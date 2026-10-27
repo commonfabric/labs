@@ -1080,7 +1080,15 @@ describe("CFC trusted agent: a floor declared as anything but a list", () => {
     ).toBeUndefined();
   });
 
-  it("denies a call that leaves the field out, without running the tool", async () => {
+  /**
+   * What a `sendRoute` tool declaring `inputSchema` commits after the model
+   * calls it with `input`: the routes it sent, or `[]` where the call was
+   * denied before the tool ran.
+   */
+  const sentAfterCall = async (
+    inputSchema: JSONSchema,
+    input: Record<string, unknown>,
+  ): Promise<string[]> => {
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
@@ -1090,13 +1098,8 @@ describe("CFC trusted agent: a floor declared as anything but a list", () => {
     const { commonfabric } = createTrustedBuilder(runtime);
     const { pattern, handler, Writable } = commonfabric;
     try {
-      const routeInputSchema = {
-        type: "object",
-        properties: { route: { type: "string" }, note: MALFORMED },
-        required: ["route"],
-      } as unknown as JSONSchema;
       const sendRoute = handler<{ route: string }, { sent: any }>(
-        routeInputSchema,
+        inputSchema,
         {
           type: "object",
           properties: {
@@ -1128,7 +1131,7 @@ describe("CFC trusted agent: a floor declared as anything but a list", () => {
             tools: {
               sendRoute: {
                 description: "Send along a route.",
-                inputSchema: routeInputSchema,
+                inputSchema,
                 handler: sendRoute({ sent }),
               },
             },
@@ -1156,16 +1159,97 @@ describe("CFC trusted agent: a floor declared as anything but a list", () => {
         type: "tool-call",
         toolCallId: "call-malformed-floor",
         toolName: "sendRoute",
-        input: { route: "a" },
+        input,
       }] as any);
       await runtime.idle();
 
-      const sent = (await result.key("sent").pull()) as string[] | undefined;
-      expect(sent ?? []).toEqual([]);
+      return ((await result.key("sent").pull()) as string[] | undefined) ??
+        [];
     } finally {
       await runtime.dispose();
       await storageManager.close();
     }
+  };
+
+  /** A tool input holding an optional tree of `Node`, defined by `node`. */
+  const withTree = (node: Record<string, unknown>) =>
+    ({
+      type: "object",
+      properties: {
+        route: { type: "string" },
+        tree: { $ref: "#/$defs/Node" },
+      },
+      required: ["route"],
+      $defs: { Node: node },
+    }) as unknown as JSONSchema;
+
+  it("denies a call that leaves the field out, without running the tool", async () => {
+    expect(
+      await sentAfterCall(
+        {
+          type: "object",
+          properties: { route: { type: "string" }, note: MALFORMED },
+          required: ["route"],
+        } as unknown as JSONSchema,
+        { route: "a" },
+      ),
+    ).toEqual([]);
+  });
+
+  it("denies a call whose malformed floor sits beside a recursive reference", async () => {
+    // The catalog's model-facing schema cuts the recursive `next` down to an
+    // open object, so the gate reads the schema the tool declares.
+
+    expect(
+      await sentAfterCall(
+        withTree({
+          type: "object",
+          properties: {
+            next: { $ref: "#/$defs/Node", ifc: { requiredIntegrity: {} } },
+          },
+        }),
+        { route: "a" },
+      ),
+    ).toEqual([]);
+  });
+
+  it("denies a literal under a floor reached through a recursive reference", async () => {
+    // The same cut drops a well-formed floor below the recursion, so a literal
+    // there passed the gate when it read the model-facing schema.
+
+    expect(
+      await sentAfterCall(
+        withTree({
+          type: "object",
+          properties: {
+            next: { $ref: "#/$defs/Node" },
+            recipient: {
+              type: "string",
+              ifc: { requiredIntegrity: [KERNEL_ATOM] },
+            },
+          },
+        }),
+        { route: "a", tree: { next: { recipient: "attacker@example.com" } } },
+      ),
+    ).toEqual([]);
+  });
+
+  it("runs the tool where no floor is malformed or unmet", async () => {
+    expect(
+      await sentAfterCall(
+        withTree({
+          type: "object",
+          properties: {
+            next: { $ref: "#/$defs/Node" },
+            recipient: {
+              type: "string",
+              ifc: { requiredIntegrity: [KERNEL_ATOM] },
+            },
+          },
+        }),
+        { route: "a" },
+      ),
+    ).toEqual(["a"]);
   });
 });
 

@@ -961,7 +961,21 @@ type PieceToolEntry = {
 };
 
 type ToolCatalog = {
-  llmTools: Record<string, { description: string; inputSchema: JSONSchema }>;
+  /**
+   * Each tool's description and `inputSchema`, its input schema as the model
+   * sees it. A tool the tools cell supplies also keeps `declaredInputSchema`,
+   * the schema it declares: the model-facing one inlines its references and
+   * cuts a recursive one down to an open object, which drops whatever the
+   * schema declares behind it, a floor included.
+   */
+  llmTools: Record<
+    string,
+    {
+      description: string;
+      inputSchema: JSONSchema;
+      declaredInputSchema?: JSONSchema;
+    }
+  >;
   dynamicToolCells: Map<string, Cell<Schema<typeof LLMToolSchema>>>;
 };
 
@@ -1551,6 +1565,7 @@ function buildToolCatalog(
     llmTools[entry.name] = {
       description,
       inputSchema: stripFrameworkProvidedFields(normalizedInputSchema),
+      declaredInputSchema: inputSchema as JSONSchema,
     };
     dynamicToolCells.set(entry.name, entry.cell);
   }
@@ -2579,9 +2594,11 @@ function toolInputRequiredIntegrityFailure(
 // For the generic `invoke` builtin the target is the resolved handler /
 // pattern, whose ARGUMENT schema carries the requiredIntegrity floors — its
 // own `path`/`args` builtin schema declares none — and the value is the
-// resolved args (path stripped). External tools keep the catalog input schema
-// and the raw model input. Other management builtins (pin/read/schema/…) have
-// fixed floor-free schemas, so their check is a no-op.
+// resolved args (path stripped). External tools are checked against the
+// schema they declare (`declaredInputSchema`), not the catalog's model-facing
+// one, which drops a floor behind a recursive reference, with the raw model
+// input. Other management builtins (pin/read/schema/…) have fixed floor-free
+// schemas, so their check is a no-op.
 function integrityGateTarget(
   resolved: ResolvedToolCall,
   part: BuiltInLLMToolCallPart,
@@ -2593,8 +2610,9 @@ function integrityGateTarget(
         ?.schema;
     return { schema, input: resolved.call.input };
   }
+  const tool = toolCatalog.llmTools[part.toolName];
   return {
-    schema: toolCatalog.llmTools[part.toolName]?.inputSchema,
+    schema: tool?.declaredInputSchema ?? tool?.inputSchema,
     input: part.input,
   };
 }
