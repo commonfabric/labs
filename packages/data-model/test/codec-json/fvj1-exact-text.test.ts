@@ -485,10 +485,10 @@ describe("fvj1-exact-text", () => {
   });
 
   describe("JSON strings", () => {
-    // `QuoteJSONString` escapes `"` and `\`, writes the five control characters
-    // that have one as a two-character escape, writes every other code unit
-    // below U+0020 and every lone surrogate as `\u` and four lowercase hex
-    // digits, and writes everything else as itself.
+    // `QuoteJSONString` writes `"`, `\`, and the control characters U+0008,
+    // U+0009, U+000A, U+000C and U+000D as two-character escapes. It writes
+    // every other code unit below U+0020, and every lone surrogate, as `\u`
+    // and four lowercase hex digits, and everything else as itself.
 
     describeTextCases([
       {
