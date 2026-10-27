@@ -523,8 +523,8 @@ describe("fvj1-exact-text", () => {
       },
       {
         what: "U+2028 and U+2029",
-        make: () => "  ",
-        text: 'fvj1:"  "',
+        make: () => "\u2028\u2029",
+        text: 'fvj1:"\u2028\u2029"',
       },
       {
         what: "a surrogate pair",
