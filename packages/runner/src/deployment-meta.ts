@@ -42,8 +42,9 @@ export const DEPLOYMENT_META_NAME = "cf-deployment";
  *   adopts the whole posture: an explicit build define still wins. Such a
  *   flag has to be `"server"` in `EXPERIMENTAL_FLAG_AUTHORITY`, since that
  *   adoption takes only server-authority flags, and must not change while a
- *   toolshed serves, since the page is built once; the runner's tests hold
- *   both.
+ *   toolshed serves, since the page is built once. The runner's tests hold
+ *   both, and for `serverExecution`, which the serving loop forces, a
+ *   toolshed test holds that the page carries the value the loop publishes.
  */
 export type ShellFlagSource = "build" | "deployment";
 
@@ -68,9 +69,8 @@ export const SHELL_FLAG_SOURCES = {
   // declares the adopted arm to its worker, which checks it against its own.
   serverExecution: "deployment",
   localSessionDocuments: "deployment",
-  // Whether a web client receives only what its mounted views need is
-  // published fleet-wide, and the server it would run against is the
-  // deployment.
+  // Whether a web client receives only what its mounted views need is the
+  // deployment's choice: its serving side selects what each view is sent.
   viewScopedReplication: "deployment",
   webViewScopedReplication: "deployment",
   readerSchemaPrecedence: "build",

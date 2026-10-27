@@ -1075,7 +1075,7 @@ describe("deployment-meta", () => {
       }
     });
 
-    it("holds no flag the serving loop forces to a value the deployment may not already run, since the page is built once", () => {
+    it("holds no flag the serving loop forces that the page's posture does not already carry", () => {
       // /api/meta applies the serving overrides live; a page carrying one of
       // them would disagree with it whenever the loop started or stopped.
       // serverExecution is the exception: the loop runs exactly when the

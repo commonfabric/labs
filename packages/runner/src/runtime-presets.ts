@@ -824,7 +824,8 @@ export const runtimePresets = {
    * In-browser worker runtime behind the shell (runtime-client's
    * RuntimeProcessor). Everything host-decided arrives as data from
    * `InitializationData` — experimental flags are the shell's build-time
-   * defines, the CFC dials are host-controlled rollout.
+   * defines with its deployment's adopted where none pins them, the CFC
+   * dials are host-controlled rollout.
    */
   browserWorker(params: BrowserWorkerPresetParams): RuntimeOptions {
     return {

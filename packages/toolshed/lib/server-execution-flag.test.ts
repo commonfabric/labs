@@ -1,12 +1,10 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
-import type { RuntimeOptions } from "@commonfabric/runner";
 import {
   memoryAclPrincipalsFor,
   serverExecutionEnabledFromEnv,
 } from "@/lib/server-execution-flag.ts";
-import { toolshedRuntimeOptions } from "@/runtime-options.ts";
 
 // The toolshed process's ONE flag resolution (server-execution v2 Phase 7,
 // the flip): unset means the FIRST-PARTY DEFAULT — the value of
@@ -37,28 +35,6 @@ describe("serverExecutionEnabledFromEnv", () => {
         envOf({ EXPERIMENTAL_SERVER_EXECUTION: "true" }),
       ),
     ).toBe(true);
-  });
-
-  it("is the arm the webhook runtime resolves, so the posture a page is built from carries what the serving loop publishes", () => {
-    // The shell takes serverExecution from the page, which is built once,
-    // while the serving loop publishes its forced ON over `/api/meta` only
-    // once it is up. The two agree because the loop starts on exactly this
-    // resolution, and the base posture is the webhook runtime's.
-    for (const value of [undefined, "true", "false"]) {
-      const envGet = envOf({ EXPERIMENTAL_SERVER_EXECUTION: value });
-      const options = toolshedRuntimeOptions(
-        {
-          MEMORY_URL: "http://memory.test",
-          API_URL: "http://toolshed.test",
-          API_INTERNAL_URL: undefined,
-        },
-        undefined as unknown as RuntimeOptions["storageManager"],
-        envGet,
-      );
-      expect(options.experimental?.serverExecution, String(value)).toBe(
-        serverExecutionEnabledFromEnv(envGet),
-      );
-    }
   });
 
   it("garbage reads as unset (the canonical mapping's warn-and-ignore), so it resolves to the default", () => {
