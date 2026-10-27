@@ -73,8 +73,8 @@ stable role rather than by the current value:
   shell has that same value baked in.
 
 Whichever role resolves ON also sets `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION`
-to `true` for its servers, baked shell and test processes, so the ON arm is
-exercised with web view-scoped replication.
+to `true` for its Toolshed servers, its baked shell and its integration suites'
+test processes, so the ON arm is exercised with web view-scoped replication.
 
 `tasks/server-execution-ci.ts` is the single mapping from those roles to the
 resolved value, label, record variant, runtime environment, baked shell define,

@@ -538,9 +538,10 @@ current value. CI keeps stable `default` and
 posture from the first-party default constant. The opposite toolshed binary is
 built with an explicit inverse so its browser shell, server, and test processes
 stay aligned. Whichever role resolves ON also runs with
-`EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true` on its servers, baked shell and
-test processes, so the ON arm's browsers receive only what their views need,
-and its posture probe checks that the toolshed publishes it.
+`EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true` on its Toolshed servers, its
+baked shell, and the test processes of its package-integration and
+pattern-integration suites, so the ON arm's browsers receive only what their
+views need, and its posture probe checks that the toolshed publishes it.
 [EXPERIMENTAL_OPTIONS.md](EXPERIMENTAL_OPTIONS.md#serverexecution) covers the
 flag itself.
 
