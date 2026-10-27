@@ -4093,7 +4093,6 @@ export const runCfHarnessCli = async (
           runState: artifacts.runState,
           transcript: artifacts.transcript,
           prompt: parsed.prompt!,
-          systemPrompt: parsed.systemPrompt,
           artifactRoot: parsed.artifactRoot,
           workspace: parsed.workspace,
           structuredResult: parsed.structuredResult,
@@ -4105,12 +4104,31 @@ export const runCfHarnessCli = async (
           parsed.allowedToolIds,
           effectiveStructuredResult,
         );
-        continuation.transcript = withContinuedResultInstructions(
-          continuation.transcript,
-          artifacts.runState.structuredResult,
-          effectiveStructuredResult,
-          parsed.allowedToolIds,
-        );
+        if (parsed.systemPrompt !== undefined) {
+          const systemPrompt = resolveCfHarnessCliSystemPrompt({
+            ...parsed,
+            structuredResult: effectiveStructuredResult,
+            fabricMountPath: parsed.fabricMount !== undefined
+              ? DEFAULT_RUNSC_FABRIC_MOUNT_PATH
+              : undefined,
+          });
+          continuation.transcript = continuation.transcript.filter((message) =>
+            message.role !== "system"
+          );
+          if (systemPrompt !== undefined) {
+            continuation.transcript.unshift({
+              role: "system",
+              content: systemPrompt,
+            });
+          }
+        } else {
+          continuation.transcript = withContinuedResultInstructions(
+            continuation.transcript,
+            artifacts.runState.structuredResult,
+            effectiveStructuredResult,
+            parsed.allowedToolIds,
+          );
+        }
       }
       const engineStructuredResult = continuation === undefined
         ? parsed.structuredResult

@@ -60,7 +60,6 @@ export const prepareHarnessContinuation = (options: {
   runState: HarnessRunState;
   transcript?: readonly HarnessTranscriptMessage[];
   prompt: string;
-  systemPrompt?: string;
   artifactRoot: string;
   workspace: string;
   structuredResult?: CfHarnessStructuredResultConfig;
@@ -79,13 +78,9 @@ export const prepareHarnessContinuation = (options: {
   const source = options.transcript ?? [];
   const boundary = inspectHarnessTranscriptPairing(source).safeBoundary;
   const checkpoint = source.slice(0, boundary);
-  let transcript = checkpoint.filter((message) =>
+  const transcript = checkpoint.filter((message) =>
     message.role !== "user" || !message.turnLocal
   );
-  if (options.systemPrompt !== undefined) {
-    transcript = transcript.filter((message) => message.role !== "system");
-    transcript.unshift({ role: "system", content: options.systemPrompt });
-  }
   if (boundary < source.length) {
     transcript.push({
       role: "user",
