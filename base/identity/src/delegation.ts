@@ -217,6 +217,13 @@ const isUnixSeconds = (value: number): boolean =>
 /**
  * Whether `cmd` is a command path: `/`, or `/` followed by segments of
  * lowercase letters, digits, `.`, `-` and `_` joined by `/`.
+ *
+ * This is narrower than UCAN's command grammar, which admits more characters
+ * in a segment and leaves open whether two spellings of a segment name one
+ * command. Holding a segment to this alphabet, lowercase and without
+ * escapes, gives every command one spelling, so that {@link delegationCovers}
+ * can decide coverage by comparing strings and no delegation covers more or
+ * less than it reads as covering.
  */
 const isCommandPath = (cmd: string): boolean =>
   cmd === "/" || /^(\/[a-z0-9._-]+)+$/.test(cmd);
