@@ -539,7 +539,9 @@ run was started. `topics-browser-posture.ts` reads it from the deployment
 rather than from the benchmark process's own `EXPERIMENTAL_SERVER_EXECUTION`,
 which would label whatever it was told: the toolshed reports the posture it
 serves at on `/api/meta`, and the shell it serves states its own through the
-build define. The worker refuses to initialize when its resolved posture
+build define, where one is baked; without one, the shell runs the arm its
+deployment publishes, and the reading below treats that bundle as stating
+nothing. The worker refuses to initialize when its resolved posture
 disagrees with the shell's declaration, so a page that loaded at all ran the
 posture its shell declared.
 

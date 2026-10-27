@@ -113,6 +113,10 @@ export const EXPERIMENTAL = {
   modernCellRep: flagValue(EXPERIMENTAL_MODERN_CELL_REP_DEFINE),
   agentBuiltin: flagValue(EXPERIMENTAL_AGENT_BUILTIN_DEFINE),
   computedCellIds: flagValue(EXPERIMENTAL_COMPUTED_CELL_IDS_DEFINE),
+  // Decided by the deployment (SHELL_FLAG_SOURCES): a runtime takes the
+  // value the deployment publishes unless this define pins it
+  // ({@link experimentalForDeployment}). The define is the rollback and CI
+  // lever, as for the other flags; it is unset in a release build.
   viewScopedReplication: flagValue(
     typeof $EXPERIMENTAL_VIEW_SCOPED_REPLICATION === "string"
       ? $EXPERIMENTAL_VIEW_SCOPED_REPLICATION
@@ -123,10 +127,6 @@ export const EXPERIMENTAL = {
       ? $EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION
       : undefined,
   ),
-  // Decided by the deployment (SHELL_FLAG_SOURCES): a runtime takes the
-  // value the deployment publishes unless this define pins it
-  // ({@link experimentalForDeployment}). The define is the rollback and CI
-  // lever, as for the other flags; it is unset in a release build.
   localSessionDocuments: flagValue(
     typeof $EXPERIMENTAL_LOCAL_SESSION_DOCUMENTS === "string"
       ? $EXPERIMENTAL_LOCAL_SESSION_DOCUMENTS
@@ -137,15 +137,12 @@ export const EXPERIMENTAL = {
       ? $EXPERIMENTAL_SHARED_MEMORY_CONNECTION
       : undefined,
   ),
-  // Server-execution v2 (docs/specs/server-side-execution/): the
-  // first-party default (the constant; the registry states its current
-  // value), overridable by the build define either way (CI's `opposite`
-  // lane bakes the inverse of the constant into its shell). The worker
-  // refuses to
-  // initialize if its resolved posture disagrees with this declaration
-  // (runtime-client's posture agreement).
-  serverExecution: flagValue(EXPERIMENTAL_SERVER_EXECUTION_DEFINE) ??
-    SERVER_EXECUTION_DEFAULT_ENABLED,
+  // Server-execution v2 (docs/specs/server-side-execution/), decided by
+  // the deployment like the flags above. CI's `opposite` lane bakes the
+  // inverse of the first-party default into its shell. Where neither the
+  // define nor the deployment says, the first-party default governs
+  // ({@link experimentalForDeployment}).
+  serverExecution: flagValue(EXPERIMENTAL_SERVER_EXECUTION_DEFINE),
   // Content-addressed schemas Phases 1 and 2: link writers and selectors
   // emit cid: references. On by default in the runner; the define is the
   // rollback override (`EXPERIMENTAL_CONTENT_ADDRESSED_SCHEMAS=false` bakes
@@ -177,9 +174,19 @@ export const EXPERIMENTAL = {
  * define wins, otherwise the deployment's value, otherwise the built-in
  * default. One shell build thereby runs a flag on against a deployment that
  * turned it on and off against one that did not.
+ *
+ * `serverExecution` always comes back resolved, to the first-party default
+ * where neither the define nor the deployment says, because the worker
+ * refuses to initialize when its own resolution differs from the arm its
+ * host declared (runtime-client's posture agreement).
  */
 export function experimentalForDeployment(
   declared: ExperimentalOptions,
 ): ExperimentalOptions {
-  return adoptServerExperimentalOptions(declared, EXPERIMENTAL);
+  const adopted = adoptServerExperimentalOptions(declared, EXPERIMENTAL);
+  return {
+    ...adopted,
+    serverExecution: adopted.serverExecution ??
+      SERVER_EXECUTION_DEFAULT_ENABLED,
+  };
 }
