@@ -427,6 +427,80 @@ describe("v2-server-session-open-proofs", () => {
     }
   });
 
+  it("takes the deadline of the chain a same-connection reopen presents, in both directions", async () => {
+    const clock = { now: 1_000_000 };
+    const server = createServer(
+      "memory://proofs-reopen-deadline",
+      { mode: "enforce", delegations: true },
+      clock,
+    );
+    try {
+      await initializeSelfOwnedSpace(server);
+      const lasting = await spaceToAlice();
+      const expiring = await issueDelegation(space, {
+        aud: alice.did(),
+        sub: space.did(),
+        cmd: "/memory",
+        exp: clock.now + 100,
+      });
+
+      // Opened without a deadline, reopened with one: the reopen's deadline
+      // holds, and the session ends once it passes.
+      const first = await connect(server);
+      const opened = await openSession(first, alice.did(), [lasting]);
+      expectExists(opened.ok);
+      const reopened = await openSession(first, alice.did(), [expiring], {
+        sessionId: opened.ok.sessionId,
+        sessionToken: opened.ok.sessionToken,
+      });
+      expectExists(reopened.ok, "the reopen is admitted");
+      clock.now += 101;
+      await first.connection.receive(encodeMemoryBoundary({
+        type: "transact",
+        requestId: nextRequestId("tx"),
+        space: space.did(),
+        sessionId: reopened.ok.sessionId,
+        commit: {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [
+            {
+              op: "set",
+              id: "of:doc:4",
+              value: { at: "late" },
+            } as unknown as Operation,
+          ],
+        },
+      }));
+      expect(shiftMessage(first.messages).type).toBe("session/revoked");
+      const refused = nextResponse<{ seq: number }>(first.messages);
+      expect(refused.error?.message).toContain("proof chain has expired");
+
+      // Opened with a deadline, reopened without one: the deadline is
+      // cleared, and the session outlives it.
+      clock.now = 1_000_000;
+      const second = await connect(server);
+      const dated = await openSession(second, alice.did(), [expiring]);
+      expectExists(dated.ok);
+      const renewed = await openSession(second, alice.did(), [lasting], {
+        sessionId: dated.ok.sessionId,
+        sessionToken: dated.ok.sessionToken,
+      });
+      expectExists(renewed.ok, "the reopen is admitted");
+      clock.now += 1_000;
+      const written = await transactSet(
+        second,
+        renewed.ok.sessionId,
+        "of:doc:5",
+        { at: "late" },
+        1,
+      );
+      expectExists(written.ok, "the lasting chain's reopen holds");
+    } finally {
+      await server.close();
+    }
+  });
+
   it("drops the chain on a resume that presents none, leaving the session to the opener's own grant", async () => {
     const server = createServer("memory://proofs-resume-without", {
       mode: "enforce",

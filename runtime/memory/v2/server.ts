@@ -1491,7 +1491,16 @@ class Connection {
     delegationEnd?: number,
   ): void {
     const key = sessionKey(space, sessionId);
-    if (this.#sessions.has(key)) {
+    const existing = this.#sessions.get(key);
+    if (existing !== undefined) {
+      // Every open re-derives the chain's deadline, as the registry
+      // re-derives the capability principal: a reopen with a later chain
+      // moves it, and a reopen presenting no chain clears it.
+      if (delegationEnd === undefined) {
+        delete existing.delegationEnd;
+      } else {
+        existing.delegationEnd = delegationEnd;
+      }
       return;
     }
     const lease = principal === undefined
@@ -1994,18 +2003,6 @@ class Connection {
       });
       return false;
     }
-    if (this.#leaseExpired(handle)) {
-      // Renewable: a `connection.auth` for the principal restores the
-      // session, so the refusal is marked as one a retry heals.
-      const error = toError(
-        "AuthorizationError",
-        `memory authentication lease of ${handle.principal} has run out; ` +
-          "renew it with `connection.auth`",
-      );
-      error.retriable = true;
-      this.#send({ type: "response", requestId, error });
-      return false;
-    }
     if (this.#delegationEnded(handle)) {
       // Not renewable: the grant came from the chain, and only a new open
       // with a fresh chain brings one. The session is ended so the client
@@ -2021,6 +2018,18 @@ class Connection {
             "again with a current chain",
         ),
       });
+      return false;
+    }
+    if (this.#leaseExpired(handle)) {
+      // Renewable: a `connection.auth` for the principal restores the
+      // session, so the refusal is marked as one a retry heals.
+      const error = toError(
+        "AuthorizationError",
+        `memory authentication lease of ${handle.principal} has run out; ` +
+          "renew it with `connection.auth`",
+      );
+      error.retriable = true;
+      this.#send({ type: "response", requestId, error });
       return false;
     }
     return true;
