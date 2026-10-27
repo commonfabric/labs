@@ -1,13 +1,6 @@
----
-status: historical
-created: 2026-10-27
-archived: 2026-10-28
-reason: "Executed plan; local jobs take messages through POST /jobs/<id>/messages, steering a running job and following up a finished one, across #9283, #9287, #9286 and #9288."
----
-
 # Sending a message to a local job
 
-Status: executed. Stages 1 to 4 landed as #9283, #9287, #9286 and #9288.
+Status: design, not built. Nothing here is implemented yet.
 
 A local job today is one task, run once: the caller enqueues it, watches its
 events, and reads its result. This plan adds a single generic way to send
