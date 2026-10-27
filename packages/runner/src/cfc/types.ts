@@ -63,7 +63,9 @@ export const CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE =
  *
  * The authenticated, whole-document, same-space checks match
  * `runtime.owned-store`. The claim lasts only for the recording transaction;
- * it grants no lifetime enrollment and does not propagate to anchored children.
+ * it grants no lifetime enrollment. Anchoring carries generic ownership to
+ * children through `runtime.owned-store`, whose misfits remain declared; the
+ * setup claim selecting derived-only persistence does not propagate.
  */
 export const CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE =
   "runtime.piece-setup-store";

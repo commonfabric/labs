@@ -585,7 +585,8 @@ The strict-only delta is:
   Generic one-shot handoffs, including agent run records, refused-slot copies
   and marker-only anchored children, retain the declaration route and its
   ratchet. A child does not inherit its parent's setup claim or enrollment.
-  The declared entries on these writes still pass through the cross-space
+  Anchoring records generic ownership for the child, so its eligible misfits
+  remain declared. The declared entries on these writes still pass through the cross-space
   metadata protection used for flow-derived labels. Later authored clients of
   a one-shot handoff continue to use its stored policy. Lazy scoped-default
   seeding on a later transaction also keeps the generic marker; before graph

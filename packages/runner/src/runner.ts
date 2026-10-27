@@ -1507,7 +1507,7 @@ const recordSetupProjectionPolicyInputs = (
 };
 
 /**
- * Name `substrate` as a store the runtime owns for `resultCell`'s piece — its
+ * Names `substrate` as a store the runtime owns for `resultCell`'s piece — its
  * result document, its argument document, or an internal document or stream
  * its result projects to. The result document is the one address on the route
  * an author chose rather than the runtime derived, so a schema declaring at a
@@ -1528,8 +1528,13 @@ const recordSetupProjectionPolicyInputs = (
  * The marker carries the runtime's authorization, which is what the fit check
  * asks for: the method that records it is reachable from anything holding a
  * cell, so an unmarked marker naming the same document counts for nothing. It
- * names the store for THIS transaction; the enrollment that carries the claim
- * into later ones is {@link enrollPieceOwnedStores}.
+ * names the store for this transaction only.
+ *
+ * `claim` defaults to generic ownership, whose eligible misfits are declared
+ * unless the store is enrolled. Setup selects the piece-setup claim to keep
+ * eligible misfits in derived labels for this transaction. Neither marker
+ * enrolls a store: {@link enrollPieceOwnedStores} separately establishes the
+ * ownership that later transactions use while the piece runs.
  */
 const recordRuntimeOwnedStore = (
   tx: IExtendedStorageTransaction,
