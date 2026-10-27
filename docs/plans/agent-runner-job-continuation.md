@@ -369,7 +369,13 @@ one exact prompt value. The task itself is caller text arriving the same
 way. The interactive chat service likewise runs a session's later user turns
 under the session's binding whenever a turn supplies no replacement policy.
 A steer is one more user message from the same driver, under the run's
-existing binding, and the seam changes no CFC enforcement source. A steer
+existing binding, and the seam changes no CFC enforcement source. This rests
+on a recorded deviation rather than on the specification: deviation 7 of
+`packages/cf-harness/docs/IMPLEMENTATION_PROFILE.md` records that these
+bindings carry no digest of the submitted value. A steer extends that
+deviation to each later message of a run, and stage 1 records so in the
+deviation, whose retirement then requires each steer to mint its own
+binding. A steer
 reaches the model by the same path as the task prompt, so whatever records
 the prompt as model context records the steer too.
 
