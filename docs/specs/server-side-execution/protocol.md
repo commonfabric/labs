@@ -504,9 +504,10 @@ serving runtime never reads another principal's, nor its own instance
 of a foreign scoped document. Both ends of the stack decide it: (i)
 the serving runtime's storage plane asks the co-hosted memory server
 before the read leaves it, keeps the verdict per (space, actor), and
-forgets it on word of a change to that space's list
-(`noteSpaceAclChanged`), so a revoked actor's next load is refused and
-a newly granted one's is admitted; (ii) admission resolves the same
+asks about every actor again on word of a change to that space's list
+(`noteSpaceAclChanged`), the last verdict standing until the new one
+lands, so a revoked actor's instances are refused from the answer on
+and a newly granted actor's refused reads are pulled again; (ii) admission resolves the same
 grant for a named scoped root a co-hosted serving session reads in a
 space whose lease it does not hold, and REFUSES an UNNAMED one — the
 shape that would silently resolve `user:<serviceDID>`. What stays

@@ -3302,14 +3302,17 @@ Delta 2026-08-15 — Phase 6 independent-review fixes (same PR):
   retry once under exact lifecycle guards (residual x).**
 - OW35 — the grant-scoped read's two gaps (protocol §2, RULED
   2026-10-27). (a) REVOCATION of a standing read: the serving manager
-  re-decides an actor's grant on the next load after word of the
-  foreign space's access-list change (`noteSpaceAclChanged`), and
-  admission re-decides at the next watch registration, but a watch the
-  serving session already holds on an admitted instance keeps
-  delivering until the replica next pulls it; the memory server's push
-  pass re-keys lease-holder deliveries on CURRENT holdership
-  (`#currentLeaseHolderExemption`) and not on the named actor's current
-  grant. Owed: a per-pass grant re-check on keyed foreign instances, or
+  asks about every actor again on word of the foreign space's
+  access-list change (`noteSpaceAclChanged`), so a revoked actor's
+  standing turns refused as soon as the probe answers and any run that
+  then reads the instance is withdrawn, and admission re-decides at the
+  next watch registration; but a watch the serving session already
+  holds on an admitted instance keeps delivering until the replica next
+  pulls it, a derivation that read the instance before the revocation
+  keeps its output until another input runs it again, and the memory
+  server's push pass re-keys lease-holder deliveries on CURRENT
+  holdership (`#currentLeaseHolderExemption`) and not on the named
+  actor's current grant. Owed: a per-pass grant re-check on keyed foreign instances, or
   a retraction of them on the access-list commit, with a test that a
   revoked actor's instance stops arriving at the serving replica
   without a re-pull. (b) DEMAND: a granted read is a service-session
@@ -3979,9 +3982,11 @@ grant):
   access list grants the actor READ, as `Server.foreignReadAuthorityFor`
   resolves it (the write probe's body, with READ for WRITE), and refused
   otherwise — unnamed, ungranted, or in a space with no list. The
-  serving manager keeps the verdict per (space, actor) and forgets it on
-  `noteSpaceAclChanged`; admission resolves the same grant for a named
-  root in a space whose lease the requester does not hold. → COVERED,
+  serving manager keeps the verdict per (space, actor), asks about every
+  actor again on `noteSpaceAclChanged` with the last verdict standing
+  meanwhile, and pulls a newly granted actor's refused reads again;
+  admission resolves the same grant for a named root in a space whose
+  lease the requester does not hold. → COVERED,
   impl-gate, red-first. `memory/test/v2-server-acl.test.ts`
   ("foreignReadAuthorityFor()": no store, no actor, READ or more in
   every ACL mode, a missing list); `memory/test/v2-explicit-read.test.ts`

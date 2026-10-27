@@ -5390,11 +5390,20 @@ export class SpaceReplica
 
   /** The grant verdicts this provider has asked for, by actor: a settled
    * one answers `foreignScopedReadStanding` and every later read of that
-   * actor's instances, until word of an access-list change
-   * (`noteAclChanged`) clears them all. */
+   * actor's instances until word of an access-list change
+   * (`noteAclChanged`) asks for each again, the last verdict standing
+   * until the new one lands. */
   readonly #foreignScopedReadVerdicts = new Map<
     string,
     ForeignScopedReadVerdictEntry
+  >();
+
+  /** The named reads this provider refused, by actor, so that an actor the
+   * list comes to grant has them pulled again: nothing else would, since a
+   * refused load left no document for a reader's change to re-run on. */
+  readonly #refusedScopedAsks = new Map<
+    string,
+    Map<string, { id: URI; scope: CellScope; scopeKey: ScopeKey }>
   >();
 
   #closed = false;
@@ -6112,9 +6121,13 @@ export class SpaceReplica
   noteAclChanged(): void {
     if (this.#closed) return;
     this.#aclChangedSinceMount = true;
-    // The list that decided every actor's grant has changed; the next read
-    // of each actor's instances asks again.
-    this.#foreignScopedReadVerdicts.clear();
+    // The list that decided every actor's grant has changed: each actor this
+    // replica has asked about is asked about again now, rather than on its
+    // next load, since an instance already loaded is read from the replica
+    // and loads no more. Its last verdict stands until the new one lands.
+    for (const actor of [...this.#foreignScopedReadVerdicts.keys()]) {
+      this.#askForeignScopedReadGrant(actor);
+    }
   }
 
   /**
@@ -6132,11 +6145,25 @@ export class SpaceReplica
   }
 
   /**
-   * The probe's verdict on `actor`'s READ grant for this space, asked once
-   * per actor and kept until the access list changes. A probe that throws
-   * refuses, fail-closed, with the error as the reason.
+   * The probe's verdict on `actor`'s READ grant for this space: the one
+   * already asked for, else a fresh ask.
    */
   #foreignScopedReadVerdict(
+    actor: string,
+  ): ReturnType<ForeignScopedReadGrant> {
+    return this.#foreignScopedReadVerdicts.get(actor)?.promise ??
+      this.#askForeignScopedReadGrant(actor);
+  }
+
+  /**
+   * Asks the probe for `actor`'s READ grant on this space and records the
+   * ask, the actor's last verdict standing until this one lands. A probe
+   * that throws refuses, fail-closed, with the error as the reason. An
+   * answer that admits an actor the list refused before pulls the reads it
+   * refused again (`#refusedScopedAsks`). Without a probe, refused and
+   * recorded nowhere, so a probe installed later is asked.
+   */
+  #askForeignScopedReadGrant(
     actor: string,
   ): ReturnType<ForeignScopedReadGrant> {
     const grant = this.#foreignScopedReadGrant();
@@ -6149,12 +6176,14 @@ export class SpaceReplica
     }
     let entry = this.#foreignScopedReadVerdicts.get(actor);
     if (entry === undefined) {
-      const created: ForeignScopedReadVerdictEntry = {
-        promise: Promise.resolve({ granted: true }),
-      };
-      created.promise = Promise.resolve().then(() => grant(actor)).catch((
-        error: unknown,
-      ) => {
+      entry = { promise: Promise.resolve({ granted: true }) };
+      this.#foreignScopedReadVerdicts.set(actor, entry);
+    }
+    const current = entry;
+    const before = current.settled;
+    const asked: ReturnType<ForeignScopedReadGrant> = Promise.resolve()
+      .then(() => grant(actor))
+      .catch((error: unknown) => {
         logger.warn("foreign-scoped-read-grant-probe-failed", () => [
           `the read authority probe for ${this.#space} (actor ${actor}) ` +
           "failed; refusing the actor's instances fail-closed until the " +
@@ -6165,14 +6194,32 @@ export class SpaceReplica
           granted: false as const,
           reason: `the read authority probe failed: ${String(error)}`,
         };
-      }).then((verdict) => {
-        created.settled = verdict;
+      })
+      .then((verdict) => {
+        // A later ask supersedes this one; its answer is the one that stands.
+        if (current.promise !== asked || this.#closed) return verdict;
+        current.settled = verdict;
+        if (verdict.granted && before?.granted !== true) {
+          this.#repullRefusedScopedAsks(actor);
+        }
         return verdict;
       });
-      entry = created;
-      this.#foreignScopedReadVerdicts.set(actor, entry);
+    current.promise = asked;
+    return asked;
+  }
+
+  /**
+   * Pulls again every named read of `actor`'s instances this replica
+   * refused, now that the list grants the actor: their readers were
+   * withdrawn on an absence, and only a landed document runs them again.
+   */
+  #repullRefusedScopedAsks(actor: string): void {
+    const asks = this.#refusedScopedAsks.get(actor);
+    if (asks === undefined) return;
+    this.#refusedScopedAsks.delete(actor);
+    for (const { id, scope, scopeKey } of asks.values()) {
+      void this.sync(id, { path: [], schema: false }, scope, scopeKey);
     }
-    return entry.promise;
   }
 
   /**
@@ -6203,9 +6250,18 @@ export class SpaceReplica
     const actor = principalOfScopeKey(key);
     if (actor === undefined) return refusal(`"${key}" names no actor`);
     const verdict = await this.#foreignScopedReadVerdict(actor);
-    return verdict.granted
-      ? undefined
-      : refusal(`the instance is ${actor}'s, and ${verdict.reason}`);
+    if (verdict.granted) return undefined;
+    let asks = this.#refusedScopedAsks.get(actor);
+    if (asks === undefined) {
+      asks = new Map();
+      this.#refusedScopedAsks.set(actor, asks);
+    }
+    asks.set(`${scope}\0${address.id}`, {
+      id: address.id,
+      scope,
+      scopeKey: key,
+    });
+    return refusal(`the instance is ${actor}'s, and ${verdict.reason}`);
   }
 
   /**

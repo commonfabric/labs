@@ -20,7 +20,7 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
-import type { Options } from "../src/storage/v2.ts";
+import type { Options, SpaceReplica } from "../src/storage/v2.ts";
 import {
   Runtime,
   type ServerRunInfo,
@@ -2094,19 +2094,41 @@ describe("Phase 5 cross-space serving", () => {
       );
       expect(manager.scopedReadStanding(foreignUser, bob)).toBe("refused");
 
-      // Word of an access-list change clears every verdict: once alice
-      // grants bob READ, his instance is asked for again and admitted.
+      // Word of an access-list change asks about every actor again at once,
+      // each last verdict standing meanwhile: alice's instances, already
+      // loaded and never pulled again, stay admitted throughout. Once alice
+      // grants bob READ, his standing turns admitted on the probe's answer
+      // alone, and the read refused earlier is pulled again for him, since
+      // nothing else would load it.
+      const replica = manager.open(foreignSpace).replica as SpaceReplica;
+      const repulled: string[] = [];
+      const originalSync = replica.sync.bind(replica);
+      replica.sync = (id, selector, scope, instance) => {
+        repulled.push(`${id}|${instance}`);
+        return originalSync(id, selector, scope, instance);
+      };
       await server.writeDocument(foreignSpace, `of:${foreignSpace}`, {
         [aliceDid]: "OWNER",
         [bobDid]: "READ",
       });
       manager.noteSpaceAclChanged(foreignSpace);
-      expect(manager.scopedReadStanding(foreignUser, bob)).toBe("unresolved");
+      expect(manager.scopedReadStanding(foreignUser, alice)).toBe("admitted");
+      expect(manager.scopedReadStanding(foreignUser, bob)).toBe("refused");
       await manager.syncInstance(
-        { space: foreignSpace, id: "of:x-scoped" as never, scope: "user" },
+        { space: foreignSpace, id: "of:x-other" as never, scope: "user" },
         bob,
       );
       expect(manager.scopedReadStanding(foreignUser, bob)).toBe("admitted");
+      expect(manager.scopedReadStanding(foreignUser, alice)).toBe("admitted");
+      expect(probed).toEqual([
+        `${foreignSpace}\0${aliceDid}`,
+        `${foreignSpace}\0${bobDid}`,
+        `${foreignSpace}\0${aliceDid}`,
+        `${foreignSpace}\0${bobDid}`,
+      ]);
+      expect(repulled).toContain(
+        `of:x-scoped|${resolveScopeKey("user", bob)}`,
+      );
 
       // Space-scope foreign reads stay free (§2b's free-read row), and
       // the F3 fix holds: a refused scoped read and an innocent SPACE-scope
