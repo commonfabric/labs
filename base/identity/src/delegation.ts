@@ -2,11 +2,10 @@
  * UCAN delegations: one principal handing another its authority over a space,
  * as a signed envelope anything holding the issuer's DID can verify.
  *
- * A delegation is a UCAN 1.0 delegation in the one shape this repository
- * issues: the subject is a space, or `null` for authority over any subject,
- * which this repository issues nowhere and the memory server admits nowhere;
- * the command is a path under `/`; and the policy is empty. It is encoded as
- * the UCAN specification requires, a
+ * This codec issues and decodes UCAN 1.0 delegations whose subject is a
+ * space or `null` for authority over any subject, whose command is a path
+ * under `/`, and whose policy is empty. The memory server requires a space
+ * subject. A delegation is encoded as the UCAN specification requires, a
  * DAG-CBOR envelope of the issuer's signature and the signed payload, and is
  * identified by a CIDv1 over those bytes with the DAG-CBOR codec and a
  * SHA-256 multihash, written in base58btc. The bytes are the delegation: a
@@ -67,7 +66,8 @@ export interface DelegationPayload {
 
   /**
    * The subject: the space the authority is over, or `null` for authority
-   * over any subject, which UCAN allows and nothing here issues or admits.
+   * over any subject. The codec supports both; the memory server requires
+   * a space subject.
    */
   readonly sub: DIDKey | null;
 
