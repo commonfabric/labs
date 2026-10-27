@@ -57,12 +57,10 @@ describe("topics-browser-measurement-core", () => {
   ].join("\n");
 
   describe("the recorded fixture", () => {
-    it("holds a lift under each of the four names measured separately", () => {
+    it("holds a lift under each of the two names measured separately", () => {
       expect(Object.keys(fixture.lifts).toSorted()).toEqual([
         "backlinksOf",
         "crossrefTable",
-        "lastActivityOf",
-        "presentCommentCountOf",
       ]);
     });
   });

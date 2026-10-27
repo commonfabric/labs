@@ -27,12 +27,12 @@ import type { ReadBudgetVariantName } from "./topics-read-budget-variants.ts";
  * each file small enough for a lane to take on its own.
  */
 export const TOPICS_READ_BUDGET_GROUPS = {
+  // The group keeps the name its test file has carried, which is the test's
+  // identity in the records; the thread cases it once held measured a topic's
+  // comment-count and last-activity lifts, which stored values replaced.
   "small-and-threads": [
     "pivot/low-degree/mentions-3/topics-4/topic-open",
     "pivot/low-degree/mentions-3/topics-4/all-backlinks",
-    "thread/comments-1/links-1/aggregates",
-    "thread/comments-100/links-3/aggregates",
-    "thread/comments-3/links-100/aggregates",
   ],
   "single-bucket": [
     "pivot/single-bucket/mentions-4/topics-32/topic-open",
@@ -197,7 +197,7 @@ type MeasuredWorkload = Exclude<Workload, "board">;
  * The regression variant each gated count is assigned to, by workload. Under
  * its variant, every limit on the count must be exceeded: a scan for the read
  * counts, and for the graph counts a growth in actions, which duplicates the
- * demanded lifts on a board and starts a lift per record on a thread.
+ * demanded lifts on a board.
  */
 const ASSIGNED_VARIANTS = {
   "topic-open": {
@@ -213,13 +213,6 @@ const ASSIGNED_VARIANTS = {
     bodyPerRun: "scan",
     graphNodes: "duplicate-demand",
     graphEdges: "duplicate-demand",
-  },
-  aggregates: {
-    attemptTotal: "scan",
-    bodyTotal: "scan",
-    bodyPerRun: "scan",
-    graphNodes: "per-record",
-    graphEdges: "per-record",
   },
 } as const satisfies Record<
   MeasuredWorkload,
