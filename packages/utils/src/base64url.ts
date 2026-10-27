@@ -168,6 +168,10 @@ export function fromBase64Polyfill(encoded: string): Uint8Array {
   if ((s.length - inLen) > 2) {
     throw new Error("`fromBase64url()`: too much padding");
   }
+  if ((inLen % 4) === 1) {
+    // A final group of one character carries no whole byte.
+    throw new Error("`fromBase64url()`: lone final character");
+  }
 
   // Compute output byte count from the number of base64 characters.
   const outLen = (inLen * 3) >>> 2;

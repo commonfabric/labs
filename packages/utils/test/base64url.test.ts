@@ -84,6 +84,16 @@ for (const fromBase64 of [fromBase64url, fromBase64Polyfill]) {
       });
     });
 
+    describe("a final group of one character", () => {
+      // Six bits, which hold no whole byte.
+
+      for (const encoded of ["A", "AAAAA", "A==", "A==="]) {
+        it(`throws on \`${encoded}\``, () => {
+          expect(() => fromBase64(encoded)).toThrow();
+        });
+      }
+    });
+
     describe("bits past the last whole byte", () => {
       // A final group of two characters carries four bits past its byte, and
       // one of three carries two. Each case sets one of them.
