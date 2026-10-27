@@ -278,7 +278,7 @@ describe("ensurePieceRunning", () => {
         runtime,
         argumentCell.getAsNormalizedFullLink(),
         {
-          onOwningRoot: (rootId) => order.push(`root:${rootId}`),
+          onOwningRoot: (root) => order.push(`root:${root.id}`),
         },
       );
       expect(verdict.started).toBe(true);

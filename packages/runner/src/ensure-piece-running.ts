@@ -257,12 +257,12 @@ export type EnsurePieceOptions = {
   signal?: AbortSignal;
 
   /**
-   * Called with the owning piece root's id once the chain from `cellLink`
-   * has resolved to it, before the piece is started. A caller that supplies
-   * a started piece's runs by what was demanded records the mapping here,
-   * so a run the start releases at once already finds it.
+   * Called with the owning piece root's address once the chain from
+   * `cellLink` has resolved to it, before the piece is started. A caller that
+   * supplies a started piece's runs by what was demanded records the mapping
+   * here, so a run the start releases at once already finds it.
    */
-  onOwningRoot?: (rootId: string) => void;
+  onOwningRoot?: (root: OwningRootAddress) => void;
 
   /**
    * Start the pieces the owning piece's inputs come from before the owning
@@ -395,7 +395,7 @@ async function ensureVerdict(
       // The owning root is known before the piece runs: a caller keying
       // per-instance run supply on it records the mapping here, so the
       // first run the start releases already finds it.
-      options?.onOwningRoot?.(rootId);
+      options?.onOwningRoot?.(root);
 
       if (
         options?.startInputSources === true &&
