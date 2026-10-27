@@ -20,9 +20,11 @@ import {
 } from "@commonfabric/data-model-schema";
 import {
   ARRAY_SUBSCHEMA_KEYS,
+  forEachSubschema,
   mapSubschemas,
   RECORD_SUBSCHEMA_KEYS,
   SINGLE_SUBSCHEMA_KEYS,
+  type SubschemaKeyword,
 } from "@commonfabric/data-model-schema/schema-walk";
 import {
   isExternalSchemaRef,
@@ -2353,14 +2355,38 @@ function resolveToolInputSchemaNode(
   }
 }
 
+/** The field a scan reaches through `keyword`, from the field at `path`. */
+const subschemaPath = (
+  path: string,
+  keyword: SubschemaKeyword,
+  key: string | undefined,
+  index: number | undefined,
+): string => {
+  if (key !== undefined) return path ? `${path}.${key}` : key;
+  if (keyword === "prefixItems") return `${path}[${index}]`;
+  if (
+    keyword === "items" || keyword === "contains" ||
+    keyword === "unevaluatedItems"
+  ) {
+    return `${path}[]`;
+  }
+  if (
+    keyword === "additionalProperties" || keyword === "unevaluatedProperties"
+  ) {
+    return path ? `${path}.*` : "*";
+  }
+  return path;
+};
+
 // Scan a tool's `inputSchema` for a floor (`ifc.requiredIntegrity`) declared
 // as anything but a list, at every position the schema reaches, whatever the
 // model supplied: a malformed declaration refuses the call even where no value
 // reaches it (§8.10.3), as a malformed ceiling does
 // (`toolAllowsObservedConfidentiality`). Returns the first such field's reason.
-// A reference the session cannot resolve is left to
-// `toolInputRequiredIntegrityFailure`, which refuses the call wherever a
-// supplied value reaches one.
+// The positions are every subschema `forEachSubschema` names, the keywords our
+// schemas never emit included, and every reference target. A reference the
+// session cannot resolve is left to `toolInputRequiredIntegrityFailure`, which
+// refuses the call wherever a supplied value reaches one.
 function toolInputMalformedFloor(
   schema: unknown,
   path: string,
@@ -2368,61 +2394,47 @@ function toolInputMalformedFloor(
   followed: ReadonlySet<string> = new Set(),
   document = "",
 ): string | undefined {
-  if (!isObjectOrArray(schema) || Array.isArray(schema)) return undefined;
-  // A recursive group closes on a reference this branch has already
-  // followed. A reference is named within the document that holds it, since a
-  // local pointer means another definition in another document, and resolving
-  // one returns a fresh object, so the resolved node cannot name it.
-  const ref = schema.$ref;
-  let branchFollowed = followed;
-  let branchDocument = document;
-  if (typeof ref === "string") {
-    const key = isExternalSchemaRef(ref) ? ref : `${document}${ref}`;
-    if (followed.has(key)) return undefined;
-    branchFollowed = new Set([...followed, key]);
-    if (isExternalSchemaRef(ref)) branchDocument = ref;
-  }
-  const node = resolveToolInputSchemaNode(schema, root);
-  if (node === undefined || node === "unresolvable") return undefined;
-  const { structural, root: structuralRoot } = node;
-  const ifc = structural.ifc;
+  if (!isObjectNotArray(schema)) return undefined;
+  const ifc = schema.ifc;
   if (
-    isObjectOrArray(ifc) && !Array.isArray(ifc) &&
-    ifc.requiredIntegrity !== undefined &&
+    isObjectNotArray(ifc) && ifc.requiredIntegrity !== undefined &&
     !Array.isArray(ifc.requiredIntegrity)
   ) {
     return `field "${path || "(root)"}" declares a requiredIntegrity that is ` +
       `not a list; refusing the call (fail closed)`;
   }
-  const children: [unknown, string][] = [];
-  if (isObjectOrArray(structural.properties)) {
-    for (const [key, child] of Object.entries(structural.properties)) {
-      children.push([child, path ? `${path}.${key}` : key]);
-    }
-  }
-  if (Array.isArray(structural.prefixItems)) {
-    structural.prefixItems.forEach((child, index) =>
-      children.push([child, `${path}[${index}]`])
-    );
-  }
-  children.push([structural.items, `${path}[]`]);
-  for (const key of ["anyOf", "oneOf", "allOf"] as const) {
-    const branches = structural[key];
-    if (Array.isArray(branches)) {
-      for (const branch of branches) children.push([branch, path]);
-    }
-  }
-  for (const [child, childPath] of children) {
-    const failure = toolInputMalformedFloor(
+  // A node's own subschemas are scanned wherever it sits, a reference site's
+  // beside its `$ref` included; only following the reference is limited.
+  const owningRoot = root ?? schema;
+  let failure: string | undefined;
+  forEachSubschema(schema as JSONSchema, (child, keyword, key, index) => {
+    failure = toolInputMalformedFloor(
       child,
-      childPath,
-      structuralRoot,
-      branchFollowed,
-      branchDocument,
+      subschemaPath(path, keyword, key, index),
+      owningRoot,
+      followed,
+      document,
     );
-    if (failure !== undefined) return failure;
-  }
-  return undefined;
+    return failure !== undefined;
+  }, { includeUnused: true });
+  if (failure !== undefined) return failure;
+  // A recursive group closes on a reference this branch has already
+  // followed. A reference is named within the document that holds it, since a
+  // local pointer means another definition in another document, and resolving
+  // one returns a fresh object, so the resolved node cannot name it.
+  const ref = schema.$ref;
+  if (typeof ref !== "string") return undefined;
+  const key = isExternalSchemaRef(ref) ? ref : `${document}${ref}`;
+  if (followed.has(key)) return undefined;
+  const node = resolveToolInputSchemaNode(schema, root);
+  if (node === undefined || node === "unresolvable") return undefined;
+  return toolInputMalformedFloor(
+    node.structural,
+    path,
+    node.root,
+    new Set([...followed, key]),
+    isExternalSchemaRef(ref) ? ref : document,
+  );
 }
 
 // Walk a tool's `inputSchema` for fields declaring `ifc.requiredIntegrity` and

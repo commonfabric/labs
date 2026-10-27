@@ -1025,6 +1025,33 @@ describe("CFC trusted agent: a floor declared as anything but a list", () => {
     ).toContain('field "tag"');
   });
 
+  it("reports a dictionary's values", () => {
+    expect(
+      toolInputMalformedFloor({
+        type: "object",
+        properties: {
+          notes: { type: "object", additionalProperties: MALFORMED },
+        },
+      }, ""),
+    ).toContain('field "notes.*"');
+  });
+
+  it("reports a floor beside a reference its branch has already followed", () => {
+    expect(
+      toolInputMalformedFloor({
+        $ref: "#/$defs/Node",
+        $defs: {
+          Node: {
+            type: "object",
+            properties: {
+              next: { $ref: "#/$defs/Node", ifc: { requiredIntegrity: {} } },
+            },
+          },
+        },
+      }, ""),
+    ).toContain('field "next"');
+  });
+
   it("reports nothing where every floor is a list", () => {
     expect(
       toolInputMalformedFloor({
