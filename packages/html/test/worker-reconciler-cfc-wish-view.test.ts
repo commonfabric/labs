@@ -11,6 +11,7 @@ import type { JSONSchema } from "../../runner/src/builder/types.ts";
 import { vnodeSchema } from "../../runner/src/schemas.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedProfileOwner,
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "../../runner/test/cfc-seed-envelope.ts";
@@ -202,6 +203,7 @@ Deno.test("worker reconciler CFC ceiling over the view a wish shows", async (t) 
         },
       ],
     });
+    seedProfileOwner(profileTx, profile.getAsNormalizedFullLink(), owner.did());
     expect((await profileTx.commit().settled).error).toBeUndefined();
     const homeTx = runtime.edit();
     const homeDefault = runtime.getCell(

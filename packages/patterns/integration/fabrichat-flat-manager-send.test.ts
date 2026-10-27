@@ -34,6 +34,8 @@ import {
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
 
+import { seedProfileOwner } from "../../runner/test/cfc-seed-envelope.ts";
+
 const owner = await Identity.fromPassphrase("fabrichat-manager-roles");
 const PATTERNS = fromFileUrl(new URL("..", import.meta.url));
 
@@ -142,8 +144,12 @@ describe("FabriChat flat manager sends", () => {
     await server?.close();
   });
 
-  /** Writes a profile named `name`, under `cause`, in a space of its own. */
-  const writeProfile = async (cause: string, name: string) => {
+  /** Writes a profile named `name`, owned by `principal`, in its own space. */
+  const writeProfile = async (
+    cause: string,
+    name: string,
+    principal: string = owner.did(),
+  ) => {
     const space = await runtime.createSpace({});
     const tx = runtime.edit();
     const profile = runtime.getCell(space, cause, {
@@ -152,6 +158,7 @@ describe("FabriChat flat manager sends", () => {
       ifc: { addIntegrity: ["fabrichat-test-profile"] },
     }, tx);
     profile.set({ name });
+    seedProfileOwner(tx, profile.getAsNormalizedFullLink(), principal);
     runtime.prepareTxForCommit(tx);
     expect((await tx.commit().settled).error).toBeUndefined();
     return profile;
@@ -298,7 +305,7 @@ describe("FabriChat flat manager sends", () => {
    */
   const addBob = async (labeled: boolean) => {
     const profile = await writeProfile("viewer profile", "Viewer");
-    const bobProfile = await writeProfile("bob profile", "Bob");
+    const bobProfile = await writeProfile("bob profile", "Bob", BOB);
     const { offerRoom } = await writeHome(labeled, profile, {
       [BOB]: [bobProfile],
     });

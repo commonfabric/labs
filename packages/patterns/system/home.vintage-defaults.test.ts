@@ -32,30 +32,27 @@ describe("home result-default contract stability", () => {
     expect(home).toContain('defaultAppUrl: Writable<string | Default<"">>');
   });
 
-  // CFC-wrapped lists: the default goes OUTSIDE the WriteAuthorizedBy wrapper
-  // (`Default<Cfc<…>, []>`), matching profile-home's externalLinks. profiles/mru
-  // entered HomeOutput in #3830 — much later than favorites (#2478) — so a home
-  // root that predates them (or is old enough to predate favorites) needs these
-  // to merge. An empty default carries no elements, so no writer claim is
-  // asserted; the profile-owner-cfc / writer-claim suites pin that invariant.
   it("profiles rides Default<TrustedProfileList, []> (wrapper-outside)", () => {
-    expect(home).toContain("profiles: Default<TrustedProfileList, []>");
+    // The empty default wraps the write contract: a Home without a stored
+    // profiles list materializes an empty one without claiming any writer.
+
+    expect(home).toContain(
+      "profiles: Writable<Default<TrustedProfileList, []>>",
+    );
   });
 
   it("mru rides Default<TrustedProfileMru, []> (wrapper-outside)", () => {
-    expect(home).toContain("mru: Default<TrustedProfileMru, []>");
+    // The empty default wraps the write contract, as it does for profiles.
+
+    expect(home).toContain("mru: Writable<Default<TrustedProfileMru, []>>");
   });
 
-  // #4933 left defaultProfile as `defaultProfile: TrustedDefaultProfile;`
-  // believing its `… | undefined` value type made it non-required. It does
-  // NOT: the schema-generator decides `required` from the presence of a `?`
-  // optional marker (schema-generator.ts `if (!member.questionToken)`), not
-  // from the value type — so the bare spelling emitted defaultProfile as
-  // required-with-no-default and the cold-start repair threw on it, one layer
-  // past the six data fields above. The `?` is the fix that makes it genuinely
-  // optional (dropped from `required`), so no default is needed.
   it("defaultProfile is optional (?) — the value-type-only assumption was wrong", () => {
-    expect(home).toContain("defaultProfile?: TrustedDefaultProfile;");
+    // The question token makes the generated field optional. Allowing an
+    // undefined value alone still requires the field and prevents cold-start
+    // repair from materializing a Home that has no default profile.
+
+    expect(home).toContain("defaultProfile?: Writable<TrustedDefaultProfile>;");
   });
 
   it("Default is imported (the spellings above are inert without it)", () => {

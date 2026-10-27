@@ -28,6 +28,7 @@ import {
   prepareSnapshotShare,
 } from "../../runner/src/cfc/share-snapshot.ts";
 import { markRendererTrustedEvent } from "../../runner/src/cfc/ui-contract.ts";
+import { seedProfileOwner } from "../../runner/test/cfc-seed-envelope.ts";
 import { seedHomeAgentQueue } from "../../runner/test/support/agent-queue.ts";
 
 const ROOT = fromFileUrl(new URL("../", import.meta.url));
@@ -130,6 +131,11 @@ describe("personalized book invitation", () => {
         properties: { name: { type: "string" } },
       }, profileTx);
       profile.set({ name: "Originator" });
+      seedProfileOwner(
+        profileTx,
+        profile.getAsNormalizedFullLink(),
+        identity.did(),
+      );
       expect((await profileTx.commit().settled).error).toBeUndefined();
       const tx = runtime.edit();
       const factory = await runtime.patternManager.compilePattern(program, {

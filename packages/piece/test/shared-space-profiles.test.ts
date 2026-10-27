@@ -35,6 +35,7 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import { ProcessModuleByteCache } from "@commonfabric/test-support/compile-byte-cache";
 import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
 
 import {
@@ -161,6 +162,8 @@ interface Host {
 }
 
 describe("shared-space-profiles", () => {
+  // Share emitted module bytes; each case owns its runtime and stored state.
+  const moduleByteCache = new ProcessModuleByteCache();
   let server: ReturnType<typeof newLoopbackServer>;
   let hosts: Host[];
   let first: Host;
@@ -233,6 +236,7 @@ describe("shared-space-profiles", () => {
     const runtime = new Runtime({
       apiUrl: new URL(HOST),
       storageManager: storage,
+      moduleByteCache,
       experimental: { serverExecution: false },
     });
     const controller = new PiecesController(
@@ -458,6 +462,7 @@ describe("shared-space-profiles", () => {
     const theirs = new Runtime({
       apiUrl: new URL(HOST),
       storageManager: storage,
+      moduleByteCache,
       experimental: { serverExecution: false },
     });
     try {

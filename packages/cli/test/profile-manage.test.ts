@@ -29,6 +29,7 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import { ProcessModuleByteCache } from "@commonfabric/test-support/compile-byte-cache";
 
 import { PiecesController } from "@commonfabric/piece/ops";
 
@@ -92,6 +93,8 @@ const CONFIG: SpaceConfig = {
 };
 
 describe("profile management", () => {
+  // Share emitted module bytes; each case owns its runtime and stored state.
+  const moduleByteCache = new ProcessModuleByteCache();
   let server: ReturnType<typeof newLoopbackServer>;
   let manager: EmulatedStorageManager;
   let runtime: Runtime;
@@ -107,6 +110,7 @@ describe("profile management", () => {
     runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: manager,
+      moduleByteCache,
     });
     const program = await resolveLocalProgram(
       (resolver) => runtime.harness.resolve(resolver),
@@ -156,6 +160,7 @@ describe("profile management", () => {
       const profileRuntime = new Runtime({
         apiUrl: new URL(import.meta.url),
         storageManager: storage,
+        moduleByteCache,
       });
       const pieces = new PiecesController(
         { as: profileSigner, space: config.space },
@@ -224,6 +229,7 @@ describe("profile management", () => {
     const theirs = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: storage,
+      moduleByteCache,
     });
     let link: NormalizedFullLink;
     try {

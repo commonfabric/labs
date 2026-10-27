@@ -25,6 +25,8 @@ import {
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
 
+import { seedProfileOwner } from "../../runner/test/cfc-seed-envelope.ts";
+
 const signer = await Identity.fromPassphrase("fabrichat container index");
 const home = signer.did();
 
@@ -545,6 +547,7 @@ describe("fabrichat-container-index", () => {
       ifc: { addIntegrity: ["fabrichat-test-profile"] },
     }, tx);
     profile.set({ name: "Sender" });
+    seedProfileOwner(tx, profile.getAsNormalizedFullLink(), home);
     runtime.prepareTxForCommit(tx);
     expect((await tx.commit().settled).error).toBeUndefined();
     tx = runtime.edit();
