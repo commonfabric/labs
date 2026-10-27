@@ -188,9 +188,10 @@ describe("fabrichat spaces across runtimes", () => {
     // room's control, admits the stranger, and the room records it as done
     // where the member's own views read it. No session here has a chat
     // manager to tell the stranger of the room, so the add reads as access
-    // alone. The stranger's runtime retains the refusal above and holds no
-    // session on the room's space to hear of the add, so it retries the
-    // space as its shell's Retry would.
+    // alone. The stranger's runtime retains the refusal above; with one
+    // connection per space the refused open closed the connection the
+    // server's `session/admissible` hint would ride, so it retries the space
+    // as its shell's Retry would.
     await member.send(
       "addMember",
       { ...adding, requestId: "add-stranger" },
