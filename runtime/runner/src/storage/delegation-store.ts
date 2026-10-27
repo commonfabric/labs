@@ -16,6 +16,7 @@
 import {
   decodeDelegation,
   type Delegation,
+  DelegationError,
   verifyDelegation,
 } from "@commonfabric/identity";
 import { MAX_PROOF_CHAIN_LENGTH } from "@commonfabric/memory/v2/session-open-auth";
@@ -34,6 +35,10 @@ export class DelegationStore {
     const delegation = await decodeDelegation(bytes);
     await verifyDelegation(delegation);
     const { sub } = delegation.payload;
+    // A delegation over any subject is one no space's open can present.
+    if (sub === null) {
+      throw new DelegationError("the delegation is over no space");
+    }
     let held = this.#bySubject.get(sub);
     if (held === undefined) {
       held = new Map();

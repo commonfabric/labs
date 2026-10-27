@@ -26,6 +26,7 @@ const delegate = (
     aud: aud.did(),
     sub: space.did(),
     cmd: "/memory",
+    pol: [],
     ...fields,
   });
 
@@ -41,6 +42,19 @@ describe("DelegationStore", () => {
       expect(cids(store.chainFor(space.did(), alice.did(), now))).toEqual([
         root.cid,
       ]);
+    });
+
+    it("throws for a delegation over no space", async () => {
+      const store = new DelegationStore();
+      const anywhere = await issueDelegation(space, {
+        aud: alice.did(),
+        sub: null,
+        cmd: "/memory",
+        pol: [],
+      });
+      await expect(store.add(anywhere.bytes)).rejects.toThrow(
+        "over no space",
+      );
     });
 
     it("throws for bytes that do not verify", async () => {

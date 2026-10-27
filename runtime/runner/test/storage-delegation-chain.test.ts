@@ -93,6 +93,7 @@ describe("storage-delegation-chain", () => {
             aud: guest.did(),
             sub: space as DIDKey,
             cmd: "/memory",
+            pol: [],
           });
           await factory.addDelegation(delegation.bytes);
 
@@ -123,6 +124,7 @@ describe("storage-delegation-chain", () => {
             aud: guest.did(),
             sub: space as DIDKey,
             cmd: "/memory",
+            pol: [],
           });
           await factory.addDelegation(delegation.bytes);
           await expect(factory.create(space)).rejects.toThrow(
@@ -143,6 +145,7 @@ describe("storage-delegation-chain", () => {
       aud: guest.did(),
       sub: space as DIDKey,
       cmd: "/memory",
+      pol: [],
     });
     const forged = delegation.bytes.slice();
     forged[10] ^= 0xff;
