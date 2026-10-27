@@ -1081,14 +1081,18 @@ describe("CFC trusted agent: a floor declared as anything but a list", () => {
   });
 
   /**
-   * What a `sendRoute` tool declaring `inputSchema` commits after the model
-   * calls it with `input`: the routes it sent, or `[]` where the call was
-   * denied before the tool ran.
+   * Runs `body` against the tool catalog of a pattern whose `sendRoute` tool
+   * declares `inputSchema`, with a call into `body` that reads the routes the
+   * tool has sent.
    */
-  const sentAfterCall = async (
+  const withTool = async <T>(
     inputSchema: JSONSchema,
-    input: Record<string, unknown>,
-  ): Promise<string[]> => {
+    body: (tool: {
+      runtime: Runtime;
+      catalog: ReturnType<typeof llmToolExecutionHelpers.buildToolCatalog>;
+      sent: () => Promise<string[]>;
+    }) => Promise<T>,
+  ): Promise<T> => {
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
@@ -1155,6 +1159,28 @@ describe("CFC trusted agent: a floor declared as anything but a list", () => {
         result.key("tools") as any,
         false,
       );
+      return await body({
+        runtime,
+        catalog,
+        sent: async () =>
+          ((await result.key("sent").pull()) as string[] | undefined) ?? [],
+      });
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  };
+
+  /**
+   * What the `sendRoute` tool declaring `inputSchema` commits after the model
+   * calls it with `input`: the routes it sent, or `[]` where the call was
+   * denied before the tool ran.
+   */
+  const sentAfterCall = (
+    inputSchema: JSONSchema,
+    input: Record<string, unknown>,
+  ): Promise<string[]> =>
+    withTool(inputSchema, async ({ runtime, catalog, sent }) => {
       await llmToolExecutionHelpers.executeToolCalls(runtime, space, catalog, [{
         type: "tool-call",
         toolCallId: "call-malformed-floor",
@@ -1162,14 +1188,8 @@ describe("CFC trusted agent: a floor declared as anything but a list", () => {
         input,
       }] as any);
       await runtime.idle();
-
-      return ((await result.key("sent").pull()) as string[] | undefined) ??
-        [];
-    } finally {
-      await runtime.dispose();
-      await storageManager.close();
-    }
-  };
+      return await sent();
+    });
 
   /** A tool input holding an optional tree of `Node`, defined by `node`. */
   const withTree = (node: Record<string, unknown>) =>
@@ -1232,6 +1252,32 @@ describe("CFC trusted agent: a floor declared as anything but a list", () => {
         { route: "a", tree: { next: { recipient: "attacker@example.com" } } },
       ),
     ).toEqual([]);
+  });
+
+  it("keeps the declared schema out of the request's tools", async () => {
+    // A request serializes `llmTools` whole. A dormant definition holding a
+    // value JSON cannot hold reaches the declared schema the gate reads, and
+    // not the model-facing one.
+
+    const inputSchema = {
+      type: "object",
+      properties: { route: { type: "string" } },
+      required: ["route"],
+      $defs: { Unused: { type: "integer", default: 1n } },
+    } as unknown as JSONSchema;
+    await withTool(inputSchema, ({ catalog }) => {
+      expect(Object.keys(catalog.llmTools.sendRoute!).sort()).toEqual([
+        "description",
+        "inputSchema",
+      ]);
+      expect(() => JSON.stringify({ tools: catalog.llmTools })).not.toThrow();
+      expect(
+        (catalog.declaredInputSchemas?.get("sendRoute") as {
+          $defs?: unknown;
+        })?.$defs,
+      ).toBeDefined();
+      return Promise.resolve();
+    });
   });
 
   it("runs the tool where no floor is malformed or unmet", async () => {

@@ -962,21 +962,20 @@ type PieceToolEntry = {
 
 type ToolCatalog = {
   /**
-   * Each tool's description and `inputSchema`, its input schema as the model
-   * sees it. A tool the tools cell supplies also keeps `declaredInputSchema`,
-   * the schema it declares: the model-facing one inlines its references and
-   * cuts a recursive one down to an open object, which drops whatever the
-   * schema declares behind it, a floor included.
+   * The request's `tools`: each tool's description, and its input schema as
+   * the model sees it.
    */
-  llmTools: Record<
-    string,
-    {
-      description: string;
-      inputSchema: JSONSchema;
-      declaredInputSchema?: JSONSchema;
-    }
-  >;
+  llmTools: Record<string, { description: string; inputSchema: JSONSchema }>;
   dynamicToolCells: Map<string, Cell<Schema<typeof LLMToolSchema>>>;
+  /**
+   * The input schema each tool from the tools cell declares, which the
+   * integrity gate checks a call against. The model-facing schema in
+   * `llmTools` inlines references and cuts a recursive one down to an open
+   * object, dropping whatever the schema declares behind it, a floor included.
+   * Kept apart from `llmTools`, which a request serializes whole. A catalog
+   * without it is checked against `llmTools`.
+   */
+  declaredInputSchemas?: Map<string, JSONSchema>;
 };
 
 type DialogMessageObservationMap = Record<string, unknown[]>;
@@ -1528,6 +1527,7 @@ function buildToolCatalog(
     includeBuiltinTools,
   );
   const llmTools: ToolCatalog["llmTools"] = {};
+  const declaredInputSchemas = new Map<string, JSONSchema>();
   const dynamicToolCells = new Map<
     string,
     Cell<Schema<typeof LLMToolSchema>>
@@ -1565,13 +1565,13 @@ function buildToolCatalog(
     llmTools[entry.name] = {
       description,
       inputSchema: stripFrameworkProvidedFields(normalizedInputSchema),
-      declaredInputSchema: inputSchema as JSONSchema,
     };
+    declaredInputSchemas.set(entry.name, inputSchema as JSONSchema);
     dynamicToolCells.set(entry.name, entry.cell);
   }
 
   if (!includeBuiltinTools) {
-    return { llmTools, dynamicToolCells };
+    return { llmTools, dynamicToolCells, declaredInputSchemas };
   }
 
   llmTools[READ_TOOL_NAME] = {
@@ -1615,7 +1615,7 @@ function buildToolCatalog(
     inputSchema: SCHEMA_INPUT_SCHEMA,
   };
 
-  return { llmTools, dynamicToolCells };
+  return { llmTools, dynamicToolCells, declaredInputSchemas };
 }
 
 function materializeDialogRequestSnapshot(
@@ -2595,7 +2595,7 @@ function toolInputRequiredIntegrityFailure(
 // pattern, whose ARGUMENT schema carries the requiredIntegrity floors — its
 // own `path`/`args` builtin schema declares none — and the value is the
 // resolved args (path stripped). External tools are checked against the
-// schema they declare (`declaredInputSchema`), not the catalog's model-facing
+// schema they declare (`declaredInputSchemas`), not the catalog's model-facing
 // one, which drops a floor behind a recursive reference, with the raw model
 // input. Other management builtins (pin/read/schema/…) have fixed floor-free
 // schemas, so their check is a no-op.
@@ -2610,9 +2610,9 @@ function integrityGateTarget(
         ?.schema;
     return { schema, input: resolved.call.input };
   }
-  const tool = toolCatalog.llmTools[part.toolName];
   return {
-    schema: tool?.declaredInputSchema ?? tool?.inputSchema,
+    schema: toolCatalog.declaredInputSchemas?.get(part.toolName) ??
+      toolCatalog.llmTools[part.toolName]?.inputSchema,
     input: part.input,
   };
 }
