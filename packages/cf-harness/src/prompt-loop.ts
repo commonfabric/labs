@@ -3281,8 +3281,8 @@ export class CfHarnessPromptLoop {
     // chat policy, and any library caller, and each of those validates against
     // the tools this build defines. This is the one boundary all of them pass
     // through, so it is where the rule is enforced rather than restated; a
-    // run with a lineage is a subagent, and only a subagent may hold them.
-    const isSubagent = this.engine.getRunState().lineage !== undefined;
+    // subagent run may hold them.
+    const isSubagent = this.engine.getRunState().lineage?.role === "subagent";
     // A host that could back `assign_slug` but left it out of the run's tools
     // has not asked this run for a piece: it could never satisfy the contract,
     // and every final answer it gave would be refused. A resume that cannot
@@ -3681,7 +3681,8 @@ export class CfHarnessPromptLoop {
     }
     if (
       options.task === undefined || this.engine.resumedRun ||
-      runState.lineage !== undefined || !this.#allowedToolIds.has("research") ||
+      runState.lineage?.role === "subagent" ||
+      !this.#allowedToolIds.has("research") ||
       !sendsSection("opening-research", this.#shapeOf(runState)) ||
       isClosedResearchTask(options.task, runState)
     ) {
@@ -3938,6 +3939,7 @@ export class CfHarnessPromptLoop {
     if (this.#requirePieceOutput || browserHost !== undefined) {
       const guidance: HarnessTranscriptMessage = {
         role: "user",
+        turnLocal: true,
         content: [
           ...(this.#requirePieceOutput ? [PIECE_OUTPUT_GUIDANCE] : []),
           ...(browserHost !== undefined ? [BROWSER_HOST_PARENT_GUIDANCE] : []),
@@ -4139,7 +4141,11 @@ export class CfHarnessPromptLoop {
       }
       /** Appends a host notice that answers the turn just taken. */
       const appendHostNotice = async (content: string): Promise<void> => {
-        const notice: HarnessTranscriptMessage = { role: "user", content };
+        const notice: HarnessTranscriptMessage = {
+          role: "user",
+          content,
+          turnLocal: true,
+        };
         turnNotices.add(notice);
         transcript.push(notice);
         await this.engine.persistTranscript(transcript);
@@ -4190,6 +4196,7 @@ export class CfHarnessPromptLoop {
         if (finalizing || modelTurns === maxModelTurns - 2) {
           const budgetMessage: HarnessTranscriptMessage = {
             role: "user",
+            turnLocal: true,
             content: finalizing
               ? "Host turn budget: provide your final response now. Tools are unavailable. Report what you established and how, name what remains unchecked or uncertain, and do not claim the task is complete if it is not. This notice applies only to this user turn; subsequent user requests have a fresh budget."
               : this.#finalizeOnTurnLimit
@@ -6175,10 +6182,15 @@ export class CfHarnessPromptLoop {
     const childRunId = `${parentRunState.runId}.subagent.${subagentSequence}`;
     const childLineage = {
       role: "subagent" as const,
-      rootRunId: parentRunState.lineage?.rootRunId ?? parentRunState.runId,
+      rootRunId: parentRunState.lineage?.role === "subagent"
+        ? parentRunState.lineage.rootRunId
+        : parentRunState.runId,
       parentRunId: parentRunState.runId,
       parentToolCallId: options.toolCall.id,
-      depth: (parentRunState.lineage?.depth ?? 0) + 1,
+      depth:
+        (parentRunState.lineage?.role === "subagent"
+          ? parentRunState.lineage.depth
+          : 0) + 1,
     };
     // The acquired skill this child may run scripts of: the one its
     // `skillHandle` names, and no other.

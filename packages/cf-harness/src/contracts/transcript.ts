@@ -34,6 +34,13 @@ export interface HarnessToolResultProvenance {
 }
 
 export interface HarnessUserTranscriptMessage {
+  /**
+   * Persisted form of a turn-local host notice, which `resumableTranscript()`
+   * excludes by identity during the live loop. Excluded from later runs'
+   * history and omitted by provider request projections.
+   */
+  turnLocal?: true;
+
   role: "user";
   content: string;
   imageAttachments?: readonly HarnessImageAttachment[];
