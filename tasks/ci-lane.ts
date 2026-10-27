@@ -2841,10 +2841,18 @@ export async function runLane(
         members === undefined &&
         failing.some(({ record }) => record.test.k === "unit")
       ) {
-        members = new Map(
-          (await readWorkspaceMembers(path.join(options.root, "deno.jsonc")))
-            .map((member) => [getPackageName(member), member]),
-        );
+        try {
+          members = new Map(
+            (await readWorkspaceMembers(path.join(options.root, "deno.jsonc")))
+              .map((member) => [getPackageName(member), member]),
+          );
+        } catch (error) {
+          members = new Map();
+          console.warn(
+            "ci-lane: could not look up unit-test rerun commands:",
+            error,
+          );
+        }
       }
       for (const test of failing) {
         const rerun = laneRerun(test.record, members ?? new Map());

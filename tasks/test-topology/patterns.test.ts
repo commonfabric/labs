@@ -122,6 +122,8 @@ describe("the pattern and package suites", () => {
             "topics-read-budget-suite.ts",
             "topics-browser-measurement.ts",
             "topics-browser-measurement-core.ts",
+            "topics-browser-posture.ts",
+            "topics-navigation-helpers.ts",
           ]
         ) {
           expect(

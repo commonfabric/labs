@@ -178,6 +178,8 @@ async function patternIntegrationSuites(
         `${packageDir}/integration/topics-read-budget-suite.ts`,
         `${packageDir}/integration/topics-browser-measurement.ts`,
         `${packageDir}/integration/topics-browser-measurement-core.ts`,
+        `${packageDir}/integration/topics-browser-posture.ts`,
+        `${packageDir}/integration/topics-navigation-helpers.ts`,
       ], changed);
       const measurements = new Set([
         "topics-headless-fixture",

@@ -4978,93 +4978,103 @@ describe("what a lane does with the batches it was given", () => {
     }
   });
 
-  it("annotates a gating failure before starting the next batch and keeps running the lane", async () => {
-    const spool = await Deno.makeTempDir({ prefix: "lane-early-failure-" });
-    const lines: string[] = [];
-    const entries = ["first", "second"].map((name, index) => ({
-      test: { k: "unit" as const, s: "bakery", n: `${name} > runs` },
-      suite: name,
-      unit: `packages/bakery/${name}.test.ts`,
-      cost: 2 - index,
-    }));
-    let secondRan = false;
-    const reporting = (index: number) => {
-      const entry = entries[index]!;
-      return suite({
-        id: entry.suite,
-        units: [entry.unit],
-        locate: (record) =>
-          record.test.n === entry.test.n
-            ? { level: "unit", unit: entry.unit }
-            : undefined,
-        command: (_units, context) => {
-          if (index === 1) {
-            expect(lines.filter((line) => line.startsWith("::error")))
-              .toHaveLength(1);
-            expect(lines.some((line) => line.startsWith("FAILED:")))
-              .toBe(false);
-            secondRan = true;
-          }
-          return Promise.resolve([{
-            command: [
-              Deno.execPath(),
-              "eval",
-              `const dir = Deno.env.get("CF_TEST_RECORDS_DIR");
+  for (const missingManifest of [false, true]) {
+    const title = missingManifest
+      ? "keeps later batches running when rerun-command lookup cannot read the workspace manifest"
+      : "annotates a gating failure before starting the next batch and keeps running the lane";
+    it(title, async () => {
+      const spool = await Deno.makeTempDir({ prefix: "lane-early-failure-" });
+      const lines: string[] = [];
+      const entries = ["first", "second"].map((name, index) => ({
+        test: { k: "unit" as const, s: "bakery", n: `${name} > runs` },
+        suite: name,
+        unit: `packages/bakery/${name}.test.ts`,
+        cost: 2 - index,
+      }));
+      let secondRan = false;
+      const reporting = (index: number) => {
+        const entry = entries[index]!;
+        return suite({
+          id: entry.suite,
+          units: [entry.unit],
+          locate: (record) =>
+            record.test.n === entry.test.n
+              ? { level: "unit", unit: entry.unit }
+              : undefined,
+          command: (_units, context) => {
+            if (index === 1) {
+              expect(lines.filter((line) => line.startsWith("::error")))
+                .toHaveLength(1);
+              expect(lines.some((line) => line.startsWith("FAILED:")))
+                .toBe(false);
+              secondRan = true;
+            }
+            return Promise.resolve([{
+              command: [
+                Deno.execPath(),
+                "eval",
+                `const dir = Deno.env.get("CF_TEST_RECORDS_DIR");
                Deno.mkdirSync(dir, { recursive: true });
                Deno.writeTextFileSync(
                  dir + "/fragment-fixture.ndjson",
                  JSON.stringify(${
-                JSON.stringify({
-                  line: "record",
-                  test: entry.test,
-                  outcome: index === 0 ? "fail" : "pass",
-                  durationMs: 1,
-                })
-              }) + "\\n",
+                  JSON.stringify({
+                    line: "record",
+                    test: entry.test,
+                    outcome: index === 0 ? "fail" : "pass",
+                    durationMs: 1,
+                  })
+                }) + "\\n",
                );`,
-            ],
-            cwd: context.root,
-          }]);
-        },
+              ],
+              cwd: context.root,
+            }]);
+          },
+        });
+      };
+      const restore = setEnv({
+        RUNNER_TEMP: undefined,
+        GITHUB_ACTIONS: "true",
+        GITHUB_STEP_SUMMARY: undefined,
       });
-    };
-    const restore = setEnv({
-      RUNNER_TEMP: undefined,
-      GITHUB_ACTIONS: "true",
-      GITHUB_STEP_SUMMARY: undefined,
+      const warnings: unknown[][] = [];
+      const warn = console.warn;
+      console.warn = (...args: unknown[]) => warnings.push(args);
+      const log = console.log;
+      console.log = (line: string) => lines.push(line);
+      try {
+        const ok = await runLane({
+          lane: 1,
+          of: 1,
+          full: true,
+          dryRun: false,
+          laneCount: false,
+          root: missingManifest ? spool : REPOSITORY,
+          at: "2026-09-01T00:00:00Z",
+          coverageDir: `${spool}/coverage`,
+        }, {
+          manifest: () =>
+            Promise.resolve({
+              manifest: manifestOf(entries),
+              objectName: "manifest-fixture.json.gz",
+            }),
+          topology: () => Promise.resolve([reporting(0), reporting(1)]),
+          spool: () => spool,
+        });
+        expect(ok).toBe(false);
+        expect(secondRan).toBe(true);
+        expect(warnings).toHaveLength(missingManifest ? 1 : 0);
+        expect(lines.filter((line) => line.startsWith("::error")))
+          .toHaveLength(1);
+        expect(lines.some((line) => line.startsWith("FAILED:"))).toBe(true);
+      } finally {
+        console.log = log;
+        console.warn = warn;
+        restore();
+        await Deno.remove(spool, { recursive: true });
+      }
     });
-    const log = console.log;
-    console.log = (line: string) => lines.push(line);
-    try {
-      const ok = await runLane({
-        lane: 1,
-        of: 1,
-        full: true,
-        dryRun: false,
-        laneCount: false,
-        root: REPOSITORY,
-        at: "2026-09-01T00:00:00Z",
-        coverageDir: `${spool}/coverage`,
-      }, {
-        manifest: () =>
-          Promise.resolve({
-            manifest: manifestOf(entries),
-            objectName: "manifest-fixture.json.gz",
-          }),
-        topology: () => Promise.resolve([reporting(0), reporting(1)]),
-        spool: () => spool,
-      });
-      expect(ok).toBe(false);
-      expect(secondRan).toBe(true);
-      expect(lines.filter((line) => line.startsWith("::error")))
-        .toHaveLength(1);
-      expect(lines.some((line) => line.startsWith("FAILED:"))).toBe(true);
-    } finally {
-      console.log = log;
-      restore();
-      await Deno.remove(spool, { recursive: true });
-    }
-  });
+  }
 
   it("fails a lane told to stop, runs nothing more, and says what it spent", async () => {
     const stop = new LaneStop();
