@@ -109,6 +109,19 @@ A read consumes the join of every entry whose class is in its consumed set:
 | `linkResolutionProbe` / slot-pointer read (no deref) | `followRef` | which reference sits here — **stops being excluded**; consumes the link-origin entry's `followRef` class |
 | dereference (follow a ref to its target) | the dereference trace pair it already is | unchanged; target read classified at the target path |
 
+Runtime-minted concrete existence entries resolve independently from current
+value entries (§4.6.3, §8.12.8). Each retains its own most-specific applicable
+entry, and an observation consuming both joins them. A public child existence
+entry therefore cannot hide a confidential ancestor value; a public child
+value cannot hide confidential ancestor existence. Wildcard membership
+entries also retain their independent resolution. Declared and legacy covering
+entries keep their existing component resolution.
+
+Returning a primitive through a query-result proxy consumes its value, even
+when constructing that view first probes its shape. This applies to JavaScript
+primitives as well as Fabric primitives. A shape-only storage observation
+continues to consume only its shape classes.
+
 The load-bearing change is the third row: the `followRef` observation, today
 dropped from the flow join, becomes a consumed class carrying the link entry's
 label — closing SC-8.
