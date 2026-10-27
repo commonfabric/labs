@@ -902,6 +902,66 @@ const FIXED_CASES: readonly HashConformanceCase[] = [
     },
   },
   {
+    name: "record holding a link whose payload holds the record",
+    section: SECTION_CYCLES,
+    make: () => {
+      // A link copies its payload, so the cycle runs through a record the
+      // payload holds rather than through the payload itself.
+      const record: { link?: FabricValue } = {};
+      record.link = new FabricLink({ record });
+      return record;
+    },
+  },
+  {
+    name: "unknown value whose state holds the unknown value",
+    section: SECTION_CYCLES,
+    make: () => {
+      const state: { self?: FabricValue } = {};
+      const unknown = new UnknownValue("Future@1", state);
+      state.self = unknown;
+      return unknown;
+    },
+  },
+  {
+    name: "unknown value whose state holds itself",
+    section: SECTION_CYCLES,
+    make: () => {
+      const state: { self?: FabricValue } = {};
+      state.self = state;
+      return new UnknownValue("Future@1", state);
+    },
+  },
+  {
+    name: "error whose cause is the error",
+    section: SECTION_CYCLES,
+    make: () => {
+      const error = new FabricError({
+        type: "Error",
+        name: "Error",
+        message: "m",
+        stack: undefined,
+        cause: undefined,
+      });
+      error.cause = error;
+      return error;
+    },
+  },
+  {
+    name: "error whose extra is the error",
+    section: SECTION_CYCLES,
+    make: () => {
+      const error = new FabricError({
+        type: "Error",
+        name: "Error",
+        message: "m",
+        stack: undefined,
+        cause: undefined,
+      });
+      error.setExtra("self", error);
+      return error;
+    },
+  },
+  {
     name: "record holding two equal records",
     section: SECTION_CYCLES,
     make: () => ({ a: { n: 1 }, b: { n: 1 } }),

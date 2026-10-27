@@ -272,17 +272,44 @@ describe("hash-conformance", () => {
       });
     });
 
-    it("throws given a case whose text and mods decode to another value", () => {
-      // The walk writing a value stops at an instance, so an unknown value
-      // inside a link is not marked unclaimed, and decodes as bytes.
+    it("returns an entry writing a cycle through an instance as a patch whose path steps through its fields", () => {
+      const entry = soleEntryOf([
+        {
+          name: "a",
+          section: "s",
+          make: () => {
+            const record: { link?: FabricValue } = {};
+            record.link = new FabricLink({
+              u: new UnknownValue("Bytes@1", "AQ"),
+              record,
+            });
+            return record;
+          },
+        },
+      ]);
+      expect(entry).toMatchObject({
+        text: 'fvj1:{"link":{"/Link@1":{"record":null,"u":{"/Bytes@1":"AQ"}}}}',
+        unclaimed: ["Bytes@1"],
+        patches: [{ at: ["link", "payload", "record"], put: { cycle: [] } }],
+      });
+    });
 
+    it("throws given a case whose text and mods decode to another value", () => {
+      // The getter returns a new number at each read, so the value the case
+      // makes is unlike any one value, its text's included.
+
+      let reads = 0;
       expect(() =>
         hashConformanceFixtureTextForTestingOnly([
           {
             name: "a",
             section: "s",
-            make: () =>
-              new FabricLink({ u: new UnknownValue("Bytes@1", "AQ") }),
+            make: () => ({
+              get n() {
+                reads++;
+                return reads;
+              },
+            }),
           },
         ])
       ).toThrow("does not decode to the value the case made.");
