@@ -1,40 +1,95 @@
 #!/usr/bin/env -S deno run --allow-net --allow-env --allow-read
 
 /**
- * Integration test to reproduce memory leak when using derive() with array.map()
+ * Checks that building and tearing down a view over a derived array, again
+ * and again, does not retain memory in the test's own isolate, which runs the
+ * derivation and renders the view, and does not grow the resident size of the
+ * Toolshed at `API_URL` past a fixed limit.
  *
- * Bug: When a cell updates repeatedly and a derived array is created for each update,
- * the old derived arrays are never garbage collected, causing unbounded memory growth.
+ * One cycle clicks the fixture's increment and then its decrement, so the
+ * counter returns to zero and the view to no elements, and whatever the
+ * cycle allocated is garbage once it ends. Memory that grows with the number
+ * of cycles is therefore memory something retained. The cycles that run
+ * before the baseline take the one-time costs, such as compiled code and
+ * caches filling, out of the measurement.
  *
- * Expected behavior: Memory should stabilize or grow modestly
- * Actual behavior: Memory grows by gigabytes (1GB+ per 100 increments)
+ * The view is rendered here, as a browser would render it, because the
+ * scheduler runs only the computations something reads: with nothing reading
+ * the view, a click runs the handler and no derivation at all.
+ *
+ * The isolate is measured after a full garbage collection, as the heap and
+ * the memory outside it that V8 accounts for. That reading does not depend on
+ * when the collector last ran, nor on which pages the operating system has
+ * compressed or swapped out, so its limit only has to leave room for bounded
+ * structures that are still filling, such as timing reservoirs and caches.
+ * Retention smaller than that limit across the measured cycles passes. Each
+ * test file runs in an isolate of its own, so the reading leaves other files
+ * out.
+ *
+ * Nothing here can make the server collect. Its resident size, its only
+ * reading of the whole process, moves by hundreds of megabytes with
+ * collection timing, so a server leak smaller than the server's limit
+ * passes.
  */
 
+// deno-lint-ignore no-external-import -- Enables `gc()` after startup, whatever flags started the test.
+import { setFlagsFromString } from "node:v8";
+// deno-lint-ignore no-external-import -- Creates the context that holds `gc()`.
+import { runInNewContext } from "node:vm";
+import { MockDoc } from "@commonfabric/html/mock-doc";
+import { renderInProcess } from "@commonfabric/html/in-process";
 import { createSession, Identity } from "@commonfabric/identity";
 import {
   experimentalOptionsFromEnv,
+  UI,
   withServerExecutionDefault,
 } from "@commonfabric/runner";
+import { uiSchema } from "@commonfabric/runner/schemas";
 import { createTestSpace, env } from "@commonfabric/integration";
 import { PiecesController } from "@commonfabric/piece/ops";
+import { defer, type Deferred } from "@commonfabric/async/defer";
 
 import { compileAndSavePattern, Runtime } from "../src/index.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 
-(Error as any).stackTraceLimit = 100;
-
 const { API_URL } = env;
 
-// Test parameters
-const INCREMENTS_PER_CLICK = 50; // How many times each click increments (must match .tsx file)
-const MAX_MEMORY_INCREASE_RATIO = 2.0; // Fail ratio
+// Cycles run before the baseline, and cycles measured after it.
+const WARM_UP_CYCLES = 30;
+const MEASURED_CYCLES = 20;
 
-console.log("Derive Array Leak Test");
-console.log(`Connecting to: ${API_URL}`);
-console.log(`Will increment ${INCREMENTS_PER_CLICK} times in one click`);
+// The most the isolate and the server may grow across the measured cycles.
+// Without a leak, on a Mac in either posture, the isolate grew less than
+// 6 MB, and the server's resident size by up to 260 MB.
+const MAX_CLIENT_GROWTH_MB = 16;
+const MAX_SERVER_GROWTH_MB = 512;
 
-// The resident memory of the Toolshed this test talks to, as that server
-// reports it.
+const MB = 1024 * 1024;
+
+/** Returns V8's `gc()`, which collects this isolate's whole heap. */
+function exposeGarbageCollector(): () => void {
+  // V8 gives `gc()` only to contexts created after the flag is set, so the
+  // function comes from a new context.
+  setFlagsFromString("--expose-gc");
+  const gc: unknown = runInNewContext("gc");
+  if (typeof gc !== "function") throw new Error("V8 did not expose `gc()`");
+  return () => gc();
+}
+
+/**
+ * Returns the memory this isolate holds live, in megabytes: the heap and
+ * V8's external memory, after `collectGarbage` has run.
+ */
+function getClientMemoryMB(collectGarbage: () => void): number {
+  collectGarbage();
+  const { heapUsed, external } = Deno.memoryUsage();
+  return (heapUsed + external) / MB;
+}
+
+/**
+ * Returns the resident size of the Toolshed at `API_URL`, in megabytes, as
+ * that server reports it.
+ */
 async function getServerMemoryMB(): Promise<number> {
   const url = new URL("api/health/stats", API_URL);
   const response = await fetch(url);
@@ -45,142 +100,153 @@ async function getServerMemoryMB(): Promise<number> {
   }
   const rss = (await response.json()).processMemory?.rss;
   if (typeof rss !== "number") {
-    throw new Error(`${url} reported no processMemory.rss`);
+    throw new Error(`${url} reported no \`processMemory.rss\``);
   }
-  return rss / (1024 * 1024);
+  return rss / MB;
 }
 
-// Main test function
 async function runTest() {
+  const collectGarbage = exposeGarbageCollector();
   const account = await Identity.generate();
   const space = await createTestSpace(account);
   const session = createSession({ identity: account, spaceDid: space });
 
-  // Create storage manager
+  // The first error the runtime or the view reported, and the wait for the
+  // click in progress, which that error ends.
+  let failure: Error | undefined;
+  let shown: Deferred | undefined;
+  const fail = (error: Error) => {
+    failure ??= error;
+    shown?.reject(error);
+  };
+
   const storageManager = StorageManager.open({
     as: session.as,
     memoryHost: new URL(API_URL),
   });
-
-  // Create runtime
   const runtime = new Runtime({
     apiUrl: new URL(API_URL),
     // The posture this client runs (server-execution v2, testing.md §2):
     // resolved exactly like a deployed entry point — the canonical env
-    // mapping, else the first-party default (ON since the flip) — so this
-    // process runs the arm the lane's toolshed runs: the DEFAULT lane's
-    // unset flag resolves ON, the OFF regression-guard lane's explicit
-    // `false` the OFF arm. A bare construction resolves the AMBIENT
-    // baseline instead, which post-flip is the P7 review's finding-7
-    // mixed posture.
+    // mapping, else the first-party default — so this process runs the arm
+    // the lane's toolshed runs. A bare construction resolves the ambient
+    // baseline instead, a posture no deployment runs.
     experimental: withServerExecutionDefault(
       experimentalOptionsFromEnv(Deno.env.get),
     ),
     storageManager,
+    errorHandlers: [fail],
   });
-
-  // Create the pieces controller for the specified space
-  const pieces = new PiecesController(session, runtime);
-  await pieces.ready;
-
-  // Read the pattern file content
-  const patternContent = await Deno.readTextFile(
-    "./integration/derive_array_leak.tsx",
-  );
-
-  const pattern = await compileAndSavePattern(
-    runtime,
-    patternContent,
-    { space },
-  );
-  console.log("Pattern compiled successfully");
-
-  const piece = (await pieces.runPersistent(pattern, {})).asSchema({
-    type: "object",
-    properties: {
-      value: { type: "number" },
-      increment: {
-        asCell: ["stream"],
+  try {
+    const pieces = new PiecesController(session, runtime);
+    await pieces.ready;
+    const pattern = await compileAndSavePattern(
+      runtime,
+      await Deno.readTextFile("./integration/derive_array_leak.tsx"),
+      { space },
+    );
+    const result = await pieces.runPersistent(pattern, {});
+    const piece = result.asSchema({
+      type: "object",
+      properties: {
+        value: { type: "number" },
+        stepsPerClick: { type: "number" },
+        increment: { asCell: ["stream"] },
+        decrement: { asCell: ["stream"] },
       },
-    },
-    required: ["value", "increment"],
-  });
-  console.log("Piece created:", piece.entityId);
+      required: ["value", "stepsPerClick", "increment", "decrement"],
+    });
 
-  // Settle the piece's initialization writes before sampling the baseline.
-  // runtime.idle() drains client-side reactivity; synced() then waits for every
-  // pending commit to be confirmed durable by the memory server. The
-  // after-measurement below settles the same way, so both samples follow the
-  // same barrier.
-  await runtime.idle();
-  await runtime.storageManager.synced();
-
-  // Measure baseline server memory (where the leak occurs)
-  const serverMemoryBeforeMB = await getServerMemoryMB();
-  console.log(`Baseline server memory: ${serverMemoryBeforeMB.toFixed(1)} MB`);
-  console.log(`Initial counter value: ${piece.get().value}`);
-
-  // Trigger the leak by incrementing
-  // The handler increments INCREMENTS_PER_CLICK times per click
-  console.log(
-    `Clicking increment (${INCREMENTS_PER_CLICK} increments total)...`,
-  );
-  const incrementStream = piece.key("increment");
-  incrementStream.send({});
-
-  // Wait for all updates to complete
-  console.log("Waiting for runtime to finish...");
-  await runtime.idle();
-  await runtime.storageManager.synced();
-  console.log(`Final counter value: ${piece.get().value}`);
-
-  // Verify the counter actually incremented
-  const finalValue = piece.get().value;
-  const expectedValue = INCREMENTS_PER_CLICK;
-  if (finalValue !== expectedValue) {
-    console.warn(
-      `WARNING: Counter value is ${finalValue}, expected ${expectedValue}. ` +
-        `This may indicate the derive action failed due to array size.`,
+    const mock = new MockDoc(
+      '<!DOCTYPE html><html><body><div id="root"></div></body></html>',
     );
+    const container = mock.document.getElementById("root");
+    if (container === null) throw new Error("The mock document has no root");
+    // Runs whenever the counter changes or the view applies a batch.
+    let onChange = () => {};
+    const render = renderInProcess(
+      container,
+      result.asSchema(uiSchema).key(UI),
+      {
+        document: mock.document,
+        setProp: mock.renderOptions.setProp,
+        onError: fail,
+        onApplied: () => onChange(),
+      },
+    );
+    const cancelValueSink = piece.key("value").sink(() => onChange());
+    try {
+      // Sends one click, and waits until the counter is `expected` and the
+      // view shows that many elements. Where the server runs the handler,
+      // the value arrives from the server, which neither the runtime going
+      // idle nor the server confirming this runtime's commits waits for.
+      const click = async (
+        stream: "increment" | "decrement",
+        expected: number,
+      ) => {
+        if (failure) throw failure;
+        const wait = shown = defer();
+        onChange = () => {
+          const items = mock.document.getElementById("items")
+            ?.getElementsByTagName("i").length;
+          if (piece.get().value === expected && items === expected) {
+            wait.resolve();
+          }
+        };
+        try {
+          piece.key(stream).send({});
+          await wait.promise;
+        } finally {
+          shown = undefined;
+        }
+        await runtime.idle();
+        await runtime.storageManager.synced();
+      };
+      const cycle = async () => {
+        await click("increment", piece.get().stepsPerClick);
+        await click("decrement", 0);
+      };
+
+      for (let i = 0; i < WARM_UP_CYCLES; i++) await cycle();
+      const clientBeforeMB = getClientMemoryMB(collectGarbage);
+      const serverBeforeMB = await getServerMemoryMB();
+      for (let i = 0; i < MEASURED_CYCLES; i++) await cycle();
+      const clientGrowthMB = getClientMemoryMB(collectGarbage) -
+        clientBeforeMB;
+      const serverGrowthMB = await getServerMemoryMB() - serverBeforeMB;
+      if (failure) throw failure;
+
+      const growth = (grewMB: number, fromMB: number, limitMB: number) =>
+        `${grewMB.toFixed(1)} MB from ${fromMB.toFixed(1)} MB ` +
+        `(limit ${limitMB} MB)`;
+      console.log(
+        `Across ${MEASURED_CYCLES} cycles, the test's isolate grew ` +
+          growth(clientGrowthMB, clientBeforeMB, MAX_CLIENT_GROWTH_MB) +
+          ", and the server grew " +
+          growth(serverGrowthMB, serverBeforeMB, MAX_SERVER_GROWTH_MB),
+      );
+      if (clientGrowthMB > MAX_CLIENT_GROWTH_MB) {
+        throw new Error(
+          `The test's isolate retained ${
+            clientGrowthMB.toFixed(1)
+          } MB across ` +
+            `${MEASURED_CYCLES} cycles (limit ${MAX_CLIENT_GROWTH_MB} MB)`,
+        );
+      }
+      if (serverGrowthMB > MAX_SERVER_GROWTH_MB) {
+        throw new Error(
+          `The server grew ${serverGrowthMB.toFixed(1)} MB across ` +
+            `${MEASURED_CYCLES} cycles (limit ${MAX_SERVER_GROWTH_MB} MB)`,
+        );
+      }
+    } finally {
+      cancelValueSink();
+      render.cancel();
+    }
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
   }
-
-  // Measure server memory after operations complete
-  const serverMemoryAfterMB = await getServerMemoryMB();
-  const serverMemoryIncreaseMB = serverMemoryAfterMB - serverMemoryBeforeMB;
-  const memoryRatio = serverMemoryAfterMB / serverMemoryBeforeMB;
-
-  console.log(`Final server memory: ${serverMemoryAfterMB.toFixed(1)} MB`);
-  console.log(
-    `Server memory increase: ${serverMemoryIncreaseMB.toFixed(1)} MB (${
-      ((memoryRatio - 1) * 100).toFixed(1)
-    }% increase)`,
-  );
-  console.log(`Memory ratio: ${memoryRatio.toFixed(2)}x`);
-
-  // Clean up
-  await runtime.dispose();
-  await storageManager.close();
-
-  // Check if server memory increase indicates a leak
-  if (memoryRatio > MAX_MEMORY_INCREASE_RATIO) {
-    console.error(
-      `FAIL: Server memory increased to ${memoryRatio.toFixed(2)}x baseline, ` +
-        `exceeds limit of ${MAX_MEMORY_INCREASE_RATIO}x`,
-    );
-    console.error("This indicates a memory leak is present");
-    throw new Error(
-      `Memory leak detected: ${
-        memoryRatio.toFixed(2)
-      }x increase (limit: ${MAX_MEMORY_INCREASE_RATIO}x)`,
-    );
-  }
-
-  console.log(
-    `PASS: Memory increase ${
-      memoryRatio.toFixed(2)
-    }x is within acceptable limit (< ${MAX_MEMORY_INCREASE_RATIO}x)`,
-  );
-  console.log(`Counter reached ${finalValue} (expected ${expectedValue})`);
 }
 
 // The test runs without a per-test deadline. See
