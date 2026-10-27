@@ -43,6 +43,7 @@ was last checked against the code.
 | [`localFold`](#localfold) | `EXPERIMENTAL_LOCAL_FOLD` env / shell build define, or `RuntimeOptions.experimental` | off | Robin McCollum (2026-10-14) | decide between the fold and reverting a refused derived write, then delete the flag and the losing arm | implemented, off by default |
 | [`instanceNames`](#instancenames) | `RuntimeOptions.experimental` only (mapped `null` in the canonical env registry); the shell adopts it from its deployment | off | Dan Bornstein (2026-10-23) | carry deployed children over to their names, exclude a runtime whose naming mode differs from its space's, turn it on, then delete the flag and the positional compile of `const`-bound instances | implemented, off by default; must not turn on before carry-over and that exclusion exist |
 | [`connectionAuth`](#connectionauth) | Memory hello capability | advertised by a host that verifies `connection.auth`; toolshed does under `sharedMemoryConnection` | Bernhard Seefeld (2026-09-29) | retain as protocol negotiation until signed `session.open` retires | optional capability |
+| [`sessionOpenProofs`](#sessionopenproofs) | Memory hello capability; toolshed advertises it under `MEMORY_ACL_DELEGATIONS` | off | Robin McCollum (2026-10-26) | turn on once a client presents a chain, then retain as protocol negotiation | implemented on the server, off by default; no client presents a chain yet |
 | [`agentBuiltin`](#agentbuiltin) | `EXPERIMENTAL_AGENT_BUILTIN` env, or `RuntimeOptions.experimental` | on | Bernhard Seefeld (agent requests stage 3) | delete the flag after the default-on posture soaks | implemented, on by default |
 | [`cfcEnforcementMode`](#cfcenforcementmode)                                 | `RuntimeOptions.cfcEnforcementMode` (`CF_CFC_MODE` in the cf-harness / fuse)                                                                    | `enforce-strict`                                                                     | Bernhard Seefeld (#3263)                              | the ladder stays; the default is at its top rung                                                                                                                                                                                  | implemented, on by default at the strictest rung                                |
 | [`cfcFlowLabels`](#cfcflowlabels)                                           | `RuntimeOptions.cfcFlowLabels`                                                                                                                  | `persist`                                                                            | Bernhard Seefeld (#4011)                              | move toward `persist`                                                                                                                                                                                                             | implemented, on by default at `persist`                                         |
@@ -1523,6 +1524,28 @@ the per-epic implementation notes).
 - **Status (2026-09-29):** optional. Toolshed advertises it exactly when
   `sharedMemoryConnection` is on; the standalone server advertises it when
   started with `connectionAuth: true`, whatever the flag says.
+
+### `sessionOpenProofs`
+
+- **Added by:** Robin McCollum, 2026-10-26.
+- **Toggle and default:** a Memory hello capability, advertised by a server
+  whose access-list policy admits delegations (`Server` option
+  `acl.delegations`). Toolshed sets it from `MEMORY_ACL_DELEGATIONS`, off by
+  default; the standalone server takes it in its `acl` option. An absent
+  field means unsupported, and such a server refuses every chain.
+- **Gates:** a `session.open` presenting a UCAN proof chain in
+  `authorization.proofs`, named by `invocation.prf` on a signed open
+  ([`04-protocol.md`](../specs/memory-v2/04-protocol.md), section 4.5.1,
+  "Proof chains"). The server verifies the chain and resolves the session's
+  capability from the access list's grant to the chain's root issuer, while
+  the session's principal stays the key that opened it. The design is
+  [`profile-delegation.md`](../specs/profile-delegation.md).
+- **End state and removal:** turn on by default once a client presents a
+  chain (the design's second phase), then retain the negotiation while
+  deployments may contain servers that admit none.
+- **Status (2026-10-26):** implemented on the server and off by default. No
+  client presents a chain yet, so turning it on admits nothing today; it
+  exists so the server side can be deployed ahead of the client.
 
 ### `conflictAdmissionMode`
 

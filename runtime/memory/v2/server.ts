@@ -207,7 +207,10 @@ import {
   trackedIdsFromEntries,
   unionQuery,
 } from "./server-sync.ts";
-import { authorizationError } from "./session-open-auth.ts";
+import {
+  authorizationError,
+  verifySessionOpenProofs,
+} from "./session-open-auth.ts";
 import {
   type SessionLifecycleEvent,
   SessionRegistry,
@@ -3145,6 +3148,17 @@ export class Server {
          * empty.
          */
         delegatingDids?: readonly string[];
+
+        /**
+         * Whether a `session.open` may present a UCAN proof chain
+         * (04-protocol.md §4.5.1). When it may, the server verifies the
+         * chain and resolves the session's capability, READ, WRITE and
+         * OWNER alike, from the access list's grant to the chain's root
+         * issuer, while the session's principal stays the key that opened
+         * it. Off (the default), an open presenting a chain is refused, and
+         * the server does not advertise `sessionOpenProofs`.
+         */
+        delegations?: boolean;
       };
     },
   ) {
@@ -3295,6 +3309,7 @@ export class Server {
       serverExecution: this.#serverExecutionObserver !== undefined,
       operationCodecs: this.#operationCodecs.ids(),
       connectionAuth: this.options.authorizeConnection !== undefined,
+      sessionOpenProofs: this.options.acl?.delegations === true,
       routedAuthV1: false,
       routedCompressionV1: false,
     };
@@ -3635,9 +3650,13 @@ export class Server {
     // served writes ride the wave's §2b delegated carriage, and a
     // session-plane write by the serving identity stays refused (the
     // observe-mode canary's subject).
-    const principal = requirement === "READ"
-      ? session.actingPrincipal ?? session.principal
-      : session.principal;
+    // A proof chain's root issuer resolves every requirement: it is the
+    // principal whose grant the session acts under, OWNER included
+    // (04-protocol.md §4.5.1).
+    const principal = session.capabilityPrincipal ??
+      (requirement === "READ"
+        ? session.actingPrincipal ?? session.principal
+        : session.principal);
     return this.#authorizeMessageWithEngine(
       engine,
       space,
@@ -3893,7 +3912,8 @@ export class Server {
       const capability = this.#capabilityFor(
         engine,
         space,
-        session.actingPrincipal ?? session.principal,
+        session.capabilityPrincipal ?? session.actingPrincipal ??
+          session.principal,
       );
       if (capability !== null && isCapable(capability, "READ")) continue;
       if (session.actingPrincipal === undefined) {
@@ -5637,10 +5657,40 @@ export class Server {
             message.space,
           );
       }
+      // A proof chain (04-protocol.md §4.5.1) resolves the session's
+      // capability from the access list's grant to the chain's root issuer.
+      // The chain is verified whatever the ACL mode, so a malformed one is
+      // refused the same way everywhere; a server whose policy admits none
+      // refuses every chain, so no client learns anything from one it
+      // presents to the wrong server.
+      const presentsChain = (isFabricPlainObject(message.authorization) &&
+        message.authorization.proofs !== undefined) ||
+        (isFabricPlainObject(message.invocation) &&
+          message.invocation.prf !== undefined);
+      let capabilityPrincipal: string | undefined;
+      if (presentsChain) {
+        if (this.options.acl?.delegations !== true) {
+          throw authorizationError(
+            "memory session.open proofs refused: this server admits no " +
+              "delegations",
+          );
+        }
+        if (actingAs !== undefined) {
+          throw authorizationError(
+            "memory session.open proofs refused: a chain and an actingAs " +
+              "binding cannot both be presented",
+          );
+        }
+        capabilityPrincipal = await verifySessionOpenProofs(message, {
+          space: message.space,
+          principal,
+          nowSeconds: this.nowSeconds(),
+        });
+      }
       const deny = this.#authorizeMessageWithEngine(
         engine,
         message.space,
-        actingPrincipal ?? principal,
+        capabilityPrincipal ?? actingPrincipal ?? principal,
         "READ",
       );
       if (deny) {
@@ -5702,6 +5752,7 @@ export class Server {
           actingPrincipal,
           connection.routed,
           connection.elidedVerdicts,
+          capabilityPrincipal,
         );
       } catch (error) {
         // Record the refused resume together with its session and connection.
@@ -6439,7 +6490,7 @@ export class Server {
           const deny = routedDeny ?? this.#authorizeCommitWithEngine(
             engine,
             message.space,
-            session.principal,
+            session.capabilityPrincipal ?? session.principal,
             message.commit,
           );
           if (deny) {

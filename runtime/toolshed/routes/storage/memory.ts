@@ -115,6 +115,7 @@ export const memoryServer = new MemoryServer.Server({
     mode: env.MEMORY_ACL_MODE,
     serviceDids: memoryAclPrincipals.serviceDids,
     delegatingDids: memoryAclPrincipals.delegatingDids,
+    delegations: env.MEMORY_ACL_DELEGATIONS,
   },
   ...(routerPolicy !== undefined
     ? {

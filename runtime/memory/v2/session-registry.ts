@@ -165,6 +165,15 @@ export type SessionState = {
   actingPrincipal?: string;
 
   /**
+   * The root issuer of the proof chain this session's latest open presented
+   * (04-protocol.md §4.5.1): the principal whose access-list grant every
+   * capability decision for the session resolves from, READ, WRITE and OWNER
+   * alike. `principal` stays the session's identity for everything else.
+   * Fresh per open; a resume presenting no chain drops it.
+   */
+  capabilityPrincipal?: string;
+
+  /**
    * Set when the opening connection's client advertised `elidedVerdicts`:
    * its replica promotes a layer the verdict elides to the document its
    * transaction computed rather than folding it, so the engine may elide a
@@ -300,6 +309,7 @@ export class SessionRegistry {
     actingPrincipal?: string,
     routed = false,
     elidedVerdicts = false,
+    capabilityPrincipal?: string,
   ): OpenSessionState {
     this.#prune();
     const sessionId = session.sessionId ?? crypto.randomUUID();
@@ -421,6 +431,8 @@ export class SessionRegistry {
       // open's resolution against the current ACL; an open without the
       // marker carries none (fail-closed toward less authority).
       ...(actingPrincipal !== undefined ? { actingPrincipal } : {}),
+      // Fresh per open, like the binding: the chain THIS open presented.
+      ...(capabilityPrincipal !== undefined ? { capabilityPrincipal } : {}),
       ...(elidedVerdicts ? { elidedVerdicts: true } : {}),
     });
     this.#observer?.(openedEvent(this.#sessions.get(key)!));

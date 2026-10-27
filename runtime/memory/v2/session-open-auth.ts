@@ -30,6 +30,12 @@ import {
   valueEqual,
 } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import {
+  decodeDelegation,
+  type Delegation,
+  delegationCovers,
+  verifyDelegation,
+} from "@commonfabric/identity";
 import { fromDID } from "../util.ts";
 import { MEMORY_PROTOCOL, type SessionOpenChallenge } from "../v2.ts";
 import { type ClientInfo, parseClientInfo } from "./client-info.ts";
@@ -280,4 +286,118 @@ export const authorizeLoopbackSessionOpen = (
       typeof authorization.principal === "string"
     ? authorization.principal
     : undefined;
+};
+
+/** The command a `session.open` exercises, as a delegation names it. */
+export const SESSION_OPEN_COMMAND = "/memory/session.open";
+
+export type VerifySessionOpenProofsOptions = {
+  /** The space the open names. */
+  space: string;
+
+  /** The principal the open was authenticated as, or `undefined` for none. */
+  principal: string | undefined;
+
+  /** Current unix time in seconds (defaults to now). Injectable for tests. */
+  nowSeconds?: number;
+
+  /** Grace window for a proof's validity to tolerate clock skew. */
+  clockSkewSeconds?: number;
+};
+
+const proofError = (step: string): Error =>
+  authorizationError(`memory session.open proofs refused: ${step}`);
+
+/**
+ * Verifies the proof chain a `session.open` presents, and returns the chain's
+ * root issuer: the principal whose access-list grant the session's capability
+ * resolves from. Returns `undefined` for an open presenting no chain.
+ *
+ * A chain is `authorization.proofs`, the delegations' bytes in order from the
+ * root. A signed open also names their CIDs in `invocation.prf`, in the same
+ * order, which binds the chain to the signature; an open naming an
+ * authenticated principal carries the proofs alone. Each proof must decode as
+ * a delegation, carry the CID named for it, verify against its issuer, name
+ * `space` as its subject, cover {@link SESSION_OPEN_COMMAND}, and be within
+ * its validity window; the proofs must link, each audience being the next
+ * issuer, and the last audience must be `principal`. Any shortfall throws a
+ * permanent `AuthorizationError` naming the step, since no fresh handshake
+ * heals it.
+ */
+export const verifySessionOpenProofs = async (
+  message: SessionOpenMessage,
+  options: VerifySessionOpenProofsOptions,
+): Promise<string | undefined> => {
+  const { invocation } = message;
+  const prf = isFabricPlainObject(invocation) ? invocation.prf : undefined;
+  const proofs = isFabricPlainObject(message.authorization)
+    ? message.authorization.proofs
+    : undefined;
+  if (prf === undefined && proofs === undefined) return undefined;
+  if (options.principal === undefined) {
+    throw proofError("the open authenticates no principal");
+  }
+  if (!Array.isArray(proofs) || proofs.length === 0) {
+    throw proofError("`proofs` is not a non-empty array");
+  }
+  let cids: string[] | undefined;
+  if (isFabricPlainObject(invocation)) {
+    if (
+      !Array.isArray(prf) || prf.length !== proofs.length ||
+      !prf.every((cid) => typeof cid === "string")
+    ) {
+      throw proofError("`prf` does not name one CID per proof");
+    }
+    cids = prf as string[];
+  } else if (prf !== undefined) {
+    throw proofError("`prf` without a signed invocation");
+  }
+  const now = options.nowSeconds ?? Math.floor(Date.now() / 1000);
+  const skew = options.clockSkewSeconds ?? DEFAULT_CLOCK_SKEW_SECONDS;
+  const chain: Delegation[] = [];
+  for (const [i, proof] of proofs.entries()) {
+    if (!(proof instanceof FabricBytes)) {
+      throw proofError(`proof ${i} is not bytes`);
+    }
+    let delegation: Delegation;
+    try {
+      delegation = await decodeDelegation(proof.slice());
+    } catch (error) {
+      throw proofError(
+        `proof ${i} ${error instanceof Error ? error.message : error}`,
+      );
+    }
+    if (cids !== undefined && cids[i] !== delegation.cid) {
+      throw proofError(`proof ${i} is not the delegation \`prf\` names`);
+    }
+    try {
+      await verifyDelegation(delegation);
+    } catch (error) {
+      throw proofError(
+        `proof ${i} ${error instanceof Error ? error.message : error}`,
+      );
+    }
+    const { payload } = delegation;
+    if (payload.sub !== options.space) {
+      throw proofError(`proof ${i} is over another space`);
+    }
+    if (!delegationCovers(payload.cmd, SESSION_OPEN_COMMAND)) {
+      throw proofError(`proof ${i} does not cover ${SESSION_OPEN_COMMAND}`);
+    }
+    if (payload.exp !== null && payload.exp < now - skew) {
+      throw proofError(`proof ${i} has expired`);
+    }
+    if (payload.nbf !== undefined && payload.nbf > now + skew) {
+      throw proofError(`proof ${i} is not yet valid`);
+    }
+    const previous = chain.at(-1);
+    if (previous !== undefined && previous.payload.aud !== payload.iss) {
+      throw proofError(`proof ${i} is not issued by the previous audience`);
+    }
+    chain.push(delegation);
+  }
+  if (chain.at(-1)!.payload.aud !== options.principal) {
+    throw proofError("the last audience is not the open's principal");
+  }
+  return chain[0].payload.iss;
 };

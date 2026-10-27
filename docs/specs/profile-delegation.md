@@ -491,15 +491,16 @@ part of this design.
 
 ## Phases
 
-1. **Server verifies proofs.** An in-house codec for the closed delegation
-   shape, with DAG-CBOR envelope encoding and decoding, CID computation, and
-   varsig signature verification, in the identity package or beside it, held
-   to reference test vectors byte for byte; `session-open-auth.ts` verifies
-   a chain with it and reports the root issuer; `server.ts` resolves the
-   capability for the root issuer. Behind a flag registered in
-   [`EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md) until
-   the client ships. Tests: chain verification, each refusal, and the
-   capability substitution, in the memory package's protocol tests.
+1. **Server verifies proofs.** Implemented. The identity package holds the
+   codec for the closed delegation shape (`delegation.ts` over
+   `dag-cbor.ts`): envelope encoding and decoding, CID computation, and
+   signature verification, pinned to a vector byte for byte.
+   `session-open-auth.ts` verifies a chain with it and reports the root
+   issuer, and `server.ts` resolves the capability for the root issuer. The
+   server advertises `sessionOpenProofs` when its policy admits delegations,
+   registered in
+   [`EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md) and
+   off by default until the client ships.
 2. **Client presents proofs.** `createSignedSessionOpenAuth` and the storage
    manager carry a chain for a space that has one; reopens keep it.
 3. **Profile identity at creation.** The profile creation path signs

@@ -1,5 +1,17 @@
 export { PassKey } from "./pass-key.ts";
 export {
+  decodeDelegation,
+  type Delegation,
+  delegationCid,
+  delegationCovers,
+  DelegationError,
+  type DelegationFields,
+  type DelegationPayload,
+  ED25519_DAG_CBOR_VARSIG,
+  issueDelegation,
+  verifyDelegation,
+} from "./delegation.ts";
+export {
   Identity,
   type IdentityCreateConfig,
   VerifierIdentity,

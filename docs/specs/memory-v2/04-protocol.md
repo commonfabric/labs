@@ -425,6 +425,10 @@ interface SessionOpenRequest {
   invocation?: SessionOpenInvocation;
   authorization?: {
     signature: SignatureBytes;
+    // The delegations `invocation.prf` names, as their issuers encoded
+    // them, in the same order (section 4.5.1, "Proof chains"). Outside the
+    // signature: each is signed by its own issuer, and `prf` binds the set.
+    proofs?: Uint8Array[];
   };
   // The client's declared holdings, sent when resuming (see the rules).
   // Outside the signed descriptor: it shapes only what this session is
@@ -480,6 +484,10 @@ interface SessionOpenInvocation {
   challenge: string;
   iat: number;
   exp: number;
+  // The CIDs of `authorization.proofs`, in chain order, on an open that
+  // presents a proof chain (section 4.5.1, "Proof chains"). Inside the
+  // signed invocation, so the chain is bound to the signature.
+  prf?: string[];
 }
 
 interface SessionOpenResult {
@@ -1880,6 +1888,49 @@ transport.
 Broader ACL-based read opens and non-owner session opens are implemented by the
 server ACL policy when enabled.
 Route-level `Origin` checks remain future work on the v2 websocket route.
+
+#### Proof chains
+
+A `session.open` may present a UCAN proof chain: delegations by which a
+principal the access list grants hands its authority over the space down to
+the principal opening the session. The server verifies the chain and resolves
+the session's capability, READ, WRITE and OWNER alike, from the access list's
+grant to the chain's **root issuer**, while the session's principal stays the
+key that opened it: scope partitions, commit attribution, presence, and
+`session/admissible` are unchanged. [`profile-delegation.md`](../profile-delegation.md)
+is the design this serves, and the delegation's encoding is specified there.
+
+A server advertises `sessionOpenProofs` when its access-list policy admits
+delegations, and refuses every chain when it does not. The chain is
+`authorization.proofs`, the delegations' bytes as their issuers encoded them,
+in order from the root. A signed open also names their CIDs in
+`invocation.prf`, in the same order; the invocation is signed, so a relay
+cannot add, drop, or reorder proofs without invalidating the open. An open
+naming a connection-authenticated `principal` carries the proofs alone, since
+proofs are per space and connection authentication is per key.
+
+The server, after authenticating the open's principal, checks that:
+
+- `proofs` is a non-empty array of bytes, and on a signed open `prf` names
+  exactly one CID per proof
+- each proof decodes as a delegation of the shape the design specifies, and
+  its CID, computed over the bytes as received, is the one `prf` names
+- each proof's signature verifies against its own `iss`
+- each proof's `sub` is the requested space
+- each proof's `cmd` covers `/memory/session.open`: it is `/`, `/memory`, or
+  `/memory/session.open`
+- each proof is within its `nbf` and `exp`, with the clock-skew grace a signed
+  open gets
+- the proofs link, each `aud` being the next proof's `iss`, and the last `aud`
+  is the open's principal
+- the open does not also carry the `actingAs` binding
+
+A chain failing any of these is refused with a permanent `AuthorizationError`
+naming the step: no fresh handshake heals it, and an expired proof is not
+retriable. The capability is then resolved for the root issuer, and an open
+whose root issuer the access list does not grant READ is refused as any
+ungranted principal is. The chain is fresh per open: a resume presenting none
+leaves the session to its principal's own grant.
 
 ### 4.5.2 Future Target
 
