@@ -24,6 +24,7 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import { writeOwnProfile } from "./own-profile-fixture.ts";
 
 const signer = await Identity.fromPassphrase("fabrichat container index");
 const home = signer.did();
@@ -538,16 +539,8 @@ describe("fabrichat-container-index", () => {
 
   it("joins an unsaved container's real room when its viewer sends a message", async () => {
     const social = await runtime.createSpace({});
+    const profile = await writeOwnProfile(runtime, social, "profile", "Sender");
     let tx = runtime.edit();
-    const profile = runtime.getCell(social, "profile", {
-      type: "object",
-      properties: { name: { type: "string" } },
-      ifc: { addIntegrity: ["fabrichat-test-profile"] },
-    }, tx);
-    profile.set({ name: "Sender" });
-    runtime.prepareTxForCommit(tx);
-    expect((await tx.commit().settled).error).toBeUndefined();
-    tx = runtime.edit();
     const program = await resolveLocalProgram(
       (resolver) => runtime.harness.resolve(resolver),
       {

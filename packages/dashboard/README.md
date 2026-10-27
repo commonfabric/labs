@@ -783,9 +783,11 @@ does not carry the jobs, nor a job its annotations, so each tile requests the
 job listing of every cancelled attempt it reaches, up to the page holding the
 first job a runner ran that did not succeed for a reason of its own, and the
 annotations of each job a runner ran that was cancelled, up to and including
-that one, page by page until one gives the concurrency group as the reason. Each answer is
-requested once and held while the run stays in the tile's window. No other
-conclusion takes those requests.
+that one, page by page until one gives the concurrency group as the reason.
+Each answer is requested once and held while the run stays in the tile's
+window. No other conclusion takes those requests, except that the ci trust
+tiles read the whole job listing of an earlier attempt GitHub returns without a
+conclusion, as described below, and treat it as cancelled when its jobs say so.
 
 The **ci** tile reads each workflow's runs on the default branch, of any
 status, newest first, and decides the job from the newest completed one
@@ -896,18 +898,24 @@ the hundred newest default-branch runs to conclude that way came from
 of them, so ending a job's verdict at a skipped run would drop a conditional
 job's real failure the next time it skipped.
 
-The **labs ci trust**, **loom ci trust**, and **weaver ci trust** percentages pass over each cancelled
-attempt in which every job a runner ran succeeded or was cancelled by a
-concurrency group. A run is first-try green when
-exactly one of its attempts is left and it succeeded. It is red when that
-attempt did not succeed, and red when more than one is left, since the run
-needed a rerun, whatever the rerun's result. A run with no attempt left is left
-out of the percentage. The run listing carries only a run's latest attempt, so
-the tile requests a run's earlier attempts from GitHub in order until the run is
-decided, each at most once, and holds them while the run stays in the trust
-window. An earlier attempt, a job listing, or a job's annotations that cannot
-be read turn the tile
-gray, keeping its last value, until a later collection reads it.
+The **labs ci trust**, **loom ci trust**, and **weaver ci trust** percentages
+pass over each cancelled attempt in which every job a runner ran succeeded or
+was cancelled by a concurrency group. A run is first-try green when exactly one
+of its attempts is left and it succeeded. It is red when that attempt did not
+succeed, and red when more than one is left, since the run needed a rerun,
+whatever the rerun's result. A run with no attempt left is left out of the
+percentage. The run listing carries only a run's latest attempt, so the tile
+requests a run's earlier attempts from GitHub in order until the run is decided,
+each at most once, and holds them while the run stays in the trust window.
+GitHub sometimes leaves an earlier attempt without a conclusion, in progress
+long after its last job ended, and the tile then reads the attempt's conclusion
+from its jobs. Such an attempt failed when a job ended in anything but success, a
+skip, or cancellation. Otherwise it was cancelled when a job was cancelled or
+none is listed, and it succeeded when every job succeeded or was skipped. An
+earlier attempt, a job listing, or a job's annotations that cannot be read turn
+the tile gray, keeping its last value, until a later collection reads it. So
+does an earlier attempt without a conclusion that lists a job GitHub has not
+ended, until GitHub ends that job or the run leaves the window.
 
 The **labs ci duration**, **loom ci duration**, and **weaver ci duration** tiles
 use pull request runs that succeeded on their first attempt. Each duration

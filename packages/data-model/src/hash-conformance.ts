@@ -7,7 +7,7 @@
  * does with it: the bytes it feeds SHA-256, the digest, and the digest's string
  * form, or the refusal. A value is written as its `fvj1:` text, with the mods
  * to decoding it that state what no text carries, as
- * `test/fixtures/hash-conformance.md` defines. Generating the fixture fails
+ * `test/fixtures/value-probes.md` defines. Generating the fixture fails
  * when they do not decode to the value the case made. Where this package's
  * decoder refuses a text the spec allows, a divergence has to say so.
  *
@@ -63,16 +63,15 @@ import {
   bytesOfHex,
   type ClassCaseNotes,
   classCasesOf,
-  descriptorOf,
   type ExampleMakers,
   fabricValueOfTextWithMods,
+  type FixtureJson,
   fixtureTextOf,
   hexOf,
   sparseArrayOf,
   STUB_CODEC_EXCLUSION,
   type TextWithMods,
   textWithModsOf,
-  type ValueDescriptor,
 } from "./conformance-fixtures.ts";
 import { ValueHasher } from "./value-hash/ValueHasher.ts";
 
@@ -903,6 +902,77 @@ const FIXED_CASES: readonly HashConformanceCase[] = [
     },
   },
   {
+    name: "record holding a link whose payload holds the record",
+    section: SECTION_CYCLES,
+    make: () => {
+      // A link copies its payload, so the cycle runs through a record the
+      // payload holds rather than through the payload itself.
+      const record: { link?: FabricValue } = {};
+      record.link = new FabricLink({ record });
+      return record;
+    },
+  },
+  {
+    name: "link whose payload holds itself",
+    section: SECTION_CYCLES,
+    make: () => {
+      // A link keeps a payload frozen before it is made as it is, rather
+      // than copying it.
+      const payload: { self?: FabricValue } = {};
+      payload.self = payload;
+      return new FabricLink(Object.freeze(payload));
+    },
+  },
+  {
+    name: "unknown value whose state holds the unknown value",
+    section: SECTION_CYCLES,
+    make: () => {
+      const state: { self?: FabricValue } = {};
+      const unknown = new UnknownValue("Future@1", state);
+      state.self = unknown;
+      return unknown;
+    },
+  },
+  {
+    name: "unknown value whose state holds itself",
+    section: SECTION_CYCLES,
+    make: () => {
+      const state: { self?: FabricValue } = {};
+      state.self = state;
+      return new UnknownValue("Future@1", state);
+    },
+  },
+  {
+    name: "error whose cause is the error",
+    section: SECTION_CYCLES,
+    make: () => {
+      const error = new FabricError({
+        type: "Error",
+        name: "Error",
+        message: "m",
+        stack: undefined,
+        cause: undefined,
+      });
+      error.cause = error;
+      return error;
+    },
+  },
+  {
+    name: "error whose extra is the error",
+    section: SECTION_CYCLES,
+    make: () => {
+      const error = new FabricError({
+        type: "Error",
+        name: "Error",
+        message: "m",
+        stack: undefined,
+        cause: undefined,
+      });
+      error.setExtra("self", error);
+      return error;
+    },
+  },
+  {
     name: "record holding two equal records",
     section: SECTION_CYCLES,
     make: () => ({ a: { n: 1 }, b: { n: 1 } }),
@@ -1003,7 +1073,7 @@ type MadeCase = {
  * @throws What the hasher or the decoder throws other than a refusal; or if
  *   the text and mods decode to a value other than the one made, which is
  *   decided by its hash and by `valueEqual()`, and for a value whose hashing is
- *   refused, by its hash and its descriptor.
+ *   refused, by its hash and its own text and mods.
  */
 function madeCaseOf(conformanceCase: HashConformanceCase): MadeCase {
   const value = conformanceCase.make();
@@ -1022,8 +1092,7 @@ function madeCaseOf(conformanceCase: HashConformanceCase): MadeCase {
 
   const same = isSameOutcome(hashOutcomeOf(restated), hashed) &&
     (("refused" in hashed)
-      ? JSON.stringify(descriptorOf(restated)) ===
-        JSON.stringify(descriptorOf(value))
+      ? JSON.stringify(textWithModsOf(restated)) === JSON.stringify(stated)
       : valueEqual(restated, value));
   if (!same) {
     throw new Error(
@@ -1126,13 +1195,13 @@ function outcomeOfStream(stream: Uint8Array): HashedOutcome {
 /** Returns the fixture entry for one case. */
 function fixtureEntryOf(
   { conformanceCase, stated, textRefused, hashed }: MadeCase,
-): Record<string, ValueDescriptor> {
+): Record<string, FixtureJson> {
   const { name, section, spec, equals, divergence } = conformanceCase;
   const specHashed = (spec === undefined)
     ? hashed
     : outcomeOfStream(bytesOfHex(spec.replaceAll(" ", "").toLowerCase()));
 
-  const entry: Record<string, ValueDescriptor> = { name, section };
+  const entry: Record<string, FixtureJson> = { name, section };
   entry.text = stated.text;
   if (stated.unclaimed !== undefined) {
     entry.unclaimed = stated.unclaimed;
@@ -1145,7 +1214,7 @@ function fixtureEntryOf(
     entry.equals = equals;
   }
 
-  const implementation: Record<string, ValueDescriptor> = {};
+  const implementation: Record<string, FixtureJson> = {};
   if (!isSameOutcome(hashed, specHashed)) {
     if (divergence === undefined) {
       throw new Error(

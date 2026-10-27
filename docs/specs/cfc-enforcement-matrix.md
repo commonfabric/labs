@@ -220,13 +220,22 @@ The strict-only delta is:
   are the empty "public" ceiling, fail-closed) joined with the target's
   RESIDENCY clause at each path where the component lands, with the shared
   clause-subsumption predicate of the egress gates (`atomsOutsideCeiling`).
-  The residency clause is `Space(<the space the document lives in>)`. That
+  Residency includes `Space(<the space the document lives in>)`. That
   atom's audience is the space's reader set — §4.9.3 resolves it by
   dereferencing its id against the space's ACL, the same document that decides
   who receives a replica — so every principal holding the bytes is inside the
   audience it names, and a flow clause listing the target's own space among
   its alternatives fits a document there whatever that document declares. A
-  `user` or `session` document is one principal's instance: its scope key is
+  space-scoped document also carries `PersonalSpace(<that same space>)` in
+  its residency ceiling. This is the own-space case proposed in
+  [specs#71](https://github.com/commonfabric/specs/pull/71): §4.9.4 reads both
+  spellings against that space's ACL. It uses the target's space, not the
+  acting principal or an ownership lookup, and adds no clause for another
+  space. The proposal is closed without merging; this implementation follows
+  its proposed rule ahead of a ruling and a reconciled pin. The existing
+  residency marker names specs#68; this addition has no separate marker.
+  The conformance statement records the semantic gap at the strict default.
+  A `user` or `session` document is one principal's instance: its scope key is
   built from that principal, and the memory server serves it only to that
   principal's sessions, so its residency clause also carries
   `User(<that principal>)`, as strong as the deployment's binding of instances
@@ -257,13 +266,13 @@ The strict-only delta is:
   <clauses>`. Scope note (v1): link-covered writes carry per-slot link labels
   instead of the join and are outside the check, as is the pure-link-structure
   shape channel; grown existence atoms (SC-4) are historical and deliberately
-  never measured — only the current join is; `Space` is the only form a
-  space's own residency clause takes, because `User` and the bare DID-string
+  never measured — only the current join is. `User` and the bare DID-string
   spelling gate by equality against one acting reader, making their audience
-  narrower than the set of principals a space grants reader roles to, while
-  `PersonalSpace(<owner>)` names a space whose clause the measurement cannot
-  build from a target address (SC-39), and `User` joins it only as a scoped
-  instance's own principal; and the ungrantable
+  narrower than the set of principals a space grants reader roles to. They
+  therefore supply no space-scoped residency; `User` joins the ceiling only
+  as a scoped instance's own principal. A `user` or `session` document gets
+  no own-space `PersonalSpace` clause, including when its scoped principal
+  is unavailable. The ungrantable
   read-failed marker sits outside every ceiling, the residency clause
   included, so a poisoned measurement never proves fit. The reserved policy
   namespaces are outside the check too: the durable policy manifests
@@ -294,8 +303,8 @@ The strict-only delta is:
   reasoned tx whose reads never tripped an eager relevance mark cannot slip the
   ladder ([extended-storage-transaction.ts](../../packages/runner/src/storage/extended-storage-transaction.ts)).
 
-  One of the forms residency excludes is readable in the DECLARED half of the
-  ceiling, in one direction. A `PersonalSpace(owner)` LABEL clause answers a
+  The DECLARED half of the ceiling also admits an owner case, in one
+  direction. A `PersonalSpace(owner)` LABEL clause answers a
   declared ceiling naming that owner, because §3.6.2's role order makes an
   owner a reader and §3.6.4 makes that principal the space's sole owner, and
   the fit test asks only that everyone the ceiling admits is entitled to the
@@ -520,21 +529,25 @@ The strict-only delta is:
   cells and streams; for a builtin's node-owned state and per-event state; and
   for values anchored out of those documents. An authorized ownership marker
   admits a writer-fit misfit on these stores under the conditions below. The
-  persistence rule depends on the claim's lifetime. For a store with a live
-  enrollment, the flow-stamp pass records the write's confidentiality in its
-  `derived` component alone; admission adds no `declared` entry. A store named
-  only by a transaction-local marker still takes §8.12.5 option 2: the write
+  persistence rule depends on the claim's provenance and lifetime. For a store
+  with a live enrollment or an authenticated piece-setup claim, the flow-stamp
+  pass records the write's confidentiality in its `derived` component alone;
+  admission adds no `declared` entry. A store named only by a generic
+  transaction-local ownership marker still takes §8.12.5 option 2: the write
   declares a covering policy in the same transaction. That declaration adds
   clauses, never alternatives, and preserves existing declared clauses.
 
-  The enrolled-store rule implements a slice of the persistence change in
+  The enrolled-store and piece-setup rule implements a slice of the change in
   [specs#78](https://github.com/commonfabric/specs/pull/78), §8.12.5. The pinned
   specification still requires option 2's declaration on these stores; the
   strict default implements this slice ahead of its ruling. The specification
   dependency remains open until the ruling and pin are reconciled. There is no
-  `SPEC-PENDING` marker: the three-slot budget is full, and this entry and the
-  conformance statement record the authorized exception. The marker count is
-  therefore not a complete inventory of semantic gaps. The proposal
+  separate `SPEC-PENDING` marker or default-off dial: the three-slot budget is
+  full. This is a nonconforming semantic gap and does not satisfy step 4 of the
+  correspondence procedure. @danfuzz has authorized proceeding ahead of specs;
+  that permission does not supply a ruling or amend the procedure. This entry
+  and the conformance statement record the gap. The marker count is therefore
+  not a complete inventory of semantic gaps. The proposal
   admits more writes than this implementation: existing authored-declaration,
   read-failed and foreign-container refusals remain fail-closed residuals
   against the proposal.
@@ -554,24 +567,30 @@ The strict-only delta is:
 
   The route runs on every write while the runtime's ownership claim holds. At
   strict it records `writer-fit(runtime-owned-store-derived)` for an enrolled
-  store and `writer-fit(runtime-owned-store-declared)` for a marker-only store,
+  store or authenticated piece setup, and
+  `writer-fit(runtime-owned-store-declared)` for a generic marker-only store,
   naming the document, path and misfit. Lower rungs retain their
   `writer-fit(persist-and-flag)` diagnostic and derived stamps. Admission
   changes no sink ceiling: a builtin that stages an effect still needs its own
   sink gate, as described below.
 
-  The choice follows live enrollment when writer-fit prepares the commit.
-  `Runtime.run(tx, ...)` instantiates and enrolls the piece's stores on the
-  caller's transaction before it commits, so its setup writes can take the
-  derived-only route. A setup committed while its stores have no live
-  enrollment retains the declaration route: for example,
+  Piece setup records a separate authenticated claim for its argument, result
+  and internal stores on the transaction preparing them. That claim selects
+  derived-only persistence even when setup commits before the nodes start:
   [`PiecesController.setupPersistent()`](../../packages/piece/src/ops/pieces-controller.ts)
-  commits a new piece's setup without starting its nodes. One-shot handoffs
-  such as agent run records and marker-only anchored children also retain that
-  route and its ratchet. A child does not gain an enrollment merely because its
-  parent has one. The declared entries on these writes still pass through the
-  cross-space metadata protection used for flow-derived labels. Later authored
-  clients of a one-shot handoff continue to use its stored policy.
+  is one such path. It creates no lifetime enrollment and carries no authority
+  into the next transaction. Starting the piece establishes the live enrollment
+  its later writes use.
+
+  Generic one-shot handoffs, including agent run records, refused-slot copies
+  and marker-only anchored children, retain the declaration route and its
+  ratchet. A child does not inherit its parent's setup claim or enrollment.
+  Anchoring records generic ownership for the child, so its eligible misfits
+  remain declared. The declared entries on these writes still pass through the cross-space
+  metadata protection used for flow-derived labels. Later authored clients of
+  a one-shot handoff continue to use its stored policy. Lazy scoped-default
+  seeding on a later transaction also keeps the generic marker; before graph
+  enrollment, those writes can still declare a misfit.
 
   What bounds the route:
 
@@ -612,7 +631,8 @@ The strict-only delta is:
     churning list ever held. A store minted per event takes the marker alone
     for the same reason. Both carry the runtime's authorization, and both
     are refused for an address naming part of a document or another space.
-    Only the enrollment selects derived-only persistence; a marker alone
+    The separate piece-setup claim selects derived-only persistence for its
+    transaction without enrolling anything. A generic ownership marker alone
     continues to declare the write's misfit.
   - **Which builtins may take it.** A builtin whose result store moves onto
     the route gives up whatever its own ceiling was refusing, so the test is

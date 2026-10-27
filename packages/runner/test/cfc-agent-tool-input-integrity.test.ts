@@ -985,6 +985,320 @@ describe("CFC trusted agent: tool-input requiredIntegrity (Epic D2)", () => {
   });
 });
 
+describe("CFC trusted agent: a floor declared as anything but a list", () => {
+  // A `requiredIntegrity` the specification types as a list (§8.8), declared
+  // as anything else, refuses the call wherever the input schema declares it,
+  // whatever the model supplied (§8.10.3), rather than read as no floor.
+
+  const { toolInputMalformedFloor } = llmToolExecutionHelpers;
+  const MALFORMED = { type: "string", ifc: { requiredIntegrity: {} } };
+
+  it("reports a field the model may leave out", () => {
+    expect(
+      toolInputMalformedFloor({
+        type: "object",
+        properties: { route: { type: "string" }, note: MALFORMED },
+      }, ""),
+    ).toContain('field "note" declares a requiredIntegrity that is not a list');
+  });
+
+  it("reports an array's items, whatever the array holds", () => {
+    expect(
+      toolInputMalformedFloor({
+        type: "object",
+        properties: { recipients: { type: "array", items: MALFORMED } },
+      }, ""),
+    ).toContain('field "recipients[]"');
+  });
+
+  it("reports a floor behind a local reference in a recursive group", () => {
+    expect(
+      toolInputMalformedFloor({
+        $ref: "#/$defs/Node",
+        $defs: {
+          Node: {
+            type: "object",
+            properties: { next: { $ref: "#/$defs/Node" }, tag: MALFORMED },
+          },
+        },
+      }, ""),
+    ).toContain('field "tag"');
+  });
+
+  it("reports a dictionary's values", () => {
+    expect(
+      toolInputMalformedFloor({
+        type: "object",
+        properties: {
+          notes: { type: "object", additionalProperties: MALFORMED },
+        },
+      }, ""),
+    ).toContain('field "notes.*"');
+  });
+
+  it("reports a floor beside a reference its branch has already followed", () => {
+    expect(
+      toolInputMalformedFloor({
+        $ref: "#/$defs/Node",
+        $defs: {
+          Node: {
+            type: "object",
+            properties: {
+              next: { $ref: "#/$defs/Node", ifc: { requiredIntegrity: {} } },
+            },
+          },
+        },
+      }, ""),
+    ).toContain('field "next"');
+  });
+
+  it("reports nothing where every floor is a list", () => {
+    expect(
+      toolInputMalformedFloor({
+        type: "object",
+        properties: {
+          note: { type: "string", ifc: { requiredIntegrity: [KERNEL_ATOM] } },
+        },
+      }, ""),
+    ).toBeUndefined();
+    expect(
+      toolInputMalformedFloor({
+        $ref: "#/$defs/Node",
+        $defs: {
+          Node: {
+            type: "object",
+            properties: {
+              next: { $ref: "#/$defs/Node" },
+              tag: {
+                type: "string",
+                ifc: { requiredIntegrity: [KERNEL_ATOM] },
+              },
+            },
+          },
+        },
+      }, ""),
+    ).toBeUndefined();
+  });
+
+  /**
+   * Runs `body` against the tool catalog of a pattern whose `sendRoute` tool
+   * declares `inputSchema`, with a call into `body` that reads the routes the
+   * tool has sent.
+   */
+  const withTool = async <T>(
+    inputSchema: JSONSchema,
+    body: (tool: {
+      runtime: Runtime;
+      catalog: ReturnType<typeof llmToolExecutionHelpers.buildToolCatalog>;
+      sent: () => Promise<string[]>;
+    }) => Promise<T>,
+  ): Promise<T> => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    const tx = runtime.edit();
+    const { commonfabric } = createTrustedBuilder(runtime);
+    const { pattern, handler, Writable } = commonfabric;
+    try {
+      const sendRoute = handler<{ route: string }, { sent: any }>(
+        inputSchema,
+        {
+          type: "object",
+          properties: {
+            sent: {
+              type: "array",
+              items: { type: "string" },
+              asCell: ["cell"],
+            },
+          },
+          required: ["sent"],
+        },
+        ({ route }, { sent }) => {
+          sent.push(route);
+        },
+      );
+      const resultSchema = {
+        type: "object",
+        properties: {
+          sent: { type: "array", items: { type: "string" } },
+          tools: true,
+        },
+        required: ["sent", "tools"],
+      } as const satisfies JSONSchema;
+      const testPattern = pattern(
+        () => {
+          const sent = Writable.of<string[]>([]);
+          return {
+            sent,
+            tools: {
+              sendRoute: {
+                description: "Send along a route.",
+                inputSchema,
+                handler: sendRoute({ sent }),
+              },
+            },
+          };
+        },
+        false,
+        resultSchema,
+      );
+      const resultCell = runtime.getCell(
+        space,
+        "agent-malformed-floor",
+        resultSchema,
+        tx,
+      );
+      const result = runtime.run(tx, testPattern, {}, resultCell);
+      runtime.prepareTxForCommit(tx);
+      await tx.commit().settled;
+      await runtime.idle();
+
+      const catalog = llmToolExecutionHelpers.buildToolCatalog(
+        result.key("tools") as any,
+        false,
+      );
+      return await body({
+        runtime,
+        catalog,
+        sent: async () =>
+          ((await result.key("sent").pull()) as string[] | undefined) ?? [],
+      });
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  };
+
+  /**
+   * What the `sendRoute` tool declaring `inputSchema` commits after the model
+   * calls it with `input`: the routes it sent, or `[]` where the call was
+   * denied before the tool ran.
+   */
+  const sentAfterCall = (
+    inputSchema: JSONSchema,
+    input: Record<string, unknown>,
+  ): Promise<string[]> =>
+    withTool(inputSchema, async ({ runtime, catalog, sent }) => {
+      await llmToolExecutionHelpers.executeToolCalls(runtime, space, catalog, [{
+        type: "tool-call",
+        toolCallId: "call-malformed-floor",
+        toolName: "sendRoute",
+        input,
+      }] as any);
+      await runtime.idle();
+      return await sent();
+    });
+
+  /** A tool input holding an optional tree of `Node`, defined by `node`. */
+  const withTree = (node: Record<string, unknown>) =>
+    ({
+      type: "object",
+      properties: {
+        route: { type: "string" },
+        tree: { $ref: "#/$defs/Node" },
+      },
+      required: ["route"],
+      $defs: { Node: node },
+    }) as unknown as JSONSchema;
+
+  it("denies a call that leaves the field out, without running the tool", async () => {
+    expect(
+      await sentAfterCall(
+        {
+          type: "object",
+          properties: { route: { type: "string" }, note: MALFORMED },
+          required: ["route"],
+        } as unknown as JSONSchema,
+        { route: "a" },
+      ),
+    ).toEqual([]);
+  });
+
+  it("denies a call whose malformed floor sits beside a recursive reference", async () => {
+    // The catalog's model-facing schema cuts the recursive `next` down to an
+    // open object, so the gate reads the schema the tool declares.
+
+    expect(
+      await sentAfterCall(
+        withTree({
+          type: "object",
+          properties: {
+            next: { $ref: "#/$defs/Node", ifc: { requiredIntegrity: {} } },
+          },
+        }),
+        { route: "a" },
+      ),
+    ).toEqual([]);
+  });
+
+  it("denies a literal under a floor reached through a recursive reference", async () => {
+    // The same cut drops a well-formed floor below the recursion, so a literal
+    // there passed the gate when it read the model-facing schema.
+
+    expect(
+      await sentAfterCall(
+        withTree({
+          type: "object",
+          properties: {
+            next: { $ref: "#/$defs/Node" },
+            recipient: {
+              type: "string",
+              ifc: { requiredIntegrity: [KERNEL_ATOM] },
+            },
+          },
+        }),
+        { route: "a", tree: { next: { recipient: "attacker@example.com" } } },
+      ),
+    ).toEqual([]);
+  });
+
+  it("keeps the declared schema out of the request's tools", async () => {
+    // A request serializes `llmTools` whole. A dormant definition holding a
+    // value JSON cannot hold reaches the declared schema the gate reads, and
+    // not the model-facing one.
+
+    const inputSchema = {
+      type: "object",
+      properties: { route: { type: "string" } },
+      required: ["route"],
+      $defs: { Unused: { type: "integer", default: 1n } },
+    } as unknown as JSONSchema;
+    await withTool(inputSchema, ({ catalog }) => {
+      expect(Object.keys(catalog.llmTools.sendRoute!).sort()).toEqual([
+        "description",
+        "inputSchema",
+      ]);
+      expect(() => JSON.stringify({ tools: catalog.llmTools })).not.toThrow();
+      expect(
+        (catalog.declaredInputSchemas?.get("sendRoute") as {
+          $defs?: unknown;
+        })?.$defs,
+      ).toBeDefined();
+      return Promise.resolve();
+    });
+  });
+
+  it("runs the tool where no floor is malformed or unmet", async () => {
+    expect(
+      await sentAfterCall(
+        withTree({
+          type: "object",
+          properties: {
+            next: { $ref: "#/$defs/Node" },
+            recipient: {
+              type: "string",
+              ifc: { requiredIntegrity: [KERNEL_ATOM] },
+            },
+          },
+        }),
+        { route: "a" },
+      ),
+    ).toEqual(["a"]);
+  });
+});
+
 describe("CFC trusted agent: floors behind reference-form schemas (D2)", () => {
   // The gate's schema walk, driven directly: a literal value carries no
   // integrity, so any reachable floor must refuse it. The runtime only

@@ -34,9 +34,10 @@ open the author UI for the lift to write. Each headless content verb and browser
 handler also calls the shared runner after validating the request and before its
 first durable write. A handler can complete an upgrade when its reads satisfy
 that step's readiness guard. For the author step, legacy records with no
-structured author object defer to the lift. Incomplete reads leave the version
-unchanged; the author upgrade is additive, so content mutations can still
-operate on version-zero state when their own inputs are available.
+structured author object defer to the lift. The activity step has no such guard:
+only the lift completes it. Incomplete reads leave the version unchanged; the
+author upgrade is additive, so content mutations can still operate on
+version-zero state when their own inputs are available.
 
 The guarded entry points include comment creation, editing and retraction; link
 creation and retraction; title and body saves; and adding or removing mentions.
@@ -59,15 +60,18 @@ conflate those cases.
 
 Handler reads can return `undefined` for both absence and an unresolved link.
 The author step handles that ambiguity conservatively. An unavailable comment
-array leaves the whole step incomplete, without author writes. For a blank
-structured name, the author object, its name and kind, and the legacy name must
-all be defined before a handler can complete the step. A nonblank structured
-name already supplies attribution and does not require a legacy name. The lift
-can complete genuinely absent fields. A version-zero record with only
-`createdByName` or `authorName`, and no corresponding structured author object,
-therefore requires the lift. A handler can complete this step when each author
-already has a nonblank structured name or has the defined fields required by the
-guard; partially populated structured authors with a blank name can meet that
+array leaves the whole step incomplete, without author writes, and so does an
+empty one in a handler: an array behind an unresolved link reads as its declared
+default, empty, which a handler cannot tell from an empty thread, so the lift
+completes the step for a topic with no comments. For a blank structured name,
+the author object, its name and kind, and the legacy name must all be defined
+before a handler can complete the step. A nonblank structured name already
+supplies attribution and does not require a legacy name. The lift can complete
+genuinely absent fields. A version-zero record with only `createdByName` or
+`authorName`, and no corresponding structured author object, therefore requires
+the lift. A handler can complete this step when each author already has a
+nonblank structured name or has the defined fields required by the guard;
+partially populated structured authors with a blank name can meet that
 condition.
 
 A step returns `true` only after completing its writes, or `false` for
@@ -128,6 +132,40 @@ data. Other handler fields retain their generated contracts. The structured
 creator remains plain in the outer Topic input; the internal upgrade binding
 supplies its writable destination.
 
+## Version one to two: kept count and activity time
+
+The second step stores `commentCount` and `lastActivityAt` on the topic, the two
+values the board's index reads, so that the index is right without the topic
+running after each write. It computes both from the topic's own records: the
+comments not retracted, and the newest of creation, the last body save, the last
+rename, and every comment's and link's stamps, retracted and edited ones
+included. It writes both whole, so it also corrects anything a verb kept before
+it ran.
+
+From version two on, the verbs keep both in the write that changes what they
+summarize (`noteActivity()` in `topic.tsx`): adding a comment counts it,
+retracting one uncounts it, and every verb that makes a stamp moves the activity
+time to that stamp when it is newer, so it never moves back. A topic the board
+creates starts at the current version with a count of zero and its creation time
+as its activity, and never runs this step.
+
+The step runs once, so a value it computed from incomplete reads would stay
+wrong. Only the lift completes it, reading each comment's and link's stamps
+through their own keys: a read through a key suspends on an unresolved link,
+where reading the whole array drops the stamp as though it were absent. The same
+holds one level up. A whole `comments` or `links` array behind an unresolved
+link reads as its declared default, empty, so before any step runs the lift
+reads each array's first element through its key, which suspends until the array
+resolves (`upgradeTopicState`); this covers the author step too. A handler's
+eager reads cannot tell an unresolved link from an absent optional stamp, so a
+handler always defers the step to the lift, and a verb's `noteActivity()` on a
+topic still at version one is overwritten when the step runs. The creation, body
+and title times are inputs with a default of zero, which an absent value reads
+as, and so does one behind an unresolved link: a number has no key to read
+through, and the pattern API cannot read past an input's default. No Topics
+writer stores these times as links; a writer that did would need this step to
+wait for them as it waits for the arrays.
+
 ## Rollout and rollback
 
 Retire legacy writers before applying the update. The first step covers the
@@ -140,10 +178,22 @@ mutations. This is a write guard, not a guarantee that every future format will
 render correctly in old code. It cannot constrain code that predates the guard,
 already-running legacy clients, or writes made directly to stored cells.
 
+The second step changes what a running topic writes but not what it accepts: an
+older client keeps deriving the two values, and its writes do not keep the
+stored ones. Retire older writers before relying on the stored values, as for
+the first step.
+
 Use the space-clone rehearsal procedure before applying source to real data.
 Admission checks, tests of the exact packaged source, and observation of actual
 migration writes establish different things; a successful source compatibility
 check alone does not establish successful migration execution.
+
+A topic deployed before the author's optional `picture` existed is refused the
+update to this source by the retained-link proof, on its comments, and so is its
+board, on its members; each takes the update once forced, past that finding
+alone, and is proven normally afterwards. The decision, the gate that confines
+the forcing to that finding, and the rehearsal are recorded in
+[`topics-profile-picture-forced-update.md`](../../../docs/history/topics-profile-picture-forced-update.md).
 
 ## Tests and extension
 
@@ -161,12 +211,18 @@ so that ignoring the version would cause an observable unwanted copy.
 The version tests exercise all durable entry points against future state and
 check both rejection and unchanged data. They also cover invalid versions and a
 standalone browser handler upgrading version-zero state before appending,
-without a Topic lift to do the work for it. A standalone browser save also
-checks that ambiguous inputs preserve the version while allowing the title
-write, then completes the upgrade on another save after data arrives.
-Integration cases send a title mutation while creator names, comment names,
-whole comments, structured authors, and author subfields are unresolved, then
-verify migration recovers without losing the title or overwriting arriving
-structured attribution. Cases with explicitly undefined and partially populated
-authors check object initialization and preservation of existing properties. New
-entry points must receive the upgrade binding and join this coverage.
+without a Topic lift to do the work for it. `activity-scalars.test.tsx` covers
+the second step from version one, with retracted and edited records, and each
+verb keeping the two values in its own write, read from the stored input cells
+the board's index reads. A standalone browser save also checks that ambiguous
+inputs preserve the version while allowing the title write, then completes the
+upgrade on another save after data arrives. Integration cases send a title
+mutation while creator names, comment names, whole comments, structured authors,
+and author subfields are unresolved, then verify migration recovers without
+losing the title or overwriting arriving structured attribution. Cases with
+explicitly undefined and partially populated authors check object initialization
+and preservation of existing properties. For the activity step, integration
+cases leave a comment's or link's stamp unresolved while a verb saves the title,
+then check that the step completes only once the stamp arrives, and counts and
+dates from it. New entry points must receive the upgrade binding and join this
+coverage.

@@ -29,6 +29,7 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import { createCompileByteCache } from "@commonfabric/test-support/compile-byte-cache";
 
 import { PiecesController } from "@commonfabric/piece/ops";
 
@@ -91,6 +92,10 @@ const CONFIG: SpaceConfig = {
   space,
 };
 
+// One cache for every runtime this file makes, so that a pattern compiles
+// once per file rather than once per case.
+const moduleByteCache = createCompileByteCache();
+
 describe("profile management", () => {
   let server: ReturnType<typeof newLoopbackServer>;
   let manager: EmulatedStorageManager;
@@ -105,6 +110,7 @@ describe("profile management", () => {
     server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
     manager = EmulatedStorageManager.connectTo(server, { as: signer });
     runtime = new Runtime({
+      moduleByteCache,
       apiUrl: new URL(import.meta.url),
       storageManager: manager,
     });
@@ -154,6 +160,7 @@ describe("profile management", () => {
         as: profileSigner,
       });
       const profileRuntime = new Runtime({
+        moduleByteCache,
         apiUrl: new URL(import.meta.url),
         storageManager: storage,
       });
@@ -222,6 +229,7 @@ describe("profile management", () => {
   ): Promise<string> {
     const storage = EmulatedStorageManager.connectTo(server, { as: stranger });
     const theirs = new Runtime({
+      moduleByteCache,
       apiUrl: new URL(import.meta.url),
       storageManager: storage,
     });

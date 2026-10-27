@@ -1090,6 +1090,7 @@ export class RuntimeProcessor {
   #cancelSpaceAccessLoss?: Cancel;
   #cancelSpaceAccessRestored?: Cancel;
   #cancelConnectionRestored?: Cancel;
+  #cancelClientUpdateRequired?: Cancel;
 
   /**
    * The retries of refused spaces in flight, which the render boundaries'
@@ -1133,6 +1134,17 @@ export class RuntimeProcessor {
     // the space with no access error. A storage manager that cannot say what
     // the error is cannot tell the two apart, so nothing is posted for it.
     const storage = runtime.storageManager;
+    this.#cancelClientUpdateRequired = storage?.subscribeClientUpdateRequired?.(
+      (status) => {
+        for (const client of clients()) {
+          client.post({
+            type: NotificationType.ErrorReport,
+            code: RuntimeErrorCode.ClientUpdateRequired,
+            ...status,
+          });
+        }
+      },
+    );
     const accessError = storage?.spaceAccessError?.bind(storage);
     if (accessError !== undefined) {
       this.#cancelSpaceAccessRestored = storage?.subscribeSpaceAccessChange?.(
@@ -1474,6 +1486,8 @@ export class RuntimeProcessor {
         this.#cancelSpaceAccessRestored = undefined;
         this.#cancelConnectionRestored?.();
         this.#cancelConnectionRestored = undefined;
+        this.#cancelClientUpdateRequired?.();
+        this.#cancelClientUpdateRequired = undefined;
         this.#spaceAccessRetries.dispose();
         this.#intentOutcomeCancel = undefined;
         this.#profilePreloadCancel?.();
@@ -1520,6 +1534,17 @@ export class RuntimeProcessor {
 
   isDisposed(): boolean {
     return this.#isDisposed;
+  }
+
+  /** Sends an attached client the runtime's retained update requirement. */
+  reportClientUpdateRequired(client: WorkerClient): void {
+    const status = this.#runtime.storageManager?.clientUpdateRequired?.();
+    if (status === undefined) return;
+    client.post({
+      type: NotificationType.ErrorReport,
+      code: RuntimeErrorCode.ClientUpdateRequired,
+      ...status,
+    });
   }
 
   /**

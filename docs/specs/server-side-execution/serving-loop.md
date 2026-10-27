@@ -1963,8 +1963,8 @@ foreignEngineFailures, warmRequests, watermarkLag, demandArrivals,
 undemandedNarrowingRuns, earlyEmitRefusals, demand: {demandedRows,
 demandedInstances, demandedInstancesMax, demandedPairs, demandedWriters,
 demandedWritersMax, demandRootEnters, demandRootLeaves, notCurrentRearms,
-demandPasses, demandPassMs, demandKeysReconciled, structureRootsPreloaded,
-pushGrowthWakes, watchWakes, warmWakes}, settle:
+demandPasses, demandPassMs, demandKeysReconciled, ownedDefaultSeeds,
+structureRootsPreloaded, pushGrowthWakes, watchWakes, warmWakes}, settle:
 {series, dropped}, settleAdvances: {count, lastDelta, series, dropped}, events:
 {appended, processed, coalescedPerWaveMax, skippedIdempotent,
 drainInFlightSkips, visibilityBarriers, visibilityRecoveries,
@@ -2106,6 +2106,17 @@ time, review MINOR-3);
 `demandKeysReconciled` the instance keys the passes reconciled, accumulated
 over the passes whose reconcile completed, so a pass that throws partway adds
 nothing.
+`ownedDefaultSeeds` the (piece root, demanding pair) seedings the passes
+completed — the ARRIVAL SEED: a pattern-owned cell declaring a default at a
+scope narrower than its result (scoped-cell-instances.md, "A pattern-owned
+cell narrower than its result starts from its declared default for each
+actor instance") is seeded in a demanding pair's instance when the pair's
+demand for a loaded root arrives, as the piece's start seeds it for the
+identity the start runs under. A viewer whose runtime runs none of the
+pattern never starts the piece; without the seed its first write into such
+a cell would create the instance holding that one field alone. The pass
+awaits the seeds ahead of the arrival re-arm, so a node re-run for the
+arriving demander reads the seeded instance.
 The pass reads the demand set per session (`demandForSpace`): the memory
 server keeps each session's share and hands back the same object until a
 write to that session's watches, views, delivered entities, graph misses, or

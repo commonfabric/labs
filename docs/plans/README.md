@@ -19,6 +19,11 @@ a record: archive it to `docs/history/plans/` following the procedure in
   and correspondence manifest checked in CI and a §18.6.4 conformance
   statement, to a kernel of same-named pure functions the pseudocode is the
   source of.
+- [Sending a message to a local job](agent-runner-job-continuation.md) adds
+  one runner route that steers a running job at its next turn boundary, or
+  follows up a finished one as a new job carrying its conversation, and the
+  two cf-harness changes it rests on: a steer seam in the prompt loop and a
+  run continued from another run's checkpoint.
 - [Unify Weaver Ask and CF harness](weaver-ask-console.md) sequences typed
   callbacks, a cohesive handles module, one session UI for both command aliases,
   and hands-on demo validation across labs, Weaver, and Loom.

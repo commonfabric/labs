@@ -74,7 +74,6 @@ import {
   commitSnapshotShare,
   prepareSnapshotShare,
 } from "@commonfabric/runner/cfc/share-snapshot";
-import { setCfcImplementationIdentity } from "@commonfabric/runner/cfc/trust-authority";
 import {
   initializePiecesController,
   type PieceController,
@@ -88,6 +87,7 @@ import {
   type WorkerRequest,
   type WorkerResponse,
 } from "./multi-runtime-ipc.ts";
+import { writeOwnProfile } from "./own-profile-fixture.ts";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
   clearTimingMeasures,
@@ -228,6 +228,10 @@ async function resultAt(address: unknown): Promise<Cell<any>> {
   let opened = addressedResults.get(key);
   if (!opened) {
     try {
+      // An explicit open is a host event, as navigation into a refused space
+      // is in the shell. Reconsider its prior denial once; the server still
+      // decides admission, and a client-update refusal remains terminal.
+      await runtime.retrySpaceAccess(space as MemorySpace);
       opened = await controller().getPieceCell(
         runtime.getCellFromEntityId(space as MemorySpace, id),
         true,
@@ -490,29 +494,6 @@ function componentBinding(
     ? cellRuntime(props).getCellFromLink(link)
     : prop.resolveAsCell();
 }
-
-/**
- * The writer `createOwnProfile` writes as, standing in for a profile's own
- * handlers, which a `represents-principal` claim needs.
- */
-const OWN_PROFILE_WRITER = "multi-runtime-own-profile";
-
-/**
- * A profile labeled as representing the principal that writes it, as a Fabric
- * profile is.
- */
-const OWN_PROFILE_SCHEMA = {
-  type: "object",
-  properties: { name: { type: "string" } },
-  ifc: {
-    addIntegrity: [{
-      kind: "represents-principal",
-      subject: { __ctCurrentPrincipal: true },
-    }],
-    ownerPrincipal: { __ctCurrentPrincipal: true },
-    writeAuthorizedBy: [OWN_PROFILE_WRITER],
-  },
-} as never;
 
 /** The trusted host gesture used after the test confirms the exact preview. */
 function shareClick() {
@@ -1119,24 +1100,34 @@ const handlers: Record<
    * space refuses can't read whom it attests.
    */
   async createOwnProfile({ name }) {
+    if (typeof name !== "string") {
+      throw new TypeError("createOwnProfile takes a string name.");
+    }
     const runtime = controller().runtime;
-    const space = await runtime.createSpace();
-    const tx = runtime.edit();
-    setCfcImplementationIdentity(tx, {
-      kind: "builtin",
-      builtinId: OWN_PROFILE_WRITER,
-    });
-    const profile = runtime.getCell(
-      space,
+    const profile = await writeOwnProfile(
+      runtime,
+      await runtime.createSpace(),
       "own profile",
-      OWN_PROFILE_SCHEMA,
-      tx,
+      name,
     );
-    profile.set({ name } as never);
-    const { error } = await tx.commit().settled;
-    if (error) throw error;
     await idle();
     return profile.getAsLink();
+  },
+
+  /**
+   * Make this runtime reconsider a space it was refused, as the shell's Retry
+   * does (`Runtime.retrySpaceAccess()`). A permanent refusal is retained
+   * until an ACL notice, the server's `session/admissible` hint, or an
+   * explicit retry; with one connection per space the refused open closed
+   * the connection the hint would ride, so only the retry reaches it.
+   */
+  async retrySpaceAccess({ space }) {
+    if (typeof space !== "string") {
+      throw new TypeError("retrySpaceAccess takes a space DID.");
+    }
+    await controller().runtime.retrySpaceAccess(space as MemorySpace);
+    await idle();
+    return {};
   },
 
   /**

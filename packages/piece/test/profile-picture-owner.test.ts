@@ -17,6 +17,7 @@ import {
 } from "@commonfabric/runner/cfc";
 import { representsPrincipalSubjects } from "@commonfabric/runner/cfc/represents-principal";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { createCompileByteCache } from "@commonfabric/test-support/compile-byte-cache";
 import { EmulatedStorageManager } from "../../runner/src/storage/v2-emulate.ts";
 import { newSharedServer } from "../../runner/test/memory-v2-test-utils.ts";
 
@@ -39,6 +40,10 @@ type Profile = {
   setPicture: Stream<{ picture?: FabricBytes }>;
 };
 
+// One cache for every runtime this file makes, so that a pattern compiles
+// once per file rather than once per case.
+const moduleByteCache = createCompileByteCache();
+
 describe("profile picture ownership", () => {
   let server: MemoryV2Server.Server;
   let served: { contents: string; identity: string };
@@ -59,6 +64,7 @@ describe("profile picture ownership", () => {
   /** A runtime acting as `identity` against the shared server. */
   const open = (identity: Identity): Runtime => {
     const runtime = new Runtime({
+      moduleByteCache,
       apiUrl: new URL("https://profile.test"),
       storageManager: EmulatedStorageManager.connectTo(server, {
         as: identity,

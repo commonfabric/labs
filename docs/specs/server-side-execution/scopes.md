@@ -186,7 +186,11 @@ faced them:
   waits on them like on any demanded work. A demander who ARRIVES
   after a node narrowed finds no instance of their own; the registry's
   new pair re-arms the narrowed nodes beneath the root for THAT
-  demander only (the arrival re-arm — later demand, protocol.md §4).
+  demander only (the arrival re-arm — later demand, protocol.md §4),
+  and seeds that demander's instances of the piece's owned cells
+  declaring a default narrower than their owner (the arrival seed,
+  serving-loop.md §7 `ownedDefaultSeeds`): the start that would have
+  seeded them runs on no viewer's runtime under served views.
   Demand-paced still: instances come only from demanders (never "all
   known principals"), and an eager/idle-scheduled node NOBODY demands
   with an identity keeps the wave-level fallback and, if it narrows,

@@ -5481,6 +5481,15 @@ const declaredObservesClass = (
     : undefined;
 };
 
+/** The `ifc` keys the specification types as lists of atoms or clauses. */
+const LABEL_LIST_KEYS = [
+  "confidentiality",
+  "integrity",
+  "addIntegrity",
+  "requiredIntegrity",
+  "maxConfidentiality",
+] as const;
+
 const unsupportedTrustSensitiveReason = (
   schema: JSONSchema,
   path: readonly string[],
@@ -5513,13 +5522,37 @@ const unsupportedTrustSensitiveReason = (
   ) {
     return `malformed writePolicyAnyOf at /${path.join("/")}`;
   }
+  // A label list declared as anything but a list is malformed (§4.2.1, §8.8).
+  // Its readers skip what is not a list, so it would be enforced as no label,
+  // no floor, or no ceiling, or crash the commit; a malformed declaration
+  // fails here instead (§8.10.3).
+  for (const key of LABEL_LIST_KEYS) {
+    if (ifc[key] !== undefined && !Array.isArray(ifc[key])) {
+      return `malformed ${key} at /${path.join("/")}`;
+    }
+  }
+  if (!writesEventIntegrityAsList(ifc.uiContract)) {
+    return `malformed uiContract.requiredEventIntegrity at /${path.join("/")}`;
+  }
   return undefined;
 };
 
 /**
+ * Whether `contract`, a UI contract as a schema declares it, writes its
+ * `requiredEventIntegrity`, where it writes one, as a list. Its parse
+ * (`uiContractFromSchema()`) keeps only a list, so a requirement written as
+ * anything else would be dropped.
+ */
+const writesEventIntegrityAsList = (contract: unknown): boolean =>
+  !isObjectNotArray(contract) ||
+  contract.requiredEventIntegrity === undefined ||
+  Array.isArray(contract.requiredEventIntegrity);
+
+/**
  * Whether the `writePolicyAnyOf` that `ifc` declares is one this runner
  * enforces: a nonempty list of alternatives, each a writer claim with at most a
- * UI contract that parses beside it, and no writer or contract of the
+ * UI contract that parses beside it, its event integrity written as a list
+ * where it writes one, and no writer or contract of the
  * position's own beside the list, which would leave unclear which of the two
  * governs.
  */
@@ -5533,7 +5566,8 @@ const isWellFormedWritePolicyAnyOf = (ifc: Record<string, unknown>) => {
         key === "writeAuthorizedBy" || key === "uiContract"
       ) &&
       (policy.uiContract === undefined ||
-        uiContractFromSchema({ ifc: policy } as JSONSchema) !== undefined)
+        (uiContractFromSchema({ ifc: policy } as JSONSchema) !== undefined &&
+          writesEventIntegrityAsList(policy.uiContract)))
     );
 };
 
@@ -12596,8 +12630,8 @@ export function* prepareBoundaryCommitSteps(
     // each path's declared ceiling: the whole-value destination fit and the
     // per-path fit of the join. `Space(<this space>)` is one clause, so a
     // flow clause listing the target's own space among its alternatives fits
-    // a document stored there, and a clause without such an alternative
-    // measures against the declared policy alone. The atom's audience is the
+    // a document stored there. The other residency clauses below join the
+    // same ceiling beside its declared policy. The atom's audience is the
     // space's reader set — §4.9.3 resolves it against the space's ACL, the
     // same document that decides who receives a replica — so it already
     // contains every principal the stored bytes reach, and the guarantee is
@@ -12605,12 +12639,12 @@ export function* prepareBoundaryCommitSteps(
     // persists the full join, leaving the egress and display gates the
     // unchanged label.
     //
-    // The space's clause takes the `Space` form alone. The bare DID-string
-    // spelling gates by equality against one acting reader, so it reaches a
-    // narrower audience than the space's readers. `PersonalSpace(<owner>)`
-    // names a space rather than a person (SC-39), and nothing in an address
-    // names a space's owner or marks the space as personal, so that atom
-    // cannot be built from the target's address.
+    // An unbound document also admits `PersonalSpace(<this space>)`, whose
+    // readers are resolved from the same ACL. This is the own-space rule
+    // proposed in https://github.com/commonfabric/specs/pull/71; its gap from
+    // the pinned specification is recorded in the CFC enforcement matrix.
+    // Bound instances do not gain that clause, even when the serving
+    // context cannot identify their principal.
     //
     // A `user` or `session` document is one principal's instance, and
     // `User(<that principal>)` joins the space's clause there: they are the
@@ -12630,6 +12664,7 @@ export function* prepareBoundaryCommitSteps(
       : undefined;
     const residencyCeiling: readonly CfcConfClause[] = [
       cfcAtom.space(space),
+      ...(scope === "space" ? [cfcAtom.personalSpace(space)] : []),
       ...(scopedReader === undefined ? [] : [cfcAtom.user(scopedReader)]),
     ];
     // Whole-value write destinations stamped as written
@@ -13148,7 +13183,8 @@ export function* prepareBoundaryCommitSteps(
         ? persistedLabelEntries.filter(isDeclaredValuePolicyEntry)
         : [];
       // Whether runtime ownership can admit a misfit at a rung that would
-      // reject. Only lifetime enrollment keeps it solely in derived stamps.
+      // reject. Lifetime enrollment and authenticated piece setup keep the
+      // misfit solely in derived stamps.
       // `cfc-enforcement-matrix.md` §4 states the admission boundary; the
       // remaining conditions are checked below.
       //
@@ -13273,16 +13309,6 @@ export function* prepareBoundaryCommitSteps(
           id,
           runtimeWritePolicyAuthorization,
         );
-        // TODO(danfuzz): A stream's entries document in a person's home space
-        // is measured once the join also holds a clause from another space,
-        // and its ceiling is then `Space(<home>)` alone, which the home
-        // owner's own `PersonalSpace` label doesn't fit. So under server
-        // execution, a handler in the home that reads data stamped with that
-        // label beside data from another space, and sends an event, is
-        // refused for the event's bookkeeping alone, as
-        // `fabrichat-stamped-title-offers-multi-runtime.test.ts` pins. Settle
-        // with the CFC specification whether such a document admits its space
-        // owner's label, then follow it here and drop that pin.
         const measuredPaths = isDeclarablePolicyStore(
             id,
             flowJoinIsLocal,
@@ -13353,18 +13379,18 @@ export function* prepareBoundaryCommitSteps(
               )
             )
           ) {
-            const enrolled = tx.isEnrolledRuntimeOwnedStore(
+            const derivedOnly = tx.usesDerivedRuntimeOwnedStoreLabels(
               target.space,
               id,
               runtimeWritePolicyAuthorization,
             );
-            // A store enrolled for a running piece keeps this attempt's
+            // A live enrollment or a piece setup claim keeps this attempt's
             // misfit solely in the derived stamps below:
             // https://github.com/commonfabric/specs/pull/78
-            // A transaction-only marker can describe a handoff to authored
-            // clients, including an AgentRun record or an anchored child;
+            // A generic transaction-only marker can describe a handoff to
+            // authored clients, including an AgentRun record or an anchored child;
             // retain its declaration until those lifecycles are covered.
-            if (!enrolled) {
+            if (!derivedOnly) {
               persistedLabelEntries.push(markFlowStampEntry({
                 path,
                 label: {
@@ -13378,7 +13404,7 @@ export function* prepareBoundaryCommitSteps(
             }
             tx.noteCfcDiagnostic(
               `writer-fit(runtime-owned-store-${
-                enrolled ? "derived" : "declared"
+                derivedOnly ? "derived" : "declared"
               }): ${id} at /${path.join("/")} (§8.12.5): ${
                 offending.map(renderCfcAtom).join(", ")
               }`,

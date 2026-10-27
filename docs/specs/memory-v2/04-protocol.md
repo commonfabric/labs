@@ -117,7 +117,8 @@ does not mark the connection ready.
 `ifElse`, `when`, and `unless` key their result stores on the owning piece and
 output spot. It is inherent to the build, and an absent marker means false.
 The server accepts a wire-compatible `hello` without this marker, but refuses
-every `session.open` on that connection with `SessionRevokedError`, before
+every `session.open` on that connection with `SessionRevokedError` and
+`clientUpdateRequired: true`, before
 authorization, store opening, or session restoration. A reconnecting client
 treats this verdict as terminal for the session, dropping its pending commits
 and watches. Refusing at session admission uses that terminal path even in
@@ -780,6 +781,10 @@ interface ResponseMessage<Result> {
     // keep reopening a denied session or to terminate it. An older server sends
     // no marker, so its AuthorizationError is read as permanent.
     retriable?: boolean;
+    // Runtime incompatibility: retain the server's reason and stop mounting
+    // until the runtime is replaced. Independent of the error name; access
+    // retries and ACL changes cannot heal it.
+    clientUpdateRequired?: true;
     // Positive, versioned evidence that the server reached a durable no-commit
     // verdict. Delivery recovery may use this to distinguish a permanent
     // protocol failure from an ambiguous transport or storage outcome.

@@ -1134,6 +1134,17 @@ export class SpaceServer implements TransactionSealDestination {
    * itself. Entries retire with their demand key. */
   readonly #pieceRootByDemandKey = new Map<string, string>();
 
+  /** Demand key → the address of the piece root its structure load
+   * RESOLVED to, beside `#pieceRootByDemandKey`: the load starts the piece
+   * at that space and scope, and the arrival seed addresses the same root. */
+  readonly #pieceRootAddressByDemandKey = new Map<string, OwningRootAddress>();
+
+  /** Piece root doc id → `${scope}\0${demanderPairKey}` for the demanding
+   * pairs whose owed defaults of that piece's owned cells the passes have
+   * seeded this tenure (the arrival seed, `#loadDemandedStructure`).
+   * Entries retire with the last demand key naming the root. */
+  readonly #seededDemanders = new Map<string, Set<string>>();
+
   /** The client demand set as the last demand pass read it, which is what
    * lets a pass reconcile only the keys whose rows changed since. */
   readonly #demandMirror = new DemandMirror();
@@ -5535,10 +5546,12 @@ export class SpaceServer implements TransactionSealDestination {
             // reachable: those nodes re-arm for them exactly as they do for
             // a demander who arrives after the mapping (the arrival re-arm
             // below).
-            const onOwningRoot = (rootId: string) => {
+            const onOwningRoot = (owning: OwningRootAddress) => {
+              const rootId = owning.id;
               if (rootId === root.id) return;
               if (this.#pieceRootByDemandKey.get(key) === rootId) return;
               this.#pieceRootByDemandKey.set(key, rootId);
+              this.#pieceRootAddressByDemandKey.set(key, owning);
               this.#indexResolvedRoot(key, rootId);
               runtime.scheduler.invalidateActionsForDemandRoots([rootId]);
             };
@@ -5682,6 +5695,74 @@ export class SpaceServer implements TransactionSealDestination {
     } finally {
       if (this.#structureLoadChangedDocs === changedDocs) {
         this.#structureLoadChangedDocs = undefined;
+      }
+    }
+    // The ARRIVAL SEED (scopes.md §2; scoped-cell-instances.md, "A
+    // pattern-owned cell narrower than its result starts from its declared
+    // default for each actor instance"): a loaded root's piece owes each
+    // demanding pair the defaults of its owned cells scoped narrower than
+    // their owner, and a start seeds them only for the identity it runs
+    // under. A viewer whose runtime runs none of the pattern never starts
+    // the piece, so the serving runtime seeds the viewer's instances here,
+    // once per (root, pair) in a tenure; without it the viewer's first
+    // write into such a cell creates the instance holding that one field.
+    // Awaited ahead of the arrival re-arm, so a node re-run for the
+    // arriving demander reads the seeded instance instead of running once
+    // more when the seed lands.
+    for (const key of new Set([...rootKeys.keys(), ...changed])) {
+      if (!this.#active || this.#runtime !== runtime) return;
+      if (
+        !this.#demandedRoots.has(key) ||
+        this.#pendingStructureLoads.has(key) ||
+        this.#terminalStructureLoads.has(key)
+      ) continue;
+      const demanders = this.#demandersByKey.get(key);
+      if (demanders === undefined || demanders.size === 0) continue;
+      // The root the structure load started the piece at, space and scope
+      // included: the owning root it resolved to, else the demanded root
+      // itself. A root in another space is that space's server's to seed.
+      const resolved = this.#pieceRootAddressByDemandKey.get(key);
+      const rootId = resolved?.id ?? key.slice(key.indexOf("\0") + 1);
+      if (resolved !== undefined && resolved.space !== this.#options.space) {
+        continue;
+      }
+      const rootScope: CellScope = resolved === undefined
+        ? this.#demandRootAddresses.get(key)?.scope ?? "space"
+        : (resolved.scope ?? "space") as CellScope;
+      if (neverAPieceRootId(rootId)) continue;
+      let seeded = this.#seededDemanders.get(rootId);
+      if (seeded === undefined) {
+        seeded = new Set();
+        this.#seededDemanders.set(rootId, seeded);
+      }
+      for (const [pairKey, identity] of demanders) {
+        const seedKey = `${rootScope}\0${pairKey}`;
+        if (seeded.has(seedKey)) continue;
+        const root = runtime.getCellFromLink({
+          space: this.#options.space,
+          id: rootId as never,
+          path: [],
+          scope: rootScope,
+        });
+        try {
+          const complete = await runtime.runner.seedOwedDefaultsFor(
+            root,
+            identity,
+          );
+          if (!this.#active || this.#runtime !== runtime) return;
+          // An incomplete seeding — the piece stopped, or a declaration
+          // the manifest no longer vouches for — is asked again when the
+          // key next changes.
+          if (!complete) continue;
+          seeded.add(seedKey);
+          stats.demand.ownedDefaultSeeds += 1;
+        } catch (error) {
+          if (!this.#active || this.#runtime !== runtime) return;
+          logger.warn("demand-seed-failed", () => [
+            `seeding the defaults the piece at ${rootId} owes a demander failed`,
+            error,
+          ]);
+        }
       }
     }
     if (arrivals.size > 0) {
@@ -5840,14 +5921,20 @@ export class SpaceServer implements TransactionSealDestination {
     const keys = this.#keysByRootId.get(id);
     if (keys !== undefined) {
       keys.delete(key);
-      if (keys.size === 0) this.#keysByRootId.delete(id);
+      if (keys.size === 0) {
+        this.#keysByRootId.delete(id);
+        this.#seededDemanders.delete(id);
+      }
     }
     const resolved = this.#pieceRootByDemandKey.get(key);
     if (resolved !== undefined) {
       const rkeys = this.#keysByResolvedRoot.get(resolved);
       if (rkeys !== undefined) {
         rkeys.delete(key);
-        if (rkeys.size === 0) this.#keysByResolvedRoot.delete(resolved);
+        if (rkeys.size === 0) {
+          this.#keysByResolvedRoot.delete(resolved);
+          this.#seededDemanders.delete(resolved);
+        }
       }
     }
   }
@@ -5869,6 +5956,7 @@ export class SpaceServer implements TransactionSealDestination {
     this.#demandedRoots.delete(key);
     this.#unindexDemandKey(key);
     this.#pieceRootByDemandKey.delete(key);
+    this.#pieceRootAddressByDemandKey.delete(key);
     this.#pendingStructureLoads.delete(key);
     this.#terminalStructureLoads.delete(key);
     this.#rearmedAwaitingSettle.delete(key);
@@ -5951,7 +6039,7 @@ export class SpaceServer implements TransactionSealDestination {
   async #attemptStructureLoad(
     runtime: Runtime,
     root: { id: string; scope?: string },
-    onOwningRoot: (rootId: string) => void,
+    onOwningRoot: (root: OwningRootAddress) => void,
   ): Promise<StructureLoadAttempt> {
     const scope = root.scope ?? "space";
     const termini: OwningRootAddress[] = [];
@@ -6010,7 +6098,7 @@ export class SpaceServer implements TransactionSealDestination {
     runtime: Runtime,
     root: { id: string; scope?: string },
     attempt: StructureLoadAttempt,
-    onOwningRoot: (rootId: string) => void,
+    onOwningRoot: (root: OwningRootAddress) => void,
   ): Promise<StructureLoadAttempt> {
     if (this.#enginePatternIdentityAbsent(runtime, attempt.termini)) {
       this.#options.stats.structureLoadConfirmationsSkipped += 1;
@@ -7712,6 +7800,8 @@ export class SpaceServer implements TransactionSealDestination {
     this.#demandersByKey.clear();
     this.#demandedPairCount = 0;
     this.#pieceRootByDemandKey.clear();
+    this.#pieceRootAddressByDemandKey.clear();
+    this.#seededDemanders.clear();
     this.#keysByRootId.clear();
     this.#keysByResolvedRoot.clear();
     this.#demandRootAddresses.clear();

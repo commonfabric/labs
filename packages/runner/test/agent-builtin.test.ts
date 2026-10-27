@@ -13,6 +13,7 @@ import { expect } from "@std/expect";
 import { afterEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
+import { cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import { getLogger } from "@commonfabric/utils/logger";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -21,6 +22,8 @@ import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value"
 import { createBuilder } from "../src/builder/factory.ts";
 import { agentQueueIndexCell } from "../src/builtins/agent.ts";
 import { renderCellReference } from "../src/cell-reference.ts";
+import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
+import { deriveFlowJoin } from "../src/cfc/prepare.ts";
 import type { Cell } from "../src/cell.ts";
 import { isCellLink } from "../src/link-utils.ts";
 import { Runtime, type RuntimeOptions } from "../src/runtime.ts";
@@ -292,6 +295,82 @@ describe("agent builtin", () => {
     expect(entries.map((entry) => entry.host)).toEqual([
       "https://fabric.example",
     ]);
+  });
+
+  it("indexes a request through a Home queue labeled for its own space", async () => {
+    setUp({
+      cfcEnforcementMode: "enforce-strict",
+      cfcFlowLabels: "persist",
+      experimental: { serverExecution: false },
+    }, { seedQueue: false });
+    const homeLabel = cfcAtom.personalSpace(space);
+    // A Home child whose result already carries a declared personal-space
+    // label. The index writer follows Home's link to that result and reads
+    // the queue before appending its new, space-scoped entry.
+    const queue = runtime.getCell(space, "labeled-home-agent-queue", {
+      type: "object",
+      properties: {
+        entries: { type: "array", items: { type: "object" } },
+      },
+      ifc: { confidentiality: [homeLabel] },
+    }, tx);
+    queue.set({ entries: [] });
+    const defaultPattern = runtime.getCell(
+      space,
+      "labeled-home-default-pattern",
+      undefined,
+      tx,
+    );
+    defaultPattern.key("agentQueue").set(queue);
+    // deno-lint-ignore no-explicit-any -- Home's fields exceed the space schema.
+    (runtime.getHomeSpaceCell(tx) as any).key("defaultPattern").set(
+      defaultPattern,
+    );
+    expect((await tx.commit().settled).error).toBeUndefined();
+
+    tx = runtime.edit();
+    const result = runAgentPattern("agent-personal-home-queue");
+    expect((await tx.commit().settled).error).toBeUndefined();
+    const record = await waitForRecord(result);
+    expect(record.get()?.state).toBe("queued");
+    const index = agentQueueIndexCell(runtime, space);
+    const entries = index.key("entries").get() ?? [];
+    expect(entries.length).toBe(1);
+    expect(entries[0].host).toBe("https://fabric.example");
+    const entry = index.key("entries").key(0).resolveAsCell();
+    expect(entry.getAsNormalizedFullLink()).toMatchObject({
+      space,
+      scope: "space",
+    });
+    expect(entry.key("run").resolveAsCell().getAsNormalizedFullLink().id)
+      .toBe(record.getAsNormalizedFullLink().id);
+
+    const inspect = runtime.edit();
+    try {
+      const queueLabels = readStoredCfcMetadata(
+        inspect,
+        queue.getAsNormalizedFullLink(),
+      )?.labelMap.entries ?? [];
+      expect(
+        queueLabels.filter((label) =>
+          label.origin === "declared" && label.path.length === 0
+        ).flatMap((label) => label.label.confidentiality ?? []),
+      )
+        .toContainEqual(homeLabel);
+      const entryLabels = readStoredCfcMetadata(
+        inspect,
+        entry.getAsNormalizedFullLink(),
+      )?.labelMap.entries ?? [];
+      expect(
+        entryLabels.filter((label) => label.origin === "derived")
+          .flatMap((label) => label.label.confidentiality ?? []),
+      )
+        .toContainEqual(homeLabel);
+      entry.withTx(inspect).key("host").get();
+      expect(deriveFlowJoin(inspect).confidentiality).toContainEqual(homeLabel);
+    } finally {
+      inspect.abort("label inspection complete");
+    }
   });
 
   it("ends the record as `refused` when the home space holds no queue", async () => {
