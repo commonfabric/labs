@@ -2308,12 +2308,15 @@ through a promise. The loop calls it before each root model request, including
 the first, with the number of the model turn that will receive the messages. It
 also checks before accepting a final text answer, structured result, or
 `finish_task` ending when another model turn remains; pending messages keep the
-run going within its existing turn budget. Each string is appended verbatim as
-an ordinary user message, after the prompt or previous turn's tool results, and
-retained in resumable history and subsequent checkpoints. Delegated child loops
-never receive the callback, and the loop never calls it after ending or when no
-model request remains. Steering is refused when the prompt-slot binding carries
-`valueDigest`, `slotDigest`, or `snapshotDigest`, because that binding
+run going within its existing turn budget. Each turn number is asked at most
+once: an ending take replaces the next turn's start take, and messages arriving
+between them wait for the following boundary. A call consumes the messages it
+returns; the host must not return them again. Each string is appended verbatim
+as an ordinary user message, after the prompt or previous turn's tool results,
+and retained in resumable history and subsequent checkpoints. Delegated child
+loops never receive the callback, and the loop never calls it after ending or
+when no model request remains. Steering is refused when the prompt-slot binding
+carries `valueDigest`, `slotDigest`, or `snapshotDigest`, because that binding
 authorizes one exact prompt value.
 
 Every run gets 32 root model turns unless its host names another budget. With a

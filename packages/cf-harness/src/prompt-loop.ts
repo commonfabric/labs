@@ -389,8 +389,11 @@ export interface RunHarnessPromptOptions {
 
   /**
    * Takes root user messages for model turn `turn`, appended verbatim before
-   * its request. Called at turn starts and provisional endings with remaining
-   * budget, and never after the loop ends. Digest-bound prompts refuse it.
+   * its request. Called at a turn's start, including the last permitted turn,
+   * or at a provisional ending when another turn remains. Each turn number is
+   * asked at most once. A call consumes the messages it returns; the host must
+   * not return them again. Never called after the loop ends. Digest-bound
+   * prompts refuse it.
    */
   takeMessages?: (
     turn: number,
@@ -415,8 +418,11 @@ export interface RunHarnessTranscriptOptions {
 
   /**
    * Takes root user messages for model turn `turn`, appended verbatim before
-   * its request. Called at turn starts and provisional endings with remaining
-   * budget, and never after the loop ends. Digest-bound prompts refuse it.
+   * its request. Called at a turn's start, including the last permitted turn,
+   * or at a provisional ending when another turn remains. Each turn number is
+   * asked at most once. A call consumes the messages it returns; the host must
+   * not return them again. Never called after the loop ends. Digest-bound
+   * prompts refuse it.
    */
   takeMessages?: (
     turn: number,
@@ -4146,11 +4152,14 @@ export class CfHarnessPromptLoop {
         await options.onTranscriptEvent?.({ message: notice, transcript });
       };
 
+      let lastMessagesTurn = 0;
+
       /** Appends the driver's pending messages to ordinary resumable history. */
       const appendTakenMessages = async (turn: number): Promise<boolean> => {
         if (options.takeMessages === undefined) return false;
         options.signal?.throwIfAborted();
         const messages = await options.takeMessages(turn);
+        lastMessagesTurn = turn;
         for (const content of messages) {
           const message: HarnessTranscriptMessage = { role: "user", content };
           transcript.push(message);
@@ -4170,7 +4179,9 @@ export class CfHarnessPromptLoop {
       while (modelTurns < maxModelTurns) {
         options.signal?.throwIfAborted();
         modelTurns += 1;
-        await appendTakenMessages(modelTurns);
+        if (lastMessagesTurn !== modelTurns) {
+          await appendTakenMessages(modelTurns);
+        }
         const finalizing = this.#finalizeOnTurnLimit &&
           modelTurns === maxModelTurns;
         // Every run is warned two turns out, so a model can wrap up rather

@@ -266,7 +266,7 @@ describe("prompt-loop", () => {
       });
       expect(result.finalAssistantText).toBe("April answer");
       expect(result.modelTurns).toBe(2);
-      expect(calls).toEqual([1, 2, 2, 3]);
+      expect(calls).toEqual([1, 2, 3]);
       expect(order.slice(-3)).toEqual(["April answer", "take:3", "returned"]);
     });
 
@@ -276,11 +276,15 @@ describe("prompt-loop", () => {
         submitTurn("april", "April"),
       ], { engine: resultEngine(), stopOnStructuredResult: true });
       const pending: string[] = [];
+      const calls: number[] = [];
       const options = {
         prompt: "Submit March.",
         promptSlotBinding,
         maxModelTurns: 2,
-        takeMessages: (_turn: number) => pending.splice(0),
+        takeMessages: (turn: number) => {
+          calls.push(turn);
+          return pending.splice(0);
+        },
         onTranscriptEvent: (
           { message }: { message: HarnessTranscriptMessage },
         ) => {
@@ -301,12 +305,62 @@ describe("prompt-loop", () => {
         answer: "April",
       });
       expect(result.modelTurns).toBe(2);
+      expect(calls).toEqual([1, 2]);
       const outputs = result.transcript.filter((message) =>
         message.role === "tool"
       );
       expect(outputs.map((message) => JSON.parse(message.content).replaced))
         .toEqual([false, true]);
     });
+
+    for (const structured of [false, true]) {
+      it(`defers messages arriving after a ${structured ? "structured-result" : "text"} ending take to the following boundary`, async () => {
+        const { loop, requests } = scriptedLoop([
+          structured ? submitTurn("march", "March") : finalTurn("March answer"),
+          inspectTurn(),
+          finalTurn("Final answer"),
+        ], { engine: resultEngine(), stopOnStructuredResult: structured });
+        const calls: number[] = [];
+        const pending: string[] = [];
+        const result = await loop.runPrompt({
+          prompt: "Summarize March.",
+          promptSlotBinding,
+          maxModelTurns: 3,
+          takeMessages: (turn) => {
+            calls.push(turn);
+            return pending.splice(0);
+          },
+          onTranscriptEvent: ({ message }) => {
+            if (
+              message.content === "March answer" ||
+              (message.role === "tool" && message.toolCallId === "march")
+            ) {
+              pending.push("Use April.");
+            }
+            if (message.role === "user" && message.content === "Use April.") {
+              pending.push("Inspect May too.");
+            }
+          },
+        });
+
+        expect(calls).toEqual([1, 2, 3]);
+        expect(requests).toHaveLength(3);
+        expect(requests[1].transcript).toContainEqual({
+          role: "user",
+          content: "Use April.",
+        });
+        expect(
+          requests[1].transcript.some((message) =>
+            message.content === "Inspect May too."
+          ),
+        ).toBe(false);
+        expect(requests[2].transcript).toContainEqual({
+          role: "user",
+          content: "Inspect May too.",
+        });
+        expect(result.finalAssistantText).toBe("Final answer");
+      });
+    }
 
     it("checkpoints a steer taken at an accepted-result ending", async () => {
       const { loop, requests } = scriptedLoop([
