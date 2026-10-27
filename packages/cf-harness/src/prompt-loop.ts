@@ -4327,6 +4327,7 @@ export class CfHarnessPromptLoop {
           }
           if (
             modelTurns < maxModelTurns &&
+            options.signal?.aborted !== true &&
             await appendTakenMessages(modelTurns + 1)
           ) {
             finalAssistantText = undefined;
@@ -4477,21 +4478,20 @@ export class CfHarnessPromptLoop {
           );
         }
         options.signal?.throwIfAborted();
+        if (
+          finalAssistantText !== undefined &&
+          modelTurns < maxModelTurns &&
+          options.signal?.aborted !== true &&
+          await appendTakenMessages(modelTurns + 1)
+        ) {
+          finalAssistantText = undefined;
+          taskOutcome = { outcome: "completed" };
+        }
         await options.onCheckpoint?.({
           transcript: resumableTranscript(),
           runState: this.engine.getRunState(),
         });
-        if (finalAssistantText !== undefined) {
-          if (
-            modelTurns < maxModelTurns &&
-            await appendTakenMessages(modelTurns + 1)
-          ) {
-            finalAssistantText = undefined;
-            taskOutcome = { outcome: "completed" };
-            continue;
-          }
-          break;
-        }
+        if (finalAssistantText !== undefined) break;
       }
     } catch (error) {
       annotatePromptLoopError(error, modelTurns);

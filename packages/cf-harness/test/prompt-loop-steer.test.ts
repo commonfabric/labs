@@ -308,6 +308,33 @@ describe("prompt-loop", () => {
         .toEqual([false, true]);
     });
 
+    it("checkpoints a steer taken at an accepted-result ending", async () => {
+      const { loop, requests } = scriptedLoop([
+        submitTurn("march", "March"),
+        finalTurn("April answer"),
+      ], { engine: resultEngine(), stopOnStructuredResult: true });
+      const pending: string[] = [];
+      const checkpoints: HarnessTranscriptMessage[][] = [];
+      const steer = { role: "user", content: "Use April." } as const;
+      const result = await loop.runTranscript({
+        transcript: [{ role: "user", content: "Submit March." }],
+        promptSlotBinding,
+        maxModelTurns: 2,
+        takeMessages: () => pending.splice(0),
+        onTranscriptEvent: ({ message }) => {
+          if (message.role === "tool") pending.push(steer.content);
+        },
+        onCheckpoint: ({ transcript }) => {
+          checkpoints.push(structuredClone([...transcript]));
+        },
+      });
+
+      expect(checkpoints).toHaveLength(1);
+      expect(checkpoints[0]).toContainEqual(steer);
+      expect(requests).toHaveLength(2);
+      expect(result.finalAssistantText).toBe("April answer");
+    });
+
     it("discards an admitted task outcome when a steer continues the run", async () => {
       const { loop, requests } = scriptedLoop([
         toolTurn("finish", "finish_task", {
@@ -434,6 +461,44 @@ describe("prompt-loop", () => {
       expect(requests).toHaveLength(1);
       expect(controller.signal.aborted).toBe(true);
       expect(result.runState.status).toBe("completed");
+      expect(JSON.parse(await Deno.readTextFile(resultPath))).toEqual({
+        answer: "March",
+      });
+    });
+
+    it("leaves a message pending when the final checkpoint aborts a steered run", async () => {
+      const { loop, requests } = scriptedLoop([submitTurn("result", "March")], {
+        engine: resultEngine(),
+        stopOnStructuredResult: true,
+      });
+      const controller = new AbortController();
+      const pending: string[] = [];
+      const order: string[] = [];
+
+      const result = await loop.runTranscript({
+        transcript: [{ role: "user", content: "Submit March." }],
+        promptSlotBinding,
+        maxModelTurns: 2,
+        signal: controller.signal,
+        takeMessages: (turn) => {
+          order.push(`take:${turn}`);
+          return pending.splice(0);
+        },
+        onCheckpoint: () => {
+          order.push("checkpoint");
+          pending.push("Use April.");
+          controller.abort(new Error("Stopped after the final checkpoint"));
+        },
+      });
+      order.push("returned");
+
+      expect(requests).toHaveLength(1);
+      expect(result.runState.status).toBe("completed");
+      expect(pending).toEqual(["Use April."]);
+      expect(order.slice(order.indexOf("checkpoint"))).toEqual([
+        "checkpoint",
+        "returned",
+      ]);
       expect(JSON.parse(await Deno.readTextFile(resultPath))).toEqual({
         answer: "March",
       });
