@@ -383,6 +383,15 @@ code that resolves them.
   materialized, not a second walk. A harness that pulls per write to find what
   the write made is quadratic in the board, and the fix is the same: apply the
   durable schema and key into the one row the write made.
+- **The derivation is scoped narrower than its readers differ.** A page load is
+  a new session, so a derivation declared per session is run and committed again
+  by every load, and so is everything downstream of it, however identical the
+  result. The store shows it and the timers do not: count the head rows a load
+  writes by `scope_key`. Storing the result in the scope its readers share
+  removes the writes and the re-runs, and does not remove the reads the
+  derivation was made from, which a load repeats either way — so measure both
+  before promising a faster load.
+  `docs/history/fabrichat-manager-home-scope-break.md` is the worked case.
 - **An append re-walks the list against its element schema.** Appending to a
   growing array is free, and so is appending a piece to one. Appending a piece
   whose declared shape is wide re-walks every element already there, once per
