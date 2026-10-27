@@ -521,6 +521,7 @@ export const runHarnessJob = async (
           }
         },
         runTranscript: async (transcriptOptions) => {
+          const seedMessages = new Set(transcriptOptions.transcript);
           try {
             loopResult = await loop.runTranscript({
               ...transcriptOptions,
@@ -531,7 +532,19 @@ export const runHarnessJob = async (
                 await transcriptOptions.onModelUsage?.(update);
               },
               onTranscriptEvent: async (event) => {
-                await options.onEvent?.(event);
+                if (event.subagent !== undefined) {
+                  await options.onEvent?.(event);
+                } else {
+                  // The loop can insert guidance into its seed. Retained
+                  // message identity locates the boundary in the live history.
+                  const seedEnd = event.transcript.findLastIndex((message) =>
+                    seedMessages.has(message)
+                  );
+                  const transcript = event.transcript.slice(seedEnd + 1);
+                  if (transcript.includes(event.message)) {
+                    await options.onEvent?.({ ...event, transcript });
+                  }
+                }
                 await transcriptOptions.onTranscriptEvent?.(event);
               },
             });
