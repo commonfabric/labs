@@ -280,6 +280,12 @@ workflow. A run's lanes come from two jobs.
   runs, one once each capability has opened, and one as each batch starts.
   Setup captures its commands' output, so in a lane that stops without saying
   why, the last of these lines names the step it stopped in.
+- After each batch, the lane raises GitHub Actions error annotations for the
+  failures it fails for, with a local rerun command where one exists. These
+  appear while the remaining batches, diagnostic reruns, and coverage work
+  continue. Each failing identity is annotated once, up to ten per lane; an
+  excused failure gets no error annotation. The closing summary still lists
+  the lane's results and writes them to the job summary.
 - The lane replaces the shell of `🧪 Run the lane` rather than running under
   it. GitHub stops a step that reaches its bound by sending SIGINT to the
   step's own process, and SIGTERM a few seconds later, and a shell waiting on a
@@ -313,6 +319,13 @@ suite, and the store half of `check-test-topology` in `Status` fails on it.
 
 So every run's lanes wait for the count. Whether a run runs every test, and
 how much a pull request chooses by score, is decided in one place, the count.
+
+The pattern integration suites make the Topics pivot session test and the
+seven Topics measurement files mandatory when the board or topic source
+changes. Changes to the shared headless, read-budget, or browser measurement
+helpers also require the measurement files. These declarations cover both
+server-execution arms, including after the default changes: the fixtures read
+authored source by path, so a change can break them without editing a test.
 
 A pull request's labels say how much it runs:
 

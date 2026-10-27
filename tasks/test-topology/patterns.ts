@@ -167,6 +167,27 @@ async function patternIntegrationSuites(
         `${packageDir}/topics/main.tsx`,
         `${packageDir}/topics/topic.tsx`,
       ], changed);
+      // The measurement fixtures reach authored lifts by name and read their
+      // source from disk. Their shared inputs must select the tests even when
+      // none of the test files changes.
+      const measurementsChanged = boardChanged || reachedByChange([
+        `${packageDir}/integration/topics-headless-fixture.ts`,
+        `${packageDir}/integration/topics-cost-cases.ts`,
+        `${packageDir}/integration/topics-read-budget.ts`,
+        `${packageDir}/integration/topics-read-budget-limits.ts`,
+        `${packageDir}/integration/topics-read-budget-suite.ts`,
+        `${packageDir}/integration/topics-browser-measurement.ts`,
+        `${packageDir}/integration/topics-browser-measurement-core.ts`,
+      ], changed);
+      const measurements = new Set([
+        "topics-headless-fixture",
+        "topics-lazy-lookup-reruns",
+        "topics-read-budget-small-and-threads",
+        "topics-read-budget-single-bucket",
+        "topics-read-budget-high-degree",
+        "topics-read-budget-mentions-16",
+        "topics-browser-measurement",
+      ].map((name) => `${packageDir}/integration/${name}.test.ts`));
       return suite.units.filter((unit) =>
         changed.has(unit) ||
         (catalogChanged &&
@@ -174,7 +195,8 @@ async function patternIntegrationSuites(
             `${packageDir}/integration/home-shared-space-catalog.test.ts`) ||
         (boardChanged &&
           unit ===
-            `${packageDir}/integration/topic-board-pivot-sessions.test.ts`)
+            `${packageDir}/integration/topic-board-pivot-sessions.test.ts`) ||
+        (measurementsChanged && measurements.has(unit))
       );
     },
   }));
