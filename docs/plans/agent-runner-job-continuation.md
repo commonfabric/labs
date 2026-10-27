@@ -353,7 +353,11 @@ by a new flag, `--continue-run <run root> --prompt=<message>`:
 - the provider, model, credential owner and read ceiling checked against the
   prior run's, refusing anything broader (`AH-ART-4`, `AH-ART-5`,
   `AH-INT-4`). The checks are the ones `--resume-run` already makes;
-- refusal of a subagent run, as `--resume-run` refuses one now.
+- refusal of a subagent run, as `--resume-run` refuses one now;
+- refusal of a prior run whose recorded prompt-slot binding carries a
+  `valueDigest`, `slotDigest` or `snapshotDigest`. That binding authorizes
+  one exact prompt value, and a follow-up's new prompt is not that value,
+  for the same reason the loop refuses a steer under such a binding.
 
 Each run still reaches exactly one terminal state (`AH-LIFE-1`). This is why
 a follow-up is a new run and does not re-enter the old one.
