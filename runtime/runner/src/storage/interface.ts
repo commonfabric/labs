@@ -460,14 +460,15 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   ): Promise<MemorySpace>;
 
   /**
-   * Holds the delegation `bytes` encode, so that a session this manager opens
-   * from here on, on the space it is over and as a key it reaches, presents
-   * the chain it belongs to and acts under the root issuer's grant
-   * (`docs/specs/profile-delegation.md`). Throws a `DelegationError` for
-   * bytes that are not a delegation or do not verify, and an `Error` where
-   * the manager's sessions cannot present a chain.
+   * Holds the delegation chain `chain` encodes, root first and the
+   * delegation granting the opening key last, so that a session this manager
+   * opens from here on, on the space the chain is over and as that key,
+   * presents it and acts under the root issuer's grant
+   * (`docs/specs/profile-delegation.md`). Throws a `DelegationError` for a
+   * chain whose delegations do not decode, verify, or link, and an `Error`
+   * where the manager's sessions cannot present a chain.
    */
-  addDelegation?(bytes: Uint8Array): Promise<void>;
+  addDelegationChain?(chain: readonly Uint8Array[]): Promise<void>;
 
   /**
    * The kind `space` declares in its genesis commit, or `undefined` when it

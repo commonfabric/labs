@@ -411,12 +411,15 @@ The runtime's storage manager opens a session to a space with a
 `createSignedSessionOpenAuth`). The pieces are:
 
 - The remote session factory holds a delegation store
-  (`delegation-store.ts`), keyed by the space each delegation is over, fed
-  through `StorageManager.addDelegation`. Asked for the chain to open a space
-  as a key, it searches back from that key over the delegations valid at
-  that moment whose command covers a session open, and returns the first
-  complete chain, one rooted at the space itself, or failing that the first
-  chain it found, for the server to judge.
+  (`delegation-store.ts`), fed through `StorageManager.addDelegationChain`
+  with whole chains, root first, as a holder is handed them; the store
+  checks each link and that the links meet, and keeps the chain under the
+  space it is over. Asked for the chain to open a space as a key, it hands
+  back one it holds that ends at that key and whose links all hold at that
+  moment and cover a session open: one the space itself rooted if there is
+  one, and otherwise the chain added last. It assembles nothing from loose
+  delegations, since which root the access list grants is the server's to
+  know; the holder's latest addition is taken as its intent.
 - The `SessionPrincipal` the factory hands the memory client carries a
   `proofs` function rather than a chain. The client calls it once per open
   or reopen, so each presents the chain as the store holds it then: a
@@ -518,9 +521,9 @@ part of this design.
    [`EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md) and
    off by default until the client ships.
 2. **Client presents proofs.** Implemented. The remote session factory holds
-   a delegation store (`delegation-store.ts`), fed through
-   `StorageManager.addDelegation`, and every session it opens presents the
-   chain the store assembles for the space and the opening key: a signed open
+   a delegation store (`delegation-store.ts`), fed whole chains through
+   `StorageManager.addDelegationChain`, and every session it opens presents
+   the chain the store holds for the space and the opening key: a signed open
    names the CIDs in `prf` and carries the bytes, and an open naming a
    connection-authenticated principal carries the bytes alone. A reopen
    presents the same chain, since it rides on the session's principal. A

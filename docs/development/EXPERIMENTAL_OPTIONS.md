@@ -1545,8 +1545,8 @@ the per-epic implementation notes).
   retain the negotiation while deployments may contain servers that admit
   none.
 - **Status (2026-10-27):** implemented on the server and off by default. A
-  runtime presents a chain for a space it holds a delegation over, fed
-  through `StorageManager.addDelegation`, and refuses a server that does not
+  runtime presents a chain for a space it holds one over, fed through
+  `StorageManager.addDelegationChain`, and refuses a server that does not
   advertise the capability rather than opening under its own grant; no
   delegation is recorded durably yet, so a deployment with the flag off
   loses nothing until the third phase lands.

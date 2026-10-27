@@ -95,7 +95,7 @@ describe("storage-delegation-chain", () => {
             cmd: "/memory",
             pol: [],
           });
-          await factory.addDelegation(delegation.bytes);
+          await factory.addDelegationChain([delegation.bytes]);
 
           const { client, session } = await factory.create(space);
           cleanups.push(() => client.close());
@@ -116,7 +116,42 @@ describe("storage-delegation-chain", () => {
             cmd: "/memory",
             pol: [],
           });
-          await factory.addDelegation(delegation.bytes);
+          await factory.addDelegationChain([delegation.bytes]);
+          const { client, session } = await factory.create(space);
+          cleanups.push(() => client.close());
+          expect((await write(session, 1)).seq).toBeGreaterThan(0);
+        });
+
+        it("presents the chain added last among those rooted elsewhere than the space, so the owner's chain added after a stranger's wins", async () => {
+          const { server, space } = await serverWithOwnedSpace({
+            delegations: true,
+            connectionAuth,
+          });
+          const factory = guestFactory(server);
+          const stranger = await Identity.fromPassphrase(
+            "delegation-chain stranger",
+          );
+          const alice = await Identity.fromPassphrase("delegation-chain alice");
+          const viaStranger = await issueDelegation(stranger, {
+            aud: guest.did(),
+            sub: space as DIDKey,
+            cmd: "/memory",
+            pol: [],
+          });
+          const fromOwner = await issueDelegation(owner, {
+            aud: alice.did(),
+            sub: space as DIDKey,
+            cmd: "/memory",
+            pol: [],
+          });
+          const onward = await issueDelegation(alice, {
+            aud: guest.did(),
+            sub: space as DIDKey,
+            cmd: "/memory",
+            pol: [],
+          });
+          await factory.addDelegationChain([viaStranger.bytes]);
+          await factory.addDelegationChain([fromOwner.bytes, onward.bytes]);
           const { client, session } = await factory.create(space);
           cleanups.push(() => client.close());
           expect((await write(session, 1)).seq).toBeGreaterThan(0);
@@ -145,7 +180,7 @@ describe("storage-delegation-chain", () => {
             cmd: "/memory",
             pol: [],
           });
-          await factory.addDelegation(delegation.bytes);
+          await factory.addDelegationChain([delegation.bytes]);
           await expect(factory.create(space)).rejects.toThrow(
             "sessionOpenProofs",
           );
@@ -168,7 +203,7 @@ describe("storage-delegation-chain", () => {
     });
     const forged = delegation.bytes.slice();
     forged[10] ^= 0xff;
-    await expect(factory.addDelegation(forged)).rejects.toThrow(
+    await expect(factory.addDelegationChain([forged])).rejects.toThrow(
       "does not verify",
     );
   });

@@ -1,16 +1,20 @@
 /**
- * The delegations a runtime holds, and the chain it presents when it opens a
- * space.
+ * The delegation chains a runtime holds, and the one it presents when it
+ * opens a space.
  *
- * A delegation reaches the store as the bytes its issuer encoded, is decoded
- * and verified on the way in, and is kept under the space it is over. When a
- * session opens a space as some principal, the store assembles the chain
- * that ends at that principal: the delegation whose audience is the
- * principal, then the one whose audience is that delegation's issuer, and so
- * on back to a root, which is a delegation the space itself issued or the
- * last one the store can link. The chain is what the open presents as its
- * proofs (`docs/specs/profile-delegation.md`, "Opening a session with a
- * delegation"); the server decides whether the root issuer's grant admits it.
+ * A chain reaches the store as its holder was handed it: the delegations'
+ * bytes in order from the root, the one that grants the holder's key last.
+ * Each is decoded and verified on the way in, the links are checked to meet,
+ * and the chain is kept whole under the space it is over. When a session
+ * opens a space as some principal, the store hands back a chain it holds
+ * that ends at that principal and whose links all hold at that moment; it
+ * assembles nothing from loose delegations, since a holder is handed whole
+ * chains and the server judges the chain it is handed
+ * (`docs/specs/profile-delegation.md`, "Opening a session with a
+ * delegation"). Where several chains end at the principal, one the space
+ * itself rooted is preferred, since the server resolves its grant without
+ * any access-list entry naming another principal, and otherwise the chain
+ * added last: the holder's latest intent.
  */
 
 import {
@@ -25,45 +29,79 @@ import {
   SESSION_OPEN_COMMAND,
 } from "@commonfabric/memory/v2/session-open-auth";
 
-/** The delegations a runtime holds, keyed by the space each is over. */
+/** Whether every link of `chain` holds at `nowSeconds` and covers an open. */
+const usableAt = (chain: readonly Delegation[], nowSeconds: number): boolean =>
+  chain.every(({ payload }) =>
+    (payload.exp === null || payload.exp >= nowSeconds) &&
+    (payload.nbf === undefined || payload.nbf <= nowSeconds) &&
+    delegationCovers(payload.cmd, SESSION_OPEN_COMMAND)
+  );
+
+/** The delegation chains a runtime holds, keyed by the space each is over. */
 export class DelegationStore {
-  /** Delegations by subject space, then by CID, so each is held once. */
-  #bySubject = new Map<string, Map<string, Delegation>>();
+  /** Chains by subject space, in the order they were added, root first. */
+  #bySubject = new Map<string, Delegation[][]>();
 
   /**
-   * Adds the delegation `bytes` encode, decoding and verifying it first.
-   * Throws a `DelegationError` for bytes that are not a delegation or do
-   * not verify. Adding a delegation the store holds changes nothing.
+   * Adds the chain `bytes` encode, root first, decoding and verifying each
+   * delegation and checking that the links meet: each audience is the next
+   * issuer, every subject is one space, and the chain is at most
+   * {@link MAX_PROOF_CHAIN_LENGTH} long. Returns the decoded chain. Throws a
+   * `DelegationError` for anything else. Adding a chain the store holds
+   * changes nothing.
    */
-  async add(bytes: Uint8Array): Promise<Delegation> {
-    // A copy, so the held bytes stay the bytes the CID and payload describe
-    // whatever the caller does with its array afterwards.
-    const delegation = await decodeDelegation(bytes.slice());
-    await verifyDelegation(delegation);
-    const { sub } = delegation.payload;
+  async add(bytes: readonly Uint8Array[]): Promise<Delegation[]> {
+    if (bytes.length === 0) {
+      throw new DelegationError("the chain is empty");
+    }
+    if (bytes.length > MAX_PROOF_CHAIN_LENGTH) {
+      throw new DelegationError(
+        `the chain is longer than ${MAX_PROOF_CHAIN_LENGTH} delegations`,
+      );
+    }
+    const chain: Delegation[] = [];
+    for (const link of bytes) {
+      // A copy, so the held bytes stay the bytes the CID and payload
+      // describe whatever the caller does with its array afterwards.
+      const delegation = await decodeDelegation(link.slice());
+      await verifyDelegation(delegation);
+      const previous = chain.at(-1);
+      if (
+        previous !== undefined &&
+        previous.payload.aud !== delegation.payload.iss
+      ) {
+        throw new DelegationError(
+          `delegation ${chain.length} is not issued by the previous audience`,
+        );
+      }
+      chain.push(delegation);
+    }
+    const space = chain[0].payload.sub;
     // A delegation over any subject is one no space's open can present.
-    if (sub === null) {
-      throw new DelegationError("the delegation is over no space");
+    if (space === null) {
+      throw new DelegationError("the chain is over no space");
     }
-    let held = this.#bySubject.get(sub);
+    if (chain.some(({ payload }) => payload.sub !== space)) {
+      throw new DelegationError("the chain is over more than one space");
+    }
+    let held = this.#bySubject.get(space);
     if (held === undefined) {
-      held = new Map();
-      this.#bySubject.set(sub, held);
+      held = [];
+      this.#bySubject.set(space, held);
     }
-    held.set(delegation.cid, delegation);
-    return delegation;
+    const cids = chain.map(({ cid }) => cid).join(" ");
+    if (!held.some((known) => known.map(({ cid }) => cid).join(" ") === cids)) {
+      held.push(chain);
+    }
+    return chain;
   }
 
   /**
    * The chain to present when opening `space` as `principal`, root first, or
-   * `undefined` when the store holds no delegation over `space` whose
-   * audience is `principal`. The search runs back from `principal` over the
-   * delegations valid now and covering a session open, each link's audience
-   * being the link after it, and returns the first complete chain it finds,
-   * one whose root the space itself issued, trying delegations in the order
-   * they were added. Where no complete chain exists within the length a
-   * server admits, it returns the first chain it found, for the server to
-   * judge against the access list.
+   * `undefined` when the store holds no usable chain over `space` ending at
+   * `principal`. A chain is usable when every link holds at `nowSeconds` and
+   * covers a session open. Among the usable chains, one the space itself
+   * rooted is preferred, and otherwise the one added last.
    */
   chainFor(
     space: string,
@@ -72,36 +110,15 @@ export class DelegationStore {
   ): Delegation[] | undefined {
     const held = this.#bySubject.get(space);
     if (held === undefined) return undefined;
-    const usable = [...held.values()].filter(({ payload }) =>
-      (payload.exp === null || payload.exp >= nowSeconds) &&
-      (payload.nbf === undefined || payload.nbf <= nowSeconds) &&
-      delegationCovers(payload.cmd, SESSION_OPEN_COMMAND)
-    );
-    let fallback: Delegation[] | undefined;
-    // Depth-first from the principal back toward a root: `chain` holds the
-    // links found so far, last audience first, and is reversed on return.
-    // The search is exhaustive, and that is enough: a runtime holds few
-    // delegations over any one space, a chain is at most
-    // `MAX_PROOF_CHAIN_LENGTH` long, and a delegation is tried at most once
-    // per chain, so the work stays small without an algorithm that scales.
-    const search = (
-      audience: string,
-      chain: Delegation[],
-    ): Delegation[] | undefined => {
-      if (chain.length >= MAX_PROOF_CHAIN_LENGTH) return undefined;
-      for (const delegation of usable) {
-        if (delegation.payload.aud !== audience || chain.includes(delegation)) {
-          continue;
-        }
-        const extended = [...chain, delegation];
-        if (delegation.payload.iss === space) return extended;
-        const complete = search(delegation.payload.iss, extended);
-        if (complete !== undefined) return complete;
-        fallback ??= extended;
-      }
-      return undefined;
-    };
-    const found = search(principal, []) ?? fallback;
-    return found === undefined ? undefined : found.reverse();
+    let latest: Delegation[] | undefined;
+    let latestRooted: Delegation[] | undefined;
+    for (const chain of held) {
+      if (chain.at(-1)!.payload.aud !== principal) continue;
+      if (!usableAt(chain, nowSeconds)) continue;
+      latest = chain;
+      if (chain[0].payload.iss === space) latestRooted = chain;
+    }
+    const chosen = latestRooted ?? latest;
+    return chosen === undefined ? undefined : [...chosen];
   }
 }

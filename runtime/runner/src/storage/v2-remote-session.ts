@@ -154,12 +154,13 @@ export interface SessionFactory {
   setMessageCompressionEnabled?(enabled: boolean): Promise<void>;
 
   /**
-   * Holds the delegation `bytes` encode, so that a session opened from here
-   * on, on the space it is over and as a key it reaches, presents the chain
-   * it belongs to (04-protocol.md §4.5.1, "Proof chains"). Throws a
-   * `DelegationError` for bytes that are not a delegation or do not verify.
+   * Holds the delegation chain `chain` encodes, root first and the
+   * delegation granting the opening key last, so that a session opened from
+   * here on, on the space it is over and as that key, presents it
+   * (04-protocol.md §4.5.1, "Proof chains"). Throws a `DelegationError` for
+   * a chain whose delegations do not decode, verify, or link.
    */
-  addDelegation?(bytes: Uint8Array): Promise<void>;
+  addDelegationChain?(chain: readonly Uint8Array[]): Promise<void>;
 
   /**
    * The flags the memory server serving `space` advertises, read from a
@@ -1238,7 +1239,7 @@ export class RemoteSessionFactory implements SessionFactory {
   readonly #defaultSigner: Signer;
   readonly #createSocket: MemorySocketFactory;
 
-  /** The delegations held here, which a session's open presents as its chain. */
+  /** The chains held here, one of which a session's open presents. */
   readonly #delegations = new DelegationStore();
 
   constructor(
@@ -1254,8 +1255,8 @@ export class RemoteSessionFactory implements SessionFactory {
   }
 
   /** @inheritDoc */
-  async addDelegation(bytes: Uint8Array): Promise<void> {
-    await this.#delegations.add(bytes);
+  async addDelegationChain(chain: readonly Uint8Array[]): Promise<void> {
+    await this.#delegations.add(chain);
   }
 
   /** Changes compression on live sessions and the default for later ones. */
