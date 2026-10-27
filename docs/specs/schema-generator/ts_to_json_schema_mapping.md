@@ -196,7 +196,8 @@ transformer prints a wrapper it builds as `__cfHelpers.PerUser<…>`, a name no
 scope declares), and follows CFC alias chains under their bindings (§11). A
 scope wrapper without a payload argument remains unread, including through an
 alias. `Date` also has a by-name special case. Keyword types and a final
-resolve-else-`true` fallback complete the node path.
+resolve-else-`true` fallback complete the node path; the `symbol` keyword is
+refused as the type is (§4.0.1), not left to that fallback.
 
 A `true` from that fallback is a guess rather than a reading, and is recorded
 as one (`uninterpretedTypeNodes`). A wrapper holding a resolved type recovers
@@ -412,6 +413,8 @@ by any repo test.
 | `bigint` | `{ type: "integer" }`; the runtime reads and validates a stored bigint under `integer` and `number` | `primitive-formatter.ts` | probe only |
 | bigint literal (`42n`) | `{ type: "integer", enum: [Number(v)] }` — converted through `Number`, so precision above 2^53 would be lost; the runtime matches a stored bigint to a whole-number member of its value | `primitive-formatter.ts` | probe only |
 | Template literal type | `{ type: "string" }` | `primitive-formatter.ts` | probe only |
+| `symbol`, a `unique symbol` (`typeof s`), and a union holding one (`string \| symbol`, `PropertyKey`, `keyof any`) | the `schema-type:symbol` **error**; the symbol reads as `false`, so a union drops it (§4.0.1) | `#formatType()` in `schema-generator.ts`, before any formatter, and the node path's `symbol` keyword; `reportSymbolType()` in `unread-type-diagnostics.ts` | `test/unread-type-diagnostics.test.ts`; end-to-end: ts-transformers `test/symbol-type-diagnostic.test.ts` |
+| A well-known symbol (`typeof Symbol.iterator`, as in `keyof string`) | `false`, with no diagnostic, so `keyof string` reads as its string and number keys (§4.0.1) | `isWellKnownSymbol()` in `typescript/default-library.ts` | `test/unread-type-diagnostics.test.ts` |
 | `null` | `{ type: "null" }` | `primitive-formatter.ts` | fixtures |
 | `undefined` | `{ type: "undefined" }` — non-standard, deliberate (`api/index.ts`) | `primitive-formatter.ts`; node `schema-generator.ts` | fixtures |
 | `void` | `{ asCell: ["opaque"] }` ("matches anything, but we will not access the cell") | `primitive-formatter.ts`; node `schema-generator.ts` | void-type.test.ts ×3 |
@@ -442,6 +445,41 @@ by any repo test.
 Fallback sentinel: a primitive-flagged type matching none of the branches emits
 `{ type: "string", enum: ["unknown"] }` (`primitive-formatter.ts`) — a
 silent, mis-typed sentinel; untested and believed unreachable in practice.
+
+### 4.0.1 Symbols
+
+The schema dialect has no symbol type, so no schema describes a symbol value.
+What the generator does with a symbol depends on whether the runtime could store
+it.
+
+A well-known symbol, such as `Symbol.iterator`, is never stored. The language
+keeps well-known symbols out of the symbol registry, and the data model stores
+only a registered symbol, by its key. A well-known symbol therefore reads as
+`false`, as `never` does, with no diagnostic. `isWellKnownSymbol()` recognizes
+one as a `unique symbol` declared on `SymbolConstructor` in the default library.
+So `keyof string`, which holds `typeof Symbol.iterator`, reads as its string and
+number keys.
+
+Any other symbol could be a registered one: TypeScript gives the type `unique
+symbol` to `const r = Symbol.for("r")` as to `const s = Symbol()`. Leaving such
+a symbol out would refuse stored values the type admits, so the generator
+reports the `schema-type:symbol` error, which refuses the schema. The schema
+reads the symbol as `false`, so a union drops it. The message names the type
+written nearest the symbol. That is the symbol's own node where it has one. A
+symbol with no node of its own, such as a member of `keyof T`, is named by the
+node written around it (`GenerationContext.writtenAround`). Where that node is a
+union holding the symbol, the message suggests `Exclude<…, symbol>`.
+
+A symbol key is a different case. A plain object's data is its string keys, so a
+symbol-keyed member is skipped without a diagnostic (the `FabricInstancePlus`
+row above), and `Record<symbol, V>` reads as an object with no entries.
+
+A symbol branded by intersection with a symbol-keyed member, such as `symbol & {
+readonly [brand]: true }`, reads as the symbol, because the intersection reading
+leaves out a constituent that holds only a brand. It is then refused like any
+other symbol. A symbol branded with a string-keyed member, such as `symbol & {
+__brand: "x" }`, reads through the unsupported-intersection fallback (§9)
+instead, as a string or number branded that way does.
 
 ### 4.1 Generic declarations and their bindings
 
@@ -2306,7 +2344,7 @@ Everything that throws, with source (test-pinned unless noted):
 
 | Condition | Message (prefix) | Source |
 | --- | --- | --- |
-| No formatter matches a type | `No formatter found for type: …` | `schema-generator.ts` (untested) |
+| No formatter matches a type (symbol types are read before the formatters, §4.0.1) | `No formatter found for type: …` | `schema-generator.ts` (untested) |
 | `Map`/`WeakMap` | `… not JSON-serializable … Use Record<string, V> …` | `type-utils.ts` |
 | `Set`/`WeakSet` | `… Use Array<T> instead.` | `type-utils.ts` |
 | `Cell<Stream<T>>` | `Cell<Stream<T>> is unsupported. Wrap the stream: …` | `common-fabric-formatter.ts` |
