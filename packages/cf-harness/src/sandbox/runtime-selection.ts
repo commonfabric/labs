@@ -21,7 +21,7 @@ import { isAbsolute, join, resolve } from "@std/path";
 
 import {
   HarnessControlError,
-  harnessResumeRefusal,
+  harnessRecordedRunRefusal,
 } from "../control-errors.ts";
 import {
   canonicalHostPath,
@@ -1336,21 +1336,28 @@ export const recordedSandboxRuntime = (
     sandboxRuntime?: string;
     capabilitySnapshot?: { cfc?: { sandbox?: { kind: string } } };
   },
+  mode: "resume" | "continue" = "resume",
 ): SandboxRuntimeKind | undefined => {
   const refused = (recorded: string): HarnessControlError =>
     recorded === DOCKER_RUNTIME_NAME || recorded === DOCKER_RUNTIME_KIND
-      ? harnessResumeRefusal(
-        "resume sandbox runtime removed: the run records that it started on " +
+      ? harnessRecordedRunRefusal(
+        mode,
+        "sandbox runtime removed: the run records that it started on " +
           `the Docker driver (\`${recorded}\`), which this cf-harness no ` +
-          "longer has. A run resumes only on the runtime it started on, " +
+          `longer has. A run ${mode}s only on the runtime it started on, ` +
           "since another need not read the CFC labels of the run's files " +
           "where that one kept them. Start a new run.",
       )
-      : harnessResumeRefusal(
-        "resume sandbox runtime unknown: the run records that it started on " +
+      : harnessRecordedRunRefusal(
+        mode,
+        "sandbox runtime unknown: the run records that it started on " +
           `the sandbox runtime \`${recorded}\`, which this cf-harness does ` +
-          "not know, so it cannot tell whether this resume is on the same " +
-          "one. Resume it with the cf-harness that wrote the record.",
+          `not know, so it cannot tell whether this ${
+            mode === "resume" ? "resume" : "continuation"
+          } is on the same ` +
+          `one. ${
+            mode === "resume" ? "Resume" : "Continue"
+          } it with the cf-harness that wrote the record.`,
       );
   const named = runState.sandboxRuntime;
   if (named !== undefined) {

@@ -13,7 +13,10 @@ import { Runtime } from "@commonfabric/runner";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
-import { buildCfHarnessBatchSystemPrompt } from "../src/cli.ts";
+import {
+  buildCfHarnessBatchSystemPrompt,
+  resolveCfHarnessCliSystemPrompt,
+} from "../src/cli.ts";
 import type { HarnessFabricSession } from "../src/fabric-session.ts";
 import { readHarnessRunArtifacts } from "../src/artifacts.ts";
 import { CFC_PROMPT_SLOT_BOUND_ATOM_TYPE } from "../src/contracts/prompt-slot.ts";
@@ -185,6 +188,15 @@ describe("continue-run", () => {
       model: "gpt-recorded",
       artifactRoot: priorRoot,
     });
+    state.systemPromptInputs = {
+      outputMode: "operator",
+      workspace,
+      systemPrompt: "Prior instructions",
+    };
+    history[0] = {
+      role: "system",
+      content: resolveCfHarnessCliSystemPrompt(state.systemPromptInputs)!,
+    };
     requests = [];
     errors = [];
     scripted = [];
@@ -209,6 +221,88 @@ describe("continue-run", () => {
     });
     expect(next.runState.status).toBe("completed");
     await unchanged();
+  });
+
+  for (const replacement of [undefined, "Replacement components"]) {
+    it(`rebuilds a manual continuation from recorded components ${replacement === undefined ? "without" : "with"} new instructions`, async () => {
+      state.systemPromptInputs = {
+        outputMode: "batch",
+        workspace,
+        systemPrompt: "Recorded components",
+        allowedToolIds: ["bash"],
+        depth: "quick",
+        skillCatalogEnabled: false,
+        skillNames: ["retained-skill"],
+      };
+      state.taskClassification = {
+        type: "cf-harness.task-classification",
+        version: 1,
+        tags: ["respond"],
+        domains: [],
+        path: "caller",
+        durationMs: 0,
+      };
+      state.structuredResult = {
+        schema: { type: "string" },
+        path: join(workspace, "old-result.json"),
+      };
+      await Deno.writeTextFile(state.structuredResult.path, '"old"');
+      await save([
+        { role: "system", content: "Unusable recorded string" },
+        ...history.slice(1),
+      ]);
+      const path = join(workspace, "new-result.json");
+      await Deno.writeTextFile(path, '"new"');
+      expect(
+        await run([
+          "--structured-result-path",
+          path,
+          ...(replacement === undefined
+            ? []
+            : [`--system-prompt=${replacement}`]),
+        ]),
+      ).toBe(0);
+      const system = requests[0].transcript.find((message) =>
+        message.role === "system"
+      )!.content;
+      expect(system).toContain(
+        "You are cf-harness, an autonomous agent harness",
+      );
+      expect(system).not.toContain("Operator guidance for cf-harness runs");
+      expect(system).toContain("/workspace/new-result.json");
+      expect(system).not.toContain("old-result.json");
+      expect(system).not.toContain("Unusable recorded string");
+      expect(system).toContain(replacement ?? "Recorded components");
+      if (replacement !== undefined) {
+        expect(system).not.toContain("Recorded components");
+      }
+      const next = await nextArtifacts();
+      expect(next.runState.systemPromptInputs).toMatchObject({
+        outputMode: "batch",
+        depth: "quick",
+        skillCatalogEnabled: false,
+        skillNames: ["retained-skill"],
+        systemPrompt: replacement ?? "Recorded components",
+      });
+      expect(next.runState.taskClassification).toEqual(
+        state.taskClassification,
+      );
+      await unchanged();
+    });
+  }
+
+  it("refuses a continuation without recorded system-prompt inputs before a model request", async () => {
+    delete state.systemPromptInputs;
+    await save();
+    expect(await run()).toBe(1);
+    expect(errors.join("")).toContain("recorded system-prompt inputs");
+    expect(requests).toHaveLength(0);
+  });
+
+  it("uses a cause-neutral interrupted-turn notice", () => {
+    expect(HARNESS_CHAT_INTERRUPTED_TURN_NOTICE).toBe(
+      "Host turn notice: the previous turn stopped before it finished. Its request above was interrupted, not answered; the work shown after it is what completed before it stopped.",
+    );
   });
   it("seeds the first model request with prior history and excludes turn-local notices", async () => {
     await save([
@@ -684,6 +778,12 @@ describe("continue-run", () => {
           path: join(workspace, "old-result.json"),
         };
         await Deno.writeTextFile(state.structuredResult.path, '"prior result"');
+        state.systemPromptInputs = {
+          outputMode: "batch",
+          workspace,
+          allowedToolIds: priorSubmitTool ? undefined : ["bash"],
+          systemPrompt: "Keep this user instruction.",
+        };
         const sourceSystem = buildCfHarnessBatchSystemPrompt({
           structuredResult: {
             ...state.structuredResult,
@@ -939,6 +1039,11 @@ describe("continue-run", () => {
   }
   for (const additionalInstructions of ["New instructions", ""]) {
     it(`rebuilds harness guidance with ${additionalInstructions === "" ? "empty" : "new"} additional instructions`, async () => {
+      state.systemPromptInputs = {
+        outputMode: "batch",
+        workspace,
+        systemPrompt: "Prior additional instructions",
+      };
       state.structuredResult = {
         schema: { type: "string" },
         path: join(workspace, "old-result.json"),
@@ -976,7 +1081,7 @@ describe("continue-run", () => {
       expect(system).toContain(
         "You are cf-harness, an autonomous agent harness",
       );
-      expect(system).toContain("Operator guidance for cf-harness runs:");
+      expect(system).not.toContain("Operator guidance for cf-harness runs:");
       expect(system).toContain("/workspace/new-result.json");
       expect(system).not.toContain("old-result.json");
       expect(system).not.toContain("Prior additional instructions");
@@ -1004,12 +1109,17 @@ describe("continue-run", () => {
           depth: 1,
         };
       }, "subagent"],
-      ["model switch", ["--model=different"], () => {}, "model"],
+      [
+        "model switch",
+        ["--model=different"],
+        () => {},
+        "continue model mismatch",
+      ],
       [
         "provider switch",
         ["--model-provider=openai-codex"],
         () => {},
-        "provider mismatch",
+        "continue provider mismatch",
       ],
     ] as const
   ) {

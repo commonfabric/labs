@@ -22,6 +22,9 @@ const continuationRefusal = (
     transcript?: readonly HarnessTranscriptMessage[];
   },
 ): string | undefined => {
+  if (runState.systemPromptInputs === undefined) {
+    return `continue run ${runState.runId} has no recorded system-prompt inputs`;
+  }
   const binding = runState.promptSlotBinding;
   if (
     binding?.valueDigest !== undefined || binding?.slotDigest !== undefined ||
@@ -145,7 +148,7 @@ export const prepareHarnessContinuation = (options: {
     runManifest: prior.runManifest,
     promptSlotBinding: prior.promptSlotBinding,
     cfcEnforcementMode: prior.cfcEnforcementMode,
-    sandboxRuntime: recordedSandboxRuntime(prior),
+    sandboxRuntime: recordedSandboxRuntime(prior, "continue"),
     fabricSessionCfc: prior.fabricSessionCfc,
     cfcModelContext: prior.cfcModelContext,
     cfcPolicySnapshot: prior.cfcPolicySnapshot,
@@ -158,6 +161,8 @@ export const prepareHarnessContinuation = (options: {
       ...run,
       historical: true,
     })),
+    systemPromptInputs: prior.systemPromptInputs,
+    taskClassification: prior.taskClassification,
     structuredResult: structuredResult === undefined ? undefined : {
       schema: structuredResult.schema,
       path: structuredResult.path,

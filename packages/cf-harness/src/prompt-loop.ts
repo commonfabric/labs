@@ -203,6 +203,7 @@ import { PIECE_OUTPUT_GUIDANCE } from "./piece-output.ts";
 import { isClosedResearchTask } from "./research/closed-task.ts";
 import { collapseSupersededRunPatternDiagnostics } from "./run-pattern-diagnostic-collapse.ts";
 import { collapseSupersededRunPatternSources } from "./run-pattern-source-collapse.ts";
+import type { HarnessSystemPromptInputs } from "./contracts/system-prompt.ts";
 import {
   type HarnessOpeningResearch,
   type HarnessRunState,
@@ -376,6 +377,9 @@ export interface HarnessModelUsageUpdate {
 }
 
 export interface RunHarnessPromptOptions {
+  /** Builder inputs retained for a later continuation. */
+  systemPromptInputs?: HarnessSystemPromptInputs;
+
   prompt: string;
   /** Trusted driver marker for research before a new root task. */
   openingResearchTask?: string;
@@ -408,6 +412,9 @@ export interface RunHarnessPromptOptions {
 }
 
 export interface RunHarnessTranscriptOptions {
+  /** Builder inputs retained for a later continuation. */
+  systemPromptInputs?: HarnessSystemPromptInputs;
+
   transcript: readonly HarnessTranscriptMessage[];
   /** Trusted driver marker for research before a new root task. */
   openingResearchTask?: string;
@@ -3854,6 +3861,7 @@ export class CfHarnessPromptLoop {
         },
       ],
       openingResearchTask: options.openingResearchTask,
+      systemPromptInputs: options.systemPromptInputs,
       model: options.model,
       maxModelTurns: options.maxModelTurns,
       promptSlotBinding: options.promptSlotBinding,
@@ -4063,6 +4071,9 @@ export class CfHarnessPromptLoop {
     this.engine.setResearchRunner(runResearch);
     await this.engine.ensureDiagnosticsInitialized();
     this.engine.startRun();
+    if (options.systemPromptInputs !== undefined) {
+      this.engine.setSystemPromptInputs(options.systemPromptInputs);
+    }
     if (options.promptSlotBinding !== undefined) {
       this.engine.setPromptSlotBinding(options.promptSlotBinding);
     }

@@ -204,6 +204,7 @@ import type {
   HarnessPatternRefSpec,
 } from "./contracts/pattern-refs.ts";
 import { resolvePatternRefs } from "./pattern-refs.ts";
+import type { HarnessSystemPromptInputs } from "./contracts/system-prompt.ts";
 import {
   addHarnessDocsQueryFailures,
   addHarnessResearchFailures,
@@ -1730,6 +1731,13 @@ export class CfHarnessEngine {
       this.#runState.updatedAt,
     );
     return this.getRunState();
+  }
+
+  /** Records the components from which the surface builds its system prompt. */
+  setSystemPromptInputs(systemPromptInputs: HarnessSystemPromptInputs): void {
+    this.#runState = patchHarnessRunState(this.#runState, {
+      systemPromptInputs: structuredClone(systemPromptInputs),
+    }, this.#runState.updatedAt);
   }
 
   setPromptSlotBinding(

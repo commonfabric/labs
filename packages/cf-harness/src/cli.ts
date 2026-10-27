@@ -13,6 +13,7 @@ import {
 } from "@std/path";
 import { normalize as normalizeSandboxPath } from "@std/path/posix";
 import type { JSONSchema } from "@commonfabric/api";
+import type { HarnessSystemPromptInputs } from "./contracts/system-prompt.ts";
 import {
   DEFAULT_GATEWAY_BASE_URL,
   DEFAULT_HARNESS_MODEL,
@@ -202,6 +203,7 @@ import {
 import {
   HarnessControlError,
   type HarnessControlErrorCode,
+  harnessRecordedRunRefusal,
   harnessResumeRefusal,
 } from "./control-errors.ts";
 
@@ -321,12 +323,38 @@ export interface CfHarnessCliConfig extends HarnessSessionConfig {
   gatewayBaseUrl: string;
   gatewayAuthMode: HarnessGatewayAuthMode;
   resultJsonPath?: string;
-  structuredResult?: CfHarnessStructuredResultConfig;
+  structuredResult?: CfHarnessStructuredResultRequest;
+
+  /** Prompt-builder properties explicitly named by this invocation. */
+  systemPromptInputFlags: readonly (keyof HarnessSystemPromptInputs)[];
+
   runManifestPath?: string;
   printTranscript: boolean;
   apiKey?: string;
   apiKeySource?: "CF_HARNESS_API_KEY" | "OPENAI_API_KEY";
 }
+
+/** A requested destination whose schema may be inherited when reading a prior run. */
+export interface CfHarnessStructuredResultRequest {
+  path: string;
+  sandboxPath: string;
+  schema?: JSONSchema;
+}
+
+/** Resolves a schema-bearing result config after the recorded run is available. */
+const resolveStructuredResultConfig = (
+  request: CfHarnessStructuredResultRequest | undefined,
+  recorded?: { schema: JSONSchema },
+): CfHarnessStructuredResultConfig | undefined => {
+  if (request === undefined) return undefined;
+  const schema = request.schema ?? recorded?.schema;
+  if (schema === undefined) {
+    throw new Error(
+      "--structured-result-path requires a recorded or explicit schema",
+    );
+  }
+  return { ...request, schema };
+};
 
 export interface CfHarnessStructuredResultConfig {
   path: string;
@@ -1414,7 +1442,7 @@ const parseStructuredResultConfig = async (
     allowedHostRoots: readonly CfHarnessAllowedHostRoot[];
     readTextFile: (path: string) => Promise<string>;
   },
-): Promise<CfHarnessStructuredResultConfig | undefined> => {
+): Promise<CfHarnessStructuredResultRequest | undefined> => {
   const structuredResultPathResolution =
     typeof args["structured-result-path"] === "string"
       ? resolvePathWithinAllowedHostRoots(
@@ -1454,7 +1482,6 @@ const parseStructuredResultConfig = async (
     return {
       path: structuredResultPath,
       sandboxPath: structuredResultPathResolution!.sandboxPath,
-      schema: {},
     };
   }
   if (rawSchema === undefined) {
@@ -1627,6 +1654,7 @@ export const parseCfHarnessCliArgs = async (
   > = {},
 ): Promise<CfHarnessCliConfig | { help: true }> => {
   const normalizedArgv = argv[0] === "--" ? argv.slice(1) : argv;
+  const flagWords = normalizedArgv.map((argument) => argument.split("=", 1)[0]);
   const undeclared: string[] = [];
   const args = parseArgs([...normalizedArgv], {
     string: [...CLI_STRING_FLAGS],
@@ -2010,7 +2038,10 @@ export const parseCfHarnessCliArgs = async (
     readTextFile,
   });
   if (continueRun === undefined) {
-    assertStructuredResultToolConfigured(allowedToolIds, structuredResult);
+    assertStructuredResultToolConfigured(
+      allowedToolIds,
+      resolveStructuredResultConfig(structuredResult),
+    );
   }
   const prompt = await resolvePrompt(args, cwd, readTextFile);
   const imageAttachments = await Promise.all(
@@ -2233,6 +2264,20 @@ export const parseCfHarnessCliArgs = async (
     ...(allowedToolIds !== undefined ? { allowedToolIds } : {}),
     allowedSubagentProfiles,
     outputMode: outputMode ?? "operator",
+    systemPromptInputFlags: ([
+      ["output-mode", "outputMode"],
+      ["workspace", "workspace"],
+      ["focus-root", "focusRoot"],
+      ["system-prompt", "systemPrompt"],
+      ["depth", "depth"],
+      ["allow-tool", "allowedToolIds"],
+      ["host-mount", "hostMounts"],
+      ["fabric-mount", "fabricMountPath"],
+      ["pattern-index-url", "patternIndex"],
+      ["no-skill-catalog", "skillCatalogEnabled"],
+    ] as const).filter(([flag]) => argvHolds(flagWords, [`--${flag}`])).map((
+      [, key],
+    ) => key),
     streamEvents: Boolean(args["stream-events"]),
     promptSlotRole: promptSlotRole ?? "direct-command",
     ...(prompt !== undefined ? { prompt } : {}),
@@ -2682,63 +2727,6 @@ const appendStructuredResultInstructions = (
   );
 };
 
-/** Removes only the recorded host contract, retaining surrounding instructions. */
-const withoutRecordedResultInstructions = (
-  content: string,
-  recorded: { schema: JSONSchema; path: string },
-): string => {
-  const marker = "__CF_HARNESS_RECORDED_RESULT_PATH__";
-  for (const allowedToolIds of [undefined, []] as const) {
-    const lines: string[] = [];
-    appendStructuredResultInstructions(lines, {
-      ...recorded,
-      sandboxPath: marker,
-    }, allowedToolIds);
-    const template = lines.join("\n");
-    const pathIndex = template.indexOf(marker);
-    const prefix = template.slice(0, pathIndex);
-    const suffix = template.slice(pathIndex + marker.length);
-    while (true) {
-      const start = content.indexOf(prefix);
-      if (start < 0) break;
-      const pathStart = start + prefix.length;
-      const pathEnd = content.indexOf(suffix, pathStart);
-      if (pathEnd < 0 || content.slice(pathStart, pathEnd).includes("\n")) {
-        break;
-      }
-      const end = pathEnd + suffix.length;
-      if (end < content.length && content[end] !== "\n") break;
-      content = content.slice(0, start) + content.slice(end);
-    }
-  }
-  return content;
-};
-
-/** Gives the continued history the effective run's structured-result contract. */
-const withContinuedResultInstructions = (
-  transcript: HarnessTranscriptMessage[],
-  recorded: { schema: JSONSchema; path: string } | undefined,
-  effective: CfHarnessStructuredResultConfig | undefined,
-  allowedToolIds: readonly BuiltinToolId[] | undefined,
-): HarnessTranscriptMessage[] => {
-  if (effective === undefined) return transcript;
-  const messages = transcript.map((message) =>
-    message.role === "system" && recorded !== undefined
-      ? {
-        ...message,
-        content: withoutRecordedResultInstructions(message.content, recorded),
-      }
-      : message
-  );
-  const index = messages.findIndex((message) => message.role === "system");
-  const lines = index < 0 ? [] : [messages[index].content];
-  appendStructuredResultInstructions(lines, effective, allowedToolIds);
-  const system = { role: "system" as const, content: lines.join("\n") };
-  if (index < 0) messages.unshift(system);
-  else messages[index] = system;
-  return messages;
-};
-
 const appendHostMountInstructions = (
   lines: string[],
   config: {
@@ -2768,12 +2756,12 @@ export const buildCfHarnessOperatorSystemPrompt = (
       | "workspace"
       | "focusRoot"
       | "systemPrompt"
-      | "structuredResult"
       | "allowedToolIds"
       | "patternIndex"
       | "depth"
     >
     & {
+      structuredResult?: CfHarnessStructuredResultConfig;
       fabricMountPath?: string;
       hostMounts?: readonly CfHarnessHostMountConfig[];
       taskTags?: ReadonlySet<HarnessTaskTag>;
@@ -2816,12 +2804,12 @@ export const buildCfHarnessBatchSystemPrompt = (
     & Pick<
       CfHarnessCliConfig,
       | "systemPrompt"
-      | "structuredResult"
       | "allowedToolIds"
       | "patternIndex"
       | "depth"
     >
     & {
+      structuredResult?: CfHarnessStructuredResultConfig;
       fabricMountPath?: string;
       hostMounts?: readonly CfHarnessHostMountConfig[];
       taskTags?: ReadonlySet<HarnessTaskTag>;
@@ -2857,27 +2845,45 @@ export const buildCfHarnessBatchSystemPrompt = (
   return lines.join("\n");
 };
 
+/** Selects only serializable inputs the system-prompt builder reads. */
+const systemPromptInputsOf = (
+  config: Parameters<typeof resolveCfHarnessCliSystemPrompt>[0],
+): HarnessSystemPromptInputs => ({
+  outputMode: config.outputMode,
+  workspace: config.workspace,
+  focusRoot: config.focusRoot,
+  systemPrompt: config.systemPrompt,
+  depth: config.depth,
+  allowedToolIds: config.allowedToolIds,
+  patternIndex: config.patternIndex,
+  hostMounts: config.hostMounts,
+  fabricMountPath: config.fabricMountPath,
+  skillCatalogEnabled: config.skillCatalogEnabled,
+  skillNames: config.skillNames,
+});
+
+/** Builds from recorded components and the effective result destination. */
+const buildSystemPromptFromInputs = (
+  inputs: HarnessSystemPromptInputs,
+  structuredResult: CfHarnessStructuredResultConfig | undefined,
+  shape: {
+    tags?: ReadonlySet<HarnessTaskTag>;
+    domains?: ReadonlySet<HarnessTaskDomain>;
+  },
+): string | undefined =>
+  resolveCfHarnessCliSystemPrompt({
+    ...inputs,
+    structuredResult,
+    taskTags: shape.tags,
+    taskDomains: shape.domains,
+  });
+
 export const resolveCfHarnessCliSystemPrompt = (
-  config:
-    & Pick<
-      CfHarnessCliConfig,
-      | "workspace"
-      | "focusRoot"
-      | "systemPrompt"
-      | "outputMode"
-      | "structuredResult"
-      | "allowedToolIds"
-      | "patternIndex"
-      | "depth"
-    >
-    & {
-      fabricMountPath?: string;
-      hostMounts?: readonly CfHarnessHostMountConfig[];
-      taskTags?: ReadonlySet<HarnessTaskTag>;
-      taskDomains?: ReadonlySet<HarnessTaskDomain>;
-      skillCatalogEnabled?: boolean;
-      skillNames?: readonly string[];
-    },
+  config: HarnessSystemPromptInputs & {
+    structuredResult?: CfHarnessStructuredResultConfig;
+    taskTags?: ReadonlySet<HarnessTaskTag>;
+    taskDomains?: ReadonlySet<HarnessTaskDomain>;
+  },
 ): string | undefined => {
   const base = config.outputMode === "batch"
     ? buildCfHarnessBatchSystemPrompt(config)
@@ -3848,7 +3854,9 @@ export const runCfHarnessCli = async (
         new CfHarnessPromptLoop(options));
     const writeTextFile = deps.writeTextFile ?? Deno.writeTextFile;
     const readTextFile = deps.readTextFile ?? Deno.readTextFile;
-    let effectiveStructuredResult = parsed.structuredResult;
+    let effectiveStructuredResult = parsed.continueRun === undefined
+      ? resolveStructuredResultConfig(parsed.structuredResult)
+      : undefined;
 
     const startedAt = Date.now();
     let result: HarnessPromptLoopResult;
@@ -3911,6 +3919,9 @@ export const runCfHarnessCli = async (
         : undefined;
     const recordedRun = parsed.resumeRun ?? parsed.continueRun;
     if (recordedRun !== undefined) {
+      const mode = parsed.continueRun === undefined ? "resume" : "continue";
+      const refuse = (detail: string) =>
+        harnessRecordedRunRefusal(mode, detail);
       const rethrowArtifactFailure = (error: unknown): never => {
         // Naming a run that is not there is a bad request. A run that is
         // there and will not read is infrastructure, whatever the argv said.
@@ -3931,13 +3942,13 @@ export const runCfHarnessCli = async (
       );
       if (artifacts.runState.lineage?.role === "subagent") {
         throw harnessResumeRefusal(
-          `Cannot resume subagent run ${artifacts.runState.runId} as a top-level run; resume root run ${artifacts.runState.lineage.rootRunId} instead.`,
+          `Cannot ${mode} subagent run ${artifacts.runState.runId} as a top-level run; ${mode} root run ${artifacts.runState.lineage.rootRunId} instead.`,
         );
       }
       // The engine refuses this too: a run recorded on the Docker driver, or
       // on a runtime this build does not know. It is refused here first,
       // before anything of the resume is read.
-      recordedSandboxRuntime(artifacts.runState);
+      recordedSandboxRuntime(artifacts.runState, mode);
       if (
         parsed.continueRun === undefined &&
         effectiveStructuredResult === undefined &&
@@ -3964,15 +3975,15 @@ export const runCfHarnessCli = async (
         requestedProvider !== undefined &&
         requestedProvider !== recordedProvider
       ) {
-        throw harnessResumeRefusal(
-          `resume provider mismatch: run uses ${recordedProvider}, requested ${requestedProvider}`,
+        throw refuse(
+          `provider mismatch: run uses ${recordedProvider}, requested ${requestedProvider}`,
         );
       }
       const modelProvider = recordedProvider;
       if (
         modelProvider === "openai-codex" && parsed.gatewayConfigurationExplicit
       ) {
-        throw harnessResumeRefusal(
+        throw refuse(
           "gateway URL/auth options cannot be used with openai-codex, which is the provider this run recorded",
         );
       }
@@ -3993,8 +4004,8 @@ export const runCfHarnessCli = async (
         parsed.docsCorpus !== undefined && recordedDocsCorpus !== undefined &&
         !harnessDocsCorpusRecordsEqual(parsed.docsCorpus, recordedDocsCorpus)
       ) {
-        throw harnessResumeRefusal(
-          `resume docs corpus mismatch: run uses ${
+        throw refuse(
+          `docs corpus mismatch: run uses ${
             describeHarnessDocsCorpus(recordedDocsCorpus)
           }, requested ${describeHarnessDocsCorpus(parsed.docsCorpus)}`,
         );
@@ -4005,8 +4016,8 @@ export const runCfHarnessCli = async (
         artifacts.runState.model !== undefined &&
         runManifest.model !== artifacts.runState.model
       ) {
-        throw harnessResumeRefusal(
-          `resume model mismatch: run uses ${artifacts.runState.model}, requested manifest uses ${runManifest.model}`,
+        throw refuse(
+          `model mismatch: run uses ${artifacts.runState.model}, requested manifest uses ${runManifest.model}`,
         );
       }
       if (
@@ -4014,8 +4025,8 @@ export const runCfHarnessCli = async (
         artifacts.runState.model !== undefined &&
         parsed.model !== artifacts.runState.model
       ) {
-        throw harnessResumeRefusal(
-          `resume model mismatch: run uses ${artifacts.runState.model}, requested ${parsed.model}`,
+        throw refuse(
+          `model mismatch: run uses ${artifacts.runState.model}, requested ${parsed.model}`,
         );
       }
       const credentialOwner = recordedRunManifest?.credentialOwner ??
@@ -4027,8 +4038,8 @@ export const runCfHarnessCli = async (
           credentialOwner,
         )
       ) {
-        throw harnessResumeRefusal(
-          "resume credential owner mismatch: requested owner does not match the recorded run",
+        throw refuse(
+          "credential owner mismatch: requested owner does not match the recorded run",
         );
       }
       // A manifest handed to a resume must agree with the recorded one on
@@ -4044,9 +4055,8 @@ export const runCfHarnessCli = async (
         ) ||
           runManifest.cfc?.onExceed !== recordedRunManifest.cfc?.onExceed)
       ) {
-        throw new HarnessControlError(
-          "provider-mismatch",
-          "resume read ceiling mismatch: the requested manifest's " +
+        throw refuse(
+          "read ceiling mismatch: the requested manifest's " +
             "cfc.maxConfidentiality or cfc.onExceed does not match the " +
             "recorded run's",
         );
@@ -4087,6 +4097,12 @@ export const runCfHarnessCli = async (
           );
         }
       }
+      if (parsed.continueRun !== undefined) {
+        effectiveStructuredResult = resolveStructuredResultConfig(
+          parsed.structuredResult,
+          artifacts.runState.structuredResult,
+        );
+      }
       const continuation = parsed.continueRun === undefined
         ? undefined
         : prepareHarnessContinuation({
@@ -4095,7 +4111,7 @@ export const runCfHarnessCli = async (
           prompt: parsed.prompt!,
           artifactRoot: parsed.artifactRoot,
           workspace: parsed.workspace,
-          structuredResult: parsed.structuredResult,
+          structuredResult: effectiveStructuredResult,
           schemaExplicit: parsed.structuredResultSchemaExplicit === true,
         });
       if (continuation !== undefined) {
@@ -4104,34 +4120,43 @@ export const runCfHarnessCli = async (
           parsed.allowedToolIds,
           effectiveStructuredResult,
         );
-        if (parsed.systemPrompt !== undefined) {
-          const systemPrompt = resolveCfHarnessCliSystemPrompt({
-            ...parsed,
-            structuredResult: effectiveStructuredResult,
-            fabricMountPath: parsed.fabricMount !== undefined
-              ? DEFAULT_RUNSC_FABRIC_MOUNT_PATH
-              : undefined,
+        const recordedInputs = artifacts.runState.systemPromptInputs!;
+        const currentInputs = systemPromptInputsOf({
+          ...parsed,
+          structuredResult: effectiveStructuredResult,
+          fabricMountPath: parsed.fabricMount !== undefined
+            ? DEFAULT_RUNSC_FABRIC_MOUNT_PATH
+            : undefined,
+        });
+        const inputs: HarnessSystemPromptInputs = {
+          ...recordedInputs,
+          ...Object.fromEntries(
+            parsed.systemPromptInputFlags.map((
+              key,
+            ) => [key, currentInputs[key]]),
+          ),
+        };
+        continuation.runState.systemPromptInputs = inputs;
+        continuation.transcript = continuation.transcript.filter((message) =>
+          message.role !== "system"
+        );
+        const systemPrompt = buildSystemPromptFromInputs(
+          inputs,
+          effectiveStructuredResult,
+          classifiedShape(
+            artifacts.runState.taskClassification,
+            inputs.depth ?? DEFAULT_HARNESS_RUN_DEPTH,
+          ),
+        );
+        if (systemPrompt !== undefined) {
+          continuation.transcript.unshift({
+            role: "system",
+            content: systemPrompt,
           });
-          continuation.transcript = continuation.transcript.filter((message) =>
-            message.role !== "system"
-          );
-          if (systemPrompt !== undefined) {
-            continuation.transcript.unshift({
-              role: "system",
-              content: systemPrompt,
-            });
-          }
-        } else {
-          continuation.transcript = withContinuedResultInstructions(
-            continuation.transcript,
-            artifacts.runState.structuredResult,
-            effectiveStructuredResult,
-            parsed.allowedToolIds,
-          );
         }
       }
       const engineStructuredResult = continuation === undefined
-        ? parsed.structuredResult
+        ? resolveStructuredResultConfig(parsed.structuredResult)
         : effectiveStructuredResult;
       requestAccepted = true;
       const engine = new CfHarnessEngine({
@@ -4206,10 +4231,11 @@ export const runCfHarnessCli = async (
       });
       if (artifacts.transcript === undefined) {
         throw new Error(
-          `resume run is missing transcript data: ${parsed.resumeRun}`,
+          `${mode} run is missing transcript data: ${recordedRun}`,
         );
       }
       result = await loop.runTranscript({
+        systemPromptInputs: continuation?.runState.systemPromptInputs,
         transcript: continuation?.transcript ?? artifacts.transcript,
         model: parsed.model ?? artifacts.runState.model,
         maxModelTurns: parsed.maxModelTurns,
@@ -4281,13 +4307,8 @@ export const runCfHarnessCli = async (
         // What the run was asked to do, in the operator's words. A pattern
         // the run publishes carries it as the request it answers.
         ...(parsed.prompt !== undefined ? { taskText: parsed.prompt } : {}),
-        ...(parsed.structuredResult !== undefined
-          ? {
-            structuredResult: {
-              schema: parsed.structuredResult.schema,
-              path: parsed.structuredResult.path,
-            },
-          }
+        ...(effectiveStructuredResult !== undefined
+          ? { structuredResult: effectiveStructuredResult }
           : {}),
         ...(deps.fabricSessionFactory !== undefined
           ? { fabricSessionFactory: deps.fabricSessionFactory }
@@ -4335,20 +4356,25 @@ export const runCfHarnessCli = async (
         classification,
         parsed.depth ?? DEFAULT_HARNESS_RUN_DEPTH,
       );
+      const systemPromptInputs = systemPromptInputsOf({
+        ...parsed,
+        structuredResult: effectiveStructuredResult,
+        fabricMountPath: parsed.fabricMount !== undefined
+          ? DEFAULT_RUNSC_FABRIC_MOUNT_PATH
+          : undefined,
+        ...(shape.tags !== undefined ? { taskTags: shape.tags } : {}),
+        ...(shape.domains !== undefined ? { taskDomains: shape.domains } : {}),
+      });
       result = await loop.runPrompt({
+        systemPromptInputs,
         prompt: parsed.prompt!,
         openingResearchTask: parsed.prompt!,
         imageAttachments: parsed.imageAttachments,
-        systemPrompt: resolveCfHarnessCliSystemPrompt({
-          ...parsed,
-          fabricMountPath: parsed.fabricMount !== undefined
-            ? DEFAULT_RUNSC_FABRIC_MOUNT_PATH
-            : undefined,
-          ...(shape.tags !== undefined ? { taskTags: shape.tags } : {}),
-          ...(shape.domains !== undefined
-            ? { taskDomains: shape.domains }
-            : {}),
-        }),
+        systemPrompt: buildSystemPromptFromInputs(
+          systemPromptInputs,
+          effectiveStructuredResult,
+          shape,
+        ),
         contextMessages: orientContextMessages(contextMessages, shape),
         model: parsed.model,
         maxModelTurns: parsed.maxModelTurns,

@@ -2676,7 +2676,9 @@ describe("sandbox-runtime-default", () => {
 
   /** The sandbox settings of `options`, which is what a selection decides. */
   const sandboxOf = (
-    options: CreateHarnessPromptLoopOptions | undefined,
+    options:
+      | Pick<CreateHarnessPromptLoopOptions, keyof SandboxRuntimeSelection>
+      | undefined,
   ): Partial<SandboxRuntimeSelection> => ({
     ...(options?.sandboxRuntimeKind !== undefined
       ? { sandboxRuntimeKind: options.sandboxRuntimeKind }
