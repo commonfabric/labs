@@ -195,9 +195,9 @@ describe("IntersectionFormatter", () => {
       });
     });
 
-    it("returns an array for records indexed by number alone", async () => {
-      // The generator gives `Record<number, T>` an array's schema, so an
-      // intersection of such records is the intersection of those arrays.
+    it("returns an object map for records indexed by number alone", async () => {
+      // A number-keyed object is a map, not an array, so an intersection of
+      // such records is the map of the intersection of their values.
 
       const { type, checker } = await getTypeFromCode(
         `type Result = Record<number, string> & Record<number, "a" | "b">;`,
@@ -205,8 +205,37 @@ describe("IntersectionFormatter", () => {
       );
 
       expect(transformer.generateSchema(type, checker)).toEqual({
-        type: "array",
-        items: { enum: ["a", "b"] },
+        type: "object",
+        properties: {},
+        additionalProperties: { enum: ["a", "b"] },
+      });
+    });
+
+    it("returns the members beside a numeric index signature's values", async () => {
+      const { type, checker } = await getTypeFromCode(
+        `type Result = { name: string } & Record<number, string>;`,
+        "Result",
+      );
+
+      expect(transformer.generateSchema(type, checker)).toEqual({
+        type: "object",
+        properties: { name: { type: "string" } },
+        required: ["name"],
+        additionalProperties: { type: "string" },
+      });
+    });
+
+    it("keeps the members an object with a numeric index signature declares", async () => {
+      const { type, checker } = await getTypeFromCode(
+        `type Result = { x: string; [n: number]: string } & { y: string };`,
+        "Result",
+      );
+
+      expect(transformer.generateSchema(type, checker)).toEqual({
+        type: "object",
+        properties: { x: { type: "string" }, y: { type: "string" } },
+        required: ["x", "y"],
+        additionalProperties: { type: "string" },
       });
     });
   });
@@ -228,9 +257,9 @@ describe("IntersectionFormatter", () => {
       expect(schema.$comment).toContain("index signature on constituent");
     });
 
-    it("returns the fallback for a record indexed by number alone beside an object", async () => {
+    it("returns the fallback for a typed array beside an object", async () => {
       const { type, checker } = await getTypeFromCode(
-        `type Result = { name: string } & Record<number, string>;`,
+        `type Result = { name: string } & Uint8Array;`,
         "Result",
       );
 
@@ -242,12 +271,12 @@ describe("IntersectionFormatter", () => {
       });
     });
 
-    it("returns the fallback for an object indexed by number alone beside another", async () => {
-      // Its schema is an array's, which holds no member `x`, so a merge would
-      // lose `x`.
+    it("returns the fallback for index signatures on numeric keys alone beside one on every key", async () => {
+      // One `additionalProperties` cannot say what the first holds under
+      // numeric keys and the second under the rest.
 
       const { type, checker } = await getTypeFromCode(
-        `type Result = { x: string; [n: number]: string } & { y: string };`,
+        `type Result = Record<string, unknown> & Record<number, string>;`,
         "Result",
       );
 
@@ -255,7 +284,7 @@ describe("IntersectionFormatter", () => {
         type: "object",
         additionalProperties: true,
         $comment:
-          "Unsupported intersection pattern: index signature on constituent",
+          "Unsupported intersection pattern: index signatures on different keys",
       });
     });
 

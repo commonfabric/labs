@@ -828,7 +828,7 @@ describe("SchemaGenerator", () => {
           type: "object",
           additionalProperties: true,
           $comment:
-            "Unsupported intersection pattern: index signature on constituent",
+            "Unsupported intersection pattern: index signatures on different keys",
         }),
       ],
       [
@@ -843,7 +843,7 @@ describe("SchemaGenerator", () => {
           type: "object",
           additionalProperties: true,
           $comment:
-            "Unsupported intersection pattern: index signature on constituent",
+            "Unsupported intersection pattern: index signatures on different keys",
         }),
       ],
       [
@@ -908,7 +908,7 @@ describe("SchemaGenerator", () => {
         }),
       ],
       [
-        "keeps evidence on an array that records indexed by number alone merge to",
+        "keeps evidence on the map records indexed by number alone merge to",
         `
           type M1 = {
             a: Cfc<Record<number, string>, { integrity: readonly ["v"] }>;
@@ -916,9 +916,65 @@ describe("SchemaGenerator", () => {
           type M2 = { a: Record<number, "a" | "b"> };
         `,
         propertyA({
-          type: "array",
-          items: { enum: ["a", "b"] },
+          type: "object",
+          properties: {},
+          additionalProperties: { enum: ["a", "b"] },
           ifc: { integrity: ["v"] },
+        }),
+      ],
+      [
+        "falls back for equal index signatures on different keys",
+        `
+          type M1 = { a: Record<string, string> };
+          type M2 = { a: Record<number, string> };
+        `,
+        propertyA({
+          type: "object",
+          additionalProperties: true,
+          $comment:
+            "Unsupported intersection pattern: index signatures on different keys",
+        }),
+      ],
+      [
+        "falls back for index signatures on different keys written as literals",
+        `
+          type M1 = { a: { [key: string]: string } };
+          type M2 = { a: { [index: number]: string } };
+        `,
+        propertyA({
+          type: "object",
+          additionalProperties: true,
+          $comment:
+            "Unsupported intersection pattern: index signatures on different keys",
+        }),
+      ],
+      [
+        "falls back for a merged numeric index signature beside one on every key",
+        `
+          type Numbered = Record<number, string> & Record<number, "a" | "b">;
+          type M1 = { a: Numbered };
+          type M2 = { a: Record<string, string> };
+        `,
+        propertyA({
+          type: "object",
+          additionalProperties: true,
+          $comment:
+            "Unsupported intersection pattern: index signatures on different keys",
+        }),
+      ],
+      [
+        "keeps evidence off members a numeric index signature does not name",
+        `
+          type M1 = { a: { x: string } };
+          type M2 = {
+            a: Cfc<Record<number, string>, { addIntegrity: readonly ["v"] }>;
+          };
+        `,
+        propertyA({
+          type: "object",
+          properties: { x: { type: "string" } },
+          required: ["x"],
+          additionalProperties: { type: "string" },
         }),
       ],
       [

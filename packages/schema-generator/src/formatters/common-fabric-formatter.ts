@@ -90,6 +90,7 @@ import {
   referenceChain,
   withIfcLabels,
 } from "../ifc-labels.ts";
+import { withIndexKeysOf } from "../schema-origins.ts";
 import {
   type LabelListReading,
   readingOfLabelList,
@@ -2783,13 +2784,17 @@ export class CommonFabricFormatter implements TypeFormatter {
   ): MutableJSONSchema {
     const labels = this.#labelsOf(metadata, context);
     return labels
-      ? placeCarriedLabels(
+      ? withIndexKeysOf(
+        placeCarriedLabels(
+          schema,
+          type,
+          labels.map((label, index) => ({
+            labels: label,
+            of: boundPayloadOf(metadata[index]!),
+          })),
+          context,
+        ),
         schema,
-        type,
-        labels.map((label, index) => ({
-          labels: label,
-          of: boundPayloadOf(metadata[index]!),
-        })),
         context,
       )
       : schema;
@@ -3164,7 +3169,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       return baseSchema;
     }
 
-    return withIfcLabels(baseSchema, ifc);
+    return withIndexKeysOf(withIfcLabels(baseSchema, ifc), baseSchema, context);
   }
 
   /**
@@ -4150,12 +4155,16 @@ export class CommonFabricFormatter implements TypeFormatter {
     ) {
       return schema;
     }
-    return {
-      ...schema,
-      ifc: { ...schema.ifc, [POLICY_READ_IN_PART]: true } as NonNullable<
-        MutableJSONSchemaObj["ifc"]
-      >,
-    };
+    return withIndexKeysOf(
+      {
+        ...schema,
+        ifc: { ...schema.ifc, [POLICY_READ_IN_PART]: true } as NonNullable<
+          MutableJSONSchemaObj["ifc"]
+        >,
+      },
+      schema,
+      context,
+    );
   }
 
   /**

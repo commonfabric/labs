@@ -12,7 +12,7 @@ import { extractDocFromType } from "../doc-utils.ts";
 import type { GenerationContext, TypeFormatter } from "../interface.ts";
 import { labelsBesideAnyValue } from "../ifc-labels.ts";
 import type { SchemaGenerator } from "../schema-generator.ts";
-import { withOriginOf } from "../schema-origins.ts";
+import { withIndexKeys, withOriginOf } from "../schema-origins.ts";
 import { dedupeByValueEqual } from "../value-equality.ts";
 import {
   cloneSchemaDefinition,
@@ -346,25 +346,33 @@ export class IntersectionFormatter implements TypeFormatter {
     parts: readonly ts.Type[],
     checker: ts.TypeChecker,
   ): string | null {
+    let everyKey = false;
+    let numericKeys = false;
     for (const part of parts) {
       if ((part.flags & ts.TypeFlags.Object) === 0) {
         return "non-object constituent";
       }
 
-      // A part indexed by number alone, as an array, a tuple, a typed array
-      // or `Record<number, T>` is, has no object schema to merge: the
-      // generator gives it an array's or its native type's, whose items no
-      // object member can hold. A string index signature merges with the
-      // members.
-      if (
-        checker.getIndexTypeOfType(part, ts.IndexKind.Number) !== undefined &&
-        checker.getIndexTypeOfType(part, ts.IndexKind.String) === undefined
-      ) {
+      // A part the generator gives an array's schema, as it gives an array, a
+      // tuple, `ArrayLike<T>` or a typed array, has no object schema whose
+      // members its items could join. Any other index signature, a numeric
+      // one included, merges with the members.
+      if (getArrayElementInfo(part, checker) !== undefined) {
         return "index signature on constituent";
+      }
+      if (checker.getIndexTypeOfType(part, ts.IndexKind.String)) {
+        everyKey = true;
+      } else if (checker.getIndexTypeOfType(part, ts.IndexKind.Number)) {
+        numericKeys = true;
       }
     }
 
-    return null;
+    // An index signature on numeric keys alone beside one on every key would
+    // need one `additionalProperties` saying what the first holds under
+    // numeric keys and the second under the rest.
+    return everyKey && numericKeys
+      ? "index signatures on different keys"
+      : null;
   }
 
   #mergeIntersectionParts(
@@ -414,21 +422,24 @@ export class IntersectionFormatter implements TypeFormatter {
       properties: mergedProps,
     };
 
-    // The keys no member names hold the intersection's string index type, as
-    // one object type declaring all of these members and index signatures
-    // would: a member keeps the type its own declarations give it, as the
-    // checker reads it. No part is indexed by number alone
-    // (`#validateIntersectionParts()`), so a number index has a string index
-    // beside it.
-    const indexType = checker.getIndexTypeOfType(
+    // The keys no member names hold the intersection's index type, as one
+    // object type declaring all of these members and index signatures would:
+    // a member keeps the type its own declarations give it, as the checker
+    // reads it. The parts' index signatures are all on every key or all on
+    // numeric keys alone (`#validateIntersectionParts()`), and the merged
+    // one is recorded as applying to the same.
+    const stringIndex = checker.getIndexTypeOfType(
       intersection,
       ts.IndexKind.String,
     );
+    const indexType = stringIndex ??
+      checker.getIndexTypeOfType(intersection, ts.IndexKind.Number);
     if (indexType) {
       result.additionalProperties = this.#schemaGenerator.formatChildType(
         indexType,
         context,
       );
+      withIndexKeys(result, stringIndex ? "string" : "number", context);
     }
 
     if (requiredSet.size > 0) {

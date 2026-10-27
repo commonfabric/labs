@@ -4102,6 +4102,83 @@ namespace Local {
       expect(schema.required).toEqual(["name"]);
       expect(schema.additionalProperties).toEqual({ type: "number" });
     });
+
+    /** A synthetic `{ [k: <key>]: <value> }`. */
+    const indexedLiteral = (
+      key: ts.SyntaxKind.StringKeyword | ts.SyntaxKind.NumberKeyword,
+      value: ts.TypeNode,
+    ) =>
+      ts.factory.createTypeLiteralNode([
+        ts.factory.createIndexSignature(
+          undefined,
+          [ts.factory.createParameterDeclaration(
+            undefined,
+            undefined,
+            ts.factory.createIdentifier("k"),
+            undefined,
+            ts.factory.createKeywordTypeNode(key),
+          )],
+          value,
+        ),
+      ]);
+    const numberNode = () =>
+      ts.factory.createKeywordTypeNode(ts.SyntaxKind.NumberKeyword);
+    const unsupportedKeys = {
+      type: "object",
+      additionalProperties: true,
+      $comment:
+        "Unsupported intersection pattern: index signatures on different keys",
+    };
+
+    it("returns the fallback for synthetic index signatures on different keys", async () => {
+      // A numeric index signature's schema reads as a string one's, so the
+      // keys each applies to are recorded where the literal is read.
+
+      const { checker } = await getTypeFromCode(
+        "type Dummy = unknown;",
+        "Dummy",
+      );
+      const typeNode = ts.factory.createIntersectionTypeNode([
+        indexedLiteral(ts.SyntaxKind.StringKeyword, numberNode()),
+        indexedLiteral(ts.SyntaxKind.NumberKeyword, numberNode()),
+      ]);
+
+      expect(
+        new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+          typeNode,
+          checker,
+        ),
+      ).toEqual(unsupportedKeys);
+    });
+
+    it("returns the fallback for merged synthetic numeric index signatures beside a string one", async () => {
+      const { checker } = await getTypeFromCode(
+        "type Dummy = unknown;",
+        "Dummy",
+      );
+      const numbered = ts.factory.createParenthesizedType(
+        ts.factory.createIntersectionTypeNode([
+          indexedLiteral(ts.SyntaxKind.NumberKeyword, numberNode()),
+          indexedLiteral(
+            ts.SyntaxKind.NumberKeyword,
+            ts.factory.createLiteralTypeNode(
+              ts.factory.createNumericLiteral(1),
+            ),
+          ),
+        ]),
+      );
+      const typeNode = ts.factory.createIntersectionTypeNode([
+        numbered,
+        indexedLiteral(ts.SyntaxKind.StringKeyword, numberNode()),
+      ]);
+
+      expect(
+        new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+          typeNode,
+          checker,
+        ),
+      ).toEqual(unsupportedKeys);
+    });
   });
 
   describe("union members", () => {

@@ -179,8 +179,15 @@ array of the intersection of their items; an index signature merges with the
 members, its values the `additionalProperties` of the merged object, the
 intersection of every part's, while a member keeps what its own declarations
 give it, as the checker reads a member of an intersection; and a constituent
-that merge refuses — a non-object, or an array beside an object — yields the
-same unsupported-pattern fallback the type path emits. Object parts merge
+that merge refuses — a non-object, an array beside an object, or an index
+signature on numeric keys alone beside one on every key — yields the same
+unsupported-pattern fallback the type path emits. Which keys an index
+signature applies to is recorded where the generator writes it
+(`GenerationContext.indexKeys`), since a number-keyed map's schema reads as
+a string-keyed one's, and a copy carries the record; equal schemas recorded
+with different keys stay apart when constituents fold. A signature with no
+record is read as holding data under any key and establishing it under none
+another part shares. Object parts merge
 into one object, and a property several of them declare is settled the same
 way from the schemas its declarations give it, documented as the type path
 documents it (§9) and refused where its declarations are in different
@@ -1083,28 +1090,32 @@ Default paths of §7:
   metadata carriers, whose labels §11 reads, are filtered before validation;
   a single survivor delegates directly, and where none survives the full set
   is merged.
-- An intersection of parts the generator gives an array's schema, arrays and
-  `Record<number, T>` among them, is an array of the values every one of them
+- An intersection of parts the generator gives an array's schema, arrays, tuples
+  and `ArrayLike<T>` among them, is an array of the values every one of them
   holds: its `items` are the schema of the intersection's number index, the
   intersection of the element types, so `unknown[] & readonly string[]` is
-  `string[]`'s schema. Its constituents' JSDoc documents it as it documents
-  a merged object (below). Tested: intersection-formatter.test.ts.
-- A string index signature merges with the members, as one object type
-  declaring all of the constituents' members and index signatures would: the
-  keys no member names hold the intersection's string index type, which the
-  checker gives as the intersection of the constituents'
-  (`additionalProperties`), and a member keeps the type its own declarations
-  give it, as the checker reads `T["x"]` of an intersection.
+  `string[]`'s schema. Its constituents' JSDoc documents it as it documents a
+  merged object (below). Tested: intersection-formatter.test.ts.
+- An index signature merges with the members, as one object type declaring
+  all of the constituents' members and index signatures would: the keys no
+  member names hold the intersection's index type, its string one or else its
+  number one, which the checker gives as the intersection of the
+  constituents' (`additionalProperties`), and a member keeps the type its own
+  declarations give it, as the checker reads `T["x"]` of an intersection. A
+  number-keyed object is a map, so `{ name: string } & Record<number, string>`
+  gives `name` beside `additionalProperties: { type: "string" }`.
   `{ x: unknown; y: string } & Record<string, string>` gives
   `{ properties: { x: { type: "unknown" }, y: { type: "string" } },
   additionalProperties: { type: "string" } }`, and labels follow the members
   and index values they are written on (§11). Tested:
   intersection-formatter.test.ts, intersection-provenance.test.ts.
-- Unsupported shapes — a non-object constituent, or a constituent indexed by
-  number alone beside an object, as an array, a tuple, a typed array or
-  `Record<number, T>` is, which the generator gives an array's or its native
-  type's schema, whose items no member can hold — produce a **permissive
-  fallback, not a throw**: `{ type: "object", additionalProperties: true,
+- Unsupported shapes — a non-object constituent; an array, a tuple,
+  `ArrayLike<T>` or a typed array beside an object, which the generator gives
+  an array's schema whose items no member can hold; and an index signature on
+  numeric keys alone beside one on every key, as in
+  `Record<string, unknown> & Record<number, string>`, which no one
+  `additionalProperties` can state — produce a **permissive fallback, not a
+  throw**: `{ type: "object", additionalProperties: true,
   $comment: "Unsupported intersection pattern: <reason>" }`.
 - A property several constituents declare takes the schema of its type in
   the intersection, which the checker gives as the intersection of the

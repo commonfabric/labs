@@ -13,6 +13,7 @@ import type {
   BoundTypeArgument,
   BoundTypeParameters,
   GenerationContext,
+  IndexKeys,
   SchemaGenerationOptions,
   SchemaHints,
   TypeFormatter,
@@ -85,7 +86,10 @@ import {
 } from "./type-utils.ts";
 import { extractDocFromType } from "./doc-utils.ts";
 import {
+  indexKeysOf,
   unionFoldedFrom,
+  withIndexKeys,
+  withIndexKeysNoted,
   withOriginOf,
   withOriginsNumbered,
 } from "./schema-origins.ts";
@@ -811,7 +815,8 @@ function isEmptyObjectSchema(schema: MutableJSONSchema): boolean {
  * `parts` with equal schemas folded, preserving source kind and the identity
  * of schemas with recorded union or intersection constituents. Equal fallback
  * schemas can stand for different constituents; `void` and an opaque cell
- * also remain distinct despite their equal schemas.
+ * also remain distinct despite their equal schemas, as do schemas holding
+ * index signatures on different keys (`withIndexKeysNoted()`).
  */
 function dedupeIntersectionParts<T extends MutableJSONSchema>(
   parts: T[],
@@ -830,7 +835,12 @@ function dedupeIntersectionParts<T extends MutableJSONSchema>(
       sourceId = sourceIds.get(schema) ?? sourceIds.size + 1;
       sourceIds.set(schema, sourceId);
     }
-    return { schema, sourceKind: origin?.kind ?? "schema", sourceId };
+    return {
+      schema,
+      sourceKind: origin?.kind ?? "schema",
+      sourceId,
+      noted: withIndexKeysNoted(schema, context) as FabricValue,
+    };
   })).map((part) => part.schema);
 }
 
@@ -991,7 +1001,7 @@ function armsOfUnion(
             members: declaredMembersOf(schema, context),
             reach: "must" as const,
             items: holdsItems(schema, context),
-            unnamed: holdsUnnamed(schema, context),
+            unnamed: establishedUnnamedKeysOf(schema, context),
           }]
           : []),
         ...labels,
@@ -1036,29 +1046,34 @@ function holdsItems(
 }
 
 /**
- * Whether `schema`, read as `withBesideKeywords()` reads it, is an object
- * with an index signature, whose values are data of the value under keys no
- * property names.
+ * The keys under which `schema`, read as `withBesideKeywords()` reads it,
+ * holds data no property names, where it is an object with an index
+ * signature: those the signature applies to (`indexKeysOf()`), or
+ * `"unrecorded"` where nothing says which. `undefined` for any other schema.
  */
-function holdsUnnamed(
+function unnamedKeysOf(
   schema: MutableJSONSchema,
   context: GenerationContext,
-): boolean {
+): IndexKeys | "unrecorded" | undefined {
   const stated = withBesideKeywords(schema, context);
   return isObjectSchema(stated) && stated.additionalProperties !== undefined &&
-    stated.additionalProperties !== false;
+      stated.additionalProperties !== false
+    ? indexKeysOf(stated, context) ?? "unrecorded"
+    : undefined;
 }
 
 /**
  * The data of a merged value, which evidence must cover to go on the whole
  * of it: the members its parts declare, its items where a part is an array,
  * and its values under keys no member names where a part has an index
- * signature (`declaredMembersOf()`, `holdsItems()`, `holdsUnnamed()`).
+ * signature (`declaredMembersOf()`, `holdsItems()`, `unnamedKeysOf()`):
+ * numeric keys alone where every such signature applies to those alone, and
+ * otherwise any key, an unrecorded signature's included.
  */
 type ValueMembers = {
   readonly names: ReadonlySet<string>;
   readonly items: boolean;
-  readonly unnamed: boolean;
+  readonly unnamed: IndexKeys | undefined;
 };
 
 /** The data of the value `parts` merge to (`ValueMembers`). */
@@ -1066,11 +1081,29 @@ function valueMembersOf(
   parts: readonly MutableJSONSchema[],
   context: GenerationContext,
 ): ValueMembers {
+  const unnamed = parts.flatMap((part) => unnamedKeysOf(part, context) ?? []);
   return {
     names: new Set(parts.flatMap((part) => declaredMembersOf(part, context))),
     items: parts.some((part) => holdsItems(part, context)),
-    unnamed: parts.some((part) => holdsUnnamed(part, context)),
+    unnamed: unnamed.length === 0
+      ? undefined
+      : unnamed.every((keys) => keys === "number")
+      ? "number"
+      : "string",
   };
+}
+
+/**
+ * The keys under which `schema` establishes data no property names
+ * (`unnamedKeysOf()`): none where nothing records which keys its index
+ * signature applies to, as data it may not hold is none it establishes.
+ */
+function establishedUnnamedKeysOf(
+  schema: MutableJSONSchema,
+  context: GenerationContext,
+): IndexKeys | undefined {
+  const keys = unnamedKeysOf(schema, context);
+  return keys === "unrecorded" ? undefined : keys;
 }
 
 /**
@@ -1141,9 +1174,10 @@ function withoutLabels(
 
 /**
  * Labels a part of an intersection states, the members of the part's value
- * they were written around, whether that value is an array (`items`) and
- * whether it has an index signature (`unnamed`), and
- * how far into the merged value they reach, as the type path places a CFC
+ * they were written around, whether that value is an array (`items`), the
+ * keys under which it establishes data no member names (`unnamed`,
+ * `establishedUnnamedKeysOf()`), and how far into the merged value they
+ * reach, as the type path places a CFC
  * carrier's labels on its payload (`placeCarriedLabels()`). A restriction
  * reaches wherever the part's data may be (`"may"`): the members it was
  * written around, or the whole value where those are none. Evidence
@@ -1157,7 +1191,7 @@ type PartLabels = {
   readonly members: readonly string[];
   readonly reach: "may" | "must";
   readonly items?: boolean;
-  readonly unnamed?: boolean;
+  readonly unnamed?: IndexKeys | undefined;
 };
 
 /**
@@ -1182,7 +1216,7 @@ function partLabelsOf(
           members,
           reach: "must" as const,
           items: holdsItems(part, context),
-          unnamed: holdsUnnamed(part, context),
+          unnamed: establishedUnnamedKeysOf(part, context),
         }]
         : []),
     ];
@@ -1215,8 +1249,11 @@ function withPartLabels(
     const reached = properties
       ? members.filter((member) => Object.hasOwn(properties, member))
       : [];
+    // An index signature on every key holds the data under any key no member
+    // names; one on numeric keys alone, only where the value's are numeric.
     const holdsAll = [...value.names].every((name) => members.includes(name)) &&
-      (!value.items || items === true) && (!value.unnamed || unnamed === true);
+      (!value.items || items === true) &&
+      (!value.unnamed || unnamed === "string" || unnamed === value.unnamed);
     if (reach === "must" && !holdsAll && reached.length === 0) continue;
     if (
       properties && reached.length > 0 &&
@@ -1461,7 +1498,7 @@ function mergeParts(
         members,
         reach,
         items === true,
-        unnamed === true,
+        unnamed ?? null,
       ]),
     ] as FabricValue)
   }`;
@@ -1581,6 +1618,7 @@ function mergeValues(
   const declarations = new Map<string, PartProperty[]>();
   const required = new Set<string>();
   const indexes: MutableJSONSchema[] = [];
+  const indexKeys: (IndexKeys | undefined)[] = [];
   for (const part of reduced) {
     if (isArraySchema(part)) {
       return unsupported("index signature on constituent");
@@ -1588,6 +1626,7 @@ function mergeValues(
     if (!isObjectSchema(part)) return unsupported("non-object constituent");
     if (part.additionalProperties !== undefined) {
       indexes.push(part.additionalProperties as MutableJSONSchema);
+      indexKeys.push(indexKeysOf(part, context));
     }
     for (
       const [key, value] of Object.entries(
@@ -1614,6 +1653,13 @@ function mergeValues(
       ? declared[0]!.schema
       : sharedPropertyOf(key, declared, context);
   }
+  // An index signature on numeric keys alone beside one on every key, an
+  // unrecorded one among those, would need one `additionalProperties` saying
+  // what the first holds under numeric keys and the second under the rest.
+  const numeric = indexKeys.filter((keys) => keys === "number").length;
+  if (numeric > 0 && numeric < indexKeys.length) {
+    return unsupported("index signatures on different keys");
+  }
   const merged: MutableJSONSchemaObj = { type: "object", properties };
   // The keys no member names hold what every index signature among the parts
   // holds, as one object type declaring all of their members and index
@@ -1624,7 +1670,10 @@ function mergeValues(
       : intersectionOf(indexes, context);
   }
   if (required.size > 0) merged.required = [...required];
-  return merged;
+  const keys = indexKeys[0];
+  return keys !== undefined && indexKeys.every((each) => each === keys)
+    ? withIndexKeys(merged, keys, context)
+    : merged;
 }
 
 /**
@@ -2011,6 +2060,7 @@ export class SchemaGenerator {
       definitions: {},
       emittedRefs: new Set(),
       schemaOrigins: new WeakMap(),
+      indexKeys: new WeakMap(),
       originNumbers: new Map(),
       mergedIntersectionNames: new Map(),
       nameAnonymousDefinition: () =>
@@ -3971,6 +4021,7 @@ export class SchemaGenerator {
       const properties: Record<string, MutableJSONSchema> = {};
       const required: string[] = [];
       let additionalProperties: MutableJSONSchema | undefined;
+      let indexKeys: IndexKeys | undefined;
 
       for (const member of typeNode.members) {
         if (ts.isPropertySignature(member) && member.name && member.type) {
@@ -4061,9 +4112,17 @@ export class SchemaGenerator {
           );
           // If multiple index signatures are present (e.g. both string and
           // number key), the first non-undefined wins — matching
-          // ObjectFormatter's `stringIndex ?? numberIndex` precedence.
+          // ObjectFormatter's `stringIndex ?? numberIndex` precedence. The
+          // keys it applies to are recorded where its key is `string` or
+          // `number` itself (`GenerationContext.indexKeys`).
           if (additionalProperties === undefined) {
             additionalProperties = valueSchema;
+            const key = member.parameters[0]?.type?.kind;
+            indexKeys = key === ts.SyntaxKind.StringKeyword
+              ? "string"
+              : key === ts.SyntaxKind.NumberKeyword
+              ? "number"
+              : undefined;
           }
         }
       }
@@ -4082,7 +4141,7 @@ export class SchemaGenerator {
           additionalProperties;
       }
 
-      return schema;
+      return indexKeys ? withIndexKeys(schema, indexKeys, context) : schema;
     }
 
     // A `readonly T[]` node is the operator form the checker prints a
@@ -5070,11 +5129,14 @@ export class SchemaGenerator {
           first.kind === ts.SyntaxKind.NumberKeyword ||
           (keyType.flags & (ts.TypeFlags.String | ts.TypeFlags.Number)) !== 0
         ) {
-          return {
-            type: "object",
-            properties: {},
-            additionalProperties: value,
-          };
+          return withIndexKeys(
+            { type: "object", properties: {}, additionalProperties: value },
+            first.kind === ts.SyntaxKind.StringKeyword ||
+              (keyType.flags & ts.TypeFlags.String) !== 0
+              ? "string"
+              : "number",
+            context,
+          );
         }
         const keys = literalKeys(first, context);
         if (keys === undefined) return undefined;

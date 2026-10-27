@@ -157,6 +157,12 @@ export interface SchemaGenerationOptions {
 }
 
 /**
+ * The keys an index signature applies to: every key (`"string"`), or numeric
+ * keys alone (`"number"`).
+ */
+export type IndexKeys = "string" | "number";
+
+/**
  * Unified context for schema generation - contains all state in one place
  */
 export interface GenerationContext {
@@ -187,6 +193,17 @@ export interface GenerationContext {
     | { kind: "void" }
     | { kind: "intersection" | "union"; parts: () => MutableJSONSchema[] }
   >;
+
+  /**
+   * The keys the index signature a schema states as `additionalProperties`
+   * applies to, where the schema alone no longer says: every key
+   * (`"string"`), or numeric keys alone (`"number"`), as a `[n: number]`
+   * signature's are. A schema with no record holds data under any key and
+   * establishes it under none it shares with another part
+   * (`indexKeysOf()`). A copy carries the record of what it copies through
+   * `withOriginOf()` and `withIndexKeysOf()`.
+   */
+  indexKeys?: WeakMap<MutableJSONSchemaObj, IndexKeys>;
 
   /**
    * A number for each record of `schemaOrigins` that a merge's key has met,
