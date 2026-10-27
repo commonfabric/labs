@@ -179,15 +179,16 @@ array of the intersection of their items; an index signature merges with the
 members, its values the `additionalProperties` of the merged object, the
 intersection of every part's, while a member keeps what its own declarations
 give it, as the checker reads a member of an intersection; and a constituent
-that merge refuses — a non-object, an array beside an object, or an index
-signature on numeric keys alone beside one on every key — yields the same
-unsupported-pattern fallback the type path emits. Which keys an index
-signature applies to is recorded where the generator writes it
-(`GenerationContext.indexKeys`), since a number-keyed map's schema reads as
-a string-keyed one's, and a copy carries the record; equal schemas recorded
-with different keys stay apart when constituents fold. A signature with no
-record is read as holding data under any key and establishing it under none
-another part shares. Object parts merge
+that merge refuses — a non-object, an array beside an object, an index
+signature on numeric keys alone beside one on every key, or one whose keys
+nothing records beside another — yields the same unsupported-pattern fallback
+the type path emits. Which keys an index signature applies to is recorded
+where the generator writes it (`GenerationContext.indexKeys`), since a
+number-keyed map's schema reads as a string-keyed one's, and a copy carries
+the record, a scoped or labeled one included; equal schemas recorded with
+different keys stay apart when constituents fold. A signature with no record
+is read as holding data under any key and establishing it under none another
+part shares. Object parts merge
 into one object, and a property several of them declare is settled the same
 way from the schemas its declarations give it, documented as the type path
 documents it (§9) and refused where its declarations are in different
@@ -224,9 +225,10 @@ nothing), while the wrapper is a cell, the value beside any other part; an
 unsupported-pattern fallback keeps the constituents behind it, so a nested
 or named intersection is reopened when an enclosing one reduces it
 (`(string & Brand) & number` is nothing); and a union whose arms fold to one
-schema — `void | OpaqueCell<any>`, or two branded primitives with the same
-fallback — keeps every arm, so an intersection reading the survivor still
-distributes over them, and the labels the survivor states are that union's
+schema — `void | OpaqueCell<any>`, two branded primitives with the same
+fallback, or `Record<string, T> | Record<number, T>` — keeps every arm, a
+labeled or scoped copy of it included, so an intersection reading the survivor
+still distributes over them, and the labels the survivor states are that union's
 (an arm accepting nothing is no arm, and is neither counted nor kept).
 Schemas with recorded union or intersection constituents are deduplicated by
 identity: equal fallback schemas can hide disjoint source types, so separate
@@ -1134,12 +1136,13 @@ Default paths of §7:
   the payload it was written around (§11); and a `Default` brand.
   `{ a: { x: string } } & { a: { y: number } }` merges the two objects, and a
   callable keeps its wrapper marker.
-- A writer is the one label a type cannot carry: only a `typeof` node names
-  it (§11). A property whose type carries a writer policy is settled from
-  the schemas its declarations give it, each read through the node it is
-  written with, as the node-based path settles one (§2). Read from the type
-  alone, the writer would go unread, and with it every label beside it, since
-  a value's carriers are read in full or not at all. So
+- A writer is the one label a type cannot carry: only a `typeof` node names it
+  (§11). A property whose value holds a writer policy, on itself or on its
+  members, index values or elements, a cell's link to its own document aside, is
+  settled from the schemas its declarations give it, each read through the node
+  it is written with, as the node-based path settles one (§2). Read from the
+  type alone, the writer would go unread, and with it every label beside it,
+  since a value's carriers are read in full or not at all. So
   `{ a: WriteAuthorizedBy<{ x: string }, typeof save> } &
   { a: { x: string; y: number } }`, in either order, gives `a` the members
   `x` and `y` with the writer on `x`, as a restriction goes on the members its

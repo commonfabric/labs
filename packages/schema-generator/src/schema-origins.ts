@@ -12,17 +12,21 @@ import type {
   MutableJSONSchema,
   MutableJSONSchemaObj,
 } from "@commonfabric/api";
+import type { FabricValue } from "@commonfabric/data-model";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { GenerationContext, IndexKeys } from "./interface.ts";
+import { dedupeByValueEqual } from "./value-equality.ts";
 
 /**
  * `folded`, the schema a union of `options` folded to with `kept` arms left,
  * recorded as that union when the fold dropped an option that carried an
- * origin of its own — on a schema of its own, so the record does not make
- * the surviving option stand for the whole. An option accepting nothing is
- * no arm: it is neither counted as folded nor recorded. Returned as it came
- * when nothing that mattered was folded.
+ * origin of its own, or one whose index signatures apply to other keys than
+ * those of the option kept for it (`withIndexKeysNoted()`) — on a schema of
+ * its own, so the record does not make the surviving option stand for the
+ * whole. An option accepting nothing is no arm: it is neither counted as
+ * folded nor recorded. Returned as it came when nothing that mattered was
+ * folded.
  */
 export function unionFoldedFrom(
   folded: MutableJSONSchema,
@@ -35,7 +39,10 @@ export function unionFoldedFrom(
   if (
     origins === undefined || !isObjectOrArray(folded) ||
     kept >= arms.length ||
-    !arms.some((arm) => isObjectOrArray(arm) && origins.has(arm))
+    (!arms.some((arm) => isObjectOrArray(arm) && origins.has(arm)) &&
+      dedupeByValueEqual(
+          arms.map((arm) => withIndexKeysNoted(arm, context) as FabricValue),
+        ).length <= dedupeByValueEqual(arms).length)
   ) {
     return folded;
   }
@@ -95,6 +102,29 @@ export function withIndexKeysOf(
     context.indexKeys?.set(copy, keys);
   }
   return copy;
+}
+
+/**
+ * `copy`, a schema made from `original` by stating something of its whole
+ * value beside it, its labels or its scope, with the records of what the
+ * value is: the keys its index signature applies to (`withIndexKeysOf()`),
+ * and the union a fold kept behind it, whose arms an intersection reads with
+ * what `copy` states (`armsOfUnion()`). An intersection behind it is not
+ * recorded, as an enclosing intersection would reopen it into parts stating
+ * none of that.
+ */
+export function withValueRecordsOf(
+  copy: MutableJSONSchema,
+  original: MutableJSONSchema,
+  context: GenerationContext,
+): MutableJSONSchema {
+  const origin = isObjectOrArray(original)
+    ? context.schemaOrigins?.get(original)
+    : undefined;
+  if (origin?.kind === "union" && isObjectOrArray(copy) && copy !== original) {
+    context.schemaOrigins?.set(copy, origin);
+  }
+  return withIndexKeysOf(copy, original, context);
 }
 
 /**

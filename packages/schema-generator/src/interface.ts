@@ -201,7 +201,7 @@ export interface GenerationContext {
    * signature's are. A schema with no record holds data under any key and
    * establishes it under none it shares with another part
    * (`indexKeysOf()`). A copy carries the record of what it copies through
-   * `withOriginOf()` and `withIndexKeysOf()`.
+   * `withOriginOf()` and `withValueRecordsOf()`.
    */
   indexKeys?: WeakMap<MutableJSONSchemaObj, IndexKeys>;
 

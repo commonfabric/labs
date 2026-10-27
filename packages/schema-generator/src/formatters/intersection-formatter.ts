@@ -22,7 +22,7 @@ import {
 } from "../type-utils.ts";
 import { isCellType } from "../typescript/cell-brand.ts";
 import { isScopeBrandMember } from "../typescript/scope-brand.ts";
-import { carriesWriterPolicy } from "../typescript/writer-policy.ts";
+import { holdsWriterPolicy } from "../typescript/writer-policy.ts";
 import {
   isCfcCarrier,
   scopeOfScopeWrapper,
@@ -486,10 +486,13 @@ export class IntersectionFormatter implements TypeFormatter {
    * `any` keeps nothing of the declarations beside it, so a property the
    * checker gives `any` keeps what `anyValueSchema()` says of their schemas.
    * Only a `typeof` node names a writer, so a writer policy the property's
-   * type carries goes unread there, and every label beside it with it; a
-   * property whose type carries one is settled from the declarations' schemas,
-   * each read through the node it is written with, as the node-based analysis
-   * settles one (`SchemaGenerator.sharedPropertyOfSchemas()`). Declarations in
+   * value holds goes unread there, and every label beside it with it, whether
+   * the policy is on the value or on what it holds, its members, index values
+   * and elements among them; a property whose value holds one, a cell's link
+   * to its own document aside (`holdsWriterPolicy()`), is settled from the
+   * declarations' schemas, each read through the node it is written with, as
+   * the node-based analysis settles one
+   * (`SchemaGenerator.sharedPropertyOfSchemas()`). Declarations in
    * different scopes are refused (`propertyScopesError()`), except where the
    * schema declares no scope.
    */
@@ -546,7 +549,7 @@ export class IntersectionFormatter implements TypeFormatter {
     if (own !== -1) {
       return sharedPropertySchema(key, schemas[own]!, schemas, context);
     }
-    if (carriesWriterPolicy(type, checker)) {
+    if (holdsWriterPolicy(type, checker)) {
       return this.#schemaGenerator.sharedPropertyOfSchemas(
         key,
         declared,

@@ -4329,6 +4329,14 @@ describe("Schema: CFC authoring aliases", () => {
           "{ a: { value: WriteAuthorizedBy<{ x: string }, typeof save> } } & { a: { value: { x: string; y: number } } }",
         ],
         [
+          "the values of a record several members of an intersection declare",
+          "{ a: Record<string, WriteAuthorizedBy<{ x: string }, typeof save>> } & { a: Record<string, { x: string; y: number }> }",
+        ],
+        [
+          "the elements of an array several members of an intersection declare",
+          "{ a: WriteAuthorizedBy<{ x: string }, typeof save>[] } & { a: { x: string; y: number }[] }",
+        ],
+        [
           "a later declaration of a property several members of an intersection declare",
           "{ a: { value: { x: string; y: number } } } & { a: { value: WriteAuthorizedBy<{ x: string }, typeof save> } }",
         ],

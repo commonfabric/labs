@@ -1653,12 +1653,17 @@ function mergeValues(
       ? declared[0]!.schema
       : sharedPropertyOf(key, declared, context);
   }
-  // An index signature on numeric keys alone beside one on every key, an
-  // unrecorded one among those, would need one `additionalProperties` saying
-  // what the first holds under numeric keys and the second under the rest.
-  const numeric = indexKeys.filter((keys) => keys === "number").length;
-  if (numeric > 0 && numeric < indexKeys.length) {
-    return unsupported("index signatures on different keys");
+  // An index signature on numeric keys alone beside one on every key would
+  // need one `additionalProperties` saying what the first holds under numeric
+  // keys and the second under the rest. One whose keys nothing records may be
+  // either, so it merges with no other.
+  if (indexKeys.length > 1) {
+    if (indexKeys.includes(undefined)) {
+      return unsupported("index signature on unrecorded keys");
+    }
+    if (new Set(indexKeys).size > 1) {
+      return unsupported("index signatures on different keys");
+    }
   }
   const merged: MutableJSONSchemaObj = { type: "object", properties };
   // The keys no member names hold what every index signature among the parts
@@ -4280,13 +4285,20 @@ export class SchemaGenerator {
         return memberSchemas[0]!;
       }
       // Filter out `false` schemas (from `never` types) — they reject all
-      // values and are no-ops inside anyOf.
-      const filtered = dedupeByValueEqual(
-        memberSchemas.filter((s) => s !== false),
-      );
+      // values and are no-ops inside anyOf. Members whose schemas coincide
+      // fold, and the fold is recorded where they differ in what the schema
+      // alone does not say (`unionFoldedFrom()`).
+      const kept = memberSchemas.filter((s) => s !== false);
+      const filtered = dedupeByValueEqual(kept);
       if (filtered.length === 0) return false;
-      if (filtered.length === 1) return filtered[0]!;
-      return { anyOf: filtered as MutableJSONSchemaObj[] };
+      return unionFoldedFrom(
+        filtered.length === 1
+          ? filtered[0]!
+          : { anyOf: filtered as MutableJSONSchemaObj[] },
+        kept,
+        filtered.length,
+        context,
+      );
     }
 
     if (ts.isLiteralTypeNode(typeNode)) {

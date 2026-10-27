@@ -963,6 +963,47 @@ describe("SchemaGenerator", () => {
         }),
       ],
       [
+        "falls back for a scoped record on numeric keys beside one on every key",
+        `
+          type M1 = { a: Record<string, unknown> };
+          type M2 = { a: PerUser<Record<number, string>> };
+        `,
+        propertyA({
+          type: "object",
+          additionalProperties: true,
+          $comment:
+            "Unsupported intersection pattern: index signatures on different keys",
+          scope: "user",
+        }),
+      ],
+      [
+        "keeps both arms of a union of records on different keys beside a record",
+        `
+          type M1 = { a: Record<string, unknown> };
+          type M2 = {
+            a: Cfc<Record<number, string> | Record<string, string>, {
+              integrity: readonly ["v"];
+            }>;
+          };
+        `,
+        propertyA({
+          anyOf: [
+            {
+              type: "object",
+              additionalProperties: true,
+              $comment:
+                "Unsupported intersection pattern: index signatures on different keys",
+            },
+            {
+              type: "object",
+              properties: {},
+              additionalProperties: { type: "string" },
+              ifc: { integrity: ["v"] },
+            },
+          ],
+        }),
+      ],
+      [
         "keeps evidence off members a numeric index signature does not name",
         `
           type M1 = { a: { x: string } };

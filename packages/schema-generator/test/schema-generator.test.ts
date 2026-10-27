@@ -4105,7 +4105,10 @@ namespace Local {
 
     /** A synthetic `{ [k: <key>]: <value> }`. */
     const indexedLiteral = (
-      key: ts.SyntaxKind.StringKeyword | ts.SyntaxKind.NumberKeyword,
+      key:
+        | ts.SyntaxKind.StringKeyword
+        | ts.SyntaxKind.NumberKeyword
+        | ts.TypeNode,
       value: ts.TypeNode,
     ) =>
       ts.factory.createTypeLiteralNode([
@@ -4116,7 +4119,9 @@ namespace Local {
             undefined,
             ts.factory.createIdentifier("k"),
             undefined,
-            ts.factory.createKeywordTypeNode(key),
+            typeof key === "number"
+              ? ts.factory.createKeywordTypeNode(key)
+              : key,
           )],
           value,
         ),
@@ -4149,6 +4154,80 @@ namespace Local {
           checker,
         ),
       ).toEqual(unsupportedKeys);
+    });
+
+    it("returns the fallback for a synthetic index signature on unrecorded keys beside another", async () => {
+      // Nothing records which keys a template-literal index signature applies
+      // to, so it merges with no other.
+
+      const { checker } = await getTypeFromCode(
+        "type Dummy = unknown;",
+        "Dummy",
+      );
+      const prefixed = ts.factory.createTemplateLiteralType(
+        ts.factory.createTemplateHead("foo-"),
+        [ts.factory.createTemplateLiteralTypeSpan(
+          ts.factory.createKeywordTypeNode(ts.SyntaxKind.StringKeyword),
+          ts.factory.createTemplateTail(""),
+        )],
+      );
+      const typeNode = ts.factory.createIntersectionTypeNode([
+        indexedLiteral(prefixed, numberNode()),
+        indexedLiteral(
+          ts.SyntaxKind.StringKeyword,
+          ts.factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword),
+        ),
+      ]);
+
+      expect(
+        new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+          typeNode,
+          checker,
+        ),
+      ).toEqual({
+        type: "object",
+        additionalProperties: true,
+        $comment:
+          "Unsupported intersection pattern: index signature on unrecorded keys",
+      });
+    });
+
+    it("keeps both arms of a synthetic union of index signatures on different keys", async () => {
+      // The two arms' schemas are equal, so the union folds to one; the fold
+      // is recorded, and an intersection reads each arm.
+
+      const { checker } = await getTypeFromCode(
+        "type Dummy = unknown;",
+        "Dummy",
+      );
+      const typeNode = ts.factory.createIntersectionTypeNode([
+        ts.factory.createParenthesizedType(
+          ts.factory.createUnionTypeNode([
+            indexedLiteral(ts.SyntaxKind.StringKeyword, numberNode()),
+            indexedLiteral(ts.SyntaxKind.NumberKeyword, numberNode()),
+          ]),
+        ),
+        indexedLiteral(
+          ts.SyntaxKind.StringKeyword,
+          ts.factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword),
+        ),
+      ]);
+
+      expect(
+        new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+          typeNode,
+          checker,
+        ),
+      ).toEqual({
+        anyOf: [
+          unsupportedKeys,
+          {
+            type: "object",
+            properties: {},
+            additionalProperties: { type: "number" },
+          },
+        ],
+      });
     });
 
     it("returns the fallback for merged synthetic numeric index signatures beside a string one", async () => {

@@ -51,7 +51,7 @@ import {
 } from "../typescript/value-annotation.ts";
 import { usesParameterUnreachably } from "../type-parameter-bindings.ts";
 import { CFC_CARRIER_PROPERTY } from "../typescript/cfc-carrier.ts";
-import { withIndexKeys, withIndexKeysOf } from "../schema-origins.ts";
+import { withIndexKeys, withValueRecordsOf } from "../schema-origins.ts";
 import { attachUiContract, getUiContractHint } from "../ui-contract.ts";
 
 const logger = getLogger("schema-generator.object", {
@@ -537,7 +537,7 @@ export class ObjectFormatter implements TypeFormatter {
     if (required.length > 0) schema.required = required;
 
     return carrier
-      ? withIndexKeysOf(
+      ? withValueRecordsOf(
         this.#schemaGenerator.withLabelsCarriedBy(
           schema,
           type,
