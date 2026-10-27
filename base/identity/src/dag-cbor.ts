@@ -112,6 +112,15 @@ const encodeInto = (
     append(out, head(MAJOR_ARRAY, value.length));
     for (const item of value) encodeInto(item, out, depth + 1);
   } else {
+    // A map is a plain object and nothing else: an instance of a class, a
+    // Map, or a Date carries state its enumerable properties do not show,
+    // and encoding those would silently drop it.
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new DagCborError(
+        "a map must be a plain object with Object.prototype or null as its prototype",
+      );
+    }
     const entries = Object.entries(value as { [key: string]: DagCborValue })
       .map(([key, item]) => ({ key: textEncoder.encode(key), item }))
       .sort((a, b) => compareKeys(a.key, b.key));

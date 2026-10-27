@@ -109,6 +109,19 @@ Deno.test("decodeDagCbor() throws for truncated input and for trailing bytes", (
   expect(() => decodeDagCbor(bytes(0x00, 0x00))).toThrow(DagCborError);
 });
 
+Deno.test("encodeDagCbor() encodes a plain object with Object.prototype or null as its prototype, and throws for any other object", () => {
+  const plain = encodeDagCbor({ a: 1 });
+  const bare = Object.create(null) as { [key: string]: number };
+  bare.a = 1;
+  expect(encodeDagCbor(bare)).toEqual(plain);
+  class Donut {
+    a = 1;
+  }
+  expect(() => encodeDagCbor(new Donut() as never)).toThrow(DagCborError);
+  expect(() => encodeDagCbor(new Date(0) as never)).toThrow(DagCborError);
+  expect(() => encodeDagCbor(new Map() as never)).toThrow(DagCborError);
+});
+
 Deno.test("decodeDagCbor() returns `__proto__` as an own key rather than setting the prototype", () => {
   // {"__proto__": {"x": 1}}
   const decoded = decodeDagCbor(
