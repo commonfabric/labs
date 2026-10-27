@@ -34,8 +34,9 @@ what the text cannot:
   itself decides, `BigInt@1`, `SpecialNumber@1`, `Symbol@1` and `Undefined@1`,
   never are, so an unknown value under one of those has no text and mods.
 - `patches`: changes made to the decoded value, each `{"at": path, "put": …}`.
-  The path runs through the arrays and records of the decoded text, and the text
-  holds a `null` where it ends, which the patch replaces. `put` is one of:
+  The path runs through the arrays and records of the decoded text, never into
+  an instance, and the text holds a `null` where it ends, which the patch
+  replaces. `put` is one of:
   - `{"cycle": path}`: the array or record at that path, which closes a cycle.
     The path is absolute, from the root, and is a proper prefix of `at`.
   - `{"unregisteredSymbol": description}`: a symbol of no registry key, under
@@ -60,8 +61,9 @@ probe is a hole, and an instance field with no probe is an optional field the
 value lacks.
 
 The one exception is a path where a patch puts a value. The patch is what states
-that part of the value, so there is no probe at its path or under it. A cycle
-and a symbol of no registry key are stated that way, and have no probe.
+that part of the value, so there is no probe at its path or under it. A symbol
+of no registry key, and a cycle through arrays and records alone, are stated
+that way, and have no probe. A cycle through an instance has no text and mods.
 
 A node's probe comes before the probes of what it holds, which run in index
 order in an array, in UTF-8 order of key in a record, and in the order of the

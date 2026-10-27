@@ -55,10 +55,10 @@ cases that differ only in those ways have the same text.
 The mods, `unclaimed` and `patches`, are those
 [`value-probes.md`](value-probes.md) defines, along with the paths a patch
 follows. The cycles and unregistered symbols among the cases are written with
-patches. Section 4.19 puts instances among what a cycle may pass through, and a
-patch can state such a cycle, but none of the cases holds one. No case holds an
-unknown value under one of the four tags the format itself decides, which no
-text and mods write.
+patches. Section 4.19 puts instances among what a cycle may pass through, but a
+patch's path does not step into an instance, so no text and mods state such a
+cycle, and none of the cases holds one. No case holds an unknown value under one
+of the four tags the format itself decides, which no text and mods write.
 
 ## Divergences
 
