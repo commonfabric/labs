@@ -4,8 +4,10 @@ The two conformance fixtures beside this file share a notation, which this
 document defines. Both write each value as its `fvj1:` text, with mods to
 decoding it that state what no text carries. `fvj1-conformance.json` then states
 what decoding the text returns as a list of probes, each a path into the value
-paired with what a reader finds there. Every value the notation names is written
-in `fvj1:` itself; there is no second notation for values.
+paired with what a reader finds there. Values are written only as `fvj1:` text.
+The one escape is for a string holding a lone surrogate, which a JSON reader may
+not keep, where it stands outside a text, as a key in a path or a symbol's
+description in a patch: `{"utf16": [...]}` writes it as its UTF-16 code units.
 [`fvj1-conformance.md`](fvj1-conformance.md) and
 [`hash-conformance.md`](hash-conformance.md) describe the fixtures themselves,
 and `src/conformance-fixtures.ts`, in `packages/data-model`, writes and reads
