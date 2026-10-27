@@ -307,7 +307,8 @@ export interface CreateHarnessPromptLoopOptions
   /**
    * Requires `submit_result` alone in its model turn, so a host job's result
    * never shares the turn that ends the run with another tool call. An
-   * accepted result ends every run, with or without this.
+   * accepted result ends a run unless a pending steer continues it, with or
+   * without this option.
    */
   stopOnStructuredResult?: boolean;
 
@@ -386,6 +387,15 @@ export interface RunHarnessPromptOptions {
   promptSlotBinding?: PromptSlotBinding;
   signal?: AbortSignal;
 
+  /**
+   * Takes root user messages for model turn `turn`, appended verbatim before
+   * its request. Called at turn starts and provisional endings with remaining
+   * budget, and never after the loop ends. Digest-bound prompts refuse it.
+   */
+  takeMessages?: (
+    turn: number,
+  ) => readonly string[] | Promise<readonly string[]>;
+
   /** Reports each completed model call, including research and descendants. */
   onModelUsage?: (update: HarnessModelUsageUpdate) => void | Promise<void>;
 
@@ -402,6 +412,15 @@ export interface RunHarnessTranscriptOptions {
   model?: string;
   promptSlotBinding?: PromptSlotBinding;
   signal?: AbortSignal;
+
+  /**
+   * Takes root user messages for model turn `turn`, appended verbatim before
+   * its request. Called at turn starts and provisional endings with remaining
+   * budget, and never after the loop ends. Digest-bound prompts refuse it.
+   */
+  takeMessages?: (
+    turn: number,
+  ) => readonly string[] | Promise<readonly string[]>;
 
   /** Host research activity, independent of the model's transcript. */
   onOpeningResearch?: (
@@ -3832,6 +3851,7 @@ export class CfHarnessPromptLoop {
       maxModelTurns: options.maxModelTurns,
       promptSlotBinding: options.promptSlotBinding,
       signal: options.signal,
+      takeMessages: options.takeMessages,
       onModelUsage: options.onModelUsage,
       onTranscriptEvent: options.onTranscriptEvent,
     });
@@ -3878,6 +3898,17 @@ export class CfHarnessPromptLoop {
         : "absent";
     const promptSlotBinding = options.promptSlotBinding ??
       initialRunState.promptSlotBinding;
+    if (
+      options.takeMessages !== undefined &&
+      (promptSlotBinding?.valueDigest !== undefined ||
+        promptSlotBinding?.slotDigest !== undefined ||
+        promptSlotBinding?.snapshotDigest !== undefined)
+    ) {
+      throw new Error(
+        "`takeMessages` cannot steer a digest-bound prompt-slot binding: " +
+          "`valueDigest`, `slotDigest`, and `snapshotDigest` bind one exact prompt value.",
+      );
+    }
     if (model === undefined) {
       throw new Error(
         "a model must be configured before running the prompt loop",
@@ -4045,7 +4076,7 @@ export class CfHarnessPromptLoop {
       await options.onTranscriptEvent?.({ message, transcript });
     }
     // A normal final answer, an admitted finish_task, or an accepted
-    // submit_result ends the model loop.
+    // submit_result ends the model loop once the driver has no pending steer.
     let finalAssistantText: string | undefined;
     let taskOutcome: HarnessTaskOutcome = { outcome: "completed" };
     try {
@@ -4114,10 +4145,32 @@ export class CfHarnessPromptLoop {
         ));
         await options.onTranscriptEvent?.({ message: notice, transcript });
       };
+
+      /** Appends the driver's pending messages to ordinary resumable history. */
+      const appendTakenMessages = async (turn: number): Promise<boolean> => {
+        if (options.takeMessages === undefined) return false;
+        options.signal?.throwIfAborted();
+        const messages = await options.takeMessages(turn);
+        for (const content of messages) {
+          const message: HarnessTranscriptMessage = { role: "user", content };
+          transcript.push(message);
+          await this.engine.persistTranscript(transcript);
+          reportTimeline.push(transcriptTimelineEntry(
+            message,
+            transcript.length - 1,
+            this.engine.getRunState().updatedAt,
+            turn,
+          ));
+          await options.onTranscriptEvent?.({ message, transcript });
+        }
+        return messages.length > 0;
+      };
+
       let emptyTurnNudged = false;
       while (modelTurns < maxModelTurns) {
         options.signal?.throwIfAborted();
         modelTurns += 1;
+        await appendTakenMessages(modelTurns);
         const finalizing = this.#finalizeOnTurnLimit &&
           modelTurns === maxModelTurns;
         // Every run is warned two turns out, so a model can wrap up rather
@@ -4272,6 +4325,14 @@ export class CfHarnessPromptLoop {
                 "Root model turn budget reached; response contains partial findings.",
             };
           }
+          if (
+            modelTurns < maxModelTurns &&
+            await appendTakenMessages(modelTurns + 1)
+          ) {
+            finalAssistantText = undefined;
+            taskOutcome = { outcome: "completed" };
+            continue;
+          }
           break;
         }
         const followupMessages: HarnessTranscriptMessage[] = [];
@@ -4333,11 +4394,11 @@ export class CfHarnessPromptLoop {
         // Every invocation has settled, and none rejected: a rejection is
         // the turn's failure and was thrown above.
         const invokedToolCalls = await Promise.all(invocations);
-        // An accepted result is the run's return, so the turn that made it
-        // is the run's last: the model is asked for nothing further, and a
-        // turn it would have spent cannot lose the result. The words written
-        // beside the call are the final answer, which may be empty. A run
-        // that still owes a piece keeps going until it names one.
+        // An accepted result is the run's return unless a pending steer
+        // continues it. The written result stands until another submission
+        // replaces it. The words beside the call are the final answer, which
+        // may be empty. A run that still owes a piece keeps going until it
+        // names one.
         if (
           invokedToolCalls.some((invoked) => invoked.resultAccepted === true) &&
           !this.#pieceOutputOwed()
@@ -4420,7 +4481,17 @@ export class CfHarnessPromptLoop {
           transcript: resumableTranscript(),
           runState: this.engine.getRunState(),
         });
-        if (finalAssistantText !== undefined) break;
+        if (finalAssistantText !== undefined) {
+          if (
+            modelTurns < maxModelTurns &&
+            await appendTakenMessages(modelTurns + 1)
+          ) {
+            finalAssistantText = undefined;
+            taskOutcome = { outcome: "completed" };
+            continue;
+          }
+          break;
+        }
       }
     } catch (error) {
       annotatePromptLoopError(error, modelTurns);

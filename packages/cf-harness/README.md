@@ -2302,22 +2302,36 @@ Unpaired work, including a tool call still running when the cancel lands, and
 process interruptions do not advance the checkpoint; their evidence remains in
 the audit trail.
 
+`CfHarnessPromptLoop.runPrompt()` and `runTranscript()` accept an optional
+`takeMessages(turn)` callback, which may return user message strings directly or
+through a promise. The loop calls it before each root model request, including
+the first, with the number of the model turn that will receive the messages. It
+also checks before accepting a final text answer, structured result, or
+`finish_task` ending when another model turn remains; pending messages keep the
+run going within its existing turn budget. Each string is appended verbatim as
+an ordinary user message, after the prompt or previous turn's tool results, and
+retained in resumable history and subsequent checkpoints. Delegated child loops
+never receive the callback, and the loop never calls it after ending or when no
+model request remains. Steering is refused when the prompt-slot binding carries
+`valueDigest`, `slotDigest`, or `snapshotDigest`, because that binding
+authorizes one exact prompt value.
+
 Every run gets 32 root model turns unless its host names another budget. With a
 budget of three turns or more, two turns before the last the host tells the
 model how many remain, so it can finish rather than be cut off; a subagent's run
 is told the same against its own budget. A run that has `submit_result` is told
-to submit on the next turn; acceptance ends the run. `finalizeOnTurnLimit`
-instead reserves the last root model turn for a partial answer with harness and
-native tools disabled, warning in those terms, and records `budget_finalized`
-with a `gave-up` task outcome. Provider failures, blank answers, and attempted
-final tool calls remain failures. Root budgets include this final call; provider
-retries and child budgets are separate. Generated budget notices remain in
-events and durable run artifacts, but are excluded from returned transcripts and
-interactive checkpoints so subsequent user turns receive a fresh budget. They
-also state their turn-local scope for explicit artifact resume and opaque
-provider context that may retain them. `CF_HARNESS_CHAT_ARTIFACT_ROOT` supplies
-the Loom host's default durable run root, including for restored sessions
-without their own artifact root.
+to submit on the next turn; acceptance ends the run unless a pending steer
+continues it. `finalizeOnTurnLimit` instead reserves the last root model turn
+for a partial answer with harness and native tools disabled, warning in those
+terms, and records `budget_finalized` with a `gave-up` task outcome. Provider
+failures, blank answers, and attempted final tool calls remain failures. Root
+budgets include this final call; provider retries and child budgets are
+separate. Generated budget notices remain in events and durable run artifacts,
+but are excluded from returned transcripts and interactive checkpoints so
+subsequent user turns receive a fresh budget. They also state their turn-local
+scope for explicit artifact resume and opaque provider context that may retain
+them. `CF_HARNESS_CHAT_ARTIFACT_ROOT` supplies the Loom host's default durable
+run root, including for restored sessions without their own artifact root.
 
 Successful `assign_slug` calls also retain host-owned naming receipts: a slug
 and the piece's complete reference, including its space. A completed turn that
