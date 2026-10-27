@@ -728,7 +728,15 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
   // card map mints nothing of its own beyond its two conditionals.
   const cards = cardRowsByActivity({ rows: topics });
   // Derived once for the whole board; every topic reads its own row out of it.
-  const crossrefs = crossrefTable({ sources: topics });
+  //
+  // The binding's name is the name of the document the rows are stored in.
+  // On the deployed board, the document named `crossrefs` holds at space scope
+  // only a link to each reader's own session instance of it, and a run whose
+  // reads stay at space scope writes behind such a link rather than over it,
+  // so a reader in any session that has not run the board finds no rows. A
+  // document under this name has no such link, and the run stores the rows in
+  // it at space scope, where every reader finds them.
+  const pivot = crossrefTable({ sources: topics });
   // Also derived once for the whole board: the mention universe every
   // child's editor autocompletes over, as one document of copies instead of
   // the topics themselves.
@@ -792,7 +800,7 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
         // The board's mention pivot. A topic reads its inbound references out
         // of the row the board already built for it rather than rebuilding the
         // join.
-        boardCrossrefs: crossrefs,
+        boardCrossrefs: pivot,
       }));
     // Mergeable append: concurrent creates from different users all land.
     // The session composer draft is `submitTopic`'s to clear; a headless
@@ -813,7 +821,7 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
   const submitTopic = submitProfileTopic({
     topics,
     mentionable,
-    boardCrossrefs: crossrefs,
+    boardCrossrefs: pivot,
     names,
     newTitle,
     profileName,
@@ -913,7 +921,7 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
     // as is decided where the binding is made.
     naming: SEQUENCE_NAMING,
     topicCount,
-    crossrefs,
+    crossrefs: pivot,
     // The topics themselves, declared through the index's narrow row schema:
     // a row's address is the topic's address, so a survey and a follow-up read
     // name the same document.
