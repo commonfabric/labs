@@ -156,14 +156,17 @@ export interface ItemOutput {
    * The name the board calls this item by: the one its input stores, as the
    * board's create passed it in.
    *
-   * Published under the name a mention pill reads it by
-   * (`Mentionable.shortName` in `packages/ui/src/v2/core/mentionable.ts`), so
-   * a mention of this item elsewhere shows the number.
+   * Published as `shortName`, which the board's mention universe copies into
+   * the item's row (`Mentionable.shortName` in
+   * `packages/ui/src/v2/core/mentionable.ts`). A mention pill and a `#42`
+   * query read that row's copy, never this property off the destination, so
+   * a mention of this item elsewhere shows the number where its editor
+   * completes over the board's universe.
    *
    * Absent for an item whose input holds no name: the property is simply not
    * there. Every consumer treats that as no name — the badge renders nothing,
    * a universe row matches no `#42` query, and a mention pill shows no number
-   * (`_trackRefShortName` in
+   * (`shortNameOf` in
    * `packages/ui/src/v2/components/cf-code-editor/cf-code-editor.ts` reads an
    * absent name exactly as it reads a blank one).
    *

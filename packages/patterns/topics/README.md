@@ -19,12 +19,14 @@ dense from `1` and never reused, through the library in
 
 **A topic publishes the number it stores**, as `shortName`, and one property is
 what every place a number shows reads: the topic's header, the board's cards,
-the survey rows, and the entries of whatever mention universe a topic's editor
-completes over — the board's derived copies, or the topics themselves where a
-topic is not yet rewired to that universe. So a mention's pill shows the number
-and `#42` offers the topic storing it. A topic nobody has numbered publishes
-none, and every one of those surfaces reads nothing for it. A number renders as
-a badge beside its topic's title rather than in place of it.
+the survey rows, and the rows of the board's derived mention universe. So in a
+topic whose editor completes over that universe, a mention's pill shows the
+number and `#42` offers the topic storing it. A topic not yet rewired to that
+universe completes over the topics themselves, and the editor takes a number
+only from a row, so its mentions carry no numbers and `#42` offers nothing
+there. A topic nobody has numbered publishes none, and every one of those
+surfaces reads nothing for it. A number renders as a badge beside its topic's
+title rather than in place of it.
 
 Topics reference each other. A reference is a **cell**, not a string: picking a
 completion in the body editor stores the destination piece itself, and a link
@@ -164,7 +166,9 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
 
   `addTopic` wires the index into each topic it creates. A piece created before
   the index is rewired to it as a one-time link-bind; until then it reads the
-  raw topics list — correct, at the cost the index exists to remove.
+  raw topics list, at the cost the index exists to remove, and its mentions
+  carry no numbers: an entry of that list is a topic rather than a row, and the
+  editor reads a number only off a row.
 - **A declared schema is the only thing that bounds a read.** The transformer
   shrinks a derivation's input schema to the paths it can see the body reach,
   and gives up when it cannot: `topics.get().length` declares `items: unknown`

@@ -8,11 +8,14 @@ allocated when the Topic is filed and never reused. It is not a display name —
 Topic's display name stays its title.
 
 A Topic publishes the number it stores, as `shortName`, and every surface that
-shows one reads that one property: the header and board card badges, the number
-on a mention pill, and what `#42` offers in a Topic's body editor. It renders as
-a badge beside the Topic's title, and the board's `index` rows carry it. A Topic
-nobody has numbered publishes none, and each of those surfaces reads nothing for
-it.
+shows one reads that one property: the header and board card badges, and,
+through the copy the board's mention universe takes into each Topic's row, the
+number on a mention pill and what `#42` offers in a Topic's body editor. A Topic
+whose editor completes over the raw topics list rather than that universe shows
+no number on a pill and offers nothing for `#42`, because the editor reads a
+number only off a row. The number renders as a badge beside the Topic's title,
+and the board's `index` rows carry it. A Topic nobody has numbered publishes
+none, and each of those surfaces reads nothing for it.
 
 `addTopic` allocates the number, passes it into the Topic it creates, and
 returns it as `name` beside the created `topic`. For the Topics already on the
@@ -57,7 +60,8 @@ stores the number the namespace holds for it, so `top/<n>` resolves there and
 
 It carries the publication. Every Topic on the board publishes the number it
 stores as `shortName`, and so does every Topic the board creates, so a Topic's
-header and its board card show the number as a badge, a mention pill shows it,
-and `#42` offers it in a Topic's body editor. A Topic's own `shortName` field
-reads what it publishes, and `namesTable` remains the reverse lookup for a
-caller holding a Topic rather than a number.
+header and its board card show the number as a badge, and in a Topic whose
+editor completes over the board's mention universe a mention pill shows it and
+`#42` offers it. A Topic's own `shortName` field reads what it publishes, and
+`namesTable` remains the reverse lookup for a caller holding a Topic rather than
+a number.

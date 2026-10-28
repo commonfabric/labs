@@ -52,13 +52,10 @@ storing its number is asked again, that asking is itself a write, and the topic
 stores the number if it has not already.
 
 A number reaches every surface through that one publication rather than through
-each display, and
-[#7771](https://github.com/commontoolsinc/labs/issues/7771) is why:
-`cf-code-editor` takes a mention's short name off the destination piece where
-the list it was handed is the raw member list, which the spec reserves for a
-universe row. A topic not yet rewired to the board's derived universe completes
-over the topics themselves, so what each topic publishes is what that editor
-offers for `#42`.
+each display. `cf-code-editor` takes a mention's short name only off a row of
+the universe it completes over, as the spec asks, so a topic not yet rewired to
+the board's derived universe completes over the topics themselves and its
+editor offers nothing for `#42` and shows no number on a pill.
 
 The board's `backfillNames` is now the whole of the operator procedure for the
 topics filed before the namespace. It numbers every topic the namespace does
@@ -135,12 +132,12 @@ the topic storing `42`.
 
 The publication is where a number reaches every surface, and one property is
 what each of them reads: a topic's header, the board's cards, the `index` rows,
-and the entries of whatever universe a topic's editor completes over. That last
-one is why the publication rather than each display carries it. A topic filed
+and the rows of the universe a topic's editor completes over. A topic filed
 before the board derived its universe reads the raw topics list until an
 operator rewires it, and a board cannot rewire it, because a parent writes a
-member's result and never a member's argument, so a topic's own publication is
-the only thing such an editor has to offer for `#42`.
+member's result and never a member's argument. Such an editor reads no number
+off an entry that is a topic rather than a row, so it offers nothing for `#42`
+until the topic is rewired.
 
 A topic that stores no number publishes none, renders without failing, and
 shows no badge on its own header or on its board card. Addressing is unchanged
@@ -231,8 +228,8 @@ ruled. A later reversal is a decision recorded here, not a discovery.
    serialize through one retry of `editWithRetry`.
 5. **A member's display name stays its title.** The number renders as a badge
    beside it, never in place of it, and every reader reaches it through the
-   member's own `shortName`: an index row, a mention universe row, and a
-   mention's pill all read that one property.
+   member's own `shortName`: an index row reads that property, a mention
+   universe row copies it, and a mention's pill reads the universe row's copy.
 6. **"In text" means the editor.** Typing `#42` completes to a reference-form
    mention that shows the number. Pasted text is left alone. The `#` sigil is
    provisional: the spec leaves tags versus citations open.
@@ -442,14 +439,16 @@ Scope: `packages/navigation` (the member in a view and its URL),
 ### S4 — `#42` in text
 
 Scope: `packages/ui` cf-code-editor mention completion and pill; the exemplar
-(mentionable rows and the item output both carry the member's name as
-`shortName`, which is the one property the editor reads at both ends of a
-mention).
+(the item output carries the member's name as `shortName`, and each
+mentionable row carries a copy of it under the same property; the row's copy
+is what the editor reads at both ends of a mention).
 
 1. Typing `#42` in the exemplar item's body offers the member named 42;
    picking it inserts a reference-form mention.
-2. A mention pill whose destination publishes a short name shows it beside
-   the label; existing mentions gain it once the destination does.
+2. A mention pill whose destination a universe row stands for shows that
+   row's short name beside the label; existing mentions gain it once the
+   universe lists the destination under one. A destination no row stands for
+   shows none, whatever it publishes.
 3. Autocomplete matches the number as well as the title.
 4. A pasted `#42` stays plain text; the editor's documentation says so and
    why.

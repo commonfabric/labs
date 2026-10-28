@@ -214,11 +214,13 @@ save, and the three streams that drive that — `startEditBody`, `saveBody`,
 open and by nothing else, so the save refuses when no edit is open and a second
 open leaves one in progress alone: either would otherwise write an empty or
 stale draft over the stored body. It publishes its stored name as `shortName`,
-rendering it as a badge beside the title when it has one; a mention of the item
-elsewhere reads that same `shortName` to show the number on its pill. The body
-is edited through `cf-code-editor`, which mints reference-form mentions into the
-item's own `references` map — saved with the prose in one transaction, so the
-tokens and the destinations they name land together.
+rendering it as a badge beside the title when it has one; the board's mention
+universe copies it into the item's row, and a mention of the item elsewhere
+shows that row's copy on its pill. An editor completing over a list of the items
+themselves shows no number, because the editor reads a number only off a row.
+The body is edited through `cf-code-editor`, which mints reference-form mentions
+into the item's own `references` map — saved with the prose in one transaction,
+so the tokens and the destinations they name land together.
 
 An item whose input holds no name — one filed before the board passed a name in
 at create, one filed past `addItem`, including every member a backfill names,

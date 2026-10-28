@@ -94,7 +94,9 @@ A mention whose destination a row of the editor's universe stands for — a row 
 `mentionable` whose piece is that destination — shows the row's `shortName`
 beside the label, inside the pill: `42` for a member of a board that numbers its
 members. A destination no row stands for shows no name, whatever `shortName` it
-publishes for itself.
+publishes for itself. An entry of `mentionable` carrying no `piece` is the piece
+itself listed directly rather than a row, so it gives no pill a name, whatever
+`shortName` it publishes.
 
 The row is found by identity: `_universeShortNames` compares the cell the
 reference map names with the one the resolution pass recorded for each row, over
@@ -149,12 +151,14 @@ reference-form mention. What differs is only what opens the query.
 `shortName` is optional in the `Mentionable` contract
 (`packages/ui/src/v2/core/mentionable.ts`), so a universe whose collection names
 nothing offers nothing to a `#` query, and a member the collection has not named
-is a row that query never reaches. The match is a PREFIX rather than a
-substring, because a member name is a number and `4` offering `42` beside `14`
-and `24` buries the one being typed. The `[[` query matches a row's `shortName`
-as well as its display name, so someone who knows the number reaches the member
-without switching sigils; what Enter completes there is unchanged, because an
-exact match is still asked of the display name alone.
+is a row that query never reaches. Nor does either query reach an entry that is
+a piece listed directly by the `shortName` it publishes; `[[` still finds it by
+its display name. The match is a PREFIX rather than a substring, because a
+member name is a number and `4` offering `42` beside `14` and `24` buries the
+one being typed. The `[[` query matches a row's `shortName` as well as its
+display name, so someone who knows the number reaches the member without
+switching sigils; what Enter completes there is unchanged, because an exact
+match is still asked of the display name alone.
 
 Enter does not complete a `#` query at all: it is picked from the list, or it
 stays text. The `[[` handler's fallthrough CREATES a piece for a query that

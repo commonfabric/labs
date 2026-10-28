@@ -89,7 +89,8 @@ and `MentionController`'s `_destinationOf` (per encode and decode).
 
 A row may carry a `shortName` besides its display strings: the collection's name
 for the member, read at the two ends of one mention. A destination piece may
-publish one of its own, which the editor does not read. What the row's copy is
+publish one of its own, which the editor does not read, whether off the
+destination or off an entry listing the piece directly. What the row's copy is
 for is in
 [`../src/v2/components/cf-code-editor/docs/mention-refs.md`](../src/v2/components/cf-code-editor/docs/mention-refs.md),
 which owns the completion and the pill that read it.

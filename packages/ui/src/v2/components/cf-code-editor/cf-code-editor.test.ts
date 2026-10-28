@@ -772,12 +772,15 @@ describe("CFCodeEditor short-name completion", () => {
   // The cases over a blank or absent name guard THIS component's handling of
   // one, not any collection's choice to show its names: a collection that
   // numbers its members and shows none of the numbers hands rows whose name is
-  // the empty string, and a universe listing pieces that publish none hands
-  // entries with no name at all. A collection that starts showing its numbers
-  // again leaves those cases green by construction. What reds them is this
+  // the empty string. A collection that starts showing its numbers again
+  // leaves those cases green by construction. What reds them is this
   // component finding a name where there is none — reading the display name
   // when the collection's name is blank, which is what the `42 apples`
   // fixtures are shaped to catch.
+  //
+  // The cases over a universe listing the pieces themselves pin the other
+  // half: an entry carrying no `piece` is not a row, so the name its piece
+  // publishes is offered to no query.
 
   type ShortNameInternals = {
     mentionable: CellHandle<MentionableArray> | null;
@@ -854,19 +857,12 @@ describe("CFCodeEditor short-name completion", () => {
   /**
    * A universe that is the pieces themselves rather than copies of them —
    * what an editor reads before its collection's derived universe is wired
-   * onto it. An entry carries no `piece`, so the entry IS the piece, and
+   * onto it. An entry carries no `piece`, so the entry IS the piece, and each
    * `shortName` here is what that piece publishes for itself.
-   *
-   * The display name opens with the digits a query types, as the fourth row of
-   * `UNIVERSE` does, so that an entry publishing no name is offered only if
-   * this component asks the query of something other than `shortName`.
    */
-  const direct = (shortName?: string) => [
-    {
-      [NAME]: "42 apples",
-      title: "42 apples",
-      ...(shortName === undefined ? {} : { shortName }),
-    },
+  const DIRECT = [
+    { [NAME]: "Second apples", title: "Second apples", shortName: "42" },
+    { [NAME]: "Third apples", title: "Third apples", shortName: "43" },
   ];
 
   /** An editor bound to `rows`, with every row's piece resolved. */
@@ -925,24 +921,10 @@ describe("CFCodeEditor short-name completion", () => {
       .toEqual([]);
   });
 
-  it("offers a piece the universe lists directly by the name it publishes", async () => {
-    // The control for the case below, and the state it pins: where the
-    // universe is the pieces themselves, the name a piece publishes is the one
-    // this query offers.
-    const { source, view } = await editorOver(
-      "see #4",
-      undefined,
-      direct("42"),
-    );
-    expect(
-      source(new CompletionContext(view.state, 6, true))?.options.map((
-        option,
-      ) => option.label),
-    ).toEqual(["#42"]);
-  });
-
-  it("offers no piece the universe lists directly where it publishes no name", async () => {
-    const { source, view } = await editorOver("see #4", undefined, direct());
+  it("offers no piece the universe lists directly, whatever name it publishes", async () => {
+    // `UNIVERSE` offers `#42` and `#43` for this same query, from rows; these
+    // entries publish the same names and are the pieces themselves.
+    const { source, view } = await editorOver("see #4", undefined, DIRECT);
     expect(source(new CompletionContext(view.state, 6, true))?.options)
       .toEqual([]);
   });
@@ -1150,6 +1132,16 @@ describe("CFCodeEditor short-name completion", () => {
     expect(element.getFilteredMentionable("43")).toHaveLength(1);
     expect(element.getFilteredMentionable("9")).toEqual([]);
   });
+
+  it("offers a piece the universe lists directly by its display name alone from the backlink query", async () => {
+    // No display name here contains `43`, so only the published name could
+    // offer an entry for it; the display-name query beside it is the control.
+    const { element } = await editorOver("", undefined, DIRECT);
+    expect(element.getFilteredMentionable("43")).toEqual([]);
+    expect(element.getFilteredMentionable("Third")).toEqual([
+      [expect.anything(), 1],
+    ]);
+  });
 });
 
 describe("CFCodeEditor mention short names", () => {
@@ -1161,11 +1153,10 @@ describe("CFCodeEditor mention short names", () => {
   // reading the destination instead announces a different name, or one where
   // none belongs.
   //
-  // The two cases over a name that is not there — a row carrying the empty
-  // name, and a universe listing a piece that publishes none — guard THIS
-  // component's handling of one, the way the completion block above does. A
-  // collection that starts showing its numbers again leaves them green; what
-  // reds them is a pill taking a blank name as a name, or taking the
+  // The case over a name that is not there — a row carrying the empty name —
+  // guards THIS component's handling of one, the way the completion block
+  // above does. A collection that starts showing its numbers again leaves it
+  // green; what reds it is a pill taking a blank name as a name, or taking the
   // destination's name when the row carries none.
 
   type PillInternals = {
@@ -1360,42 +1351,61 @@ describe("CFCodeEditor mention short names", () => {
 
   describe("a universe that lists the pieces themselves", () => {
     // What an editor reads before its collection's derived universe is wired
-    // onto it. An entry carries no `piece`, so the entry IS the piece, and the
-    // name a pill can show is the one that piece publishes.
+    // onto it. An entry carries no `piece`, so the entry IS the piece, and
+    // each piece here publishes a name of its own. An entry that is the piece
+    // is no row, so a pill takes no name from it.
+
+    /** A piece the universe lists directly, which calls itself `shortName`. */
+    function listed(name: string, shortName: string) {
+      return { [NAME]: name, title: name, shortName };
+    }
 
     /**
-     * The names announced over a universe holding one piece, which publishes
-     * `shortName` when it is given one, and is the destination of the
-     * document's one mention.
+     * The destination of a mention of the universe's entry at `index`, which
+     * is that entry's own cell.
      */
-    async function namesUnderDirect(shortName?: string) {
+    function entryCell(index: number, name: string, shortName: string) {
+      return destination("of:universe", name, shortName, {
+        path: [String(index)],
+      });
+    }
+
+    it("announces no name for any listed piece, whatever each publishes", async () => {
       const { element, view } = editorOver(
-        `See [Second item][${KEY}].`,
+        `See [Second item][${KEY}] and [Third item][${OTHER_KEY}].`,
         {
-          [KEY]: destination("of:universe", "Second item", shortName ?? "", {
-            path: ["0"],
-          }),
+          [KEY]: entryCell(0, "Second item", "42"),
+          [OTHER_KEY]: entryCell(1, "Third item", "43"),
         },
-        [{
-          [NAME]: "Second item",
-          title: "Second item",
-          ...(shortName === undefined ? {} : { shortName }),
-        }],
+        [listed("Second item", "42"), listed("Third item", "43")],
       );
 
       await element._resolvePieceIds();
       element._setupRefDestinationSubscriptions();
       await publication();
 
-      return refShortNames(view.state);
-    }
-
-    it("announces the name the listed piece publishes", async () => {
-      expect(await namesUnderDirect("42")).toEqual({ [KEY]: "42" });
+      expect(refShortNames(view.state)).toEqual({});
     });
 
-    it("announces no name where the listed piece publishes none", async () => {
-      expect(await namesUnderDirect()).toEqual({});
+    it("announces no name for a listed piece beside a row that announces its own", async () => {
+      // A universe mixing the two shapes. The row's name arriving is what
+      // says the listed piece's absence was decided rather than not yet
+      // reached, since one publication decides both.
+
+      const { element, view } = editorOver(
+        `See [Second item][${KEY}] and [Third item][${OTHER_KEY}].`,
+        {
+          [KEY]: entryCell(0, "Second item", "42"),
+          [OTHER_KEY]: destination("of:item-43", "Third item", "43"),
+        },
+        [listed("Second item", "42"), row("of:item-43", "Third item", "43")],
+      );
+
+      await element._resolvePieceIds();
+      element._setupRefDestinationSubscriptions();
+      await publication();
+
+      expect(refShortNames(view.state)).toEqual({ [OTHER_KEY]: "43" });
     });
   });
 

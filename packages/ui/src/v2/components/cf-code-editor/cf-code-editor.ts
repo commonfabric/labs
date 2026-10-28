@@ -158,11 +158,28 @@ function generateNoteId(): string {
 }
 
 /**
+ * Whether `entry` is a universe row standing for a piece, which is an entry
+ * carrying a `piece` property, rather than the piece itself listed directly.
+ * The property's presence decides it and its value plays no part, because an
+ * `asCell` position crosses the client boundary as an empty object.
+ */
+function isUniverseRow(entry: Mentionable | undefined): boolean {
+  return entry != null && Object.hasOwn(entry, "piece");
+}
+
+/**
  * The name a universe row's own collection calls the member by, or the empty
  * string. A row without one is a row no `#42` query can match, which is every
  * row of a universe whose collection names nothing.
+ *
+ * An entry that is the piece itself yields the empty string whatever
+ * `shortName` it publishes. What a piece publishes is the name its creating
+ * collection gave it, and the name read here is what the universe being
+ * completed from calls the member, which only a row carries
+ * (`docs/specs/collection-naming.md`, "The name a member publishes").
  */
 function shortNameOf(entry: Mentionable | undefined): string {
+  if (!isUniverseRow(entry)) return "";
   const name = entry?.shortName;
   return typeof name === "string" ? name : "";
 }
@@ -904,7 +921,8 @@ export class CFCodeEditor extends BaseElement {
    * row's own `shortName` — its collection's copy of what it calls the member
    * — so offering the list reads no member. A row carrying no short name
    * matches nothing, which is every row of a universe whose collection names
-   * nothing.
+   * nothing. So does an entry that is a piece listed directly, whatever
+   * `shortName` the piece publishes.
    *
    * A sigil inside a mention gesture the document already carries opens no
    * query at all; `_shortNameQueryIsClear()` says which those are.
@@ -1794,10 +1812,10 @@ export class CFCodeEditor extends BaseElement {
    * surfaces withhold it rather than mint an id naming the row.
    */
   private _isIndexRow(index: number): boolean {
-    const item =
+    return isUniverseRow(
       (((this.mentionable ? valueForDisplay(this.mentionable) : undefined) ??
-        []) as MentionableArray)[index];
-    return item != null && Object.hasOwn(item, "piece");
+        []) as MentionableArray)[index],
+    );
   }
 
   /**
@@ -3984,7 +4002,8 @@ export class CFCodeEditor extends BaseElement {
    * publishes"). The row's is what this universe calls the member, and the
    * one a `#` query here matches, so a name returned is one that query offers
    * back for the same destination. A mention whose destination no resolved
-   * row stands for gets none, whatever its destination publishes. Where
+   * row stands for gets none, whatever its destination publishes, and an
+   * entry listing the destination directly is not a row. Where
    * several rows stand for one destination, the first in the universe's order
    * that carries a name is the one returned.
    */
