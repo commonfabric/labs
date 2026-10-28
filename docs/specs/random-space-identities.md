@@ -186,7 +186,12 @@ space's key can be recomputed from its name.
 References to a deleted space keep their DID: a Home list entry, a link stored
 in another space, an `inSpace` allocation record. They reach the refusal.
 Removing them is the work of whatever holds them, and an allocation record,
-being immutable, is never removed.
+being immutable, is never removed. A person's shared-space catalog keeps its
+entry for the space and records the deletion in it
+([`shared-space-catalog.md`](../features/shared-space-catalog.md#deleted-spaces)).
+The refusal reaches a client as an `AuthorizationError` marked `deleted`, and
+pattern code as `spaceDeleted(target)`
+([`space-access.md`](../features/space-access.md#a-deleted-space)).
 
 The admission rule and the refusal are
 [INV-15](memory-v2/09-invariants.md#inv-15--space-deletion) and

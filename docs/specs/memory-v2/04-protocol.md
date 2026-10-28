@@ -775,7 +775,8 @@ The server sends:
 
 - `response` for command results
 - `session/effect` for catch-up sync on an open logical session
-- `session/revoked` when a session loses ownership to a newer connection
+- `session/revoked` when a session loses ownership to a newer connection, when
+  an access-list change deauthorizes it, or when its space is deleted
 - `session/admissible` when an access-list change admits a principal this
   connection was refused a space for
 - `presence/upsert` and `presence/remove` for the presence rooms the
@@ -826,7 +827,10 @@ interface SessionRevoked {
   type: "session/revoked";
   space: SpaceId;
   sessionId: SessionId;
-  reason: "taken-over";
+  // `taken-over`: a newer connection resumed the session. `unauthorized`: an
+  // access-list change left its principal without access. `deleted`: its
+  // space was deleted (section 4.5.1), so no principal will be admitted again.
+  reason: "taken-over" | "unauthorized" | "deleted";
 }
 
 interface SessionAdmissible {
@@ -1788,17 +1792,17 @@ tombstone rather than an access list:
 
 `by` names the committing principal, and the tombstone holds nothing else. The
 server admits it only when the stored ACL is valid and its one entry is that
-principal at OWNER, so another member has to be removed, visibly and through
-the ordinary check, before the space can be deleted. That asks no authority an
-OWNER does not already hold. A principal never deletes its own Home space,
-whose DID is the principal's own identity. From the deletion commit on, the
-server refuses every command any principal sends the space, a service DID's
-included, with a permanent `AuthorizationError` carrying `deleted: true`,
-revokes the sessions open on it as it revokes those any ACL commit
-deauthorizes, and admits no further commit to it, so no principal can undo the
-deletion. A tombstone is not an access list, so a server rolled back to a
-release that does not know tombstones finds the ACL malformed, and refuses the
-space to every principal but a service DID.
+principal at OWNER, so another member has to be removed, visibly and through the
+ordinary check, before the space can be deleted. That asks no authority an OWNER
+does not already hold. A principal never deletes its own Home space, whose DID
+is the principal's own identity. From the deletion commit on, the server refuses
+every command any principal sends the space, a service DID's included, with a
+permanent `AuthorizationError` carrying `deleted: true`, revokes the sessions
+open on it, as it revokes those any ACL commit deauthorizes but with the
+`session/revoked` reason `deleted`, and admits no further commit to it, so no
+principal can undo the deletion. A tombstone is not an access list, so a server
+rolled back to a release that does not know tombstones finds the ACL malformed,
+and refuses the space to every principal but a service DID.
 
 The shape and genesis rules are catalogued as **INV-12** (ACL mutation commit
 shape) and **INV-13** (ACL genesis precedence and authority), and deleting a
@@ -2066,7 +2070,21 @@ An implementation MAY still expose convenience methods named `subscribe()` at
 the client API level, but they are library constructs built on `watchSet()` and
 the session cache rather than distinct server-routed effect streams.
 
-### 4.8.4 Session Lifecycle
+### 4.8.4 Refusals
+
+The client library rejects a refused request with an `Error` whose `name` is
+the response's `error.name` and whose `message` is its `error.message`, and
+copies onto it each marker the envelope carries: `retriable`,
+`permanentEvidence`, `aclRevision`, `deleted`, `clientUpdateRequired`,
+`precondition`, `retryAfterSeq`, and `conflicts`. A consumer matches on `name`
+and the markers, never on `message`. A `session/revoked` terminates the session
+with an `Error` named `SessionRevokedError` for `taken-over`, and
+`AuthorizationError` for `unauthorized` and `deleted`; the `deleted` reason
+also sets `deleted: true` on it, so a session open when its space is deleted
+reports the deletion as a refused reopen would. Copying `deleted` is not
+implemented yet.
+
+### 4.8.5 Session Lifecycle
 
 On disconnect:
 

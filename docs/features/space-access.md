@@ -7,8 +7,10 @@ person, such as whether to show the controls only an owner can use, or whether
 a room it lists is one they belong to. The implementation is
 `packages/runner/src/builder/space-access.ts`, which also holds
 `spaceMembers(target)`, the principals that space's access list names,
-described [below](#a-spaces-members), and `spaceOf(target)`, the DID of that
-same space, described [below](#the-spaces-own-did).
+described [below](#a-spaces-members), `spaceOf(target)`, the DID of that
+same space, described [below](#the-spaces-own-did), and
+`spaceDeleted(target)`, whether that space is deleted, described
+[below](#a-deleted-space).
 
 The answer is advisory. A memory server in `enforce` mode, which is toolshed's
 default (`MEMORY_ACL_MODE`), checks every read and write against the space's
@@ -218,13 +220,45 @@ appears once access is granted, without a reload.
 A deleted space
 ([random space identities](../specs/random-space-identities.md#deleting-a-space))
 has a tombstone where its access list was, and the memory server refuses it
-to every principal for good, with a refusal that says the space is
-deleted. On a client that is a refusal like any other permanent one:
-`spaceAccess(target)` returns `"none"`, `spaceMembers(target)` returns
-`undefined`, and `retrySpaceAccess(space)` is refused again. A tombstone is
-not a list, so `spaceReaderRole()` finds no role in it for anyone. Deleting a
-space is not implemented yet; until it is, the memory server refuses the
-commit that would delete one.
+to every principal for good, with a refusal marked `deleted`. To the access
+calls that is a refusal like any other permanent one: `spaceAccess(target)`
+returns `"none"`, `spaceMembers(target)` returns `undefined`, and
+`retrySpaceAccess(space)` is refused again. A tombstone is not a list, so
+`spaceReaderRole()` finds no role in it for anyone.
+
+`spaceDeleted(target)` is what tells a deleted space apart from one the
+principal has merely lost:
+
+| Answer | When |
+| --- | --- |
+| `true` | the memory server has refused this runtime `target`'s space with the `deleted` marker |
+| `false` | the server has admitted the runtime to the space, or has refused it without the marker |
+| `undefined` | the server has not yet answered for the space, or `target` was passed as `undefined` |
+
+It can be called where `spaceAccess(target)` can: in a handler or a reactive
+computation, and a call in a pattern body throws. Deletion is the same for every
+principal, and the server refuses a deleted space to a serving runtime as it
+refuses it to a client, so the answer does not depend on who asks, and a call in
+a computation leaves its read scope as it is. It is kept current the way a
+refusal is, through the storage manager's access-change observer, and once
+`true` it stays `true`. A space deleted after the server refused the runtime for
+another reason reads `false` until a `retrySpaceAccess(space)` brings back the
+server's new answer. It tells a principal who names a space nothing the server's
+refusal of that space does not already tell them.
+
+`spaceaccesslost`, the runtime's notice of a refused space across the worker
+boundary, carries `deleted: true` for a deleted space. The renderer's
+placeholder for content of a deleted space reads "Deleted" and has no Retry
+button, since no retry can admit anyone, and the shell asks again neither when
+the person navigates into a deleted space nor when the page regains focus.
+
+A consumer that keeps a list of spaces, Home's shared-space catalog among
+them, uses `spaceDeleted(target)` to put away an entry whose space is gone
+([`shared-space-catalog.md`](shared-space-catalog.md#deleted-spaces)).
+
+Deleting a space is not implemented yet; until it is, the memory server
+refuses the commit that would delete one, and `spaceDeleted(target)` and the
+`deleted` marker on `spaceaccesslost` do not exist.
 
 ## Changing the level
 

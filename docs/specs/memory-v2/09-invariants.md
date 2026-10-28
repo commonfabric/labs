@@ -740,8 +740,9 @@ The clauses are checked after INV-12's shape clauses, in this order:
 A command sent to a deleted space is refused with an `AuthorizationError`,
 `Space <space> is deleted`, carrying `deleted: true`, `permanentEvidence`, and
 the `aclRevision` of the deletion commit. What follows the deletion commit
-revokes every session open on the space, as what follows any ACL commit revokes
-the sessions it deauthorizes, and sends no `session/admissible`. A served run's
+revokes every session open on the space with the `session/revoked` reason
+`deleted`, as what follows any ACL commit revokes the sessions it
+deauthorizes, and sends no `session/admissible`. A served run's
 `grantSpaceAccess()` or `revokeSpaceAccess()` against a deleted space is refused
 like any other commit to it.
 

@@ -122,7 +122,11 @@ the affected space immediately, without waiting for another document watch. An
 explicit successful session replacement after a new grant clears the old
 verdict. The runtime client forwards `spaceaccesslost` with the affected space,
 and `spaceaccessrestored` with the space once a retry admits the principal
-again; it does not send the server's diagnostic error text to the UI.
+again; it does not send the server's diagnostic error text to the UI. For a
+deleted space
+([`space-access.md`](space-access.md#a-deleted-space)) `spaceaccesslost` also
+carries `deleted: true`, the one marker of the refusal it forwards; that marker
+is not implemented yet.
 
 The worker renderer subscribes at cell boundaries. Revoking a foreign target
 removes that target's content and event handlers while retaining the authorized
@@ -133,7 +137,9 @@ content and do not masquerade as revoked authority. What stands in for revoked
 content reads "Access unavailable" beside a Retry button, which asks for the
 revoked space once more, and the status reads "Retrying…" until the answer
 comes; an
-admission restores the content.
+admission restores the content. Content of a deleted space is replaced by a
+placeholder reading "Deleted", with no Retry button, once deleting a space is
+implemented.
 
 A `cf-render` or `cf-picker` bound to content of a revoked space shows the same
 placeholder as revoked content shown directly, while its binding is withheld,
