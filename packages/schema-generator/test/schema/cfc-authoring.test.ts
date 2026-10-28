@@ -3539,6 +3539,22 @@ describe("Schema: CFC authoring aliases", () => {
       });
     }
 
+    for (const argument of ["any", "unknown"]) {
+      it(`refuses a scope wrapper beside a labeled member of a union under bindings, \`T\` bound to \`${argument}\``, async () => {
+        // `PerUser<any>` accepts any value, but the scope it declares is
+        // the slot's, which no member of a union can declare. The union
+        // keeps its members rather than reducing to the one accepting
+        // anything, so the scope's placement is refused.
+        await expect(generate(`
+          type Outer<T> = Confidential<
+            { inner: PerUser<T> | Confidential<{ x: string }, readonly ["a"]> },
+            readonly ["b"]
+          >;
+          interface Holder { value: Outer<${argument}> }
+        `)).rejects.toThrow("A scope wrapper cannot be a member of a union.");
+      });
+    }
+
     it("keeps the members of a union under bindings beside the `unknown` `T` is bound to where none is labeled", async () => {
       // With no label to place, the union stays as the node reads it.
       const { value, diagnostics } = await generate(`
@@ -4057,6 +4073,25 @@ describe("Schema: CFC authoring aliases", () => {
           expect(diagnostics).toEqual([]);
         });
       }
+
+      it("reads a mapped type over a union that replaces the carrier with the labels of the carrier it holds", async () => {
+        // The carrier is the mapping's own, not its members', and so are the
+        // labels: `d`, and none of the members' `i`.
+        const { schema, diagnostics } = await generate(
+          "View",
+          `type Source = Integrity<{ x: string }, readonly ["i"]> | Integrity<{ x: number }, readonly ["i"]>;
+          type Stamp = Confidential<{ x: string | number }, readonly ["d"]>["__ct_cfc__"];
+          type View = { [K in keyof Source]: K extends "__ct_cfc__" ? Stamp : Source[K] };
+          `,
+        );
+        expect(schema).toEqual({
+          type: "object",
+          properties: { x: { type: ["number", "string"] } },
+          required: ["x"],
+          ifc: { confidentiality: ["d"] },
+        });
+        expect(diagnostics).toEqual([]);
+      });
 
       it("keeps a label on a member of the value where every member places it there or on the whole value", async () => {
         // The first member's integrity was written around `One`, so it lands

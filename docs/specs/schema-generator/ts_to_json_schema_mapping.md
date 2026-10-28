@@ -1018,9 +1018,12 @@ Default paths of §7:
   type, where the checker has already reduced it, as `Sec<X> & any` does
   (§9); a type the checker leaves unreduced, as some instantiations are,
   reduces the same way by type. A union no member of which states a label
-  keeps its members. The members are recorded
-  (`GenerationContext.schemaOrigins`, `"reduction"`) for a `Pick` or an
-  `Omit` over the union, which maps them one at a time (§2).
+  keeps its members, and so does one with a member that declares a scope, as
+  `PerUser<T>` at `T = any` does: that member accepts any value but declares
+  the scope of the whole slot, so the union is refused as a scope wrapper
+  inside a union is (§10) rather than reduced with the scope dropped. The
+  members are recorded (`GenerationContext.schemaOrigins`, `"reduction"`) for
+  a `Pick` or an `Omit` over the union, which maps them one at a time (§2).
 - **`widenLiterals`** additionally merges member schemas that differ only in
   their literal values, an `enum` or a `const` whose values share one base
   type, widening those to that type, before the anyOf pass
@@ -1722,7 +1725,10 @@ Mechanics:
   carrier into one, though it maps only whichever member the value is, so it
   is labeled with the members' labels joined, as `Pick` and `Omit` over a
   union are: `{ [K in keyof (Integrity<X, L> | Sec<X>)]: … }` carries `Sec`'s
-  label and not `L`.
+  label and not `L`. That holds where the mapping keeps the union's carrier,
+  its carrier's type and the union's each assignable to the other; one that
+  replaces it, as `K extends "__ct_cfc__" ? Stamp : S[K]` does, is labeled by
+  the carrier it holds, as any other object is.
 - User alias chains are followed with type-parameter node substitution until a
   canonical name is reached (`#resolveAliasChainFromDeclaration` /
   `substituteTypeNode`), and the labels read the substituted argument nodes.

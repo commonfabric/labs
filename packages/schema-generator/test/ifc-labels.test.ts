@@ -131,6 +131,19 @@ describe("ifc-labels", () => {
         ], contextWith()),
       ).toBeUndefined();
     });
+
+    it("returns `undefined` for a union with an arm that declares a scope, whether that arm accepts anything or not", () => {
+      // The union keeps its arms, among which the scope's placement is
+      // refused.
+      expect(reducedLabeledUnion([{ scope: "user" }, labeled], contextWith()))
+        .toBeUndefined();
+      expect(
+        reducedLabeledUnion(
+          [true, { ...labeled, scope: "user" }],
+          contextWith(),
+        ),
+      ).toBeUndefined();
+    });
   });
 
   describe("combineIfcLabels()", () => {

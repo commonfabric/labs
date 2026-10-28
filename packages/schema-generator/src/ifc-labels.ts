@@ -36,6 +36,7 @@ import {
 import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import type { GenerationContext } from "./interface.ts";
+import { topLevelScope } from "./scope-placement.ts";
 import { dedupeByValueEqual } from "./value-equality.ts";
 
 type IfcLabels = Readonly<Record<string, unknown>>;
@@ -607,13 +608,17 @@ const forEachIfcLabels = (
  * reading that maps the value one arm at a time, as `Pick` and `Omit` do. An
  * option accepting no value, as `never` gives, is no arm of the union, and is
  * neither read nor recorded (`acceptsNoValue()`). `undefined` for any other
- * union, which keeps its arms.
+ * union, which keeps its arms, and for one with an arm that declares a scope
+ * (`topLevelScope()`): it keeps its arms too, so the scope's placement
+ * inside the union is refused (`assertScopeDeclarationsAreReachable()`)
+ * rather than the scope reduced away.
  */
 export const reducedLabeledUnion = (
   options: readonly MutableJSONSchema[],
   context: GenerationContext,
 ): MutableJSONSchema | undefined => {
   const arms = options.filter((option) => !acceptsNoValue(option));
+  if (arms.some((arm) => topLevelScope(arm) !== undefined)) return undefined;
   const accepting = arms.filter((arm) =>
     acceptsAnyValue(arm) || isUnknownValue(arm)
   );

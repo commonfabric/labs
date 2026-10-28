@@ -2964,7 +2964,8 @@ export class CommonFabricFormatter implements TypeFormatter {
    * names. A mapped type over a union, which the checker did not distribute
    * over it, folds every member's carrier into one, though the object maps
    * only whichever member the value is: its labels are those members',
-   * joined (`#mappedMembers()`, `#withMemberLabels()`).
+   * joined (`#mappedMembers()`, `#withMemberLabels()`), where the mapping
+   * kept the carrier it folded.
    */
   withLabelsCarriedBy(
     schema: MutableJSONSchema,
@@ -2980,7 +2981,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     );
     const stamps = carrierStamps(value, checker);
     this.#reportCarriedWriter(stamps.map((stamp) => stamp.meta), context);
-    const members = this.#mappedMembers(type, context);
+    const members = this.#mappedMembers(type, carrier, value, context);
     if (members) return this.#withMemberLabels(schema, type, members, context);
     return this.#withPlacedLabels(
       schema,
@@ -3054,10 +3055,14 @@ export class CommonFabricFormatter implements TypeFormatter {
    * The members a mapped type `type` maps, where it maps over a union the
    * checker did not distribute it over, as `{ [K in keyof (A | B)]: … }`
    * does, read as an operand of a default-library alias is
-   * (`#operandView()`), several of them; `undefined` for any other type.
+   * (`#operandView()`), several of them. `undefined` for any other type, and
+   * for one whose carrier, `value` held by its member `carrier`, is not the
+   * union's: a mapping that replaces the carrier carries labels of its own.
    */
   #mappedMembers(
     type: ts.Type,
+    carrier: ts.Symbol,
+    value: ts.Type,
     context: GenerationContext,
   ): readonly LabeledMember[] | undefined {
     if (((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Mapped) === 0) {
@@ -3065,6 +3070,20 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
     const source = (type as MappedTypeWithInternals).modifiersType;
     if (!source?.isUnion()) return undefined;
+    const checker = context.typeChecker;
+    const sourceCarrier = checker.getPropertyOfType(source, carrier.name);
+    if (!sourceCarrier) return undefined;
+    const sourceValue = memberValueType(
+      sourceCarrier,
+      checker.getTypeOfSymbol(sourceCarrier),
+      checker,
+    );
+    if (
+      !checker.isTypeAssignableTo(value, sourceValue) ||
+      !checker.isTypeAssignableTo(sourceValue, value)
+    ) {
+      return undefined;
+    }
     const view = this.#operandView(
       source,
       context.boundTypeParameters,

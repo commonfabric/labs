@@ -55,7 +55,9 @@ const SAME_SLOT_COMPOUND_KEYWORDS = ["anyOf", "oneOf", "allOf"] as const;
  * that reader also follows a `$ref` to its definition, which this one does not,
  * since the walk visits each definition in `$defs` itself.
  */
-const topLevelScope = (schema: MutableJSONSchema): string | undefined => {
+export const topLevelScope = (
+  schema: MutableJSONSchema,
+): string | undefined => {
   if (!isObjectOrArray(schema)) return undefined;
   const entry = Array.isArray(schema.asCell) ? schema.asCell[0] : undefined;
   // A string entry (`asCell: ["cell"]`) carries no scope of its own and does

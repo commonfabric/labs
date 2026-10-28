@@ -2756,6 +2756,25 @@ type Mapped<T> = { [K in keyof (Integrity<T, readonly ["i"]> | Sec<T>)]: (Integr
           expect(read).toEqual({ input: picked(["a"]), output: picked(["a"]) });
         });
 
+        it("reads a mapped type over a union that replaces the carrier with the labels of the carrier it holds, on both sides", async () => {
+          // The carrier is the mapping's own, not its members', and so are
+          // the labels: `d`, and none of the members' `i`.
+          const read = await schemasOf(
+            `import type { Integrity } from "commonfabric";
+${DECLARATIONS}
+type Source = Integrity<{ x: string }, readonly ["i"]> | Integrity<{ x: number }, readonly ["i"]>;
+type Stamp = Confidential<{ x: string | number }, readonly ["d"]>["__ct_cfc__"];`,
+            '{ [K in keyof Source]: K extends "__ct_cfc__" ? Stamp : Source[K] }',
+          );
+          const expected = {
+            type: "object",
+            properties: { x: { type: ["number", "string"] } },
+            required: ["x"],
+            ifc: { confidentiality: ["d"] },
+          };
+          expect(read).toEqual({ input: expected, output: expected });
+        });
+
         for (
           const [inner, argument] of [
             ['Pick<Sec<T>, "x">', 'Confidential<One, readonly ["c"]> | Two'],
@@ -2871,6 +2890,33 @@ type Outer<T> = Confidential<{ inner: T | Sec<Two> }, readonly ["outer"]>;`,
               ((side as Schema).properties as Record<string, Schema>).inner,
             ).toEqual({ ifc: { confidentiality: ["a"] } });
           }
+        });
+
+        it("reads `Omit<T | never | Sec<One>, never>` in a payload read under bindings, `T` bound to `unknown`, as with no `never`, on both sides", async () => {
+          // `never` is no member of the union, so the view is the other
+          // members': with `keyof unknown` `never`, an object with none.
+          const { input, output } = await schemasOf(
+            `${DECLARATIONS}
+type Outer<T> = Confidential<{ inner: Omit<T | never | Confidential<{ x: string }, readonly ["a"]>, never> }, readonly ["outer"]>;`,
+            "Outer<unknown>",
+          );
+          for (const side of [input, output]) {
+            expect(
+              ((side as Schema).properties as Record<string, Schema>).inner,
+            ).toEqual({ type: "object", properties: {} });
+          }
+        });
+
+        it("refuses a scope wrapper beside a labeled member of a union in a payload read under bindings, `T` bound to `any`", async () => {
+          // The union keeps its members rather than reducing to
+          // `PerUser<any>`, which accepts any value, so the scope's
+          // placement inside it is refused.
+          await expect(schemasOf(
+            `import type { PerUser } from "commonfabric";
+${DECLARATIONS}
+type Outer<T> = Confidential<{ inner: PerUser<T> | Confidential<{ x: string }, readonly ["a"]> }, readonly ["outer"]>;`,
+            "Outer<any>",
+          )).rejects.toThrow("A scope wrapper cannot be a member of a union.");
         });
 
         it("keeps the labels of a member whose labeled payload is `unknown`, on both sides", async () => {
