@@ -1033,9 +1033,11 @@ holds the measurements and the conditions for revisiting.
   transformer names no instance, so an instance nothing else names keeps its
   positional identity. A deployed parent's positional child is carried over to
   its instance's name, and recorded in the parent's `instanceChildren` meta, on
-  the first setup that names it, where the pattern the parent last set up names
-  the instance too; with the flag off, nothing is pending, so carry-over and
-  the start's pre-sync for it have nothing to act on.
+  the first setup that names it, where the pattern the parent last set up loads
+  and names the instance too, and the parent's setup record, where it has one,
+  numbers the instance's cell as this runtime's build of that pattern does.
+  Otherwise the instance starts fresh. With the flag off, nothing is pending,
+  so carry-over and the start's pre-sync for it have nothing to act on.
 - **Current default and planned end state.** Off by default. The end state is
   on, with the flag and the positional compile of `const`-bound instances
   deleted.
@@ -1043,9 +1045,10 @@ holds the measurements and the conditions for revisiting.
   deployed parent's positional children over to their names. That exists where
   the pattern a parent last set up, as a naming runtime builds it, names the
   instance, which it does where that pattern's own source bound the instance
-  to a `const`. An instance first bound to a `const` by the update that names
-  it is not carried over yet: it starts fresh, and its deployed child's state
-  is left where nothing reaches it. Second, keeping a runtime
+  to a `const`, and where the parent's setup record does not number the
+  instance's cell otherwise. An instance first bound to a `const` by the
+  update that names it is not carried over yet: it starts fresh, and its
+  deployed child's state is left where nothing reaches it. Second, keeping a runtime
   whose naming mode differs from the one a space's data was written under, an
   older runtime or a current one with the flag off, away from that space, by
   one mechanism that covers runtimes already connected (long-lived browser
