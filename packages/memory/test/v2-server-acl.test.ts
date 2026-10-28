@@ -4061,6 +4061,54 @@ describe("v2-server-acl", () => {
       }
     });
 
+    it("tells a connection once when the principal's own open finds the grant and the connection was also refused the space", async () => {
+      // The home connection holds Bob's home session and its own refusal of
+      // the space, beside the refusal held from a closed connection. The
+      // open that finds the grant answers both, so the space's refresh tells
+      // the home connection nothing more.
+      const directory = await Deno.makeTempDir({
+        prefix: "memory-acl-foreign-grant-held-once-",
+      });
+      const store = toFileUrl(`${directory}/`);
+      const space = "did:key:z6Mk-acl-space-foreign-grant-held-once";
+      const bobHome = "did:key:z6Mk-acl-space-foreign-grant-held-once-home";
+      const server = createAclServer(store, { mode: "enforce" });
+      try {
+        await initializeSpaceAcl(server, space, { [ALICE]: "OWNER" });
+        const home = await connect(server);
+        const homeOpen = await openSession(home, bobHome, BOB);
+        expectExists(homeOpen.ok?.sessionOpen);
+        expect(
+          (await openSession(
+            { ...home, sessionOpen: homeOpen.ok.sessionOpen },
+            space,
+            BOB,
+          )).error?.name,
+        ).toBe("AuthorizationError");
+        const refusedConnection = await connect(server);
+        expect((await openSession(refusedConnection, space, BOB)).error?.name)
+          .toBe("AuthorizationError");
+        refusedConnection.connection.close();
+
+        await writeAclElsewhere(store, space, {
+          [ALICE]: "OWNER",
+          [BOB]: "READ",
+        });
+        expectExists(
+          (await openSession(await connect(server), space, BOB)).ok,
+        );
+        await server.flushSessions();
+        expect(
+          home.messages.filter((message) =>
+            message.type === "session/admissible"
+          ),
+        ).toEqual([{ type: "session/admissible", space, principal: BOB }]);
+      } finally {
+        await server.close();
+        await Deno.remove(directory, { recursive: true });
+      }
+    });
+
     it("refuses a principal whose grant another connection revoked, at its next access", async () => {
       const directory = await Deno.makeTempDir({
         prefix: "memory-acl-foreign-revoke-",

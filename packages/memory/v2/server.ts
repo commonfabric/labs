@@ -5814,9 +5814,16 @@ export class Server {
         // waiting on a held refusal of it are told before it goes: this open
         // may be on another device, or may have found a grant another process
         // wrote before the space's refresh turn would have.
+        // A recipient's own refusal of the space is answered by the same
+        // notice, so it goes too, or the space's refresh would tell it again.
         if (this.#admissionWaiters.removeHeld(message.space, principal)) {
           for (const serving of this.#connectionsServing(principal)) {
             if (serving !== connection) {
+              this.#admissionWaiters.remove(
+                serving.id,
+                message.space,
+                principal,
+              );
               serving.sendAdmissible(message.space, principal);
             }
           }
