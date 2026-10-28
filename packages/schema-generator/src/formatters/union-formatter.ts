@@ -8,6 +8,7 @@ import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import ts from "typescript";
 
 import { reportUnresolvedDefault } from "../default-diagnostics.ts";
+import { reducedLabeledUnion } from "../ifc-labels.ts";
 import type { GenerationContext, TypeFormatter } from "../interface.ts";
 import type { SchemaGenerator } from "../schema-generator.ts";
 import { unionFoldedFrom } from "../schema-origins.ts";
@@ -692,6 +693,8 @@ export class UnionFormatter implements TypeFormatter {
     if (context.widenLiterals && unionOptions.length > 1) {
       unionOptions = this.#mergeIdenticalSchemas(unionOptions);
     }
+    const reduced = reducedLabeledUnion(unionOptions, context);
+    if (reduced !== undefined) return reduced;
     const anyOf: MutableJSONSchemaObj[] = [];
     for (const option of unionOptions) {
       // mergePrimitiveSchemaIntoAnyOf mutates anyOf in place; returns true to short-circuit

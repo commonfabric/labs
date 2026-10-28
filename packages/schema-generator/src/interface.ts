@@ -186,12 +186,19 @@ export interface GenerationContext {
    * them; standalone fallbacks retain their normal formatter behavior. The
    * record is keyed on the schema object itself, so it reaches a reader only
    * through the object a formatter returned — the one the definitions hold
-   * and a `$ref` resolves to — and a copy carries none of it.
+   * and a `$ref` resolves to — and a copy carries none of it. A union reduced
+   * to an arm accepting any value, labeled with its arms' labels
+   * (`reducedLabeledUnion()`), records those arms as a `"reduction"`, which
+   * only a reading that maps the value one arm at a time reads, as `Pick` and
+   * `Omit` do: elsewhere the value is the arm it reduced to.
    */
   schemaOrigins?: WeakMap<
     MutableJSONSchemaObj,
     | { kind: "void" }
-    | { kind: "intersection" | "union"; parts: () => MutableJSONSchema[] }
+    | {
+      kind: "intersection" | "union" | "reduction";
+      parts: () => MutableJSONSchema[];
+    }
   >;
 
   /**

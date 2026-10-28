@@ -3433,6 +3433,62 @@ describe("Schema: CFC authoring aliases", () => {
       });
     }
 
+    for (
+      const [argument, inner] of [
+        ["unknown", { type: "unknown", ifc: { confidentiality: ["a"] } }],
+        ["any", { ifc: { confidentiality: ["a"] } }],
+      ] as const
+    ) {
+      it(`reads \`T | Sec<{ x: string; z: 1 }>\` under bindings as the \`${argument}\` \`T\` is bound to, labeled with the other member's labels`, async () => {
+        // The checker reduces the union to `T`'s argument. The runtime keeps
+        // a union arm's label only beside arms that cannot hold the same
+        // values, so the label goes on the whole value.
+        const { value, diagnostics } = await generate(`
+          type Sec<T> = Confidential<T, readonly ["a"]>;
+          type Outer<T> = Confidential<{ inner: T | Sec<{ x: string; z: 1 }> }, readonly ["b"]>;
+          interface Holder { value: Outer<${argument}> }
+        `);
+        expect((value as any).properties.inner).toEqual(inner);
+        expect(diagnostics).toEqual([]);
+      });
+    }
+
+    it("keeps the members of a union under bindings beside the `unknown` `T` is bound to where none is labeled", async () => {
+      // With no label to place, the union stays as the node reads it.
+      const { value, diagnostics } = await generate(`
+        type Outer<T> = Confidential<{ inner: T | { x: string } }, readonly ["b"]>;
+        interface Holder { value: Outer<unknown> }
+      `);
+      expect((value as any).properties.inner).toEqual({
+        anyOf: [{ type: "unknown" }, {
+          type: "object",
+          properties: { x: { type: "string" } },
+          required: ["x"],
+        }],
+      });
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("reads `Omit<T | Sec<{ x: string; z: 1 }>, never>` under bindings with `T` bound to `any` as the members the other member names", async () => {
+      // `keyof any` is every key, so the view keeps `x` and `z`, each
+      // accepting anything, and `a`, written around them, labels it.
+      const { value, diagnostics } = await generate(`
+        type Sec<T> = Confidential<T, readonly ["a"]>;
+        type Outer<T> = Confidential<
+          { inner: Omit<T | Sec<{ x: string; z: 1 }>, never> },
+          readonly ["b"]
+        >;
+        interface Holder { value: Outer<any> }
+      `);
+      expect((value as any).properties.inner).toEqual({
+        type: "object",
+        properties: { x: true, z: true },
+        required: ["x", "z"],
+        ifc: { confidentiality: ["a"] },
+      });
+      expect(diagnostics).toEqual([]);
+    });
+
     it("keeps the label of a labeled `unknown` among the members of an `Omit` under bindings", async () => {
       // `Confidential<unknown, …>` is its carrier, written around a payload
       // that names no members, so its label lands on the whole object.
@@ -4165,7 +4221,6 @@ describe("Schema: CFC authoring aliases", () => {
             'Pick<Confidential<One, readonly ["b"]> | Sec<Two>, "x">',
             { confidentiality: ["b", "a"] },
           ],
-          ["SelectOr<any>", 'Pick<any | Sec<Two>, "x">', undefined],
           [
             "SelectOrIntegrity<never>",
             'Pick<Integrity<Two, readonly ["i"]>, "x">',
@@ -4211,6 +4266,24 @@ describe("Schema: CFC authoring aliases", () => {
           anyOf: [{ type: "string", ifc: secret }, { type: "null" }],
         });
         expect(read.diagnostics).toEqual([]);
+      });
+
+      it("keeps the label of the member beside the `any` `SelectOr<any>` binds into a union", async () => {
+        // A bare `any` is a member with no labels of its own, as a bare
+        // `unknown` is, though the checker reduces the union written out to
+        // `any`. `keyof any` is every key, so the view is `Two`'s `x`, which
+        // `a` was written around.
+        const { schema, diagnostics } = await generate(
+          "SelectOr<any>",
+          DECLARATIONS,
+        );
+        expect(schema).toEqual({
+          type: "object",
+          properties: { x: true },
+          required: ["x"],
+          ifc: secret,
+        });
+        expect(diagnostics).toEqual([]);
       });
 
       for (

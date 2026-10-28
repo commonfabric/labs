@@ -92,6 +92,7 @@ import {
   POLICY_READ_IN_PART,
   referenceChain,
   withIfcLabels,
+  withReducedArmsLabeled,
 } from "../ifc-labels.ts";
 import { withValueRecordsOf } from "../schema-origins.ts";
 import {
@@ -3192,16 +3193,17 @@ export class CommonFabricFormatter implements TypeFormatter {
    * Helper for {@link #libraryView}, which returns the members `operand`, the
    * type a default-library alias mapping an object's members is given, may
    * be under `bound`, and the payload the value is where the operand is one
-   * member whose payload is a primitive; `undefined` where `operand` is
-   * `any`, or a union holding it, which the checker reduces to it. A type
-   * parameter `bound` binds is its argument. Any other union has the members
-   * each of its own has, and is no primitive, since the checker distributes
-   * an alias that leaves one as it is over a union; a bare `unknown` among
-   * them is a member like any other, with no labels and no members of its
-   * own, so the others' labels stay; `never` has none. An intersection of CFC metadata
-   * carriers and other members, or a lone carrier (`operandCarriedParts()`),
-   * has the members its carriers label (`#carriedMembers()`), such an alias
-   * in turn its operand's, and any other type is one unlabeled member.
+   * member whose payload is a primitive; `undefined` where a member's
+   * payload makes it `any` (`#carriedMembers()`). A type parameter `bound`
+   * binds is its argument. A union has the members each of its own has, and
+   * is no primitive, since the checker distributes an alias that leaves one
+   * as it is over a union. A bare `any` or `unknown` among them is a member
+   * like any other, with no labels and no members of its own, so the others'
+   * labels stay, though the checker reduces the union to it; `never` has
+   * none. An intersection of CFC metadata carriers and other members, or a
+   * lone carrier (`operandCarriedParts()`), has the members its carriers
+   * label (`#carriedMembers()`), such an alias in turn its operand's, and any
+   * other type is one unlabeled member.
    */
   #operandView(
     operand: ts.Type,
@@ -3212,7 +3214,6 @@ export class CommonFabricFormatter implements TypeFormatter {
     if (argument) {
       return this.#operandView(argument.type, argument.bound, context);
     }
-    if ((operand.flags & ts.TypeFlags.Any) !== 0) return undefined;
     if ((operand.flags & ts.TypeFlags.Never) !== 0) {
       return { members: [], primitive: undefined };
     }
@@ -3395,9 +3396,10 @@ export class CommonFabricFormatter implements TypeFormatter {
       return baseSchema;
     }
 
-    return withValueRecordsOf(
-      withIfcLabels(baseSchema, ifc),
+    return withReducedArmsLabeled(
+      withValueRecordsOf(withIfcLabels(baseSchema, ifc), baseSchema, context),
       baseSchema,
+      ifc,
       context,
     );
   }

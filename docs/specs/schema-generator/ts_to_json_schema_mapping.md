@@ -302,11 +302,17 @@ carry no label; a restriction written around an arm that names no members,
 as `unknown` does, or that has an index signature, labels the whole object.
 A metadata key the lowering could not read at all is not declared on the
 arm, so a member holding one counts as read. A bare `unknown` arm has no
-labels and no members. Unions these
+labels and no members. A bare `any` arm has no labels and every key, as
+`keyof any` is every key there is, so beside other arms it reads as an
+object whose index signature accepts any value: `Omit<T | Sec<X>, never>` at
+`T = any` keeps `X`'s members, each accepting anything. A union reduced to an
+arm accepting any value (§8) is read by the arms it was reduced from, and a
+CFC alias around such a union labels each of those arms too, as a label
+around a union labels whichever arm the value is. Unions these
 rules build — a tuple's items, a shared property, a merged signature — fold
 equal arms by value-model equality (`dedupeByValueEqual`), flatten a bare
 nested union, and keep an `unknown` arm beside the others as a synthetic
-union does.
+union does, except beside a labeled arm, which reduces the union (§8).
 `NonNullable` removes `null` and `undefined` from a direct schema (to
 `false`), an array-valued `type`, an `enum`'s values, a union's arms, or a
 referenced definition. The synthetic alias, tuple, intersection, and
@@ -993,6 +999,26 @@ Default paths of §7:
   A member with no `type`, as the `{}` a nesting bound leaves, accepts any
   value, and no type merges into it: beside `undefined` the union stays an
   `anyOf` of the two. Singletons unwrap.
+- **A member accepting any value beside a labeled one**: where one member
+  accepts any value, `any` or a bare `unknown`, and some member states a
+  label anywhere in its value, the union is that member, as the checker
+  reduces `any | X` to `any` and `unknown | X` to `unknown`, `any` winning.
+  It is labeled with the members' labels joined, as a value that may be any
+  of them (`reducedLabeledUnion` in `ifc-labels.ts`, `joinMemberIfcLabels`):
+  every confidentiality atom any member states anywhere in its value,
+  through its references, and each other label every member states alike,
+  so a member accepting anything that states none leaves no evidence. The
+  labels go on the whole value, not on an arm, because the runtime keeps a
+  union arm's labels only beside arms that cannot hold the same values
+  (`assertNoDivergentIfcBranches` in `packages/runner/src/cfc/schema-merge.ts`),
+  and an arm accepting anything can hold any. The node path reads every
+  union written, so `any | Sec<X>` reads `{ ifc: … }` there and `true` by
+  type, where the checker has already reduced it, as `Sec<X> & any` does
+  (§9); a type the checker leaves unreduced, as some instantiations are,
+  reduces the same way by type. A union no member of which states a label
+  keeps its members. The members are recorded
+  (`GenerationContext.schemaOrigins`, `"reduction"`) for a `Pick` or an
+  `Omit` over the union, which maps them one at a time (§2).
 - **`widenLiterals`** additionally merges member schemas that differ only in
   their literal values, an `enum` or a `const` whose values share one base
   type, widening those to that type, before the anyOf pass
@@ -1613,13 +1639,13 @@ Mechanics:
   labeled with the labels of the members the operand may be, each member's
   read from its carriers in full or not at all and placed by the payloads
   they record (above). A union operand may be any of its members, each read
-  on its own once its parameters are bound, and is unlabeled where a member
-  is `any`, to which the checker reduces it. A bare `unknown` member has no
-  labels and no members, so the other members' labels stay, landing where
-  they reach, though the checker reduces `unknown | X` to `unknown`: a label
-  is kept wherever the union is read before the checker reduces it, as a
-  user's alias read under its bindings is, and lost where the checker hands
-  over the reduced type, as for `Omit<unknown | Sec<X>, never>` written out.
+  on its own once its parameters are bound. A bare `any` or `unknown` member
+  has no labels and no members of its own, so the other members' labels
+  stay, landing where they reach, though the checker reduces `any | X` and
+  `unknown | X` to that member: a label is kept wherever the union is read
+  before the checker reduces it, as a user's alias read under its bindings
+  is, and lost where the checker hands over the reduced type, as for
+  `Omit<unknown | Sec<X>, never>` written out.
   So `OmitOpen<unknown>`, where `type OmitOpen<T> = Omit<T | Sec<T>, never>`,
   carries `Sec`'s label, written around a payload that names no members, on
   the whole object. A labeled `unknown` (`Confidential<unknown, L>`) is its

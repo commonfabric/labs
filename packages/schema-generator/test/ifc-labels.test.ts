@@ -1,15 +1,20 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import type { MutableJSONSchemaObj } from "@commonfabric/api";
+import type {
+  MutableJSONSchema,
+  MutableJSONSchemaObj,
+} from "@commonfabric/api";
 import {
   combineIfcLabels,
   declaredIfcLabels,
   holdsIfcLabels,
   joinMemberIfcLabels,
   labeledValueMember,
+  reducedLabeledUnion,
   stateReferencedIfcLabels,
   withIfcLabels,
 } from "../src/ifc-labels.ts";
+import type { GenerationContext } from "../src/interface.ts";
 import { SchemaGenerator } from "../src/schema-generator.ts";
 import { asObjectSchema, getTypeFromCode } from "./utils.ts";
 
@@ -27,7 +32,94 @@ const generate = async (code: string) => {
   return asObjectSchema(new SchemaGenerator().generateSchema(type, checker));
 };
 
+/** A context holding `definitions`, with origins recorded. */
+const contextWith = (
+  definitions: Record<string, MutableJSONSchemaObj> = {},
+): GenerationContext =>
+  ({
+    definitions,
+    schemaOrigins: new WeakMap(),
+  }) as unknown as GenerationContext;
+
 describe("ifc-labels", () => {
+  describe("reducedLabeledUnion()", () => {
+    const labeled: MutableJSONSchemaObj = {
+      type: "object",
+      properties: { x: { type: "string" } },
+      ifc: { confidentiality: ["a"], integrity: ["i"] },
+    };
+
+    it("returns the `any` arm labeled with the confidentiality the other arms state, and records the arms", () => {
+      const context = contextWith();
+      const arms: MutableJSONSchema[] = [true, labeled];
+      const reduced = reducedLabeledUnion(arms, context);
+      expect(reduced).toEqual({ ifc: { confidentiality: ["a"] } });
+      const origin = context.schemaOrigins!.get(
+        reduced as MutableJSONSchemaObj,
+      );
+      expect(origin?.kind).toBe("reduction");
+      expect(origin && "parts" in origin ? origin.parts() : []).toEqual(arms);
+    });
+
+    it("returns the `unknown` arm labeled likewise, and the `any` arm beside both", () => {
+      expect(
+        reducedLabeledUnion([{ type: "unknown" }, labeled], contextWith()),
+      ).toEqual({ type: "unknown", ifc: { confidentiality: ["a"] } });
+      expect(
+        reducedLabeledUnion(
+          [{ type: "unknown" }, true, labeled],
+          contextWith(),
+        ),
+      ).toEqual({ ifc: { confidentiality: ["a"] } });
+    });
+
+    it("returns the confidentiality an arm states anywhere in its value, through its references", () => {
+      const context = contextWith({
+        Inner: {
+          type: "object",
+          properties: {
+            y: { type: "string", ifc: { confidentiality: ["b"] } },
+          },
+        },
+      });
+      expect(
+        reducedLabeledUnion(
+          [true, {
+            type: "object",
+            properties: { inner: { $ref: "#/$defs/Inner" } },
+          }],
+          context,
+        ),
+      ).toEqual({ ifc: { confidentiality: ["b"] } });
+    });
+
+    it("returns the arm accepting anything unlabeled where the other arms state evidence alone", () => {
+      expect(
+        reducedLabeledUnion([{ type: "unknown" }, {
+          type: "object",
+          ifc: { integrity: ["i"] },
+        }], contextWith()),
+      ).toEqual({ type: "unknown" });
+    });
+
+    it("returns `undefined` for a union with no arm accepting anything, one with no label, and a labeled `unknown` arm", () => {
+      expect(reducedLabeledUnion([labeled, { type: "string" }], contextWith()))
+        .toBeUndefined();
+      expect(
+        reducedLabeledUnion(
+          [{ type: "unknown" }, { type: "string" }],
+          contextWith(),
+        ),
+      ).toBeUndefined();
+      expect(
+        reducedLabeledUnion([
+          { type: "unknown", ifc: { confidentiality: ["c"] } },
+          { type: "string" },
+        ], contextWith()),
+      ).toBeUndefined();
+    });
+  });
+
   describe("combineIfcLabels()", () => {
     it("returns the confidentiality of both, the inner's first", () => {
       expect(

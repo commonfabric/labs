@@ -2766,6 +2766,40 @@ type ViewOpen<T> = Omit<T | Sec<T>, never>;`,
           }
         });
 
+        it("reads `ViewAny<any>`, where `ViewAny<T>` is `Omit<T | Sec<Two>, never>`, as `Two`'s members labeled with `a`, on both sides", async () => {
+          // A bare `any` is a member with no labels of its own, and
+          // `keyof any` is every key, so the view keeps `x` and `z`, each
+          // accepting anything.
+          const read = await schemasOf(
+            `${DECLARATIONS}
+type ViewAny<T> = Omit<T | Sec<Two>, never>;`,
+            "ViewAny<any>",
+          );
+          const expected = {
+            type: "object",
+            properties: { x: true, z: true },
+            required: ["x", "z"],
+            ifc: { confidentiality: ["a"] },
+          };
+          expect(read).toEqual({ input: expected, output: expected });
+        });
+
+        it("reads `T | Sec<Two>` in a payload read under bindings, `T` bound to `any`, as `any` labeled with `a`, on both sides", async () => {
+          // The runtime keeps a union arm's label only beside arms that
+          // cannot hold the same values, so the label goes on the whole
+          // value the checker reduces the union to.
+          const { input, output } = await schemasOf(
+            `${DECLARATIONS}
+type Outer<T> = Confidential<{ inner: T | Sec<Two> }, readonly ["outer"]>;`,
+            "Outer<any>",
+          );
+          for (const side of [input, output]) {
+            expect(
+              ((side as Schema).properties as Record<string, Schema>).inner,
+            ).toEqual({ ifc: { confidentiality: ["a"] } });
+          }
+        });
+
         it("keeps the labels of a member whose labeled payload is `unknown`, on both sides", async () => {
           // `Omit` over the union keeps the keys every member has, here none:
           // `c`, written around `Two`, lands on no member of the value, while
