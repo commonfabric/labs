@@ -2146,6 +2146,20 @@ export class HarnessInteractiveChatService {
       // Promote completed evidence atomically with the failure when the host
       // opted in. Unpaired activity remains solely in the audit trail and run
       // artifacts.
+      const retained = this.#basePromptLoopOptions.finalizeOnTurnLimit
+        ? completedCheckpoint
+        : undefined;
+      const checkpoint = retained === undefined ? undefined : {
+        ...retained,
+        transcript: (await prepareNextHarnessRun({
+          runState: createHarnessRunState({
+            currentDir: session.workspace?.cwd ?? "/workspace",
+            cfcEnforcementMode: "disabled",
+            status: "failed",
+          }),
+          transcript: retained.transcript,
+        })).transcript,
+      };
       await this.#emit(
         session.sessionId,
         turnId,
@@ -2154,9 +2168,7 @@ export class HarnessInteractiveChatService {
           turnId,
           error: chatTurnError(error),
         },
-        this.#basePromptLoopOptions.finalizeOnTurnLimit
-          ? completedCheckpoint
-          : undefined,
+        checkpoint,
       );
     } finally {
       if (record.status.status === "closed") {

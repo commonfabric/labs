@@ -4,7 +4,10 @@ import { describe, it } from "@std/testing/bdd";
 
 import type { HarnessResearchRunSummary } from "../src/contracts/research.ts";
 import type { HarnessTranscriptMessage } from "../src/contracts/transcript.ts";
-import { HarnessInteractiveChatService } from "../src/interactive-chat-service.ts";
+import {
+  HARNESS_CHAT_INTERRUPTED_TURN_NOTICE,
+  HarnessInteractiveChatService,
+} from "../src/interactive-chat-service.ts";
 
 import {
   NEXT_RUN_STATE_FIELDS,
@@ -80,6 +83,86 @@ describe("next-run-builder", () => {
           message.content.startsWith("Host turn notice:")
         ),
       ).toHaveLength(count);
+    });
+  }
+
+  for (const outcome of ["failed", "completed"] as const) {
+    it(`retains paired ${outcome} chat history with ${outcome === "failed" ? "one" : "no"} interrupted notice`, async () => {
+      const seeds: (readonly HarnessTranscriptMessage[])[] = [];
+      const partial: HarnessTranscriptMessage[] = [{
+        role: "assistant",
+        content: "Reading the first file",
+        toolCalls: [{
+          id: "read",
+          type: "function",
+          function: { name: "read_file", arguments: '{"path":"first.txt"}' },
+        }],
+      }, {
+        role: "tool",
+        toolCallId: "read",
+        toolName: "read_file",
+        content: "Partial evidence",
+      }];
+      const service = new HarnessInteractiveChatService({
+        basePromptLoopOptions: { finalizeOnTurnLimit: true },
+        createPromptLoop: () => ({
+          runTranscript: async (options) => {
+            seeds.push([...options.transcript]);
+            const transcript = [...options.transcript];
+            if (seeds.length === 1) {
+              for (const message of partial) transcript.push(message);
+              await options.onCheckpoint?.({
+                transcript,
+                runState: { ...priorState(), status: "running" },
+              });
+              if (outcome === "failed") {
+                throw new Error("Provider disconnected");
+              }
+            }
+            transcript.push({ role: "assistant", content: "Finished" });
+            return {
+              model: "test",
+              modelTurns: 1,
+              finalAssistantText: "Finished",
+              runState: priorState(),
+              transcript,
+            };
+          },
+        }),
+      });
+      await service.startSession("start", {
+        sessionId: "session",
+        workspace: { hostPath: "/workspace" },
+      });
+      await service.startTurn("first", {
+        sessionId: "session",
+        turnId: "first",
+        input: { text: "Read both files" },
+      });
+      await service.waitForTurn("session", "first");
+      expect(service.listTurns({ sessionId: "session" }).turns[0].turn.status)
+        .toBe(outcome);
+      await service.startTurn("second", {
+        sessionId: "session",
+        turnId: "second",
+        input: { text: "Continue" },
+      });
+      await service.waitForTurn("session", "second");
+      expect(seeds).toHaveLength(2);
+      expect(
+        seeds[1].filter((message) =>
+          message.role !== "user" || !message.turnLocal
+        ).slice(0, 3),
+      ).toEqual([
+        { role: "user", content: "Read both files" },
+        ...partial,
+      ]);
+      expect(
+        seeds[1].filter((message) =>
+          message.content === HARNESS_CHAT_INTERRUPTED_TURN_NOTICE
+        ),
+      ).toHaveLength(outcome === "failed" ? 1 : 0);
+      expect(seeds[1].at(-1)).toEqual({ role: "user", content: "Continue" });
     });
   }
 
