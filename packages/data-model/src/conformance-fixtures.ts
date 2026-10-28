@@ -18,6 +18,8 @@ import { utf8Compare } from "@commonfabric/utils/utf8";
 
 import type { FabricPlainObject, FabricValue } from "@/interface.ts";
 import { ProblematicValue, UnknownValue } from "@/codec-common";
+import { CODEC_META_TAGS } from "@/codec-interface/codec-meta-tags.ts";
+import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
 import { createBaseJsonRegistry, JsonCodecEngine } from "@/codec-json";
 import { deepFreeze } from "@/deep-freeze.ts";
 import {
@@ -27,6 +29,8 @@ import {
   FabricMap,
   FabricSet,
 } from "@/fabric-instances";
+import { FabricRegExp } from "@/fabric-primitives";
+import { FABRIC_PRIMITIVE_CODEC_TYPE_TAGS } from "@/fabric-primitives/interface.ts";
 import { isFabricArray, isFabricPlainObject } from "@/types";
 import { createDefaultJsonRegistry, jsonFromFabricValue } from "./codecs.ts";
 import { codecClasses as instanceClasses } from "./fabric-instances/impl.ts";
@@ -104,6 +108,30 @@ export type TextWithMods = {
   /** Changes made to what decoding returns. */
   readonly patches?: readonly ValuePatch[];
 };
+
+/**
+ * A measure of a value's size by which `3-json-encoding.md` section 12 has an
+ * implementation state a guarantee: the longest array, the largest record, the
+ * longest string, the longest byte sequence, the longest registered symbol's
+ * key, and the depth.
+ */
+export type SizeMeasure =
+  | "arrayLength"
+  | "propertyCount"
+  | "stringLength"
+  | "bytesLength"
+  | "symbolKeyLength"
+  | "depth";
+
+/**
+ * What a reader must support to read a fixture entry, a reader that does not
+ * skipping the entry: the flavors of regular expression whose patterns it must
+ * construct, and by each measure the guarantee it must state at least, given
+ * only where that is past the measure's floor.
+ */
+export type FixtureRequirements =
+  & { readonly flavors?: readonly string[] }
+  & { readonly [Measure in SizeMeasure]?: number };
 
 /** Makers of examples of each class in one of the class tables. */
 export type ExampleMakers<ClassesByName> = {
@@ -213,6 +241,304 @@ function asciiJsonOf(value: FixtureJson): string {
     /[\u007f-￿]/g,
     (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`,
   );
+}
+
+//
+// Requirements
+//
+
+/** Every measure, in the order the spec's table gives them. */
+const SIZE_MEASURES: readonly SizeMeasure[] = [
+  "arrayLength",
+  "propertyCount",
+  "stringLength",
+  "bytesLength",
+  "symbolKeyLength",
+  "depth",
+];
+
+/**
+ * The floor `3-json-encoding.md` section 12 sets by each measure: the smallest
+ * guarantee an implementation may state, and the size past which a fixture
+ * entry states what it requires.
+ */
+export const SIZE_FLOORS: { readonly [Measure in SizeMeasure]: number } = Object
+  .freeze({
+    arrayLength: 2 ** 24,
+    propertyCount: 2 ** 14,
+    stringLength: 2 ** 24,
+    bytesLength: 2 ** 24,
+    symbolKeyLength: 2 ** 10,
+    depth: 2 ** 10,
+  });
+
+/**
+ * This package's guarantee by each measure, as its README states it, no
+ * figure being written `Infinity`.
+ */
+const SIZE_GUARANTEES: { readonly [Measure in SizeMeasure]: number } = Object
+  .freeze({
+    arrayLength: 2 ** 26,
+    propertyCount: Infinity,
+    stringLength: 2 ** 26,
+    bytesLength: 2 ** 27,
+    symbolKeyLength: 2 ** 26,
+    depth: 2 ** 11,
+  });
+
+/**
+ * The tags of the primitives, whose states hold no value of their own: a
+ * tagged value under one is no container, and what its state holds is
+ * measured by {@link measurePrimitiveState}.
+ */
+const PRIMITIVE_TAGS: ReadonlySet<string> = new Set([
+  CODEC_TYPE_TAGS.BigInt,
+  CODEC_TYPE_TAGS.SpecialNumber,
+  CODEC_TYPE_TAGS.Symbol,
+  CODEC_TYPE_TAGS.Undefined,
+  ...Object.values(FABRIC_PRIMITIVE_CODEC_TYPE_TAGS),
+]);
+
+/**
+ * Returns what a reader must support to read the entry for `stated`: `flavors`,
+ * which a case marks by hand, and by each measure the size of the value its
+ * text writes, where that is past the measure's floor. Returns `undefined`
+ * where a reader need support nothing beyond the floors.
+ */
+export function requirementsOf(
+  stated: TextWithMods,
+  flavors?: readonly string[],
+): FixtureRequirements | undefined {
+  const requires:
+    & { flavors?: readonly string[] }
+    & { -readonly [Measure in SizeMeasure]?: number } = {};
+  if (flavors !== undefined) {
+    requires.flavors = flavors;
+  }
+  const sizes = sizesOf(stated);
+  for (const measure of SIZE_MEASURES) {
+    if (sizes[measure] > SIZE_FLOORS[measure]) {
+      requires[measure] = sizes[measure];
+    }
+  }
+  return (Object.keys(requires).length === 0) ? undefined : requires;
+}
+
+/**
+ * Indicates whether this package meets `requires`: that it constructs each
+ * flavor named, which it does for exactly the flavors a `FabricRegExp` can
+ * give a JavaScript `RegExp` of, and that its guarantee by each measure named
+ * is at least the size named.
+ */
+export function meetsRequirements(
+  requires: FixtureRequirements | undefined,
+): boolean {
+  if (requires === undefined) {
+    return true;
+  }
+  const constructs = (flavor: string) => {
+    try {
+      new FabricRegExp(flavor, "", "").value;
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  return (requires.flavors ?? []).every(constructs) &&
+    SIZE_MEASURES.every((measure) =>
+      (requires[measure] ?? 0) <= SIZE_GUARANTEES[measure]
+    );
+}
+
+/**
+ * Returns the size by each measure of the value `stated` writes, as
+ * `3-json-encoding.md` section 12 measures it, read from the text: the longest
+ * array, a `/hole` run counting every hole it stands for; the largest record,
+ * any object in the JSON body counting; the longest string, byte sequence and
+ * registered symbol's key; and the depth. Each is zero for a text that is not
+ * `fvj1:` JSON.
+ */
+function sizesOf(
+  { text, unclaimed = [] }: TextWithMods,
+): { [Measure in SizeMeasure]: number } {
+  const largest = {
+    arrayLength: 0,
+    propertyCount: 0,
+    stringLength: 0,
+    bytesLength: 0,
+    symbolKeyLength: 0,
+    depth: 0,
+  };
+  const note = (measure: SizeMeasure, size: number) => {
+    largest[measure] = Math.max(largest[measure], size);
+  };
+
+  let body: unknown;
+  try {
+    body = JSON.parse(JsonCodecEngine.unwrapEncodedValueForTesting(text, true));
+  } catch {
+    return largest;
+  }
+
+  // Each visit is given the count of containers enclosing what it visits.
+  // `literal` is set within a `/quote`, where nothing is a tag or a hole run.
+  const visit = (node: unknown, depth: number, literal: boolean): void => {
+    if (typeof node === "string") {
+      note("stringLength", codePointCountOf(node));
+    } else if (Array.isArray(node)) {
+      note("depth", depth + 1);
+      let length = 0;
+      for (const entry of node) {
+        const holes = literal ? undefined : holeCountOf(entry);
+        if (holes === undefined) {
+          visit(entry, depth + 1, literal);
+          length++;
+        } else {
+          length += holes;
+        }
+      }
+      note("arrayLength", length);
+    } else if (typeof node === "object" && node !== null) {
+      const members = Object.entries(node);
+      const [sole, ...others] = members;
+      if (literal || sole === undefined || others.length !== 0) {
+        visitRecord(members, depth, literal);
+        return;
+      }
+      const [key, held] = sole;
+      if (!key.startsWith("/")) {
+        visitRecord(members, depth, literal);
+      } else if (key === `/${CODEC_META_TAGS.object}`) {
+        // The escaped record's keys are literal, and its values are not.
+        if (typeof held === "object" && held !== null && !Array.isArray(held)) {
+          visitRecord(Object.entries(held), depth, false);
+        } else {
+          visit(held, depth, false);
+        }
+      } else if (key === `/${CODEC_META_TAGS.quote}`) {
+        visit(held, depth, true);
+      } else if (key === `/${CODEC_META_TAGS.hole}`) {
+        // A run of holes outside an array, which is malformed.
+      } else if (
+        PRIMITIVE_TAGS.has(key.slice(1)) && !unclaimed.includes(key.slice(1))
+      ) {
+        measurePrimitiveState(key.slice(1), held, note);
+      } else {
+        // An instance, its state enclosed by it.
+        note("depth", depth + 1);
+        visit(held, depth + 1, false);
+      }
+    }
+  };
+  const visitRecord = (
+    members: readonly (readonly [string, unknown])[],
+    depth: number,
+    literal: boolean,
+  ) => {
+    note("depth", depth + 1);
+    note("propertyCount", members.length);
+    for (const [key, held] of members) {
+      note("stringLength", codePointCountOf(key));
+      visit(held, depth + 1, literal);
+    }
+  };
+
+  visit(body, 0, false);
+  return largest;
+}
+
+/**
+ * Notes the sizes of what the state of a primitive under `tag` holds: the
+ * bytes a base64url state or field writes, a registered symbol's key, and any
+ * other string.
+ */
+function measurePrimitiveState(
+  tag: string,
+  state: unknown,
+  note: (measure: SizeMeasure, size: number) => void,
+): void {
+  const fieldOf = (name: string): unknown =>
+    (typeof state === "object" && state !== null)
+      ? Object.getOwnPropertyDescriptor(state, name)?.value
+      : undefined;
+  const noteBytes = (written: unknown) => {
+    if (typeof written === "string") {
+      note(
+        "bytesLength",
+        Math.floor(written.replace(/=+$/, "").length * 3 / 4),
+      );
+    }
+  };
+  const noteString = (written: unknown) => {
+    if (typeof written === "string") {
+      note("stringLength", codePointCountOf(written));
+    }
+  };
+
+  switch (tag) {
+    case CODEC_TYPE_TAGS.Bytes:
+      noteBytes(state);
+      break;
+    case CODEC_TYPE_TAGS.Hash:
+      noteString(fieldOf("tag"));
+      noteBytes(fieldOf("hash"));
+      break;
+    case CODEC_TYPE_TAGS.KeyPair:
+      noteString(fieldOf("algorithm"));
+      noteBytes(fieldOf("publicKey"));
+      noteBytes(fieldOf("privateKey"));
+      break;
+    case CODEC_TYPE_TAGS.Symbol:
+      if (typeof state === "string") {
+        note("symbolKeyLength", codePointCountOf(state));
+      }
+      break;
+    case CODEC_TYPE_TAGS.BigInt:
+    case CODEC_TYPE_TAGS.DurationDay:
+    case CODEC_TYPE_TAGS.DurationNsec:
+    case CODEC_TYPE_TAGS.EpochDay:
+    case CODEC_TYPE_TAGS.EpochNsec:
+    case CODEC_TYPE_TAGS.SpecialNumber:
+    case CODEC_TYPE_TAGS.Undefined:
+      // A number, written as a string or not at all.
+      break;
+    default:
+      noteString(state);
+      if (typeof state === "object" && state !== null) {
+        Object.values(state).forEach(noteString);
+      }
+  }
+}
+
+/**
+ * Returns the count of Unicode code points in `text`, a lone surrogate
+ * counting as one, as `3-json-encoding.md` section 12 counts them.
+ */
+function codePointCountOf(text: string): number {
+  let count = 0;
+  for (const _ of text) {
+    count++;
+  }
+  return count;
+}
+
+/**
+ * Returns the count of holes `entry`, an array entry, stands for, or
+ * `undefined` where it is not a well-formed `/hole` run.
+ */
+function holeCountOf(entry: unknown): number | undefined {
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+    return undefined;
+  }
+  const [member, ...others] = Object.entries(entry);
+  if (member === undefined || others.length !== 0) {
+    return undefined;
+  }
+  const [key, count] = member;
+  return (key === `/${CODEC_META_TAGS.hole}` && typeof count === "number" &&
+      Number.isInteger(count) && count > 0)
+    ? count
+    : undefined;
 }
 
 //

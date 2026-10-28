@@ -736,26 +736,36 @@ describe("FabricError", () => {
       });
 
       describe("canDecode()", () => {
-        // Decoding hand-built state (not via `encode()`): exercises name/type
-        // handling and back-compat that the round-trip tests don't.
+        // Decoding hand-built state (not via `encode()`): exercises the
+        // name/type handling and the required fields that the round-trip
+        // tests don't.
 
         it("returns `true` for a record", () => {
           expect(codec.canDecode({ type: "Error", message: "boop" }))
             .toBe(true);
         });
 
-        it("returns `true` for a record with every checked field absent", () => {
-          expect(codec.canDecode({})).toBe(true);
-          expect(codec.canDecode({ cause: 42, code: 7 })).toBe(true);
+        it("returns `true` for a record with `name` absent, which means same as `type`", () => {
+          expect(codec.canDecode({ type: "Error", message: "", code: 7 }))
+            .toBe(true);
+        });
+
+        it("returns `false` for a record lacking `type` or `message`", () => {
+          for (
+            const state of [
+              {},
+              { cause: 42, code: 7 },
+              { type: "Error" },
+              { message: "boop" },
+              { name: "TypeError", message: "boop" },
+            ]
+          ) {
+            expect(codec.canDecode(state as never)).toBe(false);
+          }
         });
 
         it("returns `true` for a `null` `name`, which means same as `type`", () => {
           expect(codec.canDecode({ type: "Error", name: null, message: "" }))
-            .toBe(true);
-        });
-
-        it("returns `true` for a `name` with no `type` (back-compat)", () => {
-          expect(codec.canDecode({ name: "TypeError", message: "old format" }))
             .toBe(true);
         });
 
@@ -862,14 +872,42 @@ describe("FabricError", () => {
           expect(result.name).toBe("CustomTypeName");
         });
 
-        it("falls back to `name` when `type` is absent (back-compat)", () => {
-          const state = { name: "TypeError", message: "old format" };
+        it("creates a `FabricError` from state, with `name` absent meaning same as `type`", () => {
+          const state = { type: "TypeError", message: "hello" };
           const result = codec.decode(
             expectedTag,
             state,
             env,
           ) as unknown as FabricError;
           expect(result.toNativeValue(true)).toBeInstanceOf(TypeError);
+          expect(result.name).toBe("TypeError");
+        });
+
+        it("reads no optional field that is inherited rather than own", () => {
+          // Read as own properties, so a `name`, `stack` or `cause` reachable
+          // only through the prototype chain does not stand in for one.
+          const polluted = Object.prototype as {
+            name?: unknown;
+            stack?: unknown;
+            cause?: unknown;
+          };
+          polluted.name = "Inherited";
+          polluted.stack = "at inherited";
+          polluted.cause = "inherited";
+          try {
+            const result = codec.decode(
+              expectedTag,
+              { type: "TypeError", message: "m" },
+              env,
+            ) as unknown as FabricError;
+            expect(result.name).toBe("TypeError");
+            expect(result.stack).toBe(undefined);
+            expect(result.cause).toBe(undefined);
+          } finally {
+            delete polluted.name;
+            delete polluted.stack;
+            delete polluted.cause;
+          }
         });
 
         it("returns the custom `name` it decoded", () => {

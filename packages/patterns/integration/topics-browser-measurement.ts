@@ -1,8 +1,8 @@
 /**
  * Browser-tier measurement of one operation on a Topics board, for
  * `docs/plans/topics-computation-cost.md`: reactive-body reads for the board's
- * pivot and for each topic's backlink, comment-count, and activity lifts,
- * scheduler graph size, and timing split between the main thread and the
+ * pivot and for each topic's backlink lift, scheduler graph size, and timing
+ * split between the main thread and the
  * worker as far as the shell's timing records that split.
  *
  * `measureTopicsReads()` turns telemetry and body read accounting on around the

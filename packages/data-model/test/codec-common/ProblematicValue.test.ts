@@ -284,6 +284,20 @@ describe("ProblematicValue", () => {
           )).toBe(false);
         });
 
+        it("returns `false` for a field that is inherited rather than own", () => {
+          // Read as an own property, so an `error` reachable only through the
+          // prototype chain does not stand in for one.
+          const polluted = Object.prototype as { error?: unknown };
+          polluted.error = "oops";
+          try {
+            expect(ProblematicValue[CODEC].canDecode(
+              { tag: "Weird@7", state: 1 },
+            )).toBe(false);
+          } finally {
+            delete polluted.error;
+          }
+        });
+
         it("returns `false` for a non-string `tag` or `error`", () => {
           expect(ProblematicValue[CODEC].canDecode(
             { tag: 7, state: 1, error: "oops" },

@@ -19,6 +19,11 @@ The file is JSON, holding only ASCII: every other character is escaped. Its
 
 - `name`: unique among the cases.
 - `section`: the part of the spec the case exercises.
+- `requires`: present where the case applies only to a reader that constructs a
+  flavor of regular expression, or that guarantees more by some measure of size
+  than every reader must, as [`value-probes.md`](value-probes.md#requirements)
+  describes. A reader that does not meet it skips the entry. None of the cases
+  has one.
 - `text`: the value hashed, as its `fvj1:` text, which
   [`3-json-encoding.md`](../../../../docs/specs/space-model-formal-spec/3-json-encoding.md)
   specifies. A reader decodes it to get the value, applying the mods below.

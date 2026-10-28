@@ -13,6 +13,7 @@ import { registerSchemaDocument } from "../src/schema-registry.ts";
 import { cfcLabelViewForCell } from "../src/cfc/label-view.ts";
 import type { CfcEnforcementMode } from "../src/cfc/types.ts";
 import { createLLMFriendlyLink } from "../src/link-types.ts";
+import type { Cell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
@@ -1101,13 +1102,14 @@ const sentAfterCall = (
 
 /**
  * Commits `value` under `schema` to the cell `name`, written by the agent
- * kernel builtin, and returns the reference the model passes for it.
+ * kernel builtin, and returns the reference the model passes for it. A
+ * function `value` is called with the cell, for a value that names it.
  */
 const seedKernelCell = async (
   runtime: Runtime,
   name: string,
   schema: JSONSchema,
-  value: unknown,
+  value: unknown | ((cell: Cell<unknown>) => unknown),
 ): Promise<{ "@link": string }> => {
   const tx = runtime.edit();
   setCfcImplementationIdentity(tx, {
@@ -1115,7 +1117,7 @@ const seedKernelCell = async (
     builtinId: "agent-kernel-demo",
   });
   const cell = runtime.getCell(space, name, schema, tx);
-  cell.set(value as any);
+  cell.set((typeof value === "function" ? value(cell) : value) as any);
   tx.prepareCfc();
   expect((await tx.commit().settled).ok).toBeDefined();
   await runtime.idle();
@@ -1402,12 +1404,27 @@ describe("CFC trusted agent: floors on a dictionary's values", () => {
   });
 
   it("denies a call whose pattern is not a valid regular expression", async () => {
+    // The keys an invalid pattern takes cannot be known, so neither can the
+    // keys left to the floor on `additionalProperties`.
+
+    expect(
+      await sentAfterCall(
+        withNotes({
+          patternProperties: { "(": { type: "string" } },
+          additionalProperties: FLOORED,
+        }),
+        { route: "a", notes: { x: "hi" } },
+      ),
+    ).toEqual([]);
+  });
+
+  it("runs the tool where an invalid pattern guards no floor", async () => {
     expect(
       await sentAfterCall(
         withNotes({ patternProperties: { "(": { type: "string" } } }),
         { route: "a", notes: { x: "hi" } },
       ),
-    ).toEqual([]);
+    ).toEqual(["a"]);
   });
 
   it("runs the tool for an entry passed as a reference carrying the floor", async () => {
@@ -1430,6 +1447,353 @@ describe("CFC trusted agent: floors on a dictionary's values", () => {
         }),
       ),
     ).toEqual(["a"]);
+  });
+});
+
+describe("CFC trusted agent: floors beneath a reference", () => {
+  // A reference the model passes is walked into wherever a floor applies at or
+  // beneath it: each position beneath it is the referenced value's part there,
+  // with the labels stored for that part. A floor on a whole referenced value
+  // is met where every part of it carries one shared atom (§8.10.3).
+
+  const FLOORED = { type: "string", ifc: { requiredIntegrity: [KERNEL_ATOM] } };
+  const KERNEL_STRING = {
+    type: "string",
+    ifc: { integrity: [KERNEL_ATOM] },
+  } as const satisfies JSONSchema;
+  const PLAIN_STRING = { type: "string" } as const satisfies JSONSchema;
+
+  /** A tool input whose optional `field` is `schema`. */
+  const withField = (field: string, schema: Record<string, unknown>) =>
+    ({
+      type: "object",
+      properties: { route: { type: "string" }, [field]: schema },
+      required: ["route"],
+    }) as unknown as JSONSchema;
+
+  /** A mail object whose `recipient` and `nonce` are stored under the given schemas. */
+  const mailSchema = (
+    recipient: JSONSchema,
+    nonce: JSONSchema = PLAIN_STRING,
+    ifc?: Record<string, unknown>,
+  ) =>
+    ({
+      type: "object",
+      ...(ifc ? { ifc } : {}),
+      properties: { recipient, nonce },
+    }) as unknown as JSONSchema;
+
+  const MAIL = { recipient: "attacker@example.com", nonce: "n" };
+
+  /** The routes sent after the model passes `field` as a reference to `value` stored under `schema`. */
+  const sentPassing = (
+    inputSchema: JSONSchema,
+    field: string,
+    schema: JSONSchema,
+    value: unknown | ((cell: Cell<unknown>) => unknown),
+  ) =>
+    sentAfterCall(inputSchema, async (runtime) => ({
+      route: "a",
+      [field]: await seedKernelCell(
+        runtime,
+        `reference-${field}`,
+        schema,
+        value,
+      ),
+    }));
+
+  it("denies a reference whose field lacks the floor beneath it", async () => {
+    expect(
+      await sentPassing(
+        withField("mail", {
+          type: "object",
+          properties: { recipient: FLOORED },
+        }),
+        "mail",
+        mailSchema(PLAIN_STRING),
+        MAIL,
+      ),
+    ).toEqual([]);
+  });
+
+  it("runs the tool for a reference whose field carries the floor beneath it", async () => {
+    expect(
+      await sentPassing(
+        withField("mail", {
+          type: "object",
+          properties: { recipient: FLOORED },
+        }),
+        "mail",
+        mailSchema(KERNEL_STRING),
+        MAIL,
+      ),
+    ).toEqual(["a"]);
+  });
+
+  it("denies a reference to a dictionary whose entry lacks the floor on its values", async () => {
+    expect(
+      await sentPassing(
+        withField("notes", { type: "object", additionalProperties: FLOORED }),
+        "notes",
+        { type: "object", additionalProperties: PLAIN_STRING } as JSONSchema,
+        { to: "attacker@example.com" },
+      ),
+    ).toEqual([]);
+  });
+
+  it("denies a reference to an array whose element lacks the floor on its items", async () => {
+    expect(
+      await sentPassing(
+        withField("recipients", { type: "array", items: FLOORED }),
+        "recipients",
+        { type: "array", items: PLAIN_STRING } as JSONSchema,
+        ["attacker@example.com"],
+      ),
+    ).toEqual([]);
+  });
+
+  it("reads a field through a link the referenced value holds", async () => {
+    // The field's labels are the ones stored where the link leads.
+
+    const inputSchema = withField("mail", {
+      type: "object",
+      properties: { recipient: FLOORED },
+    });
+    const sentThrough = (target: JSONSchema) =>
+      sentAfterCall(inputSchema, async (runtime) => {
+        const recipient = llmToolExecutionHelpers.traverseAndCellify(
+          runtime,
+          space,
+          await seedKernelCell(
+            runtime,
+            "linked-recipient",
+            target,
+            "alice@example.com",
+          ),
+        );
+        return {
+          route: "a",
+          mail: await seedKernelCell(runtime, "linking-mail", {
+            type: "object",
+            properties: { recipient: { type: "string" } },
+          } as JSONSchema, { recipient }),
+        };
+      });
+    expect(await sentThrough(PLAIN_STRING)).toEqual([]);
+    expect(await sentThrough(KERNEL_STRING)).toEqual(["a"]);
+  });
+
+  it("denies a field whose link carries the floor but whose target does not", async () => {
+    // A label on the slot that holds a link endorses the reference, not the
+    // contents of its target (§3.7.2, §8.2.4).
+
+    expect(
+      await sentAfterCall(
+        withField("mail", {
+          type: "object",
+          properties: { recipient: FLOORED },
+        }),
+        async (runtime) => {
+          const recipient = llmToolExecutionHelpers.traverseAndCellify(
+            runtime,
+            space,
+            await seedKernelCell(
+              runtime,
+              "untrusted-recipient",
+              PLAIN_STRING,
+              "attacker@example.com",
+            ),
+          );
+          return {
+            route: "a",
+            mail: await seedKernelCell(
+              runtime,
+              "trusted-slot-mail",
+              mailSchema(KERNEL_STRING),
+              { recipient },
+            ),
+          };
+        },
+      ),
+    ).toEqual([]);
+  });
+
+  it("gates a referenced value that leads back to itself", async () => {
+    const inputSchema = {
+      type: "object",
+      properties: { route: { type: "string" }, tree: { $ref: "#/$defs/Node" } },
+      required: ["route"],
+      $defs: {
+        Node: {
+          type: "object",
+          properties: { next: { $ref: "#/$defs/Node" }, recipient: FLOORED },
+        },
+      },
+    } as unknown as JSONSchema;
+    const nodeSchema = (recipient: JSONSchema) =>
+      ({
+        type: "object",
+        properties: { recipient, next: {} },
+      }) as unknown as JSONSchema;
+    const selfLinked = (cell: Cell<unknown>) => ({
+      recipient: "alice@example.com",
+      next: cell,
+    });
+    expect(
+      await sentPassing(
+        inputSchema,
+        "tree",
+        nodeSchema(PLAIN_STRING),
+        selfLinked,
+      ),
+    ).toEqual([]);
+    expect(
+      await sentPassing(
+        inputSchema,
+        "tree",
+        nodeSchema(KERNEL_STRING),
+        selfLinked,
+      ),
+    ).toEqual(["a"]);
+  });
+
+  it("denies a value whose floor sits beside a schema reference the walk has met before", async () => {
+    // The same definition reached through a reference with a floor beside it
+    // is a different constraint, so meeting it again does not close the cycle.
+
+    expect(
+      await sentPassing(
+        {
+          type: "object",
+          properties: {
+            route: { type: "string" },
+            tree: { $ref: "#/$defs/Node" },
+          },
+          required: ["route"],
+          $defs: {
+            Node: {
+              type: "object",
+              properties: {
+                recipient: { type: "string" },
+                next: {
+                  $ref: "#/$defs/Node",
+                  ifc: { requiredIntegrity: [KERNEL_ATOM] },
+                },
+              },
+            },
+          },
+        } as unknown as JSONSchema,
+        "tree",
+        {
+          type: "object",
+          properties: { recipient: PLAIN_STRING, next: {} },
+        } as unknown as JSONSchema,
+        (cell: Cell<unknown>) => ({
+          recipient: "attacker@example.com",
+          next: cell,
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  describe("a floor on the whole referenced value", () => {
+    const inputSchema = withField("mail", {
+      type: "object",
+      ifc: { requiredIntegrity: [KERNEL_ATOM] },
+    });
+
+    it("denies a value only one field of which carries it", async () => {
+      expect(
+        await sentPassing(
+          inputSchema,
+          "mail",
+          mailSchema(PLAIN_STRING, KERNEL_STRING),
+          MAIL,
+        ),
+      ).toEqual([]);
+    });
+
+    it("denies a value whose only part leads back to it, labeled on that part alone", async () => {
+      // The value holds no leaf of its own, so it counts as one, and the label
+      // on its part covers only that part.
+
+      expect(
+        await sentPassing(
+          inputSchema,
+          "mail",
+          {
+            type: "object",
+            properties: { self: { ifc: { integrity: [KERNEL_ATOM] } } },
+          } as unknown as JSONSchema,
+          (cell: Cell<unknown>) => ({ self: cell }),
+        ),
+      ).toEqual([]);
+    });
+
+    it("denies a value one part of which is another scope's instance lacking it", async () => {
+      // A space-scoped and a user-scoped instance of one document share its
+      // id and path, and hold different values and labels.
+
+      expect(
+        await sentAfterCall(inputSchema, async (runtime) => {
+          const schema = {
+            type: "object",
+            properties: {
+              recipient: PLAIN_STRING,
+              nonce: KERNEL_STRING,
+              next: {},
+            },
+          } as unknown as JSONSchema;
+          const tx = runtime.edit();
+          setCfcImplementationIdentity(tx, {
+            kind: "builtin",
+            builtinId: "agent-kernel-demo",
+          });
+          const shared = runtime.getCell(space, "scoped-mail", schema, tx);
+          const user = runtime.getCellFromLink(
+            { ...shared.getAsNormalizedFullLink(), scope: "user" },
+            schema,
+            tx,
+          );
+          user.set({ recipient: "attacker@example.com" } as any);
+          shared.set({ nonce: "n", next: user } as any);
+          tx.prepareCfc();
+          expect((await tx.commit().settled).ok).toBeDefined();
+          await runtime.idle();
+          return {
+            route: "a",
+            mail: {
+              "@link": createLLMFriendlyLink(
+                shared.getAsNormalizedFullLink(),
+                space,
+              ),
+            },
+          };
+        }),
+      ).toEqual([]);
+    });
+
+    it("runs the tool for a value labeled as a whole", async () => {
+      expect(
+        await sentPassing(
+          inputSchema,
+          "mail",
+          mailSchema(PLAIN_STRING, PLAIN_STRING, { integrity: [KERNEL_ATOM] }),
+          MAIL,
+        ),
+      ).toEqual(["a"]);
+    });
+
+    it("runs the tool for a value every field of which carries it", async () => {
+      expect(
+        await sentPassing(
+          inputSchema,
+          "mail",
+          mailSchema(KERNEL_STRING, KERNEL_STRING),
+          MAIL,
+        ),
+      ).toEqual(["a"]);
+    });
   });
 });
 

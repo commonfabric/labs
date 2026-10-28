@@ -79,9 +79,10 @@ export interface StoredSetupBuild {
 
   /**
    * A digest of the projection map: each result path that links to a
-   * positional cell, with the cell's number and the path linked inside it.
-   * It changes where two cells of one description trade places, which the
-   * cells' descriptions cannot show.
+   * positional cell, a named instance among them at its legacy number, with
+   * the cell's number and the path linked inside it. It changes where two
+   * cells of one description trade places, which the cells' descriptions
+   * cannot show.
    */
   projection: string;
 }
@@ -108,12 +109,41 @@ export interface StampedPattern extends PatternLevel {
 }
 
 /**
- * The projection map of `result`: for each `$alias` in it whose partial
- * cause is positional, the path of the slot holding it, the cell's number,
- * and the path the alias names inside the cell, in slot-path order. An alias
- * is a leaf: nothing inside one is a slot.
+ * The projection map of `result`, the result of the pattern level `level`:
+ * for each `$alias` in it whose partial cause is positional, the path of the
+ * slot holding it, the cell's number, and the path the alias names inside the
+ * cell, in slot-path order. An alias is a leaf: nothing inside one is a slot.
+ *
+ * An alias of a named instance of `level`, one of its
+ * `derivedInternalCells` with a `legacyPartialCause`, counts as positional at
+ * its legacy number, as `numberedCells()` numbers it. The map of a build is
+ * therefore the same whether or not it names instances.
  */
-export function projectionMap(result: unknown): [string, number, string][] {
+export function projectionMap(
+  result: unknown,
+  level: PatternLevel,
+): [string, number, string][] {
+  const legacyNumbers = new Map<string, number>();
+  const descriptors = Array.isArray(level.derivedInternalCells)
+    ? level.derivedInternalCells
+    : [];
+  for (const descriptor of descriptors) {
+    if (!isObjectNotArray(descriptor)) continue;
+    const legacy = descriptor.legacyPartialCause;
+    if (isObjectNotArray(legacy) && typeof legacy.$generated === "number") {
+      legacyNumbers.set(
+        hashStringOf(descriptor.partialCause as FabricValue),
+        legacy.$generated,
+      );
+    }
+  }
+
+  const numberOf = (cause: unknown): number | undefined => {
+    if (!isObjectNotArray(cause)) return undefined;
+    if (typeof cause.$generated === "number") return cause.$generated;
+    return legacyNumbers.get(hashStringOf(cause as FabricValue));
+  };
+
   const entries: [string, number, string][] = [];
   const seen = new Set<unknown>();
   const walk = (value: unknown, path: string[]) => {
@@ -121,12 +151,12 @@ export function projectionMap(result: unknown): [string, number, string][] {
     seen.add(value);
     const alias = isObjectNotArray(value) ? value.$alias : undefined;
     if (isObjectNotArray(alias)) {
-      const cause = alias.partialCause;
-      if (isObjectNotArray(cause) && typeof cause.$generated === "number") {
+      const number = numberOf(alias.partialCause);
+      if (number !== undefined) {
         const inner = Array.isArray(alias.path)
           ? alias.path.map(String).join("/")
           : "";
-        entries.push([path.join("/"), cause.$generated, inner]);
+        entries.push([path.join("/"), number, inner]);
       }
       return;
     }
@@ -154,7 +184,9 @@ export function storedSetupBuildOf(
     state: cells.filter((cell) => cell.hasState).map((
       cell,
     ) => [cell.number, cell.description]),
-    projection: hashStringOf(projectionMap(pattern.result) as FabricValue),
+    projection: hashStringOf(
+      projectionMap(pattern.result, pattern) as FabricValue,
+    ),
   };
 }
 

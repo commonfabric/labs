@@ -267,4 +267,151 @@ describe("list-coordinator-instances", () => {
       });
     }
   }
+
+  //
+  // An aborted reconcile
+  //
+  // A serving runtime aborts a reconcile's transaction when the run read a
+  // scoped instance the loop has not produced yet. The two identities below
+  // select one space-scoped child, so the child one of them set up is the
+  // child the other's aborted reconcile also names.
+  //
+
+  for (
+    const [name, builtin] of [["map", map], ["filter", filter], [
+      "flatMap",
+      flatMap,
+    ]] as const
+  ) {
+    for (const firstCommits of [true, false]) {
+      it(
+        firstCommits
+          ? `keeps running the ${name} child one identity set up when another identity's reconcile is aborted`
+          : `leaves no ${name} child running when the only reconcile that set it up is aborted`,
+        async () => {
+          const signer = await Identity.fromPassphrase(
+            "list-coordinator-instances withdrawal",
+          );
+          const server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+          const storage = EmulatedStorageManager.connectTo(server, {
+            as: signer,
+          });
+          const engine = await server.engineForSpace(signer.did());
+          expect(
+            acquireExecutionLease(engine, {
+              space: signer.did(),
+              holder: executionLeaseHolder(signer.did()),
+              now: Date.now(),
+              ttlMs: 60000,
+            }),
+          ).toBe(true);
+          const runtime = new Runtime({
+            apiUrl: new URL(import.meta.url),
+            storageManager: storage,
+            servingPosture: true,
+            experimental: { serverExecution: true },
+          });
+          const identities = await Promise.all(
+            ["withdrawal-alice", "withdrawal-bob"].map(async (passphrase) => ({
+              principal: (await Identity.fromPassphrase(passphrase)).did(),
+              sessionId: `${passphrase}-session`,
+            })),
+          );
+          const cancellations: (() => void)[] = [];
+          try {
+            const { pattern } = createTrustedBuilder(runtime).commonfabric;
+            const op = pattern(({ element }: { element: number }) => ({
+              value: element,
+            }));
+            const inputs = runtime.getCell<{ list: unknown[]; op: Pattern }>(
+              signer.did(),
+              "withdrawal inputs",
+            );
+            const parent = runtime.getCell(signer.did(), "withdrawal parent");
+            const output = runtime.getCell(signer.did(), "withdrawal output")
+              .getAsNormalizedFullLink();
+            const setup = runtime.edit();
+            const element = runtime.getCell<number>(
+              signer.did(),
+              "withdrawal element",
+              undefined,
+              setup,
+            );
+            element.set(1);
+            inputs.withTx(setup).set({ list: [element], op });
+            expect((await setup.commit().settled).error).toBeUndefined();
+            const coordinator = builtin(
+              inputs,
+              () => {},
+              (cancel) => {
+                if (cancel) cancellations.push(cancel);
+              },
+              {},
+              parent,
+              runtime,
+              output,
+            );
+            if (typeof coordinator === "function") {
+              throw new Error(`Expected a ${name} coordinator`);
+            }
+            const reconcile = (identity: typeof identities[number]) => {
+              const tx = runtime.edit();
+              tx.tx.scopeKeyIdentity = identity;
+              const plan = listCoordinatorPlan(
+                runtime,
+                tx,
+                name,
+                inputs,
+                {
+                  type: "object",
+                  properties: { op: { asCell: ["cell"] } },
+                },
+                parent,
+                output,
+              );
+              const child = listElementResultCell(
+                runtime,
+                tx,
+                name,
+                plan.container,
+                [...plan.elementKeys.values()][0],
+              );
+              coordinator.action(tx);
+              runtime.prepareTxForCommit(tx);
+              return { tx, child };
+            };
+
+            const first = firstCommits ? reconcile(identities[0]) : undefined;
+            if (first !== undefined) {
+              expect((await first.tx.commit().settled).error)
+                .toBeUndefined();
+              expect(runtime.runner.isRunning(first.child)).toBe(true);
+            }
+            const second = reconcile(identities[1]);
+            const { child } = second;
+            expect(child.getAsNormalizedFullLink()).toEqual(
+              (first ?? second).child.getAsNormalizedFullLink(),
+            );
+            expect(runtime.runner.isRunning(child)).toBe(true);
+            second.tx.abort(
+              new Error(
+                "served derivation read a scoped instance not yet produced",
+              ),
+            );
+            expect((await second.tx.commit().settled).error?.name).toBe(
+              "StorageTransactionAborted",
+            );
+
+            expect(runtime.runner.isRunning(child)).toBe(firstCommits);
+          } finally {
+            for (const cancel of cancellations) cancel();
+            await storage.synced();
+            await runtime.dispose({ closeStorage: false });
+            await storage.close();
+            await server.close();
+          }
+        },
+      );
+    }
+  }
 });

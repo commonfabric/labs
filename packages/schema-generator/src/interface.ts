@@ -7,6 +7,8 @@ import type {
 import { type Mutable } from "@commonfabric/utils/types";
 import type { ExpansionBudget } from "./typescript/expanding-recursion.ts";
 
+import type { AnyValueBesideUnwritten } from "./ifc-labels.ts";
+
 /**
  * JSON Schema object type - mutable version of the Common Fabric JSONSchema interface
  */
@@ -155,6 +157,12 @@ export interface SchemaGenerationOptions {
 }
 
 /**
+ * The keys an index signature applies to: every key (`"string"`), or numeric
+ * keys alone (`"number"`).
+ */
+export type IndexKeys = "string" | "number";
+
+/**
  * Unified context for schema generation - contains all state in one place
  */
 export interface GenerationContext {
@@ -185,6 +193,44 @@ export interface GenerationContext {
     | { kind: "void" }
     | { kind: "intersection" | "union"; parts: () => MutableJSONSchema[] }
   >;
+
+  /**
+   * The keys the index signature a schema states as `additionalProperties`
+   * applies to, where the schema alone no longer says: every key
+   * (`"string"`), or numeric keys alone (`"number"`), as a `[n: number]`
+   * signature's are. A schema with no record holds data under any key and
+   * establishes it under none it shares with another part
+   * (`indexKeysOf()`). A copy carries the record of what it copies through
+   * `withOriginOf()` and `withValueRecordsOf()`.
+   */
+  indexKeys?: WeakMap<MutableJSONSchemaObj, IndexKeys>;
+
+  /**
+   * A number for each record of `schemaOrigins` that a merge's key has met,
+   * so equal schemas that came from different types key different merges
+   * (`withOriginsNumbered()`).
+   */
+  originNumbers?: Map<object, number>;
+
+  /**
+   * The name of each intersection the node path met again inside itself while
+   * merging it, by the key `mergeParts()` gives the merge: the merge is
+   * written as a definition of that name, and each meeting as a reference.
+   */
+  mergedIntersectionNames: Map<string, string>;
+
+  /**
+   * A fresh name for an anonymous definition, `AnonymousType_` and a count
+   * the generator keeps for every name it gives one.
+   */
+  nameAnonymousDefinition: () => string;
+
+  /**
+   * Each value an intersection the checker gives `any` settled to that met a
+   * definition still being generated, checked once generation is done
+   * (`assertAnyValuesKeptLabels()`).
+   */
+  anyValuesBesideUnwritten: AnyValueBesideUnwritten[];
 
   // Stack state (push/pop during recursion)
 

@@ -48,10 +48,12 @@ import {
   type ExampleMakers,
   fabricValueOfTextWithMods,
   type FixtureJson,
+  type FixtureRequirements,
   fixtureTextOf,
   plainJsonTextOf,
   probedPathsOf,
   probesOf,
+  requirementsOf,
   sparseArrayOf,
   STUB_CODEC_EXCLUSION,
   type TextWithMods,
@@ -89,6 +91,9 @@ export type Fvj1Outcome =
  * decoded, and what it decodes to is re-encoded.
  *
  * `section` names the part of the formal spec the case exercises.
+ * `requires` names the flavors of regular expression whose construction the
+ * case's outcome depends on; the fixture entry adds the guarantees of size the
+ * case needs past the floors.
  * `divergence` is a note on what the format requires, for a case where this
  * package does not do it. The format's outcome is never typed here. For a
  * value, it is the value's own probes, and the text {@link plainJsonTextOf}
@@ -103,6 +108,7 @@ export type Fvj1ConformanceCase =
   & {
     readonly name: string;
     readonly section: string;
+    readonly requires?: Pick<FixtureRequirements, "flavors">;
     readonly divergence?: string;
   }
   & (
@@ -176,10 +182,6 @@ const RESERVED_KEY_NOTE = "Section 4 lets a record carry any key, and its " +
   "`__proto__` and `constructor` on both sides of the wire. An " +
   "implementation on a host that does not route assignment through a " +
   "prototype reserves no names.";
-
-/** Note shared by the cases with a `RegExp@1` state lacking a field. */
-const REGEXP_FIELDS_NOTE = "Section 3 requires all three fields of a " +
-  "`RegExp@1` state, and gives `flavor` no default.";
 
 /** The cases that do not range over the class tables. */
 const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
@@ -681,6 +683,7 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     name: "regular expression that does not construct",
     section: "3-json-encoding.md section 3, `RegExp@1`",
     text: 'fvj1:{"/RegExp@1":{"flags":"","flavor":"es2025","source":"("}}',
+    requires: { flavors: ["es2025"] },
   },
   {
     name: "unavailable pairing an error kind with a transient reason",
@@ -892,24 +895,16 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     name: "error with no message",
     section: SECTION_ERROR,
     text: 'fvj1:{"/Error@1":{"name":null,"type":"Error"}}',
-    divergence: "Section 3 requires `message` of an `Error@1` state. This " +
-      "implementation reads an absent message as empty.",
   },
   {
     name: "error with no type",
     section: SECTION_ERROR,
     text: 'fvj1:{"/Error@1":{"message":"m","name":null}}',
-    divergence: "Section 3 requires `type` of an `Error@1` state. This " +
-      "implementation reads an absent type as the `name`, or as `Error` " +
-      "where the name is `null` or absent too.",
   },
   {
     name: "error with the empty state",
     section: SECTION_ERROR,
     text: 'fvj1:{"/Error@1":{}}',
-    divergence: "Section 3 requires `type` and `message` of an `Error@1` " +
-      "state. This implementation reads the empty state as an `Error` with " +
-      "an empty message.",
   },
   {
     name: "unavailable with a string state",
@@ -967,34 +962,27 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     name: "regular expression with a flag es2025 lacks",
     section: SECTION_REGEXP,
     text: 'fvj1:{"/RegExp@1":{"flags":"z","flavor":"es2025","source":"a"}}',
+    requires: { flavors: ["es2025"] },
   },
   {
     name: "regular expression with no flags",
     section: SECTION_REGEXP,
     text: 'fvj1:{"/RegExp@1":{"flavor":"es2025","source":"a"}}',
-    divergence: REGEXP_FIELDS_NOTE + " This implementation reads absent " +
-      "flags as empty.",
   },
   {
     name: "regular expression with no flavor",
     section: SECTION_REGEXP,
     text: 'fvj1:{"/RegExp@1":{"flags":"","source":"a"}}',
-    divergence: REGEXP_FIELDS_NOTE + " This implementation reads an absent " +
-      "flavor as `es2025`, a default the format does not have.",
   },
   {
     name: "regular expression with no source",
     section: SECTION_REGEXP,
     text: 'fvj1:{"/RegExp@1":{"flags":"","flavor":"es2025"}}',
-    divergence: REGEXP_FIELDS_NOTE + " This implementation reads an absent " +
-      "source as empty.",
   },
   {
     name: "regular expression with the empty state",
     section: SECTION_REGEXP,
     text: 'fvj1:{"/RegExp@1":{}}',
-    divergence: REGEXP_FIELDS_NOTE + " This implementation reads the empty " +
-      "state as an empty `es2025` pattern with no flags.",
   },
   {
     name: "tag with no version",
@@ -1265,9 +1253,11 @@ function fixtureEntryOf(
     }
   }
 
+  const requires = requirementsOf(stated, conformanceCase.requires?.flavors);
   const entry: Record<string, FixtureJson> = {
     name,
     section,
+    ...(requires === undefined ? {} : { requires }),
     ...stated,
     ...specDecoded,
   };

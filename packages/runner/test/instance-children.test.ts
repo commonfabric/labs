@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { deepFreeze } from "@commonfabric/data-model";
+import {
+  deepFreeze,
+  fabricFromConvertibleJsValue,
+} from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -10,6 +13,7 @@ import type { RuntimeProgram } from "../src/harness/types.ts";
 import { getDerivedInternalCellLink } from "../src/link-utils.ts";
 import { type MetaField, rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { Runtime } from "../src/runtime.ts";
+import { storedSetupBuildOf } from "../src/stored-setup-build.ts";
 
 const signer = await Identity.fromPassphrase("instance-children");
 const space = signer.did();
@@ -65,6 +69,13 @@ const DEPLOYED = parentProgram([
   "  return { views: [a], aCount: a.count };",
 ].join("\n"));
 
+// The parent as deployed with two children, `a` and `b`, at positional
+// spots.
+const DEPLOYED_TWO = parentProgram([
+  "  const [a, b] = [Counter({ label: 'a' }), Counter({ label: 'b' })];",
+  "  return { views: [a, b], aCount: a.count, bCount: b.count };",
+].join("\n"));
+
 // The same parent with `a` bound to a `const`, which names it.
 const NAMED = parentProgram([
   "  const a = Counter({ label: 'a' });",
@@ -88,18 +99,18 @@ const NAMED_TWO_NEWER_COUNTER = parentProgram(
   `${COUNTER}// A newer version.\n`,
 );
 
-// `NAMED` with a positional sibling `s` inserted ahead of `a`, which puts it
-// at the positional spot `DEPLOYED` gives `a`.
-const POSITIONAL_SIBLING_OF_NAMED = parentProgram([
+// The parent with `a` removed and a positional `s` in its place, at the
+// positional spot `DEPLOYED` gives `a`. It names no instance, so no child is
+// carried over to one.
+const POSITIONAL_SIBLING = parentProgram([
   "  const [s] = [Other({ label: 's' })];",
-  "  const a = Counter({ label: 'a' });",
-  "  return { views: [s, a], aCount: a.count, sCount: s.count };",
+  "  return { views: [s], sCount: s.count };",
 ].join("\n"));
 
 describe("instance-children", () => {
   // Every runtime here names instances, through the experimental flag that
   // turns naming on. Each case writes the parent's `instanceChildren` record
-  // itself.
+  // itself, save the one that shows what a parent with none carries over.
 
   let storageManager: ReturnType<typeof StorageManager.emulate>;
   let rt: Runtime;
@@ -144,18 +155,19 @@ describe("instance-children", () => {
   };
 
   /**
-   * A stopped parent that ran `DEPLOYED`, holding `a`'s count of 7 at its
-   * positional spot, with its pattern pointers naming `named`, the source it
-   * runs.
+   * A stopped parent that ran `deployed`, holding `a`'s count of 7 at its
+   * positional spot and, where `deployed` sets one up, `b`'s count of 9 at
+   * its own, with its pattern pointers naming `named`, the source it runs,
+   * and the setup record `named`'s build stamps.
    */
   const deployedParent = async (
     name: string,
     named: RuntimeProgram = NAMED,
+    deployedProgram: RuntimeProgram = DEPLOYED,
   ): Promise<Cell<Record<string, unknown>>> => {
-    const deployed = await compile(DEPLOYED);
-    const namedRef = rt.patternManager.getArtifactEntryRef(
-      await compile(named),
-    )!;
+    const deployed = await compile(deployedProgram);
+    const namedPattern = await compile(named);
+    const namedRef = rt.patternManager.getArtifactEntryRef(namedPattern)!;
     const tx = rt.edit();
     const cell = rt.getCell<Record<string, unknown>>(
       space,
@@ -168,6 +180,9 @@ describe("instance-children", () => {
     await running.pull();
     const write = rt.edit();
     cell.withTx(write).key("aCount").set(7);
+    if (deployedProgram === DEPLOYED_TWO) {
+      cell.withTx(write).key("bCount").set(9);
+    }
     expect((await write.commit().settled).error).toBeUndefined();
     await rt.idle();
     rt.runner.stop(cell);
@@ -175,6 +190,13 @@ describe("instance-children", () => {
     await writeMeta(cell, {
       patternIdentity: ref,
       patternSetupIdentity: ref,
+      patternSetupBuild: fabricFromConvertibleJsValue(
+        storedSetupBuildOf(
+          namedPattern,
+          ref,
+          (artifact) => rt.patternManager.getLeastArtifactEntryRef(artifact),
+        ) as never,
+      ),
     });
     return cell;
   };
@@ -212,23 +234,27 @@ describe("instance-children", () => {
   };
 
   describe("a named instance", () => {
-    it("runs the child its parent's `instanceChildren` records for it", async () => {
-      const cell = await deployedParent("recorded-child");
+    it("runs the child its parent's `instanceChildren` records for it, rather than the one it would carry over", async () => {
+      const cell = await deployedParent("recorded-child", NAMED, DEPLOYED_TWO);
       await writeMeta(cell, {
-        instanceChildren: [entry("a", positionalChild(cell, 0))],
+        instanceChildren: [entry("a", positionalChild(cell, 1))],
       });
 
       const result = await update(cell, NAMED);
 
-      expect(result.aCount).toBe(7);
+      expect(result.aCount).toBe(9);
     });
 
-    it("runs a child of its own when its parent's `instanceChildren` records none for it", async () => {
-      const cell = await deployedParent("no-recorded-child");
+    it("carries over the child the pattern its parent last set up gives it, when its parent's `instanceChildren` records none for it", async () => {
+      const cell = await deployedParent(
+        "no-recorded-child",
+        NAMED,
+        DEPLOYED_TWO,
+      );
 
       const result = await update(cell, NAMED);
 
-      expect(result.aCount).toBe(0);
+      expect(result.aCount).toBe(7);
     });
 
     it("binds a child of its own when it is named for an inherited member", async () => {
@@ -300,7 +326,7 @@ describe("instance-children", () => {
         instanceChildren: [entry("a", positionalChild(cell, 0))],
       });
 
-      await expect(update(cell, POSITIONAL_SIBLING_OF_NAMED)).rejects.toThrow(
+      await expect(update(cell, POSITIONAL_SIBLING)).rejects.toThrow(
         /refusing to set up .*#Other for a positional spot over the child of .*#Counter that instance "a" carries/,
       );
     });
@@ -324,7 +350,7 @@ describe("instance-children", () => {
     it("sets up a positional instance over a child its `instanceChildren` records for no instance", async () => {
       const cell = await deployedParent("positional-over-unrecorded");
 
-      const result = await update(cell, POSITIONAL_SIBLING_OF_NAMED);
+      const result = await update(cell, POSITIONAL_SIBLING);
 
       expect(result.sCount).toBe(7);
     });
@@ -335,8 +361,9 @@ describe("instance-children", () => {
     // object inherits. Each is an ordinary `const` name, so each has to
     // survive the record, the guard and a start.
 
-    // `NAMED` and `POSITIONAL_SIBLING_OF_NAMED`, with the instance bound to
-    // `name` in place of `a`.
+    // `NAMED`, and `NAMED` with a positional sibling `s` inserted ahead of the
+    // instance, which puts it at the positional spot `DEPLOYED` gives `a`,
+    // with the instance bound to `name` in place of `a`.
     const namedAs = (name: string) =>
       parentProgram([
         `  const ${name} = Counter({ label: 'a' });`,

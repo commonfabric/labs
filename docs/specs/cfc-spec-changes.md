@@ -574,10 +574,12 @@ contract on the write side, one contribution per link so no laundering across
 siblings), and the flow hereditary meet when flow labels persist — against the
 floor with **exact-match** membership via the single shared predicate
 `cfcIntegritySatisfiesFloor` (observation.ts), which the read-side gate and the
-D2 tool-input floor now also call so D5's pattern/concept upgrade lands in one
-place. SC-18's own semantics are honored: floor-is-a-minimum, overwrite checked
-against the declared floor only (no meet across successive writes, no prior-
-value consultation), and empty integrity on a floor-declaring path fails (a
+D2 tool-input floor also reach, both through its coherent form
+(`cfcIntegritySatisfiesFloorCoherently`), so D5's pattern/concept upgrade
+lands in one place. SC-18's own semantics are honored: floor-is-a-minimum,
+overwrite checked against the declared floor only (no meet across successive
+writes, no prior-value consultation), and empty integrity on a floor-declaring
+path fails (a
 stamped-`LlmDerived`-only value fails any floor by construction — closing the
 write-side half of the vacuous pass). Wildcard (`*`) floor entries and
 pattern-setup/seed initialization stay exempt (v1 scope); (a) the standard-

@@ -5,6 +5,8 @@ import {
   FabricInstance,
   FabricPrimitive,
   type FabricValue,
+  isKeyableObjectNotArray,
+  isKeyableObjectOrArray,
   isWalkableObjectOrArray,
   refuseFabricInstance,
 } from "@commonfabric/data-model";
@@ -15,6 +17,7 @@ import {
 
 import {
   internSchema,
+  internSchemaAsTaggedHashString,
   isNontrivialSchema,
   toDeepFrozenSchema,
 } from "@commonfabric/data-model-schema";
@@ -76,11 +79,12 @@ import type { CfcConfClause } from "../cfc/clause.ts";
 import {
   type CfcLabelView,
   cfcLabelViewForCellFailClosed,
+  cfcLabelViewForResolvedTargetWithStatus,
 } from "../cfc/label-view.ts";
 import {
   cfcConfidentialityForObservationNode,
   type CfcFloorTrustContext,
-  cfcIntegritySatisfiesFloor,
+  cfcIntegritySatisfiesFloorCoherently,
   cfcObservationFitsCeiling,
   type CfcObservationResult,
   joinCfcObservedConfidentiality,
@@ -101,6 +105,7 @@ import { getEntityId } from "../create-ref.ts";
 import { entityUriSchemePrefix } from "../entity-kind.ts";
 import { resolveLink } from "../link-resolution.ts";
 import {
+  addressKey,
   createLLMFriendlyLink,
   getMetaLink,
   matchLLMFriendlyLink,
@@ -2313,23 +2318,73 @@ function toolAllowsObservedConfidentiality(
   return cfcObservationFitsCeiling(observedConfidentiality, maxConfidentiality);
 }
 
-// The integrity a model-supplied tool-input value carries (Epic D2). A value
-// the model passed BY REFERENCE (a `{"@link":…}` to a cell) carries that
-// cell's stored integrity; a value the model emitted as a plain literal
-// carries none — it is model output (stamped at most `LlmDerived`, D1), which
-// by construction lacks any endorsement family. `traverseAndCellify` is the
-// same resolver the invoke path uses, so a reference is read identically here.
-function toolInputValueIntegrity(
+/**
+ * The cell a model-supplied tool-input value references, or `undefined` for a
+ * value the model wrote out as a literal. A reference is a `{"@link":…}`, that
+ * object encoded as a string, or a cell the invoke path already resolved;
+ * `traverseAndCellify` is the resolver the invoke path uses, so a reference is
+ * read identically here.
+ */
+function toolInputReference(
   runtime: Runtime,
   space: MemorySpace,
   value: unknown,
-): unknown[] {
-  const cellified = traverseAndCellify(runtime, space, value);
-  if (!isCell(cellified)) {
-    return [];
+): Cell<unknown> | undefined {
+  if (isCell(value)) return value;
+  if (!isLLMFriendlyLinkObject(value) && typeof value !== "string") {
+    return undefined;
   }
-  const view = cfcLabelViewForCellFailClosed(cellified);
-  return (view?.entries ?? []).flatMap((entry) => entry.label.integrity ?? []);
+  const cellified = traverseAndCellify(runtime, space, value);
+  return isCell(cellified) ? cellified : undefined;
+}
+
+/**
+ * Where the value `cell` names is stored, every link on the way followed: its
+ * space, document, scope and path, the same key for two cells that reach one
+ * stored position.
+ */
+function storedPositionKey(cell: Cell<unknown>): string {
+  return addressKey(cell.resolveAsCell().getAsNormalizedFullLink());
+}
+
+/**
+ * The integrity each part of the value `cell` references carries, for a floor
+ * on the whole of it: one list per leaf, holding the labels that cover that
+ * leaf where it is stored, its own and its ancestors' in the document that
+ * holds it (the entries its resolved-target view holds at its own path). A
+ * label on one part covers only that part, and a label on a slot that holds a
+ * link endorses the reference, not the target (§3.7.2, §8.2.4). A
+ * container holding no leaf counts as a leaf itself, as does a part that leads
+ * back to a position it sits within, which adds no leaf the walk has not
+ * reached. Returns `"unreadable"` where a label read fails or a part is a
+ * `FabricInstance`, whose contents this walk cannot reach.
+ */
+function referencedValueLeafIntegrity(
+  cell: Cell<unknown>,
+  within: ReadonlySet<string> = new Set(),
+): (readonly CfcAtom[])[] | "unreadable" {
+  const position = storedPositionKey(cell);
+  if (within.has(position)) return [];
+  const value = cell.getRawUntyped({ lastNode: "value" });
+  if (value instanceof FabricInstance) return "unreadable";
+  if (isKeyableObjectOrArray(value)) {
+    const parts = new Set([...within, position]);
+    const leaves: (readonly CfcAtom[])[] = [];
+    const keys = Array.isArray(value) ? [...value.keys()] : Object.keys(value);
+    for (const key of keys) {
+      const part = referencedValueLeafIntegrity(cell.key(key), parts);
+      if (part === "unreadable") return part;
+      for (const leaf of part) leaves.push(leaf);
+    }
+    if (leaves.length > 0) return leaves;
+  }
+  const { view, readFailed } = cfcLabelViewForResolvedTargetWithStatus(cell);
+  if (readFailed) return "unreadable";
+  return [
+    (view?.entries ?? [])
+      .filter((entry) => entry.path.length === 0)
+      .flatMap((entry) => (entry.label.integrity ?? []) as readonly CfcAtom[]),
+  ];
 }
 
 /**
@@ -2395,39 +2450,34 @@ const subschemaPath = (
   return path;
 };
 
-// Scan a tool's `inputSchema` for a floor (`ifc.requiredIntegrity`) declared
-// as anything but a list, at every position the schema reaches, whatever the
-// model supplied: a malformed declaration refuses the call even where no value
-// reaches it (§8.10.3), as a malformed ceiling does
-// (`toolAllowsObservedConfidentiality`). Returns the first such field's reason.
-// The positions are every subschema `forEachSubschema` names, the keywords our
-// schemas never emit included, and every reference target. A reference the
-// session cannot resolve is left to `toolInputRequiredIntegrityFailure`, which
-// refuses the call wherever a supplied value reaches one.
-function toolInputMalformedFloor(
+/**
+ * The first reason `check` gives at a position of a tool's `inputSchema`, or
+ * that `unresolvable` gives at a reference the session cannot resolve. The
+ * positions are every subschema `forEachSubschema` names, the keywords our
+ * schemas never emit included, and every reference target.
+ */
+function scanToolInputSchema(
   schema: unknown,
   path: string,
+  check: (node: Record<string, unknown>, path: string) => string | undefined,
+  unresolvable: (path: string) => string | undefined,
   root?: unknown,
   followed: ReadonlySet<string> = new Set(),
   document = "",
 ): string | undefined {
   if (!isObjectNotArray(schema)) return undefined;
-  const ifc = schema.ifc;
-  if (
-    isObjectNotArray(ifc) && ifc.requiredIntegrity !== undefined &&
-    !Array.isArray(ifc.requiredIntegrity)
-  ) {
-    return `field "${path || "(root)"}" declares a requiredIntegrity that is ` +
-      `not a list; refusing the call (fail closed)`;
-  }
+  const found = check(schema, path);
+  if (found !== undefined) return found;
   // A node's own subschemas are scanned wherever it sits, a reference site's
   // beside its `$ref` included; only following the reference is limited.
   const owningRoot = root ?? schema;
   let failure: string | undefined;
   forEachSubschema(schema as JSONSchema, (child, keyword, key, index) => {
-    failure = toolInputMalformedFloor(
+    failure = scanToolInputSchema(
       child,
       subschemaPath(path, keyword, key, index),
+      check,
+      unresolvable,
       owningRoot,
       followed,
       document,
@@ -2444,14 +2494,87 @@ function toolInputMalformedFloor(
   const key = isExternalSchemaRef(ref) ? ref : `${document}${ref}`;
   if (followed.has(key)) return undefined;
   const node = resolveToolInputSchemaNode(schema, root);
-  if (node === undefined || node === "unresolvable") return undefined;
-  return toolInputMalformedFloor(
+  if (node === undefined) return undefined;
+  if (node === "unresolvable") return unresolvable(path);
+  return scanToolInputSchema(
     node.structural,
     path,
+    check,
+    unresolvable,
     node.root,
     new Set([...followed, key]),
     isExternalSchemaRef(ref) ? ref : document,
   );
+}
+
+/**
+ * What a schema reference site means wherever the walk meets it: the
+ * reference, named within the document that holds it, and the constraints
+ * written beside it, by content, so two sites naming one definition with
+ * different constraints beside it stay apart. A tool's declared schema can be
+ * read through a cell, so a site is named by content rather than identity, and
+ * its siblings are copied before they are hashed.
+ */
+function schemaReferenceSiteKey(
+  site: Record<string, unknown>,
+  ref: string,
+  document: string,
+): string {
+  const { $ref: _, ...siblings } = site;
+  const beside = Object.keys(siblings).length === 0
+    ? ""
+    : internSchemaAsTaggedHashString(
+      toDeepFrozenSchema(siblings as JSONSchema),
+    );
+  return `${isExternalSchemaRef(ref) ? ref : `${document}${ref}`}|${beside}`;
+}
+
+// Scan a tool's `inputSchema` for a floor (`ifc.requiredIntegrity`) declared
+// as anything but a list, at every position the schema reaches, whatever the
+// model supplied: a malformed declaration refuses the call even where no value
+// reaches it (§8.10.3), as a malformed ceiling does
+// (`toolAllowsObservedConfidentiality`). Returns the first such field's reason.
+// A reference the session cannot resolve is left to
+// `toolInputRequiredIntegrityFailure`, which refuses the call wherever a
+// supplied value reaches one.
+function toolInputMalformedFloor(
+  schema: unknown,
+  path: string,
+): string | undefined {
+  return scanToolInputSchema(schema, path, (node, at) => {
+    const ifc = node.ifc;
+    return isObjectNotArray(ifc) && ifc.requiredIntegrity !== undefined &&
+        !Array.isArray(ifc.requiredIntegrity)
+      ? `field "${at || "(root)"}" declares a requiredIntegrity that is ` +
+        `not a list; refusing the call (fail closed)`
+      : undefined;
+  }, () => undefined);
+}
+
+/**
+ * Whether `schema`, at a position of a tool's `inputSchema`, may declare a
+ * floor there or beneath it: one it declares, or a reference the session
+ * cannot resolve, behind which one could sit.
+ */
+function toolInputSchemaMayDeclareFloor(
+  schema: unknown,
+  root: unknown,
+  document: string,
+): boolean {
+  return scanToolInputSchema(
+    schema,
+    "",
+    (node) =>
+      isObjectNotArray(node.ifc) &&
+        Array.isArray(node.ifc.requiredIntegrity) &&
+        node.ifc.requiredIntegrity.length > 0
+        ? "floor"
+        : undefined,
+    () => "unresolvable",
+    root,
+    new Set(),
+    document,
+  ) !== undefined;
 }
 
 // Walk a tool's `inputSchema` for fields declaring `ifc.requiredIntegrity` and
@@ -2459,8 +2582,11 @@ function toolInputMalformedFloor(
 // docs/history/specs/cfc-trusted-agent-tool-integrity.md piece A/C). A control/routing
 // field (e.g. `sendMail.recipient`) declaring the agent-kernel integrity floor
 // can only be satisfied by an integrity-bearing reference the model passed, not
-// by a string it copied out of a hostile briefing — that fails closed. Returns
-// the first failing field's reason, or undefined if all floors are satisfied.
+// by a string it copied out of a hostile briefing — that fails closed. A
+// reference is walked into wherever a floor can apply at or beneath it: each
+// position beneath it is the referenced value's part there, with the labels
+// stored for that part. Returns the first failing field's reason, or undefined
+// if all floors are satisfied.
 function toolInputRequiredIntegrityFailure(
   runtime: Runtime,
   space: MemorySpace,
@@ -2470,6 +2596,8 @@ function toolInputRequiredIntegrityFailure(
   trust: CfcFloorTrustContext,
   root?: unknown,
   visited?: Set<unknown>,
+  document = "",
+  followedAt: ReadonlyMap<string, ReadonlySet<string>> = new Map(),
 ): string | undefined {
   if (!isObjectOrArray(schema)) {
     return undefined;
@@ -2485,6 +2613,10 @@ function toolInputRequiredIntegrityFailure(
       `refusing the call (fail closed)`;
   }
   const { structural, root: structuralRoot } = node;
+  const ref = schema.$ref;
+  const structuralDocument = typeof ref === "string" && isExternalSchemaRef(ref)
+    ? ref
+    : document;
   // A compound branch recurses on the SAME value, so a self-referential
   // group could otherwise walk forever. Everything reachable at this value
   // position is gated the first time its (interned, identity-stable)
@@ -2492,18 +2624,55 @@ function toolInputRequiredIntegrityFailure(
   const seen = visited ?? new Set<unknown>();
   if (seen.has(structural)) return undefined;
   seen.add(structural);
+  // Where nothing at or beneath this position declares a floor there is
+  // nothing to gate, so the value is not read: a call to a tool that declares
+  // none reads nothing it was passed and resolves none of its references.
+  if (
+    !toolInputSchemaMayDeclareFloor(
+      structural,
+      structuralRoot,
+      structuralDocument,
+    )
+  ) {
+    return undefined;
+  }
+  // A stored value can lead back to a position it sits within; reaching that
+  // position again through the same schema reference is the cycle closing,
+  // and the position was gated where the walk first reached it.
+  const reference = toolInputReference(runtime, space, value);
+  let followed = followedAt;
+  if (reference !== undefined && typeof ref === "string") {
+    const position = storedPositionKey(reference);
+    const site = schemaReferenceSiteKey(schema, ref, document);
+    const sites = followedAt.get(position);
+    if (sites?.has(site)) return undefined;
+    followed = new Map(followedAt).set(
+      position,
+      new Set([...(sites ?? []), site]),
+    );
+  }
   const ifc = structural.ifc;
   if (isObjectOrArray(ifc) && Array.isArray(ifc.requiredIntegrity)) {
     const required = ifc.requiredIntegrity;
     if (required.length > 0) {
-      const integrity = toolInputValueIntegrity(runtime, space, value);
-      // The single shared floor predicate (observation.ts) — the same
-      // membership the commit-boundary gates use. `trust` carries the acting
-      // principal's closure so a CONCEPT-valued floor accepts any concrete
-      // atom above the concept (D5), consistently with the read/write gates.
-      const satisfied = cfcIntegritySatisfiesFloor(
-        integrity as readonly CfcAtom[],
-        required,
+      // A literal is model output (stamped at most `LlmDerived`, D1), which by
+      // construction lacks any endorsement family, so it carries none. A
+      // referenced value meets the floor where all of it carries, for each
+      // requirement, one shared atom (§8.10.3): a label on one part does not
+      // vouch for the rest. `trust` carries the acting principal's closure so
+      // a CONCEPT-valued floor accepts any concrete atom above the concept
+      // (D5), consistently with the read/write gates.
+      const leaves = reference === undefined
+        ? [[]]
+        : referencedValueLeafIntegrity(reference);
+      if (leaves === "unreadable") {
+        return `field "${path || "(root)"}" holds a reference whose value ` +
+          `or labels this session cannot read; refusing the call ` +
+          `(fail closed)`;
+      }
+      const satisfied = cfcIntegritySatisfiesFloorCoherently(
+        leaves,
+        required as readonly CfcAtom[],
         trust,
       );
       if (!satisfied) {
@@ -2513,24 +2682,39 @@ function toolInputRequiredIntegrityFailure(
       }
     }
   }
-  if (isObjectOrArray(structural.properties)) {
+  const shape = reference === undefined
+    ? value
+    : reference.getRawUntyped({ lastNode: "value" });
+  if (shape instanceof FabricInstance) {
+    return `field "${path || "(root)"}" holds a reference to a value whose ` +
+      `contents this session cannot read; refusing the call (fail closed)`;
+  }
+  /** The value beneath this position at `key`, a reference's part included. */
+  const entryAt = (key: string | number): unknown =>
+    reference === undefined
+      ? (shape as Record<string | number, unknown>)[key]
+      : reference.key(key);
+  if (isObjectOrArray(structural.properties) && isKeyableObjectOrArray(shape)) {
     for (const [key, childSchema] of Object.entries(structural.properties)) {
       // Only gate fields the model actually supplied. An absent (e.g. optional)
       // field carries no value to gate; treating it as `undefined` would fail
       // an optional field's floor and over-block the call. A required field the
       // model omitted is a structural error handled by ordinary input
       // validation, not a floor bypass — there is no injected value to gate.
-      if (!isObjectOrArray(value) || !Object.hasOwn(value, key)) {
+      if (!Object.hasOwn(shape, key)) {
         continue;
       }
       const failure = toolInputRequiredIntegrityFailure(
         runtime,
         space,
         childSchema,
-        value[key],
+        entryAt(key),
         path ? `${path}.${key}` : key,
         trust,
         structuralRoot,
+        undefined,
+        structuralDocument,
+        followed,
       );
       if (failure !== undefined) {
         return failure;
@@ -2539,17 +2723,19 @@ function toolInputRequiredIntegrityFailure(
   }
   // Dictionary entries (2020-12): a supplied key is gated by every
   // `patternProperties` pattern it matches, and by `additionalProperties` when
-  // neither `properties` nor a pattern names it. A reference is gated whole at
-  // its own position, so the walk does not read its `@link` as a key.
-  if (isObjectNotArray(value) && !isLLMFriendlyLinkObject(value)) {
+  // neither `properties` nor a pattern names it.
+  if (isKeyableObjectNotArray(shape)) {
     const failure = toolInputDictionaryIntegrityFailure(
       runtime,
       space,
       structural,
-      value,
+      Object.keys(shape),
+      entryAt,
       path,
       trust,
       structuralRoot,
+      structuralDocument,
+      followed,
     );
     if (failure !== undefined) {
       return failure;
@@ -2558,14 +2744,12 @@ function toolInputRequiredIntegrityFailure(
   // Array elements: a tuple slot's floor gates its exact position, and a
   // floor under `items` gates the positions past the slots (2020-12,
   // matching the sanitizer's semantics — e.g.
-  // `recipients: { items: { ifc: { requiredIntegrity } } }`). Tuple slots
-  // previously went entirely ungated: this walk never descended
-  // prefixItems.
-  if (Array.isArray(value)) {
+  // `recipients: { items: { ifc: { requiredIntegrity } } }`).
+  if (Array.isArray(shape)) {
     const prefixItems = Array.isArray(structural.prefixItems)
       ? structural.prefixItems
       : undefined;
-    for (let index = 0; index < value.length; index++) {
+    for (let index = 0; index < shape.length; index++) {
       const slotSchema = prefixItems !== undefined && index < prefixItems.length
         ? prefixItems[index]
         : structural.items;
@@ -2574,10 +2758,13 @@ function toolInputRequiredIntegrityFailure(
         runtime,
         space,
         slotSchema,
-        value[index],
+        entryAt(index),
         `${path}[${index}]`,
         trust,
         structuralRoot,
+        undefined,
+        structuralDocument,
+        followed,
       );
       if (failure !== undefined) {
         return failure;
@@ -2595,11 +2782,13 @@ function toolInputRequiredIntegrityFailure(
           runtime,
           space,
           branch,
-          value,
+          reference ?? value,
           path,
           trust,
           structuralRoot,
           seen,
+          structuralDocument,
+          followed,
         );
         if (failure !== undefined) {
           return failure;
@@ -2612,19 +2801,23 @@ function toolInputRequiredIntegrityFailure(
 
 /**
  * The first floor that `structural`'s `patternProperties` or
- * `additionalProperties` declares and an entry of `value` does not meet, for
- * {@link toolInputRequiredIntegrityFailure}. A pattern that is not a valid
- * regular expression refuses the call, since the keys it names cannot be
+ * `additionalProperties` declares and an entry of the object at this position
+ * does not meet, for {@link toolInputRequiredIntegrityFailure}: `keys` are the
+ * object's keys, and `entryAt` reads the entry at one. A pattern that is not a
+ * valid regular expression refuses the call, since the keys it names cannot be
  * known.
  */
 function toolInputDictionaryIntegrityFailure(
   runtime: Runtime,
   space: MemorySpace,
   structural: Record<string, unknown>,
-  value: Record<string, unknown>,
+  keys: readonly string[],
+  entryAt: (key: string) => unknown,
   path: string,
   trust: CfcFloorTrustContext,
   root: JSONSchema,
+  document: string,
+  followed: ReadonlyMap<string, ReadonlySet<string>>,
 ): string | undefined {
   const properties = isObjectNotArray(structural.properties)
     ? structural.properties
@@ -2644,8 +2837,7 @@ function toolInputDictionaryIntegrityFailure(
     }
   }
   const additional = structural.additionalProperties;
-  for (const [key, entry] of Object.entries(value)) {
-    const entryPath = path ? `${path}.${key}` : key;
+  for (const key of keys) {
     const schemas = patterns.filter(([pattern]) => pattern.test(key)).map((
       [, schema],
     ) => schema);
@@ -2657,10 +2849,13 @@ function toolInputDictionaryIntegrityFailure(
         runtime,
         space,
         schema,
-        entry,
-        entryPath,
+        entryAt(key),
+        path ? `${path}.${key}` : key,
         trust,
         root,
+        undefined,
+        document,
+        followed,
       );
       if (failure !== undefined) {
         return failure;

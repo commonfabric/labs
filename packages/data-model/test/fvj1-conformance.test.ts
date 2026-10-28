@@ -14,6 +14,7 @@ import { fabricInstanceClassesByName } from "@/fabric-instances";
 import { fabricPrimitiveClassesByName } from "@/fabric-primitives";
 import {
   fabricValueOfTextWithModsForTestingOnly,
+  type FixtureRequirements,
   FVJ1_CONFORMANCE_CASES_FOR_TESTING_ONLY,
   type Fvj1ConformanceCase,
   fvj1ConformanceFixtureTextForTestingOnly,
@@ -22,6 +23,8 @@ import {
   type Fvj1Outcome,
   fvj1ProblematicPathsOfForTestingOnly,
   type Fvj1Refusal,
+  meetsRequirementsForTestingOnly,
+  SIZE_FLOORS_FOR_TESTING_ONLY,
   type TextWithMods,
   type ValuePatch,
   type ValuePath,
@@ -45,6 +48,7 @@ const STUB_CODEC_CLASSES: ReadonlySet<string> = new Set([
 /** One entry of the fixture, as `fvj1-conformance.md` defines it. */
 interface FixtureEntry {
   readonly name: string;
+  readonly requires?: FixtureRequirements;
   readonly text: string;
   readonly unclaimed?: readonly string[];
   readonly patches?: readonly ValuePatch[];
@@ -147,7 +151,12 @@ function reencodedOf(entry: FixtureEntry): Fvj1Outcome {
 
 describe("fvj1-conformance", () => {
   const fixtureText = Deno.readTextFileSync(FIXTURE_URL);
-  const entries: readonly FixtureEntry[] = JSON.parse(fixtureText).cases;
+  const allEntries: readonly FixtureEntry[] = JSON.parse(fixtureText).cases;
+
+  // A reader skips an entry whose requirements it does not meet.
+  const entries = allEntries.filter(({ requires }) =>
+    meetsRequirementsForTestingOnly(requires)
+  );
 
   it("is the fixture the conformance cases generate", () => {
     // On a failure here, `deno task regenerate-fvj1-conformance` rewrites the
@@ -158,6 +167,14 @@ describe("fvj1-conformance", () => {
         FVJ1_CONFORMANCE_CASES_FOR_TESTING_ONLY,
       ),
     );
+  });
+
+  it("requires of a reader nothing this package does not meet", () => {
+    const unmet = allEntries.filter(({ requires }) =>
+      !meetsRequirementsForTestingOnly(requires)
+    );
+
+    expect(unmet.map(({ name }) => name)).toEqual([]);
   });
 
   it("records for each text and mods what decoding them does", () => {
@@ -301,6 +318,84 @@ describe("fvj1-conformance", () => {
         canonical: 'fvj1:{"__proto__":1}',
         divergence: { note: "note", encode: { refused: "unencodable" } },
       });
+    });
+
+    it("returns an entry requiring the flavors a case marks", () => {
+      const entry = JSON.parse(
+        fvj1ConformanceFixtureTextForTestingOnly([
+          {
+            name: "unconstructed",
+            section: "s",
+            text: 'fvj1:{"/RegExp@1":{"flags":"","flavor":"es2025",' +
+              '"source":"("}}',
+            requires: { flavors: ["es2025"] },
+          },
+        ]),
+      ).cases[0];
+
+      expect(entry.requires).toEqual({ flavors: ["es2025"] });
+    });
+
+    it("returns an entry requiring the length of an array past the floor", () => {
+      const length = SIZE_FLOORS_FOR_TESTING_ONLY.arrayLength + 1;
+      const entry = JSON.parse(
+        fvj1ConformanceFixtureTextForTestingOnly([
+          {
+            name: "long",
+            section: "s",
+            text: `fvj1:[{"/hole":${length}}]`,
+          },
+        ]),
+      ).cases[0];
+
+      expect(entry.requires).toEqual({ arrayLength: length });
+    });
+
+    it("returns an entry requiring the member count of a record past the floor", () => {
+      const count = SIZE_FLOORS_FOR_TESTING_ONLY.propertyCount + 1;
+      const members = Array.from(
+        { length: count },
+        (_, i) => `"k${String(i).padStart(6, "0")}":${i}`,
+      );
+      const entry = JSON.parse(
+        fvj1ConformanceFixtureTextForTestingOnly([
+          {
+            name: "wide",
+            section: "s",
+            text: `fvj1:{${members.join(",")}}`,
+          },
+        ]),
+      ).cases[0];
+
+      expect(entry.requires).toEqual({ propertyCount: count });
+    });
+
+    it("returns entries requiring the length of a string, a byte sequence and a symbol's key past their floors, and a depth past its floor", () => {
+      const floors = SIZE_FLOORS_FOR_TESTING_ONLY;
+      const string = "x".repeat(floors.stringLength + 1);
+      const state = "A".repeat(Math.ceil((floors.bytesLength + 1) * 4 / 3));
+      const key = "x".repeat(floors.symbolKeyLength + 1);
+      const depth = floors.depth + 1;
+      const cases: readonly Fvj1ConformanceCase[] = [
+        { name: "string", section: "s", text: `fvj1:"${string}"` },
+        { name: "bytes", section: "s", text: `fvj1:{"/Bytes@1":"${state}"}` },
+        { name: "key", section: "s", text: `fvj1:{"/Symbol@1":"${key}"}` },
+        {
+          name: "deep",
+          section: "s",
+          text: `fvj1:${"[".repeat(depth)}${"]".repeat(depth)}`,
+        },
+      ];
+      const entries =
+        JSON.parse(fvj1ConformanceFixtureTextForTestingOnly(cases))
+          .cases;
+
+      expect(entries.map((entry: FixtureEntry) => entry.requires)).toEqual([
+        { stringLength: floors.stringLength + 1 },
+        { bytesLength: floors.bytesLength + 1 },
+        { symbolKeyLength: floors.symbolKeyLength + 1 },
+        { depth },
+      ]);
     });
 
     it("throws given a text the spec is said to decode that this package refuses", () => {

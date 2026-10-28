@@ -66,8 +66,10 @@ import {
   type ExampleMakers,
   fabricValueOfTextWithMods,
   type FixtureJson,
+  type FixtureRequirements,
   fixtureTextOf,
   hexOf,
+  requirementsOf,
   sparseArrayOf,
   STUB_CODEC_EXCLUSION,
   type TextWithMods,
@@ -96,7 +98,10 @@ export type HashedOutcome = {
 /**
  * One conformance case: a value to hash, made fresh by `make`.
  *
- * `section` names the part of the spec the case exercises. `spec` is the byte
+ * `section` names the part of the spec the case exercises. `requires` names
+ * the flavors of regular expression whose construction the case's outcome
+ * depends on; the fixture entry adds the guarantees of size the case needs
+ * past the floors. `spec` is the byte
  * stream the spec gives the value, in hexadecimal as the spec writes it,
  * spaces and all, for a value it gives one for. `equals` names another case,
  * earlier among the cases, whose value this one's is `valueEqual()` to.
@@ -108,6 +113,7 @@ export type HashedOutcome = {
 export type HashConformanceCase = {
   readonly name: string;
   readonly section: string;
+  readonly requires?: Pick<FixtureRequirements, "flavors">;
   readonly make: () => FabricValue;
   readonly spec?: string;
   readonly equals?: string;
@@ -1196,12 +1202,16 @@ function outcomeOfStream(stream: Uint8Array): HashedOutcome {
 function fixtureEntryOf(
   { conformanceCase, stated, textRefused, hashed }: MadeCase,
 ): Record<string, FixtureJson> {
-  const { name, section, spec, equals, divergence } = conformanceCase;
+  const { name, section, requires, spec, equals, divergence } = conformanceCase;
   const specHashed = (spec === undefined)
     ? hashed
     : outcomeOfStream(bytesOfHex(spec.replaceAll(" ", "").toLowerCase()));
 
   const entry: Record<string, FixtureJson> = { name, section };
+  const required = requirementsOf(stated, requires?.flavors);
+  if (required !== undefined) {
+    entry.requires = required;
+  }
   entry.text = stated.text;
   if (stated.unclaimed !== undefined) {
     entry.unclaimed = stated.unclaimed;
