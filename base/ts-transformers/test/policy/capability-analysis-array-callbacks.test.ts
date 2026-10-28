@@ -28,17 +28,21 @@ function elementProperties(
 
 /**
  * The input schema emitted for a `lift` reading `{ table, self }`, where
- * `body` is its whole body expression.
+ * `body` is its whole body expression and `preamble` declares what the body
+ * names beside them.
  *
  * Both `self` and the element's properties are declared `unknown`, which is
  * the shape that makes the omission silent: `unknown` maps to a schema
  * whatever the analysis concludes, so a dropped property is invisible to the
  * type system and to every other gate the pipeline runs.
  */
-async function liftInputSchema(body: string): Promise<Record<string, unknown>> {
+async function liftInputSchema(
+  body: string,
+  preamble = "",
+): Promise<Record<string, unknown>> {
   const output = await transformSource(
     `import { equals, lift } from "commonfabric";
-
+${preamble}
 const backlinksOf = lift((
   { table, self }: {
     table: { topic: unknown; mentionedBy: unknown }[];
@@ -220,6 +224,67 @@ export default pattern<{
         "self",
         "table",
       ]);
+    });
+  });
+
+  describe("an element a callback reads where the walk does not follow it", () => {
+    it("reaches the input schema whole from a callback passed by name", async () => {
+      const schema = await liftInputSchema(
+        `table.filter((row) => row.topic !== undefined).filter(mentioned)`,
+        `const mentioned = (row: { mentionedBy: unknown }) =>
+  row.mentionedBy !== undefined;`,
+      );
+
+      expect(elementProperties(schema)).toEqual({
+        topic: { type: "unknown" },
+        mentionedBy: { type: "unknown" },
+      });
+    });
+
+    it("reaches the input schema through the array a callback is handed", async () => {
+      const schema = await liftInputSchema(
+        `table.filter((row, index, all) =>
+  row.topic !== undefined && all[index].mentionedBy !== undefined
+)`,
+      );
+
+      expect(elementProperties(schema)).toEqual({
+        topic: { type: "unknown" },
+        mentionedBy: { type: "unknown" },
+      });
+    });
+
+    it("reaches the input schema from the element `reduce` hands its callback", async () => {
+      // `reduce` hands the accumulator first and the element second.
+
+      const schema = await liftInputSchema(
+        `table.filter((row) => row.topic !== undefined).length > 0 &&
+  table.reduce((seen, row) => seen || row.mentionedBy !== undefined, false)`,
+      );
+
+      expect(elementProperties(schema)).toEqual({
+        topic: { type: "unknown" },
+        mentionedBy: { type: "unknown" },
+      });
+    });
+
+    it("reaches the input schema whole from an element a `reduce` puts in the map it hands back", async () => {
+      // `set` returns its map, so the callback's result carries the element
+      // on to the read after `reduce`.
+
+      const schema = await liftInputSchema(
+        `table.filter((row) => row.topic !== undefined).length > 0
+  ? table.reduce(
+    (byTopic, row) => byTopic.set(row.topic, row),
+    new Map<unknown, { topic: unknown; mentionedBy: unknown }>(),
+  ).get(self)?.mentionedBy
+  : undefined`,
+      );
+
+      expect(elementProperties(schema)).toEqual({
+        topic: { type: "unknown" },
+        mentionedBy: { type: "unknown" },
+      });
     });
   });
 });

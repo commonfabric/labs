@@ -280,6 +280,41 @@ const ELEMENT_SUBSET_METHODS = new Set(["filter", "sort", "toSorted", "slice"]);
  * aliases an element of the receiver.
  */
 const ELEMENT_LOOKUP_METHODS = new Set(["find", "findLast", "at"]);
+/**
+ * The positions of a callback's parameters that receive the receiver's
+ * elements, and of the one that receives the receiver itself.
+ */
+interface ArrayCallbackParameters {
+  readonly elements: readonly number[];
+  readonly array?: number;
+}
+
+const ELEMENT_INDEX_ARRAY: ArrayCallbackParameters = {
+  elements: [0],
+  array: 2,
+};
+
+/**
+ * Where each array method that calls back once per element, or once per pair
+ * of elements, hands its callback the elements and itself.
+ */
+const ARRAY_CALLBACK_PARAMETERS: ReadonlyMap<string, ArrayCallbackParameters> =
+  new Map([
+    ["every", ELEMENT_INDEX_ARRAY],
+    ["filter", ELEMENT_INDEX_ARRAY],
+    ["find", ELEMENT_INDEX_ARRAY],
+    ["findIndex", ELEMENT_INDEX_ARRAY],
+    ["findLast", ELEMENT_INDEX_ARRAY],
+    ["findLastIndex", ELEMENT_INDEX_ARRAY],
+    ["flatMap", ELEMENT_INDEX_ARRAY],
+    ["forEach", ELEMENT_INDEX_ARRAY],
+    ["map", ELEMENT_INDEX_ARRAY],
+    ["some", ELEMENT_INDEX_ARRAY],
+    ["reduce", { elements: [1], array: 3 }],
+    ["reduceRight", { elements: [1], array: 3 }],
+    ["sort", { elements: [0, 1] }],
+    ["toSorted", { elements: [0, 1] }],
+  ]);
 // The mergeable tail-append ops: the catalog methods that commit as a mergeable
 // `append`, which drops the op's own array read from conflict detection. A
 // handler that also reads the same collection then has a fragile read-then-push
@@ -1057,6 +1092,54 @@ function memberSpineContainsCall(expression: ts.Expression): boolean {
     current = unwrapExpression(current.expression);
   }
   return ts.isCallExpression(current);
+}
+
+/**
+ * True when `node` refers to `arguments` anywhere within it, a nested
+ * function's own included.
+ */
+function mentionsArguments(node: ts.Node): boolean {
+  if (ts.isIdentifier(node) && node.text === "arguments") return true;
+  return ts.forEachChild(node, mentionsArguments) ?? false;
+}
+
+/**
+ * True when nothing reads the value of `expression`: it stands as a
+ * statement, past any `&&`, `||`, `??`, conditional or comma it forwards its
+ * value through, under `void`, or as the left of a comma, or it is what a
+ * `forEach` callback returns, which `forEach` drops. A position whose parent
+ * links stop short, a synthesized node's, reads it.
+ */
+function isValueDiscarded(expression: ts.Expression): boolean {
+  const at = outermostValueForwarder(expression);
+  const parent = at.parent;
+  if (!parent) return false;
+  if (ts.isExpressionStatement(parent) || ts.isVoidExpression(parent)) {
+    return true;
+  }
+  if (
+    ts.isBinaryExpression(parent) && parent.left === at &&
+    parent.operatorToken.kind === ts.SyntaxKind.CommaToken
+  ) {
+    return true;
+  }
+  let callback: ts.Node | undefined;
+  if (ts.isArrowFunction(parent) && parent.body === at) {
+    callback = parent;
+  } else if (ts.isReturnStatement(parent)) {
+    callback = parent.parent;
+    while (callback && !ts.isFunctionLike(callback)) callback = callback.parent;
+  }
+  if (
+    !callback ||
+    !(ts.isArrowFunction(callback) || ts.isFunctionExpression(callback))
+  ) {
+    return false;
+  }
+  const passed = outermostTransparentWrapper(callback);
+  const call = passed.parent;
+  return !!call && ts.isCallExpression(call) && call.arguments[0] === passed &&
+    getCallMethodNameFromExpression(call.expression) === "forEach";
 }
 
 function isDeclarationIdentifier(node: ts.Identifier): boolean {
@@ -2605,7 +2688,9 @@ export function analyzeFunctionCapabilities(
     // Whether a call writes its argument into a local collection — a `push`,
     // `unshift` or `splice` payload on a local array, or the value of a `set`
     // on a local map — which the local collection bindings below follow, so
-    // a read through the collection resolves to the value's own paths.
+    // a read through the collection resolves to the value's own paths. A
+    // `set` hands back the map it writes, so one whose value is used passes
+    // the map, and the value in it, on where the bindings do not follow.
     const isLocalCollectionWrite = (
       call: ts.CallExpression | ts.NewExpression,
       argument: ts.Expression,
@@ -2630,7 +2715,8 @@ export function analyzeFunctionCapabilities(
       if (ARRAY_IDENTITY_WRITER_METHODS.has(methodName)) {
         return isArrayIdentityWriterValueArgument(methodName, call, argument);
       }
-      return methodName === "set" && call.arguments[1] === argument;
+      return methodName === "set" && call.arguments[1] === argument &&
+        isValueDiscarded(call);
     };
 
     // Whether a call is one the runtime answers — a builder, a lift applied
@@ -2751,8 +2837,7 @@ export function analyzeFunctionCapabilities(
           const call = parent.parent;
           return ARRAY_IDENTITY_WRITER_METHODS.has(parent.name.text) &&
             !!call && ts.isCallExpression(call) &&
-            call.expression === parent && !!call.parent &&
-            ts.isExpressionStatement(call.parent);
+            call.expression === parent && isValueDiscarded(call);
         }
         if (
           ts.isElementAccessExpression(parent) && parent.expression === usage
@@ -3734,13 +3819,6 @@ export function analyzeFunctionCapabilities(
         return;
       }
 
-      const callbackArg = call.arguments[0] &&
-        unwrapExpression(call.arguments[0]);
-      if (!callbackArg || !isCapabilityAnalyzableFunction(callbackArg)) {
-        return;
-      }
-
-      const paramBindings = new Map<number, AliasBinding>();
       const target = unwrapExpression(call.expression);
       const receiverExpr = ts.isPropertyAccessExpression(target) ||
           ts.isElementAccessExpression(target)
@@ -3750,15 +3828,59 @@ export function analyzeFunctionCapabilities(
         ? resolveArrayElementBinding(receiverExpr)
         : undefined;
       const methodName = getCallMethodName(call.expression);
-      if (itemBinding) {
-        if (callbackArg.parameters[0]) {
-          paramBindings.set(0, itemBinding);
+      // A container method not in the table hands its callback an element
+      // first, and is not known to call it back once per element.
+      const knownParameters = methodName === undefined
+        ? undefined
+        : ARRAY_CALLBACK_PARAMETERS.get(methodName);
+      const parameters = knownParameters ?? { elements: [0] };
+      const callbackArg = call.arguments[0] &&
+        unwrapExpression(call.arguments[0]);
+
+      // A callback that runs over the elements and reads them where the
+      // analysis cannot see it — a function passed by name, a parameter the
+      // walk binds to nothing — reads each element whole.
+      const elementsReadUnseen = () => {
+        if (!itemBinding || !knownParameters) return;
+        forEachSourceRefLeaf(itemBinding, (leaf) => {
+          const element = materializeSourceRef(leaf);
+          if (!element.dynamic) trackEscapeRef(element);
+        });
+      };
+
+      if (!callbackArg || !isCapabilityAnalyzableFunction(callbackArg)) {
+        if (callbackArg) elementsReadUnseen();
+        return;
+      }
+
+      const paramBindings = new Map<number, AliasBinding>();
+      if (itemBinding && receiverExpr) {
+        for (const index of parameters.elements) {
+          if (callbackArg.parameters[index]) {
+            paramBindings.set(index, itemBinding);
+          }
+        }
+        // The receiver itself, handed to the callback, binds what the
+        // receiver binds: through it the callback reads the elements again.
+        if (
+          parameters.array !== undefined &&
+          callbackArg.parameters[parameters.array]
+        ) {
+          const receiverBinding = resolveBinding(receiverExpr);
+          if (receiverBinding) {
+            paramBindings.set(parameters.array, receiverBinding);
+          } else {
+            elementsReadUnseen();
+          }
         }
         if (
-          callbackArg.parameters[1] &&
-          (methodName === "sort" || methodName === "toSorted")
+          callbackArg.parameters.some((parameter) =>
+            parameter.dotDotDotToken !== undefined
+          ) ||
+          (ts.isFunctionExpression(callbackArg) &&
+            mentionsArguments(callbackArg.body))
         ) {
-          paramBindings.set(1, itemBinding);
+          elementsReadUnseen();
         }
       }
 

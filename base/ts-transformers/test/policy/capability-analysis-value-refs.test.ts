@@ -425,6 +425,21 @@ export default pattern<{ id?: string; places: Writable<Record<string, Place>> }>
     });
   });
 
+  describe("a map a `set` hands back", () => {
+    it("keeps every field of a value read through the map the `set` returns", async () => {
+      const fields = await liftRowFields(`
+import { lift } from "commonfabric";
+interface Row { id: number; name: string; note: string }
+export default lift(({ rows }: { rows: Row[] }): string => {
+  const byId = new Map<number, Row>();
+  const same = byId.set(rows[0]!.id, rows[0]!);
+  return same.get(1)?.name ?? "";
+});
+`);
+      expect(fields).toEqual(["id", "name", "note"]);
+    });
+  });
+
   describe("an array literal a spread fills", () => {
     it("keeps every field a later read of a local sorted copy reads", async () => {
       const fields = await liftRowFields(`
@@ -476,6 +491,21 @@ export default lift(({ rows }: { rows: Row[] }): Row[] =>
 );
 `);
       expect(fields).toEqual(["id"]);
+    });
+
+    it("keeps every field of a returned sorted copy a callback passed by name filters", async () => {
+      // The callback runs in the builder over the copy's elements, before the
+      // result is handed on.
+
+      const fields = await liftRowFields(`
+import { lift } from "commonfabric";
+interface Row { id: number; name: string; note: string }
+const keep = (row: Row) => row.name === "A";
+export default lift(({ rows }: { rows: Row[] }): Row[] =>
+  [...rows].sort((a, b) => a.id - b.id).filter(keep)
+);
+`);
+      expect(fields).toEqual(["id", "name", "note"]);
     });
 
     it("keeps comparing the elements of a copy the body only splices and writes back", async () => {

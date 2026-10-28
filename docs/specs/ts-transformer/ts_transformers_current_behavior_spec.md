@@ -2441,7 +2441,17 @@ adjustments:
   `table[].topic` and, through the capture, `self`. That binding survives
   `slice()`, both in a receiver chain and through a local holding the sliced
   array, so a later callback retains the fields it reads without retaining
-  unread item fields. The left operand of a `??`
+  unread item fields. Each method binds the parameters it hands elements to:
+  the first for `map`, `filter`, `find`, `some`, `every`, `forEach`, `flatMap`
+  and the index lookups, the second for `reduce` and `reduceRight`, whose
+  first is the accumulator, and the first two for `sort` and `toSorted`. The
+  parameter the method hands the array itself to binds the receiver's own ref.
+  Where the callback runs over the elements unseen — a function passed by
+  name, a rest parameter, a function expression reading `arguments`, or an
+  array parameter whose receiver resolves to no ref — each element is read
+  whole (`ARRAY_CALLBACK_PARAMETERS`;
+  `packages/patterns/regression/array-callback-reads.test.tsx`). The left
+  operand of a `??`
   / `||` fallback resolves to a single source ref, which reaches a root through
   a member/call spine and consumes nothing else; an operand whose spine passes
   through a call is therefore walked as well, covering that call's callback and
@@ -2481,7 +2491,9 @@ adjustments:
   whole (`test/policy/capability-analysis-whole-value-escapes.test.ts`). A
   primitive has nothing below it to keep and is left alone. A
   value bound to a local or written into a local collection stays tracked and
-  narrows as its reads say. So does a value handed on by reference, which the
+  narrows as its reads say; a map's `set` whose own value is read hands the
+  map on, and the value in it with it, so only one whose value is dropped
+  writes into a local collection. So does a value handed on by reference, which the
   runtime stores as a link so that whatever reads through it does so under a
   schema of its own: an argument to a runtime call (a builder, an applied lift,
   `ifElse`, a cell factory), the payload of a write through a cell (`set`,
