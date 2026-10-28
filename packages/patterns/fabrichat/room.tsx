@@ -1573,8 +1573,10 @@ export const FabriChatRoomCore = pattern<
   const cannotSendForSession = computed(
     (): PerSession<boolean | Default<true>> => !canSendForSession,
   );
-  const isOwnerForSession = computed((): PerSession<boolean> =>
-    isOwnerOf(messages)
+  // It defaults to `false`. The rows' map takes it as an argument, and a room
+  // whose rows were stored before it was bound has no value for it there.
+  const isOwnerForSession = computed(
+    (): PerSession<boolean | Default<false>> => isOwnerOf(messages),
   );
   const viewerForSession = computed((): PerSession<ChatRoomViewer> => {
     const profile = viewerProfileOf(myProfile);
