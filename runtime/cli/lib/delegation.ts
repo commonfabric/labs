@@ -9,13 +9,11 @@ import {
   decodeDelegation,
   decodeDelegationChains,
   type Delegation,
-  delegationCovers,
   DelegationError,
   type DIDKey,
   type Identity,
   isCanonicalEd25519DID,
   issueDelegation,
-  verifyDelegation,
 } from "@commonfabric/identity";
 import { DelegationStore } from "@commonfabric/runner/storage/delegation-store";
 
@@ -33,11 +31,12 @@ export interface IssueDelegationChainOptions {
   to: DIDKey;
 
   /**
-   * The delegations the signer's Home records over `space`, oldest first,
-   * from which the chain's root is taken when the signer holds the space
-   * through one rather than through the access list.
+   * The chain the signer's own sessions present on `space`, root first, or
+   * empty where the signer opens the space on its own grant: what the
+   * storage manager holds for the space, from Home's records and the chain
+   * files named, which `StorageManager.delegationChainFor` reports.
    */
-  recorded: readonly Uint8Array[];
+  held: readonly Uint8Array[];
 
   /** The unix second the issued delegation stops holding; none by default. */
   expiresAt?: number;
@@ -49,22 +48,20 @@ export interface IssueDelegationChainOptions {
 /**
  * Issues a delegation over `space` from `signer` to `to`, and returns the
  * chain `to` presents, root first: the delegation alone where the access
- * list grants the signer, and behind the latest recorded delegation to the
- * signer over the space where the signer holds the space through one, as
- * the owner of a profile does. A recorded delegation is taken only where a
- * holder could present it: covering {@link DELEGATED_COMMAND}, with the
- * empty policy, and within its validity window. The server resolves the
- * capability from the chain's root issuer, so `to` acts under the signer's
- * grant, or under the space's own where the signer's chain is rooted there.
+ * list grants the signer, and behind the chain the signer itself holds
+ * where the signer holds the space through one, as the owner of a profile
+ * does, or as a key delegated to in turn. The server resolves the
+ * capability from the chain's root issuer, so `to` acts under the grant
+ * the signer acts under.
  *
  * @throws A `DelegationError` for an audience that is not an ed25519
- *   `did:key` or is the signer itself, an expiry already past, or a recorded
- *   delegation that does not decode and verify.
+ *   `did:key` or is the signer itself, an expiry already past, or a held
+ *   chain that does not decode or does not end at the signer.
  */
 export async function issueDelegationChain(
   options: IssueDelegationChainOptions,
 ): Promise<Uint8Array[]> {
-  const { signer, space, to, recorded, expiresAt } = options;
+  const { signer, space, to, held, expiresAt } = options;
   const now = options.nowSeconds ?? Math.floor(Date.now() / 1000);
   if (!isCanonicalEd25519DID(to)) {
     throw new DelegationError(`"${to}" is not an ed25519 did:key`);
@@ -75,17 +72,11 @@ export async function issueDelegationChain(
   if (expiresAt !== undefined && expiresAt <= now) {
     throw new DelegationError("the expiry is not after now");
   }
-  let root: Delegation | undefined;
-  for (const bytes of recorded) {
-    const delegation = await decodeDelegation(bytes);
-    await verifyDelegation(delegation);
-    const { payload } = delegation;
-    if (payload.aud !== signer.did() || payload.sub !== space) continue;
-    if (!delegationCovers(payload.cmd, DELEGATED_COMMAND)) continue;
-    if (payload.pol.length !== 0) continue;
-    if (payload.exp !== null && payload.exp < now) continue;
-    if (payload.nbf !== undefined && payload.nbf > now) continue;
-    root = delegation;
+  if (held.length > 0) {
+    const last = await decodeDelegation(held[held.length - 1]);
+    if (last.payload.aud !== signer.did()) {
+      throw new DelegationError("the held chain does not end at the signer");
+    }
   }
   const issued = await issueDelegation(signer, {
     aud: to,
@@ -94,7 +85,7 @@ export async function issueDelegationChain(
     pol: [],
     exp: expiresAt ?? null,
   });
-  return root === undefined ? [issued.bytes] : [root.bytes, issued.bytes];
+  return [...held, issued.bytes];
 }
 
 /** One delegation of a chain, as `cf delegation show` describes it. */

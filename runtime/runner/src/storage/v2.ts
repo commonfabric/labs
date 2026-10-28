@@ -1922,6 +1922,11 @@ export class StorageManager implements IStorageManager {
     await this.#providers.get(space as MemorySpace)?.restoreSession();
   }
 
+  /** @inheritDoc */
+  delegationChainFor(space: MemorySpace): readonly Uint8Array[] | undefined {
+    return this.#sessionFactory.delegationChainFor?.(space, this.as.did());
+  }
+
   protected constructor(
     options: Options,
     sessionFactory: SessionFactory,

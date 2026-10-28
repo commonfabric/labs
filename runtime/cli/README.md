@@ -3415,10 +3415,11 @@ CLI connects.
 - `cf delegation issue --to <did> --out <file>` issues a delegation over the
   space from your identity to the key `--to` names, and writes the chain that
   key presents: the delegation alone where the access list grants you, and
-  behind the delegation your Home records where you hold the space through one,
-  as a profile's owner does. The server resolves the holder's capability from
-  the chain's root, so the holder acts under your grant, or under the space's
-  own grant where yours comes from it. It takes `--identity`, `--api-url`, and
+  behind the chain you hold yourself where you hold the space through one, as a
+  profile's owner does through the delegation Home records, or as a key
+  delegated to in turn does through the chain `--delegations` names. The server
+  resolves the holder's capability from the chain's root, so the holder acts
+  under the grant you act under. It takes `--identity`, `--api-url`, and
   `--space` or `--url`, or the corresponding `CF_IDENTITY`, `CF_API_URL`, and
   `CF_SPACE`. `--expires-in <seconds>` gives the delegation an expiry, which the
   server holds a session to after admitting it. The file `--out` names must not

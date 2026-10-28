@@ -99,6 +99,16 @@ class EmulatedSessionFactory implements SessionFactory {
   }
 
   /** @inheritDoc */
+  delegationChainFor(
+    space: MemorySpace,
+    principal: string,
+  ): readonly Uint8Array[] | undefined {
+    return this.#delegations.chainFor(space, principal)?.map((delegation) =>
+      delegation.bytes.slice()
+    );
+  }
+
+  /** @inheritDoc */
   async serverFlags(): Promise<MemoryProtocolFlags | null> {
     const client = await MemoryV2Client.connect({
       transport: MemoryV2Client.loopback(this.#getServer()),

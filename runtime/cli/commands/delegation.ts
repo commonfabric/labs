@@ -56,7 +56,7 @@ async function issue(options: IssueOptions): Promise<void> {
       signer,
       space,
       to: options.to as DIDKey,
-      recorded: await pieces.runtime.recordedDelegations(space),
+      held: pieces.runtime.storageManager.delegationChainFor?.(space) ?? [],
       expiresAt,
     });
     const text = encodeDelegationChains([chain]);

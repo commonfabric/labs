@@ -41,12 +41,12 @@ const NOW = 1_800_000_000;
 
 describe("delegation", () => {
   describe("issueDelegationChain()", () => {
-    it("returns the delegation alone, from the signer to the audience over the space without expiry, when nothing is recorded", async () => {
+    it("returns the delegation alone, from the signer to the audience over the space without expiry, when the signer holds no chain", async () => {
       const chain = await issueDelegationChain({
         signer: core,
         space,
         to: agent.did(),
-        recorded: [],
+        held: [],
         nowSeconds: NOW,
       });
       expect(chain).toHaveLength(1);
@@ -62,12 +62,12 @@ describe("delegation", () => {
       });
     });
 
-    it("puts the recorded delegation to the signer before the one it issues", async () => {
+    it("puts the chain the signer holds before the delegation it issues", async () => {
       const chain = await issueDelegationChain({
         signer: core,
         space,
         to: agent.did(),
-        recorded: [rootToCore.bytes],
+        held: [rootToCore.bytes],
         nowSeconds: NOW,
       });
       expect(chain).toHaveLength(2);
@@ -80,70 +80,29 @@ describe("delegation", () => {
       });
     });
 
-    it("leaves out a recorded delegation to another key, over another space, expired, not yet valid, or over another command", async () => {
-      const toOther = await issueDelegation(spaceKey, {
+    it("lets a key delegated to in turn delegate onward, keeping every link before its own", async () => {
+      const toAgent = await issueDelegationChain({
+        signer: core,
+        space,
+        to: agent.did(),
+        held: [rootToCore.bytes],
+        nowSeconds: NOW,
+      });
+      const onward = await issueDelegationChain({
+        signer: agent,
+        space,
+        to: other.did(),
+        held: toAgent,
+        nowSeconds: NOW,
+      });
+      expect(onward).toHaveLength(3);
+      expect(onward.slice(0, 2)).toEqual(toAgent);
+      const issued = await decodeDelegation(onward[2]);
+      expect(issued.payload).toMatchObject({
+        iss: agent.did(),
         aud: other.did(),
         sub: space,
-        cmd: "/memory",
-        pol: [],
       });
-      const overOther = await issueDelegation(other, {
-        aud: core.did(),
-        sub: other.did(),
-        cmd: "/memory",
-        pol: [],
-      });
-      const expired = await issueDelegation(spaceKey, {
-        aud: core.did(),
-        sub: space,
-        cmd: "/memory",
-        pol: [],
-        exp: NOW - 1,
-      });
-      const notYet = await issueDelegation(spaceKey, {
-        aud: core.did(),
-        sub: space,
-        cmd: "/memory",
-        pol: [],
-        nbf: NOW + 1,
-      });
-      const otherCommand = await issueDelegation(spaceKey, {
-        aud: core.did(),
-        sub: space,
-        cmd: "/memory/other",
-        pol: [],
-      });
-      const chain = await issueDelegationChain({
-        signer: core,
-        space,
-        to: agent.did(),
-        recorded: [
-          toOther.bytes,
-          overOther.bytes,
-          expired.bytes,
-          notYet.bytes,
-          otherCommand.bytes,
-        ],
-        nowSeconds: NOW,
-      });
-      expect(chain).toHaveLength(1);
-    });
-
-    it("takes the latest recorded delegation it could present", async () => {
-      const later = await issueDelegation(spaceKey, {
-        aud: core.did(),
-        sub: space,
-        cmd: "/memory",
-        pol: [],
-      });
-      const chain = await issueDelegationChain({
-        signer: core,
-        space,
-        to: agent.did(),
-        recorded: [rootToCore.bytes, later.bytes],
-        nowSeconds: NOW,
-      });
-      expect(chain[0]).toEqual(later.bytes);
     });
 
     it("sets the expiry given", async () => {
@@ -151,7 +110,7 @@ describe("delegation", () => {
         signer: core,
         space,
         to: agent.did(),
-        recorded: [],
+        held: [],
         expiresAt: NOW + 60,
         nowSeconds: NOW,
       });
@@ -163,7 +122,7 @@ describe("delegation", () => {
         signer: core,
         space,
         to: "did:key:nope" as DIDKey,
-        recorded: [],
+        held: [],
       })).rejects.toThrow('"did:key:nope" is not an ed25519 did:key');
     });
 
@@ -172,7 +131,7 @@ describe("delegation", () => {
         signer: core,
         space,
         to: core.did(),
-        recorded: [],
+        held: [],
       })).rejects.toThrow("the audience is the issuing key itself");
     });
 
@@ -181,21 +140,28 @@ describe("delegation", () => {
         signer: core,
         space,
         to: agent.did(),
-        recorded: [],
+        held: [],
         expiresAt: NOW,
         nowSeconds: NOW,
       })).rejects.toThrow("the expiry is not after now");
     });
 
-    it("throws for a recorded delegation that does not verify", async () => {
-      const forged = rootToCore.bytes.slice();
-      forged[10] ^= 0xff;
+    it("throws for a held chain that does not end at the signer", async () => {
+      await expect(issueDelegationChain({
+        signer: agent,
+        space,
+        to: other.did(),
+        held: [rootToCore.bytes],
+      })).rejects.toThrow("the held chain does not end at the signer");
+    });
+
+    it("throws for a held chain whose last link does not decode", async () => {
       await expect(issueDelegationChain({
         signer: core,
         space,
         to: agent.did(),
-        recorded: [forged],
-      })).rejects.toThrow("does not verify");
+        held: [new Uint8Array([1, 2, 3])],
+      })).rejects.toThrow();
     });
   });
 
@@ -205,7 +171,7 @@ describe("delegation", () => {
         signer: core,
         space,
         to: agent.did(),
-        recorded: [rootToCore.bytes],
+        held: [rootToCore.bytes],
         expiresAt: NOW + 60,
         nowSeconds: NOW,
       });
@@ -237,7 +203,7 @@ describe("delegation", () => {
         signer: core,
         space,
         to: agent.did(),
-        recorded: [],
+        held: [],
       });
       const toOther = await issueDelegation(spaceKey, {
         aud: other.did(),
@@ -344,13 +310,13 @@ describe("delegation", () => {
         signer: core,
         space,
         to: agent.did(),
-        recorded: [rootToCore.bytes],
+        held: [rootToCore.bytes],
       });
       const toAgentElsewhere = await issueDelegationChain({
         signer: other,
         space: other.did(),
         to: agent.did(),
-        recorded: [],
+        held: [],
       });
       const first = await chainFile("first.json", [toAgent]);
       const second = await chainFile("second.json", [toAgentElsewhere]);
@@ -373,7 +339,7 @@ describe("delegation", () => {
         signer: core,
         space,
         to: agent.did(),
-        recorded: [rootToCore.bytes],
+        held: [rootToCore.bytes],
       });
       const path = await chainFile("agent.json", [toAgent]);
       const recorder = holder();
@@ -411,7 +377,7 @@ describe("delegation", () => {
           signer: core,
           space,
           to: agent.did(),
-          recorded: [rootToCore.bytes],
+          held: [rootToCore.bytes],
         });
         const path = await chainFile("agent.json", [toAgent]);
         const { code, stdout } = await cf(argv`delegation show ${path}`);

@@ -270,6 +270,44 @@ describe("storage-delegation-chain", () => {
       });
     });
 
+    it("reports the chain it holds for the space as the guest, and nothing for another space or before holding one", async () => {
+      const { server, space, chain } = await selfOwnedSpaceDelegatedToGuest();
+      const factory = guestFactory(server);
+      expect(factory.delegationChainFor(space, guest.did())).toBeUndefined();
+      await factory.addDelegationChain(chain);
+      expect(factory.delegationChainFor(space, guest.did())).toEqual(chain);
+      expect(factory.delegationChainFor(space, owner.did())).toBeUndefined();
+      expect(factory.delegationChainFor(owner.did(), guest.did()))
+        .toBeUndefined();
+    });
+
+    it("lets the guest delegate onward by extending the chain it holds, so a third key opens the space under the same root", async () => {
+      const { server, space, chain } = await selfOwnedSpaceDelegatedToGuest();
+      const third = await Identity.fromPassphrase("delegation-chain third");
+      const guestFactoryHolding = guestFactory(server);
+      await guestFactoryHolding.addDelegationChain(chain);
+      const held = guestFactoryHolding.delegationChainFor(space, guest.did())!;
+      const onward = await issueDelegation(guest, {
+        aud: third.did(),
+        sub: space as DIDKey,
+        cmd: "/memory",
+        pol: [],
+      });
+      const thirdFactory = new RemoteSessionFactory(
+        createStorageAddressResolver(server.url),
+        third,
+      );
+      cleanups.push(() => thirdFactory.close());
+      // The delegation alone, which drops the proof the guest itself
+      // needs, opens nothing; behind the held chain it opens the space.
+      await thirdFactory.addDelegationChain([onward.bytes]);
+      await expect(thirdFactory.create(space)).rejects.toThrow("lacks READ");
+      await thirdFactory.addDelegationChain([...held, onward.bytes]);
+      const { client, session } = await thirdFactory.create(space);
+      cleanups.push(() => client.close());
+      expect((await write(session, 1)).seq).toBeGreaterThan(0);
+    });
+
     it("is refused the space with the owner's delegation alone, which ends at the owner rather than the guest", async () => {
       const { server, space, chain } = await selfOwnedSpaceDelegatedToGuest();
       const factory = guestFactory(server);

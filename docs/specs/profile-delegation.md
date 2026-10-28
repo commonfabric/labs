@@ -558,8 +558,10 @@ part of this design.
    `cf delegation issue` issues a delegation over a space from the
    identity to another key and writes the chain that key presents: the
    delegation alone where the access list grants the identity, and behind
-   the delegation Home records where the identity holds the space through
-   one, as a profile's owner does. The chain travels as a file in a format
+   the chain the identity's own sessions present where it holds the space
+   through one, as a profile's owner does through Home's record and a key
+   delegated to in turn does through a chain file
+   (`StorageManager.delegationChainFor`). The chain travels as a file in a format
    of this repository's own (`delegation-chain-text.ts` in the identity
    package): JSON naming the format and listing chains, each its
    delegations' envelope bytes root first, so a holder never reconstructs
