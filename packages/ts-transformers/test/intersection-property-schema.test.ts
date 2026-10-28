@@ -127,6 +127,46 @@ describe("intersection-property-schema", () => {
     }));
   });
 
+  for (
+    const [beside, other] of [
+      ["`undefined`", "undefined"],
+      ["another record", "Record<string, number>"],
+    ] as const
+  ) {
+    it(`keeps the labeled arm of a folded union nested beside ${beside}, as its alias does`, async () => {
+      // The folded union is an arm of another union, whose arms are read
+      // through to the ones the fold recorded.
+
+      const type = `
+        & { a: Record<string, unknown> }
+        & {
+          a:
+            | Integrity<
+              Record<string, string> | Record<number, string>,
+              readonly ["v"]
+            >
+            | ${other};
+        }`;
+      const [direct, alias] = await schemasOf(`
+        import { toSchema } from "commonfabric";
+        import type { Integrity } from "commonfabric";
+        export const direct = toSchema<${type}>();
+        type Result = ${type};
+        export const alias = toSchema<Result>();
+      `);
+
+      expect(sortedArms(propertyA(direct))).toEqual(
+        sortedArms(propertyA(alias)),
+      );
+      expect(sortedArms(propertyA(direct))).toContainEqual({
+        type: "object",
+        properties: {},
+        additionalProperties: { type: "string" },
+        ifc: { integrity: ["v"] },
+      });
+    });
+  }
+
   it("returns the fallback for a scoped record on numeric keys beside one on every key", async () => {
     const [schema] = await schemasOf(`
       import { toSchema, type PerUser } from "commonfabric";

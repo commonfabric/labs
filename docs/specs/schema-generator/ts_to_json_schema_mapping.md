@@ -227,9 +227,10 @@ or named intersection is reopened when an enclosing one reduces it
 (`(string & Brand) & number` is nothing); and a union whose arms fold to one
 schema — `void | OpaqueCell<any>`, two branded primitives with the same
 fallback, or `Record<string, T> | Record<number, T>` — keeps every arm, a
-labeled or scoped copy of it included, so an intersection reading the survivor
-still distributes over them, and the labels the survivor states are that union's
-(an arm accepting nothing is no arm, and is neither counted nor kept).
+labeled or scoped copy of it included and wherever it sits among the arms of
+another union, so an intersection reading the survivor still distributes over
+them, and the labels the survivor states are that union's (an arm accepting
+nothing is no arm, and is neither counted nor kept).
 Schemas with recorded union or intersection constituents are deduplicated by
 identity: equal fallback schemas can hide disjoint source types, so separate
 folded unions remain separate constraints in an enclosing intersection.
@@ -1113,6 +1114,10 @@ Default paths of §7:
   additionalProperties: { type: "string" } }`, and labels follow the members
   and index values they are written on (§11). Tested:
   intersection-formatter.test.ts, intersection-provenance.test.ts.
+- An intersection the checker reduces to nothing, as it reduces one whose
+  parts give a discriminant property different literal types
+  (`{ k: "x" } & { k: "y" }`), is `false`, though the checker may hand it
+  over unreduced as an arm of a union.
 - Unsupported shapes — a non-object constituent; an array, a tuple,
   `ArrayLike<T>` or a typed array beside an object, which the generator gives
   an array's schema whose items no member can hold; and an index signature on

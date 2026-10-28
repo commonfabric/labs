@@ -240,6 +240,17 @@ describe("IntersectionFormatter", () => {
     });
   });
 
+  describe("intersections the checker reduces to nothing", () => {
+    it("returns `false` for objects whose discriminant properties differ", async () => {
+      const { type, checker } = await getTypeFromCode(
+        `type Result = { k: "x" } & { k: "y" };`,
+        "Result",
+      );
+
+      expect(transformer.generateSchema(type, checker)).toBe(false);
+    });
+  });
+
   describe("unsupported intersections", () => {
     it("should reject an array beside an object", async () => {
       const code = `
@@ -432,6 +443,32 @@ describe("IntersectionFormatter", () => {
       expect(
         await propertyA(`type Result = { a: string } & { a: unknown };`),
       ).toEqual({ type: "string" });
+    });
+
+    it("returns the arms the checker keeps of optional unions that differ, without the `undefined` the `?` adds", async () => {
+      // Each union arm meets each of the other's; an arm whose discriminant
+      // takes two literal types is nothing, as the checker reduces it.
+
+      expect(
+        await propertyA(
+          `type Result =
+            & { a?: { k: "x" } | { k: "y" } }
+            & { a?: { k: "x" } | { k: "y" } | { k: "z" } };`,
+        ),
+      ).toEqual({
+        anyOf: [
+          {
+            type: "object",
+            properties: { k: { type: "string", enum: ["x"] } },
+            required: ["k"],
+          },
+          {
+            type: "object",
+            properties: { k: { type: "string", enum: ["y"] } },
+            required: ["k"],
+          },
+        ],
+      });
     });
 
     it("returns the union member another declaration narrows to", async () => {

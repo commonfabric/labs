@@ -220,6 +220,10 @@ export class IntersectionFormatter implements TypeFormatter {
     if (native !== undefined) {
       return cloneSchemaDefinition(native);
     }
+    // An intersection the checker reduces to nothing, as it reduces one whose
+    // parts give a discriminant property different literal types, accepts
+    // nothing, though the checker may hand it over unreduced as a union's arm.
+    if (checker.isTypeAssignableTo(type, checker.getNeverType())) return false;
     const inter = type as ts.IntersectionType;
     const parts = inter.types ?? [];
 
@@ -560,7 +564,16 @@ export class IntersectionFormatter implements TypeFormatter {
     // Every declaration has a schema, so each is a data property or a
     // callable returning a wrapper, and the intersection's call signatures,
     // if it has any, are those callables'.
-    const valueType = safeGetPropertyType(property, intersection, checker);
+    // An optional property's type holds the `undefined` its `?` adds, which
+    // the schema leaves to `required` to say. Among several other arms it is
+    // dropped here, where the union holds no `null` for the non-nullable
+    // type to drop as well.
+    const propertyType = safeGetPropertyType(property, intersection, checker);
+    const valueType = (property.flags & ts.SymbolFlags.Optional) !== 0 &&
+        propertyType.isUnion() &&
+        !propertyType.types.some((t) => (t.flags & ts.TypeFlags.Null) !== 0)
+      ? checker.getNonNullableType(propertyType)
+      : propertyType;
     const callable = classifyCallableProperty(
       valueType,
       checker,

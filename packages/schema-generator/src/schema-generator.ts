@@ -954,8 +954,9 @@ type LabeledArm = {
 
 /**
  * The arms of the union `schema` denotes, each read as `withBesideKeywords()`
- * reads a schema and flattened through nested unions, with the labels of
- * the unions it is an arm of (`LabeledArm`). A schema that is no union is its
+ * reads a schema and flattened through nested unions, a union whose arms
+ * folded to one schema included (`schemaOrigins`), with the labels of the
+ * unions it is an arm of (`LabeledArm`). A schema that is no union is its
  * own single arm.
  */
 function labeledArms(
@@ -963,10 +964,14 @@ function labeledArms(
   context: GenerationContext,
 ): LabeledArm[] {
   const stated = withBesideKeywords(schema, context);
-  if (!isObjectOrArray(stated) || !Array.isArray(stated.anyOf)) {
-    return [{ schema: stated, labels: [] }];
+  if (!isObjectOrArray(stated)) return [{ schema: stated, labels: [] }];
+  const origin = context.schemaOrigins?.get(stated);
+  if (origin?.kind === "union") {
+    return armsOfUnion(stated, origin.parts(), context);
   }
-  return armsOfUnion(stated, stated.anyOf as MutableJSONSchema[], context);
+  return Array.isArray(stated.anyOf)
+    ? armsOfUnion(stated, stated.anyOf as MutableJSONSchema[], context)
+    : [{ schema: stated, labels: [] }];
 }
 
 /**
@@ -1378,15 +1383,7 @@ function intersectionOf(
   if (nothing !== undefined) return nothing;
   const arms = values
     .filter((constituent) => !acceptsAnyValue(constituent))
-    .map((constituent) => {
-      const resolved = resolveLocalRef(constituent, context);
-      const origin = isObjectOrArray(resolved)
-        ? context.schemaOrigins?.get(resolved)
-        : undefined;
-      return isObjectOrArray(resolved) && origin?.kind === "union"
-        ? armsOfUnion(resolved, origin.parts(), context)
-        : labeledArms(constituent, context);
-    });
+    .map((constituent) => labeledArms(constituent, context));
   if (arms.length < values.length) {
     const direct = arms
       .filter((alternatives) => alternatives.length === 1)
