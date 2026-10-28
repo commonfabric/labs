@@ -385,7 +385,10 @@ const argumentsOf = (
 /** The lane. */
 export class LocalJobLane {
   #options: LocalJobLaneOptions;
-  #running = new Map<string, { abort: AbortController; done: Promise<void> }>();
+  #running = new Map<
+    string,
+    { abort: AbortController; done: Promise<void>; interactive: boolean }
+  >();
   #hosts = new Map<string, LocalJobBrowserHost>();
   #stopping = false;
 
@@ -424,7 +427,17 @@ export class LocalJobLane {
     while (
       !this.#stopping && this.#running.size < this.#options.maxConcurrent
     ) {
-      const job = this.#options.store.claimNext();
+      // One slot cannot be reserved: a single-slot lane admits background
+      // jobs whenever it is free. Larger lanes hold one slot for a person.
+      const backgroundLimit = this.#options.maxConcurrent >= 2
+        ? this.#options.maxConcurrent - 1
+        : this.#options.maxConcurrent;
+      const backgroundRunning = [...this.#running.values()].filter((run) =>
+        !run.interactive
+      ).length;
+      const job = this.#options.store.claimNext(
+        backgroundRunning >= backgroundLimit,
+      );
       if (job === undefined) return;
       this.#launch(job);
     }
@@ -484,7 +497,11 @@ export class LocalJobLane {
       this.#running.delete(job.id);
       this.kick();
     });
-    this.#running.set(job.id, { abort, done });
+    this.#running.set(job.id, {
+      abort,
+      done,
+      interactive: job.request.interactive === true,
+    });
   }
 
   /** Helper for `#launch`, which runs a job and ends it in the store. */

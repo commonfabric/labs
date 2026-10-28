@@ -60,6 +60,9 @@ export interface LocalJobRequest extends HarnessModelLimits {
   maxModelTurns?: number;
   imageAttachments?: HarnessInlineImageAttachment[];
 
+  /** A person is waiting: ordered first and eligible for the reserved slot. */
+  interactive?: boolean;
+
   /** How far the caller wants the job taken; the harness's default when absent. */
   depth?: HarnessRunDepth;
 
@@ -651,15 +654,22 @@ export class LocalJobStore {
     return this.get(id);
   }
 
-  /** Moves the oldest queued job to `running` and returns it. */
-  claimNext(): LocalJob | undefined {
+  /**
+   * Moves a queued job to `running`, interactive first and oldest within
+   * each class. `interactiveOnly` holds background jobs in the queue.
+   */
+  claimNext(interactiveOnly = false): LocalJob | undefined {
     const at = this.#now().toISOString();
     let claimed: string | undefined;
     this.#write(() => {
       const row = this.#database.prepare(`
         SELECT id FROM jobs WHERE state = 'queued'
-        ORDER BY created_at, rowid LIMIT 1
-      `).get() as { id: string } | undefined;
+          AND (:interactive_only = 0 OR json_extract(request_json, '$.interactive') = 1)
+        ORDER BY COALESCE(json_extract(request_json, '$.interactive'), 0) DESC,
+          created_at, rowid LIMIT 1
+      `).get({ interactive_only: interactiveOnly ? 1 : 0 }) as
+        | { id: string }
+        | undefined;
       if (row === undefined) return [];
       claimed = row.id;
       this.#database.prepare(`

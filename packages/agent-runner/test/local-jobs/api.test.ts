@@ -122,6 +122,59 @@ describe("local-jobs/api", () => {
   });
 
   describe("POST /jobs", () => {
+    it("replays an interactive request and returns `409 idempotency_conflict` when its flag changes", async () => {
+      const { post, store } = apiWith();
+      try {
+        const body = { ...BODY, interactive: true };
+        const response = await post("/jobs", body);
+        expect(response.status).toBe(201);
+        const { job } = await response.json();
+        expect(job.request.interactive).toBe(true);
+        const replay = await post("/jobs", body);
+        expect(replay.status).toBe(200);
+        expect((await replay.json()).job).toEqual(job);
+        const conflict = await post("/jobs", { ...body, interactive: false });
+        expect(conflict.status).toBe(409);
+        expect((await conflict.json()).code).toBe("idempotency_conflict");
+      } finally {
+        store.close();
+      }
+    });
+
+    it("returns `400 invalid_request` for a non-boolean interactive flag", async () => {
+      const { post, store, kicked } = apiWith();
+      try {
+        for (const interactive of ["yes", 1, null, {}, []]) {
+          const response = await post("/jobs", { ...BODY, interactive });
+          expect(response.status).toBe(400);
+          expect((await response.json()).code).toBe("invalid_request");
+        }
+        expect(store.list(10)).toEqual([]);
+        expect(kicked).toEqual([]);
+      } finally {
+        store.close();
+      }
+    });
+
+    it("retains the interactive flag on a follow-up request", async () => {
+      const { post, store } = apiWith();
+      try {
+        const response = await post("/jobs", { ...BODY, interactive: true });
+        const { job } = await response.json();
+        store.claimNext();
+        store.finish(job.id, { state: "completed", recordedRun: true });
+        const followUp = await post(`/jobs/${job.id}/messages`, {
+          caller: BODY.caller,
+          idempotencyKey: "interactive-follow-up",
+          message: "Continue",
+        });
+        expect(followUp.status).toBe(201);
+        expect((await followUp.json()).job.request.interactive).toBe(true);
+      } finally {
+        store.close();
+      }
+    });
+
     it("accepts inline image bytes and binds them to idempotency without granting host paths", async () => {
       const { post, store } = apiWith();
       const image = { mediaType: "image/png", base64: "iVBORw0KGgo=" };

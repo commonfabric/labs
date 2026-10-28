@@ -1591,7 +1591,7 @@ describe("local-jobs/lane", () => {
       const { store, lane, nextRun, enqueue } = laneWith();
       await lane.start();
       const a = enqueue("a");
-      const b = enqueue("b");
+      const b = enqueue("b", { ...REQUEST, interactive: true });
       const first = await nextRun(0);
       const second = await nextRun(1);
       expect(first.spec.commandJobId).toBe(a);
@@ -1609,7 +1609,11 @@ describe("local-jobs/lane", () => {
         maxConcurrent: 2,
       });
       await lane.start();
-      const [a, , c] = [enqueue("a"), enqueue("b"), enqueue("c")];
+      const [a, , c] = [
+        enqueue("a"),
+        enqueue("b", { ...REQUEST, interactive: true }),
+        enqueue("c"),
+      ];
       await nextRun(1);
 
       expect(runs).toHaveLength(2);
@@ -1641,7 +1645,7 @@ describe("local-jobs/lane", () => {
       });
       await lane.start();
       enqueue("a");
-      enqueue("b");
+      enqueue("b", { ...REQUEST, interactive: true });
       const first = await nextRun(0);
       const second = await nextRun(1);
       let settled = false;

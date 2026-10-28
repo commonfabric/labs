@@ -1911,7 +1911,7 @@ authority. A caller enqueues
 `{caller, profile, idempotencyKey, task,
 instructions?, context?, resultSchema?, tools?, maxModelTurns?, maxInputBytes?,
 maxOutputTokens?, imageAttachments?, depth?, tags?, domains?, reasoningEffort?,
-browserHost?, inputs?, foreignSpaces?}`
+browserHost?, inputs?, foreignSpaces?, interactive?}`
 with `POST /jobs`, bounded at 1 MiB of UTF-8 JSON before parsing, reads a job
 with `GET /jobs/<id>` or the newest with `GET /jobs?limit=n`, stops one with
 `POST /jobs/<id>/cancel`, and watches one with
@@ -1930,6 +1930,16 @@ it `down` with that reason, and a failed start leaves it `refused` with the
 error. Observed queue scan or record-follow failures mark it `down`; a
 successful scan marks it `up`. An idle queue is healthy: this does not detect a
 subscription that silently stops delivering changes.
+
+`interactive` is an optional boolean indicating that a person is waiting.
+Interactive queued jobs start ahead of every queued background job, oldest first
+within each class. The local lane runs at most `--max-concurrent-local` jobs at
+once. With at least two slots, background jobs may occupy at most one fewer than
+that limit, holding the last slot for an interactive job; interactive jobs may
+use any free slot. With one slot, nothing is reserved because one slot cannot be
+reserved while still running background jobs. The flag only orders admission and
+reserves capacity. It participates in enqueue idempotency and is inherited by
+follow-ups with the retained request.
 
 Health also lists `routes` as `{method, path}` entries (`:id` is a path
 parameter), the loaded `profileFile`, the resolved SQLite `storePath`, and
