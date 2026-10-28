@@ -1870,7 +1870,12 @@ class TransformObjectCreator
     // Following a reference consumes its own restrictions as well as the
     // target observations (§8.2.4). Keep the pointer read and its trace in
     // the transaction even when the returned value cannot carry a label view.
-    readMaybeLink(this.#tx, source);
+    // The traversal already records the slot's scheduling dependencies,
+    // including batched array reads; this observation is for CFC alone.
+    this.#tx.runWithAmbientReadMeta(
+      ignoreReadForScheduling,
+      () => readMaybeLink(this.#tx, source),
+    );
     this.#tx.recordCfcDereferenceTrace({
       source: cfcAddressFromLink(source),
       target: cfcAddressFromLink(target),
