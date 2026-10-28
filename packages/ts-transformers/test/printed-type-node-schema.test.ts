@@ -2621,6 +2621,54 @@ type Outer<T extends { x: string }> = Select<Sec<T>>;`,
         }
       });
 
+      for (
+        const [alias, atom, ifc] of [
+          ["Confidential", "c", { confidentiality: ["c"] }],
+          ["Integrity", "i", { integrity: ["i"] }],
+        ] as const
+      ) {
+        it(`labels the whole of an \`Omit\` over \`${alias}<T & { y: number }, …>\` at \`T = { x: string }\`, on both sides`, async () => {
+          // The policy was written around `T & { y: number }`, read with `T`
+          // bound to its argument, so it reaches `x` as well as `y`.
+          const read = await schemasOf(
+            `import type { Integrity } from "commonfabric";
+type View<T> = Omit<${alias}<T & { y: number }, readonly ["${atom}"]>, never>;`,
+            "View<{ x: string }>",
+          );
+          for (const side of [read.input, read.output]) {
+            expect((side as Schema).ifc).toEqual(ifc);
+            for (
+              const property of Object.values(
+                (side as Schema).properties as Record<string, Schema>,
+              )
+            ) {
+              expect(property.ifc).toBeUndefined();
+            }
+          }
+        });
+      }
+
+      it("labels the whole of a `Pick` under bindings that selects a key the payload's index signature supplies, on both sides", async () => {
+        // The payload may hold its data under `y` through its index
+        // signature, so the restriction reaches `y` as well as `x`.
+        const read = await schemasOf(
+          `type Outer<T extends Record<string, unknown>> = Confidential<{ inner: Pick<Confidential<T, readonly ["c"]>, "x" | "y"> }, readonly ["outer"]>;`,
+          "Outer<{ x: string; [key: string]: unknown }>",
+        );
+        for (const side of [read.input, read.output]) {
+          const inner = ((side as Schema).properties as Record<string, Schema>)
+            .inner!;
+          expect(inner.ifc).toEqual({ confidentiality: ["c"] });
+          for (
+            const property of Object.values(
+              inner.properties as Record<string, Schema>,
+            )
+          ) {
+            expect(property.ifc).toBeUndefined();
+          }
+        }
+      });
+
       describe("a union operand", () => {
         // `Pick` and `Omit` build one object from whichever member of a union
         // operand the value is, so both sides keep the labels of every member
