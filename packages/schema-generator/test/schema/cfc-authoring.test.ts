@@ -1753,6 +1753,58 @@ describe("Schema: CFC authoring aliases", () => {
       }
     });
 
+    for (
+      const [written, declarations, value, levels] of [
+        [
+          "an alias forwarding to it",
+          "type Box<T> = { next: T } | Secret; type Wrap<T> = Box<T>;",
+          "Wrap<Wrap<string>>",
+          2,
+        ],
+        [
+          "an alias nesting it twice",
+          "type Box<T> = { next: T } | Secret; type Twice<T> = Box<Box<T>>;",
+          "Twice<Twice<string>>",
+          4,
+        ],
+      ] as const
+    ) {
+      it(`keeps the label at every level of a generic alias nested in itself finitely through ${written}`, async () => {
+        for (
+          const { schema, diagnostics } of await bothPaths(declarations, value)
+        ) {
+          let expected: unknown = { type: "string" };
+          for (let level = 0; level < levels; level++) {
+            expected = {
+              anyOf: [
+                {
+                  type: "object",
+                  properties: { next: expected },
+                  required: ["next"],
+                },
+                SECRET,
+              ],
+            };
+          }
+          expect(schema.properties.a).toEqual(expected);
+          expect(diagnostics).toEqual([]);
+        }
+      });
+    }
+
+    it("reports `cfc-schema:recursive-alias-of-any` for a generic alias whose recursion nests its argument without end", async () => {
+      for (
+        const { diagnostics } of await bothPaths(
+          "type Nest<T> = { inner: Nest<T[]> } | Secret;",
+          "Nest<string>",
+        )
+      ) {
+        expect(diagnostics.map(({ type }) => type)).toEqual([
+          "cfc-schema:recursive-alias-of-any",
+        ]);
+      }
+    });
+
     it("reports nothing for a recursive alias of `any` holding only a `Projection`, which is read by its type", async () => {
       for (
         const { schema, diagnostics } of await bothPaths(

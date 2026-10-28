@@ -125,6 +125,26 @@ describe("alias-of-any-schema", () => {
       .toEqual([]);
   });
 
+  it("keeps the label at every level of a generic alias nested in itself finitely through an alias forwarding to it", async () => {
+    const { input, diagnostics } = await patternInputOf(`
+      import { pattern } from "commonfabric";
+      import type { Confidential } from "commonfabric";
+      type Box<T> = { next: T } | Confidential<any, ["secret"]>;
+      type Wrap<T> = Box<T>;
+      export default pattern<{ a: Wrap<Wrap<string>> }>(() => ({}));
+    `);
+
+    const box = (next: unknown) => ({
+      anyOf: [
+        { type: "object", properties: { next }, required: ["next"] },
+        { ifc: { confidentiality: ["secret"] } },
+      ],
+    });
+    expect(propertyA(input)).toEqual(box(box({ type: "string" })));
+    expect(diagnostics.filter(({ severity }) => severity === "error"))
+      .toEqual([]);
+  });
+
   it("reports `cfc-schema:recursive-alias-of-any` for a recursive alias wrapping a label around `any`", async () => {
     const { diagnostics } = await patternInputOf(`
       import { pattern } from "commonfabric";

@@ -51,6 +51,7 @@ import {
 import { isDefaultLibrarySourceFile } from "./typescript/default-library.ts";
 import {
   denotesSameType,
+  entityNameRight,
   getTypeAliasDeclaration,
   holdsFreeTypeParameter,
   holdsTypeParameter,
@@ -1935,6 +1936,10 @@ export class SchemaGenerator {
    * generation's `definitionStack` (`readAliasChain()`).
    */
   #chainReadings: WeakMap<object, ChainReading[]> = new WeakMap();
+
+  /** Whether each alias declaration reaches itself (`#aliasReachesItself()`). */
+  #aliasesReachingThemselves: WeakMap<ts.TypeAliasDeclaration, boolean> =
+    new WeakMap();
 
   /** Each chain reading's arguments form (`#argumentsFormOf()`). */
   #argumentForms: WeakMap<ChainReading, string | undefined> = new WeakMap();
@@ -4559,11 +4564,17 @@ export class SchemaGenerator {
    * or a union holding one is `any` to the checker, and only the written
    * declaration holds its labels, scope, or default. `undefined` for any other
    * reference, which reads as `any` does. A reference read again inside its
-   * own reading is a recursion through the alias, as the reference a
-   * declaration writes to itself is read at every level: it is `any` to the
+   * own reading is a recursion through the alias where the alias's
+   * declaration reaches itself (`#aliasReachesItself()`), as `Tree` in
+   * `type Tree = { next: Tree } | Secret` and `Nest<T[]>` in
+   * `type Nest<T> = { inner: Nest<T[]> } | Secret` do. Every branch of such a
+   * declaration is read, so its reading has no end: the alias is `any` to the
    * checker there too, and its labels would be lost at that depth, so it is
-   * refused (`reportRecursiveAliasOfAny()`). A finite nesting, `Box<Box<T>>`,
-   * reads each level through a reference of its own.
+   * refused (`reportRecursiveAliasOfAny()`). An alias whose declaration does
+   * not reach itself nests only as deep as the type written around it,
+   * however its references repeat: `Box<Box<T>>`, and `Wrap<Wrap<T>>` where
+   * `type Wrap<T> = Box<T>`, whose one reference to `Box` is read at each
+   * level.
    */
   #readAliasOfAny(
     reference: ts.TypeReferenceNode,
@@ -4585,7 +4596,9 @@ export class SchemaGenerator {
       return undefined;
     }
     const inside = context.aliasesReadForAny;
-    if (inside?.has(reference)) {
+    if (
+      inside?.has(reference) && this.#aliasReachesItself(declaration, checker)
+    ) {
       reportRecursiveAliasOfAny(context, reference);
       return {};
     }
@@ -4596,6 +4609,41 @@ export class SchemaGenerator {
       ...(bound.arguments.size > 0 && { boundTypeParameters: bound }),
       aliasesReadForAny: new Set([...inside ?? [], reference]),
     });
+  }
+
+  /**
+   * Whether `declaration` reaches itself through the alias declarations its
+   * references name, each read once: a declaration that does not can nest in
+   * itself only as deep as the type written around it.
+   */
+  #aliasReachesItself(
+    declaration: ts.TypeAliasDeclaration,
+    checker: ts.TypeChecker,
+  ): boolean {
+    const cached = this.#aliasesReachingThemselves.get(declaration);
+    if (cached !== undefined) return cached;
+    const read = new Set<ts.TypeAliasDeclaration>();
+    const reaches = (node: ts.Node): boolean => {
+      if (ts.isTypeReferenceNode(node)) {
+        const symbol = checker.getSymbolAtLocation(
+          entityNameRight(node.typeName),
+        );
+        const target = symbol &&
+          (symbol.flags & ts.SymbolFlags.Alias
+            ? checker.getAliasedSymbol(symbol)
+            : symbol).declarations?.find(ts.isTypeAliasDeclaration);
+        if (target === declaration) return true;
+        if (target && !read.has(target)) {
+          read.add(target);
+          if (reaches(target.type)) return true;
+        }
+      }
+      return ts.forEachChild(node, (child) => reaches(child) || undefined) ??
+        false;
+    };
+    const result = reaches(declaration.type);
+    this.#aliasesReachingThemselves.set(declaration, result);
+    return result;
   }
 
   /**
