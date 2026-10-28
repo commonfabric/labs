@@ -202,9 +202,9 @@ suites collect authored-pattern coverage").
 ## How the two are scored
 
 `tasks/coverage-metrics.ts` scores LCOV reports. It walks the tracked source
-files under `packages` and `tasks` and counts, for each file, how many lines no
-test covered. The top-level `scripts` directory is left out. The same counting
-serves both readers:
+files under the package directories `LAYOUT.md` names and under `tasks`, and
+counts, for each file, how many lines no test covered. The top-level `scripts`
+directory is left out. The same counting serves both readers:
 
 - **The repository-wide figure** merges every report the full run's lanes wrote
   and rolls the counts up into `coverage-debt: <group> uncovered lines` metrics,
