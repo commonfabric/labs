@@ -123,6 +123,27 @@ describe("Cell", () => {
           expect(cell.key("x", "y").get()).toBeUndefined();
         });
 
+        it("keeps `false` for a key under a conjunction declaring no type, which a read of the parent keeps", () => {
+          // Narrowing does not read a child out of an `allOf`, so the keyed
+          // cell selects nothing, while a read of the parent evaluates the
+          // conjunction whole and reaches the property.
+
+          const cell = cellHolding(
+            "typeless conjunction",
+            {
+              allOf: [{
+                type: "object",
+                properties: { x: { type: "number" } },
+              }],
+            },
+            { x: 5 },
+          );
+
+          expect(cell.get()).toEqual({ x: 5 });
+          expect(linkSchemaOf(cell.key("x"))).toBe(false);
+          expect(cell.key("x").get()).toBeUndefined();
+        });
+
         it("keeps `false` for a path below a scalar", () => {
           const cell = cellHolding(
             "below a scalar",
@@ -280,19 +301,29 @@ describe("Cell", () => {
           });
         }
 
-        for (const childSchema of [false, { not: true }] as JSONSchema[]) {
-          describe(`as ${JSON.stringify(childSchema)}`, () => {
-            it("reads nothing through a stored link", () => {
-              const holder = holderReadingChildrenAs(childSchema);
-
-              expect(holder.key("x").get()).toBeUndefined();
+        // A lazy view reaches the keyed cell's schema through `schema-view.ts`
+        // rather than the eager traversal, so the agreement is checked in both.
+        for (const lazy of [false, true]) {
+          describe(lazy ? "in a lazy view" : "in an eager read", () => {
+            beforeEach(() => {
+              if (lazy) tx.markLazyMaterialize(true);
             });
 
-            it("reads nothing at a plain value", () => {
-              const holder = holderReadingChildrenAs(childSchema);
+            for (const childSchema of [false, { not: true }] as JSONSchema[]) {
+              describe(`as ${JSON.stringify(childSchema)}`, () => {
+                it("reads nothing through a stored link", () => {
+                  const holder = holderReadingChildrenAs(childSchema);
 
-              expect(holder.key("v").get()).toBeUndefined();
-            });
+                  expect(holder.key("x").get()).toBeUndefined();
+                });
+
+                it("reads nothing at a plain value", () => {
+                  const holder = holderReadingChildrenAs(childSchema);
+
+                  expect(holder.key("v").get()).toBeUndefined();
+                });
+              });
+            }
           });
         }
       });

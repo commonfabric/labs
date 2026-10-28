@@ -88,6 +88,16 @@ will meet, so the refusal stands: `key("length")` under
 `{ "anyOf": [{ "type": "string" }, { "type": "object", "additionalProperties": false }] }`,
 or under a closed object that declares no type, carries `false`.
 
+A key under an `allOf` that declares no `type` carries `false` as well,
+because narrowing does not read a child out of a conjunction
+([`json_schema.md`](json_schema.md#how-a-step-narrows)). A read of the parent
+evaluates the conjunction whole and reaches a property a part declares, so
+over `{ "x": 5 }` under
+`{ "allOf": [{ "type": "object", "properties": { "x": { "type": "number" } } }] }`
+the parent reads `{ "x": 5 }` while `key("x")` selects nothing. Leaving the
+keyed cell agnostic instead would read the property with no schema, dropping
+the constraints and labels the part declares on it.
+
 What the entry crossing compares against is the reader's own schema. An
 agnostic reader whose read passes through one link to reach a slot
 holding another adopts the second link's schema, which describes the
