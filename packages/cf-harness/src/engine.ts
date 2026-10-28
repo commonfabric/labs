@@ -196,7 +196,10 @@ import type {
   HarnessInputCell,
   HarnessInputCellSpec,
 } from "./contracts/input-cells.ts";
-import { mintInputCellHandles } from "./input-cells.ts";
+import {
+  assertInputCellNamesAvailable,
+  mintInputCellHandles,
+} from "./input-cells.ts";
 import type { HarnessAssignedPiece } from "./contracts/assigned-piece.ts";
 import { resolvePieceAddress } from "@commonfabric/piece";
 import type {
@@ -204,6 +207,7 @@ import type {
   HarnessPatternRefSpec,
 } from "./contracts/pattern-refs.ts";
 import { resolvePatternRefs } from "./pattern-refs.ts";
+import type { HarnessSystemPromptInputs } from "./contracts/system-prompt.ts";
 import {
   addHarnessDocsQueryFailures,
   addHarnessResearchFailures,
@@ -1732,6 +1736,13 @@ export class CfHarnessEngine {
     return this.getRunState();
   }
 
+  /** Records additional instructions as the continuation default. */
+  setSystemPromptInputs(systemPromptInputs: HarnessSystemPromptInputs): void {
+    this.#runState = patchHarnessRunState(this.#runState, {
+      systemPromptInputs: structuredClone(systemPromptInputs),
+    }, this.#runState.updatedAt);
+  }
+
   setPromptSlotBinding(
     promptSlotBinding: PromptSlotBinding,
   ): HarnessRunState {
@@ -2016,8 +2027,8 @@ export class CfHarnessEngine {
   /**
    * Establishes the run's input cells: mints tokens for host-supplied attachments
    * or session-retained targets, records them in run state, and returns them.
-   * Idempotent across resume, like the well-known grants: cells already recorded
-   * are returned as they stand.
+   * With no argument, cells already recorded are returned as they stand.
+   * An explicit list adds new attachments, refusing names already held.
    *
    * An input cell names a task target, so failure is closed and loud rather
    * than tolerated: cells configured on a
@@ -2025,13 +2036,18 @@ export class CfHarnessEngine {
    * targeting an unadmitted space, and a named piece address whose slug this
    * space does not hold all throw before anything is recorded.
    */
-  async establishInputCells(): Promise<HarnessInputCell[]> {
-    if (this.#runState.inputCells !== undefined) {
+  async establishInputCells(
+    additionalCells?: readonly HarnessInputCellSpec[],
+  ): Promise<HarnessInputCell[]> {
+    if (
+      additionalCells === undefined && this.#runState.inputCells !== undefined
+    ) {
       return structuredClone(this.#runState.inputCells);
     }
-    if (this.#inputCells.length === 0) {
-      return [];
-    }
+    const specs = additionalCells ?? this.#inputCells;
+    const retained = this.#runState.inputCells ?? [];
+    assertInputCellNamesAvailable(specs, retained.map((cell) => cell.name));
+    if (specs.length === 0) return structuredClone(retained);
     if (this.#fabricSessionFactory === undefined) {
       throw new Error(
         "--input-cell requires a fabric session; configure --fabric-space",
@@ -2042,7 +2058,7 @@ export class CfHarnessEngine {
     const minted = await mintInputCellHandles(
       this.handleTable,
       this.#runState.runId,
-      this.#inputCells,
+      specs,
       space,
       {
         // A named address may spell the space by the DID beside it or by the
@@ -2055,11 +2071,11 @@ export class CfHarnessEngine {
     await this.recordHandleTable(minted.table);
     this.#runState = patchHarnessRunState(
       this.#runState,
-      { inputCells: structuredClone(minted.inputCells) },
+      { inputCells: structuredClone([...retained, ...minted.inputCells]) },
       this.#now(),
     );
     await this.persistRunState();
-    return minted.inputCells;
+    return structuredClone(this.#runState.inputCells!);
   }
 
   /**

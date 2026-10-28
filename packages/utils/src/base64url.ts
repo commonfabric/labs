@@ -50,30 +50,75 @@ export function toUnpaddedBase64urlFromText(text: string): string {
 /**
  * Decodes a base64url string to `Uint8Array`. This accepts both unpadded and
  * padded (trailing `=` characters) in the `encoded` input. Uses the base64url
- * alphabet (RFC 4648 section 5).
+ * alphabet (RFC 4648 section 5). Input holding whitespace, and input carrying a
+ * nonzero bit past its last whole byte, both throw, so that each byte sequence
+ * has one unpadded form: `AQ` decodes to the byte `0x01`, and `AR` throws.
  */
 export function fromBase64url(encoded: string): Uint8Array {
-  // TODO(danfuzz): Refuse whitespace, which `Uint8Array.fromBase64()` skips
-  // and the `fvj1:` format refuses in a base64url state. The case
-  // `bytes state holding whitespace` in
-  // `packages/data-model/test/fixtures/fvj1-conformance.json` records it.
-  //
-  // TODO(danfuzz): Refuse nonzero bits past the last whole byte, which
-  // `Uint8Array.fromBase64()` ignores and the `fvj1:` format refuses in a
-  // base64url state. The case `bytes state with nonzero trailing bits` in
-  // `packages/data-model/test/fixtures/fvj1-conformance.json` records it.
-  return useBase64Polyfill
-    ? fromBase64Polyfill(encoded)
-    : Uint8Array.fromBase64(encoded, { alphabet: "base64url" });
+  if (useBase64Polyfill) {
+    return fromBase64Polyfill(encoded);
+  }
+
+  // `Uint8Array.fromBase64()` skips ASCII whitespace and ignores the bits past
+  // the last whole byte, so both are refused here.
+  if (/[\t\n\f\r ]/.test(encoded)) {
+    throw new Error("`fromBase64url()`: whitespace in input");
+  }
+  const result = Uint8Array.fromBase64(encoded, { alphabet: "base64url" });
+  if (hasNonzeroTrailingBits(encoded)) {
+    throw new Error(TRAILING_BITS_MESSAGE);
+  }
+  return result;
 }
 
-//
-// Polyfill
-//
+/**
+ * Indicates whether `encoded`, which is known to be valid base64url apart from
+ * its trailing bits, carries a nonzero bit past its last whole byte. A final
+ * group of two characters carries four such bits, and one of three carries two.
+ */
+function hasNonzeroTrailingBits(encoded: string): boolean {
+  let end = encoded.length;
+  while ((end > 0) && (encoded[end - 1] === B64_PADDING_CHAR)) {
+    end--;
+  }
+
+  switch (end % 4) {
+    case 2: {
+      return (B64_DECODE[encoded.charCodeAt(end - 1)]! & 0x0f) !== 0;
+    }
+    case 3: {
+      return (B64_DECODE[encoded.charCodeAt(end - 1)]! & 0x03) !== 0;
+    }
+    default: {
+      return false;
+    }
+  }
+}
 
 /** Base64url alphabet (RFC 4648 section 5): `+` -> `-`, `/` -> `_`. */
 const B64_CHARS =
   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+/** Invalid reverse-lookup value. */
+const B64_INVALID = 0xff;
+
+/** Padding character. */
+const B64_PADDING_CHAR = "=";
+
+/** Reverse lookup: base64 char -> 6-bit value. */
+const B64_DECODE = new Uint8Array(128).fill(B64_INVALID);
+
+for (let i = 0; i < B64_CHARS.length; i++) {
+  B64_DECODE[B64_CHARS.charCodeAt(i)] = i;
+}
+
+/** Error message for input carrying a nonzero bit past its last whole byte. */
+const TRAILING_BITS_MESSAGE =
+  "`fromBase64url()`: nonzero bits past the last whole byte";
+
+//
+// Polyfill
+//
 
 /** Polyfill for `toUnpaddedBase64url()`. `export`ed just for testing. */
 export function toBase64Polyfill(bytes: Uint8Array): string {
@@ -108,19 +153,6 @@ export function toBase64Polyfill(bytes: Uint8Array): string {
   return result;
 }
 
-/** Invalid reverse-lookup value. */
-const B64_INVALID = 0xff;
-
-/** Padding character. */
-const B64_PADDING_CHAR = "=";
-
-/** Reverse lookup: base64 char -> 6-bit value. */
-const B64_DECODE = new Uint8Array(128).fill(B64_INVALID);
-
-for (let i = 0; i < B64_CHARS.length; i++) {
-  B64_DECODE[B64_CHARS.charCodeAt(i)] = i;
-}
-
 /** Polyfill for `fromBase64url()`. `export`ed just for testing. */
 export function fromBase64Polyfill(encoded: string): Uint8Array {
   const s = encoded;
@@ -135,6 +167,10 @@ export function fromBase64Polyfill(encoded: string): Uint8Array {
   }
   if ((s.length - inLen) > 2) {
     throw new Error("`fromBase64url()`: too much padding");
+  }
+  if ((inLen % 4) === 1) {
+    // A final group of one character carries no whole byte.
+    throw new Error("`fromBase64url()`: lone final character");
   }
 
   // Compute output byte count from the number of base64 characters.
@@ -159,6 +195,11 @@ export function fromBase64Polyfill(encoded: string): Uint8Array {
         }
       }
     }
+  }
+
+  // What is left in `bitBuf` past the last whole byte has to be zero.
+  if ((bitBuf & ((1 << bitCount) - 1)) !== 0) {
+    throw new Error(TRAILING_BITS_MESSAGE);
   }
 
   return result;

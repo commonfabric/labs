@@ -36,7 +36,6 @@ const BODY = {
 /** Helper for tests, which builds the API over an in-memory store. */
 const apiWith = (
   options: {
-    canSteer?: () => boolean;
     profiles?: Map<string, LocalJobProfile>;
     fabricLane?: () => boolean;
     heartbeatMs?: number;
@@ -123,6 +122,59 @@ describe("local-jobs/api", () => {
   });
 
   describe("POST /jobs", () => {
+    it("replays an interactive request and returns `409 idempotency_conflict` when its flag changes", async () => {
+      const { post, store } = apiWith();
+      try {
+        const body = { ...BODY, interactive: true };
+        const response = await post("/jobs", body);
+        expect(response.status).toBe(201);
+        const { job } = await response.json();
+        expect(job.request.interactive).toBe(true);
+        const replay = await post("/jobs", body);
+        expect(replay.status).toBe(200);
+        expect((await replay.json()).job).toEqual(job);
+        const conflict = await post("/jobs", { ...body, interactive: false });
+        expect(conflict.status).toBe(409);
+        expect((await conflict.json()).code).toBe("idempotency_conflict");
+      } finally {
+        store.close();
+      }
+    });
+
+    it("returns `400 invalid_request` for a non-boolean interactive flag", async () => {
+      const { post, store, kicked } = apiWith();
+      try {
+        for (const interactive of ["yes", 1, null, {}, []]) {
+          const response = await post("/jobs", { ...BODY, interactive });
+          expect(response.status).toBe(400);
+          expect((await response.json()).code).toBe("invalid_request");
+        }
+        expect(store.list(10)).toEqual([]);
+        expect(kicked).toEqual([]);
+      } finally {
+        store.close();
+      }
+    });
+
+    it("retains the interactive flag on a follow-up request", async () => {
+      const { post, store } = apiWith();
+      try {
+        const response = await post("/jobs", { ...BODY, interactive: true });
+        const { job } = await response.json();
+        store.claimNext();
+        store.finish(job.id, { state: "completed", recordedRun: true });
+        const followUp = await post(`/jobs/${job.id}/messages`, {
+          caller: BODY.caller,
+          idempotencyKey: "interactive-follow-up",
+          message: "Continue",
+        });
+        expect(followUp.status).toBe(201);
+        expect((await followUp.json()).job.request.interactive).toBe(true);
+      } finally {
+        store.close();
+      }
+    });
+
     it("accepts inline image bytes and binds them to idempotency without granting host paths", async () => {
       const { post, store } = apiWith();
       const image = { mediaType: "image/png", base64: "iVBORw0KGgo=" };
@@ -404,6 +456,23 @@ describe("local-jobs/api", () => {
   });
 
   describe("POST /jobs/<id>/messages", () => {
+    it("accepts a running job's message without a capability switch", async () => {
+      const { post, store } = apiWith();
+      try {
+        const { job } = await (await post("/jobs", BODY)).json();
+        store.claimNext();
+        const response = await post(`/jobs/${job.id}/messages`, {
+          caller: BODY.caller,
+          idempotencyKey: "always-steer",
+          message: "Continue.",
+        });
+        expect(response.status).toBe(201);
+        expect((await response.json()).message.delivery).toBe("pending");
+      } finally {
+        store.close();
+      }
+    });
+
     const MESSAGE = {
       caller: BODY.caller,
       idempotencyKey: "message-1",
@@ -411,7 +480,7 @@ describe("local-jobs/api", () => {
     };
 
     it("returns a pending record and streams delivery at the run's turn", async () => {
-      const { post, store, call } = apiWith({ canSteer: () => true });
+      const { post, store, call } = apiWith();
       try {
         const { job } = await (await post("/jobs", BODY)).json();
         store.claimNext();
@@ -448,7 +517,7 @@ describe("local-jobs/api", () => {
     });
 
     it("opens a finished head's follow-up, inherits or replaces instructions, and routes to the head", async () => {
-      const { post, store, call } = apiWith({ canSteer: () => true });
+      const { post, store, call } = apiWith();
       try {
         const { job } = await (await post("/jobs", BODY)).json();
         store.claimNext();
@@ -509,7 +578,7 @@ describe("local-jobs/api", () => {
       }
     });
 
-    it("accepts post-cancel messages and finished-head follow-ups with steering disabled", async () => {
+    it("accepts post-cancel messages and finished-head follow-ups", async () => {
       const { post, store } = apiWith();
       try {
         const { job } = await (await post("/jobs", BODY)).json();
@@ -540,7 +609,7 @@ describe("local-jobs/api", () => {
     });
 
     it("replays the current record before head refusals and writes no events", async () => {
-      const { post, store } = apiWith({ canSteer: () => true });
+      const { post, store } = apiWith();
       try {
         const { job } = await (await post("/jobs", BODY)).json();
         store.claimNext();
@@ -584,7 +653,7 @@ describe("local-jobs/api", () => {
     });
 
     it("refuses conflicting message fingerprints and keys in either route's namespace", async () => {
-      const { post, store } = apiWith({ canSteer: () => true });
+      const { post, store } = apiWith();
       try {
         const { job } = await (await post("/jobs", BODY)).json();
         const { job: other } =
@@ -646,8 +715,7 @@ describe("local-jobs/api", () => {
         ["interrupted", 409, "not_continuable"],
         ["profile failure", 409, "not_continuable"],
         ["queued cancellation", 409, "not_continuable"],
-        ["steering disabled", 409, "cannot_steer"],
-        ["instructions", 409, "instructions_on_steer"],
+        ["instructions", 409, "follow_up_only"],
         ["retired profile", 400, "unknown_profile"],
       ] as const
     ) {
@@ -656,11 +724,6 @@ describe("local-jobs/api", () => {
         const { post, store } = apiWith({ profiles });
         try {
           const { job } = await (await post("/jobs", BODY)).json();
-          if (name === "missing") {
-            const known = await post(`/jobs/${job.id}/messages`, MESSAGE);
-            expect(known.status).toBe(409);
-            expect((await known.json()).code).toBe("cannot_steer");
-          }
           if (name === "interrupted") {
             store.claimNext();
             store.recover();

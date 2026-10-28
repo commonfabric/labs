@@ -798,24 +798,42 @@ leaves the predecessor's artifacts and result untouched. It seeds the model with
 history through the last complete tool-call checkpoint, excluding turn-local
 notices persisted with `turnLocal: true`. Older artifacts have no such marker,
 so unmarked notice text remains ordinary history. The marker is omitted from
-provider requests. An interrupted tail is replaced by the chat service's
-interrupted-turn notice before the new message; a run with no complete
-checkpoint is refused. `--system-prompt` replaces the prior run's additional
-instructions, and the harness rebuilds the rest of the system message. A run
-bound to one exact prompt value cannot be continued, because the binding does
-not cover a new prompt. A run whose artifacts link outside its run root cannot
-be continued.
+provider requests. A dropped tail or a recorded status other than `completed`
+adds the cause-neutral interrupted-turn notice before the new message; a run
+with no complete checkpoint is refused. The harness always rebuilds the system
+message from this invocation's flags, the recorded task classification, and the
+new result contract. Tools, host mounts, fabric mounts, skills, pattern index,
+and depth use this invocation's configuration. Only additional instructions
+default to the recorded ones; `--system-prompt` replaces them. Output mode comes
+from this invocation, defaulting to `operator` when `--output-mode` is absent.
+Runs without recorded instruction defaults are refused before any model request.
+A run bound to one exact prompt value cannot be continued, because the binding
+does not cover a new prompt. A run whose artifacts link outside its run root
+cannot be continued.
 
 Continuation explicitly retains the prior handle table, result schema, research
-context, CFC record, and prompt-slot binding. Skill-context handles expire as
-they do between chat turns. The new result defaults to `result.json` under the
-new run's artifact directory; `--structured-result-path` can name another new
-path without repeating the recorded schema. An explicit schema must agree with
-the recorded one. Output paths that overlap the prior run's artifacts or result
-are refused. Continuation shares resume's provider, credential owner,
+context, CFC record, and prompt-slot binding. Both batch continuation and chat
+turns use the same next-run builder. Research retains the latest orientation and
+two latest answers, marked historical. Grants, skills, and turn guidance are
+re-established as turn-local context before the new input. Skill-context handles
+expire as they do between chat turns. The new result defaults to `result.json`
+under the new run's artifact directory; `--structured-result-path` can name
+another new path without repeating the recorded schema. An explicit schema must
+agree with the recorded one. Output paths that overlap the prior run's artifacts
+or result are refused. Continuation shares resume's provider, credential owner,
 read-ceiling, sandbox-runtime and CFC-mode checks, also refusing a changed model
-or a subagent source. It cannot be combined with `--resume-run`, `--skill`,
-`--image`, `--input-cell`, `--task-tags` or `--task-domains`.
+or a subagent source. It cannot be combined with `--resume-run` or `--skill`.
+`--task-tags` and `--task-domains` remain refused because they classify a new
+task, rather than a follow-up.
+
+A follow-up accepts `--image` and `--input-cell` with the same formats and
+limits as a first run. Images are snapshotted under the new run's artifact
+directory and attached to its new prompt. New input cells mint handles into the
+carried table, so earlier tokens still resolve. Attachment names are retained
+across continuations; a new input cell whose name is already held is refused
+before any model request. `assignedPieces` also carries forward. When no new
+input cells are supplied, their confirmed slugs are announced as attachments, as
+in later chat turns.
 
 The gateway and subscription routes have different billing, workspace policy,
 retention, and model availability. The model catalog is read live from the
@@ -1521,6 +1539,8 @@ parse, targets an unadmitted space, names a piece the space does not hold, or
 arrives on a run without a fabric session fails the run before the model is
 involved. The cells are recorded in run state (`inputCells`), replayed rather
 than re-minted on resume, and reported in the operator summary as `inputCells:`.
+A continuation retains those names and tokens and appends its new attachments;
+reusing a held attachment name is refused.
 
 #### Inspecting a handle's shape
 

@@ -1390,6 +1390,41 @@ describe("link-resolution", () => {
       expect(() => cellB.get()).toThrow();
     });
 
+    it("resolves a finite path through repeated references to the same object", () => {
+      const cell = runtime.getCell<Record<string, unknown>>(
+        space,
+        "finite-self-traversal",
+        undefined,
+        tx,
+      );
+      cell.setRaw({ self: cell.getAsLink(), leaf: "reached leaf" });
+
+      const path = [...Array<string>(8).fill("self"), "leaf"];
+      const resolved = resolveLink(runtime, tx, {
+        ...cell.getAsNormalizedFullLink(),
+        path,
+      });
+      expect(resolved.id).toBe(cell.getAsNormalizedFullLink().id);
+      expect(resolved.path).toEqual(["leaf"]);
+      expect(cell.key(...path).get()).toBe("reached leaf");
+    });
+
+    it("resolves a finite path through repeated references to a nested ancestor", () => {
+      const cell = runtime.getCell<Record<string, unknown>>(
+        space,
+        "finite-nested-self-traversal",
+        undefined,
+        tx,
+      );
+      cell.setRaw({
+        object: { self: cell.key("object").getAsLink(), leaf: 42 },
+      });
+
+      expect(
+        cell.key("object", ...Array<string>(8).fill("self"), "leaf").get(),
+      ).toBe(42);
+    });
+
     it("detects cycle when resolving link to its own subpath", () => {
       // Test case: A -> A/foo creates an infinite growing path. The
       // self-subpath shape is detected on the first hop.

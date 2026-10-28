@@ -4,11 +4,13 @@ import { join } from "@std/path";
 
 import type { HarnessTranscriptMessage } from "@commonfabric/cf-harness/contracts/transcript";
 
+import {
+  answerReply,
+  scriptedJob,
+  toolReply,
+} from "../fixtures/scripted-job.ts";
 import { browserChild, delegatedBrowse } from "./fixtures/delegated-browse.ts";
-import type {
-  HarnessJobOptions,
-  HarnessJobResult,
-} from "../../src/harness-job.ts";
+import type { HarnessJobResult } from "../../src/harness-job.ts";
 import { startLocalJobs } from "../../src/local-jobs/service.ts";
 
 /** A profile file with one read-only profile. */
@@ -78,61 +80,149 @@ describe("startLocalJobs()", () => {
     }
   };
 
-  for (const steering of [true, false]) {
-    it(`serves message steering with the lane capability ${steering}`, async () => {
-      const started = Promise.withResolvers<HarnessJobOptions>();
-      const result = Promise.withResolvers<HarnessJobResult>();
-      const running = await startLocalJobs(
-        {
-          socketPath: join(dir, "jobs.sock"),
-          profilesPath: join(dir, "profiles.json"),
-          maxConcurrent: 1,
-          workRoot: join(dir, "runs"),
-        },
-        () => {},
-        {
-          steering,
-          runJob: (_spec, options) => {
-            started.resolve(options);
-            return result.promise;
-          },
-        },
+  it("continues a real harness job through the API and delivers a steer in the shared workspace", async () => {
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const script = scriptedJob(async (_request, index) => {
+      if (index === 0) {
+        return toolReply("write_file", {
+          path: "/workspace/conversation.txt",
+          content: "remembered file",
+        });
+      }
+      if (index === 1) return answerReply("first");
+      if (index === 2) {
+        entered.resolve();
+        await release.promise;
+        return toolReply("read_file", { path: "/workspace/conversation.txt" });
+      }
+      if (index === 4) {
+        return toolReply("read_file", { path: "/workspace/conversation.txt" });
+      }
+      return answerReply("follow-up with steer");
+    });
+    await Deno.writeTextFile(
+      join(dir, "profiles.json"),
+      JSON.stringify({
+        read: { ...PROFILES.read, tools: ["write_file", "read_file"] },
+      }),
+    );
+    const running = await startLocalJobs(
+      {
+        socketPath: join(dir, "jobs.sock"),
+        profilesPath: join(dir, "profiles.json"),
+        maxConcurrent: 2,
+        workRoot: join(dir, "runs"),
+        model: "scripted",
+      },
+      () => {},
+      { harnessDeps: script.deps },
+    );
+    const post = (path: string, body: unknown) =>
+      call(path, { method: "POST", body: JSON.stringify(body) });
+    const finished = async (id: string) => {
+      const token = await Deno.readTextFile(join(dir, "jobs.sock.token"));
+      const client = Deno.createHttpClient(
+        { proxy: { transport: "unix", path: join(dir, "jobs.sock") } } as never,
       );
       try {
-        const { body } = await call("/jobs", {
-          method: "POST",
-          body: JSON.stringify({
-            caller: "test",
-            profile: "read",
-            idempotencyKey: "k",
-            task: "First.",
-            resultSchema: true,
-          }),
-        });
-        const options = await started.promise;
-        expect((await call("/health")).body.routes).toContainEqual({
-          method: "POST",
-          path: "/jobs/:id/messages",
-        });
-        const response = await call(`/jobs/${body.job.id}/messages`, {
-          method: "POST",
-          body: JSON.stringify({
-            caller: "test",
-            idempotencyKey: "m",
-            message: "Next.",
-          }),
-        });
-        expect(response.status).toBe(steering ? 201 : 409);
-        if (steering) {
-          expect(response.body.message.delivery).toBe("pending");
-          expect(await options.takeMessages!(1)).toEqual(["Next."]);
-        } else expect(response.body.code).toBe("cannot_steer");
+        const response = await fetch(
+          `http://runner/jobs/${id}/events`,
+          { headers: { authorization: `Bearer ${token}` }, client } as never,
+        );
+        expect(await response.text()).toContain('"state":"completed"');
+        return (await call(`/jobs/${id}`)).body.job;
       } finally {
-        result.resolve({ outcome: "cancelled" });
-        await running.stop();
+        client.close();
       }
-    });
-  }
+    };
+    try {
+      const initial = await post("/jobs", {
+        caller: "test",
+        profile: "read",
+        idempotencyKey: "first",
+        task: "Write a file",
+        resultSchema: {
+          type: "object",
+          properties: { answer: { type: "string" } },
+          required: ["answer"],
+        },
+      });
+      expect(initial.status).toBe(201);
+      const first = await finished(initial.body.job.id);
+      const follow = await post(`/jobs/${first.id}/messages`, {
+        caller: "test",
+        idempotencyKey: "follow",
+        message: "Read that file",
+        instructions: "New framing",
+      });
+      expect(follow.status).toBe(201);
+      expect(follow.body.message.delivery).toBe("follow-up");
+      const done = finished(follow.body.job.id);
+      await Promise.race([
+        entered.promise,
+        done.then(() => {
+          throw new Error("Follow-up ended before its first model request");
+        }),
+      ]);
+      const steer = await post(`/jobs/${first.id}/messages`, {
+        caller: "test",
+        idempotencyKey: "steer",
+        message: "Use this steer",
+      });
+      expect(steer.status).toBe(201);
+      release.resolve();
+      const next = await done;
+      expect(next).toMatchObject({
+        continues: first.id,
+        openedBy: { key: "follow", delivery: "follow-up" },
+        result: { answer: "follow-up with steer" },
+      });
+      expect(next.messages).toContainEqual(
+        expect.objectContaining({
+          key: "steer",
+          delivery: "delivered",
+          turn: 2,
+        }),
+      );
+      expect(script.workspaces).toEqual([
+        join(dir, "runs", first.id, "workspace"),
+        join(dir, "runs", first.id, "workspace"),
+      ]);
+      expect(script.requests[3].transcript).toContainEqual({
+        role: "user",
+        content: "Use this steer",
+      });
+      expect(
+        script.requests[3].transcript.filter((m) =>
+          m.role === "tool" && m.toolName === "read_file"
+        ).at(-1)?.content,
+      ).toContain("remembered file");
+      expect(
+        script.requests[2].transcript.find((m) => m.role === "system")?.content,
+      ).toContain("New framing");
+      expect(
+        await Deno.readTextFile(join(script.workspaces[0], "conversation.txt")),
+      ).toBe("remembered file");
+      expect(next.report.runRef).toContain(join(next.id, "artifacts"));
+      const third = await post(`/jobs/${first.id}/messages`, {
+        caller: "test",
+        idempotencyKey: "third",
+        message: "Read that file again",
+      });
+      expect(third.status).toBe(201);
+      expect((await finished(third.body.job.id)).continues).toBe(next.id);
+      expect(script.workspaces[2]).toBe(script.workspaces[0]);
+      expect(
+        script.requests[5].transcript.filter((m) =>
+          m.role === "tool" && m.toolName === "read_file"
+        ).at(-1)?.content,
+      ).toContain("remembered file");
+    } finally {
+      release.resolve();
+      await running.stop();
+    }
+  });
 
   it("serves the API on a private socket with a private token and store", async () => {
     const { service, reported } = start();

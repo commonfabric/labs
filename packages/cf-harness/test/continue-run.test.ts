@@ -7,13 +7,17 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
+import { decodeBase64 } from "@std/encoding/base64";
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
-import { buildCfHarnessBatchSystemPrompt } from "../src/cli.ts";
+import {
+  buildCfHarnessBatchSystemPrompt,
+  resolveCfHarnessCliSystemPrompt,
+} from "../src/cli.ts";
 import type { HarnessFabricSession } from "../src/fabric-session.ts";
 import { readHarnessRunArtifacts } from "../src/artifacts.ts";
 import { CFC_PROMPT_SLOT_BOUND_ATOM_TYPE } from "../src/contracts/prompt-slot.ts";
@@ -25,12 +29,17 @@ import {
   createHarnessHandleTable,
   markHandleDescribed,
   mintAddressHandle,
+  resolveHandleToken,
 } from "../src/handle-table.ts";
+import { materializeImageAttachmentContentPart } from "../src/image-attachments.ts";
 import { OpenAICompatibleGatewayClient } from "../src/gateway/openai-client.ts";
 import { OpenAICompatibleGatewayModelClient } from "../src/model/openai-compatible-gateway.ts";
 import { OpenAICodexResponsesClient } from "../src/model/openai-codex-responses.ts";
 import { CfHarnessEngine } from "../src/engine.ts";
-import { HARNESS_CHAT_INTERRUPTED_TURN_NOTICE } from "../src/interactive-chat-service.ts";
+import {
+  HARNESS_CHAT_INTERRUPTED_TURN_NOTICE,
+  HarnessInteractiveChatService,
+} from "../src/interactive-chat-service.ts";
 import type { HarnessModelTurnRequest } from "../src/model/client.ts";
 import { CfHarnessPromptLoop } from "../src/prompt-loop.ts";
 import {
@@ -74,6 +83,7 @@ describe("continue-run", () => {
   let state: HarnessRunState;
   let requests: HarnessModelTurnRequest[];
   let errors: string[];
+  let output: string[];
   let before: Map<string, string>;
   let scripted: HarnessAssistantTranscriptMessage[];
   let structuredHostFailures: boolean;
@@ -129,7 +139,13 @@ describe("continue-run", () => {
       cwd: workspace,
       structuredHostFailures,
       env: { CF_HARNESS_API_KEY: "test" },
-      io: { stdout: () => {}, stderr: (text) => errors.push(text) },
+      ...(fabric === undefined
+        ? {}
+        : { fabricSessionFactory: () => Promise.resolve(fabric!.session) }),
+      io: {
+        stdout: (text) => output.push(text),
+        stderr: (text) => errors.push(text),
+      },
       createPromptLoop: (options) =>
         new CfHarnessPromptLoop({
           ...options,
@@ -173,6 +189,49 @@ describe("continue-run", () => {
     );
   };
 
+  const attachmentCells = async () => {
+    const signer = await Identity.fromPassphrase("follow-up attachments");
+    const storage = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL("http://toolshed.test"),
+      storageManager: storage,
+      cfcEnforcementMode: "disabled",
+    });
+    const pieces = new PiecesController(
+      createSession({ identity: signer, spaceDid: signer.did() }),
+      runtime,
+    );
+    fabric = { runtime, storage, session: { pieces } };
+    await pieces.synced();
+    const tx = runtime.edit();
+    const old = runtime.getCell(
+      pieces.getSpace(),
+      "old-attachment",
+      undefined,
+      tx,
+    );
+    const added = runtime.getCell(
+      pieces.getSpace(),
+      "new-attachment",
+      undefined,
+      tx,
+    );
+    old.set("old cell");
+    added.set("new cell");
+    expect((await tx.commit().settled).ok).toBeDefined();
+    const refs = [old, added].map((cell) =>
+      createLLMFriendlyLink(cell.getAsNormalizedFullLink(), pieces.getSpace())
+    );
+    const held = await mintAddressHandle(
+      createHarnessHandleTable("prior"),
+      refs[0],
+      { schema: { type: "string" } },
+    );
+    state.handleTable = held.table;
+    state.inputCells = [{ name: "original", ref: refs[0], token: held.token }];
+    return { oldRef: refs[0], newRef: refs[1], oldToken: held.token };
+  };
+
   beforeEach(async () => {
     workspace = await Deno.realPath(await Deno.makeTempDir());
     priorRoot = join(workspace, ".cf-harness-artifacts", "prior");
@@ -185,8 +244,20 @@ describe("continue-run", () => {
       model: "gpt-recorded",
       artifactRoot: priorRoot,
     });
+    state.systemPromptInputs = {
+      systemPrompt: "Prior instructions",
+    };
+    history[0] = {
+      role: "system",
+      content: resolveCfHarnessCliSystemPrompt({
+        ...state.systemPromptInputs,
+        outputMode: "operator",
+        workspace,
+      })!,
+    };
     requests = [];
     errors = [];
+    output = [];
     scripted = [];
     structuredHostFailures = false;
     await save();
@@ -196,6 +267,170 @@ describe("continue-run", () => {
     await fabric?.storage.close();
     fabric = undefined;
     await Deno.remove(workspace, { recursive: true });
+  });
+
+  it("attaches a snapshotted follow-up image to the new prompt in the first request", async () => {
+    const bytes = decodeBase64(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p94AAAAASUVORK5CYII=",
+    );
+    const path = join(workspace, "follow-up.png");
+    await Deno.writeFile(path, bytes);
+    expect(await run(["--image", path])).toBe(0);
+    const prompt = requests[0].transcript.at(-1);
+    expect(prompt?.role).toBe("user");
+    if (prompt?.role !== "user") throw new Error("missing new user prompt");
+    expect(prompt.content).toBe("Next task");
+    expect(prompt.imageAttachments).toHaveLength(1);
+    const attachment = prompt.imageAttachments![0];
+    expect(attachment.snapshotPath?.startsWith(workspace + "/")).toBe(true);
+    expect(await Deno.readFile(attachment.snapshotPath!)).toEqual(bytes);
+    await Deno.writeFile(path, new Uint8Array([1, 2, 3]));
+    expect((await materializeImageAttachmentContentPart(attachment)).type).toBe(
+      "image_url",
+    );
+    expect(
+      requests[0].transcript.slice(0, -1).some((message) =>
+        message.role === "user" && message.imageAttachments?.length
+      ),
+    ).toBe(false);
+    await unchanged();
+  });
+
+  it("adds a follow-up input handle while retaining the prior token and naming records", async () => {
+    const refs = await attachmentCells();
+    await save();
+    expect(await run(["--input-cell", `additional=${refs.newRef}`])).toBe(0);
+    const next = await nextArtifacts();
+    const added = next.runState.inputCells?.find((cell) =>
+      cell.name === "additional"
+    );
+    expect(added).toBeDefined();
+    expect(resolveHandleToken(next.runState.handleTable!, refs.oldToken)?.ref)
+      .toBe(refs.oldRef);
+    expect(resolveHandleToken(next.runState.handleTable!, added!.token)?.ref)
+      .toBe(refs.newRef);
+    expect(
+      next.runState.inputCells?.find((cell) => cell.name === "original")?.token,
+    ).toBe(refs.oldToken);
+    const context = requests[0].transcript.filter((message) =>
+      message.role === "user" && message.turnLocal
+    ).map((message) => message.content).join("\n");
+    expect(context).toContain(`${added!.token} — additional`);
+    expect(
+      await run(["--input-cell", `additional=${refs.oldRef}`], next.runRoot),
+    ).toBe(1);
+    expect(errors.join("")).toContain("already");
+    expect(errors.join("")).toContain("additional");
+    expect(requests).toHaveLength(1);
+    await unchanged();
+  });
+
+  it("refuses a follow-up input name already held before any model request", async () => {
+    const refs = await attachmentCells();
+    await save();
+    expect(await run(["--input-cell", `original=${refs.newRef}`])).toBe(1);
+    expect(errors.join("")).toContain("already");
+    expect(errors.join("")).toContain("original");
+    expect(requests).toHaveLength(0);
+    await unchanged();
+  });
+
+  for (const source of ["assigned piece", "grant"] as const) {
+    it(`refuses an input name held by a prior ${source}`, async () => {
+      const refs = await attachmentCells();
+      const name = source === "grant" ? "piece-registry" : "assigned-ledger";
+      if (source === "grant") {
+        state.wellKnownGrants = [{
+          name: "piece-registry",
+          ref: refs.oldRef,
+          token: refs.oldToken,
+        }];
+      } else state.assignedPieces = [{ slug: name, ref: refs.oldRef }];
+      await save();
+      expect(await run(["--input-cell", `${name}=${refs.newRef}`])).toBe(1);
+      expect(errors.join("")).toContain("already");
+      expect(errors.join("")).toContain(name);
+      expect(requests).toHaveLength(0);
+      await unchanged();
+    });
+  }
+
+  it("carries assigned pieces and names them as attachments in the first request", async () => {
+    const refs = await attachmentCells();
+    state.assignedPieces = [{ slug: "assigned-ledger", ref: refs.newRef }];
+    await save();
+    expect(await run()).toBe(0);
+    const next = await nextArtifacts();
+    expect(next.runState.assignedPieces).toEqual(state.assignedPieces);
+    const assigned = next.runState.inputCells?.find((cell) =>
+      cell.name === "assigned-ledger"
+    );
+    expect(assigned).toBeDefined();
+    expect(resolveHandleToken(next.runState.handleTable!, assigned!.token)?.ref)
+      .toBe(refs.newRef);
+    const context = requests[0].transcript.filter((message) =>
+      message.role === "user" && message.turnLocal
+    ).map((message) => message.content).join("\n");
+    expect(context).toContain(`${assigned!.token} — assigned-ledger`);
+    expect(await run([], next.runRoot)).toBe(0);
+    const repeatedContext = requests[1].transcript.filter((message) =>
+      message.role === "user" && message.turnLocal
+    ).map((message) => message.content).join("\n");
+    expect(repeatedContext).toContain(`${assigned!.token} — assigned-ledger`);
+    await unchanged();
+  });
+
+  it("seeds the same durable history as chat with the same prior turn", async () => {
+    const chatSeeds: (readonly HarnessTranscriptMessage[])[] = [];
+    const service = new HarnessInteractiveChatService({
+      systemPrompt: history[0].content,
+      createPromptLoop: () => ({
+        runTranscript: (options) => {
+          chatSeeds.push([...options.transcript]);
+          return Promise.resolve({
+            model: "gpt-recorded",
+            modelTurns: 1,
+            finalAssistantText: "Prior answer",
+            runState: state,
+            transcript: [...options.transcript, {
+              role: "assistant" as const,
+              content: "Prior answer",
+            }],
+          });
+        },
+      }),
+    });
+    await service.startSession("session", {
+      sessionId: "session",
+      workspace: { hostPath: workspace },
+      model: "gpt-recorded",
+    });
+    for (
+      const [turnId, text] of [["one", "Prior task"], ["two", "Next task"]]
+    ) {
+      await service.startTurn(turnId, {
+        sessionId: "session",
+        turnId,
+        input: { text },
+      });
+      await service.waitForTurn("session", turnId);
+    }
+    expect(await run()).toBe(0);
+    const durable = (messages: readonly HarnessTranscriptMessage[]) =>
+      messages.filter((message) =>
+        message.role !== "user" || !message.turnLocal
+      );
+    expect(durable(chatSeeds[1])).toEqual(durable(requests[0].transcript));
+    expect(
+      chatSeeds[1].filter((message) =>
+        message.role === "user" && message.turnLocal
+      ).length,
+    ).toBeGreaterThan(0);
+    expect(
+      requests[0].transcript.filter((message) =>
+        message.role === "user" && message.turnLocal
+      ).length,
+    ).toBeGreaterThan(0);
   });
 
   it("creates a new run with predecessor lineage and leaves the predecessor unchanged", async () => {
@@ -210,6 +445,168 @@ describe("continue-run", () => {
     expect(next.runState.status).toBe("completed");
     await unchanged();
   });
+
+  for (const grantMount of [false, true]) {
+    it(`advertises a recorded host mount only when the follow-up ${grantMount ? "grants" : "omits"} it`, async () => {
+      Object.assign(state.systemPromptInputs!, {
+        hostMounts: [{
+          name: "archive",
+          hostPath: workspace,
+          sandboxPath: "/archive",
+          mode: "readonly",
+        }],
+      });
+      await save();
+      expect(
+        await run(
+          grantMount
+            ? [
+              "--host-mount",
+              `name=archive,source=${workspace},target=/archive,mode=readonly`,
+            ]
+            : [],
+        ),
+      ).toBe(0);
+      const system = requests[0].transcript.find((m) =>
+        m.role === "system"
+      )!.content;
+      expect(system.includes("/archive")).toBe(grantMount);
+    });
+  }
+
+  it("advertises no preloaded skills from the predecessor", async () => {
+    Object.assign(state.systemPromptInputs!, {
+      skillNames: ["prior-skill"],
+      skillCatalogEnabled: true,
+    });
+    await save();
+    expect(await run()).toBe(0);
+    const system =
+      requests[0].transcript.find((m) => m.role === "system")!.content;
+    expect(system).not.toContain("Configured skills guidance:");
+    expect(
+      requests[0].transcript.some((m) => m.content.includes("<skill_context")),
+    ).toBe(false);
+  });
+
+  it("uses only the follow-up's tool grants in its prompt and request", async () => {
+    Object.assign(state.systemPromptInputs!, {
+      allowedToolIds: ["read_file", "finish_task"],
+    });
+    await save();
+    expect(await run(["--allow-tool=read_file"])).toBe(0);
+    const system =
+      requests[0].transcript.find((m) => m.role === "system")!.content;
+    expect(system).not.toContain("Use finish_task to ask");
+    expect(system).toContain("Act on reasonable defaults");
+    expect(requests[0].tools.map((tool) => tool.toolId)).toEqual(["read_file"]);
+  });
+
+  for (const mode of [undefined, "batch"]) {
+    it(`uses ${mode ?? "the default operator"} mode for both the continuation prompt and printed output`, async () => {
+      Object.assign(state.systemPromptInputs!, { outputMode: "batch" });
+      await save([
+        {
+          role: "system",
+          content: buildCfHarnessBatchSystemPrompt({
+            systemPrompt: "Prior instructions",
+          }),
+        },
+        ...history.slice(1),
+      ]);
+      expect(await run(mode === undefined ? [] : ["--output-mode=batch"])).toBe(
+        0,
+      );
+      const system = requests[0].transcript.find((m) =>
+        m.role === "system"
+      )!.content;
+      const printed = output.join("");
+      if (mode === undefined) {
+        expect(system).toContain("Operator guidance for cf-harness runs");
+        expect(printed).toContain("Next answer\n\nrunId:");
+        expect(printed).toContain("status: completed");
+      } else {
+        expect(system).not.toContain("Operator guidance for cf-harness runs");
+        expect(printed).toBe("Next answer\n");
+      }
+      expect((await nextArtifacts()).runState.systemPromptInputs).toEqual({
+        systemPrompt: "Prior instructions",
+      });
+      await unchanged();
+    });
+  }
+
+  for (const replacement of [undefined, "Replacement components"]) {
+    it(`rebuilds a manual continuation with recorded instruction defaults ${replacement === undefined ? "without" : "with"} new instructions`, async () => {
+      state.systemPromptInputs = {
+        systemPrompt: "Recorded components",
+      };
+      state.taskClassification = {
+        type: "cf-harness.task-classification",
+        version: 1,
+        tags: ["respond"],
+        domains: [],
+        path: "caller",
+        durationMs: 0,
+      };
+      state.structuredResult = {
+        schema: { type: "string" },
+        path: join(workspace, "old-result.json"),
+      };
+      await Deno.writeTextFile(state.structuredResult.path, '"old"');
+      await save([
+        { role: "system", content: "Unusable recorded string" },
+        ...history.slice(1),
+      ]);
+      const path = join(workspace, "new-result.json");
+      await Deno.writeTextFile(path, '"new"');
+      expect(
+        await run([
+          "--structured-result-path",
+          path,
+          ...(replacement === undefined
+            ? []
+            : [`--system-prompt=${replacement}`]),
+        ]),
+      ).toBe(0);
+      const system = requests[0].transcript.find((message) =>
+        message.role === "system"
+      )!.content;
+      expect(system).toContain(
+        "You are cf-harness, an autonomous agent harness",
+      );
+      expect(system).toContain("Operator guidance for cf-harness runs");
+      expect(system).toContain("/workspace/new-result.json");
+      expect(system).not.toContain("old-result.json");
+      expect(system).not.toContain("Unusable recorded string");
+      expect(system).toContain(replacement ?? "Recorded components");
+      if (replacement !== undefined) {
+        expect(system).not.toContain("Recorded components");
+      }
+      const next = await nextArtifacts();
+      expect(next.runState.systemPromptInputs).toEqual({
+        systemPrompt: replacement ?? "Recorded components",
+      });
+      expect(next.runState.taskClassification).toEqual(
+        state.taskClassification,
+      );
+      await unchanged();
+    });
+  }
+
+  it("refuses a continuation without recorded system-prompt inputs before a model request", async () => {
+    delete state.systemPromptInputs;
+    await save();
+    expect(await run()).toBe(1);
+    expect(errors.join("")).toContain("recorded system-prompt inputs");
+    expect(requests).toHaveLength(0);
+  });
+
+  it("uses a cause-neutral interrupted-turn notice", () => {
+    expect(HARNESS_CHAT_INTERRUPTED_TURN_NOTICE).toBe(
+      "Host turn notice: the previous turn stopped before it finished. Its request above was interrupted, not answered; the work shown after it is what completed before it stopped.",
+    );
+  });
   it("seeds the first model request with prior history and excludes turn-local notices", async () => {
     await save([
       ...history,
@@ -220,7 +617,11 @@ describe("continue-run", () => {
       } as HarnessTranscriptMessage,
     ]);
     expect(await run()).toBe(0);
-    expect(requests[0].transcript).toEqual([...history, {
+    expect(
+      requests[0].transcript.filter((message) =>
+        message.role !== "user" || !message.turnLocal
+      ),
+    ).toEqual([...history, {
       role: "user",
       content: "Next task",
     }]);
@@ -245,10 +646,10 @@ describe("continue-run", () => {
     ).toBe(true);
     expect(await run([], first.runRoot)).toBe(0);
     expect(
-      requests[2].transcript.some((message) =>
+      requests[2].transcript.filter((message) =>
         message.role === "user" && message.turnLocal
-      ),
-    ).toBe(false);
+      ).every((message) => !message.content.startsWith("Host turn budget:")),
+    ).toBe(true);
     expect(
       requests[2].transcript.some((message) =>
         message.content.startsWith("Host turn budget:")
@@ -263,7 +664,11 @@ describe("continue-run", () => {
     };
     await save([...history, legacyNotice]);
     expect(await run()).toBe(0);
-    expect(requests[0].transcript).toEqual([...history, legacyNotice, {
+    expect(
+      requests[0].transcript.filter((message) =>
+        message.role !== "user" || !message.turnLocal
+      ),
+    ).toEqual([...history, legacyNotice, {
       role: "user",
       content: "Next task",
     }]);
@@ -350,7 +755,11 @@ describe("continue-run", () => {
   it("cuts an unpaired tail and places the interrupted notice before the new prompt", async () => {
     await save([...history, unpaired]);
     expect(await run()).toBe(0);
-    expect(requests[0].transcript).toEqual([...history, {
+    expect(
+      requests[0].transcript.filter((message) =>
+        message.role !== "user" || !message.turnLocal
+      ),
+    ).toEqual([...history, {
       role: "user",
       content: HARNESS_CHAT_INTERRUPTED_TURN_NOTICE,
     }, { role: "user", content: "Next task" }]);
@@ -670,7 +1079,11 @@ describe("continue-run", () => {
     await Deno.symlink(priorRoot, join(priorRoot, "cycle"));
     expect(await run()).toBe(0);
     expect(requests).toHaveLength(1);
-    expect(requests[0].transcript).toEqual([...history, {
+    expect(
+      requests[0].transcript.filter((message) =>
+        message.role !== "user" || !message.turnLocal
+      ),
+    ).toEqual([...history, {
       role: "user",
       content: "Next task",
     }]);
@@ -684,6 +1097,9 @@ describe("continue-run", () => {
           path: join(workspace, "old-result.json"),
         };
         await Deno.writeTextFile(state.structuredResult.path, '"prior result"');
+        state.systemPromptInputs = {
+          systemPrompt: "Keep this user instruction.",
+        };
         const sourceSystem = buildCfHarnessBatchSystemPrompt({
           structuredResult: {
             ...state.structuredResult,
@@ -922,11 +1338,6 @@ describe("continue-run", () => {
   for (
     const [flag, value] of [
       ["--skill", "review"],
-      ["--image", "image.png"],
-      [
-        "--input-cell",
-        "value=/of:fid1:rszomt4Ti8MwDNpMJLZCjcENRtAH6MFBxgf0wYVNCs8/title",
-      ],
       ["--task-tags", "find"],
       ["--task-domains", "web"],
     ]
@@ -939,6 +1350,9 @@ describe("continue-run", () => {
   }
   for (const additionalInstructions of ["New instructions", ""]) {
     it(`rebuilds harness guidance with ${additionalInstructions === "" ? "empty" : "new"} additional instructions`, async () => {
+      state.systemPromptInputs = {
+        systemPrompt: "Prior additional instructions",
+      };
       state.structuredResult = {
         schema: { type: "string" },
         path: join(workspace, "old-result.json"),
@@ -1004,12 +1418,17 @@ describe("continue-run", () => {
           depth: 1,
         };
       }, "subagent"],
-      ["model switch", ["--model=different"], () => {}, "model"],
+      [
+        "model switch",
+        ["--model=different"],
+        () => {},
+        "continue model mismatch",
+      ],
       [
         "provider switch",
         ["--model-provider=openai-codex"],
         () => {},
-        "provider mismatch",
+        "continue provider mismatch",
       ],
     ] as const
   ) {

@@ -386,18 +386,14 @@ const labelForEntriesAtPath = (
       continue;
     }
     const component = entry.origin ?? "legacy";
-    // Frozen-existence vs membership-template join (template-population
-    // §3.2, first exception): a frozen concrete `shape` entry records
-    // departed HISTORY;
-    // the `*` membership template records CURRENT shape. They answer
-    // different questions under one class, so where both cover a read
-    // their labels JOIN rather than compete in replace-down — replacing
-    // would let a stale frozen label mask current membership taint or
-    // vice versa. Scoped to structure/derived-origin shape-class
-    // templates (a separate resolution bucket per component); everything
-    // else keeps replace-down.
-    const bucket = template && entry.observes === "shape"
-      ? `${component}\u0000shape-template`
+    // Runtime existence and current value measurements resolve independently
+    // (§4.6.3): a public child in either class cannot shadow the other's
+    // secret ancestor. Frozen existence also joins current membership
+    // templates (§4.6.3), which describe a different fact in the shape
+    // channel. Each keeps replace-down within its own component and class.
+    const bucket = entry.observes === "shape" &&
+        (entry.origin === "derived" || entry.origin === "structure")
+      ? `${component}\u0000${template ? "shape-template" : "shape"}`
       : component;
     const match = matches.get(bucket);
     if (match === undefined || match.depth < entry.path.length) {

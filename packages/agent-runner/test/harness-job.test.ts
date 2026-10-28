@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
-import { join } from "@std/path";
+import { basename, join } from "@std/path";
 
 import {
   CfHarnessPromptLoop,
@@ -148,7 +148,8 @@ describe("runHarnessJob()", () => {
               seen.role = prompt.promptSlotBinding?.role;
               seen.signal = prompt.signal;
               return script({
-                resultPath: join(runRoot, "workspace", "agent-result.json"),
+                resultPath:
+                  loopOptions.engine!.getRunState().structuredResult!.path,
                 emitUsage: async (usage) => {
                   await prompt.onModelUsage?.({ usage, totalUsage: usage });
                 },
@@ -184,37 +185,6 @@ describe("runHarnessJob()", () => {
       await Deno.writeTextFile(resultPath, JSON.stringify({ answer }));
       return loopResult(runRoot);
     };
-
-  describe("pending continuation wiring", () => {
-    for (const seam of ["continueFrom", "takeMessages"] as const) {
-      it(`refuses ${seam} before creating the run root`, async () => {
-        const nextRunRoot = join(runRoot, "uncreated-run");
-        const spec = plainSpec(
-          seam === "continueFrom"
-            ? { continueFrom: { runRoot: join(runRoot, "predecessor") } }
-            : {},
-        );
-        const job = runHarnessJob(spec, {
-          runRoot: nextRunRoot,
-          signal: new AbortController().signal,
-          ...(seam === "takeMessages" ? { takeMessages: () => [] } : {}),
-          harnessDeps: {
-            env: SCRIPTED_ENV,
-            createPromptLoop: () => ({
-              runPrompt: () => Promise.resolve(loopResult(nextRunRoot)),
-              runTranscript: () =>
-                Promise.reject(new Error("unexpected continuation")),
-            }),
-          },
-        });
-
-        await expect(job).rejects.toThrow("Harness wiring is pending stage 4");
-        await expect(Deno.lstat(nextRunRoot)).rejects.toThrow(
-          Deno.errors.NotFound,
-        );
-      });
-    }
-  });
 
   for (const valid of [true, false]) {
     it(`keeps the real loop's final-turn ${valid ? "submission" : "failure report"}`, async () => {
@@ -742,6 +712,7 @@ describe("runHarnessJob()", () => {
 
       expect(result).toEqual({
         outcome: "cancelled",
+        recordedRun: false,
         report: {
           modelTurns: 2,
           toolCalls: 1,
@@ -784,7 +755,7 @@ describe("runHarnessJob()", () => {
         },
         { signal: controller.signal },
       );
-      expect(result).toEqual({ outcome: "cancelled" });
+      expect(result).toEqual({ outcome: "cancelled", recordedRun: false });
     });
 
     it("ends `failed` as `LIMIT_REACHED` when the turn limit stopped the loop", async () => {
@@ -793,7 +764,11 @@ describe("runHarnessJob()", () => {
         () => Promise.reject(new Error("exceeded max model turns (8)")),
       );
 
-      expect(result).toEqual({ outcome: "failed", errorCode: "LIMIT_REACHED" });
+      expect(result).toEqual({
+        outcome: "failed",
+        errorCode: "LIMIT_REACHED",
+        recordedRun: false,
+      });
     });
 
     it("ends `failed` as `PROVIDER_FAILURE` when the loop failed any other way", async () => {
@@ -805,6 +780,7 @@ describe("runHarnessJob()", () => {
       expect(result).toEqual({
         outcome: "failed",
         errorCode: "PROVIDER_FAILURE",
+        recordedRun: false,
       });
     });
 
@@ -844,13 +820,18 @@ describe("runHarnessJob()", () => {
           },
         });
 
-        expect([result, looped]).toEqual([
-          { outcome: "failed", errorCode: "PROVIDER_FAILURE" },
-          false,
-        ]);
         const refusal = reported.find((message) =>
           message.includes("No sandbox runtime is named")
         );
+        expect([result, looped]).toEqual([
+          {
+            outcome: "failed",
+            errorCode: "PROVIDER_FAILURE",
+            recordedRun: false,
+            errorDetail: refusal,
+          },
+          false,
+        ]);
         // The job's argument list is written for it, so the way to a CFC
         // policy it is told is the variable, and no flag.
         expect(refusal).toContain(
@@ -893,10 +874,12 @@ describe("runHarnessJob()", () => {
       });
     });
 
-    it("removes a result file an earlier job left before the job starts", async () => {
-      await Deno.mkdir(join(runRoot, "workspace"), { recursive: true });
+    it("removes this job's stale result before the run starts", async () => {
+      const resultDir = join(runRoot, "workspace", ".job-results");
+      await Deno.mkdir(resultDir, { recursive: true });
+      const resultPath = join(resultDir, `${basename(runRoot)}.json`);
       await Deno.writeTextFile(
-        join(runRoot, "workspace", "agent-result.json"),
+        resultPath,
         JSON.stringify({ answer: "stale" }),
       );
 
@@ -906,6 +889,7 @@ describe("runHarnessJob()", () => {
       );
 
       expect(result.outcome).toBe("failed");
+      await expect(Deno.stat(resultPath)).rejects.toThrow(Deno.errors.NotFound);
     });
   });
 });

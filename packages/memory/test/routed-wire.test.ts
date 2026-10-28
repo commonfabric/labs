@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { sha256 } from "@commonfabric/content-hash";
 import {
+  readRoutedBase64,
   routedStatementPayload,
   RoutedWriter,
   verifyRoutedProof,
@@ -137,4 +138,22 @@ describe("routed wire proof authority", () => {
       expect(accepted).toBe(expected);
     });
   }
+});
+
+describe("readRoutedBase64()", () => {
+  it("returns the bytes of canonical text", () => {
+    expect(readRoutedBase64("AQI")).toEqual(new Uint8Array([1, 2]));
+  });
+
+  it("throws the routed denial for nonzero bits past the last whole byte", () => {
+    expect(() => readRoutedBase64("AQJ")).toThrow(
+      "Routed memory request denied",
+    );
+  });
+
+  it("throws the routed denial for a lone final character", () => {
+    expect(() => readRoutedBase64("AQIDB")).toThrow(
+      "Routed memory request denied",
+    );
+  });
 });

@@ -1900,16 +1900,18 @@ Persistent `<socket>.lock` and `<store>.lock` files retain their inodes, while
 the kernel releases ownership on shutdown or crash. Startup cleanup aborts
 active runs and waits for them to settle, closes the store and listener, and
 removes its token. Active job rows remain `running`; the next start recovers
-them as `interrupted` with `RUNNER_RESTARTED`. Requests receive 503 until
-initialization completes.
+them as `interrupted` with `RUNNER_RESTARTED`. Before settling their waiting
+messages, startup checks each recorded harness run root for a continuable
+checkpoint. A checkpoint lets waiting messages open a follow-up; without one,
+they drop as `interrupted`. Requests receive 503 until initialization completes.
 
 The door is HTTP on the Unix socket, mode 0600, with a bearer token in
 `<socket>.token`, also 0600 and minted at each start: reaching the socket is the
 authority. A caller enqueues
 `{caller, profile, idempotencyKey, task,
-instructions?, context?, resultSchema, tools?, maxModelTurns?, maxInputBytes?,
+instructions?, context?, resultSchema?, tools?, maxModelTurns?, maxInputBytes?,
 maxOutputTokens?, imageAttachments?, depth?, tags?, domains?, reasoningEffort?,
-browserHost?, inputs?, foreignSpaces?}`
+browserHost?, inputs?, foreignSpaces?, interactive?}`
 with `POST /jobs`, bounded at 1 MiB of UTF-8 JSON before parsing, reads a job
 with `GET /jobs/<id>` or the newest with `GET /jobs?limit=n`, stops one with
 `POST /jobs/<id>/cancel`, and watches one with
@@ -1928,6 +1930,16 @@ it `down` with that reason, and a failed start leaves it `refused` with the
 error. Observed queue scan or record-follow failures mark it `down`; a
 successful scan marks it `up`. An idle queue is healthy: this does not detect a
 subscription that silently stops delivering changes.
+
+`interactive` is an optional boolean indicating that a person is waiting.
+Interactive queued jobs start ahead of every queued background job, oldest first
+within each class. The local lane runs at most `--max-concurrent-local` jobs at
+once. With at least two slots, background jobs may occupy at most one fewer than
+that limit, holding the last slot for an interactive job; interactive jobs may
+use any free slot. With one slot, nothing is reserved because one slot cannot be
+reserved while still running background jobs. The flag only orders admission and
+reserves capacity. It participates in enqueue idempotency and is inherited by
+follow-ups with the retained request.
 
 Health also lists `routes` as `{method, path}` entries (`:id` is a path
 parameter), the loaded `profileFile`, the resolved SQLite `storePath`, and
@@ -1957,15 +1969,28 @@ handed. An input in another space with no host, a `foreignSpaces` entry no input
 names, or a slug address naming another space is refused at enqueue as
 `beyond_profile`. It may set nothing else. A job runs through the same
 `cf-harness` path as an agent run, with the fabric session its profile names, if
-any. Every tool call, including delegated calls, counts as progress, and so does
-its return; prose and reasoning do not. A `step` carries `{turn, tool}`, and the
-same step again with `returned: true` once the calls of that turn have returned
-and the loop's model has the turn. A `command` records each command the host ran
-for it. Children add `child: {profile, childRunId, parentToolCallId, depth}` to
-either body. The harness admits one level of delegation, so depth is `1`. Only a
-child's `browser` tool steps carry `action` (such as `click` or `snapshot`),
-without the operation's arguments or page content. Other child tool steps, such
-as `submit_result`, omit `action`.
+any. Every tool call, including delegated calls, produces progress, as does its
+return. A `step` carries `{turn, tool}`, and the same step again with
+`returned: true` once the calls of that turn have returned and the loop's model
+has the turn. A `command` records each command the host ran for it. Children add
+`child: {profile, childRunId, parentToolCallId, depth}` to either body. The
+harness admits one level of delegation, so depth is `1`. Only a child's
+`browser` tool steps carry `action` (such as `click` or `snapshot`), without the
+operation's arguments or page content. Other child tool steps, such as
+`submit_result`, omit `action`.
+
+Each root assistant message with nonempty content emits one `text {turn, text}`
+event, whole and without truncation or coalescing, in order with its steps.
+Delegated assistant text is not emitted. Turns start at this job's first model
+call, including on follow-ups. The store keeps these events durably, so a job's
+event history holds its assistant text. Reasoning is not emitted.
+
+After each completed model call, including descendant calls, a
+`usage {usage, coverage}` event reports cumulative usage for this run. Its
+`coverage` matches the report's `usageCoverage`: `including-descendants` when
+the harness supplies the total for the tree, otherwise `direct`. Unreported
+usage is omitted until the provider supplies a measurement; partial measurements
+do not account for unreported provider work.
 
 The lane coalesces consecutive steps with the same tool, child, browser action
 and `returned`, ignoring turn numbers. Thus N identical browser operations in
@@ -2023,26 +2048,42 @@ A caller sends another message with `POST /jobs/<id>/messages`, also bounded at
 
 `caller` must match the conversation's caller. `message` is a nonempty string;
 `instructions` is optional and replaces the system framing of a follow-up,
-inherited by later jobs unless replaced again. The request grants no profile,
-tools or limits. Any job id in a conversation addresses its newest job, the
-head. A message to a queued or running head waits there to be taken at a model
-turn boundary. A message to a finished head with a recorded run opens a new
-queued job, with `continues` naming its predecessor, its task replaced by the
-message, and the rest of the predecessor's request inherited. A recorded run has
-a complete checkpoint from which another run can start. An interrupted job has
-none.
+inherited by later jobs unless replaced again. `imageAttachments`, `inputs` and
+`foreignSpaces` use the enqueue shapes, bounds and profile validation. Images
+join the follow-up's new prompt; inputs add named handles, with foreign spaces
+routed as on enqueue. Existing history and held input routes carry forward;
+omitted attachments are not sent again as new inputs.
+
+`instructions`, `imageAttachments` and `inputs` (with their `foreignSpaces`) are
+follow-up-only: a message carrying any of them, to a queued or running head with
+no cancel requested, is refused as `409 follow_up_only`. After cancel, they wait
+for their own follow-up. If a new input name collides with a held input,
+assigned slug or grant, acceptance still returns normally and the follow-up
+fails `PROVIDER_FAILURE` before any model call, with the builder's own reason in
+`errorDetail`.
+
+The request grants no profile, tools or limits. Any job id in a conversation
+addresses its newest job, the head. Every local run receives the message hook. A
+message to a queued or running head waits there to be taken at a model turn
+boundary. A message to a finished head with a recorded run opens a new queued
+job, with `continues` naming its predecessor, its task replaced by the message,
+and the rest of the predecessor's request inherited. A recorded run has a
+complete checkpoint from which another run can start. An interrupted job is
+continuable when recovery finds such a checkpoint.
 
 The response is `201 {message, job}` on acceptance or `200 {message, job}` on
 replay. The message record has fixed `key`, `target`, `message`, `acceptedAt`
-and, when supplied, `instructions`. Its current `delivery` is `pending`,
-`delivered`, `follow-up`, or `dropped`; `jobId` names the job waiting on or
-answering it, `turn` is present after delivery, and `reason` after a drop. `job`
-is that job's current snapshot. A first acceptance returns `pending` or
-`follow-up`. The same caller/key/fingerprint returns the current record without
-writing events, even after the head moves on or can no longer continue. The
-fingerprint includes the target id, message and presence and value of
-instructions. Keys share one namespace per caller with enqueue: reusing a key
-across routes, or changing its fingerprint, returns `409 idempotency_conflict`.
+and, when supplied, `instructions`, `imageAttachments`, `inputs` and
+`foreignSpaces`. Its current `delivery` is `pending`, `delivered`, `follow-up`,
+or `dropped`; `jobId` names the job waiting on or answering it, `turn` is
+present after delivery, and `reason` after a drop. `job` is that job's current
+snapshot. A first acceptance returns `pending` or `follow-up`. The same
+caller/key/fingerprint returns the current record without writing events, even
+after the head moves on or can no longer continue. The fingerprint includes the
+target id, message, and presence and value of instructions, images, inputs and
+foreign-space routes. Keys share one namespace per caller with enqueue: reusing
+a key across routes, or changing its fingerprint, returns
+`409 idempotency_conflict`.
 
 The job view adds `continues`, `continuedBy` (its sole follow-up once opened),
 `openedBy` (the message that opened a follow-up), and `messages` (the current
@@ -2056,10 +2097,12 @@ remaining message opens one follow-up and publishes
 `{key, delivery: "follow-up", jobId}`; the rest publish
 `{key, delivery: "moved", jobId}` on the old job and `pending` on the new job.
 Each such outcome precedes the old job's terminal state event. A run takes
-messages in acceptance order up to the first instruction replacement or message
-accepted after that holder's cancel request. Messages behind it wait with it. A
-moved message loses the old holder's cancellation restriction, but an
-instruction replacement still waits to open its own follow-up.
+messages in acceptance order up to the first message only a follow-up can
+answer, one carrying `instructions`, `imageAttachments` or `inputs`, or the
+first message accepted after that holder's cancel request. Messages behind it
+wait with it. A moved message loses the old holder's cancellation restriction,
+but a message carrying instructions or attachments still waits to open its own
+follow-up.
 
 Cancellation drops waiting messages accepted before the request as
 `{key, delivery: "dropped", reason: "cancelled"}`. Later messages wait for the
@@ -2069,22 +2112,25 @@ cancellation and `PROFILE_UNAVAILABLE` failures have no recorded run.
 
 Every refusal is `{ok: false, code, error}`:
 
-| Status | Code                    | Condition                                                        |
-| ------ | ----------------------- | ---------------------------------------------------------------- |
-| 400    | `invalid_request`       | Invalid JSON, missing or mistyped fields, or an empty message.   |
-| 413    | `too_large`             | The body exceeds 1 MiB.                                          |
-| 404    | `not_found`             | The target job does not exist.                                   |
-| 403    | `not_callers`           | The body names another caller.                                   |
-| 409    | `not_continuable`       | The finished head has no recorded run.                           |
-| 409    | `instructions_on_steer` | Instructions supplied to a queued or running head before cancel. |
-| 409    | `cannot_steer`          | That head could take a steer, but the lane cannot.               |
-| 400    | `unknown_profile`       | A follow-up would open now under a profile no longer named.      |
-| 409    | `idempotency_conflict`  | The caller's key already names another request or route.         |
+| Status | Code                   | Condition                                                                                      |
+| ------ | ---------------------- | ---------------------------------------------------------------------------------------------- |
+| 400    | `invalid_request`      | Invalid JSON, missing or mistyped fields, or an empty message.                                 |
+| 413    | `too_large`            | The body exceeds 1 MiB.                                                                        |
+| 404    | `not_found`            | The target job does not exist.                                                                 |
+| 403    | `not_callers`          | The body names another caller.                                                                 |
+| 409    | `not_continuable`      | The finished head, including an interrupted one, has no complete recorded checkpoint.          |
+| 409    | `follow_up_only`       | `instructions`, `imageAttachments` or `inputs` sent to a queued or running head before cancel. |
+| 400    | `unknown_profile`      | Opening a follow-up or admitting attachments needs a profile no longer named.                  |
+| 400    | `beyond_profile`       | The follow-up request exceeds or invalidates its profile.                                      |
+| 409    | `idempotency_conflict` | The caller's key already names another request or route.                                       |
 
-The production harness wiring is pending: its lane keeps steering disabled and
-its runs do not yet report continuation checkpoints. The store and API support
-follow-ups and delivery through a runner that supplies these seams. A message
-after a cancel request can wait regardless of steering capability.
+The local harness lane takes messages at model-turn boundaries. A finished job
+with a recorded checkpoint can open a follow-up, whose new harness run carries
+the predecessor's history and handles. Each conversation uses its first job's
+workspace; each job keeps its own artifacts and result file. A follow-up's
+instructions and context replace its system framing. A message after a cancel
+request waits for a follow-up. Jobs without a complete checkpoint cannot be
+continued.
 
 Each `command` event carries `{command, ok, outputs?}`. A refused command also
 carries the outcome's `code` and `hostCode` when present, and `error` from an
@@ -2116,17 +2162,27 @@ every operation still unanswered and every withdrawal still unacknowledged
 first, and a repeated answer reads as a duplicate. `GET /jobs/<id>` shows the
 host as `browser {state, attached, outstanding, withdrawn}`.
 
-A job ends `completed` with its result as soon as the harness accepts the
-model's `submit_result`; nothing the model does after an accepted result can
-fail it, since the run asks the model for nothing further. A job that ends
-`failed` carries `errorCode`, and `errorDetail` where the run said why: for
-`INVALID_RESULT`, that no structured result was submitted, or the field the
-schema refused and the reason. Both appear in the job snapshot and in its final
-`state` event.
+`resultSchema` is optional. With a schema, a job ends `completed` with its
+validated JSON result once the harness accepts the model's `submit_result` and
+no message is waiting to be taken; the run then asks the model for nothing
+further, so nothing after the accepted result can fail it. When a message is
+waiting and a model turn remains, the run takes it and continues, and that later
+work decides how the job ends: a later `submit_result` replaces the result, and
+a later failure or cancellation is the job's outcome. Without a schema, the job
+has no structured-result contract, result file or `submit_result` tool, and its
+`result` is the final assistant text as a plain string. Follow-ups inherit the
+absence of a schema. An empty assistant answer with no tool calls fails under
+the harness's existing `PROVIDER_FAILURE` handling; exhausting its turn budget
+without a final answer remains `LIMIT_REACHED`. A job that ends `failed` carries
+`errorCode`, and `errorDetail` where the run said why: for `INVALID_RESULT`,
+that no structured result was submitted, or the field the schema refused and the
+reason. Both appear in the job snapshot and in its final `state` event.
 
 A job the runner was running when it stopped or crashed ends `interrupted`
 (`RUNNER_RESTARTED`) when it next starts, and is never run again: it may already
-have changed things.
+have changed things. Its recorded checkpoint can seed a new follow-up, whether
+the message waited through the restart or arrived afterward. The new run retains
+completed work and marks the prior request as interrupted.
 
 ## One deployment per process
 

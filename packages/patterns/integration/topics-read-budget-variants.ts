@@ -8,14 +8,9 @@
 
 import { isModule, type Module, type Runtime } from "@commonfabric/runner";
 
-import type { ProbeCase } from "./topics-cost-cases.ts";
-import {
-  DEFAULT_COMMENTS_PER_TOPIC,
-  DEFAULT_LINKS_PER_TOPIC,
-  type TopicsVariant,
-} from "./topics-headless-fixture.ts";
+import type { TopicsVariant } from "./topics-headless-fixture.ts";
 
-/** The variants, by name, each built for the case it runs under. */
+/** The variants, by name. */
 export const READ_BUDGET_VARIANTS = {
   /**
    * A scan regression: one lift over the board that reads every topic's
@@ -38,34 +33,7 @@ export const READ_BUDGET_VARIANTS = {
     Promise.resolve(({ startDemandedLifts }) =>
       startDemandedLifts("duplicate")
     ),
-
-  /**
-   * A growth in actions on a thread: a lift for each comment position and
-   * each link position the case's fixture gives a topic, on every topic.
-   */
-  "per-record": ({ options }: ProbeCase): TopicsVariant => async (runtime) => {
-    const stamp = await compileLift(runtime, RECORD_MODULE);
-    const positions = {
-      comments: options.commentsPerTopic ?? DEFAULT_COMMENTS_PER_TOPIC,
-      links: options.linksPerTopic ?? DEFAULT_LINKS_PER_TOPIC,
-    };
-    return ({ tx, seeded, output }) =>
-      seeded.topics.flatMap((topic, index) =>
-        (["comments", "links"] as const).flatMap((field) =>
-          Array.from(
-            { length: positions[field] },
-            (_, position) =>
-              runtime.run(
-                tx,
-                stamp,
-                { record: topic.key(field).key(position) },
-                output(`record-${index}-${field}-${position}`),
-              ),
-          )
-        )
-      );
-  },
-} satisfies Readonly<Record<string, (probeCase: ProbeCase) => TopicsVariant>>;
+} satisfies Readonly<Record<string, () => TopicsVariant>>;
 
 /** The name of one read-budget variant. */
 export type ReadBudgetVariantName = keyof typeof READ_BUDGET_VARIANTS;
@@ -113,31 +81,6 @@ const SCAN_MODULE: LiftModule = {
     `  },`,
     `);`,
     `export const scan = boardScan;`,
-  ].join("\n"),
-};
-
-/** The per-record variant's lift. */
-const RECORD_MODULE: LiftModule = {
-  path: "/topics-read-budget/record.tsx",
-  name: "recordStamp",
-  contents: [
-    `import { lift } from "commonfabric";`,
-    `interface StampedRecord {`,
-    `  sentAt?: number;`,
-    `  editedAt?: number;`,
-    `  addedAt?: number;`,
-    `  removedAt?: number;`,
-    `}`,
-    `const recordStamp = lift(`,
-    `  ({ record }: { record: StampedRecord }): number =>`,
-    `    Math.max(`,
-    `      record.sentAt ?? 0,`,
-    `      record.editedAt ?? 0,`,
-    `      record.addedAt ?? 0,`,
-    `      record.removedAt ?? 0,`,
-    `    ),`,
-    `);`,
-    `export const stamp = recordStamp;`,
   ].join("\n"),
 };
 

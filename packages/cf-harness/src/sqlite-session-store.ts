@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS chat_session (
   assigned_pieces TEXT,
   transcript_omissions TEXT,
   handle_table TEXT,
+  held_input_names TEXT,
   client_action_catalog_answers TEXT,
   created_at  TEXT NOT NULL,
   updated_at  TEXT NOT NULL,
@@ -103,6 +104,7 @@ type SessionRow = {
   assigned_pieces: string | null;
   transcript_omissions: string | null;
   handle_table: string | null;
+  held_input_names: string | null;
   client_action_catalog_answers: string | null;
 };
 
@@ -248,6 +250,7 @@ export class SqliteHarnessChatSessionStore implements HarnessChatSessionStore {
         assigned_pieces,
         transcript_omissions,
         handle_table,
+        held_input_names,
         client_action_catalog_answers,
         created_at,
         updated_at,
@@ -261,6 +264,7 @@ export class SqliteHarnessChatSessionStore implements HarnessChatSessionStore {
         :assigned_pieces,
         :transcript_omissions,
         :handle_table,
+        :held_input_names,
         :client_action_catalog_answers,
         :created_at,
         :updated_at,
@@ -273,6 +277,7 @@ export class SqliteHarnessChatSessionStore implements HarnessChatSessionStore {
         assigned_pieces = :assigned_pieces,
         transcript_omissions = :transcript_omissions,
         handle_table = :handle_table,
+        held_input_names = :held_input_names,
         client_action_catalog_answers = :client_action_catalog_answers,
         updated_at = :updated_at,
         closed_at = :closed_at
@@ -289,6 +294,9 @@ export class SqliteHarnessChatSessionStore implements HarnessChatSessionStore {
       assigned_pieces: snapshot.assignedPieces === undefined
         ? null
         : JSON.stringify(snapshot.assignedPieces),
+      held_input_names: snapshot.heldInputNames === undefined
+        ? null
+        : JSON.stringify(snapshot.heldInputNames),
       handle_table: snapshot.handleTable === undefined
         ? null
         : JSON.stringify(snapshot.handleTable),
@@ -307,7 +315,7 @@ export class SqliteHarnessChatSessionStore implements HarnessChatSessionStore {
   ): HarnessChatSessionSnapshot | undefined {
     const row = this.database.prepare(`
       SELECT status, transcript, research_context, assigned_pieces, transcript_omissions,
-        handle_table, client_action_catalog_answers
+        handle_table, held_input_names, client_action_catalog_answers
       FROM chat_session
       WHERE session_id = :session_id
     `).get({ session_id: sessionId }) as SessionRow | undefined;
@@ -317,7 +325,7 @@ export class SqliteHarnessChatSessionStore implements HarnessChatSessionStore {
   listSessions(): readonly HarnessChatSessionSnapshot[] {
     return (this.database.prepare(`
       SELECT status, transcript, research_context, assigned_pieces, transcript_omissions,
-        handle_table, client_action_catalog_answers
+        handle_table, held_input_names, client_action_catalog_answers
       FROM chat_session
       ORDER BY created_at ASC, session_id ASC
     `).all() as SessionRow[]).map(decodeSessionRow);
@@ -598,6 +606,12 @@ const decodeSessionRow = (row: SessionRow): HarnessChatSessionSnapshot => {
         "chat_session.assigned_pieces",
       ),
     }),
+    ...(row.held_input_names == null ? {} : {
+      heldInputNames: parseJsonColumn<string[]>(
+        row.held_input_names,
+        "chat_session.held_input_names",
+      ),
+    }),
     ...(row.handle_table == null ? {} : {
       handleTable: parseJsonColumn<HarnessHandleTable>(
         row.handle_table,
@@ -730,6 +744,11 @@ export const openSqliteHarnessChatSessionStore = async (
         ) {
           database.exec(
             "ALTER TABLE chat_session ADD COLUMN client_action_catalog_answers TEXT",
+          );
+        }
+        if (!columns.some((column) => column.name === "held_input_names")) {
+          database.exec(
+            "ALTER TABLE chat_session ADD COLUMN held_input_names TEXT",
           );
         }
         if (!columns.some((column) => column.name === "handle_table")) {

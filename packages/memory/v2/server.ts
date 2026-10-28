@@ -54,6 +54,7 @@ import {
   type GraphQueryRequest,
   type GraphQueryResult,
   type HelloMessage,
+  identityOfScopeKey,
   isScopeKey,
   MAX_ENTITY_ID_PAGE_SIZE,
   MAX_UNTRUSTED_MESSAGE_SLOTS,
@@ -236,6 +237,17 @@ import {
   hasClientMessageLabelMetadata,
 } from "./commit-label-table.ts";
 import { compressServerMessageSchemas } from "./sync-schema-table.ts";
+import {
+  appendWatchSetPart,
+  halveSyncPart,
+  type PartLimits,
+  payloadFits,
+  serverMessageSync,
+  splitSyncMessage,
+  stagedWatchSet,
+  type SyncPartSession,
+  wholeLimits,
+} from "./message-parts.ts";
 import { type ArmedTurn, armTurn } from "./turn.ts";
 import {
   parseViewInterests,
@@ -257,6 +269,17 @@ export {
  * `foreignWriteAuthorityFor` has to ask.
  */
 const WELL_FORMED_SPACE_DID = /^did:[^:]+:[^:]+$/;
+
+/** What a foreign authority probe answers: a grant, or a refusal with the
+ * reason the serving loop logs. */
+export type ForeignAuthorityVerdict =
+  | { granted: true }
+  | { granted: false; reason: string };
+
+/** The capability a foreign authority probe resolves: WRITE for a
+ * provisioning write under the carried actor's grant (protocol.md §2b),
+ * READ for a scoped read of the actor's own instance (protocol.md §2). */
+type ForeignAuthorityRequirement = "READ" | "WRITE";
 
 // Global OTel API tracer. Interface-only and inert when no provider is
 // registered, so this is a no-op unless the host process (toolshed) has an
@@ -859,7 +882,25 @@ const respondTypedError = <Result>(
 const sessionKey = (space: string, sessionId: string): string =>
   `${space}\0${sessionId}`;
 
-type Send = (message: ServerMessage) => void;
+/**
+ * Most parts a session may hold of a watch set staged in parts before the
+ * part that applies it, 64 of the routed client's 1 MiB parts, and most
+ * characters of their messages a connection may hold over every set its
+ * sessions are staging. A direct client bounds each part by the slot limit on
+ * a message alone, so these bound its staged sets. The characters are bounded
+ * per connection, not per set, since a connection may stage a set for each of
+ * its sessions: the routed quotas count watch IDs, views and holdings, not
+ * characters. Sets a connection stages at once share the bound, so a client
+ * staging sets that together pass it has a part refused.
+ */
+const MAX_STAGED_WATCH_SET_PARTS = 64;
+const MAX_STAGED_WATCH_SET_CHARACTERS = 64 * 1024 * 1024;
+
+/**
+ * A transport's sender. `payload`, when given, is `message` already encoded,
+ * which the transport sends instead of encoding it again.
+ */
+type Send = (message: ServerMessage, payload?: string) => void;
 
 type PublishTransactVerdict = (
   response: ResponseMessage<Engine.AppliedCommit>,
@@ -1168,6 +1209,12 @@ class Connection {
   #syncSchemaTable = false;
   #syncLabelTable = false;
   #commitLabelTable = false;
+
+  /**
+   * The bounds a sync is split to fit, when the transport bounds its
+   * messages and both peers advertised `syncPartsV1`.
+   */
+  #syncPartBounds: PartLimits | undefined;
   #stableExpressionResultIds = false;
   #admissionNotice = false;
   #elidedVerdicts = false;
@@ -1175,6 +1222,26 @@ class Connection {
   #sessionOpenChallenge: SessionOpenChallengeState | null = null;
   #routedOwns: ((space: string) => boolean) | undefined;
   #routedExpiries = new Map<string, ReturnType<typeof setTimeout>>();
+
+  /**
+   * By session, the watch set it is sending in staged parts: its name, the
+   * set its parts so far make, how many parts and their messages'
+   * characters, until the part without `more` applies it. A connection's
+   * staged sets end with it, and a session's when it leaves the connection,
+   * opens again, or sends another watch mutation, unless that one is refused
+   * unread or for a lapsed lease; see `#endStagedWatchSet`.
+   */
+  #stagedWatchSets = new Map<
+    string,
+    {
+      stage: string;
+      request: WatchSetRequest;
+      parts: number;
+      characters: number;
+    }
+  >();
+  /** The characters of every set in `#stagedWatchSets`, summed. */
+  #stagedCharacters = 0;
 
   /** Every unexpired challenge issued on this connection, oldest first. */
   #challenges = new Map<string, ConnectionChallengeState>();
@@ -1210,48 +1277,131 @@ class Connection {
 
   readonly #server: Server;
   readonly #sendRaw: Send;
+  readonly #syncPartLimits: PartLimits | undefined;
 
   constructor(
     readonly id: string,
     server: Server,
     sendRaw: Send,
     routedOwns?: (space: string) => boolean,
+    syncPartLimits?: PartLimits,
   ) {
     this.#server = server;
     this.#sendRaw = sendRaw;
     this.#routedOwns = routedOwns;
+    this.#syncPartLimits = syncPartLimits;
   }
 
-  #send(message: ServerMessage): void {
+  /**
+   * Sends `message`, splitting the sync it carries when the peer takes a sync
+   * in parts and its encoding exceeds the transport's bounds. A response's
+   * `session` names the session its later parts go to; an effect names its
+   * own, and a response without one is sent whole.
+   */
+  #send(message: ServerMessage, session?: SyncPartSession): void {
     if (message.type === "response") this.#answered.add(message.requestId);
     try {
-      let prepared = message;
-      if (this.#syncLabelTable) {
-        const labelStart = performance.now();
-        prepared = compressServerMessageLabels(prepared);
-        timing.time(labelStart, "memory", "response", "prepareLabels");
+      const limits = this.#syncPartBounds;
+      const target = message.type === "session/effect"
+        ? { space: message.space, sessionId: message.sessionId }
+        : session;
+      if (
+        limits === undefined || target === undefined ||
+        serverMessageSync(message) === undefined
+      ) {
+        this.#transmit(this.#prepare(message));
+        return;
       }
-      if (this.#commitLabelTable) {
-        const commitLabelStart = performance.now();
-        prepared = compressServerMessageCommitLabels(prepared);
-        timing.time(
-          commitLabelStart,
-          "memory",
-          "response",
-          "prepareCommitLabels",
-        );
+      const prepared = this.#prepare(message);
+      const encodeStart = performance.now();
+      const payload = encodeMemoryBoundary(prepared);
+      const fits = payloadFits(payload, wholeLimits(limits));
+      timing.time(encodeStart, "memory", "response", "encode");
+      if (fits) {
+        this.#transmit(prepared, payload);
+        return;
       }
-      const schemaStart = performance.now();
-      if (this.#syncSchemaTable) {
-        prepared = compressServerMessageSchemas(prepared);
+      const splitStart = performance.now();
+      const parts = this.#syncParts(message, prepared, payload, target, limits);
+      timing.time(splitStart, "memory", "response", "split");
+      // The parts go to the transport in one synchronous pass, so that no
+      // other message of this connection's comes between them, and only once
+      // all are prepared, so that a part that cannot be prepared sends none.
+      for (const [partPrepared, partPayload] of parts) {
+        this.#transmit(partPrepared, partPayload);
       }
-      timing.time(schemaStart, "memory", "response", "prepareSchemas");
-      const sendStart = performance.now();
-      this.#sendRaw(prepared);
-      timing.time(sendStart, "memory", "response", "sendRaw");
     } catch (cause) {
       throw new DeliveryError(cause);
     }
+  }
+
+  /**
+   * Helper for `#send()`, which divides a sync too large for one message into
+   * parts and returns each prepared and encoded. A part cut to its bounds by
+   * its entries can exceed them once it carries its own tables, as can the
+   * whole message when its entries fit one part, so a part that does is
+   * halved until its halves fit, or a half is one entry, which goes as it is.
+   */
+  #syncParts(
+    message: ServerMessage,
+    prepared: ServerMessage,
+    payload: string,
+    target: SyncPartSession,
+    limits: PartLimits,
+  ): [ServerMessage, string][] {
+    const split = splitSyncMessage(message, target, limits, prepared);
+    const queue: {
+      part: ServerMessage;
+      prepared?: ServerMessage;
+      payload?: string;
+    }[] = split.length === 1
+      ? [{ part: message, prepared, payload }]
+      : split.map((part) => ({ part })).reverse();
+    const ready: [ServerMessage, string][] = [];
+    while (queue.length > 0) {
+      const item = queue.pop()!;
+      const partPrepared = item.prepared ?? this.#prepare(item.part);
+      const partPayload = item.payload ?? encodeMemoryBoundary(partPrepared);
+      const halves = payloadFits(partPayload, limits)
+        ? undefined
+        : halveSyncPart(item.part, target);
+      if (halves === undefined) ready.push([partPrepared, partPayload]);
+      else queue.push({ part: halves[1] }, { part: halves[0] });
+    }
+    return ready;
+  }
+
+  /** Helper for `#send()`, which applies the negotiated table encodings. */
+  #prepare(message: ServerMessage): ServerMessage {
+    let prepared = message;
+    if (this.#syncLabelTable) {
+      const labelStart = performance.now();
+      prepared = compressServerMessageLabels(prepared);
+      timing.time(labelStart, "memory", "response", "prepareLabels");
+    }
+    if (this.#commitLabelTable) {
+      const commitLabelStart = performance.now();
+      prepared = compressServerMessageCommitLabels(prepared);
+      timing.time(
+        commitLabelStart,
+        "memory",
+        "response",
+        "prepareCommitLabels",
+      );
+    }
+    const schemaStart = performance.now();
+    if (this.#syncSchemaTable) {
+      prepared = compressServerMessageSchemas(prepared);
+    }
+    timing.time(schemaStart, "memory", "response", "prepareSchemas");
+    return prepared;
+  }
+
+  /** Helper for `#send()`, which hands one prepared message to the transport. */
+  #transmit(prepared: ServerMessage, payload?: string): void {
+    const sendStart = performance.now();
+    this.#sendRaw(prepared, payload);
+    timing.time(sendStart, "memory", "response", "sendRaw");
   }
 
   /** Whether the peer declared the expression result identity contract. */
@@ -1280,6 +1430,7 @@ class Connection {
    */
   closeSession(space: string, sessionId: string): void {
     this.#sessions.delete(sessionKey(space, sessionId));
+    this.#endStagedWatchSet(sessionKey(space, sessionId));
     this.#server.endPresenceForSession(space, sessionId, this.id);
     this.#server.detachSession(space, sessionId, this.id);
   }
@@ -1317,7 +1468,7 @@ class Connection {
       });
       return;
     }
-    this.#send(response);
+    this.#send(response, { space, sessionId });
   }
 
   addSession(space: string, sessionId: string, principal?: string): void {
@@ -1343,6 +1494,7 @@ class Connection {
     reason: SessionRevokedMessage["reason"],
   ): void {
     const key = sessionKey(space, sessionId);
+    this.#endStagedWatchSet(key);
     if (!this.#sessions.delete(key) || this.#closed) {
       return;
     }
@@ -1641,7 +1793,7 @@ class Connection {
         const startedAt = performance.now();
         timing.time(arrivedAt, startedAt, "memory", "frame", "queue");
         try {
-          await this.#receiveOrdered(parsed);
+          await this.#receiveOrdered(parsed, payload.length);
         } catch (error) {
           if (!this.#answerFailedRequest(parsed, error)) throw error;
         } finally {
@@ -1822,6 +1974,37 @@ class Connection {
   }
 
   /**
+   * Ends the watch set the session `key` names was staging, if any, and
+   * returns it; the only way a set leaves `#stagedWatchSets`, so
+   * `#stagedCharacters` stays its sum.
+   */
+  #endStagedWatchSet(key: string) {
+    const staged = this.#stagedWatchSets.get(key);
+    if (staged !== undefined) {
+      this.#stagedWatchSets.delete(key);
+      this.#stagedCharacters -= staged.characters;
+    }
+    return staged;
+  }
+
+  /** Helper for the staged watch set parts, which refuses one as a protocol error. */
+  #refuseWatchSetPart(
+    parsed: { requestId: string; space: string; sessionId: string },
+    message: string,
+  ): void {
+    this.#sendSessionResponse(
+      parsed.space,
+      parsed.sessionId,
+      parsed.requestId,
+      {
+        type: "response",
+        requestId: parsed.requestId,
+        error: toError("ProtocolError", message),
+      },
+    );
+  }
+
+  /**
    * Helper for the methods that issue a challenge, which records `challenge`
    * as one this connection holds, dropping the expired ones and, past the
    * limit, the oldest.
@@ -1866,6 +2049,7 @@ class Connection {
 
   async #receiveOrdered(
     parsed: ClientMessage | RejectedClientMessage | null,
+    characters: number,
   ): Promise<void> {
     if (this.#closed) {
       return;
@@ -1932,6 +2116,10 @@ class Connection {
         serverFlags?.syncLabelTableV1 === true;
       this.#commitLabelTable = clientFlags?.commitLabelTableV1 === true &&
         serverFlags?.commitLabelTableV1 === true;
+      this.#syncPartBounds = clientFlags?.syncPartsV1 === true &&
+          serverFlags?.syncPartsV1 === true
+        ? this.#syncPartLimits
+        : undefined;
       this.#ready = true;
       return;
     }
@@ -1988,7 +2176,22 @@ class Connection {
           return;
         }
         const response = await this.#server.openSession(parsed, this);
-        this.#send(response);
+        // An open of a session ends the watch set it was staging.
+        if (
+          isFabricPlainObject(response.ok) &&
+          typeof response.ok.sessionId === "string"
+        ) {
+          this.#endStagedWatchSet(
+            sessionKey(parsed.space, response.ok.sessionId),
+          );
+        }
+        this.#send(
+          response,
+          isFabricPlainObject(response.ok) &&
+            typeof response.ok.sessionId === "string"
+            ? { space: parsed.space, sessionId: response.ok.sessionId }
+            : undefined,
+        );
         return;
       }
       case "transact": {
@@ -2159,7 +2362,77 @@ class Connection {
           return;
         }
         {
-          const response = await this.#server.watchSet(parsed);
+          // A part numbered 0 starts a staged set, and a later part must
+          // follow the parts of its set the session holds; a set without a
+          // number is whole. Either way the set held so far ends here, kept
+          // only by the part that continues it.
+          const key = sessionKey(parsed.space, parsed.sessionId);
+          const held = this.#endStagedWatchSet(key);
+          if (parsed.part === undefined) {
+            const response = await this.#server.watchSet(parsed);
+            this.#sendSessionResponse(
+              parsed.space,
+              parsed.sessionId,
+              parsed.requestId,
+              response,
+            );
+            return;
+          }
+          const continues = parsed.part > 0;
+          if (
+            continues &&
+            (held === undefined || held.stage !== parsed.stage ||
+              held.parts !== parsed.part)
+          ) {
+            this.#refuseWatchSetPart(
+              parsed,
+              "A staged watch set part does not follow the parts held",
+            );
+            return;
+          }
+          const staged = continues ? held! : {
+            stage: parsed.stage!,
+            request: stagedWatchSet(parsed),
+            parts: 0,
+            characters: 0,
+          };
+          if (continues) appendWatchSetPart(staged.request, parsed);
+          staged.parts += 1;
+          staged.characters += characters;
+          if (parsed.more === true) {
+            // This session's set ended above, so the total counts the
+            // connection's other staged sets.
+            if (
+              staged.parts > MAX_STAGED_WATCH_SET_PARTS ||
+              this.#stagedCharacters + staged.characters >
+                MAX_STAGED_WATCH_SET_CHARACTERS
+            ) {
+              this.#refuseWatchSetPart(
+                parsed,
+                `A staged watch set holds at most ${MAX_STAGED_WATCH_SET_PARTS} parts, and a connection's staged sets at most ${MAX_STAGED_WATCH_SET_CHARACTERS} characters together`,
+              );
+              return;
+            }
+            this.#stagedWatchSets.set(key, staged);
+            this.#stagedCharacters += staged.characters;
+            this.#sendSessionResponse(
+              parsed.space,
+              parsed.sessionId,
+              parsed.requestId,
+              {
+                type: "response",
+                requestId: parsed.requestId,
+                ok: { staged: true },
+              },
+            );
+            return;
+          }
+          // The joined set is checked as one set: a view named in two parts
+          // is refused as one named twice in one set is.
+          const response = await this.#server.watchSet({
+            ...staged.request,
+            requestId: parsed.requestId,
+          });
           this.#sendSessionResponse(
             parsed.space,
             parsed.sessionId,
@@ -2178,6 +2451,10 @@ class Connection {
         ) {
           return;
         }
+        // Another watch mutation ends a set the session was staging, which a
+        // router or a routed host can have left incomplete by refusing its
+        // last part itself.
+        this.#endStagedWatchSet(sessionKey(parsed.space, parsed.sessionId));
         {
           const response = await this.#server.watchAdd(parsed);
           this.#sendSessionResponse(
@@ -2198,6 +2475,10 @@ class Connection {
         ) {
           return;
         }
+        // Another watch mutation ends a set the session was staging, which a
+        // router or a routed host can have left incomplete by refusing its
+        // last part itself.
+        this.#endStagedWatchSet(sessionKey(parsed.space, parsed.sessionId));
         {
           const response = await this.#server.watchRemove(parsed);
           this.#sendSessionResponse(
@@ -3683,20 +3964,45 @@ export class Server {
     }
   }
 
-  connect(send: Send): Connection {
-    const connection = new Connection(crypto.randomUUID(), this, send);
+  /**
+   * Creates a connection whose messages `send` delivers. `syncParts` bounds
+   * the messages a sync is split into for a client that takes a sync in
+   * parts; without it, every sync goes whole.
+   */
+  connect(send: Send, syncParts?: PartLimits): Connection {
+    const connection = new Connection(
+      crypto.randomUUID(),
+      this,
+      send,
+      undefined,
+      syncParts,
+    );
     this.#connections.set(connection.id, connection);
     return connection;
   }
 
-  /** Creates one ticketed backend context with independent client authority. */
-  connectRouted(send: Send, owns: (space: string) => boolean): Connection {
+  /**
+   * Creates one ticketed backend context with independent client authority.
+   * `syncParts` bounds the messages a sync is split into for a client that
+   * takes a sync in parts.
+   */
+  connectRouted(
+    send: Send,
+    owns: (space: string) => boolean,
+    syncParts?: PartLimits,
+  ): Connection {
     if (this.#aclMode() !== "enforce" || this.options.ownsSpace === undefined) {
       throw authorizationError(
         "Routed memory requires enforced ACLs and ownership fencing",
       );
     }
-    const connection = new Connection(crypto.randomUUID(), this, send, owns);
+    const connection = new Connection(
+      crypto.randomUUID(),
+      this,
+      send,
+      owns,
+      syncParts,
+    );
     this.#connections.set(connection.id, connection);
     return connection;
   }
@@ -10001,7 +10307,8 @@ export class Server {
     const identity = this.#sessionScopeIdentity(session);
     const instanceByAddress = new Map<string, string>();
     let collapse: V2Error | undefined;
-    for (const { branch, root } of entries) {
+    const rows = [...entries];
+    for (const { branch, root } of rows) {
       if (root.entityScopeKey !== undefined) {
         named = true;
         if (!isScopeKey(root.entityScopeKey)) {
@@ -10065,6 +10372,34 @@ export class Server {
           "hold a live execution_lease on this memory server " +
           "(protocol.md §2's read row)",
       );
+    }
+    if (!holdsReadSpace) {
+      // The grant-scoped read (protocol.md §2, RULED 2026-10-27): a holder
+      // reading a space whose lease it does not hold names an instance of
+      // an actor that space's own ACL grants READ — the actor's own
+      // instance under the actor's own grant, the read twin of §2b's
+      // write grant — or is refused. Resolved against the engine already
+      // open, mode-independently, as the write probe resolves its grant:
+      // this is the serving plane's rule, not the client ACL rollout, so
+      // neither the service-DID blanket nor the missing-ACL compat arm
+      // applies, and a key naming no actor grants nothing.
+      for (const { root } of rows) {
+        const key = root.entityScopeKey;
+        if (key === undefined || key === "space") continue;
+        const actor = identityOfScopeKey(key)?.principal;
+        const verdict = actor === undefined
+          ? { granted: false as const, reason: `"${key}" names no actor` }
+          : this.#foreignGrantOn(engine, space, actor, "READ");
+        if (!verdict.granted) {
+          return toError(
+            "ProtocolError",
+            `read naming entity_scope_key "${key}" on root ${root.id} ` +
+              `rejected: ${verdict.reason} — a foreign scoped instance is ` +
+              "read under its actor's own READ grant on the space " +
+              "(protocol.md §2's grant-scoped read)",
+          );
+        }
+      }
     }
     session.leaseHolderReads = true;
     return undefined;
@@ -10721,40 +11056,95 @@ export class Server {
   async foreignWriteAuthorityFor(
     space: string,
     principal: string | undefined,
-  ): Promise<{ granted: true } | { granted: false; reason: string }> {
+  ): Promise<ForeignAuthorityVerdict> {
+    return await this.#foreignAuthorityFor(space, principal, "WRITE");
+  }
+
+  /**
+   * The structural read grant for a FOREIGN scoped read made on a carried
+   * actor's behalf (protocol.md §2's grant-scoped read; serving-loop.md
+   * §3b): whether `principal` — the actor whose instance a serving
+   * runtime's read of another space names — holds READ on `space`. The
+   * serving runtime's storage plane asks this before such a read leaves
+   * it, and admission asks the same question of the engine it has open
+   * (`#denyExplicitInstanceReads`), so a producer that skipped the probe
+   * is refused at the wire.
+   *
+   * Everything `foreignWriteAuthorityFor` says of its grant holds here
+   * with READ in place of WRITE: the target's own ACL document is the one
+   * grant, checked mode-independently, with neither the service-DID
+   * blanket nor the missing-ACL compat arm, and a malformed space name or
+   * a space no store holds grants nothing.
+   */
+  async foreignReadAuthorityFor(
+    space: string,
+    principal: string | undefined,
+  ): Promise<ForeignAuthorityVerdict> {
+    return await this.#foreignAuthorityFor(space, principal, "READ");
+  }
+
+  /**
+   * The two foreign authority probes' shared body: the checks on the space
+   * name, the actor and the store's existence, then
+   * `#foreignGrantOn` against the space's engine.
+   */
+  async #foreignAuthorityFor(
+    space: string,
+    principal: string | undefined,
+    requirement: ForeignAuthorityRequirement,
+  ): Promise<ForeignAuthorityVerdict> {
+    const rule = requirement === "WRITE" ? "protocol.md §2b" : "protocol.md §2";
     if (!WELL_FORMED_SPACE_DID.test(space)) {
       return {
         granted: false,
         reason: `"${space}" is not a space DID — refusing to resolve (or ` +
-          "provision) a store for a malformed space name (protocol.md §2b)",
+          `provision) a store for a malformed space name (${rule})`,
       };
     }
     if (principal === undefined || principal === "") {
       return {
         granted: false,
-        reason: "no acting principal — a foreign provisioning write is " +
-          "admitted only under a carried actor's grant (protocol.md §2b)",
+        reason: requirement === "WRITE"
+          ? "no acting principal — a foreign provisioning write is " +
+            "admitted only under a carried actor's grant (protocol.md §2b)"
+          : "no acting principal — a foreign scoped read is admitted only " +
+            "under the carried actor's own grant (protocol.md §2)",
       };
     }
     if (!(await this.#spaceStoreExists(space))) {
       return {
         granted: false,
         reason: `no space has the DID ${space} — a space exists once its ` +
-          "genesis ACL commit lands (protocol.md §2b)",
+          `genesis ACL commit lands (${rule})`,
       };
     }
     const engine = await this.#openEngine(space);
+    return this.#foreignGrantOn(engine, space, principal, requirement);
+  }
+
+  /**
+   * Whether the ACL `engine` stores for `space` grants `principal` (or
+   * `ANYONE`) `requirement`: the one structural grant both foreign
+   * authority probes and the read admission resolve, fail-closed for a
+   * missing, malformed, ownerless or retracted list.
+   */
+  #foreignGrantOn(
+    engine: Engine.Engine,
+    space: string,
+    principal: string,
+    requirement: ForeignAuthorityRequirement,
+  ): ForeignAuthorityVerdict {
     const state = this.#aclState(engine, space);
     if (state.kind === "valid") {
       const capability = state.acl[principal] ?? state.acl[ANYONE_USER] ??
         null;
-      if (capability !== null && isCapable(capability, "WRITE")) {
+      if (capability !== null && isCapable(capability, requirement)) {
         return { granted: true };
       }
       return {
         granted: false,
         reason: `the ACL of ${space} grants ${principal} ` +
-          `${capability ?? "nothing"} (WRITE required)`,
+          `${capability ?? "nothing"} (${requirement} required)`,
       };
     }
     return {
@@ -11294,6 +11684,18 @@ const parseDecodedClientMessage = (
     if (views === null) return null;
     const holdings = parseHoldings(parsed.holdings);
     if (holdings === null) return null;
+    // A staged part names its set and is numbered, and only a staged part
+    // says more follow.
+    if (
+      (parsed.stage === undefined) !== (parsed.part === undefined) ||
+      (parsed.part !== undefined &&
+        !(Number.isSafeInteger(parsed.part) && (parsed.part as number) >= 0 &&
+          isRoutedIdentifier(parsed.stage))) ||
+      (parsed.more !== undefined &&
+        (parsed.more !== true || parsed.part === undefined))
+    ) {
+      return null;
+    }
     return {
       type: "session.watch.set",
       requestId: parsed.requestId,
@@ -11302,6 +11704,10 @@ const parseDecodedClientMessage = (
       watches: parsed.watches as WatchSpec[],
       ...(views === undefined ? {} : { views }),
       ...(holdings === undefined ? {} : { holdings }),
+      ...(parsed.part === undefined
+        ? {}
+        : { stage: parsed.stage as string, part: parsed.part as number }),
+      ...(parsed.more === true ? { more: true as const } : {}),
     };
   }
 

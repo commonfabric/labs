@@ -1,6 +1,16 @@
+---
+status: historical
+created: 2026-10-27
+archived: 2026-10-28
+reason: "Executed plan; local jobs take messages through POST /jobs/<id>/messages, steering a running job and following up a finished one, across #9283, #9287 and #9286 (stages 1 to 3) and #9288 (stages 4 and 5)."
+---
+
 # Sending a message to a local job
 
-Status: design, not built. Nothing here is implemented yet.
+Status: executed. Stages 1 to 3 landed as #9283, #9287 and #9286; stages 4
+and 5 landed together as #9288. Stage 5 changed several rules sections 1 to
+3 state; the stage 5 entry under "Stages" lists them, and it governs where
+they differ.
 
 A local job today is one task, run once: the caller enqueues it, watches its
 events, and reads its result. This plan adds a single generic way to send
@@ -220,19 +230,12 @@ Every refusal is `{ok: false, code, error}`, as elsewhere on the socket.
 | 403 | `not_callers` | `caller` is not the caller that enqueued the conversation. |
 | 409 | `not_continuable` | The head has finished with no recorded run. |
 | 409 | `instructions_on_steer` | The message carries `instructions`, and the head is queued or running with no cancel requested. |
-| 409 | `cannot_steer` | The head is queued or running with no cancel requested, and the lane's runs cannot take messages. |
 | 400 | `unknown_profile` | A follow-up would open now, and its profile is no longer one the host names. |
 | 409 | `idempotency_conflict` | See "Replay". |
 
 `not_callers` is not a security boundary: the socket and its token are the
 authority, as for every other route. It keeps one client from steering
 another client's conversation by mistake.
-
-`cannot_steer` applies only to a message the head's run could take. A
-message to a head whose cancel was requested waits for the follow-up
-whatever the lane can do. The refusal exists for a lane given a `runJob`
-that does not take the seam. Every job that runs through `runHarnessJob` can
-take messages once stage 4 lands.
 
 ### Ordering
 
@@ -345,11 +348,12 @@ by a new flag, `--continue-run <run root> --prompt=<message>`:
 - the seeded history: the prior run's transcript up to its last complete
   checkpoint, then the interrupted-turn notice when the run went past that
   checkpoint, then the new prompt. With no complete checkpoint, the flag is
-  refused. A `--system-prompt` given with `--continue-run` replaces the prior
-  run's additional instructions, which is how a follow-up's new
-  `instructions` arrive. The harness rebuilds the rest of the system
-  message, its own guidance and the new result contract, with the builder
-  every batch run uses, so a follow-up keeps that guidance;
+  refused. The harness always rebuilds the system message from the prior
+  run's recorded builder inputs and the new result contract, using the same
+  builder as a fresh run. Explicit flags override the recorded inputs:
+  `--system-prompt` replaces the additional instructions, which is how a
+  follow-up's new `instructions` arrive. A run without recorded builder
+  inputs is refused;
 - the prior handle table, result schema and CFC record, passed on
   explicitly (`AH-REF-3`). The result path is the new run's own;
 - the provider, model, credential owner and read ceiling checked against the
@@ -452,9 +456,12 @@ client:
   prompt, and no turn-local notices.
 - A handle from the prior run resolves.
 - A new structured result is written and validated.
-- A `--system-prompt` given with it replaces the prior run's additional
-  instructions, and the system message still holds the harness's own
-  guidance and the new result contract.
+- With or without `--system-prompt`, the system message is rebuilt from
+  recorded builder inputs, with explicit flags overriding them. It holds
+  the harness's guidance and the new result contract, never the old result
+  path. `--system-prompt` replaces the recorded additional instructions.
+- A run without recorded system-prompt builder inputs is refused before
+  any model request.
 - A prior run cut off in the middle of a turn is continued from its last
   complete checkpoint, with the interrupted-turn notice before the new
   prompt. A prior run with no complete checkpoint is refused.
@@ -490,7 +497,7 @@ existing fake `runJob`:
   - `not_found` and `not_callers`;
   - `not_continuable`, for an interrupted job, a `PROFILE_UNAVAILABLE`
     failure, and a job cancelled while queued;
-  - `cannot_steer` and `instructions_on_steer`;
+  - `instructions_on_steer`;
   - `invalid_request` and `too_large`;
   - `unknown_profile`, for a message to a finished job whose profile the
     host no longer names.
@@ -531,7 +538,44 @@ the track lead reviews it.
    review. It wires to the real harness only after they merge.
 4. **The `harness-job` wiring:** the `takeMessages` pass-through, the
    `runTranscript` wrap, and a follow-up running `--continue-run` in the
-   conversation's workspace.
+   conversation's workspace. Done in #9288.
+5. **Continuation, completed.** Done in #9288, by Ben's decision to build
+   continuation fully before Loom adopts it:
+   - **One next-run builder** in cf-harness, used by `--continue-run` and
+     the interactive chat service's turn path. It owns the checkpoint cut,
+     turn-local exclusion by the `turnLocal` flag alone, one interrupted
+     notice, the carried handle table, research retention through
+     `selectResearchContext`, re-established grants and skills context,
+     and the run-state fields a new run carries, re-derives or excludes, in
+     one table a test holds complete. The loop marks replayed seed events
+     with `seed: true`, and consumers skip them by that marker.
+   - **The system prompt is rebuilt from recorded inputs.** Run state
+     records the prompt builder's inputs (`systemPromptInputs`), and
+     `--continue-run` always rebuilds the system message from them,
+     overridden by explicit flags. A run without them cannot be continued.
+   - **The interrupted notice is cause-neutral,** and it is added whenever
+     the cut drops anything or the prior run's status is not `completed`.
+   - **A conversation survives a runner restart.** The store records each
+     job's run root when its run starts. On recovery,
+     `canContinueHarnessRun` decides whether the interrupted job has a
+     recorded run, and if it does, waiting and later messages open
+     follow-ups. This replaces section 1's rule that an interrupted job is
+     never continued.
+   - **The steering switch is removed.** Every lane gives its runs the
+     `takeMessages` hook, and `cannot_steer` no longer exists.
+   - **`follow_up_only` replaces `instructions_on_steer`.** It is one
+     refusal for a message carrying `instructions`, `imageAttachments` or
+     `inputs` (with their `foreignSpaces`) that its head would take as a
+     steer.
+   - **Follow-ups carry attachments.** The message route accepts images and
+     inputs on a follow-up, and `--continue-run` accepts `--image` and
+     `--input-cell`. The continued run carries `assignedPieces`. A new input
+     name that collides with one the prior run holds fails the follow-up
+     before any model call.
+   - **Text and usage stream.** A job's stream carries a `text` event for
+     each root assistant message, whole, and a `usage` event after each
+     model call. A job with no `resultSchema` completes with its final
+     assistant text as a string `result`.
 
 Each stage updates the live documents it changes:
 

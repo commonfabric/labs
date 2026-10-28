@@ -27,6 +27,7 @@ import {
   type GraphQuery,
   type GraphQueryResult,
   MAX_ENTITY_ID_PAGE_SIZE,
+  MAX_UNTRUSTED_MESSAGE_SLOTS,
   MEMORY_PROTOCOL,
   type MemoryProtocolFlags,
   type OperationFieldQuery,
@@ -60,6 +61,7 @@ import {
   sqliteRowFromWire,
   type ViewInterest,
   type WatchAddResult,
+  type WatchSetRequest,
   type WatchSetResult,
   type WatchSpec,
 } from "../v2.ts";
@@ -76,7 +78,12 @@ import {
 import type { AppliedCommit } from "./engine.ts";
 import { logIncomingFrame, logOutgoingFrame } from "./frame-log.ts";
 import { memoryMessageFrameBytes } from "./message-compression.ts";
-import { ROUTED_HOLDINGS_LIMIT } from "./routed-limits.ts";
+import {
+  ROUTED_DEFAULT_SLOT_LIMIT,
+  ROUTED_HOLDINGS_LIMIT,
+  ROUTED_PART_BYTES,
+  ROUTED_QUEUE_LIMIT,
+} from "./routed-limits.ts";
 import {
   isPresenceRoom,
   PresenceError,
@@ -89,6 +96,15 @@ import {
 } from "./sync-label-table.ts";
 import { containsReservedSchemaRefSubstring } from "./sync-schema-ref.ts";
 import { expandServerMessageSchemas } from "./sync-schema-table.ts";
+import {
+  type PartLimits,
+  payloadFits,
+  serverMessageSync,
+  splitWatchSetRequest,
+  SyncPartAssembler,
+  type SyncPartSession,
+  wholeLimits,
+} from "./message-parts.ts";
 import { type ArmedTurn, armTurn } from "./turn.ts";
 
 /**
@@ -139,6 +155,14 @@ export type Transport = {
 
   /** Whether bounded routed transport records can be sent. */
   readonly supportsRouterStreaming?: boolean;
+
+  /**
+   * Bounds on one message this transport carries to a direct server, when
+   * tighter than the server's own, as a test's transport sets them; a watch
+   * set past them is staged in parts. A routed connection's bounds come from
+   * the router's `hello.ok`.
+   */
+  readonly messageLimits?: PartLimits;
 
   /**
    * Hands `payload` to the connection, opening one first when there is none.
@@ -653,6 +677,22 @@ export class Client {
   readonly #clientInfo: Readonly<ClientInfo>;
   #syncLabelTable = false;
   #commitLabelTable = false;
+  /** Whether both peers advertised `syncPartsV1`. */
+  #syncParts = false;
+  /**
+   * The bounds a watch set is staged in parts to fit on this connection: on
+   * a routed connection, the frame cap and the 4 MiB a request may take, in
+   * parts of 1 MiB; on a direct one, the server's slot limit on a client
+   * message.
+   */
+  #requestLimits: PartLimits | undefined;
+  /** The split syncs whose last part has not arrived, by session. */
+  #syncPartAssembler = new SyncPartAssembler();
+  /**
+   * The space and session of each pending request that names one, so that
+   * its response is held with the session's split sync.
+   */
+  #pendingSessions = new Map<string, { space: string; sessionId?: string }>();
 
   /**
    * Per key, the `connection.auth` it made on the current connection,
@@ -933,7 +973,10 @@ export class Client {
    * its error. A request made while the connection is down waits for the
    * reconnect, unless `options.whileConnected` is set, in which case it
    * throws a `ConnectionError`: a request a session's restore makes would
-   * otherwise wait for the reconnect that is running that restore.
+   * otherwise wait for the reconnect that is running that restore. One made
+   * with `options.epoch` throws a `ConnectionError` unless it goes on that
+   * connection, whose negotiation `options.encoded`, `message` encoded for
+   * it, then belongs to.
    *
    * The request settles once its send has too, which a transport may report
    * only after the server has handled the request, and so after the frames
@@ -944,6 +987,8 @@ export class Client {
     message: FabricPlainObject,
     options: {
       whileConnected?: boolean;
+      epoch?: number;
+      encoded?: string;
       onResponse?: (response: ResponseMessage<Result>) => void;
     } = {},
   ): Promise<Result> {
@@ -951,6 +996,11 @@ export class Client {
       throw connectionLostWhileRestoring();
     }
     const epoch = await this.#ensureConnected();
+    // A request that belongs with others on one connection, as a staged
+    // watch set's parts do, is not sent on another.
+    if (options.epoch !== undefined && epoch !== options.epoch) {
+      throw connectionError("Memory connection changed between request parts");
+    }
     // Readiness can change across the await even for an already-live transport.
     // Reject before encoding or registration so this request uses neither stale
     // negotiation nor a pending slot created after the discard's rejection sweep.
@@ -969,12 +1019,9 @@ export class Client {
       throw this.#clientUpdateError;
     }
     const requestId = message.requestId as string;
-    // Retained requests stay inline so replay uses the next connection's
-    // negotiation. Compact only the value handed to the transport encoder.
-    const prepared = this.#commitLabelTable
-      ? compressClientMessageLabels(message)
-      : message;
-    const encoded = encodeMemoryBoundary(prepared);
+    const encoded = options.encoded !== undefined && options.epoch === epoch
+      ? options.encoded
+      : this.#encodeRequest(message);
     const pending: PendingRequest = Promise.withResolvers<unknown>();
     const { onResponse } = options;
     if (onResponse !== undefined) {
@@ -989,6 +1036,19 @@ export class Client {
     // observes the rejection.
     pending.promise.catch(() => {});
     this.#pending.set(requestId, pending);
+    if (this.#syncParts && typeof message.space === "string") {
+      const descriptor = message.session;
+      const sessionId = typeof message.sessionId === "string"
+        ? message.sessionId
+        : isObjectNotArray(descriptor) &&
+            typeof descriptor.sessionId === "string"
+        ? descriptor.sessionId
+        : undefined;
+      this.#pendingSessions.set(requestId, {
+        space: message.space,
+        ...(sessionId === undefined ? {} : { sessionId }),
+      });
+    }
     logOutgoingFrame(message, memoryMessageFrameBytes(encoded));
     try {
       await this.#transport.send(encoded);
@@ -996,7 +1056,10 @@ export class Client {
       // A send the transport refused outright gets no response, so its entry
       // would otherwise stay until the connection closes. A send lost with its
       // connection is settled by the close that reports the loss.
-      if (!isConnectionError(error)) this.#pending.delete(requestId);
+      if (!isConnectionError(error)) {
+        this.#pending.delete(requestId);
+        this.#pendingSessions.delete(requestId);
+      }
       throw error;
     }
     const result = await pending.promise as ResponseMessage<Result>;
@@ -1038,6 +1101,65 @@ export class Client {
   }
 
   /**
+   * Sends a `session.watch.set` and returns the `ok` of its response. A set
+   * whose encoding exceeds the connection's bounds, sent to a server that
+   * takes a set in parts, goes as staged parts issued back to back on one
+   * connection before anything else the caller sends. The server refuses a
+   * part that does not follow the parts it holds, and with it the rest, so
+   * the set is applied whole or not at all; the first refusal is the set's.
+   *
+   * @internal For `SpaceSession`.
+   */
+  async requestWatchSet(
+    message: WatchSetRequest,
+    options: { whileConnected?: boolean } = {},
+  ): Promise<WatchSetResult> {
+    // The split reads the connection's bounds, so it waits for the
+    // connection. A connected client issues the parts without an await, in
+    // the order the caller's other requests would be issued.
+    if (!this.#connected && options.whileConnected !== true) {
+      await this.#ensureConnected();
+    }
+    if (!this.#connected) {
+      return await this.request<WatchSetResult>(message, options);
+    }
+    const epoch = this.#connectionEpoch;
+    const encoded = this.#encodeRequest(message);
+    const limits = this.#requestLimits;
+    const parts = limits !== undefined &&
+        this.#serverFlags?.watchSetPartsV1 === true &&
+        !payloadFits(encoded, wholeLimits(limits))
+      ? splitWatchSetRequest(message, limits)
+      : [message];
+    if (parts.length === 1) {
+      return await this.request<WatchSetResult>(message, {
+        ...options,
+        epoch,
+        encoded,
+      });
+    }
+    const answers = parts.map((part) =>
+      this.request<WatchSetResult>(part, { ...options, epoch })
+    );
+    for (const answer of answers) answer.catch(() => {});
+    const results = await Promise.allSettled(answers);
+    const refused = results.find((result) => result.status === "rejected");
+    if (refused !== undefined) throw refused.reason;
+    return (results.at(-1) as PromiseFulfilledResult<WatchSetResult>).value;
+  }
+
+  /**
+   * Helper for the requests, which encodes `message` for this connection.
+   * Retained requests stay inline so replay uses the next connection's
+   * negotiation; only the value handed to the transport encoder is compacted.
+   */
+  #encodeRequest(message: FabricPlainObject): string {
+    return encodeMemoryBoundary(
+      this.#commitLabelTable ? compressClientMessageLabels(message) : message,
+    );
+  }
+
+  /**
    * The holdings a request declares on this connection, given the ones its
    * session holds. A router and a routed toolshed close the connection on
    * a frame that names more than `ROUTED_HOLDINGS_LIMIT` holdings, and the
@@ -1047,13 +1169,12 @@ export class Client {
    * cut are sent a second time and none is skipped. A direct server takes
    * the whole list.
    *
-   * The cut has two costs beyond that second delivery. The server removes
-   * only documents the list names, so a document that was cut and has
-   * since left the session's watch set gets no remove: the replica keeps
-   * the value it last had for it until the document is watched again. And
-   * the documents cut all come back in the one response, which must fit
-   * the toolshed's 4 MiB bound on what it queues to a data socket; a
-   * response past it closes the socket.
+   * The cut has a cost beyond that second delivery. The server removes only
+   * documents the list names, so a document that was cut and has since left
+   * the session's watch set gets no remove: the replica keeps the value it
+   * last had for it until the document is watched again. The documents cut
+   * come back in the response's sync, in parts when it is too large for one
+   * message (`syncPartsV1`).
    *
    * @internal For `SpaceSession`.
    */
@@ -1864,6 +1985,9 @@ export class Client {
     this.#endRenewals();
     this.#syncLabelTable = false;
     this.#commitLabelTable = false;
+    this.#syncParts = false;
+    this.#syncPartAssembler.clear();
+    this.#requestLimits = undefined;
     this.#transport.setMessageCompressionEnabled?.(false);
     this.#connectionEpoch += 1;
     this.#authenticated.clear();
@@ -1880,13 +2004,15 @@ export class Client {
     const ack: PromiseWithResolvers<void> & { receiveError?: Error } = Promise
       .withResolvers<void>();
     this.#helloPending = ack;
-    // `sessionReportV1` and `watchRemoveV1` are the server's capabilities
-    // alone: the client reads them from `hello.ok` and never offers them.
-    // Other flags an endpoint does not know are ignored there, since the
-    // routed flag allowlists were removed (infra DEVIATIONS row 41).
+    // `sessionReportV1`, `watchRemoveV1` and `watchSetPartsV1` are the
+    // server's capabilities alone: the client reads them from `hello.ok` and
+    // never offers them. Other flags an endpoint does not know are ignored
+    // there, since the routed flag allowlists were removed (infra DEVIATIONS
+    // row 41).
     const {
       sessionReportV1: _reportsServerOnly,
       watchRemoveV1: _removalServerOnly,
+      watchSetPartsV1: _stagedSetsServerOnly,
       ...expectedFlags
     } = getMemoryProtocolFlags();
     const offerRoutedCompression = this.#offersRoutedCompression(
@@ -1973,6 +2099,25 @@ export class Client {
           "receive",
           "commitLabelExpansion",
         );
+      }
+      // The parts of a split sync are held until the last arrives, and the
+      // sync is then handled as the one they divide. A message that carries
+      // no sync passes whatever the assembler holds, and so does a whole
+      // sync while it holds none.
+      const sync = serverMessageSync(message);
+      if (!this.#syncParts) {
+        if (sync?.more !== undefined) {
+          throw protocolError("Unnegotiated `syncPartsV1` sync part");
+        }
+      } else if (
+        sync !== undefined &&
+        (sync.more !== undefined || this.#syncPartAssembler.pending)
+      ) {
+        message = this.#syncPartAssembler.accept(
+          message as ServerMessage,
+          this.#messageSession(message),
+        );
+        if (message === undefined) return;
       }
     } catch (cause) {
       const error = new Error("Unable to parse memory server message", {
@@ -2070,6 +2215,20 @@ export class Client {
           helloOk.flags.syncLabelTableV1;
         this.#commitLabelTable = expectedFlags.commitLabelTableV1 &&
           helloOk.flags.commitLabelTableV1;
+        this.#syncParts = expectedFlags.syncPartsV1 &&
+          helloOk.flags.syncPartsV1;
+        this.#requestLimits = routed
+          ? {
+            bytes: ROUTED_PART_BYTES,
+            values: helloOk.routerFrameSlots === undefined
+              ? ROUTED_DEFAULT_SLOT_LIMIT
+              : helloOk.routerFrameSlots,
+            whole: ROUTED_QUEUE_LIMIT,
+          }
+          : this.#transport.messageLimits ?? {
+            bytes: Number.MAX_SAFE_INTEGER,
+            values: MAX_UNTRUSTED_MESSAGE_SLOTS,
+          };
         this.#helloPending.resolve();
         return;
       }
@@ -2195,6 +2354,7 @@ export class Client {
       if (pending) {
         pending.resolve(message);
         this.#pending.delete(message.requestId);
+        this.#pendingSessions.delete(message.requestId);
         try {
           pending.onResponse?.(message);
         } catch (cause) {
@@ -2202,6 +2362,31 @@ export class Client {
         }
       }
     }
+  }
+
+  /**
+   * Helper for `#onMessage()`: the session a decoded server message is for,
+   * a response's being the one its request named, or opened.
+   */
+  #messageSession(message: unknown): SyncPartSession | undefined {
+    if (!isObjectNotArray(message)) return undefined;
+    if (
+      typeof message.space === "string" &&
+      typeof message.sessionId === "string"
+    ) {
+      return { space: message.space, sessionId: message.sessionId };
+    }
+    if (message.type !== "response" || typeof message.requestId !== "string") {
+      return undefined;
+    }
+    const request = this.#pendingSessions.get(message.requestId);
+    const sessionId = isObjectNotArray(message.ok) &&
+        typeof message.ok.sessionId === "string"
+      ? message.ok.sessionId
+      : request?.sessionId;
+    return request === undefined || sessionId === undefined
+      ? undefined
+      : { space: request.space, sessionId };
   }
 
   #nextRequestId(): string {
@@ -2426,6 +2611,7 @@ export class Client {
       pending.reject(error);
     }
     this.#pending.clear();
+    this.#pendingSessions.clear();
     this.#helloPending?.reject(error);
     this.#helloPending = null;
   }
@@ -3058,7 +3244,7 @@ export class SpaceSession {
     return await this.#runWatchMutation(
       () => {
         requestedWatches = watches ?? this.#watchSpecs;
-        return this.#client.request<WatchSetResult>({
+        return this.#client.requestWatchSet({
           type: "session.watch.set",
           requestId: crypto.randomUUID(),
           space: this.space,
@@ -3152,7 +3338,7 @@ export class SpaceSession {
         const holdings = this.#client.serverFlags?.sessionHoldings === true
           ? this.#client.declarableHoldings(this.#declaredHoldings())
           : undefined;
-        return this.#client.request<WatchSetResult>({
+        return this.#client.requestWatchSet({
           type: "session.watch.set",
           requestId: crypto.randomUUID(),
           space: this.space,
@@ -4911,11 +5097,15 @@ export type QueuedFrameTransport = Transport & {
  */
 export const loopback = (
   server: {
-    connect(send: (message: ServerMessage) => void): {
+    connect(
+      send: (message: ServerMessage, payload?: string) => void,
+      syncParts?: PartLimits,
+    ): {
       receive(payload: string): Promise<void>;
       close(): void;
     };
   },
+  options: { syncParts?: PartLimits; messageLimits?: PartLimits } = {},
 ): Transport => {
   // The transport exists before the connection, so a frame the server
   // sends as it connects is queued rather than lost.
@@ -4924,10 +5114,12 @@ export const loopback = (
     receive: (payload) => built.connection!.receive(payload),
     close: () => built.connection?.close(),
   });
-  built.connection = server.connect((message) => {
-    transport.deliver(encodeMemoryBoundary(message));
-  });
-  return transport;
+  built.connection = server.connect((message, payload) => {
+    transport.deliver(payload ?? encodeMemoryBoundary(message));
+  }, options.syncParts);
+  return options.messageLimits === undefined
+    ? transport
+    : { ...transport, messageLimits: options.messageLimits };
 };
 
 /**

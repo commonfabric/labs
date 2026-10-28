@@ -941,8 +941,12 @@ Deno.test("sqlite session store restores and terminalizes active legacy transcri
     });
     assertEquals(followUp.ok, true);
     await restored.waitForTurn("session-1", "turn-2");
+    // The recovered record keeps its turn-local context; the next turn is
+    // seeded without it and re-establishes its own.
     expect(restoredInputs[0]).toEqual([
-      ...recoveredTranscript,
+      ...recoveredTranscript.filter((message) =>
+        !(message.role === "user" && message.turnLocal)
+      ),
       ...unattachedTurnContext(),
       { role: "user", content: "Continue" },
     ]);
@@ -1157,10 +1161,12 @@ Deno.test("sqlite session restore heals terminal legacy transcripts idempotently
         createPromptLoop: () => ({
           runTranscript: async (options) => {
             restoredInputs.push([...options.transcript]);
+            // The real loop marks its replay of the seed, and chat skips it.
             for (const message of options.transcript) {
               await options.onTranscriptEvent?.({
                 message,
                 transcript: options.transcript,
+                seed: true,
               });
             }
             const result = makeResult(options, "Recovered.");
@@ -1307,7 +1313,6 @@ Deno.test("sqlite chat resumes a canceled tool call from its checkpoint", async 
     // The canceled request carries over with the stop notice; its tool call
     // never answered, so it does not.
     expect(followUpInputs[0]).toEqual([
-      ...unattachedTurnContext(),
       { role: "user", content: "Run the long command" },
       { role: "user", content: HARNESS_CHAT_INTERRUPTED_TURN_NOTICE },
       ...unattachedTurnContext(),
@@ -1901,7 +1906,6 @@ Deno.test("sqlite session restore keeps closed sessions closed while terminalizi
 });
 
 const RESUMED_AFTER_FIRST_TURN: readonly HarnessTranscriptMessage[] = [
-  ...unattachedTurnContext(),
   { role: "user", content: "Read the first file" },
   { role: "assistant", content: "Read the first." },
   ...unattachedTurnContext(),

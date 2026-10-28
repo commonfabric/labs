@@ -2,11 +2,12 @@
 import type { HarnessHandleTable } from "./contracts/handle-table.ts";
 
 /**
- * The model-visible note appended after a canceled turn's saved history, so the
- * following turn reads the earlier request as interrupted rather than answered.
+ * The model-visible note appended after an interrupted turn's saved history,
+ * so the following turn reads the earlier request as interrupted rather than
+ * answered.
  */
 export const HARNESS_CHAT_INTERRUPTED_TURN_NOTICE =
-  "Host turn notice: the person stopped the previous turn before it finished. Its request above was interrupted, not answered; the work shown after it is what completed before the stop.";
+  "Host turn notice: the previous turn stopped before it finished. Its request above was interrupted, not answered; the work shown after it is what completed before it stopped.";
 
 /**
  * The part of a session's handle table a following turn's run starts from:

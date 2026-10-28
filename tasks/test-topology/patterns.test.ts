@@ -78,13 +78,63 @@ describe("the pattern and package suites", () => {
             pivot,
           ]
         ) {
-          expect(suite.unitsForChange?.(new Set([source]))).toEqual([pivot]);
+          expect(suite.unitsForChange?.(new Set([source]))).toContain(pivot);
         }
         expect(
           suite.unitsForChange?.(
             new Set(["packages/patterns/topics/README.md"]),
           ),
         ).toEqual([]);
+      }
+    }
+  });
+
+  it("requires the Topics measurements for changes to the authored sources and shared measurement inputs", async () => {
+    const measurements = [
+      "topics-headless-fixture",
+      "topics-lazy-lookup-reruns",
+      "topics-read-budget-small-and-threads",
+      "topics-read-budget-single-bucket",
+      "topics-read-budget-high-degree",
+      "topics-read-budget-mentions-16",
+      "topics-browser-measurement",
+    ].map((name) => `packages/patterns/integration/${name}.test.ts`).sort();
+    for (const defaultEnabled of [false, true]) {
+      const loaded = await loadPatternSuites(root, defaultEnabled);
+      for (const id of Object.values(arms(defaultEnabled))) {
+        const suite = pick(loaded, id);
+        for (const source of ["main.tsx", "topic.tsx"]) {
+          expect(
+            suite.unitsForChange?.(
+              new Set([`packages/patterns/topics/${source}`]),
+            ),
+          ).toEqual([
+            ...measurements,
+            "packages/patterns/integration/topic-board-pivot-sessions.test.ts",
+          ].sort());
+        }
+        for (
+          const input of [
+            "topics-headless-fixture.ts",
+            "topics-cost-cases.ts",
+            "topics-read-budget.ts",
+            "topics-read-budget-limits.ts",
+            "topics-read-budget-suite.ts",
+            "topics-browser-measurement.ts",
+            "topics-browser-measurement-core.ts",
+            "topics-browser-posture.ts",
+            "topics-navigation-helpers.ts",
+          ]
+        ) {
+          expect(
+            suite.unitsForChange?.(
+              new Set([`packages/patterns/integration/${input}`]),
+            ),
+          ).toEqual(measurements);
+        }
+        for (const file of measurements) {
+          expect(suite.unitsForChange?.(new Set([file]))).toEqual([file]);
+        }
       }
     }
   });
@@ -211,6 +261,38 @@ describe("the pattern and package suites", () => {
       expect(invocation!.env?.EXPERIMENTAL_SERVER_EXECUTION).toBe(
         String(opposite.enabled),
       );
+    }
+  });
+
+  it("runs each arm's suites under its lane's environment, before and after a default flip", async () => {
+    const current = serverExecutionCiLane("default").enabled;
+    for (const defaultEnabled of [current, !current]) {
+      const suites = [
+        ...await loadPatternSuites(root, defaultEnabled),
+        ...await loadPackageIntegrationSuites(root, defaultEnabled),
+      ];
+      for (
+        const [id, role] of [
+          ["pattern-integration", "default"],
+          ["package-integration", "default"],
+          ["pattern-integration-opposite", "opposite"],
+          ["package-integration-opposite", "opposite"],
+        ] as const
+      ) {
+        const lane = serverExecutionCiLane(role, defaultEnabled);
+        const suite = suites.find((candidate) => candidate.id === id)!;
+        const [invocation] = await suite.command(
+          [{ unit: suite.units[0]!, skip: [] }],
+          { root, outputDir: await outputDir(), spoolDir: "/spool" },
+        );
+        const label = `${id} with the default ${defaultEnabled}`;
+        expect(invocation!.env, label).toMatchObject(lane.environment);
+        // Web view-scoped replication rides the ON arm, whichever role it is.
+        expect(
+          invocation!.env?.EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION,
+          label,
+        ).toBe(lane.enabled ? "true" : undefined);
+      }
     }
   });
 

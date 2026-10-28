@@ -14,6 +14,7 @@ import {
 } from "@commonfabric/utils/types";
 import { isAbsolute, relative } from "@std/path";
 
+import { isDigestBoundPromptSlot } from "./run-continuation.ts";
 import { PIECE_TARGETING_GUIDANCE } from "./piece-targeting.ts";
 import {
   PATTERN_SOURCE_GUIDANCE,
@@ -203,6 +204,7 @@ import { PIECE_OUTPUT_GUIDANCE } from "./piece-output.ts";
 import { isClosedResearchTask } from "./research/closed-task.ts";
 import { collapseSupersededRunPatternDiagnostics } from "./run-pattern-diagnostic-collapse.ts";
 import { collapseSupersededRunPatternSources } from "./run-pattern-source-collapse.ts";
+import type { HarnessSystemPromptInputs } from "./contracts/system-prompt.ts";
 import {
   type HarnessOpeningResearch,
   type HarnessRunState,
@@ -376,6 +378,9 @@ export interface HarnessModelUsageUpdate {
 }
 
 export interface RunHarnessPromptOptions {
+  /** Additional instructions retained for a continuation. */
+  systemPromptInputs?: HarnessSystemPromptInputs;
+
   prompt: string;
   /** Trusted driver marker for research before a new root task. */
   openingResearchTask?: string;
@@ -408,6 +413,9 @@ export interface RunHarnessPromptOptions {
 }
 
 export interface RunHarnessTranscriptOptions {
+  /** Additional instructions retained for a continuation. */
+  systemPromptInputs?: HarnessSystemPromptInputs;
+
   transcript: readonly HarnessTranscriptMessage[];
   /** Trusted driver marker for research before a new root task. */
   openingResearchTask?: string;
@@ -3854,6 +3862,7 @@ export class CfHarnessPromptLoop {
         },
       ],
       openingResearchTask: options.openingResearchTask,
+      systemPromptInputs: options.systemPromptInputs,
       model: options.model,
       maxModelTurns: options.maxModelTurns,
       promptSlotBinding: options.promptSlotBinding,
@@ -3907,9 +3916,7 @@ export class CfHarnessPromptLoop {
       initialRunState.promptSlotBinding;
     if (
       options.takeMessages !== undefined &&
-      (promptSlotBinding?.valueDigest !== undefined ||
-        promptSlotBinding?.slotDigest !== undefined ||
-        promptSlotBinding?.snapshotDigest !== undefined)
+      isDigestBoundPromptSlot(promptSlotBinding)
     ) {
       throw new Error(
         "`takeMessages` cannot steer a digest-bound prompt-slot binding: " +
@@ -3923,12 +3930,10 @@ export class CfHarnessPromptLoop {
     }
     this.engine.bindRunModel(model);
     const transcript: HarnessTranscriptMessage[] = [...options.transcript];
-    // Keep audit history intact while excluding this loop's own control messages
-    // from session replay. Identity preserves user quotations and host-only
-    // omission annotations; content matching or deep cloning would lose either.
-    const turnNotices = new Set<HarnessTranscriptMessage>();
     const resumableTranscript = () =>
-      transcript.filter((message) => !turnNotices.has(message));
+      transcript.filter((message) =>
+        message.role !== "user" || !message.turnLocal
+      );
     // A host the run cannot delegate to has nothing to brief the parent on.
     const browserHost = this.#allowedSubagentProfiles.has(
         BROWSER_SUBAGENT_PROFILE,
@@ -3951,7 +3956,6 @@ export class CfHarnessPromptLoop {
         entry.role === "user"
       );
       transcript.splice(taskIndex < 0 ? 0 : taskIndex, 0, guidance);
-      turnNotices.add(guidance);
     }
     // The attachment first, so a search this run also made — which carries
     // the ranking evidence a by-id read has none of — refines it.
@@ -4063,6 +4067,9 @@ export class CfHarnessPromptLoop {
     this.engine.setResearchRunner(runResearch);
     await this.engine.ensureDiagnosticsInitialized();
     this.engine.startRun();
+    if (options.systemPromptInputs !== undefined) {
+      this.engine.setSystemPromptInputs(options.systemPromptInputs);
+    }
     if (options.promptSlotBinding !== undefined) {
       this.engine.setPromptSlotBinding(options.promptSlotBinding);
     }
@@ -4081,7 +4088,7 @@ export class CfHarnessPromptLoop {
       ));
     }
     for (const message of transcript) {
-      await options.onTranscriptEvent?.({ message, transcript });
+      await options.onTranscriptEvent?.({ message, transcript, seed: true });
     }
     // A normal final answer, an admitted finish_task, or an accepted
     // submit_result ends the model loop once the driver has no pending steer.
@@ -4146,7 +4153,6 @@ export class CfHarnessPromptLoop {
           content,
           turnLocal: true,
         };
-        turnNotices.add(notice);
         transcript.push(notice);
         await this.engine.persistTranscript(transcript);
         reportTimeline.push(transcriptTimelineEntry(
@@ -4208,7 +4214,6 @@ export class CfHarnessPromptLoop {
                   ? " Call submit_result on the next turn; an accepted result ends the run."
                   : ""} This notice applies only to this user turn; subsequent user requests have a fresh budget.`,
           };
-          turnNotices.add(budgetMessage);
           transcript.push(budgetMessage);
           await this.engine.persistTranscript(transcript);
           await options.onTranscriptEvent?.({

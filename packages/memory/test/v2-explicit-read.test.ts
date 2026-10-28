@@ -1500,12 +1500,42 @@ const openSessionIn = async (
   return { sessionId: response.ok.sessionId };
 };
 
-Deno.test("Phase 5: a home holder names a FOREIGN space's instance under its own space's lease (FP2's widened read row)", async () => {
+/**
+ * Writes `space`'s genesis access list as the space identity, the one write
+ * that identity may make without a grant: a foreign scoped read is admitted
+ * on the named actor's READ grant in this list.
+ */
+const initializeSpaceAcl = async (
+  server: Server,
+  space: string,
+  acl: Record<string, "READ" | "WRITE" | "OWNER">,
+): Promise<void> => {
+  const authority = await connect(server);
+  const { sessionId } = await openSessionIn(authority, space, space);
+  const written = await server.transact({
+    type: "transact",
+    requestId: nextRequestId("acl"),
+    space,
+    sessionId,
+    commit: {
+      localSeq: 1,
+      reads: { confirmed: [], pending: [] },
+      operations: [{ op: "set", id: `of:${space}`, value: { value: acl } }],
+    },
+  });
+  assertExists(written.ok, JSON.stringify(written.error));
+  authority.connection.close();
+};
+
+Deno.test("Phase 5: a home holder names a FOREIGN space's instance under its own space's lease (FP2's widened read row) and the instance's actor's READ grant", async () => {
   const server = newServer("memory://explicit-read-fp2");
   setServerExecutionConfig(true);
   try {
-    // Alice's instance lives in SPACE; the serving session's lease lives
-    // in HOME_SPACE (the home SpaceServer serving cross-space reads).
+    // Alice's instance lives in SPACE, which she owns; the serving
+    // session's lease lives in HOME_SPACE (the home SpaceServer serving
+    // cross-space reads). The grant-scoped read admits the named instance
+    // on alice's own READ grant in SPACE's list.
+    await initializeSpaceAcl(server, SPACE, { [ALICE]: "OWNER" });
     const alice = await connect(server);
     const { sessionId: aliceSession } = await openSession(alice, ALICE);
     await writeAliceProfile(server, aliceSession, 1, { name: "alice" });
@@ -1634,6 +1664,94 @@ Deno.test("Phase 5: a second process's lease row admits nobody here (the per-pro
       "a session must not be admitted on ANOTHER process's lease row " +
         `(per-process sharpening): ${JSON.stringify(refused.ok)}`,
     );
+
+    alice.connection.close();
+    service.connection.close();
+  } finally {
+    resetServerExecutionConfig();
+    await server.close();
+  }
+});
+
+Deno.test("Phase 5: a home holder naming a FOREIGN instance of an actor the space grants no READ is refused (the grant-scoped read), as is one in a space with no list", async () => {
+  const server = newServer("memory://explicit-read-ungranted");
+  setServerExecutionConfig(true);
+  try {
+    const homeEngine = await server.engineForSpace(HOME_SPACE);
+    const holder = executionLeaseHolder(SERVICE);
+    assertEquals(
+      acquireExecutionLease(homeEngine, {
+        space: HOME_SPACE,
+        holder,
+        ttlMs: 600_000,
+      }),
+      true,
+    );
+    const service = await connect(server);
+    const { sessionId: serviceSession } = await openSessionIn(
+      service,
+      SPACE,
+      SERVICE,
+    );
+    const bobKey = resolveScopeKey("user", { principal: BOB });
+    const query = (label: string) =>
+      server.graphQuery({
+        type: "graph.query",
+        requestId: nextRequestId(label),
+        space: SPACE,
+        sessionId: serviceSession,
+        query: {
+          roots: [{
+            id: "of:profile",
+            scope: "user",
+            entityScopeKey: bobKey,
+            selector: { path: [], schema: false },
+          }],
+        },
+      });
+
+    // SPACE has history and no list: the client path's compat arm would
+    // admit any authenticated principal; the serving plane's grant does
+    // not exist, so the named read refuses.
+    const alice = await connect(server);
+    const { sessionId: aliceSession } = await openSession(alice, ALICE);
+    await writeAliceProfile(server, aliceSession, 1, { name: "alice" });
+    const unlisted = await query("ungranted-no-list");
+    assertEquals(unlisted.error?.name, "ProtocolError");
+    assertEquals(
+      unlisted.error?.message.includes("grant-scoped read"),
+      true,
+      JSON.stringify(unlisted),
+    );
+
+    // Alice's list grants bob nothing: bob's instance is refused to the
+    // holder, while alice's own stays admitted on her OWNER entry.
+    await server.writeDocument(SPACE, `of:${SPACE}`, { [ALICE]: "OWNER" });
+    const ungranted = await query("ungranted-listed");
+    assertEquals(ungranted.error?.name, "ProtocolError");
+    assertEquals(
+      ungranted.error?.message.includes(
+        `grants ${BOB} nothing (READ required)`,
+      ),
+      true,
+      JSON.stringify(ungranted),
+    );
+    const granted = await server.graphQuery({
+      type: "graph.query",
+      requestId: nextRequestId("granted-owner"),
+      space: SPACE,
+      sessionId: serviceSession,
+      query: {
+        roots: [{
+          id: "of:profile",
+          scope: "user",
+          entityScopeKey: resolveScopeKey("user", { principal: ALICE }),
+          selector: { path: [], schema: false },
+        }],
+      },
+    });
+    assertExists(granted.ok, JSON.stringify(granted.error));
+    assertEquals(granted.ok.entities[0].document?.value, { name: "alice" });
 
     alice.connection.close();
     service.connection.close();

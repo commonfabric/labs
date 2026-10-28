@@ -705,11 +705,20 @@ loop's duty).
   and ambiguous storage-time or transport outcomes, are not authorized
   for explicit replay.
 - A serving runtime's refusal of a foreign scoped read (protocol.md §2's
-  fail-closed interim) is no load in flight. The read's scope and the
-  runtime's serving posture decide it, so the same read from the same
-  runtime is refused every time, and the storage manager registers no
-  pending load for it, so a served event's preflight never parks on one.
-  What decides the event is what its run reads. A run that reads the
+  grant-scoped read) is no load in flight. The read's scope, the
+  runtime's serving posture and the foreign space's access list decide
+  it, so the same read from the same runtime is refused every time until
+  that list changes, and the storage manager registers no pending load
+  for it, so a served event's preflight never parks on one. While the
+  reading actor's grant is still being asked for, the read is a load in
+  flight like any other: the preflight parks on it, and a run that
+  reaches such a document in its body alone is withdrawn and runs again
+  once the load settles; a refusal settles it as an absence, not as a
+  failure of the load, so the event dispatches and what decides it is
+  what its run reads. A load that fails instead fails the withdrawn
+  event as a load that failed before dispatch does: deferred with the
+  load's typed failure, no consequence written, later same-space
+  arrivals held behind it. A run that reads the
   value of such a document, a user- or session-scoped document in
   another space reached through its declared event or its bound state,
   read an absence that is not the document's state: the run is withdrawn

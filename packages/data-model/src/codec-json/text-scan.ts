@@ -32,12 +32,22 @@ export function excerptOf(text: string): string {
  * members, counted wherever they appear. That is the number of values and keys
  * a parse of `text` would build, so a caller can refuse text before paying for
  * the parse. The scan stops as soon as the count passes `limit`.
+ */
+export function writesMoreMembersThan(text: string, limit: number): boolean {
+  return membersWritten(text, limit) > limit;
+}
+
+/**
+ * Returns the number of array elements and record members `text` writes,
+ * counted wherever they appear, or `limit + 1` once the count passes `limit`,
+ * where the scan stops. One more than the count is the number of values the
+ * text holds, its root included.
  *
  * The count is exact for well-formed JSON: every comma outside a string
  * separates two elements or members, and every container that is not empty
  * holds one more than it has commas.
  */
-export function writesMoreMembersThan(text: string, limit: number): boolean {
+export function membersWritten(text: string, limit = Infinity): number {
   let members = 0;
   let justOpened = false;
   for (let index = 0; index < text.length; index++) {
@@ -46,7 +56,7 @@ export function writesMoreMembersThan(text: string, limit: number): boolean {
     if (justOpened) {
       justOpened = false;
       if (code !== CLOSE_BRACKET && code !== CLOSE_BRACE) {
-        if (++members > limit) return true;
+        if (++members > limit) return members;
       }
     }
     if (code === QUOTE) {
@@ -54,10 +64,10 @@ export function writesMoreMembersThan(text: string, limit: number): boolean {
     } else if (code === OPEN_BRACKET || code === OPEN_BRACE) {
       justOpened = true;
     } else if (code === COMMA) {
-      if (++members > limit) return true;
+      if (++members > limit) return members;
     }
   }
-  return false;
+  return members;
 }
 
 /**

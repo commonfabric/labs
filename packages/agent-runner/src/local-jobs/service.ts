@@ -101,7 +101,6 @@ export const startLocalJobs = async (
   report: (message: string) => void,
   deps: {
     runJob?: LocalJobLaneOptions["runJob"];
-    steering?: boolean;
     harnessDeps?: HarnessJobOptions["harnessDeps"];
     chmod?: typeof Deno.chmod;
   } = {},
@@ -198,7 +197,6 @@ export const startLocalJobs = async (
         ? { loomRetrievalConfigPath: config.loomRetrievalConfigPath }
         : {}),
       ...(config.model !== undefined ? { model: config.model } : {}),
-      steering: deps.steering,
       ...(deps.runJob !== undefined ? { runJob: deps.runJob } : {}),
       ...(deps.harnessDeps !== undefined
         ? { harnessDeps: deps.harnessDeps }
@@ -215,7 +213,6 @@ export const startLocalJobs = async (
       token,
       kick: () => lane!.kick(),
       cancel: (id) => lane!.cancel(id),
-      canSteer: () => lane!.canSteer(),
       browserHost: (id) => lane!.browserHost(id),
       health: () => ({
         ok: true,
@@ -249,7 +246,7 @@ export const startLocalJobs = async (
     );
     socketOwned = true;
     await (deps.chmod ?? Deno.chmod)(config.socketPath, 0o600);
-    lane.start();
+    await lane.start();
     report(
       `agent runner: serving local jobs on ${config.socketPath} (profiles: ${
         [...profiles.keys()].join(", ")
