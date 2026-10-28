@@ -5218,7 +5218,13 @@ describe("Phase 3 events-down (serving side)", () => {
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
 
-    host = newHost();
+    // Restart coverage requires a fresh runtime, even when the idle park
+    // finishes with a state that the host could otherwise retain.
+    host = newHost({
+      flushDeadlineMs: 5_000,
+      idleParkMs: 600_000,
+      parkedRuntimeRetentionMs: 0,
+    });
     const argumentLink = argument.getAsNormalizedFullLink();
     const argumentId = argumentLink.id;
     const storedLog =
@@ -5279,9 +5285,9 @@ describe("Phase 3 events-down (serving side)", () => {
       // later arrival whose barrier behavior is under test and the new input
       // that activates the successor tenure. The still-failing A2 is therefore
       // re-observed from durable state and begins at count one.
+      const previousServingManager = servingManager;
+      expect(previousServingManager).toBeDefined();
       await host!.spaceServer(space)!.park("idle");
-      servingRuntime = undefined;
-      servingManager = undefined;
       rejectWaveCommitWhen = (batch) => {
         const rejects = JSON.stringify(batch.operations).includes(
           '"deliveryDeferral"',
@@ -5306,6 +5312,8 @@ describe("Phase 3 events-down (serving side)", () => {
         () => host!.stats().events.deliveryCheckpointWriteFailures >= 2,
       );
       expect(rejectedWaveCommits).toBe(1);
+      expect(servingManager).toBeDefined();
+      expect(servingManager).not.toBe(previousServingManager);
       rejectWaveCommitWhen = undefined;
       const wakeCheckpointRetry = async (suffix: string, value: number) => {
         const wake = clientRuntime.getCell<{ value: number }>(
