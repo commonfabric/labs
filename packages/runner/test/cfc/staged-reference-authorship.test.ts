@@ -390,6 +390,8 @@ describe("staged-reference-authorship", () => {
           "stored",
           "replaced-bottom-up",
           "replaced-top-down",
+          "rewritten-bottom-up",
+          "rewritten-top-down",
         ] as const
       ) {
         it(`keeps ${kind} on the referenced value with ${confidentialSlot ? "a confidential" : "an undeclared"} slot in ${order} order`, async () => {
@@ -443,9 +445,12 @@ describe("staged-reference-authorship", () => {
             );
             recordTrustedWrite(transaction, target.getAsNormalizedFullLink());
           };
-          if (order === "stored" || order.startsWith("replaced-")) {
+          if (order !== "bottom-up" && order !== "top-down") {
             const stored = runtime.edit();
-            stageWrapper(stored, order === "stored" ? leaf : oldLeaf);
+            stageWrapper(
+              stored,
+              order.startsWith("replaced-") ? oldLeaf : leaf,
+            );
             expect((await stored.commit().settled).error).toBeUndefined();
           }
           const node = runtime.getCell(space, "node", {
