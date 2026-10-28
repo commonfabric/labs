@@ -33,7 +33,10 @@ For each saved catalog entry, the manager resolves the space's root with
 a standalone room at that root. Every other kind uses the root's explicit
 `chatRoom` link. An unknown kind uses that same declaration; the absence of a
 kind says nothing about whether the space has a chat. A declaration can appear
-or change after a space is saved, and discovery follows it reactively.
+or change after a space is saved, and discovery follows it reactively. Each
+entry is found on its own, and lists its room once the room's records say it
+is one. An entry whose space this replica can't serve, as a space on another
+host is, lists nothing until it can be served, and holds back no other entry.
 
 Each entry links the room itself, so opening it displays the full conversation.
 Resolved room identity, compared with `equals()`, deduplicates a conversation

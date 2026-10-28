@@ -220,9 +220,8 @@ names a stored record may not use as a key, such as `constructor` and
 `__proto__`; an entry repeating an earlier entry's name is ignored. Binding reads it on every setup and start: a named
 instance it records a child for runs that child, and any other named instance
 runs the child at its own spot. The record is how a deployed parent's
-positional child can become a named instance's child without moving to a new
-document. No part of the runtime writes it yet: carrying a deployed parent's
-positional children over to their names is what will.
+positional child becomes a named instance's child without moving to a new
+document.
 
 A sub-pattern instance with a positional cause moves to another child's state
 when a cell is added ahead of it, since its child is the one minted from
@@ -276,10 +275,19 @@ instance's child at the positional spot. The first setup under a pattern that
 names it carries the child over (`planInstanceCarryOver`), taking the first of
 these that applies:
 
-1. Where the pattern the parent last set up, which `patternSetupIdentity` names,
-   is loaded and names the instance, the child is the one at the
-   `legacyPartialCause` that pattern gives the same instance name. This is
-   exact.
+1. Where the pattern the parent last set up is loaded and names the instance,
+   the child is the one at the `legacyPartialCause` that pattern gives the same
+   instance name. This is exact. The pattern last set up is the one the
+   parent's setup record describes, or, with no record of the current version,
+   the one `patternSetupIdentity` names: a start repair re-stamps the record
+   and leaves the marker alone, and the children sit at the numbers of the
+   build the record describes. That build was made by the runtime that set the
+   parent up, and the cause is one this runtime's build of the same pattern
+   gives, so the record is held against this runtime's build
+   (`compareStoredSetupBuild`). An instance whose cell the record shows
+   holding state at another number, or whose description the record's cells
+   cannot be matched with, carries nothing over, and goes to step 5. With no
+   record, this runtime's build places the instance.
 2. Where that pattern is loaded and does not name the instance, which is new or
    positional there, the instance is matched by order. Counting the new
    pattern's positional nodes and such instances of one pattern identity in the

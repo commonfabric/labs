@@ -20,6 +20,10 @@ The file is JSON, holding only ASCII: every other character is escaped. Its
 
 - `name`: unique among the cases.
 - `section`: the part of the spec the case exercises.
+- `requires`: present where the case applies only to a reader that constructs a
+  flavor of regular expression, or that guarantees more by some measure of size
+  than every reader must, as [`value-probes.md`](value-probes.md#requirements)
+  describes. A reader that does not meet it skips the entry.
 - `text`: the text to decode. For a case that starts from a value, it is the
   value's canonical text, as [Exact text](#exact-text) describes, with `null`
   wherever a patch puts what no text carries.
@@ -46,7 +50,8 @@ The file is JSON, holding only ASCII: every other character is escaped. Its
 
 ## Checking an entry
 
-A reader checks an entry in three steps:
+A reader that meets the entry's `requires`, if it has one, checks the entry in
+three steps:
 
 1. Decode `text`, applying the mods.
 2. Check the result against `probes`, walking the decoded value, as

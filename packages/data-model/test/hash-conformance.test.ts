@@ -18,15 +18,19 @@ import { fabricInstanceClassesByName, FabricLink } from "@/fabric-instances";
 import {
   FabricKeyPair,
   fabricPrimitiveClassesByName,
+  FabricRegExp,
 } from "@/fabric-primitives";
 import {
   FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY,
   fabricValueOfTextWithModsForTestingOnly,
+  type FixtureRequirements,
   HASH_CONFORMANCE_CASES_FOR_TESTING_ONLY,
   type HashConformanceCase,
   hashConformanceFixtureTextForTestingOnly,
   type HashOutcome,
   hashOutcomeOfForTestingOnly,
+  meetsRequirementsForTestingOnly,
+  SIZE_FLOORS_FOR_TESTING_ONLY,
   type TextWithMods,
 } from "@/for-testing-only.ts";
 import { hashOf, hashStringOf, taggedHashStringOf } from "@/value-hash";
@@ -47,6 +51,7 @@ const STUB_CODEC_CLASSES = ["FabricMap", "FabricSet"] as const;
 /** One entry of the fixture, as `hash-conformance.md` defines it. */
 type FixtureEntry = TextWithMods & {
   readonly name: string;
+  readonly requires?: FixtureRequirements;
   readonly hash: HashOutcome;
   readonly equals?: string;
   readonly divergence?: {
@@ -78,7 +83,12 @@ function bytesOfHex(text: string): Uint8Array {
 
 describe("hash-conformance", () => {
   const fixtureText = Deno.readTextFileSync(FIXTURE_URL);
-  const entries: readonly FixtureEntry[] = JSON.parse(fixtureText).cases;
+  const allEntries: readonly FixtureEntry[] = JSON.parse(fixtureText).cases;
+
+  // A reader skips an entry whose requirements it does not meet.
+  const entries = allEntries.filter(({ requires }) =>
+    meetsRequirementsForTestingOnly(requires)
+  );
 
   it("is the fixture the conformance cases generate", () => {
     // On a failure here, `deno task regenerate-hash-conformance` rewrites the
@@ -89,6 +99,14 @@ describe("hash-conformance", () => {
         HASH_CONFORMANCE_CASES_FOR_TESTING_ONLY,
       ),
     );
+  });
+
+  it("requires of a reader nothing this package does not meet", () => {
+    const unmet = allEntries.filter(({ requires }) =>
+      !meetsRequirementsForTestingOnly(requires)
+    );
+
+    expect(unmet.map(({ name }) => name)).toEqual([]);
   });
 
   it("records for each case what the hasher does with the value its text and mods write", () => {
@@ -424,6 +442,58 @@ describe("hash-conformance", () => {
           },
         ])
       ).toThrow("a and b: their hashes are equal, but neither names the other");
+    });
+
+    it("returns an entry requiring the flavors a case marks", () => {
+      const entry = soleEntryOf([
+        {
+          name: "flavored",
+          section: "s",
+          make: () => new FabricRegExp("es2025", "a", ""),
+          requires: { flavors: ["es2025"] },
+        },
+      ]);
+
+      expect(entry.requires).toEqual({ flavors: ["es2025"] });
+    });
+
+    it("returns an entry requiring the member count of a record past the floor", () => {
+      const count = SIZE_FLOORS_FOR_TESTING_ONLY.propertyCount + 1;
+      const entry = soleEntryOf([
+        {
+          name: "wide",
+          section: "s",
+          make: () =>
+            Object.fromEntries(
+              Array.from({ length: count }, (_, i) => [`k${i}`, i]),
+            ),
+        },
+      ]);
+
+      expect(entry.requires).toEqual({ propertyCount: count });
+    });
+
+    it("returns entries requiring the length of a symbol's key and a depth past their floors", () => {
+      const floors = SIZE_FLOORS_FOR_TESTING_ONLY;
+      const key = "x".repeat(floors.symbolKeyLength + 1);
+      const deep = () => {
+        let value: FabricValue = [];
+        for (let i = 1; i <= floors.depth; i++) {
+          value = [value];
+        }
+        return value;
+      };
+      const entries = JSON.parse(
+        hashConformanceFixtureTextForTestingOnly([
+          { name: "key", section: "s", make: () => Symbol.for(key) },
+          { name: "deep", section: "s", make: deep },
+        ]),
+      ).cases;
+
+      expect(entries.map((entry: FixtureEntry) => entry.requires)).toEqual([
+        { symbolKeyLength: floors.symbolKeyLength + 1 },
+        { depth: floors.depth + 1 },
+      ]);
     });
 
     it("returns entries for two cases of one hash and one text with mods, neither naming the other", () => {

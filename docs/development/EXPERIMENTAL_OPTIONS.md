@@ -1005,7 +1005,9 @@ holds the measurements and the conditions for revisiting.
   longer moves it onto another child's state. With the flag off, the
   transformer names no instance, so an instance nothing else names keeps its
   positional identity. A deployed parent's positional child is carried over to
-  its name on the first setup that names it, and recorded in the parent's
+  its name on the first setup that names it, unless the parent's setup record
+  numbers the instance's cell otherwise than this runtime's build of the
+  pattern the parent last set up, and recorded in the parent's
   `instanceChildren` meta; with the flag off, carry-over, `instanceChildren`
   and the start's pre-sync have nothing to act on.
 - **Current default and planned end state.** Off by default. The end state is

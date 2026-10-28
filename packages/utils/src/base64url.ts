@@ -48,11 +48,13 @@ export function toUnpaddedBase64urlFromText(text: string): string {
 }
 
 /**
- * Decodes a base64url string to `Uint8Array`. This accepts both unpadded and
- * padded (trailing `=` characters) in the `encoded` input. Uses the base64url
- * alphabet (RFC 4648 section 5). Input holding whitespace, and input carrying a
- * nonzero bit past its last whole byte, both throw, so that each byte sequence
- * has one unpadded form: `AQ` decodes to the byte `0x01`, and `AR` throws.
+ * Decodes a base64url string to `Uint8Array`. This accepts both unpadded input
+ * and input padded as RFC 4648 section 3.2 pads it, with exactly as many
+ * trailing `=` as complete the final group to four characters. Uses the
+ * base64url alphabet (RFC 4648 section 5). Input holding whitespace, and input
+ * carrying a nonzero bit past its last whole byte, both throw, so that each
+ * byte sequence has one unpadded form: `AQ` decodes to the byte `0x01`, and
+ * `AR` throws.
  */
 export function fromBase64url(encoded: string): Uint8Array {
   if (useBase64Polyfill) {
@@ -165,12 +167,17 @@ export function fromBase64Polyfill(encoded: string): Uint8Array {
   while ((inLen > 0) && (s[inLen - 1] === B64_PADDING_CHAR)) {
     inLen--;
   }
-  if ((s.length - inLen) > 2) {
-    throw new Error("`fromBase64url()`: too much padding");
-  }
   if ((inLen % 4) === 1) {
     // A final group of one character carries no whole byte.
     throw new Error("`fromBase64url()`: lone final character");
+  }
+
+  // Padding is RFC 4648's (section 3.2), as the native decoder holds it to:
+  // none at all, or exactly as many `=` as complete the final group to four
+  // characters, which a final group already of four takes none of.
+  const padding = s.length - inLen;
+  if ((padding !== 0) && (padding !== ((4 - (inLen % 4)) % 4))) {
+    throw new Error("`fromBase64url()`: padding other than RFC 4648's");
   }
 
   // Compute output byte count from the number of base64 characters.

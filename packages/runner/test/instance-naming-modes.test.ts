@@ -538,11 +538,29 @@ describe("instance-naming-modes", () => {
       return { started, aCount: value.aCount, sCount: value.sCount };
     };
 
-    it("starts it and shows its children's counts, when a runtime with naming on reopens a parent one with naming off set up", async () => {
+    it("starts it, carrying its children over to the instances' names, when a runtime with naming on reopens a parent one with naming off set up", async () => {
+      // The pattern the parent last set up is this one, which names both
+      // instances, so each carries over the child at the positional cause
+      // that pattern gives it.
       expect(await setUpThenStart(false, true)).toEqual({
         started: true,
         aCount: 7,
         sCount: 20,
+      });
+    });
+
+    it("starts it, with fresh children, when a runtime with naming off reopens a parent one with naming on set up", async () => {
+      // TODO(danfuzz): This pins the hazard the activation boundary exists to
+      // exclude. The parent's manifest names its children by instance name,
+      // which the positional build lacks, so the start re-stages the result
+      // projection onto children at positional spots, which the setup never
+      // ran. Once a runtime whose naming mode differs from the parent's is
+      // kept away from it, this case becomes a refusal.
+
+      expect(await setUpThenStart(true, false)).toEqual({
+        started: true,
+        aCount: 0,
+        sCount: 0,
       });
     });
 
@@ -559,21 +577,6 @@ describe("instance-naming-modes", () => {
         started: true,
         aCount: 7,
         sCount: 20,
-      });
-    });
-
-    it("starts it and shows fresh children's counts, when a runtime with naming off reopens a parent one with naming on set up", async () => {
-      // TODO(danfuzz): This pins the hazard the activation boundary exists to
-      // exclude. The parent's manifest names its children by instance name,
-      // which the positional build lacks, so the start re-stages the result
-      // projection onto children at positional spots, which the setup never
-      // ran. Once a runtime whose naming mode differs from the parent's is
-      // kept away from it, this case becomes a refusal.
-
-      expect(await setUpThenStart(true, false)).toEqual({
-        started: true,
-        aCount: 0,
-        sCount: 0,
       });
     });
   });

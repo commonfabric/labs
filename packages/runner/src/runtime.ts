@@ -457,7 +457,9 @@ export interface ExperimentalOptions {
    * among its parent's anonymous roots
    * (`docs/specs/computed-cell-identity.md`, "Sub-pattern instance identity").
    * A deployed parent's positional child is carried over to its name on the
-   * first setup that names it. Defaults to off, which compiles every instance
+   * first setup that names it, unless the parent's setup record numbers the
+   * instance's cell otherwise than this runtime's build of the pattern the
+   * parent last set up. Defaults to off, which compiles every instance
    * positionally, so nothing names an instance and nothing is carried over.
    * Turning it on is one-way for the data it writes, and needs every runtime
    * that opens the same space to run the same naming mode first

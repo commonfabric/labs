@@ -578,8 +578,9 @@ These must hold once enforcement is enabled:
   invalidates prepare
 - verifier-internal reads never become consumed reads
 - explicit IFC claims fail closed on missing schema, missing metadata, unknown
-  trust state, unsupported trust-sensitive claims, or a label list declared as
-  anything but a list in a schema a write or an LLM tool call goes through
+  trust state, unsupported trust-sensitive claims, a label list declared as
+  anything but a list in a schema a write or an LLM tool call goes through, or
+  a UI contract trust requirement written in a form the runtime cannot match
 - the commit gate lives at the transaction boundary, not only in scheduler code
 - external side effects happen only after successful commit
 - retries always run in a fresh transaction and recompute prepare
@@ -1020,6 +1021,12 @@ Implementation notes for spec update:
       `trusted-event` write-policy input and fails closed when a schema declares
       trusted pattern or event-integrity requirements that the renderer did not
       attest
+- [x] A contract's `trustedPattern` is matched only as a nonempty string, and
+      its `requiredEventIntegrity` atoms only as strings, the form the
+      renderer attests; a requirement written otherwise refuses the write. An
+      object atom, a form the specification writes (§8.15), is refused as an
+      unsupported trust-sensitive claim until the specification says how one
+      matches renderer-attested event integrity
 - [x] Current enforcement assumes a trusted host and an embedding model where
       untrusted embedders cannot hide or obscure embedded trusted UIs; future
       spec work should define opaque trusted UI islands and a non-forgeable

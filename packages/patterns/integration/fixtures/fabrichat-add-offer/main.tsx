@@ -4,7 +4,8 @@
  * own steps that give the profiles the inbox, and their FabriChat manager,
  * whose profile is their first. A session links its home space's root here,
  * so that a room's `#chatManager` wish resolves to this manager. Fixture for
- * `fabrichat-add-offer-multi-runtime.test.ts`.
+ * `fabrichat-add-offer-multi-runtime.test.ts` and
+ * `fabrichat-manager-sessions-multi-runtime.test.ts`.
  */
 
 import {

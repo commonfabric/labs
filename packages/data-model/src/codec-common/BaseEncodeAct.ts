@@ -63,16 +63,19 @@ export abstract class BaseEncodeAct<Encoded, SerializedForm = Encoded>
    * Encodes an array, which is this format's business entirely.
    *
    * An implementation owes this act one thing: the container goes in through
-   * {@link #enter} and comes back out through {@link #leave} however the
-   * descent ends, a throw included. The act outlives a throw, belonging to the
-   * call rather than to the node, so an entry left behind makes a later visit
-   * to the same value report a cycle that is not there.
+   * {@link #enter}, and comes back out through {@link #leave} once its descent
+   * completes, or through {@link #abandon} when the descent throws. The act
+   * outlives a throw, belonging to the call rather than to the node, so an
+   * entry left behind makes a later visit to the same value report a cycle that
+   * is not there; and `abandon()` rather than `leave()` on a throw is what lets
+   * the error in flight, a stack overflow among them, reach the caller.
    */
   protected abstract encodeArray(value: readonly FabricValue[]): Encoded;
 
   /**
    * Encodes a plain object, which is this format's business entirely. Owes the
-   * same enter/leave discipline {@link #encodeArray} states.
+   * same discipline of entering, leaving and abandoning that
+   * {@link #encodeArray} states.
    */
   protected abstract encodePlainObject(
     value: Record<string, FabricValue>,
@@ -182,16 +185,20 @@ export abstract class BaseEncodeAct<Encoded, SerializedForm = Encoded>
         : this.encodeValue(
           (matched as NonterminalCodec).encode(value, this.env),
         );
-    } finally {
-      // Left in a `finally` because `tagForValue()` and a codec's `encode()`
+    } catch (e) {
+      // Left on a throw too, because `tagForValue()` and a codec's `encode()`
       // can both throw. The act outlives a throw -- it belongs to the call,
       // not to this node -- so an entry left behind would make a later visit
       // to the same value report a cycle that is not there.
       if (isObject) {
-        this.leave(value as object);
+        this.abandon(value as object);
       }
+      throw e;
     }
 
+    if (isObject) {
+      this.leave(value as object);
+    }
     return this.wrapTag(tag, state);
   }
 

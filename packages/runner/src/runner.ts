@@ -1106,14 +1106,17 @@ export function firstResolvedOutputRedirect(
 }
 
 /**
- * A named instance that carries no child over: its name and, where it was
- * matched by position, its positional cause and the child left at it.
+ * A named instance that carries no child over: its name; where it was matched
+ * by position, its positional cause and the child left at it; and whether the
+ * parent's setup record says the pattern it last set up numbered the instance
+ * differently from this runtime's build of that pattern.
  */
 type UncarriedInstance = {
   name: string;
   legacyPartialCause?: JSONValue;
   // The child at `legacyPartialCause`, and whether another instance keeps it.
   atSpot?: { id: string; kept: boolean };
+  recordDisagrees?: true;
 };
 
 /**
@@ -15426,7 +15429,19 @@ export class Runner {
         "starts fresh",
       ]);
     }
-    for (const { name, legacyPartialCause, atSpot } of uncarried) {
+    for (
+      const { name, legacyPartialCause, atSpot, recordDisagrees } of uncarried
+    ) {
+      if (recordDisagrees) {
+        logger.warn("instance-carry-over", () => [
+          debugStr`instance $quote${name} of ` +
+          `${resultCell.getAsNormalizedFullLink().id} starts fresh: the ` +
+          "parent's setup record numbers it differently from this runtime's " +
+          "build of the pattern the parent last set up, so the child at the " +
+          "number that build gives it may be another's",
+        ]);
+        continue;
+      }
       logger.warn("instance-carry-over", () => [
         debugStr`instance $quote${name} of ` +
         `${resultCell.getAsNormalizedFullLink().id} starts fresh: it found ` +
@@ -15455,9 +15470,12 @@ export class Runner {
    * pattern that names it, provided the parent has been set up before: the
    * child a version of the pattern without the name set up under the
    * instance's positional cause. That cause is the one the pattern the parent
-   * last set up, which `patternSetupIdentity` names, gives the same name;
-   * this is exact wherever that pattern is loaded in this runtime and names
-   * the instance. An instance that pattern, loaded, does not name is matched
+   * last set up gives the same name; this is exact wherever that pattern is
+   * loaded in this runtime and names the instance. The pattern last set up is
+   * the one the parent's setup record describes, or, with no record of the
+   * current version, the one `patternSetupIdentity` names. Where the record
+   * says that pattern's build numbered an instance's cell otherwise than this
+   * runtime's build of it does, the instance carries nothing over. An instance that pattern, loaded, does not name is matched
    * to its positional children by order within each pattern identity.
    * Without that pattern, or where order places the instance at no set-up
    * child, an instance carries over the one child, among the positional
@@ -15486,6 +15504,10 @@ export class Runner {
       [...recordedChildren.values()].map(documentKey),
     );
     const previous = this.#previouslySetUpPattern(parent, pattern);
+    const previousRef = this.#lastSetUpRef(parent);
+    const disagreeing = previous === undefined || previousRef === undefined
+      ? new Set<string>()
+      : this.#instancesTheRecordNumbersOtherwise(parent, previous, previousRef);
     const nodes = subPatternNodes(pattern);
     const unmatched: {
       name: string;
@@ -15516,6 +15538,10 @@ export class Runner {
       }
       if (previous === undefined) {
         unmatched.push({ name, module: node.module, descriptor });
+        continue;
+      }
+      if (disagreeing.has(name)) {
+        uncarried.push({ name, recordDisagrees: true });
         continue;
       }
       const child = this.#previousInstanceChild(
@@ -15693,7 +15719,7 @@ export class Runner {
     resultCell: Cell<any>,
     pattern: Pattern,
   ): Pattern | undefined {
-    const setupRef = getPatternSetupIdentityRef(resultCell);
+    const setupRef = this.#lastSetUpRef(resultCell);
     if (setupRef === undefined) return undefined;
     const ownRef = this.#runtime.patternManager.getArtifactEntryRef(pattern);
     if (ownRef !== undefined && samePatternRef(ownRef, setupRef)) {
@@ -15704,6 +15730,71 @@ export class Runner {
       setupRef.symbol,
     );
     return isPattern(loaded) ? loaded : undefined;
+  }
+
+  /**
+   * The identity of the pattern the parent `resultCell` last set up: the one
+   * its setup record describes, or, with no record of the current version,
+   * the one its `patternSetupIdentity` names. A start repair re-stamps the
+   * record and leaves the marker alone, and the children sit at the numbers
+   * of the build the record describes.
+   */
+  #lastSetUpRef(
+    resultCell: Cell<any>,
+  ): { identity: string; symbol: string } | undefined {
+    return readStoredSetupBuild(
+      resultCell.getMetaRaw("patternSetupBuild", {
+        meta: ignoreReadForScheduling,
+      }),
+    )?.pattern ?? getPatternSetupIdentityRef(resultCell);
+  }
+
+  /**
+   * The names of the instances `previous`, the pattern the parent
+   * `resultCell` last set up as `ref`, names whose cell this runtime's build
+   * of it numbers otherwise than the parent's setup record of that build
+   * does: a cell holding state that the record shows at another number, or
+   * one of a description whose cells the record cannot be matched with
+   * (`compareStoredSetupBuild()`). Empty where the parent holds no record of
+   * `ref`, which leaves this runtime's build to place every instance.
+   */
+  #instancesTheRecordNumbersOtherwise(
+    resultCell: Cell<any>,
+    previous: Pattern,
+    ref: { identity: string; symbol: string },
+  ): Set<string> {
+    const names = new Set<string>();
+    const stamped = readStoredSetupBuild(
+      resultCell.getMetaRaw("patternSetupBuild", {
+        meta: ignoreReadForScheduling,
+      }),
+    );
+    if (stamped === undefined || !samePatternRef(stamped.pattern, ref)) {
+      return names;
+    }
+    const { record, cells } = this.#describedBuild(previous, ref);
+    const comparison = compareStoredSetupBuild(stamped, record, cells);
+    if (comparison.kind !== "held") return names;
+    const movedTo = new Set(comparison.moved.map((cell) => cell.to));
+    const unmatched = new Set(
+      comparison.ambiguous.map(({ description }) => description),
+    );
+    for (const descriptor of previous.derivedInternalCells ?? []) {
+      const name = instanceNameOfPartialCause(descriptor.partialCause);
+      if (name === undefined || descriptor.legacyPartialCause === undefined) {
+        continue;
+      }
+      const number = positionalNumber(descriptor.legacyPartialCause);
+      const description = cells.find((cell) => cell.number === number)
+        ?.description;
+      if (
+        movedTo.has(number) ||
+        (description !== undefined && unmatched.has(description))
+      ) {
+        names.add(name);
+      }
+    }
+    return names;
   }
 
   /**
@@ -15871,7 +15962,7 @@ export class Runner {
       this.#preparedCarryOvers.delete(this.#getDocKey(resultCell));
       return;
     }
-    const setupRef = getPatternSetupIdentityRef(resultCell);
+    const setupRef = this.#lastSetUpRef(resultCell);
     if (
       setupRef !== undefined &&
       this.#previouslySetUpPattern(resultCell, pattern) === undefined

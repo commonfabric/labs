@@ -771,6 +771,18 @@ function aboutRecordOf(room: Cell<ChatRoomLink>): unknown {
   return room.key("about").key("record");
 }
 
+/**
+ * The kind of room `room` is, as its own records say: `direct` or `group`, and
+ * absent for anything they don't say is a room.
+ */
+const roomKindOf = (
+  room: Cell<ChatRoomLink>,
+): "direct" | "group" | undefined => {
+  const kind = aboutRecordOf(room).key("kind").get() ??
+    room.key("about").key("kind").get();
+  return kind === "direct" || kind === "group" ? kind : undefined;
+};
+
 /** How a room `createRoom()` makes differs by its kind. */
 interface RoomOptions {
   /** A group room's title. */
@@ -1366,9 +1378,7 @@ const performManagerAct = (
         });
         return;
       }
-      const kind = membership?.kind ??
-        aboutRecordOf(room).key("kind").get() ??
-        room.key("about").key("kind").get();
+      const kind = membership?.kind ?? roomKindOf(room);
       if (kind !== "direct" && kind !== "group") {
         recordOutcome(state, requestId, {
           status: "refused",
@@ -1415,9 +1425,8 @@ const performManagerAct = (
     // The catalog names a room by its space, which holds at most one room,
     // its root; a link to anything else in that space, such as one of the
     // room's messages, names no room to forget.
-    const kind = aboutRecordOf(room).key("kind").get() ??
-      room.key("about").key("kind").get();
-    if (kind !== "direct" && kind !== "group") {
+    const kind = roomKindOf(room);
+    if (kind === undefined) {
       recordOutcome(state, requestId, {
         status: "refused",
         reason: "The request names no room.",
@@ -1465,7 +1474,7 @@ const performManagerAct = (
   // `accept` and `joinRoom`. The kind comes from the record the room's
   // creator wrote, or the view of a container's declared conversation.
   const record = aboutRecordOf(room);
-  const kind = record.key("kind").get() ?? room.key("about").key("kind").get();
+  const kind = roomKindOf(room);
   const space = spaceOf(room);
   if (
     currentPrincipal() === undefined || spaceAccess(room) === "none" ||
@@ -1802,7 +1811,7 @@ interface FoundRoomInput {
 
 /** A catalog entry's room, once found. */
 interface FoundRoomOutput {
-  /** The room; absent until it resolves. */
+  /** The room; absent until it resolves and its records say it is a room. */
   room?: Cell<ChatRoomLink>;
 }
 
@@ -1820,11 +1829,20 @@ const FoundRoom = pattern<FoundRoomInput, FoundRoomOutput>(
     // it; that document stores no labels, so a link to it gives a labeled
     // list nothing to carry, and the room's own labels are what a link to
     // the room carries.
+    //
+    // It is found once its records say it is a room. A space this replica
+    // can't serve, as one on another host is, leaves those records
+    // unresolved, which holds back this finding alone; the list that reads
+    // every entry's room never reads one that hasn't resolved.
     return {
-      room: computed(() =>
-        (standalone ? root.result : root.result?.key("chatRoom").get())
-          ?.resolveAsCell()
-      ),
+      room: computed(() => {
+        const found =
+          (standalone ? root.result : root.result?.key("chatRoom").get())
+            ?.resolveAsCell();
+        return found !== undefined && roomKindOf(found) !== undefined
+          ? found
+          : undefined;
+      }),
     };
   },
 );
@@ -1926,8 +1944,10 @@ export const FabriChatManagerCore = pattern<
     );
     // Each saved room once it resolves and reads as a room, newest first. The
     // room's own records are read here, beside the entry they belong to, so
-    // they are read in the run that lists them. Its binding's name is its
-    // cause, as `foundForUser`'s is.
+    // they are read in the run that lists them; `FoundRoom` has already read
+    // them for each room it found, so none of these reads waits on a space
+    // this replica can't serve. Its binding's name is its cause, as
+    // `foundForUser`'s is.
     const roomsForUser = computed((): PerUser<ChatIndexEntry[]> => {
       const self = profileOwnerOf(myProfile);
       const stored = direct.get() ?? {};
@@ -1944,9 +1964,8 @@ export const FabriChatManagerCore = pattern<
             standalone?.kind === CHAT_ROOM_OFFER_KIND &&
             standalone.state !== "saved"
           ) return [];
-          const kind = aboutRecordOf(room).key("kind").get() ??
-            room.key("about").key("kind").get();
-          if (kind !== "direct" && kind !== "group") return [];
+          const kind = roomKindOf(room);
+          if (kind === undefined) return [];
           const counterpart = kind === "direct"
             ? counterpartOf(stored, room, self)
             : undefined;

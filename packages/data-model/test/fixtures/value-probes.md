@@ -8,6 +8,8 @@ paired with what a reader finds there. Values are written only as `fvj1:` text.
 The one escape is for a string holding a lone surrogate, which a JSON reader may
 not keep, where it stands outside a text, as a key in a path or a symbol's
 description in a patch: `{"utf16": [...]}` writes it as its UTF-16 code units.
+An entry of either fixture may also state what a reader must support to read it
+at all, as [Requirements](#requirements) describes.
 [`fvj1-conformance.md`](fvj1-conformance.md) and
 [`hash-conformance.md`](hash-conformance.md) describe the fixtures themselves,
 and `src/conformance-fixtures.ts`, in `packages/data-model`, writes and reads
@@ -146,6 +148,45 @@ way, and have no probe.
 A path has one probe. A node's probe comes before the probes of what it holds:
 an array's elements and runs of holes in index order, a record's keys in UTF-8
 order, and an instance's fields in the order of the table above.
+
+## Requirements
+
+An entry may carry `requires`, naming what a reader must support for the entry
+to apply to it. A reader that does not meet every requirement an entry names
+skips the entry: the case is not applicable to it, which is neither a pass nor a
+divergence. An entry with no `requires` applies to every reader.
+
+`flavors` is a list of regular-expression flavors whose patterns the reader must
+construct, as section 3 of
+[`3-json-encoding.md`](../../../../docs/specs/space-model-formal-spec/3-json-encoding.md)
+describes for `RegExp@1`. It marks a case whose outcome depends on constructing
+one, such as a pattern that fails to construct: the format requires no flavor,
+and a reader that does not construct one stores its patterns unvalidated, so the
+outcome differs. Cases are marked by hand.
+
+The other fields each need a guarantee of at least the figure given, by one of
+the measures section 12 of `3-json-encoding.md` defines. A reader whose stated
+guarantee by that measure is below the figure skips the entry, whether or not it
+would in fact handle the value:
+
+- `arrayLength`: the length of the longest array, counting each hole a run
+  stands for.
+- `propertyCount`: the member count of the largest record, any object in the
+  JSON body counting.
+- `stringLength`: the length of the longest string, in code points, a lone
+  surrogate counting as one.
+- `bytesLength`: the length of the longest byte sequence, in bytes.
+- `symbolKeyLength`: the length of the longest registered symbol's key, in code
+  points.
+- `depth`: the value's depth, counted as section 12 counts it.
+
+These are computed from the entry's text, and each is present only where it is
+past the floor section 12 sets for its measure, which every conforming reader
+guarantees.
+
+This package meets every requirement either fixture names. It constructs
+`es2025` patterns, and its own guarantees, which its README states, are past
+every floor.
 
 ## Checking with a codec of known behavior
 

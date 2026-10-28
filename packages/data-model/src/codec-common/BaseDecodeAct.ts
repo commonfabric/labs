@@ -59,7 +59,9 @@ export abstract class BaseDecodeAct<Encoded, SerializedForm = Encoded>
    *
    * An implementation that does guard owes the act one thing: every object it
    * is about to descend through goes through {@link #enterOrReport} first, and
-   * comes back out through {@link #leave} however the descent ends. That means
+   * comes back out through {@link #leave} once its descent completes, or
+   * through {@link #abandon} when the descent throws, so that the error in
+   * flight, a stack overflow among them, reaches the caller. That means
    * the tagged form as much as a container -- a format whose transport can
    * carry a graph can close a cycle through tagged nodes alone. Here rather
    * than in {@link #decodeTagged}, because this method is the one that visits

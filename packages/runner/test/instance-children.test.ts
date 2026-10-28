@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { deepFreeze } from "@commonfabric/data-model";
+import {
+  deepFreeze,
+  fabricFromConvertibleJsValue,
+} from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -10,6 +13,7 @@ import type { RuntimeProgram } from "../src/harness/types.ts";
 import { getDerivedInternalCellLink } from "../src/link-utils.ts";
 import { type MetaField, rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { Runtime } from "../src/runtime.ts";
+import { storedSetupBuildOf } from "../src/stored-setup-build.ts";
 
 const signer = await Identity.fromPassphrase("instance-children");
 const space = signer.did();
@@ -153,7 +157,8 @@ describe("instance-children", () => {
   /**
    * A stopped parent that ran `deployed`, holding `a`'s count of 7 at its
    * positional spot and, where `deployed` sets one up, `b`'s count of 9 at
-   * its own, with its pattern pointers naming `named`, the source it runs.
+   * its own, with its pattern pointers naming `named`, the source it runs,
+   * and the setup record `named`'s build stamps.
    */
   const deployedParent = async (
     name: string,
@@ -161,9 +166,8 @@ describe("instance-children", () => {
     deployedProgram: RuntimeProgram = DEPLOYED,
   ): Promise<Cell<Record<string, unknown>>> => {
     const deployed = await compile(deployedProgram);
-    const namedRef = rt.patternManager.getArtifactEntryRef(
-      await compile(named),
-    )!;
+    const namedPattern = await compile(named);
+    const namedRef = rt.patternManager.getArtifactEntryRef(namedPattern)!;
     const tx = rt.edit();
     const cell = rt.getCell<Record<string, unknown>>(
       space,
@@ -186,6 +190,13 @@ describe("instance-children", () => {
     await writeMeta(cell, {
       patternIdentity: ref,
       patternSetupIdentity: ref,
+      patternSetupBuild: fabricFromConvertibleJsValue(
+        storedSetupBuildOf(
+          namedPattern,
+          ref,
+          (artifact) => rt.patternManager.getLeastArtifactEntryRef(artifact),
+        ) as never,
+      ),
     });
     return cell;
   };
@@ -234,7 +245,7 @@ describe("instance-children", () => {
       expect(result.aCount).toBe(9);
     });
 
-    it("carries over the child at its own positional spot when its parent's `instanceChildren` records none for it", async () => {
+    it("carries over the child the pattern its parent last set up gives it, when its parent's `instanceChildren` records none for it", async () => {
       const cell = await deployedParent(
         "no-recorded-child",
         NAMED,

@@ -5527,28 +5527,70 @@ const unsupportedTrustSensitiveReason = (
       return `malformed ${key} at /${path.join("/")}`;
     }
   }
-  if (!writesEventIntegrityAsList(ifc.uiContract)) {
-    return `malformed uiContract.requiredEventIntegrity at /${path.join("/")}`;
+  const malformedRequirement = malformedUiContractRequirement(ifc.uiContract);
+  if (malformedRequirement !== undefined) {
+    return `malformed uiContract.${malformedRequirement} at /${path.join("/")}`;
+  }
+  const contracts = [
+    ifc.uiContract,
+    ...(Array.isArray(ifc.writePolicyAnyOf)
+      ? ifc.writePolicyAnyOf.map((policy) =>
+        isObjectNotArray(policy) ? policy.uiContract : undefined
+      )
+      : []),
+  ];
+  if (contracts.some(requiresUnmatchableEventIntegrity)) {
+    return `unsupported trust-sensitive claim uiContract.requiredEventIntegrity ` +
+      `holding an atom that is not a string at /${path.join("/")}`;
   }
   return undefined;
 };
 
 /**
- * Whether `contract`, a UI contract as a schema declares it, writes its
- * `requiredEventIntegrity`, where it writes one, as a list. Its parse
- * (`uiContractFromSchema()`) keeps only a list, so a requirement written as
- * anything else would be dropped.
+ * The trust requirement that `contract`, a UI contract as a schema declares
+ * it, writes in a form its parse (`uiContractFromSchema()`) drops, or
+ * `undefined` where the parse keeps every one. The parse keeps a
+ * `trustedPattern` only as a nonempty string and a `requiredEventIntegrity`
+ * only as a list, so a requirement written otherwise would be enforced as
+ * none.
  */
-const writesEventIntegrityAsList = (contract: unknown): boolean =>
-  !isObjectNotArray(contract) ||
-  contract.requiredEventIntegrity === undefined ||
-  Array.isArray(contract.requiredEventIntegrity);
+const malformedUiContractRequirement = (
+  contract: unknown,
+): "trustedPattern" | "requiredEventIntegrity" | undefined => {
+  if (!isObjectNotArray(contract)) return undefined;
+  if (
+    contract.trustedPattern !== undefined &&
+    (typeof contract.trustedPattern !== "string" ||
+      contract.trustedPattern === "")
+  ) {
+    return "trustedPattern";
+  }
+  if (
+    contract.requiredEventIntegrity !== undefined &&
+    !Array.isArray(contract.requiredEventIntegrity)
+  ) {
+    return "requiredEventIntegrity";
+  }
+  return undefined;
+};
+
+/**
+ * Whether `contract`, a UI contract as a schema declares it, requires an
+ * event-integrity atom that is not a string. The specification writes such
+ * atoms (§8.15), but renderer-attested event integrity is a list of strings
+ * and the parse keeps only string atoms, so the requirement would be dropped;
+ * a write it governs is refused instead, as an unsupported claim.
+ */
+const requiresUnmatchableEventIntegrity = (contract: unknown): boolean =>
+  isObjectNotArray(contract) &&
+  Array.isArray(contract.requiredEventIntegrity) &&
+  contract.requiredEventIntegrity.some((atom) => typeof atom !== "string");
 
 /**
  * Whether the `writePolicyAnyOf` that `ifc` declares is one this runner
  * enforces: a nonempty list of alternatives, each a writer claim with at most a
- * UI contract that parses beside it, its event integrity written as a list
- * where it writes one, and no writer or contract of the
+ * UI contract that parses beside it, its trust requirements written in the
+ * form the parse keeps, and no writer or contract of the
  * position's own beside the list, which would leave unclear which of the two
  * governs.
  */
@@ -5563,7 +5605,7 @@ const isWellFormedWritePolicyAnyOf = (ifc: Record<string, unknown>) => {
       ) &&
       (policy.uiContract === undefined ||
         (uiContractFromSchema({ ifc: policy } as JSONSchema) !== undefined &&
-          writesEventIntegrityAsList(policy.uiContract)))
+          malformedUiContractRequirement(policy.uiContract) === undefined))
     );
 };
 

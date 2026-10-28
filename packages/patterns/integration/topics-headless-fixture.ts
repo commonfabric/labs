@@ -1,7 +1,7 @@
 /**
  * Synthetic Topics data, and reach into the unmodified Topics sources, for
- * measuring the board's mention pivot and a topic's backlink, comment-count,
- * and activity lifts in one process with no browser and no server.
+ * measuring the board's mention pivot and a topic's backlink lift in one
+ * process with no browser and no server.
  *
  * A fixture is written straight to storage as one linked document per topic
  * and the board's list of links to them. Nothing goes through the board's
@@ -619,11 +619,9 @@ export function topicsFixtureModeOf(
  *
  * The `board` and `topic-open` workloads follow what a browser ran on one small
  * board with client execution, lazy materialization on, and card values
- * already stored. Loading the board, before any topic was opened, ran none of
- * the reached lifts; opening a topic ran the pivot and that topic's backlinks
- * and comment count but not its last activity; and returning to the board
- * afterward ran that topic's last activity once. That return is not one of
- * these workloads. It is one small sample, and server execution and lazy
+ * already stored. Loading the board, before any topic was opened, ran neither
+ * of the reached lifts, and opening a topic ran the pivot and that topic's
+ * backlinks. It is one small sample, and server execution and lazy
  * materialization off were not measured.
  */
 export type TopicsDemand =

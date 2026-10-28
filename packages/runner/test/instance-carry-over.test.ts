@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { deepFreeze } from "@commonfabric/data-model";
+import {
+  deepFreeze,
+  fabricFromConvertibleJsValue,
+} from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
 
@@ -14,6 +17,10 @@ import type { RuntimeProgram } from "../src/harness/types.ts";
 import { getDerivedInternalCellLink } from "../src/link-utils.ts";
 import { type MetaField, rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { Runtime } from "../src/runtime.ts";
+import {
+  type StoredSetupBuild,
+  storedSetupBuildOf,
+} from "../src/stored-setup-build.ts";
 
 const signer = await Identity.fromPassphrase("instance-carry-over");
 const space = signer.did();
@@ -223,6 +230,39 @@ const NAMED_NEWER_COUNTER_AFTER_POSITIONAL_SIBLING = parentProgram(
   `${COUNTER}// A newer version.\n`,
 );
 
+// `NAMED_TWO` with a change to the parent's own source alone, so an update to
+// it moves the parent's pointer while every child keeps its identity.
+const NAMED_TWO_EDITED = parentProgram([
+  "  const a = Counter({ label: 'a' });",
+  "  const b = Counter({ label: 'b' });",
+  "  return { views: [a, b], aCount: a.count, bCount: b.count, edited: 1 };",
+].join("\n"));
+
+// The same parent source with both children bound to a `const`.
+const NAMED_WITH_OTHER = parentProgram([
+  "  const a = Counter({ label: 'a' });",
+  "  const t = Other({ label: 't' });",
+  "  return { views: [a, t], aCount: a.count, tCount: t.count };",
+].join("\n"));
+
+// `NAMED_WITH_OTHER` with a change to the parent's own source alone, so an
+// update to it moves the parent's pointer while every child keeps its
+// identity.
+const NAMED_WITH_OTHER_EDITED = parentProgram([
+  "  const a = Counter({ label: 'a' });",
+  "  const t = Other({ label: 't' });",
+  "  return { views: [a, t], aCount: a.count, tCount: t.count, edited: 1 };",
+].join("\n"));
+
+// `NAMED` with `COUNTER_WITH_NODE` as its child.
+const NAMED_NODE_CHILD = parentProgram(
+  [
+    "  const a = Counter({ label: 'a' });",
+    "  return { views: [a], aCount: a.count };",
+  ].join("\n"),
+  COUNTER_WITH_NODE,
+);
+
 describe("instance-carry-over", () => {
   // Every runtime here names instances, through the experimental flag that
   // turns naming on, unless a case says otherwise.
@@ -257,18 +297,24 @@ describe("instance-carry-over", () => {
    * A stopped parent that ran `deployed`, with `counts` written to its result,
    * its pattern pointers naming `named`, the source it runs, unless `marker`
    * is `"absent"`, which leaves no setup marker, as a parent set up before
-   * the marker existed has none. By default the parent holds `a`'s count of 7
+   * the marker existed has none. Its setup record is the one a runtime
+   * without instance names stamps for `named`, which is the one this runtime
+   * builds for it; `record` rewrites it, or `"absent"` leaves none, as a
+   * parent set up before the record existed has none, and as a parent with no
+   * setup marker has by default. By default the parent holds `a`'s count of 7
    * at the positional spot `DEPLOYED` gives it.
    */
   const deployedParent = async (
     name: string,
     {
       marker = "named",
+      record = marker === "absent" ? "absent" : (stamped) => stamped,
       deployed: deployedProgram = DEPLOYED,
       named: namedProgram = NAMED,
       counts = { aCount: 7 },
     }: {
       marker?: "named" | "absent";
+      record?: "absent" | ((stamped: StoredSetupBuild) => StoredSetupBuild);
       deployed?: RuntimeProgram;
       named?: RuntimeProgram;
       counts?: Record<string, number>;
@@ -304,6 +350,19 @@ describe("instance-carry-over", () => {
       marker === "named"
         ? { identity: namedRef.identity, symbol: namedRef.symbol }
         : undefined,
+      rawMetaWriteAuthorization,
+    );
+    cell.withTx(stamp).setMetaRaw(
+      "patternSetupBuild",
+      record === "absent" ? undefined : fabricFromConvertibleJsValue(
+        record(
+          storedSetupBuildOf(
+            named,
+            namedRef,
+            (artifact) => rt.patternManager.getLeastArtifactEntryRef(artifact),
+          ),
+        ) as never,
+      ),
       rawMetaWriteAuthorization,
     );
     expect((await stamp.commit().settled).error).toBeUndefined();
@@ -881,6 +940,120 @@ describe("instance-carry-over", () => {
       });
     });
 
+    it("keeps its deployed child's state when the parent holds no setup record", async () => {
+      // With no record of the pattern last set up, this runtime's build of
+      // that pattern places the instance.
+
+      const cell = await deployedParent("no-record", { record: "absent" });
+
+      const result = await update(cell, NAMED_WITH_SIBLING);
+
+      expect({ aCount: result.aCount, sCount: result.sCount }).toEqual({
+        aCount: 7,
+        sCount: 0,
+      });
+    });
+
+    it("starts fresh, and reports it, when the parent's setup record numbers its cell otherwise than this runtime's build of the pattern last set up", async () => {
+      // The record is of a build that numbered `a`'s cell one further on,
+      // so the child at the number this runtime's build gives `a` may be
+      // another's. `s`, which the pattern last set up never had, is reported
+      // too.
+
+      const cell = await deployedParent("record-disagrees", {
+        record: (stamped) => ({
+          ...stamped,
+          cells: "a build that numbered its cells otherwise",
+          state: stamped.state.map(([n, description]) => [n + 1, description]),
+        }),
+      });
+      const before = freshStarts();
+
+      const result = await update(cell, NAMED_WITH_SIBLING);
+
+      expect({ aCount: result.aCount, sCount: result.sCount }).toEqual({
+        aCount: 0,
+        sCount: 0,
+      });
+      expect(freshStarts() - before).toBe(2);
+    });
+
+    it("starts fresh, where the parent's setup record holds cells of its description that this runtime's build cannot be matched with", async () => {
+      // The record is of a build with a third `Counter` child, so which of
+      // its cells went where cannot be told, though none of `a`'s or `b`'s
+      // numbers changed.
+
+      const cell = await deployedParent("record-unmatched", {
+        deployed: DEPLOYED_TWO,
+        named: NAMED_TWO,
+        counts: { aCount: 7, bCount: 9 },
+        record: (stamped) => ({
+          ...stamped,
+          cells: "a build with a third child",
+          state: [...stamped.state, [
+            stamped.state.length,
+            stamped.state[0][1],
+          ]],
+        }),
+      });
+
+      const result = await update(cell, NAMED_TWO_EDITED);
+
+      expect({ aCount: result.aCount, bCount: result.bCount }).toEqual({
+        aCount: 0,
+        bCount: 0,
+      });
+    });
+
+    it("keeps its deployed child's state, where the parent's setup record numbers only another instance's cell otherwise", async () => {
+      // The record moves `t`'s cell alone, so `t` starts fresh and `a`, whose
+      // cell the record numbers as this runtime's build does, keeps its own.
+
+      const cell = await deployedParent("record-disagrees-for-one", {
+        deployed: DEPLOYED_WITH_OTHER,
+        named: NAMED_WITH_OTHER,
+        counts: { aCount: 7, tCount: 3 },
+        record: (stamped) => ({
+          ...stamped,
+          cells: "a build that numbered its cells otherwise",
+          state: stamped.state.map(([n, description]) =>
+            description.endsWith("#Other") ? [n + 1, description] : [
+              n,
+              description,
+            ]
+          ),
+        }),
+      });
+
+      const result = await update(cell, NAMED_WITH_OTHER_EDITED);
+
+      expect({ aCount: result.aCount, tCount: result.tCount }).toEqual({
+        aCount: 7,
+        tCount: 0,
+      });
+    });
+
+    it("keeps its deployed child's state, taking the pattern last set up from the setup record where it names another than `patternSetupIdentity`", async () => {
+      // A start repair re-stamps the record and leaves the setup marker
+      // naming the pattern before. The marker here names the deployed
+      // source, which names no instance; the record names the one that does.
+
+      const cell = await deployedParent("record-over-marker");
+      const deployedRef = rt.patternManager.getArtifactEntryRef(
+        await compile(DEPLOYED),
+      )!;
+      await writeMeta(cell, {
+        patternSetupIdentity: {
+          identity: deployedRef.identity,
+          symbol: deployedRef.symbol,
+        },
+      });
+
+      const result = await update(cell, NAMED_WITH_SIBLING);
+
+      expect(result.aCount).toBe(7);
+    });
+
     it("keeps the child it carried over across a further update", async () => {
       const cell = await deployedParent("further-update");
       await update(cell, NAMED_WITH_SIBLING);
@@ -974,6 +1147,25 @@ describe("instance-carry-over", () => {
     });
   });
 
+  describe("a runtime with naming off", () => {
+    it("carries nothing over and records nothing, updating a parent to a source that binds its child to a `const`", async () => {
+      // With naming off the source names no instance, so nothing is pending
+      // and carry-over writes nothing.
+
+      await deployedParent("naming-off");
+      replaced.push(rt);
+      rt = new Runtime({ ...naming(false), storageManager });
+      const reopened = rt.getCell<Record<string, unknown>>(space, "naming-off");
+      await reopened.sync();
+      const before = freshStarts();
+
+      await update(reopened, NAMED);
+
+      expect(reopened.getMetaRaw("instanceChildren")).toBeUndefined();
+      expect(freshStarts() - before).toBe(0);
+    });
+  });
+
   describe("a positional child", () => {
     it("refuses to set up over the child a named instance carried over", async () => {
       const cell = await deployedParent("positional-over-carried");
@@ -1050,6 +1242,23 @@ describe("instance-carry-over", () => {
     // The first piece in `pieces` other than the parent `cell`.
     const firstChild = (pieces: string[], cell: Cell<unknown>) =>
       pieces.find((piece) => piece !== cell.getAsNormalizedFullLink().id);
+
+    it("is bound by the start's pre-sync to the child the pattern last set up gives it", async () => {
+      await deployedParent("cold-previous", {
+        deployed: DEPLOYED_NODE_CHILD,
+        named: NAMED_NODE_CHILD,
+      });
+      const cell = await coldRuntime("cold-previous");
+      const carried = positionalChild(cell, 0).getAsNormalizedFullLink().id;
+      const presynced = presyncedPieces();
+
+      const result = await update(cell, NAMED_WITH_SIBLING_NODE_CHILD);
+
+      expect({
+        firstChild: firstChild(presynced, cell),
+        aCount: result.aCount,
+      }).toEqual({ firstChild: carried, aCount: 7 });
+    });
 
     it("is bound by the start's pre-sync to the positional child order matching carries over", async () => {
       await deployedParent("cold-order", {
