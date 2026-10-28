@@ -43,6 +43,7 @@ import {
 import {
   LOCAL_JOB_TERMINAL_STATES,
   type LocalJob,
+  localJobRunRequestOf,
   type LocalJobStore,
   RUNNER_RESTARTED,
 } from "./store.ts";
@@ -164,6 +165,10 @@ export const localJobSpecOf = async (
     );
   }
   const { request } = job;
+  const runRequest = localJobRunRequestOf(
+    request,
+    job.continues === undefined ? request : job.openedBy,
+  );
   const { fabric } = profile;
   const browser = profile.browserHost === true;
   const framing = [
@@ -180,8 +185,8 @@ export const localJobSpecOf = async (
       ? { continueFrom: { runRoot: options.predecessorRunRef! } }
       : {}),
     task: request.task,
-    ...(request.imageAttachments !== undefined
-      ? { imageAttachments: request.imageAttachments }
+    ...(runRequest.imageAttachments !== undefined
+      ? { imageAttachments: runRequest.imageAttachments }
       : {}),
     commandJobId: job.id,
     taskRole: profile.taskRole,
@@ -231,7 +236,7 @@ export const localJobSpecOf = async (
         fabric.space,
         undefined,
       ),
-      inputs: { ...request.inputs },
+      inputs: { ...runRequest.inputs },
       ...await foreignSpacesOf(fabric, request),
     },
     patternIndexUrl: profile.patternIndexUrl,
@@ -486,9 +491,13 @@ export class LocalJobLane {
   async #run(job: LocalJob, signal: AbortSignal): Promise<void> {
     const { store, profiles } = this.#options;
     const named = profiles.get(job.profile);
-    const narrowed = named === undefined
-      ? undefined
-      : narrowLocalJobProfile(named, job.request);
+    const narrowed = named === undefined ? undefined : narrowLocalJobProfile(
+      named,
+      localJobRunRequestOf(
+        job.request,
+        job.continues === undefined ? job.request : job.openedBy,
+      ),
+    );
     if (narrowed === undefined || "refusal" in narrowed) {
       store.finish(job.id, {
         state: "failed",

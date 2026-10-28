@@ -17,7 +17,8 @@
  * - `GET /jobs?limit=n` — the newest jobs, newest first.
  * - `GET /jobs/<id>` — one job.
  * - `POST /jobs/<id>/messages` — accept `{caller, idempotencyKey, message,
- *   instructions?}` on the conversation's head; returns `{message, job}`,
+ *   instructions?, imageAttachments?, inputs?, foreignSpaces?}` on the
+ *   conversation's head; returns `{message, job}`,
  *   `201` on acceptance or `200` on replay.
  * - `POST /jobs/<id>/cancel` — ask a job to stop.
  * - `GET /jobs/<id>/events?after=<seq>` — the job's events after `seq` as
@@ -58,6 +59,7 @@ import {
 import type { LocalJobProfiles } from "./profiles.ts";
 import {
   LOCAL_JOB_TERMINAL_STATES,
+  type LocalJobAttachments,
   type LocalJobEvent,
   type LocalJobMessageRequest,
   type LocalJobRequest,
@@ -167,6 +169,49 @@ const listOf = <T extends string>(
     : undefined;
 };
 
+/** Reads attachments with the same bounds and shapes on both routes. */
+const attachmentsOf = (
+  { imageAttachments, inputs, foreignSpaces }: Record<string, unknown>,
+): LocalJobAttachments | { error: string } => {
+  let images: HarnessInlineImageAttachment[] | undefined;
+  try {
+    images = imagesOf(imageAttachments);
+  } catch (error) {
+    return {
+      error: error instanceof Error
+        ? error.message
+        : "Invalid image attachments.",
+    };
+  }
+  if (
+    inputs !== undefined &&
+    (!isObjectNotArray(inputs) ||
+      !Object.values(inputs).every((address) =>
+        typeof address === "string" && address.length > 0
+      ))
+  ) {
+    return { error: "`inputs` must map names to piece addresses." };
+  }
+  if (
+    foreignSpaces !== undefined &&
+    (!isObjectNotArray(foreignSpaces) ||
+      !Object.values(foreignSpaces).every((host) =>
+        typeof host === "string" && host.length > 0
+      ))
+  ) {
+    return { error: "`foreignSpaces` must map space DIDs to host origins." };
+  }
+  return {
+    ...(images !== undefined ? { imageAttachments: images } : {}),
+    ...(inputs !== undefined
+      ? { inputs: inputs as Record<string, string> }
+      : {}),
+    ...(foreignSpaces !== undefined
+      ? { foreignSpaces: foreignSpaces as Record<string, string> }
+      : {}),
+  };
+};
+
 /** Helper for enqueue, which reads a request body or names what is wrong. */
 const enqueueRequestOf = (
   value: unknown,
@@ -196,9 +241,6 @@ const enqueueRequestOf = (
     domains,
     reasoningEffort,
     browserHost,
-    imageAttachments,
-    inputs,
-    foreignSpaces,
   } = value as Record<string, unknown>;
   const name = (field: unknown) =>
     typeof field === "string" && field.length > 0 &&
@@ -284,41 +326,15 @@ const enqueueRequestOf = (
   if (browserHost !== undefined && !isObjectNotArray(browserHost)) {
     return { error: "`browserHost` must be an object." };
   }
-  let images: HarnessInlineImageAttachment[] | undefined;
-  try {
-    images = imagesOf(imageAttachments);
-  } catch (error) {
-    return {
-      error: error instanceof Error
-        ? error.message
-        : "Invalid image attachments.",
-    };
-  }
-  if (
-    inputs !== undefined &&
-    (!isObjectNotArray(inputs) ||
-      !Object.values(inputs).every((address) =>
-        typeof address === "string" && address.length > 0
-      ))
-  ) {
-    return { error: "`inputs` must map names to piece addresses." };
-  }
-  if (
-    foreignSpaces !== undefined &&
-    (!isObjectNotArray(foreignSpaces) ||
-      !Object.values(foreignSpaces).every((host) =>
-        typeof host === "string" && host.length > 0
-      ))
-  ) {
-    return { error: "`foreignSpaces` must map space DIDs to host origins." };
-  }
+  const attachments = attachmentsOf(value);
+  if ("error" in attachments) return attachments;
   return {
     caller: caller as string,
     profile: profile as string,
     idempotencyKey: idempotencyKey as string,
     request: {
       task,
-      ...(images !== undefined ? { imageAttachments: images } : {}),
+      ...attachments,
       ...(instructions !== undefined ? { instructions } : {}),
       ...(context !== undefined ? { context } : {}),
       ...(resultSchema !== undefined ? { resultSchema } : {}),
@@ -332,12 +348,6 @@ const enqueueRequestOf = (
       ...(effort !== undefined ? { reasoningEffort: effort } : {}),
       ...(browserHost !== undefined
         ? { browserHost: browserHost as Record<string, unknown> }
-        : {}),
-      ...(inputs !== undefined
-        ? { inputs: inputs as Record<string, string> }
-        : {}),
-      ...(foreignSpaces !== undefined
-        ? { foreignSpaces: foreignSpaces as Record<string, string> }
         : {}),
     },
   };
@@ -365,10 +375,13 @@ const messageRequestOf = (value: unknown):
         "`caller`, `idempotencyKey` and `message` must be nonempty strings; `instructions` must be a string when supplied.",
     };
   }
+  const attachments = attachmentsOf(value);
+  if ("error" in attachments) return attachments;
   return {
     caller,
     idempotencyKey,
     message,
+    ...attachments,
     ...(instructions !== undefined ? { instructions } : {}),
   };
 };
@@ -400,14 +413,27 @@ const acceptMessage = async (
   const read = messageRequestOf(body);
   if ("error" in read) return refuse(400, "invalid_request", read.error);
   const accepted = options.store.acceptMessage(id, read, {
-    canOpenFollowUp: (profile) => options.profiles.get(profile) !== undefined,
+    validateFollowUp: (name, request) => {
+      const profile = options.profiles.get(name);
+      if (profile === undefined) {
+        return {
+          code: "unknown_profile",
+          error: "The host no longer names the head's profile.",
+        };
+      }
+      const narrowed = narrowLocalJobProfile(profile, request);
+      return "refusal" in narrowed
+        ? { code: "beyond_profile", error: narrowed.refusal }
+        : undefined;
+    },
   });
   if ("code" in accepted) {
     const status = accepted.code === "not_found"
       ? 404
       : accepted.code === "not_callers"
       ? 403
-      : accepted.code === "unknown_profile"
+      : accepted.code === "unknown_profile" ||
+          accepted.code === "beyond_profile"
       ? 400
       : 409;
     return refuse(status, accepted.code, accepted.error);

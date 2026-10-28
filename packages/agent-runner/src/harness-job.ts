@@ -386,9 +386,7 @@ const argvOf = (
   ...(spec.reasoningEffort !== undefined
     ? ["--reasoning-effort", spec.reasoningEffort]
     : []),
-  ...Object.entries(
-    spec.continueFrom === undefined ? spec.fabric?.inputs ?? {} : {},
-  ).flatMap(([name, ref]) => [
+  ...Object.entries(spec.fabric?.inputs ?? {}).flatMap(([name, ref]) => [
     "--input-cell",
     `${name}=${ref}`,
   ]),
@@ -458,11 +456,7 @@ export const runHarnessJob = async (
     resultPath,
   );
 
-  for (
-    const image of spec.continueFrom === undefined
-      ? spec.imageAttachments ?? []
-      : []
-  ) {
+  for (const image of spec.imageAttachments ?? []) {
     const snapshot = await createHarnessImageAttachmentFromBase64({
       ...image,
       snapshotDir: join(workspace, ".job-images"),
@@ -497,6 +491,7 @@ export const runHarnessJob = async (
     | (() => HarnessPromptLoopResult["runState"] | undefined)
     | undefined;
   let resultValidation: CfHarnessStructuredResultValidation | undefined;
+  let refusalDetail: string | undefined;
   const createInnerLoop = options.harnessDeps?.createPromptLoop ??
     ((loopOptions: CreateHarnessPromptLoopOptions) =>
       new CfHarnessPromptLoop(loopOptions));
@@ -514,7 +509,10 @@ export const runHarnessJob = async (
       : {}),
     io: {
       stdout: (text) => options.report?.(text.trimEnd()),
-      stderr: (text) => options.report?.(text.trimEnd()),
+      stderr: (text) => {
+        refusalDetail = text.trimEnd();
+        options.report?.(refusalDetail);
+      },
     },
     // The caller owns the process's signals and its exit.
     registerSignalHandler: () => () => {},
@@ -642,6 +640,9 @@ export const runHarnessJob = async (
       outcome: "failed",
       recordedRun,
       errorCode: limit ? LIMIT_REACHED : PROVIDER_FAILURE,
+      ...(loopError === undefined && refusalDetail !== undefined
+        ? { errorDetail: refusalDetail }
+        : {}),
       ...(report !== undefined ? { report } : {}),
     };
   }

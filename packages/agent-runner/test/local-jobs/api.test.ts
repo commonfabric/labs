@@ -662,7 +662,7 @@ describe("local-jobs/api", () => {
         ["interrupted", 409, "not_continuable"],
         ["profile failure", 409, "not_continuable"],
         ["queued cancellation", 409, "not_continuable"],
-        ["instructions", 409, "instructions_on_steer"],
+        ["instructions", 409, "follow_up_only"],
         ["retired profile", 400, "unknown_profile"],
       ] as const
     ) {

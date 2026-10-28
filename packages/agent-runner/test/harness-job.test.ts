@@ -820,17 +820,18 @@ describe("runHarnessJob()", () => {
           },
         });
 
+        const refusal = reported.find((message) =>
+          message.includes("No sandbox runtime is named")
+        );
         expect([result, looped]).toEqual([
           {
             outcome: "failed",
             errorCode: "PROVIDER_FAILURE",
             recordedRun: false,
+            errorDetail: refusal,
           },
           false,
         ]);
-        const refusal = reported.find((message) =>
-          message.includes("No sandbox runtime is named")
-        );
         // The job's argument list is written for it, so the way to a CFC
         // policy it is told is the variable, and no flag.
         expect(refusal).toContain(

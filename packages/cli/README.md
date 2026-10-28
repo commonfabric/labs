@@ -2038,27 +2038,41 @@ A caller sends another message with `POST /jobs/<id>/messages`, also bounded at
 
 `caller` must match the conversation's caller. `message` is a nonempty string;
 `instructions` is optional and replaces the system framing of a follow-up,
-inherited by later jobs unless replaced again. The request grants no profile,
-tools or limits. Any job id in a conversation addresses its newest job, the
-head. Every local run receives the message hook. A message to a queued or
-running head waits there to be taken at a model turn boundary. A message to a
-finished head with a recorded run opens a new queued job, with `continues`
-naming its predecessor, its task replaced by the message, and the rest of the
-predecessor's request inherited. A recorded run has a complete checkpoint from
-which another run can start. An interrupted job is continuable when recovery
-finds such a checkpoint.
+inherited by later jobs unless replaced again. `imageAttachments`, `inputs` and
+`foreignSpaces` use the enqueue shapes, bounds and profile validation. Images
+join the follow-up's new prompt; inputs add named handles, with foreign spaces
+routed as on enqueue. Existing history and held input routes carry forward;
+omitted attachments are not sent again as new inputs.
+
+Instructions and attachments are follow-up-only: a queued or running head with
+no cancel requested refuses them as `409 follow_up_only`. After cancel, they
+wait for their own follow-up. If a new input name collides with a held input,
+assigned slug or grant, acceptance still returns normally and the follow-up
+fails `PROVIDER_FAILURE` before any model call, with the builder's own reason in
+`errorDetail`.
+
+The request grants no profile, tools or limits. Any job id in a conversation
+addresses its newest job, the head. Every local run receives the message hook. A
+message to a queued or running head waits there to be taken at a model turn
+boundary. A message to a finished head with a recorded run opens a new queued
+job, with `continues` naming its predecessor, its task replaced by the message,
+and the rest of the predecessor's request inherited. A recorded run has a
+complete checkpoint from which another run can start. An interrupted job is
+continuable when recovery finds such a checkpoint.
 
 The response is `201 {message, job}` on acceptance or `200 {message, job}` on
 replay. The message record has fixed `key`, `target`, `message`, `acceptedAt`
-and, when supplied, `instructions`. Its current `delivery` is `pending`,
-`delivered`, `follow-up`, or `dropped`; `jobId` names the job waiting on or
-answering it, `turn` is present after delivery, and `reason` after a drop. `job`
-is that job's current snapshot. A first acceptance returns `pending` or
-`follow-up`. The same caller/key/fingerprint returns the current record without
-writing events, even after the head moves on or can no longer continue. The
-fingerprint includes the target id, message and presence and value of
-instructions. Keys share one namespace per caller with enqueue: reusing a key
-across routes, or changing its fingerprint, returns `409 idempotency_conflict`.
+and, when supplied, `instructions`, `imageAttachments`, `inputs` and
+`foreignSpaces`. Its current `delivery` is `pending`, `delivered`, `follow-up`,
+or `dropped`; `jobId` names the job waiting on or answering it, `turn` is
+present after delivery, and `reason` after a drop. `job` is that job's current
+snapshot. A first acceptance returns `pending` or `follow-up`. The same
+caller/key/fingerprint returns the current record without writing events, even
+after the head moves on or can no longer continue. The fingerprint includes the
+target id, message, and presence and value of instructions, images, inputs and
+foreign-space routes. Keys share one namespace per caller with enqueue: reusing
+a key across routes, or changing its fingerprint, returns
+`409 idempotency_conflict`.
 
 The job view adds `continues`, `continuedBy` (its sole follow-up once opened),
 `openedBy` (the message that opened a follow-up), and `messages` (the current
@@ -2085,16 +2099,17 @@ cancellation and `PROFILE_UNAVAILABLE` failures have no recorded run.
 
 Every refusal is `{ok: false, code, error}`:
 
-| Status | Code                    | Condition                                                                             |
-| ------ | ----------------------- | ------------------------------------------------------------------------------------- |
-| 400    | `invalid_request`       | Invalid JSON, missing or mistyped fields, or an empty message.                        |
-| 413    | `too_large`             | The body exceeds 1 MiB.                                                               |
-| 404    | `not_found`             | The target job does not exist.                                                        |
-| 403    | `not_callers`           | The body names another caller.                                                        |
-| 409    | `not_continuable`       | The finished head, including an interrupted one, has no complete recorded checkpoint. |
-| 409    | `instructions_on_steer` | Instructions supplied to a queued or running head before cancel.                      |
-| 400    | `unknown_profile`       | A follow-up would open now under a profile no longer named.                           |
-| 409    | `idempotency_conflict`  | The caller's key already names another request or route.                              |
+| Status | Code                   | Condition                                                                             |
+| ------ | ---------------------- | ------------------------------------------------------------------------------------- |
+| 400    | `invalid_request`      | Invalid JSON, missing or mistyped fields, or an empty message.                        |
+| 413    | `too_large`            | The body exceeds 1 MiB.                                                               |
+| 404    | `not_found`            | The target job does not exist.                                                        |
+| 403    | `not_callers`          | The body names another caller.                                                        |
+| 409    | `not_continuable`      | The finished head, including an interrupted one, has no complete recorded checkpoint. |
+| 409    | `follow_up_only`       | Instructions or attachments supplied to a queued or running head before cancel.       |
+| 400    | `unknown_profile`      | Opening a follow-up or admitting attachments needs a profile no longer named.         |
+| 400    | `beyond_profile`       | The follow-up request exceeds or invalidates its profile.                             |
+| 409    | `idempotency_conflict` | The caller's key already names another request or route.                              |
 
 The local harness lane takes messages at model-turn boundaries. A finished job
 with a recorded checkpoint can open a follow-up, whose new harness run carries

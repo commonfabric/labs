@@ -104,8 +104,14 @@ export interface LocalJobEvent {
   body: Record<string, unknown>;
 }
 
+/** Attachment fields shared by enqueue and follow-up messages. */
+export type LocalJobAttachments = Pick<
+  LocalJobRequest,
+  "imageAttachments" | "inputs" | "foreignSpaces"
+>;
+
 /** A caller's message, with its current delivery outcome. */
-export interface LocalJobMessage {
+export interface LocalJobMessage extends LocalJobAttachments {
   key: string;
   target: string;
   message: string;
@@ -118,7 +124,7 @@ export interface LocalJobMessage {
 }
 
 /** The body a caller sends to the message route. */
-export interface LocalJobMessageRequest {
+export interface LocalJobMessageRequest extends LocalJobAttachments {
   caller: string;
   idempotencyKey: string;
   message: string;
@@ -131,7 +137,8 @@ export interface LocalJobMessageRefusal {
     | "not_found"
     | "not_callers"
     | "not_continuable"
-    | "instructions_on_steer"
+    | "follow_up_only"
+    | "beyond_profile"
     | "unknown_profile"
     | "idempotency_conflict";
   error: string;
@@ -170,7 +177,7 @@ export interface LocalJob {
   /** Every command the job ran, from its `command` events, in order. */
   commands: Record<string, unknown>[];
 
-  /** The value the model submitted, once the job completed. */
+  /** The job's validated result or final text, once it completed. */
   result?: unknown;
 
   errorCode?: string;
@@ -242,6 +249,7 @@ CREATE TABLE IF NOT EXISTS messages (
   target TEXT NOT NULL REFERENCES jobs (id),
   message TEXT NOT NULL,
   instructions TEXT,
+  attachments_json TEXT NOT NULL DEFAULT '{}',
   accepted_at TEXT NOT NULL,
   holder TEXT NOT NULL REFERENCES jobs (id),
   delivery TEXT NOT NULL,
@@ -284,6 +292,7 @@ interface MessageRow {
   target: string;
   message: string;
   instructions: string | null;
+  attachments_json: string;
   accepted_at: string;
   holder: string;
   delivery: LocalJobMessage["delivery"];
@@ -441,11 +450,20 @@ export class LocalJobStore {
     target: string,
     request: LocalJobMessageRequest,
     options: {
-      canOpenFollowUp?: (profile: string) => boolean;
+      validateFollowUp?: (
+        profile: string,
+        request: LocalJobRequest,
+      ) => LocalJobMessageRefusal | undefined;
     } = {},
   ):
     | { message: LocalJobMessage; job: LocalJob; created: boolean }
     | LocalJobMessageRefusal {
+    const attachments = JSON.stringify({
+      imageAttachments: request.imageAttachments,
+      inputs: request.inputs,
+      foreignSpaces: request.foreignSpaces,
+    });
+    const hasAttachments = attachments !== "{}";
     const result = this.#write(
       (): { created: boolean } | LocalJobMessageRefusal => {
         const { caller, idempotencyKey: key, message, instructions } = request;
@@ -456,7 +474,9 @@ export class LocalJobStore {
         const existing = this.#messageRow(caller, key);
         if (existing !== undefined) {
           return existing.target === target && existing.message === message &&
-              existing.instructions === (instructions ?? null)
+              existing.instructions === (instructions ?? null) &&
+              hashStringOf(JSON.parse(existing.attachments_json)) ===
+                hashStringOf(JSON.parse(attachments))
             ? { created: false }
             : conflict;
         }
@@ -486,30 +506,35 @@ export class LocalJobStore {
           };
         }
         if (!finished && head.cancel_requested_at === null) {
-          if (instructions !== undefined) {
+          if (instructions !== undefined || hasAttachments) {
             return {
-              code: "instructions_on_steer",
-              error: "A steer cannot replace the run's instructions.",
+              code: "follow_up_only",
+              error: "Instructions and attachments require a follow-up.",
             };
           }
         }
-        if (finished && options.canOpenFollowUp?.(head.profile) === false) {
-          return {
-            code: "unknown_profile",
-            error: "The host no longer names the head's profile.",
-          };
+        if (finished || hasAttachments) {
+          const refusal = options.validateFollowUp?.(
+            head.profile,
+            localJobRunRequestOf(
+              followUpRequestOf(JSON.parse(head.request_json), request),
+              request,
+            ),
+          );
+          if (refusal !== undefined) return refusal;
         }
         const at = this.#now().toISOString();
         this.#database.prepare(`
-        INSERT INTO messages (caller, idempotency_key, target, message, instructions,
+        INSERT INTO messages (caller, idempotency_key, target, message, instructions, attachments_json,
           accepted_at, holder, delivery, after_cancel)
-        VALUES (:caller, :key, :target, :message, :instructions, :at, :holder, 'pending', :after)
+        VALUES (:caller, :key, :target, :message, :instructions, :attachments, :at, :holder, 'pending', :after)
       `).run({
             caller,
             key,
             target,
             message,
             instructions: instructions ?? null,
+            attachments,
             at,
             holder: head.id,
             after: head.cancel_requested_at === null ? 0 : 1,
@@ -540,7 +565,10 @@ export class LocalJobStore {
       if (this.#row(id)?.state !== "running") return [];
       const taken: string[] = [];
       for (const row of this.#waiting(id)) {
-        if (row.instructions !== null || row.after_cancel !== 0) break;
+        if (
+          row.instructions !== null || row.attachments_json !== "{}" ||
+          row.after_cancel !== 0
+        ) break;
         this.#database.prepare(
           "UPDATE messages SET delivery = 'delivered', turn = :turn WHERE seq = :seq",
         ).run({ turn, seq: row.seq });
@@ -789,13 +817,7 @@ export class LocalJobStore {
       head.caller,
       head.profile,
       message.idempotency_key,
-      {
-        ...request,
-        task: message.message,
-        ...(message.instructions !== null
-          ? { instructions: message.instructions }
-          : {}),
-      },
+      followUpRequestOf(request, messageOf(message)),
       at,
       head.id,
     );
@@ -977,18 +999,23 @@ export class LocalJobStore {
     try {
       database.exec(PRAGMAS);
       database.exec(INIT);
-      const columns = database.prepare("PRAGMA table_info(jobs)").all() as {
-        name: string;
-      }[];
       for (
-        const [name, declaration] of [
-          ["continues", "TEXT REFERENCES jobs (id)"],
-          ["recorded_run", "INTEGER NOT NULL DEFAULT 0"],
-          ["run_root", "TEXT"],
-        ]
+        const [table, additions] of [
+          ["jobs", [["continues", "TEXT REFERENCES jobs (id)"], [
+            "recorded_run",
+            "INTEGER NOT NULL DEFAULT 0",
+          ], ["run_root", "TEXT"]]],
+          ["messages", [["attachments_json", "TEXT NOT NULL DEFAULT '{}'"]]],
+        ] as const
       ) {
-        if (!columns.some((column) => column.name === name)) {
-          database.exec(`ALTER TABLE jobs ADD COLUMN ${name} ${declaration}`);
+        const columns = database.prepare(`PRAGMA table_info(${table})`)
+          .all() as { name: string }[];
+        for (const [name, declaration] of additions) {
+          if (!columns.some((column) => column.name === name)) {
+            database.exec(
+              `ALTER TABLE ${table} ADD COLUMN ${name} ${declaration}`,
+            );
+          }
         }
       }
       database.exec(
@@ -1016,9 +1043,48 @@ const messageOf = (row: MessageRow): LocalJobMessage => ({
   target: row.target,
   message: row.message,
   ...(row.instructions !== null ? { instructions: row.instructions } : {}),
+  ...JSON.parse(row.attachments_json),
   acceptedAt: row.accepted_at,
   delivery: row.delivery,
   jobId: row.holder,
   ...(row.turn !== null ? { turn: row.turn } : {}),
   ...(row.reason !== null ? { reason: row.reason } : {}),
+});
+
+/**
+ * Adds the opening message's inputs and routes to the conversation's retained
+ * request.
+ */
+const followUpRequestOf = (
+  request: LocalJobRequest,
+  message: Pick<
+    LocalJobMessageRequest,
+    "message" | "instructions" | keyof LocalJobAttachments
+  >,
+): LocalJobRequest => ({
+  ...request,
+  task: message.message,
+  ...(message.instructions === undefined
+    ? {}
+    : { instructions: message.instructions }),
+  ...(message.imageAttachments === undefined
+    ? {}
+    : { imageAttachments: message.imageAttachments }),
+  ...(message.inputs === undefined
+    ? {}
+    : { inputs: { ...request.inputs, ...message.inputs } }),
+  ...(message.foreignSpaces === undefined ? {} : {
+    foreignSpaces: { ...request.foreignSpaces, ...message.foreignSpaces },
+  }),
+});
+
+/** Selects this run's attachments, retaining the request's other bounds. */
+export const localJobRunRequestOf = (
+  request: LocalJobRequest,
+  attachments: LocalJobAttachments | undefined,
+): LocalJobRequest => ({
+  ...request,
+  imageAttachments: attachments?.imageAttachments,
+  inputs: attachments?.inputs,
+  foreignSpaces: attachments?.foreignSpaces,
 });

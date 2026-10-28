@@ -539,6 +539,16 @@ describe("local-jobs/store", () => {
           `INSERT INTO jobs (id, caller, profile, idempotency_key, request_json, state, created_at)
           VALUES ('old', 'cfs:weaver', 'ask', 'old-key', :request, 'completed', '2026-01-01')`,
         ).run({ request: JSON.stringify(request()) });
+        legacy.exec(`CREATE TABLE messages (
+          seq INTEGER PRIMARY KEY, caller TEXT NOT NULL, idempotency_key TEXT NOT NULL,
+          target TEXT NOT NULL REFERENCES jobs(id), message TEXT NOT NULL, instructions TEXT,
+          accepted_at TEXT NOT NULL, holder TEXT NOT NULL REFERENCES jobs(id),
+          delivery TEXT NOT NULL, turn INTEGER, reason TEXT,
+          opened_job TEXT REFERENCES jobs(id), after_cancel INTEGER NOT NULL DEFAULT 0,
+          UNIQUE(caller, idempotency_key)
+        );
+        INSERT INTO messages(caller, idempotency_key, target, message, accepted_at, holder, delivery, turn)
+        VALUES ('cfs:weaver', 'legacy-message', 'old', 'Legacy message', '2026-01-01', 'old', 'delivered', 1);`);
         legacy.close();
         for (let opening = 0; opening < 2; opening++) {
           const store = LocalJobStore.open(path);
@@ -550,6 +560,14 @@ describe("local-jobs/store", () => {
             });
             expect(store.acceptMessage("old", body("A")))
               .toMatchObject({ code: "not_continuable" });
+            expect(store.acceptMessage("old", {
+              caller: "cfs:weaver",
+              idempotencyKey: "legacy-message",
+              message: "Legacy message",
+            })).toMatchObject({
+              created: false,
+              message: { delivery: "delivered", turn: 1 },
+            });
             if (opening === 0) {
               const pending =
                 added(store.enqueue("test", "ask", "running", request())).job;
