@@ -689,7 +689,9 @@ const dataMemberDeclarations = (
  * bindings, a part a type parameter stands for is the argument bound to it,
  * so `T & { y: number }` at `T = { x: string }` is `{ x: string }` and
  * `{ y: number }`, an intersection of them the checker has no public way to
- * build. An alternative holding no bound parameter is one part, itself.
+ * build. A mapped type over a bound parameter, as `Readonly<T>`, is what it
+ * maps over, read the same way, as its members are that type's. An
+ * alternative holding no bound parameter is one part, itself.
  */
 type Payload = readonly (readonly ts.Type[])[];
 
@@ -699,8 +701,11 @@ type Payload = readonly (readonly ts.Type[])[];
  * argument, as the checker would instantiate it, alone or in a union or an
  * intersection, which distributes over a union its argument is.
  */
-const boundPayloadOf = (metadata: CarriedMetadata): Payload | undefined =>
-  metadata.of && payloadUnder(metadata.of, metadata.bound);
+const boundPayloadOf = (
+  metadata: CarriedMetadata,
+  checker: ts.TypeChecker,
+): Payload | undefined =>
+  metadata.of && payloadUnder(metadata.of, metadata.bound, checker);
 
 /**
  * Helper for {@link boundPayloadOf}, which returns `type` read under `bound`
@@ -710,23 +715,28 @@ const boundPayloadOf = (metadata: CarriedMetadata): Payload | undefined =>
 const payloadUnder = (
   type: ts.Type,
   bound: BoundTypeParameters | undefined,
+  checker: ts.TypeChecker,
 ): Payload => {
   const argument = boundArgumentOfType(type, bound);
-  if (argument) return payloadUnder(argument.type, argument.bound);
+  if (argument) return payloadUnder(argument.type, argument.bound, checker);
+  const source = mappedSourceOf(type, checker);
+  if (source !== undefined && holdsBoundParameter(source, bound, checker)) {
+    return payloadUnder(source, bound, checker);
+  }
   if (type.isUnion()) {
     return type.types.flatMap((alternative) =>
-      payloadUnder(alternative, bound)
+      payloadUnder(alternative, bound, checker)
     );
   }
   if (
     !type.isIntersection() ||
-    !type.types.some((part) => holdsBoundParameter(part, bound))
+    !type.types.some((part) => holdsBoundParameter(part, bound, checker))
   ) {
     return [[type]];
   }
   let alternatives: (readonly ts.Type[])[] = [[]];
   for (const part of type.types) {
-    const read = payloadUnder(part, bound);
+    const read = payloadUnder(part, bound, checker);
     alternatives = alternatives.flatMap((parts) =>
       read.map((more) => [...parts, ...more])
     );
@@ -742,16 +752,37 @@ const payloadUnder = (
 };
 
 /**
- * Whether `type` is a type parameter `bound` binds, or a union or an
- * intersection holding one.
+ * Whether `type` is a type parameter `bound` binds, or a union, an
+ * intersection or a mapped type holding one.
  */
 const holdsBoundParameter = (
   type: ts.Type,
   bound: BoundTypeParameters | undefined,
-): boolean =>
-  boundArgumentOfType(type, bound) !== undefined ||
-  (type.isUnionOrIntersection() &&
-    type.types.some((part) => holdsBoundParameter(part, bound)));
+  checker: ts.TypeChecker,
+): boolean => {
+  if (boundArgumentOfType(type, bound) !== undefined) return true;
+  if (type.isUnionOrIntersection()) {
+    return type.types.some((part) => holdsBoundParameter(part, bound, checker));
+  }
+  const source = mappedSourceOf(type, checker);
+  return source !== undefined && holdsBoundParameter(source, bound, checker);
+};
+
+/**
+ * The type `type` maps over where it is a mapped type, as `Readonly<T>` and
+ * `{ [K in keyof T]: T[K] }` map over `T` (`MappedTypeWithInternals`), read
+ * once the checker has resolved its members.
+ */
+const mappedSourceOf = (
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): ts.Type | undefined => {
+  if (((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Mapped) === 0) {
+    return undefined;
+  }
+  checker.getPropertiesOfType(type);
+  return (type as MappedTypeWithInternals).modifiersType;
+};
 
 /**
  * The declarations of each member `of`, a payload, holds as data, by name
@@ -1639,9 +1670,11 @@ export class CommonFabricFormatter implements TypeFormatter {
     // formatters after this one read it, or, where `Readonly`, `Partial` and
     // `Required` leave a primitive as it is, the primitive; and its labels
     // are those of the members the operand may be, joined. The carrier folded
-    // into the object is those members' carriers, which `Omit` over a union
-    // folds into one that holds every member's policies, though the value is
-    // only one of them, so the object is labeled here and not by it.
+    // into the object is those members' carriers. Over a union, `Omit` folds
+    // them into one that holds every member's policies, though the value is
+    // only one of them, so the object is labeled here and not by it; over one
+    // member, the carrier is that member's, which the checker instantiated,
+    // and labels the object as well.
     const view = this.#libraryView(type, context);
     if (view) {
       // A carrier every member holds, as one around a union operand, is one
@@ -1662,10 +1695,12 @@ export class CommonFabricFormatter implements TypeFormatter {
           context,
           undefined,
         )
-        : this.#schemaGenerator.formatStructure(type, {
-          ...context,
-          carriersRead: type,
-        });
+        : this.#schemaGenerator.formatStructure(
+          type,
+          view.members.length > 1
+            ? { ...context, carriersRead: type }
+            : context,
+        );
       return this.#withMemberLabels(shape, type, view.members, context);
     }
 
@@ -2973,7 +3008,7 @@ export class CommonFabricFormatter implements TypeFormatter {
           type,
           labels.map((label, index) => ({
             labels: label,
-            of: boundPayloadOf(metadata[index]!),
+            of: boundPayloadOf(metadata[index]!, context.typeChecker),
           })),
           context,
         ),
@@ -3039,7 +3074,7 @@ export class CommonFabricFormatter implements TypeFormatter {
         type,
         labels.map((label, index) => ({
           labels: label,
-          of: boundPayloadOf(metadata[index]!),
+          of: boundPayloadOf(metadata[index]!, context.typeChecker),
         })),
         context,
       ));

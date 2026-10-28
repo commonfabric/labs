@@ -1499,9 +1499,11 @@ Mechanics:
   (`placeCarriedLabels`, `payloadReach`). A payload read under bindings has
   each type parameter it holds read as the argument bound to it, wherever in
   the payload the parameter stands, part by part where it stands in an
-  intersection, which distributes over a union the argument is: so
-  `Confidential<T & { y: number }, L>` at `T = { x: string }` was written
-  around `x` as well as `y` (`boundPayloadOf`).
+  intersection, which distributes over a union the argument is, and a mapped
+  type over one, as `Readonly<T>`, read as what it maps over: so
+  `Confidential<T & { y: number }, L>` and
+  `Confidential<Readonly<T> & { y: number }, L>` at `T = { x: string }` were
+  written around `x` as well as `y` (`boundPayloadOf`).
   - A restriction lands wherever the payload's data may be: on each member of
     the value the payload names, and on each member with no declaration. A
     mapped type that renames its keys keeps no member's declaration, nor does
@@ -1619,7 +1621,11 @@ Mechanics:
   checker builds, read as any other type is and never holding the carrier,
   labeled with the labels of the members the operand may be, each member's
   read from its carriers in full or not at all and placed by the payloads
-  they record (above). A union operand may be any of its members, each read
+  they record (above). Where the operand is one member, the carrier the
+  checker folded into the object is that member's, instantiated, and labels
+  the object too, so a payload no binding can be read through still places
+  its labels; where it is several, the folded carrier holds every member's
+  policies at once, and is not read. A union operand may be any of its members, each read
   on its own once its parameters are bound, and is unlabeled where a member
   is `any`, to which the checker reduces it. A bare `unknown` member has no
   labels and no members, so the other members' labels stay, landing where

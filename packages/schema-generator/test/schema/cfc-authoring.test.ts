@@ -3321,6 +3321,27 @@ describe("Schema: CFC authoring aliases", () => {
       expect(diagnostics).toEqual([]);
     });
 
+    it("labels the whole of an `Omit` under bindings whose payload intersects a mapped wrapper of a bound parameter with a member of its own", async () => {
+      // `Readonly<T>` maps over `T`, read as its argument, so the policy
+      // reaches `x` as well as `y`.
+      const { value, diagnostics } = await generate(`
+        type Outer<T> = Confidential<
+          {
+            inner: Omit<
+              Confidential<Readonly<T> & { y: number }, readonly ["c"]>,
+              never
+            >;
+          },
+          readonly ["b"]
+        >;
+        interface Holder { value: Outer<{ x: string }> }
+      `);
+      const { ifc, properties } = (value as any).properties.inner;
+      expect(ifc).toEqual({ confidentiality: ["c"] });
+      expect(properties.x.ifc).toBeUndefined();
+      expect(diagnostics).toEqual([]);
+    });
+
     it("labels the whole of an `Omit` under bindings with a restriction whose payload holds data under keys no member names", async () => {
       // The payload's index signature may hold its data under any key, the
       // keys the `Omit` keeps among them.
@@ -4073,6 +4094,24 @@ describe("Schema: CFC authoring aliases", () => {
           | Sec<{ x: string; y: number }>,
           never
         >;
+        type OmitReadonly<T> =
+          Omit<Confidential<Readonly<T> & { y: number }, readonly ["c"]>, never>;
+        type OmitReadonlyIntegrity<T> =
+          Omit<Integrity<Readonly<T> & { y: number }, readonly ["i"]>, never>;
+        type OmitPartial<T> =
+          Omit<Confidential<Partial<T> & { y: number }, readonly ["c"]>, never>;
+        type OmitPickAll<T> = Omit<
+          Confidential<Pick<T, keyof T> & { y: number }, readonly ["c"]>,
+          never
+        >;
+        type OmitReadonlyOr<T> = Omit<
+          | Confidential<Readonly<T> & { y: number }, readonly ["c"]>
+          | Sec<{ x: string; y: number }>,
+          never
+        >;
+        type Same<X> = X extends object ? X : never;
+        type OmitConditional<T> =
+          Omit<Confidential<Same<T> & { y: number }, readonly ["c"]>, never>;
         type OmitOpen<T> = Omit<T | Sec<T>, never>;
         type OmitOpenLabeled<T> =
           Omit<T | Confidential<unknown, readonly ["c"]>, never>;
@@ -4257,6 +4296,36 @@ describe("Schema: CFC authoring aliases", () => {
           for (const property of Object.values(properties)) {
             expect(property.ifc).toBeUndefined();
           }
+          expect(diagnostics).toEqual([]);
+        });
+      }
+
+      for (
+        const [alias, ifc] of [
+          ["OmitReadonly<{ x: string }>", { confidentiality: ["c"] }],
+          ["OmitReadonlyIntegrity<{ x: string }>", { integrity: ["i"] }],
+          ["OmitPartial<{ x: string }>", { confidentiality: ["c"] }],
+          ["OmitPickAll<{ x: string }>", { confidentiality: ["c"] }],
+          ["OmitReadonlyOr<{ x: string }>", { confidentiality: ["a", "c"] }],
+          ["OmitConditional<{ x: string }>", { confidentiality: ["c"] }],
+        ] as const
+      ) {
+        it(`labels the whole of \`${alias}\`, whose payload intersects a wrapped bound parameter with a member of its own`, async () => {
+          // The policy was written around what wraps `T`, read with `T` bound
+          // to its argument, so it reaches `x` as well as `y`. A mapped
+          // wrapper is read as what it maps over; any other wrapper is read
+          // from the carrier the checker folded into the object, which is the
+          // one member's, instantiated.
+          const { schema, diagnostics } = await generate(alias, DECLARATIONS);
+          const whole = (schema as { ifc: Record<string, string[]> }).ifc;
+          expect(
+            Object.fromEntries(
+              Object.entries(whole).map(([key, atoms]) => [
+                key,
+                [...atoms].sort(),
+              ]),
+            ),
+          ).toEqual(ifc);
           expect(diagnostics).toEqual([]);
         });
       }

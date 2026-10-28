@@ -2648,6 +2648,31 @@ type View<T> = Omit<${alias}<T & { y: number }, readonly ["${atom}"]>, never>;`,
         });
       }
 
+      for (
+        const [wrapper, alias, atom, ifc] of [
+          ["Readonly<T>", "Confidential", "c", { confidentiality: ["c"] }],
+          ["Readonly<T>", "Integrity", "i", { integrity: ["i"] }],
+          ["Partial<T>", "Confidential", "c", { confidentiality: ["c"] }],
+          ["Required<T>", "Confidential", "c", { confidentiality: ["c"] }],
+          ["Pick<T, keyof T>", "Confidential", "c", {
+            confidentiality: ["c"],
+          }],
+        ] as const
+      ) {
+        it(`labels the whole of an \`Omit\` over \`${alias}<${wrapper} & { y: number }, …>\` at \`T = { x: string }\`, on both sides`, async () => {
+          // The policy was written around `T` mapped and `{ y: number }`, so
+          // it reaches `x` as well as `y`.
+          const read = await schemasOf(
+            `import type { Integrity } from "commonfabric";
+type View<T> = Omit<${alias}<${wrapper} & { y: number }, readonly ["${atom}"]>, never>;`,
+            "View<{ x: string }>",
+          );
+          for (const side of [read.input, read.output]) {
+            expect((side as Schema).ifc).toEqual(ifc);
+          }
+        });
+      }
+
       it("labels the whole of a `Pick` under bindings that selects a key the payload's index signature supplies, on both sides", async () => {
         // The payload may hold its data under `y` through its index
         // signature, so the restriction reaches `y` as well as `x`.
