@@ -146,6 +146,8 @@ const buildSymbolicSchemaAtPathClassifier = (
         nextActive,
       );
     }
+    // A false schema, however it is written, narrows every key to `false`.
+    if (cfcSchemaIsFalse(schema)) return () => "terminal";
     if (Array.isArray(schema.type)) {
       const { type: _types, ...base } = schema;
       const classifiers: SymbolicSchemaAtPathClassifier[] = [];
