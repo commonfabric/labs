@@ -303,6 +303,25 @@ describe("ContextualFlowControl.schemaAtPath", () => {
     expect(ContextualFlowControl.schemaAtPath(schema, ["0"])).toBe(true);
   });
 
+  it("returns each key's own narrowing of a frozen schema that omits `type`, whichever key is narrowed first", () => {
+    // Such a schema narrows as an object and as an array, so a key the
+    // object reading leaves open and a key it declares do not share the
+    // cached narrowing of whichever was looked up first.
+
+    const schema = deepFreeze({
+      properties: {
+        secret: { type: "string", ifc: { confidentiality: ["secret"] } },
+      },
+      items: { type: "number" },
+    } as JSONSchemaObj);
+
+    expect(ContextualFlowControl.schemaAtPath(schema, ["other"])).toBe(true);
+    expect(ContextualFlowControl.schemaAtPath(schema, ["secret"])).toEqual({
+      type: "string",
+      ifc: { confidentiality: ["secret"] },
+    });
+  });
+
   it("falls back when composition branches contain an indirect ref cycle", () => {
     const schema = deepFreeze({
       $ref: "#/$defs/A",

@@ -177,6 +177,17 @@ const buildSymbolicSchemaAtPathClassifier = (
       return combineSymbolicSchemaClassifiers(classifiers);
     }
     if (cfcSchemaIsTrue(schema)) return () => "wildcard";
+    if (schema.type === undefined) {
+      // Narrowing reads a schema declaring no type as the types its `enum`
+      // or `const` members make, or else as an object and as an array
+      // (`#schemaAtPathInternal`), so a key is classified by each reading.
+      const types = enumeratedTypes(schema) ?? ["object", "array"];
+      return buildSymbolicSchemaAtPathClassifier(
+        { ...schema, type: types.length === 1 ? types[0] : [...types] },
+        schemaRoot,
+        nextActive,
+      );
+    }
     if (schema.type === "object") {
       const properties = schema.properties;
       if (properties !== undefined) {
