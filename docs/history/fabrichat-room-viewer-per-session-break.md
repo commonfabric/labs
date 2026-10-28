@@ -110,6 +110,16 @@ The other 18 pairs are the baselines recorded since those breaks, which no
 entry named: 12 of the room's, 3 of the placement's and 3 of the adapter's.
 They have entries of their own, which name this record.
 
+A change of scope at `messageRights` is reported at that path alone, and no
+longer at the paths below it. Three of the room's entries named paths below
+`result.messageRights[]` and `result.$VIEWS.room.messageRights[]` for earlier
+breaks, which none of their pairs blames now, and the gate refuses an entry
+naming a path no pair blames. They no longer name them: one entry for
+`fabrichat-pushed-messages-break.md` (six paths, under `message.reactions[]`,
+`message.earlierVersions` and `message.replyTo.message`) and two for
+`fabrichat-reply-split-break.md` (two paths each, under
+`message.replyTo.message`).
+
 ## What it does not change
 
 The placement's `state`, and everything a placement gates on it, stays per

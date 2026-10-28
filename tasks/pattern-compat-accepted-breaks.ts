@@ -2083,8 +2083,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.obliterateMessage.message.reactions[]",
       "result.sendMessage.message.reactions[]",
       "result.sendReaction.message.reactions[]",
-      "result.$VIEWS.room.messageRights[].message.reactions[]",
-      "result.messageRights[].message.reactions[]",
       "result.openWindow",
       "result.recentActivityExpiredThrough",
       "result.$VIEWS.room.openWindow",
@@ -2135,15 +2133,12 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.sendReaction.requestId",
       "result.sendReaction.version",
       "result.sendReaction.message.earlierVersions",
-      "result.$VIEWS.room.messageRights[].message.earlierVersions",
-      "result.messageRights[].message.earlierVersions",
       "result.$VIEWS.room.deleteMessage.message.replyTo.message",
       "result.$VIEWS.room.deleteMessage.replyTo.message",
       "result.$VIEWS.room.deleteReaction.message.replyTo.message",
       "result.$VIEWS.room.deleteReaction.replyTo.message",
       "result.$VIEWS.room.editMessage.message.replyTo.message",
       "result.$VIEWS.room.editMessage.replyTo.message",
-      "result.$VIEWS.room.messageRights[].message.replyTo.message",
       "result.$VIEWS.room.messages.latest.messages[].replyTo.message",
       "result.$VIEWS.room.messages.threads[].root.replyTo.message",
       "result.$VIEWS.room.obliterateMessage.message.replyTo.message",
@@ -2158,7 +2153,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.deleteReaction.replyTo.message",
       "result.editMessage.message.replyTo.message",
       "result.editMessage.replyTo.message",
-      "result.messageRights[].message.replyTo.message",
       "result.messages.latest.messages[].replyTo.message",
       "result.messages.threads[].root.replyTo.message",
       "result.obliterateMessage.message.replyTo.message",
@@ -2168,7 +2162,9 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.sendReaction.message.replyTo.message",
       "result.sendReaction.replyTo.message",
       // The reader's answers, declared per session, which
-      // `fabrichat-room-viewer-per-session-break.md` records.
+      // `fabrichat-room-viewer-per-session-break.md` records. The paths
+      // below `messageRights` this entry named are reported as its scope's
+      // change now, so they are no longer named.
       "result.$VIEWS.room.canAdd",
       "result.$VIEWS.room.canSend",
       "result.$VIEWS.room.messageRights",
@@ -2232,7 +2228,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.$VIEWS.room.deleteReaction.replyTo.message",
       "result.$VIEWS.room.editMessage.message.replyTo.message",
       "result.$VIEWS.room.editMessage.replyTo.message",
-      "result.$VIEWS.room.messageRights[].message.replyTo.message",
       "result.$VIEWS.room.messages.latest.messages[].replyTo.message",
       "result.$VIEWS.room.messages.threads[].root.replyTo.message",
       "result.$VIEWS.room.obliterateMessage.message.replyTo.message",
@@ -2248,7 +2243,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.deleteReaction.replyTo.message",
       "result.editMessage.message.replyTo.message",
       "result.editMessage.replyTo.message",
-      "result.messageRights[].message.replyTo.message",
       "result.messages.latest.messages[].replyTo.message",
       "result.messages.threads[].root.replyTo.message",
       "result.obliterateMessage.message.replyTo.message",
@@ -2260,7 +2254,9 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.sendReaction.message.replyTo.message",
       "result.sendReaction.replyTo.message",
       // The reader's answers, declared per session, which
-      // `fabrichat-room-viewer-per-session-break.md` records.
+      // `fabrichat-room-viewer-per-session-break.md` records. The paths
+      // below `messageRights` this entry named are reported as its scope's
+      // change now, so they are no longer named.
       "result.$VIEWS.room.canAdd",
       "result.$VIEWS.room.canSend",
       "result.$VIEWS.room.messageRights",
@@ -2292,7 +2288,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.$VIEWS.room.deleteReaction.replyTo.message",
       "result.$VIEWS.room.editMessage.message.replyTo.message",
       "result.$VIEWS.room.editMessage.replyTo.message",
-      "result.$VIEWS.room.messageRights[].message.replyTo.message",
       "result.$VIEWS.room.messages.latest.messages[].replyTo.message",
       "result.$VIEWS.room.messages.threads[].root.replyTo.message",
       "result.$VIEWS.room.obliterateMessage.message.replyTo.message",
@@ -2307,7 +2302,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.deleteReaction.replyTo.message",
       "result.editMessage.message.replyTo.message",
       "result.editMessage.replyTo.message",
-      "result.messageRights[].message.replyTo.message",
       "result.messages.latest.messages[].replyTo.message",
       "result.messages.threads[].root.replyTo.message",
       "result.obliterateMessage.message.replyTo.message",
@@ -2317,7 +2311,9 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.sendReaction.message.replyTo.message",
       "result.sendReaction.replyTo.message",
       // The reader's answers, declared per session, which
-      // `fabrichat-room-viewer-per-session-break.md` records.
+      // `fabrichat-room-viewer-per-session-break.md` records. The paths
+      // below `messageRights` this entry named are reported as its scope's
+      // change now, so they are no longer named.
       "result.$VIEWS.room.canAdd",
       "result.$VIEWS.room.canSend",
       "result.$VIEWS.room.messageRights",
