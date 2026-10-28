@@ -769,6 +769,10 @@ function factoryFromPattern<T, R>(
             // A root sits at the address its space's genesis reserved, so the
             // cell the call returns is pinned there: a link to it is a link to
             // the root itself, not to a document of its own that links on.
+            // The node's output binding then redirects to the root, so the
+            // runner's write of the child's link into that binding is a link
+            // to the slot it is written to, which `normalizeAndDiff()` drops
+            // as a self-reference.
             setCellUnlinkedSpace(
               outputs,
               targetSpace,
