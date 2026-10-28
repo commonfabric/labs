@@ -283,9 +283,9 @@ export class FabricKeyPair extends BaseFabricPrimitive {
       /** @inheritDoc */
       canDecode(state: FabricValue): state is FabricKeyPairMaterialState {
         return isPlainObject(state) &&
-          (typeof state.algorithm === "string") &&
-          (typeof state.publicKey === "string") &&
-          (typeof state.privateKey === "string");
+          (["algorithm", "publicKey", "privateKey"] as const).every((key) =>
+            Object.hasOwn(state, key) && (typeof state[key] === "string")
+          );
       }
 
       /** @inheritDoc */
@@ -351,11 +351,15 @@ export class FabricKeyPair extends BaseFabricPrimitive {
           return false;
         }
 
-        const { algorithm, publicKey, privateKey } = state as {
-          algorithm?: unknown;
-          publicKey?: unknown;
-          privateKey?: unknown;
-        };
+        // Each field is read as an own property, so that nothing inherited
+        // stands in for one.
+        const own = (key: string): unknown =>
+          Object.hasOwn(state, key)
+            ? (state as Record<string, unknown>)[key]
+            : undefined;
+        const algorithm = own("algorithm");
+        const publicKey = own("publicKey");
+        const privateKey = own("privateKey");
 
         if (
           FabricKeyPair.#isCryptoKey(publicKey) &&

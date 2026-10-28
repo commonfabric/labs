@@ -883,6 +883,33 @@ describe("FabricError", () => {
           expect(result.name).toBe("TypeError");
         });
 
+        it("reads no optional field that is inherited rather than own", () => {
+          // Read as own properties, so a `name`, `stack` or `cause` reachable
+          // only through the prototype chain does not stand in for one.
+          const polluted = Object.prototype as {
+            name?: unknown;
+            stack?: unknown;
+            cause?: unknown;
+          };
+          polluted.name = "Inherited";
+          polluted.stack = "at inherited";
+          polluted.cause = "inherited";
+          try {
+            const result = codec.decode(
+              expectedTag,
+              { type: "TypeError", message: "m" },
+              env,
+            ) as unknown as FabricError;
+            expect(result.name).toBe("TypeError");
+            expect(result.stack).toBe(undefined);
+            expect(result.cause).toBe(undefined);
+          } finally {
+            delete polluted.name;
+            delete polluted.stack;
+            delete polluted.cause;
+          }
+        });
+
         it("returns the custom `name` it decoded", () => {
           const state = { type: "Error", name: "MyCustomError", message: "x" };
           const result = codec.decode(

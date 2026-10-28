@@ -524,12 +524,16 @@ export class FabricError extends FabricNativeWrapper<Error>
         _env: LiveEnvironment,
         mutable = false,
       ): FabricValue {
+        // Each optional field is read as an own property, so that nothing
+        // inherited stands in for one.
+        const own = (key: string): FabricValue =>
+          Object.hasOwn(state, key) ? state[key] : undefined;
         const type = state.type as string;
         // A `name` that is `null` or absent means "same as `type`".
-        const name = (state.name as string | null | undefined) ?? type;
+        const name = (own("name") as string | null | undefined) ?? type;
         const message = state.message as string;
-        const stack = state.stack as string | undefined;
-        const cause = state.cause;
+        const stack = own("stack") as string | undefined;
+        const cause = own("cause");
 
         const extras: Array<[string, FabricValue]> = [];
         for (const key of Object.keys(state)) {

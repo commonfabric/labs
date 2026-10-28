@@ -317,15 +317,17 @@ export class FabricRegExp extends BaseFabricPrimitive
 }
 
 /**
- * Indicates whether `state` holds the three fields of a `RegExp@1` state, each a
- * string. A field present as `undefined`, which the realm format carries, is
- * refused like an absent one.
+ * Indicates whether `state` holds the three fields of a `RegExp@1` state as own
+ * properties, each a string, so that nothing inherited stands in for one. A
+ * field present as `undefined`, which the realm format carries, is refused like
+ * an absent one.
  */
 function hasStringFields(
   state: Readonly<Record<string, unknown>>,
 ): state is FabricRegExpState {
-  return (typeof state.flavor === "string") &&
-    (typeof state.source === "string") && (typeof state.flags === "string");
+  return (["flavor", "source", "flags"] as const).every((key) =>
+    Object.hasOwn(state, key) && (typeof state[key] === "string")
+  );
 }
 
 /**

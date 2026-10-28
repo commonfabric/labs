@@ -212,6 +212,18 @@ describe("FabricRegExp", () => {
           expect(codec.canDecode("nope")).toBe(false);
         });
 
+        it("returns `false` for a field that is inherited rather than own", () => {
+          // Read as an own property, so a `flavor` reachable only through the
+          // prototype chain does not stand in for one.
+          const polluted = Object.prototype as { flavor?: unknown };
+          polluted.flavor = "es2025";
+          try {
+            expect(codec.canDecode({ source: "a", flags: "g" })).toBe(false);
+          } finally {
+            delete polluted.flavor;
+          }
+        });
+
         it("returns `false` for a non-string field", () => {
           // Only the `es2025` flavor is validated for syntax, so under any
           // other one these values reach the constructor untouched -- and
@@ -296,6 +308,28 @@ describe("FabricRegExp", () => {
     describe("[REALM_CODEC]", () => {
       const codec = FabricRegExp[REALM_CODEC];
       const env = NULL_LIVE_ENVIRONMENT;
+
+      describe("canDecode()", () => {
+        it("returns `true` for a record of the three strings", () => {
+          expect(codec.canDecode({
+            flavor: "es2025",
+            source: "a",
+            flags: "g",
+          })).toBe(true);
+        });
+
+        it("returns `false` for a field that is inherited rather than own", () => {
+          // Read as an own property, so a `flavor` reachable only through the
+          // prototype chain does not stand in for one.
+          const polluted = Object.prototype as { flavor?: unknown };
+          polluted.flavor = "es2025";
+          try {
+            expect(codec.canDecode({ source: "a", flags: "g" })).toBe(false);
+          } finally {
+            delete polluted.flavor;
+          }
+        });
+      });
 
       describe("encode()", () => {
         it("returns a frozen record", () => {
