@@ -1,7 +1,8 @@
 /**
- * Profile availability changes no ownership.
- * Deletion needs a resolved profile; owner moderation does not.
+ * Deletion requires a resolved profile. Owner moderation remains available
+ * after the selected profile is cleared.
  */
+
 import {
   action,
   type AddIntegrity,
