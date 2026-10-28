@@ -830,26 +830,38 @@ interface SessionAdmissible {
 ```
 
 `session/admissible` names a space and a principal that the server refused
-that space on this connection, and that the space's access list now grants
-`READ`. The server records a refusal when it denies a `session.open` for want
+that space, on this connection or on a closed one whose refusal it holds (below),
+and that the space's access list now grants `READ`. The server records a refusal when it denies a `session.open` for want
 of `READ`, and when an access-list change revokes a session for the same
 reason. An access-list commit that gives a recorded principal `READ` sends the
 notice to the connection the refusal was recorded on, and removes the record,
 so each refusal is told at most once. A grant written to the space's store by
 another process sends it at the space's next refresh turn after the server
-finds the change (see the capability cache under the ACL policy below). A change that leaves the principal
-without `READ` sends nothing, and the notice reaches no other connection.
+finds the change (see the capability cache under the ACL policy below). A
+change that leaves the principal without `READ` sends nothing. While the connection the refusal was recorded on
+is open, the notice reaches no other connection.
+
+A refusal outlives the connection it was recorded on. With one connection per
+space, a refused `session.open` closes the connection it was refused on while
+the principal's sessions on other spaces stay open on theirs, so when that
+connection closes the server holds the record for the principal instead. A grant
+then sends the notice to every connection serving the principal: each that owns
+a live session opened as it, in any space, and each whose `connection.auth`
+holds it. The principal is told on whichever connection its client still has,
+and learns nothing it could not learn there by opening the session again.
 
 The notice is a hint and grants nothing. A client that acts on it opens the
 session again through ordinary admission, which decides on the access list as
 it then stands. It tells the principal only that its own access changed, and
 when, which opening the session again would also tell it.
 
-A record lives as long as its connection, and ends with an admitted
-`session.open` of the same space and principal, or with a `connection.release`
-of the principal. A connection holds at most 1024 records, and the oldest is
-dropped past that; its principal then learns of a grant only by opening the
-session again. A connection whose peer did not advertise `admissionNotice`
+A record ends with an admitted `session.open` of the same space and principal
+on its connection, or with a `connection.release` of the principal there. A held
+record ends with an admitted `session.open` of its space and principal on any
+connection, or once no connection serves its principal. A connection holds at
+most 1024 records, and so do a principal's held records; the oldest is dropped
+past that, and its principal then learns of a grant only by opening the session
+again. A connection whose peer did not advertise `admissionNotice`
 records nothing, and neither does a routed connection
 ([`routed-mode-a.md`](routed-mode-a.md)), whatever its peers advertise. Nor
 does a session opened `actingAs: "space-owner"`: only a co-hosted serving

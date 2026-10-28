@@ -3960,8 +3960,43 @@ export class Server {
       return capability !== null && isCapable(capability, "READ");
     });
     for (const { connectionId, principal } of admitted) {
-      this.#connections.get(connectionId)?.sendAdmissible(space, principal);
+      if (connectionId !== undefined) {
+        this.#connections.get(connectionId)?.sendAdmissible(space, principal);
+        continue;
+      }
+      for (const connection of this.#connectionsServing(principal)) {
+        connection.sendAdmissible(space, principal);
+      }
     }
+  }
+
+  /**
+   * The connections a held refusal of `principal` is told on: those owning
+   * one of its live sessions, in any space, and those whose `connection.auth`
+   * holds it, less the routed ones and those whose peer did not advertise
+   * `admissionNotice`.
+   */
+  #connectionsServing(principal: string): Connection[] {
+    const ids = new Set<string>();
+    for (const session of this.#sessions.sessionsForPrincipal(principal)) {
+      if (session.ownerConnectionId !== null) {
+        ids.add(session.ownerConnectionId);
+      }
+    }
+    for (const [id, connection] of this.#connections) {
+      if (connection.hasPrincipal(principal)) ids.add(id);
+    }
+    const serving: Connection[] = [];
+    for (const id of ids) {
+      const connection = this.#connections.get(id);
+      if (
+        connection !== undefined && !connection.routed &&
+        connection.admissionNotice
+      ) {
+        serving.push(connection);
+      }
+    }
+    return serving;
   }
 
   /**
@@ -4022,7 +4057,15 @@ export class Server {
 
   disconnect(connection: Connection): void {
     this.#connections.delete(connection.id);
-    this.#admissionWaiters.removeConnection(connection.id);
+    // A refusal recorded on the closing connection waits on for another
+    // connection serving its principal, and a principal no connection
+    // serves any longer has its held refusals dropped.
+    this.#admissionWaiters.hold(connection.id);
+    for (const principal of this.#admissionWaiters.heldPrincipals()) {
+      if (this.#connectionsServing(principal).length === 0) {
+        this.#admissionWaiters.releaseHeld(principal);
+      }
+    }
     if (this.#connections.size === 0) {
       this.#cancelScheduledRefresh();
     }
@@ -5722,6 +5765,7 @@ export class Server {
       }
       if (principal !== undefined) {
         this.#admissionWaiters.remove(connection.id, message.space, principal);
+        this.#admissionWaiters.removeHeld(message.space, principal);
       }
       const nextSessionOpen = connection.issueSessionOpenAuth();
       // Activation trigger (serving-loop.md §1): session open makes the

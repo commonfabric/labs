@@ -4385,6 +4385,10 @@ class Provider
   >();
 
   #destroyed = false;
+
+  /** The retry `retryAccess()` last started, which the next one waits for. */
+  #retrying: Promise<void> = Promise.resolve();
+
   #routeAbort = new AbortController();
   #operationSubscriptions = new Set<ProviderOperationSubscription>();
   #presenceMemberships = new Set<ProviderPresenceMembership>();
@@ -4848,9 +4852,20 @@ class Provider
    * has decided. A refusal is recorded where the first one was, and does not
    * reject; any other failure, of the open or of a load, rejects, and leaves
    * the refused loads to the next retry. A session that stands is not opened
-   * again, though loads it was refused are.
+   * again, though loads it was refused are. Retries run one at a time, so
+   * two that start together open the session once: the later decides after
+   * the earlier, on the session it left.
    */
-  async retryAccess(refused: () => boolean): Promise<void> {
+  retryAccess(refused: () => boolean): Promise<void> {
+    const retry = this.#retrying.catch(() => {}).then(() =>
+      this.#retryAccessOnce(refused)
+    );
+    this.#retrying = retry;
+    return retry;
+  }
+
+  /** Helper for `retryAccess()`, which makes one retry. */
+  async #retryAccessOnce(refused: () => boolean): Promise<void> {
     // An open already in flight may be decided on the access list as it
     // stood before this call, so the retry waits for it before deciding
     // anything.
