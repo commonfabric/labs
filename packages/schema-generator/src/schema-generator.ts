@@ -1297,8 +1297,8 @@ function withoutLabels(
  * declares alone (`confined`), and how far into the merged value they reach,
  * as the type path places a CFC carrier's labels on its payload
  * (`placeCarriedLabels()`). A restriction reaches wherever the part's data
- * may be (`"may"`): the members it was written around, or the whole value
- * where those are none. Evidence
+ * may be (`"may"`): the members it was written around where its data is
+ * under those alone, and otherwise the whole value. Evidence
  * (`EVIDENCE_LABELS`) reaches only where the part's data must be (`"must"`):
  * the whole value where the part holds all of its data (`ValueMembers`), and
  * otherwise the members it was written around, as data the value holds
