@@ -120,7 +120,7 @@ import type {
   HarnessSkillScriptExecution,
 } from "./contracts/skill.ts";
 import type {
-  HarnessSubagentLineage,
+  HarnessRunLineage,
   HarnessSubagentResumeContext,
   HarnessSubagentRunRef,
 } from "./contracts/subagent.ts";
@@ -447,7 +447,7 @@ export interface CreateHarnessEngineOptions
    */
   acquiredSkills?: HarnessAcquiredSkills;
 
-  lineage?: HarnessSubagentLineage;
+  lineage?: HarnessRunLineage;
   subagentResumeContext?: HarnessSubagentResumeContext;
   /**
    * The host directory the sandbox mounts as its workspace. Required where
@@ -765,7 +765,7 @@ export class CfHarnessEngine {
     this.#resumedRun = options.runState !== undefined;
     this.#runModelBound = this.#resumedRun;
     const resumedLineage = options.runState?.lineage;
-    if (resumedLineage !== undefined) {
+    if (resumedLineage?.role === "subagent") {
       const resumeContext = options.subagentResumeContext;
       if (resumeContext === undefined) {
         throw harnessResumeRefusal(
@@ -991,8 +991,8 @@ export class CfHarnessEngine {
         "resumed run structured-result configuration does not match the recorded configuration",
       );
     }
-    this.#structuredResult = options.lineage === undefined &&
-        options.runState?.lineage === undefined
+    this.#structuredResult = options.lineage?.role !== "subagent" &&
+        options.runState?.lineage?.role !== "subagent"
       ? structuredClone(recordedStructuredResult ?? options.structuredResult)
       : undefined;
     this.#inputCells = options.inputCells ?? [];

@@ -600,9 +600,10 @@ fetch-shaped value. Write the signature out instead. `HarnessFetch` in
 `packages/runner/src/runtime.ts` are the package-level contracts. They hold
 whichever version resolves and whichever compiler checks them.
 
-This class of breakage is easy to miss because CI pins Deno 2.9.4 while
-`tasks/check.sh` accepts any 2.8.x or 2.9.x, so a local check and CI can
-disagree about what type checks.
+CI uses the exact Deno pin in `mise.toml`. Setting
+`DENO_CHECK_VERSION_LENIENT=1` lets `tasks/check.sh` accept other releases in its
+supported range, so an off-pin local check and CI can disagree about what type
+checks.
 
 ### Astral
 

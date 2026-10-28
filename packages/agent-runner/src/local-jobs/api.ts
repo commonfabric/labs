@@ -16,6 +16,9 @@
  *   names for the same request.
  * - `GET /jobs?limit=n` — the newest jobs, newest first.
  * - `GET /jobs/<id>` — one job.
+ * - `POST /jobs/<id>/messages` — accept `{caller, idempotencyKey, message,
+ *   instructions?}` on the conversation's head; returns `{message, job}`,
+ *   `201` on acceptance or `200` on replay.
  * - `POST /jobs/<id>/cancel` — ask a job to stop.
  * - `GET /jobs/<id>/events?after=<seq>` — the job's events after `seq` as
  *   server-sent events, then each new one as it is appended, ending after
@@ -52,6 +55,7 @@ import type { LocalJobProfiles } from "./profiles.ts";
 import {
   LOCAL_JOB_TERMINAL_STATES,
   type LocalJobEvent,
+  type LocalJobMessageRequest,
   type LocalJobRequest,
   type LocalJobStore,
 } from "./store.ts";
@@ -59,7 +63,7 @@ import {
 /** Longest idempotency key, caller or profile name a request may carry. */
 const MAX_NAME_LENGTH = 200;
 
-/** Largest JSON enqueue body accepted by the private socket. */
+/** Largest JSON enqueue or message body accepted by the private socket. */
 const MAX_ENQUEUE_BYTES = 1024 * 1024;
 
 /** How often an open event stream says it is alive when nothing happens. */
@@ -83,6 +87,9 @@ export interface LocalJobApiOptions {
 
   /** Starts queued jobs; called after an enqueue. */
   kick: () => void;
+
+  /** Whether the lane can take messages during a run; false when absent. */
+  canSteer?: () => boolean;
 
   /** Asks a job to stop. */
   cancel: (id: string) => unknown;
@@ -330,6 +337,83 @@ const enqueueRequestOf = (
         : {}),
     },
   };
+};
+
+/** Reads a message body, preserving absent versus supplied instructions. */
+const messageRequestOf = (value: unknown):
+  | LocalJobMessageRequest
+  | { error: string } => {
+  if (!isObjectNotArray(value)) return { error: "The body must be an object." };
+  const { caller, idempotencyKey, message, instructions } = value as Record<
+    string,
+    unknown
+  >;
+  if (
+    typeof caller !== "string" || caller.length === 0 ||
+    caller.length > MAX_NAME_LENGTH ||
+    typeof idempotencyKey !== "string" || idempotencyKey.length === 0 ||
+    idempotencyKey.length > MAX_NAME_LENGTH ||
+    typeof message !== "string" || message.length === 0 ||
+    (instructions !== undefined && typeof instructions !== "string")
+  ) {
+    return {
+      error:
+        "`caller`, `idempotencyKey` and `message` must be nonempty strings; `instructions` must be a string when supplied.",
+    };
+  }
+  return {
+    caller,
+    idempotencyKey,
+    message,
+    ...(instructions !== undefined ? { instructions } : {}),
+  };
+};
+
+/** Accepts a bounded message and starts any follow-up it opens. */
+const acceptMessage = async (
+  options: LocalJobApiOptions,
+  id: string,
+  request: Request,
+): Promise<Response> => {
+  if (
+    Number(request.headers.get("content-length") ?? "0") > MAX_ENQUEUE_BYTES
+  ) return refuse(413, "too_large", "The message is too large.");
+  let text: string | undefined;
+  try {
+    text = await boundedBodyText(request, MAX_ENQUEUE_BYTES);
+  } catch {
+    return refuse(400, "invalid_request", "The body could not be read.");
+  }
+  if (text === undefined) {
+    return refuse(413, "too_large", "The message is too large.");
+  }
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return refuse(400, "invalid_request", "The body must be JSON.");
+  }
+  const read = messageRequestOf(body);
+  if ("error" in read) return refuse(400, "invalid_request", read.error);
+  const accepted = options.store.acceptMessage(id, read, {
+    canSteer: options.canSteer?.() ?? false,
+    canOpenFollowUp: (profile) => options.profiles.get(profile) !== undefined,
+  });
+  if ("code" in accepted) {
+    const status = accepted.code === "not_found"
+      ? 404
+      : accepted.code === "not_callers"
+      ? 403
+      : accepted.code === "unknown_profile"
+      ? 400
+      : 409;
+    return refuse(status, accepted.code, accepted.error);
+  }
+  if (accepted.created) options.kick();
+  return json(accepted.created ? 201 : 200, {
+    message: accepted.message,
+    job: accepted.job,
+  });
 };
 
 /** Helper for the stream, which writes one event as a server-sent event. */
@@ -638,6 +722,11 @@ async (request: Request): Promise<Response> => {
   }
 
   const id = parts[1];
+  if (
+    parts.length === 3 && parts[2] === "messages" && request.method === "POST"
+  ) {
+    return await acceptMessage(options, id, request);
+  }
   if (store.get(id) === undefined) {
     return refuse(404, "not_found", `No job \`${id}\`.`);
   }

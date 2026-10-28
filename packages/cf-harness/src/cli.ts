@@ -9,6 +9,7 @@ import {
   join,
   relative,
   resolve,
+  SEPARATOR,
 } from "@std/path";
 import { normalize as normalizeSandboxPath } from "@std/path/posix";
 import type { JSONSchema } from "@commonfabric/api";
@@ -80,6 +81,7 @@ import type {
   HarnessTranscriptMessage,
 } from "./contracts/transcript.ts";
 import { CfHarnessEngine } from "./engine.ts";
+import { prepareHarnessContinuation } from "./run-continuation.ts";
 import { resolveHarnessFabricSessionConfig } from "./fabric-session-options.ts";
 import type { HarnessFabricSessionFactory } from "./fabric-session.ts";
 import {
@@ -221,6 +223,7 @@ const CLI_STRING_FLAGS = [
   "image",
   "system-prompt",
   "resume-run",
+  "continue-run",
   "model",
   "model-provider",
   "reasoning-effort",
@@ -307,6 +310,9 @@ export interface CfHarnessCliConfig extends HarnessSessionConfig {
   prompt?: string;
   imageAttachments: readonly HarnessImageAttachment[];
   resumeRun?: string;
+  continueRun?: string;
+  /** Whether a result schema was supplied rather than inherited at startup. */
+  structuredResultSchemaExplicit?: boolean;
   systemPrompt?: string;
   skillCatalogEnabled: boolean;
   modelProvider?: HarnessModelProviderId;
@@ -618,6 +624,7 @@ Options:
   --prompt-file <path>          Read prompt text from a file
   --image <path>                Attach an image file to the initial prompt (repeatable; png/jpeg/gif/webp)
   --resume-run <path>           Resume from a run root or run-state.json path
+  --continue-run <path>         Start a new run from a prior run, with a new prompt
   --system-prompt <text>        Optional system prompt
   --skills-root <path>          Skill root containing <name>/SKILL.md
   --docs-corpus-root <path>     Reference tree research may inspect (repeatable)
@@ -1226,8 +1233,33 @@ const createAllowedHostRoots = (
 
 const isHostPathWithinRoot = (root: string, path: string): boolean => {
   const relativePath = relative(root, path);
-  return relativePath === "" ||
-    (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+  return relativePath !== ".." && !relativePath.startsWith(`..${SEPARATOR}`) &&
+    !isAbsolute(relativePath);
+};
+
+/** Refuses outward artifact links and returns the canonical run root. */
+const validateContinuationArtifacts = async (
+  runRoot: string,
+): Promise<string> => {
+  const root = resolveHostPathThroughNearestRealParent(runRoot);
+  const directories = new Set<string>();
+  const pending = [root];
+  while (pending.length > 0) {
+    const entry = pending.pop()!;
+    const path = resolveHostPathThroughNearestRealParent(entry);
+    if (!isHostPathWithinRoot(root, path)) {
+      throw harnessResumeRefusal(
+        `cannot continue prior run: artifact entry \`${entry}\` links outside its run root`,
+      );
+    }
+    const stat = await Deno.stat(path);
+    if (!stat.isDirectory || directories.has(path)) continue;
+    directories.add(path);
+    for await (const child of Deno.readDir(path)) {
+      pending.push(join(path, child.name));
+    }
+  }
+  return root;
 };
 
 const findAllowedHostRoot = (
@@ -1320,6 +1352,12 @@ const resolvePrompt = async (
   const resumeRun = typeof args["resume-run"] === "string"
     ? resolve(cwd, args["resume-run"])
     : undefined;
+  const continueRun = typeof args["continue-run"] === "string"
+    ? resolve(cwd, args["continue-run"])
+    : undefined;
+  if (continueRun !== undefined && resumeRun !== undefined) {
+    throw new Error("--continue-run cannot be combined with --resume-run");
+  }
   const positionalPrompt = args._.length > 0
     ? args._.map(String).join(" ").trim()
     : undefined;
@@ -1351,6 +1389,21 @@ const resolvePrompt = async (
     return await readTextFile(promptFile);
   }
   return positionalPrompt!;
+};
+
+/** An explicit result tool needs a schema and destination before model work. */
+const assertStructuredResultToolConfigured = (
+  allowedToolIds: readonly BuiltinToolId[] | undefined,
+  structuredResult: CfHarnessStructuredResultConfig | undefined,
+): void => {
+  if (
+    allowedToolIds?.includes("submit_result") === true &&
+    structuredResult === undefined
+  ) {
+    throw new Error(
+      "--allow-tool submit_result requires --structured-result-path and a schema",
+    );
+  }
 };
 
 const parseStructuredResultConfig = async (
@@ -1396,6 +1449,14 @@ const parseStructuredResultConfig = async (
     (schemaFile !== undefined
       ? await options.readTextFile(schemaFile)
       : undefined);
+  // Continuation resolves the recorded schema before constructing an engine.
+  if (rawSchema === undefined && typeof args["continue-run"] === "string") {
+    return {
+      path: structuredResultPath,
+      sandboxPath: structuredResultPathResolution!.sandboxPath,
+      schema: {},
+    };
+  }
   if (rawSchema === undefined) {
     throw new Error(
       "--structured-result-path requires --structured-result-schema or --structured-result-schema-file",
@@ -1734,14 +1795,28 @@ export const parseCfHarnessCliArgs = async (
   const resumeRun = typeof args["resume-run"] === "string"
     ? resolve(cwd, args["resume-run"])
     : undefined;
-  if (resumeRun !== undefined && skillNames.length > 0) {
-    throw new Error("--skill preloading is not supported with --resume-run");
+  const continueRun = typeof args["continue-run"] === "string"
+    ? resolve(cwd, args["continue-run"])
+    : undefined;
+  if (continueRun !== undefined && resumeRun !== undefined) {
+    throw new Error("--continue-run cannot be combined with --resume-run");
+  }
+  if ((resumeRun ?? continueRun) !== undefined && skillNames.length > 0) {
+    throw new Error(
+      `--skill preloading is not supported with ${
+        resumeRun !== undefined ? "--resume-run" : "--continue-run"
+      }`,
+    );
   }
   const imagePaths = parseImageAttachmentPaths(
     args.image as string | readonly string[] | undefined,
   );
-  if (resumeRun !== undefined && imagePaths.length > 0) {
-    throw new Error("--image is not supported with --resume-run");
+  if ((resumeRun ?? continueRun) !== undefined && imagePaths.length > 0) {
+    throw new Error(
+      `--image is not supported with ${
+        resumeRun !== undefined ? "--resume-run" : "--continue-run"
+      }`,
+    );
   }
   if (configuredSkillsRoot !== undefined) {
     await assertSkillsRootRealPathWithinAllowedHostRoots(
@@ -1752,8 +1827,8 @@ export const parseCfHarnessCliArgs = async (
   const artifactRoot = resolve(
     typeof args["artifact-root"] === "string"
       ? args["artifact-root"]
-      : resumeRun !== undefined
-      ? dirname(resolveHarnessRunPaths(resumeRun).runRoot)
+      : (resumeRun ?? continueRun) !== undefined
+      ? dirname(resolveHarnessRunPaths((resumeRun ?? continueRun)!).runRoot)
       : join(workspace, DEFAULT_ARTIFACT_DIRNAME),
   );
   const resultJsonPath = typeof args["result-json-path"] === "string"
@@ -1847,9 +1922,14 @@ export const parseCfHarnessCliArgs = async (
   };
   // A resumed run is never classified, so a task shape on resume would be
   // silently ignored; it is refused like --input-cell is.
-  if (resumeRun !== undefined && Object.keys(taskShape).length > 0) {
+  if (
+    (resumeRun ?? continueRun) !== undefined &&
+    Object.keys(taskShape).length > 0
+  ) {
     throw new Error(
-      "--task-tags and --task-domains are not supported with --resume-run",
+      `--task-tags and --task-domains are not supported with ${
+        resumeRun !== undefined ? "--resume-run" : "--continue-run"
+      }`,
     );
   }
   // 0 is meaningful (disables compaction), so an explicit 0 must survive.
@@ -1916,8 +1996,12 @@ export const parseCfHarnessCliArgs = async (
   // A resumed run replays the input cells its run state recorded; a new
   // one on resume would be silently ignored, so it is refused like --skill
   // and --image are.
-  if (resumeRun !== undefined && inputCells.length > 0) {
-    throw new Error("--input-cell is not supported with --resume-run");
+  if ((resumeRun ?? continueRun) !== undefined && inputCells.length > 0) {
+    throw new Error(
+      `--input-cell is not supported with ${
+        resumeRun !== undefined ? "--resume-run" : "--continue-run"
+      }`,
+    );
   }
   const structuredResult = await parseStructuredResultConfig(args, {
     cwd,
@@ -1925,13 +2009,8 @@ export const parseCfHarnessCliArgs = async (
     allowedHostRoots,
     readTextFile,
   });
-  if (
-    allowedToolIds?.includes("submit_result") === true &&
-    structuredResult === undefined
-  ) {
-    throw new Error(
-      "--allow-tool submit_result requires --structured-result-path and a schema",
-    );
+  if (continueRun === undefined) {
+    assertStructuredResultToolConfigured(allowedToolIds, structuredResult);
   }
   const prompt = await resolvePrompt(args, cwd, readTextFile);
   const imageAttachments = await Promise.all(
@@ -1987,7 +2066,7 @@ export const parseCfHarnessCliArgs = async (
   // enforces at the recorded mode whatever the environment says. Reading them
   // on a resume would state a dial nobody typed, which a run recorded at
   // another mode then refuses. `CF_HARNESS_MODEL` is read the same way.
-  const envCfcMode = resumeRun === undefined
+  const envCfcMode = (resumeRun ?? continueRun) === undefined
     ? nonEmptyEnvValue(env.CF_HARNESS_CFC_ENFORCEMENT_MODE) ??
       nonEmptyEnvValue(env.CF_CFC_MODE)
     : undefined;
@@ -2159,6 +2238,10 @@ export const parseCfHarnessCliArgs = async (
     ...(prompt !== undefined ? { prompt } : {}),
     imageAttachments,
     ...(resumeRun !== undefined ? { resumeRun } : {}),
+    ...(continueRun !== undefined ? { continueRun } : {}),
+    structuredResultSchemaExplicit:
+      args["structured-result-schema"] !== undefined ||
+      args["structured-result-schema-file"] !== undefined,
     ...(typeof args["system-prompt"] === "string"
       ? { systemPrompt: args["system-prompt"] }
       : {}),
@@ -2173,7 +2256,7 @@ export const parseCfHarnessCliArgs = async (
     skillCatalogEnabled: args["no-skill-catalog"] !== true,
     ...(typeof args.model === "string"
       ? { model: args.model }
-      : resumeRun === undefined
+      : (resumeRun ?? continueRun) === undefined
       ? {
         model: nonEmptyEnvValue(env.CF_HARNESS_MODEL) ?? DEFAULT_HARNESS_MODEL,
       }
@@ -2597,6 +2680,63 @@ const appendStructuredResultInstructions = (
     "Result schema (JSON):",
     JSON.stringify(structuredResult.schema),
   );
+};
+
+/** Removes only the recorded host contract, retaining surrounding instructions. */
+const withoutRecordedResultInstructions = (
+  content: string,
+  recorded: { schema: JSONSchema; path: string },
+): string => {
+  const marker = "__CF_HARNESS_RECORDED_RESULT_PATH__";
+  for (const allowedToolIds of [undefined, []] as const) {
+    const lines: string[] = [];
+    appendStructuredResultInstructions(lines, {
+      ...recorded,
+      sandboxPath: marker,
+    }, allowedToolIds);
+    const template = lines.join("\n");
+    const pathIndex = template.indexOf(marker);
+    const prefix = template.slice(0, pathIndex);
+    const suffix = template.slice(pathIndex + marker.length);
+    while (true) {
+      const start = content.indexOf(prefix);
+      if (start < 0) break;
+      const pathStart = start + prefix.length;
+      const pathEnd = content.indexOf(suffix, pathStart);
+      if (pathEnd < 0 || content.slice(pathStart, pathEnd).includes("\n")) {
+        break;
+      }
+      const end = pathEnd + suffix.length;
+      if (end < content.length && content[end] !== "\n") break;
+      content = content.slice(0, start) + content.slice(end);
+    }
+  }
+  return content;
+};
+
+/** Gives the continued history the effective run's structured-result contract. */
+const withContinuedResultInstructions = (
+  transcript: HarnessTranscriptMessage[],
+  recorded: { schema: JSONSchema; path: string } | undefined,
+  effective: CfHarnessStructuredResultConfig | undefined,
+  allowedToolIds: readonly BuiltinToolId[] | undefined,
+): HarnessTranscriptMessage[] => {
+  if (effective === undefined) return transcript;
+  const messages = transcript.map((message) =>
+    message.role === "system" && recorded !== undefined
+      ? {
+        ...message,
+        content: withoutRecordedResultInstructions(message.content, recorded),
+      }
+      : message
+  );
+  const index = messages.findIndex((message) => message.role === "system");
+  const lines = index < 0 ? [] : [messages[index].content];
+  appendStructuredResultInstructions(lines, effective, allowedToolIds);
+  const system = { role: "system" as const, content: lines.join("\n") };
+  if (index < 0) messages.unshift(system);
+  else messages[index] = system;
+  return messages;
 };
 
 const appendHostMountInstructions = (
@@ -3769,15 +3909,25 @@ export const runCfHarnessCli = async (
       parsed.skillsSh !== undefined && deps.fetchFn !== undefined
         ? createHarnessSkillsShAcquisitionClientFactory(deps.fetchFn)
         : undefined;
-    if (parsed.resumeRun !== undefined) {
+    const recordedRun = parsed.resumeRun ?? parsed.continueRun;
+    if (recordedRun !== undefined) {
+      const rethrowArtifactFailure = (error: unknown): never => {
+        // Naming a run that is not there is a bad request. A run that is
+        // there and will not read is infrastructure, whatever the argv said.
+        if (
+          !(error instanceof Deno.errors.NotFound) &&
+          !(error instanceof HarnessControlError)
+        ) requestAccepted = true;
+        throw error;
+      };
+      const continuedRunRoot = parsed.continueRun === undefined
+        ? undefined
+        : await validateContinuationArtifacts(
+          resolveHarnessRunPaths(recordedRun).runRoot,
+        ).catch(rethrowArtifactFailure);
       const readRunArtifacts = deps.readRunArtifacts ?? readHarnessRunArtifacts;
-      const artifacts = await readRunArtifacts(parsed.resumeRun).catch(
-        (error: unknown) => {
-          // Naming a run that is not there is a bad request. A run that is
-          // there and will not read is infrastructure, whatever the argv said.
-          if (!(error instanceof Deno.errors.NotFound)) requestAccepted = true;
-          throw error;
-        },
+      const artifacts = await readRunArtifacts(recordedRun).catch(
+        rethrowArtifactFailure,
       );
       if (artifacts.runState.lineage?.role === "subagent") {
         throw harnessResumeRefusal(
@@ -3789,6 +3939,7 @@ export const runCfHarnessCli = async (
       // before anything of the resume is read.
       recordedSandboxRuntime(artifacts.runState);
       if (
+        parsed.continueRun === undefined &&
         effectiveStructuredResult === undefined &&
         artifacts.runState.structuredResult !== undefined
       ) {
@@ -3858,6 +4009,15 @@ export const runCfHarnessCli = async (
           `resume model mismatch: run uses ${artifacts.runState.model}, requested manifest uses ${runManifest.model}`,
         );
       }
+      if (
+        parsed.continueRun !== undefined && parsed.model !== undefined &&
+        artifacts.runState.model !== undefined &&
+        parsed.model !== artifacts.runState.model
+      ) {
+        throw harnessResumeRefusal(
+          `resume model mismatch: run uses ${artifacts.runState.model}, requested ${parsed.model}`,
+        );
+      }
       const credentialOwner = recordedRunManifest?.credentialOwner ??
         localCredentialOwner(artifacts.runState.credentialOwnerKey ?? "local");
       if (
@@ -3904,10 +4064,79 @@ export const runCfHarnessCli = async (
           "Loom openai-codex runs require an authenticated credential owner reference",
         );
       }
+      if (continuedRunRoot !== undefined) {
+        const priorResult = artifacts.runState.structuredResult === undefined
+          ? undefined
+          : resolveHostPathThroughNearestRealParent(
+            artifacts.runState.structuredResult.path,
+          );
+        const outputPaths = [
+          parsed.artifactRoot,
+          parsed.structuredResult?.path,
+          parsed.resultJsonPath,
+        ]
+          .filter((path): path is string => path !== undefined)
+          .map(resolveHostPathThroughNearestRealParent);
+        if (
+          outputPaths.some((path) =>
+            isHostPathWithinRoot(continuedRunRoot, path) || path === priorResult
+          )
+        ) {
+          throw new Error(
+            "continued run outputs must not modify the prior run's artifacts or result",
+          );
+        }
+      }
+      const continuation = parsed.continueRun === undefined
+        ? undefined
+        : prepareHarnessContinuation({
+          runState: artifacts.runState,
+          transcript: artifacts.transcript,
+          prompt: parsed.prompt!,
+          artifactRoot: parsed.artifactRoot,
+          workspace: parsed.workspace,
+          structuredResult: parsed.structuredResult,
+          schemaExplicit: parsed.structuredResultSchemaExplicit === true,
+        });
+      if (continuation !== undefined) {
+        effectiveStructuredResult = continuation.structuredResult;
+        assertStructuredResultToolConfigured(
+          parsed.allowedToolIds,
+          effectiveStructuredResult,
+        );
+        if (parsed.systemPrompt !== undefined) {
+          const systemPrompt = resolveCfHarnessCliSystemPrompt({
+            ...parsed,
+            structuredResult: effectiveStructuredResult,
+            fabricMountPath: parsed.fabricMount !== undefined
+              ? DEFAULT_RUNSC_FABRIC_MOUNT_PATH
+              : undefined,
+          });
+          continuation.transcript = continuation.transcript.filter((message) =>
+            message.role !== "system"
+          );
+          if (systemPrompt !== undefined) {
+            continuation.transcript.unshift({
+              role: "system",
+              content: systemPrompt,
+            });
+          }
+        } else {
+          continuation.transcript = withContinuedResultInstructions(
+            continuation.transcript,
+            artifacts.runState.structuredResult,
+            effectiveStructuredResult,
+            parsed.allowedToolIds,
+          );
+        }
+      }
+      const engineStructuredResult = continuation === undefined
+        ? parsed.structuredResult
+        : effectiveStructuredResult;
       requestAccepted = true;
       const engine = new CfHarnessEngine({
         ...sessionOptions,
-        runState: artifacts.runState,
+        runState: continuation?.runState ?? artifacts.runState,
         model: parsed.model ?? artifacts.runState.model,
         modelProvider,
         credentialOwnerKey,
@@ -3926,11 +4155,11 @@ export const runCfHarnessCli = async (
         // What the run was asked to do, in the operator's words. A pattern
         // the run publishes carries it as the request it answers.
         ...(parsed.prompt !== undefined ? { taskText: parsed.prompt } : {}),
-        ...(parsed.structuredResult !== undefined
+        ...(engineStructuredResult !== undefined
           ? {
             structuredResult: {
-              schema: parsed.structuredResult.schema,
-              path: parsed.structuredResult.path,
+              schema: engineStructuredResult.schema,
+              path: engineStructuredResult.path,
             },
           }
           : {}),
@@ -3981,7 +4210,7 @@ export const runCfHarnessCli = async (
         );
       }
       result = await loop.runTranscript({
-        transcript: artifacts.transcript,
+        transcript: continuation?.transcript ?? artifacts.transcript,
         model: parsed.model ?? artifacts.runState.model,
         maxModelTurns: parsed.maxModelTurns,
         promptSlotBinding: artifacts.runState.promptSlotBinding ??

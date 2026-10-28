@@ -36,6 +36,8 @@ const BODY = {
 /** Helper for tests, which builds the API over an in-memory store. */
 const apiWith = (
   options: {
+    canSteer?: () => boolean;
+    profiles?: Map<string, LocalJobProfile>;
     fabricLane?: () => boolean;
     heartbeatMs?: number;
     browserHost?: (id: string) => LocalJobBrowserHost | undefined;
@@ -398,6 +400,357 @@ describe("local-jobs/api", () => {
         task: "t",
         resultSchema: true,
       });
+    });
+  });
+
+  describe("POST /jobs/<id>/messages", () => {
+    const MESSAGE = {
+      caller: BODY.caller,
+      idempotencyKey: "message-1",
+      message: "Use April.",
+    };
+
+    it("returns a pending record and streams delivery at the run's turn", async () => {
+      const { post, store, call } = apiWith({ canSteer: () => true });
+      try {
+        const { job } = await (await post("/jobs", BODY)).json();
+        store.claimNext();
+        const read = frames(await call(`/jobs/${job.id}/events`));
+        const response = await post(`/jobs/${job.id}/messages`, MESSAGE);
+        expect(response.status).toBe(201);
+        expect(await response.json()).toMatchObject({
+          message: {
+            key: MESSAGE.idempotencyKey,
+            target: job.id,
+            message: MESSAGE.message,
+            acceptedAt: expect.any(String),
+            delivery: "pending",
+            jobId: job.id,
+          },
+          job: { id: job.id, state: "running" },
+        });
+        expect(store.takeMessages(job.id, 2)).toEqual([MESSAGE.message]);
+        store.finish(job.id, { state: "completed", recordedRun: true });
+        const sent = await read;
+        expect(
+          sent.filter((frame) => frame.includes("event: message")).map((
+            frame,
+          ) => JSON.parse(frame.split("data: ")[1])),
+        ).toMatchObject([
+          { key: MESSAGE.idempotencyKey, delivery: "pending" },
+          { key: MESSAGE.idempotencyKey, delivery: "delivered", turn: 2 },
+        ]);
+        expect((await (await call(`/jobs/${job.id}`)).json()).job.messages)
+          .toMatchObject([{ delivery: "delivered", turn: 2, jobId: job.id }]);
+      } finally {
+        store.close();
+      }
+    });
+
+    it("opens a finished head's follow-up, inherits or replaces instructions, and routes to the head", async () => {
+      const { post, store, call } = apiWith({ canSteer: () => true });
+      try {
+        const { job } = await (await post("/jobs", BODY)).json();
+        store.claimNext();
+        store.finish(job.id, { state: "completed", recordedRun: true });
+        const events = store.events(job.id);
+        const first = await post(`/jobs/${job.id}/messages`, {
+          ...MESSAGE,
+          instructions: "Use metric.",
+        });
+        expect(first.status).toBe(201);
+        const opened = await first.json();
+        expect(opened).toMatchObject({
+          message: {
+            delivery: "follow-up",
+            jobId: opened.job.id,
+            instructions: "Use metric.",
+          },
+          job: {
+            state: "queued",
+            continues: job.id,
+            idempotencyKey: MESSAGE.idempotencyKey,
+            request: {
+              task: MESSAGE.message,
+              instructions: "Use metric.",
+              tools: BODY.tools,
+              resultSchema: BODY.resultSchema,
+              maxModelTurns: BODY.maxModelTurns,
+              context: BODY.context,
+            },
+          },
+        });
+        // The request itself excludes the enqueue identity fields.
+        expect(opened.job.request.caller).toBeUndefined();
+        expect(store.events(job.id)).toEqual(events);
+        expect((await (await call(`/jobs/${job.id}`)).json()).job.continuedBy)
+          .toBe(opened.job.id);
+        expect(opened.job.openedBy).toEqual(opened.message);
+        const head = await post(`/jobs/${job.id}/messages`, {
+          ...MESSAGE,
+          idempotencyKey: "steer",
+          message: "And May.",
+        });
+        expect((await head.json()).message).toMatchObject({
+          target: job.id,
+          jobId: opened.job.id,
+          delivery: "pending",
+        });
+        store.claimNext();
+        store.takeMessages(opened.job.id, 1);
+        store.finish(opened.job.id, { state: "completed", recordedRun: true });
+        const inherited = await (await post(`/jobs/${job.id}/messages`, {
+          ...MESSAGE,
+          idempotencyKey: "next",
+        })).json();
+        expect(inherited.job.request.instructions).toBe("Use metric.");
+      } finally {
+        store.close();
+      }
+    });
+
+    it("accepts post-cancel messages and finished-head follow-ups with steering disabled", async () => {
+      const { post, store } = apiWith();
+      try {
+        const { job } = await (await post("/jobs", BODY)).json();
+        store.claimNext();
+        store.requestCancel(job.id);
+        const response = await post(`/jobs/${job.id}/messages`, {
+          ...MESSAGE,
+          instructions: "New framing.",
+        });
+        expect(response.status).toBe(201);
+        expect((await response.json()).message.delivery).toBe("pending");
+        store.finish(job.id, { state: "cancelled", recordedRun: true });
+        const followUp = store.get(job.id)!.continuedBy!;
+        store.claimNext();
+        store.finish(followUp, { state: "completed", recordedRun: true });
+        const next = await post(`/jobs/${job.id}/messages`, {
+          ...MESSAGE,
+          idempotencyKey: "next",
+        });
+        expect(next.status).toBe(201);
+        expect(await next.json()).toMatchObject({
+          message: { delivery: "follow-up" },
+          job: { state: "queued", continues: followUp },
+        });
+      } finally {
+        store.close();
+      }
+    });
+
+    it("replays the current record before head refusals and writes no events", async () => {
+      const { post, store } = apiWith({ canSteer: () => true });
+      try {
+        const { job } = await (await post("/jobs", BODY)).json();
+        store.claimNext();
+        expect((await post(`/jobs/${job.id}/messages`, MESSAGE)).status).toBe(
+          201,
+        );
+        for (const phase of ["pending", "follow-up", "dropped"] as const) {
+          if (phase === "follow-up") {
+            store.finish(job.id, { state: "completed", recordedRun: true });
+          }
+          if (phase === "dropped") {
+            store.claimNext();
+            store.recover();
+          }
+          const before = store.list(10).map((job) => store.events(job.id));
+          const replay = await post(`/jobs/${job.id}/messages`, MESSAGE);
+          expect(replay.status).toBe(200);
+          const body = await replay.json();
+          expect(body.message.delivery).toBe(
+            phase === "pending" ? "pending" : "follow-up",
+          );
+          expect(body.job.state).toBe(
+            phase === "pending"
+              ? "running"
+              : phase === "follow-up"
+              ? "queued"
+              : "interrupted",
+          );
+          expect(store.list(10).map((job) => store.events(job.id))).toEqual(
+            before,
+          );
+        }
+        const dropped = await post(`/jobs/${job.id}/messages`, {
+          ...MESSAGE,
+          idempotencyKey: "unusable",
+        });
+        expect((await dropped.json()).code).toBe("not_continuable");
+      } finally {
+        store.close();
+      }
+    });
+
+    it("refuses conflicting message fingerprints and keys in either route's namespace", async () => {
+      const { post, store } = apiWith({ canSteer: () => true });
+      try {
+        const { job } = await (await post("/jobs", BODY)).json();
+        const { job: other } =
+          await (await post("/jobs", { ...BODY, idempotencyKey: "other" }))
+            .json();
+        expect((await post(`/jobs/${job.id}/messages`, MESSAGE)).status).toBe(
+          201,
+        );
+        for (
+          const [target, body] of [
+            [job.id, { ...MESSAGE, message: "Changed." }],
+            [job.id, { ...MESSAGE, instructions: "Added." }],
+            [other.id, MESSAGE],
+            [job.id, { ...MESSAGE, idempotencyKey: BODY.idempotencyKey }],
+          ] as const
+        ) {
+          const response = await post(`/jobs/${target}/messages`, body);
+          expect(response.status).toBe(409);
+          expect(await response.json()).toMatchObject({
+            ok: false,
+            code: "idempotency_conflict",
+          });
+        }
+        const enqueue = await post("/jobs", {
+          ...BODY,
+          idempotencyKey: MESSAGE.idempotencyKey,
+        });
+        expect(enqueue.status).toBe(409);
+        expect((await enqueue.json()).code).toBe("idempotency_conflict");
+        store.claimNext();
+        store.takeMessages(job.id, 1);
+        store.finish(job.id, { state: "completed", recordedRun: true });
+        const opened = await (await post(`/jobs/${job.id}/messages`, {
+          ...MESSAGE,
+          idempotencyKey: "framed",
+          instructions: "One.",
+        })).json();
+        const changed = await post(`/jobs/${job.id}/messages`, {
+          ...MESSAGE,
+          idempotencyKey: "framed",
+          instructions: "Two.",
+        });
+        expect(changed.status).toBe(409);
+        const asJob = await post("/jobs", {
+          ...BODY,
+          ...opened.job.request,
+          idempotencyKey: "framed",
+        });
+        expect((await asJob.json()).code).toBe("idempotency_conflict");
+      } finally {
+        store.close();
+      }
+    });
+
+    for (
+      const [name, status, code] of [
+        ["missing", 404, "not_found"],
+        ["caller", 403, "not_callers"],
+        ["interrupted", 409, "not_continuable"],
+        ["profile failure", 409, "not_continuable"],
+        ["queued cancellation", 409, "not_continuable"],
+        ["steering disabled", 409, "cannot_steer"],
+        ["instructions", 409, "instructions_on_steer"],
+        ["retired profile", 400, "unknown_profile"],
+      ] as const
+    ) {
+      it(`returns ${status} ${code} for ${name}`, async () => {
+        const profiles = new Map([["ask", ASK]]);
+        const { post, store } = apiWith({ profiles });
+        try {
+          const { job } = await (await post("/jobs", BODY)).json();
+          if (name === "missing") {
+            const known = await post(`/jobs/${job.id}/messages`, MESSAGE);
+            expect(known.status).toBe(409);
+            expect((await known.json()).code).toBe("cannot_steer");
+          }
+          if (name === "interrupted") {
+            store.claimNext();
+            store.recover();
+          }
+          if (name === "profile failure") {
+            store.claimNext();
+            store.finish(job.id, {
+              state: "failed",
+              errorCode: "PROFILE_UNAVAILABLE",
+            });
+          }
+          if (name === "queued cancellation") store.requestCancel(job.id);
+          if (name === "retired profile") {
+            store.claimNext();
+            store.finish(job.id, { state: "completed", recordedRun: true });
+            profiles.clear();
+          }
+          const response = await post(
+            `/jobs/${name === "missing" ? "absent" : job.id}/messages`,
+            {
+              ...MESSAGE,
+              ...(name === "caller" ? { caller: "someone-else" } : {}),
+              ...(name === "instructions" ? { instructions: "New." } : {}),
+            },
+          );
+          expect(response.status).toBe(status);
+          expect(await response.json()).toMatchObject({
+            ok: false,
+            code,
+            error: expect.any(String),
+          });
+        } finally {
+          store.close();
+        }
+      });
+    }
+
+    for (
+      const body of [
+        "bad JSON",
+        "[]",
+        {},
+        { ...MESSAGE, caller: 1 },
+        { ...MESSAGE, idempotencyKey: "" },
+        { ...MESSAGE, message: "" },
+        { ...MESSAGE, message: 1 },
+        { ...MESSAGE, instructions: null },
+      ]
+    ) {
+      it(`returns 400 invalid_request for ${JSON.stringify(body)}`, async () => {
+        const { post, store } = apiWith();
+        try {
+          const { job } = await (await post("/jobs", BODY)).json();
+          const response = await post(`/jobs/${job.id}/messages`, body);
+          expect(response.status).toBe(400);
+          expect((await response.json()).code).toBe("invalid_request");
+        } finally {
+          store.close();
+        }
+      });
+    }
+
+    it("returns 413 too_large for declared, streamed and multibyte bodies", async () => {
+      const { post, call, store } = apiWith();
+      try {
+        const { job } = await (await post("/jobs", BODY)).json();
+        const path = `/jobs/${job.id}/messages`;
+        const bodies = [
+          {
+            headers: { "content-length": String(1024 * 1024 + 1) },
+            body: "{}",
+          },
+          { body: "é".repeat(512 * 1024 + 1) },
+          {
+            body: new ReadableStream({
+              start(controller) {
+                controller.enqueue(new Uint8Array(1024 * 1024 + 1));
+                controller.close();
+              },
+            }),
+          },
+        ];
+        for (const init of bodies) {
+          const response = await call(path, { method: "POST", ...init });
+          expect(response.status).toBe(413);
+          expect((await response.json()).code).toBe("too_large");
+        }
+      } finally {
+        store.close();
+      }
     });
   });
 
