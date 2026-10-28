@@ -27,12 +27,17 @@ import {
   type FabricValue,
   isFabricPlainObject,
 } from "@commonfabric/data-model";
-import type { MemorySpace } from "../src/storage/interface.ts";
+import {
+  loadProfileOwnerDocuments,
+  profileOwnerAt,
+} from "../src/profile-owner.ts";
 import { Runtime } from "../src/runtime.ts";
+import type { MemorySpace } from "../src/storage/interface.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import {
   asStoredValue,
+  seedProfileOwner,
   seedStoredEnvelope,
   storedFields,
   storedList,
@@ -298,6 +303,60 @@ describe("profile-ownership", () => {
     return `${space}/${id}`;
   }
 
+  /** The person whose own profile `profile` is (`profileOwnerAt()`). */
+  async function ownerOf(profile: Cell<unknown>): Promise<string | undefined> {
+    await loadProfileOwnerDocuments(rt, profile);
+    const tx = rt.edit();
+    try {
+      return profileOwnerAt(rt, tx, profile);
+    } finally {
+      tx.abort();
+    }
+  }
+
+  /**
+   * A document in `space` holding `value` and nothing else, written beneath
+   * the runtime's write checks, so that it carries no label and names no
+   * owner, as a document a setup stored as a cell's default does.
+   */
+  async function bareDocument(
+    space: MemorySpace,
+    value: FabricValue,
+  ): Promise<Cell<unknown>> {
+    const document = rt.getCell<unknown>(space, crypto.randomUUID());
+    const tx = rt.edit();
+    seedStoredEnvelope(
+      tx,
+      { ...document.getAsNormalizedFullLink(), path: [] },
+      {
+        value,
+      },
+    );
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await rt.idle();
+    return document;
+  }
+
+  /**
+   * Rewrites the value the `name` cell of `profile` holds to `value`, beneath
+   * the runtime's write checks and keeping the cell's other stored fields, so
+   * that the cell stays the profile's own while what it holds changes.
+   */
+  async function rewriteNameCell(
+    profile: Cell<unknown>,
+    value: FabricValue,
+  ): Promise<void> {
+    const cell = {
+      ...profile.resolveAsCell().key("name").resolveAsCell()
+        .getAsNormalizedFullLink(),
+      path: [],
+    };
+    const tx = rt.edit();
+    seedStoredEnvelope(tx, cell, { ...storedFields(tx, cell), value });
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await rt.idle();
+  }
+
   // Each case makes a profile that is not the person's, as `#profile` and
   // the retire guard are to take it, and says whether it is in a space of its
   // own, which a runtime can prefer apart from the person's own profiles.
@@ -441,6 +500,123 @@ export default pattern<{ friend: Cell<{ name: string }> }>(({ friend }) => ({
       await rt.idle();
       await renameBeneathChecks(ada, beside.getAsLink());
 
+      expect(await profileAnswer(rt)).toBe(addressOf(alan));
+    });
+  });
+
+  describe("a profile whose own `name` cell links to a bare document beside it", () => {
+    // The shape `isLegacyName()` in `profile-owner.ts` accepts, which every
+    // profile set up by `profile-home.tsx` before d5c274f052 stores.
+    // TODO(@hixie): remove this case with the exception in `isLegacyName()`,
+    // once profiles created before d5c274f052 keep working without it.
+
+    it("is its owner's, and the answer to `#profile`", async () => {
+      await rewriteNameCell(
+        ada,
+        asStoredValue((await bareDocument(spaceOf(ada), "Ada")).getAsLink()),
+      );
+
+      expect(await ownerOf(ada)).toBe(home);
+      expect(await profileAnswer(rt)).toBe(addressOf(ada));
+    });
+  });
+
+  // Each case puts something in a profile's own `name` cell that is not the
+  // shape `isLegacyName()` accepts, returning what the cell is to hold.
+  const notLegacy: [string, () => Promise<FabricValue>][] = [
+    [
+      "links to a bare document in another space",
+      async () =>
+        asStoredValue(
+          (await bareDocument(
+            await rt.createSpace({ grants: { "*": "WRITE" } }),
+            "Ada",
+          )).getAsLink(),
+        ),
+    ],
+    [
+      "links to a document beside it that names another document as its owner",
+      async () => {
+        const other = await bareDocument(spaceOf(ada), "another document");
+        const held = rt.getCell<unknown>(spaceOf(ada), crypto.randomUUID());
+        const tx = rt.edit();
+        seedStoredEnvelope(
+          tx,
+          { ...held.getAsNormalizedFullLink(), path: [] },
+          {
+            value: "Ada",
+            result: asStoredValue(other.getAsLink()),
+          },
+        );
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await rt.idle();
+        return asStoredValue(held.getAsLink());
+      },
+    ],
+    [
+      "links to a document beside it that carries a label",
+      async () => {
+        const held = await bareDocument(spaceOf(ada), "Ada");
+        const tx = rt.edit();
+        seedProfileOwner(tx, held.getAsNormalizedFullLink(), home);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await rt.idle();
+        return asStoredValue(held.getAsLink());
+      },
+    ],
+    [
+      "links to a bare document beside it that holds a record",
+      async () =>
+        asStoredValue(
+          (await bareDocument(spaceOf(ada), { name: "Ada" })).getAsLink(),
+        ),
+    ],
+    [
+      "links to a bare document beside it that holds a number",
+      async () =>
+        asStoredValue((await bareDocument(spaceOf(ada), 7)).getAsLink()),
+    ],
+    [
+      "links into a field of a bare document beside it",
+      async () =>
+        asStoredValue(
+          (await bareDocument(spaceOf(ada), { name: "Ada" })).key("name")
+            .getAsLink(),
+        ),
+    ],
+    [
+      "links to a bare document beside it that links to another holding the name",
+      async () => {
+        const name = await bareDocument(spaceOf(ada), "Ada");
+        return asStoredValue(
+          (await bareDocument(spaceOf(ada), asStoredValue(name.getAsLink())))
+            .getAsLink(),
+        );
+      },
+    ],
+  ];
+
+  for (const [which, held] of notLegacy) {
+    describe(`a profile whose own \`name\` cell ${which}`, () => {
+      it("is no one's, and not the answer to `#profile`", async () => {
+        await rewriteNameCell(ada, await held());
+
+        expect(await ownerOf(ada)).toBeUndefined();
+        expect(await profileAnswer(rt)).toBe(addressOf(alan));
+      });
+    });
+  }
+
+  describe("a profile whose `name` links to a bare document beside it that links to another holding the name", () => {
+    it("is no one's, and not the answer to `#profile`", async () => {
+      const name = await bareDocument(spaceOf(ada), "Ada");
+      const first = await bareDocument(
+        spaceOf(ada),
+        asStoredValue(name.getAsLink()),
+      );
+      await renameBeneathChecks(ada, asStoredValue(first.getAsLink()));
+
+      expect(await ownerOf(ada)).toBeUndefined();
       expect(await profileAnswer(rt)).toBe(addressOf(alan));
     });
   });

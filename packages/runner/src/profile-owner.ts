@@ -8,6 +8,7 @@ import type { DID } from "@commonfabric/api";
 
 import { attestedPrincipalsAt } from "./builder/principal-of.ts";
 import type { Cell } from "./cell.ts";
+import { readStoredCfcMetadata } from "./cfc/metadata.ts";
 import { PROFILE_NAME_FIELD } from "./cfc/represents-principal.ts";
 import { loadDocument } from "./document-readiness.ts";
 import { unlessCyclic } from "./link-resolution.ts";
@@ -27,7 +28,9 @@ import { internalVerifierRead } from "./storage/reactivity-log.ts";
  *   writes onto a pattern's derived internal cells and which no pattern can
  *   write), so a name borrowed from another profile, by a link into another
  *   document or another space, makes no one's profile of this one, and so
- *   does a name whose links run in a cycle; and
+ *   does a name whose links run in a cycle. The one exception is the shape
+ *   `isLegacyName()` accepts, a name the profile's own `name` cell holds a
+ *   link to; and
  * - its label names that person, and no one else, as the principal the
  *   profile represents, read as every reader of a profile's principal reads
  *   one (`attestedPrincipalsAt()`): with a name its owner wrote, the claims on
@@ -56,11 +59,8 @@ export function profileOwnerAt(
     ?.getAsNormalizedFullLink();
   if (link === undefined || link.path.length !== 0) return undefined;
   visit(link);
-  const chain = nameChain(tx, link, visit);
-  if (
-    chain === undefined ||
-    chain.some((document) => !ownedBy(runtime, tx, document, link))
-  ) {
+  const hops = nameChain(tx, link, visit);
+  if (hops === undefined || !nameIsOwn(runtime, tx, hops, link)) {
     return undefined;
   }
   const principals = attestedPrincipalsAt(
@@ -75,9 +75,9 @@ export function profileOwnerAt(
 /**
  * Helper for `profileOwnerAt()` and `loadProfileOwnerDocuments()`, which
  * follows the `name` of the profile at `profile` through each link it holds,
- * calling `visit` with each document before reading it, and returns the
- * documents other than the profile's that the chain passes through, in order,
- * or `undefined` when it leaves the profile's space or returns to a place it
+ * calling `visit` with each document before reading it, and returns the links
+ * it follows into documents other than the profile's, in order, or
+ * `undefined` when it leaves the profile's space or returns to a place it
  * passed through, which no document of the profile's own can make it do.
  */
 function nameChain(
@@ -85,42 +85,111 @@ function nameChain(
   profile: NormalizedFullLink,
   visit: (document: NormalizedFullLink) => void,
 ): NormalizedFullLink[] | undefined {
-  const documents: NormalizedFullLink[] = [];
+  const hops: NormalizedFullLink[] = [];
   const visited = new Set<string>();
   let at: NormalizedFullLink = { ...profile, path: [PROFILE_NAME_FIELD] };
   while (true) {
     const value = tx.readValueOrThrow(at, { meta: internalVerifierRead });
-    if (!isPrimitiveCellLink(value)) return documents;
+    if (!isPrimitiveCellLink(value)) return hops;
     const next = parseLink(value, at);
     const key = `${next.space}/${next.id}/${next.path.join("/")}`;
     if (next.space !== profile.space || visited.has(key)) return undefined;
     visited.add(key);
     if (next.id !== profile.id) {
-      const document = { ...next, path: [] };
-      visit(document);
-      documents.push(document);
+      visit({ ...next, path: [] });
+      hops.push(next);
     }
     at = next;
   }
 }
 
 /**
- * Helper for `profileOwnerAt()`, which returns whether `document` names the
- * profile at `profile` as its owner: its `result` back-link, read as a
- * dependency a reactive computation reruns on, is the profile's.
+ * Helper for `profileOwnerAt()`, which returns whether the `name` of the
+ * profile at `profile`, reached through `hops` as `nameChain()` returns them,
+ * stays within the profile's own documents: each document a hop lands in
+ * names the profile as its owner (`ownedBy()`), or the hops have the shape
+ * `isLegacyName()` accepts.
+ */
+function nameIsOwn(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  hops: readonly NormalizedFullLink[],
+  profile: NormalizedFullLink,
+): boolean {
+  return hops.every((hop) => ownedBy(runtime, tx, hop, profile)) ||
+    isLegacyName(runtime, tx, hops, profile);
+}
+
+/**
+ * Helper for `nameIsOwn()`, which returns whether `hops` has the shape the
+ * `name` of a profile set up by `profile-home.tsx` before commit `d5c274f052`
+ * holds: two hops, the first into the profile's own `name` cell
+ * (`ownedBy()`), which holds a link to the root of a second document in the
+ * profile's space that names no owner, carries no label, and holds the name as
+ * a string. That setup defaulted the `name` cell to a computed value, and
+ * stored the default as a link to a document holding it. The cell keeps that
+ * link: setup again under a later release leaves an existing value as it is,
+ * and `setName` writes through the link.
+ *
+ * Accepting the shape grants a writer of the `name` cell nothing more: one
+ * who can store this link there can store any name there directly, which the
+ * rule accepts anyway. The name it reaches stays in the profile's own space,
+ * so it is not borrowed from another, and whose profile it is still rests on
+ * the label of the profile's own document (`attestedPrincipalsAt()`). The
+ * document holding the name carries no label and names no owner, so whoever
+ * can write the profile's space can change the name it holds, though not
+ * whose profile it is.
+ */
+function isLegacyName(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  hops: readonly NormalizedFullLink[],
+  profile: NormalizedFullLink,
+): boolean {
+  // TODO(@hixie): re-fix this so profiles created before d5c274f052 keep
+  // working without this exception, e.g. by repairing their stored name, then
+  // remove it. `profile-ownership.test.ts` pins the shape, under "a profile
+  // whose own `name` cell links to a bare document beside it".
+  if (hops.length !== 2) return false;
+  const [cell, held] = hops;
+  return ownedBy(runtime, tx, cell, profile) &&
+    held.path.length === 0 &&
+    ownerOf(runtime, tx, held) === undefined &&
+    readStoredCfcMetadata(tx, held) === undefined &&
+    typeof tx.readValueOrThrow(held, { meta: internalVerifierRead }) ===
+      "string";
+}
+
+/**
+ * Helper for `nameIsOwn()` and `isLegacyName()`, which returns whether the
+ * document `hop` lands in names the profile at `profile` as its owner
+ * (`ownerOf()`).
  */
 function ownedBy(
   runtime: Runtime,
   tx: IExtendedStorageTransaction,
-  document: NormalizedFullLink,
+  hop: NormalizedFullLink,
   profile: NormalizedFullLink,
 ): boolean {
-  const owner = getMetaLink(
-    runtime.getCellFromLink(document, undefined, tx),
+  const owner = ownerOf(runtime, tx, hop);
+  return owner?.space === profile.space && owner.id === profile.id;
+}
+
+/**
+ * Helper for `ownedBy()` and `isLegacyName()`, which returns the owner the
+ * document `hop` lands in names, its `result` back-link, read as a dependency
+ * a reactive computation reruns on, or `undefined` when it names none.
+ */
+function ownerOf(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  hop: NormalizedFullLink,
+): NormalizedFullLink | undefined {
+  return getMetaLink(
+    runtime.getCellFromLink({ ...hop, path: [] }, undefined, tx),
     "result",
     { meta: internalVerifierRead },
   );
-  return owner?.space === profile.space && owner.id === profile.id;
 }
 
 /**
