@@ -249,16 +249,17 @@ export class CFSubmitInput extends BaseElement {
       return;
     }
     this._submitting = true;
-    // Clear the field only after the submit click has been handled — the
+    // Clear an unbound field only after the submit click has been handled — the
     // framework's host-level click listener reads `event.target.value` while
     // handling the click. A `setTimeout` runs after that dispatch (a microtask
     // defer proved too early in practice), so the submitted text is captured
     // first. Clear only if the field still holds the submitted text: a
     // back-to-back create may have already typed the next name, which must not
-    // be wiped. The value is local component state, so this guard is synchronous
-    // and race-free — and no durable cell is written, so there is nothing to
-    // clobber across the cross-space commit. The in-flight flag is reset here
-    // whether or not the clear runs, so a later submit is never blocked.
+    // be wiped. This unbound clear writes only local component state, so it
+    // cannot clobber a durable cell across the cross-space commit. A bound draft
+    // is left for its caller to clear after accepting the submit. The in-flight
+    // flag is reset here whether or not the clear runs, so a later submit is
+    // never blocked.
     setTimeout(() => {
       this._submitting = false;
       if (this.draft !== undefined || this.value !== submitted) return;
