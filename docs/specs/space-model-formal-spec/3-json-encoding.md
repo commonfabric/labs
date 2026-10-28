@@ -104,6 +104,16 @@ round-trip correctly.
 > trailing padding. Every bit the characters carry past the last whole byte
 > must be zero, so that `AQ` is the one spelling of the byte `0x01` and `AR`
 > is refused.
+>
+> Padding, where a state has it, is exactly RFC 4648's (Section 3.2, "Padding
+> of Encoded Data"). `=` appears only at the end of a state, and there are
+> exactly as many as complete its final group of characters to four: two after
+> a final group of two, one after a final group of three, and none when the
+> characters already make whole groups. So `AQ==` and `AQI=` are accepted, and
+> `AA=`, `AAA==`, `AAAA=`, and `==` are refused. Padded or not, the characters
+> before any `=` never number one more than a multiple of four, since a group of
+> one character cannot carry a whole byte.
+>
 > This convention applies to `Bytes@1`, `BigInt@1`, `EpochNsec@1`,
 > `EpochDay@1`, `DurationNsec@1`, and `DurationDay@1` state values, to the
 > `hash` field of `Hash@1` state, and to the `publicKey` and `privateKey` fields
@@ -120,9 +130,6 @@ These types need no rule beyond the shape of their state:
 - `Link@1` — a plain object, the link's payload. The format sets no policy on
   its fields, which each use of links defines; `{ id: string, path: string[],
   space: string }` is one such shape.
-- `Error@1` — `{ type: string, name: string | null, message: string, stack?:
-  string, cause?: <any>, ... }`, where the trailing properties are the error's
-  own custom ones.
 - `Undefined@1` — `null`, and nothing else. The type is stateless (Section 5).
 - `Map@1` — `[[key, value], ...]`, entry pairs in insertion order.
 - `Set@1` — `[value, ...]`, values in insertion order.
@@ -130,6 +137,21 @@ These types need no rule beyond the shape of their state:
 - `hole` — a positive integer giving the length of a run of array holes. This
   is a structural meta-key rather than a type tag, and is valid only directly
   inside an array; see the sparse-array note below.
+
+### `Error@1` — errors
+
+State is `{ type: string, name?: string | null, message: string, stack?:
+string, cause?: <any>, ... }`, where the trailing properties are the error's own
+custom ones. `type` names the error's class and `message` is its message, and
+both are required. `name` is the error's name where that differs from `type`.
+A `name` of `null` means the name is the same as `type`, and so does a state
+with no `name` at all; an encoder writes `null` for such a name rather than
+leaving it out. `stack` and `cause` are present exactly when the error has
+them.
+
+On decoding, a state that is not an object, that lacks `type` or `message`, or
+whose `type`, `message`, or `stack` is not a string, or whose `name` is neither
+a string nor `null`, produces a `ProblematicValue`.
 
 ### `Hash@1` — content hashes
 
@@ -159,14 +181,24 @@ See `1-fabric-values.md` Section 1.4.11.
 
 ### `RegExp@1` — regular expressions
 
-State is `{ source: string, flags: string, flavor: string }`. `source` is the
-pattern string and `flags` the flag string (for example `gi`). `flavor`
-identifies the regular-expression dialect, `es2025` being the default.
+State is `{ source: string, flags: string, flavor: string }`, and all three
+fields are required. `source` is the pattern string and `flags` the flag string
+(for example `gi`). `flavor` names the regular-expression dialect the pattern
+and flags are written in, for example `es2025`, that of ECMAScript 2025. The
+format has no default flavor, and requires no implementation to support any
+particular one.
 
-On decoding, a state that is not an object produces a `ProblematicValue`, as
-does an `es2025` pattern that fails to construct. A pattern under any other
-flavor is stored faithfully and **not** validated, its dialect not being one
-this format can construct. See `1-fabric-values.md` Section 1.4.5.
+On decoding, a state that is not an object, that lacks any of the three
+fields, or that has one that is not a string produces a `ProblematicValue`. An
+implementation constructs each pattern whose flavor it supports, which
+validates it, and may refuse one that fails to construct, producing a
+`ProblematicValue`. A pattern under a flavor the implementation does not
+construct is stored faithfully and **not** validated. See `1-fabric-values.md`
+Section 1.4.5.
+
+> **JS implementation note.** This implementation constructs `es2025` patterns,
+> as JavaScript `RegExp`s, and refuses one that fails to construct. It
+> constructs no other flavor.
 
 ### `Unavailable@1` — unavailable data
 
@@ -312,6 +344,16 @@ See `1-fabric-values.md` Section 3.5.
 > - A very sparse array like `a = []; a[1000000] = 'x'` encodes as `[{ "/hole":
 >   1000000 }, "x"]`.
 
+> **Maximum array length.** An implementation **may** limit the length of an
+> array, and one that does **must** state its limit. Whatever the limit, an
+> array of exactly that length is within it even when every element is a hole:
+> an implementation whose limit is `n` decodes `[{ "/hole": n }]`, and encodes
+> the array it stands for. A text standing for a longer array, counting each
+> hole a run stands for, is refused. The limit is a property of the
+> implementation, the same for every decode, and is distinct from the slot
+> limit below, which a caller sets for one decode to bound what reading a text
+> costs.
+
 > **Bounding a decode of untrusted text.** Parsing JSON text builds every
 > value the text writes, and because a `hole` run carries its length as a
 > number, a few bytes can also stand for billions of array slots that any walk
@@ -321,8 +363,8 @@ See `1-fabric-values.md` Section 3.5.
 > appears, and a `hole` run adds one slot for each hole past the first that it
 > stands for. The elements and members can be counted by scanning the text
 > without parsing it, so a decoder can refuse text before building any of it.
-> The format itself sets no limit, and a decoder reading text it wrote itself
-> sets none.
+> The format itself sets no slot limit, and a decoder reading text it wrote
+> itself sets none.
 
 ## 4. Detection
 

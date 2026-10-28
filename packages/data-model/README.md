@@ -44,6 +44,17 @@ Two things follow for a class written here:
 - `test/frozen-classes.test.ts` walks `src/` and fails for any exported class
   that is not frozen, so a new class cannot leave the block out unnoticed.
 
+## The `fvj1:` codec's array limit
+
+The format lets an implementation limit how long an array may be, provided it
+states the limit
+([`3-json-encoding.md`](../../docs/specs/space-model-formal-spec/3-json-encoding.md)
+Section 3, "Maximum array length"). This package's limit is 2^32 - 1
+(4,294,967,295) elements, the most a JavaScript array can hold. An array of that
+length is within it even when every element is a hole, so
+`fvj1:[{"/hole":4294967295}]` decodes, and `fvj1:[{"/hole":4294967296}]` is
+refused.
+
 ## Conformance fixtures
 
 Two fixtures record what this package does, for an implementation in another

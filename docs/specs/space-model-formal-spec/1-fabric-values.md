@@ -412,7 +412,7 @@ not carry a `wireTypeTag` property (no fabric type does, save `UnknownValue` and
 
 | Wrapper Class | Wraps | Type Tag | Encoded State | Notes |
 |---------------|-------|----------|---------------|-------|
-| `FabricError` | `Error` | `Error@1` | `{ type, name, message, stack?, cause?, ...custom }` | `type` is the constructor name (e.g. `"TypeError"`). `name` is the `.name` property if it differs from `type`, or `null` if it matches (the common case). Includes `message`, `stack` (if present), `cause` (if present), and custom enumerable properties. The conversion layer (Section 8.2) recursively converts nested values (including `cause` and custom properties) before wrapping, ensuring all values are `FabricValue` by the time the codec's `encode()` runs. |
+| `FabricError` | `Error` | `Error@1` | `{ type, name?, message, stack?, cause?, ...custom }` | `type` is the constructor name (e.g. `"TypeError"`). `name` is the `.name` property if it differs from `type`, or `null` if it matches (the common case); a state with no `name` means the same as `null`, but an encoder writes the `null`. Includes `message`, `stack` (if present), `cause` (if present), and custom enumerable properties. The conversion layer (Section 8.2) recursively converts nested values (including `cause` and custom properties) before wrapping, ensuring all values are `FabricValue` by the time the codec's `encode()` runs. |
 | `FabricMap` | `Map` | `Map@1` | `[[key, value], ...]` | Entry pairs as an array of two-element arrays. Insertion order is preserved. Keys and values are recursively processed. **Implementation status: stubbed** — the tag is reserved and the class exists, but its members and codec currently throw (see Section 1.4.3). |
 | `FabricSet` | `Set` | `Set@1` | `[value, ...]` | Elements as an array. Iteration order is preserved. Values are recursively processed. **Implementation status: stubbed** — the tag is reserved and the class exists, but its members and codec currently throw (see Section 1.4.4). |
 
@@ -674,8 +674,10 @@ export class FabricError extends FabricNativeWrapper<Error> {
        * Rebuilds a `FabricError` from wire state. Uses `type` for class
        * identity, falling back to `name` for backward compatibility with
        * data encoded before `type` was added; missing `message`
-       * becomes `''`. Reserved and unsafe keys are excluded from the
-       * extras. Frozen unless `mutable` (Section 2.4).
+       * becomes `''`. Those two fallbacks accept states the format refuses
+       * (`3-json-encoding.md` Section 3, `Error@1`). Reserved and unsafe
+       * keys are excluded from the extras. Frozen unless `mutable`
+       * (Section 2.4).
        */
       decode(
         _typeTag: string,
@@ -869,8 +871,8 @@ import { FabricPrimitive } from './interface';
  *
  * The essential state is `{ source, flags, flavor }` — the values needed to
  * (re)construct an equivalent regex. The `flavor` string identifies the regex
- * dialect; only `"es2025"` (the default) is currently representable as a
- * JS `RegExp`. The `flavor` field is forward-looking for multi-runtime
+ * dialect; only `"es2025"`, the dialect of a JS `RegExp`, is currently
+ * representable as one. The `flavor` field is forward-looking for multi-runtime
  * scenarios where different regex engines may be in use.
  *
  * For the `"es2025"` flavor the constructor proactively builds and retains a
@@ -4448,7 +4450,7 @@ export function fabricFromConvertibleJsValue(
 | `Map` | Wrapped into `FabricMap`. Keys and values are recursively converted (deep variant only). Extra enumerable properties on the `Map` object cause **rejection** (throw) — it is better to fail loudly than silently lose data. |
 | `Set` | Wrapped into `FabricSet`. Elements are recursively converted (deep variant only). Extra enumerable properties on the `Set` object cause **rejection** (throw) — it is better to fail loudly than silently lose data. |
 | `Date` | Wrapped into `FabricEpochNsec`. The `Date`'s millisecond timestamp is converted to nanoseconds: `BigInt(date.getTime()) * 1_000_000n`. Note the millisecond precision limitation — sub-millisecond information is not available from `Date`. Extra enumerable properties on the `Date` object cause **rejection** (throw) — it is better to fail loudly than silently lose data. |
-| `RegExp` | Converted into `FabricRegExp` (a `FabricPrimitive`, not a wrapper). The `source` and `flags` are extracted from the JS `RegExp`; `flavor` defaults to `"es2025"` (it is a `FabricRegExp`-level property, not a JS `RegExp` property). Extra enumerable properties on the `RegExp` object cause **rejection** (throw) — it is better to fail loudly than silently lose data. |
+| `RegExp` | Converted into `FabricRegExp` (a `FabricPrimitive`, not a wrapper). The `source` and `flags` are extracted from the JS `RegExp`; `flavor` is `"es2025"`, the dialect of a JS `RegExp` (it is a `FabricRegExp`-level property, not a JS `RegExp` property). Extra enumerable properties on the `RegExp` object cause **rejection** (throw) — it is better to fail loudly than silently lose data. |
 | `Uint8Array` | Wrapped into `FabricBytes`. The input bytes are copied (the caller may mutate the original afterward). Extra enumerable properties on the `Uint8Array` object cause **rejection** (throw) — it is better to fail loudly than silently lose data. |
 | `FabricValue[]` | Shallow: returned as-is (frozen if `freeze` is true). Deep: elements recursively converted (frozen at each level if `freeze` is true). |
 | `{ [key: string]: FabricValue }` | Shallow: returned as-is (frozen if `freeze` is true). Deep: values recursively converted (frozen at each level if `freeze` is true). |
