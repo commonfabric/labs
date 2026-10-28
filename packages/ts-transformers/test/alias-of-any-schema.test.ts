@@ -1,0 +1,116 @@
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
+
+import type { TransformationDiagnostic } from "../src/mod.ts";
+import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
+import { parseModule, patternSchemas } from "./transformed-ast.ts";
+import { transformFiles } from "./utils.ts";
+
+/**
+ * The input schema of the pattern `/main.tsx` declares, and the diagnostics
+ * transforming it reports, `files` type-checked beside it.
+ */
+const patternInputOf = async (
+  main: string,
+  files: Record<string, string> = {},
+): Promise<{
+  input: Record<string, unknown>;
+  diagnostics: TransformationDiagnostic[];
+}> => {
+  const diagnostics: TransformationDiagnostic[] = [];
+  const output = await transformFiles({ ...files, "/main.tsx": main }, {
+    types: COMMONFABRIC_TYPES,
+    typeCheck: true,
+    pipelineDiagnostics: diagnostics,
+  });
+  return {
+    input: patternSchemas(parseModule(output["/main.tsx"]!)).input,
+    diagnostics,
+  };
+};
+
+/** The schema `input` gives its property `a`. */
+const propertyA = (input: Record<string, unknown>): unknown =>
+  (input.properties as Record<string, unknown> | undefined)?.a;
+
+describe("alias-of-any-schema", () => {
+  for (
+    const [written, declarations, value, expected] of [
+      [
+        "a CFC alias",
+        `type Secret = Confidential<any, ["secret"]>;`,
+        "Secret",
+        { ifc: { confidentiality: ["secret"] } },
+      ],
+      [
+        "a generic alias taking the label",
+        `type Labeled<C extends readonly unknown[]> = Confidential<any, C>;`,
+        `Labeled<["secret"]>`,
+        { ifc: { confidentiality: ["secret"] } },
+      ],
+      [
+        "a nested CFC alias",
+        `type Both = Integrity<Confidential<any, ["secret"]>, ["verified"]>;`,
+        "Both",
+        { ifc: { confidentiality: ["secret"], integrity: ["verified"] } },
+      ],
+      [
+        "a nested CFC alias written in place",
+        "",
+        `Integrity<Confidential<any, ["secret"]>, ["verified"]>`,
+        { ifc: { confidentiality: ["secret"], integrity: ["verified"] } },
+      ],
+      [
+        "a scope wrapper",
+        `type Mine = PerUser<any>;`,
+        "Mine",
+        { scope: "user" },
+      ],
+    ] as const
+  ) {
+    it(`keeps what ${written} wraps around \`any\` in a pattern's input`, async () => {
+      const { input, diagnostics } = await patternInputOf(`
+        import { pattern } from "commonfabric";
+        import type { Confidential, Integrity, PerUser } from "commonfabric";
+        ${declarations}
+        export default pattern<{ a: ${value} }>(() => ({}));
+      `);
+
+      expect(propertyA(input)).toEqual(expected);
+      expect(diagnostics.filter(({ severity }) => severity === "error"))
+        .toEqual([]);
+    });
+  }
+
+  it("keeps the label of a CFC alias over `any` imported from another module", async () => {
+    const { input } = await patternInputOf(
+      `
+        import { pattern } from "commonfabric";
+        import type { Secret } from "./schemas.ts";
+        export default pattern<{ a: Secret }>(() => ({}));
+      `,
+      {
+        "/schemas.ts": `
+          import type { Confidential } from "commonfabric";
+          export type Secret = Confidential<any, ["secret"]>;
+        `,
+      },
+    );
+
+    expect(propertyA(input)).toEqual({ ifc: { confidentiality: ["secret"] } });
+  });
+
+  it("reports `cfc-schema:recursive-alias-of-any` for a recursive alias wrapping a label around `any`", async () => {
+    const { diagnostics } = await patternInputOf(`
+      import { pattern } from "commonfabric";
+      import type { Confidential } from "commonfabric";
+      type Tree = { next: Tree } | Confidential<any, ["secret"]>;
+      export default pattern<{ a: Tree }>(() => ({}));
+    `);
+
+    expect(diagnostics.map(({ type, severity }) => ({ type, severity })))
+      .toEqual([
+        { type: "cfc-schema:recursive-alias-of-any", severity: "error" },
+      ]);
+  });
+});

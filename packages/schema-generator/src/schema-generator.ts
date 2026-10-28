@@ -34,6 +34,7 @@ import {
   scopeOfScopeWrapper,
   scopeOfWrittenScopedUnion,
   scopesCellHandle,
+  writesWrapperErasedByAny,
 } from "./formatters/common-fabric-formatter.ts";
 import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
 import {
@@ -94,6 +95,7 @@ import {
   withOriginsNumbered,
 } from "./schema-origins.ts";
 import {
+  reportRecursiveAliasOfAny,
   reportUnreadCfcRecursion,
   reportUnreadTypes,
 } from "./unread-type-diagnostics.ts";
@@ -3418,6 +3420,13 @@ export class SchemaGenerator {
       }
       // Start building this named type; we'll store the result below
       context.inProgressNames.add(namedKey);
+      // Read again inside its own definition, the type is that definition's
+      // `$ref`, which ends a recursion through it, so the aliases read in
+      // place of `any` around it are read afresh inside it.
+      if (context.aliasesReadForAny) {
+        const { aliasesReadForAny: _, ...outside } = context;
+        context = outside;
+      }
     }
 
     // Cycle detection: if we see the same type again by identity, emit a $ref.
@@ -4382,8 +4391,11 @@ export class SchemaGenerator {
           checker,
           context,
         );
-      // A name declared as `any` reads as `any` does, accepting any value.
-      if (resolved === checker.getAnyType()) return true;
+      // A name declared as `any` reads as `any` does, accepting any value,
+      // unless its declaration writes a wrapper the checker erases around it.
+      if (resolved === checker.getAnyType()) {
+        return this.#readAliasOfAny(typeNode, checker, context) ?? true;
+      }
       if (resolved) {
         const { boundTypeParameters: _, ...unbound } = context;
         return this.formatChildType(
@@ -4498,6 +4510,50 @@ export class SchemaGenerator {
         parameter.name.text === name
       ) ?? -1;
     return index >= 0 ? reference.typeArguments?.[index] : undefined;
+  }
+
+  /**
+   * The schema of what the alias `reference` names declares, read under the
+   * reference's arguments, where the checker reads that alias as `any` and
+   * its declaration writes a wrapper the checker erases around `any`
+   * (`writesWrapperErasedByAny()`): `Confidential<any, C>`, `PerUser<any>`,
+   * or a union holding one is `any` to the checker, and only the written
+   * declaration holds its labels, scope, or default. `undefined` for any other
+   * reference, which reads as `any` does. The alias read again inside its own
+   * declaration is `any` to the checker there too, and its labels would be
+   * lost at that depth, so it is refused (`reportRecursiveAliasOfAny()`).
+   */
+  #readAliasOfAny(
+    reference: ts.TypeReferenceNode,
+    checker: ts.TypeChecker,
+    context: GenerationContext,
+  ): MutableJSONSchema | undefined {
+    if (!ts.isIdentifier(reference.typeName)) return undefined;
+    const declaration = this.#resolveTypeName(
+      reference,
+      reference.typeName,
+      checker,
+      context,
+    )?.declarations?.find(ts.isTypeAliasDeclaration);
+    if (
+      !declaration ||
+      isDefaultLibrarySourceFile(declaration.getSourceFile(), context) ||
+      !writesWrapperErasedByAny(declaration.type, checker)
+    ) {
+      return undefined;
+    }
+    const inside = context.aliasesReadForAny;
+    if (inside?.has(declaration)) {
+      reportRecursiveAliasOfAny(context, reference);
+      return {};
+    }
+    const bound = this.#referenceBindings(reference, context);
+    const { boundTypeParameters: _, instantiatedAs: __, ...unbound } = context;
+    return this.#analyzeChildNode(declaration.type, checker, {
+      ...unbound,
+      ...(bound.arguments.size > 0 && { boundTypeParameters: bound }),
+      aliasesReadForAny: new Set([...inside ?? [], declaration]),
+    });
   }
 
   /**

@@ -1,6 +1,6 @@
 /**
- * Reports unread schema types and CFC recursions whose nesting limit would
- * discard policies.
+ * Reports unread schema types, CFC recursions whose nesting limit would
+ * discard policies, and recursive aliases read in place of `any`.
  */
 
 import { getLogger } from "@commonfabric/utils/logger";
@@ -79,6 +79,29 @@ export function reportUnreadCfcRecursion(
       "so this schema cannot be used. Write a recursive reference whose " +
       "type arguments and writer bindings settle to the same reading.",
     ...(node && { node }),
+  });
+}
+
+/**
+ * Reports `node`, a reference to an alias read again inside its own
+ * declaration, where that declaration is read in place of the `any` the
+ * checker reads the alias as: the checker reads the alias as `any` there too,
+ * so what the declaration wraps around `any` would be lost at that depth.
+ */
+export function reportRecursiveAliasOfAny(
+  context: GenerationContext,
+  node: ts.Node,
+): void {
+  report(context, {
+    severity: "error",
+    type: "cfc-schema:recursive-alias-of-any",
+    message: "This alias refers to itself, and the type checker reads it as " +
+      "`any` because it wraps a CFC label, a scope, or a default around " +
+      "`any`. Its schema is read from its declaration, which cannot be read " +
+      "where the alias recurs, so the labels there would be lost, and this " +
+      "schema cannot be used. Write `unknown` in place of `any` in the " +
+      "alias, which keeps the wrapper in its type.",
+    node,
   });
 }
 

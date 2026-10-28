@@ -1270,6 +1270,15 @@ report these through the same collector (deduplicated via §2.2's
   discard confidentiality or write policies. This includes recursive arguments
   whose types settle but whose writer-query syntax keeps growing. See
   `test/recursive-writer-schema.test.ts`.
+- **Error** `cfc-schema:recursive-alias-of-any` (`schema-generator.ts`,
+  `unread-type-diagnostics.ts`) — an alias that wraps a CFC label, a scope, or
+  a default around `any`, which the checker reads as `any` and the schema
+  generator reads from its declaration instead, refers to itself inside that
+  declaration other than through a named definition. The checker reads it as
+  `any` there too, so the labels it wraps would be lost at that depth, and
+  compilation refuses the schema; the message advises writing `unknown` in
+  place of `any`. See the node-based analyzer in the schema-generator mapping
+  spec and `test/alias-of-any-schema.test.ts`.
 - **Error** `cfc-write-authorized-by:unread` (`schema-generator.ts`,
   `writer-binding-diagnostics.ts`) — a `WriteAuthorizedBy` or
   `TrustedActionWrite*` policy written through another alias whose writer

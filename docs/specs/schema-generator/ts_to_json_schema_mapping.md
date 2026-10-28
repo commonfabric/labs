@@ -129,7 +129,22 @@ wrapper, whose scope `CommonFabricFormatter` reads from the reference's name;
 then the general path, which resolves the name the same way — bound through
 the node, else lexically from the module's scope, an import followed to what
 it imports — and formats the declared type, so a name the module declares,
-exported or not, or imports is read. A plain generic declaration is read under
+exported or not, or imports is read. A name whose declared type is `any`
+because its declaration wraps a CFC alias, a scope wrapper, or a `Default`
+around `any` (`writesWrapperErasedByAny()`) is read as its declaration writes
+it instead, under the reference's arguments: the checker reads `any` beside
+anything as `any`, so `type Secret = Confidential<any, C>` and
+`type SecretOf<C> = Confidential<any, C>` are `any` to it, and only the
+declaration holds the wrapper. Read that way, `{ a: Secret }` gives `a`
+`{ ifc: { confidentiality: C } }`, as `Confidential<any, C>` written in place
+does, and `type U = PerUser<any>` gives `{ scope: "user" }`. A name declared
+as `any` with no such wrapper reads as `any`. An alias read this way that
+refers to itself inside its declaration is `any` to the checker there too,
+and the labels it wraps would be lost at that depth, so the reading is the
+`cfc-schema:recursive-alias-of-any` error, which advises writing `unknown`,
+which the checker keeps a wrapper around. A recursion through a named
+definition is not one: the definition's `$ref` ends it, and the alias is read
+afresh inside the definition. A plain generic declaration is read under
 bindings for every required parameter, taken from the reference's written
 arguments or preceding-parameter defaults (§4.1). A member the bindings cannot
 read, such as an indexed access with no checker-created instantiation, remains
@@ -1471,7 +1486,11 @@ Mechanics:
   generic alias keeps its argument (`Integrity<Sec<string>, I>` is a string), a
   nested `WriteAuthorizedBy` keeps its `typeof` binding, and a nested label
   keeps its `AnyOf` clauses. A named type in the payload stays a `$ref` to its
-  definition.
+  definition. A canonical alias the checker reads as `any`, as it reads
+  `Integrity<Confidential<any, C>, I>`, is read from its declared type, whose
+  payload is the alias's own parameter, bound to nothing; the payload is then
+  read as the argument written for it, so that alias keeps both labels, and
+  `Confidential<Default<any, 5>, C>` keeps its default.
 - A label lands on the part of a value its policy was written around. Each
   carrier records that payload beside its metadata (`CfcStamp<T, M>`,
   `packages/api/cfc.ts`), because TypeScript merges a carrier into whatever

@@ -79,6 +79,7 @@ export interface SchemaGenerationDiagnostic {
     | "schema-default:unresolved"
     | "schema-type:unread"
     | "cfc-schema:recursion-limit"
+    | "cfc-schema:recursive-alias-of-any"
     | "cfc-write-authorized-by:unread"
     | "cfc-label:unread"
     | "cfc-label:not-a-list";
@@ -371,6 +372,13 @@ export interface GenerationContext {
    * as a union.
    */
   scopeBrandRead?: ReadonlySet<ts.Type>;
+
+  /**
+   * The aliases whose declarations this reading is inside, each read in place
+   * of the `any` the checker reads its name as, because what it writes is a
+   * wrapper the checker erases around `any` (`writesWrapperErasedByAny()`).
+   */
+  aliasesReadForAny?: ReadonlySet<ts.TypeAliasDeclaration>;
 
   /**
    * The members written for `payload`, the payload of a union of scope

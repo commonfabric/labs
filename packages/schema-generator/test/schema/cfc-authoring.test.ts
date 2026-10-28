@@ -1456,6 +1456,17 @@ describe("Schema: CFC authoring aliases", () => {
       });
     });
 
+    it("keeps the labels of a payload over `any`, which the checker reads with the whole as `any`", async () => {
+      const schema = await generate(`
+        interface SchemaRoot {
+          t: Integrity<Confidential<any, readonly ["s"]>, readonly ["i"]>;
+        }
+      `);
+      expect(schema.properties?.t).toEqual({
+        ifc: { confidentiality: ["s"], integrity: ["i"] },
+      });
+    });
+
     it("lowers an `AnyOf` clause of a label in the payload", async () => {
       const schema = await generate(`
         interface SchemaRoot {
@@ -1547,6 +1558,204 @@ describe("Schema: CFC authoring aliases", () => {
           ifc: { addIntegrity: ["member"], requiredIntegrity: ["admin"] },
         });
       });
+    });
+  });
+
+  describe("an alias the checker reads as `any`", () => {
+    // The checker reads `any` beside anything as `any`, so an alias wrapping a
+    // CFC label, a scope, or a default around `any` is `any` to it, and only
+    // the alias's declaration holds the wrapper.
+
+    const WRAPPERS = `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
+      type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+      type Integrity<T, X extends readonly unknown[]> = Cfc<T, { integrity: X }>;
+      declare const DEFAULT_MARKER: unique symbol;
+      type DefaultMarker<T> = { readonly [DEFAULT_MARKER]: T };
+      type Default<T, V extends T = T> = (T & DefaultMarker<V>) | T;
+      type Secret = Confidential<any, readonly ["s"]>;
+    `;
+
+    /**
+     * The schema of `{ a: <value> }` beside `declarations`, and the
+     * diagnostics generating it reports, by each path: from its type, and
+     * from a synthetic node, whose names resolve to what `declarations`
+     * declares.
+     */
+    const bothPaths = async (declarations: string, value: string) => {
+      const { checker, program, sourceFile } = await createTestProgram(
+        `${WRAPPERS}\n${declarations}\ntype Root = { a: ${value} };`,
+      );
+      expect(program.getSemanticDiagnostics(sourceFile)).toEqual([]);
+      const root = sourceFile.statements.find((statement) =>
+        ts.isTypeAliasDeclaration(statement) && statement.name.text === "Root"
+      ) as ts.TypeAliasDeclaration;
+      const synthetic = ts.createSourceFile(
+        "synthetic.ts",
+        `type Root = { a: ${value} };`,
+        ts.ScriptTarget.Latest,
+        true,
+      ).statements[0] as ts.TypeAliasDeclaration;
+      const read = (
+        generate: (
+          onDiagnostic: (diagnostic: SchemaGenerationDiagnostic) => void,
+        ) => unknown,
+      ) => {
+        const diagnostics: SchemaGenerationDiagnostic[] = [];
+        const schema = generate((diagnostic) => diagnostics.push(diagnostic));
+        return { schema: schema as Record<string, any>, diagnostics };
+      };
+      return [
+        read((onDiagnostic) =>
+          new SchemaGenerator().generateSchema(
+            checker.getTypeFromTypeNode(root.type),
+            checker,
+            root.type,
+            { onDiagnostic },
+          )
+        ),
+        read((onDiagnostic) =>
+          new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+            synthetic.type,
+            checker,
+            undefined,
+            undefined,
+            sourceFile,
+            { onDiagnostic },
+          )
+        ),
+      ];
+    };
+
+    const SECRET = { ifc: { confidentiality: ["s"] } };
+
+    for (
+      const [written, declarations, value, expected] of [
+        ["a CFC alias", "", "Secret", SECRET],
+        ["an alias of that alias", "type Again = Secret;", "Again", SECRET],
+        [
+          "a generic alias taking the label",
+          "type SecretOf<C extends readonly unknown[]> = Confidential<any, C>;",
+          `SecretOf<readonly ["s"]>`,
+          SECRET,
+        ],
+        [
+          "an alias of a nested CFC alias",
+          `type Both = Integrity<Confidential<any, readonly ["s"]>, readonly ["v"]>;`,
+          "Both",
+          { ifc: { confidentiality: ["s"], integrity: ["v"] } },
+        ],
+        [
+          "a nested CFC alias written in place",
+          "",
+          `Integrity<Confidential<any, readonly ["s"]>, readonly ["v"]>`,
+          { ifc: { confidentiality: ["s"], integrity: ["v"] } },
+        ],
+        [
+          "a CFC alias around a default written in place",
+          "",
+          `Confidential<Default<any, 5>, readonly ["s"]>`,
+          { default: 5, ...SECRET },
+        ],
+        [
+          "a scope wrapper",
+          "type Mine = PerUser<any>;",
+          "Mine",
+          { scope: "user" },
+        ],
+        [
+          "a CFC alias around a default",
+          `type Five = Confidential<Default<any, 5>, readonly ["s"]>;`,
+          "Five",
+          { default: 5, ...SECRET },
+        ],
+        [
+          "a union holding a CFC alias",
+          "type OrText = Secret | string;",
+          "OrText",
+          { anyOf: [SECRET, { type: "string" }] },
+        ],
+        [
+          "an array of a CFC alias",
+          "",
+          "Secret[]",
+          { type: "array", items: SECRET },
+        ],
+      ] as const
+    ) {
+      it(`keeps what ${written} wraps around \`any\` on both paths`, async () => {
+        for (
+          const { schema, diagnostics } of await bothPaths(declarations, value)
+        ) {
+          expect(schema.properties.a).toEqual(expected);
+          expect(diagnostics).toEqual([]);
+        }
+      });
+    }
+
+    it("returns `true` for an alias of `any` that wraps nothing", async () => {
+      for (
+        const { schema, diagnostics } of await bothPaths(
+          "type Anything = any; type Loose = string | any;",
+          "Anything | Loose",
+        )
+      ) {
+        expect(schema.properties.a).toBe(true);
+        expect(diagnostics).toEqual([]);
+      }
+    });
+
+    it("reports `cfc-schema:recursive-alias-of-any` at the reference to an alias inside its own declaration", async () => {
+      for (
+        const { diagnostics } of await bothPaths(
+          "type Tree = { next: Tree } | Secret;",
+          "Tree",
+        )
+      ) {
+        expect(diagnostics.map(({ severity, type }) => ({ severity, type })))
+          .toEqual([
+            { severity: "error", type: "cfc-schema:recursive-alias-of-any" },
+          ]);
+        expect(
+          ts.findAncestor(diagnostics[0]!.node, ts.isPropertySignature)?.name
+            .getText(),
+        ).toBe("next");
+      }
+    });
+
+    it("keeps the label at every depth of a recursion through a named definition", async () => {
+      for (
+        const { schema, diagnostics } of await bothPaths(
+          "type Tree = { next: Node } | Secret; interface Node { tree: Tree }",
+          "Tree",
+        )
+      ) {
+        const tree = {
+          anyOf: [
+            {
+              type: "object",
+              properties: { next: { $ref: "#/$defs/Node" } },
+              required: ["next"],
+            },
+            SECRET,
+          ],
+        };
+        expect(schema.properties.a).toEqual(tree);
+        expect(schema.$defs.Node.properties.tree).toEqual(tree);
+        expect(diagnostics).toEqual([]);
+      }
+    });
+
+    it("reports nothing for a recursive alias wrapping `unknown`, which the checker keeps a wrapper around", async () => {
+      for (
+        const { schema, diagnostics } of await bothPaths(
+          `type Tree = { next: Tree } | Confidential<unknown, readonly ["s"]>;`,
+          "Tree",
+        )
+      ) {
+        expect(schema.properties.a).toEqual({ $ref: "#/$defs/Tree" });
+        expect(diagnostics).toEqual([]);
+      }
     });
   });
 
