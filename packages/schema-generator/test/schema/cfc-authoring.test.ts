@@ -3401,12 +3401,19 @@ describe("Schema: CFC authoring aliases", () => {
           'Omit<Confidential<T | Sec<{ x: string; z: 1 }>, readonly ["c"]>, never>',
           { confidentiality: ["c"] },
         ],
+        ["Omit<T | Sec<T>, never>", { confidentiality: ["a"] }],
+        [
+          'Omit<T | Confidential<unknown, readonly ["c"]>, never>',
+          { confidentiality: ["c"] },
+        ],
       ] as const
     ) {
       it(`reads \`${alias}\` under bindings as an object with no members, \`T\` bound to \`unknown\``, async () => {
-        // `keyof unknown` is `never`, and the checker reduces a union holding
-        // a bare `unknown` to it, the labels of the union's other members going
-        // with them.
+        // `keyof unknown` is `never`. A bare `unknown` is a member with no
+        // labels of its own, beside which the other members' labels stay,
+        // landing where they reach: nowhere for one written around members
+        // the object does not have, and on all of it for one written around a
+        // payload that names none.
         const { value, diagnostics } = await generate(`
           type Sec<T> = Confidential<T, readonly ["a"]>;
           type Outer<T> = Confidential<{ inner: ${alias} }, readonly ["b"]>;
@@ -3422,7 +3429,8 @@ describe("Schema: CFC authoring aliases", () => {
     }
 
     it("keeps the label of a labeled `unknown` among the members of an `Omit` under bindings", async () => {
-      // `Confidential<unknown, …>` is its carrier, which reduces no union.
+      // `Confidential<unknown, …>` is its carrier, written around a payload
+      // that names no members, so its label lands on the whole object.
       const { value, diagnostics } = await generate(`
         type Sec<T> = Confidential<T, readonly ["a"]>;
         type Outer<T> = Confidential<
@@ -4018,6 +4026,10 @@ describe("Schema: CFC authoring aliases", () => {
         type OmitSecEither<T, U> =
           OmitSec<T | U | Confidential<Two, readonly ["b"]>>;
         type ReadonlyUnion<T, U> = Readonly<Sec<T> | Sec<U>>;
+        type OmitOpen<T> = Omit<T | Sec<T>, never>;
+        type OmitOpenLabeled<T> =
+          Omit<T | Confidential<unknown, readonly ["c"]>, never>;
+        type OmitSecOpen<T> = OmitSec<T | Confidential<unknown, readonly ["c"]>>;
       `;
 
       for (
@@ -4186,6 +4198,24 @@ describe("Schema: CFC authoring aliases", () => {
         expect(read.diagnostics).toEqual([]);
       });
 
+      for (
+        const [alias, ifc] of [
+          ["OmitOpen<unknown>", secret],
+          ["OmitOpenLabeled<unknown>", { confidentiality: ["c"] }],
+          ["OmitSecOpen<unknown>", { confidentiality: ["a", "c"] }],
+        ] as const
+      ) {
+        it(`keeps the labels of the members beside the \`unknown\` \`${alias}\` binds into a union`, async () => {
+          // A bare `unknown` is a member with no labels of its own, beside
+          // which the others' labels stay, though the checker reduces the
+          // union written out to `unknown`. Each is written around a payload
+          // that names no members, so it labels the whole object.
+          const { schema, diagnostics } = await generate(alias, DECLARATIONS);
+          expect(schema).toEqual({ type: "object", properties: {}, ifc });
+          expect(diagnostics).toEqual([]);
+        });
+      }
+
       it("reads a union argument that holds `unknown` before `any` unlabeled, as the `any` makes it", async () => {
         // `any` absorbs every member of a union, `unknown` among them.
         const read = await generate(
@@ -4202,11 +4232,10 @@ describe("Schema: CFC authoring aliases", () => {
       });
 
       it("keeps the labels of a member whose labeled payload is `unknown`", async () => {
-        // `Confidential<unknown, …>` is its carrier rather than `unknown`, so it
-        // absorbs no other member of the union. `Omit` over the union keeps the
-        // keys every member has, here none: `c`, written around `Two`, lands on
-        // no member of the value, while `a` and `b`, written around payloads
-        // that list no members, land on all of it.
+        // `Omit` over the union keeps the keys every member has, here none:
+        // `c`, written around `Two`, lands on no member of the value, while `a`
+        // and `b`, written around payloads that list no members, land on all
+        // of it.
         const { schema, diagnostics } = await generate(
           "OmitSecNested<unknown>",
           DECLARATIONS,

@@ -1119,11 +1119,6 @@ const unlabeledView = (type: ts.Type): LibraryView => ({
   primitive: undefined,
 });
 
-/** Whether `member` is `unknown` with no carrier. */
-const isBareUnknown = ({ payload, metadata }: LabeledMember): boolean =>
-  metadata.length === 0 &&
-  payload.length === 1 && (payload[0]!.flags & ts.TypeFlags.Unknown) !== 0;
-
 /**
  * The payload of the one member in `members`, where there is one and its
  * payload is one type, a primitive.
@@ -3170,11 +3165,12 @@ export class CommonFabricFormatter implements TypeFormatter {
    * type a default-library alias mapping an object's members is given, may
    * be under `bound`, and the payload the value is where the operand is one
    * member whose payload is a primitive; `undefined` where `operand` is
-   * `any` or `unknown`, which hold no labels, or a union holding either,
-   * which the checker reduces to it. A type parameter `bound` binds is its
-   * argument. Any other union has the members each of its own has, and is no
-   * primitive, since the checker distributes an alias that leaves one as it
-   * is over a union; `never` has none. An intersection of CFC metadata
+   * `any`, or a union holding it, which the checker reduces to it. A type
+   * parameter `bound` binds is its argument. Any other union has the members
+   * each of its own has, and is no primitive, since the checker distributes
+   * an alias that leaves one as it is over a union; a bare `unknown` among
+   * them is a member like any other, with no labels and no members of its
+   * own, so the others' labels stay; `never` has none. An intersection of CFC metadata
    * carriers and other members, or a lone carrier (`operandCarriedParts()`),
    * has the members its carriers label (`#carriedMembers()`), such an alias
    * in turn its operand's, and any other type is one unlabeled member.
@@ -3188,9 +3184,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     if (argument) {
       return this.#operandView(argument.type, argument.bound, context);
     }
-    if ((operand.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) !== 0) {
-      return undefined;
-    }
+    if ((operand.flags & ts.TypeFlags.Any) !== 0) return undefined;
     if ((operand.flags & ts.TypeFlags.Never) !== 0) {
       return { members: [], primitive: undefined };
     }
@@ -3268,11 +3262,11 @@ export class CommonFabricFormatter implements TypeFormatter {
    * parameter `bound` binds is its argument, which the checker folds into the
    * operand's intersection, as it folds any type in. So the intersection
    * distributes over a union, each member of which is read on its own,
-   * except that a union holding `any` is `any` and one holding a bare
-   * `unknown` is `unknown`, one member adding no carrier, while a labeled
-   * `unknown` is its carrier, a member like any other; `never` has no
-   * members; and a type that is itself labeled folds its carriers in
-   * (`#carriedMembers()`). Any other type is one member adding no carrier.
+   * except that a union holding `any` is `any`. A bare `unknown` among them
+   * is a member adding no carrier, and a labeled one its carrier, members
+   * like any other; `never` has no members; and a type that is itself
+   * labeled folds its carriers in (`#carriedMembers()`). Any other type is
+   * one member adding no carrier.
    */
   #payloadParts(
     payload: ts.Type,
@@ -3287,16 +3281,12 @@ export class CommonFabricFormatter implements TypeFormatter {
     if ((payload.flags & ts.TypeFlags.Never) !== 0) return [];
     if (payload.isUnion()) {
       const members: LabeledMember[] = [];
-      let unknown: LabeledMember | undefined;
       for (const member of payload.types) {
         const read = this.#payloadParts(member, bound, context);
         if (!read) return undefined;
-        for (const part of read) {
-          if (isBareUnknown(part)) unknown = part;
-          else members.push(part);
-        }
+        for (const part of read) members.push(part);
       }
-      return unknown ? [unknown] : members;
+      return members;
     }
     const carried = operandCarriedParts(payload, context.typeChecker);
     return carried

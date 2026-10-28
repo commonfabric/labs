@@ -2722,7 +2722,8 @@ type Outer<T extends { x: string }> = Confidential<{ inner: Pick<T | Sec<Two>, "
         }
 
         it("reads `View<unknown>`, where `View<T>` is `Omit<T | Sec<Two>, never>`, as the alias written out, on both sides", async () => {
-          // `unknown` absorbs every other member of a union.
+          // `keyof unknown` is `never`, so the object has no members, and
+          // `a`, written around `Two`'s members, lands on none of it.
           const declarations = `${DECLARATIONS}
 type View<T> = Omit<T | Sec<Two>, never>;`;
           const read = await schemasOf(declarations, "View<unknown>");
@@ -2734,12 +2735,29 @@ type View<T> = Omit<T | Sec<Two>, never>;`;
           }
         });
 
+        it("keeps the labels of the member beside the `unknown` `ViewOpen<unknown>` binds into a union, on both sides", async () => {
+          // A bare `unknown` is a member with no labels of its own, beside
+          // which `Sec<unknown>`'s label stays, written around a payload that
+          // names no members and so on the whole object.
+          const { input, output } = await schemasOf(
+            `${DECLARATIONS}
+type ViewOpen<T> = Omit<T | Sec<T>, never>;`,
+            "ViewOpen<unknown>",
+          );
+          for (const side of [input, output]) {
+            expect(side).toEqual({
+              type: "object",
+              properties: {},
+              ifc: { confidentiality: ["a"] },
+            });
+          }
+        });
+
         it("keeps the labels of a member whose labeled payload is `unknown`, on both sides", async () => {
-          // `Confidential<unknown, …>` is its carrier rather than `unknown`, so
-          // it absorbs no other member of the union. `Omit` over the union
-          // keeps the keys every member has, here none: `c`, written around
-          // `Two`, lands on no member of the value, while `a` and `b`, written
-          // around payloads that list no members, land on all of it.
+          // `Omit` over the union keeps the keys every member has, here none:
+          // `c`, written around `Two`, lands on no member of the value, while
+          // `a` and `b`, written around payloads that list no members, land on
+          // all of it.
           const { input, output } = await schemasOf(
             `${DECLARATIONS}
 type Inner<T> = Omit<Sec<T>, never>;

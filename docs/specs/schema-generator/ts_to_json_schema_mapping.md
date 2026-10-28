@@ -1614,9 +1614,16 @@ Mechanics:
   read from its carriers in full or not at all and placed by the payloads
   they record (above). A union operand may be any of its members, each read
   on its own once its parameters are bound, and is unlabeled where a member
-  is `any` or a bare `unknown`, to which the checker reduces it; a labeled
-  `unknown` (`Confidential<unknown, L>`) is its carrier, a member like any
-  other. The checker distributes `Readonly`, `Partial` and `Required` over
+  is `any`, to which the checker reduces it. A bare `unknown` member has no
+  labels and no members, so the other members' labels stay, landing where
+  they reach, though the checker reduces `unknown | X` to `unknown`: a label
+  is kept wherever the union is read before the checker reduces it, as a
+  user's alias read under its bindings is, and lost where the checker hands
+  over the reduced type, as for `Omit<unknown | Sec<X>, never>` written out.
+  So `OmitOpen<unknown>`, where `type OmitOpen<T> = Omit<T | Sec<T>, never>`,
+  carries `Sec`'s label, written around a payload that names no members, on
+  the whole object. A labeled `unknown` (`Confidential<unknown, L>`) is its
+  carrier, a member like any other. The checker distributes `Readonly`, `Partial` and `Required` over
   one, so each member of the union they build keeps its own labels. `Pick`
   and `Omit` build one object from whichever member the value is, so it has
   every member's labels joined, as a narrowed union read does
@@ -1653,10 +1660,12 @@ Mechanics:
   union, so each member of one is read on its own, and an operand whose
   payload holds several such unions is a member for each way of taking one
   member from each: the carriers of a member that is itself labeled join the
-  operand's, a member that leaves the intersection nothing (`never`, `null`,
-  `undefined`) drops out, leaving the operand unlabeled where none is left,
-  `any` makes the operand `any`, unlabeled, and a union holding a bare
-  `unknown` is `unknown`, which keeps the carriers alone. So
+  operand's, `never` drops out, leaving the operand unlabeled where no member
+  is left, `null` and `undefined`, which a CFC alias holds beside its carrier
+  (`Cfc` in `packages/api/cfc.ts`), are members no policy labels, `any` makes
+  the operand `any`, unlabeled, and a bare `unknown` is a member adding no
+  carrier. A carrier the checker defers while its payload is a parameter
+  (`CfcTag<T, M>`) is read from the stamp it is given. So
   `Select<Confidential<X, ["b"]> | Y>`, where
   `type Select<T> = Pick<Sec<T>, "a">`, reads as
   `Pick<Sec<Confidential<X, ["b"]> | Y>, "a">`, labeled with both. Both
