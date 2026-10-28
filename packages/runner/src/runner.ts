@@ -15474,8 +15474,11 @@ export class Runner {
    * loaded in this runtime and names the instance. The pattern last set up is
    * the one the parent's setup record describes, or, with no record of the
    * current version, the one `patternSetupIdentity` names. Where the record
-   * says that pattern's build numbered an instance's cell otherwise than this
-   * runtime's build of it does, the instance carries nothing over. An instance that pattern, loaded, does not name is matched
+   * says that pattern's build numbered its cells otherwise than this
+   * runtime's build of it does, a number this runtime's builds give may name
+   * another child: an instance whose cell, or whose spot by order, is at
+   * such a number goes to the match by pattern identity, and none takes the
+   * child at its own positional spot. An instance that pattern, loaded, does not name is matched
    * to its positional children by order within each pattern identity.
    * Without that pattern, or where order places the instance at no set-up
    * child, an instance carries over the one child, among the positional
@@ -15505,9 +15508,13 @@ export class Runner {
     );
     const previous = this.#previouslySetUpPattern(parent, pattern);
     const previousRef = this.#lastSetUpRef(parent);
-    const disagreeing = previous === undefined || previousRef === undefined
-      ? new Set<string>()
-      : this.#instancesTheRecordNumbersOtherwise(parent, previous, previousRef);
+    // Where the record disagrees, the numbers this runtime's builds give are
+    // not where the parent's children sit: the steps that read a child at
+    // such a number pass over it, and the step by pattern identity, which
+    // reads none, is the one left.
+    const disagreement = previous === undefined || previousRef === undefined
+      ? undefined
+      : this.#recordDisagreement(parent, previous, previousRef);
     const nodes = subPatternNodes(pattern);
     const unmatched: {
       name: string;
@@ -15540,8 +15547,8 @@ export class Runner {
         unmatched.push({ name, module: node.module, descriptor });
         continue;
       }
-      if (disagreeing.has(name)) {
-        uncarried.push({ name, recordDisagrees: true });
+      if (disagreement?.names.has(name)) {
+        unmatched.push({ name, module: node.module, descriptor });
         continue;
       }
       const child = this.#previousInstanceChild(
@@ -15616,7 +15623,10 @@ export class Runner {
         counts.set(key, index + 1);
         if (entry === undefined) continue;
         const spot = spotsBefore.get(key)?.[index];
-        if (spot === undefined) {
+        if (
+          spot === undefined ||
+          disagreement?.numbers.has(positionalNumber(spot.partialCause))
+        ) {
           unmatched.push(entry);
           continue;
         }
@@ -15674,8 +15684,13 @@ export class Runner {
     }
     // What is left takes the child at its own positional spot, which is where
     // the child runs with no instance names, unless the parent shows the
-    // children have moved spots.
+    // children have moved spots. Where the record disagrees, that spot's
+    // number is not one the record vouches for, so what is left starts fresh.
     for (const { name, module, descriptor } of unmatched) {
+      if (disagreement !== undefined) {
+        uncarried.push({ name, recordDisagrees: true });
+        continue;
+      }
       const left = this.#childAtPartialCause(
         tx,
         parent,
@@ -15750,51 +15765,51 @@ export class Runner {
   }
 
   /**
-   * The names of the instances `previous`, the pattern the parent
-   * `resultCell` last set up as `ref`, names whose cell this runtime's build
-   * of it numbers otherwise than the parent's setup record of that build
-   * does: a cell holding state that the record shows at another number, or
-   * one of a description whose cells the record cannot be matched with
-   * (`compareStoredSetupBuild()`). Empty where the parent holds no record of
-   * `ref`, which leaves this runtime's build to place every instance.
+   * Where the parent `resultCell`'s setup record of `previous`, the pattern
+   * it last set up as `ref`, numbers that pattern's cells otherwise than this
+   * runtime's build of it does (`compareStoredSetupBuild()`), the numbers in
+   * this runtime's build that the record cannot vouch for, and the names of
+   * `previous`'s named instances at those numbers: a cell holding state that
+   * the record shows at another number, and every cell of a description
+   * whose cells the record cannot be matched with. `undefined` where the
+   * parent holds no record of `ref`, or one that agrees.
    */
-  #instancesTheRecordNumbersOtherwise(
+  #recordDisagreement(
     resultCell: Cell<any>,
     previous: Pattern,
     ref: { identity: string; symbol: string },
-  ): Set<string> {
-    const names = new Set<string>();
+  ): { numbers: Set<number>; names: Set<string> } | undefined {
     const stamped = readStoredSetupBuild(
       resultCell.getMetaRaw("patternSetupBuild", {
         meta: ignoreReadForScheduling,
       }),
     );
     if (stamped === undefined || !samePatternRef(stamped.pattern, ref)) {
-      return names;
+      return undefined;
     }
     const { record, cells } = this.#describedBuild(previous, ref);
     const comparison = compareStoredSetupBuild(stamped, record, cells);
-    if (comparison.kind !== "held") return names;
-    const movedTo = new Set(comparison.moved.map((cell) => cell.to));
+    if (comparison.kind !== "held") return undefined;
     const unmatched = new Set(
       comparison.ambiguous.map(({ description }) => description),
     );
+    const numbers = new Set([
+      ...comparison.moved.map((cell) => cell.to),
+      ...cells.filter((cell) => unmatched.has(cell.description)).map((
+        cell,
+      ) => cell.number),
+    ]);
+    const names = new Set<string>();
     for (const descriptor of previous.derivedInternalCells ?? []) {
       const name = instanceNameOfPartialCause(descriptor.partialCause);
-      if (name === undefined || descriptor.legacyPartialCause === undefined) {
-        continue;
-      }
-      const number = positionalNumber(descriptor.legacyPartialCause);
-      const description = cells.find((cell) => cell.number === number)
-        ?.description;
       if (
-        movedTo.has(number) ||
-        (description !== undefined && unmatched.has(description))
+        name !== undefined && descriptor.legacyPartialCause !== undefined &&
+        numbers.has(positionalNumber(descriptor.legacyPartialCause))
       ) {
         names.add(name);
       }
     }
-    return names;
+    return { numbers, names };
   }
 
   /**

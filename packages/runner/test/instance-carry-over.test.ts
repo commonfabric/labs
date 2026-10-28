@@ -995,11 +995,11 @@ describe("instance-carry-over", () => {
       });
     });
 
-    it("starts fresh, and reports it, when the parent's setup record numbers its cell otherwise than this runtime's build of the pattern last set up", async () => {
+    it("keeps its deployed child's state through its pattern identity, when the parent's setup record numbers its cell otherwise than this runtime's build of the pattern last set up", async () => {
       // The record is of a build that numbered `a`'s cell one further on,
       // so the child at the number this runtime's build gives `a` may be
-      // another's. `s`, which the pattern last set up never had, is reported
-      // too.
+      // another's. The one positional child of `a`'s pattern is `a`'s own.
+      // `s`, which the pattern last set up never had, is reported.
 
       const cell = await deployedParent("record-disagrees", {
         record: (stamped) => ({
@@ -1013,10 +1013,10 @@ describe("instance-carry-over", () => {
       const result = await update(cell, NAMED_WITH_SIBLING);
 
       expect({ aCount: result.aCount, sCount: result.sCount }).toEqual({
-        aCount: 0,
+        aCount: 7,
         sCount: 0,
       });
-      expect(freshStarts() - before).toBe(2);
+      expect(freshStarts() - before).toBe(1);
     });
 
     it("starts fresh, where the parent's setup record holds cells of its description that this runtime's build cannot be matched with", async () => {
@@ -1046,9 +1046,11 @@ describe("instance-carry-over", () => {
       });
     });
 
-    it("keeps its deployed child's state, where the parent's setup record numbers only another instance's cell otherwise", async () => {
-      // The record moves `t`'s cell alone, so `t` starts fresh and `a`, whose
-      // cell the record numbers as this runtime's build does, keeps its own.
+    it("keeps each deployed child's state, the one whose cell the parent's setup record numbers otherwise through its pattern identity", async () => {
+      // The record moves `t`'s cell alone. `a`, whose cell the record numbers
+      // as this runtime's build does, keeps its own at the cause the pattern
+      // last set up gives it, and `t` the one positional child of its
+      // pattern.
 
       const cell = await deployedParent("record-disagrees-for-one", {
         deployed: DEPLOYED_WITH_OTHER,
@@ -1070,7 +1072,7 @@ describe("instance-carry-over", () => {
 
       expect({ aCount: result.aCount, tCount: result.tCount }).toEqual({
         aCount: 7,
-        tCount: 0,
+        tCount: 3,
       });
     });
 
@@ -1230,6 +1232,22 @@ describe("instance-carry-over", () => {
         aCount: 0,
         bCount: 0,
       });
+    });
+
+    it("keeps its deployed child's state through its pattern identity, rather than take the child at the cause the pattern last set up gives its name", async () => {
+      // The pattern last set up names `a`, and today's build of it gives
+      // `a`'s cell the number where `x` sits.
+
+      const cell = await deployedParent("renumbered-exact", {
+        deployed: OTHER_THEN_ONE,
+        named: NAMED,
+        counts: { xCount: 5, aCount: 7 },
+        record: renumberedRecord((n) => n + 1),
+      });
+
+      const result = await update(cell, NAMED_WITH_SIBLING);
+
+      expect(result.aCount).toBe(7);
     });
 
     it("keeps its deployed child's state through its pattern identity, rather than take the child at the spot the pattern last set up gives it by order", async () => {
