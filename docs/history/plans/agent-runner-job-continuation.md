@@ -565,7 +565,8 @@ the track lead reviews it.
      `takeMessages` hook, and `cannot_steer` no longer exists.
    - **`follow_up_only` replaces `instructions_on_steer`.** It is one
      refusal for a message carrying `instructions`, `imageAttachments` or
-     `inputs` that its head would take as a steer.
+     `inputs` (with their `foreignSpaces`) that its head would take as a
+     steer.
    - **Follow-ups carry attachments.** The message route accepts images and
      inputs on a follow-up, and `--continue-run` accepts `--image` and
      `--input-cell`. The continued run carries `assignedPieces`. A new input

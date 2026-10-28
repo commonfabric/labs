@@ -2044,9 +2044,10 @@ join the follow-up's new prompt; inputs add named handles, with foreign spaces
 routed as on enqueue. Existing history and held input routes carry forward;
 omitted attachments are not sent again as new inputs.
 
-Instructions and attachments are follow-up-only: a queued or running head with
-no cancel requested refuses them as `409 follow_up_only`. After cancel, they
-wait for their own follow-up. If a new input name collides with a held input,
+`instructions`, `imageAttachments` and `inputs` (with their `foreignSpaces`) are
+follow-up-only: a message carrying any of them, to a queued or running head with
+no cancel requested, is refused as `409 follow_up_only`. After cancel, they wait
+for their own follow-up. If a new input name collides with a held input,
 assigned slug or grant, acceptance still returns normally and the follow-up
 fails `PROVIDER_FAILURE` before any model call, with the builder's own reason in
 `errorDetail`.
@@ -2101,17 +2102,17 @@ cancellation and `PROFILE_UNAVAILABLE` failures have no recorded run.
 
 Every refusal is `{ok: false, code, error}`:
 
-| Status | Code                   | Condition                                                                             |
-| ------ | ---------------------- | ------------------------------------------------------------------------------------- |
-| 400    | `invalid_request`      | Invalid JSON, missing or mistyped fields, or an empty message.                        |
-| 413    | `too_large`            | The body exceeds 1 MiB.                                                               |
-| 404    | `not_found`            | The target job does not exist.                                                        |
-| 403    | `not_callers`          | The body names another caller.                                                        |
-| 409    | `not_continuable`      | The finished head, including an interrupted one, has no complete recorded checkpoint. |
-| 409    | `follow_up_only`       | Instructions or attachments supplied to a queued or running head before cancel.       |
-| 400    | `unknown_profile`      | Opening a follow-up or admitting attachments needs a profile no longer named.         |
-| 400    | `beyond_profile`       | The follow-up request exceeds or invalidates its profile.                             |
-| 409    | `idempotency_conflict` | The caller's key already names another request or route.                              |
+| Status | Code                   | Condition                                                                                      |
+| ------ | ---------------------- | ---------------------------------------------------------------------------------------------- |
+| 400    | `invalid_request`      | Invalid JSON, missing or mistyped fields, or an empty message.                                 |
+| 413    | `too_large`            | The body exceeds 1 MiB.                                                                        |
+| 404    | `not_found`            | The target job does not exist.                                                                 |
+| 403    | `not_callers`          | The body names another caller.                                                                 |
+| 409    | `not_continuable`      | The finished head, including an interrupted one, has no complete recorded checkpoint.          |
+| 409    | `follow_up_only`       | `instructions`, `imageAttachments` or `inputs` sent to a queued or running head before cancel. |
+| 400    | `unknown_profile`      | Opening a follow-up or admitting attachments needs a profile no longer named.                  |
+| 400    | `beyond_profile`       | The follow-up request exceeds or invalidates its profile.                                      |
+| 409    | `idempotency_conflict` | The caller's key already names another request or route.                                       |
 
 The local harness lane takes messages at model-turn boundaries. A finished job
 with a recorded checkpoint can open a follow-up, whose new harness run carries
