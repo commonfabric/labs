@@ -6,7 +6,9 @@
  * session has its own answer, so a session that can't read the person's
  * profile, as one whose `#profile` wish hasn't resolved can't, answers for
  * itself alone, and so does a person holding READ in the room's space.
- * Whichever of two sessions runs last, the other still reads its own.
+ * Whichever of two sessions runs last, the other still reads its own: a
+ * session that can send may edit the message it sent, and its composer is
+ * enabled.
  *
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
@@ -33,6 +35,9 @@ const ROOT_PATH = join(import.meta.dirname!, "..");
 
 // The gesture a grant of access requires, as a members surface gives.
 const CHANGE_ACCESS = { surface: "MembersSurface", action: "ChangeAccess" };
+
+// The gesture a send requires, as the room's composer gives.
+const SEND = { surface: "ChatSendSurface", action: "ChatSend" };
 
 // The `inputId` of the room's main composer.
 const COMPOSER_INPUT = "fabrichat-message";
@@ -120,14 +125,16 @@ describe("fabrichat room viewer across runtimes", () => {
         const profile = await profiled.createOwnProfile("Person");
         await profiled.send("useProfile", { profile });
         await harness.settle();
+        await profiled.send("sendMessage", { body: "Hello" }, SEND);
+        await harness.settle();
         await findComposer(profiled);
         return { profiled, profileless };
       };
 
       /**
        * Reads, in `session`, whether the room says it can send, whether the
-       * room sees a profile for it, and whether the room's composer is
-       * disabled for it.
+       * room sees a profile for it, whether the room's composer is disabled
+       * for it, and whether it may edit the room's first message.
        */
       const answers = async (session: MultiRuntimeSession) => {
         await harness!.settle();
@@ -138,6 +145,8 @@ describe("fabrichat room viewer across runtimes", () => {
           composerDisabled:
             (await session.read([...composer!, "props", "disabled"])) ===
               true,
+          canEditFirst:
+            (await session.read(["messageRights", 0, "canEdit"])) === true,
         };
       };
 
@@ -148,16 +157,19 @@ describe("fabrichat room viewer across runtimes", () => {
           canSend: true,
           hasProfile: true,
           composerDisabled: false,
+          canEditFirst: true,
         });
         expect(await answers(profileless)).toEqual({
           canSend: false,
           hasProfile: false,
           composerDisabled: true,
+          canEditFirst: false,
         });
         expect(await answers(profiled)).toEqual({
           canSend: true,
           hasProfile: true,
           composerDisabled: false,
+          canEditFirst: true,
         });
       });
 
@@ -168,16 +180,19 @@ describe("fabrichat room viewer across runtimes", () => {
           canSend: false,
           hasProfile: false,
           composerDisabled: true,
+          canEditFirst: false,
         });
         expect(await answers(profiled)).toEqual({
           canSend: true,
           hasProfile: true,
           composerDisabled: false,
+          canEditFirst: true,
         });
         expect(await answers(profileless)).toEqual({
           canSend: false,
           hasProfile: false,
           composerDisabled: true,
+          canEditFirst: false,
         });
       });
 
@@ -206,20 +221,24 @@ describe("fabrichat room viewer across runtimes", () => {
           { principal: reader.did() },
           CHANGE_ACCESS,
         );
+        await writes.send("sendMessage", { body: "Hello" }, SEND);
         await harness.settle();
         await findComposer(writes);
 
         expect(await answers(writes)).toMatchObject({
           canSend: true,
           composerDisabled: false,
+          canEditFirst: true,
         });
         expect(await answers(reads)).toMatchObject({
           canSend: false,
           composerDisabled: true,
+          canEditFirst: false,
         });
         expect(await answers(writes)).toMatchObject({
           canSend: true,
           composerDisabled: false,
+          canEditFirst: true,
         });
       });
     });

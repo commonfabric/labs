@@ -28,7 +28,10 @@ import {
   type ChatRoomViewer,
   FabriChatRoomCore,
 } from "../../../fabrichat/room.tsx";
-import type { MessagesValue } from "../../../fabrichat/room-records.tsx";
+import type {
+  MessagesValue,
+  RoomStreamEvent,
+} from "../../../fabrichat/room-records.tsx";
 import type {
   AboutRecord,
   ChatProfile,
@@ -101,6 +104,9 @@ export interface MainOutput {
 
   /** Grants a principal READ in the room's space. */
   grantRead: Stream<GrantReadEvent>;
+
+  /** Sends a message to the room. */
+  sendMessage: Stream<RoomStreamEvent>;
 }
 
 export default pattern<Record<string, never>, MainOutput>(() => {
@@ -123,5 +129,6 @@ export default pattern<Record<string, never>, MainOutput>(() => {
     canAdd: room.canAdd,
     useProfile: useProfile({ profile }),
     grantRead: grantRead({ messages }),
+    sendMessage: room.sendMessage,
   };
 });
