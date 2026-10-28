@@ -769,6 +769,17 @@ export class ContextualFlowControl {
           });
         }
       }
+      // A position on the path is labeled here as narrowing to it would
+      // label it, so that narrowing a path in one call and segment by
+      // segment agree. One whose own label observes one class keeps that
+      // label and nothing it would have inherited, so nothing inherited
+      // passes on below it.
+      if (
+        inherited.size !== 0 && isObjectOrArray(cursor) &&
+        declaredObservationClass(cursor.ifc?.observes) !== undefined
+      ) {
+        inherited.clear();
+      }
       // A cursor declaring no `type` admits every type, and which of its
       // keywords apply is settled only by a value — `properties` and
       // `additionalProperties` by an object, `prefixItems` and `items` by an
@@ -835,6 +846,10 @@ export class ContextualFlowControl {
         throughWildcard = true;
         break;
       } else if (cursor.type === "object") {
+        // An object's label joins whatever the path reaches below it, and a
+        // label it inherited is part of its label.
+        for (const atom of inherited) joined.add(atom);
+        inherited.clear();
         if (cursor.ifc !== undefined) {
           ContextualFlowControl.addIfcAtoms(
             joined,

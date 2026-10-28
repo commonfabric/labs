@@ -385,21 +385,72 @@ describe("ContextualFlowControl.schemaAtPath", () => {
 
     // An `observes` that names no class reads as covering, so a child
     // declaring one joins the inherited label as a covering child does.
-    const unnamed = ContextualFlowControl.schemaAtPath(
-      {
+    for (const observes of ["legacy", null]) {
+      const unnamed = ContextualFlowControl.schemaAtPath(
+        {
+          type: "array",
+          items: {
+            type: "string",
+            ifc: { confidentiality: ["own"], observes },
+          },
+          ifc: { confidentiality: ["sec"] },
+        } as unknown as JSONSchema,
+        ["0"],
+      ) as JSONSchemaObj;
+      expect([...(unnamed.ifc?.confidentiality ?? [])].sort()).toEqual([
+        "own",
+        "sec",
+      ]);
+    }
+  });
+
+  it("narrows a path through labeled containers to the same schema in one call as segment by segment", () => {
+    // Each position on the path is labeled as narrowing to it would label
+    // it, so how a path is split does not change what its end carries.
+
+    const secret = { confidentiality: ["secret"] };
+    const cases: Array<[JSONSchema, string[]]> = [
+      [{
         type: "array",
+        ifc: secret,
         items: {
-          type: "string",
-          ifc: { confidentiality: ["own"], observes: "legacy" },
+          type: "array",
+          ifc: { confidentiality: [], observes: "enumerate" },
+          items: { type: "string" },
         },
-        ifc: { confidentiality: ["sec"] },
-      } as unknown as JSONSchema,
-      ["0"],
-    ) as JSONSchemaObj;
-    expect([...(unnamed.ifc?.confidentiality ?? [])].sort()).toEqual([
-      "own",
-      "sec",
-    ]);
+      } as JSONSchema, ["0", "0"]],
+      [{
+        type: "array",
+        ifc: secret,
+        items: { type: "array", items: { type: "string" } },
+      } as JSONSchema, ["0", "0"]],
+      [{
+        type: "array",
+        ifc: secret,
+        items: {
+          type: "object",
+          properties: {
+            x: {
+              type: "string",
+              ifc: { confidentiality: ["own"], observes: "enumerate" },
+            },
+          },
+        },
+      } as JSONSchema, ["0", "x"]],
+    ];
+
+    for (const [schema, path] of cases) {
+      const segmentBySegment = path.reduce<JSONSchema>(
+        (narrowed, part) =>
+          ContextualFlowControl.schemaAtPath(narrowed, [part]),
+        schema,
+      );
+      expect(ContextualFlowControl.schemaAtPath(schema, path)).toEqual(
+        segmentBySegment,
+      );
+    }
+    expect(ContextualFlowControl.schemaAtPath(cases[0][0], ["0", "0"]))
+      .toEqual({ type: "string" });
   });
 
   it("keeps a label observing only a container's shape, membership or reference off its children", () => {
