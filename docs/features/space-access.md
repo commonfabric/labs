@@ -253,10 +253,16 @@ through machinery the runtime already has, not a retry or a poll of its own:
   (`subscribeSpaceAccessChange()`), which runs it again through
   `Scheduler.invalidateAction()`, as it does for `spaceAccess(target)`.
 - A handler does not see `undefined` for a space it is waiting on. The call
-  ends the run with `RetryImmediately`, the signal a handler run already raises
-  for an `inSpace()` name with no resolved DID: the scheduler drops the run's
-  transaction, the runtime waits for the server's answer, and the handler runs
-  again with the answer in place.
+  records the space as pending, as a run records an `inSpace()` name it cannot
+  resolve yet, and the run's transaction is dropped. Once the run has ended,
+  the runtime waits for the server's answer for each pending space, and only
+  then ends the run with `RetryImmediately`, so the handler runs again with the
+  answer in place. `RetryImmediately` re-queues at once, so the wait has to
+  come first: raised before the answer arrives, it would run the handler again
+  against a space still unanswered. If the space's load fails instead, with no
+  answer coming, the event fails as an event whose required load failed does
+  (`finalize()` in `packages/runner/src/scheduler/events.ts`), and is not run
+  again.
 
 A runtime with no memory server it can ask about the space, such as one whose
 routing gives the space's host no route, returns `undefined` from both, and a
