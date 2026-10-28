@@ -18,7 +18,7 @@ import {
   clickInRow,
   findNodeById,
   hasText,
-} from "../test/vnode-helpers.ts";
+} from "../../tools/test-support/vnode-helpers.ts";
 import { FabriChatMessageRow } from "./message-row.tsx";
 import {
   type ComposerState,
