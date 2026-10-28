@@ -3491,6 +3491,33 @@ describe("Schema: CFC authoring aliases", () => {
       });
     }
 
+    for (
+      const [argument, inner] of [
+        ["any", {
+          type: "object",
+          properties: { x: true, z: true },
+          required: ["x", "z"],
+          ifc: { confidentiality: ["a"] },
+        }],
+        ["unknown", { type: "object", properties: {} }],
+      ] as const
+    ) {
+      it(`reads \`Omit<T | U | Sec<{ x: string; z: 1 }>, never>\` under bindings with \`U\` bound to \`never\`, as with no \`U\`, \`T\` bound to \`${argument}\``, async () => {
+        // `never` is no member of the union, so it drops out before the union
+        // is read, and the view is the other members'.
+        const { value, diagnostics } = await generate(`
+          type Sec<T> = Confidential<T, readonly ["a"]>;
+          type Outer<T, U> = Confidential<
+            { inner: Omit<T | U | Sec<{ x: string; z: 1 }>, never> },
+            readonly ["b"]
+          >;
+          interface Holder { value: Outer<${argument}, never> }
+        `);
+        expect((value as any).properties.inner).toEqual(inner);
+        expect(diagnostics).toEqual([]);
+      });
+    }
+
     it("keeps the members of a union under bindings beside the `unknown` `T` is bound to where none is labeled", async () => {
       // With no label to place, the union stays as the node reads it.
       const { value, diagnostics } = await generate(`

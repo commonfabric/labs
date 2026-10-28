@@ -61,6 +61,19 @@ describe("ifc-labels", () => {
       expect(origin && "parts" in origin ? origin.parts() : []).toEqual(arms);
     });
 
+    it("records no arm accepting no value, which is no member of the union", () => {
+      const context = contextWith();
+      const reduced = reducedLabeledUnion([true, false, labeled], context);
+      expect(reduced).toEqual({ ifc: { confidentiality: ["a"] } });
+      const origin = context.schemaOrigins!.get(
+        reduced as MutableJSONSchemaObj,
+      );
+      expect(origin && "parts" in origin ? origin.parts() : []).toEqual([
+        true,
+        labeled,
+      ]);
+    });
+
     it("returns the `unknown` arm labeled likewise, and the `any` arm beside both", () => {
       expect(
         reducedLabeledUnion([{ type: "unknown" }, labeled], contextWith()),

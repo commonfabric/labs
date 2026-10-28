@@ -604,13 +604,16 @@ const forEachIfcLabels = (
  * because the runtime keeps a union arm's labels only beside arms that cannot
  * hold the same values, and an arm accepting anything can hold any. The arms
  * are recorded (`GenerationContext.schemaOrigins`, `"reduction"`) for a
- * reading that maps the value one arm at a time, as `Pick` and `Omit` do.
- * `undefined` for any other union, which keeps its arms.
+ * reading that maps the value one arm at a time, as `Pick` and `Omit` do. An
+ * option accepting no value, as `never` gives, is no arm of the union, and is
+ * neither read nor recorded (`acceptsNoValue()`). `undefined` for any other
+ * union, which keeps its arms.
  */
 export const reducedLabeledUnion = (
-  arms: readonly MutableJSONSchema[],
+  options: readonly MutableJSONSchema[],
   context: GenerationContext,
 ): MutableJSONSchema | undefined => {
+  const arms = options.filter((option) => !acceptsNoValue(option));
   const accepting = arms.filter((arm) =>
     acceptsAnyValue(arm) || isUnknownValue(arm)
   );
