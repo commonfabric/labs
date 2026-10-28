@@ -799,6 +799,7 @@ the request, recorded at issue and supplied by the settle.
 | a row's content | the row's column and row labels | the row document's own entries |
 | a row document's existence | the row's label | the row document's root entry |
 | `/requestHash` | the current issue's `S`, plus applicable declared and frozen existence labels | derived value stamp by the issuing transaction, joined with retained components |
+| `/requestKey` | the issuing request's `S`, plus retained declarations | derived value stamp by the issuing transaction; declared on an abandoned ending |
 | `/pending` | the last writer's join, plus applicable declared and frozen existence labels | derived value stamp by that transaction, joined with retained components |
 
 All of it holds at every scope. A session-scoped result is materialized per

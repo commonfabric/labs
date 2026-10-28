@@ -162,6 +162,50 @@ describe("sqlite query request keys", () => {
     }
   });
 
+  it("preserves the request key's confidentiality label after a provider error", async () => {
+    const provider = storageManager.open(space);
+    const original = provider.sqliteQuery;
+    provider.sqliteQuery = () => Promise.reject(new Error("query refused"));
+    const { commonfabric: cf } = createTrustedBuilder(runtime);
+    const pattern = cf.pattern<{ requestKey: string }>(({ requestKey }) => {
+      const db = cf.sqliteDatabase({
+        tables: { notes: cf.table({ id: "integer primary key" }) },
+      });
+      return cf.sqliteQuery({ db, sql: "SELECT id FROM notes", requestKey });
+    });
+    const tx = runtime.edit();
+    const key = runtime.getCell<string>(space, "labeled-error-key", {
+      type: "string",
+      ifc: { confidentiality: ["request-secret"] },
+    }, tx);
+    key.set("failed search");
+    const result = runtime.run(
+      tx,
+      pattern,
+      { requestKey: key },
+      runtime.getCell(space, "labeled-error", pattern.resultSchema, tx),
+    );
+    runtime.prepareTxForCommit(tx);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    const cancel = result.key("pending").sink(() => {});
+    try {
+      await runtime.settled();
+      expect(result.key("pending").get()).toBe(false);
+      expect(result.key("error").get()).toBe("query refused");
+      expect(result.key("result").get()).toBeUndefined();
+      expect(result.key("requestKey").get()).toBe("failed search");
+      expect(cfcConfidentialityForObservationNode({
+        labelView: cfcLabelViewForCell(
+          result.key("requestKey").resolveAsCell(),
+        ),
+        logicalPath: [],
+      })).toContainEqual("request-secret");
+    } finally {
+      cancel();
+      provider.sqliteQuery = original;
+    }
+  });
+
   for (const outcome of ["success", "error"] as const) {
     it(`keeps the current request key when a superseded query finishes with ${outcome}`, async () => {
       const provider = storageManager.open(space);
