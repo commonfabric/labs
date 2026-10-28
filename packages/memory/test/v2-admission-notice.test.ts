@@ -327,6 +327,34 @@ describe("session/admissible", () => {
     expect(later.notices).toEqual([]);
   });
 
+  it("reaches a connection once when it was refused the space and also serves a held refusal of it", async () => {
+    const guest = await connectRecording();
+    await guest.client.mount(GUEST, {}, authAs(GUEST));
+    await expectRefused(guest.client, GUEST);
+    const refused = await connectRecording();
+    await expectRefused(refused.client, GUEST);
+    await refused.client.close();
+
+    await setAcl({ [GUEST]: "READ" });
+    await guest.client.delivered();
+    expect(guest.notices).toEqual([{ space: SPACE, principal: GUEST }]);
+  });
+
+  it("is dropped once the principal's last session closes, though its connection stays open", async () => {
+    const home = await connectRecording();
+    const session = await home.client.mount(GUEST, {}, authAs(GUEST));
+    const refused = await connectRecording();
+    await expectRefused(refused.client, GUEST);
+    await refused.client.close();
+    await session.close();
+    await home.client.delivered();
+    await home.client.mount(GUEST, {}, authAs(GUEST));
+
+    await setAcl({ [GUEST]: "READ" });
+    await home.client.delivered();
+    expect(home.notices).toEqual([]);
+  });
+
   it("is not sent to a connection that did not advertise `admissionNotice`", async () => {
     // A hand-driven connection, since a client always advertises the
     // capability. A client connection refused alongside it is the control:

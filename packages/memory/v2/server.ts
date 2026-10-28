@@ -1498,6 +1498,7 @@ class Connection {
     if (!this.#sessions.delete(key) || this.#closed) {
       return;
     }
+    this.#server.reapAdmissionWaits();
     // A membership is admitted by the session it joined through, so losing
     // the session ends it.
     this.#server.endPresenceForSession(space, sessionId, this.id);
@@ -1536,6 +1537,16 @@ class Connection {
   hasPrincipal(principal: string): boolean {
     const held = this.#principals.get(principal);
     return held !== undefined && held.leaseEnd > this.#server.nowSeconds();
+  }
+
+  /**
+   * Whether this connection holds the session of `space` named `sessionId`,
+   * and its lease, if it lives under one, has not run out.
+   */
+  servesSession(space: string, sessionId: string): boolean {
+    const handle = this.#sessions.get(sessionKey(space, sessionId));
+    return !this.#closed && handle !== undefined &&
+      !this.#leaseExpired(handle);
   }
 
   /** Whether the session lives under a lease that has run out. */
@@ -3959,27 +3970,48 @@ export class Server {
       const capability = this.#capabilityFor(engine, space, principal);
       return capability !== null && isCapable(capability, "READ");
     });
+    // A principal refused on a connection still open and held from a closed
+    // one is told once per connection, on the union of the two.
+    const recipients = new Map<string, Set<Connection>>();
     for (const { connectionId, principal } of admitted) {
-      if (connectionId !== undefined) {
-        this.#connections.get(connectionId)?.sendAdmissible(space, principal);
-        continue;
+      let connections = recipients.get(principal);
+      if (connections === undefined) {
+        connections = new Set();
+        recipients.set(principal, connections);
       }
-      for (const connection of this.#connectionsServing(principal)) {
+      if (connectionId === undefined) {
+        for (const connection of this.#connectionsServing(principal)) {
+          connections.add(connection);
+        }
+      } else {
+        const connection = this.#connections.get(connectionId);
+        if (connection !== undefined) connections.add(connection);
+      }
+    }
+    for (const [principal, connections] of recipients) {
+      for (const connection of connections) {
         connection.sendAdmissible(space, principal);
       }
     }
   }
 
   /**
-   * The connections a held refusal of `principal` is told on: those owning
-   * one of its live sessions, in any space, and those whose `connection.auth`
-   * holds it, less the routed ones and those whose peer did not advertise
+   * The connections a held refusal of `principal` is told on: those holding
+   * one of its sessions, in any space, under a lease that has not run out,
+   * and those whose `connection.auth` holds it, less the routed ones and
+   * those whose peer did not advertise
    * `admissionNotice`.
    */
   #connectionsServing(principal: string): Connection[] {
     const ids = new Set<string>();
     for (const session of this.#sessions.sessionsForPrincipal(principal)) {
-      if (session.ownerConnectionId !== null) {
+      if (
+        session.ownerConnectionId !== null &&
+        this.#connections.get(session.ownerConnectionId)?.servesSession(
+          session.space,
+          session.id,
+        )
+      ) {
         ids.add(session.ownerConnectionId);
       }
     }
@@ -4058,14 +4090,9 @@ export class Server {
   disconnect(connection: Connection): void {
     this.#connections.delete(connection.id);
     // A refusal recorded on the closing connection waits on for another
-    // connection serving its principal, and a principal no connection
-    // serves any longer has its held refusals dropped.
+    // connection serving its principal.
     this.#admissionWaiters.hold(connection.id);
-    for (const principal of this.#admissionWaiters.heldPrincipals()) {
-      if (this.#connectionsServing(principal).length === 0) {
-        this.#admissionWaiters.releaseHeld(principal);
-      }
-    }
+    this.reapAdmissionWaits();
     if (this.#connections.size === 0) {
       this.#cancelScheduledRefresh();
     }
@@ -4074,6 +4101,23 @@ export class Server {
   /** Forgets every refusal of `principal` on `connectionId`. */
   forgetAdmissionWaits(connectionId: string, principal: string): void {
     this.#admissionWaiters.removePrincipal(connectionId, principal);
+    this.reapAdmissionWaits();
+  }
+
+  /**
+   * Drops the held refusals of each principal no connection serves any
+   * longer. Runs wherever a connection stops serving a principal: a
+   * disconnect, a session's close or revocation, and a `connection.release`.
+   * A lease that runs out stops serving without an event of its own, so a
+   * principal served only by an expired lease keeps its held refusals until
+   * the next of those, and is told nothing meanwhile (`#connectionsServing()`).
+   */
+  reapAdmissionWaits(): void {
+    for (const principal of this.#admissionWaiters.heldPrincipals()) {
+      if (this.#connectionsServing(principal).length === 0) {
+        this.#admissionWaiters.releaseHeld(principal);
+      }
+    }
   }
 
   detachSession(
@@ -4090,6 +4134,7 @@ export class Server {
       // interests immediately. A fresh proof can reopen with a full restore.
       this.#sessions.remove(space, sessionId);
     } else this.#sessions.detach(space, sessionId, ownerConnectionId);
+    this.reapAdmissionWaits();
   }
 
   /**
@@ -5765,7 +5810,17 @@ export class Server {
       }
       if (principal !== undefined) {
         this.#admissionWaiters.remove(connection.id, message.space, principal);
-        this.#admissionWaiters.removeHeld(message.space, principal);
+        // The open proves the principal admitted, so the runtimes still
+        // waiting on a held refusal of it are told before it goes: this open
+        // may be on another device, or may have found a grant another process
+        // wrote before the space's refresh turn would have.
+        if (this.#admissionWaiters.removeHeld(message.space, principal)) {
+          for (const serving of this.#connectionsServing(principal)) {
+            if (serving !== connection) {
+              serving.sendAdmissible(message.space, principal);
+            }
+          }
+        }
       }
       const nextSessionOpen = connection.issueSessionOpenAuth();
       // Activation trigger (serving-loop.md §1): session open makes the

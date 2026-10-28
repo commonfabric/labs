@@ -93,9 +93,16 @@ export class AdmissionWaiters {
     return [...principals];
   }
 
-  /** Drops `principal`'s held entry for `space`. */
-  removeHeld(space: string, principal: string): void {
+  /**
+   * Drops `principal`'s held entry for `space`, returning whether it held
+   * one.
+   */
+  removeHeld(space: string, principal: string): boolean {
+    const held = this.#byConnection.get(heldKey(principal))?.has(
+      entryKey(space, principal),
+    ) ?? false;
     this.remove(heldKey(principal), space, principal);
+    return held;
   }
 
   /** Drops every held entry of `principal`. */

@@ -555,6 +555,155 @@ describe("connection authentication", () => {
     });
   });
 
+  describe("held admission refusals", () => {
+    // Bob is refused alice's space on a connection that then closes, so the
+    // refusal is held for bob, and told on the connections still serving
+    // bob when alice grants him the space.
+
+    /**
+     * Starts an `enforce` server whose space alice owns, with her session
+     * there to grant from, and refuses bob the space on a connection of its
+     * own. `closeRefused()` closes that connection, holding the refusal.
+     */
+    const refuseBob = async (name: string, clock: Clock) => {
+      const server = createServer(name, { clock, acl: "enforce" });
+      const owner = await connectPeer(server);
+      await authenticate(owner, space, {}, clock);
+      await authenticate(owner, alice, {}, clock);
+      const asSpace = await open(owner, SPACE, space.did());
+      const asAlice = await open(owner, SPACE, alice.did());
+      const writeAcl = (
+        sessionId: string,
+        acl: Record<string, string>,
+        confirmed: { id: string; path: string[]; seq: number }[] = [],
+      ) =>
+        request(owner, {
+          type: "transact",
+          space: SPACE,
+          sessionId,
+          commit: {
+            localSeq: 1,
+            reads: { confirmed, pending: [] },
+            operations: [{
+              op: "set",
+              id: `of:${SPACE}`,
+              value: { value: acl },
+            }],
+          },
+        });
+      expect(
+        (await writeAcl(asSpace.ok!.sessionId, { [alice.did()]: "OWNER" }, [
+          { id: `of:${SPACE}`, path: [], seq: 0 },
+        ])).ok,
+      ).toBeDefined();
+      const refused = await connectPeer(server);
+      await authenticate(refused, bob, {}, clock);
+      expect((await open(refused, SPACE, bob.did())).error?.name).toBe(
+        "AuthorizationError",
+      );
+      return {
+        server,
+        closeRefused: () => refused.connection.close(),
+        grant: async () => {
+          const granted = await writeAcl(asAlice.ok!.sessionId, {
+            [alice.did()]: "OWNER",
+            [bob.did()]: "READ",
+          });
+          expect(granted.ok).toBeDefined();
+        },
+      };
+    };
+
+    const admissible = (peer: WirePeer) =>
+      peer.messages.filter((message) => message.type === "session/admissible");
+
+    it("reaches a connection holding bob's session under a lease that has not run out", async () => {
+      const clock = { now: Math.floor(Date.now() / 1000) };
+      const { server, closeRefused, grant } = await refuseBob(
+        "held-lease-live",
+        clock,
+      );
+      try {
+        const guest = await connectPeer(server);
+        await authenticate(guest, bob, { exp: clock.now + 60 }, clock);
+        expect((await open(guest, OTHER_SPACE, bob.did())).ok).toBeDefined();
+        closeRefused();
+
+        await grant();
+        expect(admissible(guest)).toEqual([
+          { type: "session/admissible", space: SPACE, principal: bob.did() },
+        ]);
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("reaches no connection whose session's lease has run out", async () => {
+      const clock = { now: Math.floor(Date.now() / 1000) };
+      const { server, closeRefused, grant } = await refuseBob(
+        "held-lease-expired",
+        clock,
+      );
+      try {
+        const guest = await connectPeer(server);
+        await authenticate(guest, bob, { exp: clock.now + 60 }, clock);
+        expect((await open(guest, OTHER_SPACE, bob.did())).ok).toBeDefined();
+        closeRefused();
+        clock.now += 61;
+
+        await grant();
+        expect(admissible(guest)).toEqual([]);
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("reaches a connection whose `connection.auth` holds bob, with no session of his", async () => {
+      const clock = { now: Math.floor(Date.now() / 1000) };
+      const { server, closeRefused, grant } = await refuseBob(
+        "held-auth-live",
+        clock,
+      );
+      try {
+        const guest = await connectPeer(server);
+        await authenticate(guest, bob, {}, clock);
+        closeRefused();
+
+        await grant();
+        expect(admissible(guest)).toEqual([
+          { type: "session/admissible", space: SPACE, principal: bob.did() },
+        ]);
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("is dropped when releasing bob leaves no connection serving him", async () => {
+      const clock = { now: Math.floor(Date.now() / 1000) };
+      const { server, closeRefused, grant } = await refuseBob(
+        "held-auth-released",
+        clock,
+      );
+      try {
+        const guest = await connectPeer(server);
+        await authenticate(guest, bob, {}, clock);
+        closeRefused();
+        await request(guest, {
+          type: "connection.release",
+          principal: bob.did(),
+        });
+        const later = await connectPeer(server);
+        await authenticate(later, bob, {}, clock);
+
+        await grant();
+        expect(admissible(guest)).toEqual([]);
+        expect(admissible(later)).toEqual([]);
+      } finally {
+        await server.close();
+      }
+    });
+  });
+
   describe("connection.release", () => {
     it("refuses a later `session.open` naming the released principal", async () => {
       const server = createServer("release");
