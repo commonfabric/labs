@@ -247,8 +247,13 @@ describe("pieces-controller", () => {
         it("opens Memory on the memory URL the deployment publishes, and the rest on the API URL", async () => {
           const storageManager = EmulatedStorage.emulate({ as: identity });
           const memoryHosts: string[] = [];
+          const clientBuild = {
+            application: "test-controller",
+            gitSha: "c".repeat(40),
+          };
           using _open = stub(StorageManager, "open", (options) => {
             memoryHosts.push(options.memoryHost.href);
+            expect(options.clientBuild).toEqual(clientBuild);
             return storageManager;
           });
           using _healthy = stub(
@@ -270,6 +275,7 @@ describe("pieces-controller", () => {
               apiUrl,
               identity,
               space: "memory-url-space",
+              clientBuild,
             });
             try {
               expect(pieces.runtime.apiUrl.href).toBe(apiUrl.href);

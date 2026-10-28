@@ -36,16 +36,44 @@ function observeViewInput(
   };
 }
 
-/** Whole-value fingerprints cover every descendant of an observed path. */
+/**
+ * Whole-value fingerprints cover every descendant of an observed path.
+ * `fingerprintOf` takes the fingerprint of one document version at one path;
+ * a caller that fingerprints the same versions over and over hands in one
+ * that remembers them.
+ */
 export function viewInputBasis(
   addresses: IMemorySpaceAddress[],
   documentAt: (address: IMemorySpaceAddress) => EntityDocument | undefined,
+  fingerprintOf: (
+    document: EntityDocument | undefined,
+    path: readonly string[],
+  ) => string = viewInputFingerprint,
 ): ViewValueBasis[] {
-  return sortAndCompactPaths(addresses).map((address) => ({
+  return viewInputBasisOf(
+    sortAndCompactPaths(addresses),
+    documentAt,
+    fingerprintOf,
+  );
+}
+
+/**
+ * The basis of addresses already sorted and compacted, as `viewInputBasis`
+ * sorts and compacts them, for a caller that keeps them so across bases.
+ */
+export function viewInputBasisOf(
+  addresses: readonly IMemorySpaceAddress[],
+  documentAt: (address: IMemorySpaceAddress) => EntityDocument | undefined,
+  fingerprintOf: (
+    document: EntityDocument | undefined,
+    path: readonly string[],
+  ) => string = viewInputFingerprint,
+): ViewValueBasis[] {
+  return addresses.map((address) => ({
     id: address.id,
     scope: address.scope ?? "space",
     path: [...address.path],
-    fingerprint: viewInputFingerprint(documentAt(address), address.path),
+    fingerprint: fingerprintOf(documentAt(address), address.path),
   }));
 }
 
@@ -55,24 +83,43 @@ export class ViewInputBasisCache {
     depth: number;
     value: FabricValue | undefined;
     fingerprint: string;
+
+    /** The document the value was observed in, when it is deep-frozen. */
+    document?: EntityDocument;
   }>();
 
-  /** Reobserves path reachability and value on every currency check. */
+  /**
+   * Reobserves path reachability and value on every currency check, except
+   * in the deep-frozen document the basis was last observed in, which can
+   * only observe the same again.
+   */
   matches(
     document: EntityDocument | undefined,
     basis: ViewValueBasis,
   ): boolean {
-    const observed = observeViewInput(document, basis.path);
     const previous = this.#values.get(basis);
+    if (previous?.document !== undefined && previous.document === document) {
+      return previous.fingerprint === basis.fingerprint;
+    }
+    const observed = observeViewInput(document, basis.path);
+    const frozen = document !== undefined && isDeepFrozen(document)
+      ? document
+      : undefined;
     if (
       previous !== undefined && previous.depth === observed.depth &&
       Object.is(previous.value, observed.value)
     ) {
+      if (frozen === undefined) delete previous.document;
+      else previous.document = frozen;
       return previous.fingerprint === basis.fingerprint;
     }
     const fingerprint = hashStringOf(observed);
     if (isDeepFrozen(observed.value)) {
-      this.#values.set(basis, { ...observed, fingerprint });
+      this.#values.set(basis, {
+        ...observed,
+        fingerprint,
+        ...(frozen !== undefined && { document: frozen }),
+      });
     } else {
       this.#values.delete(basis);
     }

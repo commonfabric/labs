@@ -46,14 +46,17 @@ profile under which the person adding it acted, and the runtime labels that link
 with `represents-principal` for the principal who acted, which it resolves
 itself: no caller chooses the one the label names. The profile is the actor's
 own: `admitPanel` refuses an event whose `as` names a profile unless
-`principalOf(as, "represents-principal")` returns the principal the event acts
-for. A Fabric profile carries its own owner's `represents-principal`, so an
-event naming another principal's profile is refused, and so is one naming a
-profile from which `principalOf()` reads no principal, and one that acts for no
-one. An occurrence added without a profile records the principal who acted in
-`addedBy` instead, as the DID `currentPrincipal()` returns, and the runtime
-labels the field `authored-by` for that same principal. Nothing in an event
-names the adder.
+`profileOwnerOf(as)`, the rule every reader of a person's profiles applies
+("Profile" in
+[`HOME_SPACE.md`](../../../docs/common/conventions/HOME_SPACE.md)), returns the
+principal the event acts for. A Fabric profile carries its own owner's
+`represents-principal`, so an event naming another principal's profile is
+refused, and so is one naming a profile that is no one's own, such as one whose
+`name` links outside its own documents, and one that acts for no one. An
+occurrence added without a profile records the principal who acted in `addedBy`
+instead, as the DID `currentPrincipal()` returns, and the runtime labels the
+field `authored-by` for that same principal. Nothing in an event names the
+adder.
 
 The actor is read from the panel document's own stored label map, with
 `readStoredCfcMetadata` on the panel's document, which resolves a label map

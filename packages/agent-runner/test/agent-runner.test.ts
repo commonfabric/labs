@@ -1702,15 +1702,18 @@ describe("agent runner", () => {
                   ?.cfcReadMaxConfidentiality,
               };
               return script({
-                resultPath: join(
-                  options.workspaceHostPath!,
-                  "agent-result.json",
-                ),
+                resultPath:
+                  options.engine!.getRunState().structuredResult!.path,
                 signal: prompt.signal,
                 emit: async () => {
-                  await prompt.onTranscriptEvent?.(
-                    { type: "assistant_message" } as never,
-                  );
+                  const message = {
+                    role: "assistant" as const,
+                    content: "Working.",
+                  };
+                  await prompt.onTranscriptEvent?.({
+                    message,
+                    transcript: [message],
+                  });
                 },
               });
             },
@@ -2078,17 +2081,15 @@ describe("agent runner", () => {
 
     it("does not reuse a result file left by an earlier attempt", async () => {
       const result = await submit();
-      const workspace = join(
-        workRoot,
-        hashStringOf([
-          CLOUD,
-          addressKey(recordOf(result).getAsNormalizedFullLink()),
-        ]),
-        "workspace",
-      );
+      const jobId = hashStringOf([
+        CLOUD,
+        addressKey(recordOf(result).getAsNormalizedFullLink()),
+      ]);
+      const workspace = join(workRoot, jobId, "workspace");
       await Deno.mkdir(workspace, { recursive: true });
+      await Deno.mkdir(join(workspace, ".job-results"), { recursive: true });
       await Deno.writeTextFile(
-        join(workspace, "agent-result.json"),
+        join(workspace, ".job-results", `${jobId}.json`),
         JSON.stringify({ answer: "stale" }),
       );
       await startHarnessRunner(() =>
@@ -2102,14 +2103,16 @@ describe("agent runner", () => {
 
     it("fails before invoking the provider when the stale result path cannot be removed", async () => {
       const result = await submit();
+      const jobId = hashStringOf([
+        CLOUD,
+        addressKey(recordOf(result).getAsNormalizedFullLink()),
+      ]);
       const staleResult = join(
         workRoot,
-        hashStringOf([
-          CLOUD,
-          addressKey(recordOf(result).getAsNormalizedFullLink()),
-        ]),
+        jobId,
         "workspace",
-        "agent-result.json",
+        ".job-results",
+        `${jobId}.json`,
       );
       await Deno.mkdir(staleResult, { recursive: true });
       await Deno.writeTextFile(join(staleResult, "kept"), "not removable");

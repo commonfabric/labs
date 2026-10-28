@@ -192,12 +192,36 @@ describe("FabricRegExp", () => {
           })).toBe(true);
         });
 
-        it("returns `true` for a record with a field absent", () => {
-          expect(codec.canDecode({ source: "a" })).toBe(true);
+        it("returns `false` for a record with a field absent", () => {
+          // All three fields are required, and none has a default: an absent
+          // `flavor` above all would leave the pattern's dialect unstated.
+
+          for (
+            const state of [
+              {},
+              { source: "a", flags: "g" },
+              { flavor: "es2025", flags: "g" },
+              { flavor: "es2025", source: "a" },
+            ]
+          ) {
+            expect(codec.canDecode(state as never)).toBe(false);
+          }
         });
 
         it("returns `false` for state that is not a record", () => {
           expect(codec.canDecode("nope")).toBe(false);
+        });
+
+        it("returns `false` for a field that is inherited rather than own", () => {
+          // Read as an own property, so a `flavor` reachable only through the
+          // prototype chain does not stand in for one.
+          const polluted = Object.prototype as { flavor?: unknown };
+          polluted.flavor = "es2025";
+          try {
+            expect(codec.canDecode({ source: "a", flags: "g" })).toBe(false);
+          } finally {
+            delete polluted.flavor;
+          }
         });
 
         it("returns `false` for a non-string field", () => {
@@ -211,11 +235,8 @@ describe("FabricRegExp", () => {
               { flavor: "future", source: { mutable: true }, flags: "g" },
               { flavor: "future", source: "a", flags: ["g"] },
               { flavor: ["future"], source: "a", flags: "g" },
-              // Present as `undefined` is present, not absent. A peer can
-              // reach this through the nonterminal walk by encoding the field
-              // as `{"/Undefined@1": null}`, and defaulting it would answer a
-              // question the wire did ask -- with `flavor`, by naming a
-              // dialect the sender did not.
+              // A peer can reach this through the nonterminal walk by
+              // encoding the field as `{"/Undefined@1": null}`.
               { flavor: undefined, source: "a", flags: "g" },
             ]
           ) {
@@ -225,24 +246,10 @@ describe("FabricRegExp", () => {
       });
 
       describe("decode()", () => {
-        it("decodes a state omitting a field, taking that field's default", () => {
-          // Absent is not the same as present-and-wrong: a narrower encoder
-          // may leave a field out, and the default stands in for it.
-          const decoded = codec.decode(
-            expectedTag,
-            {},
-            env,
-          ) as FabricRegExp;
-
-          expect(decoded).toBeInstanceOf(FabricRegExp);
-          expect(decoded.source).toBe("");
-          expect(decoded.flags).toBe("");
-        });
-
         it("decodes an unparseable `es2025` pattern to `ProblematicValue`", () => {
           const decoded = codec.decode(
             expectedTag,
-            { source: "(", flags: "" },
+            { flavor: "es2025", source: "(", flags: "" },
             env,
           );
           expect(decoded).toBeInstanceOf(ProblematicValue);
@@ -251,7 +258,7 @@ describe("FabricRegExp", () => {
         it("decodes bad `es2025` flags to `ProblematicValue`", () => {
           const decoded = codec.decode(
             expectedTag,
-            { source: "a", flags: "zz" },
+            { flavor: "es2025", source: "a", flags: "zz" },
             env,
           );
           expect(decoded).toBeInstanceOf(ProblematicValue);
@@ -301,6 +308,28 @@ describe("FabricRegExp", () => {
     describe("[REALM_CODEC]", () => {
       const codec = FabricRegExp[REALM_CODEC];
       const env = NULL_LIVE_ENVIRONMENT;
+
+      describe("canDecode()", () => {
+        it("returns `true` for a record of the three strings", () => {
+          expect(codec.canDecode({
+            flavor: "es2025",
+            source: "a",
+            flags: "g",
+          })).toBe(true);
+        });
+
+        it("returns `false` for a field that is inherited rather than own", () => {
+          // Read as an own property, so a `flavor` reachable only through the
+          // prototype chain does not stand in for one.
+          const polluted = Object.prototype as { flavor?: unknown };
+          polluted.flavor = "es2025";
+          try {
+            expect(codec.canDecode({ source: "a", flags: "g" })).toBe(false);
+          } finally {
+            delete polluted.flavor;
+          }
+        });
+      });
 
       describe("encode()", () => {
         it("returns a frozen record", () => {

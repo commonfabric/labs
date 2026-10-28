@@ -280,6 +280,14 @@ workflow. A run's lanes come from two jobs.
   runs, one once each capability has opened, and one as each batch starts.
   Setup captures its commands' output, so in a lane that stops without saying
   why, the last of these lines names the step it stopped in.
+- After each batch, the lane raises GitHub Actions error annotations for the
+  failures it fails for, with a local rerun command where one exists. These
+  appear while the remaining batches, diagnostic reruns, and coverage work
+  continue. Each failing identity is annotated once, up to ten per lane; an
+  excused failure gets no error annotation. The closing summary still lists
+  the lane's results and writes them to the job summary.
+  If the workspace manifest cannot be read, the lane logs the lookup failure
+  and continues without unit-test rerun commands.
 - The lane replaces the shell of `🧪 Run the lane` rather than running under
   it. GitHub stops a step that reaches its bound by sending SIGINT to the
   step's own process, and SIGTERM a few seconds later, and a shell waiting on a
@@ -313,6 +321,17 @@ suite, and the store half of `check-test-topology` in `Status` fails on it.
 
 So every run's lanes wait for the count. Whether a run runs every test, and
 how much a pull request chooses by score, is decided in one place, the count.
+
+The pattern integration suites make the Topics pivot session test and the
+seven Topics measurement files mandatory when the board or topic source
+changes. Changes to the Topics measurement inputs declared alongside that rule
+also require the measurement files. These declarations cover both
+server-execution arms, including after the default changes. The measurement
+fixtures reach authored lifts by name and attribute measurements to their
+source locations, so renaming or removing a lift can break them without
+editing a test. The declarations cover the board, topic, and listed
+measurement inputs; changes to their other imports remain subject to
+selection by score.
 
 A pull request's labels say how much it runs:
 
@@ -387,7 +406,10 @@ failed, and not in a run that was cancelled. It reads what every lane uploaded:
 
 1. It holds the run's records to the topology: `deno task check-test-topology
    --commit "$GITHUB_SHA" --records test-records-artifacts`, which fails a
-   recorded test that no suite of the topology claims.
+   recorded test that no suite of the topology claims. The download holds the
+   artifacts of every attempt at the run, and the check reads only each job's
+   latest attempt, so re-running a lane replaces what an earlier attempt at it
+   recorded.
 2. It judges [the coverage gates](#the-coverage-gate) the lanes' plan chose,
    over every lane's coverage reports, and records each one. On a pull request
    it reads the pull request's description as it stands, through the API, and

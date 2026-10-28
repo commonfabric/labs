@@ -19,6 +19,8 @@ import {
   localJobSpecOf,
   PROFILE_UNAVAILABLE,
 } from "../../src/local-jobs/lane.ts";
+import { createLocalJobApi } from "../../src/local-jobs/api.ts";
+import { scriptedJob } from "../fixtures/scripted-job.ts";
 import { browserChild, delegatedBrowse } from "./fixtures/delegated-browse.ts";
 
 import type { LocalJobProfile } from "../../src/local-jobs/profiles.ts";
@@ -122,7 +124,21 @@ const laneWith = (
         const run = {
           spec,
           options: jobOptions,
-          settle: resolve,
+          settle: (result: HarnessJobResult) =>
+            resolve({
+              ...result,
+              ...(result.recordedRun === true
+                ? {
+                  report: {
+                    runRef: join(
+                      jobOptions.runRoot,
+                      "artifacts",
+                      "scripted-run",
+                    ),
+                  },
+                }
+                : {}),
+            }),
           fail: reject,
         };
         runs.push(run);
@@ -148,6 +164,240 @@ const laneWith = (
 };
 
 describe("local-jobs/lane", () => {
+  it("fails a follow-up without a predecessor run reference before calling the model", async () => {
+    const store = LocalJobStore.open(":memory:");
+    const firstId = idOf(store.enqueue("cfs:weaver", "ask", "first", REQUEST));
+    store.claimNext();
+    store.finish(firstId, {
+      state: "completed",
+      recordedRun: true,
+      result: {},
+    });
+    const accepted = store.acceptMessage(firstId, {
+      caller: "cfs:weaver",
+      idempotencyKey: "next",
+      message: "Continue",
+    });
+    if (!("job" in accepted)) {
+      throw new Error("message refused");
+    }
+    const script = scriptedJob(() => {
+      throw new Error("model must not run");
+    });
+    const lane = new LocalJobLane({
+      store,
+      profiles: new Map([["ask", ASK]]),
+      maxConcurrent: 1,
+      workRoot: "/unused/missing-predecessor-test",
+      harnessDeps: script.deps,
+    });
+    try {
+      lane.kick();
+      const job = await reached(store, accepted.job.id, "failed");
+      expect(job.state).toBe("failed");
+      expect(store.events(job.id).at(-1)?.body.errorDetail).toContain("runRef");
+      expect(script.requests).toHaveLength(0);
+    } finally {
+      await lane.stop();
+      store.close();
+    }
+  });
+
+  describe("messages", () => {
+    it("always supplies the message hook to a custom job runner", async () => {
+      const { store, lane, enqueue, nextRun, runs } = laneWith();
+      try {
+        enqueue("always-steer");
+        const run = await nextRun(0);
+        expect(typeof run.options.takeMessages).toBe("function");
+      } finally {
+        for (const run of runs) run.settle({ outcome: "cancelled" });
+        await lane.stop();
+        store.close();
+      }
+    });
+
+    const message = (key: string) => ({
+      caller: "cfs:weaver",
+      idempotencyKey: key,
+      message: key,
+    });
+
+    it("passes the turn seam and recorded run through and launches the follow-up", async () => {
+      const { store, lane, enqueue, nextRun, runs } = laneWith({});
+      try {
+        await lane.start();
+        const id = enqueue("initial");
+        const first = await nextRun(0);
+        store.acceptMessage(id, message("A"));
+        expect(await first.options.takeMessages!(2)).toEqual(["A"]);
+        store.acceptMessage(id, message("B"));
+        store.acceptMessage(id, message("C"));
+        first.settle({
+          outcome: "completed",
+          structuredResult: {},
+          handleTable: {} as never,
+          recordedRun: true,
+        });
+        const second = await nextRun(1);
+        expect(second.spec).toMatchObject({
+          task: "B",
+          continueFrom: {
+            runRoot: join("/work/local", id, "artifacts", "scripted-run"),
+          },
+        });
+        expect(await second.options.takeMessages!(1)).toEqual(["C"]);
+        const nextId = store.get(id)!.continuedBy!;
+        expect(
+          store.events(id).slice(-3).map((event) =>
+            event.body.delivery ?? event.body.state
+          ),
+        ).toEqual(["follow-up", "moved", "completed"]);
+        second.settle({
+          outcome: "completed",
+          structuredResult: {},
+          handleTable: {} as never,
+          recordedRun: true,
+        });
+        await reached(store, nextId, "completed");
+      } finally {
+        for (const run of runs) run.settle({ outcome: "cancelled" });
+        await lane.stop();
+        store.close();
+      }
+    });
+
+    for (const queuedC of [false, true]) {
+      it(`runs each instruction replacement in its own follow-up with C ${queuedC ? "sent while queued" : "sent after cancel"}`, async () => {
+        const { store, lane, enqueue, nextRun, runs } = laneWith({
+          maxConcurrent: 1,
+        });
+        const api = createLocalJobApi({
+          store,
+          profiles: new Map([["ask", ASK]]),
+          token: "test",
+          kick: () => lane.kick(),
+          cancel: (id) => lane.cancel(id),
+        });
+        const send = async (id: string, key: string, instructions?: string) => {
+          const response = await api(
+            new Request(`http://runner/jobs/${id}/messages`, {
+              method: "POST",
+              headers: { authorization: "Bearer test" },
+              body: JSON.stringify({
+                ...message(key),
+                ...(instructions !== undefined ? { instructions } : {}),
+              }),
+            }),
+          );
+          expect(response.status).toBe(201);
+          return await response.json();
+        };
+        try {
+          await lane.start();
+          const id = enqueue("initial");
+          const first = await nextRun(0);
+          await send(id, "old");
+          lane.cancel(id);
+          await send(id, "A", "Instructions A");
+          await send(id, "B", "Instructions B");
+          if (!queuedC) await send(id, "C");
+          if (queuedC) enqueue("blocker");
+          first.settle({ outcome: "cancelled", recordedRun: true });
+          if (queuedC) {
+            const blocker = await nextRun(1);
+            expect((await send(id, "C")).job.state).toBe("queued");
+            blocker.settle({
+              outcome: "completed",
+              structuredResult: {},
+              handleTable: {} as never,
+            });
+          }
+          const second = await nextRun(queuedC ? 2 : 1);
+          expect(store.get(id)?.messages[0]).toMatchObject({
+            key: "old",
+            delivery: "dropped",
+            reason: "cancelled",
+          });
+          expect(second.spec).toMatchObject({
+            task: "A",
+            instructions: "Instructions A",
+          });
+          expect(await second.options.takeMessages!(1)).toEqual([]);
+          second.settle({
+            outcome: "completed",
+            structuredResult: {},
+            handleTable: {} as never,
+            recordedRun: true,
+          });
+          const third = await nextRun(queuedC ? 3 : 2);
+          expect(third.spec).toMatchObject({
+            task: "B",
+            instructions: "Instructions B",
+          });
+          expect(await third.options.takeMessages!(1)).toEqual(["C"]);
+          const headId = store.get(store.get(id)!.continuedBy!)!.continuedBy!;
+          third.settle({
+            outcome: "completed",
+            structuredResult: {},
+            handleTable: {} as never,
+            recordedRun: true,
+          });
+          await reached(store, headId, "completed");
+        } finally {
+          for (const run of runs) run.settle({ outcome: "cancelled" });
+          await lane.stop();
+          store.close();
+        }
+      });
+    }
+
+    it("drops pending messages if the profile disappears", async () => {
+      const profiles = new Map([["ask", ASK]]);
+      const { store, lane, runs } = laneWith({ profiles });
+      try {
+        const id = idOf(store.enqueue("cfs:weaver", "ask", "initial", REQUEST));
+        store.acceptMessage(id, message("A"));
+        profiles.clear();
+        await lane.start();
+        await reached(store, id, "failed");
+        expect(store.get(id)).toMatchObject({
+          errorCode: PROFILE_UNAVAILABLE,
+          messages: [{ delivery: "dropped", reason: "not_continuable" }],
+        });
+        expect(
+          store.events(id).slice(-2).map((event) =>
+            event.body.delivery ?? event.body.state
+          ),
+        ).toEqual(["dropped", "failed"]);
+      } finally {
+        for (const run of runs) run.settle({ outcome: "cancelled" });
+        await lane.stop();
+        store.close();
+      }
+    });
+
+    it("drops pending messages when runJob throws without a recorded run", async () => {
+      const { store, lane, enqueue, nextRun, runs } = laneWith({});
+      try {
+        await lane.start();
+        const id = enqueue("initial");
+        const run = await nextRun(0);
+        store.acceptMessage(id, message("A"));
+        run.fail(new Error("provider gone"));
+        await reached(store, id, "failed");
+        expect(store.get(id)?.messages).toMatchObject([{
+          delivery: "dropped",
+          reason: "not_continuable",
+        }]);
+      } finally {
+        for (const run of runs) run.settle({ outcome: "cancelled" });
+        await lane.stop();
+        store.close();
+      }
+    });
+  });
+
   describe("localJobSpecOf()", () => {
     const job = {
       id: "job-test",
@@ -319,7 +569,7 @@ describe("local-jobs/lane", () => {
       ]);
       expect(
         localJobEventsOf(event({ role: "assistant", content: "Done." })),
-      ).toEqual([]);
+      ).toEqual([{ kind: "text", body: { turn: 1, text: "Done." } }]);
     });
 
     it("reports a read-only command's admitted output", () => {
@@ -653,7 +903,7 @@ describe("local-jobs/lane", () => {
   describe("LocalJobLane", () => {
     it("runs a job under its profile with no fabric and ends it with the run's result and report", async () => {
       const { store, lane, nextRun, enqueue } = laneWith();
-      lane.start();
+      await lane.start();
       const id = enqueue("a");
 
       const run = await nextRun(0);
@@ -679,7 +929,7 @@ describe("local-jobs/lane", () => {
 
     it("ends a job whose result was refused with the reason its run gave", async () => {
       const { store, lane, nextRun, enqueue } = laneWith();
-      lane.start();
+      await lane.start();
       const id = enqueue("a");
 
       const run = await nextRun(0);
@@ -697,7 +947,7 @@ describe("local-jobs/lane", () => {
 
     it("records the steps and commands its run reports", async () => {
       const { store, lane, nextRun, enqueue } = laneWith();
-      lane.start();
+      await lane.start();
       const id = enqueue("a");
       const run = await nextRun(0);
       const message = {
@@ -721,7 +971,7 @@ describe("local-jobs/lane", () => {
 
     it("shows the active child, coalesces a repeated browser call, and restores the parent on return", async () => {
       const { store, lane, nextRun, enqueue } = laneWith();
-      lane.start();
+      await lane.start();
       const id = enqueue("browse");
       const run = await nextRun(0);
       const events = delegatedBrowse().filter((event) =>
@@ -755,7 +1005,7 @@ describe("local-jobs/lane", () => {
 
     it("marks a loop's step returned once every call of its turn has returned, so a repeated action reports again", async () => {
       const { store, lane, nextRun, enqueue } = laneWith();
-      lane.start();
+      await lane.start();
       const id = enqueue("returns");
       const run = await nextRun(0);
       const events = delegatedBrowse();
@@ -783,7 +1033,7 @@ describe("local-jobs/lane", () => {
 
     it("reports a child's return as its latest activity when a sibling acted after its call", async () => {
       const { store, lane, nextRun, enqueue } = laneWith();
-      lane.start();
+      await lane.start();
       const id = enqueue("sibling returns");
       const run = await nextRun(0);
       const events = delegatedBrowse();
@@ -811,7 +1061,7 @@ describe("local-jobs/lane", () => {
 
     it("keeps a pending sibling's step when the most recently active child returns", async () => {
       const { store, lane, nextRun, enqueue } = laneWith();
-      lane.start();
+      await lane.start();
       const id = enqueue("siblings");
       const run = await nextRun(0);
       const events = delegatedBrowse();
@@ -855,7 +1105,7 @@ describe("local-jobs/lane", () => {
 
     it("makes a child receipt the latest sibling activity and keeps that order on return", async () => {
       const { store, lane, nextRun, enqueue } = laneWith();
-      lane.start();
+      await lane.start();
       const id = enqueue("sibling receipts");
       const run = await nextRun(0);
       const events = delegatedBrowse();
@@ -951,7 +1201,7 @@ describe("local-jobs/lane", () => {
 
     it("keeps every child command and reports the same tool again after a receipt", async () => {
       const { store, lane, nextRun, enqueue } = laneWith();
-      lane.start();
+      await lane.start();
       const id = enqueue("commands");
       const run = await nextRun(0);
       const message = {
@@ -1007,7 +1257,7 @@ describe("local-jobs/lane", () => {
       const { store, lane, nextRun, enqueue } = laneWith({
         report: (message) => reported.push(message),
       });
-      lane.start();
+      await lane.start();
       const id = enqueue("a");
 
       (await nextRun(0)).fail(new Error("the harness could not start"));
@@ -1027,7 +1277,7 @@ describe("local-jobs/lane", () => {
         ...REQUEST,
         tools: ["run_command"],
       }));
-      lane.start();
+      await lane.start();
 
       expect(await reached(store, gone, "failed")).toMatchObject({
         errorCode: PROFILE_UNAVAILABLE,
@@ -1066,7 +1316,7 @@ describe("local-jobs/lane", () => {
             return Promise.resolve(null);
           },
         });
-        lane.start();
+        await lane.start();
         enqueue("a", REQUEST, "carry");
         const run = await nextRun(0);
 
@@ -1102,7 +1352,7 @@ describe("local-jobs/lane", () => {
             },
           }]]),
         });
-        lane.start();
+        await lane.start();
         enqueue("a", { ...REQUEST, inputs: { focus: piece } }, "carry");
         const run = await nextRun(0);
 
@@ -1130,7 +1380,7 @@ describe("local-jobs/lane", () => {
             },
           }]]),
         });
-        lane.start();
+        await lane.start();
         enqueue("a", {
           ...REQUEST,
           inputs: { focus: foreign, own },
@@ -1193,7 +1443,7 @@ describe("local-jobs/lane", () => {
           profiles: new Map([["carry", CARRY]]),
           report: (line) => reports.push(line),
         });
-        lane.start();
+        await lane.start();
         const id = enqueue("a", REQUEST, "carry");
 
         expect(await reached(store, id, "failed")).toMatchObject({
@@ -1212,7 +1462,7 @@ describe("local-jobs/lane", () => {
         const { store, lane, nextRun, enqueue } = laneWith({
           profiles: BROWSING,
         });
-        lane.start();
+        await lane.start();
         const id = enqueue("a", DECLARED);
         const run = await nextRun(0);
 
@@ -1238,13 +1488,13 @@ describe("local-jobs/lane", () => {
         const id = enqueue("a", DECLARED);
         const early = lane.browserHost(id);
         expect(early?.view().state).toBe("open");
-        lane.start();
+        await lane.start();
         expect((await nextRun(0)).options.browserHost).toBe(early);
       });
 
       it("gives a job that declared none no host, and no browser to delegate to", async () => {
         const { lane, nextRun, enqueue } = laneWith({ profiles: BROWSING });
-        lane.start();
+        await lane.start();
         const id = enqueue("a");
         const run = await nextRun(0);
         expect(run.options.browserHost).toBeUndefined();
@@ -1259,7 +1509,7 @@ describe("local-jobs/lane", () => {
           profiles: BROWSING,
           report: () => {},
         });
-        lane.start();
+        await lane.start();
         const id = enqueue("a", DECLARED);
         const run = await nextRun(0);
         const host = lane.browserHost(id)!;
@@ -1275,7 +1525,7 @@ describe("local-jobs/lane", () => {
         const { store, lane, nextRun, enqueue } = laneWith({
           profiles: BROWSING,
         });
-        lane.start();
+        await lane.start();
         const id = enqueue("a", DECLARED);
         const run = await nextRun(0);
         lane.browserHost(id)!.close = () => {
@@ -1294,7 +1544,7 @@ describe("local-jobs/lane", () => {
             throw new Error("the operator's log is gone");
           },
         });
-        lane.start();
+        await lane.start();
         const id = enqueue("a", DECLARED);
         const run = await nextRun(0);
         const host = lane.browserHost(id)!;
@@ -1329,7 +1579,7 @@ describe("local-jobs/lane", () => {
           runJob: () => Promise.reject(new Error("never runs")),
         });
         expect(gone.browserHost(id)).not.toBe(host);
-        gone.start();
+        await gone.start();
         expect(await reached(store, id, "failed")).toMatchObject({
           errorCode: PROFILE_UNAVAILABLE,
         });
@@ -1339,9 +1589,9 @@ describe("local-jobs/lane", () => {
 
     it("binds each concurrent run to its own job identity", async () => {
       const { store, lane, nextRun, enqueue } = laneWith();
-      lane.start();
+      await lane.start();
       const a = enqueue("a");
-      const b = enqueue("b");
+      const b = enqueue("b", { ...REQUEST, interactive: true });
       const first = await nextRun(0);
       const second = await nextRun(1);
       expect(first.spec.commandJobId).toBe(a);
@@ -1358,8 +1608,12 @@ describe("local-jobs/lane", () => {
       const { store, lane, runs, nextRun, enqueue } = laneWith({
         maxConcurrent: 2,
       });
-      lane.start();
-      const [a, , c] = [enqueue("a"), enqueue("b"), enqueue("c")];
+      await lane.start();
+      const [a, , c] = [
+        enqueue("a"),
+        enqueue("b", { ...REQUEST, interactive: true }),
+        enqueue("c"),
+      ];
       await nextRun(1);
 
       expect(runs).toHaveLength(2);
@@ -1373,7 +1627,7 @@ describe("local-jobs/lane", () => {
 
     it("aborts a running job it is asked to stop, which then ends `cancelled`", async () => {
       const { store, lane, nextRun, enqueue } = laneWith();
-      lane.start();
+      await lane.start();
       const id = enqueue("a");
       const run = await nextRun(0);
 
@@ -1389,9 +1643,9 @@ describe("local-jobs/lane", () => {
       const { store, lane, nextRun, enqueue } = laneWith({
         report: () => failed.resolve(),
       });
-      lane.start();
+      await lane.start();
       enqueue("a");
-      enqueue("b");
+      enqueue("b", { ...REQUEST, interactive: true });
       const first = await nextRun(0);
       const second = await nextRun(1);
       let settled = false;
@@ -1421,7 +1675,7 @@ describe("local-jobs/lane", () => {
       const { store, lane, nextRun, enqueue } = laneWith({
         report: (message) => reported.push(message),
       });
-      lane.start();
+      await lane.start();
       const id = enqueue("a");
       const run = await nextRun(0);
 
@@ -1440,7 +1694,7 @@ describe("local-jobs/lane", () => {
         workRoot: "/work/local",
         report: (message) => reported.push(message),
       });
-      next.start();
+      await next.start();
       expect(store.get(id)).toMatchObject({
         state: "interrupted",
         errorCode: "RUNNER_RESTARTED",

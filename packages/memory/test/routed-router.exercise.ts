@@ -2550,6 +2550,87 @@ finally:
   }
   pass("an SDK session commits across its toolshed's restart");
 
+  // Messages past the frame's value cap go through the router in parts. 60
+  // documents of 4,000 numbers each are more values than one frame may carry:
+  // the toolshed sends the sync that delivers them in parts, which the router
+  // forwards one by one and the SDK applies as one sync. A watch set naming
+  // more values than one frame may carry is staged in parts, which the router
+  // counts as the set they make and the toolshed applies as one set.
+  {
+    const factory = new RemoteSessionFactory(
+      createStorageAddressResolver(new URL("https://localhost:8443")),
+      bob,
+      (address) => socketFactory(address, "127.0.0.55"),
+    );
+    try {
+      const { client: connection, session } = await factory.create(
+        spaces[1] as MemorySpace,
+        bob,
+      );
+      try {
+        const ids = Array.from({ length: 60 }, (_, i) => `of:in-parts-${i}`);
+        const values = (i: number) =>
+          Array.from({ length: 4000 }, (_, j) => i * 4000 + j);
+        for (let half = 0; half < 2; half++) {
+          await session.transact({
+            localSeq: half + 1,
+            reads: { confirmed: [], pending: [] },
+            operations: ids.slice(half * 30, half * 30 + 30).map((id, i) => ({
+              op: "set" as const,
+              id,
+              value: { value: values(half * 30 + i) },
+            })),
+          });
+        }
+        assert(countValues(ids.map((_, i) => values(i))) > ROUTED_FRAME_SLOTS);
+        const root = (id: string) => ({
+          id,
+          selector: { path: [] as string[], schema: false as const },
+        });
+        const view = await Promise.race([
+          session.watchSet(ids.map((id, i) => ({
+            id: `in-parts-${i}`,
+            kind: "graph" as const,
+            query: { roots: [root(id)] },
+          }))),
+          deadline(60000),
+        ]);
+        assertEquals(view.entities.filter((e) => e.seq > 0).length, 60);
+        pass(
+          "a sync past the frame's value cap arrives through the router in parts and is applied whole",
+        );
+
+        // Sixty watches of 600 roots each, about 180,000 values, name more
+        // than one frame carries, so the set is staged in parts. Each watch
+        // reaches a document no other watch does, so a toolshed that applied
+        // less than the whole set would leave some out.
+        const watches: WatchSpec[] = Array.from({ length: 60 }, (_, w) => ({
+          id: `in-staged-parts-${w}`,
+          kind: "graph" as const,
+          query: {
+            roots: Array.from(
+              { length: 600 },
+              () => root(ids[w]),
+            ),
+          },
+        }));
+        assert(countValues(watches) > ROUTED_FRAME_SLOTS);
+        const staged = await Promise.race([
+          session.watchSet(watches),
+          deadline(60000),
+        ]);
+        assertEquals(staged.entities.filter((e) => e.seq > 0).length, 60);
+      } finally {
+        await connection.close();
+      }
+    } finally {
+      await factory.close();
+    }
+  }
+  pass(
+    "a watch set past the frame's value cap is staged through the router in parts and applied as one set",
+  );
+
   // With sharing on, one toolshed down holds only its own space: the shared
   // connection's other space keeps committing, the client opens no further
   // sockets while the toolshed stays down, and the held space commits once

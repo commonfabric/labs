@@ -54,11 +54,23 @@ export default pattern<{ orders: SqliteDb }>(({ orders }) => {
 ```
 
 The call returns an envelope, not the rows:
-`{ pending, result?, error?, withheld? }`. `result` holds the rows once there
-are any, so a field typed as the rows themselves — `PerSession<Row[]>` — cannot
-take the call's value, and reading `.result` is what gets from one to the
-other. `withheld` counts the rows a read-time clearance kept from this reader,
-and is absent unless the query asked for one.
+`{ pending, result?, error?, withheld?, requestKey? }`. `result` holds the rows
+once there are any, so a field typed as the rows themselves —
+`PerSession<Row[]>` — cannot take the call's value, and reading `.result` is what
+gets from one to the other. `withheld` counts the rows a read-time clearance
+kept from this reader, and is absent unless the query asked for one.
+
+Pass an optional string `requestKey` in the query options to correlate this
+envelope with the application state that requested it. The same key accompanies
+pending, successful (including empty), and failed results. A changed key issues
+a new request even when SQL and parameters match. Compare the returned key with
+the current key before using rows as current search results: reactive inputs can
+change while the query still holds its previous state. Choose keys that cover
+the search and source identity; the runtime separately enforces its full request
+identity and reader scope. Keep the key stable while those inputs are unchanged:
+render counters, timestamps, or pane identifiers cause extra database requests
+without changing the search. Include a source or registration generation only
+when that change must invalidate the previous answer and issue a fresh request.
 
 Render the failure, not just the wait. A pattern that branches only on
 `pending` shows a loading view for as long as the query stays broken, because a

@@ -1,8 +1,8 @@
 /**
  * Holds `test/fixtures/hash-conformance.json` to this package's hasher: the
  * file must be what the conformance cases generate, and every hash it records
- * must be what the hasher does with the value described, read from the file
- * alone.
+ * must be what the hasher does with the value its text and mods write, read
+ * from the file alone but where this package's decoder refuses the text.
  */
 
 import { describe, it } from "@std/testing/bdd";
@@ -11,22 +11,27 @@ import { expect } from "@std/expect";
 import { sha256 } from "@commonfabric/content-hash";
 import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
 
+import type { FabricValue } from "@/interface.ts";
 import { UnknownValue } from "@/codec-common";
 import { valueEqual } from "@/comparison";
 import { fabricInstanceClassesByName, FabricLink } from "@/fabric-instances";
 import {
   FabricKeyPair,
   fabricPrimitiveClassesByName,
+  FabricRegExp,
 } from "@/fabric-primitives";
 import {
   FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY,
-  fabricValueOfDescriptorForTestingOnly,
+  fabricValueOfTextWithModsForTestingOnly,
+  type FixtureRequirements,
   HASH_CONFORMANCE_CASES_FOR_TESTING_ONLY,
   type HashConformanceCase,
   hashConformanceFixtureTextForTestingOnly,
   type HashOutcome,
   hashOutcomeOfForTestingOnly,
-  type ValueDescriptor,
+  meetsRequirementsForTestingOnly,
+  SIZE_FLOORS_FOR_TESTING_ONLY,
+  type TextWithMods,
 } from "@/for-testing-only.ts";
 import { hashOf, hashStringOf, taggedHashStringOf } from "@/value-hash";
 
@@ -44,12 +49,28 @@ const FIXTURE_URL = new URL(
 const STUB_CODEC_CLASSES = ["FabricMap", "FabricSet"] as const;
 
 /** One entry of the fixture, as `hash-conformance.md` defines it. */
-interface FixtureEntry {
+type FixtureEntry = TextWithMods & {
   readonly name: string;
-  readonly value: ValueDescriptor;
+  readonly requires?: FixtureRequirements;
   readonly hash: HashOutcome;
   readonly equals?: string;
-  readonly divergence?: { readonly hash: HashOutcome };
+  readonly divergence?: {
+    readonly hash?: HashOutcome;
+    readonly text?: "refused";
+  };
+};
+
+/**
+ * Returns the value `entry` writes, read from its text and mods, or made by
+ * its case where this package's decoder refuses the text.
+ */
+function valueOfEntry(entry: FixtureEntry): FabricValue {
+  if (entry.divergence?.text === undefined) {
+    return fabricValueOfTextWithModsForTestingOnly(entry);
+  }
+  return HASH_CONFORMANCE_CASES_FOR_TESTING_ONLY
+    .find(({ name }) => name === entry.name)!
+    .make();
 }
 
 /** Returns the bytes `text` writes in hexadecimal. */
@@ -62,7 +83,12 @@ function bytesOfHex(text: string): Uint8Array {
 
 describe("hash-conformance", () => {
   const fixtureText = Deno.readTextFileSync(FIXTURE_URL);
-  const entries: readonly FixtureEntry[] = JSON.parse(fixtureText).cases;
+  const allEntries: readonly FixtureEntry[] = JSON.parse(fixtureText).cases;
+
+  // A reader skips an entry whose requirements it does not meet.
+  const entries = allEntries.filter(({ requires }) =>
+    meetsRequirementsForTestingOnly(requires)
+  );
 
   it("is the fixture the conformance cases generate", () => {
     // On a failure here, `deno task regenerate-hash-conformance` rewrites the
@@ -75,11 +101,18 @@ describe("hash-conformance", () => {
     );
   });
 
-  it("records for each case what the hasher does with the value described", () => {
-    for (const { name, value, hash, divergence } of entries) {
-      const outcome = hashOutcomeOfForTestingOnly(
-        fabricValueOfDescriptorForTestingOnly(value),
-      );
+  it("requires of a reader nothing this package does not meet", () => {
+    const unmet = allEntries.filter(({ requires }) =>
+      !meetsRequirementsForTestingOnly(requires)
+    );
+
+    expect(unmet.map(({ name }) => name)).toEqual([]);
+  });
+
+  it("records for each case what the hasher does with the value its text and mods write", () => {
+    for (const entry of entries) {
+      const { name, hash, divergence } = entry;
+      const outcome = hashOutcomeOfForTestingOnly(valueOfEntry(entry));
       expect({ name, outcome }).toEqual({
         name,
         outcome: divergence?.hash ?? hash,
@@ -103,12 +136,12 @@ describe("hash-conformance", () => {
   });
 
   it("records equal hashes for two values exactly when `valueEqual()` returns `true` for them", () => {
-    const hashed = entries.flatMap(({ name, value, hash }) =>
-      ("digest" in hash)
+    const hashed = entries.flatMap((entry) =>
+      ("digest" in entry.hash)
         ? [{
-          name,
-          value: fabricValueOfDescriptorForTestingOnly(value),
-          digest: hash.digest,
+          name: entry.name,
+          value: valueOfEntry(entry),
+          digest: entry.hash.digest,
         }]
         : []
     );
@@ -153,8 +186,8 @@ describe("hash-conformance", () => {
 
   it("holds the cases' values to equal hashes exactly when `valueEqual()` returns `true` for them", () => {
     // Made by each case rather than read back from the file, so that the
-    // values differing only in what the notation does not record, such as
-    // sharing and freezing, are compared as made.
+    // values differing only in what no text records, such as sharing and
+    // freezing, are compared as made.
 
     const hashed = HASH_CONFORMANCE_CASES_FOR_TESTING_ONLY.flatMap(
       ({ name, make }) => {
@@ -236,12 +269,101 @@ describe("hash-conformance", () => {
       ).toThrow("Two cases are named twice.");
     });
 
-    it("throws given a divergence on a case with no spec bytes", () => {
+    it("returns an entry writing the value as a text, with the mods to decoding it", () => {
+      const entry = soleEntryOf([
+        {
+          name: "a",
+          section: "s",
+          make: () => {
+            const record: { self?: FabricValue; u?: FabricValue } = {
+              u: new UnknownValue("Link@1", { id: "x" }),
+            };
+            record.self = record;
+            return record;
+          },
+        },
+      ]);
+      expect(entry).toMatchObject({
+        text: 'fvj1:{"self":null,"u":{"/Link@1":{"id":"x"}}}',
+        unclaimed: ["Link@1"],
+        patches: [{ at: ["self"], put: { cycle: [] } }],
+      });
+    });
+
+    it("returns an entry writing a cycle through an instance as a patch whose path steps through its fields", () => {
+      const entry = soleEntryOf([
+        {
+          name: "a",
+          section: "s",
+          make: () => {
+            const record: { link?: FabricValue } = {};
+            record.link = new FabricLink({
+              u: new UnknownValue("Bytes@1", "AQ"),
+              record,
+            });
+            return record;
+          },
+        },
+      ]);
+      expect(entry).toMatchObject({
+        text: 'fvj1:{"link":{"/Link@1":{"record":null,"u":{"/Bytes@1":"AQ"}}}}',
+        unclaimed: ["Bytes@1"],
+        patches: [{ at: ["link", "payload", "record"], put: { cycle: [] } }],
+      });
+    });
+
+    it("throws given a case whose text and mods decode to another value", () => {
+      // The getter returns a new number at each read, so the value the case
+      // makes is unlike any one value, its text's included.
+
+      let reads = 0;
+      expect(() =>
+        hashConformanceFixtureTextForTestingOnly([
+          {
+            name: "a",
+            section: "s",
+            make: () => ({
+              get n() {
+                reads++;
+                return reads;
+              },
+            }),
+          },
+        ])
+      ).toThrow("does not decode to the value the case made.");
+    });
+
+    it("throws given a divergence on a case with no spec bytes whose text this package decodes", () => {
       expect(() =>
         hashConformanceFixtureTextForTestingOnly([
           { name: "one", section: "s", make: () => 1, divergence: "note" },
         ])
-      ).toThrow("declares a divergence for a value the spec gives no bytes");
+      ).toThrow("declares a divergence, but this implementation does what");
+    });
+
+    it("throws given a case whose text this package's decoder refuses, with no divergence", () => {
+      expect(() =>
+        hashConformanceFixtureTextForTestingOnly([
+          { name: "a", section: "s", make: () => ({ constructor: 1 }) },
+        ])
+      ).toThrow(
+        'a: this implementation\'s decoder refuses `fvj1:{"constructor":1}`',
+      );
+    });
+
+    it("returns an entry marking under the divergence a text this package's decoder refuses", () => {
+      const entry = soleEntryOf([
+        {
+          name: "a",
+          section: "s",
+          make: () => ({ constructor: 1 }),
+          divergence: "note",
+        },
+      ]);
+      expect(entry).toMatchObject({
+        text: 'fvj1:{"constructor":1}',
+        divergence: { note: "note", text: "refused" },
+      });
     });
 
     it("throws given a divergence on a case hashed as the spec says", () => {
@@ -309,7 +431,7 @@ describe("hash-conformance", () => {
       ).toThrow("b: names a as its equal, but one is refused.");
     });
 
-    it("throws given two cases of one hash and different descriptors, neither naming the other", () => {
+    it("throws given two cases of one hash and different texts or mods, neither naming the other", () => {
       expect(() =>
         hashConformanceFixtureTextForTestingOnly([
           { name: "a", section: "s", make: () => new FabricLink({ id: "x" }) },
@@ -322,7 +444,59 @@ describe("hash-conformance", () => {
       ).toThrow("a and b: their hashes are equal, but neither names the other");
     });
 
-    it("returns entries for two cases of one hash and one descriptor, neither naming the other", () => {
+    it("returns an entry requiring the flavors a case marks", () => {
+      const entry = soleEntryOf([
+        {
+          name: "flavored",
+          section: "s",
+          make: () => new FabricRegExp("es2025", "a", ""),
+          requires: { flavors: ["es2025"] },
+        },
+      ]);
+
+      expect(entry.requires).toEqual({ flavors: ["es2025"] });
+    });
+
+    it("returns an entry requiring the member count of a record past the floor", () => {
+      const count = SIZE_FLOORS_FOR_TESTING_ONLY.propertyCount + 1;
+      const entry = soleEntryOf([
+        {
+          name: "wide",
+          section: "s",
+          make: () =>
+            Object.fromEntries(
+              Array.from({ length: count }, (_, i) => [`k${i}`, i]),
+            ),
+        },
+      ]);
+
+      expect(entry.requires).toEqual({ propertyCount: count });
+    });
+
+    it("returns entries requiring the length of a symbol's key and a depth past their floors", () => {
+      const floors = SIZE_FLOORS_FOR_TESTING_ONLY;
+      const key = "x".repeat(floors.symbolKeyLength + 1);
+      const deep = () => {
+        let value: FabricValue = [];
+        for (let i = 1; i <= floors.depth; i++) {
+          value = [value];
+        }
+        return value;
+      };
+      const entries = JSON.parse(
+        hashConformanceFixtureTextForTestingOnly([
+          { name: "key", section: "s", make: () => Symbol.for(key) },
+          { name: "deep", section: "s", make: deep },
+        ]),
+      ).cases;
+
+      expect(entries.map((entry: FixtureEntry) => entry.requires)).toEqual([
+        { symbolKeyLength: floors.symbolKeyLength + 1 },
+        { depth: floors.depth + 1 },
+      ]);
+    });
+
+    it("returns entries for two cases of one hash and one text with mods, neither naming the other", () => {
       const text = hashConformanceFixtureTextForTestingOnly([
         { name: "a", section: "s", make: () => ({ x: 1, y: 2 }) },
         { name: "b", section: "s", make: () => ({ y: 2, x: 1 }) },

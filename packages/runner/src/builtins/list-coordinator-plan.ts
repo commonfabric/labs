@@ -1,11 +1,11 @@
 import type { JSONSchema, Pattern } from "../builder/types.ts";
 import type { Cell } from "../cell.ts";
-import { resolveLink } from "../link-resolution.ts";
+import { resolveLink, unlessCyclic } from "../link-resolution.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { Runtime } from "../runtime.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { listElementKeys } from "./list-element-keys.ts";
-import { listElementLink } from "./list-element-link.ts";
+import { listElementLink, listSlotPlace } from "./list-element-link.ts";
 import { inferListOpArgumentUsage } from "./list-op-argument-usage.ts";
 import { listResultSchema } from "./list-result-schema.ts";
 import { resolveOpPattern } from "./op-pattern-ref.ts";
@@ -171,7 +171,8 @@ export function listCoordinatorPlan(
  * key derived from a cold chase names a child the warm coordinator never
  * mints. The pre-sync therefore pulls what each round of this resolution
  * ends on, until a round ends where the last one did, before deriving a
- * plan. `slots` is empty when the list is not an array.
+ * plan. A slot whose links run in a cycle names no value and resolves to its
+ * own place in the list. `slots` is empty when the list is not an array.
  */
 export function listSlotResolutions(
   runtime: Runtime,
@@ -186,9 +187,14 @@ export function listSlotResolutions(
   const listCell = inputsCell.key(listKey).withTx(tx).resolveAsCell();
   const rawList = listCell.withTx(tx).getRaw() as unknown;
   const listBase = listCell.getAsNormalizedFullLink();
+  // An element whose links run in a cycle, back to a place they passed or
+  // into their own subpath, names no value, so its slot is its place in the
+  // list rather than a failure of the whole list.
   const slots = Array.isArray(rawList)
     ? rawList.map((slot, i) =>
-      resolveLink(runtime, tx, listElementLink(listBase, slot, i), "value")
+      unlessCyclic(() =>
+        resolveLink(runtime, tx, listElementLink(listBase, slot, i), "value")
+      ) ?? listSlotPlace(listBase, i)
     )
     : [];
   return { listCell, rawList, slots };

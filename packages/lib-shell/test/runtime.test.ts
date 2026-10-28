@@ -1241,6 +1241,7 @@ describe("RuntimeInternals", () => {
       session,
       apiUrl: new URL("http://shell.test/"),
       experimental,
+      clientBuild: { application: "shell", gitSha: "c".repeat(40) },
       // The two dials the assertions below read back, stated rather than
       // left to the host default.
       cfcEnforcementMode: "enforce-explicit",
@@ -1256,6 +1257,10 @@ describe("RuntimeInternals", () => {
     expect(options.trustSnapshot).toEqual({
       id: `principal:${session.as.did()}`,
       actingPrincipal: session.as.did(),
+    });
+    expect(options.clientBuild).toEqual({
+      application: "shell",
+      gitSha: "c".repeat(40),
     });
     expect(options.spaceDid).toBe(session.space);
     expect(options.experimental).toBe(experimental);

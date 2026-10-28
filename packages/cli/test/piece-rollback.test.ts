@@ -51,12 +51,8 @@ const TARGET = {
 const ROLLBACK_OPTIONS = { ...TARGET, plan: "retarget.jsonl" };
 
 // The 43-character handle length clears the canonical parser's threshold
-// below which an id reads as a human name and is refused. `CANONICAL` is
-// what the codec folds `HANDLE` onto — the last character carries bits the
-// hash does not, so the canonical spelling zeroes them — and it is the
-// spelling every decoded row and every refusal names.
-const HANDLE = "baedreiabcdefghijklmnopqrstuvwxyz0123456789";
-const CANONICAL = "fid1:baedreiabcdefghijklmnopqrstuvwxyz0123456788";
+// below which an id reads as a human name and is refused.
+const HANDLE = "baedreiabcdefghijklmnopqrstuvwxyz0123456788";
 const OTHER_HANDLE = "baedreizyxwvutsrqponmlkjihgfedcba9876543210";
 
 const PLAN_TEXT = [
@@ -100,8 +96,8 @@ const PLAN_TEXT = [
 
 const REPORT: ApplyReport = {
   rows: [
-    { piece: "fid1:aaa", phase: "items", verdict: "applied", elapsedMs: 412 },
-    { piece: "fid1:bbb", phase: "items", verdict: "landed", elapsedMs: 18 },
+    { piece: "fid1:aaY", phase: "items", verdict: "applied", elapsedMs: 412 },
+    { piece: "fid1:bbY", phase: "items", verdict: "landed", elapsedMs: 18 },
   ],
   applied: 1,
   complete: true,
@@ -134,7 +130,7 @@ const REVISION: RestorableRevision = {
 // serializer renders a second reference to one object as a circular one, so
 // an alias would reach a `--json` reader as `<circular reference>`.
 const LISTING: RestoreOutcome = {
-  piece: "fid1:aaa",
+  piece: "fid1:aaY",
   revisions: [REVISION, {
     ...REVISION,
     revisionId: "rev-b",
@@ -183,8 +179,8 @@ describe("piece-rollback", () => {
         },
       });
       expect(printed).toEqual([
-        "applied fid1:aaa items 412ms",
-        "landed fid1:bbb items 18ms",
+        "applied fid1:aaY items 412ms",
+        "landed fid1:bbY items 18ms",
       ]);
       expect(hints).toEqual([
         "Derived 0 rollback rows from retarget.jsonl",
@@ -286,9 +282,9 @@ describe("piece-rollback", () => {
       const errors: string[] = [];
       const stopped: ApplyReport = {
         rows: [
-          { piece: "fid1:aaa", verdict: "applied", elapsedMs: 5 },
+          { piece: "fid1:aaY", verdict: "applied", elapsedMs: 5 },
           {
-            piece: "fid1:bbb",
+            piece: "fid1:bbY",
             verdict: "refused",
             problem: "The piece's source log holds no revision on idA#Member.",
             elapsedMs: 3,
@@ -317,8 +313,8 @@ describe("piece-rollback", () => {
       const message = errors.join("\n");
       expect(message).toContain("Rollback did not complete");
       expect(message).toContain("  unattempted: fid1:ccc");
-      expect(message).toContain("  refused: fid1:bbb The piece's source log");
-      expect(message).not.toContain("fid1:aaa");
+      expect(message).toContain("  refused: fid1:bbY The piece's source log");
+      expect(message).not.toContain("fid1:aaY");
     });
 
     it("writes the accepted piece to stderr when nothing intercepts it", async () => {
@@ -449,7 +445,7 @@ describe("piece-rollback", () => {
         rollbackFromCommand(ROLLBACK_OPTIONS, {
           runRollback: () =>
             Promise.reject(
-              new Error("The prior source is not retained for fid1:aaa."),
+              new Error("The prior source is not retained for fid1:aaY."),
             ),
           printHint: () => {},
           guard: process.deps,
@@ -482,7 +478,7 @@ describe("piece-rollback", () => {
       // The row's precondition is the reference the retarget produced, and
       // its operation restores the one the retarget row recorded.
       expect(plan.rows).toEqual([{
-        piece: CANONICAL,
+        piece: `fid1:${HANDLE}`,
         phase: "items",
         expect: { patternIdentity: "idB", symbol: "Member", retained: true },
         op: {
@@ -563,7 +559,7 @@ describe("piece-rollback", () => {
     it("prints one line per revision when none is named", async () => {
       const printed: unknown[] = [];
       const hints: string[] = [];
-      await restoreFromCommand({ ...TARGET, cell: "fid1:aaa" }, {
+      await restoreFromCommand({ ...TARGET, cell: "fid1:aaY" }, {
         render: (value) => {
           printed.push(value);
         },
@@ -588,7 +584,7 @@ describe("piece-rollback", () => {
       const out = await captureStdout(() =>
         restoreFromCommand({
           ...TARGET,
-          cell: "fid1:aaa",
+          cell: "fid1:aaY",
           revision: "rev-a",
         }, {
           runRestore: (_config, given) => {
@@ -605,7 +601,7 @@ describe("piece-rollback", () => {
         "rev-a 1970-01-01T00:00:00.000Z idA#Member create retained\n",
       );
       expect(hints).toEqual([
-        "fid1:aaa would be restored to rev-a; --apply writes it",
+        "fid1:aaY would be restored to rev-a; --apply writes it",
       ]);
     });
 
@@ -614,7 +610,7 @@ describe("piece-rollback", () => {
       await captureStdout(() =>
         restoreFromCommand({
           ...TARGET,
-          cell: "fid1:aaa",
+          cell: "fid1:aaY",
           revision: "rev-b",
           apply: true,
         }, {
@@ -633,7 +629,7 @@ describe("piece-rollback", () => {
       );
       // Nothing written and nothing wrong: the exit stays zero, which is
       // what makes re-invoking a restore a resume rather than an error.
-      expect(hints).toEqual(["fid1:aaa already runs rev-b"]);
+      expect(hints).toEqual(["fid1:aaY already runs rev-b"]);
     });
 
     it("names the origin a restore would sever for a piece on the revision's reference", async () => {
@@ -641,7 +637,7 @@ describe("piece-rollback", () => {
       await captureStdout(() =>
         restoreFromCommand({
           ...TARGET,
-          cell: "fid1:aaa",
+          cell: "fid1:aaY",
           revision: "rev-b",
         }, {
           runRestore: () =>
@@ -659,7 +655,7 @@ describe("piece-rollback", () => {
       // the piece: the origin is still ahead of it, so reporting this as
       // needing nothing would hide the write the operator asked for.
       expect(hints).toEqual([
-        "fid1:aaa runs the reference of rev-b but follows " +
+        "fid1:aaY runs the reference of rev-b but follows " +
         "https://example.test/member.tsx; --apply restores it and severs " +
         "that origin",
       ]);
@@ -671,7 +667,7 @@ describe("piece-rollback", () => {
         captureStdout(() =>
           restoreFromCommand({
             ...TARGET,
-            cell: "fid1:aaa",
+            cell: "fid1:aaY",
             revision: "rev-z",
             apply: true,
           }, {
@@ -700,7 +696,7 @@ describe("piece-rollback", () => {
       await captureStdout(() =>
         restoreFromCommand({
           ...TARGET,
-          cell: "fid1:aaa",
+          cell: "fid1:aaY",
           revision: "rev-a",
           apply: true,
         }, {
@@ -719,7 +715,7 @@ describe("piece-rollback", () => {
       expect(hints).toEqual([
         "the restored source ran with a warning: the restored pattern " +
         "logged an error",
-        "restored fid1:aaa to rev-a",
+        "restored fid1:aaY to rev-a",
       ]);
     });
 
@@ -727,7 +723,7 @@ describe("piece-rollback", () => {
       const out = await captureStdout(() =>
         restoreFromCommand({
           ...TARGET,
-          cell: "fid1:aaa",
+          cell: "fid1:aaY",
           revision: "rev-a",
           json: true,
         }, {
@@ -739,7 +735,7 @@ describe("piece-rollback", () => {
       const parsed = JSON.parse(out);
       // The whole outcome, not the per-revision lines: a caller asking for
       // JSON is asking for the listing and the verdict in one value.
-      expect(parsed.piece).toBe("fid1:aaa");
+      expect(parsed.piece).toBe("fid1:aaY");
       expect(parsed.restored).toBe(false);
       expect(parsed.revisions.length).toBe(2);
       expect(parsed.selected.revisionId).toBe("rev-a");
@@ -764,10 +760,10 @@ describe("piece-rollback", () => {
           loadPieces: () => Promise.resolve({} as PiecesController),
           resolvePieceAddress: (_pieces, address) => {
             resolved = address;
-            return Promise.resolve("fid1:aaa");
+            return Promise.resolve("fid1:aaY");
           },
           restorePiece: (_pieces, address, options) => {
-            expect(address).toBe("fid1:aaa");
+            expect(address).toBe("fid1:aaY");
             given = options;
             return Promise.resolve(LISTING);
           },
@@ -782,7 +778,7 @@ describe("piece-rollback", () => {
       let given: Record<string, unknown> = { seeded: true };
       await runRestore({ piece: "board" } as never, {}, {
         loadPieces: () => Promise.resolve({} as PiecesController),
-        resolvePieceAddress: () => Promise.resolve("fid1:aaa"),
+        resolvePieceAddress: () => Promise.resolve("fid1:aaY"),
         restorePiece: (_pieces, _address, options) => {
           given = options as unknown as Record<string, unknown>;
           return Promise.resolve(LISTING);

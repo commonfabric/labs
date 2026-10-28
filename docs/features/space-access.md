@@ -246,6 +246,7 @@ who asks, so a call in a computation leaves its read scope as it is.
 | --- | --- |
 | a DID | the space `target`'s value lives in, after following any links it holds |
 | `undefined` | `target` was passed as `undefined`, or the run has named an `inSpace()` target whose space is not resolved yet |
+| `undefined` | the links `target` holds run in a cycle, so they name no value in any space; `spaceAccess(target)` throws for such a `target` |
 
 The second `undefined` comes from how `inSpace()` creates a space. A run that
 names a space not yet resolved records the name, and when the run ends the

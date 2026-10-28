@@ -10,6 +10,72 @@ import {
 } from "./v2-auth-test-helpers.ts";
 
 describe("memory session termination", () => {
+  for (const name of ["AuthorizationError", "ClientUpdateRequiredError"]) {
+    it(`terminates a marked ${name} without reconnecting again`, async () => {
+      const server = new Server({
+        ...testSessionOpenServerOptions,
+        store: new URL(`memory://update-required-${name}`),
+      });
+      const client = await connect({ transport: loopback(server) });
+      try {
+        const session = await client.mount(
+          "did:key:z6Mk-update-required",
+          {},
+          testSessionOpenAuthFactory,
+        );
+        const refusal = Object.assign(new Error("Update this runtime"), {
+          name,
+          clientUpdateRequired: true,
+        });
+        const reopen = stub(
+          client,
+          "openSession",
+          () => Promise.reject(refusal),
+        );
+        try {
+          await session.restore();
+          await session.restore();
+          expect(session.closeError).toBe(refusal);
+          expect(reopen.calls).toHaveLength(1);
+        } finally {
+          reopen.restore();
+        }
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    });
+  }
+
+  it("preserves the server's reason when a restored session is revoked", async () => {
+    const server = new Server({
+      ...testSessionOpenServerOptions,
+      store: new URL("memory://session-refusal-reason"),
+    });
+    const client = await connect({ transport: loopback(server) });
+    try {
+      const session = await client.mount(
+        "did:key:z6Mk-refusal-reason",
+        {},
+        testSessionOpenAuthFactory,
+      );
+      const refusal = Object.assign(
+        new Error("The session resume authority has ended"),
+        { name: "SessionRevokedError" },
+      );
+      const reopen = stub(client, "openSession", () => Promise.reject(refusal));
+      try {
+        await session.restore();
+        expect(session.closeError).toBe(refusal);
+      } finally {
+        reopen.restore();
+      }
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("isolates throwing current and late observers from revocation delivery", async () => {
     const server = new Server({
       ...testSessionOpenServerOptions,

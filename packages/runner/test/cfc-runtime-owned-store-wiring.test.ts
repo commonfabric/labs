@@ -51,10 +51,8 @@ describe("runtime-owned-store enrollment wiring", () => {
   });
 
   /**
-   * A source whose `secret` field carries `clause`. Each write wants its own:
-   * a route-2 upgrade declares what it carried, so a second write reusing the
-   * first's clause would fit the store's own declaration whatever the
-   * enrollment says.
+   * A source whose `secret` field carries `clause`. Distinct clauses identify
+   * which attempted write was admitted or refused.
    */
   const seedSecret = async (name: string, clause = name) => {
     const seed = runtime.edit();
@@ -122,7 +120,7 @@ describe("runtime-owned-store enrollment wiring", () => {
     return await tx.commit().settled;
   };
 
-  it("enrolls a running piece's stores, so a later write declares", async () => {
+  it("enrolls a running piece's stores, so a later labeled write commits", async () => {
     // The write runs on a transaction of its own, which names nothing: the
     // enrollment the instantiation made is the whole of what reaches it.
     await seedSecret("wiring-append-source");
@@ -132,7 +130,7 @@ describe("runtime-owned-store enrollment wiring", () => {
       .toBeUndefined();
   });
 
-  it("declares on the piece's own result document", async () => {
+  it("admits a labeled write on the piece's own result document", async () => {
     // The result document is on the route and the others are not enough to
     // put it there: a nested piece's result is `{resultFor}`, minted from a
     // node's cause, and the reactive update that first carried a label into
@@ -398,7 +396,7 @@ describe("runtime-owned-store enrollment wiring", () => {
       expect((await tx.commit().settled).error).toBeUndefined();
     });
 
-    it("declares on the child the anchoring write mints", async () => {
+    it("admits a labeled write on the child the anchoring write mints", async () => {
       await seedSecret("anchor-append-source", "anchor-append");
       const result = await startListPiece("wiring-anchor-append");
       const appended = await writeLabeled(

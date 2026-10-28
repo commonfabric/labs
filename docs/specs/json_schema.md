@@ -551,4 +551,13 @@ what the cursor declares about its type decides how:
 - An `allOf` is not read a child out of: a conjunction beside no `type`
   narrows to `false`. Traversal evaluates a conjunction whole, merging the
   keywords beside it into each part, which is where a property only a part
-  declares is reached.
+  declares is reached. A conjunction beside a declared `type` narrows through
+  the keywords beside it alone, and its parts are not consulted: under
+  `{ "type": "object", "properties": { "y": … }, "allOf": [{ "type": "object", "properties": { "x": { "type": "string" } } }] }`,
+  `x` narrows to `true`, where a read of the parent, which evaluates the part,
+  does not return an `x` holding a number. Both are limits of narrowing rather
+  than answers about the conjunction, and a caller meets each as the answer it
+  looks like: `Cell.key()` under the first carries `false` and selects a
+  property the parent reads, and under the second carries the wildcard and
+  reads a property the parent does not
+  ([The read entry](link-schema-precedence.md#the-read-entry)).

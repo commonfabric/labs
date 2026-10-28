@@ -32,6 +32,7 @@ import {
   selectWritePathsSince,
   WaveCommitConflictError,
   WavePreconditionError,
+  WaveStaleReadError,
 } from "../v2/engine.ts";
 import {
   acquireExecutionLease,
@@ -763,6 +764,65 @@ Deno.test("wave commit: a rebased doc re-verifies against the exact head its mer
       WaveCommitConflictError,
     );
     assertEquals(error.conflictedDocs, ["of:x space"]);
+  } finally {
+    resetServerExecutionConfig();
+    close(engine);
+  }
+});
+
+Deno.test("wave commit: a served handler's read a commit staled is named BY CONTRIBUTION, and nothing is applied", async () => {
+  const { engine } = await createEngine();
+  setServerExecutionConfig(true);
+  try {
+    const holder = withLiveLease(engine);
+    // The handler read of:a at seq 1 and wrote of:b from it; a rival then
+    // moved of:a to seq 2, which the wave's basis counts.
+    applyCommit(engine, {
+      sessionId: "session:seed",
+      principal: "user:seed",
+      commit: setCommit(1, [{ id: "of:a", n: 1 }]),
+    });
+    applyCommit(engine, {
+      sessionId: "rival-session",
+      principal: "user:rival",
+      commit: setCommit(1, [{ id: "of:a", n: 99 }]),
+    });
+    const read = { id: "of:a", scopeKey: "space", path: ["value"], seq: 1 };
+    const error = assertThrows(
+      () =>
+        applyWaveCommit(engine, {
+          sessionId: holder,
+          space: SPACE,
+          commit: setCommit(1, [{ id: "of:b" }]),
+          commitClass: "derived",
+          holder,
+          waveBasis: {
+            basisSeq: 2,
+            rebasedHeads: [],
+            handlerReads: [{ contribution: 3, reads: [read] }],
+          },
+        }),
+      WaveStaleReadError,
+    );
+    assertEquals(error.staleReads, [{ contribution: 3, read: 0, seq: 2 }]);
+    assertEquals(selectDocHead(engine, { id: "of:b", scopeKey: "space" }), 0);
+    // A read current at the rival's seq passes, and the write lands.
+    const applied = applyWaveCommit(engine, {
+      sessionId: holder,
+      space: SPACE,
+      commit: setCommit(2, [{ id: "of:b" }]),
+      commitClass: "derived",
+      holder,
+      waveBasis: {
+        basisSeq: 2,
+        rebasedHeads: [],
+        handlerReads: [{ contribution: 3, reads: [{ ...read, seq: 2 }] }],
+      },
+    });
+    assertEquals(
+      selectDocHead(engine, { id: "of:b", scopeKey: "space" }),
+      applied.seq,
+    );
   } finally {
     resetServerExecutionConfig();
     close(engine);

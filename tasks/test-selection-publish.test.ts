@@ -6,6 +6,7 @@ import {
   dayPartitions,
   inputChoice,
   livePrevious,
+  liveStore,
   namingSurfaces,
   parseArgs,
   partitionOf,
@@ -307,6 +308,24 @@ describe("test-selection-publish", () => {
       expect(
         inputChoice({ settled: false, foldedRaw: false, rollup: false }),
       ).toBe("raw");
+    });
+  });
+
+  describe("liveStore()", () => {
+    it("asks Cloud Storage to decode an aggregate before Deno reads it", async () => {
+      const requests: Request[] = [];
+      const fetchImpl = (
+        input: string | URL | Request,
+        init?: RequestInit,
+      ): Promise<Response> => {
+        requests.push(new Request(input, init));
+        return Promise.resolve(new Response('{"complete":true}'));
+      };
+      const store = liveStore("bucket", fetchImpl);
+
+      expect(await store.readText("state.json.gz")).toBe('{"complete":true}');
+      expect(requests.length).toBe(1);
+      expect(requests[0]!.headers.get("accept-encoding")).toBe("identity");
     });
   });
 });

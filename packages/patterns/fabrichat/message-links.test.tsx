@@ -3,7 +3,8 @@
  * message holds the link to that message's own cell, never to its slot in the
  * room's messages, so a client that compares the links a view hands it, rather
  * than calling `equals()`, finds one message under one link wherever a view
- * names it. Each comparison below is `equalLinks()`, which does not resolve.
+ * names it, a reply's thread and quote included. Each comparison below is
+ * `equalLinks()`, which does not resolve.
  */
 import {
   type AddIntegrity,
@@ -79,7 +80,7 @@ export default pattern(() => {
         trustedUi: sendGesture,
       },
       // A reply shown in both places: the main conversation lists it, it
-      // roots a thread on "Root", and it names "Root" as what it replies to.
+      // joins the thread "Root" roots, and it quotes "Root".
       {
         action: bobOnRoot.replyInBoth,
         event: typed("Reply"),
@@ -99,10 +100,8 @@ export default pattern(() => {
               Writable.equalLinks(rights[index]?.message, own[index])
             ) &&
             Writable.equalLinks(view.messages.threads[0]?.root, own[0]) &&
-            Writable.equalLinks(
-              latest[2]?.get()?.replyTo?.message,
-              latest[0],
-            ) &&
+            Writable.equalLinks(latest[2]?.get()?.replyTo?.thread, latest[0]) &&
+            Writable.equalLinks(latest[2]?.get()?.replyTo?.quotes, latest[0]) &&
             !Writable.equalLinks(latest[0], latest[1]);
         }),
       },

@@ -338,6 +338,9 @@ export interface ManagerActState {
   /** Adds this user's profile to a room's participants. */
   joinRooms: Stream<JoinRoomsEvent>;
 
+  /** Lists a newly created room in the user's catalog. */
+  listRooms: Stream<ListRoomsEvent>;
+
   /**
    * The people this user's rooms list, through whose profiles `offerRoom`
    * offers a room to a member it names by principal alone; absent for every
@@ -710,6 +713,37 @@ const joinRooms = handler<JoinRoomsEvent, Record<PropertyKey, never>>(
   },
 );
 
+/** What listing a new room asks: the room, and what to register with it. */
+export interface ListRoomsEvent {
+  /** The room to list. */
+  // `Cell<…>` is written out rather than reached through an alias: the
+  // event's schema marks a reference position only where the wrapper is
+  // written in the event type.
+  room: Cell<ChatRoomLink>;
+
+  /** A group room's title; absent for a direct room. */
+  title?: string;
+
+  /** When the room was created, in milliseconds since the epoch. */
+  since: number;
+}
+
+/**
+ * Lists a room this user created in their catalog, as `listRoom()` does. It
+ * runs as an event of its own, queued by the one that creates the room, so
+ * that the catalog is read apart from that creation: a transaction's writes
+ * are held to the labels of everything it reads, and the catalog can carry a
+ * label, such as its owner's `PersonalSpace`, that the room's space doesn't
+ * admit. While the room's space is not known, nothing is listed.
+ */
+const listRooms = handler<ListRoomsEvent, { catalog: CatalogCell }>(
+  (event, { catalog }) => {
+    const space = spaceOf(event?.room);
+    if (!isWellFormedDID(space)) return;
+    listRoom(catalog, space, { title: event.title, since: event.since });
+  },
+);
+
 /**
  * A room's result, as the link an index entry holds. The room is created
  * where the link can't be typed as a cell, and stored as a link to it.
@@ -749,16 +783,16 @@ interface RoomOptions {
 
 /**
  * Creates a room in a space of its own, as the space's root, and its notices,
- * records its entry, and registers its space in the user's catalog, all in one
- * transaction: the space's grants and its declared kind are part of creating
- * it, so nothing has to commit apart. A notice for each other member not in
- * `offerTo` is queued for a client to deliver, and adding this user to the
- * room's participants, and offering the room to each member in `offerTo`, are
- * queued to follow.
+ * and records its entry, all in one transaction: the space's grants and its
+ * declared kind are part of creating it, so nothing has to commit apart. A
+ * notice for each other member not in `offerTo` is queued for a client to
+ * deliver, and registering the room's space in the user's catalog, adding this
+ * user to the room's participants, and offering the room to each member in
+ * `offerTo`, are queued to follow.
  *
  * The space's name is pending on the first run, which the runtime discards and
- * runs again with the name resolved. Nothing is registered or sent until the
- * name resolves, since a discarded run's sends may still be delivered.
+ * runs again with the name resolved. Nothing is sent until the name resolves,
+ * since a discarded run's sends may still be delivered.
  */
 const createRoom = (
   state: ManagerActState,
@@ -800,7 +834,11 @@ const createRoom = (
   );
   const space = spaceOf(room);
   if (isWellFormedDID(space)) {
-    listRoom(state.catalog, space, { title, since: now });
+    state.listRooms.send({
+      room,
+      ...(title === undefined ? {} : { title }),
+      since: now,
+    });
     if (state.myProfile !== undefined) {
       state.joinRooms.send({ room, profile: state.myProfile });
     }
@@ -1662,7 +1700,7 @@ export interface FabriChatManagerOutput {
    * other than those whose room's roster lists a profile attesting their
    * recipient.
    */
-  outgoingNotices: ChatManagerNotice[];
+  outgoingNotices: PerUser<ChatManagerNotice[]>;
 
   /**
    * The people this user's rooms list, other than this user: by the principal
@@ -1965,6 +2003,7 @@ export const FabriChatManagerCore = pattern<
       outgoingNotices,
       offerRooms: offerRooms({ outgoingNotices, joinRooms: joining }),
       joinRooms: joining,
+      listRooms: listRooms({ catalog: sharedSpaceCatalog }),
       draft,
       startRefusal,
     };

@@ -41,7 +41,7 @@ import { isObjectNotArray } from "@commonfabric/utils/types";
 
 /** One profile, as the host file states it. */
 export interface LocalJobProfile extends HarnessModelLimits {
-  /** The tools a job may use; `submit_result` is always added. */
+  /** The tools a job may use; a result schema adds `submit_result`. */
   tools: string[];
 
   /** The most model turns a job may take. */

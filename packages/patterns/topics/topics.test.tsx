@@ -48,6 +48,7 @@ import Topic, {
   snippet,
   submitProfileComment,
   submitProfileLink,
+  TOPIC_STATE_VERSION,
   type TopicAuthor,
   topicAuthorFromPerson,
   topicAuthorLabel,
@@ -271,10 +272,16 @@ export default pattern(() => {
     minted: { destination: undefined, modifiedTitle: true },
   });
   const profileUpgrade = {
-    topicStateVersion: new Writable(1),
+    topicStateVersion: new Writable(TOPIC_STATE_VERSION),
     createdByName: new Writable<unknown>(),
     createdBy: new Writable<TopicAuthor | undefined>(),
     comments: profileComments,
+    commentCount: new Writable(0),
+    lastActivityAt: new Writable(0),
+    links: profileLinks,
+    createdAt: 0,
+    bodyUpdatedAt: profileBodyUpdatedAt,
+    titleUpdatedAt: new Writable(0),
   };
   // Render the same cells the deterministic Profile handlers mutate. This
   // keeps their behavior and the detail UI in one end-to-end test path without
@@ -310,7 +317,12 @@ export default pattern(() => {
   const textComments = new Writable<TopicComment[] | Default<[]>>([]);
   const textCommentDraft = new Writable("from a profile with no picture");
   const textSubmitComment = submitProfileComment({
-    upgrade: { ...profileUpgrade, comments: textComments },
+    upgrade: {
+      ...profileUpgrade,
+      comments: textComments,
+      commentCount: new Writable(0),
+      lastActivityAt: new Writable(0),
+    },
     comments: textComments,
     commentDraft: textCommentDraft,
     profileName: "Grace",
@@ -682,7 +694,7 @@ export default pattern(() => {
   );
 
   // A topic that HAS run orders by its published activity, which is what the
-  // fallback must not mask: `lastActivityOf` is a max including `createdAt`,
+  // fallback must not mask: `lastActivityAt` is a max including `createdAt`,
   // so a real value is always the later of the two and never 0.
   const assert_warm_row_orders_by_last_activity = assert(() =>
     activityOrderOf({ lastActivityAt: 2500, createdAt: 1700 }) === 2500
@@ -1036,7 +1048,7 @@ export default pattern(() => {
   // invariant rather than as a before-and-after. `lastActivityAt` is a max
   // over what the arrays HOLD, so the retracted comment's own stamps are
   // still in it — and the retraction, being the newest thing that happened,
-  // is what the max now equals. Skip retracted records in `lastActivityOf`
+  // is what the max now equals. Skip retracted records in `activityOf()`
   // and this reads the link's older `addedAt` instead, which is exactly the
   // backwards move that would reorder the board under a reader.
   const assert_retraction_moved_activity_forward = assert(() =>

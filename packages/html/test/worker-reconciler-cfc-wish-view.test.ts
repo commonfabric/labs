@@ -11,6 +11,7 @@ import type { JSONSchema } from "../../runner/src/builder/types.ts";
 import { vnodeSchema } from "../../runner/src/schemas.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedProfileOwner,
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "../../runner/test/cfc-seed-envelope.ts";
@@ -46,6 +47,10 @@ Deno.test("worker reconciler CFC ceiling over the view a wish shows", async (t) 
     apiUrl: new URL("http://localhost"),
   });
   const SECRET = "sealed-sheet-marker";
+  // What the reconciler emits in place of content a ceiling refuses. A
+  // ceiling case finds it only once the wish has found the view and mounted
+  // it, so it is what keeps such a case from passing on an empty page.
+  const BLOCKED = '"tagName":"cf-cfc-blocked"';
 
   // A module policy with no exchange rules: nothing releases what it seals.
   const seal = buildCfcPolicyArtifactManifest({
@@ -202,6 +207,7 @@ Deno.test("worker reconciler CFC ceiling over the view a wish shows", async (t) 
         },
       ],
     });
+    seedProfileOwner(profileTx, profile.getAsNormalizedFullLink(), owner.did());
     expect((await profileTx.commit().settled).error).toBeUndefined();
     const homeTx = runtime.edit();
     const homeDefault = runtime.getCell(
@@ -247,6 +253,7 @@ Deno.test("worker reconciler CFC ceiling over the view a wish shows", async (t) 
             renderConfidentialityCeiling: { atoms: [] },
           });
           try {
+            expect(page.emitted()).toContain(BLOCKED);
             expect(page.emitted()).not.toContain(SECRET);
           } finally {
             page.cancel();
@@ -264,6 +271,7 @@ Deno.test("worker reconciler CFC ceiling over the view a wish shows", async (t) 
             children: [shown],
           });
           try {
+            expect(page.emitted()).toContain(BLOCKED);
             expect(page.emitted()).not.toContain(SECRET);
           } finally {
             page.cancel();

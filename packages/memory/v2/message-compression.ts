@@ -100,7 +100,18 @@ export class MemoryMessageCompressionChannel {
       const frame = compressionEnabled
         ? await encodeCompressedMemoryMessage(payload)
         : payload;
-      logger.time(encodeStart, "send", "encode");
+      // The sizes are the row's detail, so a capture can say what a slow
+      // encode carried: the payload's length and the frame's.
+      logger.timeDetailed(
+        () =>
+          JSON.stringify({
+            payloadChars: payload.length,
+            frameBytes: memoryMessageFrameBytes(frame),
+          }),
+        encodeStart,
+        "send",
+        "encode",
+      );
       if (!this.#closed) {
         // Every send stays on this queue, including uncompressed control and
         // pre-negotiation frames. A mode change therefore cannot move its

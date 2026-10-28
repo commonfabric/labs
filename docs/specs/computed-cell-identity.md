@@ -123,23 +123,51 @@ record of the build it staged (`packages/runner/src/stored-setup-build.ts`): the
 pattern identity it describes, a digest of the level's positional cells by
 number and description, the cells holding state by number and description, and a
 digest of the projection map, each result path that links a positional cell with
-the cell's number. The descriptions are the schema-free ones of
+the cell's number. A named instance counts as a positional cell at the number
+of its `legacyPartialCause`, in the cells and in the projection map alike, so a
+build's record is the same whether or not it names instances. The descriptions
+are the schema-free ones of
 `packages/runner/src/cause-assignment.ts`, so a schema-generator change that
-moves no cell changes no record. Because a positional cause is a place in the
+moves no cell changes no record. A sub-pattern child is described by its
+pattern identity and the least of the names its module gives it, so a child
+its module exports under several names is described alike whichever of them a
+load registers first. A record of another version than the one setup writes
+reads as no record. Because a positional cause is a place in the
 build, two builds of one pattern source can name different cells by one cause,
 and the result projection links each slot to the cell of the build that wrote
 it. A start therefore holds the stored setup against the build it loads
 (`Runner.#storedSetupVerdict`): where the manifest misses one of the build's
 cells or names one the build lacks, or the record describes another build, it
 re-stages the internal cells and the projection when every cell that moved is
-one recomputing restores, and holds when a cell holding state moved, since
-re-staging would record one cell's state as another's. A hold writes no setup
-and reports the moves, so the stored setup and its record stay as evidence of
-what moved; the piece still instantiates at the loaded build's numbers, so a
-moved cell reads, and anything the running piece writes lands in, its neighbor's
-document, as it does with no record at all. A document with no record of the
-pattern it runs is judged by its manifest alone, and re-staged on a disagreement
-only when the build has no cell holding state.
+one recomputing restores. Where the record says a cell holding state moved, or
+that cells holding state of one description changed so that which went where
+cannot be told (`ambiguousDescriptions`), the start refuses the piece with
+`PieceStateMovedError`, which names those cells: running it would instantiate
+its children, and read its other cells holding state, at the loaded build's
+numbers, where another cell's state sits. The refusal comes before any of the
+piece's nodes are installed and before any transaction is opened, so no child
+runs and nothing is written, and it leaves no in-memory registration, so the
+next start judges the piece again. The start rejects with the refusal, and
+`startWithCommit()` does so whether the first round of its setup commit or a
+retry's reached it. A setup of the version the record names
+refuses the same way, before staging anything. A child's record is judged when
+the child is set up, as part of instantiating its parent's graph, and a refused
+child stops its parent's start, naming the child (`PieceStateMovedError`'s
+`piece`). `runSynced()` and `runSyncedWithCommit()` start the piece after their
+setup commits and report that refusal to their caller, the second as the cause
+of a `PatternSetupPostCommitError`, which a source update's receipt reports as
+a failed refresh. A bare `run(tx)` whose start comes only after its commit, with
+the child's record not yet loaded, cannot judge the child before it returns: the
+piece is left not running, and the refusal is logged. The stored setup and its
+record stay as evidence of what moved, until a build that numbers those cells as
+the record does, or a migration that moves their state and re-stamps the
+record, lets the piece run. A serving runtime counts a refusal into its
+`structureLoadRefused` stat and parks the refused root until a commit to it
+(`docs/specs/server-side-execution/serving-loop.md`). A document with no record
+of the pattern it runs is judged by its manifest alone: it is re-staged on a
+disagreement only when the build has no cell holding state, and otherwise runs
+over its stored setup as it stands, a hold that reports the disagreement,
+since nothing says any cell moved.
 
 A `{ $generated: N }` cause moves with the compiler as well as with the
 source: a transformer change that adds or removes an anonymous cell ahead of
@@ -192,9 +220,38 @@ names a stored record may not use as a key, such as `constructor` and
 `__proto__`; an entry repeating an earlier entry's name is ignored. Binding reads it on every setup and start: a named
 instance it records a child for runs that child, and any other named instance
 runs the child at its own spot. The record is how a deployed parent's
-positional child can become a named instance's child without moving to a new
-document. No part of the runtime writes it yet: carrying a deployed parent's
-positional children over to their names is what will.
+positional child becomes a named instance's child without moving to a new
+document.
+
+A parent set up under a pattern that did not name an instance holds that
+instance's child at the positional spot. The first setup of the parent under a
+pattern that names the instance carries that child over
+(`planInstanceCarryOver` in `packages/runner/src/runner.ts`) and records it in
+`instanceChildren`, so carrying a child over is a one-time transition for each
+deployed parent. The child carried over is the one at the
+`legacyPartialCause` that the pattern the parent last set up gives the same
+instance name, where that pattern is loaded and names the instance. The
+pattern last set up is the one the parent's setup record describes, or, with
+no record of the current version, the one its setup marker names: a start
+repair re-stamps the record and leaves the marker alone, and the children sit
+at the numbers of the build the record describes. That build was made by the
+runtime that set the parent up, and the cause is one this runtime's build of
+the same pattern gives, so the record is held against this runtime's build
+(`compareStoredSetupBuild`): an instance whose cell the record shows holding
+state at another number, or whose description the record's cells cannot be
+matched with, carries nothing over. With no record, this runtime's build
+places the instance. A child is carried over by one instance at most. A start
+loads the pattern last set up by its identity, and syncs the children at the
+positional causes it gives the instances it names, before setup reads them.
+
+An instance that carries nothing over starts fresh, and the setup logs
+`instance-carry-over` naming it: one the pattern last set up does not name,
+which is new or was positional there; one whose parent's pattern last set up
+does not load, or that the record numbers otherwise; and one whose child at
+that cause another instance already carries. Whatever a version without the
+name set up for it is left where it is. An instance the parent ran under a
+name the pattern no longer gives is reported the same way, and its child is
+left behind.
 
 A sub-pattern instance with a positional cause moves to another child's state
 when a cell is added ahead of it, since its child is the one minted from

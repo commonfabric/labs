@@ -81,6 +81,7 @@ export const sharedSpaceReceiptViewSchema = {
               space: { type: "string" },
               host: { type: "string" },
               kind: { type: "string" },
+              profileConflict: { enum: ["profile", "unknown-profile"] },
             },
             required: ["from", "id", "space", "host", "kind"],
             additionalProperties: true,
@@ -91,6 +92,58 @@ export const sharedSpaceReceiptViewSchema = {
     },
   ],
 } as const satisfies JSONSchema;
+
+/**
+ * Reads `Home.sharedSpaces.profiles`: which of the person's profiles acts in
+ * each space the catalog holds an entry for, keyed by the space's DID. A
+ * space's value is `unrecorded` when Home records no profile for it,
+ * `unreadable` when Home's record cannot be read, and, with the `profile`'s
+ * space DID, `live` when the record names one of the person's own profiles,
+ * `retired` when it names one they retired, and `foreign` when it names a
+ * profile that is not the person's own now. None of these means the
+ * person's default profile. `live` lists the spaces of the person's own
+ * profiles that are not retired.
+ */
+export const sharedSpaceProfileViewSchema = {
+  anyOf: [
+    unavailable,
+    {
+      type: "object",
+      properties: {
+        status: { const: "ready" },
+        spaces: {
+          type: "object",
+          additionalProperties: {
+            anyOf: [
+              {
+                type: "object",
+                properties: {
+                  status: { enum: ["unrecorded", "unreadable"] },
+                },
+                required: ["status"],
+              },
+              {
+                type: "object",
+                properties: {
+                  status: { enum: ["live", "retired", "foreign"] },
+                  profile: { type: "string" },
+                },
+                required: ["status", "profile"],
+              },
+            ],
+          },
+        },
+        live: { type: "array", items: { type: "string" } },
+      },
+      required: ["status", "spaces", "live"],
+    },
+  ],
+} as const satisfies JSONSchema;
+
+/** A host's materialized profile observation, including explicit availability. */
+export type HomeSharedSpaceProfileView = Schema<
+  typeof sharedSpaceProfileViewSchema
+>;
 
 /**
  * Reads only command bindings at `Home.sharedSpaces.commands`. Event schemas

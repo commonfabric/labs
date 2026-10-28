@@ -20,6 +20,9 @@ interface ChatMessageList {
 
   /** Every thread that holds a reply, oldest root first. */
   threads: ChatThreadSummary[];
+
+  /** How many messages reply naming neither a thread nor a quote. */
+  legacyReplies: number;
 }
 ```
 
@@ -37,11 +40,19 @@ interface ChatMessageList {
   link every other field of the room that names it holds. It follows the
   conversation as new messages arrive, and needs no request.
 - **`threads`** holds a [`ChatThreadSummary`](ChatThreadSummary.md) for each
-  thread in the room that holds a reply: its root, how many replies it holds,
-  and when the newest was sent, oldest root first. A client shows a message of
-  the main conversation with its thread's count and latest reply time from
-  here. A message that roots no thread has no entry, and reads as a count of 0.
-  It follows the conversation as replies arrive, and needs no request.
+  thread in the room that holds a reply: its root, its title, how many replies
+  it holds, when the newest was sent, and its newest messages, oldest root
+  first. A client shows a message of the main conversation with its thread's
+  count and latest reply time from here, and a thread from its `messages`. A
+  message that roots no thread has no entry, and reads as a count of 0. It
+  follows the conversation as replies arrive, and needs no request.
+- **`legacyReplies`** is how many of the room's messages carry a `replyTo`
+  naming neither a thread nor a message it quotes, a shape no send stores (see
+  [`ChatReply`](ChatReply.md#a-reply-naming-neither)). The room shows such a
+  message as a message in no thread, where it was shown in the main
+  conversation, and doesn't show it where it was shown only in a thread. A
+  client that shows the room's messages says how many there are while this
+  isn't 0.
 
 ## Scope
 
@@ -54,9 +65,9 @@ including a READ member, who can't write (see
 
 ## Reading the rest
 
-`latest` holds the newest `maxWindowCount` messages of the main conversation
-(see [`ChatRoomPolicy`](ChatRoomPolicy.md)). A client that shows more, or a
-thread, reads the room's stored messages themselves, each a cell, and derives
-the view it shows from their `replyTo` as [`ChatReply`](ChatReply.md#the-two-views)
-states. A message list offers no stream: every write goes to the room's own
+`latest` holds the newest `maxWindowCount` messages of the main conversation,
+and each thread's `messages` the newest of its own (see
+[`ChatRoomPolicy`](ChatRoomPolicy.md)). A client that shows more reads the
+room's stored messages themselves, each a cell, and derives the view it shows
+from their `replyTo` as [`ChatReply`](ChatReply.md#the-two-views) states. A message list offers no stream: every write goes to the room's own
 streams (see [`ChatRoomOutput`](ChatRoomOutput.md#streams)).

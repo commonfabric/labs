@@ -33,14 +33,17 @@ export function commitRefusal(message: string): IStorageTransactionAborted {
  *
  * With `refusal`, the commit is refused with it, and applies nothing: the
  * transaction is aborted the way a server refusal discards its writes. With
- * `held`, the commit's settlement waits for `release()`. `restore()` releases
- * it and stops intercepting.
+ * `held`, the commit's settlement waits for `release()`. `intercepted`
+ * resolves once the commit is intercepted, from when the runtime's other
+ * transactions commit as they would. `restore()` releases it and stops
+ * intercepting.
  */
 export function interceptPieceStartCommit(
   runtime: Runtime,
   options: { refusal?: CommitError; held?: boolean } = {},
-): { release(): void; restore(): void } {
+): { intercepted: Promise<void>; release(): void; restore(): void } {
   const gate = Promise.withResolvers<void>();
+  const intercepted = Promise.withResolvers<void>();
   if (!options.held) gate.resolve();
   const edit = runtime.edit.bind(runtime);
   let intercepting = false;
@@ -56,6 +59,7 @@ export function interceptPieceStartCommit(
         if (!intercepting) return commit(commitOptions);
         intercepting = false;
         runtime.edit = edit;
+        intercepted.resolve();
         const { refusal } = options;
         if (refusal !== undefined) {
           tx.abort(refusal.message);
@@ -73,6 +77,7 @@ export function interceptPieceStartCommit(
   };
   runtime.telemetry.addEventListener("telemetry", onInstall);
   return {
+    intercepted: intercepted.promise,
     release: () => gate.resolve(),
     restore: () => {
       gate.resolve();

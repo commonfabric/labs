@@ -55,7 +55,7 @@ const OPTIONS = {
 
 // The 43-character handle length clears the canonical parser's threshold
 // below which an id reads as a human name and is refused.
-const HANDLE = "baedreiabcdefghijklmnopqrstuvwxyz0123456789";
+const HANDLE = "baedreiabcdefghijklmnopqrstuvwxyz0123456788";
 
 const PLAN_TEXT = [
   JSON.stringify({
@@ -82,8 +82,8 @@ const PLAN_TEXT = [
 
 const REPORT: ApplyReport = {
   rows: [
-    { piece: "fid1:aaa", phase: "items", verdict: "applied", elapsedMs: 412 },
-    { piece: "fid1:bbb", phase: "items", verdict: "landed", elapsedMs: 18 },
+    { piece: "fid1:aaY", phase: "items", verdict: "applied", elapsedMs: 412 },
+    { piece: "fid1:bbY", phase: "items", verdict: "landed", elapsedMs: 18 },
   ],
   applied: 1,
   complete: true,
@@ -99,7 +99,7 @@ describe("piece-retarget", () => {
   describe("formatApplyRow()", () => {
     it("puts the verdict, the piece, its phase, and its cost on one line", () => {
       expect(formatApplyRow(REPORT.rows[0])).toBe(
-        "applied fid1:aaa items 412ms",
+        "applied fid1:aaY items 412ms",
       );
     });
 
@@ -110,19 +110,19 @@ describe("piece-retarget", () => {
       // detach.
       expect(
         formatApplyRow({
-          piece: "fid1:aaa",
+          piece: "fid1:aaY",
           phase: "items",
           verdict: "outstanding",
           origin,
         }),
-      ).toBe(`outstanding fid1:aaa items origin ${origin}`);
+      ).toBe(`outstanding fid1:aaY items origin ${origin}`);
     });
 
     it("states what an applied row detached, and stays quiet when the plan agreed", () => {
       const origin = "https://origins.test/member.tsx";
       expect(
         formatApplyRow({ ...REPORT.rows[0], origin, detachedOrigin: origin }),
-      ).toBe(`applied fid1:aaa items 412ms detached ${origin}`);
+      ).toBe(`applied fid1:aaY items 412ms detached ${origin}`);
     });
 
     it("names both origins on an applied row whose plan had gone stale", () => {
@@ -138,13 +138,13 @@ describe("piece-retarget", () => {
           detachedOrigin: live,
         }),
       ).toBe(
-        `applied fid1:aaa items 412ms detached ${live} ` +
+        `applied fid1:aaY items 412ms detached ${live} ` +
           `(plan recorded ${recorded})`,
       );
       // The write found the piece already detached: nothing was detached,
       // and saying so is what keeps the recorded value from reading as one.
       expect(formatApplyRow({ ...REPORT.rows[0], origin: recorded })).toBe(
-        `applied fid1:aaa items 412ms detached nothing ` +
+        `applied fid1:aaY items 412ms detached nothing ` +
           `(plan recorded ${recorded})`,
       );
     });
@@ -184,8 +184,8 @@ describe("piece-retarget", () => {
         },
       });
       expect(printed).toEqual([
-        "applied fid1:aaa items 412ms",
-        "landed fid1:bbb items 18ms",
+        "applied fid1:aaY items 412ms",
+        "landed fid1:bbY items 18ms",
       ]);
       // One line out by the time each row settled: a report assembled first
       // and printed at the end would satisfy the assertion above and none of
@@ -215,7 +215,7 @@ describe("piece-retarget", () => {
       // A warned row landed, so it is not among the stopped rows the exit
       // message names; the hint is the only place a human reads it.
       expect(hints).toContain(
-        "applied: fid1:aaa warned: the piece ran with a warning",
+        "applied: fid1:aaY warned: the piece ran with a warning",
       );
     });
 
@@ -294,13 +294,13 @@ describe("piece-retarget", () => {
       const dry: ApplyReport = {
         rows: [
           {
-            piece: "fid1:aaa",
+            piece: "fid1:aaY",
             phase: "items",
             verdict: "outstanding",
             origin: "https://origins.test/member.tsx",
           },
           {
-            piece: "fid1:bbb",
+            piece: "fid1:bbY",
             phase: "items",
             verdict: "landed",
             origin: "https://origins.test/other.tsx",
@@ -416,16 +416,16 @@ describe("piece-retarget", () => {
       const errors: string[] = [];
       const stopped: ApplyReport = {
         rows: [
-          { piece: "fid1:aaa", verdict: "applied", elapsedMs: 5 },
+          { piece: "fid1:aaY", verdict: "applied", elapsedMs: 5 },
           {
-            piece: "fid1:bbb",
+            piece: "fid1:bbY",
             verdict: "refused",
             problem: "The source resolves to idC, not the idB this row " +
               "recorded.",
             elapsedMs: 3,
           },
           { piece: "fid1:ccc", verdict: "unattempted" },
-          { piece: "fid1:ddd", verdict: "unattempted" },
+          { piece: "fid1:ddc", verdict: "unattempted" },
         ],
         applied: 1,
         complete: false,
@@ -449,9 +449,9 @@ describe("piece-retarget", () => {
       expect(message).toContain("Retarget did not complete");
       // Each unattempted piece by name, never a count of them.
       expect(message).toContain("  unattempted: fid1:ccc");
-      expect(message).toContain("  unattempted: fid1:ddd");
-      expect(message).toContain("  refused: fid1:bbb The source resolves");
-      expect(message).not.toContain("fid1:aaa");
+      expect(message).toContain("  unattempted: fid1:ddc");
+      expect(message).toContain("  refused: fid1:bbY The source resolves");
+      expect(message).not.toContain("fid1:aaY");
     });
 
     it("names the run's own stop reason when no piece is at fault", async () => {
@@ -461,7 +461,7 @@ describe("piece-retarget", () => {
           retargetFromCommand({ ...OPTIONS, apply: true }, {
             runRetarget: () =>
               Promise.resolve({
-                rows: [{ piece: "fid1:aaa", verdict: "unattempted" }],
+                rows: [{ piece: "fid1:aaY", verdict: "unattempted" }],
                 applied: 0,
                 complete: false,
                 stopReason: "The plan names space did:key:test; this run " +
@@ -493,7 +493,7 @@ describe("piece-retarget", () => {
             ]);
             const dry: ApplyReport = {
               rows: [{
-                piece: "fid1:aaa",
+                piece: "fid1:aaY",
                 phase: "items",
                 verdict: "outstanding",
               }],
@@ -511,7 +511,7 @@ describe("piece-retarget", () => {
           },
         })
       );
-      expect(out).toBe("outstanding fid1:aaa items\n");
+      expect(out).toBe("outstanding fid1:aaY items\n");
       expect(hints).toEqual(["outstanding: 1 · written: 0"]);
     });
 
@@ -523,9 +523,9 @@ describe("piece-retarget", () => {
             runRetarget: () =>
               Promise.resolve({
                 rows: [
-                  { piece: "fid1:aaa", verdict: "outstanding" },
+                  { piece: "fid1:aaY", verdict: "outstanding" },
                   {
-                    piece: "fid1:bbb",
+                    piece: "fid1:bbY",
                     verdict: "moved-elsewhere",
                     problem: "The piece is on idC#Member.",
                   },
@@ -545,9 +545,9 @@ describe("piece-retarget", () => {
       ).rejects.toThrow(ExitSentinel);
       const message = errors.join("\n");
       expect(message).toContain("Retarget found rows an apply would refuse.");
-      expect(message).toContain("  moved-elsewhere: fid1:bbb");
+      expect(message).toContain("  moved-elsewhere: fid1:bbY");
       // A dry run's outstanding row is that run's answer, not its defect.
-      expect(message).not.toContain("fid1:aaa");
+      expect(message).not.toContain("fid1:aaY");
     });
 
     it("names every accepted piece where quiet cannot silence it", async () => {
@@ -559,7 +559,7 @@ describe("piece-retarget", () => {
       let accepted: readonly string[] | undefined;
       await captureStdout(() =>
         retargetFromCommand(
-          { ...OPTIONS, apply: true, acceptUnretained: ["fid1:aaa"] },
+          { ...OPTIONS, apply: true, acceptUnretained: ["fid1:aaY"] },
           {
             runRetarget: (_config, request) => {
               accepted = request.accept;
@@ -574,9 +574,9 @@ describe("piece-retarget", () => {
           },
         )
       );
-      expect(accepted).toEqual(["fid1:aaa"]);
+      expect(accepted).toEqual(["fid1:aaY"]);
       expect(notes).toEqual([
-        "accepted as unrollbackable: fid1:aaa (moving it leaves no reversal)",
+        "accepted as unrollbackable: fid1:aaY (moving it leaves no reversal)",
       ]);
       expect(hints.join("\n")).not.toContain("unrollbackable");
     });
@@ -600,7 +600,7 @@ describe("piece-retarget", () => {
       const abandoned = retargetFromCommand({ ...OPTIONS, apply: true }, {
         runRetarget: (_config, request) => {
           request.onRow?.({
-            piece: "fid1:aaa",
+            piece: "fid1:aaY",
             phase: "topics",
             verdict: "applied",
             elapsedMs: 12,
@@ -615,7 +615,7 @@ describe("piece-retarget", () => {
       });
       // The row streamed before the run stalled; the process then ends.
       await Promise.resolve();
-      expect(rows).toEqual(["applied fid1:aaa topics 12ms"]);
+      expect(rows).toEqual(["applied fid1:aaY topics 12ms"]);
       expect(process.endProcess()).toBe(1);
       expect(process.errors.join("\n")).toContain(
         "Retarget ended before it reported",
@@ -644,13 +644,13 @@ describe("piece-retarget", () => {
           retargetFromCommand({ ...OPTIONS, ...mode, apply: true }, {
             runRetarget: (_config, request) => {
               request.onRow?.({
-                piece: "fid1:aaa",
+                piece: "fid1:aaY",
                 phase: "topics",
                 verdict: "applied",
                 elapsedMs: 12,
               });
               request.onRow?.({
-                piece: "fid1:bbb",
+                piece: "fid1:bbY",
                 phase: "topics",
                 verdict: "applied",
                 elapsedMs: 9,
@@ -795,7 +795,7 @@ describe("piece-retarget", () => {
       let options: ApplyOptionsLike | undefined;
       await runRetarget({} as never, {
         planPath: "/plans/upgrade.jsonl",
-        accept: ["fid1:aaa"],
+        accept: ["fid1:aaY"],
         apply: true,
       }, {
         readTextFile: () => Promise.resolve(PLAN_TEXT),
@@ -804,7 +804,7 @@ describe("piece-retarget", () => {
           return Promise.resolve(REPORT);
         },
       });
-      expect(options?.accepted).toEqual(["fid1:aaa"]);
+      expect(options?.accepted).toEqual(["fid1:aaY"]);
     });
 
     it("omits the knobs the command did not ask for", async () => {

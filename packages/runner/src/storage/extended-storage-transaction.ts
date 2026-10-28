@@ -1,3 +1,4 @@
+import type { TextChange } from "@commonfabric/api";
 import {
   deepFreeze,
   type FabricPlainObject,
@@ -112,6 +113,7 @@ import {
   type RuntimeOwnedStores,
 } from "../cfc/runtime-owned-stores.ts";
 import {
+  CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE,
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
   CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE,
   type CfcPreparationWork,
@@ -847,6 +849,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * needs no more than this.
    */
   #markedOwnedStores = new Set<string>();
+
+  /** Piece setup stores whose misfits stay derived in this transaction. */
+  #pieceSetupStores = new Set<string>();
 
   /**
    * The stores no schema declares a policy on that a marker named on this
@@ -2346,13 +2351,16 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       // join would put another space's bytes behind this one's promise.
       if (
         frozen.kind === "structural-provenance" &&
-        frozen.claim === CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE &&
+        (frozen.claim === CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE ||
+          frozen.claim === CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE) &&
         canonicalizeLogicalPath(frozen.target.path).length === 0 &&
         frozen.sources?.[0]?.space === frozen.target.space
       ) {
-        this.#markedOwnedStores.add(
-          runtimeOwnedStoreKey(frozen.target.space, frozen.target.id),
-        );
+        const key = runtimeOwnedStoreKey(frozen.target.space, frozen.target.id);
+        this.#markedOwnedStores.add(key);
+        if (frozen.claim === CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE) {
+          this.#pieceSetupStores.add(key);
+        }
       }
       // The same whole-document test, for the same reason: whether a schema
       // could have declared a policy is a question about the document. There
@@ -2441,6 +2449,27 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     const key = runtimeOwnedStoreKey(space, id);
     return this.#markedOwnedStores.has(key) ||
       (this.#runtimeOwnedStores?.has(key) ?? false);
+  }
+
+  isEnrolledRuntimeOwnedStore(
+    space: string,
+    id: string,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): boolean {
+    if (!runtimeWritePolicyAuthorized(authorization)) return false;
+    return this.#runtimeOwnedStores?.has(runtimeOwnedStoreKey(space, id)) ??
+      false;
+  }
+
+  /** @inheritDoc */
+  usesDerivedRuntimeOwnedStoreLabels(
+    space: string,
+    id: string,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): boolean {
+    if (!runtimeWritePolicyAuthorized(authorization)) return false;
+    return this.#pieceSetupStores.has(runtimeOwnedStoreKey(space, id)) ||
+      this.isEnrolledRuntimeOwnedStore(space, id, authorization);
   }
 
   isUndeclarablePolicyStore(
@@ -3766,6 +3795,30 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     this.tx.poisonMergeableOp?.(toMemorySpaceAddress(link));
   }
 
+  recordTextChanges(
+    link: NormalizedFullLink,
+    changes: readonly TextChange[],
+  ): string {
+    this.#assertWritable("recordTextChanges");
+    if (!this.tx.recordTextChanges) {
+      throw new Error(
+        "storage transaction does not support recordTextChanges()",
+      );
+    }
+    const address = toMemorySpaceAddress(link);
+    // The same S18 chokepoint a write takes: the changes become a write of
+    // this address, which the caller then makes through `writeOrThrow()`.
+    this.#noteSystemWrite(address);
+    this.#noteCfcActivity();
+    // The intent is held outside the journal the prepared digest is derived
+    // from, and decides how the commit carries the field. One recorded after a
+    // preparation invalidates it, as a write does.
+    if (this.#cfcState.prepare.status === "prepared") {
+      this.invalidateCfc("text-changes-after-prepare");
+    }
+    return this.tx.recordTextChanges(address, changes);
+  }
+
   recordSqliteWrite(space: MemorySpace, op: SqliteOperation): void {
     // A folded SQLite write is a write — honor the wrapper's read-only mode the
     // same way cell writes do, instead of silently recording it.
@@ -4915,6 +4968,27 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     return this.#wrapped.isRuntimeOwnedStore(space, id, authorization);
   }
 
+  isEnrolledRuntimeOwnedStore(
+    space: string,
+    id: string,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): boolean {
+    return this.#wrapped.isEnrolledRuntimeOwnedStore(space, id, authorization);
+  }
+
+  /** @inheritDoc */
+  usesDerivedRuntimeOwnedStoreLabels(
+    space: string,
+    id: string,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): boolean {
+    return this.#wrapped.usesDerivedRuntimeOwnedStoreLabels(
+      space,
+      id,
+      authorization,
+    );
+  }
+
   isUndeclarablePolicyStore(
     space: string,
     id: string,
@@ -5072,6 +5146,18 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
 
   poisonMergeableOp(link: NormalizedFullLink): void {
     this.#wrapped.poisonMergeableOp?.(link);
+  }
+
+  recordTextChanges(
+    link: NormalizedFullLink,
+    changes: readonly TextChange[],
+  ): string {
+    if (!this.#wrapped.recordTextChanges) {
+      throw new Error(
+        "storage transaction does not support recordTextChanges()",
+      );
+    }
+    return this.#wrapped.recordTextChanges(link, changes);
   }
 
   recordSqliteWrite(space: MemorySpace, op: SqliteOperation): void {

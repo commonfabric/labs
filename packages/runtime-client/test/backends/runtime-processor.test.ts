@@ -4297,6 +4297,9 @@ describe("runtime-processor", () => {
       );
       const home = {
         getAsLink: () => cellRefToSigilLink(homeRef),
+        // The document Home's root is, which the inbox ensure loads before
+        // reading Home's lists: none is stored, so it is absent.
+        getAsNormalizedFullLink: () => ({ ...homeRef }),
         // The pattern Home's root records that it runs.
         getMetaRaw: (key: string) =>
           key === "patternIdentity"
@@ -4307,31 +4310,38 @@ describe("runtime-processor", () => {
             ? { get: typeof rows === "function" ? rows : () => rows }
             : name === "ensurePrivateInbox"
             ? ensurePrivateInbox
-            : {
-              getRaw: () => ({ $stream: true }),
-              // Home's `privateInbox` and `profiles`, as the inbox ensure and
-              // the profile root repair read them: no inbox held, and no
-              // profile listed.
-              asSchema: () => ({
-                pull: async () => {
-                  await inboxReadable;
-                  return undefined;
-                },
-                sync: () => Promise.resolve(),
-                get: () => undefined,
-                sink: () => {
-                  onSubscribe();
-                  subscribed.push(name);
-                  return () => {
-                    unsubscribed.push(name);
-                  };
-                },
-              }),
-              send: (event: unknown): void => {
-                sent.push({ stream: name, event });
-              },
-            },
+            : field(name),
       };
+      // Any other field of Home's, as the inbox ensure, the profile root
+      // repair and the share intake read and subscribe to it, and a field
+      // below it, named by its path.
+      function field(name: string): unknown {
+        return {
+          key: (child: string) => field(`${name}.${child}`),
+          getRaw: () => ({ $stream: true }),
+          // Home's `privateInbox`, its `profiles` and the lists that
+          // order them, as the inbox ensure and the profile root repair
+          // read them: no inbox held, and no profile listed.
+          asSchema: () => ({
+            get: () => undefined,
+            pull: async () => {
+              await inboxReadable;
+              return undefined;
+            },
+            sync: () => Promise.resolve(),
+            sink: () => {
+              onSubscribe();
+              subscribed.push(name);
+              return () => {
+                unsubscribed.push(name);
+              };
+            },
+          }),
+          send: (event: unknown): void => {
+            sent.push({ stream: name, event });
+          },
+        };
+      }
       const ensure = stub(
         PiecesController.prototype,
         "ensureDefaultPattern",
@@ -4749,6 +4759,7 @@ describe("runtime-processor", () => {
       expect(worker.subscribed).toEqual([
         "privateInbox",
         "retainedPrivateInboxes",
+        "sharedSpaces.profiles",
       ]);
     });
 
@@ -4764,6 +4775,7 @@ describe("runtime-processor", () => {
       expect(worker.unsubscribed).toEqual([
         "privateInbox",
         "retainedPrivateInboxes",
+        "sharedSpaces.profiles",
       ]);
     });
 
@@ -4838,6 +4850,7 @@ describe("runtime-processor", () => {
         expect(worker.subscribed).toEqual([
           "privateInbox",
           "retainedPrivateInboxes",
+          "sharedSpaces.profiles",
         ]);
       });
 
@@ -5299,6 +5312,51 @@ describe("runtime-processor", () => {
       const { diagnostics } = await subscribeToShapes(undefined);
 
       expect(diagnostics).toHaveLength(1);
+    });
+
+    it("logs an empty-schema subscription for a ref read under `true`, once however often it delivers", async () => {
+      const { runtime, storageManager } = createRuntime();
+      try {
+        const cell = runtime.getCell(
+          cfcSigner.did(),
+          "true-schema-subscribe",
+          schema,
+        );
+        const write = async (x: number) => {
+          const tx = runtime.edit();
+          cell.withTx(tx).set({ state: { shapes: [{ x }] } });
+          expect((await tx.commit().settled).error).toBeUndefined();
+          await runtime.idle();
+        };
+        await write(1);
+        const { schema: _schema, ...address } = createCellRef(cell);
+        const posted: unknown[] = [];
+        using errors = stub(console, "error");
+
+        buildProcessor({ runtime }).handleCellSubscribe({
+          type: RequestType.CellSubscribe,
+          cell: { ...address, path: ["state", "shapes"], schema: true },
+        }, {
+          id: 1,
+          post: (message) => {
+            posted.push(message);
+            return true;
+          },
+        });
+        // The sink posts from a microtask.
+        await Promise.resolve();
+        await write(2);
+        await Promise.resolve();
+
+        const diagnostics = errors.calls.map(({ args }) => String(args[0]))
+          .filter((message) => message.includes("EMPTY SCHEMA SUBSCRIPTION"));
+        expect(posted.length).toBeGreaterThanOrEqual(2);
+        expect(diagnostics).toHaveLength(1);
+        expect(diagnostics[0]).toContain("schema: true");
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
     });
   });
 

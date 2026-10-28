@@ -116,3 +116,21 @@ export const waitForSettled = (
     }
   });
 };
+
+/**
+ * Resolve once the serving runtime has covered every authored commit at or
+ * below a captured store head. The server identifies the last authored commit
+ * in that interval; a watermark document's own revision is not a coverage
+ * proof. Bookkeeping tails therefore require no successor watermark write.
+ * Servers that do not advertise server execution need no serving wait.
+ */
+export const waitForSettledThroughHead = async (
+  runtime: Runtime,
+  space: MemorySpace,
+  head: number,
+): Promise<void> => {
+  const authoredSeq = await runtime.storageManager.open(space)
+    .serverAuthoredSeq?.(head);
+  if (authoredSeq === undefined) return;
+  await waitForSettled(runtime, space, authoredSeq);
+};

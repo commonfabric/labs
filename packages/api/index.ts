@@ -311,6 +311,30 @@ export type IsThisNumber =
   | AnyBrandedCell<unknown>
   | AnyBrandedCell<any>;
 
+// To constrain methods that only exist on string cells
+export type IsThisString =
+  | AnyBrandedCell<string>
+  | AnyBrandedCell<unknown>
+  | AnyBrandedCell<any>;
+
+/**
+ * One change to a string, in the shape of a CodeMirror change spec: the text
+ * from `from` up to `to` is replaced by `insert`. Positions count UTF-16 code
+ * units, as string indexes do. `to` defaults to `from`, which makes the change
+ * an insertion, and `insert` defaults to the empty string, which makes it a
+ * deletion.
+ */
+export interface TextChange {
+  /** Start of the replaced range. */
+  readonly from: number;
+
+  /** End of the replaced range, exclusive; `from` when absent. */
+  readonly to?: number;
+
+  /** Text that replaces the range; empty when absent. */
+  readonly insert?: string;
+}
+
 /*
  * IAnyCell is an interface that is used by all calls and to which the runner
  * attaches the internal methods..
@@ -415,6 +439,24 @@ export interface IWritable<T, C extends AnyBrandedCell<any>> {
    * concurrent increments sum against durable state rather than clobber.
    */
   increment(this: IsThisNumber, by?: number): void;
+
+  /**
+   * Applies `changes` to a string cell. The positions in one call refer to
+   * the value the cell holds when the call is made: the value this transaction
+   * read, or the value an earlier call in the transaction left. A list of
+   * changes runs in ascending order without overlap, all against that one
+   * value. On a field a collaborative editor has opened, the changes reach the
+   * store as an edit the editors merge with their own, and land only while the
+   * field still holds the value this transaction read; a field that moved on
+   * refuses the commit, and the transaction runs again against the new value.
+   * The first edit to a field no editor has opened opens it for
+   * collaboration, after which a `set()` of it is refused. A `get()` after
+   * this call returns the changed value.
+   */
+  applyChanges(
+    this: IsThisString,
+    changes: TextChange | readonly TextChange[],
+  ): void;
 
   remove(
     this: IsThisArray,
@@ -1963,9 +2005,6 @@ export type JSONSchemaObj = {
   // bindings + a void event). Hidden from the default `cf piece verbs`
   // listing; always callable; never consulted by `cf piece call`.
   readonly tier?: "wrapper";
-  // Discovery hashtags from the doc comment (lowercased, without the leading
-  // `#`). Populated by the schema generator; mirrors the description text.
-  readonly tags?: readonly string[];
   // makes it so that your handler gets a Cell object for that property. So you can call .set()/.update()/.push()/etc on it.
   readonly asCell?: readonly AsCellType[];
   // temporarily used to assign labels like "confidential"
@@ -3181,6 +3220,10 @@ export interface ISqliteQueryable {
       params?: ReadonlyArray<unknown> | Record<string, unknown>;
       reactOn?: unknown;
 
+      /** Application key echoed on this request's pending and settled states.
+       * Changing it issues a new request even when SQL and params match. */
+      requestKey?: string;
+
       /** CFC Phase 3: declared output ceiling (see SqliteQueryParams). */
       maxConfidentiality?: ReadonlyArray<unknown>;
 
@@ -3207,6 +3250,9 @@ export interface ISqliteQueryable {
       result?: SqliteQueryRow<Row>[];
       error?: any;
       withheld?: number;
+
+      /** Application key of the request that produced this state. */
+      requestKey?: string;
     }
   >;
 }
@@ -3255,6 +3301,10 @@ export type SqliteQueryParams = {
   params?: ReadonlyArray<unknown> | Record<string, unknown>;
   reactOn?: unknown;
 
+  /** Application key echoed on this request's pending and settled states.
+   * Changing it issues a new request even when SQL and params match. */
+  requestKey?: string;
+
   /** CFC Phase 3: the declared output ceiling — the maximum confidentiality
    *  the RESULT may carry (a consumer contract, not reader clearance).
    *  Placeholder atoms `{__ctCurrentPrincipal: true}` (the acting user) and
@@ -3284,6 +3334,9 @@ export type SqliteQueryFunction = {
       result?: SqliteQueryRow<Row>[];
       error?: any;
       withheld?: number;
+
+      /** Application key of the request that produced this state. */
+      requestKey?: string;
     }
   >;
 
@@ -3506,6 +3559,63 @@ export declare function principalsOf(
   kind: PrincipalClaimKind,
   options?: PrincipalReadOptions,
 ): DID[] | undefined;
+
+/**
+ * Returns the person whose own profile `target` is, or `undefined` when it is
+ * no one's. A profile is a person's own when its `name`, followed through the
+ * links it holds, stays within the profile's own documents, and its label,
+ * read as `principalOf()` reads a profile's, names that person alone. So a
+ * profile whose name links into another profile, or a document carrying no
+ * label at all, is no one's, and a profile set up for its owner is the
+ * owner's though its name was stored before names were labeled. This is the
+ * rule every reader of which profiles are a person's applies, `#profile`
+ * among them.
+ *
+ * It reads the profile's label and the pointers along its `name`, and no
+ * other contents of the profile. It can be called where `principalOf()` can:
+ * in a reactive computation the result updates when the label or the name
+ * changes, and in a handler a profile still loading has the handler run again
+ * once it arrives. Calling it in a pattern body throws.
+ */
+export declare function profileOwnerOf<T>(
+  target: AnyCell<T> | undefined,
+): DID | undefined;
+
+/**
+ * Returns the address, as `<space>/<id>`, of the pattern result the document
+ * a write to `target` lands in belongs to, its redirects followed and a link
+ * it holds as its value not: the result whose argument or internal
+ * cell (a `new Writable(...).for(...)` cell, say) the document is, as the
+ * runtime records it and no pattern can write. With `field`, only when that
+ * result's own `field` is that same document, so that a cell of the result's
+ * bound in another field's place names none. `undefined` means the document
+ * belongs to no result, is not the result's `field`, or that `target` is
+ * `undefined`. Cells one pattern instance owns return one address; a cell of
+ * another instance returns another. A handler that decides by several cells
+ * of one pattern names the field each must be, so that a binding naming
+ * another pattern's cells, or the right pattern's cells in the wrong places,
+ * is refused. It can be called where `principalOf()` can; calling it in a
+ * pattern body throws.
+ */
+export declare function resultOwnerOf<T>(
+  target: AnyCell<T> | undefined,
+  field?: string,
+): string | undefined;
+
+/**
+ * Returns the elements of the list `target` holds as the cells their links
+ * name, rather than the values those cells hold, reading only the list's own
+ * document: a list of links to profiles in other spaces reads as those links
+ * whether or not the profiles have loaded, so a handler can keep, reorder or
+ * drop them, and `spaceOf()` can name each one's space. An element that holds
+ * a value reads as a cell at that element; a `target` holding no list reads
+ * as none, and `undefined` as `undefined`. It can be called where
+ * `principalOf()` can; calling it in a pattern body throws, and a list that
+ * cannot be read throws too.
+ */
+export declare function linksOf<T>(
+  target: AnyCell<T[]> | AnyCell<readonly T[]> | undefined,
+): Cell<T>[] | undefined;
 
 /** Which label `principalOf()` and `principalsOf()` read. */
 export type PrincipalReadOptions = {
@@ -4163,15 +4273,16 @@ export declare const spaceMembers: SpaceMembersFunction;
  * an `inSpace()` target whose space is not resolved yet. The runtime resolves
  * that space once the run ends, and runs the handler or computation again,
  * discarding what the first run wrote. The run after it returns the new
- * space's DID.
+ * space's DID. It also means there is no answer at all: `target`'s links run
+ * in a cycle, and so name no value in any space.
  *
  * Call it in a handler or a reactive computation (`computed()`, `lift()`).
  * Calling it in a pattern body throws, since a pattern body's references name
  * no space yet: wrap it in `computed()` instead. The answer does not depend on
  * who asks, and carries no label of its own.
  */
-export type SpaceOfFunction = (
-  target: AnyCell<unknown> | undefined,
+export type SpaceOfFunction = <T>(
+  target: AnyCell<T> | undefined,
 ) => DID | undefined;
 
 export declare const spaceOf: SpaceOfFunction;

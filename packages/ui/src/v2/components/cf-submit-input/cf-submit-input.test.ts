@@ -2,8 +2,16 @@ import {
   getLogger,
   getLoggerCountsBreakdown,
 } from "@commonfabric/utils/logger";
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
+import { FakeTime } from "@std/testing/time";
+
+import {
+  createMockCellHandle,
+  holdWrites,
+  pushUpdate,
+} from "../../test-utils/mock-cell-handle.ts";
+import type { SubmitInputDraft } from "./cf-submit-input.ts";
 import { CFSubmitInput } from "./index.ts";
 
 // The unit runner uses Lit's SSR DOM shim: instances and direct method/lifecycle
@@ -105,6 +113,91 @@ describe("CFSubmitInput", () => {
     const el = new CFSubmitInput();
     internals(el)._onInput({ target: { value: "typed" } } as unknown as Event);
     expect(el.value).toBe("typed");
+  });
+
+  describe("controlled drafts", () => {
+    it("leaves bound clearing to the caller and resumes local clearing when unbound", () => {
+      const el = new CFSubmitInput();
+      const draft = createMockCellHandle<SubmitInputDraft>({
+        value: "shared",
+        revision: "initial",
+      });
+      el.draft = draft;
+      internals(el).willUpdate(new Map([["draft", undefined]]));
+      using time = new FakeTime();
+      internals(el)._onClick(clickEvent("button"));
+      time.tick(0);
+      expect(el.value).toBe("shared");
+
+      el.draft = undefined;
+      internals(el).willUpdate(new Map([["draft", draft]]));
+      expect(el.getAttribute("data-draft-revision")).toBeNull();
+      internals(el)._onClick(clickEvent("button"));
+      time.tick(0);
+      expect(el.value).toBe("");
+      pushUpdate(draft, { value: "old binding", revision: "later" });
+      internals(el).willUpdate(new Map());
+      expect(el.value).toBe("");
+    });
+
+    it("retains exact text and permits an unchanged retry after dispatch", () => {
+      const el = new CFSubmitInput();
+      el.draft = createMockCellHandle<SubmitInputDraft>({
+        value: "  hello  ",
+        revision: "submitted",
+      });
+      internals(el).willUpdate(new Map([["draft", undefined]]));
+      using time = new FakeTime();
+
+      const first = clickEvent("button");
+      internals(el)._onClick(first);
+      expect(first.stopped).toBe(false);
+      expect(el.value).toBe("  hello  ");
+      time.tick(0);
+      expect(el.value).toBe("  hello  ");
+      const retry = clickEvent("submit");
+      internals(el)._onClick(retry);
+      expect(retry.stopped).toBe(false);
+      time.tick(0);
+    });
+
+    it("keeps a newer equal-text edit over an earlier send's clear and follows shared updates after acknowledgment", () => {
+      const el = new CFSubmitInput();
+      const draft = createMockCellHandle<SubmitInputDraft>({
+        value: "hello",
+        revision: "submitted",
+      });
+      const release = holdWrites(draft);
+      el.draft = draft;
+      internals(el).willUpdate(new Map([["draft", undefined]]));
+      const type = (value: string) =>
+        internals(el)._onInput({ target: { value } } as unknown as Event);
+      try {
+        expect(el.value).toBe("hello");
+        type("other");
+        const intermediate = el.getAttribute("data-draft-revision");
+        type("hello");
+        const revision = el.getAttribute("data-draft-revision")!;
+        expect(revision).not.toBe(intermediate);
+        expect(revision).not.toBe("submitted");
+        pushUpdate(draft, { value: "", revision: "submitted" });
+        internals(el).willUpdate(new Map());
+        expect(el.value).toBe("hello");
+        expect(el.getAttribute("data-draft-revision")).toBe(revision);
+
+        pushUpdate(draft, { value: "hello", revision });
+        pushUpdate(draft, { value: "shared edit", revision: "elsewhere" });
+        internals(el).willUpdate(new Map());
+        expect(el.value).toBe("shared edit");
+        expect(el.getAttribute("data-draft-revision")).toBe("elsewhere");
+
+        pushUpdate(draft, { value: "", revision: "elsewhere" });
+        internals(el).willUpdate(new Map());
+        expect(el.value).toBe("");
+      } finally {
+        release();
+      }
+    });
   });
 
   describe("_isSubmitGesture", () => {

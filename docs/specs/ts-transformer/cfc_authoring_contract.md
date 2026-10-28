@@ -165,6 +165,10 @@ These aliases lower to direct `ifc` keys:
 - `MaxConfidentiality<T, X>` -> `ifc.maxConfidentiality = X`
 - `ExactCopy<T, P>` -> `ifc.exactCopyOf = P`
 
+`X` must read as a list of atoms, a tuple such as `readonly ["secret"]`. One
+that reads as no list, as an array type or a union of tuples does, is an error
+(`cfc-label:not-a-list`), since the runtime reads labels only from a list.
+
 ### `AnyOf<X>`
 
 `AnyOf<readonly [A, B, ...]>` is valid only inside a confidentiality tuple and
@@ -401,6 +405,7 @@ Required diagnostic type:
 - `cfc-write-authorized-by`
 - `cfc-policy-authoring`
 - `cfc-policy-of`
+- `cfc-label:not-a-list`
 
 Required failure modes:
 
@@ -410,6 +415,8 @@ Required failure modes:
 - policy declarations contain dynamic content, unsupported fields, unbound
   variables, missing guards, invalid exports, or rule reuse
 - `PolicyOf` does not directly query an exported `exchangeRules` binding
+- a label list, a simple wrapper alias's `X`, a `Cfc` payload's label key, or a
+  UI contract's `requiredEventIntegrity`, that reads as no list
 
 ## Current Limits
 

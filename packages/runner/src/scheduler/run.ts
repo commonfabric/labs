@@ -17,11 +17,13 @@ import type {
   IMemorySpaceAddress,
 } from "../storage/interface.ts";
 import {
+  endLocalReadValidationStretch,
   localReadsReady,
   releaseLocalReadBasis,
   requireLocalReadCondition,
   usesLocalReads,
   validateLocalReadBasis,
+  validateLocalReadBasisForCommit,
 } from "../storage/local-read-policy.ts";
 import {
   isConflictRejection,
@@ -1238,15 +1240,18 @@ function finalizeReactiveActionCommit(
   // transaction's write details are still staged — a committed transaction
   // no longer exposes them — and classified once the commit has succeeded.
   let echoRun: EchoRun | undefined;
-  // A served run that read a document this runtime refuses by construction
-  // read an absence that is not the document's state, so what it derived from
-  // that absence is no value of the derivation, and committing it would
-  // overwrite the instance a runtime that can read the document derives. Its
-  // writes are withdrawn rather than sealed. The read is refused the same way
-  // every time, so the run is not retried: it runs again when another of its
-  // inputs changes, and withdraws again while it still reads the document.
-  // Only a serving manager refuses reads by construction, so on any other
-  // runtime the transaction is not inspected for them at all.
+  // A served run that read a document this runtime does not admit read an
+  // absence that is not the document's state, so what it derived from that
+  // absence is no value of the derivation, and committing it would overwrite
+  // the instance a runtime that can read the document derives. Its writes are
+  // withdrawn rather than sealed. A refused read is refused the same way every
+  // time until the target's access list changes, so the run is not retried: it
+  // runs again when another of its inputs changes, and withdraws again while
+  // it still reads the document. A read whose actor's grant is still being
+  // asked for is withdrawn the same way; the read stays subscribed, so the
+  // run runs again when the admitted instance lands. Only a serving manager
+  // stands anywhere but admitted, so on any other runtime the transaction is
+  // not inspected at all.
   //
   // A served run that read a scoped instance the serving loop has not
   // produced yet (`unproducedScopedInstance`) is withdrawn the same way, for
@@ -1260,7 +1265,12 @@ function finalizeReactiveActionCommit(
   if (args.tx.status().status === "ready") {
     if (refused !== undefined) {
       args.tx.abort(
-        new Error(`served derivation read a refused document: ${refused}`),
+        new Error(
+          refused.standing === "refused"
+            ? `served derivation read a refused document: ${refused.document}`
+            : "served derivation read a foreign scoped instance whose " +
+              `actor's grant is unresolved: ${refused.document}`,
+        ),
       );
     } else if (unproduced !== undefined) {
       args.tx.abort(
@@ -1276,7 +1286,7 @@ function finalizeReactiveActionCommit(
   }, {
     beforeCommit: () => {
       log = txToReactivityLog(args.tx);
-      if (validateLocalReadBasis(args.tx) !== undefined) return;
+      if (validateLocalReadBasisForCommit(args.tx) !== undefined) return;
       warnOnWriteSurfaceViolations(state, args, log);
       echoRun = state.captureRemoteEcho(args.tx, log, args.invalidCauses);
       hasPostCommitEffects = args.tx.hasPendingPostCommitEffects();
@@ -1299,6 +1309,10 @@ function finalizeReactiveActionCommit(
       }
     },
   });
+  // The commit's own validations stood on the one just before it. A commit
+  // that handed nothing over can still have changed what that one proved,
+  // through its commit callbacks for one, so the check below makes its own.
+  endLocalReadValidationStretch();
   if (parkUnavailableRun(state, args)) return;
   if (!log) {
     throw new Error("scheduler action commit did not build a reactivity log");

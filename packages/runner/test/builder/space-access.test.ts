@@ -769,9 +769,14 @@ describe("spaceAccess()", () => {
         stuckLabel: "dave's level to arrive as `none`",
       });
 
-      // A read of a document the replica has not asked for opens the space
-      // again, and the memory server now admits it.
+      const opens = sessionOpensBy(dave);
       await setAcl({ [alice.did()]: "OWNER", [dave.did()]: "READ" });
+      const stillRefused = await runtime.storageManager.open(space).sync(
+        "of:space-access-still-refused" as URI,
+      );
+      expect(stillRefused.error?.name).toBe("AuthorizationError");
+      expect(sessionOpensBy(dave)).toBe(opens);
+      await runtime.retrySpaceAccess(space);
       const reopened = await runtime.storageManager.open(space).sync(
         "of:space-access-reopen" as URI,
       );
@@ -836,15 +841,9 @@ describe("spaceAccess()", () => {
       });
 
       it("runs again with the granted level when a refused open was still in flight at the retry", async () => {
-        // The refusal runs the computation again, and its load opens the
-        // space once more. The memory server refuses that open on the
-        // access list as it stands before the grant, and the refusal is
-        // held back from the runtime until the retry has started, so the
-        // retry has to make its own open. The hold sits on the server's
-        // response, after its verdict, because the server decides an open
-        // some time after the open arrives, and a grant landing in between
-        // would admit it.
-
+        // An explicit retry opens on the access list before the grant. Hold
+        // that refusal until a second retry starts after the grant: the later
+        // retry must wait for the in-flight verdict and then re-decide.
         const refusedOpens = new ArrivalLog<void>();
         const released = defer<void>();
         const openSession = server.openSession.bind(server);
@@ -863,19 +862,28 @@ describe("spaceAccess()", () => {
         const setAcl = await aclWriter();
         await setAcl({ [alice.did()]: "OWNER" });
         const runtime = clientRuntime(dave);
-        const level = (await levelCell(runtime, dave)).key("level");
-        await waitForCellValue(runtime, level, (v) => v === "none", {
-          stuckLabel: "dave's level to arrive as `none`",
-        });
+        const level = await refusedLevel(runtime);
         const refusal = runtime.storageManager.spaceAccessError?.(space);
+        const earlierRetry = runtime.retrySpaceAccess(space).then(
+          () => undefined,
+          (error: unknown) => error,
+        );
         await refusedOpens.reached(2);
 
-        await setAcl({ [alice.did()]: "OWNER", [dave.did()]: "READ" });
-        expect(sessionOpensBy(dave)).toBe(2);
-        expect(runtime.storageManager.spaceAccessError?.(space)).toBe(refusal);
-        const retried = runtime.retrySpaceAccess(space);
-        released.resolve();
-        await retried;
+        try {
+          await setAcl({ [alice.did()]: "OWNER", [dave.did()]: "READ" });
+          expect(sessionOpensBy(dave)).toBe(2);
+          expect(runtime.storageManager.spaceAccessError?.(space)).toBe(
+            refusal,
+          );
+          const retried = runtime.retrySpaceAccess(space);
+          released.resolve();
+          await retried;
+          expect(await earlierRetry).toBeUndefined();
+        } finally {
+          released.resolve();
+          await earlierRetry;
+        }
         expect(sessionOpensBy(dave)).toBe(3);
         await waitForCellValue(runtime, level, (v) => v === "READ", {
           stuckLabel: "dave's level to follow the retry to `READ`",
@@ -1523,9 +1531,14 @@ describe("spaceAccess()", () => {
           "AuthorizationError",
         );
 
-        // A read of a document the replica has not asked for opens the space
-        // again, and the memory server now admits it.
+        const opens = sessionOpensBy(dave);
         await setAcl({ [alice.did()]: "OWNER", [dave.did()]: "READ" });
+        const stillRefused = await runtime.storageManager.open(space).sync(
+          "of:space-members-still-refused" as URI,
+        );
+        expect(stillRefused.error?.name).toBe("AuthorizationError");
+        expect(sessionOpensBy(dave)).toBe(opens);
+        await runtime.retrySpaceAccess(space);
         const reopened = await runtime.storageManager.open(space).sync(
           "of:space-access-reopen" as URI,
         );

@@ -1,6 +1,5 @@
 import type { Cell } from "../cell.ts";
 import { waveSettlementOf } from "../executor/wave.ts";
-import type { Runtime } from "../runtime.ts";
 import {
   isConflictRejection,
   isStorageTransactionInconsistent,
@@ -63,6 +62,10 @@ export interface ListSetupRollback {
  * outcome — an abort, a terminal or permanent refusal, a transport failure —
  * has no such re-run behind it, so the record has to go.
  *
+ * Dropping a record leaves the element's run to the runner. The runner undoes
+ * what the failed launch set up, and leaves what another launch set up for the
+ * same result cell, such as another serving identity's reconcile, running.
+ *
  * The setup writes themselves are what the re-run has to re-issue, and every
  * failed outcome loses them, stale basis included. Marking the record as
  * needing setup again is therefore the one undo that applies to all of them: an
@@ -85,7 +88,6 @@ export interface ListSetupRollback {
  */
 export function trackListSetupRollback(
   tx: IExtendedStorageTransaction,
-  runtime: Runtime,
   elementRuns: Map<string, ElementRun>,
 ): ListSetupRollback {
   const created = new Map<string, ElementRun>();
@@ -135,20 +137,15 @@ export function trackListSetupRollback(
       ) {
         return;
       }
-      const errors: unknown[] = [];
       for (const [elementKey, entry] of created) {
         if (elementRuns.get(elementKey) !== entry) continue;
         elementRuns.delete(elementKey);
         indexChanges.delete(entry);
-        try {
-          runtime.runner.stop(entry.resultCell);
-        } catch (error) {
-          errors.push(error);
-        }
       }
       for (const [entry, { from, to }] of indexChanges) {
         if (entry.lastIndex === to) entry.lastIndex = from;
       }
+      const errors: unknown[] = [];
       for (const restore of resultRestores) {
         try {
           restore();

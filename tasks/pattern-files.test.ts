@@ -38,6 +38,13 @@ describe("isPatternSource", () => {
   it("rejects the excluded trees and files", () => {
     expect(isPatternSource("packages/patterns/integration/foo.ts")).toBe(false);
     expect(isPatternSource("packages/patterns/tools/foo.ts")).toBe(false);
+    expect(isPatternSource("packages/patterns/topics/tools/topics.ts")).toBe(
+      false,
+    );
+    expect(isPatternSource("packages/patterns/topics/tools.tsx")).toBe(true);
+    expect(isPatternSource("packages/patterns/notes/tools/note.tsx")).toBe(
+      true,
+    );
     expect(isPatternSource("packages/patterns/mod.ts")).toBe(false);
   });
 

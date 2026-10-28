@@ -17,7 +17,10 @@
 
 import { join } from "@std/path";
 
+import { readHarnessRunArtifacts } from "@commonfabric/cf-harness/artifacts";
+import { canContinueHarnessRun } from "@commonfabric/cf-harness/run-continuation";
 import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
+import { debugStr } from "@commonfabric/data-model";
 import { Identity, legacySpaceDid } from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
 import type { ACL } from "@commonfabric/memory/acl";
@@ -40,6 +43,7 @@ import {
 import {
   LOCAL_JOB_TERMINAL_STATES,
   type LocalJob,
+  localJobRunRequestOf,
   type LocalJobStore,
   RUNNER_RESTARTED,
 } from "./store.ts";
@@ -134,7 +138,8 @@ const foreignSpacesOf = async (
  * `inputs` become the run's input cells, each held by the model as a handle,
  * and the space of each one living outside the profile's is admitted for the
  * run on the host the request's `foreignSpaces` names for it; `narrowLocalJobProfile` has already refused them
- * under a profile with no fabric session.
+ * under a profile with no fabric session. A follow-up's `continueFrom` names
+ * the harness artifact root recorded in its predecessor's `report.runRef`.
  *
  * SHORTCUT: context reaches the model inside the system prompt, marked as
  * data rather than instructions, because a batch job has one prompt slot and
@@ -142,16 +147,28 @@ const foreignSpacesOf = async (
  * To harden, give the harness a prompt slot of role `quote` for caller data.
  *
  * @throws Error when the profile's identity key cannot be read.
+ * @throws Error when a follow-up's predecessor has no recorded `runRef`.
  */
 export const localJobSpecOf = async (
   job: LocalJob,
   profile: LocalJobProfile,
-  options: Pick<
-    LocalJobLaneOptions,
-    "loomRetrievalConfigPath" | "model" | "readSpaceAcl" | "report"
-  >,
+  options:
+    & Pick<
+      LocalJobLaneOptions,
+      "loomRetrievalConfigPath" | "model" | "readSpaceAcl" | "report"
+    >
+    & { predecessorRunRef?: string },
 ): Promise<HarnessJobSpec> => {
+  if (job.continues !== undefined && !options.predecessorRunRef) {
+    throw new Error(
+      "Cannot continue a predecessor without a recorded `report.runRef`.",
+    );
+  }
   const { request } = job;
+  const runRequest = localJobRunRequestOf(
+    request,
+    job.continues === undefined ? request : job.openedBy,
+  );
   const { fabric } = profile;
   const browser = profile.browserHost === true;
   const framing = [
@@ -164,9 +181,12 @@ export const localJobSpecOf = async (
       : []),
   ];
   return {
+    ...(job.continues !== undefined
+      ? { continueFrom: { runRoot: options.predecessorRunRef! } }
+      : {}),
     task: request.task,
-    ...(request.imageAttachments !== undefined
-      ? { imageAttachments: request.imageAttachments }
+    ...(runRequest.imageAttachments !== undefined
+      ? { imageAttachments: runRequest.imageAttachments }
       : {}),
     commandJobId: job.id,
     taskRole: profile.taskRole,
@@ -216,7 +236,7 @@ export const localJobSpecOf = async (
         fabric.space,
         undefined,
       ),
-      inputs: { ...request.inputs },
+      inputs: { ...runRequest.inputs },
       ...await foreignSpacesOf(fabric, request),
     },
     patternIndexUrl: profile.patternIndexUrl,
@@ -225,8 +245,8 @@ export const localJobSpecOf = async (
 };
 
 /**
- * The progress events one transcript event reports: a `step` for each tool
- * the model called, and a `command` for each command the host ran, one per
+ * The progress events one transcript event reports: whole root assistant
+ * `text`, a `step` for each tool the model called, and a `command` for each command the host ran, one per
  * executed call of a `run_command` or `run_read_command` batch. Children
  * carry their profile, run id, parent call id and depth. Browser steps also
  * name the action, so a reader can distinguish clicking from waiting without
@@ -234,7 +254,7 @@ export const localJobSpecOf = async (
  */
 export const localJobEventsOf = (
   event: HarnessTranscriptEvent,
-): { kind: "step" | "command"; body: Record<string, unknown> }[] => {
+): { kind: "step" | "command" | "text"; body: Record<string, unknown> }[] => {
   const child = event.subagent === undefined ? undefined : {
     parentToolCallId: event.subagent.parentToolCallId,
     childRunId: event.subagent.childRunId,
@@ -247,18 +267,23 @@ export const localJobEventsOf = (
   if (message.role === "assistant") {
     const turn = transcript.filter((entry) => entry.role === "assistant")
       .length;
-    return (message.toolCalls ?? []).map((call) => ({
-      kind: "step",
-      body: {
-        turn,
-        tool: call.function.name,
-        ...(child !== undefined ? { child } : {}),
-        ...(child !== undefined && call.function.name === "browser" &&
-            typeof argumentsOf(transcript, call.id).action === "string"
-          ? { action: argumentsOf(transcript, call.id).action }
-          : {}),
-      },
-    }));
+    return [
+      ...(child === undefined && message.content.length > 0
+        ? [{ kind: "text" as const, body: { turn, text: message.content } }]
+        : []),
+      ...(message.toolCalls ?? []).map((call) => ({
+        kind: "step" as const,
+        body: {
+          turn,
+          tool: call.function.name,
+          ...(child !== undefined ? { child } : {}),
+          ...(child !== undefined && call.function.name === "browser" &&
+              typeof argumentsOf(transcript, call.id).action === "string"
+            ? { action: argumentsOf(transcript, call.id).action }
+            : {}),
+        },
+      })),
+    ];
   }
   if (
     message.role !== "tool" ||
@@ -360,7 +385,10 @@ const argumentsOf = (
 /** The lane. */
 export class LocalJobLane {
   #options: LocalJobLaneOptions;
-  #running = new Map<string, { abort: AbortController; done: Promise<void> }>();
+  #running = new Map<
+    string,
+    { abort: AbortController; done: Promise<void>; interactive: boolean }
+  >();
   #hosts = new Map<string, LocalJobBrowserHost>();
   #stopping = false;
 
@@ -373,8 +401,19 @@ export class LocalJobLane {
    * Ends every job a stop or a crash cut off as `interrupted`, then starts
    * the queued jobs it has room for.
    */
-  start(): void {
-    const recovered = this.#options.store.recover();
+  async start(): Promise<void> {
+    const continuable = new Set<string>();
+    for (const { id, runRoot } of this.#options.store.runningRuns()) {
+      if (runRoot === undefined) continue;
+      try {
+        if (canContinueHarnessRun(await readHarnessRunArtifacts(runRoot))) {
+          continuable.add(id);
+        }
+      } catch (error) {
+        if (!(error instanceof Deno.errors.NotFound)) throw error;
+      }
+    }
+    const recovered = this.#options.store.recover(continuable);
     if (recovered.length > 0) {
       this.#report(() =>
         `agent runner: ${recovered.length} local job(s) were cut off and end interrupted (${RUNNER_RESTARTED})`
@@ -388,7 +427,17 @@ export class LocalJobLane {
     while (
       !this.#stopping && this.#running.size < this.#options.maxConcurrent
     ) {
-      const job = this.#options.store.claimNext();
+      // One slot cannot be reserved: a single-slot lane admits background
+      // jobs whenever it is free. Larger lanes hold one slot for a person.
+      const backgroundLimit = this.#options.maxConcurrent >= 2
+        ? this.#options.maxConcurrent - 1
+        : this.#options.maxConcurrent;
+      const backgroundRunning = [...this.#running.values()].filter((run) =>
+        !run.interactive
+      ).length;
+      const job = this.#options.store.claimNext(
+        backgroundRunning >= backgroundLimit,
+      );
       if (job === undefined) return;
       this.#launch(job);
     }
@@ -448,16 +497,24 @@ export class LocalJobLane {
       this.#running.delete(job.id);
       this.kick();
     });
-    this.#running.set(job.id, { abort, done });
+    this.#running.set(job.id, {
+      abort,
+      done,
+      interactive: job.request.interactive === true,
+    });
   }
 
   /** Helper for `#launch`, which runs a job and ends it in the store. */
   async #run(job: LocalJob, signal: AbortSignal): Promise<void> {
     const { store, profiles } = this.#options;
     const named = profiles.get(job.profile);
-    const narrowed = named === undefined
-      ? undefined
-      : narrowLocalJobProfile(named, job.request);
+    const narrowed = named === undefined ? undefined : narrowLocalJobProfile(
+      named,
+      localJobRunRequestOf(
+        job.request,
+        job.continues === undefined ? job.request : job.openedBy,
+      ),
+    );
     if (narrowed === undefined || "refusal" in narrowed) {
       store.finish(job.id, {
         state: "failed",
@@ -491,12 +548,25 @@ export class LocalJobLane {
     };
     let result: HarnessJobResult;
     try {
+      const root = store.conversation(job.id)!.root;
+      const runRef = job.continues === undefined
+        ? undefined
+        : store.get(job.continues)?.report?.runRef;
       result = await (this.#options.runJob ?? runHarnessJob)(
-        await localJobSpecOf(job, narrowed.profile, this.#options),
+        await localJobSpecOf(job, narrowed.profile, {
+          ...this.#options,
+          predecessorRunRef: typeof runRef === "string" ? runRef : undefined,
+        }),
         {
           runRoot: join(this.#options.workRoot, job.id),
+          workspace: join(this.#options.workRoot, root.id, "workspace"),
           signal,
+          takeMessages: (turn: number) => store.takeMessages(job.id, turn),
           ...(browserHost !== undefined ? { browserHost } : {}),
+          onStart: (runRoot) => store.recordRunRoot(job.id, runRoot),
+          onUsage: (update) => {
+            store.report(job.id, "usage", { ...update });
+          },
           onEvent: (event) => {
             const { message } = event;
             const loop = event.subagent?.parentToolCallId;
@@ -508,7 +578,9 @@ export class LocalJobLane {
               childSteps.delete(message.toolCallId);
             }
             for (const { kind, body } of localJobEventsOf(event)) {
-              if (kind === "command") {
+              if (kind === "text") {
+                store.report(job.id, kind, body);
+              } else if (kind === "command") {
                 if (event.subagent !== undefined) {
                   const id = event.subagent.parentToolCallId;
                   const step = childSteps.get(id);
@@ -565,7 +637,13 @@ export class LocalJobLane {
           error instanceof Error ? error.message : String(error)
         }`
       );
-      result = { outcome: "failed", errorCode: "PROVIDER_FAILURE" };
+      result = {
+        outcome: "failed",
+        errorCode: "PROVIDER_FAILURE",
+        errorDetail: error instanceof Error
+          ? error.message
+          : debugStr`${error}`,
+      };
     }
     this.#closeHost(job.id);
     // A run the lane's own stop aborted stays `running`, to be ended
@@ -573,6 +651,7 @@ export class LocalJobLane {
     if (this.#stopping && signal.aborted) return;
     store.finish(job.id, {
       state: result.outcome,
+      recordedRun: result.recordedRun,
       ...(result.outcome === "completed"
         ? { result: result.structuredResult }
         : {}),

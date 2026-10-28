@@ -106,6 +106,36 @@ export const profileDisplayFromValue = (val: unknown): ProfileBadgeDisplay => {
 };
 
 /**
+ * The space `cell` lives in, when `cell` is a profile; `undefined` otherwise.
+ * A profile is its space's root: the create makes it so, and
+ * `cf profile repair-root` does for an older one. So a document is taken for
+ * a profile when it is the piece its space's root links, and anything else
+ * carrying a principal's claim, a room's or a roster's record of the person
+ * among them, is not. The space cell is loaded before its root is read.
+ *
+ * @throws Error when the space's root cannot be read, which says nothing
+ * about whether the cell is a profile.
+ */
+export const profileSpaceOf = async (
+  cell: CellHandle,
+): Promise<DID | undefined> => {
+  if (cell.ref().path.length > 0) return undefined;
+  const space = cell.space();
+  const spaceCell = await cell.runtime().getCell<{ defaultPattern: unknown }>(
+    space,
+    space,
+  );
+  // Loaded first: a space cell this runtime has not received resolves to
+  // itself, which would answer "not a profile" for a profile that is one.
+  await spaceCell.sync();
+  const root = await spaceCell.key("defaultPattern").resolveAsCell();
+  return root.space() === space && root.id() === cell.id() &&
+      root.ref().path.length === 0
+    ? space
+    : undefined;
+};
+
+/**
  * CFProfileBadge — official presentation of a profile (avatar + name).
  *
  * You bind it a *cell* containing a profile (e.g. `$profile={profileCell}`) and
@@ -116,12 +146,16 @@ export const profileDisplayFromValue = (val: unknown): ProfileBadgeDisplay => {
  * When the bound cell carries a runtime-attested `represents-principal` CFC label
  * (read over trusted IPC via `getCfcLabel()`), the badge enters the **verified**
  * state and draws a *generative identity seal* — a deterministic aura derived
- * purely from the owner's principal DID (see `identity-seal.ts`). Because the
- * aura is a pure function of the DID, it is the *same everywhere* that person's
- * badge appears, so it reads as a recognizable fingerprint of their identity;
- * and because it is gated on the attestation (which user-space cannot mint), a
- * pattern can mimic the CSS but not earn the verified seal for a DID it doesn't
- * control. Without that label the badge stays in the plain "presented" state.
+ * from the owner's principal DID and, when the cell is a profile (the root
+ * of its space, as {@link profileSpaceOf} says), the profile's space (see
+ * `identity-seal.ts`). Because the aura is a pure function of those, it is
+ * the *same everywhere* that profile's badge appears, so it reads as a
+ * recognizable fingerprint of the profile, and two profiles of one person
+ * read as two people. Verification attests the principal; the space only
+ * tells their profiles apart. Because the seal is gated on the attestation
+ * (which user-space cannot mint), a pattern can mimic the CSS but not earn
+ * the verified seal for a DID it doesn't control. Without that label the
+ * badge stays in the plain "presented" state.
  *
  * @element cf-profile-badge
  * @attr {string} size - avatar size: xs | sm | md | lg | xl (default md)
@@ -250,10 +284,11 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
 
       /* The generative aura ring. Transparent until the badge is verified; when
         verified, a separate aura-ring layer carries the per-identity conic
-        gradient (a pure function of the owner DID) behind the avatar, so the ring
-        is unique-but-stable for each person. Keeping it on its own layer lets it
-        rotate in lockstep (the always-on animation below) and carry the shimmer
-        and cursor-sheen layers, all without rotating the avatar. */
+        gradient (a pure function of the owner DID and the profile's space)
+        behind the avatar, so the ring is unique-but-stable for each profile.
+        Keeping it on its own layer lets it rotate in lockstep (the always-on
+        animation below) and carry the shimmer and cursor-sheen layers, all
+        without rotating the avatar. */
       .aura {
         position: relative;
         display: inline-flex;
@@ -453,10 +488,10 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
   accessor size: AvatarSize = "md";
 
   /**
-   * Badge shape. The verification treatment is ALWAYS the generative seal — the
-   * DID-derived aura ring + the cursor-reactive glint (a pattern can mimic the
-   * chrome but cannot earn the seal for a DID it doesn't control). Variants
-   * differ only in how much chrome they draw around it:
+   * Badge shape. The verification treatment is ALWAYS the generative seal —
+   * the identity-derived aura ring + the cursor-reactive glint (a pattern can
+   * mimic the chrome but cannot earn the seal for a DID it doesn't control).
+   * Variants differ only in how much chrome they draw around it:
    *  - `full` (default): avatar + name pill. Roster rows, "playing as", etc.
    *  - `chip`: name + a compact DID-hued seal dot (no avatar). For inline names
    *    in dense UI where a full pill is too heavy but the identity treatment
@@ -540,6 +575,20 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
   private _resolvedCell: CellHandle | undefined = undefined;
 
   /**
+   * The resolved cell's space when the cell is a profile
+   * ({@link profileSpaceOf}), which seeds the seal with it.
+   */
+  #profileSpace: DID | undefined = undefined;
+
+  /**
+   * Whether {@link profileSpaceOf} has returned for the resolved cell. The
+   * seal is not drawn until it has, so that a profile's badge does not show
+   * the principal's seal first and then change to its own, and it is never
+   * drawn when that call fails.
+   */
+  #profileKnown = false;
+
+  /**
    * Whether a click navigates, which is so only when `noNavigate` is unset and
    * the resolved cell is a root cell (a real profile piece). A badge bound to
    * a real profile (rosters/lists) navigates to that profile's page on click;
@@ -564,6 +613,46 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
    * style writes.
    */
   private _lastSheenA = -1;
+
+  /**
+   * The verification state, the seal, whether the profile question has been
+   * answered, whether the badge presents as verified, and the resolve step,
+   * which a test drives directly.
+   */
+  get accessForTestingOnly(): {
+    state: ProfileBadgeState;
+    seal: IdentitySeal | undefined;
+    profileKnown: boolean;
+    readonly verified: boolean;
+    resolve(): Promise<void>;
+  } {
+    // deno-lint-ignore no-this-alias
+    const outerThis = this;
+    return {
+      get state() {
+        return outerThis._state;
+      },
+      set state(value) {
+        outerThis._state = value;
+      },
+      get seal() {
+        return outerThis._seal;
+      },
+      set seal(value) {
+        outerThis._seal = value;
+      },
+      get profileKnown() {
+        return outerThis.#profileKnown;
+      },
+      set profileKnown(value) {
+        outerThis.#profileKnown = value;
+      },
+      get verified() {
+        return outerThis._verified;
+      },
+      resolve: () => this._resolve(),
+    };
+  }
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -591,7 +680,8 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
   }
 
   /**
-   * Whether this badge is presenting a VERIFIED profile.
+   * Whether this badge is presenting a VERIFIED profile, which it is only
+   * once it knows whether the cell is a profile, and so which seal it wears.
    *
    * The single answer the seal nodes, `data-state` and the cursor-sheen
    * liveness all take, because they are one claim wearing three faces and a
@@ -602,7 +692,7 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
    */
   private get _verified(): boolean {
     return this._resolved && this._state === "verified" &&
-      this._seal !== undefined;
+      this._seal !== undefined && this.#profileKnown;
   }
 
   protected override updated(changed: PropertyValues): void {
@@ -697,6 +787,8 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
     // Drop navigation state until the (new) cell resolves — a stale link must
     // not survive a re-bind.
     this._resolvedCell = undefined;
+    this.#profileSpace = undefined;
+    this.#profileKnown = false;
     this._navigable = false;
 
     const cell = this.profile;
@@ -752,6 +844,26 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
         includeCfcLabel: true,
         onRefused: () => this._applyRefusal(generation),
       });
+      // Whether the cell is a profile is read after the subscription, so
+      // the name shows without waiting on it; the seal follows when it
+      // arrives. When it cannot be decided, the name stays and no seal is
+      // drawn, since neither the profile's seal nor the principal's is known
+      // to be the right one.
+      let profileSpace: DID | undefined;
+      try {
+        profileSpace = await profileSpaceOf(resolved);
+      } catch (e) {
+        if (generation !== this._resolveGeneration || !this.isConnected) return;
+        if (resolved.runtime().signal.aborted) return;
+        console.error(
+          "cf-profile-badge: cannot tell whether the cell is a profile, so " +
+            "the badge draws no seal",
+          e,
+        );
+        return;
+      }
+      if (generation !== this._resolveGeneration || !this.isConnected) return;
+      this.#applyProfileSpace(profileSpace);
     } catch (e) {
       if (generation !== this._resolveGeneration || !this.isConnected) return;
       // A disposal race (logout, runtime swap) cancels the resolve; that is
@@ -832,10 +944,24 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
   }
 
   /**
+   * Records `profileSpace` as the resolved cell's profile space, which lets
+   * the seal be drawn, and derives a seal already derived again with it.
+   */
+  #applyProfileSpace(profileSpace: DID | undefined): void {
+    this.#profileSpace = profileSpace;
+    this.#profileKnown = true;
+    if (this._seal !== undefined) {
+      this._seal = identitySeal(this._seal.did, profileSpace);
+    }
+    this.requestUpdate();
+  }
+
+  /**
    * Reads the resolved cell's runtime-attested CFC label and, if it carries a
    * `represents-principal` atom, enters the verified state and derives the
-   * generative seal from the owner principal DID. The seal is a pure function of
-   * the DID, so it is identical wherever this person's badge renders. No
+   * generative seal from the owner principal DID and, once the cell is known
+   * to be a profile, its space. The seal is a pure function of those, so it
+   * is identical wherever this profile's badge renders. No
    * attestation → the badge stays in the plain "presented" state (a pattern can
    * mimic the chrome but cannot mint the label that unlocks the seal).
    *
@@ -858,7 +984,7 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
     // `represents-principal` integrity atom that unlocks the seal.
     const owner = ownerPrincipalFromLabel(cfcLabel, nameWritten);
     if (owner) {
-      this._seal = identitySeal(owner);
+      this._seal = identitySeal(owner, this.#profileSpace);
       this._state = "verified";
     } else {
       this._seal = undefined;
@@ -878,15 +1004,15 @@ export class CFProfileBadge extends BaseElement implements SealLivenessClient {
       (usingFallback ? this.fallbackName : undefined);
     const displayName = presentedName ?? "Unknown profile";
     const verified = this._verified;
-    // The aura ring layer carries the DID-derived conic gradient plus a soft glow
-    // in the identity's hue, so the fingerprint reads at badge scale.
+    // The aura ring layer carries the identity-derived conic gradient plus a
+    // soft glow in the identity's hue, so the fingerprint reads at badge scale.
     const hue = this._seal?.hue ?? 0;
     const ringStyle = verified
       ? `background: ${
         this._seal!.ringGradient
       }; box-shadow: 0 0 0 1px hsl(${hue} 80% 58% / 0.3), 0 0 10px -1px hsl(${hue} 85% 60% / 0.7);`
       : "";
-    // The chip's seal-dot is filled with the same DID-derived accent when
+    // The chip's seal-dot is filled with the same identity-derived accent when
     // verified (supplied inline), so an inline name still carries the identity's
     // color even without an avatar.
     const dotStyle = verified ? `background: ${this._seal!.accent};` : "";

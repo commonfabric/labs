@@ -391,9 +391,9 @@ took the branch, so a call site of the form
 from one run to the next, and one line of movement moves a count exactly as
 thirty-nine did. Do not reason from what the `if` line itself reports either.
 That count is a projection of V8's block ranges onto lines: it differs between
-the one-line and the braced form of the same guard, and it changed between deno
-2.8.3 and the pinned 2.9.4, which now credits a braced guard's line with the
-condition's own count. See
+the one-line and the braced form of the same guard, and the attribution can
+change across Deno releases. A braced guard's line can receive the condition's
+own count even when its body never ran. See
 [deno coverage: one-line guard reported uncovered when its branch is not taken](deno-coverage-guard-line-artifact.md).
 
 ### Paths reached only when something happens twice
@@ -467,8 +467,10 @@ tear a runtime down while one was in flight.
 
 The list coordinators' resume-seed recovery was one of those. A coordinator
 resuming against a result container with no durable value pulls the container
-and seeds an empty array once the pull settles, and it warns when either the
-pull or the seed fails. One workspace shard on one `main` run reached the seed's
+and, for a filter or a flatMap, seeds an empty array once the pull settles, and
+it warns when either the pull or the seed fails. A map seeds nothing, since it
+writes its container only when a reconcile succeeds, and an absent one is a map
+that has failed. One workspace shard on one `main` run reached the seed's
 warning three times; no other artifact in that run or the next reached it at
 all.
 
@@ -942,10 +944,13 @@ a drop the next warm run takes back.
 The pattern-integration process owns one shared cache in
 `packages/patterns/integration/pieces-controller.ts`. Its controller helper, the
 capability-gate controller, and the serving loop the multi-runtime harness hosts
-all inject that cache into every runtime they create. A custom runtime in this
-suite must do the same. Setting `CF_COMPILE_CACHE_FILE` only tells the
-test-support cache where to persist its bytes; a runtime uses those bytes only
-when it receives the cache through its `moduleByteCache` option.
+on the test's thread all inject that cache into every runtime they create. A
+custom runtime in this suite must do the same. A serving loop that
+`SERVER_EXECUTION_WORKER` puts in a worker cannot, since a worker takes no
+closure, and its runtimes compile without the cache. Setting
+`CF_COMPILE_CACHE_FILE` only tells the test-support cache where to persist its
+bytes; a runtime uses those bytes only when it receives the cache through its
+`moduleByteCache` option.
 
 Each lane records the state of the compile byte cache it restores
 (`COMPILE_CACHE_FILE` in `tasks/ci-capabilities.ts`) itself. A lane whose

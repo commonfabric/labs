@@ -48,7 +48,8 @@ Implementation: see `src/schema-generator.ts` (`formatType`) and
   entirely so we do not emit function shapes in JSON Schema output — except a
   callable whose call signature returns `Stream`/`Cell`/`SqliteDb`, which is
   kept as its `asCell` wrapper schema, participates in `required`, and carries
-  the property's JSDoc description and lowered tags like any kept property.
+  the property's JSDoc description. A stream-valued property also carries its
+  `@deprecated` annotation.
 - Method signatures, declared methods, and other properties whose type exposes
   call signatures are filtered before we decide on `required` membership or emit
   attribute metadata (docs, default wrappers, etc.).

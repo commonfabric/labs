@@ -201,8 +201,8 @@ request names a room's members by principal or by profile itself.
   attesting its recipient, who then needs no telling.
 - **`people`** holds the people this user shares a room with: for each
   principal, the profiles attesting it, read from the roster of each room in
-  `rooms` (see [`ChatRoomOutput`](ChatRoomOutput.md#facts)) and keyed by each
-  profile's own `represents-principal` label, never by what a roster claims
+  `rooms` (see [`ChatRoomOutput`](ChatRoomOutput.md#facts)) and keyed by whose
+  own each profile is (`profileOwnerOf()`), never by what a roster claims
   about it. Each profile is listed once, in the order the rooms list them:
   newest room first, and within a room in its roster's order. So a person's
   first profile is a fixed choice for a given list of rooms. A profile that
@@ -261,10 +261,11 @@ These rules hold for every stream:
   with it resumes the request rather than starting another.
 - `counterpart: string` — The DID of the other person. Must not be this user's
   own.
-- `profile?: Cell<ChatProfile>` — The other person's profile, whose
-  `represents-principal` label must name `counterpart`. A new room, or a found
-  one that was offered them nothing, is offered to them through the share inbox
-  it points at (see [offers](#offers)).
+- `profile?: Cell<ChatProfile>` — The other person's profile, which must be
+  `counterpart`'s own (`profileOwnerOf()` names them; see
+  [`ChatProfile`](ChatProfile.md)). A new room, or a found one that was offered
+  them nothing, is offered to them through the share inbox it points at (see
+  [offers](#offers)).
 
 Finds the direct room this user shares with a person, or creates it. This is an
 outward act when it creates a room, or offers one it finds.
@@ -310,9 +311,10 @@ conversation from splitting.
   be empty, which creates a group room of one, and people can be added later
   from the room's add control.
 - `profiles?: Cell<ChatProfile>[]` — The profiles of more people to admit, as
-  `people` lists them. Each names the principal its `represents-principal`
-  label attests, who is admitted as a member, and the room is offered to them
-  through the share inbox the profile points at (see [offers](#offers)). A
+  `people` lists them. Each names the person whose own profile it is
+  (`profileOwnerOf()`), who is admitted as a member, and a profile that is no
+  one's refuses the request. The room is offered to them through the share
+  inbox the profile points at (see [offers](#offers)). A
   person named by more than one profile is offered the room through each
   distinct inbox those profiles point at, once per inbox, and added to the
   room's participants once. Profiles of two different people must not point at
@@ -353,9 +355,9 @@ Creates a group room. This is an outward act: it grants other people access.
 - `room: Cell<ChatRoomOutput>` — A link to the room, one this user may add
   people to.
 - `member?: string` — The DID of the person to tell of the room.
-- `profile?: Cell<ChatProfile>` — The person's profile, whose
-  `represents-principal` label must name `member`, or names the person when
-  `member` is absent.
+- `profile?: Cell<ChatProfile>` — The person's profile, which must be
+  `member`'s own (`profileOwnerOf()` names them), or names the person whose
+  own it is when `member` is absent.
 
 Tells someone this user has added to a room of the room. The room's
 `addMember` sends it, once it has granted the person access, and reads its

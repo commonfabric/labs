@@ -28,6 +28,7 @@ import {
   newLoopbackServer,
 } from "../../src/storage/v2-emulate.ts";
 import type { SessionFactory } from "../../src/storage/v2.ts";
+import { seedProfileOwner } from "../cfc-seed-envelope.ts";
 import { TestStorageManager } from "../memory-v2-test-utils.ts";
 
 const user = await Identity.fromPassphrase("local profile cold-link consumer");
@@ -214,6 +215,15 @@ describe("wish-home-readiness", () => {
             );
             seed.prepareTxForCommit(tx);
             expect((await tx.commit().settled).error).toBeUndefined();
+            {
+              const owned = seed.edit();
+              seedProfileOwner(
+                owned,
+                profile.getAsNormalizedFullLink(),
+                user.did(),
+              );
+              expect((await owned.commit().settled).error).toBeUndefined();
+            }
             tx = seed.edit();
             homeDefault.withTx(tx).asSchema(homeSchema).set({ profiles: [] });
             homeDefault.withTx(tx).setMetaRaw(

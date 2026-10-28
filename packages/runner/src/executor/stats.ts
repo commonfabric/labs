@@ -77,6 +77,18 @@ export type ServingLoopStats = {
    * subsequent input-driven demand cycle until the load lands. */
   structureLoadFailures: number;
 
+  /** Demanded-structure loads REFUSED because the piece's stored setup is
+   * a record of another build that numbered its cells holding state
+   * differently (`PieceStateMovedError`): the start runs no part of the
+   * piece and writes nothing. Counted per refusal, from two sources: the
+   * demand cycle's start of a root, and the retry of a piece start's
+   * commit (`pieceStartCommitFailureObserver`). The demand cycle parks a
+   * root it refused as it parks a terminal one, until a commit touching it
+   * re-arms it, so a refused root does not churn every cycle; one such
+   * commit landing while the refusing pass ran re-arms the root in place of
+   * the park. A refusal on a commit's retry parks nothing. */
+  structureLoadRefused: number;
+
   /** Demanded-structure ensure attempts that returned FALSE — the root
    * carried no loadable pattern identity yet, typically the creation
    * race (the demand cycle ran before the piece's instantiation
@@ -294,6 +306,13 @@ export type ServingLoopStats = {
      * and the pass after one that threw partway, reconcile every key. */
     demandKeysReconciled: number;
 
+    /** The (piece root, demanding pair) seedings of owed defaults the
+     * passes completed — the arrival seed: a pattern-owned cell declaring a
+     * default at a scope narrower than its result is seeded in a demanding
+     * pair's instance when the pair's demand for the piece arrives, as the
+     * piece's start seeds it for the identity the start runs under. */
+    ownedDefaultSeeds: number;
+
     /** Root documents the pass pulled TOGETHER before its sequential
      * structure loads ran (`SpaceServer.#loadStructureRootDocs`): the
      * instance each demand names and, for every scoped demand, the space
@@ -434,7 +453,11 @@ export type ServingLoopStats = {
      * register's owed follow-up on the OW45 row. */
     preQueueDeferralStuck: number;
 
-    /** Ordered publication/response barriers attempted for lagging event views. */
+    /**
+     * Attempts to bring a lagging event view current: an ordered
+     * publication/response, or under the store read-through a read of the
+     * entries document from the store.
+     */
     visibilityBarriers: number;
 
     /** Event identities visible at the recomputed index after a barrier. */
@@ -510,6 +533,17 @@ export type ServingLoopStats = {
      * that grows without `processed` settling names a handler whose
      * argument never resolves. */
     handlerNotRunDeferrals: number;
+
+    /**
+     * Events requeued at a wave commit because a recorded read of the handler
+     * run was stale: a commit the serving replica had not taken wrote what
+     * the run read (serving-loop.md §3d). Counted per event, the later
+     * entries of the stream requeued behind one included. Each re-drains
+     * once the replica has taken the staling commit, so a count that climbs
+     * on one stream names a document written faster than the loop replays
+     * the handler reading it.
+     */
+    staleReadRequeues: number;
 
     /**
      * Drain deferrals that spent none of the deferral budget because an entry
@@ -688,6 +722,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
   derivedCommitsBySpace: {},
   derivedCommitsBySpaceDropped: 0,
   structureLoadFailures: 0,
+  structureLoadRefused: 0,
   structureLoadDeferred: 0,
   structureLoadStuck: 0,
   structureLoadTerminal: 0,
@@ -720,6 +755,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     demandPasses: 0,
     demandPassMs: 0,
     demandKeysReconciled: 0,
+    ownedDefaultSeeds: 0,
     structureRootsPreloaded: 0,
     pushGrowthWakes: 0,
     watchWakes: 0,
@@ -743,6 +779,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     lt1LateSealsRefused: 0,
     orphanDeliveriesRefused: 0,
     handlerNotRunDeferrals: 0,
+    staleReadRequeues: 0,
     arrivalHeldDeferrals: 0,
     loadParkDeferrals: 0,
     loadParkFailures: 0,

@@ -245,6 +245,61 @@ scans, so a largest entry is largest among those inspected. `unavailable`
 preserves the original refusal when independent encoding fails. Queued bodies
 have source attribution only; size breakdowns describe the refused message.
 
+## Client attribution
+
+Every client created by `connect` reports its application, loaded labs Git SHA
+(or `null`), runtime instance ID, reserved generation field, and instance start
+time in `session.open.session.client`. A signed open binds the recognized report
+fields; a connection-authenticated open attributes them to its authenticated
+principal. Reports travel on fresh opens and resumes. Unknown fields are
+ignored. If a known field is malformed, the entire optional report is treated as
+absent; authentication and session access checks still apply.
+
+`StorageManager.open({ clientBuild: { application, gitSha }, ... })` supplies
+the host's provenance; `RuntimeClient`, lib-shell, and
+`PiecesController.initialize` forward the same option. Remote and loopback
+session factories share one report across a runtime's spaces and connections.
+The wire SHA is a full lowercase 40-character hash, or `null` when unknown.
+Report creation lowercases full host hashes and maps other build labels to
+`null`, so a development label does not prevent runtime startup. Embedders
+report the labs code they loaded. A source checkout's HEAD cannot attest
+uncommitted changes or modules edited while a process is running.
+
+The cf CLI resolves its SHA on first use and shares that SHA snapshot across
+later runtime opens, each with its own instance report. Source runs sample HEAD
+at that first call, which can be after the code loads: a commit made before the
+call is included in the reported SHA. Later commits leave the snapshot
+unchanged; uncommitted edits are omitted.
+
+Shell, cf, and toolshed supply their build identity. Toolshed's serving runtimes
+receive it in both main-thread and worker execution. FUSE, cf-harness, the
+agents host, and the GitHub host report their application names with an unknown
+SHA. Unconfigured runner embedders report `runner`, unconfigured `RuntimeClient`
+embedders report `runtime-client`, and raw memory clients report `memory`, all
+with unknown SHA. Producers emit the reserved `generation` field as `1` for
+readers that require it; it has no admission meaning. Readers accept reports
+that omit it and preserve the other attribution fields.
+
+Each toolshed serving runtime serves one space, so each served space has its own
+toolshed runtime instance ID within a process or worker.
+
+The metadata-only `/api/health/document-interests?space=…&id=…` diagnostic
+includes each matching session's `client`, or `null` for an unidentified client,
+beside its authenticated principal and watch/cache interests. Detached sessions
+retain the report until they expire or reopen. A reopen replaces it; an absent
+or malformed report clears it. Reports contain no hostname, filesystem path, or
+document contents. Identity and start time are self-reported, not device or code
+attestation, and multiple runtime instances may belong to one process.
+
+Client retirement is disabled. The server does not decide admission from client
+attribution. The deprecated `minimumClientGeneration` option accepts only `0` or
+omission and throws for any other value. Toolshed accepts only an unset
+`MEMORY_MINIMUM_CLIENT_GENERATION` or the exact string `0`; every other value
+refuses startup with an explicit configuration error. There is no setting that
+enables retirement. A future retirement feature requires a runtime-wide update
+state, appropriate user guidance, and tested recovery across reads, navigation,
+and replacement sessions before it can be enabled.
+
 ## Layout
 
 - `v2.ts` — the protocol vocabulary: documents, operations, commits, queries,

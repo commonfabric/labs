@@ -3658,6 +3658,9 @@ Deno.test("runCfHarnessCli passes image attachments to the prompt loop", async (
     runPromptOptions?.imageAttachments?.[0].hostPath,
     await Deno.realPath(join(workspace, "capture.png")),
   );
+  const snapshotPath = runPromptOptions?.imageAttachments?.[0].snapshotPath;
+  expect(snapshotPath).toBeDefined();
+  expect(await Deno.readFile(snapshotPath!)).toEqual(ONE_PIXEL_PNG);
 });
 
 Deno.test("runCfHarnessCli passes tool and subagent profile allowlists", async () => {

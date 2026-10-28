@@ -256,9 +256,8 @@ describe("max-enforcement CFC posture as one system", () => {
       //
       // This case stages the request by hand and writes to no store, so it
       // pins the SINK's verdict alone. `builtin-abandoned-request.test.ts`
-      // pins the same verdict for a pattern calling the builtin, which is the
-      // path a product takes and the one that was gated by accident until the
-      // §8.12.5 route-2 widening.
+      // pins the same verdict for a pattern calling the builtin, whose
+      // enrolled result store admits the write with its derived flow label.
       await withPostureRuntime(async (runtime) => {
         const cell = await seedSource(
           runtime,

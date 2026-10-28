@@ -27,6 +27,7 @@ import {
   type GraphQuery,
   type GraphQueryResult,
   MAX_ENTITY_ID_PAGE_SIZE,
+  MAX_UNTRUSTED_MESSAGE_SLOTS,
   MEMORY_PROTOCOL,
   type MemoryProtocolFlags,
   type OperationFieldQuery,
@@ -38,8 +39,10 @@ import {
   type PresenceRemoveMessage,
   type PresenceUpsertMessage,
   type ResponseMessage,
+  type ServerMessage,
   SESSION_REPORT_TEXT_MAX,
   type SessionAdmissibleMessage,
+  type SessionDescriptor,
   type SessionEffectMessage,
   type SessionHolding,
   type SessionOpenAuthMetadata,
@@ -58,6 +61,7 @@ import {
   sqliteRowFromWire,
   type ViewInterest,
   type WatchAddResult,
+  type WatchSetRequest,
   type WatchSetResult,
   type WatchSpec,
 } from "../v2.ts";
@@ -66,16 +70,25 @@ import {
   expandServerMessageCommitLabels,
   hasServerMessageCommitLabelMetadata,
 } from "./commit-label-table.ts";
+import {
+  type ClientInfo,
+  createClientInfo,
+  parseClientInfo,
+} from "./client-info.ts";
 import type { AppliedCommit } from "./engine.ts";
 import { logIncomingFrame, logOutgoingFrame } from "./frame-log.ts";
 import { memoryMessageFrameBytes } from "./message-compression.ts";
-import { ROUTED_HOLDINGS_LIMIT } from "./routed-limits.ts";
+import {
+  ROUTED_DEFAULT_SLOT_LIMIT,
+  ROUTED_HOLDINGS_LIMIT,
+  ROUTED_PART_BYTES,
+  ROUTED_QUEUE_LIMIT,
+} from "./routed-limits.ts";
 import {
   isPresenceRoom,
   PresenceError,
   validatePresencePublication,
 } from "./presence.ts";
-import type { Server } from "./server.ts";
 import { parseSessionReport } from "./session-reports.ts";
 import {
   expandServerMessageLabels,
@@ -83,6 +96,15 @@ import {
 } from "./sync-label-table.ts";
 import { containsReservedSchemaRefSubstring } from "./sync-schema-ref.ts";
 import { expandServerMessageSchemas } from "./sync-schema-table.ts";
+import {
+  type PartLimits,
+  payloadFits,
+  serverMessageSync,
+  splitWatchSetRequest,
+  SyncPartAssembler,
+  type SyncPartSession,
+  wholeLimits,
+} from "./message-parts.ts";
 import { type ArmedTurn, armTurn } from "./turn.ts";
 
 /**
@@ -133,6 +155,14 @@ export type Transport = {
 
   /** Whether bounded routed transport records can be sent. */
   readonly supportsRouterStreaming?: boolean;
+
+  /**
+   * Bounds on one message this transport carries to a direct server, when
+   * tighter than the server's own, as a test's transport sets them; a watch
+   * set past them is staged in parts. A routed connection's bounds come from
+   * the router's `hello.ok`.
+   */
+  readonly messageLimits?: PartLimits;
 
   /**
    * Hands `payload` to the connection, opening one first when there is none.
@@ -217,6 +247,9 @@ export function isPushedSync(sync: SessionSync): boolean {
 }
 
 export type ConnectOptions = {
+  /** Runtime identity attached to every session mounted on this client. */
+  client?: ClientInfo;
+
   transport: Transport;
   signal?: AbortSignal;
 };
@@ -300,7 +333,7 @@ export type SessionOpenAuthContext = {
 
 export type SessionOpenAuthFactory = (
   space: string,
-  session: MountOptions,
+  session: SessionDescriptor,
   context: SessionOpenAuthContext,
 ) => Promise<SessionOpenAuth | undefined> | SessionOpenAuth | undefined;
 
@@ -403,6 +436,13 @@ type OutstandingCommit = {
 
   /** Settles with the server's verdict on the commit. */
   pending: PromiseWithResolvers<AppliedCommit>;
+
+  /**
+   * The server's acceptance, once its response has arrived. The commit stays
+   * outstanding until its send settles as well, which a transport may report
+   * only after the frames the server sent while handling it.
+   */
+  applied?: AppliedCommit;
 
   /**
    * How many attempts failed because the commit's own write failed on an open
@@ -618,8 +658,15 @@ export async function settleBounded<T>(
   return results;
 }
 
+/** A request awaiting its response; see {@link Client.request}. */
+type PendingRequest = PromiseWithResolvers<unknown> & {
+  /** Hears the response as the client handles it, before any frame after it. */
+  onResponse?: (response: ResponseMessage<unknown>) => void;
+};
+
 export class Client {
-  #pending = new Map<string, PromiseWithResolvers<unknown>>();
+  #pending = new Map<string, PendingRequest>();
+  #clientUpdateError: Error | undefined;
   #spaces = new Set<SpaceSession>();
   #nextRequest = 1;
   #helloPending:
@@ -627,8 +674,25 @@ export class Client {
     | null = null;
   #sessionOpenAuthContext: SessionOpenAuthContext | null = null;
   #serverFlags: MemoryProtocolFlags | null = null;
+  readonly #clientInfo: Readonly<ClientInfo>;
   #syncLabelTable = false;
   #commitLabelTable = false;
+  /** Whether both peers advertised `syncPartsV1`. */
+  #syncParts = false;
+  /**
+   * The bounds a watch set is staged in parts to fit on this connection: on
+   * a routed connection, the frame cap and the 4 MiB a request may take, in
+   * parts of 1 MiB; on a direct one, the server's slot limit on a client
+   * message.
+   */
+  #requestLimits: PartLimits | undefined;
+  /** The split syncs whose last part has not arrived, by session. */
+  #syncPartAssembler = new SyncPartAssembler();
+  /**
+   * The space and session of each pending request that names one, so that
+   * its response is held with the session's split sync.
+   */
+  #pendingSessions = new Map<string, { space: string; sessionId?: string }>();
 
   /**
    * Per key, the `connection.auth` it made on the current connection,
@@ -728,14 +792,20 @@ export class Client {
 
   private constructor(
     transport: Transport,
+    clientInfo: Readonly<ClientInfo>,
   ) {
+    this.#clientInfo = clientInfo;
     this.#transport = transport;
     this.#transport.setReceiver((payload) => this.#onMessage(payload));
     this.#transport.setCloseReceiver?.((error) => this.#onClose(error));
   }
 
   static async connect(options: ConnectOptions): Promise<Client> {
-    const client = new Client(options.transport);
+    const info = options.client === undefined
+      ? createClientInfo({ application: "memory", gitSha: null })
+      : parseClientInfo(options.client);
+    if (info === null) throw new TypeError("Invalid memory client metadata");
+    const client = new Client(options.transport, Object.freeze(info));
     const abortError = (): Error =>
       options.signal?.reason instanceof Error
         ? options.signal.reason
@@ -903,16 +973,34 @@ export class Client {
    * its error. A request made while the connection is down waits for the
    * reconnect, unless `options.whileConnected` is set, in which case it
    * throws a `ConnectionError`: a request a session's restore makes would
-   * otherwise wait for the reconnect that is running that restore.
+   * otherwise wait for the reconnect that is running that restore. One made
+   * with `options.epoch` throws a `ConnectionError` unless it goes on that
+   * connection, whose negotiation `options.encoded`, `message` encoded for
+   * it, then belongs to.
+   *
+   * The request settles once its send has too, which a transport may report
+   * only after the server has handled the request, and so after the frames
+   * the server sent while handling it. `options.onResponse` hears the
+   * response as the client handles it, before any frame after it.
    */
   async request<Result>(
     message: FabricPlainObject,
-    options: { whileConnected?: boolean } = {},
+    options: {
+      whileConnected?: boolean;
+      epoch?: number;
+      encoded?: string;
+      onResponse?: (response: ResponseMessage<Result>) => void;
+    } = {},
   ): Promise<Result> {
     if (options.whileConnected === true && !this.#connected) {
       throw connectionLostWhileRestoring();
     }
     const epoch = await this.#ensureConnected();
+    // A request that belongs with others on one connection, as a staged
+    // watch set's parts do, is not sent on another.
+    if (options.epoch !== undefined && epoch !== options.epoch) {
+      throw connectionError("Memory connection changed between request parts");
+    }
     // Readiness can change across the await even for an already-live transport.
     // Reject before encoding or registration so this request uses neither stale
     // negotiation nor a pending slot created after the discard's rejection sweep.
@@ -925,14 +1013,21 @@ export class Client {
         "Memory connection changed before request encoding",
       );
     }
+    if (
+      message.type === "session.open" && this.#clientUpdateError !== undefined
+    ) {
+      throw this.#clientUpdateError;
+    }
     const requestId = message.requestId as string;
-    // Retained requests stay inline so replay uses the next connection's
-    // negotiation. Compact only the value handed to the transport encoder.
-    const prepared = this.#commitLabelTable
-      ? compressClientMessageLabels(message)
-      : message;
-    const encoded = encodeMemoryBoundary(prepared);
-    const pending = Promise.withResolvers<unknown>();
+    const encoded = options.encoded !== undefined && options.epoch === epoch
+      ? options.encoded
+      : this.#encodeRequest(message);
+    const pending: PendingRequest = Promise.withResolvers<unknown>();
+    const { onResponse } = options;
+    if (onResponse !== undefined) {
+      pending.onResponse = (response) =>
+        onResponse(response as ResponseMessage<Result>);
+    }
     // The rejection handler below only attaches after the transport send
     // completes, and send suspends across event-loop turns on any real
     // transport — close()'s rejectPending() can fire in that window with
@@ -941,6 +1036,19 @@ export class Client {
     // observes the rejection.
     pending.promise.catch(() => {});
     this.#pending.set(requestId, pending);
+    if (this.#syncParts && typeof message.space === "string") {
+      const descriptor = message.session;
+      const sessionId = typeof message.sessionId === "string"
+        ? message.sessionId
+        : isObjectNotArray(descriptor) &&
+            typeof descriptor.sessionId === "string"
+        ? descriptor.sessionId
+        : undefined;
+      this.#pendingSessions.set(requestId, {
+        space: message.space,
+        ...(sessionId === undefined ? {} : { sessionId }),
+      });
+    }
     logOutgoingFrame(message, memoryMessageFrameBytes(encoded));
     try {
       await this.#transport.send(encoded);
@@ -948,13 +1056,20 @@ export class Client {
       // A send the transport refused outright gets no response, so its entry
       // would otherwise stay until the connection closes. A send lost with its
       // connection is settled by the close that reports the loss.
-      if (!isConnectionError(error)) this.#pending.delete(requestId);
+      if (!isConnectionError(error)) {
+        this.#pending.delete(requestId);
+        this.#pendingSessions.delete(requestId);
+      }
       throw error;
     }
     const result = await pending.promise as ResponseMessage<Result>;
     if (result.error) {
       const error = new Error(result.error.message);
       error.name = result.error.name;
+      if (result.error.clientUpdateRequired === true) {
+        Object.assign(error, { clientUpdateRequired: true });
+        this.#clientUpdateError ??= error;
+      }
       if (result.error.precondition !== undefined) {
         (error as Error & { precondition?: string }).precondition =
           result.error.precondition;
@@ -986,6 +1101,65 @@ export class Client {
   }
 
   /**
+   * Sends a `session.watch.set` and returns the `ok` of its response. A set
+   * whose encoding exceeds the connection's bounds, sent to a server that
+   * takes a set in parts, goes as staged parts issued back to back on one
+   * connection before anything else the caller sends. The server refuses a
+   * part that does not follow the parts it holds, and with it the rest, so
+   * the set is applied whole or not at all; the first refusal is the set's.
+   *
+   * @internal For `SpaceSession`.
+   */
+  async requestWatchSet(
+    message: WatchSetRequest,
+    options: { whileConnected?: boolean } = {},
+  ): Promise<WatchSetResult> {
+    // The split reads the connection's bounds, so it waits for the
+    // connection. A connected client issues the parts without an await, in
+    // the order the caller's other requests would be issued.
+    if (!this.#connected && options.whileConnected !== true) {
+      await this.#ensureConnected();
+    }
+    if (!this.#connected) {
+      return await this.request<WatchSetResult>(message, options);
+    }
+    const epoch = this.#connectionEpoch;
+    const encoded = this.#encodeRequest(message);
+    const limits = this.#requestLimits;
+    const parts = limits !== undefined &&
+        this.#serverFlags?.watchSetPartsV1 === true &&
+        !payloadFits(encoded, wholeLimits(limits))
+      ? splitWatchSetRequest(message, limits)
+      : [message];
+    if (parts.length === 1) {
+      return await this.request<WatchSetResult>(message, {
+        ...options,
+        epoch,
+        encoded,
+      });
+    }
+    const answers = parts.map((part) =>
+      this.request<WatchSetResult>(part, { ...options, epoch })
+    );
+    for (const answer of answers) answer.catch(() => {});
+    const results = await Promise.allSettled(answers);
+    const refused = results.find((result) => result.status === "rejected");
+    if (refused !== undefined) throw refused.reason;
+    return (results.at(-1) as PromiseFulfilledResult<WatchSetResult>).value;
+  }
+
+  /**
+   * Helper for the requests, which encodes `message` for this connection.
+   * Retained requests stay inline so replay uses the next connection's
+   * negotiation; only the value handed to the transport encoder is compacted.
+   */
+  #encodeRequest(message: FabricPlainObject): string {
+    return encodeMemoryBoundary(
+      this.#commitLabelTable ? compressClientMessageLabels(message) : message,
+    );
+  }
+
+  /**
    * The holdings a request declares on this connection, given the ones its
    * session holds. A router and a routed toolshed close the connection on
    * a frame that names more than `ROUTED_HOLDINGS_LIMIT` holdings, and the
@@ -995,13 +1169,12 @@ export class Client {
    * cut are sent a second time and none is skipped. A direct server takes
    * the whole list.
    *
-   * The cut has two costs beyond that second delivery. The server removes
-   * only documents the list names, so a document that was cut and has
-   * since left the session's watch set gets no remove: the replica keeps
-   * the value it last had for it until the document is watched again. And
-   * the documents cut all come back in the one response, which must fit
-   * the toolshed's 4 MiB bound on what it queues to a data socket; a
-   * response past it closes the socket.
+   * The cut has a cost beyond that second delivery. The server removes only
+   * documents the list names, so a document that was cut and has since left
+   * the session's watch set gets no remove: the replica keeps the value it
+   * last had for it until the document is watched again. The documents cut
+   * come back in the response's sync, in parts when it is too large for one
+   * message (`syncPartsV1`).
    *
    * @internal For `SpaceSession`.
    */
@@ -1055,11 +1228,16 @@ export class Client {
    */
   async openSession(
     space: string,
-    session: MountOptions,
+    mount: MountOptions,
     auth?: SessionAuth,
     holdings?: SessionHolding[],
     options: { restoring?: boolean; signal?: AbortSignal } = {},
   ): Promise<SessionOpenResult> {
+    if (this.#clientUpdateError !== undefined) throw this.#clientUpdateError;
+    const session: SessionDescriptor = {
+      ...mount,
+      client: this.#clientInfo,
+    };
     const whileConnected = options.restoring === true;
     // A mount made while the connection is down waits for the reconnect to
     // finish, restores included, before it joins the key's authentication
@@ -1807,6 +1985,9 @@ export class Client {
     this.#endRenewals();
     this.#syncLabelTable = false;
     this.#commitLabelTable = false;
+    this.#syncParts = false;
+    this.#syncPartAssembler.clear();
+    this.#requestLimits = undefined;
     this.#transport.setMessageCompressionEnabled?.(false);
     this.#connectionEpoch += 1;
     this.#authenticated.clear();
@@ -1823,13 +2004,15 @@ export class Client {
     const ack: PromiseWithResolvers<void> & { receiveError?: Error } = Promise
       .withResolvers<void>();
     this.#helloPending = ack;
-    // `sessionReportV1` and `watchRemoveV1` are the server's capabilities
-    // alone: the client reads them from `hello.ok` and never offers them.
-    // Other flags an endpoint does not know are ignored there, since the
-    // routed flag allowlists were removed (infra DEVIATIONS row 41).
+    // `sessionReportV1`, `watchRemoveV1` and `watchSetPartsV1` are the
+    // server's capabilities alone: the client reads them from `hello.ok` and
+    // never offers them. Other flags an endpoint does not know are ignored
+    // there, since the routed flag allowlists were removed (infra DEVIATIONS
+    // row 41).
     const {
       sessionReportV1: _reportsServerOnly,
       watchRemoveV1: _removalServerOnly,
+      watchSetPartsV1: _stagedSetsServerOnly,
       ...expectedFlags
     } = getMemoryProtocolFlags();
     const offerRoutedCompression = this.#offersRoutedCompression(
@@ -1916,6 +2099,25 @@ export class Client {
           "receive",
           "commitLabelExpansion",
         );
+      }
+      // The parts of a split sync are held until the last arrives, and the
+      // sync is then handled as the one they divide. A message that carries
+      // no sync passes whatever the assembler holds, and so does a whole
+      // sync while it holds none.
+      const sync = serverMessageSync(message);
+      if (!this.#syncParts) {
+        if (sync?.more !== undefined) {
+          throw protocolError("Unnegotiated `syncPartsV1` sync part");
+        }
+      } else if (
+        sync !== undefined &&
+        (sync.more !== undefined || this.#syncPartAssembler.pending)
+      ) {
+        message = this.#syncPartAssembler.accept(
+          message as ServerMessage,
+          this.#messageSession(message),
+        );
+        if (message === undefined) return;
       }
     } catch (cause) {
       const error = new Error("Unable to parse memory server message", {
@@ -2013,6 +2215,20 @@ export class Client {
           helloOk.flags.syncLabelTableV1;
         this.#commitLabelTable = expectedFlags.commitLabelTableV1 &&
           helloOk.flags.commitLabelTableV1;
+        this.#syncParts = expectedFlags.syncPartsV1 &&
+          helloOk.flags.syncPartsV1;
+        this.#requestLimits = routed
+          ? {
+            bytes: ROUTED_PART_BYTES,
+            values: helloOk.routerFrameSlots === undefined
+              ? ROUTED_DEFAULT_SLOT_LIMIT
+              : helloOk.routerFrameSlots,
+            whole: ROUTED_QUEUE_LIMIT,
+          }
+          : this.#transport.messageLimits ?? {
+            bytes: Number.MAX_SAFE_INTEGER,
+            values: MAX_UNTRUSTED_MESSAGE_SLOTS,
+          };
         this.#helloPending.resolve();
         return;
       }
@@ -2138,8 +2354,39 @@ export class Client {
       if (pending) {
         pending.resolve(message);
         this.#pending.delete(message.requestId);
+        this.#pendingSessions.delete(message.requestId);
+        try {
+          pending.onResponse?.(message);
+        } catch (cause) {
+          console.error("request response observer threw:", cause);
+        }
       }
     }
+  }
+
+  /**
+   * Helper for `#onMessage()`: the session a decoded server message is for,
+   * a response's being the one its request named, or opened.
+   */
+  #messageSession(message: unknown): SyncPartSession | undefined {
+    if (!isObjectNotArray(message)) return undefined;
+    if (
+      typeof message.space === "string" &&
+      typeof message.sessionId === "string"
+    ) {
+      return { space: message.space, sessionId: message.sessionId };
+    }
+    if (message.type !== "response" || typeof message.requestId !== "string") {
+      return undefined;
+    }
+    const request = this.#pendingSessions.get(message.requestId);
+    const sessionId = isObjectNotArray(message.ok) &&
+        typeof message.ok.sessionId === "string"
+      ? message.ok.sessionId
+      : request?.sessionId;
+    return request === undefined || sessionId === undefined
+      ? undefined
+      : { space: request.space, sessionId };
   }
 
   #nextRequestId(): string {
@@ -2364,6 +2611,7 @@ export class Client {
       pending.reject(error);
     }
     this.#pending.clear();
+    this.#pendingSessions.clear();
     this.#helloPending?.reject(error);
     this.#helloPending = null;
   }
@@ -2996,7 +3244,7 @@ export class SpaceSession {
     return await this.#runWatchMutation(
       () => {
         requestedWatches = watches ?? this.#watchSpecs;
-        return this.#client.request<WatchSetResult>({
+        return this.#client.requestWatchSet({
           type: "session.watch.set",
           requestId: crypto.randomUUID(),
           space: this.space,
@@ -3090,7 +3338,7 @@ export class SpaceSession {
         const holdings = this.#client.serverFlags?.sessionHoldings === true
           ? this.#client.declarableHoldings(this.#declaredHoldings())
           : undefined;
-        return this.#client.request<WatchSetResult>({
+        return this.#client.requestWatchSet({
           type: "session.watch.set",
           requestId: crypto.randomUUID(),
           space: this.space,
@@ -3346,7 +3594,7 @@ export class SpaceSession {
         restored = await this.#reopen();
       } catch (error) {
         if (isSessionRevokedError(error)) {
-          this.handleRevoked("taken-over");
+          this.#terminateSession(error as Error);
           return;
         }
         throw error;
@@ -3437,14 +3685,17 @@ export class SpaceSession {
       this.#heldRestores = 0;
       if (wasHeld) this.#client.noteHoldEnded();
     } catch (error) {
-      // A permanent authorization denial ANYWHERE in the reopen — the initial
+      // A permanent authorization denial or explicit update requirement in the reopen — the initial
       // session.open OR the watch re-establishment (watchSetSync) that follows a
       // fresh, non-resumed session — terminates just this session with the real
       // error: its pending commits and waiters reject with it, and its next watch
       // or transact rethrows it. It must NOT propagate to the client-wide
       // reconnect loop, which would then fail sessions for other spaces on the
-      // same client. Every other error propagates so the loop retries it.
-      if (isPermanentAuthorizationError(error)) {
+      // same client. Recoverable failures propagate to the reconnect loop.
+      if (
+        isPermanentAuthorizationError(error) ||
+        isClientUpdateRequiredError(error)
+      ) {
         this.#terminateSession(error as Error);
         return;
       }
@@ -3595,10 +3846,9 @@ export class SpaceSession {
     const background = [...this.#background];
     this.#background.clear();
     await Promise.allSettled(background);
-    for (const pending of this.#outstandingCommits.values()) {
-      pending.pending.reject(new Error("memory session closed"));
-    }
-    this.#outstandingCommits.clear();
+    // A commit whose send failed after its acceptance arrived is outstanding
+    // still, and settles with its verdict.
+    this.#settleOutstandingCommits(new Error("memory session closed"));
     this.#replaceWatchSpecs([]);
     this.#viewInterests = [];
     this.#viewCapabilityLostObservers.clear();
@@ -3619,8 +3869,10 @@ export class SpaceSession {
   }
 
   /**
-   * Close this session terminally with `error`: reject its outstanding commits
-   * and caught-up waiters, forget it from the client, and drop its watch state.
+   * Close this session terminally with `error`: settle its outstanding commits,
+   * one the server has accepted with its verdict and the rest by rejecting
+   * them, reject its caught-up waiters, forget it from the client, and drop its
+   * watch state.
    * The stored error is what `#assertOpen()` rethrows for any later call, so a
    * storage subscriber observes the real cause on its next watch or transact.
    * Shared by session revocation, a permanent reopen authorization denial,
@@ -3643,11 +3895,11 @@ export class SpaceSession {
     this.#endWatchRequests(error);
     this.#readyOnConnection = false;
     this.#client.forgetSession(this);
-    for (const pending of this.#outstandingCommits.values()) {
-      pending.pending.reject(error);
-    }
+    // An accepted commit settles with its verdict: a session the commit's own
+    // ACL write revokes is told so right after the verdict, which can reach it
+    // before the commit's send settles.
+    this.#settleOutstandingCommits(error);
     this.#rejectCaughtUpLocalSeqWaiters(error);
-    this.#outstandingCommits.clear();
     this.#replaceWatchSpecs([]);
     this.#viewInterests = [];
     this.#viewCapabilityLostObservers.clear();
@@ -3663,6 +3915,21 @@ export class SpaceSession {
         console.error("session-termination subscriber threw:", cause);
       }
     }
+  }
+
+  /**
+   * Settles and forgets every outstanding commit: one whose acceptance has
+   * arrived with its verdict, the rest by rejecting them with `error`.
+   */
+  #settleOutstandingCommits(error: Error): void {
+    for (const pending of this.#outstandingCommits.values()) {
+      if (pending.applied !== undefined) {
+        pending.pending.resolve(pending.applied);
+      } else {
+        pending.pending.reject(error);
+      }
+    }
+    this.#outstandingCommits.clear();
   }
 
   /** Terminates the session when its client cannot restore the connection. */
@@ -4411,6 +4678,10 @@ export class SpaceSession {
           space: this.space,
           sessionId: this.#sessionId,
           commit: pendingCommit.commit,
+        }, {
+          onResponse: (response) => {
+            if (response.ok !== undefined) pendingCommit.applied = response.ok;
+          },
         });
         this.#noteResult(applied.seq);
         if (this.#outstandingCommits.get(localSeq) === pendingCommit) {
@@ -4698,28 +4969,41 @@ export class WatchView {
 
 export const connect = Client.connect;
 
-// Loopback delivers server frames on EVENT LOOP turns, one frame per
-// turn, like a socket: no response or push ever arrives inside the sender's
-// own await cascade, so code that accidentally depends on "nothing arrives
-// until I yield" fails here the way it would against a deployment. One
-// frame per macrotask also guarantees a frame's full microtask cascade
-// (response resolution, request() continuation, caller continuation)
-// completes before the next frame delivers. Client→server keeps awaiting
-// the server's processing: the server's fan-out drain-wait counts a frame
-// from receive() entry, and a send that merely enqueued would let fan-out
-// read heads that predate a write already handed to the transport. Frames
-// staged at close() are dropped — nothing arrives after the socket is
-// gone. Remaining fidelity gap: setCloseReceiver is a no-op, so a
-// server-initiated disconnect is invisible over loopback.
-//
-// The pump takes that turn through armTurn, so a queued frame always has an
-// armed zero-delay timer for `clock.settle()` to see without the delivery
-// itself waiting on one. A posted message is not an option in its place:
-// Node's MessageChannel replaces the web one as soon as anything in the
-// process loads node compatibility, and its ports deliver inside a microtask
-// cascade rather than on a turn of their own.
-export const loopback = (server: Server): Transport => {
+/**
+ * A transport over a connection whose server frames are handed to it one at
+ * a time ({@link QueuedFrameTransport.deliver}). It delivers them on event
+ * loop turns, one frame per turn, like a socket: no response or push ever
+ * arrives inside the sender's own await cascade, so code that accidentally
+ * depends on "nothing arrives until I yield" fails here the way it would
+ * against a deployment. One frame per macrotask also guarantees a frame's
+ * full microtask cascade (response resolution, `request()` continuation,
+ * caller continuation) completes before the next frame delivers.
+ * Client→server keeps awaiting the server's processing: the server's fan-out
+ * drain-wait counts a frame from `receive()` entry, and a send that merely
+ * enqueued would let fan-out read heads that predate a write already handed
+ * to the transport. Frames staged at `close()` are dropped, since nothing
+ * arrives after the socket is gone, and `delivered()` waits for the frames
+ * held at the call.
+ *
+ * The pump takes each turn through `armTurn`, so a queued frame always has an
+ * armed zero-delay timer for `clock.settle()` to see without the delivery
+ * itself waiting on one. A posted message is not an option in its place:
+ * Node's MessageChannel replaces the web one as soon as anything in the
+ * process loads node compatibility, and its ports deliver inside a microtask
+ * cascade rather than on a turn of their own.
+ *
+ * `loopback()` builds one over an in-process connection; the serving worker's
+ * plane builds one over its port.
+ */
+export const queuedFrameTransport = (
+  connection: {
+    /** Hands one client frame to the server; settles once it has taken it. */
+    receive(payload: string): Promise<void>;
+    close(): void;
+  },
+): QueuedFrameTransport => {
   let receiver = (_payload: string) => {};
+  let closeReceiver: ((error?: Error) => void) | undefined;
   let closed = false;
   const queue: string[] = [];
   let turn: ArmedTurn | null = null;
@@ -4751,36 +5035,91 @@ export const loopback = (server: Server): Transport => {
   const schedule = () => {
     turn ??= armTurn(drainOne);
   };
-  const connection = server.connect((message) => {
-    if (closed) return;
-    queue.push(encodeMemoryBoundary(message));
-    queued++;
-    schedule();
-  });
+  const end = () => {
+    closed = true;
+    turn?.cancel();
+    turn = null;
+    queue.length = 0;
+    releaseWaiters();
+  };
   return {
     async send(payload: string) {
+      if (closed) throw connectionError("memory transport closed");
       await connection.receive(payload);
     },
     close() {
-      closed = true;
-      turn?.cancel();
-      turn = null;
-      queue.length = 0;
-      releaseWaiters();
+      end();
       connection.close();
       return Promise.resolve();
     },
     setReceiver(next) {
       receiver = next;
     },
-    setCloseReceiver() {},
+    setCloseReceiver(next) {
+      closeReceiver = next;
+    },
     delivered() {
       if (closed || handedOver >= queued) return Promise.resolve();
       const { promise, resolve } = Promise.withResolvers<void>();
       deliveryWaiters.push({ target: queued, resolve });
       return promise;
     },
+    deliver(frame) {
+      if (closed) return;
+      queue.push(frame);
+      queued++;
+      schedule();
+    },
+    lose(error) {
+      if (closed) return;
+      end();
+      closeReceiver?.(error);
+    },
   };
+};
+
+/** What {@link queuedFrameTransport} returns. */
+export type QueuedFrameTransport = Transport & {
+  /** Hands one server frame over, to reach the receiver on its own turn. */
+  deliver(frame: string): void;
+
+  /**
+   * Reports the connection lost to the close receiver, dropping the frames
+   * held: what a transport over a port does when the port closes under it.
+   */
+  lose(error: Error): void;
+};
+
+/**
+ * A transport to an in-process server, delivering its frames as
+ * {@link queuedFrameTransport} does. Nothing calls `lose()` over it, so a
+ * disconnect the server initiates is invisible over loopback.
+ */
+export const loopback = (
+  server: {
+    connect(
+      send: (message: ServerMessage, payload?: string) => void,
+      syncParts?: PartLimits,
+    ): {
+      receive(payload: string): Promise<void>;
+      close(): void;
+    };
+  },
+  options: { syncParts?: PartLimits; messageLimits?: PartLimits } = {},
+): Transport => {
+  // The transport exists before the connection, so a frame the server
+  // sends as it connects is queued rather than lost.
+  const built: { connection?: ReturnType<typeof server.connect> } = {};
+  const transport = queuedFrameTransport({
+    receive: (payload) => built.connection!.receive(payload),
+    close: () => built.connection?.close(),
+  });
+  built.connection = server.connect((message, payload) => {
+    transport.deliver(payload ?? encodeMemoryBoundary(message));
+  }, options.syncParts);
+  return options.messageLimits === undefined
+    ? transport
+    : { ...transport, messageLimits: options.messageLimits };
 };
 
 /**
@@ -4886,6 +5225,15 @@ const isRetriableAuthorizationError = (error: unknown): boolean =>
 export function isPermanentAuthorizationError(error: unknown): boolean {
   return error instanceof Error && error.name === "AuthorizationError" &&
     (error as { retriable?: unknown }).retriable !== true;
+}
+
+/** Recognizes a server refusal whose recovery requires replacing the runtime. */
+export function isClientUpdateRequiredError(error: unknown): error is Error & {
+  /** Explicit recovery instruction, independent of the refusal's error name. */
+  clientUpdateRequired: true;
+} {
+  return error instanceof Error &&
+    (error as { clientUpdateRequired?: unknown }).clientUpdateRequired === true;
 }
 
 // A reconnect handshake failure the whole client must give up on rather than

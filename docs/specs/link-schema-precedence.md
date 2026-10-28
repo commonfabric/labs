@@ -73,6 +73,42 @@ the reader's item schema; and a renderer reading a link slot by its own
 schema reads the target's UI whatever narrower view the link was written
 from.
 
+A keyed cell's reader schema is its parent's narrowed to the key
+(`Cell.key()`). Where the parent refuses the key — a property declared
+`false`, `items: false`, an undeclared key beside
+`additionalProperties: false`, any key below a false schema or below a
+scalar — the keyed cell carries `false` and selects nothing, the same as one
+whose parent declares the child `{ "not": true }`. It is not left agnostic,
+which would read the raw value and adopt the stored schema at a link. The one
+refused key that reads with no schema is `length` under a schema admitting an
+array or a string and no object, since the store reads an array's or a
+string's `length` as a value. A schema that also admits an object refuses
+`length` as that object's key, and a keyed cell cannot tell which value it
+will meet, so the refusal stands: `key("length")` under
+`{ "anyOf": [{ "type": "string" }, { "type": "object", "additionalProperties": false }] }`,
+or under a closed object that declares no type, carries `false`.
+
+A key under an `allOf` that declares no `type` carries `false` as well,
+because narrowing does not read a child out of a conjunction
+([`json_schema.md`](json_schema.md#how-a-step-narrows)). A read of the parent
+evaluates the conjunction whole and reaches a property a part declares, so
+over `{ "x": 5 }` under
+`{ "allOf": [{ "type": "object", "properties": { "x": { "type": "number" } } }] }`
+the parent reads `{ "x": 5 }` while `key("x")` selects nothing. Leaving the
+keyed cell agnostic instead would read the property with no schema, dropping
+the constraints and labels the part declares on it.
+
+Under an `allOf` beside a declared `type` the disagreement runs the other
+way. Narrowing reads the keywords beside the conjunction and not its parts,
+so a key those keywords admit narrows to what they say about it, whatever a
+part declares. Over `{ "x": 5, "y": 1 }` under
+`{ "type": "object", "properties": { "y": { "type": "number" } }, "allOf": [{ "type": "object", "properties": { "x": { "type": "string" } } }] }`,
+`key("x")` carries the wildcard and reads `5`, which a read of the parent does
+not return, and the part's constraints and labels on `x` do not reach the
+keyed cell. Both cases close when narrowing reads a child out of each part of
+a conjunction; until then, a schema that has to hold for keyed reads states
+its constraints beside the `allOf` rather than only inside it.
+
 What the entry crossing compares against is the reader's own schema. An
 agnostic reader whose read passes through one link to reach a slot
 holding another adopts the second link's schema, which describes the

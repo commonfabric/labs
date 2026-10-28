@@ -39,101 +39,145 @@ export const index = createRoute({
   },
 });
 
+/** The body `/api/health/stats` answers with. */
+export const StatsResponseSchema = z.object({
+  timestamp: z.number(),
+  serverStart: z.number(),
+  logCounts: z.any(),
+  timingStats: z.any(),
+  slowQueries: z.array(z.any()),
+  // This process's memory, in bytes, as `Deno.memoryUsage()` reports
+  // it: `rss` covers the whole process, including a serving loop's
+  // worker; the heap figures and `external` cover this thread only.
+  processMemory: z.object({
+    rss: z.number().int().nonnegative(),
+    heapTotal: z.number().int().nonnegative(),
+    heapUsed: z.number().int().nonnegative(),
+    external: z.number().int().nonnegative(),
+  }),
+  // The memory server's decoded-document caches, keyed by open space
+  // (packages/memory/v2/engine.ts `DocumentCacheDiagnostics`) —
+  // present whenever a memory server is co-hosted in this process.
+  documentCaches: z.object({
+    totalBudgetBytes: z.number().int().positive(),
+    bytes: z.number().int().nonnegative(),
+    totalBudgetEvictions: z.number().int().nonnegative(),
+    spaces: z.record(
+      z.string(),
+      z.object({
+        hits: z.number().int().nonnegative(),
+        misses: z.number().int().nonnegative(),
+        evictions: z.number().int().nonnegative(),
+        patchReplays: z.number().int().nonnegative(),
+        resumes: z.number().int().nonnegative(),
+        entries: z.number().int().nonnegative(),
+        bytes: z.number().int().nonnegative(),
+        budgetBytes: z.number().int().positive(),
+        maxEntries: z.number().int().positive(),
+      }),
+    ),
+  }).optional(),
+  // The memory server's commit rates over the last minute and ten
+  // minutes (packages/memory/v2/commit-rates.ts `CommitRatesReport`)
+  // — present whenever a memory server is co-hosted in this process.
+  commitRates: z.object({
+    storm: z.object({
+      commitsPerMinute: z.number().positive(),
+      sustainedSeconds: z.number().positive(),
+    }),
+    activeSpaces: z.number().int().nonnegative(),
+    storms: z.number().int().nonnegative(),
+    spaces: z.array(
+      z.object({
+        space: z.string(),
+        minute: commitWindowCounts,
+        tenMinutes: commitWindowCounts,
+        storm: z.object({ since: z.number() }).optional(),
+        activeWriters: z.number().int().nonnegative(),
+        writers: z.array(
+          z.object({
+            session: z.string(),
+            principal: z.string().optional(),
+            minute: commitWindowCounts,
+            tenMinutes: commitWindowCounts,
+          }),
+        ),
+      }),
+    ),
+  }).optional(),
+  // The diagnostics clients reported about their sessions
+  // (packages/memory/v2/session-reports.ts `SessionReportsReport`):
+  // the remote-echo breaker's trips and clears since the server
+  // started, and the most recent reports in full — present whenever a
+  // memory server is co-hosted in this process.
+  sessionReports: z.object({
+    echoBreaker: z.object({
+      trips: z.number().int().nonnegative(),
+      clears: z.object({
+        convergence: z.number().int().nonnegative(),
+        quiet: z.number().int().nonnegative(),
+        retired: z.number().int().nonnegative(),
+        evicted: z.number().int().nonnegative(),
+      }),
+    }),
+    recent: z.array(
+      z.discriminatedUnion("event", [
+        sessionReportBase.extend({ event: z.literal("trip") }),
+        sessionReportBase.extend({
+          event: z.literal("clear"),
+          reason: z.enum(["convergence", "quiet", "retired", "evicted"]),
+          renewals: z.number().int().nonnegative(),
+          trippedMs: z.number().int().nonnegative(),
+        }),
+      ]),
+    ),
+  }).optional(),
+  // The serving loop's counters (server-execution v2,
+  // serving-loop.md §7) — present only in a process that runs the
+  // loop (the ON arm), on this thread or in its worker. Between a
+  // worker that failed and its replacement they are the failed
+  // worker's last counters, and no worker is serving.
+  servingLoop: z.any().optional(),
+});
+
 export const stats = createRoute({
   path: "/api/health/stats",
   method: "get",
   tags,
   responses: {
     [HttpStatusCodes.OK]: jsonContent(
+      StatsResponseSchema,
+      "Logger counts and timing statistics",
+    ),
+  },
+});
+
+/**
+ * The serving loop's realm's own logger counts and timing statistics. With
+ * the loop in a worker, `/api/health/stats` reads this thread's loggers,
+ * which hold none of the loop's; this route asks the worker, so an answer
+ * waits for the worker's turn, which is why it is not part of `stats`.
+ */
+export const servingLoopRealm = createRoute({
+  path: "/api/health/serving-loop-realm",
+  method: "get",
+  tags,
+  responses: {
+    [HttpStatusCodes.OK]: jsonContent(
       z.object({
         timestamp: z.number(),
-        serverStart: z.number(),
-        logCounts: z.any(),
+        loggerCounts: z.any(),
         timingStats: z.any(),
-        slowQueries: z.array(z.any()),
-        // The memory server's decoded-document caches, keyed by open space
-        // (packages/memory/v2/engine.ts `DocumentCacheDiagnostics`) —
-        // present whenever a memory server is co-hosted in this process.
-        documentCaches: z.object({
-          totalBudgetBytes: z.number().int().positive(),
-          bytes: z.number().int().nonnegative(),
-          totalBudgetEvictions: z.number().int().nonnegative(),
-          spaces: z.record(
-            z.string(),
-            z.object({
-              hits: z.number().int().nonnegative(),
-              misses: z.number().int().nonnegative(),
-              evictions: z.number().int().nonnegative(),
-              patchReplays: z.number().int().nonnegative(),
-              resumes: z.number().int().nonnegative(),
-              entries: z.number().int().nonnegative(),
-              bytes: z.number().int().nonnegative(),
-              budgetBytes: z.number().int().positive(),
-              maxEntries: z.number().int().positive(),
-            }),
-          ),
-        }).optional(),
-        // The memory server's commit rates over the last minute and ten
-        // minutes (packages/memory/v2/commit-rates.ts `CommitRatesReport`)
-        // — present whenever a memory server is co-hosted in this process.
-        commitRates: z.object({
-          storm: z.object({
-            commitsPerMinute: z.number().positive(),
-            sustainedSeconds: z.number().positive(),
-          }),
-          activeSpaces: z.number().int().nonnegative(),
-          storms: z.number().int().nonnegative(),
-          spaces: z.array(
-            z.object({
-              space: z.string(),
-              minute: commitWindowCounts,
-              tenMinutes: commitWindowCounts,
-              storm: z.object({ since: z.number() }).optional(),
-              activeWriters: z.number().int().nonnegative(),
-              writers: z.array(
-                z.object({
-                  session: z.string(),
-                  principal: z.string().optional(),
-                  minute: commitWindowCounts,
-                  tenMinutes: commitWindowCounts,
-                }),
-              ),
-            }),
-          ),
-        }).optional(),
-        // The diagnostics clients reported about their sessions
-        // (packages/memory/v2/session-reports.ts `SessionReportsReport`):
-        // the remote-echo breaker's trips and clears since the server
-        // started, and the most recent reports in full — present whenever a
-        // memory server is co-hosted in this process.
-        sessionReports: z.object({
-          echoBreaker: z.object({
-            trips: z.number().int().nonnegative(),
-            clears: z.object({
-              convergence: z.number().int().nonnegative(),
-              quiet: z.number().int().nonnegative(),
-              retired: z.number().int().nonnegative(),
-              evicted: z.number().int().nonnegative(),
-            }),
-          }),
-          recent: z.array(
-            z.discriminatedUnion("event", [
-              sessionReportBase.extend({ event: z.literal("trip") }),
-              sessionReportBase.extend({
-                event: z.literal("clear"),
-                reason: z.enum(["convergence", "quiet", "retired", "evicted"]),
-                renewals: z.number().int().nonnegative(),
-                trippedMs: z.number().int().nonnegative(),
-              }),
-            ]),
-          ),
-        }).optional(),
-        // The serving loop's counters (server-execution v2,
-        // serving-loop.md §7) — present only while an ExecutorHost runs
-        // in this process (the ON arm).
-        servingLoop: z.any().optional(),
       }),
-      "Logger counts and timing statistics",
+      "The serving loop's realm's logger counts and timing statistics",
+    ),
+    [HttpStatusCodes.NOT_FOUND]: jsonContent(
+      z.object({ error: z.string() }),
+      "No serving loop runs in this process",
+    ),
+    [HttpStatusCodes.SERVICE_UNAVAILABLE]: jsonContent(
+      z.object({ error: z.string() }),
+      "The serving loop's worker is not serving",
     ),
   },
 });
@@ -182,6 +226,17 @@ export const documentInterests = createRoute({
         truncated: z.boolean(),
         sessions: z.array(z.object({
           sessionId: z.string(),
+          client: z.object({
+            application: z.string().regex(/^[\x20-\x7e]{1,64}$/),
+            gitSha: z.string().regex(/^[a-f0-9]{40}$/).nullable(),
+            instanceId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/),
+            generation: z.number().int().positive().max(
+              Number.MAX_SAFE_INTEGER,
+            ).optional(),
+            startedAt: z.number().int().nonnegative().max(
+              Number.MAX_SAFE_INTEGER,
+            ),
+          }).nullable(),
           principal: z.string().nullable(),
           actingPrincipal: z.string().nullable(),
           connectionId: z.string().nullable(),
@@ -206,6 +261,7 @@ export const documentInterests = createRoute({
 
 export type IndexRoute = typeof index;
 export type StatsRoute = typeof stats;
+export type ServingLoopRealmRoute = typeof servingLoopRealm;
 export type DashRoute = typeof dash;
 
 /** Handler contract for the document-interest diagnostic. */

@@ -30,7 +30,7 @@ import {
   pattern,
   type PerSession,
   type PerUser,
-  principalOf,
+  profileOwnerOf,
   SELF,
   spaceAccess,
   type SpaceAccessLevel,
@@ -57,7 +57,12 @@ import {
   rosterProfiles,
 } from "../loom/participants.tsx";
 import { profileKeyOf } from "../system/private-inbox.tsx";
-import { type ShownIn, type ViewPlace, viewPlaces } from "./logic.ts";
+import {
+  type ShownIn,
+  threadExcerpt,
+  type ViewPlace,
+  viewPlaces,
+} from "./logic.ts";
 import {
   canActIn,
   commitAttach,
@@ -68,6 +73,7 @@ import {
   commitObliterate,
   commitSend,
   commitSendReaction,
+  commitSetThreadTitle,
   commitSetTitle,
   commitThreadSend,
   type ComposerAttachment,
@@ -76,6 +82,7 @@ import {
   dropAttachment,
   FABRICHAT_POLICY,
   isOwnerOf,
+  type JoinedEvent,
   type JoiningManager,
   type MessageCell,
   messageEntries,
@@ -86,11 +93,14 @@ import {
   NO_MESSAGE_RIGHTS,
   ownersMayObliterateIn,
   prepareAttach,
+  type RepliedMessage,
   rightsOf,
   type RoomStreamEvent,
+  type SetThreadTitleEvent,
   type SetTitleEvent,
   type StoredAbout,
   tellManagerJoined,
+  type ThreadInfoCell,
   TITLE_KEY,
   type TitlesCell,
   viewKeyOf,
@@ -104,6 +114,7 @@ import {
   type AddMemberRefusalCode,
   CHAT_ADD_MEMBER_ACTION,
   CHAT_ADD_MEMBER_SURFACE,
+  CHAT_REPLY_SHAPE,
   CHAT_RETITLE_ACTION,
   CHAT_RETITLE_SURFACE,
   CHAT_SEND_ACTION,
@@ -113,6 +124,7 @@ import {
   type ChatContainer,
   type ChatDisplay,
   type ChatProfile,
+  type ChatReplyShape,
   type ChatRequestOutcome,
   type ChatRoomAbout,
   type ChatRoomKind,
@@ -121,6 +133,7 @@ import {
   epochNsec,
   isPrincipalDID,
   type ProfileCell,
+  type SetThreadTitleOutcome,
   type SetTitleOutcome,
 } from "./schemas.tsx";
 
@@ -150,8 +163,8 @@ export interface ParticipantEntry {
   profile: ProfileCell;
 
   /**
-   * The principal the profile's `represents-principal` label attests; absent
-   * when it attests none, or when the label can't be read where the entry is
+   * The principal whose own profile it is (`profileOwnerOf()`); absent when
+   * it is no one's, or when its label can't be read where the entry is
    * derived.
    */
   principal?: string;
@@ -166,7 +179,7 @@ export const participantEntriesOf = (
 ): ParticipantEntry[] =>
   participants.map((profile) => ({
     profile,
-    principal: principalOf(profile, "represents-principal"),
+    principal: profileOwnerOf(profile),
   }));
 
 /** The principals `entries` attest, each once, in the order of `entries`. */
@@ -236,17 +249,15 @@ export interface ParticipantChipOutput {
  * manager, and to a viewer whose Home has none, and a click then reaches no
  * one. It names the participant to the manager by their profile, bound as the
  * control's `name`, which crosses into the click's event as the profile's own
- * cell; the manager reads whom it names from the profile's
- * `represents-principal` label, and offers the room through the share inbox
- * the profile points at.
+ * cell; the manager reads whom it names as the principal whose own profile it
+ * is (`profileOwnerOf()`), and offers the room through the share inbox the
+ * profile points at.
  */
 export const ParticipantChip = pattern<
   ParticipantChipInput,
   ParticipantChipOutput
 >(({ participant, myProfile, startDirect }) => {
-  const counterpart = computed(() =>
-    principalOf(participant, "represents-principal") ?? ""
-  );
+  const counterpart = computed(() => profileOwnerOf(participant) ?? "");
   // Who may start a chat differs by viewer, so the control is hidden by a
   // prop rather than built as a different tree (see `FabriChatMessageRow`).
   const chatDisplay = computed((): ChatDisplay =>
@@ -294,8 +305,8 @@ export interface AddMemberEvent {
   readonly requestId?: string;
 
   /**
-   * The new member's profile, whose `represents-principal` label names them,
-   * through whose share inbox the viewer's manager offers them the room.
+   * The new member's own profile (`profileOwnerOf()` names them), through
+   * whose share inbox the viewer's manager offers them the room.
    */
   // `Cell<…>` is written out rather than reached through an alias: the
   // event's schema marks a reference position only where the wrapper is
@@ -583,12 +594,12 @@ const commitAddMember = handler<AddMemberEvent, AddMemberState>(
       refuse("A direct chat keeps its two members.", "direct-room");
       return;
     }
-    // A profile names the person its `represents-principal` label attests, so
-    // one attesting no one names no one.
+    // A profile names the person whose own profile it is (`profileOwnerOf()`),
+    // so one that is no one's names no one.
     const profile = event?.profile ?? picked;
     const attested = profile === undefined
       ? undefined
-      : principalOf(profile, "represents-principal");
+      : profileOwnerOf(profile);
     if (profile !== undefined && !isPrincipalDID(attested)) {
       refuse("That profile doesn't say whose it is.");
       return;
@@ -861,18 +872,76 @@ export interface MessageFacts {
 }
 
 /**
- * `MessageFacts` for `messages`. The views keep the order the room recorded
- * the messages in: a time is the handler clock's reading, and nothing sorts
- * by it. A thread's root is always in the main conversation, so the main
- * conversation's entries, in order, name every root.
+ * The title of the thread `root` roots, as `titles` holds one by the root's
+ * key, or else the start of the root's text, `record`'s, as
+ * `threadExcerpt()` cuts it. A root with no text, only attachments, reads as
+ * `Attachments`; a deleted or obliterated root reads as the marker it shows.
+ */
+export const threadTitleOf = (
+  key: string,
+  record: RepliedMessage | undefined,
+  titles: Readonly<Record<string, string>>,
+): string => {
+  const set = titles[key];
+  if (set !== undefined) return set;
+  const text = bodyText(record);
+  return text.trim() === "" ? "Attachments" : threadExcerpt(text);
+};
+
+/**
+ * How a composer's bar shows the message it replies to: its text, or
+ * `Attachments` for one with no text, only attachments.
+ */
+const quotedText = (record: RepliedMessage | undefined): string => {
+  const text = bodyText(record);
+  return record !== undefined && text.trim() === "" ? "Attachments" : text;
+};
+
+/**
+ * The title each thread's record holds, by its root's key, from `threadInfo`;
+ * none where the room is given no list of them.
+ */
+export const threadTitles = (
+  threadInfo: ThreadInfoCell | undefined,
+): Record<string, string> =>
+  Object.fromEntries(
+    (threadInfo?.get() ?? []).flatMap((record) => {
+      const key = record?.root === undefined
+        ? undefined
+        : viewKeyOf(record.root);
+      return key === undefined || typeof record.title !== "string"
+        ? []
+        : [[key, record.title]];
+    }),
+  );
+
+/**
+ * `MessageFacts` for `messages`, with each thread titled as `titles` says.
+ * The views keep the order the room recorded the messages in: a time is the
+ * handler clock's reading, and nothing sorts by it. A thread's root is always
+ * in the main conversation, so the main conversation's entries, in order,
+ * name every root.
  */
 export const messageFacts = (
   messages: Cell<MessagesValue>,
+  titles: Readonly<Record<string, string>> = {},
 ): MessageFacts => {
-  const { entries, authors } = messageEntries(messages);
+  const { entries, authors, records, legacyReplies } = messageEntries(
+    messages,
+  );
   const places = viewPlaces(entries);
   const mainEntries = entries.filter((entry) => entry.inMain);
   const main = mainEntries.map((entry) => entry.cell);
+  // Each thread's messages besides its root, in the order recorded.
+  const members = new Map<string, MessageCell[]>();
+  for (const entry of entries) {
+    const root = places[entry.key]?.thread;
+    if (root === undefined) continue;
+    const list = members.get(root);
+    if (list === undefined) members.set(root, [entry.cell]);
+    else list.push(entry.cell);
+  }
+  const window = FABRICHAT_POLICY.maxWindowCount;
   const first = entries[0];
   const last = entries[entries.length - 1];
   return {
@@ -885,17 +954,22 @@ export const messageFacts = (
       ...(first === undefined ? {} : { oldestAt: epochNsec(first.sentAt) }),
       ...(last === undefined ? {} : { newestAt: epochNsec(last.sentAt) }),
       latest: {
-        messages: main.slice(-FABRICHAT_POLICY.maxWindowCount),
-        hasOlder: main.length > FABRICHAT_POLICY.maxWindowCount,
+        messages: main.slice(-window),
+        hasOlder: main.length > window,
       },
       threads: mainEntries.flatMap((entry) => {
         const place = places[entry.key];
+        const replies = members.get(entry.key) ?? [];
         return place?.latestReplyAt === undefined ? [] : [{
           root: entry.cell,
+          title: threadTitleOf(entry.key, records.get(entry.key), titles),
           replyCount: place.replies,
           latestReplyAt: epochNsec(place.latestReplyAt),
+          messages: [entry.cell, ...replies.slice(-window)],
+          hasOlder: replies.length > window,
         }];
       }),
+      legacyReplies,
     },
   };
 };
@@ -910,11 +984,26 @@ export interface ChatThreadSummary {
   /** The thread's root, a message the main conversation shows. */
   root: MessageCell;
 
+  /**
+   * The thread's title, as a member last set it, or else the start of its
+   * root's text (see `threadTitleOf()`).
+   */
+  title: string;
+
   /** How many messages the thread holds besides its root; never 0. */
   replyCount: number;
 
   /** The newest `sentAt` among those messages. */
   latestReplyAt: FabricEpochNsec;
+
+  /**
+   * The thread's root, then up to `maxWindowCount` of its newest other
+   * messages, oldest first.
+   */
+  messages: MessageCell[];
+
+  /** Whether the thread holds older messages than those `messages` holds. */
+  hasOlder: boolean;
 }
 
 /** A room's messages: facts, the newest, and its threads. */
@@ -942,6 +1031,15 @@ export interface ChatMessageList {
    * of the main conversation that roots none has no entry.
    */
   threads: ChatThreadSummary[];
+
+  /**
+   * How many of the room's messages were stored before a message named the
+   * thread it joins and the message it quotes apart, so the room can't say
+   * what they replied to: shown in the conversation, where they were shown
+   * there, as messages in no thread, and not shown where they were shown only
+   * in a thread. A room shows how many there are; 0 in a room with none.
+   */
+  legacyReplies: number;
 }
 
 /** Who is reading a room. */
@@ -953,8 +1051,9 @@ export interface ChatRoomViewer {
   profile?: ProfileCell;
 
   /**
-   * The principal the reader's profile's `represents-principal` label attests;
-   * absent when it attests none, or the label can't be read.
+   * The principal whose own profile the reader's profile is
+   * (`profileOwnerOf()`); absent when it is no one's, or its label can't be
+   * read.
    */
   principal?: string;
 
@@ -988,6 +1087,12 @@ export interface ChatRoomView {
   about: ChatRoomAbout;
 
   /**
+   * The shape of `replyTo` the room reads and stores, which a client sends a
+   * reply in. A room offering none takes a reply that names one `message`.
+   */
+  replyShape: ChatReplyShape;
+
+  /**
    * The room's participants: for a room that is its space's root, those who
    * joined it; for any other, its space's participants as the space's root
    * lists them, then those who joined the room itself; and then any author
@@ -1006,8 +1111,8 @@ export interface ChatRoomView {
 
   /**
    * One entry for each of `participants`, in their order: the profile, and the
-   * principal its `represents-principal` label attests, absent where it
-   * attests none or the label can't be read where the list is derived. Like
+   * principal whose own profile it is (`profileOwnerOf()`), absent where it is
+   * no one's or its label can't be read where the list is derived. Like
    * `participants`, it is not proof of access.
    */
   participantEntries: PerUser<ParticipantEntry[]>;
@@ -1091,6 +1196,19 @@ export interface ChatRoomView {
   titleRequests: Record<string, SetTitleOutcome>;
 
   /**
+   * Sets the title of the thread its event's `root` roots, which every member
+   * shares, from a trusted gesture on the rendering's `ChatRetitleSurface`,
+   * or from a client's own control through the sanctioned issuing path. Any
+   * member who can write in the room may.
+   */
+  setThreadTitle: Stream<SetThreadTitleEvent>;
+
+  /**
+   * The outcome of each of this reader's thread retitles, by its `requestId`.
+   */
+  threadTitleRequests: Record<string, SetThreadTitleOutcome>;
+
+  /**
    * The store of the files of the room's space: for a room that is its
    * space's root, the one it names itself; for any other, the one its space's
    * root names. Absent while that names none.
@@ -1167,6 +1285,12 @@ export interface FabriChatRoomCoreInput {
    * no member sets.
    */
   titles?: TitlesCell;
+
+  /**
+   * What the room keeps about each of its threads; absent for a room that
+   * keeps nothing about them, whose threads are titled by their roots' text.
+   */
+  threadInfo?: ThreadInfoCell;
 
   /** Those who joined the room; absent for a room nobody can join. */
   roster?: ParticipantRosterCell;
@@ -1268,6 +1392,66 @@ const FabriChatAttachingFile = pattern<AttachingFileInput, { [UI]: VNode }>(
   },
 );
 
+/** One thread composer's session-owned draft and view. */
+interface ThreadComposerOutput {
+  [UI]: VNode;
+  draft: PerSession<Writable<{ value: string; revision: string }>>;
+}
+
+/** Owns one thread's session draft under its root's mapped occurrence identity. */
+const FabriChatThreadComposer = pattern<{
+  root: Cell<RepliedMessage>;
+  disabled: boolean | Default<true>;
+  myProfile: ProfileCell | undefined;
+  messages: MessagesCell;
+  composer: PerSession<ComposerCell>;
+  shownIn: ShownIn;
+  threadInfo: ThreadInfoCell;
+  joined?: Stream<JoinedEvent>;
+}, PerSession<ThreadComposerOutput>>(
+  (
+    {
+      root,
+      disabled,
+      myProfile,
+      messages,
+      composer,
+      shownIn,
+      threadInfo,
+      joined,
+    },
+  ) => {
+    const draft = new Writable.perSession<{ value: string; revision: string }>({
+      value: "",
+      revision: "",
+    });
+    const send = commitThreadSend({
+      myProfile,
+      messages,
+      composer,
+      shownIn,
+      threadInfo,
+      joined,
+      draft,
+    });
+    return {
+      draft,
+      [UI]: (
+        <cf-submit-input
+          data-ui-action={CHAT_SEND_ACTION}
+          data-thread-key={computed(() => viewKeyOf(root) ?? "")}
+          inputId="fabrichat-thread-message"
+          $draft={draft}
+          placeholder="Reply in thread"
+          buttonText="Reply"
+          disabled={disabled}
+          onClick={send}
+        />
+      ),
+    };
+  },
+);
+
 /**
  * A conversation with a composer that sends as the viewer: the whole of
  * `ChatRoomOutput`, given the viewer's profile.
@@ -1282,6 +1466,7 @@ export const FabriChatRoomCore = pattern<
     about,
     messages,
     titles,
+    threadInfo,
     roster,
     fileStore,
     addRequests,
@@ -1331,7 +1516,9 @@ export const FabriChatRoomCore = pattern<
 
   // Everything the room derives from its messages, in one walk (see
   // `MessageFacts`).
-  const facts = computed(() => messageFacts(messages));
+  const facts = computed(() =>
+    messageFacts(messages, threadTitles(threadInfo))
+  );
   const places = facts.places;
   // The space's participants as its root lists them, for a room that isn't
   // that root. A root room's `#default` is the room itself, so it reads only
@@ -1379,7 +1566,7 @@ export const FabriChatRoomCore = pattern<
     const profile = viewerProfileOf(myProfile);
     const principal = profile === undefined
       ? undefined
-      : principalOf(profile, "represents-principal");
+      : profileOwnerOf(profile);
     const role = spaceAccess(messages);
     return {
       ...(profile === undefined ? {} : { profile }),
@@ -1457,6 +1644,14 @@ export const FabriChatRoomCore = pattern<
     return key !== undefined && places[key] !== undefined ? key : "";
   });
   const hasThread = computed(() => openThreadKey !== "");
+  const threadComposerRoots = computed(
+    (): PerSession<Cell<RepliedMessage>[]> => {
+      const root = composer.get()?.thread;
+      return openThreadKey === "" || root === undefined
+        ? []
+        : [root.resolveAsCell()];
+    },
+  );
   // The session's open thread: its root, and every message in the thread the
   // root starts, in the order the room recorded them. The thread's list maps
   // it, so a session holds a thread row for each message of the thread it has
@@ -1471,11 +1666,41 @@ export const FabriChatRoomCore = pattern<
         places[entry.key]?.thread === openThreadKey
       ).map((entry) => entry.cell)
   );
-  const replyingTo = computed(() => bodyText(composer.get()?.replyTo?.get()));
+  // What each composer is replying to, as its bar shows it: a message with
+  // no text, only attachments, reads as "Attachments", so its bar still says
+  // what the reply quotes and still offers its cancel.
+  const replyingTo = computed(() => quotedText(composer.get()?.replyTo?.get()));
+  const threadReplyingTo = computed(() =>
+    quotedText(composer.get()?.threadQuotes?.get())
+  );
+  // The open thread's title, as the thread's summary gives it, including
+  // for a root that holds no reply yet.
+  const openThreadTitle = computed(() =>
+    openThreadKey === "" ? "" : threadTitleOf(
+      openThreadKey,
+      composer.get()?.thread?.get(),
+      threadTitles(threadInfo),
+    )
+  );
+  // Messages stored before a message named its thread and its quote apart;
+  // the room says how many, rather than showing them as if nothing was lost.
+  const legacyReplies = computed(() => facts.list.legacyReplies);
+  const legacyText = computed(() =>
+    `${legacyReplies} ${
+      legacyReplies === 1 ? "message here was" : "messages here were"
+    } sent with an earlier FabriChat. Each is shown without what it replied to, and one sent only to a thread isn't shown.`
+  );
+  const legacyDisplay = computed((): ChatDisplay =>
+    legacyReplies > 0 ? "block" : "none"
+  );
   // Per-session and per-viewer parts are hidden by a prop, never built as a
   // different tree (see `FabriChatMessageRow`).
-  const replyDisplay = computed(
-    (): ChatDisplay => (replyingTo ? "flex" : "none"),
+  // Each bar shows while its composer quotes a message.
+  const replyDisplay = computed((): ChatDisplay =>
+    composer.get()?.replyTo?.get() === undefined ? "none" : "flex"
+  );
+  const threadReplyDisplay = computed((): ChatDisplay =>
+    composer.get()?.threadQuotes?.get() === undefined ? "none" : "flex"
   );
   const threadDisplay = computed(
     (): ChatDisplay => (hasThread ? "flex" : "none"),
@@ -1502,7 +1727,12 @@ export const FabriChatRoomCore = pattern<
   });
 
   // Each handler is bound to the cells it uses and no others.
-  const sendMessage = commitSend({ myProfile, messages, joined: tellJoined });
+  const sendMessage = commitSend({
+    myProfile,
+    messages,
+    threadInfo,
+    joined: tellJoined,
+  });
   const composeSend = commitComposerSend({
     myProfile,
     messages,
@@ -1524,13 +1754,55 @@ export const FabriChatRoomCore = pattern<
   const attachingFiles = computed((): PerSession<ComposerAttachment[]> =>
     composer.get()?.attaching ?? []
   );
+  const threadComposers = threadComposerRoots.map((root) =>
+    FabriChatThreadComposer({
+      root,
+      disabled: cannotSend,
+      myProfile,
+      messages,
+      composer,
+      shownIn: threadShownIn,
+      threadInfo,
+      joined: tellJoined,
+    })
+  );
+  const selectedThreadDraft = computed(
+    (): Writable<{ value: string; revision: string }> | undefined =>
+      threadComposers[0]?.draft,
+  );
+  // The aggregate view belongs to the session, as the child composers do.
+  const threadComposerViews = computed((): PerSession<VNode[]> =>
+    threadComposers.map((threadComposer) => threadComposer[UI])
+  );
   const sendThreadReply = commitThreadSend({
     myProfile,
     messages,
     composer,
+    draft: selectedThreadDraft,
     shownIn: threadShownIn,
+    threadInfo,
     joined: tellJoined,
   });
+  // The sender's thread retitles' outcomes, and why the session's latest was
+  // refused, as for the room's own title. A rendered retitle names the
+  // session's open thread.
+  const threadTitleRequests = new Writable.perUser<
+    Record<string, SetThreadTitleOutcome>
+  >({});
+  const threadTitleRefusal = new Writable.perSession<string>("");
+  const setThreadTitle = commitSetThreadTitle({
+    threadInfo,
+    messages,
+    composer,
+    outcomes: threadTitleRequests,
+    refusal: threadTitleRefusal,
+  });
+  const threadRetitleDisplay = computed((): ChatDisplay =>
+    threadInfo !== undefined && canSend ? "flex" : "none"
+  );
+  const threadTitleRefusalDisplay = computed((): ChatDisplay =>
+    threadTitleRefusal.get() === "" ? "none" : "block"
+  );
   const streams = {
     sendMessage,
     editMessage: commitEdit({ myProfile, room: messages, composer }),
@@ -1550,6 +1822,7 @@ export const FabriChatRoomCore = pattern<
   };
   const view = {
     about: aboutView,
+    replyShape: CHAT_REPLY_SHAPE,
     participants,
     roster: joined,
     participantEntries: participantEntriesForUser,
@@ -1565,12 +1838,20 @@ export const FabriChatRoomCore = pattern<
     addRequests: addMember.outcomes,
     setTitle,
     titleRequests,
+    setThreadTitle,
+    threadTitleRequests,
     fileStore: spaceFileStore,
     ensureFileStore: ensureFileStoreHere,
     fileStoreRecord: ownSpace ? fileStore : undefined,
   };
-  const closeThread = action(() => composer.key("thread").set(undefined));
+  const closeThread = action(() => {
+    composer.key("thread").set(undefined);
+    composer.key("threadQuotes").set(undefined);
+  });
   const cancelReply = action(() => composer.key("replyTo").set(undefined));
+  const cancelThreadReply = action(() =>
+    composer.key("threadQuotes").set(undefined)
+  );
 
   return {
     [NAME]: name,
@@ -1580,6 +1861,14 @@ export const FabriChatRoomCore = pattern<
           <cf-heading level={3}>{name}</cf-heading>
           <cf-profile-badge $profile={myProfile} size="sm" />
         </cf-hstack>
+        <cf-text
+          id="fabrichat-legacy-replies"
+          variant="caption"
+          hidden
+          style={{ display: legacyDisplay }}
+        >
+          {legacyText}
+        </cf-text>
         <cf-vstack
           id="fabrichat-retitle"
           gap="1"
@@ -1676,6 +1965,7 @@ export const FabriChatRoomCore = pattern<
           <cf-submit-input
             data-ui-action={CHAT_SEND_ACTION}
             inputId="fabrichat-message"
+            $draft={composer.key("draft")}
             placeholder="Message"
             buttonText="Send"
             disabled={cannotSend}
@@ -1713,11 +2003,38 @@ export const FabriChatRoomCore = pattern<
           }}
         >
           <cf-hstack justify="between" align="center">
-            <cf-heading level={4}>Thread</cf-heading>
+            <cf-heading level={4}>{openThreadTitle}</cf-heading>
             <cf-button size="sm" variant="ghost" onClick={closeThread}>
               Close
             </cf-button>
           </cf-hstack>
+          <cf-vstack
+            id="fabrichat-thread-retitle"
+            gap="1"
+            hidden
+            style={{ display: threadRetitleDisplay }}
+          >
+            <div
+              data-ui-pattern={CHAT_RETITLE_SURFACE}
+              data-ui-event-integrity={CHAT_RETITLE_SURFACE}
+            >
+              <cf-submit-input
+                data-ui-action={CHAT_RETITLE_ACTION}
+                inputId="fabrichat-thread-title"
+                placeholder="Thread title"
+                buttonText="Rename"
+                onClick={setThreadTitle}
+              />
+            </div>
+            <cf-text
+              id="fabrichat-thread-retitle-refusal"
+              variant="caption"
+              hidden
+              style={{ display: threadTitleRefusalDisplay }}
+            >
+              {threadTitleRefusal}
+            </cf-text>
+          </cf-vstack>
           {threadMessages.map((message) => (
             <FabriChatMessageRow
               message={message}
@@ -1736,6 +2053,17 @@ export const FabriChatRoomCore = pattern<
               self={self}
             />
           ))}
+          <cf-hstack
+            gap="2"
+            align="center"
+            hidden
+            style={{ display: threadReplyDisplay }}
+          >
+            <cf-text variant="caption">Replying to: {threadReplyingTo}</cf-text>
+            <cf-button size="sm" variant="ghost" onClick={cancelThreadReply}>
+              Cancel
+            </cf-button>
+          </cf-hstack>
           <cf-checkbox $checked={alsoToMain}>
             Also send to the conversation
           </cf-checkbox>
@@ -1743,14 +2071,7 @@ export const FabriChatRoomCore = pattern<
             data-ui-pattern={CHAT_SEND_SURFACE}
             data-ui-event-integrity={CHAT_SEND_SURFACE}
           >
-            <cf-submit-input
-              data-ui-action={CHAT_SEND_ACTION}
-              inputId="fabrichat-thread-message"
-              placeholder="Reply in thread"
-              buttonText="Reply"
-              disabled={cannotSend}
-              onClick={sendThreadReply}
-            />
+            {threadComposerViews}
           </div>
         </cf-vstack>
       </cf-vstack>
@@ -1783,6 +2104,12 @@ export interface FabriChatRoomInput {
   titles?: TitlesCell;
 
   /**
+   * What the room keeps about each of its threads. It changes only through
+   * `setThreadTitle`, and a send that titles the thread it starts.
+   */
+  threadInfo?: ThreadInfoCell;
+
+  /**
    * Those who joined the room. It changes only through `addParticipant`, the
    * one writer its write contract admits.
    */
@@ -1805,6 +2132,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
     about,
     messages,
     titles,
+    threadInfo,
     participants,
     fileStore,
     // The room itself, the link another member's manager lists it by.
@@ -1835,6 +2163,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
         about,
         messages,
         titles,
+        threadInfo,
         roster: participants,
         fileStore,
         addRequests,
@@ -1848,6 +2177,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
       [NAME]: room[NAME],
       [VIEWS]: room[VIEWS],
       about: room.about,
+      replyShape: room.replyShape,
       participants: room.participants,
       roster: room.roster,
       participantEntries: room.participantEntries,
@@ -1868,6 +2198,8 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
       addRequests: room.addRequests,
       setTitle: room.setTitle,
       titleRequests: room.titleRequests,
+      setThreadTitle: room.setThreadTitle,
+      threadTitleRequests: room.threadTitleRequests,
       fileStore: room.fileStore,
       ensureFileStore: room.ensureFileStore,
       fileStoreRecord: room.fileStoreRecord,

@@ -208,8 +208,9 @@ export class CFShareSnapshot extends BaseElement {
           : ""}</pre>
         <p>Only the displayed fields are shared. Links and future changes to the source are not included.</p>
         <div class="actions">
-          <button type="button" ?disabled=${this.#busy} @click=${this
-            .#cancel}>Cancel</button>
+          <button type="button" ?disabled=${this.#busy}
+            @click=${this
+              .#cancel}>Cancel</button>
           <button class="confirm" type="button" ?disabled=${this.#busy ||
             !this.#preview}
             @click=${this.#confirm}>Share snapshot</button>

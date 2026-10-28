@@ -127,6 +127,7 @@ import {
   publishCustodyAnswer,
   readCustodyAnswer,
 } from "@commonfabric/runner/cfc/custody-seal";
+import { cfcSchemaGivesNoShape } from "@commonfabric/runner/cfc/schema-primitives";
 import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
 import { bindNativeUiControl } from "@commonfabric/runner/native-ui";
 import {
@@ -146,11 +147,7 @@ import {
   resetAllTimingBaselines,
 } from "@commonfabric/utils/logger";
 import { backtickQuote } from "@commonfabric/utils/markdown";
-import {
-  isObjectNotArray,
-  isObjectOrArray,
-  isPlainObject,
-} from "@commonfabric/utils/types";
+import { isObjectNotArray, isPlainObject } from "@commonfabric/utils/types";
 
 import { HostReadGate } from "./host-read-gate.ts";
 import { postToClient } from "./post-to-client.ts";
@@ -528,8 +525,8 @@ export function browserWorkerParamsFromInitializationData(
   return {
     apiUrl: new URL(data.apiUrl),
     storageManager,
-    // The host decides the flags (shell build-time defines); absent ⇒ runtime
-    // defaults.
+    // The host decides the flags (the shell's build-time defines and the ones
+    // it adopts from its deployment); absent ⇒ runtime defaults.
     experimental: data.experimental ?? {},
     telemetry,
     ...(data.spaceHostMap !== undefined
@@ -549,6 +546,9 @@ export function browserWorkerParamsFromInitializationData(
       : {}),
     ...(data.cfcReadOnExceed !== undefined
       ? { cfcReadOnExceed: data.cfcReadOnExceed }
+      : {}),
+    ...(data.preferredProfileSpace !== undefined
+      ? { preferredProfileSpace: data.preferredProfileSpace }
       : {}),
     ...(data.cfcTrustConfig !== undefined
       ? { cfcTrustConfig: data.cfcTrustConfig }
@@ -760,11 +760,15 @@ export function toConsoleDebugValue(value: unknown): FabricValue {
   });
 }
 
-export const hasExplicitSubscriptionSchema = (schema: unknown): boolean =>
-  schema === true ||
-  (schema !== undefined && schema !== false &&
-    isObjectOrArray(schema) &&
-    Object.keys(schema).length > 0);
+/**
+ * Whether `schema`, the one a subscription reads its cell under, gives what it
+ * reads a shape. One that gives none (absent, `true`, `{}`, or nothing but
+ * annotations and the runtime's own keywords, `cfcSchemaGivesNoShape()`) reads
+ * a value through a query-result proxy that follows every link it holds and
+ * depends on all of it.
+ */
+export const subscriptionSchemaGivesShape = (schema: unknown): boolean =>
+  !cfcSchemaGivesNoShape(schema as JSONSchema | undefined);
 
 /**
  * Connects render boundaries to authoritative access verdict changes. Given
@@ -857,6 +861,7 @@ export function securityContextFrom(
     cfcFlowLabels: data.cfcFlowLabels,
     cfcReadMaxConfidentiality: data.cfcReadMaxConfidentiality,
     cfcReadOnExceed: data.cfcReadOnExceed,
+    preferredProfileSpace: data.preferredProfileSpace,
     cfcTrustConfig: data.cfcTrustConfig,
     renderDeclassificationPolicy: data.renderDeclassificationPolicy,
     renderConfidentialityCeiling: data.renderConfidentialityCeiling,
@@ -1085,6 +1090,7 @@ export class RuntimeProcessor {
   #cancelSpaceAccessLoss?: Cancel;
   #cancelSpaceAccessRestored?: Cancel;
   #cancelConnectionRestored?: Cancel;
+  #cancelClientUpdateRequired?: Cancel;
 
   /**
    * The retries of refused spaces in flight, which the render boundaries'
@@ -1128,6 +1134,17 @@ export class RuntimeProcessor {
     // the space with no access error. A storage manager that cannot say what
     // the error is cannot tell the two apart, so nothing is posted for it.
     const storage = runtime.storageManager;
+    this.#cancelClientUpdateRequired = storage?.subscribeClientUpdateRequired?.(
+      (status) => {
+        for (const client of clients()) {
+          client.post({
+            type: NotificationType.ErrorReport,
+            code: RuntimeErrorCode.ClientUpdateRequired,
+            ...status,
+          });
+        }
+      },
+    );
     const accessError = storage?.spaceAccessError?.bind(storage);
     if (accessError !== undefined) {
       this.#cancelSpaceAccessRestored = storage?.subscribeSpaceAccessChange?.(
@@ -1469,6 +1486,8 @@ export class RuntimeProcessor {
         this.#cancelSpaceAccessRestored = undefined;
         this.#cancelConnectionRestored?.();
         this.#cancelConnectionRestored = undefined;
+        this.#cancelClientUpdateRequired?.();
+        this.#cancelClientUpdateRequired = undefined;
         this.#spaceAccessRetries.dispose();
         this.#intentOutcomeCancel = undefined;
         this.#profilePreloadCancel?.();
@@ -1515,6 +1534,17 @@ export class RuntimeProcessor {
 
   isDisposed(): boolean {
     return this.#isDisposed;
+  }
+
+  /** Sends an attached client the runtime's retained update requirement. */
+  reportClientUpdateRequired(client: WorkerClient): void {
+    const status = this.#runtime.storageManager?.clientUpdateRequired?.();
+    if (status === undefined) return;
+    client.post({
+      type: NotificationType.ErrorReport,
+      code: RuntimeErrorCode.ClientUpdateRequired,
+      ...status,
+    });
   }
 
   /**
@@ -2376,16 +2406,21 @@ export class RuntimeProcessor {
 
     const cell = getCell(this.#runtime, request.cell);
 
+    // Whether this subscription has been reported as reading through a
+    // proxy, so that it is reported once rather than on every delivery.
+    let reported = false;
     const cancel = this.#hostReadGate.subscribe(cell, request.cell, {
       includeCfcLabel: request.includeCfcLabel,
     }, (value) => {
-      // Log empty-schema subscriptions that produce CellResult proxies.
-      // These are the call sites that need real schemas added. The schema
-      // checked is the one the cell reads under, which for a ref keyed from
-      // an ancestor is the one the worker narrowed to.
-      if (!isCellResult(value)) return;
+      // Log subscriptions whose schema gives no shape and that produce
+      // CellResult proxies, `true` and a schema of annotations alone among
+      // them. These are the call sites that need real schemas added. The
+      // schema checked is the one the cell reads under, which for a ref keyed
+      // from an ancestor is the one the worker narrowed to.
+      if (reported || !isCellResult(value)) return;
       const schema = cell.getAsNormalizedFullLink().schema;
-      if (!hasExplicitSubscriptionSchema(schema)) {
+      if (!subscriptionSchemaGivesShape(schema)) {
+        reported = true;
         console.error(
           `[handleCellSubscribe] EMPTY SCHEMA SUBSCRIPTION producing ` +
             `CellResult proxy. Add a schema to this subscription site!\n` +
@@ -4462,6 +4497,8 @@ export class RuntimeProcessor {
 
     const storageManager = StorageManager.open({
       as: identity,
+      clientBuild: data.clientBuild ??
+        { application: "runtime-client", gitSha: null },
       memoryHost,
       spaceHostMap: data.spaceHostMap,
       // Host dogfood toggle (commonfabric.concurrentWatchRefresh): overlap

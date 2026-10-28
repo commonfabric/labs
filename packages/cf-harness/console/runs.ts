@@ -328,7 +328,7 @@ export const summarizeConsoleRun = (
     ...(runState.model !== undefined ? { model: runState.model } : {}),
     ...(title !== undefined ? { title } : {}),
     toolCallCount: runState.toolOutputs.length,
-    ...(runState.lineage !== undefined
+    ...(runState.lineage?.role === "subagent"
       ? {
         parentRunId: runState.lineage.parentRunId,
         parentToolCallId: runState.lineage.parentToolCallId,

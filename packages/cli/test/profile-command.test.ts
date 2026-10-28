@@ -12,15 +12,29 @@ import { Identity } from "@commonfabric/identity";
 import { decode } from "@commonfabric/utils/encoding";
 
 import {
+  dataUrlByteLength,
   profile,
+  profileAttestNameAction,
   type ProfileCommandDeps,
   profileCreateAction,
+  profileGetPictureAction,
+  profileListAction,
+  profileRenameAction,
   profileRepairNameProtectionAction,
   profileRepairRootAction,
+  profileRestoreAction,
+  profileRetireAction,
+  profileSetPictureAction,
   profileShowAction,
 } from "../commands/profile.ts";
 import { getDidFromFile } from "../lib/identity.ts";
-import type { CreatedProfile, ProfileCreateConfig } from "../lib/profile.ts";
+import type {
+  CreatedProfile,
+  ListedProfile,
+  ProfileCreateConfig,
+  ProfileNameAttestation,
+  ProfileTargetConfig,
+} from "../lib/profile.ts";
 import {
   profileNameProtection,
   type ProfileNameProtectionConfig,
@@ -40,19 +54,64 @@ const CREATED: CreatedProfile = {
   address: "/@did:key:zProfileSpace/of:profile-piece",
 };
 
-function stubDeps(wish: WishReadResult = { result: null }): {
+const PICTURE = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+
+const LISTED: ListedProfile[] = [{
+  name: "Ada Lovelace",
+  picture: PICTURE,
+  pictureByOwner: true,
+  avatar: "",
+  avatarByOwner: false,
+  space: CREATED.space,
+  id: CREATED.id,
+  address: CREATED.address,
+  current: true,
+}];
+
+/** What a stubbed command that acts on one profile was given. */
+type Target = ProfileTargetConfig & {
+  name?: string;
+  bytes?: Uint8Array;
+  clear?: true;
+  keepCurrent?: true;
+  expectedInspection?: string;
+};
+
+function stubDeps(
+  wish: WishReadResult = { result: null },
+  attested: ProfileNameAttestation = {
+    status: "inspected",
+    name: "Old Ada",
+    inspection: "receipt",
+  },
+): {
   deps: ProfileCommandDeps;
   creates: ProfileCreateConfig[];
   reads: WishReadConfig[];
+  targets: Target[];
 } {
   const creates: ProfileCreateConfig[] = [];
   const reads: WishReadConfig[] = [];
+  const targets: Target[] = [];
+  const target = (config: ProfileTargetConfig) => {
+    targets.push(config);
+    return Promise.resolve();
+  };
   return {
     deps: {
+      attestProfileName: (config) => {
+        targets.push(config);
+        return Promise.resolve(attested);
+      },
       createProfile: (config) => {
         creates.push(config);
         return Promise.resolve(CREATED);
       },
+      listProfiles: () => Promise.resolve(LISTED),
+      renameProfile: target,
+      restoreProfile: target,
+      retireProfile: target,
+      setProfilePicture: target,
       readWish: (config) => {
         reads.push(config);
         return Promise.resolve(wish);
@@ -60,6 +119,7 @@ function stubDeps(wish: WishReadResult = { result: null }): {
     },
     creates,
     reads,
+    targets,
   };
 }
 
@@ -111,6 +171,401 @@ describe("cf profile command actions", () => {
           ])).rejects.toThrow("--apply and --expect");
         }),
     );
+  });
+
+  describe("profileListAction()", () => {
+    it("prints one line per profile, marking the current one and the ones with a picture", async () => {
+      const key = await makeTempKeyFile();
+      try {
+        const { deps } = stubDeps();
+        const out = await captureStdout(() =>
+          profileListAction(
+            { apiUrl: "http://127.0.0.1:8000", identity: key.path },
+            deps,
+          )
+        );
+        expect(out).toBe(`* ${CREATED.space} "Ada Lovelace" (picture)\n`);
+        const other = await captureStdout(() =>
+          profileListAction(
+            { apiUrl: "http://127.0.0.1:8000", identity: key.path },
+            {
+              ...deps,
+              listProfiles: () =>
+                Promise.resolve([{ ...LISTED[0], pictureByOwner: false }]),
+            },
+          )
+        );
+        expect(other).toBe(
+          `* ${CREATED.space} "Ada Lovelace" (picture not attested to its owner)\n`,
+        );
+      } finally {
+        await Deno.remove(key.path);
+      }
+    });
+
+    it("prints the listed profiles as JSON with `--json`, carrying no bytes", async () => {
+      const key = await makeTempKeyFile();
+      try {
+        const { deps } = stubDeps();
+        const legacy = "data:image/png;base64,iVBORw0KGgo=";
+        const rows: ListedProfile[] = [
+          LISTED[0],
+          { ...LISTED[0], picture: undefined, pictureByOwner: false },
+          { ...LISTED[0], avatar: legacy, avatarByOwner: true },
+          { ...LISTED[0], avatar: "🦉", avatarByOwner: false },
+        ];
+        const out = await captureStdout(() =>
+          profileListAction(
+            { apiUrl: "http://127.0.0.1:8000", identity: key.path, json: true },
+            { ...deps, listProfiles: () => Promise.resolve(rows) },
+          )
+        );
+        const { name, space, id, address, current } = LISTED[0];
+        const common = { name, space, id, address, current };
+        const picture = { size: PICTURE.length, byOwner: true };
+        expect(JSON.parse(out)).toEqual([
+          { ...common, picture, avatar: null },
+          { ...common, picture: null, avatar: null },
+          { ...common, picture, avatar: { size: 8, byOwner: true } },
+          { ...common, picture, avatar: { text: "🦉", byOwner: false } },
+        ]);
+        expect(out).not.toContain("base64");
+        expect(out).not.toContain("iVBOR");
+      } finally {
+        await Deno.remove(key.path);
+      }
+    });
+  });
+
+  describe("dataUrlByteLength()", () => {
+    it("returns the bytes a base64 or a percent-encoded `data:` URL holds", () => {
+      expect(dataUrlByteLength("data:image/png;base64,iVBORw0KGgo=")).toBe(8);
+      expect(dataUrlByteLength("data:;base64,AAAA")).toBe(3);
+      expect(dataUrlByteLength("data:;base64,AA==")).toBe(1);
+      expect(dataUrlByteLength("data:text/plain,a%20b")).toBe(3);
+      expect(dataUrlByteLength("data:text/plain,é")).toBe(2);
+    });
+  });
+
+  describe("profileRetireAction()", () => {
+    it("retires the profile in the space named, from the identity's home", async () => {
+      const key = await makeTempKeyFile();
+      try {
+        const { deps, targets } = stubDeps();
+        const out = await captureStdout(() =>
+          profileRetireAction(
+            { apiUrl: "http://127.0.0.1:8000", identity: key.path },
+            CREATED.space,
+            deps,
+          )
+        );
+        expect(targets).toHaveLength(1);
+        expect(targets[0].space).toBe(key.did);
+        expect(targets[0].profileSpace).toBe(CREATED.space);
+        expect(out).toBe(`Retired profile ${CREATED.space}\n`);
+      } finally {
+        await Deno.remove(key.path);
+      }
+    });
+  });
+
+  describe("profileRestoreAction()", () => {
+    it("restores the profile in the space named, from the identity's home", async () => {
+      const key = await makeTempKeyFile();
+      try {
+        const { deps, targets } = stubDeps();
+        const out = await captureStdout(() =>
+          profileRestoreAction(
+            { apiUrl: "http://127.0.0.1:8000", identity: key.path, json: true },
+            CREATED.space,
+            deps,
+          )
+        );
+        expect(targets).toHaveLength(1);
+        expect(targets[0].space).toBe(key.did);
+        expect(targets[0].profileSpace).toBe(CREATED.space);
+        expect(JSON.parse(out)).toEqual({ restored: CREATED.space });
+      } finally {
+        await Deno.remove(key.path);
+      }
+    });
+  });
+
+  describe("profileAttestNameAction()", () => {
+    it("prints the stored name and the inspection without --apply, inspecting the profile in the space named", async () => {
+      const key = await makeTempKeyFile();
+      try {
+        const { deps, targets } = stubDeps();
+        const out = await captureStdout(() =>
+          profileAttestNameAction(
+            { apiUrl: "http://127.0.0.1:8000", identity: key.path, json: true },
+            CREATED.space,
+            deps,
+          )
+        );
+        expect(targets).toHaveLength(1);
+        expect(targets[0].space).toBe(key.did);
+        expect(targets[0].profileSpace).toBe(CREATED.space);
+        expect(targets[0].expectedInspection).toBeUndefined();
+        expect(JSON.parse(out)).toEqual({
+          space: CREATED.space,
+          status: "inspected",
+          name: "Old Ada",
+          inspection: "receipt",
+        });
+      } finally {
+        await Deno.remove(key.path);
+      }
+    });
+
+    it("applies the inspection --expect names with --apply, naming the name it attested", async () => {
+      const key = await makeTempKeyFile();
+      try {
+        const { deps, targets } = stubDeps({ result: null }, {
+          status: "attested",
+          name: "Old Ada",
+        });
+        const out = await captureStdout(() =>
+          profileAttestNameAction(
+            {
+              apiUrl: "http://127.0.0.1:8000",
+              identity: key.path,
+              apply: true,
+              expect: "receipt",
+            },
+            CREATED.space,
+            deps,
+          )
+        );
+        expect(targets[0].expectedInspection).toBe("receipt");
+        expect(out).toContain('Attested the name "Old Ada"');
+      } finally {
+        await Deno.remove(key.path);
+      }
+    });
+
+    it("refuses --apply without --expect, and --expect without --apply", async () => {
+      const { deps, targets } = stubDeps();
+      await expect(
+        profileAttestNameAction({ apply: true }, CREATED.space, deps),
+      ).rejects.toThrow("--apply and --expect");
+      await expect(
+        profileAttestNameAction({ expect: "receipt" }, CREATED.space, deps),
+      ).rejects.toThrow("--apply and --expect");
+      expect(targets).toEqual([]);
+    });
+
+    it("says so when the name was already attested", async () => {
+      const key = await makeTempKeyFile();
+      try {
+        const { deps } = stubDeps({ result: null }, {
+          status: "already",
+          name: "Ada",
+        });
+        const out = await captureStdout(() =>
+          profileAttestNameAction(
+            { apiUrl: "http://127.0.0.1:8000", identity: key.path },
+            CREATED.space,
+            deps,
+          )
+        );
+        expect(out).toContain("already attested");
+      } finally {
+        await Deno.remove(key.path);
+      }
+    });
+  });
+
+  describe("profileRenameAction()", () => {
+    it("renames the profile to the trimmed name", async () => {
+      const key = await makeTempKeyFile();
+      try {
+        const { deps, targets } = stubDeps();
+        await captureStdout(() =>
+          profileRenameAction(
+            { apiUrl: "http://127.0.0.1:8000", identity: key.path },
+            CREATED.space,
+            "  Countess  ",
+            deps,
+          )
+        );
+        expect(targets).toHaveLength(1);
+        expect(targets[0].profileSpace).toBe(CREATED.space);
+        expect(targets[0].name).toBe("Countess");
+      } finally {
+        await Deno.remove(key.path);
+      }
+    });
+
+    it("throws a `ValidationError` for a blank name before connecting", async () => {
+      const { deps, targets } = stubDeps();
+      await expect(
+        profileRenameAction(
+          { apiUrl: "http://127.0.0.1:8000", identity: "/unread.key" },
+          CREATED.space,
+          "  ",
+          deps,
+        ),
+      ).rejects.toThrow(ValidationError);
+      expect(targets).toHaveLength(0);
+    });
+  });
+
+  describe("profileGetPictureAction()", () => {
+    it("writes the picture's bytes to the file named", async () => {
+      const key = await makeTempKeyFile();
+      const out = await Deno.makeTempFile({ suffix: ".png" });
+      try {
+        const { deps } = stubDeps();
+        await profileGetPictureAction(
+          { apiUrl: "http://127.0.0.1:8000", identity: key.path },
+          CREATED.space,
+          out,
+          deps,
+        );
+        expect(await Deno.readFile(out)).toEqual(PICTURE);
+      } finally {
+        await Deno.remove(key.path);
+        await Deno.remove(out);
+      }
+    });
+
+    it("throws a `ValidationError` for a space no listed profile lives in, a profile with no picture, and a picture its owner did not set", async () => {
+      const key = await makeTempKeyFile();
+      try {
+        const options = { apiUrl: "http://127.0.0.1:8000", identity: key.path };
+        const { deps } = stubDeps();
+        await expect(
+          profileGetPictureAction(options, "did:key:zElsewhere", "-", deps),
+        ).rejects.toThrow(ValidationError);
+        await expect(
+          profileGetPictureAction(options, CREATED.space, "-", {
+            ...deps,
+            listProfiles: () =>
+              Promise.resolve([{ ...LISTED[0], picture: undefined }]),
+          }),
+        ).rejects.toThrow(/has no picture/);
+        await expect(
+          profileGetPictureAction(options, CREATED.space, "-", {
+            ...deps,
+            listProfiles: () =>
+              Promise.resolve([{ ...LISTED[0], pictureByOwner: false }]),
+          }),
+        ).rejects.toThrow(/not attested to its owner/);
+      } finally {
+        await Deno.remove(key.path);
+      }
+    });
+  });
+
+  describe("profileSetPictureAction()", () => {
+    it("sets the picture to the file's bytes, and removes it with `--clear`", async () => {
+      const key = await makeTempKeyFile();
+      const image = await Deno.makeTempFile({ suffix: ".png" });
+      try {
+        await Deno.writeFile(image, PICTURE);
+        const { deps, targets } = stubDeps();
+        const options = {
+          apiUrl: "http://127.0.0.1:8000",
+          identity: key.path,
+          json: true,
+        };
+        const set = await captureStdout(() =>
+          profileSetPictureAction(options, CREATED.space, image, deps)
+        );
+        const cleared = await captureStdout(() =>
+          profileSetPictureAction(
+            { ...options, clear: true },
+            CREATED.space,
+            undefined,
+            deps,
+          )
+        );
+        expect(JSON.parse(set)).toEqual({
+          pictureSet: CREATED.space,
+          cleared: false,
+        });
+        expect(JSON.parse(cleared)).toEqual({
+          pictureSet: CREATED.space,
+          cleared: true,
+        });
+        expect(targets.map(({ bytes, clear }) => ({ bytes, clear }))).toEqual([
+          { bytes: PICTURE, clear: undefined },
+          { bytes: undefined, clear: true },
+        ]);
+      } finally {
+        await Deno.remove(key.path);
+        await Deno.remove(image);
+      }
+    });
+
+    it("sets the stored picture again with `--keep-current`", async () => {
+      const key = await makeTempKeyFile();
+      try {
+        const { deps, targets } = stubDeps();
+        const out = await captureStdout(() =>
+          profileSetPictureAction(
+            {
+              apiUrl: "http://127.0.0.1:8000",
+              identity: key.path,
+              keepCurrent: true,
+            },
+            CREATED.space,
+            undefined,
+            deps,
+          )
+        );
+
+        expect(out.trim()).toBe(
+          `Set the stored picture of profile ${CREATED.space} again`,
+        );
+        expect(
+          targets.map(({ bytes, clear, keepCurrent }) => ({
+            bytes,
+            clear,
+            keepCurrent,
+          })),
+        ).toEqual([{ bytes: undefined, clear: undefined, keepCurrent: true }]);
+      } finally {
+        await Deno.remove(key.path);
+      }
+    });
+
+    it("throws a `ValidationError` for both a file and `--clear`, or neither, before connecting", async () => {
+      const { deps, targets } = stubDeps();
+      const options = {
+        apiUrl: "http://127.0.0.1:8000",
+        identity: "/unread.key",
+      };
+      await expect(
+        profileSetPictureAction(
+          { ...options, clear: true },
+          CREATED.space,
+          "./picture.png",
+          deps,
+        ),
+      ).rejects.toThrow(ValidationError);
+      await expect(
+        profileSetPictureAction(options, CREATED.space, undefined, deps),
+      ).rejects.toThrow(ValidationError);
+      await expect(
+        profileSetPictureAction(
+          { ...options, keepCurrent: true },
+          CREATED.space,
+          "./picture.png",
+          deps,
+        ),
+      ).rejects.toThrow(ValidationError);
+      await expect(
+        profileSetPictureAction(
+          { ...options, clear: true, keepCurrent: true },
+          CREATED.space,
+          undefined,
+          deps,
+        ),
+      ).rejects.toThrow(ValidationError);
+      expect(targets).toHaveLength(0);
+    });
   });
 
   describe("profileCreateAction()", () => {

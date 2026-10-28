@@ -431,9 +431,6 @@ describe("bulk-plan", () => {
     it("normalizes non-canonical hash spellings onto one key", () => {
       const canonical = "fid1:" + "A".repeat(43);
       expect(canonicalPieceAddress(canonical + "=")).toBe(canonical);
-      expect(canonicalPieceAddress("fid1:" + "A".repeat(42) + "B")).toBe(
-        canonical,
-      );
       const plan = retargetPlan();
       const dup = JSON.stringify(header) + "\n" +
         JSON.stringify({ ...plan.rows[0], op: undefined, piece: canonical }) +
@@ -444,6 +441,11 @@ describe("bulk-plan", () => {
           piece: canonical + "=",
         });
       expect(() => decodePlan(dup)).toThrow("more than once");
+    });
+
+    it("throws for a hash spelling with nonzero bits past its last byte", () => {
+      expect(() => canonicalPieceAddress("fid1:" + "A".repeat(42) + "B"))
+        .toThrow("Not a piece address");
     });
 
     it("canonicalizes the of: alias, and refuses an alias-spelled duplicate", () => {

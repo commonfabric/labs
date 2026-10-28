@@ -347,7 +347,7 @@ load-bearing enforcement; commit-level identity is not load-bearing
 | `authored`, server-produced (outbox event append, `.inSpace` provisioning) | commit metadata carries the acting identity (`actingPrincipal` + `actingSession` — the ORIGINATING chain actor, events.md §2) + `capabilityRef` → admission validates that capability grant against the target doc/stream (a delegated-capability check, NEVER session-identity impersonation) → for event appends, `firedAt` stamps from the validated acting identity (the stamping paragraph below) → CAS. *(Phase-1 bound, stage D/F: the landed validation is carriage PRESENCE + COMPLETENESS — authored class only, non-empty `actingPrincipal` + `capabilityRef`, a sessionless batch refused for session-scoped writes (scopes.md §5) — with scoped writes keyed from the carried identity; RESOLVING the grant against the target doc/stream awaits per-doc grants, which today's ACL model does not hold, and is the named owed hardening — verification-coverage.md OW13.)* **Genesis of a provisioned space (RULED 2026-08-18):** the FIRST commit into a `.inSpace()`-minted space is its ACL, signed by the SPACE'S OWN identity (a key generated for that one commit and then dropped — [random space identities](../random-space-identities.md)), and that same commit names the ACTING user OWNER (`{ [actor]: "OWNER" }` — the shape a client mints), together with any grants the `inSpace()` call names; the space is created before the handler re-runs, and the calling space's allocation record, written in the handler's commit, is what later runs read; every later write into the space is the actor's, through this row's delegated carriage or a client's own session; the serving identity is neither owner nor actor at any step and appears nowhere in the ACL (verification-coverage.md OW31 — the build is owed post-merge, before the flip). **An access-list write:** the one server-produced authored commit of a space's ACL document `of:<space>` is a served handler's `grantSpaceAccess()` or `revokeSpaceAccess()` change, and past carriage completeness it is admitted by the memory server's own INV-12 check KEYED ON THE CARRIED ACTOR (`Server.commitServedAclChange()`: the session plane's `#validateAclCommit` and capability check, one implementation, with the carried actor as the principal) — INV-12's shape, the genesis rule (so a served commit never initializes a list), and `OWNER` for the actor but for the removal of its own entry, on the same `acl.mode` dial. Its grant is RESOLVED, not only present: `capabilityRef` must be `event-consequence:<eventId>`, naming the durable entry the run delivers, and that entry's `firedAt` must name the carried actor. The serving loop asks the same decision at the run's seal (`Server.checkServedAclChange()`), so a refusal fails that run alone (serving-loop.md §3d). *(The co-hosted process is trusted for the carried actor here as for every delegated commit, LT5; the owner's ruling on this admission decision is open.)* |
 | `derived` | producer holds the live `execution_lease` for the space (one equality check) → no operation on the space's ACL document `of:<space>`, in any memory ACL mode (no derived producer writes it; INV-12) → CAS |
 | `system` | unchanged from today |
-| READ naming an explicit `entity_scope_key` (not a commit — the read side of R-Q6b; S1; widened by FP2, RULED 2026-08-03) | requester holds A live `execution_lease` on the co-hosted memory server — its OWN space's lease, not necessarily the read space's (the read-side twin of §2's inter-server trust ruling: a home SpaceServer reads FOREIGN scoped instances for cross-space derivations, closing the silent-empty-instance trap cross-space) → the named instance is read. A non-lease-holder naming a `scope_key` is REJECTED (today the wire cannot even express one); a request naming none resolves from the authenticated session as today (the shared `resolveScopeKey` in `packages/memory/v2.ts`). *(Fan-out stage A, 2026-08-16 — the runner ISSUES these: a serving runtime's per-instance run whose read of a scoped doc names an instance other than the runtime's own — the demand-supplied identity's — loads it as an explicit-instance read (`Cell.sync`/`syncCell` with the run identity, the transaction layer's kick for a never-loaded instance, the presync of a served event's inputs as the event's actor), so the serving replica holds that principal's instance keyed apart from the service's; own-identity reads name nothing and keep the no-key admission fast path. A live lease holder may name TWO instances of one (branch, id, scope) — its frames carry `scope_key` (§3) — the wire collapse guard now applies to non-holders only.)* |
+| READ naming an explicit `entity_scope_key` (not a commit — the read side of R-Q6b; S1; widened by FP2, RULED 2026-08-03) | requester holds A live `execution_lease` on the co-hosted memory server — its OWN space's lease, not necessarily the read space's (the read-side twin of §2's inter-server trust ruling: a home SpaceServer reads FOREIGN scoped instances for cross-space derivations, closing the silent-empty-instance trap cross-space) → the named instance is read. A non-lease-holder naming a `scope_key` is REJECTED (today the wire cannot even express one); a request naming none resolves from the authenticated session as today (the shared `resolveScopeKey` in `packages/memory/v2.ts`). *(Fan-out stage A, 2026-08-16 — the runner ISSUES these: a serving runtime's per-instance run whose read of a scoped doc names an instance other than the runtime's own — the demand-supplied identity's — loads it as an explicit-instance read (`Cell.sync`/`syncCell` with the run identity, the transaction layer's kick for a never-loaded instance, the presync of a served event's inputs as the event's actor), so the serving replica holds that principal's instance keyed apart from the service's; own-identity reads name nothing and keep the no-key admission fast path. A live lease holder may name TWO instances of one (branch, id, scope) — its frames carry `scope_key` (§3) — the wire collapse guard now applies to non-holders only. A named root in a space whose lease the requester does NOT hold is admitted on the named actor's READ grant in that space's access list and refused without one — the grant-scoped read below, RULED 2026-10-27.)* |
 
 That is the ENTIRE admission surface — the last row is the one
 READ-side check; every row above it is commit admission. No scope
@@ -481,44 +481,60 @@ retiring the Phase-1 recorded acceptance under which a second
 process sharing the service DID passed on the first process's lease
 row (verification-coverage.md's stage-F read-row entry).
 
-**The grant-scoped read DESIGN (Phase 5; the RULED 2026-08-13
+**The grant-scoped read (Phase 5; RULED 2026-08-13 as the
 precondition — the design, or an explicit fail-closed refusal, lands
 BEFORE any delegated-scoped-read producer ships, and producer and
-refusal land together as one stack).** A DELEGATED scoped read — the
-home SpaceServer reading a FOREIGN scoped instance on behalf of a
-carried actor — resolves against the CARRIED actor's instance under
-an explicit grant, NEVER the delegating envelope, and NEVER silently
-empty (the FP2 silent-empty-instance trap is the failure mode this
-kills). The design, stated for the implementation that follows the
-per-doc grant store (OW13's trigger): the read carries the acting
-identity + `capabilityRef` exactly like the server-produced authored
-row; admission resolves the grant against the target doc and admits
-the NAMED instance (`entity_scope_key` constructed from the CARRIED
-actor); a read whose grant does not resolve REFUSES — it never falls
-back to lease-wide trust or the envelope. Until that store exists,
-the FAIL-CLOSED interim is normative and LANDED with Phase 5's
-producers, at both ends of the stack: (i) the serving runtime's
-storage plane REFUSES scoped (user/session) reads of any non-home
-space outright — a foreign scoped read cannot leave the producer,
-named or unnamed; (ii) admission REFUSES an UNNAMED scoped root from
-a co-hosted serving session (a live-lease principal) reading a space
-whose lease it does not hold — the shape that would silently resolve
-`user:<serviceDID>`. Cross-space serving therefore reads foreign
-SPACE-scope state freely (§2b's free-read row) and foreign SCOPED
-state not at all; lifting that refusal is exactly the grant
-resolution above, never a lease-trust widening. Refusal (i) is no load
-for served delivery to wait on, and it is never silently empty for the
+refusal land together as one stack; RULED 2026-10-27, owner — the
+grant is the target space's access list, for the carried actor's own
+instances).** A DELEGATED scoped read — the home SpaceServer reading a
+FOREIGN scoped instance on behalf of a carried actor — resolves
+against the CARRIED actor's instance under an explicit grant, NEVER
+the delegating envelope, and NEVER silently empty (the FP2
+silent-empty-instance trap is the failure mode this kills). The grant
+is the target space's own access list: the read names the carried
+actor's instance (`entity_scope_key` constructed from the actor, the
+read row above) and is admitted when that list grants the actor READ
+(or `ANYONE` READ), as `Server.foreignReadAuthorityFor` resolves it —
+the read twin of §2b's write grant, at the same granularity and with
+the same footing: checked mode-independently, so neither the
+service-DID blanket nor the missing-ACL compat arm applies, and a
+space with no list, a malformed or retracted list, or no store grants
+nothing. A read names only the carried actor's own instance; a
+serving runtime never reads another principal's, nor its own instance
+of a foreign scoped document. Both ends of the stack decide it: (i)
+the serving runtime's storage plane asks the co-hosted memory server
+before the read leaves it, keeps the verdict per (space, actor), and
+asks about every actor again on word of a change to that space's list
+(`noteSpaceAclChanged`), the last verdict standing until the new one
+lands, so a revoked actor's instances are refused from the answer on
+and a newly granted actor's refused reads are pulled again; (ii) admission resolves the same
+grant for a named scoped root a co-hosted serving session reads in a
+space whose lease it does not hold, and REFUSES an UNNAMED one — the
+shape that would silently resolve `user:<serviceDID>`. What stays
+refused: a foreign scoped read naming no actor's instance, and one
+whose actor the list does not grant. Resolution against a per-doc
+grant store with `capabilityRef` carriage, the finer design OW13
+names, stays owed and would narrow this grant, never widen it. A
+granted read is a service-session read: it registers no
+identity-bearing demand in the foreign space, so the instance it reads
+is as the foreign space's own loop last derived it for that actor
+(verification-coverage.md OW35). Cross-space serving therefore reads
+foreign SPACE-scope state freely (§2b's free-read row) and foreign
+SCOPED state under the actor's grant alone. A refusal is no load for
+served delivery to wait on, and it is never silently empty for the
 data a served run reads: a run that reads the value of a refused
 document — through its declared event or its bound state — fails
 permanently and terminalizes at once (events.md §5). A derivation run
-that reads one is withdrawn: nothing it wrote reaches the wave, it is not
-retried, and the instance is left to a runtime that can read the
-document (serving-loop.md §3d). A derivation run that reads an absent
-scoped instance the serving loop owes and has not produced yet is
-withdrawn the same way. A refused document
-that only the dispatch preflight's dependency walk reaches, or whose
-link a run passes along without reading it, does not stop dispatch.
-Remote attestation stays anticipated future work.
+that reads one is withdrawn: nothing it wrote reaches the wave, it is
+not retried, and the instance is left to a runtime that can read the
+document (serving-loop.md §3d). A derivation run that reads a document
+whose actor's grant is still being asked for is withdrawn the same
+way, and runs again when the admitted instance lands; so is one that
+reads an absent scoped instance the serving loop owes and has not
+produced yet. A refused document that only the dispatch preflight's
+dependency walk reaches, or whose link a run passes along without
+reading it, does not stop dispatch. Remote attestation stays
+anticipated future work.
 
 **Run identity for a derivation (S1).** A derivation runs PER
 DEMANDED INSTANCE and the DEMAND supplies the identity — a

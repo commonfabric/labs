@@ -632,8 +632,7 @@ export class CFFab extends BaseElement {
       <div
         class="backdrop ${this.expanded ? "active" : ""}"
         part="backdrop"
-      >
-      </div>
+      ></div>
 
       <!-- FAB Container -->
       <div class="fab-container">

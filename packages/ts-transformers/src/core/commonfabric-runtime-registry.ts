@@ -100,6 +100,27 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     category: "ignored",
     reactiveOrigin: false,
   },
+  // Reads whose own profile a cell is, from its label and the pointers along
+  // its name, and returns a plain DID. It builds no graph node.
+  {
+    exportName: "profileOwnerOf",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  // Reads which pattern result a cell belongs to, from the runtime's
+  // back-link, and returns a plain string. It builds no graph node.
+  {
+    exportName: "resultOwnerOf",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  // Reads a list's elements as the cells their links name, and returns them
+  // as plain cells. It builds no graph node.
+  {
+    exportName: "linksOf",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
   // Reads the key of the event the running handler handles, and returns a
   // plain string rather than a reactive value.
   {

@@ -304,8 +304,17 @@ export function readRoutedBase64(value: unknown): Uint8Array {
     typeof value === "string" && value.length <= 1366 &&
       /^[A-Za-z0-9_-]+$/.test(value),
   );
-  const bytes = fromBase64url(value);
-  requireRouted(routedBase64(bytes) === value && bytes.length <= 1024);
+  let bytes: Uint8Array | undefined;
+  try {
+    bytes = fromBase64url(value);
+  } catch {
+    // Text no encoder writes, such as a lone final character or nonzero bits
+    // past the last whole byte, is refused below like any other.
+  }
+  requireRouted(
+    bytes !== undefined && routedBase64(bytes) === value &&
+      bytes.length <= 1024,
+  );
   return bytes;
 }
 

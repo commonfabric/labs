@@ -351,6 +351,15 @@ describe("cfc-write-policy-any-of", () => {
             uiContract: { helper: "UiAction" },
           }],
         }],
+        [
+          "an alternative whose contract writes its event integrity as an object",
+          {
+            writePolicyAnyOf: [{
+              writeAuthorizedBy: writerClaim("send"),
+              uiContract: { ...contract("Send"), requiredEventIntegrity: {} },
+            }],
+          },
+        ],
         ["a writer beside the list", {
           writeAuthorizedBy: writerClaim("send"),
           writePolicyAnyOf: [policy("send", "Send")],
@@ -368,6 +377,87 @@ describe("cfc-write-policy-any-of", () => {
               schema: { type: "string", ifc } as JSONSchemaObj,
             }),
           ).toContain("malformed writePolicyAnyOf");
+        });
+      });
+    }
+  });
+
+  describe("trust requirements a contract writes in a form it cannot match", () => {
+    // A contract's `trustedPattern` is matched as a nonempty string, and its
+    // `requiredEventIntegrity` atoms as strings, the form renderer-attested
+    // event evidence takes. A requirement written otherwise refuses the
+    // write, whatever the event carries, rather than being dropped.
+
+    const UNSUPPORTED =
+      "unsupported trust-sensitive claim uiContract.requiredEventIntegrity";
+    const OBJECT_ATOM = {
+      type: "https://commonfabric.org/cfc/atom/ConditionMatched",
+      condition: "Other",
+    };
+
+    /** `contract("Send")`, with `change` applied. */
+    const changed = (change: Record<string, unknown>) => ({
+      ...contract("Send"),
+      ...change,
+    });
+
+    for (
+      const [name, change, loneRefusal, alternativeRefusal] of [
+        [
+          "an event-integrity atom that is not a string",
+          { requiredEventIntegrity: [OBJECT_ATOM] },
+          UNSUPPORTED,
+          UNSUPPORTED,
+        ],
+        [
+          "an event-integrity atom that is not a string, beside one the event carries",
+          { requiredEventIntegrity: ["ReviewedSurface", OBJECT_ATOM] },
+          UNSUPPORTED,
+          UNSUPPORTED,
+        ],
+        [
+          "a trusted pattern that is not a string",
+          { trustedPattern: { name: "ReviewedSurface" } },
+          "malformed uiContract.trustedPattern",
+          "malformed writePolicyAnyOf",
+        ],
+        [
+          "an empty trusted pattern",
+          { trustedPattern: "" },
+          "malformed uiContract.trustedPattern",
+          "malformed writePolicyAnyOf",
+        ],
+      ] as const
+    ) {
+      it(`refuses a lone writer's write whose contract requires ${name}`, async () => {
+        const schema = {
+          type: "string",
+          ifc: {
+            writeAuthorizedBy: writerClaim("send"),
+            uiContract: changed(change),
+          },
+        } as unknown as JSONSchemaObj;
+        await withFixture(async (f) => {
+          expect(await f.write("send", "Send", { schema })).toContain(
+            loneRefusal,
+          );
+        });
+      });
+
+      it(`refuses an alternative's write whose contract requires ${name}`, async () => {
+        const schema = {
+          type: "string",
+          ifc: {
+            writePolicyAnyOf: [{
+              writeAuthorizedBy: writerClaim("send"),
+              uiContract: changed(change),
+            }],
+          },
+        } as unknown as JSONSchemaObj;
+        await withFixture(async (f) => {
+          expect(await f.write("send", "Send", { schema })).toContain(
+            alternativeRefusal,
+          );
         });
       });
     }

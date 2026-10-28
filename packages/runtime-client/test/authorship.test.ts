@@ -2,6 +2,9 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
+import type { CfcLabelView } from "@commonfabric/runner/cfc";
+import type { JSONSchema } from "@commonfabric/runner/shared";
+
 import {
   AUTHOR_CLAIM_SCHEMA,
   authorClaimLabel,
@@ -10,6 +13,7 @@ import {
   integrityAtomMatchesAuthor,
   observeAuthorship,
   type ObserveAuthorshipOptions,
+  VALUE_LABEL_SCHEMA,
 } from "@/authorship.ts";
 import { CellHandle, CellReadRefusedError } from "@/cell-handle.ts";
 import type { CellRef } from "@/protocol/mod.ts";
@@ -921,6 +925,95 @@ describe("authorship", () => {
         name: "Alice Nguyen",
       });
       expect(notify).toBeDefined();
+    });
+
+    describe("a value cell handle", () => {
+      /** A handle on `of:authorship-value` whose ref carries `schema`. */
+      const valueHandle = (schema?: JSONSchema) =>
+        new CellHandle(
+          { [$conn]: () => ({}) } as unknown as RuntimeClient,
+          {
+            id: "of:authorship-value" as CellRef["id"],
+            space: "did:key:test" as CellRef["space"],
+            scope: "space",
+            path: ["body"],
+            ...(schema !== undefined && { schema }),
+          },
+        );
+      /** A value whose subscription delivers Alice's label as current. */
+      const labeledValue = () => ({
+        subscribe: (
+          callback: (
+            value: unknown,
+            cfcLabel: CfcLabelView | undefined,
+            delivery: { cfcLabelCurrent: boolean },
+          ) => void,
+        ) => {
+          callback("hello", authoredByLabel("did:example:alice"), {
+            cfcLabelCurrent: true,
+          });
+          return () => {};
+        },
+      });
+
+      it("reads a handle bound with no shape under the value-label schema, and nothing through it as bound", async () => {
+        const schemas: unknown[] = [];
+        const bound = valueHandle();
+        using _asSchema = stub(bound, "asSchema", (schema) => {
+          schemas.push(schema);
+          return labeledValue() as unknown as CellHandle;
+        });
+        using _subscribe = stub(bound, "subscribe", () => {
+          throw new Error("the value was subscribed to as bound");
+        });
+        const observation = observe(bound, "did:example:alice");
+        await settle();
+
+        expect(schemas).toEqual([VALUE_LABEL_SCHEMA]);
+        expect(observation.state).toBe("verified");
+      });
+
+      // A schema holding only a keyword the runtime reads for itself gives
+      // no shape, and is still kept: the keyword bears on the read.
+      const runtimeKeywordSchemas: [string, JSONSchema][] = [
+        ["`asCell`", { asCell: ["cell"] }],
+        ["a stream's `asCell`", { asCell: ["stream"] }],
+        ["`scope`", { scope: "user" }],
+        ["`ifc`", { ifc: { confidentiality: ["secret"] } }],
+      ];
+      for (const [keyword, schema] of runtimeKeywordSchemas) {
+        it(`reads a handle bound with ${keyword} alone as it is bound`, async () => {
+          const bound = valueHandle(schema);
+          using _asSchema = stub(bound, "asSchema", () => {
+            throw new Error("the value was narrowed");
+          });
+          using _subscribe = stub(
+            bound,
+            "subscribe",
+            labeledValue().subscribe as unknown as CellHandle["subscribe"],
+          );
+          const observation = observe(bound, "did:example:alice");
+          await settle();
+
+          expect(observation.state).toBe("verified");
+        });
+      }
+
+      it("reads a handle bound with a shape as it is bound", async () => {
+        const bound = valueHandle({ type: "string" });
+        using _asSchema = stub(bound, "asSchema", () => {
+          throw new Error("the value was narrowed");
+        });
+        using _subscribe = stub(
+          bound,
+          "subscribe",
+          labeledValue().subscribe as unknown as CellHandle["subscribe"],
+        );
+        const observation = observe(bound, "did:example:alice");
+        await settle();
+
+        expect(observation.state).toBe("verified");
+      });
     });
 
     it("names a principal claim by `authorName` when the author cell holds no name", async () => {

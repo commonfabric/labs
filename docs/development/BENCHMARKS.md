@@ -312,15 +312,25 @@ measurement.
   its own, in its own space, because sending a comment is a durable write that
   makes the commented topic the board's first card, which would leave `crossref`
   and `journey` opening a card with no citation to follow. Each iteration
-  comments on a topic that has none, so every iteration measures the same thing;
-  how cost grows with thread length is the headless probe's question, and its
-  thread cases run at 10, 100, and 1,000 comments.
+  comments on a topic that has none, so every iteration measures the same
+  thing.
 - `backlink` opens the topic the most siblings cite and waits for every row the
   topic's backlink derivation produces. `crossref` cannot measure that: it
   follows a citation outward from the board's first card, which is the newest
   topic, and nothing cites the newest topic. The segment reaches its topic
   through the shell's own navigation rather than by clicking, because a topic in
   the middle of the board is on no card or link the page is showing.
+
+Under server execution the serving runtime computes those derivations, and with
+web view-scoped replication on the page shows what it delivers without running
+any of them, so the browser's worker may complete no run at all during either
+operation. Both segments' timed samples declare `mayRunNothing` when the
+deployment serves with server execution on, which permits that zero rather than
+asserting it; with server execution off the browser computes the derivations,
+and the guard stays. Neither segment takes its read-accounted sample under
+server execution, and each writes a line saying so instead: the sample
+attributes the browser's reads to the derivations, and what the browser runs
+there is its echo of them, or nothing.
 
 The comment segment needs the viewer to have a Profile, since the composer's
 send button is disabled until `#profile` resolves to a named one. The field
@@ -432,11 +442,11 @@ is the distinction `mayRunNothing` is scoped to.
 
 Widening the interval would not recover a lift run worth having. Of those four
 boundaries only the whole round trip yields one, and for the return leg:
-measuring the return to the board on its own records that same single
-`lastActivityOf` run with the same counters, while the reopen beside it records
-none. Charging this series for a board render is what widening that far would
-do, and the `<size>` series already measures it, at a hundred topics costing an
-order of magnitude more than the reopen.
+measuring the return to the board on its own records no run of a topic's own,
+since a topic's last activity is a stored value the board reads, while the
+reopen beside it records none. Charging this series for a board render is what
+widening that far would do, and the `<size>` series already measures it, at a
+hundred topics costing an order of magnitude more than the reopen.
 
 The sample reports `runsWithoutSource` beside its zero so that a zero taken
 next to such runs does not print identically to one taken next to no runs at
@@ -513,7 +523,10 @@ Each charts the interval `timeTopicsOperation()` brackets, and each writes a
 alongside it. `reopen` declares `mayRunNothing` on that sample, because a reopen
 completes no run for the call to attribute and the zero is what it has to
 record; it writes its timed sample as well, for the graph and timing the
-read-accounted half's elapsed time cannot speak for.
+read-accounted half's elapsed time cannot speak for. Under a deployment serving
+with server execution on, the two navigation series declare it on their timed
+samples instead and write no read-accounted sample, for the reasons their
+section gives.
 
 ### The posture a sample is labeled with
 
@@ -525,7 +538,9 @@ run was started. `topics-browser-posture.ts` reads it from the deployment
 rather than from the benchmark process's own `EXPERIMENTAL_SERVER_EXECUTION`,
 which would label whatever it was told: the toolshed reports the posture it
 serves at on `/api/meta`, and the shell it serves states its own through the
-build define. The worker refuses to initialize when its resolved posture
+build define, where one is baked; without one, the shell runs the arm its
+deployment publishes, and the reading below treats that bundle as stating
+nothing. The worker refuses to initialize when its resolved posture
 disagrees with the shell's declaration, so a page that loaded at all ran the
 posture its shell declared.
 
@@ -578,9 +593,8 @@ shell's runtime client, runs the operation, waits until the view has settled and
 the runtime is idle, and turns both off again. From the `scheduler.run.complete`
 markers it sums runs, `durationMs`, proxy accesses, the largest single run's
 accesses, link resolutions, distinct documents, and registered dependencies, in
-one row for the board's pivot (`crossrefTable`, the producer), one for each
-per-topic consumer (`backlinksOf`, `presentCommentCountOf`, and
-`lastActivityOf`), and one for every other run. It also records the scheduler
+one row for the board's pivot (`crossrefTable`, the producer), one for the
+per-topic consumer (`backlinksOf`), and one for every other run. It also records the scheduler
 graph's node and edge counts before and after, the operation's elapsed time, and
 the timing statistics the main thread and the worker accumulated over it, less
 the helper's own requests. A timing row sums spans that can overlap, so its
@@ -754,7 +768,8 @@ which it may not; read that before weakening an assertion in it.
 several people editing one thing at the same moment cost each other: ten voters
 each cast a vote on each of ten lunch-poll options, all hundred dispatched
 before any settles, timed until every one of the ten clients holds the whole
-result. Its `lunch poll` group carries one series, `vote burst 10x10`.
+result. Its `lunch poll` group carries one series, `vote burst 10x10 rendered`,
+named for the views its clients hold.
 
 It is the only benchmark in the repository with a second writer. Every other
 bench file drives one runtime against storage it alone holds, so a write
@@ -762,39 +777,60 @@ conflict cannot arise in one, and the cost of a contended write — the rejected
 commit, the rolled-back optimistic write, the re-run — is invisible to all of
 them. This one runs ten runtimes, each in its own Deno worker, through
 `packages/patterns/integration/multi-runtime-harness.ts`. The benchmark passes
-the harness no `apiUrl`, so it hosts an in-process storage server whether or
-not `API_URL` is set, matching the resolved posture: a plain one when server
+the harness no `apiUrl`, so it hosts an in-process storage server whether or not
+`API_URL` is set, matching the resolved posture: a plain one when server
 execution resolves OFF, and one with a serving loop attached when it resolves
-ON, by `EXPERIMENTAL_SERVER_EXECUTION=true` or by the first-party default.
-Both modes use ordinary worker
-clients, without a browser or renderer mounts. The view-scoped web-client flag
-therefore does not activate selective replication in this benchmark. Use the
-browser Topics benchmarks to measure that mode, and hold server execution
-constant when comparing replication flags.
+ON, by `EXPERIMENTAL_SERVER_EXECUTION=true` or by the first-party default. Both
+modes use ordinary worker clients with no browser, each holding the worker
+reconciler's demand over the piece's view for the run, as a mounted tab does
+(`renderView` on the session, with the fixture showing the poll's own view under
+its `renderPoll` input), so a client that derives the tallies and cards it would
+show has derived them by the measured end. Each client is a web client
+(`clientClass: "web"` on the session), so under
+`EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION` its view registers as a view interest
+and the server selects what it receives, as it does for a browser tab; hold that
+flag and server execution constant when comparing arms. Such a client derives
+none of the poll itself, and the tallies the server derives from a burst's votes
+can reach it a wave after the votes do, which the measured end below does not
+wait for, so with that flag and server execution on the end is the votes'
+arrival rather than the view's.
 
-Each burst ends with the harness's `settle()`, which waits for every writer's
-event consequences to arrive before the replica barriers. Outside the timed
-interval, every replica must contain the expected vote count and color
-distribution for every option; a mismatch fails the run.
+A burst's measured interval ends when every client's own vote list, read at
+that runtime's quiescence and woken by the list's own changes, holds exactly
+the round's rows: each voter's vote on each option at the value cast this
+round, and no other row. The predicate runs after that client's `idle()` inside
+the timed burst. The rows are locally visible and may include speculation; this
+endpoint is not a proof of durable serving coverage. Outside the interval,
+`afterBurst()` runs the harness's `settle()`, which waits for every writer's
+event consequences to arrive before the replica barriers. Then every replica
+must contain the expected vote count and color distribution for every option,
+or the run fails.
 
 Four things follow from that shape:
 
 - **Setup runs once, at module scope.** Ten workers, ten joins, ten options and
-  two warm-up bursts cost around twelve seconds, so paying it per iteration
-  would leave a run with almost no samples. Each iteration recolors every vote,
-  so all hundred are real changes and the poll holds a hundred votes throughout;
-  no iteration leaves a state the next one starts from differently.
-- **Few samples.** An iteration runs in about 450ms on a developer machine and
-  2.6 seconds on a four-core CI host, which puts this benchmark at the end of
-  the distribution where the 75th percentile buys least — it discards the
-  slowest quarter of a dozen samples, so two stalls in a run reach the figure
-  the trend reads. Read it across several windows.
+  two warm-up bursts took four and a half minutes with the loop off on a
+  four-core container, the first warm-up burst two and a half of them, so
+  paying it per iteration would leave a run with almost no samples. Each
+  iteration recolors every vote, so all hundred are real changes and the poll
+  holds a hundred votes throughout; no iteration leaves a state the next one
+  starts from differently.
+- **Few samples.** An iteration took 35.5 seconds on average with the loop off
+  on a four-core container, from 29.3 to 40.9, which puts this benchmark at the
+  end of the distribution where the 75th percentile buys least — it discards
+  the slowest quarter of a dozen samples, so two stalls in a run reach the
+  figure the trend reads. Read it across several windows.
 - **The wall-clock is half of what it measures.** A contended write is also
   work thrown away, and that half does not appear in a timing. The file writes a
   contention accounting — rejected commits and rolled-back writes over one
-  untimed burst — to stderr, and so into `diagnostics.log`. On the keyed vote
-  write both are zero; the same burst over a whole-list write measured 430 and
-  558.
+  untimed burst — to stderr, and so into `diagnostics.log`. None of the
+  commits a burst's sessions refuse writes the vote list, so with the loop off
+  what the accounting counts is the clients' derivations: each derives what its
+  view shows and commits it, and those commits contend. One burst at 10x10
+  counted 1,460 rejected commits and 2,356 rolled-back writes on a four-core
+  container, most of the refused commits writing derived documents alone. Over
+  clients that hold no view the keyed write's burst counts zero of both, and
+  the same burst over a whole-list write measured 430 and 558.
 - **The size names the series.** `CF_LUNCH_POLL_VOTERS` and
   `CF_LUNCH_POLL_OPTIONS` resize it for a local run asking how the burst scales.
   Changing either starts a new line rather than continuing this one, exactly as
@@ -802,18 +838,17 @@ Four things follow from that shape:
   is written to stderr.
 
 Ten runtimes is a large footprint, and the cost is worth knowing before adding
-a voter to it. **Measured on a default hosted
-runner — four cores, 15.6GB — the file takes 89 seconds and peaks at 4.76GB
-resident**, under a third of that host with around 9GB still free. The runner
-group this workflow uses is a larger machine than that one, so the share it
-takes there is smaller again.
+a voter to it. **Measured with the loop off on a four-core container, the file
+takes 1,044 seconds and peaks at 8.73GB resident**, more than half of a default
+hosted runner's 15.6GB. The runner group this workflow uses is a larger machine
+than that one, so the share it takes there is smaller.
 
-Read that peak as a working set rather than as a requirement. The same run
-under `--max-old-space-size=512` completes in 3.5GB at roughly double the
-per-iteration time, and a developer machine with far more memory peaks higher,
-at 5.4GB. So the absolute figure rises with the headroom the heap is offered
-while the fraction of the host falls, and it is the fraction that decides
-whether this belongs beside the other benchmarks.
+Read that peak as a working set rather than as a requirement. A run over
+clients that hold no view completed in 3.5GB under `--max-old-space-size=512`,
+at roughly double the per-iteration time, and peaked higher, at 5.4GB, on a
+developer machine with far more memory. So the absolute figure rises with the
+headroom the heap is offered while the fraction of the host falls, and it is
+the fraction that decides whether this belongs beside the other benchmarks.
 
 That peak is a floor under everything measured after it. The workers are
 released at process exit — `Deno.bench` offers no seam for "this file's
@@ -823,9 +858,43 @@ Which benchmarks that floor sits under is therefore a question of where
 a question the workflow's list answers.
 
 `packages/patterns/integration/lunch-poll-keyed-votes.test.ts` is the assertion
-half of the same property: it counts rolled-back writes instead of timing them,
-and requires none, so a regression that this benchmark shows as trend drift
-also fails a test.
+half of the same property: over clients that hold no view it counts rolled-back
+writes instead of timing them, bounds them below one a vote, and requires that
+no refused commit wrote the vote list, so a regression that this benchmark
+shows as trend drift also fails a test.
+
+### The browser copy of the vote burst
+
+`packages/patterns/integration/lunch-poll-vote-burst.browser.ts` measures the
+same burst through real browsers, and is a separate series from the worker
+benchmark above: the production lunch poll rather than the keyed-votes fixture,
+five independent Chromium profiles that create a profile, join the poll and add
+its options through the UI, votes cast as trusted CDP clicks, and an endpoint
+that is every page's rendered swatches. A burst ends when every page holds the
+exact option, name and color tuple for every voter on every option, with no
+duplicate row, and two animation frames have passed since the last change, so
+the endpoint is a paint opportunity in every browser rather than a runtime's
+quiescence. Both are timed from the moment every page's runtime is idle, before
+the clicks are prepared and dispatched. The driver's own completion, until it
+has seen every page converge, is reported apart from that headline, and the
+browsers' teardown comes after both and is not timed. Two warmup bursts precede
+the measured rounds.
+
+It is a `deno run -A` script rather than a `Deno.bench` file, so the Benchmarks
+workflow does not run it and the dashboard carries no series for it; it is run
+by hand, against a source toolshed and a shell build whose
+`EXPERIMENTAL_SERVER_EXECUTION`, `SERVER_EXECUTION_WORKER` and
+`SERVER_EXECUTION_STORE_READ_THROUGH` match the arm under measurement, with
+`API_URL` and `FRONTEND_URL` naming them. `CF_LUNCH_POLL_VOTERS` and
+`CF_LUNCH_POLL_OPTIONS` size the poll (five and five unless set),
+`CF_LUNCH_POLL_BROWSER_ROUNDS` sets the measured rounds (three unless set), and
+`CF_LUNCH_POLL_BROWSER_OUT` names a JSON file for the samples, every client's
+logger rows and the server's health snapshots, all captured outside the timed
+intervals. The rows a page shows may include that page's own speculation, so a
+converged DOM is not a proof of durable serving coverage, and the script, unlike
+the worker benchmark, checks none after a burst: the next waits only for every
+page's runtime to go idle. Arms compare only within one sitting, for the reason
+the worker benchmark gives.
 
 ## Rendered lunch-poll read scaling
 
@@ -1313,12 +1382,13 @@ records the validated local count matrix and its limits.
 ## Topics computation cost probe
 
 Run `deno run -A --frozen scripts/topics-computation-cost.ts` from the
-repository root to measure the Topics board's mention pivot, each topic's
-backlink lookup, and a topic's comment and link aggregates over the headless
-fixture in `packages/patterns/integration/topics-headless-fixture.ts`. The
-fixture writes synthetic topics straight to emulated storage and runs the
-unmodified Topics lifts — `crossrefTable`, `backlinksOf`,
-`presentCommentCountOf`, and `lastActivityOf` — with no browser and no server.
+repository root to measure the Topics board's mention pivot and each topic's
+backlink lookup over the headless fixture in
+`packages/patterns/integration/topics-headless-fixture.ts`. The fixture writes
+synthetic topics straight to emulated storage and runs the unmodified Topics
+lifts — `crossrefTable` and `backlinksOf` — with no browser and no server. A
+topic's comment count and last activity are stored values its verbs keep in the
+write that changes them, so there is no derivation of theirs to measure.
 Each case runs in a process of its own, started with `--frozen` as well, so no
 process in a run writes `deno.lock`.
 
@@ -1392,46 +1462,28 @@ small pivot cases hold 4 topics, with as many mentions per source, up to four,
 as each graph allows. The fixture's documentation of
 `MentionGraph` says how each graph spreads its mentions.
 
-The thread cases hold four topics, each with 10, 100, or 1,000 comments and
-three links, then with 10, 100, or 1,000 links and three comments. The small
-thread case gives each topic one comment and one link.
-
 The pivot cases are recorded under three demand workloads. The first topic is
 the focus topic: the one `topic-open` opens. The mention phases change which
 topics mention it, and the comment and link phases edit it; the unrelated
 sibling edit changes a different topic, the last one.
 
-- `board`: a board loaded before any topic is opened, which demands none of the
-  four lifts. The probe does not measure it: each `board` case writes a sample
+- `board`: a board loaded before any topic is opened, which demands neither
+  lift. The probe does not measure it: each `board` case writes a sample
   recording `measured: false` and the reason, and starts no process.
-- `topic-open`: the board with the focus topic open, which demands the pivot,
-  the focus topic's backlinks, and its present comment count, but not its last
-  activity.
+- `topic-open`: the board with the focus topic open, which demands the pivot
+  and the focus topic's backlinks.
 - `all-backlinks`: the pivot and every topic's backlinks. This is a scaling
   probe, not what a board in use demands.
 
 The `board` and `topic-open` definitions come from one browser measurement of a
 small Topics board, with client execution, lazy materialization on, and card
-values already stored. Loading the board, before any topic was opened, ran none
-of the four lifts, since the cards read their stored values. Opening a topic ran
-the pivot and that topic's backlinks and comment count, but not its last
-activity. Returning to the board afterward ran that topic's last activity once;
-a board returned to after opening a topic is not one of the probe's workloads.
-That is one small sample. Server execution, and lazy materialization off, were
-not measured.
-
-The thread cases are measured under one workload, `aggregates`, which demands
-every topic's present comment count and last activity and nothing else. Those
-are the lifts that read a topic's comments, which the thread cases scale, and of
-the two the last activity reads the topic's links as well; no pivot workload
-demands a topic's last activity. The browser ran them only for the topic it
-opened, the comment count on opening that topic and its last activity on
-returning to the board; `aggregates` runs every topic's, so it is not what a
-board in use demands either.
+values already stored. Loading the board, before any topic was opened, ran
+neither lift, since the cards read their stored values. Opening a topic ran the
+pivot and that topic's backlinks. That is one small sample. Server execution,
+and lazy materialization off, were not measured.
 
 A case's ID names all of that, as
-`pivot/<graph>/mentions-<count>/topics-<count>/<workload>` or
-`thread/comments-<count>/links-<count>/aggregates`.
+`pivot/<graph>/mentions-<count>/topics-<count>/<workload>`.
 
 ### The phases
 
@@ -1452,9 +1504,7 @@ each measured from the start of its edit through settlement:
 - comment append, edit, and retraction on the focus topic;
 - link removal, which stamps the focus topic's first present link as removed;
 - an unrelated sibling edit, which writes the last topic's `title` and nothing
-  else. None of the measured lifts reads a title. A rename through a topic also
-  stamps `titleUpdatedAt`, which `lastActivityOf` reads, so this phase is not a
-  rename.
+  else. Neither measured lift reads a title.
 
 Where nothing mentions the focus topic, as in the `none` graph, mention removal
 is not measured and insertion starts from the second topic. The warm updates
@@ -1494,7 +1544,7 @@ everything a case's process prints.
   that mode pins, the arguments, the V8 flags each case's process starts with,
   the `repeat` count, and the selected case IDs.
 - A `sample` line is one case in one `round`: its `mode`, the case, its `family`
-  (`pivot` or `thread`), its series, the `size` its series scales, its
+  (always `pivot`), its series, the `size` its series scales, its
   `workload`, the fixture's options with its mention count, the `focusTopic` and
   its `focusMentioners` count, and `demandedActions`, how many actions of each
   lift the workload starts. A measured sample adds `measured: true`, the heap
@@ -1521,9 +1571,8 @@ A measured phase records:
 - `bodies`, the completed-body reads that
   [read accounting](../features/read-accounting.md) defines, attributed to a
   lift by the authored source each run reports and grouped by role: `producer`
-  holds the pivot, `consumer` the backlink lookup, `aggregate` the comment count
-  and last activity, and `other` every remaining run, sinks and builtins
-  included. `total` sums them all. Each entry counts runs, actions, proxy
+  holds the pivot, `consumer` the backlink lookup, and `other` every remaining
+  run, sinks and builtins included. `total` sums them all. Each entry counts runs, actions, proxy
   accesses, link resolutions, and per-run sums of distinct documents and
   registered dependencies, with the most proxy accesses of any one run;
 - `attempts`, the transaction-attempt reads through settlement, of every kind,
@@ -1559,15 +1608,14 @@ The gated cases are:
 - the 4-topic `low-degree` pivot cases under `topic-open` and `all-backlinks`;
 - the 32-topic pivot cases under both workloads for the `high-degree` and
   `single-bucket` graphs at four mentions per source, and for the `low-degree`
-  graph at 16;
-- the thread cases with one comment and one link, with 100 comments, and with
-  100 links.
+  graph at 16.
 
-No `board` case is gated, since the probe measures none. Every gated pivot
-case holds 32 topics or the small case's 4, and no gated thread case holds more
-than 100 comments or links; the larger sizes run only from the probe. A
+No `board` case is gated, since the probe measures none. Every gated case holds
+32 topics or the small case's 4; the larger sizes run only from the probe. A
 regression that appears only above 32 topics is one the probe finds, not
-continuous integration.
+continuous integration. The `small-and-threads` group keeps the name its test
+file has carried: the thread cases it once held measured a topic's
+comment-count and last-activity lifts, which stored values replaced.
 
 Every measured phase of a gated case has a limit on each of five counts, read
 from its phase record:
@@ -1582,11 +1630,11 @@ from its phase record:
 
 The two read boundaries are the attempt and body boundaries that
 [read accounting](../features/read-accounting.md#execution-boundary) defines,
-and each count covers the complete settled operation: the pivot, lookup,
-aggregate, and every other run together. A limit is the largest count five runs
+and each count covers the complete settled operation: the pivot, lookup, and
+every other run together. A limit is the largest count five runs
 of the case observed, plus 10%, rounded up to an integer. A phase in which the
 case read nothing has a limit of zero on that count: the unrelated sibling edit
-is such a phase in every gated case, since no measured lift reads a title. A
+is such a phase in every gated case, since neither measured lift reads a title. A
 change that adds any read there exceeds the limit.
 
 Each limit has a negative control: a regression variant that grows the count the
@@ -1600,10 +1648,8 @@ lifts, in the same transaction:
   topic's title, the titles of the topics it mentions, and every stamp on its
   comments and links. Each warm update writes one of those, so the scan runs
   again in every phase.
-- `duplicate-demand`, assigned the graph counts of the pivot cases, starts a
-  second instance of each demanded lift, the pivot among them.
-- `per-record`, assigned the graph counts of the thread cases, starts a lift
-  for each comment position and each link position on every topic.
+- `duplicate-demand`, assigned the graph counts, starts a second instance of
+  each demanded lift, the pivot among them.
 
 Every limit is an upper bound, so the budget catches a change that reads more
 and is blind to one that reads differently. Lazy materialization turned back

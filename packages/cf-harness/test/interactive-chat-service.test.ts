@@ -967,10 +967,14 @@ Deno.test("a canceled turn keeps its request and completed work for the next tur
   for (const snapshot of snapshots) {
     assertEquals(inspectHarnessTranscriptPairing(snapshot).valid, true);
   }
+  expect(
+    requests[1].filter((message) =>
+      message.content === HARNESS_CHAT_INTERRUPTED_TURN_NOTICE
+    ),
+  ).toHaveLength(1);
   // The request, the completed lookup and the notice carry over; the radar
   // call whose result never arrived does not.
   expect(requests[1]).toEqual([
-    ...unattachedTurnContext(),
     { role: "user", content: "weather in brisbane" },
     lookup,
     forecast,
@@ -978,6 +982,65 @@ Deno.test("a canceled turn keeps its request and completed work for the next tur
     ...unattachedTurnContext(),
     { role: "user", content: "go on" },
   ]);
+});
+
+Deno.test("waiting for a canceled turn includes its checkpoint commit", async () => {
+  const ready = Promise.withResolvers<void>();
+  const committing = Promise.withResolvers<void>();
+  const commit = Promise.withResolvers<void>();
+  const cancellationRecorded = Promise.withResolvers<void>();
+  const { store } = recordingStore();
+  const service = new HarnessInteractiveChatService({
+    onEvent: ({ event }) => {
+      if (event.kind === "turn_canceled") cancellationRecorded.resolve();
+    },
+    sessionStore: {
+      ...store,
+      saveSessionTurnAndAppendEvent: async (mutation) => {
+        if (mutation.turn.turn.status === "canceled") {
+          committing.resolve();
+          await commit.promise;
+        }
+        return true;
+      },
+    },
+    createPromptLoop: () => ({
+      runTranscript: (options) =>
+        new Promise((_resolve, reject) => {
+          options.signal?.addEventListener("abort", () => {
+            void cancellationRecorded.promise.then(() =>
+              reject(options.signal?.reason)
+            );
+          }, { once: true });
+          ready.resolve();
+        }),
+    }),
+  });
+  await service.startSession("session", {
+    sessionId: "session",
+    workspace: { hostPath: "/workspace" },
+  });
+  await service.startTurn("turn", {
+    sessionId: "session",
+    turnId: "turn",
+    input: { text: "Work" },
+  });
+  await ready.promise;
+  await service.cancelTurn("cancel", "session", "turn");
+  await committing.promise;
+  const order: string[] = [];
+  const waiting = service.waitForTurn("session", "turn").then(() =>
+    order.push("wait returned")
+  );
+  const release = Promise.resolve().then(() => {
+    order.push("commit released");
+    commit.resolve();
+  });
+  await Promise.all([waiting, release]);
+  expect(order).toEqual(["commit released", "wait returned"]);
+  expect(service.listTurns({ sessionId: "session" }).turns[0].turn.status).toBe(
+    "canceled",
+  );
 });
 
 Deno.test("a canceled turn ignores checkpoints it cannot resume from or that arrive after the cancel", async () => {
@@ -1061,7 +1124,6 @@ Deno.test("a canceled turn ignores checkpoints it cannot resume from or that arr
   }
   // Neither checkpoint advanced the turn past its own request.
   expect(requests[1]).toEqual([
-    ...unattachedTurnContext(),
     { role: "user", content: "Read both files" },
     { role: "user", content: HARNESS_CHAT_INTERRUPTED_TURN_NOTICE },
     ...unattachedTurnContext(),
@@ -1070,10 +1132,12 @@ Deno.test("a canceled turn ignores checkpoints it cannot resume from or that arr
 });
 
 Deno.test("interactive service aborts active turns when closing a session", async () => {
+  const ready = Promise.withResolvers<void>();
   let activeSignal: AbortSignal | undefined;
   const createPromptLoop: HarnessInteractivePromptLoopFactory = () => ({
     runTranscript: async (options) => {
       activeSignal = options.signal;
+      ready.resolve();
       return await new Promise<HarnessPromptLoopResult>((_resolve, reject) => {
         if (options.signal?.aborted) {
           reject(options.signal.reason);
@@ -1099,6 +1163,7 @@ Deno.test("interactive service aborts active turns when closing a session", asyn
     turnId: "turn-1",
     input: { text: "Start" },
   });
+  await ready.promise;
   const closed = await service.closeSession("req-3", "session-1", "done");
   assertEquals(closed.ok, true);
   assertEquals(activeSignal instanceof AbortSignal, true);
@@ -1685,12 +1750,14 @@ Deno.test("interactive service rejects missing sessions and concurrent turns", a
     "session_not_found",
   );
 
+  const ready = Promise.withResolvers<void>();
   let release: (() => void) | undefined;
   const busyService = new HarnessInteractiveChatService({
     createPromptLoop: () => ({
       runTranscript: () =>
         new Promise((resolve) => {
           release = () => resolve(makeResult({ transcript: [] }, "Done."));
+          ready.resolve();
         }),
     }),
     now: nextIsoNow(),
@@ -1724,6 +1791,7 @@ Deno.test("interactive service rejects missing sessions and concurrent turns", a
     missing.ok === false ? missing.error.retryable : "unset",
     undefined,
   );
+  await ready.promise;
   release?.();
   await busyService.waitForTurn("session-1", "turn-1");
 });
@@ -1909,7 +1977,6 @@ Deno.test("a completed turn promotes its transcript independently of the loop's 
   await service.waitForTurn("session-1", "turn-2");
 
   expect(seenTranscripts[1]).toEqual([
-    ...unattachedTurnContext(),
     { role: "user", content: "Hi" },
     { role: "assistant", content: "Done." },
     ...unattachedTurnContext(),
@@ -2093,7 +2160,7 @@ for (const resultsBeforeFault of FAULT_POINTS) {
       // already ran and it is never replayed. A canceled one keeps its request
       // and the last complete batch, then says it was stopped; a batch still
       // missing a result is left out.
-      const request = [...unattachedTurnContext(), {
+      const request = [{
         role: "user" as const,
         content: "Read both files",
       }];
