@@ -17,7 +17,13 @@ import {
 } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+import {
+  streamEntriesDocId,
+  type StreamEventsDocValue,
+} from "@commonfabric/memory/v2";
+import { isCell, UI } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
+import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 import { withStuckNet } from "@commonfabric/test-support/stuck-net";
 
 import {
@@ -103,6 +109,13 @@ describe("fabrichat-composer-drafts", () => {
 
     const body = "  Keep these spaces, please.  ";
     await fillCfInput(page, MAIN_INPUT, body);
+    const sidecar = cc.runtime.experimental.serverExecution
+      ? await composerEvents(cc, result)
+      : undefined;
+    await sidecar?.sync();
+    const previousEvents = new Set(
+      sidecar?.get()?.entries?.map((entry) => entry.eventId),
+    );
     const refused = Promise.withResolvers<void>();
     const observeRefusal = (event: Event): void => {
       if (
@@ -114,7 +127,31 @@ describe("fabrichat-composer-drafts", () => {
     page.addEventListener("console", observeRefusal);
     try {
       await clickTrustedAction(page, "ChatSend");
-      await withStuckNet(refused.promise, "the deleted-quote send refusal");
+      if (sidecar) {
+        const completed = await waitForCellValue<StreamEventsDocValue>(
+          cc.runtime,
+          sidecar,
+          (value) =>
+            value?.entries?.some((entry) =>
+              !previousEvents.has(entry.eventId) &&
+              entry.rendererTrusted === true && entry.consequenced === true &&
+              entry.error?.includes(DELETED) === true
+            ) === true,
+          { stuckLabel: "the served deleted-quote send refusal" },
+        );
+        const submitted = completed.entries?.filter((entry) =>
+          !previousEvents.has(entry.eventId)
+        );
+        expect(submitted).toHaveLength(1);
+        expect(submitted?.[0]).toMatchObject({
+          rendererTrusted: true,
+          consequenced: true,
+          error: expect.stringContaining(DELETED),
+          payload: { target: { value: body } },
+        });
+      } else {
+        await withStuckNet(refused.promise, "the deleted-quote send refusal");
+      }
       await settleView(page);
       expect(await readCfInputValue(page, MAIN_INPUT)).toBe(body);
     } finally {
@@ -167,6 +204,48 @@ describe("fabrichat-composer-drafts", () => {
     expect(await readCfInputValue(page, MAIN_INPUT)).toBe(mainDraft);
   });
 });
+
+/** The authoritative event log for the main composer's canonical stream. */
+async function composerEvents(
+  cc: PiecesController,
+  result: ReturnType<PiecesController["getResult"]>,
+) {
+  const find = async (node: unknown): Promise<unknown> => {
+    if (isCell(node)) {
+      await node.pull();
+      return await find(node.get());
+    }
+    if (!node || typeof node !== "object") return undefined;
+    if (Array.isArray(node)) {
+      for (const child of node) {
+        const found = await find(child);
+        if (found) return found;
+      }
+      return undefined;
+    }
+    if ("$UI" in node) return await find(node.$UI);
+    if ("name" in node && node.name === "cf-submit-input" && "props" in node) {
+      const props = node.props;
+      if (isCell(props)) {
+        const inputId = await props.key("inputId").asSchema({ type: "string" })
+          .pull();
+        if (inputId === "fabrichat-message") {
+          return props.key("onClick").resolveAsCell();
+        }
+      }
+    }
+    return "children" in node ? await find(node.children) : undefined;
+  };
+  const stream = await find(result.key(UI).asSchema(rendererVDOMSchema));
+  if (!isCell(stream)) {
+    throw new Error("The main composer's canonical stream was not found.");
+  }
+  const link = stream.resolveAsCell().getAsNormalizedFullLink();
+  return cc.runtime.getCellFromEntityId<StreamEventsDocValue>(
+    link.space,
+    streamEntriesDocId(link),
+  );
+}
 
 /** Opens the thread whose main-conversation root has `body`. */
 async function openThread(page: Page, body: string): Promise<void> {
