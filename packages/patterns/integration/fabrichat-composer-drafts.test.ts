@@ -8,6 +8,7 @@ import { join } from "@std/path";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 
 import { ConsoleEvent } from "@astral/astral";
+import { entityRefToString } from "@commonfabric/data-model/cell-rep";
 import { type DID, Identity } from "@commonfabric/identity";
 import {
   createTestSpace,
@@ -21,7 +22,7 @@ import {
   streamEntriesDocId,
   type StreamEventsDocValue,
 } from "@commonfabric/memory/v2";
-import { isCell, UI } from "@commonfabric/runner";
+import { getEntityId, isCell, UI } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 import { withStuckNet } from "@commonfabric/test-support/stuck-net";
@@ -173,19 +174,33 @@ describe("fabrichat-composer-drafts", () => {
     await fillCfInput(page, MAIN_INPUT, otherRoot);
     await submitViaEnter(page, MAIN_INPUT);
     await waitForSettledText(page, "#fabrichat-messages", otherRoot);
+    const messages = result.key("messages").key("latest").key("messages");
+    await waitForCellValue<string>(
+      cc.runtime,
+      messages.key(2).key("body"),
+      (value) => value === otherRoot,
+      { stuckLabel: "the second thread root's stored message" },
+    );
+    const [firstThreadKey, otherThreadKey] = [1, 2].map((index) => {
+      const entity = getEntityId(messages.key(index).resolveAsCell());
+      if (entity === undefined) {
+        throw new Error("The thread root has no entity.");
+      }
+      return entityRefToString(entity);
+    });
 
     const mainDraft = "  Still writing in the conversation.  ";
     const firstThreadDraft = "  Keep this in the first thread.  ";
     const threadBody = "  A separate thread reply.  ";
     await fillCfInput(page, MAIN_INPUT, mainDraft);
-    await openThread(page, body);
+    await openThread(page, body, firstThreadKey);
     await fillCfInput(page, THREAD_INPUT, firstThreadDraft);
-    await openThread(page, otherRoot);
+    await openThread(page, otherRoot, otherThreadKey);
     expect(await readCfInputValue(page, THREAD_INPUT)).toBe("");
     await fillCfInput(page, THREAD_INPUT, threadBody);
-    await openThread(page, body);
+    await openThread(page, body, firstThreadKey);
     expect(await readCfInputValue(page, THREAD_INPUT)).toBe(firstThreadDraft);
-    await openThread(page, otherRoot);
+    await openThread(page, otherRoot, otherThreadKey);
     expect(await readCfInputValue(page, THREAD_INPUT)).toBe(threadBody);
     await submitViaEnter(page, THREAD_INPUT);
     await waitForSettledText(page, "#fabrichat-thread", threadBody.trim());
@@ -199,7 +214,7 @@ describe("fabrichat-composer-drafts", () => {
       (value) => value === threadBody,
       { stuckLabel: "the thread reply retains its exact submitted text" },
     );
-    await openThread(page, body);
+    await openThread(page, body, firstThreadKey);
     expect(await readCfInputValue(page, THREAD_INPUT)).toBe(firstThreadDraft);
     expect(await readCfInputValue(page, MAIN_INPUT)).toBe(mainDraft);
   });
@@ -247,8 +262,12 @@ async function composerEvents(
   );
 }
 
-/** Opens the thread whose main-conversation root has `body`. */
-async function openThread(page: Page, body: string): Promise<void> {
+/** Opens the thread and waits for its own composer to be interactive. */
+async function openThread(
+  page: Page,
+  body: string,
+  threadKey: string,
+): Promise<void> {
   const token = `fabrichat-thread-${crypto.randomUUID()}`;
   const args = markTargetsArgs(
     (probe, body: string) => {
@@ -284,4 +303,13 @@ async function openThread(page: Page, body: string): Promise<void> {
     remark: { predicate: settleAndMarkTargets, args },
   });
   await waitForSettledText(page, "#fabrichat-thread cf-heading", body.trim());
+  // The heading and composer arrive through separate reactive branches.
+  await waitForCondition(page, (probe, key: string) => {
+    const inputs = probe.collect("#fabrichat-thread-message");
+    if (inputs.length !== 1) return false;
+    const root = inputs[0].getRootNode();
+    return root instanceof ShadowRoot &&
+      root.host.getAttribute("data-thread-key") === key;
+  }, { args: [threadKey] });
+  await settleView(page);
 }
