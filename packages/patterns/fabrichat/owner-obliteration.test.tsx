@@ -2,23 +2,24 @@
  * A FabriChat room's `ownersMayObliterate`, set against its kind's default: a
  * group room that doesn't let its OWNERs obliterate, and a direct room that
  * does. An OWNER obliterates someone else's message only where the setting
- * holds, and deletes no one else's message either way. Alice and Bob run here
- * as this lane's one principal, which holds OWNER in the room's space, so what
- * tells them apart is their profiles alone. Each act the room refuses fails
- * its run with a reason, and the test requires exactly those, each by its
- * reason. `members.test.tsx` and `direct.test.tsx` cover each kind's default.
+ * holds, and deletes no one else's message either way. Alice and Bob are
+ * distinct principals, each holding OWNER access. `members.test.tsx` and
+ * `direct.test.tsx` cover each kind's default.
  */
 import {
   type AddIntegrity,
   assert,
   type Cell,
   equals,
+  multiUserTest,
   pattern,
+  principalOf,
   TESTS,
   VIEWS,
   Writable,
 } from "commonfabric";
 import { type MessageRecord, type MessagesValue } from "./room-records.tsx";
+import { profileGesture, testRoomProfile } from "./room-test-fixture.ts";
 import { FabriChatMessageRow } from "./message-row.tsx";
 import { type ChatMessageRights, FabriChatRoomCore } from "./room.tsx";
 import {
@@ -58,7 +59,7 @@ const bodies = (messages: Cell<MessagesValue>): string =>
   ((messages.get() ?? []) as MessageRecord[]).map((message) =>
     typeof message?.body === "string"
       ? message.body
-      : message?.authorProfile === undefined
+      : message?.authorProfile?.get() === undefined
       ? "<obliterated>"
       : "<deleted>"
   ).join(" | ");
@@ -77,10 +78,7 @@ function messageOf(cell: unknown): unknown {
   return cell;
 }
 
-export default pattern(() => {
-  const aliceProfile = Writable.of<TestProfile>({ name: "Alice" });
-  const bobProfile = Writable.of<TestProfile>({ name: "Bob" });
-
+export const setup = pattern(() => {
   // A group room whose OWNERs may not obliterate.
   const groupMessages = Writable.of<MessagesValue>([] as MessagesValue);
   const groupRecords = {
@@ -88,12 +86,6 @@ export default pattern(() => {
     ownersMayObliterate: false,
     messages: groupMessages,
   };
-  const aliceInGroup = FabriChatRoomCore(
-    { myProfile: aliceProfile, ...groupRecords } as RoomArg,
-  );
-  const bobInGroup = FabriChatRoomCore(
-    { myProfile: bobProfile, ...groupRecords } as RoomArg,
-  );
 
   // A direct room whose OWNERs may obliterate.
   const directMessages = Writable.of<MessagesValue>([] as MessagesValue);
@@ -102,11 +94,66 @@ export default pattern(() => {
     ownersMayObliterate: true,
     messages: directMessages,
   };
-  const aliceInDirect = FabriChatRoomCore(
-    { myProfile: aliceProfile, ...directRecords } as RoomArg,
+  return { groupRecords, directRecords };
+});
+
+/** Shared room storage and policy overrides. */
+type Setup = ReturnType<typeof setup>;
+
+export const alice = pattern<{ setup: Setup }>(({ setup }) => {
+  const profile = Writable.of<TestProfile>({ name: "Alice" });
+  const group = FabriChatRoomCore({
+    about: setup.groupRecords.about,
+    ownersMayObliterate: setup.groupRecords.ownersMayObliterate,
+    messages: setup.groupRecords.messages,
+    myProfile: profile,
+  } as RoomArg);
+  const direct = FabriChatRoomCore({
+    about: setup.directRecords.about,
+    ownersMayObliterate: setup.directRecords.ownersMayObliterate,
+    messages: setup.directRecords.messages,
+    myProfile: profile,
+  } as RoomArg);
+  return {
+    [TESTS]: [
+      {
+        action: group.sendMessage,
+        event: typed("Alice in the group"),
+        trustedUi: sendGesture,
+      },
+      {
+        action: direct.sendMessage,
+        event: typed("Alice in private"),
+        trustedUi: sendGesture,
+      },
+      { label: "alice-sent" },
+      { await: "bob-done" },
+    ],
+  };
+});
+
+export const bob = pattern<{ setup: Setup }>(({ setup }) => {
+  const ownProfile = testRoomProfile({});
+  const bobProfile = ownProfile.profile;
+  const groupRecords = setup.groupRecords;
+  const directRecords = setup.directRecords;
+  const groupMessages = groupRecords.messages;
+  const directMessages = directRecords.messages;
+  const bobInGroup = FabriChatRoomCore(
+    {
+      about: groupRecords.about,
+      ownersMayObliterate: groupRecords.ownersMayObliterate,
+      messages: groupRecords.messages,
+      myProfile: bobProfile,
+    } as RoomArg,
   );
   const bobInDirect = FabriChatRoomCore(
-    { myProfile: bobProfile, ...directRecords } as RoomArg,
+    {
+      about: directRecords.about,
+      ownersMayObliterate: directRecords.ownersMayObliterate,
+      messages: directRecords.messages,
+      myProfile: bobProfile,
+    } as RoomArg,
   );
   // Bob's control on Alice's message in the group room, bound to the room's
   // records but to no policy, where a group room's kind alone would let an
@@ -125,13 +172,10 @@ export default pattern(() => {
 
   return {
     [TESTS]: [
+      { action: ownProfile.initialize, trustedUi: profileGesture },
+      { await: "alice-sent" },
       // In the group room, Bob, an OWNER, can neither delete nor obliterate
       // Alice's message, nor obliterate his own.
-      {
-        action: aliceInGroup.sendMessage,
-        event: typed("Alice in the group"),
-        trustedUi: sendGesture,
-      },
       {
         action: bobInGroup.sendMessage,
         event: typed("Bob in the group"),
@@ -183,11 +227,6 @@ export default pattern(() => {
       // In the direct room, Bob, an OWNER, obliterates Alice's message, but
       // still can't delete it.
       {
-        action: aliceInDirect.sendMessage,
-        event: typed("Alice in private"),
-        trustedUi: sendGesture,
-      },
-      {
         assertion: assert(() => {
           const hers = rightsAt(
             bobInDirect[VIEWS].room.messageRights,
@@ -217,6 +256,25 @@ export default pattern(() => {
         trustedUi: obliterateGesture,
       },
       {
+        assertion: assert(() =>
+          bodies(directMessages) === "<obliterated>" &&
+          principalOf(directMessages.key(0), "authored-by") ===
+            principalOf(bobProfile, "represents-principal") &&
+          bobInDirect[VIEWS].room.messageRights.every((rights) =>
+            !rights.canEdit && !rights.canDelete && !rights.canObliterate
+          )
+        ),
+      },
+
+      // Removing the same tombstone again leaves it removed.
+      {
+        action: bobInDirect.obliterateMessage,
+        event: {
+          message: messageOf(directMessages.key(0)),
+        },
+        trustedUi: obliterateGesture,
+      },
+      {
         assertion: assert(() => bodies(directMessages) === "<obliterated>"),
       },
 
@@ -232,6 +290,7 @@ export default pattern(() => {
           bodies(groupMessages) === "Alice in the group | Bob in the group"
         ),
       },
+      { label: "bob-done" },
     ],
     expectRuntimeErrors: [
       // In the group room, Bob's deletion and obliteration of Alice's message,
@@ -245,4 +304,9 @@ export default pattern(() => {
       "Messages in this chat can't be removed.",
     ],
   };
+});
+
+export default multiUserTest({
+  setup,
+  participants: { alice, bob: { pattern: bob, access: "OWNER" } },
 });

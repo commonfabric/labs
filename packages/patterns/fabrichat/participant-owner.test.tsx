@@ -17,9 +17,24 @@ import {
   type RepresentsCurrentUser,
   TESTS,
   type TrustedActionWrite,
+  UI,
+  VIEWS,
   Writable,
 } from "commonfabric";
-import { participantEntriesOf } from "./room.tsx";
+import {
+  findNode,
+  isButton,
+  propValue,
+  readValue,
+} from "../test/vnode-helpers.ts";
+import { testRoomStorage } from "./room-test-fixture.ts";
+import { FabriChatRoomCore, participantEntriesOf } from "./room.tsx";
+
+/** The display of a room's first message-edit control. */
+const editDisplay = (ui: unknown): unknown => {
+  const style = propValue(findNode(ui, isButton("Edit")), "style");
+  return readValue((style as { display?: unknown } | undefined)?.display);
+};
 
 /** The reviewed surface and action a person writes their own profile from. */
 const PROFILE_SURFACE = "FabriChatTestProfileSurface";
@@ -101,6 +116,17 @@ export default pattern(() => {
   const principals = computed(() =>
     participantEntriesOf([named, borrowing]).map((entry) => entry.principal)
   );
+  const records = testRoomStorage({});
+  const ownRoom = FabriChatRoomCore({
+    myProfile: named,
+    messages: records.messages,
+    about: { kind: "direct" },
+  });
+  const borrowedRoom = FabriChatRoomCore({
+    myProfile: borrowing,
+    messages: records.messages,
+    about: { kind: "direct" },
+  });
   return {
     [TESTS]: [
       { action: recordMe },
@@ -116,6 +142,27 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           principals[0] === me.get() && principals[1] === undefined
+        ),
+      },
+      {
+        action: ownRoom.sendMessage,
+        event: { body: "My message" },
+        trustedUi: { surface: "ChatSendSurface", action: "ChatSend" },
+      },
+      {
+        assertion: assert(() =>
+          ownRoom[VIEWS].room.viewer.principal === me.get() &&
+          ownRoom[VIEWS].room.messageRights[0]?.canEdit === true &&
+          editDisplay(ownRoom[UI]) === "inline-flex"
+        ),
+      },
+      {
+        assertion: assert(() =>
+          borrowedRoom[VIEWS].room.viewer.principal === undefined &&
+          borrowedRoom[VIEWS].room.messageRights[0]?.canEdit === false &&
+          borrowedRoom[VIEWS].room.messageRights[0]?.canDelete === false &&
+          borrowedRoom[VIEWS].room.messageRights[0]?.canObliterate === false &&
+          editDisplay(borrowedRoom[UI]) === "none"
         ),
       },
     ],

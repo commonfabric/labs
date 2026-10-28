@@ -62,6 +62,7 @@ export const TIER_DIRECTORIES: Readonly<Record<string, MarkedTier>> = {
 /** Individual pattern sources, relative to the patterns root, and their tier. */
 export const TIER_FILES: Readonly<Record<string, MarkedTier>> = {
   "cell-link.tsx": "fixture",
+  "fabrichat/room-test-fixture.ts": "fixture",
   "nested-map-ifelse-test.tsx": "fixture",
   "render-test.tsx": "fixture",
   "self-reference-test.tsx": "fixture",

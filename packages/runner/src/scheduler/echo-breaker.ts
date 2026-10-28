@@ -1,19 +1,21 @@
+import { type FabricValue, valueEqual } from "@commonfabric/data-model";
+import type { MemorySpace } from "@commonfabric/memory/interface";
 import {
   type EchoBreakerClearReport,
   resolveScopeKey,
   type ScopeKey,
   type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
-import type { MemorySpace } from "@commonfabric/memory/interface";
-import { getLogger } from "@commonfabric/utils/logger";
 import { BoundedKeyMap } from "@commonfabric/utils/cache";
-import { type FabricValue, valueEqual } from "@commonfabric/data-model";
+import { getLogger } from "@commonfabric/utils/logger";
 
 import { getValueAtPath } from "../path-utils.ts";
 import { arraysOverlap } from "../reactive-dependencies.ts";
+import { wasCommitWriteElided } from "../storage/commit-elision.ts";
 import type {
   IExtendedStorageTransaction,
   IMemorySpaceAddress,
+  IStorageTransaction,
   TransactionWriteDetail,
 } from "../storage/interface.ts";
 import { entityKey } from "./keys.ts";
@@ -129,6 +131,9 @@ export interface EchoRun {
 
   /** The identity the run's addresses resolve against. */
   readonly identity: ScopeKeyIdentity;
+
+  /** The transaction whose server verdict can prove a staged write redundant. */
+  readonly source?: IStorageTransaction;
 }
 
 /**
@@ -159,6 +164,7 @@ export function captureEchoRun(
   log: ReactivityLog,
   invalidCauses: readonly IMemorySpaceAddress[] | undefined,
   identity: ScopeKeyIdentity,
+  source?: IStorageTransaction,
 ): EchoRun | undefined {
   if (invalidCauses === undefined || invalidCauses.length === 0) {
     return undefined;
@@ -181,7 +187,13 @@ export function captureEchoRun(
       if (paths?.some((path) => overwrites(detail, path))) changed.add(key);
     }
   }
-  return { causeKeys: new Set(causePaths.keys()), changed, log, identity };
+  return {
+    causeKeys: new Set(causePaths.keys()),
+    changed,
+    log,
+    identity,
+    source,
+  };
 }
 
 /**
@@ -193,7 +205,9 @@ export function captureEchoRun(
  * convergence step. Storage drops a write of an equal value before it
  * reaches the write details, so a candidate with no changed write detail is a
  * convergence whether the run wrote the same value again or did not write it
- * at all.
+ * at all. The server can also elide a staged write when another writer has
+ * already published the same value. When every operation on a candidate was
+ * elided, that candidate converged even though its staged value differed.
  *
  * `options.tracked` says whether the breaker holds a pair of the run's action
  * now, as the commit lands, rather than when the run began: another run of
@@ -228,7 +242,8 @@ export function computeEchoSteps(
   return [...candidates].map(([docKey, document]) => ({
     docKey,
     document,
-    changed: run.changed.has(docKey),
+    changed: run.changed.has(docKey) &&
+      !wasCommitWriteElided(run.source, document),
   }));
 }
 
