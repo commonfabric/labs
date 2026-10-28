@@ -13,7 +13,6 @@ import { expect } from "@std/expect";
 import { fabricInstanceClassesByName } from "@/fabric-instances";
 import { fabricPrimitiveClassesByName } from "@/fabric-primitives";
 import {
-  ARRAY_LENGTH_FLOOR_FOR_TESTING_ONLY,
   fabricValueOfTextWithModsForTestingOnly,
   type FixtureRequirements,
   FVJ1_CONFORMANCE_CASES_FOR_TESTING_ONLY,
@@ -25,7 +24,7 @@ import {
   fvj1ProblematicPathsOfForTestingOnly,
   type Fvj1Refusal,
   meetsRequirementsForTestingOnly,
-  PROPERTY_COUNT_FLOOR_FOR_TESTING_ONLY,
+  SIZE_FLOORS_FOR_TESTING_ONLY,
   type TextWithMods,
   type ValuePatch,
   type ValuePath,
@@ -338,7 +337,7 @@ describe("fvj1-conformance", () => {
     });
 
     it("returns an entry requiring the length of an array past the floor", () => {
-      const length = ARRAY_LENGTH_FLOOR_FOR_TESTING_ONLY + 1;
+      const length = SIZE_FLOORS_FOR_TESTING_ONLY.arrayLength + 1;
       const entry = JSON.parse(
         fvj1ConformanceFixtureTextForTestingOnly([
           {
@@ -353,7 +352,7 @@ describe("fvj1-conformance", () => {
     });
 
     it("returns an entry requiring the member count of a record past the floor", () => {
-      const count = PROPERTY_COUNT_FLOOR_FOR_TESTING_ONLY + 1;
+      const count = SIZE_FLOORS_FOR_TESTING_ONLY.propertyCount + 1;
       const members = Array.from(
         { length: count },
         (_, i) => `"k${String(i).padStart(6, "0")}":${i}`,
@@ -369,6 +368,34 @@ describe("fvj1-conformance", () => {
       ).cases[0];
 
       expect(entry.requires).toEqual({ propertyCount: count });
+    });
+
+    it("returns entries requiring the length of a string, a byte sequence and a symbol's key past their floors, and a depth past its floor", () => {
+      const floors = SIZE_FLOORS_FOR_TESTING_ONLY;
+      const string = "x".repeat(floors.stringLength + 1);
+      const state = "A".repeat(Math.ceil((floors.bytesLength + 1) * 4 / 3));
+      const key = "x".repeat(floors.symbolKeyLength + 1);
+      const depth = floors.depth + 1;
+      const cases: readonly Fvj1ConformanceCase[] = [
+        { name: "string", section: "s", text: `fvj1:"${string}"` },
+        { name: "bytes", section: "s", text: `fvj1:{"/Bytes@1":"${state}"}` },
+        { name: "key", section: "s", text: `fvj1:{"/Symbol@1":"${key}"}` },
+        {
+          name: "deep",
+          section: "s",
+          text: `fvj1:${"[".repeat(depth)}${"]".repeat(depth)}`,
+        },
+      ];
+      const entries =
+        JSON.parse(fvj1ConformanceFixtureTextForTestingOnly(cases))
+          .cases;
+
+      expect(entries.map((entry: FixtureEntry) => entry.requires)).toEqual([
+        { stringLength: floors.stringLength + 1 },
+        { bytesLength: floors.bytesLength + 1 },
+        { symbolKeyLength: floors.symbolKeyLength + 1 },
+        { depth },
+      ]);
     });
 
     it("throws given a text the spec is said to decode that this package refuses", () => {

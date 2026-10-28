@@ -57,7 +57,6 @@ import {
   FabricUnavailable,
 } from "@/fabric-primitives";
 import {
-  ARRAY_LENGTH_FLOOR,
   fabricValueOfTextWithMods,
   type FixtureJson,
   type FixtureRequirements,
@@ -66,8 +65,9 @@ import {
   type PathStep,
   type ProbeForm,
   probesOf,
-  PROPERTY_COUNT_FLOOR,
   requirementsOf,
+  SIZE_FLOORS,
+  type SizeMeasure,
   type TextWithMods,
   textWithModsOf,
   type ValuePatch,
@@ -297,6 +297,7 @@ export type {
   HashOutcome,
   PathStep,
   ProbeForm,
+  SizeMeasure,
   TextWithMods,
   ValuePatch,
   ValuePath,
@@ -304,27 +305,21 @@ export type {
 };
 
 /**
- * The floor `3-json-encoding.md` section 12 sets on an implementation's limit
- * on the length of an array, past which a fixture entry states the length it
- * requires.
+ * The floor `3-json-encoding.md` section 12 sets by each measure of a value's
+ * size, past which a fixture entry states the guarantee it requires.
  */
-export const ARRAY_LENGTH_FLOOR_FOR_TESTING_ONLY: number = ARRAY_LENGTH_FLOOR;
-
-/**
- * The floor `3-json-encoding.md` section 12 sets on an implementation's limit
- * on the number of members of a record, past which a fixture entry states the
- * count it requires.
- */
-export const PROPERTY_COUNT_FLOOR_FOR_TESTING_ONLY: number =
-  PROPERTY_COUNT_FLOOR;
+export const SIZE_FLOORS_FOR_TESTING_ONLY: {
+  readonly [Measure in SizeMeasure]: number;
+} = SIZE_FLOORS;
 
 /**
  * `requirementsOf()` from `conformance-fixtures.ts`, which returns what a
- * reader must support to read the fixture entry for a text: the flavors a case
- * marks, and the sizes of array and record the text writes past the floors.
+ * reader must support to read the fixture entry for a text and mods: the
+ * flavors a case marks, and by each measure the size of the value the text
+ * writes, past the floors.
  */
 export const requirementsOfForTestingOnly: (
-  text: string,
+  stated: TextWithMods,
   flavors?: readonly string[],
 ) => FixtureRequirements | undefined = requirementsOf;
 

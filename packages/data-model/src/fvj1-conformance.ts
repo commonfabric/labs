@@ -92,8 +92,8 @@ export type Fvj1Outcome =
  *
  * `section` names the part of the formal spec the case exercises.
  * `requires` names the flavors of regular expression whose construction the
- * case's outcome depends on; the fixture entry adds the sizes of array and
- * record the case needs past the floors.
+ * case's outcome depends on; the fixture entry adds the guarantees of size the
+ * case needs past the floors.
  * `divergence` is a note on what the format requires, for a case where this
  * package does not do it. The format's outcome is never typed here. For a
  * value, it is the value's own probes, and the text {@link plainJsonTextOf}
@@ -1273,10 +1273,7 @@ function fixtureEntryOf(
     }
   }
 
-  const requires = requirementsOf(
-    stated.text,
-    conformanceCase.requires?.flavors,
-  );
+  const requires = requirementsOf(stated, conformanceCase.requires?.flavors);
   const entry: Record<string, FixtureJson> = {
     name,
     section,

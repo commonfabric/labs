@@ -30,7 +30,7 @@ import {
   type HashOutcome,
   hashOutcomeOfForTestingOnly,
   meetsRequirementsForTestingOnly,
-  PROPERTY_COUNT_FLOOR_FOR_TESTING_ONLY,
+  SIZE_FLOORS_FOR_TESTING_ONLY,
   type TextWithMods,
 } from "@/for-testing-only.ts";
 import { hashOf, hashStringOf, taggedHashStringOf } from "@/value-hash";
@@ -458,7 +458,7 @@ describe("hash-conformance", () => {
     });
 
     it("returns an entry requiring the member count of a record past the floor", () => {
-      const count = PROPERTY_COUNT_FLOOR_FOR_TESTING_ONLY + 1;
+      const count = SIZE_FLOORS_FOR_TESTING_ONLY.propertyCount + 1;
       const entry = soleEntryOf([
         {
           name: "wide",
@@ -471,6 +471,29 @@ describe("hash-conformance", () => {
       ]);
 
       expect(entry.requires).toEqual({ propertyCount: count });
+    });
+
+    it("returns entries requiring the length of a symbol's key and a depth past their floors", () => {
+      const floors = SIZE_FLOORS_FOR_TESTING_ONLY;
+      const key = "x".repeat(floors.symbolKeyLength + 1);
+      const deep = () => {
+        let value: FabricValue = [];
+        for (let i = 1; i <= floors.depth; i++) {
+          value = [value];
+        }
+        return value;
+      };
+      const entries = JSON.parse(
+        hashConformanceFixtureTextForTestingOnly([
+          { name: "key", section: "s", make: () => Symbol.for(key) },
+          { name: "deep", section: "s", make: deep },
+        ]),
+      ).cases;
+
+      expect(entries.map((entry: FixtureEntry) => entry.requires)).toEqual([
+        { symbolKeyLength: floors.symbolKeyLength + 1 },
+        { depth: floors.depth + 1 },
+      ]);
     });
 
     it("returns entries for two cases of one hash and one text with mods, neither naming the other", () => {

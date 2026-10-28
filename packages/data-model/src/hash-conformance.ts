@@ -100,8 +100,8 @@ export type HashedOutcome = {
  *
  * `section` names the part of the spec the case exercises. `requires` names
  * the flavors of regular expression whose construction the case's outcome
- * depends on; the fixture entry adds the sizes of array and record the case
- * needs past the floors. `spec` is the byte
+ * depends on; the fixture entry adds the guarantees of size the case needs
+ * past the floors. `spec` is the byte
  * stream the spec gives the value, in hexadecimal as the spec writes it,
  * spaces and all, for a value it gives one for. `equals` names another case,
  * earlier among the cases, whose value this one's is `valueEqual()` to.
@@ -1208,7 +1208,7 @@ function fixtureEntryOf(
     : outcomeOfStream(bytesOfHex(spec.replaceAll(" ", "").toLowerCase()));
 
   const entry: Record<string, FixtureJson> = { name, section };
-  const required = requirementsOf(stated.text, requires?.flavors);
+  const required = requirementsOf(stated, requires?.flavors);
   if (required !== undefined) {
     entry.requires = required;
   }

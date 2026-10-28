@@ -14,12 +14,12 @@ import {
 import { FabricError, FabricLink, FabricMap } from "@/fabric-instances";
 import { FabricBytes, FabricKeyPair } from "@/fabric-primitives";
 import {
-  ARRAY_LENGTH_FLOOR_FOR_TESTING_ONLY,
   fabricValueOfTextWithModsForTestingOnly,
+  type FixtureRequirements,
   meetsRequirementsForTestingOnly,
   probesOfForTestingOnly,
-  PROPERTY_COUNT_FLOOR_FOR_TESTING_ONLY,
   requirementsOfForTestingOnly,
+  SIZE_FLOORS_FOR_TESTING_ONLY,
   type TextWithMods,
   textWithModsOfForTestingOnly,
 } from "@/for-testing-only.ts";
@@ -61,6 +61,11 @@ function recordBodyOf(count: number): string {
     (_, i) => `"k${String(i).padStart(6, "0")}":${i}`,
   );
   return `{${members.join(",")}}`;
+}
+
+/** Returns the length of the unpadded base64url text of `count` bytes. */
+function base64LengthOf(count: number): number {
+  return Math.ceil(count * 4 / 3);
 }
 
 describe("conformance-fixtures", () => {
@@ -668,73 +673,176 @@ describe("conformance-fixtures", () => {
   });
 
   describe("requirementsOfForTestingOnly()", () => {
-    const arrayFloor = ARRAY_LENGTH_FLOOR_FOR_TESTING_ONLY;
-    const recordFloor = PROPERTY_COUNT_FLOOR_FOR_TESTING_ONLY;
+    const floors = SIZE_FLOORS_FOR_TESTING_ONLY;
 
-    it("returns `undefined` for a text whose arrays and records are at their floors", () => {
-      expect(
-        requirementsOfForTestingOnly(
-          `fvj1:[{"/hole":${arrayFloor}}]`,
-        ),
-      ).toBeUndefined();
-      expect(
-        requirementsOfForTestingOnly(`fvj1:${recordBodyOf(recordFloor)}`),
-      ).toBeUndefined();
+    /** Returns what a reader must support to read `text` with `unclaimed`. */
+    function requirementsOfText(
+      text: string,
+      unclaimed?: readonly string[],
+    ): FixtureRequirements | undefined {
+      return requirementsOfForTestingOnly({
+        text,
+        ...(unclaimed === undefined ? {} : { unclaimed }),
+      });
+    }
+
+    /** Returns `inner` written inside `count` nested arrays. */
+    function nestedIn(count: number, inner: string): string {
+      return "[".repeat(count) + inner + "]".repeat(count);
+    }
+
+    it("returns `undefined` for a text whose value is at the floor by every measure", () => {
+      const texts = [
+        `fvj1:[{"/hole":${floors.arrayLength}}]`,
+        `fvj1:${recordBodyOf(floors.propertyCount)}`,
+        `fvj1:"${"x".repeat(floors.stringLength)}"`,
+        `fvj1:{"/Bytes@1":"${"A".repeat(base64LengthOf(floors.bytesLength))}"}`,
+        `fvj1:{"/Symbol@1":"${"x".repeat(floors.symbolKeyLength)}"}`,
+        `fvj1:${nestedIn(floors.depth, "1")}`,
+      ];
+      for (const text of texts) {
+        expect(requirementsOfText(text)).toBeUndefined();
+      }
     });
 
     it("returns the length of the longest array past the floor, counting each hole a run stands for", () => {
-      const text = `fvj1:[[1,{"/hole":${arrayFloor}}],[1]]`;
+      const text = `fvj1:[[1,{"/hole":${floors.arrayLength}}],[1]]`;
 
-      expect(requirementsOfForTestingOnly(text)).toEqual({
-        arrayLength: arrayFloor + 1,
+      expect(requirementsOfText(text)).toEqual({
+        arrayLength: floors.arrayLength + 1,
       });
     });
 
     it("returns the member count of the largest record past the floor, wherever it is", () => {
-      const text = `fvj1:[{"a":1},${recordBodyOf(recordFloor + 1)}]`;
+      const text = `fvj1:[{"a":1},${recordBodyOf(floors.propertyCount + 1)}]`;
 
-      expect(requirementsOfForTestingOnly(text)).toEqual({
-        propertyCount: recordFloor + 1,
+      expect(requirementsOfText(text)).toEqual({
+        propertyCount: floors.propertyCount + 1,
       });
     });
 
     it("returns the member count of a type's state as a record's", () => {
-      const text = `fvj1:{"/Error@1":${recordBodyOf(recordFloor + 1)}}`;
+      const text = `fvj1:{"/Error@1":${
+        recordBodyOf(floors.propertyCount + 1)
+      }}`;
 
-      expect(requirementsOfForTestingOnly(text)).toEqual({
-        propertyCount: recordFloor + 1,
+      expect(requirementsOfText(text)).toEqual({
+        propertyCount: floors.propertyCount + 1,
+      });
+    });
+
+    it("returns the length of the longest string past the floor, in code points, a lone surrogate counting as one", () => {
+      // One code point past the floor, and two code units past it.
+      const value = "x".repeat(floors.stringLength - 1) +
+        "\\ud800\\ud83d\\ude00";
+
+      expect(requirementsOfText(`fvj1:"${value}"`)).toEqual({
+        stringLength: floors.stringLength + 1,
+      });
+    });
+
+    it("returns the length of a record key, and of a string in a type's state", () => {
+      const long = "x".repeat(floors.stringLength + 1);
+      const texts = [
+        `fvj1:{"${long}":1}`,
+        `fvj1:{"/Error@1":{"message":"${long}","name":null,"type":"Error"}}`,
+        `fvj1:{"/RegExp@1":{"flags":"","flavor":"es2025","source":"${long}"}}`,
+      ];
+      for (const text of texts) {
+        expect(requirementsOfText(text)).toEqual({
+          stringLength: floors.stringLength + 1,
+        });
+      }
+    });
+
+    it("returns the length of the longest byte sequence past the floor, in bytes rather than characters", () => {
+      const state = "A".repeat(base64LengthOf(floors.bytesLength + 1));
+      const texts = [
+        `fvj1:{"/Bytes@1":"${state}"}`,
+        `fvj1:{"/Hash@1":{"hash":"${state}","tag":"fid1"}}`,
+        `fvj1:{"/KeyPair@1":{"algorithm":"Ed25519","privateKey":"${state}",` +
+        '"publicKey":"AA"}}',
+      ];
+      for (const text of texts) {
+        expect(requirementsOfText(text)).toEqual({
+          bytesLength: floors.bytesLength + 1,
+        });
+      }
+    });
+
+    it("returns the length of a registered symbol's key past its own floor", () => {
+      const key = "x".repeat(floors.symbolKeyLength + 1);
+
+      expect(requirementsOfText(`fvj1:{"/Symbol@1":"${key}"}`)).toEqual({
+        symbolKeyLength: floors.symbolKeyLength + 1,
+      });
+    });
+
+    it("returns the depth past the floor, an instance and its state counting as two", () => {
+      // Each error is an instance and its state record.
+      let text = "1";
+      for (let i = 0; i < floors.depth / 2 + 1; i++) {
+        text = `{"/Error@1":{"cause":${text},"message":"m","name":null,` +
+          '"type":"Error"}}';
+      }
+
+      expect(requirementsOfText(`fvj1:${text}`)).toEqual({
+        depth: floors.depth + 2,
+      });
+    });
+
+    it("counts no depth for an escape wrapper or a primitive's state", () => {
+      const texts = [
+        `fvj1:{"/quote":${nestedIn(floors.depth, "1")}}`,
+        `fvj1:{"/object":{"a":${nestedIn(floors.depth - 1, "1")}}}`,
+        `fvj1:${nestedIn(floors.depth, '{"/Hash@1":{"hash":"AA","tag":"t"}}')}`,
+      ];
+      for (const text of texts) {
+        expect(requirementsOfText(text)).toBeUndefined();
+      }
+    });
+
+    it("counts a primitive's tag left unclaimed as an instance", () => {
+      const text = `fvj1:${nestedIn(floors.depth, '{"/Bytes@1":"AA"}')}`;
+
+      expect(requirementsOfText(text, ["Bytes@1"])).toEqual({
+        depth: floors.depth + 1,
       });
     });
 
     it("returns the flavors given, beside the sizes past their floors", () => {
-      const text = `fvj1:[{"/hole":${arrayFloor + 1}}]`;
+      const text = `fvj1:[{"/hole":${floors.arrayLength + 1}}]`;
 
-      expect(requirementsOfForTestingOnly(text, ["es2025"])).toEqual({
+      expect(requirementsOfForTestingOnly({ text }, ["es2025"])).toEqual({
         flavors: ["es2025"],
-        arrayLength: arrayFloor + 1,
+        arrayLength: floors.arrayLength + 1,
       });
     });
 
-    it("counts a malformed hole run as one element", () => {
-      const text = `fvj1:[{"/hole":${arrayFloor + 1.5}}]`;
+    it("counts a malformed hole run as no element", () => {
+      const text = `fvj1:[{"/hole":${floors.arrayLength + 1.5}}]`;
 
-      expect(requirementsOfForTestingOnly(text)).toBeUndefined();
+      expect(requirementsOfText(text)).toBeUndefined();
     });
 
     it("returns `undefined` for a text that is not `fvj1:` JSON", () => {
-      expect(requirementsOfForTestingOnly("fvj1:[")).toBeUndefined();
-      expect(requirementsOfForTestingOnly("[1]")).toBeUndefined();
+      expect(requirementsOfText("fvj1:[")).toBeUndefined();
+      expect(requirementsOfText("[1]")).toBeUndefined();
     });
   });
 
   describe("meetsRequirementsForTestingOnly()", () => {
-    it("returns `true` for no requirements, or ones this package meets", () => {
+    it("returns `true` for no requirements, or ones within this package's guarantees", () => {
       expect(meetsRequirementsForTestingOnly(undefined)).toBe(true);
       expect(
         meetsRequirementsForTestingOnly({
           flavors: ["es2025"],
           arrayLength: 2 ** 32 - 1,
           propertyCount: 2 ** 30,
+          stringLength: 2 ** 26,
+          bytesLength: 2 ** 27,
+          symbolKeyLength: 2 ** 26,
+          depth: 2 ** 11,
         }),
       ).toBe(true);
     });
@@ -744,9 +852,18 @@ describe("conformance-fixtures", () => {
         .toBe(false);
     });
 
-    it("returns `false` for an array longer than a JavaScript array can be", () => {
-      expect(meetsRequirementsForTestingOnly({ arrayLength: 2 ** 32 }))
-        .toBe(false);
+    it("returns `false` for a size past any of this package's guarantees", () => {
+      const pastEach: readonly FixtureRequirements[] = [
+        { arrayLength: 2 ** 32 },
+        { stringLength: 2 ** 26 + 1 },
+        { bytesLength: 2 ** 27 + 1 },
+        { symbolKeyLength: 2 ** 26 + 1 },
+        { depth: 2 ** 11 + 1 },
+      ];
+      for (const requires of pastEach) {
+        expect({ requires, met: meetsRequirementsForTestingOnly(requires) })
+          .toEqual({ requires, met: false });
+      }
     });
   });
 });
