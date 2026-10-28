@@ -1875,6 +1875,7 @@ export const FabriChatRoomCore = pattern<
           <cf-submit-input
             data-ui-action={CHAT_SEND_ACTION}
             inputId="fabrichat-message"
+            $draft={composer.key("draft")}
             placeholder="Message"
             buttonText="Send"
             disabled={cannotSend}
@@ -1983,6 +1984,7 @@ export const FabriChatRoomCore = pattern<
             <cf-submit-input
               data-ui-action={CHAT_SEND_ACTION}
               inputId="fabrichat-thread-message"
+              $draft={composer.key("threadDraft")}
               placeholder="Reply in thread"
               buttonText="Reply"
               disabled={cannotSend}

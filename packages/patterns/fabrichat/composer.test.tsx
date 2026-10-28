@@ -12,7 +12,13 @@ import {
   UI,
   Writable,
 } from "commonfabric";
-import { clickButton, hasText } from "../test/vnode-helpers.ts";
+import {
+  clickButton,
+  findNodeByProp,
+  hasText,
+  propsOf,
+  propValue,
+} from "../test/vnode-helpers.ts";
 import { type MessageRecord, type MessagesValue } from "./room-records.tsx";
 import { FabriChatRoomCore } from "./room.tsx";
 import {
@@ -34,7 +40,35 @@ const sendGesture = {
   action: CHAT_SEND_ACTION,
 };
 
-const typed = (text: string) => ({ type: "click", target: { value: text } });
+const typed = (text: string, revision?: string) => ({
+  type: "click",
+  target: { value: text, dataset: { draftRevision: revision } },
+});
+
+/** Writes the binding the main or thread input edits. */
+const fillDraft = (
+  root: unknown,
+  inputId: string,
+  value: string,
+  revision: string,
+): void => {
+  const binding = propsOf(findNodeByProp(root, "inputId", inputId))?.["$draft"];
+  if (
+    typeof binding !== "object" || binding === null || !("set" in binding) ||
+    typeof binding.set !== "function"
+  ) {
+    throw new Error("The composer has no writable draft binding.");
+  }
+  binding.set({ value, revision });
+};
+
+/** The text the main or thread input reads through its draft binding. */
+const draftText = (root: unknown, inputId: string): unknown => {
+  const draft = propValue(findNodeByProp(root, "inputId", inputId), "$draft");
+  return typeof draft === "object" && draft !== null && "value" in draft
+    ? draft.value
+    : undefined;
+};
 
 // Each stored message, as `body@shownIn`.
 const summary = (messages: Cell<MessagesValue>): string =>
@@ -47,6 +81,12 @@ export default pattern(() => {
   const aliceProfile = Writable.of<TestProfile>({ name: "Alice" });
   const alice = FabriChatRoomCore({
     myProfile: aliceProfile,
+    about: { kind: "group" as const },
+    messages,
+  } as RoomArg);
+  const pendingProfile = Writable.of<TestProfile | undefined>(undefined);
+  const pending = FabriChatRoomCore({
+    myProfile: pendingProfile,
     about: { kind: "group" as const },
     messages,
   } as RoomArg);
@@ -87,6 +127,111 @@ export default pattern(() => {
             "Hello@- | Quoting@main | In the thread@thread | Plain@-"
         ),
       },
+      {
+        action: action(() =>
+          fillDraft(pending[UI], "fabrichat-message", "  retained  ", "first")
+        ),
+      },
+      {
+        action: pending.composerSend,
+        event: typed("  retained  ", "first"),
+        trustedUi: sendGesture,
+      },
+      {
+        assertion: assert(() =>
+          messages.get().length === 4 &&
+          draftText(pending[UI], "fabrichat-message") === "  retained  "
+        ),
+      },
+      { action: action(() => pendingProfile.set({ name: "Alice" })) },
+      {
+        action: pending.composerSend,
+        event: typed("  retained  ", "first"),
+        trustedUi: sendGesture,
+      },
+      {
+        assertion: assert(() =>
+          messages.get().length === 5 &&
+          (messages.get() as MessageRecord[])[4]?.body === "  retained  " &&
+          draftText(pending[UI], "fabrichat-message") === ""
+        ),
+      },
+      {
+        action: action(() =>
+          fillDraft(alice[UI], "fabrichat-message", "newer text", "second")
+        ),
+      },
+      {
+        action: alice.composerSend,
+        event: typed("submitted text", "first"),
+        trustedUi: sendGesture,
+      },
+      {
+        assertion: assert(() =>
+          draftText(alice[UI], "fabrichat-message") === "newer text" &&
+          (messages.get() as MessageRecord[])[5]?.body === "submitted text"
+        ),
+      },
+      {
+        action: action(() =>
+          fillDraft(alice[UI], "fabrichat-message", "submitted text", "third")
+        ),
+      },
+      {
+        action: alice.composerSend,
+        event: typed("submitted text", "first"),
+        trustedUi: sendGesture,
+      },
+      {
+        assertion: assert(() =>
+          draftText(alice[UI], "fabrichat-message") === "submitted text" &&
+          messages.get().length === 7
+        ),
+      },
+      {
+        action: action(() =>
+          fillDraft(
+            alice[UI],
+            "fabrichat-thread-message",
+            "  reply  ",
+            "thread",
+          )
+        ),
+      },
+      {
+        action: alice.threadComposerSend,
+        event: typed("  reply  ", "thread"),
+        trustedUi: sendGesture,
+      },
+      {
+        assertion: assert(() =>
+          draftText(alice[UI], "fabrichat-thread-message") === "" &&
+          draftText(alice[UI], "fabrichat-message") === "submitted text" &&
+          (messages.get() as MessageRecord[])[7]?.body === "  reply  "
+        ),
+      },
+      {
+        action: action(() =>
+          fillDraft(
+            alice[UI],
+            "fabrichat-thread-message",
+            "newer reply",
+            "next",
+          )
+        ),
+      },
+      {
+        action: alice.threadComposerSend,
+        event: typed("  reply  ", "thread"),
+        trustedUi: sendGesture,
+      },
+      {
+        assertion: assert(() =>
+          draftText(alice[UI], "fabrichat-thread-message") === "newer reply" &&
+          draftText(alice[UI], "fabrichat-message") === "submitted text"
+        ),
+      },
     ],
+    expectRuntimeErrors: ["Your profile hasn't loaded yet."],
   };
 });

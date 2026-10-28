@@ -65,6 +65,14 @@ attachments being composed, as a `PerSession` value of its own, so two
 placements of the same room open in one session show the same composer state,
 as one conversation shown twice should.
 
+The main and thread composers hold independent drafts, each with the exact
+text and the identity of its latest edit. A refused send keeps its draft. An
+accepted send clears only the submitted edit, in the transaction that appends
+the message; a newer edit survives even when it has the same text. The submit
+gesture carries the text to store, so a pending draft update cannot change a
+message's body. Whitespace-only text is checked separately from the text kept
+in the message.
+
 The main composer attaches files. Its attach control sends the room's
 `ensureFileStore` as it opens its file picker, so that the space has a store by
 the time a file is picked. Each file it stores in the blob store it adds to the
