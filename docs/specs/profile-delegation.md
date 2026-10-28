@@ -328,13 +328,17 @@ describes, and the server holds the two to be one: the payload is the
 anything else is read. The open stays what it is, admission to the space;
 a command's invocation carries the attenuation within it.
 
-Where the open is signed, so is the invocation, by the session's principal.
-Where the connection authenticates the principal and the open goes
-unsigned, the invocation goes unsigned too, bound to the session as the open
-is. The signed form is what the audit trail wants, since a commit's
+The invocation goes unsigned, bound to the session as a
+connection-authenticated open is: the session already authenticates the
+principal, and the policy needs the invocation's shape, not its signature.
+Signing each command is what the audit trail wants, since a commit's
 `invocationRef` then points at the invocation that made it rather than at
-the open. Which form a deployment runs is decided by the cost of signing
-every command, measured before this phase is built; the design admits both.
+the open, and it belongs to the protocol's cutover rather than to this
+phase. It is affordable when it comes: measured on the real signing and
+verifying paths, a one-operation transaction costs about 20 µs to sign and
+40 µs to verify with WebCrypto, which is under one percent of what the
+server spends on a transaction today, and the pure-JavaScript fallback a
+browser without native Ed25519 takes costs about five times that to sign.
 
 ### Proofs by reference
 
@@ -426,8 +430,10 @@ policy means. A chain's policy is compiled once, when the chain is
 verified, into the predicate the server runs per command; a chain with an
 empty policy compiles to nothing, so a session under one costs what a
 session costs today. The cost of evaluating a non-empty policy is paid per
-command and grows with the operations it quantifies over, which the same
-measurement as the signing cost establishes.
+command and grows with the operations it quantifies over: compiled, a
+prefix match over a hundred operations costs a few microseconds, and an
+interpreted evaluation that rebuilds its glob per operation costs ten
+times that, which is why the policy is compiled.
 
 ### Revocation at the point of use
 
@@ -774,7 +780,7 @@ part of this design.
    recovery.
 5. **Policy and revocation.** The commands that name documents, transact,
    graph query, and the watch set, become invocations carrying `cmd`,
-   `args`, and `prf`, signed where the open is signed, and the server
+   `args`, and `prf`, bound to the session, and the server
    evaluates each command's chain's policy over its arguments, so a
    delegation can grant its level on one document or a prefix rather than
    the whole space, and over one command rather than all ("Policy"); the
@@ -783,9 +789,11 @@ part of this design.
    takes a policy and records what it issued in Home; and a space's
    revocation document lets an owner refuse a delegation by CID before it
    expires, at the next command and by sweeping open sessions ("Rotation
-   and revocation"). The cost of signing and of evaluating per command is
-   measured before the phase is built. A grant-side rule confining a
-   wildcard WRITE to the documents a sender created is left open.
+   and revocation"). The invocations are bound to the session rather than
+   signed; signing each command belongs to the protocol's cutover.
+   Evaluating a compiled policy costs a few microseconds per command even
+   over a hundred operations. A grant-side rule confining a wildcard WRITE
+   to the documents a sender created is left open.
 
 ## Open questions
 
