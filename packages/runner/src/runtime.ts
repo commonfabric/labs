@@ -125,6 +125,7 @@ import {
   liveImmutableSnapshotsBySpace,
   ownImmutableCells,
 } from "./immutable-cell.ts";
+import { inSpaceRootCause } from "./in-space-root-cause.ts";
 import type { ConsoleMessage } from "./interface.ts";
 import { addressKey } from "./link-types.ts";
 import {
@@ -153,7 +154,6 @@ import {
   setReaderSchemaPrecedenceConfig,
 } from "./reader-schema-precedence-config.ts";
 import {
-  inSpaceRootCause,
   type PieceSourceTransition,
   Runner,
   type RunnerRunOptions,

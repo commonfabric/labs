@@ -3689,6 +3689,7 @@ export class Scheduler {
           log,
           invalidCauses,
           tx.tx.scopeKeyIdentity ?? this.runtime.scopeKeyIdentity,
+          tx.tx,
         ),
       observeRemoteEcho: (action, actionId, run) =>
         this.#observeRemoteEcho(action, actionId, run),

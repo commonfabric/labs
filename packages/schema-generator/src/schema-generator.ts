@@ -34,6 +34,7 @@ import {
   scopeOfScopeWrapper,
   scopeOfWrittenScopedUnion,
   scopesCellHandle,
+  writesWrapperErasedByAny,
 } from "./formatters/common-fabric-formatter.ts";
 import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
 import {
@@ -94,6 +95,7 @@ import {
   withOriginsNumbered,
 } from "./schema-origins.ts";
 import {
+  reportRecursiveAliasOfAny,
   reportUnreadCfcRecursion,
   reportUnreadTypes,
 } from "./unread-type-diagnostics.ts";
@@ -3024,6 +3026,39 @@ export class SchemaGenerator {
   }
 
   /**
+   * The reference `context` reads, where `type` is the declared type of the
+   * generic alias it names, lowered by `CommonFabricFormatter` from the
+   * reference's arguments, as a CFC alias the checker reads as `any` is
+   * (`#resolveTypeReferenceFromScope()`); `undefined` for any other reading.
+   * The declared type's parameters are unbound in it, so it is one type for
+   * every such reference, and the reading is told apart by the reference.
+   */
+  #declaredAliasReference(
+    type: ts.Type,
+    context: GenerationContext,
+  ): ts.TypeReferenceNode | undefined {
+    const written = context.typeNode &&
+      unwrapTypeParentheses(context.typeNode);
+    if (
+      !written || !ts.isTypeReferenceNode(written) ||
+      !written.typeArguments?.length || !ts.isIdentifier(written.typeName)
+    ) {
+      return undefined;
+    }
+    const symbol = this.#resolveTypeName(
+      written,
+      written.typeName,
+      context.typeChecker,
+      context,
+    );
+    return symbol !== undefined &&
+        context.typeChecker.getDeclaredTypeOfSymbol(symbol) === type &&
+        this.#commonFabricFormatter.supportsType(type, context)
+      ? written
+      : undefined;
+  }
+
+  /**
    * The declaration's type names a reading under bindings. The root's
    * instantiation and its recursive member's declaration then share an
    * identity; the binding key distinguishes their arguments and writers.
@@ -3418,6 +3453,13 @@ export class SchemaGenerator {
       }
       // Start building this named type; we'll store the result below
       context.inProgressNames.add(namedKey);
+      // Read again inside its own definition, the type is that definition's
+      // `$ref`, which ends a recursion through it, so the aliases read in
+      // place of `any` around it are read afresh inside it.
+      if (context.aliasesReadForAny) {
+        const { aliasesReadForAny: _, ...outside } = context;
+        context = outside;
+      }
     }
 
     // Cycle detection: if we see the same type again by identity, emit a $ref.
@@ -3429,11 +3471,17 @@ export class SchemaGenerator {
     // type parameter bindings is that type together with them, as its
     // definition's name is (`#bindingKey()`), so the same declared type read
     // under other bindings inside it is no cycle, and so is a reading of
-    // another variant (`#readingVariant()`).
+    // another variant (`#readingVariant()`). A generic alias's declared type,
+    // read from a reference's arguments (`#declaredAliasReference()`), is one
+    // type for every such reference, so its reading is that type together
+    // with the reference, and another reference to the alias inside it,
+    // `Confidential<Confidential<any, A>, B>`, is no cycle.
     const bound = context.boundTypeParameters;
     const bindingKey = this.#bindingKey(context);
     const bindingType = this.#bindingType(type, context);
-    const variant = this.#readingVariant(context);
+    const declaredAt = this.#declaredAliasReference(type, context);
+    const variant = this.#readingVariant(context) +
+      (declaredAt ? `:at${this.#bindingId(declaredAt)}` : "");
     const stackKey = bindingKey === undefined
       ? variant === "" ? type : `${variant}|${this.#bindingId(type)}`
       : `${variant}${this.#bindingId(bindingType)}|${bindingKey}`;
@@ -4382,8 +4430,11 @@ export class SchemaGenerator {
           checker,
           context,
         );
-      // A name declared as `any` reads as `any` does, accepting any value.
-      if (resolved === checker.getAnyType()) return true;
+      // A name declared as `any` reads as `any` does, accepting any value,
+      // unless its declaration writes a wrapper the checker erases around it.
+      if (resolved === checker.getAnyType()) {
+        return this.#readAliasOfAny(typeNode, checker, context) ?? true;
+      }
       if (resolved) {
         const { boundTypeParameters: _, ...unbound } = context;
         return this.formatChildType(
@@ -4498,6 +4549,114 @@ export class SchemaGenerator {
         parameter.name.text === name
       ) ?? -1;
     return index >= 0 ? reference.typeArguments?.[index] : undefined;
+  }
+
+  /**
+   * The schema of what the alias `reference` names declares, read under the
+   * reference's arguments, where the checker reads that alias as `any` and
+   * its declaration writes a wrapper the checker erases around `any`
+   * (`writesWrapperErasedByAny()`): `Confidential<any, C>`, `PerUser<any>`,
+   * or a union holding one is `any` to the checker, and only the written
+   * declaration holds its labels, scope, or default. `undefined` for any other
+   * reference, which reads as `any` does. A reference read again inside its
+   * own reading with arguments that denote the same written nodes
+   * (`#writtenArguments()`), as `Tree` is in `type Tree = { next: Tree } |
+   * Secret`, recurses without end, and so does one whose argument is met
+   * again inside what it denotes, as `Nest<T[]>` is in
+   * `type Nest<T> = { inner: Nest<T[]> } | Secret`: the alias is `any` to the
+   * checker there too, and its labels would be lost at that depth, so it is
+   * refused (`reportRecursiveAliasOfAny()`). One read again with arguments
+   * that denote other nodes nests only as deep as those arguments:
+   * `Wrap<Wrap<T>>`, where `type Wrap<T> = Box<T>` reads its one reference to
+   * `Box` at each level.
+   */
+  #readAliasOfAny(
+    reference: ts.TypeReferenceNode,
+    checker: ts.TypeChecker,
+    context: GenerationContext,
+  ): MutableJSONSchema | undefined {
+    if (!ts.isIdentifier(reference.typeName)) return undefined;
+    const declaration = this.#resolveTypeName(
+      reference,
+      reference.typeName,
+      checker,
+      context,
+    )?.declarations?.find(ts.isTypeAliasDeclaration);
+    if (
+      !declaration ||
+      isDefaultLibrarySourceFile(declaration.getSourceFile(), context) ||
+      !writesWrapperErasedByAny(declaration.type, checker)
+    ) {
+      return undefined;
+    }
+    const inside = context.aliasesReadForAny ?? [];
+    const written = this.#writtenArguments(reference, context);
+    if (
+      written.selfNested ||
+      inside.some((reading) =>
+        reading.reference === reference && reading.arguments === written.key
+      )
+    ) {
+      reportRecursiveAliasOfAny(context, reference);
+      return {};
+    }
+    const bound = this.#referenceBindings(reference, context);
+    const { boundTypeParameters: _, instantiatedAs: __, ...unbound } = context;
+    return this.#analyzeChildNode(declaration.type, checker, {
+      ...unbound,
+      ...(bound.arguments.size > 0 && { boundTypeParameters: bound }),
+      aliasesReadForAny: [...inside, { reference, arguments: written.key }],
+    });
+  }
+
+  /**
+   * The arguments `reference` writes, as a key of the written nodes they
+   * denote: each argument's node, with the node bound to each type parameter
+   * it names, read in turn under the bindings of the place that node is
+   * written. And whether a node is met again inside what it denotes: an
+   * argument written inside the declaration it is an argument to, which
+   * grows at each level, as `T[]` in `type Nest<T> = { inner: Nest<T[]> }`
+   * does.
+   */
+  #writtenArguments(
+    reference: ts.TypeReferenceNode,
+    context: GenerationContext,
+  ): { key: string; selfNested: boolean } {
+    const checker = context.typeChecker;
+    let selfNested = false;
+    const keyOf = (
+      node: ts.TypeNode,
+      bound: BoundTypeParameters | undefined,
+      outer: ReadonlySet<ts.Node>,
+    ): string => {
+      if (outer.has(node)) {
+        selfNested = true;
+        return "^";
+      }
+      const within = new Set([...outer, node]);
+      const named: string[] = [];
+      const visit = (part: ts.Node): void => {
+        const parameter = ts.isTypeReferenceNode(part)
+          ? typeParameterOfReference(part, checker)
+          : undefined;
+        const argument = parameter && bound?.arguments.get(parameter);
+        if (argument) {
+          named.push(
+            argument.node
+              ? keyOf(argument.node, argument.bound, within)
+              : `t${this.#bindingId(argument.type)}`,
+          );
+          return;
+        }
+        ts.forEachChild(part, visit);
+      };
+      visit(node);
+      return `${this.#bindingId(node)}(${named.join(",")})`;
+    };
+    const key = (reference.typeArguments ?? []).map((argument) =>
+      keyOf(argument, context.boundTypeParameters, new Set())
+    ).join(",");
+    return { key, selfNested };
   }
 
   /**
@@ -5111,8 +5270,46 @@ export class SchemaGenerator {
         if (second === undefined) return undefined;
         const keys = literalKeys(second, context);
         if (keys === undefined) return undefined;
+        // An operand written in place as a type literal, read by its syntax,
+        // is read for the members kept alone, so a member the alias drops is
+        // not read, nor a recursion through it, as `parent` in
+        // `Omit<{ parent: Data<T>; value: T }, "parent">` is not. `Pick` drops
+        // an index signature too where every key it names is a member's. An
+        // operand read by its type keeps that reading, and the metadata it
+        // gives each member.
+        const written = unwrapTypeParentheses(first);
+        const members = ts.isTypeLiteralNode(written) ? written.members : [];
+        const declared = new Set(
+          members.flatMap((member) => {
+            const key = ts.isPropertySignature(member)
+              ? getPropertyNameText(member.name, checker)
+              : undefined;
+            return key === undefined ? [] : [key];
+          }),
+        );
+        const kept = (member: ts.TypeElement): boolean => {
+          if (ts.isIndexSignatureDeclaration(member)) {
+            return name === "Omit" ||
+              [...keys].some((key) => !declared.has(key));
+          }
+          const key = ts.isPropertySignature(member)
+            ? getPropertyNameText(member.name, checker)
+            : undefined;
+          return key === undefined || keys.has(key) === (name === "Pick");
+        };
         // The picked members are the labelled value's, so its label stays.
-        const operand = analyze(first, instantiatedAs);
+        const operand = ts.isTypeLiteralNode(written) &&
+            ((readBoundTypeNode(written, context).flags & ts.TypeFlags.Any) !==
+                0 || this.#readsBySyntax(written, context))
+          ? this.#analyzeTypeNodeStructure(
+            ts.factory.updateTypeLiteralNode(
+              written,
+              ts.factory.createNodeArray(written.members.filter(kept)),
+            ),
+            checker,
+            instantiatedAs ? { ...context, instantiatedAs } : context,
+          )
+          : analyze(first, instantiatedAs);
         const { ifc, ...payload } = isObjectOrArray(operand) &&
             !Array.isArray(operand)
           ? operand as Record<string, unknown>

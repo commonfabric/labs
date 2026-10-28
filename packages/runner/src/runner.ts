@@ -123,6 +123,7 @@ import { spaceReaderRole } from "./cfc/space-membership.ts";
 import { isTrustedGesture } from "./cfc/ui-contract.ts";
 import { findAndInlineDataUriLinks } from "./data-uri.ts";
 import { type EntityKind, entityKindOfIdString } from "./entity-kind.ts";
+import { inSpaceRootCause } from "./in-space-root-cause.ts";
 import { MAX_PATH_RESOLUTION_LENGTH, resolveLink } from "./link-resolution.ts";
 import { FILTER_INPUT_SCHEMA } from "./builtins/filter.ts";
 import { FLATMAP_INPUT_SCHEMA } from "./builtins/flatmap.ts";
@@ -1809,19 +1810,6 @@ export const SEALING_SOURCE_UPDATE_REFUSAL =
   "source update authority requires a durable setup commit and cannot be " +
   "published while sealing into a wave, whose acceptance a later withdrawal " +
   "can undo";
-
-/**
- * The cause of the root `PatternFactory.inSpace(..., { root: true })` places
- * in `space`, the space it creates. The space's genesis commit reserves the
- * address it derives there, so the root's address is fixed before the run that
- * places it. The cause names `space`, so the roots of two such spaces are two
- * entities, and a pattern keying a record by the entity a root names, as one
- * keys a person's record by their profile, keeps one person's record apart
- * from another's.
- */
-export function inSpaceRootCause(space: MemorySpace): string {
-  return `in-space-root:${space}`;
-}
 
 /**
  * Reports work which failed after storage accepted a pattern setup.

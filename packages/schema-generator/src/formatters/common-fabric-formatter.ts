@@ -1214,6 +1214,47 @@ export function lowersFromReferenceArguments(
 }
 
 /**
+ * Whether `node` writes, in any of its parts or of the alias declarations they
+ * reference, each read once, a kind of wrapper the checker erases around
+ * `any`: a CFC alias or a scope wrapper this formatter lowers, or a `Default`.
+ * The checker reads `any` beside anything as `any`, so `Confidential<any, C>`
+ * is `any` to it, and only the written node holds the label.
+ */
+export function writesWrapperErasedByAny(
+  node: ts.TypeNode,
+  checker: ts.TypeChecker,
+): boolean {
+  const read = new Set<ts.TypeAliasDeclaration>();
+  const writes = (node: ts.Node): boolean => {
+    if (ts.isTypeReferenceNode(node)) {
+      if (
+        resolveScopeWrapperNode(node) ||
+        detectWrapperViaNode(node, checker) === "Default"
+      ) return true;
+      const symbol = checker.getSymbolAtLocation(
+        entityNameRight(node.typeName),
+      );
+      const declaration = symbol &&
+        resolveAliasedSymbol(symbol, checker).declarations?.find(
+          ts.isTypeAliasDeclaration,
+        );
+      if (declaration && !read.has(declaration)) {
+        read.add(declaration);
+        // A canonical alias this formatter lowers from the type the checker
+        // resolves it to (`lowersFromSyntax()`) is no wrapper read from its
+        // syntax, and nor is what its declaration resolves to.
+        if (CFC_ALIAS_NAMES.has(declaration.name.text)) {
+          if (lowersFromSyntax(declaration.name.text)) return true;
+        } else if (writes(declaration.type)) return true;
+      }
+    }
+    return ts.forEachChild(node, (child) => writes(child) || undefined) ??
+      false;
+  };
+  return writes(node);
+}
+
+/**
  * The scope of the wrapper that `type`'s alias names, directly or as the whole
  * body of a chain of aliases, each followed at most once. The checker reports
  * the outermost alias, so `type Rec = PerUser<T>` has `Rec` for its alias
@@ -3275,8 +3316,17 @@ export class CommonFabricFormatter implements TypeFormatter {
           this.#refersToCfcAlias(payloadNode, context),
         context.typeChecker,
       );
+    // A payload that is a parameter no binding reaches is the alias's own,
+    // read from its declared type, as a reference the checker reads as `any`
+    // is: `Integrity<Confidential<any, C>, I>` is `any` to the checker. The
+    // payload is then the argument as written, whose labels only its node
+    // holds.
+    const payloadType = payloadNode && baseType.isTypeParameter() &&
+        !this.#boundArgumentFor(typeParameterOfType(baseType), context)
+      ? this.#writtenArgumentType(payloadNode, context)
+      : baseType;
     return this.#schemaGenerator.formatChildType(
-      baseType,
+      payloadType,
       context,
       payloadNode,
       instantiatedPayload,

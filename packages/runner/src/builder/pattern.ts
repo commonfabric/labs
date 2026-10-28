@@ -50,6 +50,7 @@ import {
   getCellOrThrow,
   isCellResultForDereferencing,
 } from "../query-result-proxy.ts";
+import { inSpaceRootCause } from "../in-space-root-cause.ts";
 import { getContentAddressedSchemasConfig } from "../schema-doc-config.ts";
 import { Runtime } from "../runtime.ts";
 import { hardenVerifiedFunction } from "../sandbox/function-hardening.ts";
@@ -765,7 +766,23 @@ function factoryFromPattern<T, R>(
             frame,
           );
           if (targetSpace !== undefined) {
-            setCellUnlinkedSpace(outputs, targetSpace);
+            // A root sits at the address its space's genesis reserved, so the
+            // cell the call returns is pinned there: a link to it is a link to
+            // the root itself, not to a document of its own that links on.
+            // The node's output binding then redirects to the root, so the
+            // runner's write of the child's link into that binding is a link
+            // to the slot it is written to, which `normalizeAndDiff()` drops
+            // as a self-reference.
+            setCellUnlinkedSpace(
+              outputs,
+              targetSpace,
+              spaceRequest?.root
+                ? frame!.runtime!.getCell(
+                  targetSpace,
+                  inSpaceRootCause(targetSpace),
+                ).getAsNormalizedFullLink().id
+                : undefined,
+            );
             module.targetSpace = targetSpace;
             if (spaceRequest?.root) module.targetSpaceRoot = true;
           }

@@ -79,6 +79,7 @@ export interface SchemaGenerationDiagnostic {
     | "schema-default:unresolved"
     | "schema-type:unread"
     | "cfc-schema:recursion-limit"
+    | "cfc-schema:recursive-alias-of-any"
     | "cfc-write-authorized-by:unread"
     | "cfc-label:unread"
     | "cfc-label:not-a-list";
@@ -161,6 +162,21 @@ export interface SchemaGenerationOptions {
  * keys alone (`"number"`).
  */
 export type IndexKeys = "string" | "number";
+
+/**
+ * An alias whose declaration a reading is inside, read in place of the `any`
+ * the checker reads the alias's name as (`GenerationContext.aliasesReadForAny`).
+ */
+export interface AliasReadForAny {
+  /** The reference the declaration is read for. */
+  readonly reference: ts.TypeReferenceNode;
+
+  /**
+   * The written nodes the reference's arguments denote, as a key
+   * (`SchemaGenerator.#writtenArguments()`).
+   */
+  readonly arguments: string;
+}
 
 /**
  * Unified context for schema generation - contains all state in one place
@@ -371,6 +387,14 @@ export interface GenerationContext {
    * as a union.
    */
   scopeBrandRead?: ReadonlySet<ts.Type>;
+
+  /**
+   * The aliases whose declarations this reading is inside, each read in place
+   * of the `any` the checker reads its name as, because what the declaration
+   * writes is a wrapper the checker erases around `any`
+   * (`writesWrapperErasedByAny()`), outermost first.
+   */
+  aliasesReadForAny?: readonly AliasReadForAny[];
 
   /**
    * The members written for `payload`, the payload of a union of scope

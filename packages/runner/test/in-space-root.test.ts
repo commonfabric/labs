@@ -14,8 +14,9 @@ import {
   patternSourceUrl,
   resolveSpaceRootPattern,
 } from "../src/ensure-space-root.ts";
+import { isSigilLink, type NormalizedLink } from "../src/link-types.ts";
 import { parseLink } from "../src/link-utils.ts";
-import { inSpaceRootCause } from "../src/runner.ts";
+import { inSpaceRootCause } from "../src/in-space-root-cause.ts";
 import { Runtime, type RuntimeFetch } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
 import {
@@ -148,18 +149,22 @@ describe("in-space root", () => {
     await runtime.idle();
     await runtime.storageManager.synced();
     await result.pull();
+    /** The links to the children, as the handler's writes stored them. */
+    const links = async (): Promise<NormalizedLink[]> => {
+      await children.pull();
+      return (children.getRaw() as unknown[]).map((raw) =>
+        parseLink(raw, children)!
+      );
+    };
     return {
       send: async (value: string) => {
         result.key("create").send({ value });
         await runtime.idle();
         await runtime.storageManager.synced();
       },
-      spaces: async (): Promise<MemorySpace[]> => {
-        await children.pull();
-        return (children.getRaw() as unknown[]).map((raw) =>
-          parseLink(raw, children)!.space! as MemorySpace
-        );
-      },
+      links,
+      spaces: async (): Promise<MemorySpace[]> =>
+        (await links()).map((link) => link.space! as MemorySpace),
     };
   };
 
@@ -190,6 +195,44 @@ describe("in-space root", () => {
     expect(
       await linked!.key("value").asSchema({ type: "string" }).pull(),
     ).toBe("first");
+  });
+
+  it("stores the handler's link to the child as a link to the root's own address", async () => {
+    // A link that reaches the root through a document of its own is the same
+    // room to `equals()`, which resolves both sides, and a different one to a
+    // reader comparing links as stored, so the stored link is compared here.
+
+    const runtime = openRuntime();
+    const root = await spawnRoot(runtime, (Child, value) => [
+      Child.inSpace(undefined, { root: true })({ value }),
+    ]);
+    await root.send("first");
+
+    const [link] = await root.links();
+    const space = link.space as MemorySpace;
+    const reserved = reservedRootOf(runtime, space).getAsNormalizedFullLink();
+    expect({ id: link.id, space: link.space, path: link.path }).toEqual({
+      id: reserved.id,
+      space: reserved.space,
+      path: [],
+    });
+  });
+
+  it("leaves the root holding the child's result, not a link to itself", async () => {
+    const runtime = openRuntime();
+    const root = await spawnRoot(runtime, (Child, value) => [
+      Child.inSpace(undefined, { root: true })({ value }),
+    ]);
+    await root.send("first");
+
+    const [space] = await root.spaces();
+    const reader = openRuntime();
+    const reserved = reservedRootOf(reader, space);
+    await reader.storageManager.synced();
+    await reserved.pull();
+    expect(isSigilLink(reserved.getRaw())).toBe(false);
+    expect(await reserved.key("value").asSchema({ type: "string" }).pull())
+      .toBe("first");
   });
 
   it("keeps the one root when a second event names the same space", async () => {

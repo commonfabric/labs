@@ -1,14 +1,15 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
-import * as Engine from "@commonfabric/memory/v2/engine";
 import {
   resolveScopeKey,
   type ScopeKeyIdentity,
   toDocumentPath,
 } from "@commonfabric/memory/v2";
-import type { FabricValue } from "@commonfabric/data-model";
+import * as MemoryV2Client from "@commonfabric/memory/v2/client";
+import * as Engine from "@commonfabric/memory/v2/engine";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import {
@@ -35,8 +36,12 @@ import type {
   TransactionWriteDetail,
 } from "../src/storage/interface.ts";
 import type { Action, ReactivityLog } from "../src/scheduler/types.ts";
+import { recordCommitElisions } from "../src/storage/commit-elision.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
-import { newSharedServer } from "./memory-v2-test-utils.ts";
+import {
+  newSharedServer,
+  testSessionOpenAuthFactory,
+} from "./memory-v2-test-utils.ts";
 
 const ACTION = "action-1";
 
@@ -215,6 +220,116 @@ describe("scheduler-remote-echo-breaker", () => {
         document: { space: alpha, id: "of:d", scopeKey: "space" },
         changed: false,
       }]);
+    });
+
+    it("clears a tripped pair when the server elides its staged overwrite", async () => {
+      const storage = EmulatedStorageManager.emulate({ as: signer });
+      try {
+        const source = storage.edit();
+        const doc = address(alpha, "of:d");
+        const run = captureEchoRun(
+          tx([written(doc, "B", "A")]),
+          log([doc], [doc]),
+          [doc],
+          session1,
+          source,
+        )!;
+        const breaker = new RemoteEchoBreaker();
+        const [before] = computeEchoSteps(run, { tracked: true });
+        expect(before.changed).toBe(true);
+        trip(breaker, before.docKey);
+
+        // The verdict arrives after capture, and its identity write clears
+        // the existing streak instead of renewing its backoff.
+        recordCommitElisions(
+          source,
+          alpha,
+          [{ op: "delete", id: doc.id }],
+          [0],
+          session1,
+        );
+        const steps = computeEchoSteps(run, { tracked: true });
+        expect(steps[0].changed).toBe(false);
+        expect(breaker.observe(ACTION, steps, ECHO_TRIP_THRESHOLD)).toBe(0);
+        expect(breaker.stats(ECHO_TRIP_THRESHOLD)).toEqual({
+          active: 0,
+          trips: 1,
+          cyclesObserved: ECHO_TRIP_THRESHOLD,
+        });
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("keeps durable overwrites when other operations were elided", async () => {
+      const storage = EmulatedStorageManager.emulate({ as: signer });
+      try {
+        const source = storage.edit();
+        const agreeing = address(alpha, "of:agreeing");
+        const partial = address(alpha, "of:partial");
+        const changing = address(alpha, "of:changing");
+        const docs = [agreeing, partial, changing];
+        const run = captureEchoRun(
+          tx(docs.map((doc) => written(doc, "B", "A"))),
+          log(docs, docs),
+          docs,
+          session1,
+          source,
+        )!;
+        recordCommitElisions(
+          source,
+          alpha,
+          [
+            { op: "delete", id: agreeing.id },
+            { op: "delete", id: partial.id },
+            { op: "delete", id: partial.id },
+            { op: "delete", id: changing.id },
+          ],
+          [0, 1],
+          session1,
+        );
+        expect(
+          computeEchoSteps(run, { tracked: true }).map((step) => step.changed),
+        )
+          .toEqual([false, true, true]);
+      } finally {
+        await storage.close();
+      }
+    });
+
+    it("does not transfer server agreement across spaces or scope instances", async () => {
+      const storage = EmulatedStorageManager.emulate({ as: signer });
+      try {
+        const source = storage.edit();
+        const shared = address(alpha, "of:d");
+        const scoped = address(alpha, "of:d", "session");
+        const elsewhere = address(beta, "of:d");
+        const docs = [shared, scoped, elsewhere];
+        recordCommitElisions(
+          source,
+          alpha,
+          [
+            { op: "delete", id: scoped.id, scope: "session" },
+          ],
+          [0],
+          session1,
+        );
+        const stepsFor = (identity: ScopeKeyIdentity) =>
+          computeEchoSteps(
+            captureEchoRun(
+              tx(docs.map((doc) => written(doc, "B", "A"))),
+              log(docs, docs),
+              docs,
+              identity,
+              source,
+            )!,
+            { tracked: true },
+          ).map((step) => step.changed);
+        expect(stepsFor(session1)).toEqual([true, false, true]);
+        expect(stepsFor(session2)).toEqual([true, true, true]);
+      } finally {
+        await storage.close();
+      }
     });
 
     it("returns no echo step for a written document that did not trigger the run", () => {
@@ -1103,6 +1218,143 @@ describe("scheduler-remote-echo-breaker", () => {
         await dispose(editor, deriver);
       }
     });
+
+    for (const redundant of [true, false]) {
+      it(
+        redundant
+          ? "does not count redundant commits while shared inputs and outputs advance"
+          : "counts durable overwrites even when inputs also advance",
+        async () => {
+          // Each delivery carries a fresh input and the preceding output. A
+          // competing derivation publishes the same next output while this
+          // runtime's commit is in flight when `redundant`, so the store accepts
+          // it as an identity. Otherwise the disagreeing output really changes.
+
+          const editor = connect();
+          const deriver = connect();
+          const source = deriver.runtime.getCell<number[]>(
+            space,
+            "growing-source",
+            anySchema,
+          );
+          const output = deriver.runtime.getCell<number[]>(
+            space,
+            "growing-output",
+            anySchema,
+          );
+          const outputId = output.getAsNormalizedFullLink().id;
+          const transact = server.transact.bind(server);
+          let nextOutput: number[] | undefined;
+          let derivedCommits = 0;
+          const peerClient = await MemoryV2Client.connect({
+            transport: MemoryV2Client.loopback(server),
+          });
+          try {
+            await seed(editor, deriver.runtime, "growing-source", []);
+            await seed(editor, deriver.runtime, "growing-output", []);
+            const peer = await peerClient.mount(
+              space,
+              {},
+              testSessionOpenAuthFactory,
+            );
+            let peerSeq = 0;
+            server.transact = async (...args: Parameters<typeof transact>) => {
+              const competing = nextOutput;
+              if (
+                competing !== undefined &&
+                args[0].commit.operations.some((op) =>
+                  "id" in op && op.id === outputId
+                )
+              ) {
+                nextOutput = undefined;
+                if (redundant) {
+                  await peer.transact({
+                    localSeq: ++peerSeq,
+                    reads: { confirmed: [], pending: [] },
+                    operations: [{
+                      op: "patch",
+                      id: outputId,
+                      patches: [{
+                        op: "replace",
+                        path: "/value",
+                        value: competing,
+                      }],
+                    }],
+                  });
+                }
+                const response = await transact(...args);
+                expect(response.error).toBeUndefined();
+                if (redundant) {
+                  expect(response.ok?.revisions).toEqual([]);
+                  expect(response.ok?.elidedOpIndexes?.length).toBeGreaterThan(
+                    0,
+                  );
+                } else {
+                  expect(response.ok?.revisions.length).toBeGreaterThan(0);
+                }
+                derivedCommits++;
+                return response;
+              }
+              return await transact(...args);
+            };
+            const derive: Action = (tx) => {
+              output.withTx(tx).set(Array.from(source.withTx(tx).get()));
+            };
+            deriver.runtime.scheduler.subscribe(
+              derive,
+              { reads: [], shallowReads: [], writes: [] },
+              { isEffect: true },
+            );
+            deriver.runtime.scheduler.queueExecution();
+            await clock.settle();
+
+            const rounds = ECHO_TRIP_THRESHOLD * (redundant ? 2 : 1);
+            for (let round = 1; round <= rounds; round++) {
+              const values = Array.from({ length: round * 2 }, (_, i) => i);
+              await peer.transact({
+                localSeq: ++peerSeq,
+                reads: { confirmed: [], pending: [] },
+                operations: [
+                  {
+                    op: "patch",
+                    id: source.getAsNormalizedFullLink().id,
+                    patches: [{ op: "replace", path: "/value", value: values }],
+                  },
+                  {
+                    op: "patch",
+                    id: outputId,
+                    patches: [{
+                      op: "replace",
+                      path: "/value",
+                      value: values.slice(0, -1),
+                    }],
+                  },
+                ],
+              });
+              nextOutput = values;
+              await server.flushSessions([space]);
+              await clock.settle();
+              expect(derivedCommits).toBe(round);
+              expect(output.get()).toEqual(values);
+            }
+            // A durable write's success observer waits for its covering frame.
+            await server.flushSessions([space]);
+            await clock.settle();
+
+            expect(runCount(deriver.runtime, derive)).toBeGreaterThan(rounds);
+            expect(deriver.runtime.scheduler.getEchoBreakerStats()).toEqual({
+              active: redundant ? 0 : 1,
+              trips: redundant ? 0 : 1,
+              cyclesObserved: redundant ? 0 : rounds,
+            });
+          } finally {
+            server.transact = transact;
+            await peerClient.close();
+            await dispose(editor, deriver);
+          }
+        },
+      );
+    }
 
     it("does not trip a derivation that reads one field of a document and writes another", async () => {
       // One session edits a field of a document over and over, and the other

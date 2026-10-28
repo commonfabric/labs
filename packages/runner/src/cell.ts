@@ -1711,19 +1711,25 @@ export class CellImpl<T extends FabricValue>
   }
 
   /**
-   * Pins this (not-yet-linked) cell to a space before its id exists, and routes
-   * any pattern nodes attached to it into that target space. Used by the pattern
-   * builder to implement `PatternFactory.inSpace(...)`. Throws if the cell has
-   * already been linked.
+   * Pins this (not-yet-linked) cell to a space, and to the id `id` when one is
+   * given, before its id would otherwise be derived, and routes any pattern
+   * nodes attached to it into that target space. Used by the pattern builder
+   * to implement `PatternFactory.inSpace(...)`. Throws if the cell has already
+   * been linked.
    */
-  setUnlinkedSpace(space: MemorySpace): void {
+  setUnlinkedSpace(space: MemorySpace, id?: URI): void {
     if (this.#causeContainer.id || this.#_link.id) {
       throw new Error(
         "Cannot set space: cell already has a link.",
       );
     }
     this.#causeContainer.space = space;
-    this.#_link = frozenLink({ ...this.#_link, space });
+    if (id !== undefined) this.#causeContainer.id = id;
+    this.#_link = frozenLink({
+      ...this.#_link,
+      space,
+      ...(id !== undefined ? { id } : {}),
+    });
     for (const node of cellNodes.get(this.#causeContainer.cell) ?? []) {
       (node.module as Module).targetSpace = space;
     }
@@ -5256,11 +5262,13 @@ export function getCarriedCfcLabelView(
   return cell === undefined ? undefined : labelViewOf(cell);
 }
 
+/** Does what `CellImpl.setUnlinkedSpace()` does for `cell`. */
 export function setCellUnlinkedSpace(
   cell: unknown,
   space: MemorySpace,
+  id?: URI,
 ): void {
-  asCellImpl(cell)?.setUnlinkedSpace(space);
+  asCellImpl(cell)?.setUnlinkedSpace(space, id);
 }
 
 function asCellImpl(cell: unknown): CellImpl<FabricValue> | undefined {

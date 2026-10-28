@@ -62,7 +62,7 @@ import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-op
 import { type Frame, UI } from "../src/builder/types.ts";
 import { resolveEntryIdentity } from "../src/index.ts";
 import { resolveSpaceRootPattern } from "../src/ensure-space-root.ts";
-import { inSpaceRootCause } from "../src/runner.ts";
+import { inSpaceRootCause } from "../src/in-space-root-cause.ts";
 import { readGenesisRoot } from "@commonfabric/memory/v2/genesis-root";
 import { parseLink } from "../src/link-utils.ts";
 import {

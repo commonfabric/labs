@@ -151,6 +151,7 @@ import {
 } from "../space-host.ts";
 import type { RuntimeTelemetryMarker } from "../telemetry.ts";
 import { combineOptionalSchema, isUnknownCellSchema } from "../traverse.ts";
+import { recordCommitElisions } from "./commit-elision.ts";
 import { recordCommitLocalSeq, recordCommitSeq } from "./commit-identity.ts";
 import * as Differential from "./differential.ts";
 import {
@@ -9333,6 +9334,7 @@ export class SpaceReplica
             localSeq,
             operations,
             applied,
+            wireCommit.operations,
             resolveAtVerdict,
             source,
           );
@@ -9390,6 +9392,7 @@ export class SpaceReplica
           localSeq,
           operations,
           outcome.applied,
+          wireCommit.operations,
           resolveAtVerdict,
           source,
         );
@@ -11423,6 +11426,7 @@ export class SpaceReplica
     localSeq: number,
     operations: NativeCommitOperation[],
     applied: AppliedCommit,
+    wireOperations: ClientCommit["operations"],
     resolveAtVerdict = false,
     source?: IStorageTransaction,
   ): Promise<void> {
@@ -11434,6 +11438,13 @@ export class SpaceReplica
     // can name the commit after the bounded record above has forgotten it.
     if (source !== undefined) {
       recordCommitSeq(source, this.#space, applied.seq);
+      recordCommitElisions(
+        source,
+        this.#space,
+        wireOperations,
+        applied.elidedOpIndexes,
+        source.scopeKeyIdentity ?? this.#scopeKeyIdentity(),
+      );
     }
     if (
       this.#ackedSeqsByLocalSeq.size > SpaceReplica.#MAX_RETAINED_ACK_SEQS
