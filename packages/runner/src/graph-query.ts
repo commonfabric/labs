@@ -16,16 +16,23 @@
 import type { FabricValue } from "@commonfabric/data-model";
 import { internPathSelector } from "@commonfabric/data-model-schema";
 import type { MemorySpace } from "@commonfabric/memory/interface";
-import type { ScopeKey, ScopeKeyIdentity } from "@commonfabric/memory/v2";
+import type {
+  CellScope,
+  ScopeKey,
+  ScopeKeyIdentity,
+} from "@commonfabric/memory/v2";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import type { JSONSchema } from "./builder/types.ts";
+import { ownImmutableCells } from "./immutable-cell.ts";
 import { ExtendedStorageTransaction } from "./storage/extended-storage-transaction.ts";
 import {
   type BaseMemoryAddress,
   CompoundCycleTracker,
+  coveringSelector,
   createSchemaMemo,
   createTraversalContext,
+  forgetSchemaMemoDocuments,
   getAtPath,
   type IAttestation,
   type IMemorySpaceValueAttestation,
@@ -34,6 +41,7 @@ import {
   MapSetStringToPathSelectors,
   type ObjectStorageManager,
   type SchemaMemo,
+  schemaMemoDocumentPrefix,
   SchemaObjectTraverser,
   type SchemaPathSelector,
   schemaTrackerCoversSelector,
@@ -48,9 +56,12 @@ export type {
   SchemaPathSelector,
 };
 export {
+  coveringSelector,
   createSchemaMemo,
+  forgetSchemaMemoDocuments,
   MapSetStringToPathSelectors,
   type SchemaMemo,
+  schemaMemoDocumentPrefix,
   schemaTrackerCoversSelector,
   schemaTrackerKey,
 };
@@ -77,6 +88,27 @@ export const createGraphQueryWalkStats = (): GraphQueryWalkStats => ({
   getDocAtPathCalls: 0,
   schemaMemoHits: 0,
 });
+
+/**
+ * The key a walk records a crossing under: the target document by space,
+ * scope NAME, and id, as one JSON array, so any character in an id survives
+ * the round trip. The scope stays a name rather than resolving to an
+ * instance, since the client that loads the target resolves it under its
+ * own identity.
+ */
+export const crossingDocKey = (
+  space: MemorySpace,
+  id: string,
+  scope: CellScope | undefined,
+): string => JSON.stringify([space, scope ?? "space", id]);
+
+/** The parts of a {@link crossingDocKey}. */
+export const parseCrossingDocKey = (
+  key: string,
+): { space: MemorySpace; scope: CellScope; id: string } => {
+  const [space, scope, id] = JSON.parse(key) as [string, string, string];
+  return { space: space as MemorySpace, scope: scope as CellScope, id };
+};
 
 export type GraphQueryWalkOptions = {
   /** Supplies documents by address. */
@@ -129,6 +161,41 @@ export type GraphQueryWalkOptions = {
     referrerKey: string | undefined,
   ) => void;
 
+  /**
+   * Receives one call per value link the walk followed into ANOTHER space:
+   * the target's crossing key (`crossingDocKey`), the target-rooted
+   * selector the read needed there, and the key of the referrer document
+   * whose link crossed. The walk reads one space, so the target is never
+   * loaded here; a client told of the crossing loads it from the target
+   * space under that selector. Attributed to the referrer the way a miss
+   * is, so a referrer re-walked without the link retires it.
+   */
+  onCrossing?: (
+    crossingKey: string,
+    selector: SchemaPathSelector,
+    referrerKey: string | undefined,
+  ) => void;
+
+  /**
+   * Receives one call per selector the walk records in the schema tracker,
+   * or finds the tracker already covering (see
+   * `TraversalContext.onTrackedDoc`): the tracker key, the selector, the
+   * key of the REFERRER whose walk needed it — a document reached through
+   * a link attributes to the document holding the link, a root to the
+   * referrer `visit()` was given — and whether the referrer's walk recorded
+   * the selector (`walked`) or was skipped because it covers the
+   * referrer's own (`covered`). Attributed like a miss, so a referrer
+   * re-walked without the link, or a root released, retires what nothing
+   * else reaches. A record attributed to its own document is reported as
+   * it is; the receiver decides what a self-reference means.
+   */
+  onTrackedDoc?: (
+    key: string,
+    selector: SchemaPathSelector,
+    referrerKey: string | undefined,
+    kind: "walked" | "covered",
+  ) => void;
+
   /** Schema-traversal results reused across walks that share it. */
   memo?: SchemaMemo;
 
@@ -160,40 +227,86 @@ export class GraphQueryWalk {
    * later release, not to a session-resolved key nothing ever walks. */
   readonly #keyOverrides = new Map<string, string>();
 
+  readonly #onTrackedDoc: GraphQueryWalkOptions["onTrackedDoc"];
+
   constructor(options: GraphQueryWalkOptions) {
     this.#manager = options.manager;
     this.#space = options.space;
     this.#identity = options.identity;
-    const { space, identity, onMissedDoc } = options;
+    const { space, identity, onMissedDoc, onCrossing, onTrackedDoc } = options;
+    this.#onTrackedDoc = onTrackedDoc;
+    // A referrer arrives as an address; its attribution key is its tracker
+    // key, overridden to the explicit-instance key a root was recorded
+    // under (`#keyOverrides`), as a miss's referrer is. A document reports
+    // once per link it holds, so its tracker key is kept per document. The
+    // override is read on every report: one walk visits every explicit
+    // instance of a root in turn, and each visit records its own.
+    const sourceKeys = new Map<string, string>();
+    const referrerKeyOf = (
+      source: { id: string; scope?: CellScope } | undefined,
+    ): string | undefined => {
+      if (source === undefined) return undefined;
+      const cacheKey = `${source.scope ?? ""}\0${source.id}`;
+      let sourceKey = sourceKeys.get(cacheKey);
+      if (sourceKey === undefined) {
+        sourceKey = schemaTrackerKey(space, source.id, source.scope, identity);
+        sourceKeys.set(cacheKey, sourceKey);
+      }
+      return this.#keyOverrides.get(sourceKey) ?? sourceKey;
+    };
     this.#context = createTraversalContext(
       new CompoundCycleTracker<FabricValue, JSONSchema | undefined>(),
       options.schemaTracker,
       identity,
       true,
-      // Record a value-link dead-end with the caller (see `onMissedDoc`
-      // above for the contract and why it is not the schema tracker).
-      // Same-space only: a foreign-space target can never ride this
-      // space's per-space watch, and the client's own cross-space load
-      // kick owns that case. The recorded selector is the target-rooted
-      // shape the read needed, so the arrival re-walk delivers the
-      // closure this read would have reached.
-      onMissedDoc === undefined ? undefined : (link, _sourceSpace, source) => {
-        if (link.space !== space) return;
-        const referrerKey = source === undefined
-          ? undefined
-          : schemaTrackerKey(space, source.id, source.scope, identity);
-        onMissedDoc(
-          schemaTrackerKey(space, link.id, link.scope, identity),
-          internPathSelector({
+      // Record a value-link dead-end with the caller: a same-space target
+      // as a miss (see `onMissedDoc` above for the contract and why it is
+      // not the schema tracker), a target in another space as a crossing
+      // (`onCrossing`), which this space's per-space watch can never
+      // deliver. The recorded selector is the target-rooted shape the
+      // read needed, so a miss's arrival re-walk and a crossing's load
+      // each deliver the closure this read would have reached.
+      onMissedDoc === undefined && onCrossing === undefined
+        ? undefined
+        : (link, _sourceSpace, source) => {
+          const sourceKey = source === undefined
+            ? undefined
+            : schemaTrackerKey(space, source.id, source.scope, identity);
+          const referrerKey = sourceKey === undefined
+            ? undefined
+            : this.#keyOverrides.get(sourceKey) ?? sourceKey;
+          const selector = internPathSelector({
             path: ["value", ...link.path],
             schema: link.schema ?? false,
-          }),
-          referrerKey === undefined
-            ? undefined
-            : this.#keyOverrides.get(referrerKey) ?? referrerKey,
-        );
-      },
+          });
+          if (link.space !== space) {
+            onCrossing?.(
+              crossingDocKey(link.space, link.id, link.scope),
+              selector,
+              referrerKey,
+            );
+            return;
+          }
+          onMissedDoc?.(
+            schemaTrackerKey(space, link.id, link.scope, identity),
+            selector,
+            referrerKey,
+          );
+        },
+      undefined,
+      undefined,
+      // A record is reported under the key the tracker holds it under,
+      // the derived one, so that its attribution names a record that
+      // exists; the override reaches the referrer side alone.
+      onTrackedDoc === undefined
+        ? undefined
+        : (key, selector, source, kind) =>
+          onTrackedDoc(key, selector, referrerKeyOf(source), kind),
     );
+    // The manager serves stored documents and nothing is handed back to be
+    // written elsewhere, so an inline array element is walked where it is
+    // stored.
+    this.#context.inlineArrayItemsInPlace = true;
     this.#memo = options.memo ?? createSchemaMemo();
     this.stats = options.stats ?? createGraphQueryWalkStats();
   }
@@ -209,11 +322,23 @@ export class GraphQueryWalk {
    * scope INSTANCE (protocol.md §2's read row — a query root carrying
    * `entityScopeKey`) records under THAT instance's key rather than one
    * resolved from the acting identity.
+   *
+   * The document's own record attributes to `referrer` through
+   * `onTrackedDoc` (a watch's root key, for a walk a watch roots); the
+   * records of what its walk reaches attribute to the document. Without a
+   * referrer the document's record attributes to nothing, as a re-walk of
+   * a document already attributed wants.
+   *
+   * A `rewalk` visit traverses every position of the document itself
+   * whether or not the shared memo holds it, so that its links are followed
+   * and attributed; what they reach is still answered from the memo.
    */
   visit(
     document: IAttestation,
     selector: SchemaPathSelector,
     docKey?: `${string}/${ScopeKey}/${string}`,
+    referrer?: string,
+    rewalk = false,
   ): void {
     const effectiveSelector = selector.schema === undefined
       ? { ...selector, schema: false }
@@ -226,20 +351,35 @@ export class GraphQueryWalk {
       this.#identity,
     );
     docKey ??= derivedKey;
+    // The override stands for the instance being visited, and the
+    // session's own instance has none to set, so a visit to it takes down
+    // the one an explicit instance visited before it left.
     if (docKey !== derivedKey) {
       this.#keyOverrides.set(derivedKey, docKey);
+    } else {
+      this.#keyOverrides.delete(derivedKey);
     }
     const internedSelector = internPathSelector(effectiveSelector);
-    const covered = schemaTrackerCoversSelector(
+    const covering = coveringSelector(
       this.#context.schemaTracker,
       docKey,
       internedSelector,
     );
+    const covered = covering !== undefined;
     if (covered) {
       this.stats.coveredSelectorSkips++;
+      this.#onTrackedDoc?.(docKey, covering, referrer, "covered");
     } else {
       this.#context.schemaTracker.add(docKey, internedSelector);
+      this.#onTrackedDoc?.(docKey, internedSelector, referrer, "walked");
     }
+    this.#context.trackedReferrer = {
+      id: document.address.id,
+      scope: document.address.scope,
+    };
+    this.#context.traverseUnmemoized = rewalk
+      ? { id: document.address.id, scope: document.address.scope }
+      : undefined;
 
     if (!isObjectNotArray(document.value)) {
       return;
@@ -247,6 +387,8 @@ export class GraphQueryWalk {
 
     const tx = new ExtendedStorageTransaction(
       new ManagedStorageTransaction(this.#manager),
+      {},
+      ownImmutableCells(this.#memo),
     );
     if (!covered) {
       const value = (document.value as { value: FabricValue }).value;

@@ -2,7 +2,8 @@ import { expect } from "@std/expect";
 import { join, toFileUrl } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 
-import { ConsoleServer, resolveConsoleConfig } from "../console/server.ts";
+import { ConsoleServer } from "../console/server.ts";
+import { resolveConsoleConfig } from "./support/on-linux.ts";
 import type { ConsoleChatEventEnvelope } from "../console/turn-result.ts";
 import { harnessChatTurnElapsedMs } from "../src/contracts/interactive-chat.ts";
 import type { HarnessToolCall } from "../src/contracts/transcript.ts";
@@ -20,7 +21,7 @@ import { directPromptSlotBindingFor } from "./support/prompt-slot-binding.ts";
 /** The usage fixture reads a file without launching a sandbox process. */
 const sandbox: SandboxRuntime = {
   describe: () => ({
-    kind: "docker-runsc-cfc",
+    kind: "runsc-cfc",
     defaultWorkingDirectory: "/workspace",
     cfc: { runtimeRequested: true, workspaceMountPath: "/workspace" },
   }),

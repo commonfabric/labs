@@ -10,6 +10,7 @@
  *   deno run -A scripts/bench-setup.ts [--api-url URL] [--identity PATH] [--root PATH] [--quiet]
  */
 
+import { dirname, fromFileUrl } from "@std/path";
 import {
   callPieceHandler,
   type EntryConfig,
@@ -21,7 +22,7 @@ import {
 // Path resolution
 //
 
-const REPO_ROOT = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 const NOTE_PATTERN = `${REPO_ROOT}/packages/patterns/notes/note.tsx`;
 const TODO_PATTERN = `${REPO_ROOT}/packages/patterns/todo-list/todo-list.tsx`;
 

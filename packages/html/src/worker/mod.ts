@@ -10,6 +10,7 @@ export { WorkerReconciler } from "./reconciler.ts";
 export {
   admitsEverything,
   canRenderCellUnderPolicy,
+  canRenderLabelUnderPolicy,
   cellLabelRefusal,
   cellLabelSources,
   type DisplayFitSources,
@@ -28,6 +29,8 @@ export type {
   RenderDeclassificationPolicy,
   RenderPolicy,
   SpaceAccessProvider,
+  SpaceAccessRetryControl,
+  SpaceAccessRetryState,
   WorkerJSXElement,
   WorkerProps,
   WorkerReconcilerOptions,

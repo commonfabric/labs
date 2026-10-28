@@ -473,6 +473,13 @@ remain gated, including reads of a value already examined during preflight.
 Cell traversal caches are partitioned by ambient read metadata so a cached
 scheduling probe cannot supply an ordinary payload read.
 
+Before the runner runs a piece set up elsewhere, or swaps one to another
+pattern, it probes whether the documents that run reads are on the replica, so
+that it can name the piece's family first when they are not. Those probes are
+verifier-internal reads on a read-only transaction of their own, and do not
+require the read ceiling: a document whose value the ceiling withholds is
+present all the same. The run's own reads of it remain gated.
+
 A **session-scoped** query result (`PerSession<>`, `.asScope("session")`,
 `scope: "session"`, or a session-scoped db) meets the runtime ceiling with the
 query's declared ceiling before materialization. Placeholder atoms resolve
@@ -744,62 +751,39 @@ read out of a labeled row puts that row's label on the hash. Which atoms that
 is depends on what the transaction issuing the request read, which no `ifc`
 written into a schema can say.
 
-So the result cell is a store the runtime owns, and its control paths declare
-their policy from the issuing transaction — CFC spec §8.12.5 route 2, the
-same route the runner's own piece documents take. The declaration grows by
-clause and never shrinks, which is the ratchet §8.12.2 asks for: a query cell
-parameterized out of three differently labeled reads ends up admitting all
-three and readable by whoever satisfies all three.
+The result cell is a store the runtime owns and enrolls for the life of its
+node. Eligible misfits on its control paths are recorded in the issuing
+transaction's derived stamps, under the runtime-owned-store admission described
+in [`../cfc-enforcement-matrix.md`](../cfc-enforcement-matrix.md) §4. This is
+the persistence change proposed in specs#78, implemented ahead of its ruling.
+The control write adds no declared policy.
 
-The route declares on the paths the issuing transaction writes, and which
-paths those are depends on what the claim finds stored. `/requestHash` moves
-on every issue, so every labeled issue declares there, and that is the path
-on which the declaration is always observable. `/pending` is written only by
-a claim that finds the flag down. A claim made while an earlier request of
-the same node is still in flight sets the flag to the value it already holds,
-which is no write, and declares nothing there. So a query whose labeled issue
-follows a settled one carries the parameter's clause on `/pending`, and a
-query whose only labeled issue overlapped an unlabeled one does not.
+`/requestHash` changes on each issue. `/pending` changes only when a claim
+raises a flag that was down. A claim while an earlier request is still in
+flight may leave `/pending` unchanged, so that flag does not necessarily
+carry the latest issue's label. Each written control value carries the
+issuing transaction's join, which a reader consumes.
 
-The settle takes no declaration back. It rewrites `pending` — and, on a
-failure, `error` — from a transaction that reads only its own write
-destination and therefore carries nothing, and a declared component grows by
-clause and gives none back (CFC spec §8.12.1), whatever the transaction
-rewriting the path carried. A reader of `pending` is tainted by every clause
-a labeled issue declared there, and stays so after the query settles. A
-pattern that copies the flag, or anything computed from it, into a store
-whose policy an author wrote has to admit those clauses there.
+The settle rewrites `/pending` and, on failure, `/error` from a transaction
+that reads its own write destination rather than application input. Its
+value stamps therefore reflect that settle's derivation. For an existing
+path initialized without taint, a clean settle leaves no issuing-request
+clause in its value stamp. A declaration already stored there, or the
+frozen existence stamp of a path created under taint, remains. Clearing
+those requires the appropriate release route, not an ordinary settle. A
+path with no recorded existence entry can receive a legacy backfill at its
+first labeled write even when its value already existed. That frozen entry
+also remains after a clean settle.
 
-What the flag carries is bounded by the result's top. A claim carries `S`
-and nothing of the rows: the builtin reads its own settled result as a read
-of its write destination, which stays out of the join (§18.6.2). Each settle
-that writes rows declares that same `S` on `/result`, joined with the rows'
-labels. So a reader of the flag of a settled query carries no more than a
-reader of the result's length, and none of a projected column's label. An
-issue that another superseded before its rows landed is inside the bound as
-well. Both read the same parameter cell, and what a reader of that cell
-carries grows by clause and gives none back, so the issue that settled
-carried the superseded one's `S` with its own.
+The issuing transaction writes a foreign-space refusal, so its `/error`
+value carries the clause that caused the refusal. Rendering that error
+therefore consumes the issuing transaction's label. The same value-stamp
+replacement and existence rules apply to a later write there.
 
-The bound stops at two states. While a labeled request is in flight the flag
-carries its `S` and the top does not, until the settle declares it there. And
-the settle of a FAILED issue writes `/error` and no rows, and declares
-nothing on `/result`, so after a failure the flag carries that issue's `S`
-and the top keeps what the issues that settled rows brought. That settle
-carries nothing, so it declares nothing on `/error` either.
-
-The foreign-space refusal below declares the same way. It is written by the
-ISSUING transaction — the one carrying the clause it refuses over, since that
-is the condition it fires on — so the route declares that clause on the
-control paths the refusal writes, `/error` among them. A pattern that renders
-"this query was refused" therefore inherits the atoms the refusal was about,
-and a store it writes them into has to admit them. That is the ratchet
-landing where the refusal did rather than an accident, and it is worth
-knowing before rendering a refusal into a store whose policy an author wrote.
-
-`/result`'s per-column entries are untouched — the route declines at a path a
-schema declares — and so are the row documents, because that settle
-transaction carries no clause of its own.
+`/result`'s per-column and selection entries keep their authored policy.
+The runtime-owned route declines at a path whose schema declares a policy,
+and the transaction settling rows adds no flow clause of its own. A
+request's labeled selection inputs are recorded separately, as below.
 
 ### Where a query's selection inputs are labeled
 
@@ -814,8 +798,8 @@ the request, recorded at issue and supplied by the settle.
 | which reference sits at a `/result` slot | `S`, and the label of the row at that slot | declared `observes: "followRef"` entry at `/result/*` for `S`; the link entry at the slot for the row's label |
 | a row's content | the row's column and row labels | the row document's own entries |
 | a row document's existence | the row's label | the row document's root entry |
-| `/requestHash` | `S`, accumulated over issues | route-2 declaration by the issuing transaction |
-| `/pending` | the `S` of each issue whose claim raised the flag, accumulated | route-2 declaration by the issuing transaction |
+| `/requestHash` | the current issue's `S`, plus applicable declared and frozen existence labels | derived value stamp by the issuing transaction, joined with retained components |
+| `/pending` | the last writer's join, plus applicable declared and frozen existence labels | derived value stamp by that transaction, joined with retained components |
 
 All of it holds at every scope. A session-scoped result is materialized per
 reader, which limits who can read it and does not label what that reader's
@@ -864,38 +848,40 @@ column labels on its root as an `observes: "shape"` entry, so its existence
 carries them. A row under a row label carries the row label at its root for
 every class; where such a row also carries per-column labels, its existence
 carries the row label and its columns carry theirs. A row of a query that
-projects an `asCell` link column declares no existence label: a label at a
-row's root subjects every link written beneath it to the link write policy,
-which refuses a link to a cell that carries no label metadata.
+projects an `asCell` link column declares no existence label, so its
+existence does not carry the join of its column labels.
 
 A row to which neither its columns nor a row rule assign a label stores none,
-and declares an empty one. The link write policy governs the slots of a
-result store that carries a label, and refuses a link there to a document
-that stores no label and for which the writing transaction declares none. A
-settle that finds a row's document standing writes the slot and not the
-document, so the declaration cannot rely on what the document stores: every
-settle into a store that carries a label, or is written under one, declares
-the empty label at the root of each such row. The declaration stores nothing
-on the row document, and it does not subject a link written beneath the
-row's root to the link write policy, which counts a declaration by the atoms
-it holds. Into a store that carries no label a row declares nothing, so the
-rows of an unlabeled result do not make its settle relevant to commit
-preparation.
+and declares an empty one: every settle into a store that carries a label, or
+is written under one, declares the empty label at the root of each such row.
+The declaration stores nothing on the row document, and no check depends on
+it. Into a store that carries no label a row declares nothing, so the rows of
+an unlabeled result do not make its settle relevant to commit preparation.
+
+A link write takes nothing from the document it points at, so neither
+arrangement is needed to link a row or a cell a row's column names.
+`docs/plans/cfc-independent-reference-labels.md` (stage 6) records giving a
+row that holds a link column its existence label and dropping the empty
+declaration.
 
 A row document's id is hashed with the space's row salt as well as the row
 key and the result cell's coordinates. The salt is a runtime secret
 (`packages/runner/src/runtime-secret.ts`): one document per space at a
 reserved id, minted with a random value by the first settle that needs it.
 The transaction write chokepoint refuses every unprivileged write to that id,
-and the one writer, `ensureRuntimeSecret()`, returns nothing. A stored salt is
-trusted only when its stored schema carries the writer claim
-`writeAuthorizedBy: ["runtime-secret"]`, which the runtime records under that
-builtin identity when it mints one and which no executed code can satisfy. A
-value planted in the namespace before the chokepoint existed, or through a
-runtime without it, carries no such claim, and the next settle replaces it. The salt is labeled with the
-read-failed atom, which no ceiling admits, so code that reads it cannot
-write, display or send anything derived from it; the builtin reads it as a
-verifier-internal read, which joins nothing to the settle's label. Without
+and the one writer, `ensureRuntimeSecret()`, returns nothing; the read
+chokepoint refuses every read of its value but the runtime's own, so no
+executed code reads the salt. A stored salt is trusted only when its stored
+schema carries the writer claim `writeAuthorizedBy: ["runtime-secret"]`, which
+the runtime records under that builtin identity when it mints one and which no
+executed code can satisfy. A value planted in the namespace before the
+chokepoint existed, or through a runtime without it, carries no such claim,
+and the next settle replaces it. A value whose stored schema resolves neither
+in the replica nor in the schema registry is neither trusted nor untrusted,
+and the settle fails rather than replace it, since replacing a trusted salt
+would re-key every row document. The salt is labeled with the read-failed
+atom, which no ceiling admits; the builtin reads it as a verifier-internal
+read, which joins nothing to the settle's label. Without
 the salt the id would be a value computable from the row, and the reference
 at each slot would have to carry the row's label so that a reader could not
 confirm a guess at a row by recomputing its id (§8.17.6 rule 4). With it the
@@ -907,11 +893,10 @@ Three residuals are recorded against §8.17.6:
   slots holding equal rows hold one id, and a row that stays in a result
   across a change of parameter keeps its id. A reader of the result learns
   both under `S` and the membership labels, without reading a row.
-- **The salt's protection is its label.** Anything that reads the space's
-  documents outside the runtime, or a runtime whose enforcement mode does not
-  refuse writes on labels, can read the salt and recompute ids. The residual
-  a recomputed id opens is the one the salt closes: whether a guessed row is
-  in a result, disclosed without the row's label.
+- **The salt's protection is the runtime's.** Anything that reads the
+  space's documents outside the runtime can read the salt and recompute ids.
+  The residual a recomputed id opens is the one the salt closes: whether a
+  guessed row is in a result, disclosed without the row's label.
 - **A row document is immutable by construction of its writer, and nothing
   refuses another writer.** The builtin never writes a document twice. A
   pattern holding a row reference can write to it. A writer claim naming the

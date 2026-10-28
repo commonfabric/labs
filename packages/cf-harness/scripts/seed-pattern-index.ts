@@ -30,6 +30,10 @@
 
 import { basename, fromFileUrl, join } from "@std/path";
 import {
+  type PatternIndexClient,
+  type PatternIndexPublishRequest,
+} from "@commonfabric/pattern-index/client";
+import {
   compileAndSavePattern,
   type MemorySpace,
   PatternManager,
@@ -38,11 +42,7 @@ import {
 } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { isObjectNotArray } from "@commonfabric/utils/types";
-import {
-  createHarnessPatternIndexClientFactory,
-  type PatternIndexClient,
-  type PatternIndexPublishRequest,
-} from "../src/pattern-index/client.ts";
+import { createHarnessPatternIndexClientFactory } from "../src/pattern-index/factory.ts";
 import { createHarnessFabricSessionFactory } from "../src/fabric-session.ts";
 import { patternIndexDependencies } from "../src/pattern-index/composition.ts";
 import { patternIndexDeclaredType } from "../src/tools/search-patterns.ts";

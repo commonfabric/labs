@@ -373,6 +373,112 @@ export default pattern<{ avatar: string }, { avatar: Owned }>(
       );
     });
 
+    it("retains a committed link to a metadata-less element under an unchanged contract that defaults a member below a label", async () => {
+      // A pushed element carries no schema metadata of its own, so an update
+      // holds the link to it to the prior argument contract at its path. A
+      // FabriChat room's messages are such elements, and their schema labels
+      // each message while defaulting its `reactions`.
+      const element = runtime.getCell<{ body: string }>(
+        pieces.getSpace(),
+        "element",
+      );
+      const other = runtime.getCell<{ body: string }>(
+        pieces.getSpace(),
+        "other element",
+      );
+      const described = runtime.getCell<{ body: string }>(
+        pieces.getSpace(),
+        "described element",
+      );
+      const argument = runtime.getCell<{ messages: unknown[] }>(
+        pieces.getSpace(),
+        "argument",
+      );
+      const { error } = await runtime.editWithRetry((tx) => {
+        element.withTx(tx).set({ body: "hello" });
+        other.withTx(tx).set({ body: "elsewhere" });
+        described.withTx(tx).set({ body: "described" });
+        argument.withTx(tx).set({ messages: [element, described] });
+      });
+      expect(error).toBeUndefined();
+
+      const label = { ifc: { addIntegrity: ["fabrichat-test-message"] } };
+      const schema = (
+        reactionsDefault: string[],
+        parent: Record<string, unknown> = label,
+      ): JSONSchema => ({
+        type: "object",
+        properties: {
+          messages: {
+            type: "array",
+            items: {
+              type: "object",
+              ...parent,
+              properties: {
+                body: { type: "string" },
+                reactions: {
+                  type: "array",
+                  items: { type: "string" },
+                  default: reactionsDefault,
+                },
+              },
+              required: ["body"],
+            },
+          },
+        },
+        required: ["messages"],
+      });
+      const committed = argument.getRaw()?.messages?.[0];
+      expect(isLink(committed)).toBe(true);
+      const update = (
+        prior: JSONSchema,
+        candidate: JSONSchema,
+        value: unknown = committed,
+        { index = 0, verbatim = true } = {},
+      ) =>
+        assertSuppliedLinkSchemasCompatible(
+          [{ path: ["messages", index], value }],
+          candidate,
+          argument,
+          pieces,
+          { priorArgumentSchema: prior, linksPreservedVerbatim: verbatim },
+        );
+
+      expect(() => update(schema([]), schema([]))).not.toThrow();
+      expect(() => update(schema([]), schema(["like"]))).toThrow(
+        "not stable under default insertion",
+      );
+      const constParent = { const: { body: "hello" } };
+      expect(() =>
+        update(schema([], constParent), schema(["like"], constParent))
+      ).toThrow();
+      const notCommitted = other.getAsLink({ base: argument });
+      expect(() => update(schema([]), schema([]), notCommitted)).toThrow(
+        "not stable under default insertion",
+      );
+      expect(() =>
+        update(schema([]), schema([]), committed, { verbatim: false })
+      ).toThrow("not stable under default insertion");
+
+      // An element that carries its own schema is held to that contract
+      // instead, which the producer proof checks whatever the prior was.
+      const elementSchema = (schema([]) as {
+        properties: { messages: { items: JSONSchema } };
+      }).properties.messages.items;
+      const { error: describedError } = await runtime.editWithRetry((tx) => {
+        described.withTx(tx).setMetaRaw(
+          "schema",
+          elementSchema,
+          rawMetaWriteAuthorization,
+        );
+      });
+      expect(describedError).toBeUndefined();
+      const describedLink = argument.getRaw()?.messages?.[1];
+      expect(isLink(describedLink)).toBe(true);
+      expect(() => update(schema([]), schema([]), describedLink, { index: 1 }))
+        .toThrow("not stable under default insertion");
+    });
+
     it("checks the producer contract when a retained handle's prior consumer schema cannot resolve", async () => {
       const producer = runtime.getCell<string>(pieces.getSpace(), "producer");
       const argument = runtime.getCell<{ value: unknown }>(

@@ -8,7 +8,10 @@
  */
 
 import type { Cell } from "./cell.ts";
-import { markRendererTrustedEvent } from "./cfc/ui-contract.ts";
+import {
+  markRendererTrustedEvent,
+  reviewedActionProvenance,
+} from "./cfc/ui-contract.ts";
 
 /** The reviewed surface and action one native control draws. */
 export interface NativeUiControl {
@@ -33,9 +36,10 @@ export interface NativeUiControl {
  * changes nothing the returned function sends. A `provenance` field in a
  * payload is replaced. The runtime still applies its ordinary checks to the
  * write the event leads to: the writer the contract names, the surface and
- * action, the actor, and the space's access list. The event satisfies a
- * write's UI contract and nothing more, since `isTrustedGesture()` admits
- * only events of `dom` origin.
+ * action, the actor, and the space's access list. The event is a trusted
+ * gesture, as `isTrustedGesture()` decides, so it meets any requirement for a
+ * trusted gesture, such as the one `grantSpaceAccess()` puts on a handler's
+ * event.
  *
  * The returned function mints trusted events, so the host keeps it away from
  * pattern code, loaded content, automation and agent interfaces, generic IPC,
@@ -56,15 +60,7 @@ export function bindNativeUiControl<T extends object>(
   return (payload) => {
     const event = {
       ...payload,
-      provenance: {
-        origin: "native",
-        trusted: true,
-        ui: {
-          pattern: surface,
-          eventIntegrity: [surface],
-          uiContractDataset: { uiAction: action },
-        },
-      },
+      provenance: reviewedActionProvenance("native", { surface, action }),
     };
     markRendererTrustedEvent(event);
     stream.send(event);

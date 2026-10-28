@@ -281,6 +281,7 @@ console.log(JSON.stringify({
   cfApiUrl: Deno.env.get("CF_API_URL"),
   cfCliName: Deno.env.get("CF_CLI_NAME"),
   initCwd: Deno.env.get("INIT_CWD"),
+  readsInterfaceNetworks: Deno.networkInterfaces().length > 0,
 }));
 `,
     );
@@ -325,6 +326,7 @@ console.log(JSON.stringify({
       cfApiUrl: "http://example.invalid",
       cfCliName: "cf",
       initCwd: "/stale/init/cwd",
+      readsInterfaceNetworks: true,
     });
   } finally {
     await Deno.remove(tempDir, { recursive: true });
@@ -354,6 +356,7 @@ Deno.test("buildCfLauncherCommand builds the child deno invocation", () => {
         "--allow-write",
         "--allow-env",
         "--allow-run",
+        "--allow-sys=networkInterfaces,uid",
         "/workspace/labs/packages/cli/mod.ts",
         "check",
         "pattern.tsx",

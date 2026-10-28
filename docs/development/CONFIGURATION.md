@@ -33,7 +33,8 @@ Required only if you're running the toolshed.
 | `LOG_LEVEL` | `info` | One of `fatal`, `error`, `warn`, `info`, `debug`, `trace`, `silent`. |
 | `DISABLE_LOG_REQ_RES` | `false` | Suppress per-request log lines. |
 | `CACHE_DIR` | `./cache` | Local disk cache root. |
-| `API_URL` | `http://localhost:8000` | Self-referential URL used for internal server-to-server requests, and the audience authority every first-party proof on the signed invitation routes is checked against. Set it to the public origin clients dial, or those routes refuse every correctly signed request; the server prints it at startup as its configured first-party authority. |
+| `API_URL` | `http://localhost:8000` | The toolshed's public origin: the audience authority every first-party proof on the signed invitation and inbox routes is checked against, the base of the webhook and ingest URLs the server returns, and the fallback for `SANDBOX_TOOLSHED_URL`. Set it to the public origin clients dial, or those routes refuse every correctly signed request; the server prints it at startup as its configured first-party authority. The server's own runtimes also address their pattern-source loads, compiles and HTTP API calls to it, and record it as a space's host; `API_INTERNAL_URL` changes where those requests are sent, not what they are addressed to. |
+| `API_INTERNAL_URL` | _(unset)_ | Where this process's own runtimes send the requests they address to `API_URL`: the serving runtimes' and the webhook runtime's pattern-source loads, compiles and HTTP API calls. Unset, they go to `API_URL`, which on a deployment leaves through the public path (`tailscale serve`, nginx) and comes back in, once for each of the many fetches a pattern load makes. `self` names this process's own listener, `HOST` and `PORT`, so the one `.env` a multi-instance host shares names each instance to itself; a wildcard or loopback bind is reached on `127.0.0.1` (`[::1]` for an IPv6 bind), and a bound address on itself. An HTTP or HTTPS origin names a specific listener of this same process, such as a private address it is bound to; an `https://` origin with a certificate Deno does not trust fails the check below. The value decides whose bytes this server compiles, so it is checked rather than taken: once the listener is bound, and before any runtime exists, the server sends `GET /api/meta` to the origin carrying a one-time token and refuses to run unless that request arrives at its own listener, naming what happened instead (nothing answered, with the connection failure's cause; an error status; an answer that did not come through this process, as from another toolshed or nginx in front of several). Until the check passes, the public listener answers 503 to every request but that probe; a routed Mode A private listener is separate and not gated. The check does not cover a proxy that forwards the probe and alters later responses; `self` names a port this process has bound, where none can sit, and an explicit origin is the operator's statement that none does. Only the transport changes: `API_URL` stays what is recorded as a space's host, compared against source origins, published on `/api/meta`, checked as the invite audience, and returned in webhook and ingest URLs, and sandbox `CF_API_URL` stays `SANDBOX_TOOLSHED_URL` or `API_URL`. The LLM client reads `API_URL` once at module load and keeps calling it. Anything but `self`, an origin or unset refuses startup. Local development needs none of this: a second toolshed on another port sets `API_URL` and `MEMORY_URL` to that port (see [LOCAL_DEV_SERVERS.md](LOCAL_DEV_SERVERS.md)), and a loopback `API_URL` is already the shortest path. |
 | `SHELL_URL` | _(unset)_ | When set, toolshed proxies non-API paths to this upstream — used by local dev to route to the Shell dev server on `:5173`. |
 
 ---
@@ -115,6 +116,31 @@ All blank by default. Each integration is gated on its `_CLIENT_ID` /
 
 ---
 
+## Ingest channels
+
+Not an OAuth integration: nothing here needs a client id and secret. The
+control plane is always mounted, and Gmail push is gated on a service
+account.
+
+### Ingest registry
+
+| Var | Default | Notes |
+|---|---|---|
+| `INGEST_SERVICE_SPACE` | _(unset: the space named by this deployment's identity)_ | The space this deployment keeps its ingest registry in: channel registrations, their indexes, and Gmail mailbox bindings. A space named here must exist already, with an access list in which this deployment's identity is `OWNER` and nobody else is listed, so that nothing but this deployment reads it. Identities in `MEMORY_SERVICE_DIDS` hold `OWNER` on every space whatever its access list says, so that list is held to identities trusted with the registry. It is also the space a Gmail push is addressed to, so a deployment reached through something that dispatches by space names a space dispatched to it. Pointing it somewhere new on a deployment that already has channels leaves them behind: nothing reads the registry it left, so their tokens stop working and their owners mint again. |
+
+### Gmail push ingest
+
+On only when a service account is set; see
+[`gmail-push-ingest.md`](../features/gmail-push-ingest.md).
+
+| Var | Default | Notes |
+|---|---|---|
+| `INGEST_GMAIL_PUSH_SERVICE_ACCOUNTS` | _(unset)_ | Comma-separated service accounts a push token may be signed for. |
+| `INGEST_GMAIL_PUSH_AUDIENCE` | the ingest registry space's DID | The audience the Pub/Sub push subscriptions put on their OIDC tokens. |
+| `INGEST_GMAIL_OAUTH_CLIENT_IDS` | _(unset)_ | Comma-separated OAuth client ids whose Google ID tokens a mint accepts as proof of a mailbox. Unset, a mint proves a mailbox with an access token only. |
+
+---
+
 ## Identity & auth
 
 There are two interacting identity concepts. Pick one column based on which
@@ -150,8 +176,11 @@ The toolshed-embedded memory service has two modes:
 |---|---|---|
 | `MEMORY_DIR` | `./cache/memory/` (as a `file://` URL) | **Directory mode** — one SQLite file per space. Default; backwards-compatible. |
 | `DB_PATH` | _(unset)_ | **Single-file mode** — absolute path to one SQLite database holding every space, instead of a file per space. Takes precedence over `MEMORY_DIR`. Validated as an absolute path. |
-| `MEMORY_URL` | `http://localhost:8000` | Where other components reach the memory service. |
+| `MEMORY_URL` | `http://localhost:8000` | Where this server's own runtime and its scripts reach the memory service. A host-internal address that is never published to clients; `MEMORY_PUBLIC_URL` is the one they get. Under [routed Mode A](../specs/memory-v2/routed-mode-a.md) it must name a route that honors per-space affinity, one that sends `?space=<DID>` to the toolshed owning that space, such as a loopback-only proxy route to the toolsheds' direct listeners; the toolshed's own runtime reaches it with dedicated connections whatever `EXPERIMENTAL_SHARED_MEMORY_CONNECTION` says (rollout steps 4 and 5 of the spec), and so do the scripts, which build their Runtime without the flag. |
+| `MEMORY_PUBLIC_URL` | _(empty)_ | Where this deployment's clients open Memory, for a deployment that puts a memory router in front of its toolsheds ([routed Mode A](../specs/memory-v2/routed-mode-a.md)). Set the same value on every toolshed. An HTTP or HTTPS origin, such as `https://memory.example.com`; anything else refuses startup, and an `http://` origin that is not loopback is warned about, since a shell served over https cannot open its socket. The toolshed publishes it as `memoryUrl` on `/api/meta`, which `cf`, the pieces controller (FUSE mounts, cf-harness) and the GitHub and agents hosts read beside the experimental posture. A compiled toolshed also puts it in a `<meta name="cf-deployment">` element in every `index.html` it serves, whose content is JSON of the shape `{"memoryUrl": <origin> | null, "experimental": {...} | null}`: the memory URL, `null` when it is unset, and the flags the shell adopts from its deployment (`SHELL_DEPLOYMENT_FLAGS`, the `"deployment"` entries of `SHELL_FLAG_SOURCES`, among them `serverExecution`, `webViewScopedReplication` and `sharedMemoryConnection`), out of the posture `/api/meta` publishes, `null` before a Runtime exists. The page is built on its first request, once. The shell reads the element at startup. A shell whose page has no element (a development shell proxied through `SHELL_URL` or served by felt), or whose page came from another origin than its API URL (a CDN copy), reads both from its API URL's `/api/meta` instead, in one request. A 404, 405 or 410 from `/api/meta` means the server publishes no meta document, as an older server does, so the client opens Memory on the API URL without a warning or a retry. A client that cannot read `/api/meta` for any other reason warns and opens Memory on the API URL. It tries three times when the failure is transient (a connection failure, 408, 429, 502, 503 or 504), and once otherwise; an attempt may take five seconds, and one that does is not repeated. That bound covers the read alone, and the health check that follows has no timeout. A redirect off the API URL's deployment (anything but its own origin, or the same host on https where the API URL names http) gives no memory URL, with a warning naming where it ended; the posture is still read from it, as before. Only Memory moves: the HTTP APIs, patterns, LLM requests and the health check stay on the API URL. The health check does not ask the memory host, so it does not report an unreachable one: that shows up as a Memory connection that keeps reconnecting. While a client has a memory URL, a site-table row or other host hint naming the API host's own origin or the memory URL is the default route, and one naming any other origin opens that space's Memory where that origin's deployment serves it: the client reads `/api/meta` on the hinted origin once and keeps the answer for the runtime's lifetime, up to 64 origins. A published `memoryUrl` is where that space's Memory opens, while its HTTP work goes to the hinted origin; an origin publishing none serves Memory itself; one publishing this client's own memory URL is a sibling toolshed of this deployment behind the same router, so its HTTP work goes to the hinted origin while its Memory takes the default route. The first route a space is given this way is fixed for the runtime's lifetime; a later hint naming another origin is refused as `known-different-host`. A hint whose origin cannot be read (any failure other than a 404, 405 or 410, a redirect off its deployment, or a published value that is not an HTTP or HTTPS origin) is refused as `foreign-host-unread`, warned about once per origin, and leaves the space on no route rather than on this deployment's router; one past the 64 origins as `foreign-host-limit`. Empty: clients open Memory on the API host. |
+| `MEMORY_MINIMUM_CLIENT_GENERATION` | `0` | Client retirement is disabled. Only unset or the exact string `0` is accepted; every other value refuses startup. No setting enables retirement. See [client attribution](../../packages/memory/README.md#client-attribution). |
 | `MEMORY_ACL_MODE` | `enforce` | Space ACL policy: `off`, `observe`, or `enforce`. `observe` logs ordinary access shortfalls, while malformed ACLs, fresh-space genesis violations, and any shortfall of OWNER (an ACL write, a disk-source registration) still fail closed. |
+| `MEMORY_ROUTER_CONFIG_FILE` | _(empty)_ | A tracked private Mode A policy file ([routed Mode A](../specs/memory-v2/routed-mode-a.md)): version 1, deployment, private bind hostname/port, certificate/key paths, the shared directory, the epoch ledger and per-router allowlists. Its optional `limits` object sets the capacity the toolshed admits from routers (`RoutedHostLimits` in `packages/memory/v2/routed-host.ts`): omitted fields retain defaults, `null` disables an individual quota, and a positive safe integer sets a custom quota. The object itself cannot be `null`; malformed or unknown limits fail startup. `limits.frameSlots` (default 150,000) bounds JSON values in a received frame, one slot per value with keys free, and must equal the router's `max_frame_slots`, including `null` to disable counting. The router advertises this value in `hello.ok.routerFrameSlots`; clients apply it to sends and receives, defaulting to 150,000 when the field is absent. A frame over an enabled cap closes the socket. Byte, depth and unambiguous-JSON checks remain enforced with a null slot cap. `limits.watchesPerSession` (default 2,048) bounds watch IDs and must match the router's `max_watches_per_session`, including `null`; `limits.viewsPerSession` defaults to 64. Exceeding either enabled session quota is refused for good. `limits.holdingsPerSession` defaults to 8,192 declared entries per frame; exceeding its enabled bound closes the socket. `limits.outputBytesPerSocket` (default 4 MiB, at most 8 MiB, `null` disables it) bounds output queued behind other output on one private socket; a message sent to a socket holding nothing is admitted up to 8 MiB regardless, and none over 8 MiB is sent. Retained output at half of it pauses reads and dispatch of further requests on that socket, released once retained output falls below a quarter of it, so a slow reader is back-pressured before a response can exceed the bound; output past the bound is refused as `queued-output` as before. With `null`, half and a quarter of the 8 MiB ceiling take that role. Size enabled watch quotas with `frameSlots`, since a session restores its whole watch set in one frame. Disabling router quotas alone leaves toolshed quotas enforced; disable both for a quota-free rehearsal. Changes take effect on restart. Whole-space syncs can exceed byte limits and need bounded delivery (infra#244). Empty: the private endpoint is disabled. |
 | `MEMORY_DOCUMENT_CACHE_BUDGET_BYTES` | _(engine default, 128 MiB)_ | Byte budget of each space's decoded-document cache on the memory server, in encoded UTF-8 bytes of the documents as stored (expect a few times that in heap per active space; a Topics-board page load retains ~18 MB across ~13,300 documents). Least-recently-read eviction under a budget smaller than a corpus's working set serves nothing, so lower it only with `/api/health/stats` → `documentCaches` in view: `evictions` climbing for a space being read repeatedly means it no longer fits, and `patchReplays` far above `misses` means a document under a run of patch commits is being lost between the commits that write it, each one rebuilding it from its base or snapshot rather than from the revision before it. A resident document still costs one row per commit, so the ratio is the signal rather than the count. |
 | `MEMORY_DOCUMENT_CACHE_MAX_ENTRIES` | _(engine default, 65536)_ | Entry cap of the same cache — the cardinality backstop beside the byte budget, kept well above any real working set (a Topics-board page load is ~13,300 documents). |
 | `MEMORY_DOCUMENT_CACHE_TOTAL_BUDGET_BYTES` | _(server default, 256 MiB)_ | Bound across every space's document cache on the memory server this process hosts, held as documents are cached, least-recently-used space first. The per-space budget decides what one corpus may keep; this decides what the server keeps in total (one memory server per toolshed process, so in deployment: the process). `documentCaches.totalBudgetEvictions` on `/api/health/stats` counts what holding it has cost. |
@@ -159,6 +188,8 @@ The toolshed-embedded memory service has two modes:
 | `MEMORY_SERVICE_DIDS` | _(empty)_ | Comma-separated DIDs with implicit OWNER on every space. These identities may initialize ACLs but still cannot make an ordinary first write before genesis. |
 | `CF_MEMORY_FRAME_LOG` | _(unset)_ | Read by the memory **client** (`packages/memory/v2/client.ts`), in every Deno process that opens one — `cf` is the usual one — and never in a browser. Path of a file it appends one JSON line per wire frame to, in both directions: the frame's type and uncompressed UTF-8 size; for a watch mutation, its roots and their selectors, each distinct selector written once as a separate `dir: "selector"` line and named by its hash after; for a commit, its operations and the shape of its read set, including how many reads assert a document absent; for a response or pushed sync, every document delivered with its size and its first twelve top-level keys — a key past that limit is not recorded, so its absence from the record says nothing about the document. It answers what a request carried and what came back, which neither the timing statistics nor the server's slow-query buffer record. [`debugging/profiling.md`](./debugging/profiling.md#what-the-client-sent-and-what-came-back) says how to read the file. |
 | `CF_SLOW_QUERY_THRESHOLD_MS` | `100` | Operations slower than this land in `slowQueries` on `/api/health/stats`, with the per-operation root, read and upsert counts described in [`debugging/profiling.md`](./debugging/profiling.md#read-apihealthstats). A local investigation on a fast machine sets it lower — `0` records every operation — since the default leaves a 90 ms watch that delivered ten thousand documents invisible. The buffer holds the last hundred either way. |
+| `CF_COMMIT_STORM_PER_MINUTE` | `120` | Commits to one space in the last sixty seconds, accepted and rejected together, at or over which the space is over the write-storm threshold. `commitRates` on `/api/health/stats` and the `storm` attribute of the `ct.memory.commits` counter report a storm once a space has stayed over it for `CF_COMMIT_STORM_SUSTAINED_SECONDS`; [`debugging/profiling.md`](./debugging/profiling.md#alerting-on-a-write-storm) says how to read and alert on them. |
+| `CF_COMMIT_STORM_SUSTAINED_SECONDS` | `300` | How long a space has to stay over that threshold to be in a storm. A page load's burst of commits settles inside the default, and a loop does not. |
 
 With ACL policy active, a fresh space is read-only until its space identity or a
 configured service DID writes a valid ACL with a concrete OWNER. A populated
@@ -187,7 +218,7 @@ Used by `/routes/sandbox/exec` to execute untrusted pattern code.
 | Var | Default | Notes |
 |---|---|---|
 | `SANDBOX_SERVICE_URL` | `https://sandbox.stage.commontools.dev` | External sandbox executor. |
-| `SANDBOX_TOOLSHED_URL` | _(falls back to `API_URL`)_ | URL injected into sandboxes as `CF_API_URL` so they can call back to this toolshed. |
+| `SANDBOX_TOOLSHED_URL` | _(falls back to `API_URL`)_ | URL injected into sandboxes as `CF_API_URL` so they can call back to this toolshed. A sandbox runs on another host, so `API_INTERNAL_URL` does not apply to it. |
 
 The executor itself is not in this repo; the toolshed only forwards to
 `SANDBOX_SERVICE_URL`. The service is `commonfabric/common-cluster` (Go): its
@@ -217,6 +248,7 @@ Off by default; flip `OTEL_ENABLED=true` to start exporting.
 | Var | Default | Notes |
 |---|---|---|
 | `TOOLSHED_GIT_SHA` | _(unset)_ | Explicit toolshed commit override, surfaced via `lib/build-info.ts`. Takes priority over the build-baked SHA for `/api/meta`. |
+| `TOOLSHED_RELEASED_AT` | _(unset)_ | When this deployment released what it serves, as an RFC 3339 date-time with an offset, such as `2026-10-16T14:03:00Z`; any other non-empty value refuses startup, and so does a time more than five minutes ahead of the host's clock. Set by each deploy to the time of that deploy, a deploy of a commit already deployed included, and the same on every instance a deploy restarts ([Deploying a commit](deploying.md#a-deploy-states-when-it-happened)). The patterns route sends it beside every identity it advertises, in a `CF-Released-At` header, and `/api/meta` publishes it as `releasedAt`. A piece following a `system:` origin records it with the revision that adopts that source, moves it forward when a later release offers the same source, and is then not moved to an earlier release unless its running pattern cannot load and its history records no move to it from that release. Unset or empty: identities go out alone, and pieces follow them by identity without any order. |
 | `COMMIT_SHA` | _(unset)_ | Source-run build metadata fallback. It lets `/api/meta` present the same `gitSha` field that a compiled toolshed obtains from baked metadata. On a compiled toolshed, baked metadata takes priority. The system-pattern updater does not consult this value. |
 
 Set `COMMIT_SHA` to the Labs revision that describes a source checkout when you
@@ -270,11 +302,15 @@ default, its planned end state, and its removal path, plus the propagation paths
   posture on `/api/meta` and those clients adopt it at boot. An explicit
   `EXPERIMENTAL_*` still wins per flag, and `CF_ADOPT_SERVER_FLAGS=false`
   turns adoption off wholesale.
-- Everywhere else — the shell included — the same env var must be set wherever
-  the flag is read; shell-side that means a build-time define, so toggling
-  requires a rebuild, and only the flags the shell defines can be toggled there
-  at all; `packages/shell/felt.config.ts` and `packages/shell/src/lib/env.ts`
-  say which.
+- The shell adopts the flags `SHELL_FLAG_SOURCES`
+  (`packages/runner/src/deployment-meta.ts`) gives the deployment, among them
+  `serverExecution` and the view-scoped replication flags, from the toolshed
+  that serves it, unless a build define pins them.
+- Everywhere else — the shell's other flags included — the same env var must
+  be set wherever the flag is read; shell-side that means a build-time define,
+  so toggling requires a rebuild, and only the flags the shell defines can be
+  toggled there at all; `packages/shell/felt.config.ts` and
+  `packages/shell/src/lib/env.ts` say which.
 
 The environment-backed flags (the only ones settable without editing code) are
 declared once in `EXPERIMENTAL_ENV_VARS`
@@ -308,7 +344,7 @@ Most shell config is **build-time**: esbuild injects defines in
 | `PRODUCTION` | `$ENVIRONMENT` (`"production"` if set, else `"development"`) | _(unset = dev)_ | Triggers minified bundle and disables sourcemaps. |
 | `API_URL` | `$API_URL` | falls back to `location.origin` | Backend the shell calls. |
 | `COMMIT_SHA` | `$COMMIT_SHA` | _(unset)_ | Surfaced for diagnostics and used by deployed shells to select the immutable `/builds/<sha>` worker asset graph. In development the explicit worker URL remains `/scripts/worker-runtime.js`. It does not authorize system-pattern updates. |
-| `EXPERIMENTAL_*` (`MODERN_CELL_REP`, `COMPUTED_CELL_IDS`, `SERVER_EXECUTION`, `CONTENT_ADDRESSED_SCHEMAS`, `READER_SCHEMA_PRECEDENCE`) | `EXPERIMENTAL.<flag>` | _(unset)_ | Per-flag build-time values; changing one requires a rebuild. See experimental flags. |
+| `EXPERIMENTAL_*` (`MODERN_CELL_REP`, `COMPUTED_CELL_IDS`, `SERVER_EXECUTION`, `CONTENT_ADDRESSED_SCHEMAS`, `READER_SCHEMA_PRECEDENCE`) | `EXPERIMENTAL.<flag>` | _(unset)_ | Per-flag build-time values; changing one requires a rebuild. A flag `SHELL_FLAG_SOURCES` gives the deployment, `SERVER_EXECUTION` among them, takes the deployment's value where its define is unset. See experimental flags. |
 | `SHELL_PORT` | _(server-only)_ | `5173` (from `ports.json`) | Dev server port. |
 
 ---
@@ -323,15 +359,15 @@ the labs checkout and dispatches to `packages/cli/mod.ts`.
 
 | Var | Default | Notes |
 |---|---|---|
-| `CF_IDENTITY` | _(none)_ | Path to identity keyfile. Required for the server-touching commands — `cell`, `piece`, `space recreate-root`/`set-home`, `wish`, `acl`, `exec` — against a remote toolshed. |
+| `CF_IDENTITY` | _(none)_ | Path to identity keyfile. Required for the server-touching commands — `cell`, `piece`, `space recreate-root`, `wish`, `acl`, `exec` — against a remote toolshed. |
 | `CF_API_URL` | _(none)_ | Toolshed URL. Required for the same commands as above. |
-| `CF_SPACE` | _(none)_ | The space a command acts on, when `--space` is absent. Read by `cell`, `piece`, `space recreate-root`, `wish`, `acl` and `deps`. `check`, `fuse` and `ingest` take a space and do not read it, and neither does `space set-home`, which acts on the identity's own home space and declares the option only through the shared target flags. `--space` overrides it, and a written `--space` beside `--url` is still refused where an ambient one yields to the space the URL carries. A command that writes names the space it wrote to on stderr, which is what makes an ambient default safe to leave set. |
+| `CF_SPACE` | _(none)_ | The space a command acts on, when `--space` is absent. Read by `cell`, `piece`, `space recreate-root`, `wish`, `acl` and `deps`. `check`, `fuse` and `ingest` take a space and do not read it. `--space` overrides it, and a written `--space` beside `--url` is still refused where an ambient one yields to the space the URL carries. A command that writes names the space it wrote to on stderr, which is what makes an ambient default safe to leave set. |
 | `CF_INVOCATION_SESSION` | _(none)_ | Invocation session `cf piece call` scopes an invocation id to. Mint one per agent run with `cf invocation-session new`. Carried here rather than as `--invocation-session <id>` because the session is what makes a call's outcome unguessable, and an argument is readable in a process listing. |
 | `CF_LOG_LEVEL` | `error` | `debug` \| `info` \| `warn` \| `error` \| `silent`. Also settable per-invocation with `--log-level`. |
 | `CF_CLI_NAME` | `cf` | Override the displayed CLI name (for branded builds). |
 | `CF_CLI_TRACE_TIMINGS` | `0` | Set to `1` for detailed timing traces. |
 | `CF_SKIP_VERSION_CHECK` | _(unset)_ | Set to any non-empty value to skip the cf ↔ server version check. By default, server-touching commands compare this cf's commit (baked build metadata, or the checkout's HEAD for source runs) with the server's self-reported commit — the `gitSha` riding the `/_health` response the health check already fetches (same value as `/api/meta`) — and warn on stderr when they differ. Source runs grade the warning by git ancestry: cf newer than the server is the normal local-dev case and stays silent unless the command fails, where its note prints as neutral version context. Commit distance alone does not establish incompatibility or explain a failure. `cf piece call` suppresses the held note for confirmed unknown verbs, rejected payloads, and argument validation failures before dispatch; cf **older** than the server gets the loud OUTDATED warning immediately; diverged or unorderable pairs (including all compiled binaries, which carry no history) get the undirected wording immediately. |
-| `CF_ADOPT_SERVER_FLAGS` | `true` | Set to `false` to keep this process on its own `EXPERIMENTAL_*` posture instead of adopting the one the toolshed publishes on `/api/meta`. A cf binary is installed independently of the server it talks to, so by default it takes the deployment's experimental flags and lets an explicit `EXPERIMENTAL_*` override them per flag; this turns the mechanism off wholesale when a deployment publishes something this client cannot run. Read by every client that is not built alongside its server — cf, the pieces controller behind a FUSE mount, the agents host. See [the flag registry](./EXPERIMENTAL_OPTIONS.md#clients-that-are-not-built-alongside-their-server). |
+| `CF_ADOPT_SERVER_FLAGS` | `true` | Set to `false` to keep this process on its own `EXPERIMENTAL_*` posture instead of adopting the one the toolshed publishes on `/api/meta`. A cf binary is installed independently of the server it talks to, so by default it takes the deployment's experimental flags and lets an explicit `EXPERIMENTAL_*` override them per flag; this turns the mechanism off wholesale when a deployment publishes something this client cannot run. The client still reads `/api/meta` for the memory URL it may name (`MEMORY_PUBLIC_URL`). Read by every client that is not built alongside its server — cf, the pieces controller behind a FUSE mount, the agents host. See [the flag registry](./EXPERIMENTAL_OPTIONS.md#clients-that-are-not-built-alongside-their-server). |
 | `CF_CLI_INTEGRATION_USE_LOCAL` | _(unset)_ | Used by integration tests to dispatch through local source rather than a built binary. |
 | `CF_LABS_ROOT` | _(unset)_ | Read by `bin/cf` only. Selects which labs checkout answers, overriding the nearest one walking up from the cwd. Must be a checkout (a directory with `packages/cli/launcher.ts`) or `bin/cf` exits 2. Chooses the CLI, not the working directory. |
 
@@ -416,8 +452,9 @@ A test that needs a space of its own creates one with `createTestSpace` (or
 `@commonfabric/integration`, and addresses it by the DID that returns.
 
 Additionally, [`tasks/integration.ts`](../../tasks/integration.ts) sets
-`INTEGRATION_TEST_FLAGS` (default: unset; populated with `--junit-path=…` when
-`--junit-dir` is passed, or passed through from the environment otherwise).
+`INTEGRATION_TEST_FLAGS` to whatever the variable already held in the
+environment, followed by a `--junit-path=…` naming where each package's JUnit
+report goes and the registration preload. The run's closing summary is read from those reports.
 Per-package `deno.jsonc` `integration` scripts pick it up via `$INTEGRATION_TEST_FLAGS`
 shell expansion to forward extra `deno test` flags (e.g. `--filter`).
 
@@ -512,5 +549,6 @@ gateway candidate for the `default` alias.
 ```bash
 ENV=production
 TOOLSHED_GIT_SHA=<deploy-sha>
+TOOLSHED_RELEASED_AT=<time of this deploy, e.g. 2026-10-16T14:03:00Z>
 # Provider keys, OAuth secrets, MEMORY_URL, etc. as appropriate.
 ```

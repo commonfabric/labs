@@ -96,7 +96,7 @@ Components that capture user input.
 
 **Characteristics:**
 
-- Consume theme for consistent styling
+- Draw the ambient theme through `var(--cf-theme-*)` in their styles
 - Emit custom events (use `this.emit()`)
 - May use `InputTimingController` for debouncing
 - Handle disabled states
@@ -105,30 +105,20 @@ Components that capture user input.
 
 ```typescript
 export class CFButton extends BaseElement {
-  @consume({ context: cfThemeContext, subscribe: true })
+  // Draws the ambient theme by inheritance: its styles read
+  // `var(--cf-theme-*)`, and nothing is written on the host for it.
+  /** A theme given to this element directly, written over the ambient one. */
   @property({ attribute: false })
-  declare theme?: CFTheme;
+  accessor theme: CFTheme | undefined = undefined;
 
   static override properties = {
     variant: { type: String },
     disabled: { type: Boolean, reflect: true },
   };
 
-  override firstUpdated(changed: Map<string | number | symbol, unknown>) {
-    super.firstUpdated(changed);
-    this._updateThemeProperties();
-  }
-
   override updated(changed: Map<string | number | symbol, unknown>) {
     super.updated(changed);
-    if (changed.has("theme")) {
-      this._updateThemeProperties();
-    }
-  }
-
-  private _updateThemeProperties() {
-    const currentTheme = this.theme || defaultTheme;
-    applyThemeToElement(this, currentTheme);
+    if (changed.has("theme")) applyThemeToElement(this, this.theme);
   }
 
   private _handleClick(e: Event) {

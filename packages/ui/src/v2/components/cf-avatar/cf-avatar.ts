@@ -1,7 +1,9 @@
 import { css, html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
+import type { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { BaseElement } from "../../core/base-element.ts";
 import { oneOf } from "../../core/property-guards.ts";
+import "../cf-image/index.ts";
 
 export type AvatarSize = "xs" | "sm" | "md" | "lg" | "xl";
 export type AvatarShape = "circle" | "square";
@@ -62,14 +64,17 @@ export const initialsForName = (name: string | undefined): string => {
  * identity presentation lives in `<cf-profile-badge>`, which composes this.
  *
  * Rendering precedence:
- *   1. `src` that is a `data:` URI   → `<img>` (falls back to initials on error)
- *   2. a short typed glyph (emoji)   → the glyph as-is
- *   3. otherwise                     → initials derived from `name`.
+ *   1. non-empty `bytes`             → the image they hold, via `<cf-image>`
+ *   2. `src` that is a `data:` URI   → `<img>` (falls back to initials on error)
+ *   3. a short typed glyph (emoji)   → the glyph as-is
+ *   4. otherwise                     → initials derived from `name`.
  *      Remote URL/path-like `src` (http(s):, //host, blob:, /path, …) is never
  *      fetched and is not shown as raw text — it degrades to initials here
  *      (see `isAvatarImageUrl` / `isRemoteLikeSource`).
  *
  * @element cf-avatar
+ * @property {FabricBytes} bytes - The bytes of a raster image, such as a
+ *   profile's picture
  * @attr {string} src   - A `data:` image URI, or a glyph/emoji string
  * @attr {string} name  - Display name; drives the initials fallback + alt text
  * @attr {string} alt   - Explicit alt text (defaults to `name`)
@@ -131,7 +136,8 @@ export class CFAvatar extends BaseElement {
         border-radius: var(--cf-border-radius-md, 6px);
       }
 
-      .avatar img {
+      .avatar img,
+      .avatar cf-image {
         width: 100%;
         height: 100%;
         object-fit: cover;
@@ -143,6 +149,9 @@ export class CFAvatar extends BaseElement {
       }
     `,
   ];
+
+  @property({ attribute: false })
+  accessor bytes: FabricBytes | undefined = undefined;
 
   @property({ type: String })
   accessor src: string | undefined = undefined;
@@ -165,7 +174,7 @@ export class CFAvatar extends BaseElement {
   protected override willUpdate(changed: PropertyValues): void {
     super.willUpdate(changed);
     // A new src gets a fresh chance to load before we fall back to initials.
-    if (changed.has("src")) this._imgError = false;
+    if (changed.has("src") || changed.has("bytes")) this._imgError = false;
     if (changed.has("size")) this.size = oneOf(this.size, avatarSizes, "md");
     if (changed.has("shape")) {
       this.shape = oneOf(this.shape, avatarShapes, "circle");
@@ -175,12 +184,14 @@ export class CFAvatar extends BaseElement {
   override render() {
     const src = (this.src ?? "").trim();
     const name = this.name;
-    const showImage = src.length > 0 && isAvatarImageUrl(src) &&
+    const showBytes = (this.bytes?.length ?? 0) > 0;
+    const showImage = !showBytes && src.length > 0 && isAvatarImageUrl(src) &&
       !this._imgError;
     // Short typed glyphs (emoji / a couple of letters) render as-is; URL/path
     // -like sources are neither fetched nor shown as raw text — they fall
     // through to initials.
-    const showGlyph = src.length > 0 && !showImage && !isRemoteLikeSource(src);
+    const showGlyph = !showBytes && src.length > 0 && !showImage &&
+      !isRemoteLikeSource(src);
 
     return html`
       <span
@@ -189,7 +200,14 @@ export class CFAvatar extends BaseElement {
         role="img"
         aria-label="${this.alt ?? name ?? "avatar"}"
       >
-        ${showImage
+        ${showBytes
+          ? html`
+            <cf-image
+              .bytes="${this.bytes}"
+              alt="${this.alt ?? name ?? ""}"
+            ></cf-image>
+          `
+          : showImage
           ? html`
             <img
               src="${src}"

@@ -2,11 +2,35 @@ import { type Config } from "@commonfabric/felt";
 
 import ports from "@commonfabric/ports" with { type: "json" };
 
-import { computeCurrentCompilerVersion } from "../runner/src/compilation-cache/compiler-fingerprint.deno.ts";
+import { fromFileUrl } from "@std/path";
+
+import {
+  compileCacheVersionSourceOf,
+  computeCurrentCompilerVersion,
+} from "../runner/src/compilation-cache/compiler-fingerprint.deno.ts";
 
 const PRODUCTION = !!Deno.env.get("PRODUCTION");
 const ENVIRONMENT = PRODUCTION ? "production" : "development";
-const COMPILE_CACHE_RUNTIME_VERSION = await computeCurrentCompilerVersion();
+// A production bundle ships, so it names its compiler by what it emits (a
+// corpus compile, about two minutes); a development bundle takes the
+// compiler-input fingerprint, which costs nothing. `CF_COMPILE_CACHE_VERSION`
+// (`output` or `inputs`) overrides the choice either way.
+const COMPILE_CACHE_VERSION_SOURCE = compileCacheVersionSourceOf(
+  Deno.env.get("CF_COMPILE_CACHE_VERSION"),
+  PRODUCTION ? "output" : "inputs",
+);
+// A binary build that embeds this shell hands over the version it baked, so
+// the two name one compiler and the corpus compiles once per build.
+const COMPILE_CACHE_RUNTIME_VERSION =
+  Deno.env.get("CF_COMPILE_CACHE_RUNTIME_VERSION") ??
+    (COMPILE_CACHE_VERSION_SOURCE === "output"
+      // deno-lint-ignore cf-imports/no-inline-module-import -- the corpus compile brings the whole runtime with it, which a development build has no reason to load
+      ? await (await import(
+        "../runner/src/compilation-cache/compile-cache-output-version.deno.ts"
+      )).computeCompilerOutputVersion(
+        fromFileUrl(new URL("../../", import.meta.url)),
+      )
+      : await computeCurrentCompilerVersion());
 
 const SHELL_PORT = parseInt(
   Deno.env.get("SHELL_PORT") || String(ports.shell),
@@ -71,6 +95,9 @@ const config: Config = {
       "$EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION": Deno.env.get(
         "EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION",
       ),
+      "$EXPERIMENTAL_LOCAL_SESSION_DOCUMENTS": Deno.env.get(
+        "EXPERIMENTAL_LOCAL_SESSION_DOCUMENTS",
+      ),
       "$EXPERIMENTAL_SHARED_MEMORY_CONNECTION": Deno.env.get(
         "EXPERIMENTAL_SHARED_MEMORY_CONNECTION",
       ),
@@ -83,6 +110,7 @@ const config: Config = {
       "$EXPERIMENTAL_READER_SCHEMA_PRECEDENCE": Deno.env.get(
         "EXPERIMENTAL_READER_SCHEMA_PRECEDENCE",
       ),
+      "$EXPERIMENTAL_LOCAL_FOLD": Deno.env.get("EXPERIMENTAL_LOCAL_FOLD"),
       "globalThis.__cfCompileCacheRuntimeVersion":
         COMPILE_CACHE_RUNTIME_VERSION,
     },

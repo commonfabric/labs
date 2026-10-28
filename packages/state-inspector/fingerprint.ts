@@ -1,43 +1,35 @@
-// Durable-content fingerprints — "did this space's content survive?" as a
-// number you can compare, and a diff when it didn't.
-//
-// Why (docs/plans/space-clone-rehearsal.md): the July 2026 Topics rehearsal
-// verified content preservation with ad-hoc SQL and Python heredocs written
-// fresh each attempt. Two rehearsals whose fingerprints were computed
-// differently cannot be compared, and an improvised check that quietly measures
-// less than last time looks exactly like a pass. This is that check, computed
-// one way.
-//
-// COMPILER-GENERATED CELLS ARE EXCLUDED BY DEFAULT. A pattern update rotates
-// generated internal-cell identities on purpose (labs#4916), so including them
-// guarantees the fingerprint changes on every legitimate migration — which
-// makes it useless as a "content survived" signal. Verified against the real
-// Estuary Topics store: all 20 write-storm cells (192,381 revisions, 90.3% of
-// every revision) are `$generated`, and NONE of them is authored content.
-//
-// Hashing goes through `@commonfabric/data-model` — the same
-// canonicalizing hash the runtime derives entity ids with, so this cannot drift
-// from the engine's notion of value identity.
+/**
+ * Fingerprints durable values across every visible scope using the runtime's
+ * canonical value hash. Compiler-generated cells are excluded by default
+ * because pattern updates rotate their identities. Exclusions, ambiguous
+ * causes, and unhashable values travel with the report so a caller can qualify
+ * what an equal hash establishes.
+ */
 
 import { type FabricValue, hashOf } from "@commonfabric/data-model";
+import { LRUCache } from "@commonfabric/utils/cache";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import { utf8Compare } from "@commonfabric/utils/utf8";
+
 import type { SpaceDb } from "./db.ts";
 import {
-  type EntityModel,
-  listEntityModels,
+  absentEntity,
+  classifyDocument,
+  type DocumentReader,
+  entityKinds,
+  scanLimit,
+  spaceDocumentReader,
   visibleEntityRowsByScope,
 } from "./model.ts";
-import { type EntityAddress, reconstructDocument } from "./reconstruct.ts";
+import {
+  type EntityAddress,
+  type EntityDocument,
+  type ReconstructOutcome,
+  reconstructOutcome,
+} from "./reconstruct.ts";
 import { scopesOfRows } from "./scopes.ts";
 
-/**
- * `listEntityModels` caps at 5,000 by default — a real Estuary space already
- * exceeds that. A fingerprint computed over a truncated enumeration would still
- * return a confident-looking hash, which is the exact failure this whole module
- * exists to prevent, so we raise the cap and REFUSE the listing that reports
- * itself truncated rather than hash a partial space.
- */
+/** Per-scope enumeration bound; exceeding it refuses the entire fingerprint. */
 const ENUMERATION_CAP = 1_000_000;
 
 /**
@@ -68,42 +60,6 @@ export function hashEntityValue(
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
   }
-}
-
-/**
- * Enumerates every scope in the space, refusing listings that exceed `cap`.
- *
- * `listEntityModels()` defaults to the shared space scope. Per-user and
- * per-session state is durable content too, so this walk uses every scope
- * the rows are grouped under.
- */
-function allEntities(
-  space: SpaceDb,
-  branch: string,
-  cap: number = ENUMERATION_CAP,
-): EntityModel[] {
-  const out: EntityModel[] = [];
-  // Scopes and their rows come from one pass, so every scope walked is one the
-  // rows were grouped under.
-  const rowsByScope = visibleEntityRowsByScope(space, { branch });
-  for (const scope of scopesOfRows(rowsByScope)) {
-    const rows = rowsByScope.get(scope.raw) ?? [];
-    const listing = listEntityModels(space, {
-      branch,
-      scope: scope.raw,
-      limit: cap,
-      rows,
-    });
-    if (listing.extent.truncated) {
-      throw new Error(
-        `scope ${scope.raw} holds ${listing.extent.total} entities, past the ` +
-          `${cap} cap; refusing to fingerprint a truncated enumeration.`,
-      );
-    }
-    // Appending individually avoids V8's argument limit for large scopes.
-    for (const entity of listing.entities) out.push(entity);
-  }
-  return out;
 }
 
 /**
@@ -198,6 +154,13 @@ export interface FingerprintOptions {
   branch?: string;
 
   /**
+   * Visits every primary reconstruction, including generated and unreadable
+   * records, after capturing fingerprint evidence. Related-document lookups do
+   * not invoke this callback. The store must remain unchanged during the scan.
+   */
+  onEntity?: (at: ScopedEntity, outcome: ReconstructOutcome) => void;
+
+  /**
    * Refuse rather than fingerprint a space whose scope enumerates more than
    * this many entities, since the enumeration was truncated. A scope holding
    * exactly the cap is complete and accepted. Defaults to 1,000,000 — far above
@@ -225,46 +188,179 @@ export function generatedInternalCellIds(
   space: SpaceDb,
   options: { branch?: string; enumerationCap?: number } = {},
 ): { generated: Set<string>; named: Set<string> } {
-  const branch = options.branch ?? "";
-  return generatedIdsAmong(
-    space,
-    allEntities(space, branch, options.enumerationCap),
-    branch,
-  );
+  const { generated, named } = fingerprintScanner(space, options, false).scan();
+  return { generated, named };
 }
 
-/**
- * {@link generatedInternalCellIds} over models a caller already enumerated, so
- * a caller that walks every entity for its own reasons does not build every
- * model a second time to learn which ones are generated.
- */
-function generatedIdsAmong(
-  space: SpaceDb,
-  models: Iterable<EntityModel>,
-  branch: string,
-): { generated: Set<string>; named: Set<string> } {
-  const generated = new Set<string>();
-  const named = new Set<string>();
-  for (const model of models) {
-    if (model.kind !== "piece") continue;
-    const doc = reconstructDocument(space, {
-      id: model.id,
-      scope: model.scope,
-      branch,
-    });
-    const internal = (doc as Record<string, unknown> | undefined)?.internal;
-    if (!Array.isArray(internal)) continue;
-    for (const entry of internal) {
-      const id = manifestLinkId(entry);
-      if (id === undefined) continue;
-      if (isGeneratedCause((entry as Record<string, unknown>).partialCause)) {
-        generated.add(id);
-      } else {
-        named.add(id);
+/** One entity's compact evidence, retained after its document is released. */
+interface FingerprintEntry {
+  /** Address and classification reported by the model. */
+  entity: EntityFingerprint;
+
+  /** Value-hashing failure, reported only for included entities. */
+  unhashable?: string;
+
+  /** Decode failure, thrown only when the entity is included. */
+  unreadable?: { error: unknown };
+}
+
+/** Collects one document's fingerprint evidence using this store's related reads. */
+function fingerprintEntry(
+  at: ScopedEntity,
+  outcome: ReconstructOutcome,
+  readDocument: DocumentReader,
+  options: FingerprintOptions,
+  hashValues: boolean,
+) {
+  const doc = outcome.status === "present" ? outcome.document : undefined;
+  const kind = outcome.status === "present"
+    ? classifyDocument(outcome.document, { id: at.id, readDocument }).kind
+    : absentEntity(outcome.status).kind;
+  const entry: FingerprintEntry = {
+    entity: { id: at.id, scope: at.scope, kind, hash: null },
+  };
+  if (outcome.status === "undecodable") {
+    entry.unreadable = { error: outcome.error };
+  }
+  if (hashValues && doc?.value !== undefined) {
+    const hashed = hashEntityValue(doc.value);
+    if ("error" in hashed) entry.unhashable = hashed.error;
+    else entry.entity.hash = hashed.hash;
+  }
+  const causes: { id: string; generated: boolean }[] = [];
+  if (
+    !options.includeGenerated && kind === "piece" &&
+    Array.isArray(doc?.internal)
+  ) {
+    for (const member of doc.internal) {
+      const id = manifestLinkId(member);
+      if (id !== undefined && isObjectOrArray(member)) {
+        causes.push({
+          id,
+          generated: isGeneratedCause(member.partialCause),
+        });
       }
     }
   }
-  return { generated, named };
+  return { entry, causes, kind };
+}
+
+/**
+ * Collects compact evidence while reading documents, then completes the scan
+ * over its independent revision enumeration. Classification errors are deferred
+ * to enumeration order; errors from final inclusion checks follow listing order.
+ */
+function fingerprintScanner(
+  space: SpaceDb,
+  options: FingerprintOptions,
+  hashValues: boolean,
+) {
+  const branch = options.branch ?? "";
+
+  /** Evidence or an error to surface when the scan reaches this address. */
+  type Captured =
+    | { evidence: ReturnType<typeof fingerprintEntry> }
+    | { error: unknown };
+
+  const captured = new Map<string, Map<string, Captured>>();
+  let relatedScope: string | undefined;
+  let relatedReader: DocumentReader;
+  const related = new LRUCache<
+    string,
+    { document: EntityDocument | undefined }
+  >({ capacity: 256 });
+
+  /** Reads this scope's owners and space-scoped schemas through a bounded cache. */
+  const readDocument: DocumentReader = (id) => {
+    let hit = related.get(id);
+    if (hit === undefined) {
+      hit = { document: relatedReader(id) };
+      related.put(id, hit);
+    }
+    return hit.document;
+  };
+
+  /** Reads a primary document and collects its evidence before notifying callers. */
+  const visit = (
+    at: Pick<ScopedEntity, "id" | "scope">,
+  ): { outcome: ReconstructOutcome; result: Captured } => {
+    const address = { id: at.id, scope: at.scope, branch };
+    const outcome = reconstructOutcome(space, address);
+    if (relatedScope !== at.scope) {
+      related.clear();
+      relatedScope = at.scope;
+      relatedReader = spaceDocumentReader(space, { branch, scope: at.scope });
+    }
+    let result: Captured;
+    try {
+      result = {
+        evidence: fingerprintEntry(
+          at,
+          outcome,
+          readDocument,
+          options,
+          hashValues,
+        ),
+      };
+    } catch (error) {
+      result = { error };
+    }
+    options.onEntity?.(address, outcome);
+    return { outcome, result };
+  };
+
+  /** Retains a caller's primary read as compact evidence for the scan. */
+  const read = (
+    at: Pick<ScopedEntity, "id" | "scope">,
+  ): ReconstructOutcome => {
+    const { outcome, result } = visit(at);
+    let scoped = captured.get(at.scope);
+    if (scoped === undefined) captured.set(at.scope, scoped = new Map());
+    scoped.set(at.id, result);
+    return outcome;
+  };
+
+  /** Completes every scope, including addresses the caller never read. */
+  const scan = () => {
+    const cap = options.enumerationCap ?? ENUMERATION_CAP;
+    const rowsByScope = visibleEntityRowsByScope(space, { branch });
+    const entries: FingerprintEntry[] = [];
+    const generated = new Set<string>();
+    const named = new Set<string>();
+    for (const scope of scopesOfRows(rowsByScope)) {
+      const rows = rowsByScope.get(scope.raw) ?? [];
+      if (rows.length > scanLimit(cap)) {
+        throw new Error(
+          `scope ${scope.raw} holds ${rows.length} entities, past the ` +
+            `${cap} cap; refusing to fingerprint a truncated enumeration.`,
+        );
+      }
+      const scoped = rows.map((row) => {
+        const result = captured.get(scope.raw)?.get(row.id) ??
+          visit({ id: row.id, scope: scope.raw }).result;
+        if ("error" in result) throw result.error;
+        return { ...result.evidence, revisions: row.revisions };
+      });
+      captured.delete(scope.raw);
+      // Match listing order for diagnostics and exclusions. Each store uses
+      // its own revision counts even when its documents compare equal.
+      scoped.sort((a, b) =>
+        entityKinds.indexOf(a.kind) - entityKinds.indexOf(b.kind) ||
+        b.revisions - a.revisions
+      );
+      for (const { entry, causes } of scoped) {
+        if (hashValues) entries.push(entry);
+        for (const cause of causes) {
+          (cause.generated ? generated : named).add(cause.id);
+        }
+      }
+    }
+    captured.clear();
+    related.clear();
+    return { entries, generated, named };
+  };
+
+  return { read, scan };
 }
 
 /** `{ $generated: N }` — the compiler's anonymous per-build ordinal. */
@@ -290,14 +386,39 @@ export function contentFingerprint(
   space: SpaceDb,
   options: FingerprintOptions = {},
 ): FingerprintReport {
-  const branch = options.branch ?? "";
-  // One walk serves both the generated-cell exclusion and the hashing: every
-  // model is built once, which is most of what a fingerprint costs.
-  const models = allEntities(space, branch, options.enumerationCap);
-  const { generated, named } = options.includeGenerated
-    ? { generated: new Set<string>(), named: new Set<string>() }
-    : generatedIdsAmong(space, models, branch);
+  return fingerprintReader(space, options).finish();
+}
 
+/**
+ * Reads documents at the configured branch's head while retaining compact
+ * fingerprint evidence. `finish()` enumerates every visible revision address,
+ * reads any not yet visited, and applies globally collected manifest causes.
+ * The store must remain unchanged until `finish()` returns. Primary document
+ * bodies are returned to the caller, never retained by this reader.
+ */
+export function fingerprintReader(
+  space: SpaceDb,
+  options: FingerprintOptions = {},
+): {
+  /** Reads a document and captures its fingerprint evidence for `finish()`. */
+  read(at: Pick<ScopedEntity, "id" | "scope">): ReconstructOutcome;
+
+  /** Completes the fingerprint, reporting errors in enumeration/listing order. */
+  finish(): FingerprintReport;
+} {
+  const scanner = fingerprintScanner(space, options, true);
+  return {
+    read: scanner.read,
+    finish: () => finishFingerprint(scanner.scan()),
+  };
+}
+
+/** Applies the global exclusions and rolls up a completed scan's evidence. */
+function finishFingerprint(
+  { entries, generated, named }: ReturnType<
+    ReturnType<typeof fingerprintScanner>["scan"]
+  >,
+): FingerprintReport {
   const ambiguous = [...generated].filter((id) => named.has(id)).sort(
     utf8Compare,
   );
@@ -305,35 +426,17 @@ export function contentFingerprint(
   const unhashable: { id: string; reason: string }[] = [];
   const excludedGeneratedAddresses: ScopedEntity[] = [];
 
-  for (const model of models) {
-    if (generated.has(model.id)) {
-      excludedGeneratedAddresses.push({ id: model.id, scope: model.scope });
+  for (const { entity, unreadable, unhashable: reason } of entries) {
+    if (generated.has(entity.id)) {
+      excludedGeneratedAddresses.push({ id: entity.id, scope: entity.scope });
       continue;
     }
-    // The models come from this branch, so the values must too — reading the
-    // default branch here would hash a parent's content under a child's name
-    // and certify two different spaces as identical.
-    const doc = reconstructDocument(space, {
-      id: model.id,
-      scope: model.scope,
-      branch,
-    });
-    const value = doc?.value;
-    let hash: string | null = null;
-    if (value !== undefined) {
-      const hashed = hashEntityValue(value);
-      if ("error" in hashed) {
-        unhashable.push({ id: model.id, reason: hashed.error });
-        continue;
-      }
-      hash = hashed.hash;
+    if (unreadable !== undefined) throw unreadable.error;
+    if (reason !== undefined) {
+      unhashable.push({ id: entity.id, reason });
+      continue;
     }
-    perEntity.push({
-      id: model.id,
-      scope: model.scope,
-      kind: model.kind,
-      hash,
-    });
+    perEntity.push(entity);
   }
 
   // Sort so the roll-up is independent of enumeration order.

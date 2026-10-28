@@ -32,9 +32,21 @@ Documents also carry a **scope key**. `PerUser`/`PerSession` cells
 revisions by `scope_key` derived from the session's principal
 (`v2/engine.ts`). Isolation by partition, not by discipline.
 
+Session documents synchronize by default. With the experimental
+[`localSessionDocuments`](../development/EXPERIMENTAL_OPTIONS.md#localsessiondocuments)
+flag enabled and server execution disabled, the runtime's own session instance
+lives only in its local replica. Explicit foreign-instance reads still go to the
+server for admission and loading. A transaction whose reads, writes, and
+preconditions are entirely local needs no server connection. Values of the local
+session instance are not persisted in the space's SQLite database. Space and
+user documents still synchronize.
+Server execution always synchronizes session documents so the serving runtime
+can read and derive them. Toolshed's webhook runtime keeps its session state
+synchronized even when the deployment enables local session storage for clients.
+
 ## The commit protocol: optimistic concurrency via read sets
 
-A client ships each transaction as a `ClientCommit`
+A client sends the synchronized part of a transaction as a `ClientCommit`
 (`packages/memory/v2.ts`):
 
 ```ts
@@ -50,6 +62,16 @@ ClientCommit {
   // observations, branch/merge fields, ...)
 }
 ```
+
+With local session storage enabled in client-execution mode, transactions whose
+reads, writes, and preconditions are entirely local settle locally. A session
+write that consumes shared state still sends those shared reads for server
+validation. Mixed
+transactions send their space/user operations and reads while keeping session
+operations and reads local. Their optimistic session writes settle with the
+server verdict: rejection rolls them back and rejects dependent local writes.
+Local origin and value preconditions are checked by the replica; the server
+validates the synchronized portion described below.
 
 A `patch` operation is itself a small language: alongside the
 diff-generated ops (`replace`, `add`, `remove`, `move`, `splice`) it
@@ -108,7 +130,12 @@ Offline-tolerant by construction, within a session's lifetime.
 
 ## Subscriptions: watches over schema-shaped graphs
 
-The read side mirrors the reactive model. Over one WebSocket, a client opens
+With local session storage enabled, client-executed session reads subscribe to
+replica changes without registering server graph watches. A local write or rollback notifies
+reactive readers through the same sink/trigger machinery.
+
+For synchronized documents, the read side mirrors the reactive model. Over one
+WebSocket, a client opens
 a session per space (`hello` → `session.open`, then `transact` /
 `graph.query` / `session.watch.set` / `session.watch.add` / `session.ack`).
 

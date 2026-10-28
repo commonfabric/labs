@@ -1487,7 +1487,7 @@ Deno.test("render _internal: sliceVisible keeps ANSI and counts visible cols", (
 });
 
 Deno.test("render _internal: padTo pads to visible width", () => {
-  assertEquals(_internal.visibleLen(_internal.padTo("hi", 5)), 5);
+  assertEquals(visibleWidth(_internal.padTo("hi", 5)), 5);
 });
 
 Deno.test("renderFrame: the overlay uses a double-line (Turbo Pascal) frame", () => {

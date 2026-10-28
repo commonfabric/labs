@@ -19,6 +19,7 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { fromFileUrl } from "@std/path";
 
 import { loadCliSuites } from "../../../tasks/test-topology/cli.ts";
 
@@ -32,7 +33,7 @@ const SCRIPT = await Deno.readTextFile(
  * suite, each named for this script and the one step its arm runs.
  */
 const CI_STEPS = (await loadCliSuites(
-  new URL("../../..", import.meta.url).pathname.replace(/\/$/, ""),
+  fromFileUrl(new URL("../../..", import.meta.url)).replace(/\/$/, ""),
 ))
   .find((suite) => suite.id === "cli-core")?.units
   .filter((unit) => unit.startsWith("integration.sh "))

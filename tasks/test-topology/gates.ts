@@ -12,9 +12,14 @@
  * it.
  */
 
-import { collectPathsByScope, scopesReached } from "../typecheck.ts";
+import {
+  collectPathsByScope,
+  localImporters,
+  scopesReached,
+} from "../typecheck.ts";
 import * as path from "@std/path";
 import { ACCEPTED_CONTRACT_BREAKS } from "../pattern-compat-accepted-breaks.ts";
+import { COMPILER_PATHS, GATE_PATHS } from "../check-cause-assignments.ts";
 import {
   BASELINES_DIR,
   collectCompatibilityPaths,
@@ -122,6 +127,34 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     // Reads every Markdown document and the comments of every TypeScript
     // file, so a comment added anywhere can fail it.
     reachedBy: [],
+  },
+  {
+    name: "check-cfc-correspondence",
+    kind: "gate",
+    run: ["task", "check-cfc-correspondence"],
+    // The CFC sources whose citations and kernel headers it reads, the
+    // snapshot and manifest under the kernel directory, the other files
+    // the CFC rule governs, which its `SPEC-PENDING` scan reads, the task
+    // holding the exemptions, and the two modules it reads the tree and
+    // the snapshot's shape through. The runner's top-level `cfc*.test.ts`
+    // files are governed too, and this vocabulary has no file glob to name
+    // them by, so a marker added to one reaches the gate on what it is
+    // worth.
+    reachedBy: [
+      "packages/cf-harness/src/cfc-label-disclosure.ts",
+      "packages/cf-harness/src/cfc-label-shape.ts",
+      "packages/cf-harness/src/cfc-posture.ts",
+      "packages/cf-harness/src/contracts/",
+      "packages/cf-harness/src/sandbox/runsc-cfc-result.ts",
+      "packages/html/src/worker/display-fit.ts",
+      "packages/html/src/worker/reconciler.ts",
+      "packages/runner/src/cfc.ts",
+      "packages/runner/src/cfc/",
+      "packages/runner/test/cfc/",
+      "tasks/cfc-spec-snapshot.ts",
+      "tasks/check-cfc-correspondence.ts",
+      "tasks/repository-files.ts",
+    ],
   },
   {
     name: "check-docs",
@@ -357,11 +390,23 @@ export const REACHED_BY_ABSENT_PATHS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The gates that hold a file to being appended to. Each reads the file as
- * it stood at the merge base with the revision the change is measured
- * against, which takes a checkout carrying history.
+ * The gates that compare the tree with the revision the change is measured
+ * against: two hold a file to being appended to, and one holds the
+ * compiler to numbering an unchanged pattern's cells as it did. Each reads
+ * the merge base with that revision, which takes a checkout carrying
+ * history.
  */
 export const HISTORY_GATES: readonly Gate[] = [
+  {
+    name: "check-cause-assignments",
+    kind: "gate",
+    run: ["task", "check-cause-assignments"],
+    args: ({ baseRef }) => [baseRef],
+    // The trees a pattern's numbering is built by, and the gate's own
+    // modules. The task passes a change touching none of them without
+    // compiling anything, so the two lists are one.
+    reachedBy: [...COMPILER_PATHS, ...GATE_PATHS],
+  },
   {
     name: "check-baselines-append-only",
     kind: "gate",
@@ -607,11 +652,13 @@ async function cfcheckSuite(root: string): Promise<Suite> {
  * break names it, and the lane given it reports it as retired or orphaned.
  * Its task takes `--only` to restrict which patterns it reads, so a lane
  * runs the ones it was given, and a run given every pattern passes no
- * `--only` at all.
+ * `--only` at all. A unit is a pattern key rather than a path, so
+ * `unitsForChange` says which patterns a change reaches.
  */
 async function patternCompatSuite(root: string): Promise<Suite> {
+  const files = await patternFiles(root);
   const paths = await collectCompatibilityPaths(
-    await patternFiles(root),
+    files,
     path.join(root, BASELINES_DIR),
     ACCEPTED_CONTRACT_BREAKS.map((accepted) => accepted.pattern),
   );
@@ -628,6 +675,7 @@ async function patternCompatSuite(root: string): Promise<Suite> {
     // Each pattern's verdict is one identity, and `--only` selects whole
     // patterns.
     whole: units,
+    unitsForChange: patternsReached(root, files, new Set(units)),
     locate(record): Location | undefined {
       if (!claimsIdentity({ recordSurfaces }, record.test)) return undefined;
       if (record.test.n === name) return { level: "suite" };
@@ -661,6 +709,63 @@ async function patternCompatSuite(root: string): Promise<Suite> {
         cwd: context.root,
       }]);
     },
+  };
+}
+
+/** The list of contract breaks the compatibility gate forgives. */
+const ACCEPTED_BREAKS_FILE = "tasks/pattern-compat-accepted-breaks.ts";
+
+/**
+ * Helper for `patternCompatSuite()`, which names the patterns among `units` a
+ * change reaches: one whose source changed, one importing a changed module of
+ * a pattern tree directly or through other such modules, and one whose
+ * recorded contracts changed. A change to the list of accepted breaks reaches
+ * every pattern: removing an entry changes the verdict of a pattern the list
+ * no longer names, and what the list named before is not visible here. `files`
+ * are the pattern sources the tree holds, which the import graph is read from
+ * on the first change that needs it.
+ *
+ * Imports are followed only within the pattern trees. A contract is also
+ * built from what lies outside them, the schema generator and the API's
+ * types, but a change there reaches every pattern, which is the case
+ * `Suite.unitsForChange` leaves to a lane on what each unit is worth.
+ */
+function patternsReached(
+  root: string,
+  files: readonly string[],
+  units: ReadonlySet<string>,
+): (changed: ReadonlySet<string>) => string[] {
+  const inTrees = (file: string) =>
+    PATTERN_TREES.some((tree) => file.startsWith(`${tree.directory}/`));
+  let importers: Map<string, string[]> | undefined;
+  return (changed) => {
+    const reached = new Set<string>();
+    const pending: string[] = [];
+    for (const at of changed) {
+      if (at === ACCEPTED_BREAKS_FILE) {
+        return [...units].sort();
+      } else if (at.startsWith(`${BASELINES_DIR}/`)) {
+        // A baseline is `<key>/<label>.json` under the baselines directory.
+        const rest = at.slice(BASELINES_DIR.length + 1);
+        const key = rest.slice(0, rest.lastIndexOf("/"));
+        if (units.has(key)) reached.add(key);
+      } else if (inTrees(at)) {
+        pending.push(at);
+      }
+    }
+    if (pending.length > 0) importers ??= localImporters(root, files);
+    const seen = new Set<string>();
+    while (pending.length > 0) {
+      const at = pending.pop()!;
+      if (seen.has(at)) continue;
+      seen.add(at);
+      const key = patternKey(at);
+      if (units.has(key)) reached.add(key);
+      for (const importer of importers!.get(at) ?? []) {
+        if (inTrees(importer)) pending.push(importer);
+      }
+    }
+    return [...reached].sort();
   };
 }
 

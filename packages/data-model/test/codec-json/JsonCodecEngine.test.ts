@@ -24,7 +24,7 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { spy } from "@std/testing/mock";
+import { spy, stub } from "@std/testing/mock";
 
 import { FabricInstance, type FabricValue, isDeepFrozen } from "@";
 import {
@@ -32,12 +32,14 @@ import {
   BaseNonterminalCodec,
   BaseTerminalCodec,
   CodecRegistry,
+  NULL_LIVE_ENVIRONMENT,
   ProblematicStateError,
   ProblematicValue,
   UnknownValue,
 } from "@/codec-common";
 import { JsonCodecEngine, SlotLimitError } from "@/codec-json";
 import { JSON_FORMAT, type JsonCodecValue } from "@/codec-json/interface.ts";
+import { JsonEncodeAct } from "@/codec-json/JsonEncodeAct.ts";
 import {
   createDefaultJsonRegistry,
   jsonFromFabricValue,
@@ -50,7 +52,7 @@ import {
   IS_DEEP_FROZEN,
   SHALLOW_UNFROZEN_CLONE,
 } from "@/fabric-bases";
-import { FabricError } from "@/fabric-instances";
+import { FabricError, FabricLink } from "@/fabric-instances";
 import {
   FabricBytes,
   FabricDurationDay,
@@ -61,6 +63,7 @@ import {
   FabricUnavailable,
   UNAVAILABLE_PENDING,
 } from "@/fabric-primitives";
+import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
 import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 
 /**
@@ -98,7 +101,7 @@ class UnregisteredInstance extends BaseFabricInstance {
     throw new Error("not implemented");
   }
 
-  protected [DEEP_CLONE_CORE](_frozen: boolean): FabricInstance {
+  [DEEP_CLONE_CORE](_frozen: boolean): FabricInstance {
     throw new Error("not implemented");
   }
 
@@ -327,6 +330,123 @@ describe("JsonCodecEngine", () => {
     });
   });
 
+  describe("nesting past what the call stack holds", () => {
+    // Deep enough to exhaust any host's call stack, which gives out at a few
+    // thousand levels of this walk, and quick to build all the same.
+    const depth = 100_000;
+
+    /**
+     * Calls `body` with the `push()` of every `IndexTrackingStack` made to
+     * throw a `RangeError` once it has pushed for the `nth` time, as an
+     * exhausted call stack can: between a walk entering a container and the
+     * code that would leave it. A real overflow strikes there or elsewhere,
+     * as the engine's code happens to be compiled, which this pins down.
+     *
+     * Fails unless the stub took effect, `push()` having been called `nth`
+     * times and thrown, so that a walk which stops pushing there cannot let a
+     * test pass without reaching the window it is about.
+     */
+    function overflowingAtPush<T>(nth: number, body: () => T): T {
+      const push = IndexTrackingStack.prototype.push;
+      let pushes = 0;
+      let threw = false;
+      const pushStub = stub(
+        IndexTrackingStack.prototype,
+        "push",
+        function (this: IndexTrackingStack<unknown>, value: unknown): void {
+          push.call(this, value);
+          pushes++;
+          if (pushes === nth) {
+            threw = true;
+            throw new RangeError("Maximum call stack size exceeded");
+          }
+        },
+      );
+      try {
+        return body();
+      } finally {
+        pushStub.restore();
+        expect({ pushes: Math.min(pushes, nth), threw })
+          .toEqual({ pushes: nth, threw: true });
+      }
+    }
+
+    /** Returns `leaf` wrapped `depth` times, each time by `wrap`. */
+    function nested(
+      leaf: FabricValue,
+      wrap: (inner: FabricValue) => FabricValue,
+    ): FabricValue {
+      let value = leaf;
+      for (let i = 0; i < depth; i++) {
+        value = wrap(value);
+      }
+      return value;
+    }
+
+    it("throws the host's `RangeError` when encoding, not one about the walk's own stack", () => {
+      const engine = newDefaultJsonCodecEngine();
+      const values: Record<string, FabricValue> = {
+        array: nested(1, (inner) => [inner]),
+        record: nested(1, (inner) => ({ a: inner })),
+        "`/`-keyed record": nested(1n, (inner) => ({ "/a": inner })),
+        instance: nested(1, (inner) => new UnknownValue("Future@1", inner)),
+      };
+      for (const [kind, value] of Object.entries(values)) {
+        let thrown: unknown;
+        try {
+          engine.encode(value, new TestLiveEnvironment());
+        } catch (e) {
+          thrown = e;
+        }
+        expect({
+          kind,
+          thrown: (thrown instanceof RangeError)
+            ? "RangeError"
+            : String(thrown),
+        }).toEqual({ kind, thrown: "RangeError" });
+      }
+    });
+
+    it("throws the `RangeError` that strikes just after a container is entered, not one about the walk's own stack", () => {
+      const engine = newDefaultJsonCodecEngine();
+      const values: Record<string, FabricValue> = {
+        array: [[1]],
+        record: { a: { b: 1 } },
+        "`/`-keyed record": { "/a": { "/b": 1n } },
+        instance: new UnknownValue("Future@1", [1]),
+      };
+      for (const [kind, value] of Object.entries(values)) {
+        let thrown: unknown;
+        try {
+          overflowingAtPush(
+            2,
+            () => engine.encode(value, new TestLiveEnvironment()),
+          );
+        } catch (e) {
+          thrown = e;
+        }
+        expect({
+          kind,
+          thrown: (thrown instanceof RangeError)
+            ? "RangeError"
+            : String(thrown),
+        }).toEqual({ kind, thrown: "RangeError" });
+      }
+    });
+
+    it("leaves the act able to encode again once the throw has passed", () => {
+      const act = new JsonEncodeAct(
+        newDefaultJsonCodecEngine(),
+        NULL_LIVE_ENVIRONMENT,
+      );
+      const value = nested(1, (inner) => [inner]);
+
+      expect(() => act.encodeValue(value)).toThrow(RangeError);
+      expect(() => act.encodeValue(value)).toThrow(RangeError);
+      expect(act.encodeValue([[1], { a: 2 }])).toEqual([[1], { a: 2 }]);
+    });
+  });
+
   describe("`slotLimit` constructor option", () => {
     /** Decodes one codec-value tree through an engine limited to `limit`. */
     function decodeLimited(
@@ -523,7 +643,7 @@ describe("JsonCodecEngine", () => {
         return new ProbeInstance();
       }
 
-      protected [DEEP_CLONE_CORE](_frozen: boolean): FabricInstance {
+      [DEEP_CLONE_CORE](_frozen: boolean): FabricInstance {
         return new ProbeInstance();
       }
     }
@@ -1183,6 +1303,15 @@ describe("JsonCodecEngine", () => {
       expect(result.length).toBe(2 ** 32 - 1);
     });
 
+    it("returns a `ProblematicValue` given a run one past the array maximum", () => {
+      const result = decodeArray([{ "/hole": 2 ** 32 }]);
+
+      expect(result).toBeInstanceOf(ProblematicValue);
+      expect((result as unknown as ProblematicValue).error).toContain(
+        "past the",
+      );
+    });
+
     it("decodes a run of one, the smallest a count may be", () => {
       const result = decodeArray(["a", { "/hole": 1 }, "b"]) as FabricValue[];
 
@@ -1465,6 +1594,54 @@ describe("JsonCodecEngine", () => {
         const result = roundTrip(obj) as Record<string, FabricValue[]>;
         expect(result["/outer"]![0]).toEqual({ "/inner": "val" });
       });
+
+      it("collapses a `/quote` held by a plain object between two `/`-keyed ones", () => {
+        const obj = { "/outer": { plain: { "/inner": "val" } } };
+
+        expect(toEncodedFormat(obj)).toEqual({
+          "/quote": { "/outer": { plain: { "/inner": "val" } } },
+        });
+        expect(roundTrip(obj)).toEqual(obj);
+      });
+
+      it("collapses every `/quote` beneath a literal `/`-keyed object, at any depth", () => {
+        // Four inner wraps, reached through an array, through a plain object,
+        // through another `/`-keyed object, and as a direct member.
+
+        const obj = {
+          "/a": [{ "/b": 1 }, { x: { "/c": [{ "/d": 2 }] } }],
+          y: { "/e": 3 },
+        };
+
+        expect(toEncodedFormat(obj)).toEqual({ "/quote": obj });
+        expect(roundTrip(obj)).toEqual(obj);
+      });
+
+      it("emits a `/quote` of its own for each `/`-keyed object with none enclosing it", () => {
+        const obj = { a: { "/b": 1 }, c: [{ "/d": { "/e": 2 } }] };
+
+        expect(toEncodedFormat(obj)).toEqual({
+          a: { "/quote": { "/b": 1 } },
+          c: [{ "/quote": { "/d": { "/e": 2 } } }],
+        });
+        expect(roundTrip(obj)).toEqual(obj);
+      });
+
+      it("emits `/quote` for a `/`-prefixed key behind keys that sort ahead of it", () => {
+        // The empty key and keys opening below `/` in UTF-8 order all come
+        // before a `/`-prefixed one.
+
+        const obj = { "": 0, "!": 1, "-": 2, "/k": 3, z: 4 };
+
+        expect(toEncodedFormat(obj)).toEqual({ "/quote": obj });
+        expect(roundTrip(obj)).toEqual(obj);
+      });
+
+      it("emits no escape for keys that sort ahead of `/` with no `/`-prefixed key among them", () => {
+        const obj = { "": 0, "!": 1, "-": 2, "0": 3 };
+
+        expect(toEncodedFormat(obj)).toEqual(obj);
+      });
     });
 
     describe("`/object` over a state that is not an object", () => {
@@ -1575,6 +1752,81 @@ describe("JsonCodecEngine", () => {
         const result = roundTrip(obj) as Record<string, FabricValue>;
         expect(result["/a"]).toBe("literal");
         expect(result["/b"]).toBeInstanceOf(FabricError);
+      });
+
+      it("keeps a `/quote` beneath an `/object` as a wrap of its own", () => {
+        const obj = {
+          "/literal": { plain: [{ "/inner": 1 }] },
+          "/typed": new FabricEpochDay(42n),
+        };
+
+        expect(toEncodedFormat(obj)).toEqual({
+          "/object": {
+            "/literal": { plain: [{ "/quote": { "/inner": 1 } }] },
+            "/typed": { "/EpochDay@1": expect.anything() },
+          },
+        });
+        expect(roundTrip(obj)).toEqual(obj);
+      });
+
+      it("emits `/object` at every level above a value that needs encoding", () => {
+        const obj = {
+          "/a": {
+            "/b": { "/c": new FabricEpochDay(42n) },
+            "/d": { "/e": 1 },
+          },
+        };
+
+        expect(toEncodedFormat(obj)).toEqual({
+          "/object": {
+            "/a": {
+              "/object": {
+                "/b": {
+                  "/object": { "/c": { "/EpochDay@1": expect.anything() } },
+                },
+                "/d": { "/quote": { "/e": 1 } },
+              },
+            },
+          },
+        });
+        expect(roundTrip(obj)).toEqual(obj);
+      });
+
+      it("emits `/object` for a `/`-keyed object over an array hole", () => {
+        // deno-lint-ignore no-sparse-arrays
+        const obj = { "/a": [1, , 3] };
+
+        expect(toEncodedFormat(obj)).toEqual({
+          "/object": { "/a": [1, { "/hole": 1 }, 3] },
+        });
+      });
+
+      it("emits `/quote` for a literal `/`-keyed object that follows an `/object`", () => {
+        // An object's escape depends only on what is under that object.
+
+        const obj = [
+          { "/a": new FabricEpochDay(42n) },
+          { "/b": { "/c": 1 } },
+        ];
+
+        expect(toEncodedFormat(obj)).toEqual([
+          { "/object": { "/a": { "/EpochDay@1": expect.anything() } } },
+          { "/quote": { "/b": { "/c": 1 } } },
+        ]);
+      });
+
+      it("emits `/object` over a tagged value whose state holds a `/quote`", () => {
+        const obj = {
+          "/a": new FabricLink({ "/x": { "/y": 1 } }),
+          "/z": [{ "/q": 2 }],
+        };
+
+        expect(toEncodedFormat(obj)).toEqual({
+          "/object": {
+            "/a": { "/Link@1": { "/quote": { "/x": { "/y": 1 } } } },
+            "/z": [{ "/quote": { "/q": 2 } }],
+          },
+        });
       });
     });
 

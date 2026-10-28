@@ -5,10 +5,12 @@
  * Mobile (<480px): Bottom sheet with slide-up animation
  */
 
-import { css } from "lit";
+import { css, unsafeCSS } from "lit";
+import { surfaceRecipesCSS } from "../../styles/variables.ts";
 
 export const modalStyles = css`
   :host {
+    ${unsafeCSS(surfaceRecipesCSS)};
     --cf-modal-color-background: var(--cf-theme-color-background, white);
     --cf-modal-color-border: var(--cf-theme-color-border, #e5e7eb);
     --cf-modal-color-surface: var(--cf-theme-color-surface, #fafafa);

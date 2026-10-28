@@ -3,6 +3,7 @@ import {
   computed,
   Default,
   equals,
+  type FabricBytes,
   handler,
   NAME,
   pattern,
@@ -14,6 +15,7 @@ import {
   wish,
   Writable,
 } from "commonfabric";
+import { profileLook } from "../system/profile-look.ts";
 
 /**
  * Shared-profile participant roster (CT-1649).
@@ -24,9 +26,9 @@ import {
  * (`wish({ query: "#profile" })`). See `docs/specs/shared-profile-rosters.md`.
  *
  * This pattern demonstrates the **snapshot** (self-containment) variant: name +
- * avatar are copied at join time, so the roster is fully self-describing inside
- * the shared space and never depends on other users' profile spaces being
- * reachable. Participants render from those snapshot strings via `<cf-avatar>`,
+ * picture are copied at join time, so the roster is fully self-describing
+ * inside the shared space and never depends on other users' profile spaces
+ * being reachable. Participants render from those snapshots via `<cf-avatar>`,
  * and the current viewer's OWN live profile is shown with the trusted
  * `<cf-profile-badge>`.
  *
@@ -60,8 +62,12 @@ export interface Participant {
   /** Display name, snapshotted from the joiner's profile at join time. */
   name: string;
 
-  /** Avatar URL or glyph, snapshotted from the joiner's profile (may be ""). */
+  /** Avatar text, snapshotted instead when the joiner's profile has no
+   * picture; otherwise "". */
   avatar: string;
+
+  /** Picture bytes, snapshotted from the joiner's profile, if it has one. */
+  picture?: FabricBytes;
   joinedAt: number;
 }
 
@@ -95,25 +101,26 @@ type ViewerCell = Writable<ViewerState | Default<typeof EMPTY_VIEWER>>;
 // tasks/pattern-compat-accepted-breaks.ts.
 export type JoinEvent = void;
 
-// The current viewer's name/avatar (plain strings) and live profile cell are
+// The current viewer's name, picture, avatar text and live profile cell are
 // resolved from their shared profile in the pattern body (via wish). The handler
 // appends a snapshot to the shared roster and records that this viewer has
 // joined. Identity is keyed on the `profile` CELL — never the display name,
 // which is mutable and may collide between distinct users.
 //
-// `name`/`avatar` arrive as plain strings (named `computed` values auto-unwrap
-// as handler state — do not call `.get()` on them). `profile` is a live cell
-// reference: it round-trips through `push` as a link and is compared with
-// `equals()`, the pattern idiom for cell identity (see profile-group-chat /
-// fair-share / cfc-group-chat-demo).
+// `name`/`picture`/`avatar` arrive as plain values (named `computed` values
+// auto-unwrap as handler state — do not call `.get()` on them). `profile` is a
+// live cell reference: it round-trips through `push` as a link and is compared
+// with `equals()`, the pattern idiom for cell identity (see profile-group-chat
+// / fair-share / cfc-group-chat-demo).
 const join = handler<JoinEvent, {
   roster: RosterCell;
   viewer: ViewerCell;
   // May be undefined until the viewer's `#profile` wish resolves; guarded below.
   profile: ParticipantProfileCell | undefined;
   name: string;
-  avatar: string;
-}>((_event, { roster, viewer, profile, name, avatar }) => {
+  picture?: FabricBytes;
+  avatar?: string;
+}>((_event, { roster, viewer, profile, name, picture, avatar }) => {
   const trimmed = (name ?? "").trim();
   if (!trimmed) return; // No resolved profile name yet — nothing to contribute.
   if (!profile) return; // No resolved profile cell — no stable identity yet.
@@ -127,7 +134,9 @@ const join = handler<JoinEvent, {
     participants.push({
       profile,
       name: trimmed,
-      avatar: (avatar ?? "").trim(),
+      // Drawn with the picture, or else the avatar text.
+      avatar: "",
+      ...profileLook(picture, avatar),
       joinedAt: Date.now(),
     });
   }
@@ -156,15 +165,17 @@ export default pattern<RosterDemoInput, RosterDemoOutput>(
     // Resolve THIS viewer's shared profile. `#profile` yields the viewer's own
     // profile cell (the default profile / picker result under PR #3830). The
     // cell itself is the stable identity used to dedupe the roster; the
-    // convenience targets give just the strings for the snapshot.
+    // convenience targets give just the values for the snapshot.
     const profileWish = wish<{ name?: string; avatar?: string }>({
       query: "#profile",
     });
     const profileNameWish = wish<string>({ query: "#profileName" });
+    const profilePictureWish = wish<FabricBytes>({ query: "#profilePicture" });
     const profileAvatarWish = wish<string>({ query: "#profileAvatar" });
 
     const myName = computed(() => profileNameWish.result ?? "");
-    const myAvatar = computed(() => profileAvatarWish.result ?? "");
+    const myPicture = computed(() => profilePictureWish.result);
+    const myAvatar = computed(() => profileAvatarWish.result);
     // The live profile cell — passed to the join handler as the identity key.
     const myProfile = profileWish.result;
 
@@ -182,6 +193,7 @@ export default pattern<RosterDemoInput, RosterDemoOutput>(
       viewer,
       profile: myProfile,
       name: myName,
+      picture: myPicture,
       avatar: myAvatar,
     });
 
@@ -222,7 +234,12 @@ export default pattern<RosterDemoInput, RosterDemoOutput>(
             <cf-vstack gap="2">
               {participants.map((p) => (
                 <cf-hstack gap="2" align="center">
-                  <cf-avatar src={p.avatar} name={p.name} size="sm" />
+                  <cf-avatar
+                    bytes={p.picture}
+                    src={p.avatar}
+                    name={p.name}
+                    size="sm"
+                  />
                   <span style={{ fontSize: "0.875rem" }}>{p.name}</span>
                 </cf-hstack>
               ))}

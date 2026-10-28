@@ -1063,6 +1063,96 @@ describe("guest", () => {
       }
     });
 
+    it("sends a stream event as a call of the resource's `send` method", async () => {
+      const fabric = connectFabric();
+      try {
+        const host = handOffPort();
+        const sent = fabric.stream<{ text: string }>("addItem").send({
+          text: "Milk",
+        });
+
+        const request = await receive(host);
+        expect(request).toEqual({
+          protocol: BRIDGE_PROTOCOL,
+          version: BRIDGE_VERSION,
+          type: "request",
+          id: 0,
+          operation: "call",
+          resource: "addItem",
+          method: "send",
+          value: { text: "Milk" },
+        });
+        send(host, response(request.id));
+        await expect(sent).resolves.toBeUndefined();
+      } finally {
+        fabric.disconnect();
+      }
+    });
+
+    it("sends a stream event after a cell write the guest made first", async () => {
+      const fabric = connectFabric();
+      try {
+        const host = handOffPort();
+        const state = fabric.cell<{ draft: string }>("state");
+        const pulled = state.pull();
+        // The write waits behind the pull on the same cell, and the send is
+        // made while it does.
+        const written = state.set({ draft: "Milk" });
+        const sent = fabric.stream<{ text: string }>("addItem").send({
+          text: "Milk",
+        });
+
+        const pull = await receive(host);
+        expect(pull.operation).toBe("pull");
+        send(host, response(pull.id, { draft: "" }));
+        const set = await receive(host);
+        expect(set.operation).toBe("set");
+        send(host, response(set.id));
+        const call = await receive(host);
+        expect(call).toMatchObject({
+          operation: "call",
+          resource: "addItem",
+          method: "send",
+        });
+        send(host, response(call.id));
+        await Promise.all([pulled, written, sent]);
+      } finally {
+        fabric.disconnect();
+      }
+    });
+
+    it("rejects a stream send with the error the host answers", async () => {
+      const fabric = connectFabric();
+      try {
+        const host = handOffPort();
+        const sent = fabric.stream<{ text: string }>("addItem").send({
+          text: "",
+        });
+
+        const request = await receive(host);
+        send(host, {
+          protocol: BRIDGE_PROTOCOL,
+          version: BRIDGE_VERSION,
+          type: "response",
+          id: request.id,
+          ok: false,
+          error: {
+            code: "operation-failed",
+            message: "An item needs text.",
+            resource: "addItem",
+          },
+        });
+        await expect(sent).rejects.toMatchObject({
+          name: "FabricBridgeError",
+          code: "operation-failed",
+          message: "An item needs text.",
+          resource: "addItem",
+        });
+      } finally {
+        fabric.disconnect();
+      }
+    });
+
     it("rejects pending work when disconnected", async () => {
       const fabric = connectFabric();
       const pending = fabric.describe();

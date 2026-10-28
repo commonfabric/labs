@@ -28,7 +28,11 @@ import {
 // DB).
 
 import { openSpace, type SpaceDb } from "./db.ts";
-import { linksWithPaths, type LinkWalkBounds } from "./decode.ts";
+import {
+  type DecodedLink,
+  linksWithPaths,
+  type LinkWalkBounds,
+} from "./decode.ts";
 import { shortDid } from "./did-display.ts";
 import { candidatesMatching, reconstructDocument } from "./reconstruct.ts";
 import { parseScope } from "./scopes.ts";
@@ -96,6 +100,58 @@ function isHomeResultValue(v: FabricValue): v is FabricPlainObject {
 }
 
 /**
+ * The profile links a space's Home pieces list, or `undefined` when the space
+ * holds no Home piece. Each Home piece's `profiles` field is a link to the
+ * cell holding the list, and every link in that list naming another space is
+ * returned as stored, its `id` included, in the order the walk visits them. A
+ * list entry is the slot a profile was appended through, which links on to
+ * the profile itself.
+ */
+export function homeProfileLinks(
+  space: SpaceDb,
+  opts: { branch?: string; scope?: string } = {},
+): DecodedLink[] | undefined {
+  const branch = opts.branch ?? "";
+  const scope = opts.scope ?? "space";
+  const own = didFromPath(space.path);
+  let isHome = false;
+  const links: DecodedLink[] = [];
+  const homeCandidates = candidatesMatching(space, {
+    branch,
+    scope,
+    like: ["%createProfile%", '%"profiles"%'],
+  });
+  for (const id of homeCandidates) {
+    let doc;
+    try {
+      doc = reconstructDocument(space, { id, branch, scope });
+    } catch {
+      continue;
+    }
+    const value = doc?.value;
+    if (!isHomeResultValue(value)) continue;
+    isHome = true;
+    // `profiles` is a link to the profiles cell; follow it and read the array.
+    const profilesField = value.profiles;
+    const link = linksWithPaths(profilesField, SPACE_SIGNAL_WALK)
+      .links[0]?.link;
+    if (!link?.id) continue;
+    let pdoc;
+    try {
+      pdoc = reconstructDocument(space, { id: link.id, branch, scope });
+    } catch {
+      continue;
+    }
+    for (
+      const { link: l } of linksWithPaths(pdoc?.value, SPACE_SIGNAL_WALK).links
+    ) {
+      if (l.space && l.space !== own) links.push(l);
+    }
+  }
+  return isHome ? links : undefined;
+}
+
+/**
  * Read the grouping signals from a single space DB. Cheap by design: it never
  * does a full reconstruction pass — it targets home pieces and cross-space
  * carriers with `data LIKE` candidate queries, then reconstructs only those.
@@ -138,40 +194,10 @@ export function analyzeSpaceSignals(
   }
 
   // Home detection + profiles[] edges
-  let isHome = false;
+  const listed = homeProfileLinks(space, { branch, scope });
+  const isHome = listed !== undefined;
   const profileDids = new Set<string>();
-  const homeCandidates = candidatesMatching(space, {
-    branch,
-    scope,
-    like: ["%createProfile%", '%"profiles"%'],
-  });
-  for (const id of homeCandidates) {
-    let doc;
-    try {
-      doc = reconstructDocument(space, { id, branch, scope });
-    } catch {
-      continue;
-    }
-    const value = doc?.value;
-    if (!isHomeResultValue(value)) continue;
-    isHome = true;
-    // `profiles` is a link to the profiles cell; follow it and read the array.
-    const profilesField = value.profiles;
-    const link = linksWithPaths(profilesField, SPACE_SIGNAL_WALK)
-      .links[0]?.link;
-    if (!link?.id) continue;
-    let pdoc;
-    try {
-      pdoc = reconstructDocument(space, { id: link.id, branch, scope });
-    } catch {
-      continue;
-    }
-    for (
-      const { link: l } of linksWithPaths(pdoc?.value, SPACE_SIGNAL_WALK).links
-    ) {
-      if (l.space && l.space !== own) profileDids.add(l.space);
-    }
-  }
+  for (const l of listed ?? []) if (l.space) profileDids.add(l.space);
 
   // All cross-space link targets (cheap candidate query)
   const crossSpaceDids = new Set<string>();

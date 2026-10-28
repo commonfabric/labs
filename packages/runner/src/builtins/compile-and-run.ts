@@ -14,6 +14,7 @@ import {
 import { waveSettlementOf } from "../executor/wave.ts";
 import type { RuntimeProgram } from "../harness/types.ts";
 import { snapshotQueryResult } from "../query-result-proxy.ts";
+import { type RawBuiltinResult } from "../module.ts";
 import type { Runtime } from "../runtime.ts";
 import { type Action } from "../scheduler.ts";
 import { narrowestScope } from "../scope.ts";
@@ -22,7 +23,7 @@ import type {
   MemorySpace,
 } from "../storage/interface.ts";
 import { settleAbandonedRequest } from "./abandoned-request.ts";
-import { ownedCell } from "./runtime-owned-store.ts";
+import { ownedCell, ownedStoreLinks } from "./runtime-owned-store.ts";
 import { resolvedCellScope } from "./scope-policy.ts";
 
 /** Durable state of a compile request, including its instantiation outcome. */
@@ -83,7 +84,16 @@ export function compileAndRun(
   cause: any,
   parentCell: Cell<any>,
   runtime: Runtime,
-): Action {
+): RawBuiltinResult {
+  // The stores this node keeps, each keyed by its cause alone, so the
+  // action declares them when it is set up.
+  const stores = {
+    pending: { compile: { pending: cause } },
+    result: { compile: { result: cause } },
+    error: { compile: { error: cause } },
+    errors: { compile: { errors: cause } },
+    internal: { compile: { internal: cause } },
+  };
   let requestId: string | undefined = undefined;
   let abortController: AbortController | undefined = undefined;
   let previousCallHash: string | undefined = undefined;
@@ -116,7 +126,7 @@ export function compileAndRun(
     abortController?.abort("Pattern stopped");
   });
 
-  return (tx: IExtendedStorageTransaction) => {
+  const action: Action = (tx: IExtendedStorageTransaction) => {
     tx.resetNarrowestReadScope();
     // TODO(seefeld): Ideally, this cell already has this schema, because we set
     // it on the node itself.
@@ -141,7 +151,7 @@ export function compileAndRun(
         runtime,
         tx,
         parentCell,
-        { compile: { pending: cause } },
+        stores.pending,
         undefined,
         outputScope,
       );
@@ -151,7 +161,7 @@ export function compileAndRun(
         runtime,
         tx,
         parentCell,
-        { compile: { result: cause } },
+        stores.result,
         undefined,
         outputScope,
       );
@@ -169,7 +179,7 @@ export function compileAndRun(
         runtime,
         tx,
         parentCell,
-        { compile: { error: cause } },
+        stores.error,
         undefined,
         outputScope,
       );
@@ -189,7 +199,7 @@ export function compileAndRun(
         runtime,
         tx,
         parentCell,
-        { compile: { errors: cause } },
+        stores.errors,
         undefined,
         outputScope,
       );
@@ -199,7 +209,7 @@ export function compileAndRun(
           runtime,
           tx,
           parentCell,
-          { compile: { internal: cause } },
+          stores.internal,
           undefined,
           outputScope,
         );
@@ -364,6 +374,10 @@ export function compileAndRun(
       }
       // TODO(seefeld): Add capturing runtime errors.
     });
+  };
+  return {
+    action,
+    storeWrites: ownedStoreLinks(runtime, parentCell, Object.values(stores)),
   };
 }
 

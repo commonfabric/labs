@@ -456,6 +456,7 @@ describe("mount state operations", () => {
     expect(shim).toContain("export CF_EXEC_SHEBANG=1");
     expect(shim).toContain("export CF_CLI_NAME=cf");
     expect(shim).toContain('" run --allow-net');
+    expect(shim).toContain("--allow-sys=networkInterfaces");
     expect(shim).toContain(join(repoRoot, "packages/cli/mod.ts"));
     expect(shim).toContain('"$@"');
   });

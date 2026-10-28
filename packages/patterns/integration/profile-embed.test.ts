@@ -4,7 +4,6 @@ import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
-import { assert } from "@std/assert";
 import {
   initializePiecesController,
   PiecesController,
@@ -14,9 +13,10 @@ import {
   fillCfInput,
   fillCfTextarea,
   waitForRuntimeIdle,
-  waitForText,
+  waitForSettledText,
   waitForTextAbsent,
 } from "./cfc-browser-helpers.ts";
+import { clickButtonWithExactText } from "./note-button-helpers.ts";
 
 const { API_URL, FRONTEND_URL } = env;
 // The `#profile` wish fallback surface (rendered by the embed when no profile
@@ -123,7 +123,7 @@ describe("profile-embed integration test", () => {
     await createProfileFromFallback(page, "Ada Lovelace");
 
     // Resolved presentation: the hero badge renders the name.
-    await waitForText(page, "#profile-embed-badge", "Ada Lovelace");
+    await waitForSettledText(page, "#profile-embed-badge", "Ada Lovelace");
     // The presentation region is present.
     await waitForSelector(
       page,
@@ -140,7 +140,7 @@ describe("profile-embed integration test", () => {
 
     // Enter edit mode: the "Edit profile" button flips `editing` and seeds the
     // draft inputs from the resolved values.
-    await clickSaveByLabel(page, "Edit profile");
+    await clickButtonWithExactText(page, "Edit profile");
     await waitForRuntimeIdle(page);
     await waitForSelector(page, '[data-ui-region="profile-embed-edit"]');
 
@@ -152,7 +152,7 @@ describe("profile-embed integration test", () => {
       '[data-ui-region="profile-embed-edit"] cf-input',
       "Grace Hopper",
     );
-    await clickSaveByLabel(page, "Save name");
+    await clickButtonWithExactText(page, "Save name");
     // The save dispatches into the resolved profile's owner-protected setName
     // stream — a cross-space write into the profile space this session created
     // and still holds open. `waitForRuntimeIdle` awaits the pending-commit
@@ -167,7 +167,7 @@ describe("profile-embed integration test", () => {
       '[data-ui-region="profile-embed-edit"] cf-textarea',
       "Countess of computing.",
     );
-    await clickSaveByLabel(page, "Save bio");
+    await clickButtonWithExactText(page, "Save bio");
     // As with the name save, the bio dispatches into the resolved profile's
     // owner-protected setBio stream; `waitForRuntimeIdle` confirms the write
     // through the pending-commit barrier before edit mode is left.
@@ -175,11 +175,11 @@ describe("profile-embed integration test", () => {
 
     // Leave edit mode and assert the RESOLVED presentation reflects the amends:
     // the hero badge shows the new name and the bio paragraph renders.
-    await clickSaveByLabel(page, "Done");
+    await clickButtonWithExactText(page, "Done");
     await waitForRuntimeIdle(page);
 
-    await waitForText(page, "#profile-embed-badge", "Grace Hopper");
-    await waitForText(
+    await waitForSettledText(page, "#profile-embed-badge", "Grace Hopper");
+    await waitForSettledText(
       page,
       '[data-ui-region="profile-embed-bio"]',
       "Countess of computing.",
@@ -216,47 +216,4 @@ async function createProfileFromFallback(page: Page, name: string) {
   // session, so the child space stays open and subscribed and the reactive read
   // resolves from already-open state without a separate cross-space sync.
   await waitForRuntimeIdle(page);
-}
-
-// Click the save/done cf-button whose accessible text matches `label`. Each of
-// the embed's edit-mode buttons has distinct visible text ("Save name",
-// "Save avatar", "Save bio", "Done"), so matching by text picks exactly one.
-async function clickSaveByLabel(page: Page, label: string) {
-  await waitForRuntimeIdle(page);
-  const token = `profile-embed-save-${crypto.randomUUID()}`;
-  await markCfButtonByText(page, label, token);
-  const button = await page.waitForSelector(`[data-cfc-mark="${token}"]`, {
-    strategy: "pierce",
-  });
-  await button.click();
-}
-
-// Tag the inner click target of the cf-button whose trimmed text equals `label`
-// so a single pierce click lands on it. cf-button renders a <div data-cf-button>
-// click target inside its shadow root (see docs/development/UI_TESTING.md and
-// project_cf_button_div_decision).
-async function markCfButtonByText(page: Page, label: string, token: string) {
-  const marked = await page.evaluate((targetLabel, targetToken) => {
-    function collect(root: Document | ShadowRoot, result: Element[]): void {
-      for (const element of root.querySelectorAll("*")) {
-        result.push(element);
-        if (element.shadowRoot) collect(element.shadowRoot, result);
-      }
-    }
-    const elements: Element[] = [];
-    collect(document, elements);
-    for (const element of elements) {
-      if (element.tagName.toLowerCase() !== "cf-button") continue;
-      const text = (element.textContent ?? "").trim();
-      if (text !== targetLabel) continue;
-      const host = element as HTMLElement;
-      const clickTarget = (host.shadowRoot?.querySelector("[data-cf-button]") as
-        | HTMLElement
-        | null) ?? host;
-      clickTarget.setAttribute("data-cfc-mark", targetToken);
-      return true;
-    }
-    return false;
-  }, { args: [label, token] });
-  assert(marked, `No cf-button with text "${label}" found to click`);
 }

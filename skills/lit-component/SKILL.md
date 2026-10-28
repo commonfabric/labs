@@ -152,15 +152,17 @@ connection lifecycle.
 
 ## Theme Integration
 
-Most components should use `var(--cf-theme-*)` CSS variables with fallbacks
-(`--cf-theme-*` first, then `--cf-*` base token, then a literal). Consume
-`cfThemeContext` (with `applyThemeToElement`) only when JavaScript needs the
-theme object for runtime logic, derived values, or applying theme variables to
-dynamically created elements.
+Components use `var(--cf-theme-*)` CSS variables with fallbacks (`--cf-theme-*`
+first, then `--cf-*` base token, then a literal), and inherit their values from
+the `cf-theme` or host page above them. Only `cf-theme` writes tokens for the
+ambient theme; any other component writes none on its own host for it. Consume
+`cfThemeContext` only when JavaScript needs the theme object for runtime logic
+or derived values, and carry the tokens onto an overlay mounted outside the
+subtree with `copyThemeProperties`.
 
 **Theme consumption code and complete reference:** See
-`references/theme-system.md` for the `@consume` boilerplate, all available CSS
-variables, and helper functions.
+`references/theme-system.md` for all available CSS variables and helper
+functions, and `references/component-patterns.md` for the `@consume` example.
 
 ## Cell Integration
 

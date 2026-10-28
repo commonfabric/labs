@@ -2,6 +2,7 @@ import { FabricDurationNsec } from "@commonfabric/data-model/fabric-primitives";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { fromFileUrl } from "@std/path";
 import {
   compileWithEntryBody,
   Engine,
@@ -420,6 +421,26 @@ describe("Engine in SES mode", () => {
     );
   });
 
+  it("evaluates a module exporting a function whose name begins with `new`", async () => {
+    const program: RuntimeProgram = {
+      main: "/main.ts",
+      files: [
+        {
+          name: "/main.ts",
+          contents: [
+            "export function newThing(n: number) {",
+            "  return n + 1;",
+            "}",
+          ].join("\n"),
+        },
+      ],
+    };
+
+    const { main } = await engine.compileAndEvaluateModules(program);
+
+    expect(main?.newThing(1)).toBe(2);
+  });
+
   it("allows top-level template literal snapshots", async () => {
     const program: RuntimeProgram = {
       main: "/main.ts",
@@ -491,14 +512,13 @@ describe("Engine in SES mode", () => {
   });
 
   it("compiles the self-improving classifier pattern", async () => {
-    const repoRoot = new URL("../../..", import.meta.url).pathname.replace(
+    const repoRoot = fromFileUrl(new URL("../../..", import.meta.url)).replace(
       /\/$/,
       "",
     );
-    const sourcePath = new URL(
-      "../../patterns/self-improving-classifier.tsx",
-      import.meta.url,
-    ).pathname;
+    const sourcePath = fromFileUrl(
+      new URL("../../patterns/self-improving-classifier.tsx", import.meta.url),
+    );
     const program = await resolveLocalProgram(
       (resolver) => engine.resolve(resolver),
       { main: sourcePath, root: repoRoot },
@@ -509,6 +529,9 @@ describe("Engine in SES mode", () => {
   });
 
   it("rejects top-level mutable bindings", async () => {
+    // The compiler refuses the binding before the module verifier sees the
+    // compiled body.
+
     const program: RuntimeProgram = {
       main: "/main.ts",
       files: [
@@ -526,8 +549,42 @@ describe("Engine in SES mode", () => {
     };
 
     await expect(engine.compileToRecordGraph(program)).rejects.toThrow(
-      "Top-level mutable bindings are not allowed in SES mode",
+      "`let` declarations are not allowed at module scope",
     );
+  });
+
+  it("throws when an exported function assigns an export after its module loaded", async () => {
+    // Stored source may still export a `let`: recompiling stored bytes only
+    // warns about one. Left `undefined` when the module loads, such an export
+    // would take one later write, and every caller after the first would read
+    // the first caller's value.
+
+    const source = [
+      "export let first: string | undefined;",
+      "export function remember(value: string): string {",
+      "  if (first === undefined) first = value;",
+      "  return first;",
+      "}",
+      "export default remember;",
+    ].join("\n");
+    const { modules, entryIdentity } = await engine
+      .compileResolvedToRecordGraph(
+        [{ name: "/main.ts", contents: source }],
+        "/main.ts",
+      );
+    const { main } = await engine.evaluateCachedModules(
+      modules.map((module) => ({
+        identity: module.identity,
+        filename: module.filename,
+        code: module.js,
+        imports: module.imports,
+      })),
+      entryIdentity,
+    );
+    const remember = main?.remember as (value: string) => string;
+
+    expect(() => remember("alice")).toThrow(/after the module/);
+    expect(() => remember("bob")).toThrow(/after the module/);
   });
 
   it("rejects top-level IIFEs that try to hide mutable state", async () => {

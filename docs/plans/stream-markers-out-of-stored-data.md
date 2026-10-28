@@ -53,21 +53,19 @@ fakes and stored-document fixtures, 48 test files in all.
 
 ### The load-bearing reader
 
-`#resolveJavaScriptStreamLink` (`packages/runner/src/runner.ts:9394`) follows
-the `$event` input through write redirects and reads the terminal value.
-Anything but the sentinel becomes a "Handler used as lift" failure
-(`runner.ts:10492`, `:10902`, `describeHandlerStreamFailure` at `:11806`). That
-failure class is the trigger for the cold-start repairs, whose causes are
-structural (a setup marker naming another version, a manifest missing an
-internal cell) and which therefore outlive the sentinel; only the keying goes:
-
-- `isMissingStreamMarkerFailure` (`runner.ts:11862`) and the cold-start
-  nested-piece setup repair keyed on it (`runner.ts:4942`).
-- The hot-swap pre-setup pass, whose comment cites the same failure
-  (`runner.ts:4470`), and the wave-withdrawal note that names it as the
-  failure class a withdrawn setup produces (`runner.ts:4558`).
-- The pieces-controller cold-start repair comments
-  (`packages/piece/src/ops/pieces-controller.ts:2168`, `:2402`).
+`#handlerStreamLink` (`packages/runner/src/runner.ts`) follows the `$event`
+input through write redirects, and a lift binding `$event` is refused by name.
+The cold-start repairs do not key on that reader. A start repairs a piece when
+the setup stored on it disagrees with the build the runtime loads
+(`Runner.#startOwes`): a manifest missing one of the build's internal cells or
+naming one the build lacks, or a stamped record describing another build. Where
+the record says a cell holding state moved, the start refuses the piece instead,
+leaving the stored setup as it is. Where no record says which cells moved and the
+build has a cell holding state, the start runs the piece over the stored setup,
+which it leaves as it is. The controller hands a stopped root whose marker names
+another version to the same repair. Nothing about a stream's stored value enters
+those triggers, so a stream's document can carry nothing but its `result`
+back-link.
 
 ### Secondary readers
 
@@ -147,10 +145,11 @@ that rides as a reference is read the same way.
 
 A builtin that re-serializes a branch at run time is a separate writer.
 `getAsLink({ base })` carries a schema only when asked
-(`packages/runner/src/link-utils.ts:391`), so `ifElse`, `when` and `unless`
-(`builtins/if-else.ts:77`, `when.ts:48`, `unless.ts:48`) must each ask for it
-when the selected branch declares a stream, or the link they store names the
-stream's document with nothing on it that says so.
+(`packages/runner/src/link-utils.ts:391`), so the action `ifElse`, `when` and
+`unless` share (`builtins/forward-reference.ts`) asks for it, or the link they
+store names the stream's document with nothing on it that says so. It asks
+for it unconditionally: the schema the selected branch resolved to is what
+says what the position is, a stream or a defaulted value alike.
 
 This bends one convention slightly: `asCell` normally describes the position
 that holds a handle, and the handle's own schema is the stripped one. Putting
@@ -274,11 +273,13 @@ than what the list first said, the item says what it does now and why.
       which stage 3 adds. `describeHandlerStreamFailure`,
       `isMissingStreamMarkerFailure` and the `runner.ts:10492` throw are gone,
       and a lift binding `$event` is refused by name. The cold-start repairs
-      stay, on structural triggers rather than the marker: a nested piece
-      repairs when its setup marker names another version and its manifest
-      lacks one of the pattern's internal cells, and the controller refuses a
-      stopped root whose marker names another version and hands it to the
-      existing repair (`Runner.isRunning()` keeps a running root out of it).
+      stay, on structural triggers rather than the marker: a start repairs a
+      piece whose stored setup disagrees with the build it loads (a manifest
+      missing one of the build's internal cells or naming one the build
+      lacks, or a stamped record describing another build), and the controller
+      refuses a stopped root whose marker names another version and hands it
+      to the existing repair (`Runner.isRunning()` keeps a running root out
+      of it).
       Without the repair a nested piece comes up with no result aliases, so
       `nested-piece-setup-repair.test.ts` stays, rewritten for the structural
       trigger.
@@ -296,8 +297,8 @@ than what the list first said, the item says what it does now and why.
       around. Under this design it works only because the stored alias link
       carries the stamp.
 - [x] `when` and `unless` carry the stamp on the link they write when the
-      selected branch declares a stream, as `ifElse` does (each asks for
-      `includeSchema` off `declaresStream(resolvedRef.schema)`). One test per
+      selected branch declares a stream, as `ifElse` does (the action the
+      three share asks for `includeSchema` unconditionally). One test per
       builtin, over a sub-pattern's stream and the pattern's own
       (`stream-declaration.test.ts`), pins it by what the stamp is for: with
       nothing stored at the position, the selected field reads as a stream

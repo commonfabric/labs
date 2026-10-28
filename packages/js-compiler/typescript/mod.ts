@@ -5,6 +5,8 @@ export {
   type TypeScriptCompilerOptions,
 } from "./compiler.ts";
 export {
+  type AuthoredSource,
+  type AuthoredSourceLookup,
   CompilationError,
   type CompilationErrorType,
   CompilerError,

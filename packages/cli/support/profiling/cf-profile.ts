@@ -1,4 +1,5 @@
 import { dirname, fromFileUrl, join, resolve } from "@std/path";
+import { CF_PERMISSION_FLAGS } from "../../lib/cf-permissions.ts";
 import { CAPTURE_STOP_SIGNAL } from "./capture-deno-inspector-profile-lib.ts";
 import {
   createProfileOutputRelay,
@@ -59,12 +60,7 @@ const cliCommand = new Deno.Command(Deno.execPath(), {
   args: [
     "run",
     inspectWaitFlag("127.0.0.1", inspectPort),
-    "--allow-net",
-    "--allow-ffi",
-    "--allow-read",
-    "--allow-write",
-    "--allow-env",
-    "--allow-run",
+    ...CF_PERMISSION_FLAGS,
     cliPath,
     ...cliArgs,
   ],

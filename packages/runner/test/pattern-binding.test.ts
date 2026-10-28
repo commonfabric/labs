@@ -5,6 +5,8 @@ import {
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
+import { deepFreeze, isDeepFrozen } from "@commonfabric/data-model";
+import { getContainersHashedForTestingOnly } from "@commonfabric/data-model/for-testing-only";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import { FabricEpochNsec } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
@@ -21,14 +23,15 @@ import {
   withLinkCfcLabelView,
 } from "../src/cfc/link-label-view.ts";
 import { createCell, isCell } from "../src/cell.ts";
+import { ContextualFlowControl } from "../src/cfc.ts";
 import {
-  areLinksSame,
   areNormalizedLinksSame,
   createSigilLinkFromParsedLink,
   getDerivedInternalCellLink,
   getMetaCell,
   parseLink,
 } from "../src/link-utils.ts";
+import { areLinksSame } from "../src/link-equality.ts";
 import { externalRefTo, resolvedSchema } from "./schema-ref-helpers.ts";
 import {
   causalFormOfBinding,
@@ -48,6 +51,7 @@ import type {
   JSONSchema,
   Pattern,
 } from "../src/builder/types.ts";
+import { isPattern } from "../src/builder/types.ts";
 import type { AnyCell } from "../src/cell.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
@@ -668,6 +672,65 @@ describe("pattern-binding", () => {
       });
     });
 
+    it("hashes nothing to fold a declared scope into an argument binding again", () => {
+      // The fold builds the binding's schema with the slot's declared scope
+      // on it, and a schema built per binding is hashed whole per binding.
+      const authored = deepFreeze(
+        {
+          type: "object",
+          properties: {
+            profile: {
+              type: "object",
+              properties: { name: { type: "string" } },
+              asCell: [{ kind: "cell", scope: "user" }],
+            },
+          },
+        } as const satisfies JSONSchema,
+      );
+      const binding = {
+        profile: { $alias: { cell: "argument", path: ["profile"] } },
+      };
+      const resultCell = runtime.getCell(
+        space,
+        "folded scope hashed once result cell",
+        undefined,
+        tx,
+      );
+      const argumentLink = runtime.getCell(
+        space,
+        "folded scope hashed once argument cell",
+        {
+          type: "object",
+          properties: {
+            profile: {
+              type: "object",
+              properties: { name: { type: "string" } },
+            },
+          },
+        },
+        tx,
+      ).getAsNormalizedFullLink();
+      const bind = () =>
+        unwrapOneLevelAndBindToDoc(binding, argumentLink, resultCell, {
+          sourceSchemas: { argument: authored },
+        }) as { profile: unknown };
+
+      const first = parseLink(bind().profile, resultCell)!;
+      expect(first.scope).toBe("space");
+      expect(resolvedSchema(first.schema)).toEqual({
+        type: "object",
+        properties: { name: { type: "string" } },
+        scope: "user",
+      });
+      const hashedBefore = getContainersHashedForTestingOnly();
+      for (let node = 0; node < 10; node++) {
+        expect(parseLink(bind().profile, resultCell)!.schema).toBe(
+          first.schema,
+        );
+      }
+      expect(getContainersHashedForTestingOnly()).toBe(hashedBefore);
+    });
+
     it("binds aliases from a caller-owned circular schema", () => {
       const circularSchema: JSONSchema & {
         properties: Record<string, JSONSchema>;
@@ -920,6 +983,72 @@ describe("pattern-binding", () => {
       expect(() => bind(err)).toThrow("FabricError");
       expect(() => bind([err])).toThrow("FabricError");
       expect(() => bind({ err, aliased: alias() })).toThrow("FabricError");
+    });
+
+    it("returns a nested pattern bound over the deep-frozen argument schema its graph holds", () => {
+      // The schema a nested pattern's nodes are bound under is the deep-frozen
+      // one the graph holds, which is what lets `schemaAtPath()` keep the
+      // narrowings a bind makes of it.
+      const argumentSchema = () =>
+        ({
+          type: "object",
+          properties: {
+            item: { $ref: "#/$defs/Item" },
+            count: { type: "number" },
+          },
+          $defs: {
+            Item: { type: "object", properties: { title: { type: "string" } } },
+          },
+        }) as JSONSchema;
+      const resultSchema = () =>
+        ({
+          type: "object",
+          properties: { doubled: { type: "number" } },
+        }) as JSONSchema;
+      const frame = pushFrame({
+        runtime,
+        tx,
+        space,
+        cause: { test: "nested pattern bound over its built schema" },
+      });
+      try {
+        const { pattern, lift } = createTrustedBuilder(runtime).commonfabric;
+        const double = lift<number>((x) => x * 2);
+        const Inner = pattern<{ count: number }, { doubled: number }>(
+          ({ count }) => ({ doubled: double(count) }),
+          argumentSchema(),
+          resultSchema(),
+        );
+        const Outer = pattern<{ count: number }, { doubled: number }>(
+          ({ count }) => ({ doubled: Inner({ count }).doubled }),
+          argumentSchema(),
+          resultSchema(),
+        );
+        const nested = Outer.nodes
+          .map((node) => node.module.implementation)
+          .find((implementation) => isPattern(implementation)) as Pattern;
+
+        const child = bind(nested);
+        expect(child).not.toBe(nested);
+        expect(child.argumentSchema).toBe(nested.argumentSchema);
+        expect(child.argumentSchema).toEqual(Inner.argumentSchema);
+        expect(isDeepFrozen(child.argumentSchema)).toBe(true);
+        const narrowed = ContextualFlowControl.schemaAtPath(
+          child.argumentSchema,
+          ["item"],
+        );
+        expect(narrowed).toEqual({
+          $ref: "#/$defs/Item",
+          $defs: {
+            Item: { type: "object", properties: { title: { type: "string" } } },
+          },
+        });
+        expect(
+          ContextualFlowControl.schemaAtPath(child.argumentSchema, ["item"]),
+        ).toBe(narrowed);
+      } finally {
+        popFrame(frame);
+      }
     });
 
     it("hands an Array subclass's species the same length `map()` would", () => {

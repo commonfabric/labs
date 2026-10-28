@@ -51,6 +51,16 @@ export interface NodeTypeLinks {
   patternResultAnchor?: ts.Node;
 
   /**
+   * Whether a `toSchema` call SchemaInjection created describes a document
+   * it creates: an authored pattern's argument, its result where the author
+   * wrote the result type, or a cell a constructor or a factory creates. SchemaGeneration generates such a schema as one that
+   * defines a document (`SchemaGenerationOptions.definesDocument`), in which a
+   * writer it cannot read is an error. Like `schemaInjected`, a presence flag
+   * read with no `getOriginalNode` fallback: it tags the synthetic call.
+   */
+  definesDocument?: true;
+
+  /**
    * For a type node printed from a type, that type. The node stands for the
    * type and says nothing more, and neither does the `unknown` put in place of
    * a type the checker will not print, so schema generation reads the type
@@ -333,6 +343,19 @@ export class CrossStageState {
     // on the synthetic call SchemaInjection built, and that node reaches
     // SchemaGeneration as the same object.
     return this.nodeLinks.get(schemaCall)?.patternResultAnchor;
+  }
+
+  //
+  // definesDocument (nodeLinks-backed)
+  //
+
+  markDocumentSchemaCall(schemaCall: ts.Node): void {
+    this.#linksFor(schemaCall).definesDocument = true;
+  }
+
+  isDocumentSchemaCall(schemaCall: ts.Node): boolean {
+    // Plain identity lookup, as for the pattern result anchor above.
+    return this.nodeLinks.get(schemaCall)?.definesDocument === true;
   }
 
   //

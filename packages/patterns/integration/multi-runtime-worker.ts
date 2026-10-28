@@ -16,7 +16,10 @@ import {
   agentQueueIndexCell,
   AgentRunRecordSchema,
 } from "@commonfabric/runner/agent-run";
+import { WorkerReconciler } from "@commonfabric/html/worker";
 import { patternCoverageCollector } from "@commonfabric/integration/pattern-coverage";
+import { rowKeyOf } from "@commonfabric/integration/row-key";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import {
   debugVDOMSchema,
   rendererVDOMSchema,
@@ -33,24 +36,40 @@ import {
   realmFromFabricValue,
 } from "@commonfabric/data-model/codecs";
 import type { FabricKeyPair } from "@commonfabric/data-model/fabric-primitives";
-import type { Cell, MemorySpace } from "@commonfabric/runner";
+import type { JSONSchema } from "@commonfabric/api";
+import type {
+  Cell,
+  MemorySpace,
+  NormalizedFullLink,
+} from "@commonfabric/runner";
 import {
   cellRuntime,
   convertCellsToLinks,
+  createSpaceRootIfAbsent,
   isCell,
   markUiInputBlindWriteTx,
   parseLink,
   type RuntimeTelemetry,
   type RuntimeTelemetryEvent,
+  sendEvent,
   setBlindStructuralTarget,
   unmarkUiInputBlindWriteTx,
 } from "@commonfabric/runner";
 import {
   cfcLabelViewForCell,
   type CfcWriteFloorMode,
+  hostGestureProvenance,
   markRendererTrustedEvent,
+  reviewedActionProvenance,
 } from "@commonfabric/runner/cfc";
-import { Identity } from "@commonfabric/identity";
+import { type DID, Identity } from "@commonfabric/identity";
+import {
+  ensurePrivateInboxOf,
+  inboxPieceLinkSchema,
+  requestPrivateInboxOf,
+  type ShareIntake,
+  startShareIntakeOf,
+} from "@commonfabric/piece/ops";
 import {
   commitSnapshotShare,
   prepareSnapshotShare,
@@ -68,8 +87,13 @@ import {
   type WorkerRequest,
   type WorkerResponse,
 } from "./multi-runtime-ipc.ts";
+import { writeOwnProfile } from "./own-profile-fixture.ts";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
-import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
+import {
+  clearTimingMeasures,
+  getLoggerCountsBreakdown,
+  TIMING_MEASURE_PREFIX,
+} from "@commonfabric/utils/logger";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { holdWorkerLifetimeLock } from "@commonfabric/utils/worker-lifetime";
 import { authenticatedOwnerFromLabel } from "../../ui/src/v2/components/cf-owner-view/owner-predicate.ts";
@@ -82,12 +106,34 @@ let boundedReads = false;
 let watchPaths: readonly (readonly (string | number)[])[] = [[]];
 
 /**
+ * Whether this session holds a rendered view of the piece, as a mounted
+ * browser does: the worker reconciler's recursive demand over `$UI`, its
+ * operations discarded. Without it a session derives only what its watched
+ * paths read, and the view's own derivations never run on this client.
+ */
+let renderView = false;
+
+let viewMountCancel: (() => void) | undefined;
+let viewMounts = 0;
+
+/**
+ * What the rendered view's reconciler reported since `renderErrors` last
+ * read them: a view that fails to mount or to reconcile is otherwise a view
+ * that silently derives nothing, and a measurement over it measures the
+ * data alone.
+ */
+const viewRenderErrors: string[] = [];
+
+/**
  * The result cells of the pieces other than the attached one that a command
  * has addressed, keyed by {@link addressKey}. A piece enters on the first
  * command to reach it, once it has opened, so one that could not be opened is
  * opened afresh by the next command naming it.
  */
 const addressedResults = new Map<string, Cell<any>>();
+
+/** The share intakes `startShareIntake` started, which `dispose` stops. */
+const shareIntakes: ShareIntake[] = [];
 
 /**
  * Every commit this runtime had refused since the last `clearRejections`,
@@ -148,6 +194,20 @@ function addressKey(address: PieceAddress): string {
 }
 
 /**
+ * The value `path` reaches inside `value`, reading through every cell along
+ * it, so a field held as a link resolves to what it links to.
+ */
+function valueAt(value: unknown, path: readonly (string | number)[]): unknown {
+  let current = value;
+  for (const segment of path) {
+    if (isCell(current)) current = current.get();
+    current = (current as Record<string | number, unknown> | undefined)
+      ?.[segment];
+  }
+  return isCell(current) ? current.get() : current;
+}
+
+/**
  * The result cell of the piece at `address`, or of the attached piece when
  * `address` is absent, read through its pattern's result schema either way.
  * Opening a piece other than the attached one starts it in this runtime, as
@@ -168,6 +228,10 @@ async function resultAt(address: unknown): Promise<Cell<any>> {
   let opened = addressedResults.get(key);
   if (!opened) {
     try {
+      // An explicit open is a host event, as navigation into a refused space
+      // is in the shell. Reconsider its prior denial once; the server still
+      // decides admission, and a client-update refusal remains terminal.
+      await runtime.retrySpaceAccess(space as MemorySpace);
       opened = await controller().getPieceCell(
         runtime.getCellFromEntityId(space as MemorySpace, id),
         true,
@@ -201,6 +265,35 @@ async function attachPiece(next: PieceController): Promise<void> {
   });
   resultSinkCancel = () => {
     for (const cancel of cancels) cancel();
+  };
+  viewMountCancel?.();
+  viewMountCancel = renderView ? await mountView() : undefined;
+}
+
+/**
+ * Mounts the rendered view the way the browser worker does: under view-scoped
+ * replication the mount is first registered as a view interest on the piece's
+ * result, so the server selects the documents this session receives for it
+ * and the plan admits the actions it may run, and the reconciler's demand
+ * follows; otherwise the reconciler's demand is the whole of the view.
+ */
+async function mountView(): Promise<() => void> {
+  const { runtime } = controller();
+  const onError = (error: Error) => {
+    viewRenderErrors.push(error.message);
+  };
+  const cancelView = runtime.viewScopedReplicationRequested
+    ? await runtime.viewReplication.mount(
+      controller().getResult(currentPiece().getCell()),
+      `harness-view-${++viewMounts}`,
+      onError,
+    )
+    : undefined;
+  const cancelRender = new WorkerReconciler({ onOps: () => {}, onError })
+    .mount(result().key("$UI").asSchema(rendererVDOMSchema));
+  return () => {
+    cancelRender();
+    cancelView?.();
   };
 }
 
@@ -406,11 +499,7 @@ function componentBinding(
 function shareClick() {
   const event = {
     type: "click",
-    provenance: {
-      origin: "dom",
-      trusted: true,
-      ui: { pattern: "ShareSnapshot" },
-    },
+    provenance: hostGestureProvenance("ShareSnapshot"),
   };
   markRendererTrustedEvent(event);
   return event;
@@ -432,6 +521,8 @@ const handlers: Record<
       cfcWriteFloor,
       cfc,
       watchPaths: requestedWatchPaths,
+      renderView: requestedRenderView,
+      clientClass,
     },
   ) {
     const identity = await Identity.fromKeyPair(
@@ -443,6 +534,7 @@ const handlers: Record<
       (cfc as MultiRuntimeCfcOptions | undefined)?.cfcReadMaxConfidentiality !==
         undefined;
     if (Array.isArray(requestedWatchPaths)) watchPaths = requestedWatchPaths;
+    renderView = requestedRenderView === true;
     cc = await initializePiecesController({
       apiUrl: new URL(apiUrl as string),
       identity,
@@ -451,6 +543,7 @@ const handlers: Record<
       ...(cfcWriteFloor !== undefined
         ? { cfcWriteFloor: cfcWriteFloor as CfcWriteFloorMode }
         : {}),
+      ...(clientClass === "web" ? { clientClass } : {}),
     });
     if (recordRejections === true) {
       recordRejectionsInto(controller().runtime.telemetry);
@@ -459,6 +552,7 @@ const handlers: Record<
       const scheduler = controller().runtime.scheduler;
       scheduler.enableSettleStats();
       scheduler.setActionRunTraceEnabled(true);
+      scheduler.setTriggerTraceEnabled(true);
     }
     await maybeAttachOtelBridge(identity);
     return { did: identity.did() };
@@ -525,15 +619,7 @@ const handlers: Record<
       eventValue = {
         type: "click",
         ...(isObjectNotArray(event) ? event : {}),
-        provenance: {
-          origin: "dom",
-          trusted: true,
-          ui: {
-            pattern: trusted.surface,
-            eventIntegrity: [trusted.surface],
-            uiContractDataset: { uiAction: trusted.action },
-          },
-        },
+        provenance: reviewedActionProvenance("dom", trusted),
       };
       markRendererTrustedEvent(eventValue);
     }
@@ -856,6 +942,61 @@ const handlers: Record<
   },
 
   /**
+   * Resolve once the list the piece result holds at `path`, read as a map
+   * from each element's values at the `keys` paths to its value at the
+   * `valueKey` path, equals `expected`: the same keys and no others, each at
+   * its expected value in its string form. A path descends through a cell
+   * where an element holds one, so a key may name a field of the row's author.
+   * Read at this runtime's quiescence and woken by the cell's own changes.
+   * Visible rows can include speculation; this does not assert that the
+   * serving runtime has committed their consequences.
+   */
+  async waitForRows({ path, piece, keys, valueKey, expected }) {
+    const target = await resultAt(piece);
+    let cell = target;
+    for (const segment of (path ?? []) as (string | number)[]) {
+      cell = cell.key(segment as never);
+    }
+    const keyPaths = keys as (string | number)[][];
+    const valuePath = valueKey as (string | number)[];
+    const wanted = expected as Record<string, string>;
+    const wantedKeys = Object.keys(wanted);
+    await waitForCellValue<unknown>(controller().runtime, cell, (value) => {
+      if (!Array.isArray(value) || value.length !== wantedKeys.length) {
+        return false;
+      }
+      const found = new Map<string, string>();
+      for (const element of value) {
+        found.set(
+          rowKeyOf(keyPaths.map((keyPath) => valueAt(element, keyPath))),
+          String(valueAt(element, valuePath)),
+        );
+      }
+      return found.size === wantedKeys.length &&
+        wantedKeys.every((key) => found.get(key) === wanted[key]);
+    }, { stuckLabel: `waitForRows at ${JSON.stringify(path)}` });
+    return {};
+  },
+
+  /**
+   * Read the value of the cell reached from the piece result by `path`,
+   * through `schema` alone. The walk starts from the result's raw link, with
+   * no result schema, and nothing above `path` is pulled, so neither shapes
+   * what `schema` reads; links are converted as `read` converts them.
+   */
+  async readAs({ path, schema, piece }) {
+    const { schema: _resultSchema, ...link } = (await resultAt(piece))
+      .getAsNormalizedFullLink();
+    let cell = controller().runtime.getCellFromLink(link);
+    for (const segment of path as (string | number)[]) {
+      cell = cell.key(segment as never);
+    }
+    cell = cell.asSchema(schema as JSONSchema);
+    await cell.pull();
+    return convertCellsToLinks(cell.get(), { doNotConvertCellResults: true });
+  },
+
+  /**
    * Read the RAW stored value of the cell reached from the piece result by
    * `path` (links resolved to the target cell, NO result-schema shaping) —
    * for state the declared schema does not carry, e.g. a query result's
@@ -952,6 +1093,44 @@ const handlers: Record<
   },
 
   /**
+   * Mint a profile of this session's own, holding `name`, in a space created
+   * for it that admits this session's identity alone, and answer with the
+   * link that reaches it. Its label attests this identity with
+   * `represents-principal`, as a Fabric profile's does, so a session the
+   * space refuses can't read whom it attests.
+   */
+  async createOwnProfile({ name }) {
+    if (typeof name !== "string") {
+      throw new TypeError("createOwnProfile takes a string name.");
+    }
+    const runtime = controller().runtime;
+    const profile = await writeOwnProfile(
+      runtime,
+      await runtime.createSpace(),
+      "own profile",
+      name,
+    );
+    await idle();
+    return profile.getAsLink();
+  },
+
+  /**
+   * Make this runtime reconsider a space it was refused, as the shell's Retry
+   * does (`Runtime.retrySpaceAccess()`). A permanent refusal is retained
+   * until an ACL notice, the server's `session/admissible` hint, or an
+   * explicit retry; with one connection per space the refused open closed
+   * the connection the hint would ride, so only the retry reaches it.
+   */
+  async retrySpaceAccess({ space }) {
+    if (typeof space !== "string") {
+      throw new TypeError("retrySpaceAccess takes a space DID.");
+    }
+    await controller().runtime.retrySpaceAccess(space as MemorySpace);
+    await idle();
+    return {};
+  },
+
+  /**
    * Inspect the normalized link (id, space, scope) of a cell reached from
    * the piece result by `path`, resolving links along the way. Lets tests
    * assert the storage addressing (e.g. scope) of pattern state.
@@ -999,6 +1178,265 @@ const handlers: Record<
     };
   },
 
+  /**
+   * Has the host give the Home stand-in reached from the piece result by
+   * `path` its private inbox, as `PiecesController.ensurePrivateInbox()` gives
+   * the identity's Home its own, and answers what the host found, naming an
+   * adopted or refused inbox, and the profile that decided it, by its link.
+   */
+  async ensurePrivateInbox({ path, piece }) {
+    const target = await resultAt(piece);
+    await target.pull();
+    let cell = target;
+    for (const segment of (path ?? []) as (string | number)[]) {
+      cell = cell.key(segment as never);
+    }
+    await cell.sync();
+    const runtime = controller().runtime;
+    const found = await ensurePrivateInboxOf(
+      runtime,
+      cell.resolveAsCell(),
+      runtime.userIdentityDID,
+    );
+    await idle();
+    const inbox = "inbox" in found
+      ? found.inbox.getAsNormalizedFullLink()
+      : undefined;
+    const profile = "profile" in found
+      ? found.profile?.getAsNormalizedFullLink()
+      : undefined;
+    return {
+      outcome: found.outcome,
+      ...("reason" in found ? { reason: found.reason } : {}),
+      ...(inbox === undefined
+        ? {}
+        : { inbox: { id: inbox.id, space: inbox.space } }),
+      ...(profile === undefined
+        ? {}
+        : { profile: { id: profile.id, space: profile.space } }),
+    };
+  },
+
+  /**
+   * Requests, as a loom daemon does, the private inbox of the Home stand-in
+   * reached from the piece result by `path`, naming its profile reached from
+   * that result by `profile`, and answers with Home's answer, naming the inbox
+   * by its link, and the link that profile's pointer holds once Home has
+   * answered, read after a sync.
+   */
+  async requestPrivateInbox({ path, profile, piece }) {
+    const target = await resultAt(piece);
+    await target.pull();
+    const cellAt = async (segments: unknown) => {
+      let cell = target;
+      for (const segment of (segments ?? []) as (string | number)[]) {
+        cell = cell.key(segment as never);
+      }
+      await cell.sync();
+      return cell.resolveAsCell();
+    };
+    const home = await cellAt(path);
+    const named = await cellAt(profile);
+    const answer = await requestPrivateInboxOf(
+      controller().runtime,
+      home,
+      named,
+    );
+    const pointer = await named.key("inbox").asSchema({
+      type: "object",
+      properties: { piece: inboxPieceLinkSchema },
+    }).pull();
+    const addressOf = (cell: Cell<unknown>) => {
+      const { id, space } = cell.getAsNormalizedFullLink();
+      return { id, space };
+    };
+    return {
+      status: answer.status,
+      ...("inbox" in answer ? { inbox: addressOf(answer.inbox) } : {}),
+      ...(isCell(pointer?.piece) ? { pointer: addressOf(pointer.piece) } : {}),
+    };
+  },
+
+  /**
+   * Sends the request `requestPrivateInbox` does, and answers with the
+   * receipt's address and the document and path it holds a link to, as it
+   * stands once the send has completed, or nothing when it holds no link.
+   */
+  async requestReceipt({ path, profile, piece }) {
+    const target = await resultAt(piece);
+    await target.pull();
+    const cellAt = async (segments: unknown) => {
+      let cell = target;
+      for (const segment of (segments ?? []) as (string | number)[]) {
+        cell = cell.key(segment as never);
+      }
+      await cell.sync();
+      return cell.resolveAsCell();
+    };
+    const home = await cellAt(path);
+    const named = await cellAt(profile);
+    const link = await new Promise<NormalizedFullLink>((resolve, reject) =>
+      sendEvent(home.key("requestPrivateInbox"), { from: named }, (tx) => {
+        const receipt = tx.handlingReceiptLink;
+        if (tx.status().status === "error" || receipt === undefined) {
+          reject(new Error("The request's handling wrote no receipt"));
+        } else resolve(receipt);
+      })
+    );
+    const receipt = controller().runtime.getCellFromLink(link);
+    await receipt.sync();
+    const linked = parseLink(receipt.getRaw());
+    return linked === undefined ? undefined : {
+      receipt: { id: link.id, space: link.space },
+      id: linked.id,
+      path: [...linked.path],
+    };
+  },
+
+  /**
+   * Reads the status the receipt at `receipt` holds, following the link it
+   * holds, as a client of `requestPrivateInbox` reads it.
+   */
+  async readReceiptStatus({ receipt }) {
+    const { id, space } = receipt as { id: string; space: MemorySpace };
+    const cell = controller().runtime.getCellFromLink({
+      id: id as `${string}:${string}`,
+      space,
+      path: [],
+      type: "application/json",
+    } as never, {
+      type: "object",
+      properties: { status: { type: "string" } },
+    });
+    const answer = await cell.pull() as { status?: string } | undefined;
+    return answer?.status;
+  },
+
+  /**
+   * Starts the host's share intake over the Home stand-in reached from the
+   * piece result by `path`, as `PiecesController.startShareIntake()` starts
+   * the identity's own Home's, following it until the session is disposed.
+   * Answers whether it started.
+   */
+  async startShareIntake({ path, piece }) {
+    const target = await resultAt(piece);
+    await target.pull();
+    let cell = target;
+    for (const segment of (path ?? []) as (string | number)[]) {
+      cell = cell.key(segment as never);
+    }
+    await cell.sync();
+    const runtime = controller().runtime;
+    const intake = startShareIntakeOf(
+      runtime,
+      cell.resolveAsCell(),
+      runtime.userIdentityDID,
+    );
+    if (intake !== undefined) shareIntakes.push(intake);
+    return { started: intake !== undefined };
+  },
+
+  /**
+   * Answers what the share intakes `startShareIntake` started last decided
+   * about each row naming `from` and `id`, once each has taken up the changes
+   * it was told of.
+   */
+  async shareIntakeDecisions({ from, id }) {
+    const decisions: string[] = [];
+    for (const intake of shareIntakes) {
+      await intake.idle();
+      for (
+        const decision of intake.accessForTestingOnly.decisionsFor(
+          from as string,
+          id as string,
+        )
+      ) decisions.push(decision);
+    }
+    return { decisions };
+  },
+
+  /**
+   * Links the root of this session's home space to the result of the piece at
+   * `piece`, or of the session's own piece when absent, so that the piece
+   * stands in for the identity's Home: a home target such as `#chatManager`
+   * resolves to its fields.
+   */
+  async linkHomeRoot({ piece }) {
+    const runtime = controller().runtime;
+    const target = await resultAt(piece);
+    const { error } = await runtime.editWithRetry((tx) => {
+      runtime.getHomeSpaceCell(tx).withTx(tx).key("defaultPattern").set(
+        target as never,
+      );
+    });
+    if (error) {
+      throw new Error(`linkHomeRoot failed: ${error.message}`);
+    }
+    await idle();
+    return {};
+  },
+
+  /**
+   * Links the root of `space` to a fresh document in it, in place of the root
+   * it had, as any member with `WRITE` there can.
+   */
+  async repointSpaceRoot({ space }) {
+    const runtime = controller().runtime;
+    const elsewhere = runtime.getCell<FabricValue>(
+      space as MemorySpace,
+      crypto.randomUUID(),
+    );
+    const { error } = await runtime.editWithRetry((tx) => {
+      elsewhere.withTx(tx).set({ elsewhere: true });
+      runtime.getSpaceCell(space as MemorySpace).withTx(tx).key(
+        "defaultPattern",
+      ).set(elsewhere as never);
+    });
+    if (error) {
+      throw new Error(`repointSpaceRoot failed: ${error.message}`);
+    }
+    await idle();
+    return {};
+  },
+
+  /**
+   * Creates a space the way a loom daemon's sidecar creates a social Loom's:
+   * its genesis commit reserves the Loom root at the Loom's publication cause
+   * and declares `spaceKind`, `loom` when absent and no kind for `null`, and
+   * grants `recipient` `WRITE`, as the daemon's offer does. Then provisions
+   * the root, titled `title`, from `system:loom/main.tsx` at the host this
+   * runtime reads. Answers the space and the address of its root.
+   */
+  async createLoomSpace({ recipient, spaceKind, title }) {
+    const runtime = controller().runtime;
+    const root = {
+      source: "system:loom/main.tsx",
+      sourceRoots: [
+        "system:loom/main.test.tsx",
+        "system:loom/presentation-refusals.test.tsx",
+        "system:loom/multi-user.test.tsx",
+        "system:loom/url-view.test.tsx",
+      ],
+      cause: JSON.stringify({
+        purpose: "loom-publication-root",
+        publication: crypto.randomUUID(),
+      }),
+      argument: { title: title as string },
+    };
+    const space = await runtime.createSpace({
+      grants: { [recipient as DID]: "WRITE" },
+      root,
+      ...(spaceKind === null
+        ? {}
+        : { spaceKind: (spaceKind ?? "loom") as string }),
+    });
+    const { error } = await createSpaceRootIfAbsent(runtime, space, root);
+    if (error) throw new Error(`createLoomSpace failed: ${error.message}`);
+    await idle();
+    const { id } = runtime.getCell(space, root.cause).getAsNormalizedFullLink();
+    return { space, root: { space, id } };
+  },
+
   /** Reads an explicit held address with the same stored-label gate as any Cell. */
   async readAddress({ link }) {
     const cell = controller().runtime.getCellFromLink(link as never);
@@ -1006,6 +1444,34 @@ const handlers: Record<
     return convertCellsToLinks(
       cell.asSchema({ ifc: { confidentiality: [] } }).get(),
     );
+  },
+
+  /**
+   * The rendered view's reconciliation errors since the last call, as
+   * messages, and nothing when the view mounted and reconciled cleanly or
+   * the session holds no view. Drained on each call.
+   */
+  renderErrors() {
+    return Promise.resolve(viewRenderErrors.splice(0) as FabricValue);
+  },
+
+  /**
+   * The timing measures this worker's loggers emitted since the last call,
+   * as the perf-investigation scripts read them, and nothing when emission
+   * is off. Drained on each call, so a capture is the measures of one window.
+   */
+  timingMeasures() {
+    const entries: { name: string; startTime: number; duration: number }[] = [];
+    for (const entry of performance.getEntriesByType("measure")) {
+      if (!entry.name.startsWith(TIMING_MEASURE_PREFIX)) continue;
+      entries.push({
+        name: entry.name,
+        startTime: entry.startTime,
+        duration: entry.duration,
+      });
+    }
+    clearTimingMeasures();
+    return Promise.resolve(entries as unknown as FabricValue);
   },
 
   async idle() {
@@ -1032,45 +1498,6 @@ const handlers: Record<
     return {};
   },
 
-  // Wait until this runtime has NO outstanding event intents: every event it
-  // fired has reached a terminal consequence (consequenced, errored, dropped,
-  // or refused) AND that consequence has arrived back here — speculation.md
-  // §4 step 2's retirement, whose outstanding set the overlay maintains
-  // (`Runtime.speculationOverlay.pendingIntentCount`). Under the served (ON)
-  // topology this is the client-observable "the server has drained my sends"
-  // signal the harness settle uses in place of the in-process server's
-  // `idle()` (see MultiRuntimeHarness.settle). Resolves `{ pending: 0 }` on
-  // quiescence, or with the still-outstanding count once `timeoutMs`
-  // elapses — the caller's settle round proceeds and the test's own assert
-  // speaks, so a wedged consequence degrades loudly instead of hanging the
-  // harness. The OFF arm has no overlay and resolves immediately.
-  async eventQuiescence({ timeoutMs }) {
-    const overlay = controller().runtime.speculationOverlay;
-    if (overlay === undefined || overlay.pendingIntentCount === 0) {
-      return { pending: 0 };
-    }
-    const budget = typeof timeoutMs === "number" ? timeoutMs : 10_000;
-    // Event-driven with a budget: the overlay resolves the quiescence
-    // waiter from the same untrack step that retires the last intent
-    // (consequence pushes arrive on the WebSocket; nothing here needs
-    // nudging), raced against the budget timer. A waiter whose race the
-    // timer wins stays parked until the set empties or the overlay
-    // closes — a spent resolver, not a leak (growth is bounded by the
-    // caller's settle rounds and every parked waiter flushes together).
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const budgetElapsed = new Promise<"budget">((resolve) => {
-      timer = setTimeout(() => resolve("budget"), budget);
-    });
-    const raced = await Promise.race([
-      overlay.waitForIntentQuiescence().then(() => "quiescent" as const),
-      budgetElapsed,
-    ]);
-    clearTimeout(timer);
-    return {
-      pending: raced === "quiescent" ? 0 : overlay.pendingIntentCount,
-    };
-  },
-
   // Wait — with no budget of its own — until every event this runtime
   // fired has reached a terminal consequence (consequenced, errored,
   // dropped, or refused) that has ARRIVED back here: the overlay's
@@ -1083,9 +1510,8 @@ const handlers: Record<
   // reading handler then no-ops SILENTLY (the 2026-08-22 ON-lane
   // group-chat flake). Once the first event's consequence has arrived
   // back, its commit is in the space's history, so any later-fired
-  // event is served against a view that includes it. Backstopped by
-  // the harness RPC timeout, which names this session and command;
-  // instant on the OFF arm (no overlay) and when nothing is
+  // event is served against a view that includes it. Nothing bounds
+  // the wait; instant on the OFF arm (no overlay) and when nothing is
   // outstanding. First-order only, like the count it drains — a
   // server-side cascade child is no session's intent.
   async awaitEventConsequences() {
@@ -1110,6 +1536,7 @@ const handlers: Record<
       graph: scheduler.getGraphSnapshot(),
       settleStatsHistory: scheduler.getSettleStatsHistory(),
       actionRunTrace: scheduler.getActionRunTrace(),
+      triggerTrace: scheduler.getTriggerTrace(),
     } satisfies RuntimeDiagnosticsSnapshot;
   },
 
@@ -1149,6 +1576,9 @@ const handlers: Record<
   },
 
   async dispose() {
+    for (const intake of shareIntakes.splice(0)) intake.stop();
+    viewMountCancel?.();
+    viewMountCancel = undefined;
     resultSinkCancel?.();
     resultSinkCancel = undefined;
     piece = undefined;

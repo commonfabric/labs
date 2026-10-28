@@ -280,7 +280,7 @@ describe("step-summary", () => {
     async function cli(args: string[], text: string): Promise<string> {
       const command = new Deno.Command(Deno.execPath(), {
         args: ["run", "tasks/step-summary.ts", ...args],
-        cwd: new URL("..", import.meta.url).pathname,
+        cwd: new URL("..", import.meta.url),
         stdin: "piped",
         stdout: "piped",
         stderr: "piped",

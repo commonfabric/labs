@@ -35,11 +35,9 @@ runs Toolshed on `localhost:8000`; use `dev-local` for the shell, not
 `dev`). Then:
 
 ```bash
-# Create a unique dev key. Redirect from `deno run -A packages/cli/mod.ts`,
-# never `deno task cf` — the task wrapper prints ANSI preamble that corrupts
-# the key file. (Chapter 10 covers the shared `implicit trust` dev identity
-# and the narrow case where you'd derive it instead.)
-deno run -A packages/cli/mod.ts id new > cf.key
+# Create a unique dev key. (Chapter 10 covers the shared `implicit trust` dev
+# identity and the narrow case where you'd derive it instead.)
+deno task cf id new > cf.key
 
 export CF_IDENTITY=./cf.key
 export CF_API_URL=http://localhost:8000

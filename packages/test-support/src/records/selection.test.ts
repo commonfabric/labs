@@ -263,45 +263,57 @@ describe("selection", () => {
         .toEqual({ overhead: 3, correction: 1, unitOverhead: 0 });
     });
 
-    it("round-trips a suite's fit with its processes' setup measured", () => {
+    it("reads a suite's fit carrying a figure it does not know as its three figures", () => {
+      const object = JSON.parse(serializeManifest(sampleManifest()));
+      object.calibration.suites = {
+        unit: {
+          overhead: 3,
+          correction: 1,
+          unitOverhead: 0,
+          process: { setup: 8, overhead: 2, correction: 0.5, unitOverhead: 0 },
+        },
+      };
+      expect(parseManifest(JSON.stringify(object))?.calibration.suites.unit)
+        .toEqual({ overhead: 3, correction: 1, unitOverhead: 0 });
+    });
+
+    it("round-trips what each unit's hooks take", () => {
       const manifest = sampleManifest();
       manifest.calibration.suites = {
         unit: {
-          overhead: 30,
+          overhead: 3,
           correction: 1,
-          unitOverhead: 1,
-          process: { setup: 8, overhead: 2, correction: 0.5, unitOverhead: 0 },
+          unitOverhead: 2,
+          unitHooks: { "packages/bakery/oven.test.ts": 8.5 },
         },
       };
       expect(parseManifest(serializeManifest(manifest))).toEqual(manifest);
     });
 
-    it("reads a suite carrying no process fit as having none", () => {
-      // A fit made where no process marks when its units begin carries none.
-      const manifest = sampleManifest();
-      manifest.calibration.suites = {
-        unit: { overhead: 3, correction: 1, unitOverhead: 0 },
+    it("reads a unit's hooks whatever the unit is named", () => {
+      const object = JSON.parse(serializeManifest(sampleManifest()));
+      object.calibration.suites = {
+        unit: { overhead: 3, correction: 1, unitOverhead: 2, unitHooks: {} },
       };
-      const parsed = parseManifest(serializeManifest(manifest));
-      expect(parsed?.calibration.suites.unit).toEqual({
-        overhead: 3,
-        correction: 1,
-        unitOverhead: 0,
-      });
+      const text = JSON.stringify(object).replace(
+        '"unitHooks":{}',
+        '"unitHooks":{"__proto__":4,"constructor":5}',
+      );
+      const hooks = parseManifest(text)?.calibration.suites.unit?.unitHooks;
+      expect(Object.hasOwn(hooks ?? {}, "__proto__")).toBe(true);
+      expect(Object.entries(hooks ?? {})).toEqual([
+        ["__proto__", 4],
+        ["constructor", 5],
+      ]);
     });
 
-    it("refuses a process fit it cannot read", () => {
-      for (
-        const process of [
-          7,
-          { setup: -1, overhead: 0, correction: 1, unitOverhead: 0 },
-          { setup: 1, overhead: 0, correction: 0, unitOverhead: 0 },
-          { setup: 1, overhead: 0, correction: 1 },
-        ]
-      ) {
+    it("refuses a unit's hooks it cannot read as a duration", () => {
+      // The packer charges them each time a pass opens the unit, so one
+      // that will not read is a body this reader cannot read.
+      for (const unitHooks of [[], 7, { oven: "slow" }, { oven: -1 }]) {
         const object = JSON.parse(serializeManifest(sampleManifest()));
         object.calibration.suites = {
-          unit: { overhead: 0, correction: 1, unitOverhead: 0, process },
+          unit: { overhead: 3, correction: 1, unitOverhead: 2, unitHooks },
         };
         expect(parseManifest(JSON.stringify(object))).toBeUndefined();
       }
@@ -559,7 +571,7 @@ describe("selection", () => {
         }, "entry"),
       ],
       [
-        "a last catch that is not a day",
+        "a last new real test failure that is not a day",
         withField("inputs", {
           catches: 0,
           sources: 0,

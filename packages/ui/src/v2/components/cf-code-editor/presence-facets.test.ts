@@ -7,7 +7,6 @@ import {
   caretFacetOf,
   decodeCaretFacet,
   participantFromRecord,
-  presenceFailureCategory,
 } from "./presence-facets.ts";
 
 const caret = {
@@ -118,26 +117,6 @@ describe("presence-facets", () => {
           facets: { [CARET_FACET]: { focused: "yes" } },
         }),
       ).toBeNull();
-    });
-  });
-
-  describe("presenceFailureCategory()", () => {
-    it("maps a relay refusal, an unsupported server, and anything else", () => {
-      const refused = new Error("Presence name is empty");
-      refused.name = "PresenceError";
-      const unsupported = new Error("memory server does not support presence");
-      unsupported.name = "ProtocolError";
-      expect(presenceFailureCategory(refused)).toBe("protocol");
-      expect(presenceFailureCategory(unsupported)).toBe("configuration");
-      expect(
-        presenceFailureCategory(
-          new Error("runtime storage does not support presence"),
-        ),
-      ).toBe("configuration");
-      expect(presenceFailureCategory(new Error("memory session closed"))).toBe(
-        "connection",
-      );
-      expect(presenceFailureCategory("nope")).toBe("connection");
     });
   });
 });

@@ -699,6 +699,7 @@ describe("RuntimeClient", () => {
       const session = await createTestSession();
       await using rt = await createRuntimeClient(session);
       const root = await rt.getSpaceRootPattern(session.space);
+      assertExists(root);
       const before = await rt.getPieceSource(root.id(), session.space);
       assertExists(before.origin);
 

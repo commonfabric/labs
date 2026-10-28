@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { resolveConsoleConfig } from "../console/server.ts";
+import { resolveConsoleConfig } from "./support/on-linux.ts";
 import { resolveHarnessFabricSessionConfig } from "../src/fabric-session-options.ts";
 import {
   admitsFabricReference,

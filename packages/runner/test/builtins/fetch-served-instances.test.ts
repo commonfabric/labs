@@ -89,7 +89,7 @@ describe("fetch-served-instances", () => {
       });
       tx.tx.scopeKeyIdentity = identity;
       input.withTx(tx).set({ url: "https://example.test/scoped" });
-      (shared ?? construct())(tx);
+      (shared ?? construct()).action(tx);
       return tx.getCfcState().outbox.map((effect) => effect.idempotencyKey);
     });
   }
@@ -101,7 +101,7 @@ describe("fetch-served-instances", () => {
     });
     const parent = runtime.getCell(space, "idle-parent");
     const cancels: Array<() => void> = [];
-    const action = fetchText(
+    const { action } = fetchText(
       input,
       () => {},
       (cancel) => cancels.push(cancel),
@@ -141,7 +141,7 @@ describe("fetch-served-instances", () => {
     });
     const parent = runtime.getCell(space, "dedup-parent");
     const cancels: Array<() => void> = [];
-    const action = fetchText(
+    const { action } = fetchText(
       input,
       () => {},
       (cancel) => cancels.push(cancel),
@@ -191,7 +191,7 @@ describe("fetch-served-instances", () => {
         scope,
       });
       const parent = runtime.getCell(space, "representative-parent");
-      const action = fetchText(
+      const { action } = fetchText(
         input,
         () => {},
         () => {},
@@ -314,7 +314,7 @@ describe("fetch-served-instances", () => {
     };
     const publications: Array<{ scope: string | undefined; session?: string }> =
       [];
-    const action = fetchText(
+    const { action } = fetchText(
       input,
       (tx, result) => {
         resultCells = result;

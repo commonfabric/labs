@@ -3,12 +3,11 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import { DATA_URI_MEDIA_TYPE } from "@commonfabric/data-model/codec-data-uri";
-
 import "@commonfabric/utils/equal-ignoring-symbols";
 
 import { Writable } from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/data-model";
+import { getContainersHashedForTestingOnly } from "@commonfabric/data-model/for-testing-only";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
@@ -20,8 +19,12 @@ import { type Cell, elementSchemaFor, isCell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import { TransactionWrapper } from "../src/storage/extended-storage-transaction.ts";
 import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
-import { isLinkResolutionProbe } from "../src/storage/reactivity-log.ts";
+import {
+  isLinkResolutionProbe,
+  isReadIgnoredForScheduling,
+} from "../src/storage/reactivity-log.ts";
 import { getTransactionReadActivities } from "../src/storage/transaction-inspection.ts";
+import { hasInlineCellScheme } from "../src/immutable-cell.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
@@ -95,6 +98,52 @@ describe("Cell array element conversion", () => {
         { type: "object", properties: { foo: { type: "number" } } },
       );
     }
+  });
+});
+
+describe("resolving an inline array element as a cell", () => {
+  let runtime: Runtime;
+  let storageManager: ReturnType<typeof StorageManager.emulate>;
+  let tx: IExtendedStorageTransaction;
+
+  beforeEach(() => {
+    storageManager = StorageManager.emulate({ as: signer });
+    runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    tx = runtime.edit();
+  });
+
+  afterEach(async () => {
+    await tx.commit().settled;
+    await runtime?.dispose();
+    await storageManager?.close();
+  });
+
+  it("names the same snapshot on a second resolve without encoding the element again", async () => {
+    const list = runtime.getCell<{ foo: number }[]>(
+      space,
+      "inline-elements",
+      undefined,
+      tx,
+    );
+    list.setRaw([{ foo: 1 }, { foo: 2 }]);
+    await tx.commit().settled;
+    await runtime.idle();
+    tx = runtime.edit();
+
+    const first = list.withTx(tx).key(0).resolveAsCell()
+      .getAsNormalizedFullLink();
+    expect(hasInlineCellScheme(first.id)).toBe(true);
+    const hashedBefore = getContainersHashedForTestingOnly();
+    const again = list.withTx(tx).key(0).resolveAsCell()
+      .getAsNormalizedFullLink();
+    expect(again.id).toBe(first.id);
+    expect(getContainersHashedForTestingOnly()).toBe(hashedBefore);
+    expect(
+      list.withTx(tx).key(1).resolveAsCell().getAsNormalizedFullLink().id,
+    ).not.toBe(first.id);
   });
 });
 
@@ -262,7 +311,21 @@ describe("plain-schema array traversal", () => {
     expect(rows.map(({ label }) => label)).toEqual(["First", "Second"]);
     expect(sourceBatches).toEqual([true, false]);
 
-    const batchedActivities = [...getTransactionReadActivities(tx)];
+    const activities = [...getTransactionReadActivities(tx)];
+    const referenceObservations = activities.filter((activity) =>
+      activity.id === sourceId && activity.path.length === 2 &&
+      isLinkResolutionProbe(activity.meta)
+    );
+    expect(new Set(referenceObservations.map((activity) => activity.path[1])))
+      .toEqual(new Set(["0", "1"]));
+    expect(
+      referenceObservations.every((activity) =>
+        isReadIgnoredForScheduling(activity.meta)
+      ),
+    ).toBe(true);
+    const batchedActivities = activities.filter((activity) =>
+      !isReadIgnoredForScheduling(activity.meta)
+    );
     const sourceItemActivities = batchedActivities.filter((activity) =>
       activity.id === sourceId && activity.path.length === 2
     );
@@ -403,7 +466,7 @@ describe("plain-schema array traversal", () => {
     const trackedDataPaths: string[][] = [];
     const nativeTrackReadPaths = tx.trackReadPaths!.bind(tx);
     tx.trackReadPaths = (address, paths, options) => {
-      if (address.id.startsWith(`data:${DATA_URI_MEDIA_TYPE}`)) {
+      if (hasInlineCellScheme(address.id)) {
         for (const path of paths) trackedDataPaths.push([...path]);
       }
       return nativeTrackReadPaths(address, paths, options);

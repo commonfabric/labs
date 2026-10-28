@@ -380,6 +380,11 @@ export class CFCustodySeal extends BaseElement {
   override render() {
     const preview = this.#preview;
     const summary = preview ? summarizeCustodyTerms(preview.terms) : undefined;
+    const heldWith = preview?.heldWith ?? [];
+    const readsRoom = (person: string) =>
+      (preview?.readers ?? []).some((reader) =>
+        reader.principal === person || reader.principal === "*"
+      );
     // The bound on what an answer reveals is shown only when the worker found
     // the room's release witnessed. A preview that does not say so, including
     // one from a worker that predates the field, gets the warning instead.
@@ -422,7 +427,28 @@ export class CFCustodySeal extends BaseElement {
                 html`<li>${describeSource(source)}</li>`
               )
             }</ul>`
+            : heldWith.length > 0
+            ? "None, beyond data you share with the people below."
             : "Nothing beyond what you entered yourself."}</dd>
+          ${heldWith.length > 0
+            ? html`
+              <dt>Drawn from data you share with</dt>
+              <dd class="held-with">
+                <ul>${heldWith.map((group) =>
+                  html`<li>${
+                    group.map((person, index) =>
+                      html`${index > 0 ? ", " : nothing}${principal(person)}${
+                        readsRoom(person)
+                          ? annotation("reads the room")
+                          : nothing
+                      }`
+                    )
+                  }</li>`
+                )}</ul>
+                <p class="note">For example, a conversation.</p>
+              </dd>
+            `
+            : nothing}
         </dl>
         <h3>What the room's terms say</h3>
         <dl class="stated">

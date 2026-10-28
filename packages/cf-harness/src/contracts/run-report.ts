@@ -11,13 +11,15 @@ import { countHarnessPolicyDecisions } from "./policy-trace.ts";
 import type { PromptSlotBinding } from "./prompt-slot.ts";
 import type { HarnessFabricSessionCfcPosture } from "../run-state.ts";
 import type { HarnessSubagentRunRef } from "./subagent.ts";
+import type { HarnessTaskClassification } from "../task-classification.ts";
 import type { HarnessTaskOutcome } from "./task-outcome.ts";
 import type { HarnessToolEffectClass } from "./tool-descriptor.ts";
 import type { HarnessTranscriptMessage } from "./transcript.ts";
 import type { ToolResultRef } from "./tool-result.ts";
-import type {
-  HarnessModelAttemptDiagnostic,
-  HarnessModelUsage,
+import {
+  type HarnessModelAttemptDiagnostic,
+  type HarnessModelUsage,
+  observedModelId,
 } from "../model/client.ts";
 import type {
   HarnessModelAuthSource,
@@ -95,6 +97,14 @@ export interface HarnessModelTurnUsage {
   usage: HarnessModelUsage;
 }
 
+/** Provider-reported identity for one completed direct model call. */
+export interface HarnessModelResponse {
+  modelTurn: number;
+
+  /** Observed response identifier; `null` means the provider omitted it. */
+  model: string | null;
+}
+
 export interface HarnessRunTimelineEntry {
   type: "cf-harness.timeline-entry";
   sequence: number;
@@ -132,7 +142,18 @@ export interface HarnessRunReport {
   runId: string;
   generatedAt: string;
   status: string;
+
+  /** Requested model identifier. */
   model: string;
+
+  /** Observed models from direct calls; research and descendants have their own reports. */
+  actualModels?: string[];
+
+  /** Whether every direct model turn has an observed response identifier. */
+  modelAttributionComplete?: boolean;
+
+  /** Per-response attribution, independent of token usage availability. */
+  modelResponses?: HarnessModelResponse[];
 
   /** Requested effort; provider clients reject routes that cannot apply it. */
   reasoningEffort?: string;
@@ -175,6 +196,10 @@ export interface HarnessRunReport {
   artifactRoot?: string;
   transcriptPath?: string;
   promptSlotBinding?: PromptSlotBinding;
+
+  /** The kinds of work the root task was classified with, and how. */
+  taskClassification?: HarnessTaskClassification;
+
   cfcPolicySnapshot?: HarnessCfcPolicySnapshot;
   policyTrace?: HarnessPolicyTrace;
   policyTracePath?: string;
@@ -212,6 +237,7 @@ export interface CreateHarnessRunReportOptions {
     artifactRoot?: string;
     transcriptPath?: string;
     promptSlotBinding?: PromptSlotBinding;
+    taskClassification?: HarnessTaskClassification;
     cfcPolicySnapshot?: HarnessCfcPolicySnapshot;
     policyTrace?: HarnessPolicyTrace;
     policyTracePath?: string;
@@ -243,6 +269,7 @@ export interface CreateHarnessRunReportOptions {
   usage?: HarnessModelUsage;
   totalUsage?: HarnessModelUsage;
   modelUsage?: readonly HarnessModelTurnUsage[];
+  modelResponses?: readonly HarnessModelResponse[];
 }
 
 export const createHarnessRunTimeline = (
@@ -356,12 +383,28 @@ export const createHarnessRunReport = (
     options.runState.policyEvents.filter((event) => event.severity === "denied")
       .length;
   const policyDecisions = [...(options.runState.policyDecisions ?? [])];
+  const modelResponses = [...(options.modelResponses ?? [])];
+  const actualModels = [
+    ...new Set(modelResponses.flatMap((response) => {
+      const observed = observedModelId(response.model);
+      return observed === undefined ? [] : [observed];
+    })),
+  ].sort();
+  const modelAttributionComplete =
+    modelResponses.length === options.modelTurns &&
+    modelResponses.every((response, index) =>
+      response.modelTurn === index + 1 &&
+      observedModelId(response.model) !== undefined
+    );
   return {
     type: "cf-harness.run-report",
     runId: options.runState.runId,
     generatedAt: options.runState.updatedAt,
     status: options.runState.status,
     model: options.model,
+    actualModels,
+    modelAttributionComplete,
+    modelResponses,
     ...(options.reasoningEffort !== undefined
       ? { reasoningEffort: options.reasoningEffort }
       : {}),
@@ -425,6 +468,9 @@ export const createHarnessRunReport = (
       : {}),
     ...(options.runState.promptSlotBinding !== undefined
       ? { promptSlotBinding: options.runState.promptSlotBinding }
+      : {}),
+    ...(options.runState.taskClassification !== undefined
+      ? { taskClassification: options.runState.taskClassification }
       : {}),
     ...(options.runState.cfcPolicySnapshot !== undefined
       ? { cfcPolicySnapshot: options.runState.cfcPolicySnapshot }

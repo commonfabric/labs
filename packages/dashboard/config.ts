@@ -29,11 +29,19 @@ export const TICK_MS = 15_000;
 export const PROD_SERVICE = "toolshed-production";
 
 // The loom repo and its main CI workflow ("Tests (fast)"), for the loom-repo CI
-// tiles and the combined recent-runs stream.
+// tiles and the recent commits tile.
 export const LOOM_REPO = Deno.env.get("DASHBOARD_LOOM_REPO") ?? "commonfabric/loom";
 export const LOOM_CI_WORKFLOW = "test-fast.yml";
 
-// The weaver repo and its CI workflow, for the weaver-repo CI tiles.
+// The branch each repository's CI moves to the newest commit of main whose
+// tests passed, by repository. Every view of a run on main marks a commit the
+// branch is or was at (green-branch.ts).
+export const GREEN_BRANCHES: Readonly<Record<string, string>> = {
+  [LOOM_REPO]: "main-green",
+};
+
+// The weaver repo and its CI workflow, for the weaver-repo CI tiles and the
+// recent commits tile.
 export const WEAVER_REPO = Deno.env.get("DASHBOARD_WEAVER_REPO") ??
   "commonfabric/commonfabric-weaver";
 export const WEAVER_CI_WORKFLOW = "ci.yml";
@@ -62,5 +70,5 @@ export const BENCH_HEADLINE_MAX_AGE_HOURS = 12;
 // together than the cadence are one moment in wall clock, and counting them
 // separately lets one moment supply a whole level of the fit.
 export const BENCH_TREND_BUCKET_MS = 4 * 60 * 60_000;
-export const RECENT_WINDOW = 10; // recent completed runs scanned for the recent-runs status
-export const RECENT_DISPLAY = 50; // rows the recent-runs tile shows
+export const RECENT_WINDOW = 10; // recent completed runs scanned for the recent commits status
+export const RECENT_DISPLAY = 50; // rows the recent commits tile shows

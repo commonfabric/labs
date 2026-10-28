@@ -4,8 +4,6 @@
  * changes shape is a type error in the page rather than a blank pane.
  */
 
-import type { HarnessChatEventEnvelope } from "../../src/contracts/interactive-chat.ts";
-import { consolePath, pageMount } from "./mount.ts";
 import type {
   PatternIndexEvent,
   PatternIndexListEventsRequest,
@@ -14,8 +12,14 @@ import type {
   PatternIndexPattern,
   PatternIndexSearchRequest,
   PatternIndexSearchResponse,
-} from "../../src/pattern-index/client.ts";
-import type { ConsoleRunDetail } from "../run-store.ts";
+} from "@commonfabric/pattern-index/client";
+import type { HarnessChatEventEnvelope } from "../../src/contracts/interactive-chat.ts";
+import { consolePath, pageMount } from "./mount.ts";
+import type {
+  ConsoleListedRun,
+  ConsoleRunDetail,
+  ConsoleRunSource,
+} from "../run-store.ts";
 import type {
   ConsoleGraph,
   ConsoleGraphEdge,
@@ -37,7 +41,9 @@ export type {
   ConsoleGraph,
   ConsoleGraphEdge,
   ConsoleGraphNode,
+  ConsoleListedRun,
   ConsoleRunDetail,
+  ConsoleRunSource,
   ConsoleRunSummary,
   ConsoleSessionSummary,
   ConsoleTurnResult,
@@ -131,8 +137,8 @@ export const listSessions = async (): Promise<
     await fetch(api("/api/sessions")),
   )).sessions;
 
-export const listRuns = async (): Promise<readonly ConsoleRunSummary[]> =>
-  (await json<{ runs: readonly ConsoleRunSummary[] }>(
+export const listRuns = async (): Promise<readonly ConsoleListedRun[]> =>
+  (await json<{ runs: readonly ConsoleListedRun[] }>(
     await fetch(api("/api/runs")),
   )).runs;
 

@@ -437,6 +437,11 @@ const resolveStoredCfcMetadata = (
     version: stored.version,
     schemaHash: stored.schemaHash,
     labelMap,
+    // Read as the one value this build knows; any other is an envelope that
+    // says nothing of its stamps' placement.
+    ...(stored.stampPlacement === "committed"
+      ? { stampPlacement: stored.stampPlacement }
+      : {}),
   };
 };
 
@@ -477,6 +482,19 @@ export const readStoredCfcMetadata = (
     ? undefined
     : resolveStoredCfcMetadata(tx, target.space, stored, policy);
 };
+
+/**
+ * The schema hash of the envelope stored for `target`, or `undefined` when
+ * the document stores none. Reads the envelope alone, labels unresolved, so
+ * it costs one metadata read however large the schema it names. Throws a
+ * {@link StoredCfcMetadataError} for a value {@link interpretStoredEnvelope}
+ * cannot interpret.
+ */
+export const readStoredCfcSchemaHash = (
+  tx: IExtendedStorageTransaction,
+  target: StoredCfcTarget,
+  policy: StoredCfcReadPolicy = DEPENDENT_READ,
+): string | undefined => readStoredEnvelope(tx, target, policy)?.schemaHash;
 
 /** The labels {@link readStoredCfcLabelsForReader} answers with. */
 export type StoredCfcLabels = Pick<CfcMetadata, "labelMap">;

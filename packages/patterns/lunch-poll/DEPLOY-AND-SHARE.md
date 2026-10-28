@@ -87,9 +87,13 @@ sqlite3 <store>/engine-v3/engine-v3/<did>.sqlite "VACUUM INTO '<destination>'"
 
 ### `rapids` — the fast-moving instance
 
-`rapids.saga-castor.ts.net` redeploys on every push to `main`, so it runs close
-to tip and can move under you mid-session. Iterate here, in **a space of your
-own**: a scratch space costs nothing and leaves the shared ones alone.
+`rapids.saga-castor.ts.net` deploys coordinated release candidates selected from
+verified green `main` revisions across its components. Infra dispatches each
+candidate through the Labs receiver; see
+[coordinated Rapids releases](../../../docs/development/deploying.md#coordinated-rapids-releases).
+Frequent releases can change the host build mid-session. Iterate here, in **a
+space of your own**: a scratch space costs nothing and leaves the social spaces
+alone.
 
 The `team-lunch` space on this host is unusable as it stands. Its stored root
 pattern does not compile against the current API, so every command that loads
@@ -123,12 +127,14 @@ SPACE=team-lunch
 # Keep this complete set on every source deployment in this guide.
 LUNCH_POLL_TEST_ARGS=(
   --test packages/patterns/lunch-poll/art-sync.test.tsx
+  --test packages/patterns/lunch-poll/day-rollover.test.tsx
   --test packages/patterns/lunch-poll/generated-art.test.tsx
   --test packages/patterns/lunch-poll/lunch-stats.test.tsx
   --test packages/patterns/lunch-poll/main.test.tsx
   --test packages/patterns/lunch-poll/multi-user.test.tsx
   --test packages/patterns/lunch-poll/participant-identity-card.test.tsx
   --test packages/patterns/lunch-poll/poll-option-card.test.tsx
+  --test packages/patterns/lunch-poll/read-cost.test.tsx
 )
 ```
 
@@ -143,12 +149,14 @@ pattern test and stop if one fails:
 
 ```bash
 deno task cf test packages/patterns/lunch-poll/art-sync.test.tsx --root packages/patterns
+deno task cf test packages/patterns/lunch-poll/day-rollover.test.tsx --root packages/patterns
 deno task cf test packages/patterns/lunch-poll/generated-art.test.tsx --root packages/patterns
 deno task cf test packages/patterns/lunch-poll/lunch-stats.test.tsx --root packages/patterns
 deno task cf test packages/patterns/lunch-poll/main.test.tsx --root packages/patterns
 deno task cf test packages/patterns/lunch-poll/multi-user.test.tsx --root packages/patterns
 deno task cf test packages/patterns/lunch-poll/participant-identity-card.test.tsx --root packages/patterns
 deno task cf test packages/patterns/lunch-poll/poll-option-card.test.tsx --root packages/patterns
+deno task cf test packages/patterns/lunch-poll/read-cost.test.tsx --root packages/patterns
 ```
 
 The quoted `"${LUNCH_POLL_TEST_ARGS[@]}"` expansion below repeats every `--test`
@@ -196,7 +204,7 @@ mints a fresh, empty instance. Run the exact update once with `--check`; only a
 clean, zero-exit preflight authorizes the apply:
 
 ```bash
-# Runs all seven tests and the dry-run compatibility check;
+# Runs all attached tests and the dry-run compatibility check;
 # leaves the piece unchanged.
 packages/patterns/lunch-poll/deploy-safe.sh
 

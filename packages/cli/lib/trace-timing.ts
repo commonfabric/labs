@@ -44,7 +44,19 @@ export async function timeCliPhase<T>(
   try {
     return await run();
   } finally {
-    const elapsed = Math.round(performance.now() - start);
-    trace.log(`[cf-phase] ${elapsed}ms :: ${label}`);
+    reportCliPhase(label, performance.now() - start, trace);
   }
+}
+
+/**
+ * Report a phase timed elsewhere — a step the serving side measured and
+ * returned with its receipt — in the same shape as one timed here.
+ */
+export function reportCliPhase(
+  label: string,
+  elapsedMs: number,
+  trace: PhaseTrace = cliPhaseTrace,
+): void {
+  if (!trace.enabled) return;
+  trace.log(`[cf-phase] ${Math.round(elapsedMs)}ms :: ${label}`);
 }

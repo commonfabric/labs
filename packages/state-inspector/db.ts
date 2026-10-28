@@ -128,6 +128,23 @@ function shimScopeKey(db: Database): void {
          SELECT branch, id, 'space' AS scope_key, seq, value FROM main.snapshot`,
     );
   }
+  // The head table of the same legacy DBs lacks scope_key as well, and the
+  // ones from before the current-op migration lack `op` too; a reader that
+  // joins head to revision by instance needs the column on both sides. The
+  // view carries `op` only where the table has it, so a reader of a store
+  // that never had the column meets the same absence it would meet unshimmed.
+  if (tableExists("head") && lacksScopeKey("head")) {
+    const hasOp = !!db
+      .prepare(`SELECT 1 FROM pragma_table_info('head') WHERE name = 'op'`)
+      .get<{ 1: number }>();
+    db.exec(
+      `CREATE TEMP VIEW head AS
+         SELECT branch, id, 'space' AS scope_key, seq, op_index${
+        hasOp ? ", op" : ""
+      }
+         FROM main.head`,
+    );
+  }
 }
 
 export function tableNames(db: Database): string[] {

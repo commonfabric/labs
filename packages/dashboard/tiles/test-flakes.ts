@@ -32,6 +32,7 @@ import {
   FLAKY_SECTION_ID,
   TEST_SELECTION_PATH,
 } from "../test-selection-page.ts";
+import { REPO } from "../config.ts";
 import { publisherRunning } from "../test-selection-activity.ts";
 import type { Status, Tile, TileView } from "../types.ts";
 
@@ -48,6 +49,7 @@ export function makeTestFlakes(
   const source = options.source ?? sharedTestSelection;
   return {
     label: "flaky tests",
+    repo: REPO,
     intervalMs: MANIFEST_SHARE_MS,
     collectActivity: publisherRunning,
     collect: (_ctx, publish) =>

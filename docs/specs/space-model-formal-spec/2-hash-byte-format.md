@@ -776,8 +776,9 @@ payload is 4 bytes: `0xDE`, `0xAD`, `0xBE`, `0xEF`.
 `FabricRegExp` is a `FabricPrimitive` with the dedicated tag `TAG_REGEXP`
 (`0x2B`); it is hashed by feeding its three component strings — source, flags,
 flavor — in that order (Section 4.16). A `FabricRegExp` built from `/abc/gi`
-has source `"abc"`, flags `"gi"`, and the default flavor `"es2025"`. All three
-strings are under the 64-byte threshold, so each uses the direct string form.
+has source `"abc"`, flags `"gi"`, and flavor `"es2025"`, the dialect of a JS
+`RegExp`. All three strings are under the 64-byte threshold, so each uses the
+direct string form.
 
 - RegExp tag: `2B`
 - Source `"abc"` (3 bytes UTF-8): `24 03 61 62 63`

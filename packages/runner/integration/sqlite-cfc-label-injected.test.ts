@@ -20,10 +20,11 @@
  * own entity doc, and INHERITED by a consumer that reads the leaf.
  *
  * Where the labels live is itself the point. A labeled result splits each row
- * into its own entity doc and stores the label THERE; the query doc holds only
- * `{ pending, result, requestHash }` and carries no label view at any path.
- * That is true of the in-frame path too, so a probe of the query doc reports
- * "unlabeled" for a fully labeled result.
+ * into its own entity doc and stores the row's labels THERE; the query doc
+ * holds `{ pending, result, requestHash }` and links to the rows. That is true
+ * of the in-frame path too. A label read of a path into the result therefore
+ * crosses links, and a reader that stopped at the document a path starts in
+ * would report "unlabeled" for a fully labeled result.
  */
 
 import { Database } from "@db/sqlite";
@@ -428,24 +429,43 @@ async function runTest(base: URL, contractArrivesLate: boolean) {
         );
       }
 
-      // (d) The labels live on the row docs, NOT on the query doc. The
-      // one-hop reader follows a link the selected path lands ON, and these
-      // paths CROSS one at `result/0`, so it reports nothing for a result
-      // that plainly carries labels. Pinning that keeps the contrast in (e)
-      // honest, and keeps a future reader from probing the query doc, finding
-      // nothing, and reporting a fully labeled result as unlabeled.
-      for (const path of [[], ["result"], ["result", 0]] as const) {
+      // (d) The labels live on the row docs, NOT on the query doc, and the
+      // paths selected here cross links on the way to them: the piece's
+      // field links to the query's document, and `result/0` links to the
+      // row's. A cell's own reader follows those links, so it reports the
+      // column's label at the column and one entry per labeled column at the
+      // row, as the inspection reader in (e) does.
+      const ownAt = (path: readonly (string | number)[]) => {
         let probe: Cell<unknown> = direct as Cell<unknown>;
         for (const key of path) probe = probe.key(key as never);
-        const view = cfcLabelViewForCellWithStatus(probe).view;
-        if (view !== undefined) {
+        const status = cfcLabelViewForCellWithStatus(probe);
+        if (status.readFailed) {
           throw new Error(
-            `the one-hop reader gained a label view at ${
-              JSON.stringify(path)
-            }: ${JSON.stringify(view)} — update this test, (e), and the ` +
-              `loom-side probe together`,
+            `the cell's own label read failed at ${JSON.stringify(path)}`,
           );
         }
+        return status.view;
+      };
+      const ownColumn = ownAt(["result", 0, "secret"]);
+      if (
+        !ownColumn?.entries.find((e) => e.path.length === 0)?.label
+          .confidentiality?.some((a) => a === "secret-body")
+      ) {
+        throw new Error(
+          `the cell's own reader reported no confidentiality at ` +
+            `result/0/secret; got ${JSON.stringify(ownColumn)}`,
+        );
+      }
+      const ownRow = ownAt(["result", 0]);
+      if (
+        !ownRow?.entries.find((e) =>
+          e.path.length === 1 && e.path[0] === "secret"
+        )?.label.confidentiality?.some((a) => a === "secret-body")
+      ) {
+        throw new Error(
+          `the cell's own reader reported no per-column entry at result/0; ` +
+            `got ${JSON.stringify(ownRow)}`,
+        );
       }
 
       // (e) The INSPECTION reader — what `cf cell get-label` calls — resolves

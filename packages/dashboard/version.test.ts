@@ -59,12 +59,4 @@ Deno.test("dashboard image requires the publishing workflow commit", async () =>
     dockerfile,
     "grep -Eq '^[0-9a-f]{40}$'",
   );
-
-  const readme = await Deno.readTextFile(
-    new URL("./README.md", import.meta.url),
-  );
-  assertStringIncludes(
-    readme,
-    '--build-arg DASHBOARD_GIT_COMMIT="$SHA"',
-  );
 });

@@ -384,16 +384,18 @@ function reconstructWithinBranch(
   id: string,
   rowSeq: number,
   rowOpIndex: number,
+  options: { exact?: boolean } = {},
 ): StoredDocument {
+  // Tuple bounds follow the revision index's order, so SQLite can seek to
+  // the requested range instead of filtering the instance's entire history.
   const base = space.get<RevRow>(
     `SELECT seq, op_index, op, data FROM revision
      WHERE branch = ? AND id = ? AND scope_key = ? AND op IN ('set','delete')
-       AND (seq < ? OR (seq = ? AND op_index <= ?))
+       AND (seq, op_index) <= (?, ?)
      ORDER BY seq DESC, op_index DESC LIMIT 1`,
     branch,
     id,
     scope,
-    rowSeq,
     rowSeq,
     rowOpIndex,
   );
@@ -408,11 +410,18 @@ function reconstructWithinBranch(
   // does this for speed AND it future-proofs against any revision compaction
   // behind a snapshot. The snapshot is keyed by seq only and represents the full
   // materialized document at that seq, so patches strictly AFTER its seq apply.
+  // An exact-row reconstruction wants the state after one row, not after its
+  // whole commit, so it takes no snapshot at the row's own seq (the engine's
+  // `readRevision` draws the same line).
   if (hasTable(space, "snapshot")) {
     const snap = space.get<{ seq: number; value: string }>(
-      `SELECT seq, value FROM snapshot
-       WHERE branch = ? AND id = ? AND scope_key = ? AND seq <= ?
-       ORDER BY seq DESC LIMIT 1`,
+      options.exact
+        ? `SELECT seq, value FROM snapshot
+           WHERE branch = ? AND id = ? AND scope_key = ? AND seq < ?
+           ORDER BY seq DESC LIMIT 1`
+        : `SELECT seq, value FROM snapshot
+           WHERE branch = ? AND id = ? AND scope_key = ? AND seq <= ?
+           ORDER BY seq DESC LIMIT 1`,
       branch,
       id,
       scope,
@@ -431,16 +440,14 @@ function reconstructWithinBranch(
   const patches = space.all<RevRow>(
     `SELECT seq, op_index, op, data FROM revision
      WHERE branch = ? AND id = ? AND scope_key = ? AND op = 'patch'
-       AND (seq > ? OR (seq = ? AND op_index > ?))
-       AND (seq < ? OR (seq = ? AND op_index <= ?))
+       AND (seq, op_index) > (?, ?)
+       AND (seq, op_index) <= (?, ?)
      ORDER BY seq ASC, op_index ASC`,
     branch,
     id,
     scope,
     baseSeq,
-    baseSeq,
     baseOpIndex,
-    rowSeq,
     rowSeq,
     rowOpIndex,
   );
@@ -452,6 +459,46 @@ function reconstructWithinBranch(
     doc = applyPatchToDocument(doc, storedPatchList(p.data));
   }
   return doc;
+}
+
+/**
+ * The document a stored row produces: the state after exactly that row and
+ * before any later operation of the same commit. This package's spelling of
+ * the engine's `readRevision`, for checking a compaction's materialized
+ * boundaries against the backup they were materialized from. Throws when
+ * the row is not there; a `delete` row produces `undefined`.
+ */
+export function reconstructRevision(
+  space: SpaceDb,
+  opts: EntityAddress & { seq: number; opIndex: number },
+): StoredDocument | undefined {
+  const branch = opts.branch ?? "";
+  const scope = opts.scope ?? "space";
+  const row = space.get<RevRow>(
+    `SELECT seq, op_index, op, data FROM revision
+     WHERE branch = ? AND id = ? AND scope_key = ? AND seq = ? AND op_index = ?`,
+    branch,
+    opts.id,
+    scope,
+    opts.seq,
+    opts.opIndex,
+  );
+  if (row === undefined) {
+    throw new Error(
+      `no revision of ${opts.id} (${scope}) at ${opts.seq}/${opts.opIndex}`,
+    );
+  }
+  if (row.op === "delete") return undefined;
+  if (row.op === "set") return storedDocument(row.data);
+  return reconstructWithinBranch(
+    space,
+    branch,
+    scope,
+    opts.id,
+    row.seq,
+    row.op_index,
+    { exact: true },
+  );
 }
 
 /**

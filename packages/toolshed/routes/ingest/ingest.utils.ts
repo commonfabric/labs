@@ -1,6 +1,16 @@
 import { sha256 } from "@commonfabric/content-hash";
-import type { JSONSchema, MemorySpace, Runtime } from "@commonfabric/runner";
-import { isLink } from "@commonfabric/runner";
+import type {
+  IExtendedStorageTransaction,
+  JSONSchema,
+  MemorySpace,
+  Runtime,
+} from "@commonfabric/runner";
+import { isLink, type NormalizedLink, parseLink } from "@commonfabric/runner";
+import {
+  linkRefFrom,
+  linkRefPayloadFromString,
+  type WireLinkRefPayload,
+} from "@commonfabric/runner/shared";
 import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
@@ -10,12 +20,16 @@ import {
   type VouchedChannel,
 } from "@/lib/custody-ingest.ts";
 
-// The `journal` sink of a vouched ingest channel: a durable, append-only,
-// ExternalIngest-marked record log. This is the generic capability — location
-// is one consumer of it (its beacon POSTs `location.point` records; loom wraps
-// them into `loom.source-record.v1` envelopes on READ). Nothing here knows about
-// location or loom's schema; records are stored verbatim and the read side is
-// the single schema authority.
+// The two kinds of vouched ingest channel, each a durable, ExternalIngest-
+// marked write into the channel's space. A `device` channel is an append-only
+// record journal in per-partition cells that a device POSTs to with the
+// channel's bearer token; location is one consumer of it (its beacon POSTs
+// `location.point` records; loom wraps them into `loom.source-record.v1`
+// envelopes on READ). A `gmail` channel is one cell, named by its owner,
+// holding the newest Gmail push notification for the mailbox bound to it,
+// which toolshed itself writes. Nothing here knows about location, loom's
+// schema, or what a reader does with a notification; records are stored
+// verbatim and the read side is the single schema authority.
 //
 // This module owns the DATA plane (ingest) and the shared registry helpers. The
 // CONTROL plane — self-serve mint/list/rotate/revoke — lives in
@@ -97,28 +111,142 @@ export const containsLink = (value: unknown): boolean => {
 
 export const isValidPartition = isValidSegment;
 
+/**
+ * What kind of channel a registration is, which decides who writes it and
+ * where. A `device` channel is written by a device POSTing records with the
+ * channel's bearer token, into journal partition cells under `causePrefix`. A
+ * `gmail` channel is written by toolshed on each Gmail push notification for
+ * the mailbox bound to it, into the one cell `target` names.
+ */
+export type IngestChannelKind = "device" | "gmail";
+
+/**
+ * The cell a `gmail` channel writes, as the parts of a link held as data: the
+ * space, the document id, and the path within it. The caller named it at mint
+ * and is the one keeping it from colliding with anything else in the space.
+ */
+export interface CellTarget {
+  space: string;
+  id: string;
+  path: string[];
+}
+
+/**
+ * Returns the parts of `link` as a `CellTarget`, or throws when the link is
+ * not complete: a target has to name its space and document outright.
+ */
+export function cellTargetOf(link: NormalizedLink): CellTarget {
+  if (link.id === undefined || link.space === undefined) {
+    throw new Error("a target cell link must carry a space and an id");
+  }
+  // The parts hold no scope, so only a space-scoped cell round-trips through
+  // them; a user- or session-scoped link would come back as another cell.
+  if (link.scope !== undefined && link.scope !== "space") {
+    throw new Error("a target cell must be space-scoped");
+  }
+  return {
+    space: link.space,
+    id: link.id,
+    path: link.path.map((segment) => String(segment)),
+  };
+}
+
+/** Returns the link a `CellTarget` holds the parts of. */
+function linkOfCellTarget(target: CellTarget): NormalizedLink {
+  const link = parseLink(
+    linkRefFrom({ id: target.id, space: target.space, path: target.path }),
+  );
+  if (link === undefined) {
+    throw new Error(
+      `cell target ${target.id} in ${target.space} is not a link`,
+    );
+  }
+  return link;
+}
+
+/**
+ * Reads a cell link off the wire, where it travels as the `fcl1:` string that
+ * `linkRefPayloadToString()` writes, and returns it as the link the runtime
+ * resolves. The payload may name only a document id, a space, a path, and the
+ * space scope; a target cell is nothing else. Throws, naming the fault, on a
+ * string that is not a wire link or a payload that is not such a cell.
+ */
+export function parseWireCellLink(wire: string): NormalizedLink {
+  const payload: WireLinkRefPayload = linkRefPayloadFromString(wire);
+  for (const key of Object.keys(payload)) {
+    if (!["id", "space", "path", "scope"].includes(key)) {
+      throw new Error(`a target cell link has no field ${JSON.stringify(key)}`);
+    }
+  }
+  const { id, space, path, scope } = payload;
+  if (typeof id !== "string" || !id.startsWith("of:")) {
+    throw new Error("a target cell link names its document by an of: id");
+  }
+  if (typeof space !== "string") {
+    throw new Error("a target cell link names its space");
+  }
+  if (path !== undefined && typeof path === "string") {
+    throw new Error("a target cell link's path is a list of segments");
+  }
+  if (scope !== undefined && scope !== "space") {
+    throw new Error("a target cell must be space-scoped");
+  }
+  const link = parseLink(linkRefFrom({ id, space, path: path ?? [] }));
+  if (link === undefined) {
+    throw new Error("a target cell link did not parse as a link");
+  }
+  return link;
+}
+
 export interface IngestRegistration {
   id: string;
   name: string;
 
-  /** The space partition cells are written into (the end user's space). */
+  /** The space the channel's cells are written into (the end user's space). */
   space: string;
 
-  /** Cell-cause prefix; a partition cell's cause is `${causePrefix}/${partition}`. */
-  causePrefix: string;
+  /**
+   * Cell-cause prefix of a `device` channel: a partition cell has the cause
+   * `${causePrefix}/${partition}`. Absent on a `gmail` channel, whose cell is
+   * `target`.
+   */
+  causePrefix?: string;
+
+  /**
+   * The one cell of a `gmail` channel, which the caller named at mint. Absent
+   * on a `device` channel, whose cells are named by `causePrefix`.
+   */
+  target?: CellTarget;
+
+  /**
+   * The key of the mailbox a `gmail` channel is bound to, as the push
+   * module's `mailboxKey()` derives it from the address. The mailbox's own
+   * list of channel ids is the index a push is delivered through, and the two
+   * are written in one transaction, so a live gmail channel carrying a key is
+   * in that mailbox's list. Absent on a `device` channel, and on a gmail
+   * channel bound to no mailbox, which a mint with a proof binds.
+   */
+  mailboxKey?: string;
 
   /** Stable source identifier: recorded on the mark + the cross-repo join key. */
   installId: string;
 
   /**
-   * The sink discriminator. Only `"journal"` (durable, append-only, marked)
-   * exists in iteration 1; `"stream"` (today's webhook dispatch) joins the union
-   * when webhooks are subsumed onto ingest channels. Required so a future
-   * stream-channel id can never silently be given journal semantics here.
+   * Which kind of channel this is, and so which of `causePrefix` and `target`
+   * it carries. Each write path checks it, so a channel of one kind can never
+   * be given the other's semantics: the data plane appends only to a `device`
+   * channel, and Gmail push writes only to a `gmail` channel. A registration
+   * stored before the field existed is a `device` channel, and reads as one.
    */
-  sink: "journal";
+  kind: IngestChannelKind;
 
-  secretHash: string;
+  /**
+   * The hash of the bearer token a `device` channel's POSTs carry; the token
+   * itself is shown once, at mint, and never stored. Absent on a `gmail`
+   * channel, which has no token because nothing POSTs to it, and the data
+   * plane refuses a token for one as it refuses an unknown channel.
+   */
+  secretHash?: string;
 
   /**
    * The hash of the token this channel most recently rotated AWAY from.
@@ -247,8 +375,18 @@ const RegistrationSchema = {
     name: { type: "string" },
     space: { type: "string" },
     causePrefix: { type: "string" },
+    target: {
+      type: "object",
+      properties: {
+        space: { type: "string" },
+        id: { type: "string" },
+        path: { type: "array", items: { type: "string" } },
+      },
+      required: ["space", "id", "path"],
+    },
+    mailboxKey: { type: "string" },
     installId: { type: "string" },
-    sink: { type: "string" },
+    kind: { type: "string" },
     secretHash: { type: "string" },
     createdBy: { type: "string" },
     createdAt: { type: "string" },
@@ -275,10 +413,7 @@ const RegistrationSchema = {
     "id",
     "name",
     "space",
-    "causePrefix",
     "installId",
-    "sink",
-    "secretHash",
     "createdBy",
     "createdAt",
     "enabled",
@@ -342,6 +477,16 @@ export function channelId(space: string, installId: string): string {
   return `ing_${hashSecret(`${space}\n${installId}`)}`;
 }
 
+/**
+ * Builds the URL a device POSTs records to for channel `id`, which writes
+ * into `space`. The space is in the path so that whatever dispatches requests
+ * by space can send the write to the deployment holding that space; it grants
+ * nothing, since the bearer token is the credential.
+ */
+export function ingestUrl(apiUrl: string, space: string, id: string): string {
+  return `${apiUrl.replace(/\/+$/, "")}/api/spaces/${space}/ingest/${id}`;
+}
+
 export function generateIngestSecret(): { secret: string; secretHash: string } {
   const secret = `ingsec_${randomBase62(INGEST_SECRET_BYTES)}`;
   return { secret, secretHash: hashSecret(secret) };
@@ -362,7 +507,11 @@ export function verifyIngestSecret(
 // Registrations live in the toolshed's OWN service space (keyed by the operator
 // identity's DID), NOT in the user's space — only the per-day records land in
 // the user's space.
-const registrationCell = (runtime: Runtime, serviceSpace: string, id: string) =>
+export const registrationCell = (
+  runtime: Runtime,
+  serviceSpace: string,
+  id: string,
+) =>
   runtime.getCell<IngestRegistration>(
     serviceSpace as MemorySpace,
     `cf:ingest:${id}`,
@@ -617,6 +766,58 @@ const liveClaims = (
     .filter((entry) => now - entry.at < CLAIM_RETENTION_MS)
     .map((entry) => ({ id: entry.id, at: entry.at, channel: entry.channel }));
 
+/** What checking a request claim inside a transaction found. */
+export type ClaimCheck =
+  /** The id is unused. `record()` writes the claim into the transaction. */
+  | { kind: "fresh"; record: () => void }
+  /** The id was already used, for `channel`. */
+  | { kind: "used"; channel: string }
+  /** The caller has as many live claims as the store retains. */
+  | { kind: "full" };
+
+/**
+ * Prepares the claim of a request id, for a write that has to be at most once.
+ * The caller syncs `cell` before its transaction, calls `check()` inside it
+ * ahead of any write, and calls `record()` on a fresh result once every other
+ * check has passed, so that an id is consumed only by a write that lands.
+ *
+ * `check()` reads through the transaction, which is what puts the claims in
+ * its read set and makes two concurrent uses of one id conflict.
+ */
+export function requestClaim(
+  runtime: Runtime,
+  serviceSpace: string,
+  claim: ClaimRequest,
+): {
+  cell: ReturnType<typeof mintRequestCell>;
+  check: (tx: IExtendedStorageTransaction) => ClaimCheck;
+} {
+  const cell = mintRequestCell(runtime, serviceSpace, claim.owner);
+  return {
+    cell,
+    check(tx) {
+      const bound = cell.withTx(tx);
+      const now = claim.now ?? Date.now();
+      const live = liveClaims(bound.get(), now);
+      const seen = live.find((entry) => entry.id === claim.requestId);
+      // The channel the claim was MADE for, not the one now being asked for.
+      if (seen !== undefined) return { kind: "used", channel: seen.channel };
+      // Full: refuse rather than evict. Dropping the oldest entry would discard
+      // a claim still inside the replay window — the entry that proves a replay
+      // — so a flood of fresh ids would buy a second live token for a used id.
+      if (live.length >= MAX_RETAINED_CLAIMS) return { kind: "full" };
+      return {
+        kind: "fresh",
+        record: () =>
+          bound.set([
+            ...live,
+            { id: claim.requestId, at: now, channel: claim.channel },
+          ]),
+      };
+    },
+  };
+}
+
 /**
  * The channel a request id was already used for, or `null` if it is unused.
  *
@@ -646,7 +847,12 @@ export async function getRegistration(
   const cell = registrationCell(runtime, serviceSpace, id);
   await cell.sync();
   await runtime.storageManager.synced();
-  return (cell.get() as IngestRegistration | undefined) ?? null;
+  const stored = cell.get() as
+    | (Omit<IngestRegistration, "kind"> & { kind?: IngestChannelKind })
+    | undefined;
+  if (stored === undefined) return null;
+  // A registration written before kinds existed is a device channel.
+  return { ...stored, kind: stored.kind ?? "device" };
 }
 
 /**
@@ -719,6 +925,19 @@ export async function getLastSeen(
   return (cell.get() as string | undefined) ?? null;
 }
 
+/**
+ * A write that joins a registration's transaction. `prepare()` runs before
+ * the transaction opens and syncs whatever `apply()` reads; `apply()` runs
+ * inside it, after every check on the registration has passed and before
+ * anything is written, reads through `tx` so that what it read joins the read
+ * set, and either writes and returns `undefined` or returns the error the
+ * whole write is then refused with, nothing committed.
+ */
+export interface RegistrationCompanion {
+  prepare(): Promise<void>;
+  apply(tx: IExtendedStorageTransaction): Error | undefined;
+}
+
 export async function saveRegistration(
   runtime: Runtime,
   serviceSpace: string,
@@ -747,6 +966,12 @@ export async function saveRegistration(
    * bounded.
    */
   limits?: { live?: number; lifetime?: number; spaceLifetime?: number },
+  /**
+   * A write that lands with the registration or not at all: a gmail
+   * channel's place in its mailbox's list, which has to agree with the
+   * `mailboxKey` the registration carries.
+   */
+  companion?: RegistrationCompanion,
 ): Promise<void> {
   // Every index is written with the registration, and none of them is
   // best-effort.
@@ -777,9 +1002,10 @@ export async function saveRegistration(
   const month = auditMonth(registration.createdAt);
   const auditIndex = auditShardCell(runtime, serviceSpace, month);
   const shardList = auditShardListCell(runtime, serviceSpace);
-  const claimsCell = claim === undefined
+  const pendingClaim = claim === undefined
     ? undefined
-    : mintRequestCell(runtime, serviceSpace, claim.owner);
+    : requestClaim(runtime, serviceSpace, claim);
+  const claimsCell = pendingClaim?.cell;
   const ownerIndex = registration.owner === undefined
     ? undefined
     : ownerIndexCell(runtime, serviceSpace, registration.owner);
@@ -805,6 +1031,7 @@ export async function saveRegistration(
   ) {
     await c.sync();
   }
+  await companion?.prepare();
   await runtime.storageManager.synced();
 
   let conflicted = false;
@@ -813,6 +1040,7 @@ export async function saveRegistration(
   let overLive: number | undefined;
   let overLifetime: number | undefined;
   let overSpaceLifetime: number | undefined;
+  let refusedBy: Error | undefined;
   const result = await runtime.editWithRetry((tx) => {
     conflicted = false;
     claimedBy = undefined;
@@ -820,34 +1048,24 @@ export async function saveRegistration(
     overLive = undefined;
     overLifetime = undefined;
     overSpaceLifetime = undefined;
+    refusedBy = undefined;
 
     // EVERY check runs before ANY write. `editWithRetry` commits whatever the
     // closure did to the transaction, so a write followed by an early return
     // still lands — which would consume a request id on a write that was then
     // refused, the exact failure this atomicity exists to prevent.
-    let pendingClaim:
-      | { id: string; at: number; channel: string }[]
-      | undefined;
-    if (claim !== undefined && claimsCell !== undefined) {
-      const now = claim.now ?? Date.now();
-      const live = liveClaims(claimsCell.withTx(tx).get(), now);
-      const seen = live.find((entry) => entry.id === claim.requestId);
-      if (seen !== undefined) {
-        // The channel the claim was MADE for, not the one now being asked for.
-        claimedBy = seen.channel;
+    let recordClaim: (() => void) | undefined;
+    if (pendingClaim !== undefined) {
+      const checked = pendingClaim.check(tx);
+      if (checked.kind === "used") {
+        claimedBy = checked.channel;
         return;
       }
-      // Full: refuse rather than evict. Dropping the oldest entry would discard
-      // a claim still inside the replay window — the entry that proves a replay
-      // — so a flood of fresh ids would buy a second live token for a used id.
-      if (live.length >= MAX_RETAINED_CLAIMS) {
+      if (checked.kind === "full") {
         claimsFull = true;
         return;
       }
-      pendingClaim = [
-        ...live,
-        { id: claim.requestId, at: now, channel: claim.channel },
-      ];
+      recordClaim = checked.record;
     }
 
     const bound = cell.withTx(tx);
@@ -916,9 +1134,14 @@ export async function saveRegistration(
       }
     }
 
-    if (pendingClaim !== undefined && claimsCell !== undefined) {
-      claimsCell.withTx(tx).set(pendingClaim);
+    // Last of the checks, and the first write: the companion writes only
+    // when it does not refuse.
+    if (companion !== undefined) {
+      refusedBy = companion.apply(tx);
+      if (refusedBy !== undefined) return;
     }
+
+    recordClaim?.();
 
     if (acquiring && lifetimeCell !== undefined) {
       const ever = (lifetimeCell.withTx(tx).get() as number | undefined) ?? 0;
@@ -982,6 +1205,7 @@ export async function saveRegistration(
   if (overSpaceLifetime !== undefined) {
     throw new SpaceLifetimeChannelCapError(overSpaceLifetime);
   }
+  if (refusedBy !== undefined) throw refusedBy;
   if (conflicted) throw new RegistrationConflictError();
 }
 
@@ -997,6 +1221,22 @@ export async function getOwnerRegistrationIndex(
   return (cell.get() as string[] | undefined) ?? [];
 }
 
+/**
+ * Returns the cause prefix of a device channel, or throws for a channel of
+ * another kind, which has none.
+ */
+function causePrefixOf(registration: IngestRegistration): string {
+  if (
+    registration.kind !== "device" || registration.causePrefix === undefined
+  ) {
+    throw new Error(
+      `channel ${registration.id} is a ${registration.kind} channel, ` +
+        `not a device channel`,
+    );
+  }
+  return registration.causePrefix;
+}
+
 /** The partition cell for a channel — `${causePrefix}/${partition}` in the user's space. */
 export function journalCell(
   runtime: Runtime,
@@ -1005,7 +1245,7 @@ export function journalCell(
 ) {
   return runtime.getCell<Record<string, unknown>[]>(
     registration.space as MemorySpace,
-    `${registration.causePrefix}/${partition}`,
+    `${causePrefixOf(registration)}/${partition}`,
     JournalSchema,
   );
 }
@@ -1035,10 +1275,116 @@ export async function appendToJournal(
   return records.length;
 }
 
+// The one cell of a `gmail` channel. The record it holds is opaque here, as a
+// journal's are.
+const LatestSchema = {
+  type: "object",
+  additionalProperties: true,
+} as const satisfies JSONSchema;
+
+/**
+ * The one cell of a `gmail` channel: its `target`, resolved as a link. Throws
+ * for a channel of another kind, which has no target.
+ */
+export function latestCell(
+  runtime: Runtime,
+  registration: IngestRegistration,
+) {
+  if (registration.kind !== "gmail" || registration.target === undefined) {
+    throw new Error(
+      `channel ${registration.id} is a ${registration.kind} channel, ` +
+        `not a gmail channel`,
+    );
+  }
+  return runtime.getCellFromLink<Record<string, unknown>>(
+    linkOfCellTarget(registration.target),
+    LatestSchema,
+  );
+}
+
+/**
+ * Durably replaces the record in a `gmail` channel's cell with `record`,
+ * minting one ExternalIngest mark bound to it, when the cell is empty or
+ * `supersedes(current, record)` returns `true`, meaning `record` is newer
+ * than the `current` record the cell holds. Otherwise the cell is left as it
+ * is: nothing is written and no mark is minted, so a stale arrival wakes
+ * nothing watching the cell. The decision is made inside the retried
+ * transaction against the value it commits over, so two writes racing
+ * through different instances leave the newer record in place whichever
+ * lands last. Returns whether `record` was written.
+ */
+export async function writeLatest(
+  runtime: Runtime,
+  registration: IngestRegistration,
+  record: Record<string, unknown>,
+  supersedes: (
+    current: Record<string, unknown>,
+    next: Record<string, unknown>,
+  ) => boolean,
+): Promise<boolean> {
+  const cell = latestCell(runtime, registration);
+  await cell.sync();
+  await runtime.storageManager.synced();
+  const channel: VouchedChannel = {
+    channel: registration.space,
+    audience: registration.installId,
+  };
+  return await custodyIngest.replaceIfNewer(
+    cell,
+    record,
+    (current) => supersedes(current, record),
+    channel,
+  );
+}
+
+/**
+ * Why a stored channel may not take writes right now: `revoked` for one that
+ * is disabled or revoked, `expired` for one past its `expiresAt`, or `null`
+ * for a live channel. An unparseable `expiresAt` reads as expired.
+ */
+export function channelRefusal(
+  registration: IngestRegistration,
+  now: number = Date.now(),
+): "revoked" | "expired" | null {
+  if (!registration.enabled || registration.revoked) return "revoked";
+  if (registration.expiresAt !== undefined) {
+    // Fail CLOSED on an unparseable value. `Date.parse` returns NaN for garbage
+    // and every comparison against NaN is false, so the natural spelling
+    // (`parsed <= now`) would treat a corrupted expiry as "not expired" and
+    // silently grant an unbounded token — the exact opposite of this field's
+    // purpose.
+    const expiresAt = Date.parse(registration.expiresAt);
+    if (!Number.isFinite(expiresAt) || expiresAt <= now) return "expired";
+  }
+  return null;
+}
+
+/**
+ * Stamps the channel's last-seen time with the current time, so an operator
+ * can see a source that has gone quiet. Best-effort: a failure is logged and
+ * never thrown, because it is status bookkeeping rather than the ingest
+ * itself, and carries no ExternalIngest mark.
+ */
+export async function recordLastSeen(
+  runtime: Runtime,
+  serviceSpace: string,
+  id: string,
+  logger?: IngestLogger,
+): Promise<void> {
+  try {
+    const seen = lastSeenCell(runtime, serviceSpace, id);
+    await seen.sync();
+    await runtime.storageManager.synced();
+    await durableSet(seen, new Date().toISOString());
+  } catch (error) {
+    logger?.error({ error, id }, "ingest: failed to bump last-seen");
+  }
+}
+
 const DUMMY_HASH = hashSecret("");
 
-/** A minimal logger shape so processIngest is testable without a pino instance. */
-interface IngestLogger {
+/** A minimal logger shape so the ingest paths are testable without pino. */
+export interface IngestLogger {
   error: (obj: unknown, msg: string) => void;
   info: (obj: unknown, msg: string) => void;
 }
@@ -1054,7 +1400,11 @@ export type IngestResult =
  * equalized 401 for missing/disabled/wrong-token, 502-vs-401, hostile-partition
  * 400, batch cap) is unit-testable against a real runtime. `rawBody` is the raw
  * request body text; it is parsed only AFTER auth succeeds, so a bad/unknown/
- * disabled/wrong-sink token gets a uniform 401 regardless of body validity.
+ * disabled/wrong-kind token gets a uniform 401 regardless of body validity.
+ *
+ * `addressedSpace` is the space the request named in its path, for a request
+ * that named one. A channel writing into any other space answers exactly like
+ * an unknown channel, whatever token came with it.
  */
 export async function processIngest(
   runtime: Runtime,
@@ -1063,6 +1413,7 @@ export async function processIngest(
   token: string,
   rawBody: string,
   logger?: IngestLogger,
+  addressedSpace?: string,
 ): Promise<IngestResult> {
   // Storage errors must 502, not masquerade as 401.
   let registration: IngestRegistration | null;
@@ -1078,13 +1429,22 @@ export async function processIngest(
 
   // EXACTLY TWO compares on every path — current, then previous-or-dummy — so
   // unknown / wrong / rotated are indistinguishable by timing. A missing
-  // channel burns both against the dummy.
-  if (!registration) {
+  // channel burns both against the dummy, and so does one addressed through a
+  // space it does not write into.
+  if (
+    !registration ||
+    (addressedSpace !== undefined && registration.space !== addressedSpace)
+  ) {
     verifyIngestSecret(token, DUMMY_HASH);
     verifyIngestSecret(token, DUMMY_HASH);
     return { status: 401, body: { error: "Invalid request" } };
   }
-  const matchesCurrent = verifyIngestSecret(token, registration.secretHash);
+  // Both compares run whatever the registration holds. A channel with no hash
+  // of its own, which a gmail channel is, compares against the dummy, and the
+  // guard below keeps that compare from ever counting as a match.
+  const matchesCurrent =
+    verifyIngestSecret(token, registration.secretHash ?? DUMMY_HASH) &&
+    registration.secretHash !== undefined;
   const matchesPrevious =
     verifyIngestSecret(token, registration.previousSecretHash ?? DUMMY_HASH) &&
     // The compare above always RUNS (constant time), but its result only counts
@@ -1104,9 +1464,9 @@ export async function processIngest(
     }
     return { status: 401, body: { error: "Invalid request" } };
   }
-  // A wrong-sink channel stays opaque even to a valid token holder, so a
-  // stream-channel id POSTed here can never acquire journal semantics.
-  if (registration.sink !== "journal") {
+  // A channel of another kind stays opaque even to a valid token holder, so a
+  // gmail channel's id POSTed here can never acquire journal semantics.
+  if (registration.kind !== "device") {
     return { status: 401, body: { error: "Invalid request" } };
   }
 
@@ -1118,7 +1478,8 @@ export async function processIngest(
   // "re-pair me" from "server is broken", so it either drops buffered records
   // or retries forever. This is the one deliberate departure from the blanket
   // 401 equalization, and it is confined to correct-token cases.
-  if (!registration.enabled || registration.revoked) {
+  const refusal = channelRefusal(registration);
+  if (refusal === "revoked") {
     // Logged, not silent: a mass retirement (scripts/retire-ingest-channels.ts)
     // shows up here as a burst, and an operator needs to be able to see which
     // devices are still presenting retired tokens — and that the refusals are
@@ -1132,19 +1493,11 @@ export async function processIngest(
       body: { error: "Channel revoked or rotated — re-pair this device" },
     };
   }
-  if (registration.expiresAt !== undefined) {
-    // Fail CLOSED on an unparseable value. `Date.parse` returns NaN for garbage
-    // and every comparison against NaN is false, so the natural spelling
-    // (`parsed <= now`) would treat a corrupted expiry as "not expired" and
-    // silently grant an unbounded token — the exact opposite of this field's
-    // purpose.
-    const expiresAt = Date.parse(registration.expiresAt);
-    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
-      return {
-        status: 403,
-        body: { error: "Channel expired — re-pair this device" },
-      };
-    }
+  if (refusal === "expired") {
+    return {
+      status: 403,
+      body: { error: "Channel expired — re-pair this device" },
+    };
   }
 
   // Parse the body only AFTER auth — a bad token must stay opaque (uniform 401)
@@ -1196,16 +1549,7 @@ export async function processIngest(
       partition,
       records as Record<string, unknown>[],
     );
-    // Best-effort last-seen bump (operator status, not ingest — no mark) so a
-    // dead beacon is visible. Failure must not fail the POST.
-    try {
-      const seen = lastSeenCell(runtime, serviceSpace, id);
-      await seen.sync();
-      await runtime.storageManager.synced();
-      await durableSet(seen, new Date().toISOString());
-    } catch (error) {
-      logger?.error({ error, id }, "ingest: failed to bump last-seen");
-    }
+    await recordLastSeen(runtime, serviceSpace, id, logger);
     logger?.info({ id, partition, appended }, "ingest: appended records");
     // received === appended in v1 (no server dedup); `appended` is a distinct
     // field only to leave room for a future dedup story without a wire change.

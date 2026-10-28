@@ -1,0 +1,106 @@
+{
+  "argumentSchema": {
+    "properties": {
+      "note": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "user"
+          }
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "secret": {
+        "default": "",
+        "scope": "user",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "test/inferred-result-scope/main.tsx",
+  "resultSchema": {
+    "properties": {
+      "coalesced": {
+        "type": "string"
+      },
+      "holder": {
+        "properties": {
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "note"
+        ],
+        "type": "object"
+      },
+      "passThrough": {
+        "type": [
+          "string",
+          "undefined"
+        ]
+      },
+      "setNote": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "type": "object"
+      },
+      "setSecret": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "type": "object"
+      },
+      "shout": {
+        "type": "string"
+      },
+      "tagged": {
+        "properties": {
+          "n": {
+            "type": "number"
+          },
+          "who": {
+            "type": [
+              "string",
+              "undefined"
+            ]
+          }
+        },
+        "required": [
+          "who",
+          "n"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "passThrough",
+      "shout",
+      "tagged",
+      "coalesced",
+      "holder",
+      "setSecret",
+      "setNote"
+    ],
+    "type": "object"
+  }
+}

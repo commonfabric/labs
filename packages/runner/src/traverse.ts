@@ -27,6 +27,7 @@ import { walkSchemaDocumentClosure } from "@commonfabric/data-model-schema/schem
 import {
   collectExternalSchemaRefHashes,
   containsExternalSchemaRef,
+  isExternalSchemaRef,
 } from "@commonfabric/data-model-schema/schema-refs";
 import type { MemorySpace, Result, Unit } from "@commonfabric/memory/interface";
 import {
@@ -59,6 +60,7 @@ import {
 } from "./schema-registry.ts";
 import { getReaderSchemaPrecedenceConfig } from "./reader-schema-precedence-config.ts";
 import { markIfcBearingLinkCrossing } from "./schema-ifc.ts";
+import { schemaTypesAreDisjoint } from "./schema-type-disjointness.ts";
 import type {
   CellScope,
   JSONObject,
@@ -74,8 +76,12 @@ import {
 } from "./cfc.ts";
 import { cfcEnvelopeLabelDocumentHashes } from "./cfc/label-documents.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
-import { dataUriFromValueWithResolvedLinks } from "./data-uri.ts";
 import { FABRIC_SPECIAL_OBJECT_BRAND } from "./fabric-special-object-brand.ts";
+import {
+  immutableCellsFor,
+  mintedFromUnstoredValue,
+  pinImmutableCell,
+} from "./immutable-cell.ts";
 import { type LastNode, readMaybeLink } from "./link-resolution.ts";
 import {
   type IMemorySpaceValueAddress,
@@ -90,7 +96,12 @@ import {
   parseLink,
   schemaForSpaceCrossing,
 } from "./link-utils.ts";
-import { canFollowScopedLink, isCellScope, scopeRank } from "./scope.ts";
+import {
+  canFollowScopedLink,
+  isCellScope,
+  noteDeclaredReadScope,
+  scopeRank,
+} from "./scope.ts";
 import { type CellLinkRefPayload, SigilLink, type URI } from "./sigil-types.ts";
 import {
   type Activity,
@@ -239,9 +250,9 @@ const _memoIdDigests = new LRUCache<string, string>({
 });
 
 /**
- * Fixed-size stand-in for a document id that carries its own content.
+ * Fixed-size traversal key for a document identifier.
  *
- * A data URI names the value it holds, so an inline document's id is as long
+ * A legacy data URI names the value it holds, so its id is as long
  * as the document — tens of thousands of characters for a component that
  * holds a list. A key built from that id costs a copy and a hash of every one
  * of those characters, and the traversal builds one key per node it visits
@@ -269,15 +280,53 @@ function memoIdComponent(id: string): string {
  * id that reads like a digest still gets a key of its own.
  */
 function schemaMemoAddressKey(address: IMemorySpaceAddress): string {
+  return `${schemaMemoDocumentPrefix(address)}${
+    keyComponent(address.type ?? "application/json")
+  }p${pathKey(address.path)}`;
+}
+
+/**
+ * The part every memo key for the document `address` names opens with,
+ * whatever type, path and schema the key goes on to name: the space, the
+ * scope and the id, each length-prefixed, through the `t` that starts the
+ * type. `forgetSchemaMemoDocuments()` matches memo keys by it.
+ */
+export function schemaMemoDocumentPrefix(
+  address: { space: string; scope?: IMemorySpaceAddress["scope"]; id: string },
+): string {
   return `s${keyComponent(address.space)}c${
     keyComponent(address.scope ?? "space")
   }${
     address.id.length > MAX_SPELLED_OUT_ID_LENGTH
       ? memoIdComponent(address.id)
       : `i${keyComponent(address.id)}`
-  }t${keyComponent(address.type ?? "application/json")}p${
-    pathKey(address.path)
-  }`;
+  }t`;
+}
+
+/** The `schemaMemoDocumentPrefix()` a memo key opens with. */
+function schemaMemoKeyDocumentPrefix(key: string): string {
+  let at = 0;
+  for (let component = 0; component < 3; component++) {
+    const colon = key.indexOf(":", at + 1);
+    at = colon + 1 + Number(key.slice(at + 1, colon));
+  }
+  return key.slice(0, at + 1);
+}
+
+/**
+ * Drops every entry of `memo` for the documents `prefixes` name, each a
+ * `schemaMemoDocumentPrefix()`. An entry stands for a traversal that
+ * recorded the document's reads and tracker entries; once those records
+ * are gone, a traversal that found the entry would skip the document and
+ * record nothing in their place.
+ */
+export function forgetSchemaMemoDocuments(
+  memo: SchemaMemo,
+  prefixes: ReadonlySet<string>,
+): void {
+  for (const key of memo.keys()) {
+    if (prefixes.has(schemaMemoKeyDocumentPrefix(key))) memo.delete(key);
+  }
 }
 
 /**
@@ -504,6 +553,16 @@ const _plainSchemaPlanCache = new WeakMap<
 /** Exact `{ type }` schemas have no traversal semantics beyond this check. */
 function isPlainTypeSchema(schema: JSONSchemaObj, type: string): boolean {
   return schema.type === type && Object.keys(schema).length === 1;
+}
+
+/**
+ * Whether `value` satisfies a plain-schema plan's primitive `type`: the type
+ * `value` has, or `"number"` for a `bigint`, which is an integer and so a
+ * number under schemaTypeMatchesValueType's subtype rule.
+ */
+function matchesPlainType(value: unknown, type: PlainPrimitiveType): boolean {
+  const valueType = getPlainJsonType(value);
+  return valueType === type || (type === "number" && valueType === "integer");
 }
 
 /**
@@ -1138,6 +1197,12 @@ export class MapSet<K, V> {
     return this.#setMap!.get(key);
   }
 
+  /** Iterates the keys, without materializing any key's values. */
+  public *keys(): IterableIterator<K> {
+    if (this.#hashMap) yield* this.#hashMap.keys();
+    else yield* this.#setMap!.keys();
+  }
+
   /**
    * Iterate the values for a key without materializing a `Set` (unlike
    * `get()`, which copies in hash mode). Yields nothing for an absent key.
@@ -1428,12 +1493,23 @@ export const schemaTrackerCoversSelector = (
   schemaTracker: MapSet<string, SchemaPathSelector>,
   key: string,
   selector: SchemaPathSelector,
-): boolean => {
+): boolean => coveringSelector(schemaTracker, key, selector) !== undefined;
+
+/**
+ * Like `schemaTrackerCoversSelector()`, except that it returns the tracked
+ * selector that covers `selector` — the equal one, or a permissive one
+ * whose path is a prefix — and `undefined` when none does.
+ */
+export const coveringSelector = (
+  schemaTracker: MapSet<string, SchemaPathSelector>,
+  key: string,
+  selector: SchemaPathSelector,
+): SchemaPathSelector | undefined => {
   const internedSelector = internPathSelector(
     selector.schema === undefined ? { ...selector, schema: false } : selector,
   );
   if (schemaTracker.hasValue(key, internedSelector)) {
-    return true;
+    return internedSelector;
   }
 
   // Only true-schema selectors can grant prefix coverage; scan just those
@@ -1447,10 +1523,10 @@ export const schemaTrackerCoversSelector = (
       ContextualFlowControl.isTrueSchema(existing.schema) &&
       pathStartsWith(internedSelector.path, existing.path)
     ) {
-      return true;
+      return existing;
     }
   }
-  return false;
+  return undefined;
 };
 
 export class CycleTracker<K> {
@@ -1574,7 +1650,7 @@ export type PointerCycleTracker = CompoundCycleTracker<
  * than in the one a position is in.
  *
  * A traversal that moves a value to another address without following a
- * link, as an inline array item moves to a `data:` document of its own,
+ * link, as an inline array item moves to an immutable document of its own,
  * records that as a copy.
  */
 export interface LinkCrossingRoute {
@@ -1632,6 +1708,17 @@ export type TraversalContext = {
   traverseCells: boolean;
 
   /**
+   * Whether an inline object or array held in an array is traversed at its
+   * address in the document that stores it. Otherwise the traversal gives
+   * such an element a `snapshot:` address naming its frozen value, which
+   * is what gives the object a read returns its value identity. A walk that
+   * selects documents for a storage engine sets this: it returns no object,
+   * so the snapshot buys it nothing, and its storage holds no document at a
+   * snapshot address, so those reads cannot select stored documents.
+   */
+  inlineArrayItemsInPlace: boolean;
+
+  /**
    * Reports a followed link whose target document is absent from the local
    * replica. Cross-space targets (target space !== `sourceSpace`) can never
    * be covered by the source doc's per-space subscription; same-space
@@ -1648,6 +1735,40 @@ export type TraversalContext = {
      * the miss so a referrer that changes away retires it. */
     source?: { id: string; scope?: CellScope },
   ) => void;
+
+  /**
+   * Reports each selector the traversal records in the schema tracker, or
+   * finds the tracker already covering, with the document whose walk
+   * needed it: the document holding the link that was followed, the
+   * document whose schema or `cfc` envelope named a schema document, or
+   * the traversal's own root (`trackedReferrer`). `walked` means the
+   * selector was recorded for the referrer's walk; `covered` means the
+   * referrer's own selector was skipped because the reported one, already
+   * in the tracker, covers it. Optional: a server-side graph walk
+   * attributes the tracker with it so a referrer re-walked without the
+   * link, or a watch removed, retires what nothing else reaches.
+   */
+  onTrackedDoc?: (
+    key: string,
+    selector: SchemaPathSelector,
+    source: { id: string; scope?: CellScope } | undefined,
+    kind: "walked" | "covered",
+  ) => void;
+
+  /**
+   * The referrer a traverser's root record attributes to, set by the walk
+   * that constructs the traverser; `onTrackedDoc` receives it as the
+   * source. Unset, a root record is reported with no source.
+   */
+  trackedReferrer?: { id: string; scope?: CellScope };
+
+  /**
+   * Set by a walk that visits a document again to record what its links
+   * reach: no position inside that document is answered from the schema
+   * memo, which would skip its links and report nothing, while the
+   * documents its links reach still are.
+   */
+  traverseUnmemoized?: { id: string; scope?: CellScope };
 
   /**
    * How many missing link targets this traversal has reported. A site that
@@ -1768,13 +1889,16 @@ export function createTraversalContext(
   ) => void,
   schemaDocsLoaded: Set<string> = new Set<string>(),
   schemaDocsAvailable: Set<string> = new Set<string>(),
+  onTrackedDoc?: TraversalContext["onTrackedDoc"],
 ): TraversalContext {
   return {
     tracker,
     schemaTracker,
     scopeKeyIdentity,
     traverseCells,
+    inlineArrayItemsInPlace: false,
     onMissingLinkTarget,
+    onTrackedDoc,
     missingLinkTargets: 0,
     missingLinkTargetDocs: new Set<string>(),
     substituteCoveredMissingTarget: false,
@@ -2092,13 +2216,13 @@ function getNormalizedLink(
     throw new Error("Unable to create link to non-value address");
   }
   const { space, id, path } = address;
-  return {
+  return pinImmutableCell({
     space,
     id,
     scope: address.scope ?? "space",
     path: path.slice(1),
     ...(schema !== undefined && { schema }),
-  };
+  }, id);
 }
 
 // Value traversed must be a DAG, though it may have aliases or cell links
@@ -2445,14 +2569,18 @@ export abstract class BaseObjectTraverser {
       link.schema,
     );
 
-    return schemaTrackerCoversSelector(
+    // Same key construction as getTrackerKey (key-vocabulary.md §1 site
+    // 5): coverage proven for one scope instance is not coverage of
+    // another.
+    const key = getTrackerKey(link, this.context.scopeKeyIdentity);
+    const covering = coveringSelector(
       this.schemaTracker,
-      // Same key construction as getTrackerKey (key-vocabulary.md §1
-      // site 5): coverage proven for one scope instance is not coverage
-      // of another.
-      getTrackerKey(link, this.context.scopeKeyIdentity),
+      key,
       this.#internCoverageSelector(targetSelector),
     );
+    if (covering === undefined) return false;
+    this.context.onTrackedDoc?.(key, covering, doc.address, "covered");
+    return true;
   }
 
   /**
@@ -2693,6 +2821,32 @@ const schemaScopeForSelector = (selector?: SchemaPathSelector) =>
 const schemaFollowScopeCap = (schema: unknown): SchemaScope | undefined =>
   ContextualFlowControl.getSchemaScopeCap(schema as JSONSchema | undefined);
 
+const _schemaScopeCapCache = new WeakMap<object, SchemaScope | undefined>();
+
+/**
+ * {@link schemaFollowScopeCap}, memoized by schema identity. Handle
+ * construction asks it of every element read as a handle, and the elements
+ * of one array share one declaration, so the reference resolution behind the
+ * answer runs once per declaration rather than once per element. A schema
+ * whose root is a content-addressed reference is answered from the closure
+ * the registry holds at the time, which may not hold it yet, so that answer
+ * is never kept.
+ */
+function schemaFollowScopeCapMemoized(
+  schema: JSONSchema | undefined,
+): SchemaScope | undefined {
+  if (!isObjectOrArray(schema)) return undefined;
+  if (_schemaScopeCapCache.has(schema)) {
+    return _schemaScopeCapCache.get(schema);
+  }
+  const cap = schemaFollowScopeCap(schema);
+  const ref = (schema as { $ref?: unknown }).$ref;
+  if (!(typeof ref === "string" && isExternalSchemaRef(ref))) {
+    _schemaScopeCapCache.set(schema, cap);
+  }
+  return cap;
+}
+
 /**
  * The key `TraversalContext.missingLinkTargetDocs` holds a document under: its
  * space, its scope and its id, since one id names a different document in
@@ -2901,6 +3055,7 @@ function followPointer(
     ]);
     return [notFound(target), selector];
   }
+  noteDeclaredReadScope(tx, schemaScope, link.scope);
   if (selector !== undefined) {
     // We'll need to re-root the selector for the target doc
     // Remove the portions of doc.path from selector.path, limiting schema if
@@ -2981,7 +3136,7 @@ function followPointer(
   // If we followed a link to a doc, and the doc exists, track our visit
   // We do this even if the id is the same, since the path may differ.
   if (link.id !== undefined) {
-    trackVisitedDoc(tx, target, context, selector);
+    trackVisitedDoc(tx, target, context, selector, doc.address);
   }
 
   // If we got a NotFoundError, or an undefined because the last element
@@ -3052,14 +3207,15 @@ function trackVisitedDoc(
   target: IMemorySpaceAddress,
   context: TraversalContext,
   selector: SchemaPathSelector | undefined,
+  source?: IMemorySpaceAddress,
 ) {
   // We have a reference to a different doc, so track the dependency
   // and update our targetDoc
   if (selector !== undefined) {
-    context.schemaTracker.add(
-      getTrackerKey(target, context.scopeKeyIdentity),
-      internPathSelector(selector),
-    );
+    const key = getTrackerKey(target, context.scopeKeyIdentity);
+    const interned = internPathSelector(selector);
+    context.schemaTracker.add(key, interned);
+    context.onTrackedDoc?.(key, interned, source, "walked");
   }
   // A document reached through a link is owed the schema document its
   // `cfc` envelope names, whichever way the walk reached it.
@@ -3100,6 +3256,14 @@ function trackVisitedDoc(
  * is closure-transitive, so gating at the two places a schema enters a
  * traversal (the selector, a link) covers every interior resolution.
  *
+ * A referrer minted from a value no space has stored
+ * (`mintedFromUnstoredValue`) is the one exception: no query delivers such
+ * a document, and no space holds the closure behind its links' references,
+ * so a document the registry holds is taken from there — unread, untracked,
+ * and not credited to the space — and the verdict for such a referrer is
+ * the registry's. A document the registry lacks is read from the space as
+ * for a stored referrer.
+ *
  * Documents are read in the referrer's space at the canonical `"space"`
  * scope: schema documents are installed space-scoped, so a session- or
  * user-scoped referrer must not redirect the read to its own partition.
@@ -3111,20 +3275,33 @@ function loadExternalSchemaDocs(
   context: TraversalContext,
 ): boolean {
   if (!containsExternalSchemaRef(schema)) return true;
+  // A link inside a document minted from a value no space has stored was
+  // never written, so no space holds the closure its schema's reference
+  // names, and the registry that minted the reference does
+  // (`docs/specs/content-addressed-schemas.md`, "Space boundaries"). For
+  // such a referrer the registry decides, and what it supplies is never
+  // counted as available in the referrer's space: a stored document's
+  // reference is held to what that space delivers.
+  const registryHeld = mintedFromUnstoredValue(referrer.id);
   loadSchemaDocClosure(
     tx,
     referrer,
     collectExternalSchemaRefHashes(schema),
     context,
+    registryHeld,
   );
 
   // The verdict: every hash transitively reachable from the schema's own
   // refs was collected in this traversal (this call or an earlier one — the
-  // per-context set accumulates).
+  // per-context set accumulates), or, for a registry-held referrer, is in
+  // the registry, where a document read from the space was registered too.
   const { missing } = walkSchemaDocumentClosure({
     roots: collectExternalSchemaRefHashes(schema),
     load: (hash) => {
-      if (!context.schemaDocsAvailable.has(`${referrer.space}/${hash}`)) {
+      if (
+        !registryHeld &&
+        !context.schemaDocsAvailable.has(`${referrer.space}/${hash}`)
+      ) {
         return undefined;
       }
       const document = lookupSchemaDocument(hash);
@@ -3136,12 +3313,50 @@ function loadExternalSchemaDocs(
   return missing.size === 0;
 }
 
+/**
+ * Helper for {@link loadExternalSchemaDocs}, which loads and verifies the
+ * closure behind `initialHashes` in `referrer`'s space. With `registryHeld`,
+ * a document the registry holds is taken from there without a read, and is
+ * not recorded as available in the space.
+ */
 function loadSchemaDocClosure(
   tx: IExtendedStorageTransaction,
   referrer: IMemorySpaceAddress,
   initialHashes: ReadonlySet<string>,
   context: TraversalContext,
+  registryHeld: boolean,
 ): void {
+  const fromRegistry = new Set<string>();
+  const keyOf = (hash: string): string =>
+    getTrackerKey(
+      { space: referrer.space, id: `cid:${hash}` as URI, scope: "space" },
+      context.scopeKeyIdentity,
+    );
+  // A closure this context loaded for an earlier referrer is this one's
+  // too: each document in it the registry holds is attributed to the
+  // referrer, through the registry's copy, since the walk below settles at
+  // the first document it finds loaded and descends no further. One the
+  // registry lacks was loaded and failed, and has no record to attribute.
+  const attributeLoaded = (root: string): void => {
+    const seen = new Set<string>();
+    const pending = [root];
+    while (pending.length > 0) {
+      const hash = pending.pop()!;
+      if (seen.has(hash)) continue;
+      seen.add(hash);
+      const registered = lookupSchemaDocument(hash);
+      if (registered === undefined) continue;
+      context.onTrackedDoc?.(
+        keyOf(hash),
+        REJECTING_SELECTOR,
+        referrer,
+        "walked",
+      );
+      for (const ref of collectExternalSchemaRefHashes(registered)) {
+        pending.push(ref);
+      }
+    }
+  };
   walkSchemaDocumentClosure({
     roots: initialHashes,
     load: (hash) => {
@@ -3151,8 +3366,20 @@ function loadSchemaDocClosure(
         scope: "space" as const,
         path: [],
       };
-      const key = getTrackerKey(address, context.scopeKeyIdentity);
-      if (context.schemaDocsLoaded.has(key)) return { kind: "settled" };
+      const key = keyOf(hash);
+      if (context.schemaDocsLoaded.has(key)) {
+        attributeLoaded(hash);
+        return { kind: "settled" };
+      }
+      // A document the registry lacks is read from the space the referrer is
+      // addressed in, as for a stored document.
+      if (registryHeld) {
+        const registered = lookupSchemaDocument(hash);
+        if (registered !== undefined) {
+          fromRegistry.add(hash);
+          return { kind: "verified", schema: registered };
+        }
+      }
       context.schemaDocsLoaded.add(key);
       // A plain read: loads the document AND records the dependency, so an
       // absent document's later arrival re-triggers the reader.
@@ -3176,6 +3403,7 @@ function loadSchemaDocClosure(
         return undefined;
       }
       context.schemaTracker.add(key, REJECTING_SELECTOR);
+      context.onTrackedDoc?.(key, REJECTING_SELECTOR, referrer, "walked");
       const doc = result.ok.value;
       if (!isObjectNotArray(doc) || !("value" in doc)) return undefined;
       return {
@@ -3185,8 +3413,11 @@ function loadSchemaDocClosure(
     },
     onVerified: (hash, schema) => {
       registerSchemaDocument(hash, schema);
-      // Loaded in this space and verified.
-      context.schemaDocsAvailable.add(`${referrer.space}/${hash}`);
+      // Loaded in this space and verified; one the registry supplied was not
+      // loaded here, and the space is not credited with it.
+      if (!fromRegistry.has(hash)) {
+        context.schemaDocsAvailable.add(`${referrer.space}/${hash}`);
+      }
     },
     onMissing: (hash, miss) => {
       // An absent document was reported where its read failed. One that is
@@ -3299,10 +3530,9 @@ function trackMetadataDocument(
   // tracked too, or nothing would re-run this load when it arrives. The
   // read itself is deliberately not a scheduling read: delivery
   // reactivity rides the tracker, not the runner scheduler.
-  context.schemaTracker.add(
-    getTrackerKey(address, context.scopeKeyIdentity),
-    REJECTING_SELECTOR,
-  );
+  const key = getTrackerKey(address, context.scopeKeyIdentity);
+  context.schemaTracker.add(key, REJECTING_SELECTOR);
+  context.onTrackedDoc?.(key, REJECTING_SELECTOR, valueEntry.address, "walked");
   tx.read(address, { meta: ignoreReadForScheduling });
 }
 
@@ -3511,42 +3741,28 @@ export function combineSchemaForLink(
       schemaWithProperties(adopted, { default: parentDefault }),
     );
   }
-  const linkDefault = isObjectOrArray(linkSchema)
-    ? linkSchema.default
+  // The link's declaration is read in structural form, so a default behind a
+  // content-addressed reference is inherited as an inline one is.
+  const linkDefault = isObjectNotArray(linkSchema)
+    ? resolveExternalRootRefForStructure(linkSchema).default
     : undefined;
   if (linkDefault === undefined) {
     return parentSchema;
   }
-  const key = internSchemaPairAsKey(parentSchema, linkSchema);
+  // The result holds nothing of the link schema but its default, so the key
+  // is the reader's schema and that default. Each document a link is read
+  // out of holds the link's schema as an object of its own, and a key over
+  // the whole link schema would hash one whole schema per document. The
+  // second delimiter keeps this key apart from the pair key above.
+  const key = `${internSchemaAsTaggedHashString(parentSchema)}|default|${
+    hashStringOf(linkDefault)
+  }`;
   const cached = _combineLinkSchemaCache.get(key);
   if (cached !== undefined) return cached;
   return internSet(
     _combineLinkSchemaCache,
     key,
     schemaWithProperties(parentSchema, { default: linkDefault }),
-  );
-}
-
-function schemaTypesAreDisjoint(
-  parentType: JSONSchemaObj["type"],
-  linkType: JSONSchemaObj["type"],
-): boolean {
-  if (parentType === undefined || linkType === undefined) return false;
-
-  const parentTypes = Array.isArray(parentType) ? parentType : [parentType];
-  const linkTypes = Array.isArray(linkType) ? linkType : [linkType];
-  if (parentTypes.includes("unknown") || linkTypes.includes("unknown")) {
-    return false;
-  }
-
-  return !parentTypes.some((parent) =>
-    linkTypes.some((link) =>
-      parent === link ||
-      (parent === "number" && link === "integer") ||
-      (parent === "integer" && link === "number") ||
-      (parent === "object" && isFabricPrimitiveSchemaType(link)) ||
-      (link === "object" && isFabricPrimitiveSchemaType(parent))
-    )
   );
 }
 
@@ -4178,18 +4394,44 @@ export class SchemaObjectTraverser<V extends FabricValue>
     this.schemaTracker.deepEqualCalls = 0;
     this.schemaTracker.deepEqualMs = 0;
 
-    logger.timeStart("traverse");
-    this.schemaTracker.add(
-      getTrackerKey(doc.address, this.context.scopeKeyIdentity),
-      internPathSelector(this.selector),
-    );
-    // Flag the top level read of doc for the scheduler
-    this.tx.readOrThrow(doc.address, READ_NON_RECURSIVE_FOR_SCHEDULING);
-    const rv: TraverseResult<FabricValue> = selectorCollected
-      ? this.traverseWithSelector(doc, this.selector, link)
-      : fail<FabricValue>(TRAVERSE_FAILURES.schemaRefResolution);
+    const startedAt = performance.now();
+    let outcome = "threw";
+    let rv: TraverseResult<FabricValue>;
+    let elapsed: number;
+    try {
+      {
+        const key = getTrackerKey(doc.address, this.context.scopeKeyIdentity);
+        const interned = internPathSelector(this.selector);
+        this.schemaTracker.add(key, interned);
+        this.context.onTrackedDoc?.(
+          key,
+          interned,
+          this.context.trackedReferrer,
+          "walked",
+        );
+      }
+      // Flag the top level read of doc for the scheduler.
+      this.tx.readOrThrow(doc.address, READ_NON_RECURSIVE_FOR_SCHEDULING);
+      rv = selectorCollected
+        ? this.traverseWithSelector(doc, this.selector, link)
+        : fail<FabricValue>(TRAVERSE_FAILURES.schemaRefResolution);
+      outcome = rv.error === undefined ? "ok" : "failed";
+    } finally {
+      elapsed = logger.timeDetailed(
+        () =>
+          JSON.stringify({
+            doc: getTrackerKey(doc.address, this.context.scopeKeyIdentity),
+            path: this.selector.path,
+            schema: hashSchema(this.selector.schema),
+            schemaCalls: this.traverseWithSchemaCalls,
+            memoHits: this.schemaMemoHits,
+            outcome,
+          }),
+        startedAt,
+        "traverse",
+      );
+    }
     const { error } = rv;
-    const elapsed = logger.timeEnd("traverse") ?? 0;
     this.maybeReportSlowTraverse(elapsed, doc);
     if (error !== undefined) {
       // This helps track down mismatched schemas, but may be fine
@@ -4395,7 +4637,12 @@ export class SchemaObjectTraverser<V extends FabricValue>
         ? schemaMemoAddressKey(doc.address) + "|" + hashSchema(schema)
         : schemaMemoAddressKey(doc.address) + "|" + hashSchema(schema) + "|" +
           schemaMemoLinkKey(link) + "|" + linkCrossingsMemoKey(this.context);
-      const cached = memo.get(memoKey);
+      const unmemoized = this.context.traverseUnmemoized;
+      const cached = unmemoized !== undefined &&
+          unmemoized.id === doc.address.id &&
+          (unmemoized.scope ?? "space") === (doc.address.scope ?? "space")
+        ? undefined
+        : memo.get(memoKey);
       if (cached !== undefined) {
         this.schemaMemoHits++;
         return cached;
@@ -4909,6 +5156,13 @@ export class SchemaObjectTraverser<V extends FabricValue>
           this.#isValidType(schemaObj, "boolean")
         ? { ok: this.#traversePrimitive(doc, schemaObj) }
         : fail(TRAVERSE_FAILURES.invalidType);
+    } else if (typeof doc.value === "bigint") {
+      // A `bigint` is an integer, so a `number` schema accepts it too, by
+      // schemaTypeMatchesValueType's subtype rule.
+      return isPlainTypeSchema(schemaObj, "integer") ||
+          this.#isValidType(schemaObj, "integer")
+        ? { ok: this.#traversePrimitive(doc, schemaObj) }
+        : fail(TRAVERSE_FAILURES.invalidType);
     } else if (isSigilLink(doc.value)) {
       this.tx.read(doc.address, READ_FOR_SCHEDULING);
       // When traversing a pointer, use the unresolved schema, so we have
@@ -5086,7 +5340,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
     if (isSigilLink(doc.value)) return undefined;
 
     if (plan.kind === "primitive") {
-      return getPlainJsonType(doc.value) === plan.type
+      return matchesPlainType(doc.value, plan.type)
         ? { ok: doc.value }
         : fail(TRAVERSE_FAILURES.invalidType);
     }
@@ -5107,7 +5361,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
       let valid = true;
       doc.value.forEach((item, index) => {
         reads.paths.push(appendToPath(doc.address.path, index.toString()));
-        if (getPlainJsonType(item) === itemPlan.type) {
+        if (matchesPlainType(item, itemPlan.type)) {
           newValue[index] = item;
         } else if (itemPlan.type === "undefined") {
           newValue[index] = undefined;
@@ -5151,7 +5405,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
       const propPath = appendToPath(doc.address.path, propKey);
       reads.paths.push(propPath);
       if (childPlan.kind === "primitive" && !isSigilLink(propValue)) {
-        if (getPlainJsonType(propValue) === childPlan.type) {
+        if (matchesPlainType(propValue, childPlan.type)) {
           newValue[propKey] = propValue;
         }
       } else {
@@ -5413,7 +5667,9 @@ export class SchemaObjectTraverser<V extends FabricValue>
       // cell to hold the object, except when it is requested as Cell. While
       // this means updates aren't propagated, it seems like the right trade-off
       // for stability of links and the ability to mutate them without creating
-      // loops (see below).
+      // loops (see below). A traversal whose context sets
+      // `inlineArrayItemsInPlace` traverses the element where it is stored
+      // instead.
       //
       // This makes
       // ```ts
@@ -5422,7 +5678,6 @@ export class SchemaObjectTraverser<V extends FabricValue>
       // cell.set(array);
       // ```
       // work as expected. Handle boolean items values for element schema
-      // let createdDataURI = false;
       // const maybeLink = parseLink(item, arrayLink);
       if (isSigilLink(item)) {
         const elementLink = parseLink(item, curDoc.address);
@@ -5553,30 +5808,38 @@ export class SchemaObjectTraverser<V extends FabricValue>
           );
         }
       } else if (
+        !this.context.inlineArrayItemsInPlace &&
         arrayItemUsesValueIdentity(item, curSelector.schema)
       ) {
-        // We create an element link, but this is just to establish the id if we encounter
-        // other links in our data value and we need to construct a relative link.
+        // An inline object or array gets a `snapshot:` address naming its
+        // frozen value, so that the object a read returns copies
+        // the data when written elsewhere; a link to this slot would name
+        // whatever the slot holds next.
+        //
+        // A context that sets `inlineArrayItemsInPlace` does not take this
+        // branch. Its traversal goes through the element at its address in
+        // the document that stores it, like any other nested value, so it
+        // mints no id and issues no read at a snapshot address.
+        //
+        // The element link exists to give the snapshot an id for the links
+        // inside the element that name no document.
         const elementLink = getNormalizedLink(
           curDoc.address,
           curSelector.schema,
         );
-        // Replace doc with a DataCellURI style doc
-        // Need to read recursively here
+        // Keep the source dependency and the space that owns schema refs.
+        // The whole element is read recursively, then shared by the snapshot
+        // with its relative-link origin, without a link-rewriting walk.
         this.tx.read(curDoc.address, READ_FOR_SCHEDULING);
+        const snapshot = immutableCellsFor(this.tx).createElement(
+          curDoc.value,
+          elementLink,
+        );
         const elementAddress = curDoc.address;
-        // TODO(@ubik2): ideally, we wouldn't use this path in query traversal.
-        // Right now, we aren't passing both the link info and doc info, so we
-        // will override the doc here.
-        // I could switch based off the traverseCells flag (true for queries),
-        // but I don't want to have that change behavior here.
         curDoc = {
           ...curDoc,
-          address: {
-            ...curDoc.address,
-            id: dataUriFromValueWithResolvedLinks(curDoc.value, elementLink),
-            path: ["value"],
-          },
+          address: { ...curDoc.address, id: snapshot.id, path: ["value"] },
+          value: snapshot.value,
         };
         // Our selector's path needs to be updated to match the new doc
         curSelector.path = curDoc.address.path;
@@ -5978,6 +6241,23 @@ export class SchemaObjectTraverser<V extends FabricValue>
         // since we can't follow all the write-redirect links.
         return fail(TRAVERSE_FAILURES.undefinedLink);
       } else {
+        // The selector combined the link's schema in at the hop, so its
+        // `default` is the nearest declaration for the value at the target,
+        // and an absent target reads as that default here as it does where a
+        // read enters at the target itself. A default standing in for a
+        // document the replica lacks is noted, so a view refuses to publish
+        // it.
+        const resolved = isObjectOrArray(redirSelector.schema) &&
+            "$ref" in redirSelector.schema
+          ? resolveSchemaRefsCanonical(redirSelector.schema)
+          : redirSelector.schema;
+        const defaultValue = resolved === undefined
+          ? undefined
+          : this.#applyDefault(redirDoc, resolved);
+        if (defaultValue !== undefined) {
+          this.#noteDefaultOnAbsentValue(redirDoc);
+          return { ok: defaultValue };
+        }
         return this.#isValidType(redirSelector.schema, "undefined")
           ? { ok: this.#traversePrimitive(redirDoc, redirSelector.schema) }
           : fail(TRAVERSE_FAILURES.undefinedLink);
@@ -6259,6 +6539,9 @@ function getPlainJsonType(
   if (value === undefined) return "undefined";
   if (isString(value)) return "string";
   if (typeof value === "number") return "number";
+  // A `bigint` is an integer, which schemaTypeMatchesValueType's subtype rule
+  // reads as a "number" too.
+  if (typeof value === "bigint") return "integer";
   if (isBoolean(value)) return "boolean";
   if (Array.isArray(value)) return "array";
   // A `FabricPrimitive` reports its specific type name; a schema saying
@@ -6367,6 +6650,13 @@ function getNextCellLink(
         ? combined
         : schemaForSpaceCrossing(tx, doc.address.space, combined),
     };
+    // A handle built over a link is that link followed from the position
+    // the handle is declared at, as much as a value read through it is.
+    noteDeclaredReadScope(
+      tx,
+      schemaFollowScopeCapMemoized(schema),
+      lastLink.scope,
+    );
     noteLinkCrossing(context, doc.address, target);
     return target;
   }

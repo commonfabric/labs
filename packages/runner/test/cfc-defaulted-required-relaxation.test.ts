@@ -8,7 +8,7 @@ import {
 } from "../src/cfc/schema-sanitization.ts";
 
 /** The composition the CLI's pre-dispatch verb gate applies to a present
- * payload (`verbInputSchemaError`, `packages/cli/lib/callable.ts`), and the
+ * payload (`verbInputSchemaError`, `packages/piece/src/verb-input.ts`), and the
  * one C5's server-side closed-world enforcement shares: validate against the
  * schema with defaulted properties relaxed out of `required`. These tests
  * moved here with the helpers (verb contract D6) because they pin the

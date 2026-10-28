@@ -17,14 +17,14 @@ const __cfLift_1 = __cfHelpers.lift<{
 }, string>(({ prefix, count }) => ((value: number) => prefix + value)(count), {
     type: "object",
     properties: {
-        prefix: {
-            type: "string"
-        },
         count: {
             type: "number"
+        },
+        prefix: {
+            type: "string"
         }
     },
-    required: ["prefix", "count"]
+    required: ["count", "prefix"]
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);

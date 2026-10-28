@@ -1,3 +1,4 @@
+import type { PatternIndexClient } from "@commonfabric/pattern-index/client";
 import type { JSONSchema } from "@commonfabric/api";
 import type {
   CfcConfClause,
@@ -22,6 +23,7 @@ import type {
 } from "../contracts/skill.ts";
 import type { HarnessBrowserAccessLease } from "../contracts/browser-access.ts";
 import type { HarnessBrowserHost } from "../contracts/browser-host.ts";
+import type { HarnessSubagentProfile } from "../contracts/subagent.ts";
 import type { HarnessClientActionRequester } from "../client-actions/coordinator.ts";
 import type { HarnessAssignedPiece } from "../contracts/assigned-piece.ts";
 import type { HarnessDocsCorpus } from "../docs-corpus/corpus.ts";
@@ -39,7 +41,6 @@ import type {
 } from "../contracts/handle-table.ts";
 import type { HarnessFabricSession } from "../fabric-session.ts";
 import type { openProbeRuntime } from "../pattern-index/probe-runtime.ts";
-import type { PatternIndexClient } from "../pattern-index/client.ts";
 import type { PatternIndexLedger } from "../pattern-index/ledger.ts";
 import type { SkillsShAcquisitionClient } from "../skills-sh/acquisition.ts";
 import type { SkillsShSearchClient } from "../skills-sh/search-client.ts";
@@ -49,7 +50,10 @@ import type {
 } from "../contracts/tool-descriptor.ts";
 import type { ToolOutputId } from "../contracts/tool-result.ts";
 import type { HarnessLoomAuthoringConfig } from "../loom-authoring.ts";
-import type { HarnessLoomCommandsConfig } from "../loom-commands.ts";
+import type {
+  HarnessLoomCommandsConfig,
+  LoomCommandCatalogSource,
+} from "../loom-commands.ts";
 import type { HarnessLoomRetrievalConfig } from "../loom-retrieval.ts";
 import type { ProcessRunner } from "../sandbox/process-runner.ts";
 import type {
@@ -60,6 +64,14 @@ import type {
 export interface HarnessToolContext {
   runId: string;
   cfcEnforcementMode: CfcEnforcementMode;
+
+  /**
+   * Whether the policy gate would admit a side effect on this call, decided
+   * as it decides a side-effect tool's. A tool classed as a read that can
+   * cause one only on some inputs asks this before causing it; a call made
+   * outside the prompt loop leaves it absent, which admits none.
+   */
+  sideEffectsAuthorized?: boolean;
   skillRegistry?: HarnessSkillRegistry;
   skillActivations?: HarnessSkillActivations;
   allowSkillScripts?: boolean;
@@ -259,6 +271,15 @@ export interface HarnessToolContext {
   loomCommands?: HarnessLoomCommandsConfig;
 
   /**
+   * The run's command catalog, read from the host on first use and held by
+   * the engine for the run, which both command tools share. Absent without
+   * {@link loomCommands}; a context built outside the engine may leave it
+   * out too, and the command tools then read the host's catalog for each
+   * call.
+   */
+  loomCommandCatalog?: LoomCommandCatalogSource;
+
+  /**
    * Registers content a tool observed as a referent the run holds, and
    * returns its token. Absent outside a run that keeps a handle table.
    */
@@ -374,6 +395,9 @@ export interface HarnessToolRun {
 
   /** Whether a browser host carries out the run's browser actions. */
   browserHost?: boolean;
+
+  /** The subagent profiles the run may delegate to. */
+  subagentProfiles?: readonly HarnessSubagentProfile[];
 }
 
 export interface HarnessToolDefinition<Input = unknown, Output = unknown> {

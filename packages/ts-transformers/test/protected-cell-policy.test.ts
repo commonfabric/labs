@@ -165,6 +165,12 @@ const setName = handler<{ name: string }, { name: Writable<string> }>((event, { 
         "ProtectedName<string>",
       ],
       [
+        "a parenthesized pattern-local generic alias with a fixed writer",
+        "",
+        "type ProtectedName<T> = (Owned<T, typeof setName>);",
+        "ProtectedName<string>",
+      ],
+      [
         "a pattern-local generic alias with a writer argument",
         "",
         "type ProtectedName<T, Writer> = Owned<T, Writer>;",

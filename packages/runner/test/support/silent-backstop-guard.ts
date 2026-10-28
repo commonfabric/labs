@@ -192,5 +192,11 @@ export function installSilentBackstopGuard(
     }
   }
 
+  // A hook registers a function to run around the tests rather than a
+  // test, so it is the registrar's own.
+  for (const hook of HOOKS) Reflect.set(guardedTest, hook, previousTest[hook]);
   Reflect.set(Deno, "test", guardedTest);
 }
+
+/** The lifecycle hooks `Deno.test` carries beside its overloads. */
+const HOOKS = ["beforeAll", "beforeEach", "afterEach", "afterAll"] as const;

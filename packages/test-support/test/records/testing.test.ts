@@ -23,6 +23,10 @@ describe("recordsSpooledBy()", () => {
       expect(dir).toBeDefined();
       await Deno.mkdir(join(dir!, "nested"));
       await Deno.writeTextFile(join(dir!, "empty.ndjson"), "\n");
+      await Deno.writeTextFile(
+        join(dir!, "names-map.json"),
+        `${JSON.stringify({ names: {} })}\n`,
+      );
 
       const writer = FragmentWriter.openForRun();
       expect(writer).toBeDefined();
@@ -31,6 +35,17 @@ describe("recordsSpooledBy()", () => {
     });
 
     expect(records).toEqual([RECORD]);
+  });
+
+  it("throws for a spooled record line the record parser refuses", async () => {
+    const outside = JSON.stringify({
+      ...RECORD,
+      test: { k: "pattern", s: "patterns", n: "../tmp/a.test.tsx" },
+    });
+    await expect(recordsSpooledBy(async () => {
+      const dir = Deno.env.get(RECORDS_DIR_VARIABLE)!;
+      await Deno.writeTextFile(join(dir, "fragment.ndjson"), `${outside}\n`);
+    })).rejects.toThrow(outside);
   });
 
   it("restores an existing spool variable", async () => {

@@ -22,12 +22,13 @@ import { expandGlob } from "@std/fs";
 import { join } from "@std/path";
 import {
   type Environment,
-  ingestJUnit,
   readEnv,
+  readJUnit,
   readNameMaps,
   readSpool,
   recordsDir,
   serializeRecordLine,
+  type TestIdentity,
   type TestRecord,
 } from "@commonfabric/test-support/records";
 import {
@@ -100,6 +101,12 @@ export interface CollectOptions {
   junit: readonly JUnitSpec[];
 
   /**
+   * Whether the execution that wrote the reports was interrupted by a
+   * signal, which decides what a test they report as cancelled was.
+   */
+  interrupted?: boolean;
+
+  /**
    * The configuration these records were produced in. Every record takes
    * this value, replacing whatever a producer supplied, which is what
    * makes a variant a property of the suite that ran rather than of the
@@ -116,6 +123,13 @@ export interface CollectOptions {
    * in. Absent, every record takes the declared variant.
    */
   surfaces?: ReadonlyArray<{ kind: string; scope: string }>;
+
+  /**
+   * Whether the caller already knows a test, recorded from a file, as an
+   * identity, which ingestion then records whenever it reports, even where
+   * it holds other tests.
+   */
+  known?: (test: TestIdentity, file: string | undefined) => boolean;
 }
 
 /** What one execution left behind. */
@@ -130,6 +144,17 @@ export interface Collected {
    * drift guard is what fails on them.
    */
   conflicts: TestRecord[];
+
+  /**
+   * What each outermost test its JUnit reports name took beyond the
+   * records, one record each, as `readJUnit()` makes them, with the
+   * declared variant applied. They are not tests, so they are in neither
+   * list above and nothing ships them.
+   */
+  hooks: TestRecord[];
+
+  /** The message each failing record its JUnit reports name failed with. */
+  failures: Map<TestRecord, string>;
 }
 
 /**
@@ -149,6 +174,8 @@ export async function collectRecords(
     throw new Error("a declared variant must not be empty");
   }
   const records: TestRecord[] = [];
+  const hooks: TestRecord[] = [];
+  const failures = new Map<TestRecord, string>();
   // The registration preload leaves a name-to-file map in the spool.
   // Where it installed, every class name names the wrapper it put in
   // front of `Deno.test`, so the map is the only thing that can tell a
@@ -174,14 +201,19 @@ export async function collectRecords(
         // itself, not the records of every later file the glob matched.
         try {
           const xml = await Deno.readTextFile(entry.path);
-          const ingestOptions: Parameters<typeof ingestJUnit>[1] = {
+          const ingestOptions: Parameters<typeof readJUnit>[1] = {
             kind: spec.kind,
             scope: spec.scope,
             fileByName,
+            interrupted: options.interrupted ?? false,
           };
           if (spec.prefix !== undefined) ingestOptions.filePrefix = spec.prefix;
-          for (const record of ingestJUnit(xml, ingestOptions)) {
-            records.push(record);
+          if (options.known !== undefined) ingestOptions.known = options.known;
+          const read = readJUnit(xml, ingestOptions);
+          for (const record of read.records) records.push(record);
+          for (const record of read.hooks) hooks.push(record);
+          for (const [record, message] of read.failures) {
+            failures.set(record, message);
           }
         } catch (error) {
           console.warn(
@@ -213,7 +245,10 @@ export async function collectRecords(
     }
     if (options.variant !== undefined) record.test.v = options.variant;
   }
-  return { records, conflicts };
+  if (options.variant !== undefined) {
+    for (const record of hooks) record.test.v = options.variant;
+  }
+  return { records, conflicts, hooks, failures };
 }
 
 export interface GatherOptions {

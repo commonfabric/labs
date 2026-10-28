@@ -864,6 +864,7 @@ Deno.test("applyShrinkAndWrap descends identity item paths through Array<T> refe
 
   const result = applyShrinkAndWrap(
     createParamSummary({
+      readPaths: [["0", "drop"]],
       identityPaths: [["0", "keep"]],
       identityCellPaths: [["0", "keep"]],
     }),
@@ -900,6 +901,7 @@ Deno.test("applyShrinkAndWrap applies identity paths across union members", () =
 
   const result = applyShrinkAndWrap(
     createParamSummary({
+      readPaths: [["item", "drop"], ["item", "other"]],
       identityPaths: [["item", "keep"]],
       identityCellPaths: [["item", "keep"]],
     }),
@@ -1102,6 +1104,7 @@ Deno.test("applyShrinkAndWrap descends identity paths through a Cell-like wrappe
 
   const result = applyShrinkAndWrap(
     createParamSummary({
+      readPaths: [["drop"]],
       identityPaths: [["keep"]],
       identityCellPaths: [["keep"]],
     }),

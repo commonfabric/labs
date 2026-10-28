@@ -21,7 +21,10 @@ export function encodeJsonPointer(path: readonly string[]): string {
  * `~1` becomes `/` and `~0` becomes `~` in each token, in that order.
  */
 export function decodeJsonPointer(pointer: string): string[] {
-  return pointer
-    .split("/")
-    .map((token) => token.replace(/~1/g, "/").replace(/~0/g, "~"));
+  const tokens = pointer.split("/");
+  // Every escape starts with `~`, so a pointer without one is its tokens as
+  // split, and the common pointer is decoded without the two replacements
+  // per token.
+  if (!pointer.includes("~")) return tokens;
+  return tokens.map((token) => token.replace(/~1/g, "/").replace(/~0/g, "~"));
 }

@@ -49,7 +49,6 @@ import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
   ACLManager,
   ConsoleMethod,
-  experimentalOptionsFromEnv,
   parseLink,
   PatternCoverageCollector,
   patternCoverageOutputPath,
@@ -105,6 +104,7 @@ import {
 import { getDefaultModuleByteCache } from "./compile-byte-cache.ts";
 import {
   appendLoggerDeltaMessages,
+  ServedLoggerCounts,
   snapshotLoggerErrorWarnCounts,
 } from "./console-capture.ts";
 import {
@@ -117,7 +117,15 @@ import {
   multiUserDescriptorMeta,
   runMultiUserTestPattern,
 } from "./multi-user-test-runner.ts";
+import { patternTestExperimentalOptions } from "./pattern-test-experimental-options.ts";
 import { inferProgramRoot } from "./program-root.ts";
+import {
+  type RuntimeErrorExpectation,
+  runtimeErrorExpectation,
+  unmetRuntimeErrorExpectation,
+} from "./runtime-error-expectation.ts";
+import { collectServedErrors, servedRuntimeErrors } from "./served-errors.ts";
+import { servedConsequences, settleServed } from "./served-settle.ts";
 import { buildActionEvent } from "./trusted-action-event.ts";
 
 /**
@@ -327,12 +335,13 @@ export interface TestRunResult {
   /** If true, runtime errors are expected and should not fail the test */
   allowRuntimeErrors?: boolean;
 
-  /** If set, runtime errors are REQUIRED: the run fails when none (or, for a
-   * number, a different count) were captured. Like expectNonIdempotent, this
-   * asserts the loudness fires — it is not a mere tolerance — so reverting a
-   * throwing rejection to a silent return fails the suite. Implies
-   * allowRuntimeErrors for the captured errors themselves. */
-  expectRuntimeErrors?: boolean | number;
+  /** If set, runtime errors are REQUIRED, as `runtimeErrorExpectation()`
+   * reads them: at least one, an exact count, or one per expected message.
+   * Like expectNonIdempotent, this asserts the loudness fires — it is not a
+   * mere tolerance — so reverting a throwing rejection to a silent return
+   * fails the suite. Implies allowRuntimeErrors for the captured errors
+   * themselves. */
+  expectRuntimeErrors?: RuntimeErrorExpectation;
 
   /** Non-idempotent computation names detected by the idempotency check */
   nonIdempotent: string[];
@@ -359,6 +368,14 @@ export interface TestRunResult {
 
   /** If true, console warnings are expected and should not fail the test. */
   allowConsoleWarnings?: boolean;
+
+  /**
+   * Logger-level warn activity of a serving loop hosted in the test's
+   * process, detected as `consoleWarnings` is. It is reported and never fails
+   * the test: the loop's routine warnings are not the pattern's doing. Its
+   * errors are in `consoleErrors`.
+   */
+  servedWarnings?: string[];
 }
 
 export interface TestRunnerOptions {
@@ -1116,6 +1133,18 @@ export async function runTestPattern(
   testPath: string,
   options: TestRunnerOptions = {},
 ): Promise<TestRunResult> {
+  // Resolved before anything is opened, so a refusal leaves nothing to close.
+  const experimental = patternTestExperimentalOptions(Deno.env.get);
+  if (experimental.serverExecution && options.storageHost !== undefined) {
+    throw new Error(
+      `\`cf test\` refuses a caller-supplied \`storageHost\` on the ` +
+        `server-execution arm: the store is the caller's, so the runner has ` +
+        `no memory server to host a serving loop beside, and the events its ` +
+        `runtime commits would go unserved. See "The ON topology in one ` +
+        `process" in \`docs/development/TESTING.md\`.`,
+    );
+  }
+
   // A denial logs its warning once per kind, and a denial's warning is what
   // fails a file that does not allow for one, so each file starts with every
   // kind unannounced. Otherwise a second file denied the same way would log
@@ -1169,22 +1198,9 @@ export async function runTestPattern(
       options.storageHost?.identity ?? Identity.fromPassphrase("test-runner"),
   );
   const space = identity.did();
-  // A caller-supplied store is FILE-BACKED, which the default emulation is not:
-  // `StorageManager.emulate` runs against `:memory:` and leaves nothing to
-  // snapshot. See `TestRunnerOptions.storageHost`.
-  const storageManager = options.storageHost?.storageManager ??
-    await withPhase(
-      ["runTestPattern", "storageManager"],
-      async () => {
-        // The Deno storage cache opens SQLite as it loads, which a
-        // caller-supplied storage host makes unnecessary.
-        // deno-lint-ignore cf-imports/no-inline-module-import
-        const { StorageManager } = await import(
-          "@commonfabric/runner/storage/cache.deno"
-        );
-        return StorageManager.emulate({ as: identity });
-      },
-    );
+  const apiUrl = options.storageHost?.apiUrl ?? new URL(import.meta.url);
+  const moduleByteCache = options.moduleByteCache ??
+    getDefaultModuleByteCache();
 
   // Track navigation events for assertions and verbose output
   const navigations: NavigationEvent[] = [];
@@ -1201,17 +1217,74 @@ export async function runTestPattern(
   let fetchMockEntries: FetchMockEntry[] | undefined;
   const mockFetch = makeMockFetch(() => fetchMockEntries, realFetch);
 
+  // On the server-execution arm the memory server has a serving loop beside
+  // it, whose runtimes run the handlers this test's events fire. They fetch
+  // through the same mock, so a served handler sees the test's `fetchMocks`.
+  // The loop closes when this function returns or throws, which is after the
+  // `finally` below has disposed the runtime connected to it, and a setup
+  // failure before that `try` closes it all the same. A failure to close is
+  // logged and raised, since the loop may still be running.
+  await using servingCleanup = new AsyncDisposableStack();
+  // Set on that arm: whether the caller is running the serving loop's work.
+  let inServingContext: (() => boolean) | undefined;
+  // A caller-supplied store is FILE-BACKED, which the default emulation is not:
+  // `StorageManager.emulate` runs against `:memory:` and leaves nothing to
+  // snapshot. See `TestRunnerOptions.storageHost`.
+  const storageManager = options.storageHost?.storageManager ??
+    await withPhase(
+      ["runTestPattern", "storageManager"],
+      async () => {
+        // The Deno storage cache opens SQLite as it loads, which a
+        // caller-supplied storage host makes unnecessary.
+        // deno-lint-ignore cf-imports/no-inline-module-import
+        const { EmulatedStorageManager, StorageManager } = await import(
+          "@commonfabric/runner/storage/cache.deno"
+        );
+        if (!experimental.serverExecution) {
+          return StorageManager.emulate({ as: identity });
+        }
+        // Loaded with the storage cache, for the same reason.
+        // deno-lint-ignore cf-imports/no-inline-module-import
+        const servingModule = await import(
+          "@commonfabric/runner/executor/serving-memory-server.deno"
+        );
+        inServingContext = servingModule.inServingContext;
+        const serving = await servingModule.startServingMemoryServer({
+          apiUrl,
+          experimental,
+          fetch: mockFetch,
+          moduleByteCache,
+          // The loop stays on this thread whatever the environment selects
+          // for a toolshed: the mock fetch and the module cache are closures,
+          // which a worker's port does not carry.
+          worker: false,
+        });
+        servingCleanup.defer(() =>
+          serving.close().catch((error) => {
+            console.error(
+              `[cf test] closing the serving loop failed for ${testPath}: ${
+                formatError(error)
+              }`,
+            );
+            throw error;
+          })
+        );
+        return EmulatedStorageManager.connectTo(serving.server, {
+          as: identity,
+        });
+      },
+    );
+
   const runtime = await withPhase(
     ["runTestPattern", "runtime"],
     () =>
       // `runtimePresets.patternTest` carries the shared first-party posture
       // (CT-1814). Params below are this harness's declared deltas.
       new Runtime(runtimePresets.patternTest({
-        apiUrl: options.storageHost?.apiUrl ?? new URL(import.meta.url),
+        apiUrl,
         storageManager,
-        experimental: experimentalOptionsFromEnv(Deno.env.get),
-        moduleByteCache: options.moduleByteCache ??
-          getDefaultModuleByteCache(),
+        experimental,
+        moduleByteCache,
         // The collector is the runtime's, which makes every compile an
         // instrumented one and names the instrumented variant wherever the
         // runtime reads or writes a compiled closure. Replicating a pattern
@@ -1249,6 +1322,9 @@ export async function runTestPattern(
   console.log(
     `  CFC posture: enforcement=${runtime.cfcEnforcementMode} flowLabels=${runtime.cfcFlowLabels}`,
   );
+  const servedErrors = experimental.serverExecution
+    ? collectServedErrors(runtime)
+    : [];
   if (!options.noIdempotencyCheck) runtime.enableIdempotencyCheck();
   else if (options.verbose) {
     console.log("  Idempotency verification disabled for this measurement.");
@@ -1508,6 +1584,12 @@ export async function runTestPattern(
     // while capturing everything the pattern's own handlers log at error/warn
     // level through the runtime logger.
     const loggerCountsBeforeRun = snapshotLoggerErrorWarnCounts();
+    // The serving loop logs into this process's loggers too. What it logs is
+    // kept apart from the deltas and reported on its own, its errors failing
+    // the file as the test's own would.
+    const servedLoggerCounts = inServingContext === undefined
+      ? undefined
+      : servingCleanup.use(new ServedLoggerCounts(inServingContext));
     consoleCaptureActive = true;
     if (readBudgets !== undefined) {
       runtime.scheduler.setReadStatsEnabled(true, { attempts: true });
@@ -1562,15 +1644,17 @@ export async function runTestPattern(
     initializationBudgetSettlement = withPhase([
       "runTestPattern",
       "initialSettle",
-    ], async () => {
-      // Wait for initial setup to complete
-      await runtime.idle();
-      // Also wait for all in-flight storage subscriptions to settle.
-      // replica.poll() fires without await during mount(), so subscription
-      // updates can arrive after idle() resolves, scheduling more work.
-      await storageManager.synced();
-      await runtime.idle();
-    });
+    ], () =>
+      settleServed(runtime, async () => {
+        // Wait for initial setup to complete
+        await runtime.idle();
+        await servedConsequences(runtime);
+        // Also wait for all in-flight storage subscriptions to settle.
+        // replica.poll() fires without await during mount(), so subscription
+        // updates can arrive after idle() resolves, scheduling more work.
+        await storageManager.synced();
+        await runtime.idle();
+      }));
     await initializationBudgetSettlement;
     initializationBudgetSettlement = undefined;
 
@@ -1604,8 +1688,10 @@ export async function runTestPattern(
     const expectRuntimeErrors = await withPhase(
       ["runTestPattern", "expectRuntimeErrors"],
       async () =>
-        await (patternResult.key("expectRuntimeErrors") as Cell<unknown>)
-          .pull() as boolean | number | undefined,
+        runtimeErrorExpectation(
+          await (patternResult.key("expectRuntimeErrors") as Cell<unknown>)
+            .pull(),
+        ),
     );
     const expectNonIdempotent = await withPhase(
       ["runTestPattern", "expectNonIdempotent"],
@@ -1643,44 +1729,56 @@ export async function runTestPattern(
     const settleRuntime = async (stepLabel: string): Promise<void> => {
       await withPhase(
         ["runTestPattern", "step", stepLabel, "settle"],
-        async () => {
-          for (let settle = 0; settle < MAX_SETTLE_ROUNDS; settle++) {
-            const iterStart = performance.now();
+        () =>
+          settleServed(runtime, async () => {
+            for (let settle = 0; settle < MAX_SETTLE_ROUNDS; settle++) {
+              const iterStart = performance.now();
+              await withPhase(
+                [
+                  "runTestPattern",
+                  "step",
+                  stepLabel,
+                  "settle",
+                  `iter-${settle}`,
+                  "idle",
+                ],
+                () => runtime.idle(),
+              );
+              await withPhase(
+                [
+                  "runTestPattern",
+                  "step",
+                  stepLabel,
+                  "settle",
+                  `iter-${settle}`,
+                  "servedConsequences",
+                ],
+                () => servedConsequences(runtime),
+              );
+              await withPhase(
+                [
+                  "runTestPattern",
+                  "step",
+                  stepLabel,
+                  "settle",
+                  `iter-${settle}`,
+                  "synced",
+                ],
+                () => storageManager.synced(),
+              );
+              const totalMs = performance.now() - iterStart;
+              if (options.verbose && totalMs > 1) {
+                console.log(`      settle[${settle}]: ${fmtMs(totalMs)}`);
+              }
+              // If both resolved nearly instantly, the system is settled.
+              // synced() has ~1ms of overhead even when idle, so use 2ms.
+              if (settle > 0 && totalMs < 2) break;
+            }
             await withPhase(
-              [
-                "runTestPattern",
-                "step",
-                stepLabel,
-                "settle",
-                `iter-${settle}`,
-                "idle",
-              ],
+              ["runTestPattern", "step", stepLabel, "settle", "finalIdle"],
               () => runtime.idle(),
             );
-            await withPhase(
-              [
-                "runTestPattern",
-                "step",
-                stepLabel,
-                "settle",
-                `iter-${settle}`,
-                "synced",
-              ],
-              () => storageManager.synced(),
-            );
-            const totalMs = performance.now() - iterStart;
-            if (options.verbose && totalMs > 1) {
-              console.log(`      settle[${settle}]: ${fmtMs(totalMs)}`);
-            }
-            // If both resolved nearly instantly, the system is settled.
-            // synced() has ~1ms of overhead even when idle, so use 2ms.
-            if (settle > 0 && totalMs < 2) break;
-          }
-          await withPhase(
-            ["runTestPattern", "step", stepLabel, "settle", "finalIdle"],
-            () => runtime.idle(),
-          );
-        },
+          }),
       ).catch((error) => {
         settlementFailed = true;
         throw error;
@@ -1697,7 +1795,11 @@ export async function runTestPattern(
     const settleFully = async (stepIndex: number): Promise<void> => {
       await withPhase(
         ["runTestPattern", "step", `settle_${stepIndex}`, "settled"],
-        () => runtime.settled(),
+        () =>
+          settleServed(runtime, async () => {
+            await runtime.settled();
+            await servedConsequences(runtime);
+          }),
       ).catch((error) => {
         settlementFailed = true;
         throw error;
@@ -2223,10 +2325,14 @@ export async function runTestPattern(
       loggerCountsBeforeRun,
       consoleErrors,
       consoleWarnings,
+      servedLoggerCounts,
     );
+    const servedWarnings: string[] = [];
+    servedLoggerCounts?.appendMessages(consoleErrors, servedWarnings);
 
     const errorMessages = [
       ...runtimeErrors.map((e) => String(e)),
+      ...servedRuntimeErrors(servedErrors, runtimeErrors),
       ...continuousUiErrors.map((e) => `[continuous $UI] ${String(e)}`),
     ];
     return {
@@ -2243,6 +2349,7 @@ export async function runTestPattern(
       allowConsoleErrors,
       consoleWarnings,
       allowConsoleWarnings,
+      servedWarnings,
     };
   } catch (err) {
     let errorMessage = err instanceof Error ? err.message : String(err);
@@ -2285,6 +2392,7 @@ export async function runTestPattern(
 
     const errorMessages = [
       ...runtimeErrors.map((e) => String(e)),
+      ...servedRuntimeErrors(servedErrors, runtimeErrors),
       ...continuousUiErrors.map((e) => `[continuous $UI] ${String(e)}`),
     ];
     return {
@@ -2426,21 +2534,25 @@ export async function runTests(
   // not just the assertion results. Written only for a caller that asked
   // for records, and inert unless CF_TEST_RECORDS_DIR is set; the
   // integration orchestrator clears that variable for its cf children and
-  // records from its own clock instead.
+  // records from its own clock instead. A file inside no repository is no
+  // test of one and records nothing.
   const recordsFragment = options.recordResults === true
     ? FragmentWriter.openForRun()
     : undefined;
-  const recordFile = (testPath: string, failed: boolean, durationMs: number) =>
+  const recordFile = (
+    testPath: string,
+    failed: boolean,
+    durationMs: number,
+  ) => {
+    const name = repositoryRelativePath(testPath);
+    if (name === undefined) return;
     recordsFragment?.append({
       line: "record",
-      test: {
-        k: "pattern",
-        s: "patterns",
-        n: repositoryRelativePath(testPath),
-      },
+      test: { k: "pattern", s: "patterns", n: name },
       outcome: failed ? "fail" : "pass",
       durationMs: Math.round(durationMs),
     });
+  };
 
   // Files run in the order the seed puts them in, so a file that leans
   // on another file having run fails rather than passing quietly. The
@@ -2534,21 +2646,21 @@ export async function runTests(
       }
 
       // Report runtime errors. An expectation both tolerates the captured
-      // errors and REQUIRES them (exact count when numeric): the flag asserts
-      // the loudness fires, so silently-absorbed rejections fail here.
+      // errors and REQUIRES them (`unmetRuntimeErrorExpectation()`): the flag
+      // asserts the loudness fires, so silently-absorbed rejections fail here.
       const expectedErrors = result.expectRuntimeErrors;
-      if (expectedErrors !== undefined && expectedErrors !== false) {
-        const want = typeof expectedErrors === "number"
-          ? expectedErrors
-          : undefined;
-        const got = result.runtimeErrors.length;
-        if (got === 0 || (want !== undefined && got !== want)) {
+      if (expectedErrors !== undefined) {
+        const unmet = unmetRuntimeErrorExpectation(
+          expectedErrors,
+          result.runtimeErrors,
+        );
+        if (unmet !== undefined) {
           totalFailed++;
-          console.log(
-            `  ✗ expected ${want ?? "some"} runtime error(s), saw ${got}`,
-          );
+          console.log(`  ✗ ${unmet}`);
         } else {
-          console.log(`  ⊘ ${got} runtime error(s) (expected)`);
+          console.log(
+            `  ⊘ ${result.runtimeErrors.length} runtime error(s) (expected)`,
+          );
         }
       } else if (result.runtimeErrors.length > 0) {
         if (result.allowRuntimeErrors) {
@@ -2618,6 +2730,15 @@ export async function runTests(
               "    Run again with `--cfc-denials` to see what CFC denied, and why.",
             );
           }
+        }
+      }
+
+      if (result.servedWarnings && result.servedWarnings.length > 0) {
+        console.log(
+          `  ⊘ ${result.servedWarnings.length} serving-loop warning(s) (not counted):`,
+        );
+        for (const msg of result.servedWarnings) {
+          console.log(`    ${msg}`);
         }
       }
     }

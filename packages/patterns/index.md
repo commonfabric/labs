@@ -118,15 +118,23 @@ that exercises it; the library is the reference, the board is a demo),
 explorations), `fabrichat/` (chat among real profiles: a room per conversation,
 whose messages and reactions are written only through reviewed surfaces, each
 user's manager of their rooms, and placements that show a room in other spaces),
-`file-share/` (a minimal file-sharing example: bytes go to the blob store, cells
-hold descriptors), `habit-tracker/`, `lobby/`, `lunch-poll/`,
-`profile-group-chat/`, `project-list/`,
+`fabrifile/` (a space's set of named files: a store with no rendering, each
+entry a record linking a blob named as the entry is, and a view of it for VDOM
+hosts in a module the store never imports), `file-share/` (a minimal
+file-sharing example: bytes go to the blob store, cells hold descriptors),
+`habit-tracker/`, `iframe-cursor-canvas/` (a shared board in a sandboxed iframe:
+shapes are stored, while each viewer's pointer and a shape held mid-drag or
+mid-resize travel through a presence room and are stored nowhere),
+`iframe-verb-list/` (a list in a sandboxed iframe whose guest adds an item only
+by sending the pattern's `addItem` verb, which the generated frame takes as a
+stream), `lobby/`, `lunch-poll/`, `profile-group-chat/`, `project-list/`,
 [`recommend-a-book/`](recommend-a-book/README.md) (personal reading shelf and
 private visitor recommendations), `router/`, `scoped-group-chat/`,
 `scoped-user-directory/`, `scrabble/`, `shared-note/` (a shared Markdown
 document whose live cursors carry each viewer's profile name),
 `shared-profile-demo/`, `shared-profile-roster/`, `suggestable/`,
-`weekly-calendar/`.
+`weekly-calendar/`, `wordsearch/` (a word search maker: form, puzzle, a PDF of
+the puzzle and its answer key, and a Play tab).
 
 Connector-owned patterns live with their connector families: the
 [agent debug view](../connectors/agents/debug-view/README.md) and
@@ -176,9 +184,10 @@ directly as JSX tags plus `wish` discovery instead;
 
 Support files with no tier (not patterns): `deno.jsonc`, `mod.ts`, `index.md`,
 `README.md`, `DEPRECATED_IDIOMS.md`, `test/vnode-helpers.ts` (the shared
-rendered-tree helpers for pattern tests), `tools/` (codegen tooling). The
-December 2025 bug survey formerly kept here as `PREEXISTING_BUGS.md` is archived
-at `docs/history/packages/patterns/PREEXISTING_BUGS.md`.
+rendered-tree helpers for pattern tests), `tools/` (codegen tooling), and
+`topics/tools/` (the Topics board's command-line client). The December 2025 bug
+survey formerly kept here as `PREEXISTING_BUGS.md` is archived at
+`docs/history/packages/patterns/PREEXISTING_BUGS.md`.
 
 ---
 
@@ -736,6 +745,100 @@ interface Output {
     endTime: string;
   }>;
   setTitle: Stream<{ newTitle: string }>;
+}
+```
+
+## `wordsearch/main.tsx`
+
+Word Search Maker: a form for a title, a word list (one per line), the grid size
+and the directions words may run, beside the puzzle it makes. Composes
+`wordsearch/wordsearch.tsx`.
+
+**Keywords:** word search, puzzle, generator, printable, pdf, form
+
+### Input Schema
+
+```ts
+interface WordSearchMakerInput {
+  title?: Writable<string | Default<"Word Search">>;
+  wordText?: Writable<
+    string | Default<"apple\nbanana\ncherry\ngrape\nlemon\nmango\npeach">
+  >;
+  rows?: Writable<number | Default<12>>;
+  cols?: Writable<number | Default<12>>;
+  diagonals?: Writable<boolean | Default<false>>;
+  backwards?: Writable<boolean | Default<false>>;
+  seed?: Writable<number | Default<1>>;
+}
+```
+
+### Output Schema
+
+```ts
+interface WordSearchMakerOutput {
+  puzzle: WordSearch; // from wordsearch/generator.ts
+}
+```
+
+## `wordsearch/play.tsx`
+
+Play a word search: tap a hidden word's first letter, then its last, and it is
+marked found. Found words are each player's own (`PerUser`); a reshuffled puzzle
+starts unsolved. Takes the `puzzle` that `wordsearch/wordsearch.tsx` puts out.
+
+**Keywords:** word search, puzzle, game, play, solve
+
+### Input Schema
+
+```ts
+interface WordSearchPlayInput {
+  title?: string | Default<"Word Search">;
+  puzzle?: WordSearch; // from wordsearch/generator.ts
+  found?: PerUser<Writable<string[] | Default<[]>>>;
+}
+```
+
+### Output Schema
+
+```ts
+interface WordSearchPlayOutput {
+  foundCount: number;
+  solved: boolean;
+  tap: Stream<{ index: number }>;
+  restart: Stream<void>;
+}
+```
+
+## `wordsearch/wordsearch.tsx`
+
+A word search puzzle from a list of words: the grid, the words to find, an
+answers switch, Shuffle, and a PDF download of the puzzle and its answer key.
+Every hidden word appears exactly once; words left out are named with why.
+
+**Keywords:** word search, puzzle, grid, answer key, pdf, shuffle
+
+### Input Schema
+
+```ts
+interface WordSearchInput {
+  title?: string | Default<"Word Search">;
+  words?: string[] | Default<[]>;
+  rows?: number | Default<12>;
+  cols?: number | Default<12>;
+  diagonals?: boolean | Default<false>;
+  backwards?: boolean | Default<false>;
+  seed?: Writable<number | Default<1>>;
+  showAnswers?: PerSession<Writable<boolean | Default<false>>>;
+}
+```
+
+### Output Schema
+
+```ts
+interface WordSearchOutput {
+  puzzle: WordSearch;
+  pdf: string;
+  shuffle: Stream<void>;
 }
 ```
 

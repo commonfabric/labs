@@ -1,8 +1,8 @@
 /**
  * The test-run record schema: the identity of a test, the record of one
  * execution, and the context line that heads every uploaded object. The
- * design, including the field discipline that keeps every value public
- * material, is docs/history/plans/test-run-telemetry.md.
+ * contract, including the field discipline that keeps every value public
+ * material, is docs/specs/test-records.md.
  */
 
 import { isObjectOrArray } from "@commonfabric/utils/types";
@@ -88,7 +88,10 @@ export interface CiContext {
   /** Pull request head commit; `commit` is the ephemeral merge commit. */
   headCommit?: string;
 
-  /** Triggering event, from the trusted payload: "push", "pull_request". */
+  /**
+   * Triggering event, from the trusted payload: "push", "pull_request",
+   * "schedule", "workflow_dispatch".
+   */
   event?: string;
 
   /**
@@ -147,13 +150,17 @@ export interface RunContext {
 }
 
 /**
- * Whether a report ran code the default branch carries: a push to `main`
- * that the fork flag does not mark. The flag also marks a run the relay
- * could not place, so neither kind is a run of the default branch.
+ * Whether a report ran code the default branch carries: a run of the head
+ * of `main` that the fork flag does not mark. A push, a scheduled run and
+ * a run dispatched by hand each check out the head of the branch they
+ * name, where a pull request's run checks out a merge commit no branch
+ * carries. The flag also marks a run the relay could not place, so
+ * neither kind is a run of the default branch.
  */
-export function isMainPush(context: RunContext): boolean {
-  return context.ci?.event === "push" && context.branch === "main" &&
-    context.ci.fork !== true;
+export function isMainRun(context: RunContext): boolean {
+  return ["push", "schedule", "workflow_dispatch"].includes(
+    context.ci?.event ?? "",
+  ) && context.branch === "main" && context.ci?.fork !== true;
 }
 
 const OUTCOMES = new Set(["pass", "fail", "skip"]);
@@ -164,6 +171,19 @@ function isNonEmptyString(value: unknown): value is string {
 
 function isOptionalString(value: unknown): value is string | undefined {
   return value === undefined || typeof value === "string";
+}
+
+/**
+ * Whether a path can name a file of the repository: one relative to its
+ * root, forward-slashed, that never climbs above it. An absolute path,
+ * whether rooted at `/` or at a drive letter, or one that climbs out,
+ * names a file outside the repository, and nothing there is a test of it.
+ * A backslash is refused as well, since a repository path is written with
+ * forward slashes and a backslash can hide either of the other two.
+ */
+export function isRepositoryPath(path: string): boolean {
+  return !path.startsWith("/") && !/^[A-Za-z]:/.test(path) &&
+    !path.includes("\\") && !path.split("/").includes("..");
 }
 
 /** Whether a value is a seed `deno test --shuffle` would take. */
@@ -205,6 +225,9 @@ export function parseRecordLine(line: string): TestRecord | undefined {
     return undefined;
   }
   if (test.v !== undefined && !isNonEmptyString(test.v)) return undefined;
+  // A pattern test is named by its file, so a name outside the repository
+  // is a fixture some test ran rather than a test of the repository.
+  if (test.k === "pattern" && !isRepositoryPath(test.n)) return undefined;
   if (!OUTCOMES.has(record.outcome as string)) return undefined;
   if (
     typeof record.durationMs !== "number" ||
@@ -213,6 +236,9 @@ export function parseRecordLine(line: string): TestRecord | undefined {
     return undefined;
   }
   if (!isOptionalString(record.file)) return undefined;
+  if (record.file !== undefined && !isRepositoryPath(record.file)) {
+    return undefined;
+  }
   const result: TestRecord = {
     line: "record",
     test: { k: test.k, s: test.s, n: test.n },
@@ -351,19 +377,28 @@ export function localObjectName(context: RunContext): string {
 }
 
 /**
+ * The parts of the name the shipping action gives a job's artifact,
+ * `test-records-<artifact>-a<attempt>`: the suffix the job named it for,
+ * and the run attempt that uploaded it. Undefined for any other name.
+ */
+export function shippedArtifact(
+  name: string,
+): { artifact: string; attempt: number } | undefined {
+  const [, artifact, attempt] = name.match(/^test-records-(.+)-a(\d+)$/) ?? [];
+  return artifact === undefined || attempt === undefined
+    ? undefined
+    : { artifact, attempt: Number(attempt) };
+}
+
+/**
  * Object name for one CI artifact's records, relative to the relay's
  * `submissions/ci/` folder. The run id and the artifact name — which
  * carries the attempt that produced it — are unique within a repository,
- * and the repository is in the folder path, so the name is deterministic
- * and re-running the relay is idempotent: a later attempt's relay
- * re-ships an earlier attempt's artifacts into a collision and ships the
- * re-run jobs' new artifacts as new objects.
- *
- * That collision needs both attempts to land in one partition, and the
- * partition comes from `runStartedAt`, which GitHub reports per attempt.
- * Two attempts separated by a UTC midnight therefore compute different
- * partitions, and the earlier attempt's artifacts are stored a second
- * time under the later day rather than colliding.
+ * and the repository is in the folder path. The partition comes from
+ * `runStartedAt`, the start of the attempt that produced the artifact,
+ * which no later attempt changes. The name is therefore deterministic, and
+ * re-running the relay for one attempt is idempotent: a re-ship collides
+ * with the first shipment.
  */
 export function ciObjectName(options: {
   runStartedAt: string;

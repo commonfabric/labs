@@ -21,6 +21,13 @@ const FIXTURES = resolve(import.meta.dirname!, "fixtures/data-files");
 const FIXTURE = join(FIXTURES, "single.test.tsx");
 const DATA_FILE = join(FIXTURES, "data", "cities.json");
 
+const PASSING_PATTERN = `import { assert, pattern, TESTS } from "commonfabric";
+
+export default pattern(() => ({
+  [TESTS]: [{ assertion: assert(() => true) }],
+}));
+`;
+
 async function runTestCommand(
   command: ReturnType<typeof createTestCommand>,
 ): Promise<void> {
@@ -82,5 +89,23 @@ describe("pattern test recording", () => {
       "packages/cli/test/fixtures/data-files/single.test.tsx",
     );
     expect(spooled[0].outcome).toBe("pass");
+  });
+
+  it("spools nothing for a file inside no repository", async () => {
+    // A temporary directory has no .git above it, which is how a test's own
+    // fixture tree looks to the runner.
+    const dir = await Deno.makeTempDir({ prefix: "test_runner_records_" });
+    try {
+      const file = join(dir, "outside.test.tsx");
+      await Deno.writeTextFile(file, PASSING_PATTERN);
+      let passed = 0;
+      const spooled = await recordsSpooledBy(async () => {
+        ({ passed } = await runTests(file, { recordResults: true }));
+      });
+      expect(passed).toBe(1);
+      expect(spooled).toEqual([]);
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
   });
 });

@@ -49,9 +49,11 @@ existing state publishes none until loading settles. A favorite, mentionable, or
 profile element whose piece document is confirmed absent is excluded from
 matches; its entry remains in the discovery collection. Failed favorite,
 mentionable, and profile element loads are skipped when another readable match
-remains. This includes current-space and explicit-DID mentionable searches. If
-no readable match remains and a candidate load failed, Wish reports the load
-error. The legacy
+remains. This includes current-space and explicit-DID mentionable searches. A
+profile-scope search reads the selected profile's elements, so when the selected
+profile itself failed to load, the search reports that load error (see the
+profile rules below). If no readable match remains and a candidate load failed,
+Wish reports the load error. The legacy
 `#favorites/<term>` search selects the first readable match. UI loading
 affordances must not depend on an empty `candidates` array. A confirmed empty
 collection produces a no-match error. A failed discovery-collection load, or a
@@ -92,6 +94,11 @@ as an empty box.
 // Shown inside a pattern body.
 return { [UI]: wishResult[UI] };
 ```
+
+The wish holds its view as a handle rather than as a value. A pattern that uses
+`result` alone, as one handing the found piece on to something else does, loads
+none of the found piece's view. The view loads where it is shown, and the
+renderer reads it there.
 
 ## Wishing for a Specific Piece
 
@@ -149,8 +156,9 @@ wish({ query: "#portfolio", scope: ["profile"] })
 
 ### Well-Known Profile Targets
 
-A user may have multiple profiles, stored on the home default pattern at
-`homeSpaceCell.defaultPattern.profiles` (a list), with `defaultProfile` and a
+A user may have multiple profiles. Each is a piece in a space of its own, and a
+new profile is that space's root. The home default pattern holds links to them
+at `homeSpaceCell.defaultPattern.profiles` (a list), with `defaultProfile` and a
 recency-ordered `mru`. The well-known wishes enumerate that list and resolve,
 ordered **default first, then by MRU, then list order**:
 
@@ -158,18 +166,41 @@ ordered **default first, then by MRU, then list order**:
 // Shown at module scope.
 wish({ query: "#profile" }) // the single current profile; see [UI] below
 wish({ query: "#profileName" }) // default profile's initialNameApplied
-wish({ query: "#profileAvatar" }) // default profile's avatar
+wish({ query: "#profileAvatar" }) // default profile's avatar text
+wish({ query: "#profilePicture" }) // default profile's picture, as image bytes
 wish({ query: "#profileBio" }) // default profile's bio (free-text description)
 wish({ query: "#profileSpace" }) // default profile's space cell
 ```
 
 Once profile data is loaded and at least one profile exists,
 `wish({ query: "#profile" }).result` is **the single current profile** —
-the best of the ordered candidates (default → MRU → first) — in **every** mode
+the best of the ordered candidates (default → MRU → first, or the preferred
+profile first, as the next paragraph says) — in **every** mode
 (interactive, headless, and the blessed read). It does not depend on the picker
 sidecar pattern running, so
 consumers can gate on `.result` without stranding in the multi-profile case
-(CT-1829). The `candidates` array holds all ordered profiles.
+(CT-1829). The `candidates` array holds the ordered profiles that loaded.
+
+A profile the home lists in `retiredProfiles` is not a candidate, and neither is
+one that is not the user's own, by the one rule "Profile" in
+[`HOME_SPACE.md`](HOME_SPACE.md) states: a home's lists may link someone
+else's profile, or a document carrying no label at all. A runtime
+constructed with `preferredProfileSpace`, which a host gives a runtime that acts
+as one of the user's profiles (the Weaver runs one per facet), orders the
+profile in that space ahead of the rest, so `#profile` and the profile-data
+wishes above (`#profileName` and the rest) answer from it. When the home does
+not list that profile, has retired it, or lists one that is not the user's
+own, these wishes fail with an error
+naming the space rather than answer as another profile, even when other
+profiles are live. The home's own default and MRU are unchanged.
+
+Through `#profile`, `preferredProfileSpace` reaches every pattern that reads
+`#profile`, not only the runtime's own wishes. FabriChat's chat manager is one
+such pattern. There is one chat manager per Home, and it keys its direct rooms
+by the counterpart's principal alone. Two profiles of one person would
+therefore share a direct room with the same counterpart, which shows the
+counterpart that the two profiles are one person. Until the manager keeps its
+state per profile, a host runs the chat manager as one profile, the default.
 
 Profile resolution waits for the Home root, default pattern, roster, and
 referenced profile documents to load before publishing a new result or opening
@@ -177,12 +208,17 @@ profile creation.
 While those reads are pending, the existing wish state is retained; a new wish
 can remain unset. Confirmation re-runs the wish even when a document is absent
 and no data arrives. A confirmed empty roster opens profile creation. An entry
-confirmed absent is skipped when another valid profile remains. A failed load,
-or absent entries leaving no valid profile, produces an error surface instead.
+confirmed absent is skipped when another valid profile remains. A profile whose
+load failed keeps its place in the ordering, so a failure never changes which
+profile is selected: any other failed profile is left out of `candidates`, and
+when the selected profile failed, the Wish reports the load error instead of
+selecting another one. Absent entries leaving no valid profile also produce an
+error surface rather than profile creation.
 Failed confirmations do not schedule another load on their own. Every re-run
 checks the current document before consulting a cached failure, so document
-arrival allows the same Wish instance to recover. A fresh Wish instance or a
-replica reset can request another load.
+arrival allows the same Wish instance to recover. A load that failed because
+the connection dropped is requested again when the session reconnects. A fresh
+Wish instance or a replica reset can request another load.
 
 The picker is the **switching affordance**, not the source of `.result`:
 selection is _state_, not a channel. When the picker's "Use" writes `mru` or
@@ -228,7 +264,7 @@ for the rendered output so each viewer sees their own home profile projection.
 
 | Feature    | Favorites (`~`)            | Mentionables (`.`)              | Profile (`profile`)              |
 |------------|----------------------------|---------------------------------|----------------------------------|
-| Storage    | Home default pattern       | Current space                   | Profile default pattern          |
+| Storage    | Home default pattern       | Current space                   | Profile piece                    |
 | Scope      | Cross-space                | Per-space                       | Cross-space, per-user            |
 | Source     | User's favorites list      | Pattern's `mentionable` export  | User's profile element list      |
 | Tag source | Snapshotted when favorited | Computed from schema            | `userTags` first, then `tag`     |
@@ -246,10 +282,14 @@ const wishResult = wish<Array<Favorite>>({ query: "#favorites" });
 ```
 
 The `tags` field holds the discovery tags of the piece pointed to by `cell` —
-the hashtags from its schema's doc comment, lowercased and without the leading
-`#`. The favorites client derives them from the piece's schema when the
-favorite is added (the schema is not reachable from inside the home pattern's
-handler), and the wish system matches against them.
+the hashtags from descriptions across its schema tree, lowercased and without
+the leading `#`. The favorites client derives them from the piece's schema
+when the favorite is added (the schema is not reachable from inside the home
+pattern's handler), and the wish system matches against them. Description text
+is the source even when a stored schema also carries a `tags` annotation. A
+schema with only that annotation and no description hashtags contributes no
+tags. Explicit favorite-tag overrides take precedence; stored favorite tags
+remain the values searched by wish.
 
 Favorites created before the `tags` field instead carry a `tag` field holding
 the piece's serialized result schema; the wish system still reads it,
@@ -294,10 +334,30 @@ These query strings resolve to well-known cells without a search. The
 `#`-prefixed targets resolve against the current space by default, except
 `#favorites`, `#journal`, `#learned`, `#learnedSummary`, `#agent_queue`,
 `#chatManager`, and the `#profile*` targets, which require a signed-in user and
-resolve from that user's home space. `#chatManager` reports an error, naming
-the remedies, when the home pattern holds no chat manager: a system home
-pattern set up before its source had one gains it when the home space is next
-opened, and a custom one holds it only if it says so.
+resolve from that user's home space. A wish reads; it never creates the home
+pattern, the home space's root. The targets that resolve under that root are
+`#favorites`, `#journal`, `#learned`, `#learnedSummary`, `#agent_queue`, the
+profile create surface `#profile` offers while the user has no profile, and a
+`"~"`-scoped target such as `#default`. While the home space's `defaultPattern`
+slot is empty, as it is before the home space is first opened, a headless wish
+for one of these resolves to nothing, with no result and no error, and a
+`"~"`-scoped one resolves to whatever else its scope reaches. Any other wish for
+one of these hands out a cell through the empty slot, where a read finds
+nothing. A write beneath the empty slot is refused with a
+`SpaceRootMissingError` rather than landing in the space cell itself. When the
+write is a handler's on a client runtime, and the refusal escapes the handler,
+the root is created and the handler runs again, so the write lands under the
+root. None of these creates one, and each leaves the slot empty: a handler that
+only reads beneath the empty slot, a handler that catches the refusal itself, a
+write outside a handler, and any write on a serving runtime. A root whose
+creation fails leaves the handler's refusal standing, with the failure as its
+cause. A slot that already holds something is resolved through as it stands.
+The other `#profile*` targets only read the profile roster through the slot as
+it stands, so for them an empty slot reads as no profiles. `#chatManager` only reads the home
+pattern too, and reports an error, naming the remedies, when there is no home
+pattern or it holds no chat manager: a system home pattern set up before its
+source had one gains it when the home space is next opened, and a custom one
+holds it only if it says so.
 The `scope` parameter can redirect or fan the others out across other spaces.
 
 | Target              | Description                                             |
@@ -319,9 +379,10 @@ The `scope` parameter can redirect or fan the others out across other spaces.
 | `#learnedSummary`   | Free-form learned summary string (home space)           |
 | `#agent_queue`      | User's agent queue: their agent runs and runner (home space) |
 | `#chatManager`      | User's FabriChat manager: their chat rooms (home space) |
-| `#profile`          | Profile default pattern object                          |
+| `#profile`          | User's current profile piece                            |
 | `#profileName`      | User's profile display name                             |
-| `#profileAvatar`    | User's profile avatar                                   |
+| `#profileAvatar`    | User's profile avatar text                              |
+| `#profilePicture`   | User's profile picture, as image bytes                  |
 | `#profileSpace`     | User's profile space cell                               |
 
 The `#profile*` targets are detailed under

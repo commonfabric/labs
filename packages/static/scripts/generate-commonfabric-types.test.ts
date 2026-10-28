@@ -31,6 +31,54 @@ const INLINED_URL = new URL(
   "../../data-model/src/api.ts",
   import.meta.url,
 );
+const LIBRARY_URL = new URL("../assets/types/es2023.d.ts", import.meta.url);
+
+/**
+ * Type-checks `source` as a module beside the checked-in type module, which it
+ * imports as `./commonfabric.d.ts`, the way the pattern compiler serves it: a
+ * declaration file the checker reads and does not check. Returns the messages
+ * of the diagnostics `source` gets and the number of type instantiations the
+ * check made.
+ */
+function checkAgainstTypeModule(
+  source: string,
+): { messages: string[]; instantiations: number } {
+  const files = new Map([
+    ["/commonfabric.d.ts", Deno.readTextFileSync(GENERATED_URL)],
+    ["/lib.d.ts", Deno.readTextFileSync(LIBRARY_URL)],
+    ["/main.ts", source],
+  ]);
+  const program = ts.createProgram(["/main.ts"], {
+    target: ts.ScriptTarget.ES2023,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    allowImportingTsExtensions: true,
+    noEmit: true,
+    strict: true,
+    skipLibCheck: true,
+  }, {
+    getSourceFile: (name) => {
+      const text = files.get(name);
+      return text === undefined
+        ? undefined
+        : ts.createSourceFile(name, text, ts.ScriptTarget.ES2023, true);
+    },
+    writeFile: () => {},
+    getCurrentDirectory: () => "/",
+    fileExists: (name) => files.has(name),
+    readFile: (name) => files.get(name),
+    getCanonicalFileName: (name) => name,
+    useCaseSensitiveFileNames: () => true,
+    getNewLine: () => "\n",
+    getDefaultLibFileName: () => "/lib.d.ts",
+  });
+  const messages = program
+    .getSemanticDiagnostics(program.getSourceFile("/main.ts"))
+    .map((diagnostic) =>
+      ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")
+    );
+  return { messages, instantiations: program.getInstantiationCount() };
+}
 
 describe("generate-commonfabric-types", () => {
   describe("generateCommonfabricTypes()", () => {
@@ -109,6 +157,43 @@ describe("generate-commonfabric-types", () => {
         await Deno.remove(path);
       }
     });
+  });
+
+  describe("the checked-in type module", () => {
+    // Relating two instantiations of an interface needs the interface's
+    // variance. Where the interface declares none, the checker measures it by
+    // comparing two instantiations of the whole interface member by member,
+    // which for a cell is about 80,000 type instantiations, made once in every
+    // compile that passes a cell where a cell of another type is expected. A
+    // declared variance is read instead.
+
+    for (const cell of ["Cell", "OpaqueCell"]) {
+      const relating = (from: string, to: string) => `
+        import type { ${cell} } from "./commonfabric.d.ts";
+        type Narrow = { id: string; label: string };
+        type Wide = { id: string };
+        declare const held: ${cell}<${from}>;
+        export const passed: ${cell}<${to}> = held;
+      `;
+
+      it(`relates \`${cell}<Narrow>\` to \`${cell}<Wide>\` in under 1,000 type instantiations`, () => {
+        const { messages, instantiations } = checkAgainstTypeModule(
+          relating("Narrow", "Wide"),
+        );
+        expect(messages).toEqual([]);
+        expect(instantiations).toBeLessThan(1000);
+      });
+
+      it(`reports \`${cell}<Wide>\` assigned to \`${cell}<Narrow>\``, () => {
+        const { messages } = checkAgainstTypeModule(
+          relating("Wide", "Narrow"),
+        );
+        expect(messages).toHaveLength(1);
+        expect(messages[0]).toContain(
+          `Type '${cell}<Wide>' is not assignable to type '${cell}<Narrow>'`,
+        );
+      });
+    }
   });
 
   describe("moduleSpecifierOf()", () => {

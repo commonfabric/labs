@@ -1,8 +1,10 @@
 /**
  * What makes the report the subject here decidable at all is the document it
  * writes to. A resolved wish emits a `cf-cell-link` as its `[UI]`, whose
- * `$cell` prop is a link to the wished-for cell, so the stored label map
- * carries a link-origin entry under `[UI]`. A value write reaching a path
+ * `$cell` prop is a link to the wished-for cell. The slot stores the
+ * reference's own label, which for a wish is nothing, and the wished-for
+ * cell's labels are read through it (CFC §8.2); the cases below seed the
+ * state document with a label map of its own. A value write reaching a path
  * the stored label map reaches is refused unless something names the schema
  * it was authored against, and that refusal reads `missing schema
  * write-policy input`.
@@ -29,6 +31,7 @@ import { resolveLink } from "../src/link-resolution.ts";
 import { type JSONSchema, UI } from "../src/builder/types.ts";
 import type { IStorageTransaction } from "../src/storage/interface.ts";
 import { StateInconsistency } from "../src/storage/transaction/attestation.ts";
+import { labelsReached } from "./support/reached-labels.ts";
 
 const signer = await Identity.fromPassphrase(
   "wish failure report write policy",
@@ -56,11 +59,9 @@ const altProfileViewSchema: JSONSchema = {
  *
  * The two variants are the two shapes a wish-state document is found in. The
  * first declares the report's own fields, as the real wish-state schema
- * does, and holds the `cf-cell-link` a resolved wish emits — so its stored
- * label map reaches `[UI]` and the report needs a name for what it writes.
- * The second says nothing about those fields, so the label map does not
- * reach them and the report needs no name; it is there because a report that
- * needs no name must not be refused for offering one.
+ * does, and holds the `cf-cell-link` a resolved wish emits. The second says
+ * nothing about those fields; it is there because a report that needs no
+ * name must not be refused for offering one.
  */
 const ambiguousWishShapedSchema: JSONSchema = {
   type: "object",
@@ -68,7 +69,7 @@ const ambiguousWishShapedSchema: JSONSchema = {
     result: { anyOf: [profileViewSchema, altProfileViewSchema] },
     candidates: { type: "array", items: profileViewSchema },
     error: true,
-    [UI]: true,
+    [UI]: { type: "unknown", asCell: ["opaque"] },
   },
 } as JSONSchema;
 
@@ -187,13 +188,20 @@ describe("wish commit-failure reporting", () => {
       undefined,
     );
 
-  it("persists a link-origin label entry under `[UI]` when a wish resolves", async () => {
+  it("stores no entry of its own for the resolved link under `[UI]` and reaches the wished-for label through it", async () => {
     await seedWishTarget(runtime, "classified");
     const doc = await runWish(runtime);
 
     expect(
       storedLabelPaths(runtime, doc).some((path) => path[0] === UI),
-    ).toBe(true);
+    ).toBe(false);
+    expect(
+      labelsReached(
+        runtime,
+        { id: doc.id, space, scope: doc.scope, path: [] } as never,
+        [UI, "props", "$cell", "name"],
+      ).confidentiality,
+    ).toContain("secret");
   });
 
   /**
@@ -312,11 +320,18 @@ describe("wish commit-failure reporting", () => {
     // Nor did the report launder the document's labels. It replaces the
     // `[UI]` subtree, so the entries describing the link that used to sit
     // there go with the value they described; every entry at a path the
-    // report does not write stands.
+    // report does not write stands, and the candidate, a document of its
+    // own, still labels itself.
     const labelled = storedLabelPaths(runtime, doc);
     expect(labelled).toContainEqual(["result", "name"]);
-    expect(labelled).toContainEqual(["candidates", "0"]);
     expect(labelled.filter((path) => path[0] === UI)).toEqual([]);
+    expect(
+      labelsReached(
+        runtime,
+        { id: doc.id, space, scope: doc.scope, path: [] } as never,
+        ["candidates", "0", "name"],
+      ).confidentiality,
+    ).toContain("secret");
   });
 
   it("lands a refusal on a document whose stored envelope says nothing about the report's own fields", async () => {

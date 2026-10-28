@@ -1,5 +1,8 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { deepFreeze } from "@commonfabric/data-model";
+import { getContainersHashedForTestingOnly } from "@commonfabric/data-model/for-testing-only";
+import { internSchema } from "@commonfabric/data-model-schema";
 import { combineSchema, combineSchemaForLink } from "../src/traverse.ts";
 import {
   resetReaderSchemaPrecedenceConfig,
@@ -749,6 +752,76 @@ describe("combineSchemaForLink reader precedence", () => {
       ...readerSchema,
       default: { name: "first" },
     });
+  });
+
+  it("returns one schema for a shaped reader over two link schemas declaring one default", () => {
+    const reader = {
+      ...readerSchema,
+      title: "one default, two links",
+    } as const satisfies JSONSchema;
+    const first = combineSchemaForLink(reader, {
+      ...linkContactSchema,
+      default: { name: "someone" },
+    });
+    expect(first).toEqual({ ...reader, default: { name: "someone" } });
+    expect(
+      combineSchemaForLink(reader, {
+        type: "object",
+        default: { name: "someone" },
+      }),
+    ).toBe(first);
+  });
+
+  it("returns a schema of its own for each shaped reader and each default a link declares", () => {
+    const reader = (title: string) =>
+      ({ ...readerSchema, title }) as const satisfies JSONSchema;
+    const link = (name: string) =>
+      ({
+        ...linkContactSchema,
+        default: { name },
+      }) as const satisfies JSONSchema;
+    expect(combineSchemaForLink(reader("first reader"), link("someone")))
+      .toEqual({ ...reader("first reader"), default: { name: "someone" } });
+    expect(combineSchemaForLink(reader("second reader"), link("someone")))
+      .toEqual({ ...reader("second reader"), default: { name: "someone" } });
+    expect(combineSchemaForLink(reader("first reader"), link("another")))
+      .toEqual({ ...reader("first reader"), default: { name: "another" } });
+    // A default that is a key of the other's, and one that is not a string.
+    expect(combineSchemaForLink(reader("first reader"), link("name")))
+      .toEqual({ ...reader("first reader"), default: { name: "name" } });
+    expect(
+      combineSchemaForLink(reader("first reader"), {
+        ...linkContactSchema,
+        default: null,
+      }),
+    ).toEqual({ ...reader("first reader"), default: null });
+  });
+
+  it("hashes nothing to inherit a primitive default from a link schema it has not seen", () => {
+    // Each document a link is read out of holds the link's schema as an
+    // object of its own, so keying the result by the whole link schema
+    // would hash one whole schema per document.
+    const reader = internSchema(
+      {
+        ...readerSchema,
+        title: "primitive default",
+      } as const satisfies JSONSchema,
+    );
+    const linkSchema = () =>
+      deepFreeze(
+        {
+          ...linkContactSchema,
+          title: "primitive default link",
+          default: "unnamed",
+        } as const satisfies JSONSchema,
+      );
+    const first = combineSchemaForLink(reader, linkSchema());
+    expect(first).toEqual({ ...reader, default: "unnamed" });
+    const hashedBefore = getContainersHashedForTestingOnly();
+    for (let document = 0; document < 10; document++) {
+      expect(combineSchemaForLink(reader, linkSchema())).toBe(first);
+    }
+    expect(getContainersHashedForTestingOnly()).toBe(hashedBefore);
   });
 
   //

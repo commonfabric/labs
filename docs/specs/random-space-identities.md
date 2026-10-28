@@ -48,8 +48,9 @@ arithmetic.
 - The private key signs one access-control-only genesis transaction. That
   transaction has no prior version and makes the authenticated creator the
   first owner.
-- The genesis transaction grants the creator alone. A newly created space is
-  not world-writable. The deployment's configured service identities keep the
+- The genesis transaction makes the creator an owner, and grants nobody else
+  anything the creator did not ask for. A newly created space is not
+  world-writable unless its creator asks for that. The deployment's configured service identities keep the
   authority the deployment already gives them; that authority is policy, not
   anything derived from the space key.
 - The private key is destroyed once the genesis commit has been confirmed. It
@@ -87,12 +88,12 @@ costs one access-control document and is reachable by nobody.
 
 ## Recording a created space
 
-A DID is recorded by whatever refers to it, beside the reference. Nothing
-records a newly created space in a shared directory, there is no per-user
-name-to-DID map, and no provider keeps a table of names.
+A DID is recorded by whatever refers to it, beside the reference. Space
+creation itself records no DID in a shared directory or a per-user name-to-DID
+map, and no provider keeps a table of display names.
 
-Three things refer to a space created under this specification, and each
-records its own DID:
+References to a space created under this specification record its DID beside
+the reference:
 
 - **A pattern's `PatternFactory.inSpace(name)` target.** The space that calls
   `inSpace` holds an allocation record for that name. Resolution reads the
@@ -104,7 +105,10 @@ records its own DID:
   on a client, the user whose runtime is resolving the name; on a serving
   runtime, the run's demanding identity. A serving run with no such identity
   resolves no name and creates no space, rather than creating one owned by the
-  service.
+  service. Under server execution a client creates no space at all: its run of
+  a handler is a speculative echo of the serving runtime's, which creates the
+  space. The client resolves a name only through its record, and its echo of a
+  handler naming one that has none withdraws.
 
   An allocation record is one document per name, addressed by a canonical cause
   over the calling space and the name, and immutable once written. A
@@ -119,8 +123,28 @@ records its own DID:
 - **A user's Home site table.** Each entry maps a space DID to the origin
   serving it. This table already exists.
 
-The allocation record is what makes repeated resolution converge. A handler that
-runs more than once for one logical event reads the record its first run wrote
+  A runtime learns where that origin serves Memory from the origin itself,
+  not from its own deployment. A runtime whose deployment publishes a memory
+  URL (a memory router) reads `/api/meta` on an entry's origin when the origin
+  is neither its API host nor its memory URL, once per origin for the runtime's
+  lifetime and for at most 64 origins, and opens the space's Memory on the
+  `memoryUrl` the origin publishes, or on the origin itself when it publishes
+  none; the space's HTTP work goes to the origin. An origin whose memory host
+  cannot be read leaves its spaces on no route, since the runtime's own router
+  is not where another deployment keeps its spaces. A runtime whose deployment
+  publishes no memory URL opens Memory on the entry's origin, as before.
+
+- **A host's calendar meeting association.** The
+  [meeting-room allocation boundary](../features/meeting-room-allocation.md)
+  retains a canonical space DID per portable occurrence signature. It creates
+  candidates through ordinary space creation and conditionally records one
+  before a meeting daemon publishes panels or sends invitations. A losing or
+  unrecorded candidate is abandoned. This application reference does not change
+  the creation operation or retain its private key.
+
+For `PatternFactory.inSpace`, the allocation record makes repeated resolution
+converge. A handler that runs more than once for one logical event reads the
+record its first run wrote
 and reaches the same space. Concurrent resolvers contend on one document in one
 logical writable history, and the resolver that loses adopts the recorded DID
 and abandons the space it created.
@@ -149,8 +173,8 @@ Before another process accepts writes, the provider must preserve the durable
 history and fence the previous writer. Process identity is neither space
 identity nor part of any routing decision this specification makes.
 
-Every allocation record lives in a space that reaches its durable history
-through that same route. No additional provider-owned storage is required for
+Each `inSpace` allocation record lives in a space that reaches its durable
+history through that same route. No additional provider-owned storage is required for
 space creation.
 
 ## Deployment mappings

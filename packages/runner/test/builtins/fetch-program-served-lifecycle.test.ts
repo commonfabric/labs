@@ -29,7 +29,7 @@ import {
   WaveAccumulator,
   waveRunContextOf,
 } from "../../src/executor/wave.ts";
-import type { raw } from "../../src/module.ts";
+import { isRawBuiltinResult, type raw } from "../../src/module.ts";
 import { Runtime } from "../../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../../src/storage/interface.ts";
 import { EmulatedStorageManager } from "../../src/storage/v2-emulate.ts";
@@ -207,7 +207,7 @@ describe("fetch-program-served-lifecycle", () => {
     let resultCells: ResultCells;
     const builtin: Parameters<typeof raw<{ url: string }, ResultCells>>[0] =
       fetchProgram;
-    const action = builtin(
+    const built = builtin(
       input,
       (tx, cells) => {
         resultCells = cells;
@@ -228,11 +228,11 @@ describe("fetch-program-served-lifecycle", () => {
       false,
       binding.getAsNormalizedFullLink(),
     );
-    if (typeof action !== "function") {
-      throw new Error("Expected raw program action");
+    if (!isRawBuiltinResult(built)) {
+      throw new Error("Expected raw program result");
     }
 
-    const run = action;
+    const run = built.action;
 
     async function seed(identity: ScopeKeyIdentity, scope: "user" | "session") {
       const tx = edit(identity);

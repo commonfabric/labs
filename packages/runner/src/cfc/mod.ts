@@ -6,6 +6,11 @@ export type {
   ResolvedLabelReadOptions,
 } from "./label-view.ts";
 export {
+  type ConsumedLocation,
+  exchangeEachObservation,
+  joinLocationIntegrity,
+} from "./access-integrity.ts";
+export {
   type CfcCellLinkRefPayload,
   linkCfcLabelView,
   stripSigilCfcLabelViews,
@@ -40,6 +45,7 @@ export {
   cfcLabelViewForResolvedCell,
   cfcLabelViewForResolvedCellWithStatus,
   cfcLabelViewForResolvedTarget,
+  cfcLabelViewForResolvedTargetWithStatus,
   cfcLabelViewFromMetadata,
   cfcLabelViewSourceForCell,
   cloneCfcLabelView,
@@ -93,10 +99,10 @@ export type {
 } from "./types.ts";
 // `runtimeWritePolicyAuthorization` is deliberately NOT re-exported here.
 // `./cfc` is a public entry point of this package, and the value is what
-// mints a write-policy input the route-2 declaration acts on; publishing it
-// would let anything that can import the package name it. The type above
-// carries no such risk — it is erased, and names nothing at run time. The
-// runtime passes the value through an in-package import.
+// mints a write-policy input the runtime-owned-store admission acts on;
+// publishing it would let anything that can import the package name it. The
+// type above carries no such risk — it is erased, and names nothing at run
+// time. The runtime passes the value through an in-package import.
 export {
   cfcCanonicalClauseDigest,
   collectDeclaredMonotonicityViolations,
@@ -213,8 +219,11 @@ export type {
   RuleFiring,
 } from "./exchange-eval.ts";
 export {
+  admitsRulesOfKind,
   DEFAULT_EXCHANGE_FUEL,
   evaluateExchangeRules,
+  type ExchangeRuleKind,
+  isValueIntrinsicExchangeRule,
 } from "./exchange-eval.ts";
 export type {
   CfcGrant,
@@ -255,6 +264,7 @@ export {
 } from "./space-membership.ts";
 export {
   CFC_PREFIX_PROVENANCE_MAX_WRITES,
+  collectConsumedLabel,
   describeSinkReleaseRefusal,
   flowLabelWorkExists,
   gatedSinkRequestExists,
@@ -368,7 +378,15 @@ export {
   type CfcReadCeilingOptions,
   type CfcReadOnExceed,
 } from "./read-ceiling.ts";
-export { markRendererTrustedEvent } from "./ui-contract.ts";
+export {
+  markRendererTrustedEvent,
+  type ReviewedActionProvenance,
+  reviewedActionProvenance,
+} from "./ui-contract.ts";
+export {
+  type HostGestureProvenance,
+  hostGestureProvenance,
+} from "./host-review.ts";
 export {
   cfcObjectSchemaIsClosed,
   INJECTION_SAFE_ATOM,
@@ -399,6 +417,7 @@ export {
   uniqueCfcAtoms,
 } from "./observation.ts";
 export {
+  canonicalizeCfcSchemaDocument,
   cfcSchemaIsFalse,
   cfcSchemaIsInternalKey,
   cfcSchemaIsTrue,

@@ -72,6 +72,7 @@ in CI:
   transformer goldens with `UPDATE_GOLDENS=1` (see
   `packages/ts-transformers/AGENTS.md`).
 - The coverage gate holds `packages/static`'s measured set, its `deno-test`
-  half, to its baseline on a pull request that changes the package and reaches
-  at most two measured sets. New code under `scripts/` needs matching tests, or
-  it fails the gate. Neither `cfcheck` nor `deno task check` measures coverage.
+  half, to its baseline on a pull request that changes the package and whose
+  plan chooses the gate by its score; the default branch judges it on every
+  push. New code under `scripts/` needs matching tests, or it fails the gate.
+  Neither `cfcheck` nor `deno task check` measures coverage.

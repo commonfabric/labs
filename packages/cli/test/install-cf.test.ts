@@ -29,6 +29,27 @@ import { dirname, fromFileUrl, join } from "@std/path";
 const repoRoot = join(dirname(fromFileUrl(import.meta.url)), "..", "..", "..");
 const installer = join(repoRoot, "scripts", "install-cf.sh");
 
+/**
+ * Runs `git` in `cwd`, throwing with git's own error output when it fails, so
+ * a fixture that could not be built says so rather than surfacing later as an
+ * installer failure.
+ */
+async function git(cwd: string, ...args: string[]): Promise<void> {
+  const { code, stderr } = await new Deno.Command("git", {
+    args,
+    cwd,
+    stdout: "null",
+    stderr: "piped",
+  }).output();
+  if (code !== 0) {
+    throw new Error(
+      `\`git ${args.join(" ")}\` exited ${code}: ${
+        new TextDecoder().decode(stderr)
+      }`,
+    );
+  }
+}
+
 /** A git checkout with a `bin/cf` and a `bin/cfsh`, standing in for a real one. */
 async function makeCheckout(
   root: string,
@@ -46,18 +67,15 @@ async function makeCheckout(
     '#!/bin/sh\nexec cf sh "$@"\n',
   );
   await Deno.chmod(join(root, "bin", "cfsh"), 0o755);
-  const git = async (...args: string[]) => {
-    await new Deno.Command("git", {
-      args,
-      cwd: root,
-      stdout: "null",
-      stderr: "null",
-    })
-      .output();
-  };
-  await git("init", "-q");
-  await git("config", "user.email", "test@example.com");
-  await git("config", "user.name", "Test");
+  await git(root, "init", "-q");
+  await git(root, "config", "user.email", "test@example.com");
+  await git(root, "config", "user.name", "Test");
+  // A commit starts git's automatic maintenance, which carries on in the
+  // background after the commit returns. Its worktree pruning can delete the
+  // admin directory of a worktree that `git worktree add` has created but not
+  // yet locked, so a worktree added straight after a commit would fail now and
+  // then.
+  await git(root, "config", "maintenance.auto", "false");
 }
 
 async function runInstaller(
@@ -139,18 +157,8 @@ Deno.test("copies this checkout's script, but defaults to the primary", async ()
 
     // A real worktree of that repo, carrying a different bin/cf.
     const worktree = join(dir, "wt");
-    await new Deno.Command("git", {
-      args: ["commit", "-qm", "init", "--allow-empty"],
-      cwd: primary,
-      stdout: "null",
-      stderr: "null",
-    }).output();
-    await new Deno.Command("git", {
-      args: ["worktree", "add", "-q", "--detach", worktree],
-      cwd: primary,
-      stdout: "null",
-      stderr: "null",
-    }).output();
+    await git(primary, "commit", "-qm", "init", "--allow-empty");
+    await git(primary, "worktree", "add", "-q", "--detach", worktree);
     await Deno.mkdir(join(worktree, "bin"), { recursive: true });
     await Deno.writeTextFile(
       join(worktree, "bin", "cf"),
@@ -161,7 +169,8 @@ Deno.test("copies this checkout's script, but defaults to the primary", async ()
       '#!/bin/sh\nexec cf sh "$@"\n',
     );
 
-    assertEquals((await runInstaller(worktree, ["--dir", target])).code, 0);
+    const { code, err } = await runInstaller(worktree, ["--dir", target]);
+    assertEquals(code, 0, err);
 
     const installed = await Deno.readTextFile(join(target, "cf"));
     assertStringIncludes(installed, "worktree-version");

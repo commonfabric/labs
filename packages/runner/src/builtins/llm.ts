@@ -47,6 +47,7 @@ import {
   isCellResultForDereferencing,
   snapshotQueryResult,
 } from "../query-result-proxy.ts";
+import { type RawBuiltinResult } from "../module.ts";
 import type { Runtime } from "../runtime.ts";
 import { type Action } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
@@ -60,7 +61,7 @@ import {
   LLMResultSchema,
   LLMToolSchema,
 } from "./llm-schemas.ts";
-import { ownedCell } from "./runtime-owned-store.ts";
+import { ownedCell, ownedStoreLinks } from "./runtime-owned-store.ts";
 import {
   LLM_DERIVED_RESULT_STAMP_SCHEMA,
   withLlmDerivedStamp,
@@ -886,14 +887,19 @@ export function llm(
   _outputBinding?: NormalizedFullLink,
   _awaitSync?: boolean,
   publicationBinding?: NormalizedFullLink,
-): Action {
+): RawBuiltinResult {
+  // The stores this node keeps, each keyed by its cause alone, so the
+  // action declares them when it is set up.
+  const stores = {
+    result: { llm: { result: cause } },
+  };
   const inputs = inputsCell.asSchema(LLMParamsSchema);
 
   const states = new Map<string, LLMRunState<Schema<typeof LLMResultSchema>>>();
 
   let requestSequence = 0;
 
-  return (tx: IExtendedStorageTransaction) => {
+  const action: Action = (tx: IExtendedStorageTransaction) => {
     tx.resetNarrowestReadScope();
     const {
       system,
@@ -945,7 +951,7 @@ export function llm(
         runtime,
         tx,
         parentCell,
-        { llm: { result: cause } },
+        stores.result,
         LLMResultSchema,
         outputScope,
       );
@@ -1274,6 +1280,10 @@ export function llm(
       lifecycle,
     );
   };
+  return {
+    action,
+    storeWrites: ownedStoreLinks(runtime, parentCell, Object.values(stores)),
+  };
 }
 
 /**
@@ -1360,7 +1370,12 @@ export function generateText(
   _outputBinding?: NormalizedFullLink,
   _awaitSync?: boolean,
   publicationBinding?: NormalizedFullLink,
-): Action {
+): RawBuiltinResult {
+  // The stores this node keeps, each keyed by its cause alone, so the
+  // action declares them when it is set up.
+  const stores = {
+    result: { generateText: { result: cause } },
+  };
   const inputs = inputsCell.asSchema(GenerateTextParamsSchema);
 
   const states = new Map<
@@ -1370,7 +1385,7 @@ export function generateText(
 
   let requestSequence = 0;
 
-  return (tx: IExtendedStorageTransaction) => {
+  const action: Action = (tx: IExtendedStorageTransaction) => {
     tx.resetNarrowestReadScope();
     const {
       system,
@@ -1422,7 +1437,7 @@ export function generateText(
         runtime,
         tx,
         parentCell,
-        { generateText: { result: cause } },
+        stores.result,
         GenerateTextResultSchema,
         outputScope,
       );
@@ -1745,6 +1760,10 @@ export function generateText(
       lifecycle,
     );
   };
+  return {
+    action,
+    storeWrites: ownedStoreLinks(runtime, parentCell, Object.values(stores)),
+  };
 }
 
 /**
@@ -1776,7 +1795,12 @@ export function generateObject<T extends Record<string, unknown>>(
   _outputBinding?: NormalizedFullLink,
   _awaitSync?: boolean,
   publicationBinding?: NormalizedFullLink,
-): Action {
+): RawBuiltinResult {
+  // The stores this node keeps, each keyed by its cause alone, so the
+  // action declares them when it is set up.
+  const stores = {
+    result: { generateObject: { result: cause } },
+  };
   const inputs = inputsCell.asSchema(GenerateObjectParamsSchema);
 
   const states = new Map<
@@ -1786,7 +1810,7 @@ export function generateObject<T extends Record<string, unknown>>(
 
   let requestSequence = 0;
 
-  return (tx: IExtendedStorageTransaction) => {
+  const action: Action = (tx: IExtendedStorageTransaction) => {
     tx.resetNarrowestReadScope();
     const {
       prompt,
@@ -1849,7 +1873,7 @@ export function generateObject<T extends Record<string, unknown>>(
         runtime,
         tx,
         parentCell,
-        { generateObject: { result: cause } },
+        stores.result,
         GenerateObjectResultSchema,
         outputScope,
       );
@@ -2746,5 +2770,9 @@ export function generateObject<T extends Record<string, unknown>>(
         lifecycle,
       );
     }
+  };
+  return {
+    action,
+    storeWrites: ownedStoreLinks(runtime, parentCell, Object.values(stores)),
   };
 }

@@ -44,6 +44,7 @@ class ControlledWorker {
             { kind: "assertion" },
           ],
           allowRuntimeErrors: false,
+          expectRuntimeErrors: undefined,
           expectNonIdempotent: false,
           allowConsoleErrors: false,
           allowConsoleWarnings: false,

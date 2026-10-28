@@ -31,9 +31,10 @@ import {
   cfcSchemaResolvedRoot,
   resolveCfcSchemaRefs,
 } from "@commonfabric/runner/cfc";
+import type { PieceCallableListing } from "@commonfabric/piece/verb-listing";
 import { isObjectOrArray, isPlainObject } from "@commonfabric/utils/types";
 
-import type { PieceCallableListing, PieceCallablesListing } from "./piece.ts";
+import type { PieceCallablesListing } from "./piece.ts";
 
 /** One documented data field: a state field of the declared result, or a
  * caller-supplied input. */

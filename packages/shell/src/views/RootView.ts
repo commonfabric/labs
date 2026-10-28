@@ -36,14 +36,21 @@ import {
   type CommonfabricDebugState,
   exposeCommonfabricGlobals,
 } from "../lib/debug-utils.ts";
-import { COMMIT_SHA, ENVIRONMENT, EXPERIMENTAL } from "../lib/env.ts";
+import {
+  COMMIT_SHA,
+  ENVIRONMENT,
+  experimentalForDeployment,
+  shellDeployment,
+} from "../lib/env.ts";
 import { runtimeHostFlags } from "../lib/host-toggles.ts";
 import { type BrowserTelemetry, initBrowserOtel } from "../lib/otel.ts";
+import { RefusedSpaceRetry } from "../lib/refused-space-retry.ts";
 import { shouldRecreateRuntime } from "../lib/runtime-lifecycle.ts";
 import {
   getThemePreference,
   type ThemePreference,
 } from "../lib/theme-preference.ts";
+import type { XAppView } from "./AppView.ts";
 import {
   BaseView,
   type Command,
@@ -83,6 +90,15 @@ export class XRootView extends BaseView implements ShellApp {
     #body {
       height: 100%;
       width: 100%;
+    }
+
+    #client-update-required {
+      position: fixed;
+      z-index: 1001;
+      top: 1rem;
+      left: 50%;
+      transform: translateX(-50%);
+      width: min(32rem, calc(100vw - 2rem));
     }
 
     #event-attention {
@@ -144,12 +160,19 @@ export class XRootView extends BaseView implements ShellApp {
   @state()
   private accessor _resolvingAttention = new Map<string, symbol>();
 
+  @state()
+  private accessor _clientUpdateRequired: ErrorNotification | undefined =
+    undefined;
+
   #eventAttentionMutation = 0;
   #eventAttentionMutationVersions = new Map<
     DID,
     Map<string, number>
   >();
   #eventAttentionRefreshOwners = new Map<DID, symbol>();
+
+  /** The current runtime's refused spaces, retried on returning to them. */
+  #refusedSpaceRetry: RefusedSpaceRetry | undefined;
 
   /**
    * Generation counter which invalidates callbacks from replaced workers. A
@@ -171,6 +194,16 @@ export class XRootView extends BaseView implements ShellApp {
   ): void => {
     console.error("[RuntimeClient Error]", event);
     if (generation !== this.#runtimeGeneration) {
+      return;
+    }
+
+    if (event.code === RuntimeErrorCode.ClientUpdateRequired) {
+      this._clientUpdateRequired = {
+        ...event,
+        unconfirmedWrites: event.unconfirmedWrites === true ||
+          this._clientUpdateRequired?.unconfirmedWrites === true ||
+          this.runtime?.hasPendingWrites() === true,
+      };
       return;
     }
 
@@ -236,6 +269,8 @@ export class XRootView extends BaseView implements ShellApp {
           );
           previous.dispose().catch(console.error);
         }
+        this.#refusedSpaceRetry?.dispose();
+        this.#refusedSpaceRetry = undefined;
         this._eventAttention = [];
         this.#eventAttentionMutationVersions.clear();
         this.#eventAttentionRefreshOwners.clear();
@@ -264,13 +299,20 @@ export class XRootView extends BaseView implements ShellApp {
         });
         this.#telemetry = telemetry ?? undefined;
 
+        // Awaited at each creation; kept unless the read failed for a
+        // transient reason (holdDeployment). A later value does not recreate
+        // this runtime. The first creation takes the read the shell's entry
+        // started, usually settled by now.
+        const deployment = await shellDeployment.get();
         const rt = await RuntimeInternals.create({
           identity: app.identity,
           apiUrl: app.apiUrl,
-          experimental: EXPERIMENTAL,
+          memoryUrl: deployment.memoryUrl,
+          experimental: experimentalForDeployment(deployment.experimental),
           // Select the deployed shell's immutable worker asset graph. Source
           // runs keep the explicit mutable /scripts URL below.
           clientVersion: COMMIT_SHA,
+          clientBuild: { application: "shell", gitSha: COMMIT_SHA ?? null },
           // A source-run shell serves its worker graph from /scripts even when
           // COMMIT_SHA identifies the checkout. Only deployed builds use the
           // immutable /builds/<sha>/ namespace selected by RuntimeInternals.
@@ -309,6 +351,7 @@ export class XRootView extends BaseView implements ShellApp {
           "eventneedsattention",
           this._handleEventNeedsAttention,
         );
+        this.#refusedSpaceRetry = new RefusedSpaceRetry(this.runtime);
         if (this.space !== undefined) {
           void this.#refreshEventAttention(this.space, generation);
         }
@@ -320,6 +363,7 @@ export class XRootView extends BaseView implements ShellApp {
           this.runtime,
           () => this.runtime,
           () => this.space as DID,
+          () => this.#appView?.settling,
         );
 
         return rt;
@@ -365,6 +409,8 @@ export class XRootView extends BaseView implements ShellApp {
       this.#onThemeChanged,
     );
     globalThis.addEventListener("beforeunload", this.#onBeforeUnload);
+    globalThis.addEventListener("focus", this.#onReturn);
+    document.addEventListener("visibilitychange", this.#onReturn);
   }
 
   override disconnectedCallback(): void {
@@ -375,6 +421,8 @@ export class XRootView extends BaseView implements ShellApp {
       this.#onThemeChanged,
     );
     globalThis.removeEventListener("beforeunload", this.#onBeforeUnload);
+    globalThis.removeEventListener("focus", this.#onReturn);
+    document.removeEventListener("visibilitychange", this.#onReturn);
     super.disconnectedCallback();
   }
 
@@ -386,12 +434,27 @@ export class XRootView extends BaseView implements ShellApp {
    * check is current; while writes are unconfirmed, this asks the browser to
    * confirm leaving instead of silently losing them. Commits confirm quickly
    * (typically well under a second), so the prompt only appears in the narrow
-   * window a reload would actually lose data.
+   * window a reload could lose data. An update-required refusal retains the
+   * warning after rejected commits leave the pending set, because rejection
+   * does not establish whether an unconfirmed write reached the server.
    */
   #onBeforeUnload = (event: BeforeUnloadEvent): void => {
-    if (this.runtime?.hasPendingWrites()) {
+    if (
+      this.runtime?.hasPendingWrites() ||
+      this._clientUpdateRequired?.unconfirmedWrites === true
+    ) {
       event.preventDefault();
     }
+  };
+
+  /**
+   * Handler for the page's `focus` and `visibilitychange`, which asks again
+   * for every space the runtime refused once the person is back to see it.
+   * A grant made meanwhile sends nothing to a refused session.
+   */
+  #onReturn = (): void => {
+    if (document.visibilityState === "hidden") return;
+    this.#refusedSpaceRetry?.retryAll();
   };
 
   /**
@@ -528,6 +591,7 @@ export class XRootView extends BaseView implements ShellApp {
     if (space !== undefined) {
       void this.#refreshEventAttention(space, this.#runtimeGeneration);
     }
+    this.#refusedSpaceRetry?.retry(space);
   }
 
   readonly _handleEventNeedsAttention = (
@@ -715,6 +779,11 @@ export class XRootView extends BaseView implements ShellApp {
     return this.updateComplete.then((_) => undefined);
   }
 
+  /** The app view this element renders, once it has rendered one. */
+  get #appView(): XAppView | null {
+    return this.renderRoot?.querySelector<XAppView>("x-app-view") ?? null;
+  }
+
   getRuntimeSpaceDID(): DID | undefined {
     return this.space;
   }
@@ -736,6 +805,18 @@ export class XRootView extends BaseView implements ShellApp {
           .preserveRuntimeErrorsForNextViewChange="${this
             .preserveRuntimeErrorsForNextViewChange}"
         ></x-app-view>
+        ${this._clientUpdateRequired === undefined ? undefined : html`
+          <aside id="client-update-required" class="attention-card" role="alert">
+            <h2>Update required</h2>
+            <p>${this._clientUpdateRequired.message}</p>
+            <p>Reload this tab to load the current version. Retrying access cannot update this runtime.</p>
+            ${this._clientUpdateRequired.unconfirmedWrites === true
+              ? html`
+                <p>Some changes were not confirmed as saved. Copy any recent edits you need to keep before reloading; this tab cannot confirm whether they reached the server.</p>
+              `
+              : undefined}
+          </aside>
+        `}
         ${this._eventAttention.length === 0 ? undefined : html`
           <aside
             id="event-attention"

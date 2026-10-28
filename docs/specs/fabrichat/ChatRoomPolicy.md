@@ -8,7 +8,7 @@ choice to the implementation. A room states it in its
 ```ts
 // Shown for illustration only.
 interface ChatRoomPolicy {
-  /** Whether an OWNER may obliterate messages. */
+  /** Whether an OWNER may obliterate messages, anyone's. */
   ownersMayObliterate: boolean;
 
   /** Whether an edit or a plain deletion keeps the version it replaces. */
@@ -26,15 +26,25 @@ interface ChatRoomPolicy {
   /** How long an entry stays in `recentActivity`, in ns. */
   recentActivityWindowNsec: FabricDurationNsec;
 
-  /** The most messages a message window holds. */
+  /** How many of the newest messages `messages.latest` holds. */
   maxWindowCount: number;
 
   /** The most message windows a session can have open. */
   maxOpenWindows: number;
+
+  /** The most attachments a message may have; absent for 10. */
+  maxAttachments?: number;
 }
 ```
 
-A plain object, with every key present. Each duration is a
+A plain object, with every key present but `maxAttachments`, which a policy
+stated before rooms took attachments doesn't hold, and which then means 10. A
+room enforces `ownersMayObliterate`, `deletionIsObliteration` and
+`maxAttachments`, and holds `maxWindowCount` of its newest messages in
+`messages.latest`; it states `keepsHistory`,
+`proposedTimeMaxAgeNsec`, `proposedTimeMaxLeadNsec`,
+`recentActivityWindowNsec`, and `maxOpenWindows` for the policy's shape, and
+reads none of them. Each duration is a
 [`FabricDurationNsec`](../space-model-formal-spec/1-fabric-values.md): an exact
 count of nanoseconds, held as a `bigint`.
 
@@ -54,12 +64,16 @@ The policy document is labeled `authored-by` the principal who wrote it (see
 
 ## Keys
 
-- **`ownersMayObliterate`**: whether an OWNER may obliterate messages in a group
-  room. A room under a retention requirement may say no.
-- **`keepsHistory`**: whether an edit, or a deletion that isn't obliteration,
-  keeps the version it replaces in `earlierVersions`
-  ([`ChatMessage`](ChatMessage.md)). A room under a retention requirement says
-  yes, and then keeps deleted text too.
+- **`ownersMayObliterate`**: whether an OWNER of the room's space may
+  obliterate any message in it, whoever sent it, in a direct room as in a group
+  room. Where it is false, an OWNER may obliterate only what anyone else may
+  (in a direct room, their own messages), and it never lets anyone delete a
+  message someone else sent. A room under a retention requirement may say no,
+  and so may a direct room, between two people who each hold OWNER. A room
+  enforces the value its policy states, and a policy that can't be read lets
+  no OWNER obliterate.
+- **`keepsHistory`**: stated and read by nothing. A message keeps no history
+  ([`ChatMessage`](ChatMessage.md#deleted-messages)).
 - **`deletionIsObliteration`**: whether a sender's `deleteMessage` of their own
   message obliterates it, removing its history and its author, as
   `obliterateMessage` does (see [obliterated
@@ -67,24 +81,19 @@ The policy document is labeled `authored-by` the principal who wrote it (see
   of a group room takes back what they said completely. It governs
   `deleteMessage` only: a direct room MUST let either person obliterate their
   own messages with `obliterateMessage`, whatever its policy.
-- **`proposedTimeMaxAgeNsec`**: how far before the room's handler clock a
-  sender's proposed time is accepted, and recorded as proposed. It covers
-  network delay, retries, and sends queued offline, so it can be generous.
-- **`proposedTimeMaxLeadNsec`**: how far after the room's handler clock a
-  sender's proposed time is accepted. It covers only clock skew, so it can be
-  small. An accepted proposal on this side is recorded at the current time,
-  never later (see [recorded times](ChatRoomOutput.md#recorded-times)).
-
-A proposal outside both bounds is refused.
-
-- **`recentActivityWindowNsec`**: how long, before the room's handler clock, an
-  entry stays in `recentActivity` ([`ChatRoomActivity`](ChatRoomActivity.md)).
-  It MUST be at least `proposedTimeMaxAgeNsec`.
-- **`maxWindowCount`**: the most messages a message window holds (see
-  [`ChatMessageList`](ChatMessageList.md#limits)). A request for more gets this
-  many.
-- **`maxOpenWindows`**: the most message windows a session can have open at
-  once. Opening one more is refused.
+- **`proposedTimeMaxAgeNsec`**, **`proposedTimeMaxLeadNsec`**, and
+  **`recentActivityWindowNsec`**: stated and read by nothing. A sender
+  proposes no time, and the room keeps no activity log (see
+  [times](ChatMessage.md#times)).
+- **`maxWindowCount`**: how many of the newest messages of the main
+  conversation `messages.latest` holds (see
+  [`ChatMessageList`](ChatMessageList.md#fields)).
+- **`maxOpenWindows`**: stated and read by nothing. A room offers no message
+  windows.
+- **`maxAttachments`**: the most attachments a message may have (see
+  [`ChatMessage`](ChatMessage.md#fields)); a send attaching more is refused.
+  Absent, it is 10, so a policy that doesn't state it is still stated
+  correctly for a room that allows 10.
 
 ## When it changes
 

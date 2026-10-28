@@ -5,6 +5,11 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { ValidationError } from "@cliffy/command";
 import type { JSONSchema } from "@commonfabric/api";
 import { Identity } from "@commonfabric/identity";
+import { schemaIsObjectShaped } from "@commonfabric/piece/declared-fields";
+import {
+  normalizeAbsentVerbPayload,
+  verbInputSchemaError,
+} from "@commonfabric/piece/verb-input";
 import {
   type Cell,
   entityIdFrom,
@@ -46,12 +51,9 @@ import {
   CF_RUNTIME_ERROR_LOG,
   collectInvocationResultLinks,
   executeResolvedCallable,
-  normalizeAbsentVerbPayload,
   runtimeErrorLog,
-  verbInputSchemaError,
   VerbInputValidationError,
 } from "../lib/callable.ts";
-import { schemaIsObjectShaped } from "../lib/declared-fields.ts";
 import {
   type CellSelection,
   CellSelectionError,
@@ -66,7 +68,7 @@ import {
   UnknownPieceVerbError,
 } from "../lib/piece.ts";
 import type { ExecutedPieceCallable } from "../lib/piece.ts";
-import { cf, sendThroughStandIn, stripAnsi } from "./utils.ts";
+import { argv, cf, sendThroughStandIn, stripAnsi } from "./utils.ts";
 import { createTransactionCommitReceipt } from "../../runner/src/storage/commit-receipt.ts";
 
 /**
@@ -1079,9 +1081,8 @@ describe("executePieceCallable", () => {
       },
     );
 
-    // The default prefix is the top-level spelling: a page minted with no
-    // mount to name must not teach the deprecated one. Each mount passes its
-    // own spelling as helpCommandPrefix.
+    // With no helpCommandPrefix passed, the page names the command by its
+    // own spelling.
     expect(result.helpText).toContain(
       "cf piece call ... search --help",
     );
@@ -4146,10 +4147,10 @@ describe("call selection", () => {
 
     it("reports a malformed selection without naming an invocation to retry", async () => {
       const { code, stderr } = await cf(
-        "call " +
-          "--identity ./definitely-missing-piece-call-review.key " +
-          "--api-url https://cf.dev --space common-knowledge " +
-          "--piece fid1:piece-123 addTopic -- --select a..b",
+        argv`piece call
+          --identity ./definitely-missing-piece-call-review.key
+          --api-url https://cf.dev --space common-knowledge
+          --piece fid1:piece-123 addTopic -- --select a..b`,
       );
       const errors = stripAnsi(stderr.join("\n"));
       expect(code).toBe(1);

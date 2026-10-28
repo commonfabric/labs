@@ -190,6 +190,12 @@ export const instantiate = createRoute({
               attempt: z.number().int().nonnegative().optional(),
               terminal: z.literal(true).optional(),
             }),
+            timings: z.array(z.object({
+              phase: z.string(),
+              ms: z.number().int().nonnegative(),
+            })).optional().describe(
+              "Each step the serving side timed, in milliseconds: the writer check, session, queue for the serving loop, run, wave commit and durability read of every served verb, and the registration event's delivery.",
+            ),
           }),
         },
       },

@@ -8,7 +8,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
-import { cf, stripAnsi } from "./utils.ts";
+import { argv, cf, stripAnsi } from "./utils.ts";
 
 /**
  * `CliResult` streams are line arrays; join before substring assertions.
@@ -85,7 +85,7 @@ async function withStore(
 describe("cf inspect churn", () => {
   it("renders the curve, marks the peak, and blames its drivers", async () => {
     await withStore(STORM, async (path) => {
-      const result = await cf(`inspect churn ${path}`);
+      const result = await cf(argv`inspect churn ${path}`);
       expect(result.code).toBe(0);
       const output = text(result.stdout);
 
@@ -107,12 +107,12 @@ describe("cf inspect churn", () => {
   it("bounds the window with --since/--until and widens with --bucket", async () => {
     await withStore(STORM, async (path) => {
       const zoomed = await cf(
-        `inspect churn ${path} --since 2026-07-22T10:01:00 --until 2026-07-22T10:02:00`,
+        argv`inspect churn ${path} --since 2026-07-22T10:01:00 --until 2026-07-22T10:02:00`,
       );
       expect(zoomed.code).toBe(0);
       expect(text(zoomed.stdout)).toContain("40 commits / 50 revisions over 1");
 
-      const coarse = await cf(`inspect churn ${path} --bucket 3600`);
+      const coarse = await cf(argv`inspect churn ${path} --bucket 3600`);
       expect(coarse.code).toBe(0);
       // Same totals, one bucket.
       expect(text(coarse.stdout)).toContain("42 commits / 52 revisions over 1");
@@ -125,14 +125,14 @@ describe("cf inspect churn", () => {
     // a storm but never show one settling. The footer's two timestamps are what
     // make the gap between "stopped writing" and "stopped watching" readable.
     await withStore(STORM, async (path) => {
-      const bare = text((await cf(`inspect churn ${path}`)).stdout);
+      const bare = text((await cf(argv`inspect churn ${path}`)).stdout);
       expect(bare).toContain("over 3 × 60s");
       expect(bare).toContain(
         "last commit 2026-07-22 10:02:00, observed through 2026-07-22 10:02:00",
       );
 
       const observed = await cf(
-        `inspect churn ${path} --until "2026-07-22 10:06:00"`,
+        argv`inspect churn ${path} --until ${"2026-07-22 10:06:00"}`,
       );
       expect(observed.code).toBe(0);
       const output = text(observed.stdout);
@@ -148,13 +148,15 @@ describe("cf inspect churn", () => {
 
   it("refuses a window that would report as quiet rather than as wrong", async () => {
     await withStore(STORM, async (path) => {
-      const unreadable = await cf(`inspect churn ${path} --since yesterday`);
+      const unreadable = await cf(
+        argv`inspect churn ${path} --since yesterday`,
+      );
       expect(unreadable.code).not.toBe(0);
       expect(text(unreadable.stderr)).toContain("not a time SQLite can read");
 
       const backwards = await cf(
-        `inspect churn ${path} --since "2026-07-22 11:00:00" ` +
-          `--until "2026-07-22 10:00:00"`,
+        argv`inspect churn ${path} --since ${"2026-07-22 11:00:00"}
+          --until ${"2026-07-22 10:00:00"}`,
       );
       expect(backwards.code).not.toBe(0);
       expect(text(backwards.stderr)).toContain("is not before");
@@ -163,7 +165,7 @@ describe("cf inspect churn", () => {
 
   it("emits machine-readable JSON", async () => {
     await withStore(STORM, async (path) => {
-      const result = await cf(`inspect churn ${path} --json --top 1`);
+      const result = await cf(argv`inspect churn ${path} --json --top 1`);
       expect(result.code).toBe(0);
       const report = JSON.parse(text(result.stdout));
       expect(report.totals).toEqual({ commits: 42, revisions: 52 });
@@ -178,7 +180,7 @@ describe("cf inspect churn", () => {
 
   it("says so when the window holds no timed commits", async () => {
     await withStore([], async (path) => {
-      const result = await cf(`inspect churn ${path}`);
+      const result = await cf(argv`inspect churn ${path}`);
       expect(result.code).toBe(0);
       expect(text(result.stdout)).toContain("no timed commits in window");
     });
@@ -191,7 +193,7 @@ describe("cf inspect churn", () => {
       { at: "2026-07-22 10:00:00", entities: ["of:X"] },
       { at: "not-a-timestamp", entities: ["of:Y"] },
     ], async (path) => {
-      const result = await cf(`inspect churn ${path}`);
+      const result = await cf(argv`inspect churn ${path}`);
       expect(result.code).toBe(0);
       expect(text(result.stdout)).toContain(
         "1 commit(s) have unparseable created_at",
@@ -204,7 +206,7 @@ describe("cf inspect churn", () => {
       { at: "2020-01-01 00:00:00", entities: ["of:X"] },
       { at: "2026-07-22 10:00:00", entities: ["of:X"] },
     ], async (path) => {
-      const result = await cf(`inspect churn ${path} --bucket 1`);
+      const result = await cf(argv`inspect churn ${path} --bucket 1`);
       expect(result.code).not.toBe(0);
       expect(text(result.stderr)).toContain("--bucket");
     });

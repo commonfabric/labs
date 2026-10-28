@@ -68,7 +68,10 @@ describe("theme", () => {
 
     it("aligns the theme control at the bottom-right of the document", () => {
       expect(DASHBOARD_THEME_STYLES).toContain(
-        ".theme-toggle{display:flex;width:88px;box-sizing:border-box;margin:16px 0 0 auto;align-items:center;justify-content:center",
+        ".theme-toggle,.pill{display:flex;box-sizing:border-box;margin-top:16px;align-items:center;justify-content:center",
+      );
+      expect(DASHBOARD_THEME_STYLES).toContain(
+        ".theme-toggle{width:88px;margin-left:auto}",
       );
       expect(DASHBOARD_THEME_STYLES).not.toContain("position:fixed");
     });

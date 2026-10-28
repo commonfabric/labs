@@ -71,7 +71,10 @@ import {
 } from "@commonfabric/memory/v2";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
-import type { MemorySpace } from "../src/storage/interface.ts";
+import type {
+  IExtendedStorageTransaction,
+  MemorySpace,
+} from "../src/storage/interface.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
 import { WaveAccumulator, waveRunContextOf } from "../src/executor/wave.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
@@ -228,6 +231,14 @@ const NAVIGATE_PATTERN = [
   "  { value: number; go: Stream<unknown> }",
   ">(({ value }) => ({ value, go: go({ value }) }));",
 ].join("\n");
+
+/** A handler that calls navigateTo(TargetPage) and returns nothing: its
+ * result pattern starts after the handler commits, through the start of a
+ * commit-gated result pattern rather than of the handler's result. */
+const NAVIGATE_CALLED_PATTERN = NAVIGATE_PATTERN.replace(
+  "return navigateTo(",
+  "navigateTo(",
+);
 
 /** H1 (the click's handler) emits to a second stream; H2 returns the
  * navigateTo — the intent must still address the CLICKING session
@@ -471,6 +482,58 @@ describe("Phase 4 client-effect channel", () => {
 
     cancelDemand();
   });
+
+  for (
+    const [how, source] of [
+      ["returns", NAVIGATE_PATTERN],
+      ["calls without returning", NAVIGATE_CALLED_PATTERN],
+    ] as const
+  ) {
+    it(`hands the deferred start of a navigation target a handler ${how} the firing actor's trust snapshot, never the service's`, async () => {
+      // The target starts in a transaction of its own once the handler's
+      // commits, on the handler's behalf, so what it initializes is the
+      // actor's.
+
+      ({ manager: clientManager, runtime: clientRuntime } = openClient(
+        aliceSigner,
+      ));
+      const engine = await server.engineForSpace(space);
+      const { result } = await standUp(clientRuntime, source, {
+        arg: `start-trust-arg-${how}`,
+        result: `start-trust-result-${how}`,
+      });
+      const cancelDemand = result.sink(() => {});
+      await clientRuntime.idle();
+      await clientRuntime.storageManager.synced();
+
+      const served: IExtendedStorageTransaction[] = [];
+      host = newHost(undefined, (runtime) => {
+        const edit = runtime.edit.bind(runtime);
+        runtime.edit = ((...args: Parameters<typeof edit>) => {
+          const tx = edit(...args);
+          served.push(tx);
+          return tx;
+        }) as typeof runtime.edit;
+      });
+      result.key("go").send({});
+      await clientRuntime.idle();
+      await clientRuntime.storageManager.synced();
+      await settleServing(engine, clientRuntime);
+
+      const starts = served.filter((tx) =>
+        waveRunContextOf(tx)?.actionId?.startsWith("piece-start/") === true &&
+        tx.getCfcState().attributedInitialization
+      );
+      expect(starts.length).toBeGreaterThan(0);
+      for (const tx of starts) {
+        expect(tx.getCfcState().trustSnapshot?.actingPrincipal).toBe(
+          aliceSigner.did(),
+        );
+      }
+
+      cancelDemand();
+    });
+  }
 
   it("cardinality 2 + multi-hop: a cascade-hop navigateTo addresses the CLICKING session; two sessions' fires land in their OWN instances", async () => {
     ({ manager: clientManager, runtime: clientRuntime } = openClient(

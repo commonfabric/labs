@@ -12,6 +12,7 @@ import type {
   URI,
 } from "@commonfabric/memory/interface";
 import type { FabricValue } from "@commonfabric/data-model";
+import { valueFromDataUri } from "@commonfabric/data-model/codec-data-uri";
 import {
   createDefaultTraversalContext,
   ManagedStorageTransaction,
@@ -21,6 +22,7 @@ import {
 import { StoreObjectManager } from "../src/storage/query.ts";
 import { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
+import { dataUriFromValueWithResolvedLinks } from "../src/data-uri.ts";
 import {
   type DecomposedSchema,
   decomposeSchema,
@@ -306,6 +308,126 @@ describe("traverse-schema-docs", () => {
       value: rootValue,
     });
     expect((ok as { crossed: unknown }).crossed).toBeNull();
+  });
+
+  describe("a link inside an array element read by value", () => {
+    // The traversal reads such an element at a `data:` address it mints from
+    // the element's value, in the array's own space. Each case reads the
+    // element once within its array and once at that address, decoded from
+    // the identifier as a later reader holding only the address has it. Each
+    // registers the schema documents in the realm registry first, so what
+    // decides the read is whether the traversed space holds them.
+
+    const elementSchema: JSONSchema = {
+      type: "object",
+      properties: { person: true },
+    };
+
+    /** A root whose one array element links to `targetId` under `ref`. */
+    const rowsLinkingTo = (targetId: string, ref: string) => ({
+      rows: [{
+        person: {
+          "/": {
+            [LINK_V1_TAG]: { id: targetId, path: [], schema: { $ref: ref } },
+          },
+        },
+      }],
+    });
+
+    /**
+     * The value at `person` in the one element of `rootValue.rows`, read
+     * within the array stored at `rootId` and at the element's own address.
+     */
+    const readElement = (
+      store: Map<string, Revision<State>>,
+      rootId: string,
+      rootValue: ReturnType<typeof rowsLinkingTo>,
+    ) => {
+      const inArray = traverse(store, rootId, rootValue, {
+        type: "object",
+        properties: { rows: { type: "array", items: elementSchema } },
+      });
+      const elementId = dataUriFromValueWithResolvedLinks(rootValue.rows[0], {
+        space,
+        id: rootId as URI,
+        path: ["rows", "0"],
+      });
+      const atAddress = traverse(
+        store,
+        elementId,
+        valueFromDataUri(elementId),
+        elementSchema,
+      );
+      return {
+        inArray: {
+          person: (inArray.result as { rows: { person: unknown }[] }).rows[0]
+            .person,
+          tracked: trackedKeys(inArray.context),
+        },
+        atAddress: {
+          person: (atAddress.result as { person: unknown }).person,
+          tracked: trackedKeys(atAddress.context),
+        },
+      };
+    };
+
+    it("loads and tracks the documents behind the link's schema reference", () => {
+      const schema: JSONSchemaObj = {
+        type: "object",
+        properties: { rowMarker: { type: "string" } },
+        title: "array element reference fixture",
+      };
+      const decomposed = decomposeSchema(schema);
+      for (const [hash, document] of decomposed.documents) {
+        registerSchemaDocument(hash, document);
+      }
+
+      const store = new Map<string, Revision<State>>();
+      putSchemaDocs(store, decomposed);
+      putDoc(store, "of:row-target", { rowMarker: "Alpha" });
+      const rootValue = rowsLinkingTo("of:row-target", decomposed.rootRef);
+      putDoc(store, "of:row-root", rootValue, 2);
+
+      const { inArray, atAddress } = readElement(
+        store,
+        "of:row-root",
+        rootValue,
+      );
+      for (const read of [inArray, atAddress]) {
+        expect(read.person).toEqual({ rowMarker: "Alpha" });
+        for (const hash of decomposed.documents.keys()) {
+          expect(read.tracked).toContain(`${space}/space/cid:${hash}`);
+        }
+      }
+    });
+
+    it("does not resolve through a realm-registered document the traversed space does not hold", () => {
+      const schema: JSONSchemaObj = {
+        type: "object",
+        properties: { rowGateMarker: { type: "string" } },
+        title: "array element availability gate fixture",
+      };
+      const decomposed = decomposeSchema(schema);
+      for (const [hash, document] of decomposed.documents) {
+        registerSchemaDocument(hash, document);
+      }
+
+      const store = new Map<string, Revision<State>>();
+      putDoc(store, "of:row-gate-target", { rowGateMarker: "hidden" });
+      const rootValue = rowsLinkingTo(
+        "of:row-gate-target",
+        decomposed.rootRef,
+      );
+      putDoc(store, "of:row-gate-root", rootValue, 2);
+
+      const { inArray, atAddress } = readElement(
+        store,
+        "of:row-gate-root",
+        rootValue,
+      );
+      expect(inArray.person).toBeNull();
+      expect(atAddress.person).toBeNull();
+    });
   });
 
   it("reads schema documents at the canonical space scope whatever the referrer's scope", () => {

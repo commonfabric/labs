@@ -29,14 +29,14 @@ const __cfLift_1 = __cfHelpers.lift<{
                 type: "string"
             }
         },
-        todayDate: {
-            type: "string"
-        },
         colIdx: {
             type: "number"
+        },
+        todayDate: {
+            type: "string"
         }
     },
-    required: ["weekDates", "todayDate", "colIdx"]
+    required: ["weekDates", "colIdx", "todayDate"]
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema);
@@ -68,7 +68,7 @@ export default pattern((__cf_pattern_input) => {
                 } as const satisfies __cfHelpers.JSONSchema, {
                     type: "string"
                 } as const satisfies __cfHelpers.JSONSchema, {
-                    "enum": ["Today", "Other"]
+                    "enum": ["Other", "Today"]
                 } as const satisfies __cfHelpers.JSONSchema, isToday, "Today", "Other")}</div>;
             })}
       </div>)

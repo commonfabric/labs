@@ -194,7 +194,12 @@ describe("default-app golden replay (state survives an in-place roll-forward)", 
     ).toBe("updated");
     // Let the pattern watcher observe the meta change and re-instantiate, then
     // pull the root so the new instance actually executes (pull-based graph).
+    // A `system:` update grants the candidate the running pattern's writer
+    // authority, and the watcher reads that grant before it follows the
+    // pointer; `idle()` does not cover that read, the pointer maintenance
+    // settle does.
     await runtime.idle();
+    await runtime.runner.idlePointerMaintenance();
     const rolled = (await controller.getDefaultPattern(false))!;
     await rolled.pull();
 

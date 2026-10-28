@@ -12,7 +12,7 @@ import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { resolve } from "@std/path";
 import type { Identity } from "@commonfabric/identity";
-import { experimentalOptionsForDeployedClient } from "@commonfabric/runner";
+import { settingsForDeployedClient } from "@commonfabric/runner";
 import { PiecesController } from "@commonfabric/piece/ops";
 import {
   type TempIdentity,
@@ -28,7 +28,7 @@ import {
   newPiece,
   type SpaceConfig,
 } from "../lib/piece.ts";
-import { integrationCf } from "./utils.ts";
+import { argv, integrationCf } from "./utils.ts";
 
 const API_URL = Deno.env.get("API_URL");
 
@@ -56,10 +56,16 @@ let staleInputResultPieceId = "";
 let coldSelectionResultPieceId = "";
 let staleSelectionResultPieceId = "";
 let sessionScopedPieceId = "";
-let flags = "";
+let flags: readonly string[] = [];
 let identityPath = "";
 let tempIdentity: TempIdentity | undefined;
 let spaceConfig: SpaceConfig;
+
+// The options that point a `cf cell` command at `piece` in the test's space.
+const pieceFlags = (piece: string) =>
+  argv`--api-url ${API_URL!} --identity ${identityPath}
+    --space ${spaceConfig.space} --piece ${piece}`;
+
 // The server-execution arm `cf` itself runs at (server-execution v2,
 // testing.md §2): resolved exactly as the cf binary resolves it — the
 // deployed-client rule (explicit EXPERIMENTAL_* env, else the server's
@@ -132,10 +138,10 @@ async function waitForServedValue(
 
 describe("cf cell get (integration)", { ignore: !API_URL }, () => {
   beforeAll(async () => {
-    serverExecutionOn = (await experimentalOptionsForDeployedClient({
+    serverExecutionOn = (await settingsForDeployedClient({
       apiUrl: new URL(API_URL!),
       env: Deno.env.get,
-    })).serverExecution === true;
+    })).experimental.serverExecution === true;
     tempIdentity = await writeTempIdentity();
     const { identity, path } = tempIdentity;
     identityPath = path;
@@ -198,8 +204,7 @@ describe("cf cell get (integration)", { ignore: !API_URL }, () => {
       "editContent",
       { detail: { value: NOTE_CONTENT } },
     );
-    flags =
-      `--api-url ${API_URL} --identity ${identityPath} --space ${space} --piece ${pieceId}`;
+    flags = pieceFlags(pieceId);
     await waitForContent(identity, space, pieceId, NOTE_CONTENT);
   });
 
@@ -211,20 +216,22 @@ describe("cf cell get (integration)", { ignore: !API_URL }, () => {
 
   it("bad path exits 1 with Available keys: in output", async () => {
     const { code, stderr } = await integrationCf(
-      `cell get ${flags} nonexistent`,
+      argv`cell get ${flags} nonexistent`,
     );
     expect(code).toBe(1);
     expect(stderr.join("\n")).toContain("Available keys:");
   });
 
   it("good path exits 0 with valid output", async () => {
-    const { code, stdout } = await integrationCf(`cell get ${flags} content`);
+    const { code, stdout } = await integrationCf(
+      argv`cell get ${flags} content`,
+    );
     expect(code).toBe(0);
     expect(stdout.length).toBeGreaterThan(0);
   });
 
   it("no path returns full result JSON", async () => {
-    const { code, stdout } = await integrationCf(`cell get ${flags}`);
+    const { code, stdout } = await integrationCf(argv`cell get ${flags}`);
     expect(code).toBe(0);
     const json = JSON.parse(stdout.join(""));
     expect(typeof json).toBe("object");
@@ -233,10 +240,9 @@ describe("cf cell get (integration)", { ignore: !API_URL }, () => {
   });
 
   it("reports present result data that cannot project in a fresh session (OFF) — and serves it under the flipped default (ON)", async () => {
-    const sessionFlags =
-      `--api-url ${API_URL} --identity ${identityPath} --space ${spaceConfig.space} --piece ${sessionResultPieceId}`;
+    const sessionFlags = pieceFlags(sessionResultPieceId);
     const { code, stdout, stderr } = await integrationCf(
-      `cell get ${sessionFlags}`,
+      argv`cell get ${sessionFlags}`,
     );
     if (serverExecutionOn) {
       // Under ON the refusal scenario DISSOLVES by design: the serving
@@ -260,10 +266,9 @@ describe("cf cell get (integration)", { ignore: !API_URL }, () => {
     // reading a piece whose REQUIRED output lives in another session's scope
     // must get the rest of the object (exit 0), not `undefined` and not the
     // #4874 projection error. The unreachable member is simply absent.
-    const scopedFlags =
-      `--api-url ${API_URL} --identity ${identityPath} --space ${spaceConfig.space} --piece ${sessionScopedPieceId}`;
+    const scopedFlags = pieceFlags(sessionScopedPieceId);
     const { code, stdout, stderr } = await integrationCf(
-      `cell get ${scopedFlags}`,
+      argv`cell get ${scopedFlags}`,
     );
     expect(code, stderr.join("\n")).toBe(0);
     const json = JSON.parse(stdout.join(""));
@@ -272,36 +277,33 @@ describe("cf cell get (integration)", { ignore: !API_URL }, () => {
   });
 
   it("steps and reads session-scoped computed results atomically", async () => {
-    const sessionFlags =
-      `--api-url ${API_URL} --identity ${identityPath} --space ${spaceConfig.space} --piece ${sessionResultPieceId}`;
+    const sessionFlags = pieceFlags(sessionResultPieceId);
     const { code, stdout, stderr } = await integrationCf(
-      `cell get ${sessionFlags} --step`,
+      argv`cell get ${sessionFlags} --step`,
     );
     expect(code, stderr.join("\n")).toBe(0);
     expect(JSON.parse(stdout.join(""))).toEqual({ value: "session-ready" });
   });
 
   it("steps and reads a cold session-scoped result path", async () => {
-    const sessionFlags =
-      `--api-url ${API_URL} --identity ${identityPath} --space ${spaceConfig.space} --piece ${coldSessionResultPieceId}`;
+    const sessionFlags = pieceFlags(coldSessionResultPieceId);
     const { code, stdout, stderr } = await integrationCf(
-      `cell get ${sessionFlags} value --step`,
+      argv`cell get ${sessionFlags} value --step`,
     );
     expect(code, stderr.join("\n")).toBe(0);
     expect(JSON.parse(stdout.join(""))).toBe("session-ready");
   });
 
   it("reads a current result path after changing an unstarted piece's input", async () => {
-    const sessionFlags =
-      `--api-url ${API_URL} --identity ${identityPath} --space ${spaceConfig.space} --piece ${staleSessionResultPieceId}`;
+    const sessionFlags = pieceFlags(staleSessionResultPieceId);
     const write = await integrationCf(
-      `cell set ${sessionFlags} values --input`,
+      argv`cell set ${sessionFlags} values --input`,
       { stdin: '["updated-while-stopped"]' },
     );
     expect(write.code, write.stderr.join("\n")).toBe(0);
 
     const { code, stdout, stderr } = await integrationCf(
-      `cell get ${sessionFlags} value --step`,
+      argv`cell get ${sessionFlags} value --step`,
     );
     expect(code, stderr.join("\n")).toBe(0);
     expect(JSON.parse(stdout.join(""))).toBe("updated-while-stopped");
@@ -313,42 +315,39 @@ describe("cf cell get (integration)", { ignore: !API_URL }, () => {
     // and the write are this test's own, because the assertion is that the
     // read returns the written value rather than the pattern's default, and a
     // value a sibling wrote is there only when that sibling also ran.
-    const sessionFlags =
-      `--api-url ${API_URL} --identity ${identityPath} --space ${spaceConfig.space} --piece ${staleInputResultPieceId}`;
+    const sessionFlags = pieceFlags(staleInputResultPieceId);
     const write = await integrationCf(
-      `cell set ${sessionFlags} values --input`,
+      argv`cell set ${sessionFlags} values --input`,
       { stdin: '["input-while-stopped"]' },
     );
     expect(write.code, write.stderr.join("\n")).toBe(0);
 
     const { code, stdout, stderr } = await integrationCf(
-      `cell get ${sessionFlags} values --input --step`,
+      argv`cell get ${sessionFlags} values --input --step`,
     );
     expect(code, stderr.join("\n")).toBe(0);
     expect(JSON.parse(stdout.join(""))).toEqual(["input-while-stopped"]);
   });
 
   it("selects a cold session-scoped computed result", async () => {
-    const sessionFlags =
-      `--api-url ${API_URL} --identity ${identityPath} --space ${spaceConfig.space} --piece ${coldSelectionResultPieceId}`;
+    const sessionFlags = pieceFlags(coldSelectionResultPieceId);
     const { code, stdout, stderr } = await integrationCf(
-      `cell get ${sessionFlags} --step --select value`,
+      argv`cell get ${sessionFlags} --step --select value`,
     );
     expect(code, stderr.join("\n")).toBe(0);
     expect(JSON.parse(stdout.join(""))).toEqual({ value: "session-ready" });
   });
 
   it("selects a current result after changing an unstarted piece's input", async () => {
-    const sessionFlags =
-      `--api-url ${API_URL} --identity ${identityPath} --space ${spaceConfig.space} --piece ${staleSelectionResultPieceId}`;
+    const sessionFlags = pieceFlags(staleSelectionResultPieceId);
     const write = await integrationCf(
-      `cell set ${sessionFlags} values --input`,
+      argv`cell set ${sessionFlags} values --input`,
       { stdin: '["selected-while-stopped"]' },
     );
     expect(write.code, write.stderr.join("\n")).toBe(0);
 
     const { code, stdout, stderr } = await integrationCf(
-      `cell get ${sessionFlags} --step --select value`,
+      argv`cell get ${sessionFlags} --step --select value`,
     );
     expect(code, stderr.join("\n")).toBe(0);
     expect(JSON.parse(stdout.join(""))).toEqual({
@@ -379,7 +378,9 @@ describe("cf cell get (integration)", { ignore: !API_URL }, () => {
     const listed = await listPieces(spaceConfig);
     const listedPiece = listed.find((piece) => piece.id === pieceId);
     const identity = listedPiece?.patternRef?.identity;
-    expect(identity).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(identity, JSON.stringify(listedPiece)).toMatch(
+      /^[A-Za-z0-9_-]{43}$/,
+    );
     expect(listedPiece?.patternRef?.source).toEqual({
       ref: `cf:pattern:${identity}`,
       repository: REPOSITORY,

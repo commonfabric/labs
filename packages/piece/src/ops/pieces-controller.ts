@@ -11,6 +11,7 @@ import {
 } from "@commonfabric/home-schemas";
 import {
   createSession,
+  type DID,
   Identity,
   legacySpaceDid,
   type Session,
@@ -18,9 +19,11 @@ import {
 import { isDID } from "@commonfabric/identity/did";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import { setLLMUrl } from "@commonfabric/llm";
+import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
 import type { CfcPosture } from "@commonfabric/runner";
 import {
   applyPieceSourceTransition,
+  attestedPrincipalsAt,
   type Cell,
   cellRuntime,
   Console as RuntimeConsole,
@@ -31,7 +34,6 @@ import {
   type EntityIdListResult,
   type EnvReader,
   type ExperimentalOptions,
-  experimentalOptionsForDeployedClient,
   getEntityId,
   getMetaLink,
   getPatternIdentityRef,
@@ -39,12 +41,18 @@ import {
   getPatternSource,
   getPieceSourceSnapshot,
   idStringForEntityAddress,
+  type IExtendedStorageTransaction,
+  inSpaceRootCause,
   isCell,
+  isEarlierRelease,
   isLink,
+  isPieceRoot,
   isStoredArgumentSchemaRefusal,
   isStream,
   type JSONSchema,
   KeepAsCell,
+  knownPieceReleasedAt,
+  memoryHostNote,
   type MemorySpace,
   type Module,
   type ModuleByteCache,
@@ -55,6 +63,7 @@ import {
   PatternManager,
   type PatternSetupCommitReceipt,
   PatternSetupPostCommitError,
+  pieceSourceMovedPast,
   type PieceSourceTransition,
   preparePieceSourceTransitionBaseline,
   Runtime,
@@ -64,6 +73,7 @@ import {
   sendEvent,
   setPatternRepository,
   setPatternSource,
+  settingsForDeployedClient,
   type SpaceCellContents,
   SpaceNotFoundError,
 } from "@commonfabric/runner";
@@ -112,7 +122,17 @@ import {
   assertPieceInputPath,
   PieceInputPathError,
 } from "./piece-input-path.ts";
-import { reconcilePieceSource } from "./piece-origin.ts";
+import {
+  type JoinVisitDecision,
+  joinVisitedRoomOf,
+} from "./join-visited-room.ts";
+import {
+  advertisedSystemRelease,
+  reconcilePieceSource,
+} from "./piece-origin.ts";
+import { ensurePrivateInboxOf } from "./private-inbox.ts";
+import { repairProfileRootsOf } from "./profile-space-root.ts";
+import { type ShareIntake, startShareIntakeOf } from "./share-intake.ts";
 import { compileProgram } from "./utils.ts";
 export {
   DEFAULT_APP_PATTERN_SOURCE,
@@ -257,6 +277,10 @@ export class PiecesController<T = unknown> {
    * authorization error. A connection that does not complete takes its socket
    * and its replica down with it.
    *
+   * Memory opens on the memory URL the deployment publishes on its meta
+   * document, where it publishes one (`settingsForDeployedClient`), and on
+   * `apiUrl` otherwise. The health check does not ask the memory host.
+   *
    * A pattern that reaches the LLM reaches this deployment's service.
    */
   static async initialize(
@@ -276,9 +300,14 @@ export class PiecesController<T = unknown> {
       cfcWriteFloor,
       cfcReadMaxConfidentiality,
       cfcReadOnExceed,
+      clientClass,
+      clientBuild,
     }: {
       apiUrl: URL | string;
       identity: Identity;
+
+      /** Application and loaded labs build reported by this runtime. */
+      clientBuild?: ClientBuild;
 
       /**
        * The space to open, as a `did:key:` DID or as a legacy space name,
@@ -301,7 +330,7 @@ export class PiecesController<T = unknown> {
       /**
        * The experimental posture the controller's runtime runs under. Absent,
        * it is the deployment's own, with this process's explicit
-       * `EXPERIMENTAL_*` winning per flag (`experimentalOptionsForDeployedClient`).
+       * `EXPERIMENTAL_*` winning per flag (`settingsForDeployedClient`).
        * A caller that had to know the posture before opening the session — a
        * host that decides something on it, a test that states the arm it
        * exercises — passes what it resolved, so the runtime runs the posture
@@ -351,6 +380,10 @@ export class PiecesController<T = unknown> {
       // space server, whose runtime reads under it for the session's runs.
       cfcReadMaxConfidentiality?: readonly CfcConfClause[];
       cfcReadOnExceed?: CfcReadOnExceed;
+      // The client class the runtime declares (the remoteClient preset's
+      // `clientClass`): a controller standing in for a browser tab, as the
+      // pattern integration harness's sessions do, declares `"web"`.
+      clientClass?: "web";
     },
   ): Promise<PiecesController> {
     const api = new URL(apiUrl);
@@ -359,9 +392,17 @@ export class PiecesController<T = unknown> {
       identity,
       spaceDid: isDID(space) ? space : await legacySpaceDid(space),
     });
+    // The deployment's meta document names the memory URL Memory opens on,
+    // where it has one, so it is read even when the caller states the flags.
+    const deployment = await settingsForDeployedClient({
+      apiUrl: api,
+      env: readEnv,
+    });
+    const memoryHost = deployment.memoryHost;
     const storageManager = StorageManager.open({
       as: session.as,
-      memoryHost: api,
+      memoryHost,
+      clientBuild,
     });
     // Shared first-party posture for client runtimes against a deployed API
     // (CT-1814); the CFC pin this site previously restated lives in the
@@ -379,12 +420,9 @@ export class PiecesController<T = unknown> {
     try {
       runtime = new Runtime(runtimePresets.remoteClient({
         apiUrl: api,
+        memoryHost,
         storageManager,
-        experimental: experimental ??
-          await experimentalOptionsForDeployedClient({
-            apiUrl: api,
-            env: readEnv,
-          }),
+        experimental: experimental ?? deployment.experimental,
         moduleByteCache,
         patternCoverage,
         ...(cfcEnforcementMode !== undefined ? { cfcEnforcementMode } : {}),
@@ -395,6 +433,7 @@ export class PiecesController<T = unknown> {
           ? { cfcReadMaxConfidentiality }
           : {}),
         ...(cfcReadOnExceed !== undefined ? { cfcReadOnExceed } : {}),
+        ...(clientClass !== undefined ? { clientClass } : {}),
         ...(navigateCallback !== undefined ? { navigateCallback } : {}),
         ...(onPatternInstantiated !== undefined
           ? { onPatternInstantiated }
@@ -405,7 +444,10 @@ export class PiecesController<T = unknown> {
         }),
       }));
       if (!await runtime.healthCheck()) {
-        throw new Error(`Could not connect to "${api.toString()}".`);
+        throw new Error(
+          `Could not connect to "${api.toString()}".` +
+            memoryHostNote(memoryHost, api),
+        );
       }
       const pieces = new PiecesController(session, runtime, {
         deferSpaceCellSync,
@@ -494,15 +536,65 @@ export class PiecesController<T = unknown> {
   /**
    * Link the default pattern cell to the space cell.
    * This should be called after the default pattern is created.
+   *
+   * Refuses to replace an identity Home's root: a Home that already holds one
+   * is changed only in place, as {@link #refuseHomeRoot} says. Linking the
+   * first root of a Home that holds none is what first open does.
+   *
+   * With `options.replacing`, the link is made only while the space's root is
+   * still the one a caller inspected: the cell given, or none at all when it
+   * is `null`, compared by the link the space cell stores. With
+   * `options.stillReplaceable` as well, the root linked now must also pass
+   * that test, which reads it through the linking transaction. Both checks
+   * are read in that transaction, so a root another writer links or changes
+   * meanwhile fails the call rather than being replaced. With
+   * `options.signal`, no commit starts once it has aborted.
+   *
    * @param defaultPatternCell - The cell representing the default pattern
+   * @throws Error when `options.replacing` no longer names the space's root,
+   *   when the root it names no longer passes `options.stillReplaceable`, and
+   *   when `options.signal` aborts before the link's commit starts.
    */
   async linkDefaultPattern(
     defaultPatternCell: Cell<any>,
+    options: {
+      replacing?: Cell<unknown> | null;
+      stillReplaceable?: (root: Cell<unknown>) => boolean;
+      signal?: AbortSignal;
+    } = {},
   ): Promise<void> {
-    const { error } = await this.runtime.editWithRetry((tx) => {
+    const link = (tx: IExtendedStorageTransaction) => {
       const spaceCellWithTx = this.#spaceCell.withTx(tx);
-      spaceCellWithTx.key("defaultPattern").set(defaultPatternCell.withTx(tx));
-    });
+      const slot = spaceCellWithTx.key("defaultPattern");
+      if (options.replacing !== undefined) {
+        const current = slot.get() as Cell<unknown> | undefined;
+        const unchanged = options.replacing === null
+          ? slot.getRaw() === undefined
+          : current !== undefined && current.equalLinks(options.replacing);
+        if (!unchanged) {
+          throw new Error("The space's root changed since it was inspected");
+        }
+        if (
+          current !== undefined &&
+          options.stillReplaceable?.(current.withTx(tx)) === false
+        ) {
+          throw new Error(
+            "The space's root is still the one inspected, but no longer passes the check it was inspected under",
+          );
+        }
+      }
+      // Read in the transaction, as the stored pointer: a retry reruns this
+      // against fresh state, and a target that cannot load is still a root.
+      if (slot.getRaw() !== undefined) {
+        this.#refuseHomeRoot("replace");
+      }
+      slot.set(defaultPatternCell.withTx(tx));
+    };
+    const { error } = await this.runtime.editWithRetry(
+      link,
+      undefined,
+      options.signal === undefined ? {} : { signal: options.signal },
+    );
     if (error) {
       throw new Error(
         `Linking the default pattern failed because storage returned ${error.name}: ${error.message}`,
@@ -515,8 +607,12 @@ export class PiecesController<T = unknown> {
   /**
    * Clears the defaultPattern link from the space cell.
    * Used when the default pattern is being deleted.
+   *
+   * Refuses an identity Home: its root is the record of the account data it
+   * owns, and nothing that drops that pointer is an account operation.
    */
   async unlinkDefaultPattern(): Promise<void> {
+    this.#refuseHomeRoot("unlink");
     const { error } = await this.runtime.editWithRetry((tx) => {
       const spaceCellWithTx = this.#spaceCell.withTx(tx);
       spaceCellWithTx.key("defaultPattern").set(undefined);
@@ -572,10 +668,12 @@ export class PiecesController<T = unknown> {
       // listings, `cf piece ls`, FUSE, the shell's list cells all resolve the
       // root HERE. Opening it already reconciled it against its origin, so a
       // start that still failed is not out of date; the one remaining rescue
-      // is for a root that records no origin at all and whose stored pattern
-      // this runtime cannot load. Roll that one forward to the space's
-      // official system root and retry the start ONCE. Every other failure
-      // rethrows untouched.
+      // is for a root that records no origin at all, that its creator's
+      // pattern did not place (no `inSpace()` call placed it, and its own
+      // label says it represents no principal), and whose stored pattern this
+      // runtime cannot load. Roll that one forward to the space's official
+      // system root and retry the start ONCE. Every other failure rethrows
+      // untouched.
       if (!start) throw error;
       let healed: Cell<NameSchema>;
       try {
@@ -631,7 +729,8 @@ export class PiecesController<T = unknown> {
    * runnable pattern, and rolling it forward changes no source. A root
    * following anything else has an owner's choice behind it, and replacing its
    * source with the system default would discard that choice rather than
-   * repair anything.
+   * repair anything. So does a root its creator's pattern placed
+   * ({@link #keepsCreatorsPattern}), origin or none.
    *
    * A by-identity load probe is the evidence this rests on, and with CFC
    * enforcement disabled that probe reports every artifact outside the
@@ -639,9 +738,49 @@ export class PiecesController<T = unknown> {
    */
   #rootNeedsRollForward(root: Cell<NameSchema>): boolean {
     if (this.runtime.cfcEnforcementMode === "disabled") return false;
+    if (this.#keepsCreatorsPattern(root)) return false;
     const origin = getPatternSource(root);
     return origin === undefined ||
       origin === deriveSystemPatternSource(this.#space, this.runtime);
+  }
+
+  /**
+   * Whether `root` was placed by its creator's pattern, which the space's
+   * system root is no replacement for: a root an `inSpace()` call placed
+   * ({@link #isInSpaceRoot}), and a root its own stored label says
+   * represents a principal, as a profile's does wherever the profile sits.
+   * The label read is of the root's own document, so a claim a link inside
+   * it carries in from another document does not count, and nothing is
+   * loaded or run to read it.
+   */
+  #keepsCreatorsPattern(root: Cell<NameSchema>): boolean {
+    if (this.#isInSpaceRoot(root)) return true;
+    const tx = this.runtime.edit();
+    try {
+      return (attestedPrincipalsAt(
+        this.runtime,
+        tx,
+        root.getAsNormalizedFullLink(),
+        "represents-principal",
+      )?.length ?? 0) > 0;
+    } finally {
+      tx.abort();
+    }
+  }
+
+  /**
+   * Whether `root` is at the address the space's genesis commit reserves for
+   * the root an `inSpace(..., { root: true })` call places. Such a root was
+   * placed by its creator's pattern, so the space's system root is no
+   * replacement for it. It reads the address, not the space's genesis
+   * reservation, which no client can read: a writer who places a root at that
+   * address in a space that reserved none makes it fail closed, as a root
+   * following any other origin already does.
+   */
+  #isInSpaceRoot(root: Cell<NameSchema>): boolean {
+    return root.equalLinks(
+      this.runtime.getCell(this.#space, inSpaceRootCause(this.#space)),
+    );
   }
 
   /** The root's `pieceRegistry` export, addressed but not yet synced. */
@@ -749,7 +888,9 @@ export class PiecesController<T = unknown> {
     const piecesCell = await this.getPieceRegistry();
     const pieces = await this.syncPieces(piecesCell);
     return pieces.map((piece) => {
-      const target = piece.resolveAsCell();
+      // The registry names pieces without loading their documents. Controllers
+      // load and mutate those documents after this read snapshot was taken.
+      const target = piece.resolveAsCell().withTx();
       const space = target.getAsNormalizedFullLink().space;
       const controller = space === this.#space ? this : new PiecesController(
         { as: this.#session.as, space },
@@ -760,10 +901,19 @@ export class PiecesController<T = unknown> {
     });
   }
 
-  async add(newPieces: Cell<unknown>[]): Promise<void> {
+  /**
+   * Registers `newPieces` in the space's piece list by sending each into the
+   * root's `addPiece` stream, starting the root first. The root follows its
+   * origin before it starts unless `reconcile` is `false`, which starts it on
+   * the pattern it holds, as {@link ensureDefaultPattern} does given the same.
+   */
+  async add(
+    newPieces: Cell<unknown>[],
+    { reconcile = true }: { reconcile?: boolean } = {},
+  ): Promise<void> {
     const defaultPattern = await timePiecePhase(
       "add.getDefaultPattern",
-      () => this.getDefaultPattern(true),
+      () => this.getDefaultPattern({ reconcile, start: true }),
     );
     if (!defaultPattern) {
       throw new Error("Cannot add pieces: default pattern not available");
@@ -859,6 +1009,17 @@ export class PiecesController<T = unknown> {
    * Resolve a piece to its canonical result cell, optionally starting it.
    * In view-scoped mode, the narrow root watch demands server execution;
    * mounted renderers own local graph registration and deeper replication.
+   *
+   * An open that reconciles waits, as {@link openPiece} does, for a piece
+   * that is already running to be re-instantiated on the pattern its pointer
+   * moved to, whether or not the open also starts it. The wait covers the
+   * move this open's own reconcile made and any earlier move the piece's
+   * pattern watcher has observed. It does not cover a move committed
+   * elsewhere that the watcher has yet to observe, a re-instantiation that
+   * fails, or one that follows a serving wave's settlement, so in those cases
+   * this resolves with the outgoing pattern's graph still running. As after
+   * any start, the piece's computations run when something demands their
+   * results.
    */
   async getPieceCell<S extends JSONSchema = JSONSchema>(
     id: string | Cell<unknown>,
@@ -913,7 +1074,15 @@ export class PiecesController<T = unknown> {
     // operate on the real piece rather than the wrapper. The sync above already
     // made the canonical cell local, so this resolves over local links with no
     // further sync. Idempotent for a normal top-level piece.
-    let piece = addressed.resolveAsCell();
+    //
+    // The root of a document carrying a pattern pointer is the piece, whatever
+    // its value links to. A pattern returning a sub-pattern's result as its
+    // whole result stores a redirect to the child's result at its root, and
+    // following it would start the child alone and leave stale everything the
+    // root derives for the child.
+    let piece = isPieceRoot(this.runtime, addressed)
+      ? addressed
+      : addressed.resolveAsCell();
 
     if (reconcile && !viewScoped) {
       const outcome = await timePiecePhase(
@@ -927,6 +1096,10 @@ export class PiecesController<T = unknown> {
         // just replaced — and reads through the returned cell describe it.
         piece = await piece.withTx().sync();
       }
+      await timePiecePhase(
+        "get.patternPointerFollowed",
+        () => this.#patternPointerFollowed(piece, outcome === "updated"),
+      );
     }
     if (start && !viewScoped) {
       // start() handles pattern loading and running. It's idempotent - no
@@ -935,6 +1108,11 @@ export class PiecesController<T = unknown> {
         "get.runtime.start",
         () => this.runtime.start(piece),
       );
+      // A start that was in flight before the pointer moved may have
+      // instantiated the outgoing pattern. Its watcher begins the follow as
+      // it is installed, which the wait ahead of the start came too early
+      // to observe.
+      if (reconcile) await this.#patternPointerFollowed(piece, false);
     }
 
     // If caller provided a schema, use it
@@ -1453,6 +1631,9 @@ export class PiecesController<T = unknown> {
         .key("defaultPattern");
       const linked = defaultPatternCell.get();
       if (linked && piece.resolveAsCell().equals(linked.resolveAsCell())) {
+        // Removing a Home's own root from its registry would drop the root
+        // pointer with it; that is the unlink the Home refuses.
+        this.#refuseHomeRoot("unlink");
         defaultPatternCell.set(undefined);
       }
       return true;
@@ -1712,6 +1893,15 @@ export class PiecesController<T = unknown> {
    * moments ago from the source it was created with is started directly
    * through {@link startPiece} instead: following that origin again would only
    * fetch what it was just built from.
+   *
+   * A piece that is already running keeps its graph through a start, and the
+   * runner's pattern watcher re-instantiates it on the pattern its pointer
+   * moved to. This resolves once the watcher has, for the move this open's
+   * own reconcile made and for any earlier move the watcher has observed. A
+   * re-instantiation that fails is logged by the runner and leaves the piece
+   * on the pattern it was running. On a runtime that seals its writes into a
+   * serving wave, the re-instantiation follows the wave's settlement, and
+   * this resolves with the outgoing pattern's graph still running.
    */
   async openPiece<T = unknown>(pieceOrId: string | Cell<T>): Promise<void> {
     const piece = typeof pieceOrId === "string"
@@ -1729,9 +1919,51 @@ export class PiecesController<T = unknown> {
     // have handed us a cell bound to a read transaction older than it. Detach
     // and resync, or the start below loads the identity the origin just
     // replaced.
-    await this.startPiece(
-      outcome === "updated" ? await piece.withTx().sync() : piece,
+    const opened = outcome === "updated" ? await piece.withTx().sync() : piece;
+    await timePiecePhase(
+      "openPiece.patternPointerFollowed",
+      () => this.#patternPointerFollowed(opened, outcome === "updated"),
     );
+    await this.startPiece(opened);
+    // A start that was in flight before the pointer moved may have
+    // instantiated the outgoing pattern. Its watcher begins the follow as it
+    // is installed, which the wait ahead of the start came too early to
+    // observe.
+    await this.#patternPointerFollowed(opened, false);
+  }
+
+  /**
+   * Helper for the opens that reconcile a piece with its origin, which
+   * resolves once a piece that is already running runs the pattern its
+   * pointer names. A start leaves such a piece's graph as it is, and the
+   * runner's pattern watcher swaps in the incoming pattern after reading from
+   * storage, so until the swap a field the incoming pattern adds is unset and
+   * a stream it adds has no handler. Resolves at once for a piece that is not
+   * running: it has no watcher, and its start instantiates the pattern the
+   * pointer names.
+   *
+   * `movedHere` says this open's own reconcile moved the pointer. The watcher
+   * observes a move in a scheduler pass, so for that move this awaits
+   * `Runtime.idle()` first. An open that moved nothing does not, because
+   * `idle()` waits for the whole runtime, and so it waits only for a move
+   * the watcher has already observed. A move committed elsewhere that the
+   * watcher has yet to observe is not waited for.
+   *
+   * The wait is for this piece's watcher alone, and lasts as long as the
+   * watcher takes. Where another replica moved the pointer to a pattern this
+   * runtime has not compiled, the watcher loads that pattern, which a start
+   * of the same piece would wait for as well were it not running. A swap
+   * that fails is logged by the runner and leaves the piece on the pattern
+   * it was running.
+   */
+  async #patternPointerFollowed(
+    piece: Cell<unknown>,
+    movedHere: boolean,
+  ): Promise<void> {
+    const runner = this.runtime.runner;
+    if (!runner.isRunning(piece)) return;
+    if (movedHere) await this.runtime.idle();
+    await runner.patternPointerFollowed(piece);
   }
 
   /**
@@ -1741,10 +1973,16 @@ export class PiecesController<T = unknown> {
    * In view-scoped mode this synchronizes the name and opaque UI tip; the
    * retained root watch demands server execution, while mounted renderers
    * own local graph registration.
+   *
+   * With `awaitSetupCommit`, the start waits for the commit of the setup
+   * writes of the graph it instantiates, and this rejects when that commit
+   * failed, which leaves the piece stopped. Otherwise such a failure reaches
+   * only the runtime's log; see `Runner.startWithCommit()`.
    */
   async startPiece<T = unknown>(
     pieceOrId: string | Cell<T>,
     scope?: CellScope,
+    options: { awaitSetupCommit?: boolean } = {},
   ): Promise<void> {
     const piece = typeof pieceOrId === "string"
       ? await timePiecePhase(
@@ -1762,7 +2000,10 @@ export class PiecesController<T = unknown> {
     }
     await timePiecePhase(
       "startPiece.runtime.start",
-      () => this.runtime.start(piece),
+      () =>
+        options.awaitSetupCommit
+          ? this.runtime.startWithCommit(piece)
+          : this.runtime.start(piece),
     );
     await timePiecePhase(
       "startPiece.result.pull",
@@ -2032,8 +2273,35 @@ export class PiecesController<T = unknown> {
   }
 
   /**
+   * The refusal every root-replacing operation on an identity Home shares.
+   *
+   * A Home is created once, on its user's first open
+   * ({@link ensureDefaultPattern}), by the Home space's own server under
+   * server execution, or by a client handler's first write through a cell a
+   * wish handed out beneath its empty root slot, and changes only by an in-place
+   * source update, which retains the account data its root owns: profiles,
+   * favorites, navigation, the shared-space catalog and the inbox pointer.
+   * There is no path that drops or replaces that root, absent or present,
+   * loadable or not. A Home that will not load is repaired in place; a
+   * destructive recovery, should one ever be needed, is a separate contract
+   * (docs/common/conventions/HOME_SPACE.md, "A Home that will not load").
+   * `linkDefaultPattern` shares it once a Home holds a root; before that it is
+   * the creation step itself. `remove` shares it for a Home's own root, which
+   * a registry may list, since dropping the registry entry drops the pointer.
+   */
+  #refuseHomeRoot(verb: "recreate" | "replace" | "unlink"): void {
+    if (this.getSpace() !== this.runtime.userIdentityDID) return;
+    throw new Error(
+      `Cannot ${verb} an identity Home root. A Home is created on its ` +
+        "user's first open and changed only by an in-place source update, " +
+        "which preserves the account data it owns.",
+    );
+  }
+
+  /**
    * Creates a fresh default pattern, replacing a non-Home space's root.
-   * An existing identity Home must be updated in place to retain account data.
+   *
+   * Never an identity Home, absent or present: see {@link #refuseHomeRoot}.
    *
    * @param options.customProgram - A pre-compiled program to use instead of the default URL-based pattern
    * @returns The newly created default pattern piece
@@ -2049,63 +2317,39 @@ export class PiecesController<T = unknown> {
       );
     }
 
-    // Determine which pattern to use based on space type
-    const isHomeSpace = this.getSpace() === this.runtime.userIdentityDID;
-
-    // A Home space comes into being on its user's first open. Any other space
-    // is created on purpose, and one that was not is not conjured by opening,
-    // so this is settled before anything touches the space.
-    if (!isHomeSpace && !(await this.runtime.spaceExists(this.getSpace()))) {
+    // Settled before anything touches the space: a Home is never recreated,
+    // and a space that was not created on purpose is not conjured here.
+    this.#refuseHomeRoot("recreate");
+    if (!(await this.runtime.spaceExists(this.getSpace()))) {
       throw new SpaceNotFoundError(this.getSpace(), this.#spaceName);
     }
 
     const spaceCellContents = this.getSpaceCellContents();
     await spaceCellContents.sync();
-    const protectHome = (cell: Cell<SpaceCellContents>) => {
-      if (isHomeSpace && cell.key("defaultPattern").getRaw() !== undefined) {
-        throw new Error(
-          "Cannot replace an existing Home root. Update its source in place " +
-            "to preserve account data.",
-        );
-      }
-    };
-    protectHome(spaceCellContents);
-    if (!isHomeSpace) {
-      const defaultPatternRef = spaceCellContents.key("defaultPattern").get();
-      if (defaultPatternRef) this.runtime.runner.stop(defaultPatternRef);
-      await this.unlinkDefaultPattern();
-    }
+    const defaultPatternRef = spaceCellContents.key("defaultPattern").get();
+    if (defaultPatternRef) this.runtime.runner.stop(defaultPatternRef);
+    await this.unlinkDefaultPattern();
 
     let patternConfig: { name: string; source: string; cause: string };
     let pattern;
 
     if (options?.customProgram) {
       patternConfig = {
-        name: isHomeSpace ? "Home" : "DefaultPieceList",
+        name: "DefaultPieceList",
         source: "custom",
-        cause: isHomeSpace
-          ? `home-pattern-${Date.now()}`
-          : `space-root-${Date.now()}`,
+        cause: `space-root-${Date.now()}`,
       };
       pattern = await this.runtime.patternManager.compilePattern(
         options.customProgram,
         { space: this.getSpace() },
       );
     } else {
-      if (isHomeSpace) {
-        patternConfig = {
-          name: "Home",
-          source: HOME_PATTERN_SOURCE,
-          cause: `home-pattern-${Date.now()}`,
-        };
-      } else {
-        const customUrl = await this.#getDefaultAppUrlFromHome();
-        patternConfig = {
-          name: "DefaultPieceList",
-          source: customUrl || DEFAULT_APP_PATTERN_SOURCE,
-          cause: `space-root-${Date.now()}`,
-        };
-      }
+      const customUrl = await this.#getDefaultAppUrlFromHome();
+      patternConfig = {
+        name: "DefaultPieceList",
+        source: customUrl || DEFAULT_APP_PATTERN_SOURCE,
+        cause: `space-root-${Date.now()}`,
+      };
 
       const patternUrl = patternSourceUrl(
         patternConfig.source,
@@ -2126,8 +2370,6 @@ export class PiecesController<T = unknown> {
     let pieceCell: Cell<NameSchema>;
 
     const { error } = await this.runtime.editWithRetry((tx) => {
-      // First-open initializers may have installed Home during compilation.
-      protectHome(spaceCellContents.withTx(tx));
       // Create piece cell within this transaction
       pieceCell = this.runtime.getCell<NameSchema>(
         this.getSpace(),
@@ -2230,6 +2472,114 @@ export class PiecesController<T = unknown> {
     await this.#recordServingHosts(adopted, "adopted");
   }
 
+  /**
+   * Gives the identity's Home the private inbox its profiles advertise, and has
+   * it point each of the identity's profiles that points at no inbox at it, by
+   * sending Home's `ensurePrivateInbox` as `ensurePrivateInboxOf()` does: Home
+   * keeps an inbox it holds while the deciding profile, the first in `#profile`
+   * order that points at an inbox, advertises it or no profile advertises any,
+   * and otherwise adopts the deciding profile's inbox when it passes vetting,
+   * retaining the one it held. It creates one when it holds none and
+   * no profile advertises one, and otherwise keeps what it holds or holds
+   * none, with the refusal logged and sent for Home to record in its
+   * `privateInboxRefusal`. Sending it again creates, re-points and retains
+   * nothing. A Home pattern without that stream is left as it is. This
+   * controller must be over the identity's Home space.
+   *
+   * Resolves once Home's handler has run on the event and its run has
+   * committed, on the server that runs it under server execution. It rejects
+   * when Home cannot be brought up, when reading Home's or its profiles'
+   * pointers or loading the inbox documents they name fails, when a profile
+   * ordered ahead of the deciding one cannot be read, when vetting or the send
+   * itself throws, or when Home's handling of the event fails. Once `signal`
+   * aborts, or the runtime begins disposal, it sends nothing.
+   */
+  async ensurePrivateInbox(signal?: AbortSignal): Promise<void> {
+    this.#assertHomeSpace("ensure a private inbox");
+    const home = (await this.ensureDefaultPattern()).getCell();
+    await ensurePrivateInboxOf(
+      this.runtime,
+      home,
+      this.runtime.userIdentityDID,
+      signal,
+    );
+  }
+
+  /**
+   * Makes each of the identity's profiles that Home lists its space's root,
+   * where the space has no root or one only a space-root ensure created, as
+   * `repairProfileRootsOf()` does, through a controller over each profile's
+   * space on this controller's runtime. This controller must be over the
+   * identity's Home space.
+   *
+   * Resolves once every listed profile has been tried. Rejects when Home
+   * cannot be brought up or its list cannot be read, and, once every profile
+   * has been tried, when any one's inspection or repair failed. Once `signal`
+   * aborts, or the runtime begins disposal, it starts no further repair
+   * commit.
+   */
+  async repairProfileRoots(signal?: AbortSignal): Promise<void> {
+    this.#assertHomeSpace("repair its profiles' roots");
+    const home = (await this.ensureDefaultPattern()).getCell();
+    await repairProfileRootsOf(
+      home,
+      this.runtime.userIdentityDID,
+      // Each repair syncs what it reads, so the controller makes no first
+      // sync of its own that nothing would wait for.
+      (space) =>
+        new PiecesController({ as: this.#session.as, space }, this.runtime, {
+          deferSpaceCellSync: true,
+        }),
+      signal,
+    );
+  }
+
+  /**
+   * Starts the identity's share intake: it follows the offers in the private
+   * inboxes Home holds and retains, and registers each offer that passes
+   * vetting in Home's shared-space catalog, as `ShareIntake` describes, until
+   * it is stopped or `signal` aborts. Returns `undefined`, starting nothing,
+   * for a Home pattern without a `registerSharedSpace` stream. This controller
+   * must be over the identity's Home space.
+   *
+   * Resolves once the intake is following Home, which is before it has taken
+   * up any offer. Rejects when Home cannot be brought up.
+   */
+  async startShareIntake(
+    signal?: AbortSignal,
+  ): Promise<ShareIntake | undefined> {
+    this.#assertHomeSpace("start a share intake");
+    const home = (await this.ensureDefaultPattern()).getCell();
+    return startShareIntakeOf(
+      this.runtime,
+      home,
+      this.runtime.userIdentityDID,
+      signal,
+    );
+  }
+
+  /**
+   * Tells the identity's chat manager that the identity has joined the
+   * FabriChat room declared by `space`, when the space passes vetting, as
+   * `joinVisitedRoomOf()` says. This controller must be over the identity's
+   * Home space, and Home is brought up, created where it has no root, so a
+   * caller that must not create Home checks first that it exists.
+   *
+   * Resolves with what was decided, once any event is sent, which is before
+   * the manager has handled it. Rejects when Home cannot be brought up, or when
+   * reading what vetting needs fails other than by a refusal of access.
+   */
+  async joinVisitedRoom(space: DID): Promise<JoinVisitDecision> {
+    this.#assertHomeSpace("join a visited room");
+    const home = (await this.ensureDefaultPattern()).getCell();
+    return await joinVisitedRoomOf(
+      this.runtime,
+      home,
+      this.runtime.userIdentityDID,
+      space,
+    );
+  }
+
   #assertHomeSpace(operation: string): void {
     if (this.#space !== this.runtime.userIdentityDID) {
       throw new Error(
@@ -2282,15 +2632,32 @@ export class PiecesController<T = unknown> {
    * simultaneously, the first successful commit wins and others gracefully
    * discover the existing pattern on retry.
    *
+   * An existing root follows its origin before it is started. A root that was
+   * already running when its origin moved it has been re-instantiated on the
+   * incoming pattern by the time this resolves, as one started here has. The
+   * exception is a runtime that seals its writes into a serving wave: there
+   * the re-instantiation follows the wave's settlement, which a call made
+   * within the wave's cycle cannot wait for, and this resolves with the
+   * outgoing pattern's graph still running.
+   *
+   * With `reconcile: false`, an existing root starts on the pattern it holds,
+   * and its origin is consulted only if that pattern cannot load: then the
+   * root is opened the default way, following its origin before it starts.
+   * That is for a caller that needs the root running rather than current, such
+   * as one registering a piece through the root's `addPiece` stream; the opens
+   * that show the root follow its origin.
+   *
    * @returns The default pattern piece, either existing or newly created
    */
-  async ensureDefaultPattern(): Promise<PieceController<NameSchema>> {
+  async ensureDefaultPattern(
+    { reconcile = true }: { reconcile?: boolean } = {},
+  ): Promise<PieceController<NameSchema>> {
     // Fast path: resolve the existing root WITHOUT starting it, so opening it
     // can follow its origin before bootstrap tries to load an identity that
     // origin has already replaced.
     const existingPattern = await this.getDefaultPattern(false);
     if (existingPattern) {
-      return await this.#startEnsuredDefaultPattern(existingPattern, true);
+      return await this.#startEnsuredDefaultPattern(existingPattern, reconcile);
     }
 
     // Determine which pattern to use based on space type
@@ -2352,18 +2719,20 @@ export class PiecesController<T = unknown> {
 
     // A root created by this successful attempt was compiled from the current
     // source immediately above. If another writer won the race, treat the
-    // discovered root like every other persisted root and reconcile it before
-    // start.
+    // discovered root like every other persisted root: reconcile it before
+    // start, unless the caller asked for no reconciliation.
     return await this.#startEnsuredDefaultPattern(
       finalPattern,
-      !createdByThisCall,
+      reconcile && !createdByThisCall,
     );
   }
 
   /**
-   * `reconcileBeforeStart` is false only for a root this call just created
-   * from its source: following that origin again would fetch the route to
-   * learn what was compiled from it moments ago.
+   * `reconcileBeforeStart` is false for a root this call just created from its
+   * source, where following that origin again would fetch the route to learn
+   * what was compiled from it moments ago, and for a caller that asked for no
+   * reconciliation. A root started that way whose pattern cannot load is
+   * opened again with reconciliation.
    */
   async #startEnsuredDefaultPattern(
     root: Cell<NameSchema>,
@@ -2379,13 +2748,16 @@ export class PiecesController<T = unknown> {
       // so start() observes the committed patternIdentity rather than the
       // pre-transaction snapshot held by the caller's cell.
       rootToStart = await this.getDefaultPattern(false) ?? root;
-      // Only when the origin CONFIRMED the pinned pattern. Then a disagreeing
+      // Only when the origin CONFIRMED the pinned pattern, or offered an
+      // earlier release than it, which the root keeps. Then a disagreeing
       // setup marker says the document is staged by another version while the
       // right one is pinned, which is a stale document rather than a stale
       // pattern. A root the origin did not confirm may be pinned to a pattern
       // that is simply wrong for it, and re-staging that one buys nothing the
       // repair below cannot do with the failure in hand.
-      if (outcome === "current" || outcome === "migrated") {
+      if (
+        outcome === "current" || outcome === "migrated" || outcome === "ahead"
+      ) {
         rootToStart = await this.#restageRootSetupIfStale(rootToStart);
       }
     }
@@ -2452,6 +2824,12 @@ export class PiecesController<T = unknown> {
         throw startError;
       }
       if (pattern === undefined) {
+        // A start that skipped the root's origin opens it the default way
+        // instead, following that origin before starting it, so the origin
+        // has its chance before any repair below.
+        if (!reconcileBeforeStart) {
+          return await this.#startEnsuredDefaultPattern(rootToStart, true);
+        }
         // The pattern is not merely unrunnable, it is unreachable through every
         // supported recovery path, so re-running its setup cannot help. A root
         // that records no origin has nothing else to fall back on and its space
@@ -2459,6 +2837,9 @@ export class PiecesController<T = unknown> {
         // for its kind. One that follows an origin keeps what its owner chose:
         // opening it already tried that origin, and replacing its source with
         // the system default would discard the choice rather than repair it.
+        // One its creator's pattern placed, an `inSpace()` root or one whose
+        // label says it represents a principal, keeps that pattern the same
+        // way, and fails closed.
         if (!this.#rootNeedsRollForward(rootToStart)) throw startError;
         return new PieceController<NameSchema>(
           this,
@@ -2545,6 +2926,20 @@ export class PiecesController<T = unknown> {
           );
           throw startError;
         }
+        if (this.#keepsCreatorsPattern(rootToStart)) {
+          // The system root is no replacement for a root its creator's pattern
+          // placed, so this one fails closed like any other refused repair.
+          pieceUpdateLogger.warn(
+            "cold-start-setup-repair-creators-root",
+            () => [
+              "startEnsuredDefaultPattern: setup repair rejected for a root " +
+              "its creator's pattern placed; surfacing the original start error",
+              `${ref.identity}#${ref.symbol}`,
+              repairError,
+            ],
+          );
+          throw startError;
+        }
         pieceUpdateLogger.warn(
           "cold-start-setup-repair-failed",
           () => [
@@ -2565,6 +2960,20 @@ export class PiecesController<T = unknown> {
     await timePiecePhase(
       "ensureDefaultPattern.runtime.idle",
       () => this.runtime.idle(),
+    );
+    // A root that was already running when its origin moved it keeps its
+    // graph through the start above, and the runner's pattern watcher swaps
+    // in the incoming pattern. The watcher has observed the move by the time
+    // the runtime is idle, and what it does next reads from storage, which
+    // `idle()` does not wait for. Until the swap the root runs the outgoing
+    // pattern's graph: a field the incoming pattern adds is unset, and a
+    // stream it adds has no handler.
+    await timePiecePhase(
+      "ensureDefaultPattern.patternPointerFollowed",
+      async () => {
+        await this.runtime.runner.patternPointerFollowed(rootToStart);
+        await this.runtime.idle();
+      },
     );
     await timePiecePhase(
       "ensureDefaultPattern.synced",
@@ -2804,6 +3213,38 @@ export class PiecesController<T = unknown> {
       );
     }
 
+    // A root this runtime cannot load is ahead of it rather than dead when its
+    // history records its move from the official source to the pinned one and
+    // the host offers that source at an earlier release than the pinned one:
+    // the host is one a deploy has not yet restarted. Swapping back would undo
+    // the update, and every runtime that can load it would make it again, so
+    // the root keeps it, as the reconciler keeps it against the same offer.
+    // A host offering the source at a later release, or with no order between
+    // the two, may be a rollback, which the heal takes as before. The order is
+    // read again inside the swap's transaction. The revision a heal writes
+    // records the official release time, as an adopting revision does, so the
+    // root stays ordered against later offers.
+    const officialReleasedAt = await advertisedSystemRelease(
+      runtime,
+      space,
+      officialUrlPath,
+      officialRef.identity,
+    );
+    const behindPinnedRelease = (root: Cell<NameSchema>) =>
+      reason === "unloadable" &&
+      pieceSourceMovedPast(root, officialRef, pinnedRef) &&
+      isEarlierRelease(
+        officialReleasedAt,
+        knownPieceReleasedAt(root, pinnedRef),
+      );
+    const movedBackReason = () =>
+      `would move the root back to ${officialRef.identity}#` +
+      `${officialRef.symbol}, an earlier release than the pinned one, which ` +
+      `its history records moving from and this runtime is behind`;
+    if (behindPinnedRelease(rootToStart)) {
+      throw clearError(movedBackReason(), migrationError);
+    }
+
     const sourceSnapshot = getPieceSourceSnapshot(rootToStart);
     if (sourceSnapshot === undefined) {
       throw clearError("has no source state to update", migrationError);
@@ -2821,14 +3262,23 @@ export class PiecesController<T = unknown> {
       operation: "origin-update",
       origin: officialUrlPath,
       expected: sourceSnapshot,
+      ...(officialReleasedAt === undefined
+        ? {}
+        : { releasedAt: officialReleasedAt }),
     };
+    let movedBack = false;
     const swapResult = await runtime.editWithRetry((tx) => {
+      movedBack = false;
       const rootTx = rootToStart.withTx(tx);
       const currentRef = getPatternIdentityRef(rootTx);
       if (
         currentRef?.identity !== pinnedRef.identity ||
         currentRef?.symbol !== pinnedRef.symbol
       ) {
+        return false;
+      }
+      if (behindPinnedRelease(rootTx)) {
+        movedBack = true;
         return false;
       }
       applyPieceSourceTransition(
@@ -2867,6 +3317,7 @@ export class PiecesController<T = unknown> {
         swapResult.error,
       );
     }
+    if (movedBack) throw clearError(movedBackReason(), migrationError);
     if (!swapResult.ok) {
       // The root was repointed by a concurrent heal between the failed repair
       // and this swap. We must NOT overwrite the newer identity (the whole

@@ -155,11 +155,18 @@ describe("CFC labelMap component origins", () => {
       seed.prepareCfc();
       expect((await seed.commit().settled).ok).toBeDefined();
 
+      // The handle carries the source's schema, so the link written declares
+      // the label at the slot as the reference's own restriction; the slot
+      // stores nothing of the source's labels themselves.
       const tx = runtime.edit();
       const linkedSource = runtime.getCell(
         signer.did(),
         "cfc-components-link-source",
-        undefined,
+        {
+          type: "object",
+          ifc: { confidentiality: ["shared-space"] },
+          properties: { title: { type: "string" } },
+        } satisfies JSONSchema,
         tx,
       );
       const holder = runtime.getCell(

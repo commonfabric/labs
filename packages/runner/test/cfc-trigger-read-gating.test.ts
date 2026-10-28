@@ -1,5 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { linkProbeSubPath } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import { internSchema } from "@commonfabric/data-model-schema";
 import {
@@ -279,6 +280,85 @@ describe("CFC trigger-read gating (H5, §8.9.2 / SC-3)", () => {
       }
     });
   }
+
+  it("flag ON: a trigger read at a slot's link probe carries the slot's own membership label", async () => {
+    // A probe asks which reference sits at a slot, so a change to its path
+    // is a change at the slot. The trigger is read at the slot, where the
+    // slot's membership label applies, rather than at the sub-path a link
+    // exposes its form at, beneath every label that applies at its own path
+    // alone.
+
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = makeRuntime({
+      storageManager,
+      // Pinned: the commit below asserts the ceiling rejection, which only a
+      // gated trigger read produces.
+      cfcTriggerReadGating: true,
+      // Pinned: with the flow dial off, the trigger read reaches the sink gate
+      // only through the gated consumed set.
+      cfcFlowLabels: "off",
+      cfcSinkMaxConfidentiality: { fetchJson: [] },
+    });
+    try {
+      const seed = runtime.edit();
+      const itemsId = runtime.getCell(
+        signer.did(),
+        "h5-probe-items",
+        undefined,
+        seed,
+      ).getAsNormalizedFullLink().id;
+      writeSeedEnvelopeDoc(seed, signer.did());
+      seedStoredEnvelope(seed, {
+        space: signer.did(),
+        scope: "space",
+        id: itemsId,
+        path: [],
+      }, {
+        value: { items: ["a", "b"] },
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: ["items"],
+              label: { confidentiality: ["medical"] },
+              origin: "declared",
+              observes: "enumerate",
+            }],
+          },
+        },
+      });
+      expect((await seed.commit().settled).ok).toBeDefined();
+
+      const tx = runtime.edit();
+      runtime.getCell(signer.did(), "h5-probe-out", OUT_SCHEMA.schema, tx)
+        .set({ v: "computed" });
+      tx.addCfcTriggerReads([{
+        space: signer.did(),
+        id: itemsId,
+        type: "application/json",
+        path: ["value", "items", ...linkProbeSubPath()],
+      }]);
+      enqueueSinkRequestPostCommitEffect(
+        tx,
+        "fetchJson",
+        "fetchJson:probe",
+        createFrozenRequestSnapshot({ url: "https://example.com/exfil" }),
+        "fetchJson-start",
+        () => {},
+      );
+      tx.prepareCfc();
+      const result = await tx.commit().settled;
+      expect(isCfcEnforcementRejection(result.error)).toBe(true);
+      expect(String((result.error as Error).message)).toContain(
+        "exceeds ceiling for fetchJson",
+      );
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
 
   it("flag ON but no trigger read: an unrelated scheduled egress still passes", async () => {
     // The gate only folds in ACTUAL trigger reads — a run scheduled by a

@@ -60,8 +60,13 @@ export function hex(value: string): Rgb {
   ];
 }
 
-// deno-lint-ignore no-control-regex
-const ANSI_PATTERN = /\x1b\[[0-9;?]*[A-Za-z]/g;
+/** A CSI escape sequence, or an OSC one that ends with BEL. */
+const ESCAPE_SOURCE = String.raw`\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*\x07`;
+
+const ANSI_PATTERN = new RegExp(ESCAPE_SOURCE, "g");
+
+/** An escape sequence at the start of a string. */
+export const LEADING_ESCAPE = new RegExp(`^(?:${ESCAPE_SOURCE})`);
 
 /** Strip every ANSI escape from `text`. Used for width maths and tests. */
 export function stripAnsi(text: string): string {
@@ -119,4 +124,10 @@ export const term = {
 
   /** Restore the terminal's own default background color (OSC 111). */
   resetDefaultBg: `${OSC}111${BEL}`,
+
+  /** `text` as a link to `url` (OSC 8), which a terminal without links
+   * shows as the text alone. */
+  hyperlink(url: string, text: string): string {
+    return `${OSC}8;;${url}${BEL}${text}${OSC}8;;${BEL}`;
+  },
 };

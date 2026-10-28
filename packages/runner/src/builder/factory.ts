@@ -44,6 +44,7 @@ import {
   registerUnsafeHostTrustedValue,
   type UnsafeHostTrust,
 } from "../unsafe-host-trust.ts";
+import { nameBlob } from "./blob-name.ts";
 import {
   agent,
   cellFromUrl,
@@ -75,6 +76,7 @@ import { currentPrincipal } from "./current-principal.ts";
 import { getPatternEnvironment } from "./env.ts";
 import { eventKey } from "./event-key.ts";
 import { h, UiAction, UiDisclosure, UiPromptSlot } from "./h.ts";
+import { nameInstance } from "./instance-name.ts";
 import {
   action,
   assert,
@@ -88,7 +90,15 @@ import {
 import { isTrustedPattern, setPatternProgram } from "./pattern-metadata.ts";
 import { pattern } from "./pattern.ts";
 import { principalOf, principalsOf } from "./principal-of.ts";
-import { spaceAccess } from "./space-access.ts";
+import { profileOwnerOf } from "./profile-owner-of.ts";
+import { linksOf } from "./links-of.ts";
+import { resultOwnerOf } from "./result-owner-of.ts";
+import {
+  spaceAccess,
+  spaceAccessOf,
+  spaceMembers,
+  spaceOf,
+} from "./space-access.ts";
 import { grantSpaceAccess, revokeSpaceAccess } from "./space-access-change.ts";
 import type {
   BuilderFunctionsAndConstants,
@@ -217,6 +227,11 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     assertCapture,
     assertRenderParts,
 
+    // Names a sub-pattern instance bound to a `const`, for its identity. The
+    // reactive-variable transformer stage emits the calls when its
+    // `instanceNames` option is on; authored code does not call it.
+    nameInstance,
+
     // Built-in modules
     str: trustedStr,
     ifElse,
@@ -278,6 +293,9 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     currentPrincipal,
     principalOf,
     principalsOf,
+    profileOwnerOf,
+    resultOwnerOf,
+    linksOf,
     eventKey,
     // The DID Core syntax guard the runtime itself decides by.
     isWellFormedDID,
@@ -309,8 +327,14 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
 
     // Access
     spaceAccess,
+    spaceAccessOf,
+    spaceMembers,
+    spaceOf,
     grantSpaceAccess,
     revokeSpaceAccess,
+
+    // Blobs
+    nameBlob,
 
     // Entity utilities
     getEntityId,

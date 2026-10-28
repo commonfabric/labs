@@ -8,10 +8,20 @@ import {
 } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  type ActiveLogLevel,
+  setLoggerCountObserver,
+} from "@commonfabric/utils/logger";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { type JSONSchema } from "../src/builder/types.ts";
+import { ContextualFlowControl } from "../src/cfc.ts";
 import { resolvedSchema } from "./schema-ref-helpers.ts";
-import { resolveLink } from "../src/link-resolution.ts";
+import {
+  LinkCycleError,
+  resolveLink,
+  unlessCyclic,
+} from "../src/link-resolution.ts";
 import {
   areNormalizedLinksSame,
   isSigilLink,
@@ -619,6 +629,101 @@ describe("link-resolution", () => {
       expect(resolved.schema).toBeUndefined();
     });
 
+    describe("a hop onto a stored schema", () => {
+      // The source cell's `link` field holds a link to the target cell's
+      // `value` that stores `stored` as its schema, and the resolution starts
+      // out carrying `carried`.
+      const resolveAcross = (
+        name: string,
+        stored: JSONSchema,
+        carried: JSONSchema,
+      ): JSONSchema | undefined => {
+        const targetCell = runtime.getCell<any>(space, `${name}-target`);
+        targetCell.withTx(tx).set({});
+        const sourceCell = runtime.getCell<any>(space, `${name}-source`);
+        sourceCell.withTx(tx).setRaw({
+          link: targetCell.key("value").asSchema(stored).getAsLink({
+            includeSchema: true,
+          }),
+        });
+        tx.commit();
+        tx = runtime.edit();
+        const resolved = resolveLink(runtime, tx, {
+          ...sourceCell.key("link").getAsNormalizedFullLink(),
+          schema: carried,
+        });
+        expect(resolved.path).toEqual(["value"]);
+        return isObjectOrArray(resolved.schema)
+          ? ContextualFlowControl.resolveSchemaRefs(resolved.schema)
+          : resolved.schema;
+      };
+
+      it("keeps the carried schema across one of annotations alone", () => {
+        const carried = { type: "number", default: 1 } as const;
+
+        expect(
+          resolveAcross("annotations-only", {
+            description: "d",
+            title: "t",
+          }, carried),
+        ).toEqual(carried);
+      });
+
+      it("adds the carried default to an adopted schema that declares none", () => {
+        expect(
+          resolveAcross(
+            "carried-default",
+            { type: "number", maximum: 10 },
+            { type: "number", minimum: 0, default: 1 },
+          ),
+        ).toEqual({ type: "number", maximum: 10, default: 1 });
+      });
+
+      it("adds a carried `null` default to an adopted schema that declares none", () => {
+        expect(
+          resolveAcross(
+            "carried-null-default",
+            { type: ["number", "null"] },
+            { default: null },
+          ),
+        ).toEqual({ type: ["number", "null"], default: null });
+      });
+
+      it("adds no default from a carried schema that selects nothing", () => {
+        expect(
+          resolveAcross(
+            "carried-false-default",
+            { type: "number" },
+            { not: true, default: 7 },
+          ),
+        ).toEqual({ type: "number" });
+      });
+
+      it("adds no default from a carried reference to a schema that selects nothing", () => {
+        expect(
+          resolveAcross(
+            "carried-referenced-false-default",
+            { type: "number" },
+            {
+              $defs: { Nothing: { not: true } },
+              $ref: "#/$defs/Nothing",
+              default: 7,
+            },
+          ),
+        ).toEqual({ type: "number" });
+      });
+
+      it("keeps the default an adopted schema declares over the carried one", () => {
+        expect(
+          resolveAcross(
+            "stored-default",
+            { type: "number", default: 5 },
+            { type: "number", default: 1 },
+          ),
+        ).toEqual({ type: "number", default: 5 });
+      });
+    });
+
     it("should handle complex nested schemas with multiple levels", () => {
       const complexSchema = {
         type: "object",
@@ -956,6 +1061,68 @@ describe("link-resolution", () => {
       await storageManager?.close();
     });
 
+    describe("unlessCyclic()", () => {
+      let logged: string[];
+
+      beforeEach(() => {
+        logged = [];
+        setLoggerCountObserver((module, key, level: ActiveLogLevel) => {
+          if (module === "link-resolution") logged.push(`${level} ${key}`);
+        });
+      });
+
+      afterEach(() => setLoggerCountObserver(undefined));
+
+      /** A cell whose value is a link to itself. */
+      const loop = () => {
+        const cell = runtime.getCell<unknown>(
+          space,
+          "unless-cyclic loop",
+          undefined,
+          tx,
+        );
+        cell.setRawUntyped(cell.getAsLink());
+        return cell;
+      };
+
+      it("returns `undefined` for links that run in a cycle, logging the cycle at debug level", () => {
+        const cell = loop();
+
+        expect(unlessCyclic(() => cell.resolveAsCell())).toBeUndefined();
+        expect(logged).toEqual(["debug link-res-cycle"]);
+      });
+
+      it("returns what the resolution returns for links that end", () => {
+        const cell = runtime.getCell<unknown>(
+          space,
+          "unless-cyclic end",
+          undefined,
+          tx,
+        );
+        cell.set({ value: 1 });
+
+        expect(
+          unlessCyclic(() => cell.resolveAsCell())?.getAsNormalizedFullLink(),
+        ).toEqual(cell.getAsNormalizedFullLink());
+        expect(logged).toEqual([]);
+      });
+
+      it("leaves a cycle met outside it thrown, to be reported where it fails", () => {
+        const cell = loop();
+
+        expect(() => cell.resolveAsCell()).toThrow(LinkCycleError);
+        expect(logged).toEqual(["debug link-res-cycle"]);
+      });
+
+      it("throws what the resolution throws for any other reason", () => {
+        expect(() =>
+          unlessCyclic(() => {
+            throw new RangeError("not a cycle");
+          })
+        ).toThrow(RangeError);
+      });
+    });
+
     it("handles circular references correctly without overtriggering cycle detection", () => {
       // This test verifies that the cycle detection does NOT overtrigger.
       // The scenario described in the bug report works correctly:
@@ -1221,6 +1388,41 @@ describe("link-resolution", () => {
       // Both should resolve to undefined
       expect(() => cellA.get()).toThrow();
       expect(() => cellB.get()).toThrow();
+    });
+
+    it("resolves a finite path through repeated references to the same object", () => {
+      const cell = runtime.getCell<Record<string, unknown>>(
+        space,
+        "finite-self-traversal",
+        undefined,
+        tx,
+      );
+      cell.setRaw({ self: cell.getAsLink(), leaf: "reached leaf" });
+
+      const path = [...Array<string>(8).fill("self"), "leaf"];
+      const resolved = resolveLink(runtime, tx, {
+        ...cell.getAsNormalizedFullLink(),
+        path,
+      });
+      expect(resolved.id).toBe(cell.getAsNormalizedFullLink().id);
+      expect(resolved.path).toEqual(["leaf"]);
+      expect(cell.key(...path).get()).toBe("reached leaf");
+    });
+
+    it("resolves a finite path through repeated references to a nested ancestor", () => {
+      const cell = runtime.getCell<Record<string, unknown>>(
+        space,
+        "finite-nested-self-traversal",
+        undefined,
+        tx,
+      );
+      cell.setRaw({
+        object: { self: cell.key("object").getAsLink(), leaf: 42 },
+      });
+
+      expect(
+        cell.key("object", ...Array<string>(8).fill("self"), "leaf").get(),
+      ).toBe(42);
     });
 
     it("detects cycle when resolving link to its own subpath", () => {

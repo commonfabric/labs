@@ -1,21 +1,33 @@
 import { expect } from "@std/expect";
 import { afterEach, describe, it } from "@std/testing/bdd";
 import * as path from "@std/path";
+import { readSpool } from "@commonfabric/test-support/records";
 import {
   collectSetReports,
   formatGateReport,
   type GateInput,
+  gateRecords,
   main,
   nearestBaseline,
   nearestOnBranch,
+  onlyAt,
+  parentCommit,
+  parentRunBaselines,
+  type ParentRuns,
   parseGateArgs,
-  publishedBaselines,
   runGate,
+  type SetVerdict,
 } from "./coverage-gate.ts";
 import { COVERAGE_SUGGESTION_MARKER } from "./ci-check-lib.ts";
-import { coverageGateFor } from "./test-selection/coverage.ts";
+import type { CoverageGateSelection } from "./test-selection/coverage.ts";
+import {
+  coverageGateSuite,
+  reachedSets,
+} from "./test-topology/coverage-gates.ts";
 import type { MeasuredSet, Suite } from "./test-topology/suite.ts";
 import type { CoverageBaseline } from "./test-selection/manifest.ts";
+import type { ManifestFetch } from "./test-selection/store.ts";
+import { sampleEntry, sampleManifest } from "./test-selection/testing.ts";
 
 /** A suite carrying only what the gate reads. */
 function suite(id: string, measured: MeasuredSet[]): Suite {
@@ -64,15 +76,59 @@ function gateInput(
   over: Partial<GateInput> & Pick<GateInput, "root" | "gate">,
 ): GateInput {
   return {
+    excused: new Set(),
     reports: new Map(),
+    marked: new Set(),
     members: [],
     measured: over.members ?? [],
     baselines: [],
     nearest: (commits) => Promise.resolve(commits[0]),
     accepted: new Map(),
     testsFailed: false,
+    defaultBranch: false,
     ...over,
   };
+}
+
+/** What the store answers with: a manifest carrying these baselines. */
+function withBaselines(
+  coverageBaselines: CoverageBaseline[],
+): Promise<ManifestFetch> {
+  return Promise.resolve({ manifest: sampleManifest({ coverageBaselines }) });
+}
+
+/** A parent whose run has uploaded no coverage figures. */
+const NO_RUNS: ParentRuns = { figuresAt: () => Promise.resolve(undefined) };
+
+/** A parent whose push run at `commit` measured the bakery set at `uncoveredLines`. */
+function runsMeasuring(commit: string, uncoveredLines: number): ParentRuns {
+  return {
+    figuresAt: (asked) =>
+      Promise.resolve(
+        asked === commit
+          ? {
+            figures: {
+              groups: new Map(),
+              sets: new Map([[
+                "workspace-unit/packages/bakery",
+                uncoveredLines,
+              ]]),
+              cold: false,
+            },
+            startedAt: "2026-09-01T00:00:00Z",
+          }
+          : undefined,
+      ),
+  };
+}
+
+/** A plan that chose the gate of every set `changed` reaches. */
+function chosen(
+  suites: readonly Suite[],
+  changed: ReadonlySet<string>,
+): CoverageGateSelection {
+  const reached = reachedSets(suites, changed);
+  return { sets: reached, reached };
 }
 
 /** A set over `member`, and the suites declaring it. */
@@ -166,7 +222,7 @@ describe("coverage-gate", () => {
       ]]);
       const report = await runGate(gateInput({
         root,
-        gate: coverageGateFor(
+        gate: chosen(
           suites,
           new Set(["packages/connectors/github/src/main.ts"]),
         ),
@@ -309,7 +365,7 @@ describe("coverage-gate", () => {
       ]]);
       const report = await runGate(gateInput({
         root,
-        gate: coverageGateFor(suites, changed),
+        gate: chosen(suites, changed),
         reports,
         members: ["packages/bakery"],
         baselines: [{
@@ -334,7 +390,7 @@ describe("coverage-gate", () => {
       ]]);
       const report = await runGate(gateInput({
         root,
-        gate: coverageGateFor(suites, changed),
+        gate: chosen(suites, changed),
         reports,
         members: ["packages/bakery"],
         baselines: [{
@@ -362,7 +418,7 @@ describe("coverage-gate", () => {
       ]]);
       const report = await runGate(gateInput({
         root,
-        gate: coverageGateFor(suites, changed),
+        gate: chosen(suites, changed),
         reports,
         members: ["packages/bakery"],
         accepted: new Map([["packages/bakery", 3]]),
@@ -389,7 +445,7 @@ describe("coverage-gate", () => {
       ]]);
       const report = await runGate(gateInput({
         root,
-        gate: coverageGateFor(suites, changed),
+        gate: chosen(suites, changed),
         reports,
         members: ["packages/bakery"],
         accepted: new Map([["packages/bakery", 1]]),
@@ -414,7 +470,7 @@ describe("coverage-gate", () => {
       ]]);
       const report = await runGate(gateInput({
         root,
-        gate: coverageGateFor(suites, changed),
+        gate: chosen(suites, changed),
         reports,
         members: ["packages/bakery"],
       }));
@@ -431,7 +487,7 @@ describe("coverage-gate", () => {
       ]]);
       const report = await runGate(gateInput({
         root,
-        gate: coverageGateFor(suites, changed),
+        gate: chosen(suites, changed),
         reports,
         members: ["packages/bakery"],
         nearest: () => Promise.resolve(undefined),
@@ -456,7 +512,7 @@ describe("coverage-gate", () => {
       ]]);
       const report = await runGate(gateInput({
         root,
-        gate: coverageGateFor(suites, changed),
+        gate: chosen(suites, changed),
         reports,
         members: ["packages/bakery"],
         testsFailed: true,
@@ -472,7 +528,7 @@ describe("coverage-gate", () => {
       expect(report.verdicts[0]?.outcome).toBe("not-scored");
     });
 
-    it("fails when the report of a forced set names no line of the member", async () => {
+    it("fails a chosen gate whose report names no line of the member", async () => {
       // An empty report is a lane that measured nothing, so a rise in
       // the set cannot be ruled out.
       const { root } = await workspace("packages/bakery", 10, 6);
@@ -483,7 +539,7 @@ describe("coverage-gate", () => {
       ]]);
       const report = await runGate(gateInput({
         root,
-        gate: coverageGateFor(suites, changed),
+        gate: chosen(suites, changed),
         reports,
         members: ["packages/bakery"],
       }));
@@ -493,7 +549,7 @@ describe("coverage-gate", () => {
         .toContain("no lane's report measured");
     });
 
-    it("scores a forced set one of whose reports names no line of the member", async () => {
+    it("scores a chosen gate's set one of whose reports names no line of the member", async () => {
       const { root, lcov } = await workspace("packages/bakery", 10, 6);
       const { suites, changed } = bakery();
       const { reports } = await reportsFor([
@@ -508,7 +564,7 @@ describe("coverage-gate", () => {
       ]);
       const report = await runGate(gateInput({
         root,
-        gate: coverageGateFor(suites, changed),
+        gate: chosen(suites, changed),
         reports,
         members: ["packages/bakery"],
         baselines: [{
@@ -524,7 +580,7 @@ describe("coverage-gate", () => {
       expect(report.verdicts[0]?.uncoveredLines).toBe(4);
     });
 
-    it("fails a forced set whose report names no line of the member in a run with a failing test", async () => {
+    it("fails a chosen gate whose report names no line of the member in a run with a failing test", async () => {
       const { root } = await workspace("packages/bakery", 10, 6);
       const { suites, changed } = bakery();
       const { reports } = await reportsFor([[
@@ -533,7 +589,7 @@ describe("coverage-gate", () => {
       ]]);
       const report = await runGate(gateInput({
         root,
-        gate: coverageGateFor(suites, changed),
+        gate: chosen(suites, changed),
         reports,
         members: ["packages/bakery"],
         testsFailed: true,
@@ -542,30 +598,41 @@ describe("coverage-gate", () => {
       expect(report.verdicts[0]?.outcome).toBe("nothing-measured");
     });
 
-    it("reports rather than fails when the report of an unforced set names no line of the member", async () => {
-      // Over the cap nothing is forced, so nothing asked for the set to
-      // be measured.
+    it("reports rather than fails a gate the plan did not choose", async () => {
+      // A gate the plan passed over forced nothing, so nothing measured
+      // its set, and a report a lane left for it is not read.
       const { root } = await workspace("packages/bakery", 10, 6);
-      const members = ["packages/bakery", "packages/b", "packages/c"];
-      const suites = [suite(
-        "workspace-unit",
-        members.map((member) => ({
-          member,
-          reachedBy: [`${member}/`],
-          units: [`${member}/one.test.ts`],
-        })),
-      )];
-      const changed = new Set(members.map((member) => `${member}/src/main.ts`));
-      const gate = coverageGateFor(suites, changed);
-      expect(gate.sets).toEqual([]);
+      const { suites, changed } = bakery();
       const { reports } = await reportsFor([[
         "lane-1/coverage/lcov/sets/workspace-unit/packages__bakery/coverage.lcov",
         "",
       ]]);
       const report = await runGate(gateInput({
         root,
-        gate,
+        gate: { sets: [], reached: reachedSets(suites, changed) },
         reports,
+        members: ["packages/bakery"],
+      }));
+      expect(report.ok).toBe(true);
+      expect(report.verdicts.map((verdict) => verdict.outcome))
+        .toEqual(["not-chosen"]);
+      const lines = formatGateReport(report).join("\n");
+      expect(lines).toContain("the plan did not choose this gate");
+      expect(lines).not.toContain("no lane's report measured");
+    });
+
+    it("reports rather than fails a set measured through an excused failure", async () => {
+      const { root, lcov } = await workspace("packages/bakery", 10, 6);
+      const { suites, changed } = bakery();
+      const { reports } = await reportsFor([[
+        "lane-1/coverage/lcov/sets/workspace-unit/packages__bakery/coverage.lcov",
+        lcov,
+      ]]);
+      const report = await runGate(gateInput({
+        root,
+        gate: chosen(suites, changed),
+        reports,
+        marked: new Set(["workspace-unit/packages__bakery"]),
         members: ["packages/bakery"],
         baselines: [{
           suite: "workspace-unit",
@@ -576,12 +643,7 @@ describe("coverage-gate", () => {
         }],
       }));
       expect(report.ok).toBe(true);
-      expect(
-        report.verdicts
-          .find((verdict) => verdict.member === "packages/bakery")?.outcome,
-      ).toBe("not-forced");
-      expect(formatGateReport(report).join("\n"))
-        .not.toContain("no lane's report measured");
+      expect(report.verdicts[0]?.outcome).toBe("not-scored");
     });
 
     it("fails an acceptance that names neither a member nor a group", async () => {
@@ -589,7 +651,7 @@ describe("coverage-gate", () => {
       const { suites, changed } = bakery();
       const report = await runGate(gateInput({
         root,
-        gate: coverageGateFor(suites, changed),
+        gate: chosen(suites, changed),
         members: ["packages/bakery"],
         accepted: new Map([["packages/bakery/src/oven", 3]]),
       }));
@@ -606,7 +668,7 @@ describe("coverage-gate", () => {
       const { suites, changed } = bakery();
       const report = await runGate(gateInput({
         root,
-        gate: coverageGateFor(suites, changed),
+        gate: chosen(suites, changed),
         members: ["packages/bakery"],
         accepted: new Map([["tasks", 3], ["packages/bakery", 4]]),
       }));
@@ -620,7 +682,7 @@ describe("coverage-gate", () => {
       const { suites, changed } = bakery();
       const report = await runGate(gateInput({
         root,
-        gate: coverageGateFor(suites, changed),
+        gate: chosen(suites, changed),
         members: ["packages/bakery", "packages/pantry"],
         measured: ["packages/bakery"],
         accepted: new Map([["packages/pantry", 3]]),
@@ -629,12 +691,12 @@ describe("coverage-gate", () => {
       expect(report.unknownAcceptances).toEqual(["packages/pantry"]);
     });
 
-    it("fails when no lane wrote the report of a forced set", async () => {
+    it("fails a chosen gate whose set no lane wrote a report for", async () => {
       const { root } = await workspace("packages/bakery", 10, 6);
       const { suites, changed } = bakery();
       const report = await runGate(gateInput({
         root,
-        gate: coverageGateFor(suites, changed),
+        gate: chosen(suites, changed),
         members: ["packages/bakery"],
       }));
       expect(report.ok).toBe(false);
@@ -643,12 +705,12 @@ describe("coverage-gate", () => {
         .toContain("no lane's report measured");
     });
 
-    it("fails a forced set with no report in a run with a failing test", async () => {
+    it("fails a chosen gate with no report in a run with a failing test", async () => {
       const { root } = await workspace("packages/bakery", 10, 6);
       const { suites, changed } = bakery();
       const report = await runGate(gateInput({
         root,
-        gate: coverageGateFor(suites, changed),
+        gate: chosen(suites, changed),
         members: ["packages/bakery"],
         testsFailed: true,
       }));
@@ -656,36 +718,11 @@ describe("coverage-gate", () => {
       expect(report.verdicts[0]?.outcome).toBe("no-report");
     });
 
-    it("says the gate did not run when the change is over the cap", async () => {
-      const { root } = await workspace("packages/bakery", 10, 6);
-      const members = ["packages/a", "packages/b", "packages/c"];
-      const suites = [suite(
-        "workspace-unit",
-        members.map((member) => ({
-          member,
-          reachedBy: [`${member}/`],
-          units: [`${member}/one.test.ts`],
-        })),
-      )];
-      const changed = new Set(members.map((member) => `${member}/src/main.ts`));
-      const report = await runGate(gateInput({
-        root,
-        gate: coverageGateFor(suites, changed),
-      }));
-      expect(report.ran).toBe(false);
-      expect(report.ok).toBe(true);
-      expect(report.verdicts.map((verdict) => verdict.outcome))
-        .toEqual(["not-forced", "not-forced", "not-forced"]);
-      expect(formatGateReport(report).join("\n"))
-        .toContain("No measured set was forced to run");
-    });
-
-    it("scores a set the cap left unforced that a run measured anyway", async () => {
-      // A full run measures every set. The cap bounds what a change is
-      // made to run, not what a complete measurement may be compared
-      // against, so a number already paid for is not thrown away.
+    it("records a rise in a set the change does not reach, and fails nothing", async () => {
+      // A run of every test chooses every gate, and the change reached
+      // only one of them; the rest are judged for their records alone.
       const { root, lcov } = await workspace("packages/bakery", 10, 6);
-      const members = ["packages/bakery", "packages/b", "packages/c"];
+      const members = ["packages/bakery", "packages/cellar"];
       const suites = [suite(
         "workspace-unit",
         members.map((member) => ({
@@ -694,9 +731,6 @@ describe("coverage-gate", () => {
           units: [`${member}/one.test.ts`],
         })),
       )];
-      const changed = new Set(members.map((member) => `${member}/src/main.ts`));
-      const gate = coverageGateFor(suites, changed);
-      expect(gate.sets).toEqual([]);
       const { reports } = await reportsFor([[
         "lane-1/coverage/lcov/sets/workspace-unit/packages__bakery/" +
         "coverage.lcov",
@@ -704,7 +738,10 @@ describe("coverage-gate", () => {
       ]]);
       const report = await runGate(gateInput({
         root,
-        gate,
+        gate: {
+          sets: reachedSets(suites, new Set(members.map((m) => `${m}/x.ts`))),
+          reached: reachedSets(suites, new Set(["packages/cellar/x.ts"])),
+        },
         reports,
         members: ["packages/bakery"],
         baselines: [{
@@ -715,20 +752,69 @@ describe("coverage-gate", () => {
           uncoveredLines: 1,
         }],
       }));
-      expect(report.ran).toBe(true);
-      expect(report.ok).toBe(false);
-      const bakery = report.verdicts
-        .find((verdict) => verdict.member === "packages/bakery");
-      expect(bakery?.outcome).toBe("rose");
       expect(
-        report.verdicts.filter((verdict) => verdict.outcome === "not-forced"),
-      ).toHaveLength(2);
+        report.verdicts.map((verdict) => [verdict.member, verdict.outcome]),
+      )
+        .toEqual([
+          ["packages/bakery", "rose"],
+          ["packages/cellar", "no-report"],
+        ]);
+      // The set the change reached had no report, which fails; the rise
+      // in the one it did not reach fails nothing.
+      expect(report.ok).toBe(false);
+      expect(report.verdicts.map((verdict) => verdict.gating))
+        .toEqual([false, true]);
+      expect(formatGateReport(report).join("\n"))
+        .toContain("rose; recorded, and fails nothing here");
     });
 
-    it("scores only the sets the change reached", async () => {
+    it("fails nothing on the default branch, whatever it finds", async () => {
+      const { root, lcov } = await workspace("packages/bakery", 10, 6);
+      const { suites, changed } = bakery();
+      const { reports } = await reportsFor([[
+        "lane-1/coverage/lcov/sets/workspace-unit/packages__bakery/coverage.lcov",
+        lcov,
+      ]]);
+      const report = await runGate(gateInput({
+        root,
+        gate: { sets: reachedSets(suites, changed), reached: [] },
+        reports,
+        members: ["packages/bakery"],
+        accepted: new Map([["packages/pantry", 3]]),
+        defaultBranch: true,
+        baselines: [{
+          suite: "workspace-unit",
+          member: "packages/bakery",
+          commit: "abc",
+          createdAt: "2026-09-01T00:00:00.000Z",
+          uncoveredLines: 1,
+        }],
+      }));
+      expect(report.ok).toBe(true);
+      expect(report.verdicts[0]?.outcome).toBe("rose");
+      expect(report.unknownAcceptances).toEqual(["packages/pantry"]);
+    });
+
+    it("fails nothing for a gate the run excuses as too flaky to judge by", async () => {
+      const { root } = await workspace("packages/bakery", 10, 6);
+      const { suites, changed } = bakery();
+      const report = await runGate(gateInput({
+        root,
+        gate: chosen(suites, changed),
+        excused: new Set([
+          JSON.stringify(["gate", "bakery", "coverage-gate workspace-unit"]),
+        ]),
+        members: ["packages/bakery"],
+      }));
+      expect(report.verdicts[0]?.outcome).toBe("no-report");
+      expect(report.verdicts[0]?.gating).toBe(false);
+      expect(report.ok).toBe(true);
+    });
+
+    it("judges only the sets whose gates the plan chose", async () => {
       // A lane may write a report for a member it sampled a few tests
-      // from. The gate scores from the declarations, so such a report is
-      // not one of its numbers.
+      // from. Its gate was not chosen, so such a report is not one of its
+      // numbers.
       const { root, lcov } = await workspace("packages/bakery", 10, 6);
       const { suites, changed } = bakery();
       const { reports } = await reportsFor([
@@ -745,7 +831,7 @@ describe("coverage-gate", () => {
       ]);
       const report = await runGate(gateInput({
         root,
-        gate: coverageGateFor(suites, changed),
+        gate: chosen(suites, changed),
         reports,
         members: ["packages/bakery"],
       }));
@@ -758,9 +844,10 @@ describe("coverage-gate", () => {
       const { suites } = bakery();
       const report = await runGate(gateInput({
         root,
-        gate: coverageGateFor(suites, new Set(["docs/README.md"])),
+        gate: chosen(suites, new Set(["docs/README.md"])),
       }));
-      expect(report.ran).toBe(false);
+      expect(report.verdicts).toEqual([]);
+      expect(report.ok).toBe(true);
       expect(formatGateReport(report).join("\n"))
         .toContain("reaches no measured set");
     });
@@ -787,11 +874,122 @@ describe("coverage-gate", () => {
       ]);
       const report = await runGate(gateInput({
         root,
-        gate: coverageGateFor(suites, changed),
+        gate: chosen(suites, changed),
         reports,
         members: ["packages/bakery"],
       }));
       expect(report.verdicts[0]?.uncoveredLines).toBe(2);
+    });
+  });
+
+  describe("the figures a parent's run measured", () => {
+    /** What `parentRunBaselines()` says, and what it finds. */
+    async function reading(commit: string, runs: ParentRuns) {
+      const lines: string[] = [];
+      const log = console.log;
+      console.log = (line: string) => lines.push(line);
+      try {
+        return {
+          found: await parentRunBaselines(commit, runs),
+          said: lines.join("\n"),
+        };
+      } finally {
+        console.log = log;
+      }
+    }
+
+    it("reads them from the run at the parent", async () => {
+      const { found, said } = await reading("abc", runsMeasuring("abc", 4));
+      expect(found).toEqual([{
+        suite: "workspace-unit",
+        member: "packages/bakery",
+        commit: "abc",
+        createdAt: "2026-09-01T00:00:00Z",
+        uncoveredLines: 4,
+      }]);
+      expect(said).toBe("");
+    });
+
+    it("says it read nothing where the parent's run uploaded no figures", async () => {
+      // A run whose Status has not shipped yet, and nothing waits for it.
+
+      const { found, said } = await reading("abc", runsMeasuring("def", 4));
+      expect(found).toEqual([]);
+      expect(said).toContain("parent commit abc");
+    });
+
+    it("says why it read nothing where the run cannot be read", async () => {
+      const { found, said } = await reading("abc", {
+        figuresAt: () => Promise.reject(new Error("rate limited")),
+      });
+      expect(found).toEqual([]);
+      expect(said).toContain("rate limited");
+    });
+  });
+
+  describe("the records it leaves", () => {
+    const members = ["packages/a", "packages/b", "packages/c", "packages/d"];
+    const suites = [suite(
+      "workspace-unit",
+      members.map((member) => ({
+        member,
+        reachedBy: [`${member}/`],
+        units: [`${member}/one.test.ts`],
+      })),
+    )];
+    const verdict = (
+      member: string,
+      outcome: SetVerdict["outcome"],
+      durationMs?: number,
+    ): SetVerdict => ({
+      set: `workspace-unit/${member}`,
+      member,
+      gating: true,
+      outcome,
+      ...(durationMs === undefined ? {} : { durationMs }),
+    });
+
+    it("fails a rise, passes a comparison that found none, and skips an accepted rise", () => {
+      const records = gateRecords(suites, {
+        verdicts: [
+          verdict("packages/a", "rose", 3),
+          verdict("packages/b", "passed", 4),
+          verdict("packages/c", "accepted", 5),
+          verdict("packages/d", "no-baseline", 6),
+        ],
+        unknownAcceptances: [],
+        ok: false,
+      });
+      expect(records.map((record) => [record.test.s, record.outcome]))
+        .toEqual([["a", "fail"], ["b", "pass"], ["c", "skip"], ["d", "skip"]]);
+      expect(records.map((record) => record.durationMs)).toEqual([3, 4, 5, 6]);
+      expect(records[0]?.test).toEqual({
+        k: "gate",
+        s: "a",
+        n: "coverage-gate workspace-unit",
+      });
+    });
+
+    it("skips a gate that measured nothing or measured through a failure", () => {
+      const records = gateRecords(suites, {
+        verdicts: [
+          verdict("packages/a", "no-report", 1),
+          verdict("packages/b", "nothing-measured", 1),
+          verdict("packages/c", "not-scored", 1),
+        ],
+        unknownAcceptances: [],
+        ok: false,
+      });
+      expect(records.map((record) => record.outcome))
+        .toEqual(["skip", "skip", "skip"]);
+    });
+
+    it("records nothing for a gate the plan did not choose", () => {
+      expect(gateRecords(suites, {
+        verdicts: [verdict("packages/a", "not-chosen")],
+        unknownAcceptances: [],
+        ok: true,
+      })).toEqual([]);
     });
   });
 
@@ -949,6 +1147,28 @@ describe("coverage-gate", () => {
       return { root, ancestor, descendant };
     }
 
+    it("names the parent alone for a commit on the default branch", async () => {
+      // A default-branch verdict compares a commit with its parent and with
+      // nothing else, neither the commit itself nor anything further back.
+
+      const { root, contained, newer } = await repository();
+      expect(await parentCommit(root)).toBe(contained);
+      const parent = onlyAt(await parentCommit(root));
+      expect(await parent([newer])).toBeUndefined();
+      expect(await parent([newer, contained])).toBe(contained);
+      const tip = await temporaryRoot("coverage-gate-root-");
+      const git = gitIn(tip);
+      await git("init", "-q", "-b", "main");
+      await git("config", "user.email", "tests@example.com");
+      await git("config", "user.name", "Tests");
+      await Deno.writeTextFile(path.join(tip, "one.txt"), "one");
+      await git("add", "-A");
+      await git("commit", "-qm", "one");
+      expect(await parentCommit(tip)).toBeUndefined();
+      expect(await onlyAt(undefined)([await git("rev-parse", "HEAD")]))
+        .toBeUndefined();
+    });
+
     it("names a commit the tree under test descends from", async () => {
       const { root, contained } = await repository();
       expect(await nearestOnBranch(root)([contained])).toBe(contained);
@@ -1068,15 +1288,19 @@ describe("coverage-gate", () => {
         path.join(at, "coverage.lcov"),
         `SF:${file}\n${records.join("\n")}\nend_of_record\n`,
       );
+      const unit = suite("workspace-unit", [{
+        member,
+        reachedBy: [`${member}/`],
+        units: [`${member}/one.test.ts`],
+      }]);
+      // The set's one unit is the file the change edited, so it runs
+      // whatever else is chosen, and choosing the gate over it costs the
+      // plan nothing.
       return {
         root,
         commit,
         reports,
-        suites: [suite("workspace-unit", [{
-          member,
-          reachedBy: [`${member}/`],
-          units: [`${member}/one.test.ts`],
-        }])],
+        suites: [unit, coverageGateSuite([unit])],
       };
     }
 
@@ -1092,8 +1316,8 @@ describe("coverage-gate", () => {
           root,
           {
             topology: () => Promise.resolve(suites),
-            baselines: () =>
-              Promise.resolve([{
+            manifest: () =>
+              withBaselines([{
                 suite: "workspace-unit",
                 member: "packages/bakery",
                 commit,
@@ -1111,6 +1335,62 @@ describe("coverage-gate", () => {
       expect(said).toContain("no rise");
     });
 
+    it("judges only the gates the plan the lanes were handed chose", async () => {
+      // The set also holds a unit the change does not reach, which runs only
+      // where the gate is chosen. At a scale of nothing the plan chooses
+      // nothing by score, so it chooses no gate and there is nothing to
+      // compare; at a scale of one it chooses the gate.
+      const { root, commit, reports, suites } = await job(10, 6);
+      const other = "packages/bakery/two.test.ts";
+      await Deno.writeTextFile(path.join(root, other), "// another\n");
+      const unit = suite("workspace-unit", [{
+        member: "packages/bakery",
+        reachedBy: ["packages/bakery/"],
+        units: [...suites[0]!.units, other],
+      }]);
+      const topology = [unit, coverageGateSuite([unit])];
+      const manifest = sampleManifest({
+        coverageBaselines: [{
+          suite: "workspace-unit",
+          member: "packages/bakery",
+          commit,
+          createdAt: "2026-09-01T00:00:00.000Z",
+          uncoveredLines: 4,
+        }],
+        entries: [
+          sampleEntry({ k: "unit", s: "workspace-unit", n: "two" }, {
+            suite: "workspace-unit",
+            unit: other,
+            cost: 10,
+          }),
+        ],
+      });
+      const said = async (...extra: string[]) => {
+        const lines: string[] = [];
+        const log = console.log;
+        console.log = (line: string) => lines.push(line);
+        try {
+          const status = await main(
+            ["--base", "HEAD~1", "--reports", reports, ...extra],
+            root,
+            {
+              topology: () => Promise.resolve(topology),
+              manifest: () => Promise.resolve({ manifest }),
+            },
+          );
+          return { status, lines: lines.join("\n") };
+        } finally {
+          console.log = log;
+        }
+      };
+      const none = await said("--scale", "0", "--of", "1");
+      expect(none.status).toBe(0);
+      expect(none.lines).not.toContain("no rise");
+      const chosen = await said("--scale", "1", "--of", "1");
+      expect(chosen.status).toBe(0);
+      expect(chosen.lines).toContain("no rise");
+    });
+
     it("fails a rise, and asks for tests", async () => {
       const { root, commit, reports, suites } = await job(10, 6);
       const lines: string[] = [];
@@ -1123,8 +1403,8 @@ describe("coverage-gate", () => {
           root,
           {
             topology: () => Promise.resolve(suites),
-            baselines: () =>
-              Promise.resolve([{
+            manifest: () =>
+              withBaselines([{
                 suite: "workspace-unit",
                 member: "packages/bakery",
                 commit,
@@ -1160,8 +1440,8 @@ describe("coverage-gate", () => {
           root,
           {
             topology: () => Promise.resolve(suites),
-            baselines: () =>
-              Promise.resolve([{
+            manifest: () =>
+              withBaselines([{
                 suite: "workspace-unit",
                 member: "packages/bakery",
                 commit,
@@ -1195,7 +1475,7 @@ describe("coverage-gate", () => {
           root,
           {
             topology: () => Promise.resolve(suites),
-            baselines: () => Promise.resolve([]),
+            manifest: () => withBaselines([]),
           },
         );
       } finally {
@@ -1215,7 +1495,7 @@ describe("coverage-gate", () => {
       try {
         await main(["--base", "HEAD~1", "--reports", reports], root, {
           topology: () => Promise.resolve(suites),
-          baselines: () => Promise.resolve([]),
+          manifest: () => withBaselines([]),
         });
       } finally {
         console.log = log;
@@ -1225,6 +1505,200 @@ describe("coverage-gate", () => {
       expect(await Deno.readTextFile(summary))
         .toContain("workspace-unit/packages/bakery");
       await Deno.remove(summary);
+    });
+
+    it("records each gate it judged into the spool it is given", async () => {
+      const { root, commit, reports, suites } = await job(10, 6);
+      const spool = await Deno.makeTempDir({ prefix: "coverage-gate-spool-" });
+      const log = console.log;
+      console.log = () => {};
+      try {
+        await main(["--base", "HEAD~1", "--reports", reports], root, {
+          topology: () => Promise.resolve(suites),
+          manifest: () =>
+            withBaselines([{
+              suite: "workspace-unit",
+              member: "packages/bakery",
+              commit,
+              createdAt: "2026-09-01T00:00:00.000Z",
+              uncoveredLines: 1,
+            }]),
+          env: (name) => name === "CF_TEST_RECORDS_DIR" ? spool : undefined,
+        });
+      } finally {
+        console.log = log;
+      }
+      const records = (await readSpool(spool)).records;
+      await Deno.remove(spool, { recursive: true });
+      expect(records.map((record) => [record.test, record.outcome])).toEqual([[
+        { k: "gate", s: "bakery", n: "coverage-gate workspace-unit" },
+        "fail",
+      ]]);
+    });
+
+    it("refuses on a pull request where the store cannot be read", async () => {
+      // The lanes refused to pack without the manifest, so which gates
+      // they would have chosen cannot be worked out here either.
+      const { root, reports, suites } = await job(10, 6);
+      const log = console.log;
+      console.log = () => {};
+      let status: number;
+      try {
+        status = await main(["--base", "HEAD~1", "--reports", reports], root, {
+          topology: () => Promise.resolve(suites),
+          manifest: () =>
+            Promise.resolve({ unreachable: true, absent: "the store is down" }),
+        });
+      } finally {
+        console.log = log;
+      }
+      expect(status).toBe(1);
+    });
+
+    it("judges every gate on the default branch, and fails for none", async () => {
+      const { root, commit, reports, suites } = await job(10, 6);
+      const lines: string[] = [];
+      const log = console.log;
+      console.log = (line: string) => lines.push(line);
+      let status: number;
+      try {
+        status = await main(
+          ["--full", "--default-branch", "--reports", reports],
+          root,
+          {
+            topology: () => Promise.resolve(suites),
+            parentRuns: NO_RUNS,
+            manifest: () =>
+              withBaselines([{
+                suite: "workspace-unit",
+                member: "packages/bakery",
+                commit,
+                createdAt: "2026-09-01T00:00:00.000Z",
+                uncoveredLines: 1,
+              }]),
+          },
+        );
+      } finally {
+        console.log = log;
+      }
+      expect(status).toBe(0);
+      expect(lines.join("\n")).toContain("rose; recorded, and fails nothing");
+    });
+
+    it("judges every gate on the default branch whatever its marker says", async () => {
+      // The default branch has no change for an unreadable marker to stop,
+      // so it judges the gates as though nothing were accepted.
+      const { root, reports, suites } = await job(10, 6);
+      const lines: string[] = [];
+      const log = console.log;
+      console.log = (line: string) => lines.push(line);
+      let status: number;
+      try {
+        status = await main(
+          [
+            "--full",
+            "--default-branch",
+            "--reports",
+            reports,
+            "--body",
+            "ACCEPT_COVERAGE_DEBT: packages/bakery 3 lines",
+          ],
+          root,
+          {
+            topology: () => Promise.resolve(suites),
+            manifest: () =>
+              Promise.resolve({
+                unreachable: true,
+                absent: "the store is down",
+              }),
+            parentRuns: NO_RUNS,
+          },
+        );
+      } finally {
+        console.log = log;
+      }
+      expect(status).toBe(0);
+      const text = lines.join("\n");
+      expect(text).toContain("ACCEPT_COVERAGE_DEBT");
+      expect(text).toContain("no baseline on `main` yet");
+    });
+
+    it("compares the default branch against its parent's own run", async () => {
+      // The manifest carries no figure at the parent, as it usually does
+      // not for hours after the parent's run, and the parent's run measured
+      // one.
+
+      const { root, commit, reports, suites } = await job(10, 6);
+      const lines: string[] = [];
+      const log = console.log;
+      console.log = (line: string) => lines.push(line);
+      try {
+        await main(
+          ["--full", "--default-branch", "--reports", reports],
+          root,
+          {
+            topology: () => Promise.resolve(suites),
+            manifest: () => withBaselines([]),
+            parentRuns: runsMeasuring(commit, 1),
+          },
+        );
+      } finally {
+        console.log = log;
+      }
+      expect(lines.join("\n")).toContain("rose; recorded, and fails nothing");
+    });
+
+    it("prefers the parent's own run over the manifest at the parent", async () => {
+      // Both hold the parent, and disagree: the run's 1 makes this run's 4 a
+      // rise, where the manifest's 9 would have passed it.
+
+      const { root, commit, reports, suites } = await job(10, 6);
+      const lines: string[] = [];
+      const log = console.log;
+      console.log = (line: string) => lines.push(line);
+      try {
+        await main(
+          ["--full", "--default-branch", "--reports", reports],
+          root,
+          {
+            topology: () => Promise.resolve(suites),
+            manifest: () =>
+              withBaselines([{
+                suite: "workspace-unit",
+                member: "packages/bakery",
+                commit,
+                createdAt: "2026-09-01T00:00:00.000Z",
+                uncoveredLines: 9,
+              }]),
+            parentRuns: runsMeasuring(commit, 1),
+          },
+        );
+      } finally {
+        console.log = log;
+      }
+      expect(lines.join("\n")).toContain("rose; recorded, and fails nothing");
+    });
+
+    it("never reads the parent's run for a pull request", async () => {
+      const { root, reports, suites } = await job(10, 6);
+      const asked: string[] = [];
+      const log = console.log;
+      console.log = () => {};
+      try {
+        await main(["--base", "HEAD~1", "--reports", reports], root, {
+          topology: () => Promise.resolve(suites),
+          manifest: () => withBaselines([]),
+          parentRuns: {
+            figuresAt: (commit) => {
+              asked.push(commit);
+              return Promise.resolve(undefined);
+            },
+          },
+        });
+      } finally {
+        console.log = log;
+      }
+      expect(asked).toEqual([]);
     });
 
     it("refuses a command line it cannot read", async () => {
@@ -1258,8 +1732,8 @@ describe("coverage-gate", () => {
             root,
             {
               topology: () => Promise.resolve(suites),
-              baselines: () =>
-                Promise.resolve([{
+              manifest: () =>
+                withBaselines([{
                   suite: "workspace-unit",
                   member: "packages/bakery",
                   commit,
@@ -1367,22 +1841,6 @@ describe("coverage-gate", () => {
     });
   });
 
-  describe("the baselines a manifest carries", () => {
-    it("reads none where there is no manifest to read", async () => {
-      // A set with no baseline is reported rather than failed, so a
-      // store that cannot be reached costs the gate its opinion alone.
-      const empty: typeof globalThis.fetch = () =>
-        Promise.resolve(
-          new Response(
-            '<?xml version="1.0"?><ListBucketResult></ListBucketResult>',
-            { status: 200 },
-          ),
-        );
-      expect(await publishedBaselines("2026-09-10T00:00:00.000Z", empty))
-        .toEqual([]);
-    });
-  });
-
   describe("the gate's command line", () => {
     it("refuses a command line with no base to measure against", () => {
       // With no diff the gate reaches no set and passes, which reads the
@@ -1456,6 +1914,64 @@ describe("coverage-gate", () => {
       }
     });
 
+    it("takes the lane count and the scale the lanes were handed", () => {
+      expect(
+        parseGateArgs(
+          ["--base", "origin/main", "--scale", "2.5", "--of", "7"],
+          "/tmp/root",
+        ),
+      ).toMatchObject({ scale: 2.5, of: 7 });
+      const unsaid = parseGateArgs(["--base", "origin/main"], "/tmp/root");
+      expect(unsaid?.scale).toBeUndefined();
+      expect(unsaid?.of).toBeUndefined();
+      for (const bad of [["--scale", "-1"], ["--scale", ""], ["--of", "0"]]) {
+        expect(parseGateArgs(["--base", "origin/main", ...bad], "/tmp/root"))
+          .toBeUndefined();
+      }
+      // A full run chooses nothing by score, so nothing would honor it.
+      expect(
+        parseGateArgs(
+          ["--base", "origin/main", "--full", "--scale", "2"],
+          "/tmp/root",
+        ),
+      ).toBeUndefined();
+    });
+
+    it("takes a run of every test, on a pull request or the default branch", () => {
+      expect(parseGateArgs(["--base", "origin/main", "--full"], "/tmp/root"))
+        .toMatchObject({
+          base: "origin/main",
+          full: true,
+          defaultBranch: false,
+        });
+      expect(parseGateArgs(["--full", "--default-branch"], "/tmp/root"))
+        .toMatchObject({ full: true, defaultBranch: true });
+      expect(parseGateArgs(["--full", "--default-branch"], "/tmp/root")?.base)
+        .toBeUndefined();
+    });
+
+    it("refuses the default branch with a base, or with less than every test", () => {
+      // The default branch's run has no change to measure, and runs
+      // everything; a command line saying otherwise lost a flag.
+      expect(
+        parseGateArgs(
+          ["--full", "--default-branch", "--base", "origin/main"],
+          "/tmp/root",
+        ),
+      ).toBeUndefined();
+      expect(parseGateArgs(["--default-branch"], "/tmp/root")).toBeUndefined();
+      expect(
+        parseGateArgs([
+          "--full",
+          "--default-branch",
+          "--comment",
+          "coverage-comment.json",
+          "--pr",
+          "4211",
+        ], "/tmp/root"),
+      ).toBeUndefined();
+    });
+
     it("refuses a flag it does not know, and one with no value", () => {
       expect(parseGateArgs(["--nonsense", "x"], "/tmp/root")).toBeUndefined();
       expect(parseGateArgs(["--base"], "/tmp/root")).toBeUndefined();
@@ -1490,7 +2006,7 @@ describe("coverage-gate", () => {
       ]);
       const report = await runGate(gateInput({
         root,
-        gate: coverageGateFor(suites, new Set([`${member}/src/main.ts`])),
+        gate: chosen(suites, new Set([`${member}/src/main.ts`])),
         reports,
         members: [member],
         accepted: new Map([[member, 3]]),

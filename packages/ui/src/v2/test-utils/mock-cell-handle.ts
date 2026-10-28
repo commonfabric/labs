@@ -17,6 +17,8 @@
  *   through `key()`, sent the mock runtime
  * - `holdReads(cell)` — leave every read the handle's network is asked for
  *   unanswered, as a worker that has not answered yet does
+ * - `holdWrites(cell)` — leave every `cell:set` the handle's network is sent
+ *   unanswered, as a worker that has not taken it yet does
  * - `refuseReads(cell)` — answer every read the handle's network is asked
  *   for with a refusal
  */
@@ -62,6 +64,12 @@ class MockCellNetwork {
    * not at all, or with a refusal.
    */
   reads: "nothing" | "held" | { refused: CellReadRefusal } = "nothing";
+
+  /** Whether each `cell:set` is left unanswered until it is let through. */
+  writesHeld = false;
+
+  /** What answers each `cell:set` held so far, in order. */
+  readonly heldWrites: Array<() => void> = [];
 
   /** What answers, or fails, each read held so far, in order. */
   readonly heldReads: Array<
@@ -179,6 +187,16 @@ function createMockConnection(
       if (data.type === "cell:set" || data.type === "cell:push") {
         network.writes.push(data);
       }
+      if (data.type === "cell:set" && network.writesHeld) {
+        // Held, the write reaches no other handle until it is taken.
+        const { cell, value } = data;
+        return new Promise((answer) =>
+          network.heldWrites.push(() => {
+            if (cell && value !== undefined) network.handleCellSet(cell, value);
+            answer({});
+          })
+        );
+      }
       if (data.type === "cell:set" && data.cell && data.value !== undefined) {
         network.handleCellSet(data.cell, data.value);
       }
@@ -209,10 +227,12 @@ function createMockConnection(
 }
 
 /**
- * Create a mock RuntimeClient with a connection and a live lifetime signal.
+ * Create a mock RuntimeClient with a connection, a live lifetime signal, and
+ * a `getPiece` that finds nothing.
  *
- * CellHandle's constructor only accesses `worker[$conn]()` — it doesn't call
- * any other RuntimeClient methods — so this minimal mock is sufficient.
+ * CellHandle's constructor only accesses `worker[$conn]()`; `getPiece` is
+ * what `cf-render` opens a displayed piece with. A test that asserts the open
+ * replaces it on `cell.runtime()`.
  */
 function createMockRuntimeClient(
   conn: InitializedRuntimeConnection,
@@ -220,6 +240,7 @@ function createMockRuntimeClient(
   return {
     [$conn]: () => conn,
     signal: new AbortController().signal,
+    getPiece: () => Promise.resolve(null),
   } as unknown as RuntimeClient;
 }
 
@@ -291,6 +312,20 @@ export function holdReads<T>(
       if (answer instanceof Error) read.fail(answer);
       else read.answer(answer);
     }
+  };
+}
+
+/**
+ * Leaves every `cell:set` the network `handle` was made on is sent
+ * unanswered, as a worker that has not taken it yet does, until the function
+ * it returns answers them, and lets later writes through.
+ */
+export function holdWrites<T>(handle: CellHandle<T>): () => void {
+  const network = networkOf(handle, "holdWrites");
+  network.writesHeld = true;
+  return () => {
+    network.writesHeld = false;
+    for (const answer of network.heldWrites.splice(0)) answer();
   };
 }
 

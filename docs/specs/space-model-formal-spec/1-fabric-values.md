@@ -412,7 +412,7 @@ not carry a `wireTypeTag` property (no fabric type does, save `UnknownValue` and
 
 | Wrapper Class | Wraps | Type Tag | Encoded State | Notes |
 |---------------|-------|----------|---------------|-------|
-| `FabricError` | `Error` | `Error@1` | `{ type, name, message, stack?, cause?, ...custom }` | `type` is the constructor name (e.g. `"TypeError"`). `name` is the `.name` property if it differs from `type`, or `null` if it matches (the common case). Includes `message`, `stack` (if present), `cause` (if present), and custom enumerable properties. The conversion layer (Section 8.2) recursively converts nested values (including `cause` and custom properties) before wrapping, ensuring all values are `FabricValue` by the time the codec's `encode()` runs. |
+| `FabricError` | `Error` | `Error@1` | `{ type, name?, message, stack?, cause?, ...custom }` | `type` is the constructor name (e.g. `"TypeError"`). `name` is the `.name` property if it differs from `type`, or `null` if it matches (the common case); a state with no `name` means the same as `null`, but an encoder writes the `null`. Includes `message`, `stack` (if present), `cause` (if present), and custom enumerable properties. The conversion layer (Section 8.2) recursively converts nested values (including `cause` and custom properties) before wrapping, ensuring all values are `FabricValue` by the time the codec's `encode()` runs. |
 | `FabricMap` | `Map` | `Map@1` | `[[key, value], ...]` | Entry pairs as an array of two-element arrays. Insertion order is preserved. Keys and values are recursively processed. **Implementation status: stubbed** — the tag is reserved and the class exists, but its members and codec currently throw (see Section 1.4.3). |
 | `FabricSet` | `Set` | `Set@1` | `[value, ...]` | Elements as an array. Iteration order is preserved. Values are recursively processed. **Implementation status: stubbed** — the tag is reserved and the class exists, but its members and codec currently throw (see Section 1.4.4). |
 
@@ -475,7 +475,7 @@ export abstract class FabricNativeWrapper<T extends object>
   /**
    * @inheritDoc Not yet implemented, so the inherited `deepClone()` throws.
    */
-  protected [DEEP_CLONE_CORE](_frozen: boolean): FabricInstance {
+  [DEEP_CLONE_CORE](_frozen: boolean, _subClone: (value: FabricValue) => FabricValue): FabricInstance {
     throw new Error(
       `Cannot yet handle deep cloning of \`${this.constructor.name}\`.`,
     );
@@ -633,10 +633,10 @@ export class FabricError extends FabricNativeWrapper<Error> {
   // ([DEEP_FREEZE] / [IS_DEEP_FROZEN] freeze `this` and recurse into
   // `cause` + the extras-bag values; `[SHALLOW_UNFROZEN_CLONE]()` copies the
   // slots + bag; `wrappedValue` / `toNativeFrozen()` / `toNativeThawed()`
-  // build the JS `Error` projection on demand. `[DEEP_CLONE_CORE](frozen)`
-  // round-trips through the codec, decoding mutable unless `frozen`:
-  // `codec.decode(tag, codec.encode(this, env), env, !frozen)`; the
-  // `deepClone()` template owns the final deep freeze. Bodies omitted for
+  // build the JS `Error` projection on demand. `[DEEP_CLONE_CORE]` clones
+  // codec state through `subClone`, preserving ancestor tracking:
+  // `codec.decode(tag, subClone(codec.encode(this, env)), env, !frozen)`.
+  // The canonical cloner owns the final deep freeze. Bodies omitted for
   // brevity.)
 
   static #codec = Object.freeze(
@@ -671,11 +671,11 @@ export class FabricError extends FabricNativeWrapper<Error> {
       }
 
       /**
-       * Rebuilds a `FabricError` from wire state. Uses `type` for class
-       * identity, falling back to `name` for backward compatibility with
-       * data encoded before `type` was added; missing `message`
-       * becomes `''`. Reserved and unsafe keys are excluded from the
-       * extras. Frozen unless `mutable` (Section 2.4).
+       * Rebuilds a `FabricError` from wire state, which `canDecode()` has
+       * held to a `type` and a `message` (`3-json-encoding.md` Section 3,
+       * `Error@1`). A `name` that is `null` or absent is the same as `type`.
+       * Reserved and unsafe keys are excluded from the extras. Frozen unless
+       * `mutable` (Section 2.4).
        */
       decode(
         _typeTag: string,
@@ -684,9 +684,9 @@ export class FabricError extends FabricNativeWrapper<Error> {
         mutable = false,
       ): FabricValue {
         const s = state as Record<string, FabricValue>;
-        const type = (s.type as string) ?? (s.name as string) ?? 'Error';
+        const type = s.type as string;
         const name = (s.name as string | null | undefined) ?? type;
-        const message = (s.message as string) ?? '';
+        const message = s.message as string;
 
         const extras: Array<[string, FabricValue]> = [];
         for (const key of Object.keys(s)) {
@@ -869,8 +869,8 @@ import { FabricPrimitive } from './interface';
  *
  * The essential state is `{ source, flags, flavor }` — the values needed to
  * (re)construct an equivalent regex. The `flavor` string identifies the regex
- * dialect; only `"es2025"` (the default) is currently representable as a
- * JS `RegExp`. The `flavor` field is forward-looking for multi-runtime
+ * dialect; only `"es2025"`, the dialect of a JS `RegExp`, is currently
+ * representable as one. The `flavor` field is forward-looking for multi-runtime
  * scenarios where different regex engines may be in use.
  *
  * For the `"es2025"` flavor the constructor proactively builds and retains a
@@ -1907,6 +1907,33 @@ encoded subtree appears at each position it appeared at. Whether the decoded
 objects are `===` to each other is a further promise, which an engine states
 only if it makes it.
 
+**A cell write keeps shared references within that write, and no further.**
+The runtime's write path (`Cell.set()` and the collection operations) stores a
+plain JavaScript object or array that appears at two positions of one written
+value once: each later occurrence is stored as a link to the first. A plain
+object that occurs as an array element is the exception: it is stored in a
+document of its own, which every occurrence links to, including one written
+at an object key earlier in the write. The link is stored, so the sharing
+outlives the write and holds across sessions:
+
+- A write inside the shared value, such as a push or a `set()` at a path below
+  either position, is read at both positions.
+- Replacing a position whole with `set()` writes at that position. A position
+  that holds a link has the link replaced, and stops sharing. The first
+  occurrence, where the others link to it, takes the new value, and every link
+  to it reads that value. Where every occurrence links to the object's own
+  document, no position is the one named, so replacing any of them ends only
+  that position's sharing.
+
+What is shared is the stored value, not the JavaScript object written: the
+object itself is left as it was. The sharing reaches only as far as one write.
+The same plain object written by two writes (two `set()` calls, even in one
+transaction, two handlers, or two cells) is stored as two independent values.
+A reference is different, because the reference is what is written: a `Cell`
+or link written at two positions names its target at both, however many writes
+put it there, and a position holding a write-redirect link passes a `set()` on
+to its target rather than replacing the link.
+
 Cycles *across* documents are a separate matter, and are supported whatever an
 engine does within one. They are written as explicit links (`FabricInstance`s
 referencing other documents), so two cells may reference each other and form a
@@ -2173,11 +2200,11 @@ export abstract class BaseFabricInstance extends FabricInstance {
   /**
    * Returns a new deep clone of this instance, cloning nested `FabricValue`s
    * to the requested frozenness (see `[DEEP_CLONE_CORE]`'s symbol doc). The
-   * returned instance itself is not yet frozen: the `deepClone()` template
-   * method owns the identity optimization and the final freeze. Called by
-   * `deepClone()` when a fresh instance is needed.
+   * returned instance itself is not yet frozen; the canonical cloner owns the
+   * identity optimization and final freeze. Nested values use `subClone`,
+   * preserving ancestor tracking across instance boundaries.
    */
-  protected abstract [DEEP_CLONE_CORE](frozen: boolean): FabricInstance;
+  abstract [DEEP_CLONE_CORE](frozen: boolean, subClone: (value: FabricValue) => FabricValue): FabricInstance;
 
   //
   // Instance members
@@ -3098,7 +3125,8 @@ export class UnknownValue extends BaseFabricInstance {
   to.)
 - When re-encoding an `UnknownValue`, its codec's `tagForValue()` reads
   back the preserved tag and `encode()` returns the preserved bare state,
-  reproducing the original wire format byte-for-byte.
+  reproducing the original wire format byte-for-byte where it arrived as its
+  canonical text (Section 11 of `3-json-encoding.md`).
 - This allows data to round-trip through systems that don't understand it.
 
 ### 3.5 `ProblematicValue` (Recommended)
@@ -3814,8 +3842,9 @@ The implementation is split across several files for separation of concerns:
 ## 5. JSON Encoding for Special Types
 
 The JSON encoding for `FabricValue`s — the `/<Type>@<Version>` wire format,
-type encodings, escaping mechanisms, and the `/`-key reservation rule — is
-specified in a dedicated document:
+type encodings, escaping mechanisms, the `/`-key reservation rule, the
+canonical text an encoder writes, and the floors on the size guarantees an
+implementation states — is specified in a dedicated document:
 
 **See [`3-json-encoding.md`](./3-json-encoding.md)**
 
@@ -4420,7 +4449,7 @@ export function fabricFromConvertibleJsValue(
 | `Map` | Wrapped into `FabricMap`. Keys and values are recursively converted (deep variant only). Extra enumerable properties on the `Map` object cause **rejection** (throw) — it is better to fail loudly than silently lose data. |
 | `Set` | Wrapped into `FabricSet`. Elements are recursively converted (deep variant only). Extra enumerable properties on the `Set` object cause **rejection** (throw) — it is better to fail loudly than silently lose data. |
 | `Date` | Wrapped into `FabricEpochNsec`. The `Date`'s millisecond timestamp is converted to nanoseconds: `BigInt(date.getTime()) * 1_000_000n`. Note the millisecond precision limitation — sub-millisecond information is not available from `Date`. Extra enumerable properties on the `Date` object cause **rejection** (throw) — it is better to fail loudly than silently lose data. |
-| `RegExp` | Converted into `FabricRegExp` (a `FabricPrimitive`, not a wrapper). The `source` and `flags` are extracted from the JS `RegExp`; `flavor` defaults to `"es2025"` (it is a `FabricRegExp`-level property, not a JS `RegExp` property). Extra enumerable properties on the `RegExp` object cause **rejection** (throw) — it is better to fail loudly than silently lose data. |
+| `RegExp` | Converted into `FabricRegExp` (a `FabricPrimitive`, not a wrapper). The `source` and `flags` are extracted from the JS `RegExp`; `flavor` is `"es2025"`, the dialect of a JS `RegExp` (it is a `FabricRegExp`-level property, not a JS `RegExp` property). Extra enumerable properties on the `RegExp` object cause **rejection** (throw) — it is better to fail loudly than silently lose data. |
 | `Uint8Array` | Wrapped into `FabricBytes`. The input bytes are copied (the caller may mutate the original afterward). Extra enumerable properties on the `Uint8Array` object cause **rejection** (throw) — it is better to fail loudly than silently lose data. |
 | `FabricValue[]` | Shallow: returned as-is (frozen if `freeze` is true). Deep: elements recursively converted (frozen at each level if `freeze` is true). |
 | `{ [key: string]: FabricValue }` | Shallow: returned as-is (frozen if `freeze` is true). Deep: values recursively converted (frozen at each level if `freeze` is true). |

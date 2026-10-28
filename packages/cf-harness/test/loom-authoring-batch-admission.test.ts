@@ -4,11 +4,11 @@ import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 
+import { createCfHarnessCliCapabilities } from "../src/cli.ts";
 import {
-  createCfHarnessCliCapabilities,
+  createLoomLocalCfHarnessHost,
   parseCfHarnessCliArgs,
-} from "../src/cli.ts";
-import { createLoomLocalCfHarnessHost } from "../src/loom-local-host.ts";
+} from "./support/on-linux.ts";
 import type { CreateHarnessPromptLoopOptions } from "../src/prompt-loop.ts";
 
 /** Tool grant used by Loom's collection-capable batch profiles. */

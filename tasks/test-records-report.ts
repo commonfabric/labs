@@ -10,10 +10,11 @@
  *   deno run -A tasks/test-records-report.ts [--days N] [--gate]
  *
  * --gate turns the over-60-seconds report into an exit status, the ratchet
- * the design document describes; it stays advisory until the violator list
- * is short enough for someone to flip the flag in CI. It exits 3 rather
- * than 1 for a window that was not read in full, which is a ratchet that
- * could not check rather than one that failed.
+ * that docs/specs/test-records.md describes under "The sixty-second rule";
+ * it stays advisory until the violator list is short enough for someone to
+ * flip the flag in CI. It exits 3 rather than 1 for a window that was not
+ * read in full, which is a ratchet that could not check rather than one
+ * that failed.
  *
  * A day of the store holds tens of thousands of objects, so a whole-day
  * read is tens of thousands of requests and a transient network failure
@@ -138,8 +139,8 @@ export function collisions(
  * High-churn identity families: identities that appear in only one run of
  * the window, grouped by their name with digit runs collapsed. A family
  * with several one-run members is a name built from a counter, a position,
- * or an interpolated value — the shapes the design document tells authors
- * to avoid.
+ * or an interpolated value, none of which names the same test from one run
+ * to the next.
  */
 export function churnFamilies(
   byIdentity: ReadonlyMap<string, IdentityAggregate>,

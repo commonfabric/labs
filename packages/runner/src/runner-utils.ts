@@ -1,4 +1,6 @@
 import {
+  cloneIfNecessary,
+  deepFreeze,
   fabricAwareEqual,
   type FabricValue,
   isFabricPlainObject,
@@ -917,7 +919,8 @@ function mergeSchemaDefaultsUncached(
       defaults !== undefined &&
       (!isValidFabricPlainObject(defaults) || isCellLink(defaults))
     ) {
-      return valuePresent ? value : defaults;
+      if (valuePresent) return value;
+      return Array.isArray(defaults) ? ownCopy(defaults) : defaults;
     }
     // Defaults only fill absent values or recursively merge plain records. A
     // defined scalar, sparse array, `FabricSpecialObject`, or sigil link is
@@ -994,6 +997,18 @@ function mergeSchemaDefaultsUncached(
   } finally {
     if (trackedSchema !== undefined) activeSchemas?.delete(trackedSchema);
   }
+}
+
+/**
+ * Helper for {@link mergeSchemaDefaultsUncached}, which copies a list default
+ * for the one position it fills. Defaults are shared by the positions they can
+ * fill: those of identical subschemas are one object once interned, and a
+ * merge reuses one default for every element of an array. A write that holds
+ * one list at two positions links the second to the first, so two slots, or
+ * two elements, that each took a default would become one.
+ */
+function ownCopy(defaults: FabricValue[]): FabricValue[] {
+  return deepFreeze(cloneIfNecessary(defaults, { frozen: false, force: true }));
 }
 
 function schemasForObjectProperty(

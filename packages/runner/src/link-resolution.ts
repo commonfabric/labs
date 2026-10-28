@@ -24,18 +24,60 @@ import {
 import type {
   IExtendedStorageTransaction,
   INotFoundError,
+  MemorySpace,
 } from "./storage/interface.ts";
 import {
   dereferenceResolutionProbe,
   linkResolutionProbe,
 } from "./storage/reactivity-log.ts";
 import { ContextualFlowControl } from "./cfc.ts";
+import { cfcSchemaGivesNoShape } from "./cfc/schema-primitives.ts";
 import type { Runtime } from "./runtime.ts";
 import type { CfcAddress, CfcDereferenceTrace } from "./cfc/types.ts";
-import { canFollowScopedLink, narrowerScopeCap } from "./scope.ts";
-import type { JSONSchema, SchemaScope } from "./builder/types.ts";
+import {
+  canFollowScopedLink,
+  narrowerScopeCap,
+  noteDeclaredReadScope,
+} from "./scope.ts";
+import type {
+  JSONSchema,
+  JSONSchemaObj,
+  SchemaScope,
+} from "./builder/types.ts";
 
 const logger = getLogger("link-resolution");
+
+/**
+ * Thrown when the links a resolution follows run in a cycle, so that they
+ * name no value at all, which a caller can tell from a failure to read.
+ */
+export class LinkCycleError extends Error {}
+
+/**
+ * Returns what `resolve` returns, or `undefined` when the links it follows
+ * run in a cycle and so name nothing.
+ *
+ * @throws What `resolve` throws for any other reason.
+ */
+export function unlessCyclic<T>(resolve: () => T): T | undefined {
+  try {
+    return resolve();
+  } catch (error) {
+    if (error instanceof LinkCycleError) return undefined;
+    throw error;
+  }
+}
+
+/**
+ * Returns the error to throw for the cycle `message` describes, logging it
+ * at debug level: a caller that takes the cycle for an answer
+ * ({@link unlessCyclic}) has nothing to report, and one it fails reports the
+ * error where it fails, as it would any other.
+ */
+function linkCycle(message: string): LinkCycleError {
+  logger.debug("link-res-cycle", message);
+  return new LinkCycleError(message);
+}
 
 export type LastNode = "value" | "writeRedirect" | "top";
 
@@ -51,23 +93,61 @@ export type ResolvedFullLink = NormalizedFullLink & {
 };
 
 /**
- * Whether `schema` constrains nothing at all: absent, or a TRUE schema in
- * the canonical sense (`ContextualFlowControl.isTrueSchema`) — JSON Schema
- * `true`, `{}`, or an object carrying only internal flags, `default`, or
- * `$defs`. Such a schema selects every value, so it says nothing the
- * schema a resolution is already carrying does not, and a hop onto a link
- * bearing one keeps carrying rather than adopting it. `false` is not one
- * of these — it selects nothing, which is information. Nor is a schema
- * that declares a stream: it selects every value too, but the document behind
- * a stream holds nothing, so the declaration is the only thing that says what
- * the position is, and a carried schema that lacks it cannot say so. Any
- * other `asCell` entry keeps carrying: its document holds a value, which the
- * carried schema is there to read.
+ * Whether `schema` constrains nothing at all: it gives a value no shape
+ * (`cfcSchemaGivesNoShape()`) — absent, JSON Schema `true`, `{}`, or an
+ * object carrying only annotations, internal flags, `default`, or `$defs`.
+ * Such a schema selects every value, so it says nothing the schema a
+ * resolution is already carrying does not, and a hop onto a link bearing one
+ * keeps carrying rather than adopting it. `false` is not one of these — it
+ * selects nothing, which is information. Nor is a schema that declares a
+ * stream: it selects every value too, but the document behind a stream holds
+ * nothing, so the declaration is the only thing that says what the position
+ * is, and a carried schema that lacks it cannot say so. Any other `asCell`
+ * entry keeps carrying: its document holds a value, which the carried schema
+ * is there to read.
  */
 const schemaConstrainsNothing = (schema: JSONSchema | undefined): boolean =>
-  schema === undefined ||
-  (ContextualFlowControl.isTrueSchema(schema) &&
-    !ContextualFlowControl.declaresStream(schema));
+  cfcSchemaGivesNoShape(schema) &&
+  !ContextualFlowControl.declaresStream(schema);
+
+/**
+ * `schema` with its references resolved against the documents `space` holds,
+ * or `false` where a document it names is missing or a reference does not
+ * resolve. A schema whose root is not a reference is itself.
+ */
+const resolveDeclaration = (
+  tx: IExtendedStorageTransaction,
+  space: MemorySpace,
+  schema: JSONSchema | undefined,
+): JSONSchema | undefined =>
+  isObjectOrArray(schema) && typeof schema.$ref === "string"
+    ? ensureExternalSchemaClosure(tx, space, schema)
+      ? ContextualFlowControl.resolveSchemaRefs(schema) ?? false
+      : false
+    : schema;
+
+/**
+ * The top-level `default` a resolved `schema` declares, if any. A schema that
+ * selects nothing declares none: no default stands in where nothing is
+ * selected.
+ */
+const declaredDefault = (
+  schema: JSONSchema | undefined,
+): JSONSchemaObj["default"] =>
+  isObjectOrArray(schema) && !ContextualFlowControl.isFalseSchema(schema)
+    ? schema.default
+    : undefined;
+
+/** `schema` with `value` as its top-level `default`. */
+const withDefault = (
+  schema: JSONSchema | undefined,
+  value: Exclude<JSONSchemaObj["default"], undefined>,
+): JSONSchema =>
+  internSchema(
+    isObjectOrArray(schema)
+      ? { ...schema, default: value }
+      : { default: value },
+  );
 
 export const MAX_PATH_RESOLUTION_LENGTH = 100;
 
@@ -79,6 +159,9 @@ type LinkHop = {
    * subject is the link as stored.
    */
   storedSchema?: JSONSchema;
+
+  /** The stored destination before the caller's remaining path is appended. */
+  storedTarget: NormalizedFullLink;
 
   link: NormalizedFullLink;
   source: NormalizedFullLink;
@@ -440,16 +523,20 @@ const resolutionMemoVariant = (
  * describes the value at its target, where the caller's describes the value at
  * the source, so the stored one replaces what the resolution carried in. One
  * that constrains nothing describes nothing, so the caller's schema keeps
- * traveling instead; see `schemaConstrainsNothing()`.
+ * traveling instead; see `schemaConstrainsNothing()`. Either way the deepest
+ * declared `default` wins: a stored schema's own, and otherwise the one the
+ * resolution carried in.
  *
  * A cycle is detected if the exact (document, path) pair is visited more than
  * once. This detects cycles like:
  * - A/foo → A/foo
  * - A → B → C → A
  *
- * A link whose target passes back through the link's own position in the same
+ * A link whose stored target passes back through its own position in the same
  * document (e.g. A → A/foo) makes the path grow on every hop, so the pair
- * never repeats; that shape is detected separately on the first hop.
+ * never repeats; that shape is detected separately on the first hop. The
+ * caller's remaining path is excluded from this check: a finite query can
+ * revisit a link to an ancestor while consuming its remaining segments.
  *
  * Growing-path cycles that span documents, e.g.
  * - A → B, B → A/foo
@@ -704,11 +791,7 @@ export function resolveLinkTracingDereferences(
     // from: computed for the first before the loop, refreshed by each hop.
     const key = addressKey;
     if (seen.has(key)) {
-      logger.error(
-        "link-res-error",
-        debugStr`Link cycle detected ${key}: $quote,long${[...seen]}`,
-      );
-      throw new Error(
+      throw linkCycle(
         debugStr`Link cycle detected at ${key}: $quote,long${[...seen]}`,
       );
     }
@@ -728,6 +811,7 @@ export function resolveLinkTracingDereferences(
       const nextLink = hopAt(link, link.path, probe);
       nextHop = {
         link: nextLink,
+        storedTarget: nextLink,
         source: { ...link, path: [...link.path] },
         kind: hopKindForLink(nextLink),
         depth: link.path.length,
@@ -753,6 +837,7 @@ export function resolveLinkTracingDereferences(
             const nextLink = hopAt(link, lastValid, parent);
             nextHop = {
               link: nextLink,
+              storedTarget: nextLink,
               source: { ...link, path: [...lastValid] },
               kind: hopKindForLink(nextLink),
               depth: lastValid.length,
@@ -817,12 +902,13 @@ export function resolveLinkTracingDereferences(
         link = undefinedDataLink(link);
         break;
       }
-      // A link whose target passes back through the link's own position can
+      noteDeclaredReadScope(tx, hopCap, nextHop.link.scope);
+      // A link whose stored target passes through its own position can
       // never resolve: the value at that position is the link itself, so
       // every hop re-follows it with a longer path and the (document, path)
       // cycle key never repeats. Detect this on the first hop.
       const hopSource = nextHop.source;
-      const hopTarget = nextHop.link;
+      const hopTarget = nextHop.storedTarget;
       if (
         hopTarget.space === hopSource.space &&
         hopTarget.id === hopSource.id &&
@@ -832,8 +918,7 @@ export function resolveLinkTracingDereferences(
       ) {
         const detail = `link at [${hopSource.path.join("/")}] targets its ` +
           `own subpath [${hopTarget.path.join("/")}]`;
-        logger.error("link-res-error", `Link cycle detected: ${detail}`);
-        throw new Error(`Link cycle detected at ${key}: ${detail}`);
+        throw linkCycle(`Link cycle detected at ${key}: ${detail}`);
       }
       carriedCap = hopCap;
       traces.push(recordDereferenceHop(tx, nextHop));
@@ -858,18 +943,11 @@ export function resolveLinkTracingDereferences(
       // Precedence and defaults depend on what a reference declares, in
       // either space. The traveling schema keeps its reference form until
       // a space boundary requires a self-contained representation.
-      let declaration = nextLink.schema;
-      if (
-        isObjectOrArray(declaration) && typeof declaration.$ref === "string"
-      ) {
-        declaration = ensureExternalSchemaClosure(
-            tx,
-            nextHop.source.space,
-            declaration,
-          )
-          ? ContextualFlowControl.resolveSchemaRefs(declaration) ?? false
-          : false;
-      }
+      const declaration = resolveDeclaration(
+        tx,
+        nextHop.source.space,
+        nextLink.schema,
+      );
       // The hop consumed `nextHop.depth` of our path and re-rooted the rest
       // under the target. Caps recorded for the consumed prefix have done
       // their job; caps for the REMAINING segments still have to travel, or a
@@ -889,37 +967,44 @@ export function resolveLinkTracingDereferences(
       // a carried schema that already declares the stream, and that one can
       // also type the event, so it keeps carrying.
       const carriedDeclaresStoredStream = declaration !== undefined &&
-        ContextualFlowControl.isTrueSchema(declaration) &&
+        cfcSchemaGivesNoShape(declaration) &&
         ContextualFlowControl.declaresStream(link.schema);
+      // Whichever schema travels on, the deepest declared `default` wins:
+      // the stored schema's where it declares one, and the carried schema's
+      // otherwise. A top-level `default` constrains nothing, and narrowing
+      // can reduce a stored schema to one, so a stored schema that keeps the
+      // carried one traveling can still supply the default. No default
+      // crosses to or from a false schema: one that selects nothing neither
+      // supplies a default nor takes one. A stored schema that replaces a
+      // false carried one brings its own, as any adopted schema does.
+      const storedDefault = declaredDefault(declaration);
       if (
         link.schema !== undefined &&
         (schemaConstrainsNothing(declaration) || carriedDeclaresStoredStream)
       ) {
-        // `default` still inherits from the last declaration even when the
-        // stored schema is otherwise unconstrained — a top-level `default`
-        // is trivially true, and narrowing can reduce a stored schema to
-        // one. A false carried schema stays false: the reader selected
-        // nothing, so no default stands in.
-        const storedDefault = isObjectOrArray(declaration)
-          ? declaration.default
-          : undefined;
-        const carriedSchema = storedDefault !== undefined &&
-            !ContextualFlowControl.isFalseSchema(link.schema)
-          ? internSchema(
-            isObjectOrArray(link.schema)
-              ? { ...link.schema, default: storedDefault }
-              : { default: storedDefault },
-          )
-          : link.schema;
         link = {
           ...nextLink,
-          schema: carriedSchema,
+          schema: storedDefault !== undefined &&
+              !ContextualFlowControl.isFalseSchema(link.schema)
+            ? withDefault(link.schema, storedDefault)
+            : link.schema,
           ...(carriedCaps !== undefined && { scopeCaps: carriedCaps }),
         };
       } else {
+        const carriedDefault = storedDefault === undefined &&
+            declaration !== undefined &&
+            !ContextualFlowControl.isFalseSchema(declaration)
+          ? declaredDefault(
+            resolveDeclaration(tx, nextHop.source.space, link.schema),
+          )
+          : undefined;
+        const adopted = carriedDefault === undefined ? nextLink : {
+          ...nextLink,
+          schema: withDefault(nextLink.schema, carriedDefault),
+        };
         link = carriedCaps === undefined
-          ? nextLink
-          : { ...nextLink, scopeCaps: carriedCaps };
+          ? adopted
+          : { ...adopted, scopeCaps: carriedCaps };
       }
       if (crossSpace) {
         link = {
@@ -979,6 +1064,45 @@ export function resolveLinkTracingDereferences(
         link.scope === "space"
       ) {
         pendingDeadEnd = true;
+        // Each hop this walk crossed had its target asked for above. A walk
+        // that crossed none starts at a handle minted from a stored link,
+        // whose hop was crossed before the walk began, so its document is
+        // asked for here, as a same-space hop's target is.
+        if (
+          !followedHop &&
+          runtime.storageManager.shouldPullDoc?.(
+              link.space,
+              link.id,
+              link.scope,
+            ) === true
+        ) {
+          kickDocPull(runtime, link, true);
+        }
+      } else if (
+        (followedHop || inputViaLinkHop) && deadEndDocMissing &&
+        link.scope !== "space" && runtime.servingPosture &&
+        tx.tx.sourceAction !== undefined &&
+        runtime.scheduler.hasOtherWriterOf(link, tx.tx.sourceAction)
+      ) {
+        // A serving runtime reads one such row differently: a missing
+        // instance of a document that another derivation registered here
+        // writes is one the serving loop owes and has not produced yet, not
+        // one its principal never wrote. The read still reads `undefined`,
+        // as above, and stays subscribed, so the run comes again once the
+        // instance is produced; what the transaction records is that this
+        // run's value was derived from an instance not yet there, which
+        // withdraws the run's commit (`finalizeReactiveActionCommit` in
+        // scheduler/run.ts).
+        //
+        // Only a walk that crossed a hop is read this way. A walk that crossed
+        // none dead-ends at the document the run addressed itself, as a
+        // builtin reads its own store before it mints it (`llmDialog` reads
+        // its `internal` store directly, per user and per session, while
+        // another registered action declares it). That run may be the one
+        // that produces the instance, and withdrawing its commit would then
+        // starve the instance it was about to write.
+        tx.tx.unproducedScopedInstance ??=
+          `${link.space}/${link.scope}/${link.id}`;
       }
       break;
     }

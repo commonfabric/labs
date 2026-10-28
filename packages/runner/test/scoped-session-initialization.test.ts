@@ -27,11 +27,11 @@ import {
   scopedArgumentInitializationTargets,
 } from "../src/data-updating.ts";
 import {
-  areLinksSame,
   createSigilLinkFromParsedLink,
   isSigilLink,
   parseLink,
 } from "../src/link-utils.ts";
+import { areLinksSame } from "../src/link-equality.ts";
 import { Runtime } from "../src/runtime.ts";
 import { createRef } from "../src/create-ref.ts";
 import { causalFormOfBinding } from "../src/pattern-binding.ts";

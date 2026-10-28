@@ -23,24 +23,16 @@ export function repositoryMarker(dir: string): string {
 /**
  * The repository-root-relative, forward-slashed form of a test file path —
  * the identity form for file-named tests — found by climbing from the file
- * to the enclosing .git. Outside any repository the path falls back to
- * being relative to the working directory.
+ * to the enclosing .git. Undefined for a file inside no repository, such as
+ * a fixture a test writes to a temporary directory: it is no test of a
+ * repository, so it has no identity to record under.
  */
-export function repositoryRelativePath(filePath: string): string {
+export function repositoryRelativePath(filePath: string): string | undefined {
   const absolute = resolve(filePath);
-  let dir = dirname(absolute);
-  for (;;) {
-    try {
-      Deno.statSync(repositoryMarker(dir));
-      return absolute.slice(dir.length + 1).replaceAll("\\", "/");
-    } catch {
-      const parent = dirname(dir);
-      if (parent === dir) {
-        return relative(Deno.cwd(), absolute).replaceAll("\\", "/");
-      }
-      dir = parent;
-    }
-  }
+  const root = repositoryRoot(dirname(absolute));
+  return root === undefined
+    ? undefined
+    : relative(root, absolute).replaceAll("\\", "/");
 }
 
 /**

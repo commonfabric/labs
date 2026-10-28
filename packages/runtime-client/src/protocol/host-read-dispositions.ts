@@ -53,6 +53,12 @@ const write = {
   kind: "no-cell-value",
   why: "a write or an event the host sends; the answer carries no value",
 } as const;
+const send = {
+  kind: "ungated",
+  why: "an event the host sends; the refusal of a handling it waits for " +
+    "carries the reason, which can quote a value, as an error report's " +
+    "message can",
+} as const;
 const setting = {
   kind: "no-cell-value",
   why: "a diagnostic setting or counter",
@@ -72,7 +78,8 @@ export const REQUEST_DISPOSITIONS = {
   [RequestType.CellInitialize]: DECIDED,
   [RequestType.CellSet]: write,
   [RequestType.CellPush]: write,
-  [RequestType.CellSend]: write,
+  [RequestType.CellSend]: send,
+  [RequestType.CellSendReviewed]: send,
   [RequestType.CellSubscribe]: {
     kind: "no-cell-value",
     why: "whether a subscription opened; its values arrive as cell updates",
@@ -138,6 +145,7 @@ export const REQUEST_DISPOSITIONS = {
   [RequestType.GetCell]: reference,
   [RequestType.GetHomeSpaceCell]: reference,
   [RequestType.EnsureHomePatternRunning]: lifecycle,
+  [RequestType.JoinVisitedRoom]: write,
   [RequestType.Idle]: lifecycle,
   [RequestType.ListEventAttention]: {
     kind: "no-cell-value",
@@ -192,8 +200,11 @@ export const REQUEST_DISPOSITIONS = {
   },
   [RequestType.SetBreakpoints]: setting,
   [RequestType.UploadBlob]: write,
+  [RequestType.BlobUrl]: {
+    kind: "no-cell-value",
+    why: "the URL a space's host serves a blob at",
+  },
   [RequestType.GetSpaceRootPattern]: reference,
-  [RequestType.RecreateSpaceRootPattern]: reference,
   [RequestType.PieceCreate]: reference,
   [RequestType.PieceGet]: reference,
   [RequestType.PieceGetSlug]: {
@@ -248,6 +259,8 @@ export const NOTIFICATION_DISPOSITIONS = {
     why: "a runtime error's message, which can quote a value",
   },
   [NotificationType.SpaceAccessLost]: lifecycle,
+  [NotificationType.SpaceAccessRestored]: lifecycle,
+  [NotificationType.ConnectionRestored]: lifecycle,
   [NotificationType.Telemetry]: {
     kind: "ungated",
     why: "telemetry markers, including a cell update's values",

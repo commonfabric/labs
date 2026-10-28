@@ -8,14 +8,20 @@ import { debugStr } from "@commonfabric/data-model";
 
 import type { ExperimentalOptions } from "./runtime.ts";
 
-/** The canonical parse: exactly `"true"` / `"false"`, anything else ignored. */
+/**
+ * The canonical parse: exactly `"true"` / `"false"`, anything else ignored
+ * with a warning. The warning starts with `[logPrefix]`; a caller that warns
+ * about other values in the same call passes its own prefix, so that all of
+ * that call's warnings share one.
+ */
 export function parseFlagValue(
   raw: string,
   source: string,
+  logPrefix = "runtime-presets",
 ): boolean | undefined {
   if (raw === "true" || raw === "false") return raw === "true";
   console.warn(
-    `[runtime-presets] Ignoring ${source}="${raw}" — ` +
+    `[${logPrefix}] Ignoring ${source}="${raw}" — ` +
       `expected "true" or "false" (unset = default).`,
   );
   return undefined;
@@ -57,18 +63,29 @@ export const EXPERIMENTAL_ENV_VARS = {
   // declared arm. Env-reachable so every server-side process can be flipped
   // either way, and an explicit value always wins over the constant.
   serverExecution: "EXPERIMENTAL_SERVER_EXECUTION",
+  localSessionDocuments: "EXPERIMENTAL_LOCAL_SESSION_DOCUMENTS",
   viewScopedReplication: "EXPERIMENTAL_VIEW_SCOPED_REPLICATION",
   webViewScopedReplication: "EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION",
   sharedMemoryConnection: "EXPERIMENTAL_SHARED_MEMORY_CONNECTION",
+  // The local fold of a refused derived write is default-off; env-reachable
+  // so a process can opt in with an explicit "true".
+  localFold: "EXPERIMENTAL_LOCAL_FOLD",
+  // Instance naming is default-off, and reachable programmatically only: one
+  // process naming instances binds a parent's children to other documents
+  // than the rest of its space does, so no environment may turn it on before
+  // a runtime of the other naming mode is kept away from a space.
+  instanceNames: null,
 } as const satisfies Record<keyof ExperimentalOptions, string | null>;
 
 /**
  * Read `ExperimentalOptions` from the environment via the canonical mapping.
  * Accepted values are exactly `"true"` and `"false"`; unset means "use the
- * default". Anything else is ignored with a warning.
+ * default". Anything else is ignored with a warning, under `logPrefix` when
+ * one is given ({@link parseFlagValue}).
  */
 export function experimentalOptionsFromEnv(
   env: EnvReader,
+  logPrefix?: string,
 ): ExperimentalOptions {
   const opts: ExperimentalOptions = {};
   for (
@@ -80,7 +97,7 @@ export function experimentalOptionsFromEnv(
     if (envVar === null) continue;
     const raw = env(envVar);
     if (raw === undefined) continue;
-    const parsed = parseFlagValue(raw, envVar);
+    const parsed = parseFlagValue(raw, envVar, logPrefix);
     if (parsed !== undefined) opts[key] = parsed;
   }
   return opts;
@@ -95,10 +112,11 @@ export function experimentalOptionsFromEnv(
  * it talks to.
  *
  * - `"server"` — the deployment decides. The client adopts the value the
- *   server publishes (see {@link experimentalOptionsForDeployedClient}). Use
- *   this for a flag whose value is visible on the wire, in what gets stored,
- *   or in which side runs what: peers that disagree either refuse each other
- *   or, worse, quietly write data shaped for two different postures.
+ *   server publishes (see `settingsForDeployedClient` in
+ *   `deployment-meta.ts`). Use this for a flag whose value is visible on the
+ *   wire, in what gets stored, or in which side runs what: peers that disagree
+ *   either refuse each other or, worse, quietly write data shaped for two
+ *   different postures.
  * - `"client"` — the flag governs in-process behavior with no wire, storage,
  *   or division-of-labor consequence, so a client is free to run its own
  *   value. Justify the reasoning in a comment beside the entry: over-adopting
@@ -146,6 +164,9 @@ export const EXPERIMENTAL_FLAG_AUTHORITY = {
   lazyMaterialization: "server",
   // The whole point of the flag is which side computes what is stored.
   serverExecution: "server",
+  // Local session writes with shared reads require validation-only commits.
+  // The deployment must support those commits before clients enable this.
+  localSessionDocuments: "server",
   // Defaults are published fleet-wide; each session negotiates the mode.
   viewScopedReplication: "server",
   webViewScopedReplication: "server",
@@ -159,15 +180,26 @@ export const EXPERIMENTAL_FLAG_AUTHORITY = {
   // one that routes a connection by the space its address names cannot
   // serve a client that shares connections.
   sharedMemoryConnection: "server",
+  // A write over a folded document goes to the store whole rather than as a
+  // patch, so the arm a client runs is visible in what it writes; and the
+  // deployment that turns the fold off is deciding, for every client it
+  // serves, between the value a fold keeps and the re-runs its absence costs.
+  localFold: "server",
+  // Decides the identity a compiled pattern gives a `const`-bound child, so
+  // two runtimes on different values bind one parent's children to
+  // different documents.
+  instanceNames: "server",
 } as const satisfies Record<
   keyof ExperimentalOptions,
   ExperimentalFlagAuthority
 >;
 
 /**
- * Where a server publishes the experimental posture its own Runtime resolved.
- * Same document as the deployment's DID and commit, so a client that already
- * asks who it is talking to learns the posture in the same breath.
+ * The deployment's meta document, where a server publishes the experimental
+ * posture its own Runtime resolved and the memory URL its clients open Memory
+ * on (`deployment-meta.ts` reads both). Same document as the deployment's DID
+ * and commit, so a client that already asks who it is talking to learns both
+ * from one request.
  */
 export const SERVER_EXPERIMENTAL_PATH = "/api/meta";
 
@@ -220,7 +252,7 @@ export function parseServerExperimentalOptions(
     if (value === undefined) continue;
     if (typeof value !== "boolean") {
       console.warn(
-        `[runtime-presets] Ignoring server-published ${key}=` +
+        `[deployment-meta] Ignoring server-published ${key}=` +
           debugStr`$quote${value} — expected a boolean.`,
       );
       continue;
@@ -270,101 +302,4 @@ export function adoptServerExperimentalOptions(
     if (published !== undefined) opts[key] = published;
   }
   return opts;
-}
-
-export interface DeployedClientExperimentalParams {
-  /** The deployment this client runs against. */
-  apiUrl: URL;
-
-  /** Reads this process's environment; pass `Deno.env.get` in Deno contexts. */
-  env: EnvReader;
-
-  /**
-   * Cancels the request. A caller whose startup is cancellable must pass its
-   * signal: without one, a deployment that accepts the connection and then
-   * says nothing holds the caller here for as long as it stays silent, and
-   * no shutdown can reach it.
-   */
-  signal?: AbortSignal;
-
-  /** Injectable for tests; the real `fetch` otherwise. */
-  fetch?: typeof globalThis.fetch;
-}
-
-/**
- * The posture a client that is NOT built alongside its server should run:
- * the deployment's own, with this process's explicit `EXPERIMENTAL_*`
- * overriding it flag by flag.
- *
- * Call it in place of {@link experimentalOptionsFromEnv} wherever a runtime
- * talks to a deployed API — `cf`, the pieces controller, the agents host, the
- * admin CLIs. The presets that run against LOCAL emulated storage have no
- * server to ask and keep reading the environment alone; the Labs development shell
- * reads its build-time defines and never fetches a posture.
- *
- * An unreachable server or a body that is not a JSON object resolves to the
- * environment alone — the caller is about to fail loudly on its real work if
- * the server is genuinely down, and failing here first would only obscure
- * that. A server that ANSWERS with a pre-flag document — a meta document
- * without an `experimental` field, or a posture record silent on
- * `readerSchemaPrecedence` or `agentBuiltin` — is different: those flags
- * adopt their legacy declared `false`
- * ({@link parseServerExperimentalOptions}). For every other flag, absence of
- * a declaration is not a declaration.
- *
- * An aborted `signal` is the one case that does NOT resolve: the caller
- * asked to stop, so this throws the abort reason rather than handing back a
- * posture nobody is going to use. That holds whether the abort arrives before
- * the call, while the request is in flight, or while its body is being read —
- * every one of those paths ends at the same throw.
- */
-export async function experimentalOptionsForDeployedClient(
-  params: DeployedClientExperimentalParams,
-): Promise<ExperimentalOptions> {
-  // Before anything else, including the opt-out below: a caller that has
-  // already stopped gets the abort, not a posture.
-  params.signal?.throwIfAborted();
-  const env = experimentalOptionsFromEnv(params.env);
-  const raw = params.env(ADOPT_SERVER_FLAGS_ENV);
-  if (
-    raw !== undefined && parseFlagValue(raw, ADOPT_SERVER_FLAGS_ENV) === false
-  ) {
-    return env;
-  }
-  const fetchImpl = params.fetch ?? globalThis.fetch;
-  let declared: unknown;
-  try {
-    // The signal rides the request, which is what makes the BODY read below
-    // cancellable too: aborting a signal passed to `fetch` terminates the
-    // ongoing fetch and errors the response's stream, so a stalled
-    // `response.json()` rejects rather than hanging, and lands in the catch.
-    const response = await fetchImpl(
-      new URL(SERVER_EXPERIMENTAL_PATH, params.apiUrl),
-      params.signal !== undefined ? { signal: params.signal } : {},
-    );
-    if (!response.ok) {
-      // Discard the body rather than leaving the connection holding an
-      // unread stream. An error page is not a posture even when it parses
-      // as one.
-      await response.body?.cancel();
-      params.signal?.throwIfAborted();
-      return env;
-    }
-    const body: unknown = await response.json();
-    params.signal?.throwIfAborted();
-    if (body === null || typeof body !== "object" || Array.isArray(body)) {
-      return env;
-    }
-    declared = (body as { experimental?: unknown }).experimental;
-  } catch {
-    // A cancelled startup is the caller's decision, not a server that failed
-    // to answer: propagate it instead of resolving a posture into a runtime
-    // construction the caller is abandoning.
-    params.signal?.throwIfAborted();
-    return env;
-  }
-  return adoptServerExperimentalOptions(
-    parseServerExperimentalOptions(declared),
-    env,
-  );
 }

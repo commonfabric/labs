@@ -542,6 +542,8 @@ describe("cloneIfNecessary()", () => {
   const DEEP_CLONE_IMPLEMENTED: ReadonlySet<string> = new Set([
     "FabricError",
     "FabricLink",
+    "ProblematicValue",
+    "UnknownValue",
   ]);
 
   const subclassCases: readonly SubclassCase[] = [

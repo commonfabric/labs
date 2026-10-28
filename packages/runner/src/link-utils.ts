@@ -10,6 +10,7 @@ import {
   deepFrozenCloneAndInternSchema,
   internSchema,
   isNontrivialSchema,
+  toDeepFrozenSchema,
 } from "@commonfabric/data-model-schema";
 import {
   containsExternalSchemaRef,
@@ -25,6 +26,7 @@ import { mapLinkSchemas } from "@commonfabric/memory/v2/schema-table-links";
 import {
   externalResolutionMissCount,
   lookupSchemaDocument,
+  noteExternalResolutionMiss,
   onSchemaRegistryClear,
   registerSchemaDocument,
 } from "./schema-registry.ts";
@@ -55,11 +57,10 @@ import {
 } from "./cfc.ts";
 import { resolveExternalCfcSchemaRefAsDocument } from "./cfc/schema-refs.ts";
 import { createRef } from "./create-ref.ts";
-import { resolveLink } from "./link-resolution.ts";
+import { pinImmutableCell } from "./immutable-cell.ts";
 import { ensureExternalSchemaClosure } from "./schema-ifc.ts";
 import {
   areNormalizedLinksSame,
-  isNormalizedFullLink,
   isNormalizedLink,
   isPrimitiveCellLink,
   NormalizedFullLink,
@@ -72,7 +73,6 @@ import {
   getCellOrThrow,
   isCellResultForDereferencing,
 } from "./query-result-proxy.ts";
-import type { Runtime } from "./runtime.ts";
 import { ignoreReadForScheduling } from "./scheduler.ts";
 import { type CellLinkRefPayload, type SigilLink } from "./sigil-types.ts";
 import {
@@ -145,7 +145,9 @@ export function parseLink(
     // it names somebody else's doc, so a later read that dead-ends at
     // that doc missing is an unresolved input, not a known absence.
     const markDerived = <L extends NormalizedLink | undefined>(link: L): L =>
-      link === undefined ? link : { ...link, viaLinkHop: true as const };
+      link === undefined
+        ? link
+        : pinImmutableCell({ ...link, viaLinkHop: true as const }, link.id);
     if (!base) {
       return markDerived(parseLinkPrimitive(value));
     } else if (isAnyCell(base)) {
@@ -174,55 +176,6 @@ export function parseLinkOrThrow(
     );
   }
   return result;
-}
-
-/**
- * Compare two link values for equality, supporting all link formats
- */
-export function areLinksSame(
-  value1: any,
-  value2: any,
-  base?: Cell | NormalizedLink,
-  resolveBeforeComparing?: boolean,
-  txForResolving?: IExtendedStorageTransaction,
-  runtime?: Runtime,
-  markIfcCrossings?: boolean,
-): boolean {
-  if (value1 === undefined && value2 === undefined) return false;
-
-  // If both are the same object, they're equal
-  if (value1 === value2) return true;
-
-  // If either is null/undefined, they're only equal if both are
-  if (!value1 || !value2) return value1 === value2;
-
-  // Try parsing both as links
-  let link1 = parseLink(value1, base);
-  let link2 = parseLink(value2, base);
-
-  // If one parses and the other doesn't, they're not equal
-  if (!link1 || !link2) return false;
-
-  if (resolveBeforeComparing) {
-    const tx = txForResolving;
-    if (!tx) throw new Error("Provide tx to resolve before comparing");
-    if (!runtime) {
-      throw new Error("Provide runtime to resolve before comparing");
-    }
-    // Content-reading callers (a candidate comparison reads through the
-    // links it resolves) opt into the ifc crossing seam; identity-only
-    // callers leave it off.
-    const options = markIfcCrossings ? { markIfcCrossings: true } : {};
-    link1 = isNormalizedFullLink(link1)
-      ? resolveLink(runtime, tx, link1, "value", options)
-      : link1;
-    link2 = isNormalizedFullLink(link2)
-      ? resolveLink(runtime, tx, link2, "value", options)
-      : link2;
-  }
-
-  // Compare normalized links
-  return areNormalizedLinksSame(link1, link2);
 }
 
 export function areMaybeLinkAndNormalizedLinkSame(
@@ -284,7 +237,10 @@ export function externalizeSchema(schema: JSONSchemaObj): JSONSchema {
 /**
  * The self-contained schema a link carries across a space boundary. Its
  * external documents are loaded from the space holding the declaration;
- * the target space need not hold them. An incomplete declaration selects
+ * the target space need not hold them. A declaration inside an immutable
+ * document, which no space stores, is held by the space in the address
+ * naming that document, or by the registry alone for a document minted
+ * from a value no space has stored. An incomplete declaration selects
  * nothing until its missing documents arrive. A declaration rejected by the
  * decomposer logs a warning and selects nothing.
  */
@@ -316,13 +272,22 @@ export function schemaForSpaceCrossing(
   }
 }
 
+// The inline form each external reference recomposed to, by reference.
+// Recomposition builds a fresh closure every time; a reference names one
+// content, so the form it recomposed to in this registry epoch is the form
+// it has.
+let inlinedSchemaByRef = new Map<string, FabricValue>();
+onSchemaRegistryClear(() => {
+  inlinedSchemaByRef = new Map();
+});
+
 /**
  * Rewrites reference-form link schemas inside `value` back to their inline
- * (recomposed) form. A `data:` document is self-contained by construction —
- * the value lives in the id and no write ever installs anything alongside
- * it — so a link serialized into one carries its schema inline, exactly as
- * with the flag off. A reference whose closure the registry cannot supply
- * stays a reference; the traversal's loader gates that read either way.
+ * (recomposed) form, for a value whose reader has no registry to resolve a
+ * reference in: one encoded into a portable `data:` identifier, one about
+ * to cross the runtime boundary, and the content identity two immutable
+ * documents are compared by. A reference whose closure the registry cannot
+ * supply stays a reference.
  */
 export function inlineExternalSchemaRefsInValue<T extends FabricValue>(
   value: T,
@@ -331,16 +296,82 @@ export function inlineExternalSchemaRefsInValue<T extends FabricValue>(
     if (!isObjectNotArray(schema)) return schema;
     const ref = schema.$ref;
     if (typeof ref !== "string" || !isExternalSchemaRef(ref)) return schema;
+    const inlined = inlinedSchemaByRef.get(ref);
+    if (inlined !== undefined) return inlined;
     try {
       // Recomposition never mints an empty `$defs` (a closure of one
       // document returns the body alone), so the result rides as it is. A
       // schema document is plain JSON, hence a FabricValue.
-      return internSchema(
+      const recomposed = internSchema(
         recomposeSchema(ref, lookupSchemaDocument),
       ) as FabricValue;
+      inlinedSchemaByRef.set(ref, recomposed);
+      return recomposed;
     } catch {
+      noteExternalResolutionMiss();
       return schema;
     }
+  }) as T;
+}
+
+const wireEncoder = new TextEncoder();
+
+/**
+ * The bytes `value` takes on the wire, where frames are UTF-8 JSON;
+ * `undefined` for a value JSON cannot serialize, a cyclic one among them.
+ */
+function wireByteLength(value: unknown): number | undefined {
+  try {
+    return wireEncoder.encode(JSON.stringify(value)).byteLength;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Rewrites inline link schemas inside `value` to their reference form, the
+ * form a link created by `createSigilLinkFromParsedLink()` carries with the
+ * flag on, registering each closure in the realm registry as that does. A
+ * value a pattern built by hand carries its link schemas inline, and written
+ * as it stands into an ordinary document it would store, and send, every
+ * closure in full for every link. A reference already stamped, a trivial
+ * schema, a schema decomposition refuses, and a schema that takes no more
+ * wire bytes than the reference that would replace it (a bare handle stamp
+ * such as `{ asCell: ["stream"] }`, which readers combine structurally) ride
+ * through unchanged. A cyclic schema has no inline wire form, so its
+ * reference always replaces it. The value is rebuilt only along the paths
+ * that change, so a value carrying nothing to rewrite is returned as it is.
+ */
+export function externalizeLinkSchemasInValue<T extends FabricValue>(
+  value: T,
+): T {
+  return mapLinkSchemas(value, (schema) => {
+    if (!isObjectNotArray(schema) || !isNontrivialSchema(schema)) {
+      return schema;
+    }
+    if (typeof schema.$ref === "string" && isExternalSchemaRef(schema.$ref)) {
+      return schema;
+    }
+    const externalized = externalizeLinkSchema(
+      schema as JSONSchema,
+      KeepAsCell.All,
+    );
+    if (
+      !isObjectNotArray(externalized) ||
+      typeof externalized.$ref !== "string" ||
+      !isExternalSchemaRef(externalized.$ref)
+    ) {
+      return schema;
+    }
+    const inlineBytes = wireByteLength(schema);
+    const referenceBytes = wireByteLength(externalized);
+    if (
+      inlineBytes !== undefined && referenceBytes !== undefined &&
+      inlineBytes <= referenceBytes
+    ) {
+      return schema;
+    }
+    return externalized as FabricValue;
   }) as T;
 }
 
@@ -351,7 +382,6 @@ export function createSigilLinkFromParsedLink(
   link: NormalizedLink,
   options: {
     base?: Cell<any> | NormalizedFullLink;
-    baseSpace?: MemorySpace;
     includeSchema?: boolean;
     overwrite?: "redirect" | "this"; // default is "this"
     // Which asCell entries to preserve in the included schema. When omitted,
@@ -383,9 +413,7 @@ export function createSigilLinkFromParsedLink(
     }
   } else {
     reference.id = link.id;
-
-    // Handle baseSpace option - only include space if different from baseSpace
-    if (link.space !== options.baseSpace) reference.space = link.space;
+    if (link.space) reference.space = link.space;
     if (link.scope) reference.scope = link.scope;
   }
 
@@ -410,7 +438,10 @@ export function createSigilLinkFromParsedLink(
     reference.overwrite = "redirect";
   }
 
-  return linkRefFrom<CellLinkRefPayload>(reference);
+  return pinImmutableCell(
+    linkRefFrom<CellLinkRefPayload>(reference),
+    link.id,
+  );
 }
 
 /**
@@ -517,7 +548,7 @@ export function sanitizeSchemaForLinks(
   schema: JSONSchema | undefined,
   keepAsCell: KeepAsCell = KeepAsCell.None,
 ): JSONSchema | undefined {
-  return sanitizeSchemaForLinksInternal(schema, keepAsCell, false);
+  return sanitizeSchemaForLinksInternal(schema, keepAsCell, "mutable");
 }
 
 /**
@@ -537,13 +568,59 @@ export function sanitizeAndInternSchemaForLinks(
   schema: JSONSchema | undefined,
   keepAsCell: KeepAsCell = KeepAsCell.None,
 ): JSONSchema | undefined {
-  return sanitizeSchemaForLinksInternal(schema, keepAsCell, true);
+  return sanitizeSchemaForLinksInternal(schema, keepAsCell, "canonical");
+}
+
+/**
+ * Like `sanitizeSchemaForLinks()`, except that the result is deep-frozen. Its
+ * root is still an object of its own, and `schema` is left as it was: a part
+ * of a mutable `schema` nested too deep for the strip to rebuild is copied
+ * into the result, where `sanitizeSchemaForLinks()` carries it by reference.
+ */
+export function sanitizeAndFreezeSchemaForLinks(
+  schema: JSONSchema,
+  keepAsCell?: KeepAsCell,
+): JSONSchema;
+export function sanitizeAndFreezeSchemaForLinks(
+  schema: JSONSchema | undefined,
+  keepAsCell?: KeepAsCell,
+): JSONSchema | undefined;
+export function sanitizeAndFreezeSchemaForLinks(
+  schema: JSONSchema | undefined,
+  keepAsCell: KeepAsCell = KeepAsCell.None,
+): JSONSchema | undefined {
+  return sanitizeSchemaForLinksInternal(schema, keepAsCell, "frozen");
+}
+
+/**
+ * The form `sanitizeSchemaForLinksInternal()` returns a strip in: a schema
+ * the caller may change, a deep-frozen schema with a root of its own, or the
+ * canonical interned instance.
+ */
+type SanitizedForm = "mutable" | "frozen" | "canonical";
+
+/**
+ * Helper for `sanitizeSchemaForLinksInternal()`, which returns the memoized
+ * deep-frozen strip `strip` in the form `form`.
+ */
+function memoizedStripAs(
+  strip: JSONSchema & object,
+  form: SanitizedForm,
+): JSONSchema {
+  switch (form) {
+    case "canonical":
+      return internSchema(strip);
+    case "frozen":
+      return deepFreeze({ ...strip });
+    case "mutable":
+      return { ...strip };
+  }
 }
 
 function sanitizeSchemaForLinksInternal(
   schema: JSONSchema | undefined,
   keepAsCell: KeepAsCell,
-  canonical: boolean,
+  form: SanitizedForm,
 ): JSONSchema | undefined {
   if (schema === undefined || typeof schema === "boolean") {
     return schema;
@@ -568,12 +645,16 @@ function sanitizeSchemaForLinksInternal(
   // result. The mutable API returns a fresh shallow clone because reactive
   // callers can depend on its top-level identity. Binding callers request the
   // canonical result and can reuse both its identity and its cached hash.
+  // The frozen form is that clone, frozen: its root stays an object of its
+  // own because `createRef()` hashes an object it reaches twice in one cause
+  // as `null`, so two positions of a graph sharing one schema object would
+  // derive other ids than two positions holding equal ones.
   // A missing external document can change the result when it arrives, so
   // only complete resolutions enter the cache.
   const memoizable = isDeepFrozen(schema);
   if (memoizable) {
     const hit = _sanitizeCache.get(schema)?.get(keepAsCell);
-    if (hit !== undefined) return canonical ? internSchema(hit) : { ...hit };
+    if (hit !== undefined) return memoizedStripAs(hit, form);
   }
 
   // Collect existing $defs names to avoid collisions
@@ -595,6 +676,7 @@ function sanitizeSchemaForLinksInternal(
     defCounter: 0,
     reservedNames: existingDefNames,
     keepAsCell,
+    copyBelowDepthCap: form === "frozen",
   };
 
   const stripped = recursiveStripAsCellFromSchema(schema, context, 0);
@@ -613,7 +695,7 @@ function sanitizeSchemaForLinksInternal(
       byMode = new Map();
       _sanitizeCache.set(schema, byMode);
     }
-    // Deep-freeze the cached result: both APIs share this sub-tree across
+    // Deep-freeze the cached result: every form shares this sub-tree across
     // callers, so a consumer mutating a nested node
     // would otherwise silently poison every later same-schema build — frozen,
     // such a mutation throws loudly instead. Freezing only touches objects this
@@ -621,10 +703,22 @@ function sanitizeSchemaForLinksInternal(
     // returns sub-trees of the input, which is deep-frozen on this path.
     const frozen = deepFreeze(output) as JSONSchema & object;
     byMode.set(keepAsCell, frozen);
-    return canonical ? internSchema(frozen) : { ...frozen };
+    return memoizedStripAs(frozen, form);
   }
 
-  return canonical ? deepFrozenCloneAndInternSchema(output) : output;
+  switch (form) {
+    case "canonical":
+      return deepFrozenCloneAndInternSchema(output);
+    case "frozen":
+      // Freezing in place changes nothing the caller holds. The strip
+      // rebuilds every record and array it walks, and for this form copies
+      // what lies below its depth cap. What it carries by reference is a
+      // `FabricPrimitive`, which is frozen from its construction, or a
+      // function, which `deepFreeze()` leaves as it is.
+      return deepFreeze(output);
+    case "mutable":
+      return output;
+  }
 }
 
 /** Sanitizes and externalizes a link schema, memoizing frozen inputs. */
@@ -672,6 +766,9 @@ interface SanitizeContext {
   reservedNames: Set<string>;
   // Which asCell entries to preserve while stripping.
   keepAsCell: KeepAsCell;
+  // Whether a sub-tree below the depth cap is copied, deep-frozen, into the
+  // result. It is carried by reference otherwise.
+  copyBelowDepthCap: boolean;
 }
 
 /**
@@ -699,7 +796,9 @@ function recursiveStripAsCellFromSchema(
 
   // Prevent infinite recursion from proxy objects or very deep schemas
   // JSON Schema shouldn't need more than ~50 levels of nesting in practice
-  if (depth > 100) return schema;
+  if (depth > 100) {
+    return context.copyBelowDepthCap ? toDeepFrozenSchema(schema) : schema;
+  }
 
   // A NESTED reference-form schema stays a reference, but the strip must
   // reach THROUGH it: the referenced closure may carry `asCell`, and a
@@ -947,20 +1046,16 @@ export function getDerivedInternalCellLink(
   descriptor: DerivedInternalCellDescriptor,
 ): NormalizedFullLink {
   const resultCellLink = resultCell.getAsNormalizedFullLink();
-  const parent = resultCell.entityId ?? resultCell;
   return {
     space: resultCellLink.space,
-    // The kind's ONLY representation is the URI scheme applied here by
-    // toURI; the hash preimage is kind-free, so this mint site is the single
-    // place a computed identity is established.
+    // The runtime's `DerivedInternalCellIds` mints the hash, which is
+    // kind-free. The kind's ONLY representation is the URI scheme `toURI`
+    // applies here, so this is the single place a hash becomes the id of a
+    // computed cell.
     id: toURI(
-      createRef(
-        {},
-        {
-          parent,
-          type: "internal",
-          cause: descriptor.partialCause,
-        },
+      cellRuntime(resultCell).derivedInternalCellIds.idFor(
+        resultCell,
+        descriptor.partialCause,
       ),
       descriptor.kind,
     ),

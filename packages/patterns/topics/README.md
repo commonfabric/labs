@@ -176,40 +176,49 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
 
   Four derivations run over the whole board, and each declares only what it
   reads. `crossrefTable` takes one list of references per topic and builds the
-  mention pivot from it; `cardsByActivity` takes a single timestamp per topic
-  and orders the cards by it; `mentionableIndex` takes the three display strings
-  per topic and builds the mention universe; `namesTable` takes the namespace
-  map and builds one row per numbered member, for a caller's reverse lookup,
-  without reading through any of them. None expands a topic's prose, thread,
-  verbs, or rendered UI.
+  mention pivot from it; `cardRowsByActivity` takes the seven scalars a card
+  uses per topic (`CardSource`: the six it shows, and `createdAt` as the sort's
+  fallback for a topic that has never run), orders the topics by activity and
+  builds one row per card — the badge, title, snippet and caption as plain
+  strings, plus the topic as a reference for the Open link; `mentionableIndex`
+  takes the three display strings per topic and builds the mention universe;
+  `namesTable` takes the namespace map and builds one row per numbered member,
+  for a caller's reverse lookup, without reading through any of them. None
+  expands a topic's thread, verbs, or rendered UI. The card derivation alone
+  reads prose: the body string, whole, which it cuts to its 120-character
+  snippet — and nothing else of the topic.
 
-  A lift's parameter and its result look like one type, which seems to force a
-  choice: narrow the parameter to bound the read, and what comes out narrows
-  with it, so a card could no longer render a body snippet. It is not a real
-  choice, and it is not settled by a cast either. A generic lift states the two
-  separately — the CONSTRAINT is what the body reads, the type parameter is what
-  the caller handed in — and a reference that passes through resolves to the
-  whole topic however little the lift declared. `cardsByActivity` is written
-  that way: it reads one timestamp and gives back the topics themselves.
+  The card rows are strings, and that is deliberate: the card list is a mapped
+  sub-pattern, and every helper call or conditional in a mapped body —
+  `snippet(card.body)`, `topicAuthorLabel(card.createdBy)`, a ternary — compiles
+  to a computed cell of its own, minted per card, persisted per session and
+  watched by every reader. On a board of nine hundred topics that was six
+  computed documents a card on every load. Deriving the strings once, in the
+  board-level lift, is the same bound the mention universe takes: one derivation
+  pays the board-wide walk, once per change, in place of every card paying it on
+  every load. The card keeps only the two conditionals it cannot precompute (the
+  badge and the snippet line are present or absent).
 
   What each reader of a topic gets is then its own declared schema's business.
   The published `index` declares the six scalars a survey reads, so a survey
-  cannot expand a topic past them, while the card list's argument schema is
-  shrunk to the handful of fields its body renders. Neither widens the topic,
-  which is what leaves both free to be that narrow — and it is why every field a
-  card renders carries a default, since that schema is what a piece holding
-  older topics is updated against.
+  cannot expand a topic past them, while the card list reads the row, never the
+  topic. Neither widens the topic, which is what leaves both free to be that
+  narrow — and it is why every field `CardSource` reads but `createdAt` carries
+  a default or is optional, since that schema is what a piece holding older
+  topics is updated against (`createdAt` is required for the reason
+  `TopicSummary` gives: the Topic pattern publishes it unconditionally).
 
   The rule for new code stands regardless: prefer a scalar reduction
   (`topics.get().length`) over anything that hands the array to a helper.
-- **Row identity is a cell, not an array position.** Each row goes in a cell
-  caused by the topic it describes, and the rows array holds links to those
-  cells rather than the row values inline. The card list is a mapped
-  sub-pattern, and `map` keys its element runs by each element's normalized
-  link: a link resolves to the row's own entity and stays the same wherever the
-  row sits, while an inline value resolves to the array position. Because the
-  board sorts by activity, every append is a prepend — with inline rows, one new
-  topic re-keys every card and rebuilds its whole subtree.
+- **Row identity is a cell, not an array position.** Each card row goes in a
+  cell caused by the topic it describes (`Writable.for(topic)`, as the crossref
+  table's rows do), and the rows array holds links to those cells rather than
+  the row values inline. The card list is a mapped sub-pattern, and `map` keys
+  its element runs by each element's normalized link: a link resolves to the
+  row's own entity and stays the same wherever the row sits, while an inline
+  value resolves to the array position. Because the board sorts by activity,
+  every append is a prepend — with inline rows, one new topic re-keys every card
+  and rebuilds its whole subtree.
 - **Authoring: cf-code-editor in the Edit→Save draft flow.** The editor binds
   the session-local `bodyDraft` (never live to the shared string — whole-value
   conflict semantics hold) with `@`-mention autocomplete over `mentionable`, and
@@ -258,12 +267,30 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   itself. With prose no longer scanned there is otherwise no headless way to
   make a reference, and `kind: "topic"` links are ordinary links unless their
   URL resolves.
-- **Nothing derived is persisted.** The index and the reference graph are
-  recomputed from the board on read; no derived field is written back into a
+- **The board persists nothing derived.** The index and the reference graph are
+  recomputed from the board on read; the board writes no derived field into a
   topic, so retracting a mention simply removes the edge. A pattern that writes
   derived data into its own children can destroy real data when it runs from a
   partial-view replica, so any future persisted index needs single-writer +
   full-view preconditions first.
+- **A topic keeps two summaries of its own records.** `commentCount` and
+  `lastActivityAt` are stored on the topic, because the board's index reads them
+  without running the topic, and a topic written to by an agent is often never
+  run again. The topic's own verbs keep them, in the same write as the comment,
+  link, body or title change they summarize, so no writer running this module
+  has to run the topic afterwards for the board to be right. A writer still on
+  an older topic module does not keep them, so they are reliable once every
+  writer runs this one (`state-upgrades.md`, "Rollout and rollback"). Keeping
+  them costs concurrency on one topic: every such verb reads and writes the
+  activity time, so two writes to the same topic at once conflict on it where
+  two comment appends alone would merge, and the later one runs again against
+  the committed state (the scheduler's stale-basis retry) rather than merging. A
+  topic stored before they were kept gets them from the `activity-scalars`
+  upgrade step (`state-upgrades.md`), which computes both from the topic's own
+  records. That step runs once, so a value it computed from incomplete reads
+  would stay wrong: only the lift completes it, reaching each array and each
+  stamp through a key, which waits for an unresolved link rather than reading it
+  as absent or as its default.
 - Verified by `multi-user.test.tsx` (two isolated runtimes, one shared board).
 
 ## Headless / agent use
@@ -337,10 +364,12 @@ leaving `author` and `sentAt` alone. A reader hides a retracted record,
 `mentions` — the reference goes with the link that made it.
 
 `lastActivityAt` is the one reader that does not filter them, and that is the
-reason the design stamps rather than deletes: it is a max over what the arrays
-hold, so removing the newest comment outright would move a topic _backwards_ in
-the board's most-recent ordering. A stamped record keeps its `sentAt` in that
-max, and the retraction's own stamp moves the clock forward.
+reason the design stamps rather than deletes: it is the newest stamp across what
+the arrays hold, so removing the newest comment outright would move a topic
+_backwards_ in the board's most-recent ordering. A stamped record keeps its
+`sentAt` in that max, and the retraction's own stamp moves the clock forward.
+The verbs keep it the same way: each moves it to its own stamp only when that is
+newer.
 
 All three live on the topic's direct interface for the same reason `setTitle`
 does. `removeComment` and `editComment` name their target by reference, which is
@@ -452,3 +481,9 @@ outside the number grammar or disagreeing with the number the topic already
 stores, all surface as a failed call — a nonzero CLI exit — never as apparent
 success. The UI composer wrappers keep their silent guards: an empty draft is a
 non-event in a composer, not a headless mutation.
+
+## From the command line
+
+[`tools/`](tools/README.md) holds `deno task topics`, the team's command-line
+client for the board: it keeps a local copy of the board's documents, searches
+it, and runs the verbs above through `cf piece call`.

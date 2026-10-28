@@ -249,11 +249,16 @@ describe("topic-board-pivot-contract", () => {
   };
 
   /** The edges as they stand, with no waiting. Read only once something the
-   * same write produces has already been awaited. */
+   * same write produces has already been awaited. A path that has produced
+   * nothing yet reads as no edges: `referencedBy` is served from the
+   * board-wide pivot, and a case run on its own can read a topic before the
+   * pivot has written that path, which `PieceController.result.get()` refuses
+   * as a missing property. */
   const edgesNow = async (
     t: PieceController,
     key: "referencedBy" | "mentions",
-  ): Promise<unknown[]> => ((await t.result.get([key])) ?? []) as unknown[];
+  ): Promise<unknown[]> =>
+    ((await (await t.result.getCell()).key(key).pull()) ?? []) as unknown[];
 
   /** The titles of the topics that mention `t`, as they stand. Carries the
    * reading rule {@link edgesNow} states, since it composes it. */

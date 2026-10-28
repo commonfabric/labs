@@ -169,19 +169,15 @@ const rawStoredSourceMap = async (
 describe("compile-cache storage-served closures round-trip as values", () => {
   // A compiled closure read back from one space's storage must hand its
   // consumers plain VALUES — not live query-result views over the space it was
-  // read from. Before the fix, `loadCompiledClosure` returned `cell.get()`
-  // documents whose `sourceMap` was a query-result proxy; a runtime that
-  // storage-served a program's modules from space A and then wrote them back
-  // into space B persisted B's copy of each shared doc with `/sourceMap` as a
-  // QUOTED CROSS-SPACE LINK into A instead of the map:
-  //
-  //   - when B's copy of the doc already existed WITH its stored CFC envelope
-  //     (the server-side space-root ensure writes the default-app closure into
-  //     every served space), the link write is CFC-relevant and the write-back
-  //     ABORTS: "missing link source metadata for <doc> at /sourceMap" — the
-  //     ensure-ON pattern-shard-10 sx2-scale red;
-  //   - when B's copy did not exist yet, the corrupt link landed SILENTLY
-  //     (observed durably in ensure-OFF stores).
+  // read from. A `cell.get()` document's `sourceMap` is a query-result proxy;
+  // a runtime that storage-served a program's modules from space A and then
+  // wrote such a document back into space B would persist B's copy of each
+  // shared doc with `/sourceMap` as a QUOTED CROSS-SPACE LINK into A instead
+  // of the map. Nothing refuses that write, whether B's copy is new or
+  // already stores its CFC envelope (the server-side space-root ensure writes
+  // the default-app closure into every served space): a link write takes
+  // nothing from the document it points at. The corrupt link lands SILENTLY,
+  // so the stored value is what these cases read.
 
   let storageManager: ReturnType<typeof StorageManager.emulate>;
 
@@ -220,15 +216,10 @@ describe("compile-cache storage-served closures round-trip as values", () => {
       // per-space storage hit, so its modules are SERVED FROM A's STORAGE and
       // populate the byte cache. Compiling it into B then byte-cache-hits and
       // writes those same module objects back into B — where the shared helper
-      // doc already exists with stored CFC metadata. Before the fix the
-      // corrupt cross-space link COMMITTED even here: in this single-client
-      // emulate topology the foreign space's stored metadata is readable at
-      // prepare time, so the link write derives a label and passes. On the
-      // live client against toolshed that read resolves nothing and the same
-      // write-back ABORTS fail-closed ("missing link source metadata … at
-      // /sourceMap" — the ensure-ON pattern-shard-10 red); that abort arm is
-      // evidenced by the live gate, not by this unit test. Either disposition
-      // is the same corrupt value, which the raw-store assertions below pin.
+      // doc already exists with stored CFC metadata. A live view written
+      // back here commits as a cross-space link, in this single-client
+      // emulate topology as on a live client against toolshed, which the
+      // raw-store assertions below would show.
       await compileInto(rt2, PROGRAM_B, spaceA);
       await compileInto(rt2, PROGRAM_B, spaceB);
 

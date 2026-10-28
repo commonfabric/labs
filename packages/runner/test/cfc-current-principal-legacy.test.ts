@@ -5,6 +5,8 @@ import { cfcAtom } from "@commonfabric/api/cfc";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
 
+import { labelsReached } from "./support/reached-labels.ts";
+import type { NormalizedFullLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
@@ -86,9 +88,14 @@ const setup = async (legacy: "both" | "schema" | "label") => {
     schema,
     envelope,
     readEnvelope() {
+      return this.readEnvelopeOf(link);
+    },
+    readEnvelopeOf(target: NormalizedFullLink) {
       const tx = runtime.edit();
       try {
-        return tx.readOrThrow(link, { meta: internalVerifierRead });
+        return tx.readOrThrow(target, { meta: internalVerifierRead }) as {
+          cfc?: { labelMap: { entries: unknown[] } };
+        };
       } finally {
         tx.abort();
       }
@@ -123,7 +130,11 @@ describe("cfc-current-principal-legacy", () => {
     });
   }
 
-  it("refuses to derive a held reference from an unresolved stored creator", async () => {
+  it("binds a held reference to its writer and leaves the stored creator unresolved behind it", async () => {
+    // The link schema's placeholder is the reference's own restriction. The
+    // source stores no concrete reader it could bind to, so it binds to the
+    // writer; the source's own placeholder stays where it is, unresolved, and
+    // a read through the reference still answers to it.
     const fixture = await setup("both");
     try {
       const tx = fixture.runtime.edit();
@@ -132,11 +143,21 @@ describe("cfc-current-principal-legacy", () => {
         properties: { books: { asCell: ["readonly"] } },
       }, tx);
       copy.set({ books: fixture.source.asSchema(fixture.schema) });
-      const result = await tx.commit().settled;
-      expect(result.error?.message).toContain(
-        "Stored CurrentPrincipal confidentiality",
-      );
+      expect((await tx.commit().settled).error).toBeUndefined();
+      const copyLink = copy.getAsNormalizedFullLink();
+      const slot = fixture.readEnvelopeOf(copyLink).cfc?.labelMap.entries ??
+        [];
+      expect(slot).toEqual([{
+        path: ["books"],
+        origin: "link",
+        label: { confidentiality: [cfcAtom.user(visitor.did())] },
+      }]);
       expect(fixture.readEnvelope()).toEqual(fixture.envelope);
+      expect(
+        labelsReached(fixture.runtime, copyLink, ["books"]).confidentiality,
+      )
+        .toContainEqual(placeholder);
+      expect(() => fixture.source.get()).toThrow(/read ceiling/);
     } finally {
       await fixture.dispose();
     }

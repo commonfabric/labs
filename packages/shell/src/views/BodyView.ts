@@ -177,6 +177,14 @@ export class XBodyView extends BaseView {
   @property({ attribute: false })
   accessor spaceName: string | undefined = undefined;
 
+  /**
+   * Whether the space home was opened and the space has no root to show, which
+   * is the case for a space whose owner has not yet set it up, when someone
+   * else opens it.
+   */
+  @property({ type: Boolean })
+  accessor spaceHasNoRoot = false;
+
   @property({ type: Boolean })
   accessor embedded = false;
 
@@ -266,7 +274,29 @@ export class XBodyView extends BaseView {
     `;
   }
 
+  /**
+   * What stands where a space's root would be when the space has none: a
+   * statement saying so. Only an owner of the space creates its root, by
+   * opening the space or by putting a piece in it.
+   */
+  #renderSpaceHasNoRoot() {
+    return html`
+      <div slot="main" class="load-error">
+        <cf-alert status="info">
+          <h2 slot="title">Nothing is in this space yet</h2>
+          <span slot="description">
+            This space has no content until its owner sets it up.
+          </span>
+        </cf-alert>
+      </div>
+    `;
+  }
+
   override render() {
+    // The shell opened the active piece itself (`getPattern`,
+    // `getSpaceRootPattern`), so its render need not; a view at a path inside
+    // it may lead to another piece, which the render opens.
+    const hostOpened = this.activeCell?.ref().path.length === 0;
     const mainContent = this.loadError?.kind === "space" &&
         isSpaceNotFound(this.loadError.error)
       ? this.#renderSpaceNotFound()
@@ -298,9 +328,14 @@ export class XBodyView extends BaseView {
       : this.activePattern
       ? html`
         <cf-piece slot="main" .pieceId="${this.activePattern.id()}">
-          <cf-render .cell="${this.activeCell}"></cf-render>
+          <cf-render
+            .cell="${this.activeCell}"
+            .hostOpened="${hostOpened}"
+          ></cf-render>
         </cf-piece>
       `
+      : this.spaceHasNoRoot
+      ? this.#renderSpaceHasNoRoot()
       : null;
 
     const sidebar = this.embedded

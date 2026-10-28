@@ -14,7 +14,7 @@
 //   work per step, 1.2 s total) under a 100-ms deadline commits its first
 //   (exhausted) wave within ~one step of the deadline, not after the whole
 //   walk. Mutation (the yield removed from settle.ts) → the first commit
-//   lands only after the full 1.2 s → RED.
+//   carries the whole walk → RED.
 // - (ii) MID-WAVE RENEW: a 45-step (1.8-s) walk with a 900-ms lease TTL,
 //   the renew TIMER inert (600 s) and a 5-s deadline — the wave outlives
 //   the TTL twice over and still COMMITS under a live lease, because the
@@ -198,19 +198,23 @@ describe("stage C tuning T3: cooperative yield + mid-wave renew", () => {
     const before = host.stats();
     const seqBefore = Engine.serverSeq(engine);
 
-    const t0 = performance.now();
     const outIds = registerWalk();
-    // The wave commit reports itself to the server's admission hook the
-    // moment the engine applies it, so the elapsed time measured here is
-    // the commit's own latency with no poll interval quantizing it.
-    await awaitAdmitted(server, () => Engine.serverSeq(engine) > seqBefore);
-    const firstCommitAfterMs = performance.now() - t0;
-    // The whole walk is WALK_STEPS × STEP_MS = 1 200 ms of synchronous
-    // runs; pre-fix the deadline could only fire after the last one. With
-    // the yield the first (exhausted) commit lands at ~deadline + one
-    // step + a slice. Generous bound for a loaded box, still far below the
-    // walk's length.
-    expect(firstCommitAfterMs).toBeLessThan(WALK_STEPS * STEP_MS / 2);
+    // The predicate runs on each commit's admission, before a later wave
+    // can commit, so the steps counted here are the ones the first commit
+    // carried.
+    let stepsInFirstCommit = -1;
+    await awaitAdmitted(server, () => {
+      if (Engine.serverSeq(engine) === seqBefore) return false;
+      stepsInFirstCommit = storedOutCount(engine, outIds);
+      return true;
+    });
+    // Without the yield the deadline can only fire after the walk's last
+    // step. With it the first (exhausted) commit lands about one step past
+    // the deadline, a few steps into the walk. Each step burns STEP_MS of
+    // wall-clock time, so a process descheduled mid-walk lets fewer steps
+    // run before the deadline, never more.
+    expect(stepsInFirstCommit).toBeGreaterThan(0);
+    expect(stepsInFirstCommit).toBeLessThan(WALK_STEPS / 2);
     // The walk still completes in full: every step's write lands, and W
     // eventually covers everything (the last cycle settles un-exhausted).
     await awaitAdmitted(
@@ -287,46 +291,25 @@ describe("stage C tuning T3: cooperative yield + mid-wave renew", () => {
     }
   });
 
-  it("CooperativeYield unit: yields only once the slice is spent, reports every yield to the observer FIRST, and lets a due timer fire between slices", async () => {
+  it("CooperativeYield unit: lets a timer that fell due mid-slice fire within two yields", async () => {
+    // The slice accounting is covered on the fake clock in
+    // `scheduler/CooperativeYield.test.ts`. This case needs Deno's own
+    // timer queue, which the fake clock replaces. That queue runs timers
+    // one list per delay, earliest list first, so a zero-delay timer left
+    // pending by other work can carry the first yield's turn ahead of the
+    // due timer; the second yield's turn cannot pass it.
+
     const yielder = new CooperativeYield(20);
-    let observed = 0;
-    let observedBeforeTurn = 0;
-    yielder.onYield = () => {
-      observed += 1;
-    };
-    // Fresh slice: no yield.
-    expect(yielder.maybeYield()).toBeUndefined();
+    let firedDuringYield = -1;
+    setTimeout(() => {
+      firedDuringYield = yielder.yieldCount;
+    }, 10);
+    // Work outlasts both the timer's delay and the slice.
     burn(25);
-    // Spent slice: a yield, observer called synchronously before the turn.
     const turn = yielder.maybeYield();
     expect(turn).toBeDefined();
-    observedBeforeTurn = observed;
-    expect(observedBeforeTurn).toBe(1);
     await turn;
-    expect(yielder.yieldCount).toBe(1);
-    // Right after a turn the slice is fresh again.
-    expect(yielder.maybeYield()).toBeUndefined();
-    // A due timer fires between slices of continuous work.
-    let firedAt = -1;
-    const start = performance.now();
-    setTimeout(() => {
-      firedAt = performance.now() - start;
-    }, 10);
-    for (let i = 0; i < 20 && firedAt < 0; i++) {
-      burn(5);
-      const t = yielder.maybeYield();
-      if (t !== undefined) await t;
-    }
-    expect(firedAt).toBeGreaterThanOrEqual(0);
-    // Fired before the loop's own work ended: without the yields the
-    // 20 × 5-ms burns run to completion (~100 ms) before any timer can
-    // fire; with them the due timer lands within a slice or two.
-    expect(firedAt).toBeLessThan(90);
-    // An observer throw is contained.
-    yielder.onYield = () => {
-      throw new Error("boom");
-    };
     await yielder.yieldNow();
-    expect(yielder.yieldCount).toBeGreaterThanOrEqual(3);
+    expect([1, 2]).toContain(firedDuringYield);
   });
 });

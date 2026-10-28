@@ -278,3 +278,27 @@ export const cfcLabelViewForDereferenceTraces = (
       cfcLabelViewForDereference(tx, trace.source, trace.target)
     ),
   );
+
+/**
+ * The restriction a handle acquires by being resolved through `traces`: the
+ * reference restrictions of every slot the resolution left (CFC §8.2.3), and
+ * nothing of what the slots reach. A handle is a reference; the labels of
+ * the document it names are read from that document whenever the handle is
+ * followed, so a handle carries only how it was obtained, and a link written
+ * from it persists that and no copy of its target's labels (§8.2.5).
+ */
+export const cfcAcquisitionViewForDereferenceTraces = (
+  tx: IExtendedStorageTransaction,
+  traces: readonly CfcDereferenceTrace[],
+): CfcLabelView | undefined =>
+  mergeCfcLabelViews(
+    traces.map((trace) => {
+      // The target's labels are read and left out of the view. The read is
+      // what a subscription depends on: a label-only write to a document the
+      // resolution followed into re-fires a sink that followed it, and the
+      // labels themselves are read again, where they are, by whatever
+      // consumes them.
+      cfcLabelViewForAddress(tx, trace.target);
+      return referenceRestrictionsOf(cfcLabelViewForAddress(tx, trace.source));
+    }),
+  );

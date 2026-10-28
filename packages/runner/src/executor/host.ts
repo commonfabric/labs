@@ -23,10 +23,7 @@
 // spaces activate on their first session, event, warm request, or
 // session-implying authored admission.
 
-import {
-  type AdmittedCommitNotice,
-  type Server as MemoryServer,
-} from "@commonfabric/memory/v2/server";
+import type { AdmittedCommitNotice } from "@commonfabric/memory/v2/server";
 import { acquireServerExecutionEnabler } from "@commonfabric/memory/v2";
 import {
   type Engine,
@@ -36,10 +33,12 @@ import {
 import { getLogger } from "@commonfabric/utils/logger";
 import type { Runtime } from "../runtime.ts";
 import type { MemorySpace } from "../storage/interface.ts";
+import type { HostMemoryServer } from "./host-memory-server.ts";
 import {
   type ParkedRuntimeHandle,
   ParkedServingRuntime,
 } from "./parked-runtime.ts";
+import { runInServingContext } from "./serving-context.ts";
 import {
   awaitDisposeTimeboxed,
   LIFECYCLE_VERB_SPACE_PARKED,
@@ -57,6 +56,10 @@ import {
 } from "./stats.ts";
 
 export type { LifecycleVerb } from "./space-server.ts";
+export type {
+  LifecyclePhaseTiming,
+  LifecycleVerbRun,
+} from "./lifecycle-verb.ts";
 
 /**
  * Thrown by {@link ExecutorHost.runLifecycleVerb} when this process cannot
@@ -92,7 +95,13 @@ const DEFAULT_FAILURE_PARK_BACKOFF_MAX_MS = 30_000;
 const DEFAULT_PARKED_RUNTIME_RETENTION_MS = 10 * 60_000;
 const DEFAULT_MAX_PARKED_RUNTIMES = 8;
 
-const failureParkBackoffDelayMs = (
+/**
+ * How long the host waits before rebuilding a space after its `streak`th
+ * consecutive failure: `failureParkBackoffBaseMs` doubled per failure, up to
+ * `failureParkBackoffMaxMs`, both from `policy` or the defaults above. The
+ * serving worker's launcher paces a worker's restarts by the same shape.
+ */
+export const failureParkBackoffDelayMs = (
   streak: number,
   policy: SpaceServerPolicy | undefined,
 ): number => {
@@ -104,7 +113,7 @@ const failureParkBackoffDelayMs = (
 };
 
 export type ExecutorHostOptions = {
-  server: MemoryServer;
+  server: HostMemoryServer;
 
   /** The service identity (DID) DR1 holders are minted from — also the
    * loopback sessions' principal (the read-row admission matches it,
@@ -137,6 +146,10 @@ export type ExecutorHostOptions = {
 
   /** Forwarded internal deterministic-verification seam. */
   decorateWaveCommitSink?: SpaceServerOptions["decorateWaveCommitSink"];
+
+  /** Forwarded to every SpaceServer this host builds; see
+   * `SpaceServerOptions.createWaveCommitSink`. */
+  createWaveCommitSink?: SpaceServerOptions["createWaveCommitSink"];
 
   /** DIAGNOSTIC (tests): forwarded to every SpaceServer this host
    * builds, with the space it serves — see `SpaceServerOptions`. */
@@ -245,9 +258,15 @@ export class ExecutorHost {
     // count lives beside the flag), so neither owner's teardown can
     // un-claim `derived` while the other still serves.
     this.#releaseServerExecution = acquireServerExecutionEnabler();
+    // The memory server calls these from whichever session's request it is
+    // handling, so the two that start work enter the serving context: what
+    // the host starts from here is the serving loop's work. A demand change
+    // only wakes a loop already running in it.
     options.server.setServerExecutionObserver({
-      commitAdmitted: (notice) => this.#onCommitAdmitted(notice),
-      sessionOpened: (space) => this.#onSessionOpened(space),
+      commitAdmitted: (notice) =>
+        runInServingContext(true, () => this.#onCommitAdmitted(notice)),
+      sessionOpened: (space) =>
+        runInServingContext(true, () => this.#onSessionOpened(space)),
       // Fan-out stage B: a watch-set change on an ACTIVE space wakes its
       // demand pass (the arrival re-arm's trigger); an inactive space
       // waits for the session-open / admission activation triggers.
@@ -342,7 +361,18 @@ export class ExecutorHost {
    * Throws {@link SpaceNotServedError} when this process cannot serve the
    * space — the host is closed, or another process holds the space's lease.
    */
-  async runLifecycleVerb<T>(
+  runLifecycleVerb<T>(
+    space: MemorySpace,
+    verb: LifecycleVerb<T>,
+  ): Promise<T> {
+    return runInServingContext(
+      true,
+      () => this.#runLifecycleVerbInner(space, verb),
+    );
+  }
+
+  /** Helper for `runLifecycleVerb()`, which does all its work. */
+  async #runLifecycleVerbInner<T>(
     space: MemorySpace,
     verb: LifecycleVerb<T>,
   ): Promise<T> {
@@ -622,6 +652,9 @@ export class ExecutorHost {
             decorateWaveCommitSink: this.#options.decorateWaveCommitSink,
           }
           : {}),
+        ...(this.#options.createWaveCommitSink !== undefined
+          ? { createWaveCommitSink: this.#options.createWaveCommitSink }
+          : {}),
         onParked: (reason) => {
           parked = true;
           try {
@@ -894,7 +927,12 @@ export class ExecutorHost {
    * park has finished; a park that failed is rethrown then, several as an
    * `AggregateError`.
    */
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    return runInServingContext(true, () => this.#closeInner());
+  }
+
+  /** Helper for `close()`, which does all its work. */
+  async #closeInner(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
     this.#options.server.setServerExecutionObserver(undefined);

@@ -19,7 +19,7 @@ import {
   isValueComputationExpressionKind,
   unwrapExpression,
 } from "../utils/expression.ts";
-import { getKnownComputedKeyExpression } from "../utils/reactive-keys.ts";
+import { hasStaticKeyType } from "../utils/reactive-keys.ts";
 import { getCallbackBoundarySemantics } from "../policy/callback-boundary.ts";
 import {
   type CallRootPolicyDecision,
@@ -173,13 +173,7 @@ function isPostClosureWrapperRewriteExpression(
   }
 
   if (ts.isElementAccessExpression(expression)) {
-    const argument = expression.argumentExpression;
-    return !!argument &&
-      (
-        ts.isLiteralExpression(argument) ||
-        ts.isNoSubstitutionTemplateLiteral(argument) ||
-        !!getKnownComputedKeyExpression(argument, context)
-      );
+    return hasStaticKeyType(expression.argumentExpression, context.checker);
   }
 
   if (ts.isPrefixUnaryExpression(expression)) {
@@ -838,16 +832,7 @@ function isOwnedDynamicElementAccessRoot(
     return false;
   }
 
-  const argument = current.argumentExpression;
-  if (!argument) {
-    return false;
-  }
-
-  if (
-    ts.isLiteralExpression(argument) ||
-    ts.isNoSubstitutionTemplateLiteral(argument) ||
-    getKnownComputedKeyExpression(argument, context)
-  ) {
+  if (hasStaticKeyType(current.argumentExpression, context.checker)) {
     return false;
   }
 

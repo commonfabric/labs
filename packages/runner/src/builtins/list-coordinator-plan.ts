@@ -1,19 +1,38 @@
 import type { JSONSchema, Pattern } from "../builder/types.ts";
 import type { Cell } from "../cell.ts";
-import { resolveLink } from "../link-resolution.ts";
+import { resolveLink, unlessCyclic } from "../link-resolution.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { Runtime } from "../runtime.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { listElementKeys } from "./list-element-keys.ts";
-import { listElementLink } from "./list-element-link.ts";
+import { listElementLink, listSlotPlace } from "./list-element-link.ts";
 import { inferListOpArgumentUsage } from "./list-op-argument-usage.ts";
 import { listResultSchema } from "./list-result-schema.ts";
 import { resolveOpPattern } from "./op-pattern-ref.ts";
-import { ownedCell } from "./runtime-owned-store.ts";
+import { ownedCell, ownedStoreLinks } from "./runtime-owned-store.ts";
 import { narrowestCellScope, outputSpotFromBinding } from "./scope-policy.ts";
 
 /** The three list coordinators, by the builtin ref name each registers. */
 export type ListOp = "map" | "filter" | "flatMap";
+
+/**
+ * The result container an `op` node's plan mints, named when the node is set
+ * up so that its action declares it. A node with no output spot has none: its
+ * plan refuses to run.
+ */
+export function listContainerStoreWrites(
+  runtime: Runtime,
+  op: ListOp,
+  parentCell: Cell<any>,
+  outputBinding: NormalizedFullLink | undefined,
+): NormalizedFullLink[] {
+  const outputSpot = outputSpotFromBinding(outputBinding);
+  return outputSpot
+    ? ownedStoreLinks(runtime, parentCell, [
+      listContainerCause(op, parentCell, outputSpot),
+    ])
+    : [];
+}
 
 /**
  * Everything a list coordinator derives before it touches an element: the
@@ -124,7 +143,7 @@ export function listCoordinatorPlan(
     runtime,
     tx,
     parentCell,
-    { [op]: parentCell.entityId, outputSpot },
+    listContainerCause(op, parentCell, outputSpot),
     resultSchema,
     scope,
   );
@@ -152,7 +171,8 @@ export function listCoordinatorPlan(
  * key derived from a cold chase names a child the warm coordinator never
  * mints. The pre-sync therefore pulls what each round of this resolution
  * ends on, until a round ends where the last one did, before deriving a
- * plan. `slots` is empty when the list is not an array.
+ * plan. A slot whose links run in a cycle names no value and resolves to its
+ * own place in the list. `slots` is empty when the list is not an array.
  */
 export function listSlotResolutions(
   runtime: Runtime,
@@ -167,9 +187,14 @@ export function listSlotResolutions(
   const listCell = inputsCell.key(listKey).withTx(tx).resolveAsCell();
   const rawList = listCell.withTx(tx).getRaw() as unknown;
   const listBase = listCell.getAsNormalizedFullLink();
+  // An element whose links run in a cycle, back to a place they passed or
+  // into their own subpath, names no value, so its slot is its place in the
+  // list rather than a failure of the whole list.
   const slots = Array.isArray(rawList)
     ? rawList.map((slot, i) =>
-      resolveLink(runtime, tx, listElementLink(listBase, slot, i), "value")
+      unlessCyclic(() =>
+        resolveLink(runtime, tx, listElementLink(listBase, slot, i), "value")
+      ) ?? listSlotPlace(listBase, i)
     )
     : [];
   return { listCell, rawList, slots };
@@ -196,4 +221,13 @@ export function listElementResultCell(
     tx,
     container.getAsNormalizedFullLink().scope,
   );
+}
+
+/** The cause a list coordinator's result container is minted under. */
+function listContainerCause(
+  op: ListOp,
+  parentCell: Cell<any>,
+  outputSpot: NonNullable<ReturnType<typeof outputSpotFromBinding>>,
+): unknown {
+  return { [op]: parentCell.entityId, outputSpot };
 }

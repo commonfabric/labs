@@ -125,6 +125,13 @@ export const NamedThroughAlias = pattern<In, NamedOut>((input) => {
   return { [NAME]: input.title, title: input.title, myName: me[NAME] };
 });
 
+/** Reads `[NAME]` straight through `input[SELF]`. */
+export const NamedThroughSelf = pattern<In, NamedOut>((input) => ({
+  [NAME]: input.title,
+  title: input.title,
+  myName: input[SELF][NAME],
+}));
+
 /** A child that republishes the title of the `room` it is handed. */
 export const Child = pattern<
   { room: { title: string } },

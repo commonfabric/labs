@@ -5,7 +5,7 @@ import {
   buildObjectBody,
   ciObjectName,
   datePartition,
-  isMainPush,
+  isMainRun,
   localObjectName,
   objectNameSlug,
   parseContextLine,
@@ -13,6 +13,7 @@ import {
   type RunContext,
   serializeContextLine,
   serializeRecordLine,
+  shippedArtifact,
   testIdentityKey,
   testIdentityOfKey,
   type TestRecord,
@@ -103,6 +104,60 @@ describe("schema", () => {
         test: { ...RECORD.test, v: "" },
       });
       expect(parseRecordLine(line)).toBeUndefined();
+    });
+
+    describe("for a record naming a file", () => {
+      const pattern = (n: string): string =>
+        JSON.stringify({ ...RECORD, test: { k: "pattern", s: "patterns", n } });
+      const filed = (file: string): string =>
+        JSON.stringify({ ...RECORD, file });
+
+      it("keeps a pattern test named by a path inside the repository", () => {
+        expect(parseRecordLine(pattern("packages/patterns/a.test.tsx"))?.test.n)
+          .toBe("packages/patterns/a.test.tsx");
+      });
+
+      it("returns undefined for a pattern test named by a path that climbs out", () => {
+        expect(
+          parseRecordLine(pattern("../../tmp/root_1/pkg/main.test.tsx")),
+        ).toBeUndefined();
+        expect(parseRecordLine(pattern("packages/../../a.test.tsx")))
+          .toBeUndefined();
+      });
+
+      it("returns undefined for a pattern test named by an absolute path", () => {
+        expect(parseRecordLine(pattern("/tmp/root_1/main.test.tsx")))
+          .toBeUndefined();
+        expect(parseRecordLine(pattern("C:/tmp/root_1/main.test.tsx")))
+          .toBeUndefined();
+        expect(parseRecordLine(pattern("C:\\tmp\\root_1\\main.test.tsx")))
+          .toBeUndefined();
+      });
+
+      it("returns undefined for a pattern test named with backslashes", () => {
+        expect(parseRecordLine(pattern("..\\tmp\\main.test.tsx")))
+          .toBeUndefined();
+      });
+
+      it("keeps a unit test whose name reads like an absolute path", () => {
+        const line = JSON.stringify({
+          ...RECORD,
+          test: { k: "unit", s: "dashboard", n: "/bench renders" },
+        });
+        expect(parseRecordLine(line)?.test.n).toBe("/bench renders");
+      });
+
+      it("returns undefined for a file outside the repository", () => {
+        expect(parseRecordLine(filed("../fixture/add.test.ts")))
+          .toBeUndefined();
+        expect(parseRecordLine(filed("/tmp/fixture/add.test.ts")))
+          .toBeUndefined();
+      });
+
+      it("keeps a file whose name merely starts with two dots", () => {
+        expect(parseRecordLine(filed("packages/x/..hidden.test.ts"))?.file)
+          .toBe("packages/x/..hidden.test.ts");
+      });
     });
   });
 
@@ -248,7 +303,7 @@ describe("schema", () => {
     });
   });
 
-  describe("isMainPush()", () => {
+  describe("isMainRun()", () => {
     const ci = {
       workflowRunId: "1",
       runAttempt: 1,
@@ -260,17 +315,28 @@ describe("schema", () => {
     const pushed: RunContext = { ...CONTEXT, env: "ci", ci };
 
     it("returns true for a push to main the fork flag does not mark", () => {
-      expect(isMainPush(pushed)).toBe(true);
+      expect(isMainRun(pushed)).toBe(true);
       const { fork: _, ...unmarked } = ci;
-      expect(isMainPush({ ...pushed, ci: unmarked })).toBe(true);
+      expect(isMainRun({ ...pushed, ci: unmarked })).toBe(true);
+    });
+
+    it("returns true for a scheduled or dispatched run of main", () => {
+      for (const event of ["schedule", "workflow_dispatch"]) {
+        expect(isMainRun({ ...pushed, ci: { ...ci, event } })).toBe(true);
+      }
     });
 
     it("returns false for any other run", () => {
-      expect(isMainPush({ ...pushed, ci: { ...ci, fork: true } })).toBe(false);
-      expect(isMainPush({ ...pushed, ci: { ...ci, event: "pull_request" } }))
+      expect(isMainRun({ ...pushed, ci: { ...ci, fork: true } })).toBe(false);
+      expect(
+        isMainRun({ ...pushed, ci: { ...ci, event: "schedule", fork: true } }),
+      ).toBe(false);
+      expect(isMainRun({ ...pushed, ci: { ...ci, event: "pull_request" } }))
         .toBe(false);
-      expect(isMainPush({ ...pushed, branch: "topic" })).toBe(false);
-      expect(isMainPush(CONTEXT)).toBe(false);
+      const { event: _, ...eventless } = ci;
+      expect(isMainRun({ ...pushed, ci: eventless })).toBe(false);
+      expect(isMainRun({ ...pushed, branch: "topic" })).toBe(false);
+      expect(isMainRun(CONTEXT)).toBe(false);
     });
   });
 
@@ -320,6 +386,33 @@ describe("schema", () => {
         workflowRunId: "456",
         artifactName: "test-records-test-3-a2",
       })).toBe("v1/2026/08/17/run-456-test-records-test-3-a2.ndjson");
+    });
+  });
+
+  describe("shippedArtifact()", () => {
+    it("returns the suffix a job named its artifact for, and its attempt", () => {
+      expect(shippedArtifact("test-records-tests-11-a2")).toEqual({
+        artifact: "tests-11",
+        attempt: 2,
+      });
+      expect(shippedArtifact("test-records-coverage-a12")).toEqual({
+        artifact: "coverage",
+        attempt: 12,
+      });
+    });
+
+    it("returns `undefined` for a name the shipping action does not give", () => {
+      for (
+        const name of [
+          "test-records-tests-11",
+          "test-records-tests-11-a",
+          "test-records--a1",
+          "lane-coverage-tests-11-a1",
+          "tests-11-a1",
+        ]
+      ) {
+        expect(shippedArtifact(name)).toBeUndefined();
+      }
     });
   });
 });

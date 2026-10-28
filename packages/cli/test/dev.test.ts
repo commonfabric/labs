@@ -2,7 +2,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
-import { bytesToLines, cf, checkStderr, stripAnsi } from "./utils.ts";
+import { argv, bytesToLines, cf, checkStderr, stripAnsi } from "./utils.ts";
 import { serializeMainExport } from "../lib/dev.ts";
 
 const cliPackageDir = join(import.meta.dirname!, "..");
@@ -56,7 +56,7 @@ describe("cli check", () => {
 
   it("Executes a package", async () => {
     const { code, stdout, stderr } = await cf(
-      "check fixtures/pow-5.tsx --pattern-json",
+      argv`check fixtures/pow-5.tsx --pattern-json`,
     );
     checkStderr(stderr);
     expect(stdout[stdout.length - 1]).toBe("25");
@@ -65,7 +65,7 @@ describe("cli check", () => {
 
   it("Runs a pattern with commonfabric+3P modules", async () => {
     const { code, stdout, stderr } = await cf(
-      "check fixtures/3p-modules.tsx --pattern-json",
+      argv`check fixtures/3p-modules.tsx --pattern-json`,
     );
     checkStderr(stderr);
     expect(JSON.parse(stdout.join("\n")).argumentSchema).toBeTruthy();
@@ -75,7 +75,7 @@ describe("cli check", () => {
   it("Generates output file with the compiled module bodies", async () => {
     const temp = await Deno.makeTempFile();
     const { code, stdout, stderr } = await cf(
-      `check fixtures/pattern.tsx --no-run --output ${temp}`,
+      argv`check fixtures/pattern.tsx --no-run --output ${temp}`,
     );
     checkStderr(stderr);
     expect(stdout.length).toBe(0);
@@ -89,7 +89,7 @@ describe("cli check", () => {
 
   it("Uses default export when no --main-export specified", async () => {
     const { code, stdout, stderr } = await cf(
-      "check fixtures/named-export.tsx --pattern-json",
+      argv`check fixtures/named-export.tsx --pattern-json`,
     );
     checkStderr(stderr);
     const output = JSON.parse(stdout.join("\n"));
@@ -99,7 +99,7 @@ describe("cli check", () => {
 
   it("Uses specified named export with --main-export", async () => {
     const { code, stdout, stderr } = await cf(
-      "check fixtures/named-export.tsx --main-export myNamedPattern --pattern-json",
+      argv`check fixtures/named-export.tsx --main-export myNamedPattern --pattern-json`,
     );
     checkStderr(stderr);
     const output = JSON.parse(stdout.join("\n"));
@@ -111,7 +111,7 @@ describe("cli check", () => {
   });
 
   it("Produces no output on success by default", async () => {
-    const { code, stdout, stderr } = await cf("check fixtures/pow-5.tsx");
+    const { code, stdout, stderr } = await cf(argv`check fixtures/pow-5.tsx`);
     checkStderr(stderr);
     expect(stdout.length).toBe(0);
     expect(code).toBe(0);
@@ -119,7 +119,7 @@ describe("cli check", () => {
 
   it("Resolves imports with --root flag", async () => {
     const { code, stdout, stderr } = await cf(
-      "check --root fixtures fixtures/pow-5.tsx --pattern-json",
+      argv`check --root fixtures fixtures/pow-5.tsx --pattern-json`,
     );
     checkStderr(stderr);
     expect(stdout[stdout.length - 1]).toBe("25");
@@ -128,8 +128,8 @@ describe("cli check", () => {
 
   it("evaluates a pattern that reads a data file attached with --datafile", async () => {
     const { code, stdout, stderr } = await cf(
-      "check --root fixtures fixtures/reads-data-file.tsx " +
-        "--datafile fixtures/data/cities.json --pattern-json",
+      argv`check --root fixtures fixtures/reads-data-file.tsx
+        --datafile fixtures/data/cities.json --pattern-json`,
     );
     checkStderr(stderr);
     // The printed value is the file's contents, so this fails if the bytes
@@ -140,7 +140,7 @@ describe("cli check", () => {
 
   it("evaluates a pattern that reads a data file it names itself", async () => {
     const { code, stdout, stderr } = await cf(
-      "check --root fixtures fixtures/reads-data-file.tsx --pattern-json",
+      argv`check --root fixtures fixtures/reads-data-file.tsx --pattern-json`,
     );
     checkStderr(stderr);
     // No `--datafile`: the `dataFile()` call is the declaration, so the same
@@ -151,7 +151,7 @@ describe("cli check", () => {
 
   it("refuses a data file the pattern names with nothing behind it", async () => {
     const { code, stderr } = await cf(
-      "check --root fixtures fixtures/reads-absent-data-file.tsx",
+      argv`check --root fixtures fixtures/reads-absent-data-file.tsx`,
     );
     // The program cannot be assembled as its source describes it, so this
     // fails at the build, naming the module that asked and the path it wanted.
@@ -163,7 +163,7 @@ describe("cli check", () => {
 
   it("prints compiled module bodies as a structured JSON result", async () => {
     const { code, stdout, stderr } = await cf(
-      "check fixtures/check-json-no-evaluate.ts --json",
+      argv`check fixtures/check-json-no-evaluate.ts --json`,
     );
     checkStderr(stderr);
 
@@ -174,7 +174,7 @@ describe("cli check", () => {
     expect(code).toBe(0);
 
     const evaluated = await cf(
-      "check fixtures/check-json-no-evaluate.ts --pattern-json",
+      argv`check fixtures/check-json-no-evaluate.ts --pattern-json`,
     );
     expect(evaluated.code).toBe(0);
     expect(evaluated.stdout).toEqual(["1"]);
@@ -189,13 +189,13 @@ describe("cli check", () => {
   it("rejects conflicting stdout modes", async () => {
     for (
       const flags of [
-        "--json --show-transformed",
-        "--json --pattern-json",
-        "--show-transformed --pattern-json",
+        argv`--json --show-transformed`,
+        argv`--json --pattern-json`,
+        argv`--show-transformed --pattern-json`,
       ]
     ) {
       const { code, stderr } = await cf(
-        `check fixtures/pow-5.tsx ${flags}`,
+        argv`check fixtures/pow-5.tsx ${flags}`,
       );
       expect(code).not.toBe(0);
       expect(stripAnsi(stderr.join("\n"))).toContain("conflicts with option");
@@ -204,7 +204,7 @@ describe("cli check", () => {
 
   it("does not print transformed output when any input fails", async () => {
     const { code, stdout, stderr } = await cf(
-      "check fixtures/pow-5.tsx fixtures/no-such-pattern.tsx --show-transformed --no-run",
+      argv`check fixtures/pow-5.tsx fixtures/no-such-pattern.tsx --show-transformed --no-run`,
     );
 
     expect(code).not.toBe(0);
@@ -214,7 +214,7 @@ describe("cli check", () => {
 
   it("does not evaluate input while showing transformed output", async () => {
     const { code, stdout, stderr } = await cf(
-      "check fixtures/check-json-no-evaluate.ts --show-transformed",
+      argv`check fixtures/check-json-no-evaluate.ts --show-transformed`,
     );
 
     checkStderr(stderr);
@@ -225,7 +225,7 @@ describe("cli check", () => {
 
   it("does not print pattern JSON when any input fails", async () => {
     const { code, stdout, stderr } = await cf(
-      "check fixtures/check-json-no-evaluate.ts fixtures/no-such-pattern.tsx --pattern-json",
+      argv`check fixtures/check-json-no-evaluate.ts fixtures/no-such-pattern.tsx --pattern-json`,
     );
 
     expect(code).not.toBe(0);
@@ -237,7 +237,7 @@ describe("cli check", () => {
 
   it("surfaces fabric imports without a space as a CLI compile error", async () => {
     const { code, stdout, stderr } = await cf(
-      "check fixtures/fabric-import.tsx --no-run",
+      argv`check fixtures/fabric-import.tsx --no-run`,
     );
     const renderedStderr = stripAnsi(stderr.join("\n"));
 

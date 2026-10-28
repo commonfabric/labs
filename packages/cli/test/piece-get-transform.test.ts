@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { spy, stub } from "@std/testing/mock";
+import { fromFileUrl } from "@std/path";
 
 import type { JSONSchemaObj } from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/data-model";
@@ -11,6 +12,7 @@ import {
   parseLLMFriendlyLink,
 } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import {
   boundReadValue,
   CellSelectionError,
@@ -3774,6 +3776,59 @@ describe("cf cell get transforms", () => {
       const second = await readWithCell(runtime, source, selection);
       expect(second.value).toEqual([{ id: 1 }, { id: 2 }]);
       expect(second.cell).toBe(first.cell);
+    });
+
+    it("returns the repeat after a release pass dropped the first read's documents", async () => {
+      // Dropping them needs a collection, so `--expose-gc`, which this
+      // package's test task does not give: the helper runs in a process of its
+      // own.
+      const output = await runDenoCommandWithTemporaryLock({
+        root: fromFileUrl(new URL("../../../", import.meta.url)),
+        args: (lock) => [
+          "run",
+          "--quiet",
+          "--frozen",
+          `--lock=${lock}`,
+          "--no-check",
+          "--v8-flags=--expose-gc",
+          "--allow-read",
+          "--allow-env",
+          "--allow-ffi",
+          fromFileUrl(
+            new URL("./piece-get-transform-gc-helper.ts", import.meta.url),
+          ),
+        ],
+      });
+      const stdout = new TextDecoder().decode(output.stdout);
+      expect(
+        output.code,
+        `helper failed:\n${new TextDecoder().decode(output.stderr)}\n${stdout}`,
+      ).toBe(0);
+      // Loggers may write above the report; the report is the last line.
+      const lines = stdout.trim().split("\n");
+      expect(JSON.parse(lines[lines.length - 1])).toEqual({
+        dropped: true,
+        repeat: [{ id: 1 }],
+      });
+    });
+
+    it("reports a repeat whose stored piece could not be loaded", async () => {
+      const source = await seededSource(runtime, "repeat-unloaded-source", [
+        { id: 1, title: "First" },
+      ]);
+      const selection = { projection: await parseSelectionProjection("id") };
+      await readWithCell(runtime, source, selection);
+
+      using sync = stub(
+        runtime.runner,
+        "syncStoredPieceCells",
+        () => Promise.reject(new Error("stored piece sync failed")),
+      );
+      await expect(deriveSelectedValue(runtime, space, source, selection))
+        .rejects.toThrow(
+          "Could not apply get transform: stored piece sync failed",
+        );
+      expect(sync.calls).toHaveLength(1);
     });
 
     it("returns each differing selection from its own cell", async () => {

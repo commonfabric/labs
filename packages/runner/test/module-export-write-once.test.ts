@@ -21,7 +21,7 @@ const noRequire = (s: string): Record<string, unknown> => {
 
 describe("createWriteOnceExports", () => {
   it("locks a property after a real assignment (blocks the overwrite smuggle)", () => {
-    const exports = createWriteOnceExports();
+    const { exports } = createWriteOnceExports();
     exports.token = "verified-data";
     // The smuggled `exports.token = evilClosure` inside a later accepted
     // expression must throw rather than silently corrupt the export.
@@ -32,7 +32,7 @@ describe("createWriteOnceExports", () => {
   });
 
   it("allows the `exports.x = void 0; … exports.x = real;` forward-decl shape", () => {
-    const exports = createWriteOnceExports();
+    const { exports } = createWriteOnceExports();
     // TS CommonJS output forward-declares exports as `void 0` in the preamble.
     exports.value = undefined;
     exports.value = undefined; // chained `exports.a = exports.b = void 0`
@@ -45,7 +45,7 @@ describe("createWriteOnceExports", () => {
   });
 
   it("allows a re-export getter to be defined once, blocks redefinition", () => {
-    const exports = createWriteOnceExports();
+    const { exports } = createWriteOnceExports();
     Object.defineProperty(exports, "reexported", {
       enumerable: true,
       configurable: true,
@@ -59,7 +59,7 @@ describe("createWriteOnceExports", () => {
   });
 
   it("allows the __esModule marker and locks it", () => {
-    const exports = createWriteOnceExports();
+    const { exports } = createWriteOnceExports();
     Object.defineProperty(exports, "__esModule", { value: true });
     expect(exports.__esModule).toBe(true);
     expect(() => {
@@ -68,7 +68,7 @@ describe("createWriteOnceExports", () => {
   });
 
   it("blocks deletion of an export (e.g. `delete exports.__esModule`)", () => {
-    const exports = createWriteOnceExports();
+    const { exports } = createWriteOnceExports();
     exports.keep = 1;
     expect(() => {
       delete exports.keep;
@@ -77,7 +77,7 @@ describe("createWriteOnceExports", () => {
   });
 
   it("fails closed when a smuggle assigns before the real assignment", () => {
-    const exports = createWriteOnceExports();
+    const { exports } = createWriteOnceExports();
     // Smuggle runs first (e.g. an import-preamble data arg evaluated early),
     // setting a real value and locking the binding…
     exports.api = () => "pwned";
@@ -88,8 +88,32 @@ describe("createWriteOnceExports", () => {
     }).toThrow(/write-once/);
   });
 
+  it("throws on a write to an `undefined` placeholder once sealed", () => {
+    const { exports, seal } = createWriteOnceExports();
+    exports.first = undefined;
+    seal();
+
+    expect(() => {
+      exports.first = "late";
+    }).toThrow(/after the module finished evaluating/);
+    expect(exports.first).toBeUndefined();
+  });
+
+  it("throws on defining a new export once sealed", () => {
+    const { exports, seal } = createWriteOnceExports();
+    seal();
+
+    expect(() => {
+      exports.added = 1;
+    }).toThrow(/after the module finished evaluating/);
+    expect(() => {
+      Object.defineProperty(exports, "defined", { value: 1 });
+    }).toThrow(/after the module finished evaluating/);
+    expect("added" in exports).toBe(false);
+  });
+
   it("treats distinct exports independently", () => {
-    const exports = createWriteOnceExports();
+    const { exports } = createWriteOnceExports();
     exports.a = 1;
     exports.b = 2;
     expect(exports.a).toBe(1);
@@ -161,6 +185,29 @@ describe("populateModuleExports", () => {
       expect(module.exports).toBe(exports);
     }, noRequire);
     expect(ns.x).toBe("verified");
+  });
+
+  it("seals the exports when the module body returns", () => {
+    // An export still `undefined` when the body returns would otherwise take
+    // one later write from a function the module exported, and every caller
+    // after the first would read the first caller's value.
+
+    const ns: Record<string, unknown> = {};
+    populateModuleExports(ns, ["first", "remember"], (exports) => {
+      exports.first = undefined;
+      exports.remember = (value: string) => {
+        if (exports.first === undefined) exports.first = value;
+        return exports.first;
+      };
+    }, noRequire);
+    const remember = ns.remember as (value: string) => unknown;
+
+    expect(() => remember("alice")).toThrow(
+      /after the module finished evaluating/,
+    );
+    expect(() => remember("bob")).toThrow(
+      /after the module finished evaluating/,
+    );
   });
 
   it("propagates a write-once violation as a module load failure", () => {

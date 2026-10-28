@@ -1,8 +1,15 @@
 import { expect } from "@std/expect";
+import { fromFileUrl } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { createSession, Identity } from "@commonfabric/identity";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+import {
+  sharedSpaceCollectionViewSchema,
+  sharedSpaceCommandsSchema,
+  sharedSpaceReceiptViewSchema,
+} from "@commonfabric/home-schemas";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import {
   streamEntriesDocId,
@@ -40,7 +47,13 @@ import type {
   SharedSpaceCatalog,
   SharedSpaceMembershipChange,
   SharedSpaceRegistration,
+  SharedSpaceRemoval,
 } from "../system/shared-space-catalog.ts";
+import type {
+  SharedSpaceCollectionView,
+  SharedSpaceInterface,
+} from "../system/shared-space-interface.ts";
+import { moduleByteCache } from "./pieces-controller.ts";
 
 const owner = await Identity.fromPassphrase("Home catalog owner");
 const service = await Identity.fromPassphrase("Home catalog service");
@@ -53,9 +66,11 @@ const registration: SharedSpaceRegistration = {
 };
 
 interface HomeSurface {
+  sharedSpaces: SharedSpaceInterface;
   sharedSpaceCatalog: SharedSpaceCatalog;
   registerSharedSpace: SharedSpaceRegistration;
   changeSharedSpaceMembership: SharedSpaceMembershipChange;
+  removeSharedSpace: SharedSpaceRemoval;
   addSpace: { did: string; name: string };
   spaces: { did: string; name: string }[];
 }
@@ -65,8 +80,8 @@ async function compileHome(runtime: Runtime, revision?: string) {
   const program = await resolveLocalProgram(
     (resolver) => runtime.harness.resolve(resolver),
     {
-      main: new URL("../system/home.tsx", import.meta.url).pathname,
-      root: new URL("..", import.meta.url).pathname,
+      main: fromFileUrl(new URL("../system/home.tsx", import.meta.url)),
+      root: fromFileUrl(new URL("..", import.meta.url)),
     },
   );
   if (revision !== undefined) {
@@ -172,10 +187,9 @@ async function rejectInvocation<T>(
       .toMatchObject({ message: expect.stringContaining(message) });
     return;
   }
-  const engine = await server.engineForSpace(owner.did());
-  const sidecarId = streamEntriesDocId(
-    stream.resolveAsCell().getAsNormalizedFullLink(),
-  );
+  const target = stream.resolveAsCell().getAsNormalizedFullLink();
+  const engine = await server.engineForSpace(target.space);
+  const sidecarId = streamEntriesDocId(target);
   const entries = () =>
     (Engine.read(engine, { id: sidecarId })?.value as
       | StreamEventsDocValue
@@ -198,16 +212,18 @@ function watchHandlingCommits(runtime: Runtime) {
   const edit = runtime.edit.bind(runtime);
   const wrapped = stub(runtime, "edit", (...args) => {
     const tx = interceptTransaction(edit(...args), (method, _args, proceed) => {
-      if (
-        method !== "commit" || !tx.dispatchedEventId || !tx.handlingReceiptLink
-      ) {
+      if (!tx.dispatchedEventId || !tx.handlingReceiptLink) return proceed();
+      // The receipt is read before the transaction is prepared for commit: a
+      // read after that invalidates a prepared transaction's flow checks.
+      if (method === "prepareForCommit") {
+        outcomes.record({
+          eventId: tx.dispatchedEventId,
+          value: runtime.getCellFromLink(tx.handlingReceiptLink).withTx(tx)
+            .getRaw(),
+        });
         return proceed();
       }
-      outcomes.record({
-        eventId: tx.dispatchedEventId,
-        value: runtime.getCellFromLink(tx.handlingReceiptLink).withTx(tx)
-          .getRaw(),
-      });
+      if (method !== "commit") return proceed();
       const receipt = proceed() as ReturnType<
         IExtendedStorageTransaction["commit"]
       >;
@@ -253,6 +269,7 @@ async function withHome(
   const fresh = (executeOnServer = serverExecution) => {
     const storage = EmulatedStorageManager.connectTo(server, { as: owner });
     const runtime = new Runtime({
+      moduleByteCache,
       apiUrl: new URL("https://home.example"),
       storageManager: storage,
       experimental: { serverExecution: executeOnServer },
@@ -282,6 +299,7 @@ async function withHome(
             servingHomeSpace: space,
           });
           const runtime = new Runtime({
+            moduleByteCache,
             apiUrl: new URL("https://home.example"),
             storageManager: storage,
             servingPosture: true,
@@ -492,6 +510,206 @@ describe("Home catalog speculative revisions", () => {
 });
 
 describe("Home shared-space catalog", () => {
+  for (const serving of [false, true]) {
+    it(`writes shared records through command bindings without reading Home's private collection with serving ${serving}`, async () => {
+      await withHome(serving, async (runtime, home, fresh, server) => {
+        expect(runtime.cfcEnforcementMode).toBe("enforce-strict");
+        // The control supplies a synthetic privately labeled observation
+        // beside Home's real command streams. Reading it exercises the write
+        // boundary; the real Home collection projection is asserted below.
+        const viewSchema = {
+          type: "object",
+          additionalProperties: true,
+          ifc: {
+            confidentiality: [{
+              type: "https://commonfabric.org/cfc/atom/PersonalSpace",
+              owner: owner.did(),
+            }],
+          },
+        } as const;
+        const privateView = runtime.getCell(
+          owner.did(),
+          "private collection observation",
+          viewSchema,
+        );
+        const observation = await home.key("sharedSpaces").key("view")
+          .asSchema(sharedSpaceCollectionViewSchema).pull();
+        expect(observation).toMatchObject({
+          status: "ready",
+          saved: [],
+          archived: [],
+        });
+        const homeTx = runtime.edit();
+        privateView.withTx(homeTx).set({
+          status: "ready",
+          entries: {},
+          saved: [],
+          archived: [],
+          other: [],
+          byKind: {},
+        });
+        runtime.prepareTxForCommit(homeTx);
+        expect((await homeTx.commit().settled).error).toBeUndefined();
+        const serviceTx = runtime.edit();
+        const service = runtime.getCell(
+          owner.did(),
+          "Home collection interface",
+          undefined,
+          serviceTx,
+        );
+        service.set({
+          view: privateView,
+          commands: home.key("sharedSpaces").key("commands").asSchema(
+            sharedSpaceCommandsSchema,
+          ),
+        });
+        runtime.prepareTxForCommit(serviceTx);
+        expect((await serviceTx.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+        const social = await runtime.createSpace({});
+        const program = await resolveLocalProgram(
+          (resolver) => runtime.harness.resolve(resolver),
+          {
+            main: fromFileUrl(
+              new URL(
+                "./fixtures/home-catalog-commands/main.tsx",
+                import.meta.url,
+              ),
+            ),
+            root: fromFileUrl(new URL("..", import.meta.url)),
+          },
+        );
+        const compiled = await runtime.patternManager.compilePattern(program, {
+          space: social,
+        });
+        const tx = runtime.edit();
+        const client = runtime.run(tx, compiled, {
+          commands: service.key("commands"),
+          messages: [],
+        }, runtime.getCell(social, "social catalog consumer", undefined, tx));
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+        await client.pull();
+        await invoke(runtime, client.key("send"), {
+          message: "A public social-space write",
+          registration: {
+            space: social,
+            host: "https://home.example",
+            kind: "loom",
+          },
+        }, "social-send");
+        await runtime.idle();
+        expect(await client.key("messages").pull()).toEqual([
+          "A public social-space write",
+        ]);
+        const viewCell = home.key("sharedSpaces").key("view")
+          .asSchema(sharedSpaceCollectionViewSchema);
+        if (serving) {
+          // Served, Home's `register` commits in Home's space apart from the
+          // social-space event, whose consequence retires the local preview
+          // of that write before it lands. The wait is on the record itself,
+          // so what is asserted below is the served write, not the preview.
+          await waitForCellValue<SharedSpaceCollectionView>(
+            runtime,
+            viewCell,
+            (value) =>
+              value?.status === "ready" &&
+              value.saved.some((entry) => entry.space === social),
+            { stuckLabel: "the social space saved in Home's collection view" },
+          );
+        }
+        const view = await viewCell.pull();
+        expect(view).toMatchObject({
+          status: "ready",
+          saved: [{ space: social }],
+        });
+        expect(
+          await home.key("sharedSpaces").key("receipts")
+            .asSchema(sharedSpaceReceiptViewSchema).pull(),
+        )
+          .toMatchObject({ status: "ready", offers: {} });
+        const peer = await fresh();
+        expect(
+          await peer.runtime.getCellFromLink(client.getAsNormalizedFullLink())
+            .key("messages").pull(),
+        )
+          .toEqual(["A public social-space write"]);
+        const discoveredPattern = await runtime.patternManager.compilePattern({
+          ...program,
+          mainExport: "DiscoveredConsumer",
+        }, { space: social });
+        const discoveredTx = runtime.edit();
+        const discovered = runtime.run(
+          discoveredTx,
+          discoveredPattern,
+          { messages: [] },
+          runtime.getCell(
+            social,
+            "consumer discovering Home",
+            undefined,
+            discoveredTx,
+          ),
+        );
+        runtime.prepareTxForCommit(discoveredTx);
+        expect((await discoveredTx.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+        await discovered.pull();
+        await invoke(runtime, discovered.key("send"), {
+          message: "A write through discovered Home commands",
+          registration: {
+            space: social,
+            host: "https://home.example",
+            kind: "loom",
+          },
+        }, "discovered-send");
+        expect(await discovered.key("messages").pull()).toEqual([
+          "A write through discovered Home commands",
+        ]);
+        const observed = await runtime.patternManager.compilePattern({
+          ...program,
+          mainExport: "ObservingConsumer",
+        }, { space: social });
+        const controlTx = runtime.edit();
+        const control = runtime.run(
+          controlTx,
+          observed,
+          {
+            commands: service.key("commands"),
+            observation: privateView,
+            messages: [],
+          },
+          runtime.getCell(
+            social,
+            "consumer with private observation",
+            undefined,
+            controlTx,
+          ),
+        );
+        runtime.prepareTxForCommit(controlTx);
+        expect((await controlTx.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+        await control.pull();
+        await rejectInvocation(
+          runtime,
+          control.key("send"),
+          {
+            message: "A write with private observations",
+            registration: {
+              space: social,
+              host: "https://home.example",
+              kind: "loom",
+            },
+          },
+          server,
+          serving,
+          "writer-fit confidentiality misfit",
+        );
+        expect(await control.key("messages").pull()).toEqual([]);
+      });
+    });
+  }
+
   for (
     const scenario of ["existing", "rejected-predecessor", "first-registration"]
   ) {
@@ -718,6 +936,7 @@ describe("Home shared-space catalog", () => {
       await withHome(serving, async (_runtime, home, _fresh, server) => {
         const storage = EmulatedStorageManager.connectTo(server, { as: owner });
         const reader = new Runtime({
+          moduleByteCache,
           apiUrl: new URL("https://home.example"),
           storageManager: storage,
           experimental: { serverExecution: serving },
@@ -778,6 +997,7 @@ describe("Home shared-space catalog", () => {
           as: outsider,
         });
         const reader = new Runtime({
+          moduleByteCache,
           apiUrl: new URL("https://home.example"),
           storageManager: storage,
           experimental: { serverExecution: serving },
@@ -824,7 +1044,7 @@ describe("Home shared-space catalog", () => {
           runtime,
         );
         await expect(controller.recreateDefaultPattern()).rejects.toThrow(
-          "Cannot replace an existing Home root",
+          "Cannot recreate an identity Home root",
         );
         expect((await controller.getDefaultPattern(false))?.equals(home)).toBe(
           true,
@@ -850,6 +1070,10 @@ describe("Home shared-space catalog", () => {
           ...registration,
           initialState: "archived",
         }, "seed");
+        // Source-update setup reads the catalog, so its snapshot must be
+        // authoritative rather than a speculative registration result.
+        await runtime.speculationOverlay?.waitForSpaceQuiescence(owner.did());
+        await runtime.idle();
         const original = await backingCatalog(runtime, home);
         const originalId = original.getAsNormalizedFullLink().id;
         const before = original.getRaw();
@@ -1036,7 +1260,7 @@ describe("Home shared-space catalog", () => {
     });
 
     it(`advances revisions exactly and refuses unsupported counters with serving ${serving}`, async () => {
-      await withHome(serving, async (runtime, home, _peer, server) => {
+      await withHome(serving, async (runtime, home) => {
         await invoke(
           runtime,
           home.key("registerSharedSpace"),
@@ -1046,6 +1270,10 @@ describe("Home shared-space catalog", () => {
         const catalog = await backingCatalog(runtime, home);
         const valid = catalog.getRaw() as SharedSpaceCatalog;
         expect(valid.entries[registration.space].revision).toMatch(/^1:.+$/);
+        const eventSuffix = valid.entries[registration.space].revision.slice(2);
+        expect(eventSuffix).toMatch(/^evk:[A-Za-z0-9_-]{43}$/);
+        const exhausted = `${"9".repeat(272)}:${eventSuffix}`;
+        expect(exhausted.length).toBe(320);
         await runtime.editWithRetry((tx) =>
           catalog.withTx(tx).key("entries", registration.space, "revision").set(
             "9007199254740992:seed",
@@ -1071,7 +1299,8 @@ describe("Home shared-space catalog", () => {
             "01:seed",
             "-1:seed",
             "2:",
-            "future-revision",
+            "legacy",
+            exhausted,
             `${"9".repeat(318)}:x`,
           ]
         ) {
@@ -1079,18 +1308,19 @@ describe("Home shared-space catalog", () => {
           await runtime.editWithRetry((tx) =>
             catalog.withTx(tx).key("entries", registration.space).set(entry)
           );
-          await rejectInvocation(
-            runtime,
-            home.key("changeSharedSpaceMembership"),
-            {
-              space: registration.space,
-              id: "unsupported-counter",
-              expectedRevision: revision,
-              state: "archived",
-            },
-            server,
-            serving,
-          );
+          expect(
+            await invoke(
+              runtime,
+              home.key("changeSharedSpaceMembership"),
+              {
+                space: registration.space,
+                id: "unsupported-counter",
+                expectedRevision: revision,
+                state: "archived",
+              },
+              `unsupported:${revision}`,
+            ),
+          ).toEqual({ status: "conflict", reason: "unsupported-revision" });
           expect(catalog.getRaw()).toEqual({
             ...valid,
             entries: { ...valid.entries, [registration.space]: entry },
@@ -1372,6 +1602,80 @@ describe("Home shared-space catalog", () => {
             "stale-archive",
           ),
         ).toEqual({ status: "conflict", reason: "revision" });
+        await runtime.idle();
+      });
+    });
+
+    it(`removes only an entry no receipt names, at its observed revision, with serving ${serving}`, async () => {
+      await withHome(serving, async (runtime, home, _peer, server) => {
+        const imported: SharedSpaceRegistration = {
+          space: "did:key:catalog-import",
+          host: "https://room.example",
+          kind: "loom",
+          title: "Imported loom",
+        };
+        const remove = home.key("removeSharedSpace");
+        await invoke(
+          runtime,
+          home.key("registerSharedSpace"),
+          registration,
+          "register",
+        );
+        await invoke(
+          runtime,
+          home.key("registerSharedSpace"),
+          imported,
+          "import",
+        );
+        const catalog = home.key("sharedSpaceCatalog");
+        const observed = await catalog.pull();
+        expect(
+          await invoke(runtime, remove, {
+            space: imported.space,
+            expectedRevision: "1:not-the-observed-revision",
+          }, "stale"),
+        ).toEqual({ status: "conflict", reason: "revision" });
+        expect(
+          await invoke(runtime, remove, {
+            space: registration.space,
+            expectedRevision: observed.entries[registration.space].revision,
+          }, "receipted"),
+        ).toEqual({ status: "conflict", reason: "offer" });
+        const take: SharedSpaceRemoval = {
+          space: imported.space,
+          expectedRevision: observed.entries[imported.space].revision,
+        };
+        expect(await invoke(runtime, remove, take, "take")).toEqual({
+          status: "removed",
+          space: imported.space,
+        });
+        expect(await invoke(runtime, remove, take, "take")).toEqual({
+          status: "removed",
+          space: imported.space,
+        });
+        expect(await invoke(runtime, remove, take, "take-again")).toEqual({
+          status: "conflict",
+          reason: "missing",
+        });
+        const stored = await backingCatalog(runtime, home);
+        expect(Object.keys(stored.getRaw().entries)).toEqual([
+          registration.space,
+        ]);
+        expect(await catalog.pull()).toEqual({
+          entries: {
+            [registration.space]: observed.entries[registration.space],
+          },
+          offers: observed.offers,
+        });
+        for (
+          const input of [
+            { space: imported.space },
+            { space: "not-a-did", expectedRevision: take.expectedRevision },
+            { space: imported.space, expectedRevision: "" },
+          ]
+        ) {
+          await rejectInvocation(runtime, remove, input, server, serving);
+        }
         await runtime.idle();
       });
     });

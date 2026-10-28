@@ -25,6 +25,7 @@ import {
   DEFAULT_SCAN_LIMIT,
   // Remote acquisition (`cf inspect --remote` / `pull`).
   defaultCacheDir,
+  describeCommitPayload,
   describeIdentity,
   describePiece,
   diffEntity,
@@ -912,9 +913,9 @@ export const inspect = new Command()
       out(!!options.json, rows, () => {
         for (const r of rows) {
           console.log(
-            `#${r.seq}\t${
-              fmtSession(r.session)
-            }\tlocal=${r.localSeq}\tops=${r.ops}\treads=${r.reads}\t${r.createdAt}`,
+            `#${r.seq}\t${fmtSession(r.session)}\tlocal=${r.localSeq}\t${
+              describeCommitPayload(r)
+            }\t${r.createdAt}`,
           );
         }
       });

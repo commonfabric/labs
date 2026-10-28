@@ -50,6 +50,38 @@ const PROGRAM: RuntimeProgram = {
   ],
 };
 
+// A host that wires the create surface's two steps itself. Besides the
+// `profiles` list the create appends to, the seed step is handed one the
+// append never reaches: the list as a seed step finds it when it runs before
+// the create's append is visible to it. The seed step is returned too, for a
+// test to send to directly.
+const UNAPPENDED_LIST_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [
+    {
+      name: "/main.tsx",
+      contents: [
+        "import { seedProfileName, submitProfileCreation } from './profile-create.tsx';",
+        "import { pattern, Writable } from 'commonfabric';",
+        "import type { ProfileHomeOutput } from './profile-home.tsx';",
+        "",
+        "export default pattern(() => {",
+        "  const profiles = new Writable<ProfileHomeOutput[]>([]).for('profiles');",
+        "  const unappended = new Writable<ProfileHomeOutput[]>([]).for('unappended');",
+        "  const seedName = seedProfileName({ profiles: unappended } as any);",
+        "  const createProfile = submitProfileCreation({",
+        "    profiles: profiles as any,",
+        "    seedName,",
+        "  });",
+        "  return { profiles, unappended, createProfile, seedName };",
+        "});",
+      ].join("\n"),
+    },
+    { name: "/profile-create.tsx", contents: read("profile-create.tsx") },
+    { name: "/profile-home.tsx", contents: read("profile-home.tsx") },
+  ],
+};
+
 const RESULT_CAUSE = "profile name seeded at creation host";
 
 const profileLinkListSchema = {
@@ -74,6 +106,34 @@ function createEvent(name: string): { name: string } {
   };
   markRendererTrustedEvent(event);
   return event;
+}
+
+/**
+ * Runs `program` as a host in `home`, in `runtime`, and returns its result
+ * cell once the run has committed.
+ */
+async function startHost(
+  runtime: Runtime,
+  program: RuntimeProgram,
+  // deno-lint-ignore no-explicit-any
+): Promise<any> {
+  const tx = runtime.edit();
+  const host = await runtime.patternManager.compilePattern(program, {
+    space: home,
+    tx,
+  });
+  const resultCell = runtime.getCell<Record<string, unknown>>(
+    home,
+    RESULT_CAUSE,
+    undefined,
+    tx,
+  );
+  // deno-lint-ignore no-explicit-any
+  const result = runtime.run(tx, host as any, {}, resultCell);
+  runtime.prepareTxForCommit(tx);
+  expect((await tx.commit().settled).error).toBeUndefined();
+  await result.pull();
+  return result;
 }
 
 describe("a profile's name is seeded at creation", () => {
@@ -162,6 +222,65 @@ describe("a profile's name is seeded at creation", () => {
     } finally {
       await rt2.dispose();
       await rt1.dispose();
+    }
+  });
+
+  it("stores the creation name when every list the seed step could read lacks the create's append", async () => {
+    const rt = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: managerA,
+    });
+    try {
+      const r = await startHost(rt, UNAPPENDED_LIST_PROGRAM);
+      const tx = rt.edit();
+      r.withTx(tx).key("createProfile").send(createEvent("Ada"));
+      rt.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await rt.idle();
+      await rt.storageManager.synced();
+      await r.pull();
+
+      const unappended = r.key("unappended").asSchema(profileLinkListSchema)
+        // deno-lint-ignore no-explicit-any
+        .get() as any[];
+      expect(unappended).toHaveLength(0);
+      const links = r.key("profiles").asSchema(profileLinkListSchema)
+        // deno-lint-ignore no-explicit-any
+        .get() as any[];
+      expect(links).toHaveLength(1);
+      const profile = rt.getCellFromLink(links[0].getAsNormalizedFullLink());
+      const name = profile.key("name").asSchema<string>({ type: "string" });
+      await name.sync();
+      await name.pull();
+      expect(name.get()).toBe("Ada");
+    } finally {
+      await rt.dispose();
+    }
+  });
+
+  it("fails the seed step loudly when its event names no profile", async () => {
+    const rt = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: managerA,
+    });
+    try {
+      const r = await startHost(rt, UNAPPENDED_LIST_PROGRAM);
+      const errors: Error[] = [];
+      rt.scheduler.onError((error) => {
+        errors.push(error);
+      });
+
+      const tx = rt.edit();
+      r.withTx(tx).key("seedName").send({ name: "Ada" });
+      rt.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await rt.idle();
+      await rt.scheduler.idleWithPendingCommits();
+
+      expect(errors).toHaveLength(1);
+      expect(errors[0].message).toContain("Cannot seed a profile's name");
+    } finally {
+      await rt.dispose();
     }
   });
 });

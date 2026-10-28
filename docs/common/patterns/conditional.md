@@ -40,6 +40,12 @@ branches are evaluated eagerly as arguments — they do not short-circuit. So
 branch needs `computed()` deferral; see
 [Eager Ternary Branch Evaluation](../../development/debugging/gotchas/eager-ternary-branch-evaluation.md).
 
+A ternary's result is a reference to the branch the condition selected, not a
+copy of its value, and the reference carries that branch's schema. So an input
+declared with a `Default` and returned through a ternary, or through `&&` or
+`||`, reads as its default when the input holds no value, exactly as the input
+itself does.
+
 ## Showing and Hiding Through a Prop
 
 A ternary in child position renders nothing until its condition has a value,
@@ -67,10 +73,13 @@ controls this way, for the reason its `FabriChatMessageRow` states.
 
 The element stays hidden for as long as the computed has no value for the
 viewer. A computed that reads per-user or per-session state has a value for a
-viewer only once something runs the pattern for that viewer, and a page that
-only renders a piece, through `cf-render` for instance, does not run it. With
-server execution off, nothing runs it for the viewer until an event of theirs
-reaches it. An element every viewer must see takes its
+viewer only once something runs the pattern for that viewer. Opening the piece
+runs it, and so does a `cf-render` that shows it (in full, as an exported tile
+or chip, or as the default tile). A render of a value at a path inside a
+piece's document, or of the default chip that only names a piece, runs nothing.
+With server execution off and nothing running the piece for the viewer, the
+element stays hidden until an event of theirs reaches it. An element every
+viewer must see takes its
 display from a computed that reads shared state alone, which whichever runtime
 runs the pattern computes for everyone. When the element is shown in one place
 by shared state and in another by per-session state, as a FabriChat message is

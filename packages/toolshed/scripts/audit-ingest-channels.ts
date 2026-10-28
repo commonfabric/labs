@@ -33,6 +33,7 @@ import {
   RegistrationConflictError,
   saveRegistration,
 } from "@/routes/ingest/ingest.utils.ts";
+import { ingestServiceSpace } from "@/routes/ingest/service-space.ts";
 
 export const stateOf = (r: IngestRegistration): string =>
   r.revoked ? "revoked" : r.enabled ? "active" : "disabled";
@@ -209,7 +210,7 @@ export const defaultRuntime = (): Runtime =>
 export async function main(
   args: string[],
   makeRuntime: () => Runtime = defaultRuntime,
-  serviceSpace: string = identity.did(),
+  serviceSpace: string = ingestServiceSpace,
   log: (line: string) => void = console.log,
 ): Promise<number> {
   const flags = parseArgs(args, {

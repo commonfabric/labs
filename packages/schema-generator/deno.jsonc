@@ -11,9 +11,13 @@
     "./property-optionality": "./src/typescript/property-optionality.ts",
     "./property-name": "./src/typescript/property-name.ts",
     "./scope-brand": "./src/typescript/scope-brand.ts",
+    "./cfc-carrier": "./src/typescript/cfc-carrier.ts",
+    "./expanding-recursion": "./src/typescript/expanding-recursion.ts",
     "./numeric-expression": "./src/typescript/numeric-expression.ts",
     "./type-node": "./src/typescript/type-node.ts",
-    "./writer-binding": "./src/typescript/writer-binding.ts"
+    "./value-annotation": "./src/typescript/value-annotation.ts",
+    "./writer-binding": "./src/typescript/writer-binding.ts",
+    "./writer-policy": "./src/typescript/writer-policy.ts"
   },
   "imports": {
     // Dependency guide: ../../docs/development/DEPENDENCIES.md

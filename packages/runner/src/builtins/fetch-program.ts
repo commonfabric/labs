@@ -22,11 +22,12 @@ import {
 } from "../executor/wave.ts";
 import { ensureCompilerStack } from "../harness/deferred-compiler-stack.ts";
 import { setResultCell } from "../result-utils.ts";
+import { type RawBuiltinResult } from "../module.ts";
 import type { Runtime } from "../runtime.ts";
 import { type Action } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { computeInputHashFromValue } from "./fetch-utils.ts";
-import { ownedCell } from "./runtime-owned-store.ts";
+import { ownedCell, ownedStoreLinks } from "./runtime-owned-store.ts";
 
 /**
  * How long a `fetching` cache entry left by another replica is believed before
@@ -199,7 +200,15 @@ export function fetchProgram(
   _outputBinding?: NormalizedFullLink,
   _awaitSync?: boolean,
   publicationBinding?: NormalizedFullLink,
-): Action {
+): RawBuiltinResult {
+  // The stores this node keeps, each keyed by its cause alone, so the
+  // action declares them when it is set up.
+  const stores = {
+    pending: { fetchProgram: { pending: cause } },
+    result: { fetchProgram: { result: cause } },
+    error: { fetchProgram: { error: cause } },
+    cache: { fetchProgram: { cache: cause } },
+  };
   const bindings = new Map<CellScope, ProgramCells>();
   const inFlight = new Map<string, ProgramResolution>();
   const publications = new Set<ProgramPublication>();
@@ -339,7 +348,7 @@ export function fetchProgram(
       runtime,
       tx,
       parentCell,
-      { fetchProgram: { pending: cause } },
+      stores.pending,
       undefined,
       scope,
     );
@@ -347,7 +356,7 @@ export function fetchProgram(
       runtime,
       tx,
       parentCell,
-      { fetchProgram: { result: cause } },
+      stores.result,
       undefined,
       scope,
     );
@@ -355,7 +364,7 @@ export function fetchProgram(
       runtime,
       tx,
       parentCell,
-      { fetchProgram: { error: cause } },
+      stores.error,
       undefined,
       scope,
     );
@@ -363,7 +372,7 @@ export function fetchProgram(
       runtime,
       tx,
       parentCell,
-      { fetchProgram: { cache: cause } },
+      stores.cache,
       cacheSchema,
       scope,
     );
@@ -376,7 +385,7 @@ export function fetchProgram(
     return cells;
   }
 
-  return (tx: IExtendedStorageTransaction) => {
+  const action: Action = (tx: IExtendedStorageTransaction) => {
     if (stopped) return;
     tx.resetNarrowestReadScope();
     const requestSnapshot = snapshotFetchProgramInputs(inputsCell.withTx(tx));
@@ -567,6 +576,10 @@ export function fetchProgram(
     );
     sendResult(tx, { pending, result, error });
   };
+  return {
+    action,
+    storeWrites: ownedStoreLinks(runtime, parentCell, Object.values(stores)),
+  };
 }
 
 /**
@@ -592,8 +605,10 @@ async function startFetch(
   identity?: ScopeKeyIdentity,
 ) {
   try {
-    // Create HTTP program resolver
-    const resolver = new HttpProgramResolver(url);
+    // The runtime's fetch, as the other source loads use, so a host that
+    // redirects requests to its own origin (toolshed's API_INTERNAL_URL)
+    // covers this one too.
+    const resolver = new HttpProgramResolver(url, runtime.fetch);
 
     // Program resolution parses; load the deferred compiler stack first.
     const { resolveProgram, ts } = await ensureCompilerStack();

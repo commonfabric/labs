@@ -28,6 +28,7 @@ import {
   newLoopbackServer,
 } from "../../src/storage/v2-emulate.ts";
 import type { SessionFactory } from "../../src/storage/v2.ts";
+import { seedProfileOwner } from "../cfc-seed-envelope.ts";
 import { TestStorageManager } from "../memory-v2-test-utils.ts";
 
 const user = await Identity.fromPassphrase("local profile cold-link consumer");
@@ -214,6 +215,15 @@ describe("wish-home-readiness", () => {
             );
             seed.prepareTxForCommit(tx);
             expect((await tx.commit().settled).error).toBeUndefined();
+            {
+              const owned = seed.edit();
+              seedProfileOwner(
+                owned,
+                profile.getAsNormalizedFullLink(),
+                user.did(),
+              );
+              expect((await owned.commit().settled).error).toBeUndefined();
+            }
             tx = seed.edit();
             homeDefault.withTx(tx).asSchema(homeSchema).set({ profiles: [] });
             homeDefault.withTx(tx).setMetaRaw(
@@ -230,7 +240,6 @@ describe("wish-home-readiness", () => {
             parent.withTx(tx).set({});
             inputs.withTx(tx).set({
               query: "#profile",
-              headless: true,
               schema: {
                 type: "object",
                 properties: {
@@ -309,13 +318,17 @@ describe("wish-home-readiness", () => {
                 seed.getHomeSpaceCell().getAsNormalizedFullLink(),
               ),
             ).toBeUndefined();
+            // The helper's argument holds references to Home and the profile
+            // under no declaration of its own, so it stores no envelope: a
+            // reference's slot carries the reference's own label and nothing
+            // of its target's, whose label is read where it is.
             expect(
               readStoredCfcMetadata(
                 metadata,
                 seed.getCellFromLink(getMetaLink(helper, "argument")!)
                   .getAsNormalizedFullLink(),
               ),
-            ).toBeDefined();
+            ).toBeUndefined();
             metadata.abort();
             const helperIsRunning = () =>
               [...runtime.runner.cancels.keys()]

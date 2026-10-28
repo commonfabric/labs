@@ -1080,9 +1080,30 @@ export type AsCellEntry =
   };
 
 export declare const SCOPE_BRAND: unique symbol;
-export type Scoped<T, Scope extends SchemaScope> = T & {
-  readonly [SCOPE_BRAND]?: Scope;
-};
+/**
+ * The brand `Scoped` intersects `T` with: the scope, beside the `null` and
+ * `undefined` `T` holds, which an intersection with the brand alone would
+ * reduce to `never`. The intersection distributes over `T`'s members, so
+ * `string | null` keeps its `null`. While `T` holds a type parameter the tag is
+ * a conditional the checker defers, so `Scoped<T, Scope>` around a bare type
+ * parameter is one intersection; around `T | null` it is a union, as around
+ * any other union. The conditional checks `[T]`, and both its branches are the
+ * same type, so where `T`'s constraint excludes `null` and `undefined`
+ * (`T extends {}`), a value of the payload's type is assignable to the deferred
+ * tag, and to `Scoped<T, Scope>`, as it is once `T` is known.
+ */
+type ScopeTag<T, Scope extends SchemaScope> = [T] extends [unknown]
+  ? { readonly [SCOPE_BRAND]?: Scope } | Extract<T, null | undefined>
+  : { readonly [SCOPE_BRAND]?: Scope } | Extract<T, null | undefined>;
+/**
+ * `T` in the scope `Scope`: `T` branded with the scope, except for `null` and
+ * `undefined`, which it holds as they are. So `PerUser<string | null>` is
+ * `(string & brand) | null`, and `PerUser<string>` is `string & brand`. The
+ * type keeps the alias it is reached by, `PerUser<…>` or an author's own
+ * `type Box<T> = PerUser<…>`, which is how a reader of a type finds the
+ * declaration it came from.
+ */
+export type Scoped<T, Scope extends SchemaScope> = T & ScopeTag<T, Scope>;
 export type PerSpace<T> = Scoped<T, "space">;
 export type PerUser<T> = Scoped<T, "user">;
 export type PerSession<T> = Scoped<T, "session">;
@@ -1131,6 +1152,30 @@ export type IsThisNumber =
   | AnyBrandedCell<number>
   | AnyBrandedCell<unknown>
   | AnyBrandedCell<any>;
+
+// To constrain methods that only exist on string cells
+export type IsThisString =
+  | AnyBrandedCell<string>
+  | AnyBrandedCell<unknown>
+  | AnyBrandedCell<any>;
+
+/**
+ * One change to a string, in the shape of a CodeMirror change spec: the text
+ * from `from` up to `to` is replaced by `insert`. Positions count UTF-16 code
+ * units, as string indexes do. `to` defaults to `from`, which makes the change
+ * an insertion, and `insert` defaults to the empty string, which makes it a
+ * deletion.
+ */
+export interface TextChange {
+  /** Start of the replaced range. */
+  readonly from: number;
+
+  /** End of the replaced range, exclusive; `from` when absent. */
+  readonly to?: number;
+
+  /** Text that replaces the range; empty when absent. */
+  readonly insert?: string;
+}
 
 /*
  * IAnyCell is an interface that is used by all calls and to which the runner
@@ -1237,6 +1282,24 @@ export interface IWritable<T, C extends AnyBrandedCell<any>> {
    */
   increment(this: IsThisNumber, by?: number): void;
 
+  /**
+   * Applies `changes` to a string cell. The positions in one call refer to
+   * the value the cell holds when the call is made: the value this transaction
+   * read, or the value an earlier call in the transaction left. A list of
+   * changes runs in ascending order without overlap, all against that one
+   * value. On a field a collaborative editor has opened, the changes reach the
+   * store as an edit the editors merge with their own, and land only while the
+   * field still holds the value this transaction read; a field that moved on
+   * refuses the commit, and the transaction runs again against the new value.
+   * The first edit to a field no editor has opened opens it for
+   * collaboration, after which a `set()` of it is refused. A `get()` after
+   * this call returns the changed value.
+   */
+  applyChanges(
+    this: IsThisString,
+    changes: TextChange | readonly TextChange[],
+  ): void;
+
   remove(
     this: IsThisArray,
     ref: T extends (infer U)[] ? (U | AnyBrandedCell<U>) : never,
@@ -1312,7 +1375,8 @@ export interface IStreamable<T> {
   ): void;
 }
 
-// Lightweight HKT, so we can pass cell types to IKeyable<>.
+// Lightweight higher-kinded type (HKT), so we can pass cell types to
+// IKeyable<>.
 export interface HKT {
   _A: unknown;
   type: unknown;
@@ -1756,8 +1820,9 @@ export interface ICreatable<C extends AnyBrandedCell<any>> {
    * Set a cause for this cell. Used to create a link when the cell doesn't have
    * one yet.
    *
-   * Record causes may not use the top-level key `$generated` — it is
-   * reserved for system-generated causes and setting one throws.
+   * Record causes may not use the top-level key `$generated` or `$instance` —
+   * they are reserved for the causes the pattern builder mints, and setting
+   * one throws.
    * @param cause - The cause to associate with this cell
    * @returns This cell for method chaining
    */
@@ -2171,7 +2236,9 @@ export interface IOpaqueCell<T>
     IDerivable<T>,
     IOpaquable<T> {}
 
-export interface OpaqueCell<T>
+// `out` is the variance the checker measures for this interface, as it is for
+// `Cell`, and is declared for the same reason.
+export interface OpaqueCell<out T>
   extends BrandedCell<T, "opaque">, IOpaqueCell<T> {}
 
 export declare const OpaqueCell: CellTypeConstructor<AsOpaqueCell>;
@@ -2198,7 +2265,12 @@ export interface ICell<T>
     IDerivable<T>,
     IResolvable<T, Cell<T>> {}
 
-export interface Cell<T = unknown> extends BrandedCell<T, "cell">, ICell<T> {}
+// `out` is the variance the checker measures for this interface, its methods
+// being compared bivariantly. Declared, it is read; undeclared, the first
+// expression of a compile that relates two cells has the checker measure it,
+// by comparing two instantiations of the interface member by member.
+export interface Cell<out T = unknown>
+  extends BrandedCell<T, "cell">, ICell<T> {}
 
 export declare const Cell: CellTypeConstructor<AsCell>;
 
@@ -2449,11 +2521,14 @@ export type FactoryInput<T> =
  * - UnwrapCell<any> = any
  * - UnwrapCell<unknown> = unknown (preserves unknown)
  */
+// A single conditional whose check type is `T` is a form the checker can relate
+// between two instantiations, and `OpaqueCell<out T>` depends on that: its
+// `key()` returns this type, and the declared variance is validated through
+// it. `any` needs no branch of its own. A conditional type checked on `any`
+// evaluates to the union of its branches, which here is `any`.
 export type UnwrapCell<T> =
-  // Preserve any
-  0 extends (1 & T) ? T
-    // Unwrap AnyBrandedCell
-    : T extends AnyBrandedCell<infer S> ? UnwrapCell<S>
+  // Unwrap AnyBrandedCell
+  T extends AnyBrandedCell<infer S> ? UnwrapCell<S>
     // Otherwise return as-is
     : T;
 
@@ -2570,19 +2645,44 @@ export type NodeFactory<T, R> =
 
 /**
  * Access a space created by `PatternFactory.inSpace()` grants beyond its
- * owner, by principal DID, or `"*"` for anyone. The grants
+ * creator, by principal DID, or `"*"` for anyone. A principal DID may be
+ * granted `OWNER`, and `"*"` may not. The identity the run acts for is an
+ * OWNER of the space whatever the grants name it. The grants
  * apply when the space is created, and the first call to name a space in a
  * run is the one that creates it; a space that already exists keeps its own
  * access-control document.
  */
 export type InSpaceGrants = Readonly<
-  { [principal in DID | "*"]?: "READ" | "WRITE" }
+  & { [principal in DID]?: "READ" | "WRITE" | "OWNER" }
+  & { "*"?: "READ" | "WRITE" }
 >;
 
 /** Options for `PatternFactory.inSpace()`. */
 export interface InSpaceOptions {
-  /** Access the created space grants beyond its owner. */
+  /** Access the created space grants beyond its creator. */
   grants?: InSpaceGrants;
+
+  /**
+   * Whether the pattern's result is the root of the space, the piece that
+   * opening the space shows. The call that creates the space reserves the
+   * root in the space's genesis commit, and the commit placing the result
+   * links it as the space's root unless one is linked already. A DID or a
+   * cell names a space that already exists, so `inSpace()` refuses `root`
+   * with either. A space's root is shared by everyone the space admits, so
+   * `inSpace()` also refuses `root` for a pattern whose result is not
+   * space-scoped.
+   */
+  root?: boolean;
+
+  /**
+   * The kind the space declares, sealed in the genesis commit of the space
+   * the call creates and never changed afterward, as `fabrichat-room` is. A
+   * kind is a lowercase word, or several joined by single hyphens, of at most
+   * 32 characters. A DID or a cell names a space that already exists, so
+   * `inSpace()` refuses `spaceKind` with either, and it refuses a kind of
+   * any other form.
+   */
+  spaceKind?: string;
 }
 
 export type PatternFactory<T, R> =
@@ -2747,9 +2847,6 @@ export type JSONSchemaObj = {
   // bindings + a void event). Hidden from the default `cf piece verbs`
   // listing; always callable; never consulted by `cf piece call`.
   readonly tier?: "wrapper";
-  // Discovery hashtags from the doc comment (lowercased, without the leading
-  // `#`). Populated by the schema generator; mirrors the description text.
-  readonly tags?: readonly string[];
   // makes it so that your handler gets a Cell object for that property. So you can call .set()/.update()/.push()/etc on it.
   readonly asCell?: readonly AsCellType[];
   // temporarily used to assign labels like "confidential"
@@ -3480,13 +3577,16 @@ export interface LiftFunction {
   ): ModuleFactory<StripCell<Parameters<T>[0]>, ReturnType<T>>;
 }
 
-// Helper type to make non-Cell and non-Stream properties readonly in handler state.
-// Cell/Stream/SqliteDb are passed through whole (they are handle interfaces with
-// methods — `.get()/.set()`, `.send()`, `.exec()/.query()` — not data containers
-// to map over).
-export type HandlerState<T> = T extends Cell<any> ? T
+// Helper type to make the plain data in handler state readonly. A cell of every
+// kind, a stream, and a SqliteDb are passed through whole: they are handle
+// interfaces with methods — `.get()/.set()`, `.send()`, `.exec()/.query()` —
+// not data containers to map over. A fabric primitive, such as a
+// `FabricBytes`, is passed through whole too: it is an immutable value read
+// through its methods.
+export type HandlerState<T> = T extends AnyBrandedCell<any> ? T
   : T extends AnyStream ? T
   : T extends SqliteDb<any> ? T
+  : T extends FabricPrimitive ? T
   : T extends Array<infer U> ? ReadonlyArray<HandlerState<U>>
   : T extends object ? { readonly [K in keyof T]: HandlerState<T[K]> }
   : T;
@@ -4223,20 +4323,31 @@ export type PrincipalClaimKind = "authored-by" | "represents-principal";
 /**
  * Returns the one principal that the label on `target`'s value attests with a
  * claim of `kind`: the DID a profile represents, or the author of a record.
- * The claim is read at the value's root and on its top-level fields, and only
- * in the form the runtime writes when it resolves `RepresentsCurrentUser`,
- * `AuthoredByCurrentUser` or `ownerPrincipal`, which a pattern cannot write
- * for anyone but the principal it runs for.
+ * An `authored-by` claim is read at the value's root and on its top-level
+ * fields, and only in the form the runtime writes when it resolves
+ * `AuthoredByCurrentUser`, which a pattern cannot write for anyone but the
+ * principal it runs for; a claim in another form there makes the result
+ * `undefined`. A `represents-principal` claim on a value whose owner wrote a
+ * name (a `name` field holding more than whitespace) is read from the root and
+ * the `name` field alone: the written name says whose the value is, and a
+ * field still at its default may carry the principal of another runtime. On
+ * any other value it is read from every label entry the value holds, deeper
+ * ones and those a link carries included. It counts when it is an object of
+ * that kind with a subject beginning `did:`, and an atom in another form is
+ * skipped.
  *
- * `undefined` means the label names no verified single principal of that kind:
- * none, more than one, or a claim in some other form. It also means that
+ * `undefined` means the label names no single principal of that kind: none,
+ * more than one, or, for `authored-by`, a claim in some other form. It also means that
  * `target` is `undefined`, which is what a value that cannot be read yet reads
  * as. It is never a guess, and a caller refuses whatever needs a principal. A
- * label that cannot be read throws instead.
+ * label the caller cannot observe, a refused read among them, returns
+ * `undefined` as well, as missing metadata does; a label stored in a form the
+ * runtime cannot interpret throws.
  *
- * It reads the label, and no contents of the value beyond the link pointers
- * needed to reach it. In a reactive computation
- * (`computed()`, `lift()`) the result updates when the label changes. It can
+ * It reads the label, the value's `name` for a `represents-principal` claim,
+ * and no other contents of the value beyond the link pointers needed to reach
+ * them. In a reactive computation (`computed()`, `lift()`) the result updates
+ * when the label or the name changes. It can
  * also be called in a handler, on a cell an event names. Calling it in a
  * pattern body throws: wrap it in `computed()` instead.
  *
@@ -4246,10 +4357,15 @@ export type PrincipalClaimKind = "authored-by" | "represents-principal";
  * subject is refused, like any other literal DID a pattern writes there,
  * unless the schema declares it as the `ownerPrincipal` and it is the
  * principal the write acts for.
+ *
+ * `options` is a {@link PrincipalReadOptions}: with `label` of `"written"`,
+ * the label read is the one on the field `target` addresses, not the one on
+ * the document a link stored there leads to.
  */
 export declare function principalOf(
   target: AnyCell<unknown> | undefined,
   kind: PrincipalClaimKind,
+  options?: PrincipalReadOptions,
 ): DID | undefined;
 
 /**
@@ -4258,16 +4374,90 @@ export declare function principalOf(
  * caller can tell a label that attests no principal from one that attests
  * several, and refuse the second while admitting the first.
  *
- * `[]` means the label attests none. A non-empty array lists the DIDs it
- * attests, in the order they first appear. `undefined` means a claim there is
+ * `[]` means the label attests none, or that the caller cannot observe it, a
+ * refused read among them, as with missing metadata. A non-empty array lists
+ * the DIDs it attests, in the order they first appear. `undefined` means a claim there is
  * in some other form, from which no principal can be read, or that `target` is
  * `undefined`. The claims are read where, and as, `principalOf()` reads them,
- * it can be called where `principalOf()` can, and it throws where that does.
+ * `options.label` included; it can be called where `principalOf()` can,
+ * and it throws where that does.
  */
 export declare function principalsOf(
   target: AnyCell<unknown> | undefined,
   kind: PrincipalClaimKind,
+  options?: PrincipalReadOptions,
 ): DID[] | undefined;
+
+/**
+ * Returns the person whose own profile `target` is, or `undefined` when it is
+ * no one's. A profile is a person's own when its `name`, followed through the
+ * links it holds, stays within the profile's own documents, and its label,
+ * read as `principalOf()` reads a profile's, names that person alone. So a
+ * profile whose name links into another profile, or a document carrying no
+ * label at all, is no one's, and a profile set up for its owner is the
+ * owner's though its name was stored before names were labeled. This is the
+ * rule every reader of which profiles are a person's applies, `#profile`
+ * among them.
+ *
+ * It reads the profile's label and the pointers along its `name`, and no
+ * other contents of the profile. It can be called where `principalOf()` can:
+ * in a reactive computation the result updates when the label or the name
+ * changes, and in a handler a profile still loading has the handler run again
+ * once it arrives. Calling it in a pattern body throws.
+ */
+export declare function profileOwnerOf<T>(
+  target: AnyCell<T> | undefined,
+): DID | undefined;
+
+/**
+ * Returns the address, as `<space>/<id>`, of the pattern result the document
+ * a write to `target` lands in belongs to, its redirects followed and a link
+ * it holds as its value not: the result whose argument or internal
+ * cell (a `new Writable(...).for(...)` cell, say) the document is, as the
+ * runtime records it and no pattern can write. With `field`, only when that
+ * result's own `field` is that same document, so that a cell of the result's
+ * bound in another field's place names none. `undefined` means the document
+ * belongs to no result, is not the result's `field`, or that `target` is
+ * `undefined`. Cells one pattern instance owns return one address; a cell of
+ * another instance returns another. A handler that decides by several cells
+ * of one pattern names the field each must be, so that a binding naming
+ * another pattern's cells, or the right pattern's cells in the wrong places,
+ * is refused. It can be called where `principalOf()` can; calling it in a
+ * pattern body throws.
+ */
+export declare function resultOwnerOf<T>(
+  target: AnyCell<T> | undefined,
+  field?: string,
+): string | undefined;
+
+/**
+ * Returns the elements of the list `target` holds as the cells their links
+ * name, rather than the values those cells hold, reading only the list's own
+ * document: a list of links to profiles in other spaces reads as those links
+ * whether or not the profiles have loaded, so a handler can keep, reorder or
+ * drop them, and `spaceOf()` can name each one's space. An element that holds
+ * a value reads as a cell at that element; a `target` holding no list reads
+ * as none, and `undefined` as `undefined`. It can be called where
+ * `principalOf()` can; calling it in a pattern body throws, and a list that
+ * cannot be read throws too.
+ */
+export declare function linksOf<T>(
+  target: AnyCell<T[]> | AnyCell<readonly T[]> | undefined,
+): Cell<T>[] | undefined;
+
+/** Which label `principalOf()` and `principalsOf()` read. */
+export type PrincipalReadOptions = {
+  /**
+   * `"resolved"`, the default, is the label on the document `target`'s value
+   * resolves to, following a link stored there: for a field linking a
+   * profile, whom the profile represents. `"written"` is the label where a
+   * write to `target` lands, the field's own, which a link stored there does
+   * not change: what the runtime stamped there, such as who wrote the link.
+   * Links on the way to `target` are followed either way, and so is a
+   * redirect stored there.
+   */
+  readonly label?: "written" | "resolved";
+};
 
 /**
  * Returns the event key of the event the running handler handles: a string
@@ -4828,13 +5018,102 @@ export type SpaceAccessLevel = "OWNER" | "WRITE" | "READ" | "none";
  * body builds one graph for every viewer: wrap it in `computed()` instead.
  *
  * It names no principal, and tells a member only what a member can already
- * read, since any member can read the whole access list.
+ * read, since any member can read the whole access list. `spaceAccessOf()`
+ * returns another principal's level.
  */
 export type SpaceAccessFunction = (
   target: AnyCell<unknown> | undefined,
 ) => SpaceAccessLevel | undefined;
 
 export declare const spaceAccess: SpaceAccessFunction;
+
+/**
+ * Returns `principal`'s access to the space `target`'s value lives in, where
+ * `spaceAccess()` returns the current principal's own: that principal's
+ * entry in the space's access list, else the list's `"*"` entry, so a handler
+ * can tell whether the principal a label names still belongs to the space.
+ *
+ * The answer is the list's alone, and does not depend on who is asking, so a
+ * computation calling it keeps its read scope, and the memory server's
+ * refusal of the caller's own session does not enter into it. `undefined`
+ * means the list has not arrived, the space has no list, or `target` is
+ * `undefined`. It can be called where `spaceAccess()` can, and throws where
+ * that does; a `principal` that is not a well-formed DID throws too, and `*`
+ * is not a principal.
+ */
+export type SpaceAccessOfFunction = (
+  target: AnyCell<unknown> | undefined,
+  principal: DID,
+) => SpaceAccessLevel | undefined;
+
+export declare const spaceAccessOf: SpaceAccessOfFunction;
+
+/**
+ * The principals a space's access list names, each with its level, as
+ * `spaceMembers()` returns them.
+ */
+export interface SpaceMemberList {
+  /** Each principal the list names, with the level its entry grants. */
+  readonly principals: Readonly<Record<DID, SpaceGrantLevel>>;
+
+  /**
+   * The level the list's `"*"` entry grants anyone it does not name, absent
+   * when the list has no such entry. It names no one, so it adds no member.
+   */
+  readonly anyone?: SpaceGrantLevel;
+}
+
+/**
+ * Returns the principals the access list of the space `target`'s value lives
+ * in names, each with its level, so a pattern can list a space's members. The
+ * list's `"*"` entry is not a member, and is reported apart, as `anyone`. A
+ * service DID the deployment grants `OWNER` everywhere holds it without an
+ * entry, and is not listed.
+ *
+ * Only a principal the list grants access gets it: the current principal,
+ * found as `spaceAccess()` finds it, through its own entry or the `"*"`
+ * entry. Anyone else gets `undefined`, as does a call for which
+ * `spaceAccess()` would return `undefined`. It is never an empty list, so a
+ * reader can tell "not known yet" from "nobody". The list tells a member only
+ * what a member can already read, since any member can read the whole access
+ * list.
+ *
+ * As with `spaceAccess()`, a reactive computation calling it gets a value of
+ * its viewer's own, which updates when the access list changes. It can be
+ * called where `spaceAccess()` can, and throws where that does. The result
+ * carries no label.
+ */
+export type SpaceMembersFunction = (
+  target: AnyCell<unknown> | undefined,
+) => SpaceMemberList | undefined;
+
+export declare const spaceMembers: SpaceMembersFunction;
+
+/**
+ * Returns the DID of the space `target`'s value lives in, after following any
+ * links it holds: so a pattern can name a space it holds a cell of, such as
+ * one a handler just created with `PatternFactory.inSpace()`, in data such as
+ * an invitation to it. A cell in the pattern's own space returns that space's
+ * DID.
+ *
+ * `undefined` means the answer is not known yet: `target` is `undefined`,
+ * which is what a value that cannot be read yet reads as, or the run has named
+ * an `inSpace()` target whose space is not resolved yet. The runtime resolves
+ * that space once the run ends, and runs the handler or computation again,
+ * discarding what the first run wrote. The run after it returns the new
+ * space's DID. It also means there is no answer at all: `target`'s links run
+ * in a cycle, and so name no value in any space.
+ *
+ * Call it in a handler or a reactive computation (`computed()`, `lift()`).
+ * Calling it in a pattern body throws, since a pattern body's references name
+ * no space yet: wrap it in `computed()` instead. The answer does not depend on
+ * who asks, and carries no label of its own.
+ */
+export type SpaceOfFunction = <T>(
+  target: AnyCell<T> | undefined,
+) => DID | undefined;
+
+export declare const spaceOf: SpaceOfFunction;
 
 /** The level `grantSpaceAccess()` sets an access-list entry to. */
 export type SpaceGrantLevel = "READ" | "WRITE" | "OWNER";
@@ -4849,21 +5128,28 @@ export type SpaceGrantLevel = "READ" | "WRITE" | "OWNER";
  * what is written after it, since adding a member changes no value's label.
  *
  * The acting principal, the event's actor, must hold `OWNER` in the space, and
- * the event must be a trusted gesture: a person's action on a rendered UI.
- * `principal` must be a DID other than the actor's own, the space's own, and
- * `"*"`. The space may not be the actor's own Home space. Lowering the space's
- * last concrete `OWNER` is refused. A runtime
+ * the event must be a trusted gesture: a person's action on a rendered UI or
+ * on a native host's reviewed control. `principal` must be a DID other than
+ * the actor's own, the space's own, and `"*"`. The space may not be the
+ * actor's own Home space. Lowering the space's last concrete `OWNER` is
+ * refused. A runtime
  * cannot know the deployment's service DIDs, or the identities its serving
  * runtimes act through, so it does not refuse one of those as `principal`.
  *
  * The change commits as a commit of its own, before the handler's other
- * writes commit. If the handler's writes then fail, the change stands.
+ * writes commit. If the handler's writes then fail, the change stands. On a
+ * serving runtime it commits when the serving loop commits the handler's run,
+ * still ahead of the run's writes; a run the serving loop withdraws before
+ * that commit changes nothing, and its event runs again. A client's
+ * speculative echo of a handler the serving loop runs changes nothing.
  *
- * Available only in a handler on a client runtime, and throws anywhere else:
- * a serving runtime cannot yet check that the event's actor holds `OWNER`.
- * Every refusal throws. One the handler lets escape drops its whole
- * transaction; the call throws before staging anything, so one the handler
- * catches leaves nothing staged for that call.
+ * Available only in a handler, on a client or a serving runtime alike, and
+ * throws anywhere else. Every refusal the call can see throws. One the
+ * handler lets escape drops its whole transaction; the call throws before
+ * staging anything, so one the handler catches leaves nothing staged for that
+ * call. A refusal found only once the handler returns fails its whole run,
+ * but for one caused by a concurrent change to the list, after which the
+ * handler runs again for the same event.
  */
 export declare function grantSpaceAccess(
   target: AnyCell<unknown>,
@@ -4884,18 +5170,55 @@ export declare function grantSpaceAccess(
  * refused.
  *
  * The change commits as a commit of its own, before the handler's other
- * writes commit. If the handler's writes then fail, the change stands.
+ * writes commit. If the handler's writes then fail, the change stands. On a
+ * serving runtime it commits when the serving loop commits the handler's run,
+ * still ahead of the run's writes; a run the serving loop withdraws before
+ * that commit changes nothing, and its event runs again. A client's
+ * speculative echo of a handler the serving loop runs changes nothing.
  *
- * Available only in a handler on a client runtime, and throws anywhere else:
- * a serving runtime cannot yet check that the event's actor holds `OWNER`.
- * Every refusal throws. One the handler lets escape drops its whole
- * transaction; the call throws before staging anything, so one the handler
- * catches leaves nothing staged for that call.
+ * Available only in a handler, on a client or a serving runtime alike, and
+ * throws anywhere else. Every refusal the call can see throws. One the
+ * handler lets escape drops its whole transaction; the call throws before
+ * staging anything, so one the handler catches leaves nothing staged for that
+ * call. A refusal found only once the handler returns fails its whole run,
+ * but for one caused by a concurrent change to the list, after which the
+ * handler runs again for the same event.
  */
 export declare function revokeSpaceAccess(
   target: AnyCell<unknown>,
   principal: DID,
 ): void;
+
+/**
+ * Returns the id of a blob holding the bytes and media type of the blob
+ * `blobId` under the file name `name`, in the space `target`'s value lives in.
+ * A blob's id is the hash of its name, media type and bytes, and a blob never
+ * changes, so this is how a file is renamed: the space then holds the same
+ * bytes under both names, and whatever names the file names the new blob. A
+ * blob already named `name` is its own answer.
+ *
+ * The new blob's record is staged in the handler's transaction, and is stored
+ * when the transaction commits. Its bytes travel with the commit, so a handler
+ * renaming a large file loads its bytes and then sends them back.
+ *
+ * Returns `undefined` when the space holds no blob `blobId`. A blob still
+ * loading is not one of those: the handler is withdrawn, and runs again once
+ * the blob arrives.
+ *
+ * The record carries no label, as no blob does: `name` is readable by anyone
+ * who can fetch the blob, as its bytes are. The blob's id hashes the name in
+ * with the media type and bytes, so fetching it takes knowing all three
+ * already, and a correct guess at all three is confirmed by fetching.
+ *
+ * Available only in a handler, and throws anywhere else. Throws too when
+ * `blobId` is not a non-empty string, or `name` is not a non-empty string of
+ * well-formed Unicode of at most 1024 bytes as UTF-8.
+ */
+export declare function nameBlob(
+  target: AnyCell<unknown>,
+  blobId: string,
+  name: string,
+): string | undefined;
 
 /**
  * Convert an entity-id reference — as produced by {@link getEntityId} or a
@@ -4958,11 +5281,15 @@ export type UIRenderable = {
 /**
  * JSX element type - the result of a JSX expression.
  * Can be a VNode, or a cell containing something with a [UI] property.
+ *
+ * A generated schema lists the members in the order they are written here,
+ * and nearly every pattern's schema holds one, so reordering them changes
+ * every such schema.
  */
 export type JSXElement =
   | VNode
-  | AnyBrandedCell<UIRenderable>
-  | Reactive<UIRenderable>;
+  | Reactive<UIRenderable>
+  | AnyBrandedCell<UIRenderable>;
 
 /** A "virtual view node", e.g. a virtual DOM element */
 export type VNode = {

@@ -20,81 +20,109 @@ The file is JSON, holding only ASCII: every other character is escaped. Its
 
 - `name`: unique among the cases.
 - `section`: the part of the spec the case exercises.
-- `encode`: a value, under `value`, and either the exact text encoding it
-  yields, under `text`, or `refused: "unencodable"`.
-- `decode`: a text, under `text`, and either the value decoding it yields, under
-  `value`, or the reason it is refused, under `refused`: `not-fvj1` when the
-  text lacks the prefix, `not-json` when what follows the prefix is not JSON,
-  and `malformed` for any other form the format does not allow. The spec settles
-  all three alike, so a decoder need only refuse; the kind says why.
-- `divergence`: present where this package falls short of the format, as the
-  spec states it. The `encode` and `decode` beside it are then the format's
-  outcomes, computed by the generator rather than written by hand, and
-  `divergence.encode` and `divergence.decode` are this package's, given only
-  where they differ. `divergence.note` says what the format requires.
+- `requires`: present where the case applies only to a reader that constructs a
+  flavor of regular expression, or that guarantees more by some measure of size
+  than every reader must, as [`value-probes.md`](value-probes.md#requirements)
+  describes. A reader that does not meet it skips the entry.
+- `text`: the text to decode. For a case that starts from a value, it is the
+  value's canonical text, as [Exact text](#exact-text) describes, with `null`
+  wherever a patch puts what no text carries.
+- `unclaimed` and `patches`: the mods to decoding `text`, present where the case
+  needs them, as [`value-probes.md`](value-probes.md) defines them. Among the
+  cases they state symbols of no registry key; none of the cases needs
+  `unclaimed`.
+- `probes` or `refused`: what decoding `text` with the mods yields. `probes`
+  states the value it returns, in the vocabulary
+  [`value-probes.md`](value-probes.md) defines. `refused` says why the text is
+  refused: `not-fvj1` when it lacks the prefix, `not-json` when what follows the
+  prefix is not JSON, and `malformed` for any other form the format does not
+  allow. The spec settles all three alike, so a decoder need only refuse; the
+  kind says why.
+- `canonical`: present where `text` is not the canonical text of the value it
+  decodes to, as with whitespace, `1.0e2`, base64 padding, an escape in
+  uppercase, or record keys out of order. It is the canonical text.
+- `reencode`: `{"refused": "unencodable"}`, present where the value decoded has
+  no text, as a cycle and a symbol of no registry key have none.
+- `problematicAt`: present only beside `refused`, as described under
+  [Lenient decoding](#lenient-decoding).
+- `divergence`: present where this package falls short of the format, as
+  described under [Divergences](#divergences).
 
-An entry has `encode`, `decode`, or both. A value whose text decodes back to it
-has both, with the same value and text. A text that is not the canonical form of
-the value it decodes to has an `encode` giving that canonical form.
+## Checking an entry
+
+A reader that meets the entry's `requires`, if it has one, checks the entry in
+three steps:
+
+1. Decode `text`, applying the mods.
+2. Check the result against `probes`, walking the decoded value, as
+   [`value-probes.md`](value-probes.md) describes; or, where the entry has
+   `refused`, check that the decode was refused.
+3. Re-encode the decoded value, and compare the text with `canonical` where the
+   entry has it, and with `text` otherwise; or, where the entry has `reencode`,
+   check that the encode was refused.
+
+The probes fix the structure, the fragments fix each leaf, and the re-encode
+fixes the whole, catching anything a decoder adds that a walk of its own value
+might not visit.
 
 A refusal is recorded only where the codec refused; a fault in the codec fails
-generation instead. Refusals assume a strict decoder. A lenient one returns a
-`Problematic` value in place of raising, at the point of the malformation.
+generation instead.
 
 ## Exact text
 
-An encoder that is to match `text` byte for byte writes the JSON that
-ECMAScript's `JSON.stringify()` writes with no indentation, as ECMA-262 defines
-it: a string by the `QuoteJSONString` abstract operation, and a number by
-`Number::toString`. The result is JSON as RFC 8259 defines it. Record keys are
-in the order section 10 of the spec requires, UTF-8 byte order, a lone surrogate
-taking the bytes WTF-8 gives it.
+`canonical`, `text` where there is no `canonical`, each fragment, and each
+`divergence.encode` text are canonical text, the one text a conforming encoder
+writes, as
+[section 11 of `3-json-encoding.md`](../../../../docs/specs/space-model-formal-spec/3-json-encoding.md#11-canonical-text)
+defines it, with record keys in the order of section 10.
 
-## Descriptors
+## Lenient decoding
 
-A `value` is a descriptor: JSON that says everything about a value the format
-carries, and nothing about how the format carries it. Two descriptors describe
-the same value exactly when they are equal as JSON read this way: a number is an
-IEEE 754 double, so `1` and `1.0` are equal, and an integer past 2^53 is written
-in the shortest form that reads back as its double and must be read as that
-double, not as an exact integer; a string is equal to another with the same code
-points, compared without normalization; an array is equal to another of equal
-elements in the same order; and an object is equal to another with the same keys
-holding equal values.
+The refusals assume a strict decoder. A lenient one returns a `Problematic`
+value in place of refusing, as sections 3 and 9 of the spec require. The spec
+fixes that one appears, but not where in the value, nor what its fields hold.
 
-`null`, `true`, `false`, and a finite number other than negative zero describe
-themselves. A string describes itself when it holds no lone surrogate. Every
-other descriptor is an object with one key, naming the kind of value:
+`problematicAt` is the path at which this package's lenient decoder puts the one
+`Problematic` value it returns for the text, which an implementation elsewhere
+need not match. This package puts a codec's refusal at the tagged value refused,
+a structural fault at the container being built when it was found, and a text
+that lacks the prefix or is not JSON at the root. The fields are this package's,
+such as an English message, so the fixture neither probes them nor re-encodes
+the value. A `Problematic` value within another's state, as for a link whose
+payload holds a malformed tag, is part of what the other preserves, and is not
+counted.
 
-| Descriptor                                       | Value                                                                                          |
-| ------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
-| `{"utf16": [55296, 97]}`                         | A string holding a lone surrogate, as its UTF-16 code units.                                   |
-| `{"number": "-0"}`                               | Negative zero, or with `NaN`, `+Infinity` or `-Infinity`, those.                               |
-| `{"undefined": null}`                            | `undefined`.                                                                                   |
-| `{"bigint": "-129"}`                             | A bigint, in decimal.                                                                          |
-| `{"symbol": "key"}`                              | The symbol registered under a key, which is a string descriptor.                               |
-| `{"unregisteredSymbol": "local"}`                | A symbol with no registry key, under its description, or `null` for none.                      |
-| `{"array": [1, {"hole": 3}, 2]}`                 | An array. A `hole` entry stands for that many absent elements, in runs as long as possible.    |
-| `{"record": [["a", 1], ["b", 2]]}`               | A plain object, as key and value pairs in UTF-8 order of key. A key is a string descriptor.    |
-| `{"Bytes": "0102"}`                              | Bytes, in lowercase hexadecimal.                                                               |
-| `{"EpochNsec": "1700"}`                          | Likewise `EpochDay`, `DurationNsec` and `DurationDay`: the quantity, in decimal.               |
-| `{"Hash": {"tag": "fid1", "hash": "00ff"}}`      | A hash: its algorithm tag, and its bytes in hexadecimal.                                       |
-| `{"KeyPair": {...}}`                             | A key pair: `algorithm`, and `publicKey` and `privateKey` in hexadecimal.                      |
-| `{"RegExp": {...}}`                              | A regular expression: `flavor`, `source` and `flags`.                                          |
-| `{"Unavailable": {...}}`                         | Unavailable data: `reason`, and `errorKind` and `errorMessage` where the value has them.       |
-| `{"Error": {...}}`                               | An error: `type`, `name`, `message`, `stack` and `cause` where present, and `extras` as pairs. |
-| `{"Link": {"record": [...]}}`                    | A link, by the record of its payload.                                                          |
-| `{"Map": [[key, value], ...]}`                   | A map, its entries in insertion order.                                                         |
-| `{"Set": [value, ...]}`                          | A set, its values in insertion order.                                                          |
-| `{"Unknown": {"tag": "Future@2", "state": ...}}` | A value of a type no codec claims: the tag it arrived under, and its decoded state.            |
-| `{"Problematic": {...}}`                         | A preserved failure: `tag`, `state`, and `error`.                                              |
+## Divergences
 
-A link's payload is opaque to the format: its fields are whatever the link's
-users define, and the payloads in the cases are examples rather than a required
-shape. `Map` and `Set` values are in the notation but not among the cases, their
-codecs being stubs pending general `FabricInstance` support.
+A `divergence` is present where this package falls short of the format, as the
+spec states it. The rest of the entry is then the format's outcome, computed by
+the generator rather than written by hand. `divergence.note` says what the
+format requires, and `divergence.decode` and `divergence.encode` are this
+package's outcomes, each given only where it differs from the format's:
+`divergence.decode` is `{"probes": [...]}` or `{"refused": kind}`, and
+`divergence.encode` is `{"text": ...}` or `{"refused": "unencodable"}`.
 
-Strings inside the class descriptors are string descriptors. `name` in an
-`Error` is the error's name even where the wire writes `null` for a name equal
-to the type, and an `Unavailable` holds an `errorMessage` only where one is
-stored, a kind's default message not being one.
+Where the spec refuses a text that this package decodes, the entry has `refused`
+and no probes, and `divergence.decode` gives the probes of what this package
+decodes. The entry has no `problematicAt`, this package's lenient decoder making
+no `Problematic` value there, and nothing is re-encoded, the spec having no
+value to re-encode.
+
+Where the spec decodes a text that this package's decoder refuses, as it does
+for a record with the key `__proto__` or `constructor`, or decodes to another
+value, `divergence.decode` is this package's outcome, and
+`test/fvj1-conformance.test.ts` re-encodes the value the case makes instead of
+the value decoded.
+
+Where this package decodes a text as the spec does, but refuses to re-encode
+what it decodes to, as it does for `{"/quote":{"__proto__":1}}`, the entry has
+the spec's probes and `canonical`, and `divergence.encode` is the refusal.
+
+A divergence that does not hold fails generation, so that a fix here retires the
+mark rather than leaving it to mislead.
+
+## What is not among the cases
+
+`Map` and `Set` values are not among the cases, their codecs being stubs pending
+general `FabricInstance` support. Nor is a value holding a cycle, which the mods
+can state and which re-encodes to a refusal.

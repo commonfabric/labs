@@ -297,7 +297,7 @@ export default pattern((state) => {
         } as const satisfies __cfHelpers.JSONSchema, {
             "enum": ["B", "C"]
         } as const satisfies __cfHelpers.JSONSchema, {
-            "enum": ["B", "C", "A"]
+            "enum": ["A", "B", "C"]
         } as const satisfies __cfHelpers.JSONSchema, __cfLift_2({ state: {
                 score: state.key("score")
             } }), "A", __cfHelpers.ifElse({
@@ -317,9 +317,9 @@ export default pattern((state) => {
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
-            "enum": ["Single", "Multiple"]
+            "enum": ["Multiple", "Single"]
         } as const satisfies __cfHelpers.JSONSchema, {
-            "enum": ["Single", "Multiple", "Empty"]
+            "enum": ["Empty", "Multiple", "Single"]
         } as const satisfies __cfHelpers.JSONSchema, __cfLift_4({ state: {
                 count: state.key("count")
             } }), "Empty", __cfHelpers.ifElse({
@@ -329,7 +329,7 @@ export default pattern((state) => {
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
-            "enum": ["Single", "Multiple"]
+            "enum": ["Multiple", "Single"]
         } as const satisfies __cfHelpers.JSONSchema, __cfLift_5({ state: {
                 count: state.key("count")
             } }), "Single", "Multiple"))}
@@ -361,9 +361,9 @@ export default pattern((state) => {
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
-            "enum": ["User", "Guest"]
+            "enum": ["Guest", "User"]
         } as const satisfies __cfHelpers.JSONSchema, {
-            "enum": ["User", "Guest", "Admin"]
+            "enum": ["Admin", "Guest", "User"]
         } as const satisfies __cfHelpers.JSONSchema, __cfLift_6({ state: {
                 userType: state.key("userType")
             } }), "Admin", __cfHelpers.ifElse({
@@ -373,7 +373,7 @@ export default pattern((state) => {
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
-            "enum": ["User", "Guest"]
+            "enum": ["Guest", "User"]
         } as const satisfies __cfHelpers.JSONSchema, __cfLift_7({ state: {
                 userType: state.key("userType")
             } }), "User", "Guest"))}
@@ -426,7 +426,7 @@ export default pattern((state) => {
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
-            "enum": ["Premium Features", "Basic Features"]
+            "enum": ["Basic Features", "Premium Features"]
         } as const satisfies __cfHelpers.JSONSchema, __cfHelpers.unless({
             type: "boolean"
         } as const satisfies __cfHelpers.JSONSchema, {
@@ -483,9 +483,9 @@ export default pattern((state) => {
                 }
             } as const satisfies __cfHelpers.JSONSchema, {
                 anyOf: [{
-                        $ref: "https://commonfabric.org/schemas/vnode.json"
-                    }, {
                         $ref: "#/$defs/UIRenderable"
+                    }, {
+                        $ref: "https://commonfabric.org/schemas/vnode.json"
                     }],
                 $defs: {
                     UIRenderable: {
@@ -544,9 +544,9 @@ export default pattern((state) => {
             }
         } as const satisfies __cfHelpers.JSONSchema, {
             anyOf: [{
-                    $ref: "https://commonfabric.org/schemas/vnode.json"
-                }, {
                     $ref: "#/$defs/UIRenderable"
+                }, {
+                    $ref: "https://commonfabric.org/schemas/vnode.json"
                 }],
             $defs: {
                 UIRenderable: {

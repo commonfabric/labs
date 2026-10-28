@@ -120,7 +120,7 @@ export default pattern((state) => ({
     } as const satisfies __cfHelpers.JSONSchema, {
         type: "string"
     } as const satisfies __cfHelpers.JSONSchema, {
-        "enum": ["Yes", "No"]
+        "enum": ["No", "Yes"]
     } as const satisfies __cfHelpers.JSONSchema, __cfLift_3({ state: {
             items: state.key("items"),
             threshold: state.key("threshold")

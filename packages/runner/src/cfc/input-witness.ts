@@ -49,7 +49,7 @@ export const inputWitnessDepth = (atom: CfcAtom): number => {
 
 /**
  * The atoms of one input location's integrity that are retained as input
- * witnesses. Only the `TransformedBy` family is retained: it is the provenance
+ * witnesses. Only the `TransformedBy` family is retained: it is a value-bound
  * family the default transition never carries forward, so without this it
  * says nothing past the value it was minted on, and it is what a chain of
  * endorsed transformers needs. Hereditary atoms already survive by the meet,

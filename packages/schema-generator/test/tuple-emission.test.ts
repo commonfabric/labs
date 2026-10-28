@@ -60,6 +60,8 @@ describe("fixed-length tuple emission", () => {
   });
 
   it("merges literal tuples into a positionless enum", async () => {
+    // The items are the union of the element types, listed in the order the
+    // tuple lists its elements.
     expect(await generate(`type Lit = ["a", 1];`, "Lit")).toEqual({
       type: "array",
       items: { enum: ["a", 1] },

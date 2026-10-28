@@ -30,6 +30,7 @@
  *   deno task measure-batch suite.json --fabric-api-url=http://localhost:8040
  *   deno task measure-batch suite.json --expect-git-sha=<sha>
  *   deno task measure-batch suite.json --cell-spec=./cell.json
+ *   deno task measure-batch suite.json --compare-with=./tonight/report.json
  *   deno task measure-batch suite.json --allow-diverged
  *
  * `--cell-spec` is what refuses a misconfigured console before the first task
@@ -1179,6 +1180,60 @@ export interface SessionConfiguration {
   runsWithoutSkillRegistry?: number;
 
   runsInFamily?: number;
+
+  /**
+   * The sandbox runtime the root run records it ran on, from its own
+   * `run-state.json`: a run on the native runtime and a run on Docker are
+   * different experiments with the same tasks. Absent where the run records
+   * none, as a run written before runs recorded it does not.
+   */
+  sandboxRuntime?: string;
+
+  /**
+   * How the run's entrypoint chose that runtime, from the same record:
+   * `named`, by a flag or the environment, or `default on <platform>`, where
+   * nothing named one. Absent where the run records no choice.
+   */
+  sandboxRuntimeChosen?: string;
+}
+
+/**
+ * One line of the console's configuration as a batch report records it.
+ * `recorded` is false for a line that recorded nothing, and that therefore
+ * reads `NOT RECORDED`.
+ */
+export interface ConfigurationReading {
+  factor: string;
+  reading: string;
+  recorded: boolean;
+}
+
+/** A line of the console's configuration that two batches do not share. */
+export interface ConfigurationDifference {
+  factor: string;
+  earlier: string;
+  later: string;
+}
+
+/**
+ * How a batch compares with an earlier one, by the console configuration
+ * each recorded.
+ */
+export interface BatchComparison {
+  /** The earlier batch's `report.json`, as `--compare-with` named it. */
+  report: string;
+
+  /**
+   * Every line that reads differently in the two, a line one of them did not
+   * record included; none for batches whose lines all agree.
+   */
+  differences: readonly ConfigurationDifference[];
+
+  /**
+   * The lines neither batch recorded. They read the same, and nothing shows
+   * the two agree on them.
+   */
+  unrecorded: readonly string[];
 }
 
 /** What one task did, as the report records it. */
@@ -1221,6 +1276,9 @@ export interface BatchResult {
   indexBefore: IndexSnapshot;
   indexAfter: IndexSnapshot;
   results: readonly TaskResult[];
+
+  /** How this batch compares with the one `--compare-with` named. */
+  comparedWith?: BatchComparison;
 }
 
 /**
@@ -1258,7 +1316,37 @@ const readSkillRegistry = async (
 /** The root run identified by the console's returned turn id. */
 interface RunCandidate {
   runId: string;
+
+  /** The sandbox runtime its state records, and how it was chosen. */
+  sandboxRuntime: Pick<
+    SessionConfiguration,
+    "sandboxRuntime" | "sandboxRuntimeChosen"
+  >;
 }
+
+/**
+ * The sandbox runtime a run's state records, and how its entrypoint chose
+ * it, as `SessionConfiguration` carries them. Each is left out where the
+ * state holds none.
+ */
+const sandboxRuntimeOf = (
+  runState: Record<string, unknown>,
+): RunCandidate["sandboxRuntime"] => {
+  const runtime = runState.sandboxRuntime;
+  const choice = runState.sandboxRuntimeChoice;
+  const recorded = isObjectNotArray(choice) ? choice : undefined;
+  const source = recorded?.source;
+  const platform = recorded?.platform;
+  const chosen = source === "flag" || source === "environment"
+    ? "named"
+    : source === "default" && typeof platform === "string"
+    ? `default on ${platform}`
+    : undefined;
+  return {
+    ...(typeof runtime === "string" ? { sandboxRuntime: runtime } : {}),
+    ...(chosen !== undefined ? { sandboxRuntimeChosen: chosen } : {}),
+  };
+};
 
 /** Candidates found and in-scope artifacts the scan could not read. */
 interface RunCandidateScan {
@@ -1313,7 +1401,10 @@ const runCandidates = async (
     ) {
       continue;
     }
-    candidates.push({ runId: entry.name });
+    candidates.push({
+      runId: entry.name,
+      sandboxRuntime: sandboxRuntimeOf(runState),
+    });
   }
   return {
     candidates: candidates.sort((left, right) =>
@@ -1452,7 +1543,14 @@ export const runTask = async (
     };
   }
   const runId = scan.candidates[0].runId;
-  const located = { ...base, runId };
+  const located = {
+    ...base,
+    runId,
+    configuration: {
+      ...base.configuration,
+      ...scan.candidates[0].sandboxRuntime,
+    },
+  };
   const members = scan.directories.filter((name) =>
     name === runId || name.startsWith(`${runId}.`)
   );
@@ -1585,16 +1683,20 @@ puts one to work, because the index holds entries that are exactly that and
 they would otherwise inflate the reading.
 
 **These numbers are comparable to another batch's only if the index readings
-above match.** The corpus changes underneath a measurement — entries are
-seeded, archived, and rescored between runs — and a change in what the runs did
-is as easily an effect of that as of anything in the harness.
+above match, and the console lines below.** The corpus changes underneath a
+measurement — entries are seeded, archived, and rescored between runs — and a
+change in what the runs did is as easily an effect of that as of anything in
+the harness. So is a change of sandbox runtime: a run on the native runtime and
+a run on Docker are different experiments with the same tasks.
 
 A run this could not read is counted as not read, never as a run that did
 nothing.
 `;
 
 /**
- * What the console was running under, as the sessions reported it.
+ * What the console was running under, as the sessions and their runs
+ * recorded it, one reading per line of the report. Two batches are comparable
+ * only where every one of these agrees.
  *
  * The skills root is deliberately named as not recorded rather than left out.
  * The console scans it before every turn and exposes it over no route, so a
@@ -1602,32 +1704,190 @@ nothing.
  * authored without the authoring guides — a difference that would otherwise be
  * invisible in the report and indistinguishable from an index effect.
  */
-const renderConfiguration = (
-  results: readonly TaskResult[],
-): readonly string[] => {
+export const configurationReadings = (
+  configurations: readonly SessionConfiguration[],
+): readonly ConfigurationReading[] => {
   const models = new Set(
-    results.map((result) => result.configuration.model).filter((model) =>
-      model !== undefined
-    ),
+    configurations.map((configuration) => configuration.model).filter((
+      model,
+    ) => model !== undefined),
   );
   const postures = new Set(
-    results.map((result) => result.configuration.cfcEnforcementMode).filter((
-      mode,
-    ) => mode !== undefined),
+    configurations.map((configuration) => configuration.cfcEnforcementMode)
+      .filter((mode) => mode !== undefined),
   );
-  const named = (values: ReadonlySet<string>): string =>
-    values.size === 0
+  const named = (factor: string, values: ReadonlySet<string>) => ({
+    factor,
+    reading: values.size === 0
       ? "NOT RECORDED — no session reported one"
-      : [...values].sort().join(", ");
+      : [...values].sort().join(", "),
+    recorded: values.size > 0,
+  });
   return [
-    "## The console this ran against",
-    "",
-    `- Model: ${named(models)}`,
-    `- CFC enforcement: ${named(postures)}`,
-    `- Skills root: ${skillsRoot(results)}`,
-    "",
+    named("Model", models),
+    named("CFC enforcement", postures),
+    skillsRoot(configurations),
+    sandboxRuntime(configurations),
   ];
 };
+
+/** The console's configuration, as the report renders it. */
+const renderConfiguration = (
+  results: readonly TaskResult[],
+): readonly string[] => [
+  "## The console this ran against",
+  "",
+  ...configurationReadings(results.map((result) => result.configuration))
+    .map(({ factor, reading }) => `- ${factor}: ${reading}`),
+  "",
+];
+
+/**
+ * The sandbox runtime the runs ran on and how it was chosen, read from each
+ * root run's own state. A run that records none says so, and so does a run
+ * that records its runtime and not how it was chosen: the reading is
+ * recorded only where every run records both.
+ */
+const sandboxRuntime = (
+  configurations: readonly SessionConfiguration[],
+): ConfigurationReading => {
+  const runtimes = new Set(
+    configurations.flatMap((configuration) =>
+      configuration.sandboxRuntime === undefined ? [] : [
+        `${configuration.sandboxRuntime} (${
+          configuration.sandboxRuntimeChosen ??
+            "how it was chosen NOT RECORDED"
+        })`,
+      ]
+    ),
+  );
+  const unrecorded =
+    configurations.filter((configuration) =>
+      configuration.sandboxRuntime === undefined
+    ).length;
+  const listed = runtimes.size === 0
+    ? "NOT RECORDED — no run recorded one"
+    : [...runtimes].sort().join(", ");
+  return {
+    factor: "Sandbox runtime",
+    reading: unrecorded === 0 || runtimes.size === 0
+      ? listed
+      : `${listed}; ${unrecorded} of ${configurations.length} runs recorded none`,
+    recorded: configurations.length > 0 &&
+      configurations.every((configuration) =>
+        configuration.sandboxRuntime !== undefined &&
+        configuration.sandboxRuntimeChosen !== undefined
+      ),
+  };
+};
+
+/**
+ * How `later` compares with `earlier` by the console configuration each
+ * recorded, line by line. A line that reads differently in the two is a
+ * difference, and so is a line one of them did not record and the other did:
+ * a record written before batches recorded the sandbox runtime is not
+ * comparable on that line with a batch that records one.
+ */
+export const compareConfigurations = (
+  report: string,
+  earlier: readonly SessionConfiguration[],
+  later: readonly SessionConfiguration[],
+): BatchComparison => {
+  const before = configurationReadings(earlier);
+  // Both lists hold the same lines in the same order, as one function builds
+  // them.
+  const pairs = configurationReadings(later).map((now, index) => ({
+    then: before[index],
+    now,
+  }));
+  return {
+    report,
+    differences: pairs.filter(({ then, now }) => then.reading !== now.reading)
+      .map(({ then, now }) => ({
+        factor: now.factor,
+        earlier: then.reading,
+        later: now.reading,
+      })),
+    unrecorded: pairs.filter(({ then, now }) =>
+      then.reading === now.reading && !now.recorded
+    ).map(({ now }) => now.factor),
+  };
+};
+
+/** The string fields of a recorded `SessionConfiguration`. */
+const RECORDED_TEXT_FIELDS: readonly (
+  | "model"
+  | "cfcEnforcementMode"
+  | "skillsRoot"
+  | "skillsUnread"
+  | "sandboxRuntime"
+  | "sandboxRuntimeChosen"
+)[] = [
+  "model",
+  "cfcEnforcementMode",
+  "skillsRoot",
+  "skillsUnread",
+  "sandboxRuntime",
+  "sandboxRuntimeChosen",
+];
+
+/**
+ * The console configuration an earlier batch's `report.json` records for each
+ * of its tasks. A field the record does not hold is left out, and its line
+ * then reads as not recorded: a record written before batches recorded the
+ * sandbox runtime is read, and differs from every batch on that line.
+ *
+ * @throws For a record that is not a batch report: one holding no `results`
+ * list, or a result holding no `configuration` object.
+ */
+export const parseRecordedConfigurations = (
+  input: unknown,
+): SessionConfiguration[] => {
+  const results = isObjectNotArray(input) ? input.results : undefined;
+  if (!Array.isArray(results)) {
+    throw new Error("the earlier batch record holds no `results` list");
+  }
+  return results.map((result: unknown, index) => {
+    const configuration = isObjectNotArray(result)
+      ? result.configuration
+      : undefined;
+    if (!isObjectNotArray(configuration)) {
+      throw new Error(
+        `result ${index} of the earlier batch record holds no \`configuration\``,
+      );
+    }
+    const parsed: SessionConfiguration = {};
+    for (const field of RECORDED_TEXT_FIELDS) {
+      const value = configuration[field];
+      if (typeof value === "string") parsed[field] = value;
+    }
+    const found = configuration.skillsFound;
+    if (typeof found === "number") parsed.skillsFound = found;
+    return parsed;
+  });
+};
+
+/** How the batch compares with the earlier one `--compare-with` named. */
+const renderComparison = (
+  comparison: BatchComparison,
+): readonly string[] => [
+  "## Compared with an earlier batch",
+  "",
+  comparison.differences.length === 0
+    ? `Every line of the console's configuration above reads the same in \`${comparison.report}\`. This compares those lines alone: the tasks, the index readings and the fabric server are for a reader to hold against that record.`
+    : `**Not comparable with \`${comparison.report}\`.** These lines of the console's configuration read differently there and here:`,
+  "",
+  ...comparison.differences.map((difference) =>
+    `- ${difference.factor}: ${difference.earlier} there, ${difference.later} here`
+  ),
+  ...(comparison.differences.length === 0 ? [] : [""]),
+  ...(comparison.unrecorded.length === 0 ? [] : [
+    `Neither batch recorded ${
+      comparison.unrecorded.join(", ")
+    }, so nothing shows the two agree there.`,
+    "",
+  ]),
+];
 
 /**
  * The skills tree the runs scanned, read from each run's own
@@ -1640,17 +1900,19 @@ const renderConfiguration = (
  * run family, because a parent that scanned a root while its children did not
  * is the case that matters and a parent-only reading calls it healthy.
  */
-const skillsRoot = (results: readonly TaskResult[]): string => {
+const skillsRoot = (
+  configurations: readonly SessionConfiguration[],
+): ConfigurationReading => {
   const roots = new Set(
-    results.map((result) => result.configuration.skillsRoot).filter((
+    configurations.map((configuration) => configuration.skillsRoot).filter((
       root,
     ): root is string => root !== undefined),
   );
-  const unread = results.filter((result) =>
-    result.configuration.skillsRoot === undefined
+  const unread = configurations.filter((configuration) =>
+    configuration.skillsRoot === undefined
   );
   const found = new Set(
-    results.map((result) => result.configuration.skillsFound).filter((
+    configurations.map((configuration) => configuration.skillsFound).filter((
       count,
     ): count is number => count !== undefined),
   );
@@ -1659,11 +1921,15 @@ const skillsRoot = (results: readonly TaskResult[]): string => {
     : `${[...roots].sort().join(", ")} (${
       [...found].sort((left, right) => left - right).join("/")
     } skills)`;
-  return unread.length === 0
-    ? scanned
-    : `${scanned}; ${unread.length} of ${results.length} runs scanned none — ${
-      unread[0].configuration.skillsUnread ?? "no reason recorded"
-    }`;
+  return {
+    factor: "Skills root",
+    reading: unread.length === 0
+      ? scanned
+      : `${scanned}; ${unread.length} of ${configurations.length} runs scanned none — ${
+        unread[0].skillsUnread ?? "no reason recorded"
+      }`,
+    recorded: roots.size > 0,
+  };
 };
 
 const renderBlock = (
@@ -1936,6 +2202,9 @@ export const renderBatchReport = (batch: BatchResult): string => {
     "",
   );
   for (const line of renderConfiguration(batch.results)) lines.push(line);
+  if (batch.comparedWith !== undefined) {
+    for (const line of renderComparison(batch.comparedWith)) lines.push(line);
+  }
   lines.push("## Batch totals", "", "```text");
   const batchTotals = foldTotals(
     batch.results.map((result) => result.measurement?.totals).filter((
@@ -2024,6 +2293,7 @@ export const main = async (
     "base",
     "expect-git-sha",
     "cell-spec",
+    "compare-with",
   ] as const;
   const undeclared: string[] = [];
   const flags = parseArgs([...args], {
@@ -2038,7 +2308,7 @@ export const main = async (
     unknown: recordUndeclaredFlags(undeclared),
   });
   const usage =
-    "usage: measure-batch <suite.json> [--console=URL] [--out=DIR] [--cell-spec=FILE] [--allow-diverged]";
+    "usage: measure-batch <suite.json> [--console=URL] [--out=DIR] [--cell-spec=FILE] [--compare-with=REPORT_JSON] [--allow-diverged]";
   // Before the suite is read or anything is asked: a misspelled flag, such as
   // `--expect-git-sha`, would otherwise go unapplied.
   try {
@@ -2061,12 +2331,19 @@ export const main = async (
   const suite = parseMeasurementSuite(
     JSON.parse(await Deno.readTextFile(suitePath)),
   );
-  // Both files are read and validated before a socket is opened, so a
-  // malformed spec costs nothing and a console that is not running is the only
-  // thing a reachability failure can mean.
+  // Every file is read and validated before a socket is opened, so a
+  // malformed spec or earlier record costs nothing and a console that is not
+  // running is the only thing a reachability failure can mean.
   const spec = flags["cell-spec"] === undefined
     ? undefined
     : parseCellSpec(JSON.parse(await Deno.readTextFile(flags["cell-spec"])));
+  const compareWith = flags["compare-with"];
+  const earlier = compareWith === undefined ? undefined : {
+    report: compareWith,
+    configurations: parseRecordedConfigurations(
+      JSON.parse(await Deno.readTextFile(compareWith)),
+    ),
+  };
   const client = await ConsoleClient.open(flags.console);
   const startedAt = new Date().toISOString();
   const consolePreflight = await client.preflightStatus();
@@ -2201,6 +2478,15 @@ export const main = async (
     indexBefore,
     indexAfter,
     results,
+    ...(earlier !== undefined
+      ? {
+        comparedWith: compareConfigurations(
+          earlier.report,
+          earlier.configurations,
+          results.map((result) => result.configuration),
+        ),
+      }
+      : {}),
   };
   const outDir = flags.out ??
     join(

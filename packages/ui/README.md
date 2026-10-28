@@ -67,8 +67,12 @@ import { CFButton } from "./src/v2/components/cf-button/index.ts";
 ## 🎨 Theme System
 
 `cf-theme` provides subtree-level theme tokens for typography, colors, spacing,
-border radius, and motion. Use it for overall visual direction, then refine
-individual components with their documented `--cf-*` custom properties.
+border radius, and motion, and every component inside inherits them. A pattern
+inherits its host's theme; it may tint it with a nested `cf-theme` carrying only
+what it changes; the nested `cf-theme` sets those tokens and leaves the rest to
+the enclosing theme. A pattern never declares a full theme, and prefers theme
+tokens to literal colors and fonts. Refine individual components with their
+documented `--cf-*` custom properties.
 
 Useful references:
 
@@ -91,11 +95,11 @@ Useful references:
 
 ### Files And Media
 
-| Element              | Element               | Element     | Element            |
-| -------------------- | --------------------- | ----------- | ------------------ |
-| `cf-attachments-bar` | `cf-audio-visualizer` | `cf-canvas` | `cf-file-download` |
-| `cf-file-input`      | `cf-iframe`           | `cf-image`  | `cf-image-input`   |
-| `cf-svg`             |                       |             |                    |
+| Element              | Element               | Element           | Element        |
+| -------------------- | --------------------- | ----------------- | -------------- |
+| `cf-attachments-bar` | `cf-audio-visualizer` | `cf-avatar-input` | `cf-blob-link` |
+| `cf-canvas`          | `cf-file-download`    | `cf-file-input`   | `cf-iframe`    |
+| `cf-image`           | `cf-image-input`      | `cf-svg`          |                |
 
 ### Layout And Structure
 
@@ -334,6 +338,25 @@ cf-card::part(header) {
   background: #f3f4f6;
 }
 ```
+
+### Iframe presentation
+
+`cf-iframe` inherits the nearest `iframePresentationContext` value (context key
+`cf-iframe-presentation`). A presentation supplies CSS, root `data-*`
+attributes, and stylesheet URLs to the guest document. Updates preserve the
+guest's state. Set `.presentation` explicitly to override the context, or to
+`null` to opt out. See
+[the iframe presentation contract](../iframe-sandbox/README.md#guest-presentation).
+
+`cf-theme` provides that context, so the guest of an iframe beneath it wears its
+theme: the `--cf-theme-*` values computed on the theme element, declared on the
+guest's `:root`, followed by the guest base sheet
+(`src/v2/components/cf-theme/guest-base-sheet.ts`), which styles the common
+elements and provides the `cf-*` classes, with the resolved scheme as the root's
+`data-color-scheme`. A nested `cf-theme` provides its own values. The element
+reads them again whenever it recomputes, including on
+`theme-preference-changed`, which a host that changes the tokens by CSS
+dispatches on `document` afterwards; an unchanged reading provides nothing new.
 
 ### TypeScript/JSX Support
 

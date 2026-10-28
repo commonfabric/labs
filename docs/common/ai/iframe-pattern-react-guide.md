@@ -340,6 +340,8 @@ in progress. Divide state by the lifecycle that owns it:
 | State | Owner | Examples |
 | --- | --- | --- |
 | Durable collaborative data | Fabric Cell or SQLite | records, committed positions, shared edges |
+| Live status others see and nobody keeps | A presence room | pointers, a peer's drag in flight, who is here |
+| Actions the pattern exposes as verbs, or work only it can start | A verb the pattern passes in as a stream | adding to a list through the pattern's `addItem`, asking `agent()` or an LLM built-in |
 | Local user intent not yet committed | React state or refs | a text draft, open menu, active drag, pending selection |
 | Third-party interaction state | The library's local component state | `dragging`, measured bounds, viewport, focus, selection handles |
 | Pure presentation | Derived during render | labels, colors, filtered rows |
@@ -369,6 +371,21 @@ remount: native popups close, focus moves, selections flash, and dragged items
 snap between local and durable positions. Keep component types, React keys, and
 the library root stable for the same reason. The full loading view belongs only
 to initial hydration; an ordinary mutation must not remount the application.
+
+A presence room is declared in the contract and read through
+`fabric.presence(name)`; its events arrive outside React, so hold what a
+component renders from them in state or an external store.
+[Optional presence](./iframe-pattern-guide.md#optional-presence) in the
+iframe pattern guide is the contract.
+
+A verb is declared in the contract's `streams`, and the guest sends it an event
+through `fabric.stream(name).send(event)` from the event handler where the user
+acted, which is how a guest calls `agent()` and the other LLM built-ins in a
+user-triggered way. When the pattern exposes an action as a verb, prefer
+sending that verb an event over making the same change through Cell writes. Keep the draft that produced the event, and show any error
+the send rejects with, until the send settles.
+[Optional streams](./iframe-pattern-guide.md#optional-streams) in the iframe
+pattern guide is the contract.
 
 ### Reconcile asynchronous gestures by identity
 
@@ -444,7 +461,10 @@ replace the text under the user's cursor.
 The generated wrapper bundles JavaScript imports, but a React library can also
 depend on stylesheet rules that give its viewport, measurement wrappers,
 overlays, portals, and controls their geometry. Theme colors alone are not
-enough. Put the required structural rules in `guest.html` so the document stays
+enough; the guest receives the `--cf-theme-*` variables and
+the `cf-*` classes described in
+[Style with the ambient theme](./iframe-pattern-guide.md#style-with-the-ambient-theme),
+so components spell no color or font of their own. The required structural rules still belong in `guest.html` so the document stays
 self-contained under the iframe CSP. Give `html`, `body`, `#root`, and every
 intermediate layout container an explicit height, and give custom measured
 items a stable width or size when the library expects one.
@@ -651,25 +671,70 @@ deno check packages/patterns/iframe-react-quick-notes/guest.tsx
 deno task cf check packages/patterns/iframe-react-quick-notes/main.tsx --no-run
 ```
 
-Launch against local servers:
+Launch against local servers, starting them first:
 
 ```bash
 ./scripts/start-local-dev.sh
+```
+
+The script serves on ports 8000 and 5173 and fails when either is taken, which
+is the usual case when another checkout has servers running. Start it with
+`--port-offset=<n>` then. Continue only once it reports that both servers
+started, and use the `Toolshed:` address it prints,
+`http://localhost:<8000 + n>`, as `CF_API_URL` below: a `cf` command pointed at
+port 8000 would deploy to the other checkout's server.
+[`LOCAL_DEV_SERVERS.md`](../../development/LOCAL_DEV_SERVERS.md) covers the
+scripts.
+
+Then mint a key, create a space, and create the piece in it:
+
+```bash
 mkdir -p .cf
 test -e .cf/iframe-pattern.key || \
-deno task cf id new > .cf/iframe-pattern.key
-CF_API_URL=http://localhost:8000 \
-CF_IDENTITY=.cf/iframe-pattern.key \
+  deno task cf id new > .cf/iframe-pattern.key
+# The Toolshed address that start-local-dev.sh printed.
+export CF_API_URL=http://localhost:8000
+export CF_IDENTITY=.cf/iframe-pattern.key
+export CF_SPACE="$(deno task cf space create --label "Iframe React notes")"
 deno task cf piece new packages/patterns/iframe-react-quick-notes/main.tsx \
-  --root . --space iframe-react-notes --slug react-notes
+  --root . --slug react-notes
 ```
 
 Never overwrite an existing key file because it selects the PerUser identity.
-Open `http://localhost:8000/iframe-react-notes/react-notes`. If the shell shows
-first-use login, choose **Register New Key**, enter and confirm a passphrase, and
-continue. Exercise every meaningful action and inspect the browser console. A
-successful bundle does not prove React mounted, a hook completed its pull, or a
-bridge write reached the worker.
+`cf piece new` does not create the space it names, so `cf space create` runs
+first. It prints the new space's DID, which `CF_SPACE` and `--space` accept.
+Run both commands once: each `cf space create` makes another space, and a
+second `cf piece new` leaves the slug with the first piece. `cf piece new`
+prints the page address under `Open in browser`, which is
+`$CF_API_URL/$CF_SPACE/react-notes`. It also prints the `cf piece setsrc`
+command that updates the piece after a source change.
+
+Open the page address. A browser that has not signed in is shown the shell's
+login. Sign it in with the key the CLI used: choose **Register**, which a
+browser that has signed in before labels **Register New Key**, then
+**Import CLI Key**, and select `.cf/iframe-pattern.key`. The browser then acts
+as the identity that created the space, the only one the space admits, and `cf`
+commands read the PerUser values the page wrote.
+[`shared-identity.md`](../../features/shared-identity.md) covers that workflow.
+
+**Use Passphrase** on the same screen, followed by generating and confirming a
+passphrase, registers a new identity instead, and the space refuses it: the
+shell reports `Slug "react-notes" not found.`, and the console carries
+`AuthorizationError: Principal did:key:… lacks READ on space did:key:…`.
+Take that route only when the tool driving the browser cannot choose a file, or
+for the second identity the multi-user checks below need. The principal the
+error names is the browser's DID, which
+`globalThis.app.state().identity.did()` also returns in the page's console.
+Grant it access with the CLI key, in a shell that has the three exports above,
+then reload the page:
+
+```bash
+deno task cf acl set <browser DID> WRITE
+```
+
+Exercise every meaningful action and inspect the browser console. A successful
+bundle does not prove React mounted, a hook completed its pull, or a bridge
+write reached the worker.
 
 Verify at least these behaviors:
 
@@ -714,7 +779,8 @@ should drag through multiple visible frames, operate every embedded native
 control, and confirm that the browser console stays clean.
 
 For multi-user state, cover two sessions of one identity, a second identity,
-and a reload. PerSpace data agrees everywhere, PerUser data agrees only between
+and a reload. The second identity opens the piece only after the `cf acl set`
+grant above. PerSpace data agrees everywhere, PerUser data agrees only between
 the same identity's sessions, and PerSession data remains distinct. Exercise
 first use rather than only a warmed-up piece. When both runtime modes matter,
 run the same unskipped browser test with default execution and with

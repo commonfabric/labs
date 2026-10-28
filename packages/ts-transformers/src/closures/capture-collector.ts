@@ -1,6 +1,10 @@
 import ts from "typescript";
 import { getMethodCallTarget, isMethodCall } from "../ast/mod.ts";
 import {
+  hasOnlyErasedDeclarations,
+  isErasedAtEmit,
+} from "../ast/erased-syntax.ts";
+import {
   isDeclaredWithinFunction,
   isFunctionDeclaration,
   isModuleScopedDeclaration,
@@ -84,6 +88,15 @@ export class CaptureCollector {
     const captures = new Set<ts.Expression>();
 
     const visit = (node: ts.Node) => {
+      // Erased syntax is gone before the callback runs, so nothing named in it
+      // is a value the callback closes over: not a function type's parameter
+      // (`next` in `(value as { set: (next: string) => void })`), not a local
+      // interface's member, not a name an `implements` clause or a `typeof`
+      // query mentions.
+      if (isErasedAtEmit(node)) {
+        return;
+      }
+
       // For nested functions, recursively collect their captures too
       // Even though they have their own scope for parameters, they still
       // close over variables from outer scopes, and we need to know about
@@ -192,6 +205,9 @@ export class CaptureCollector {
 
     const symbol = this.#checker.getSymbolAtLocation(root);
     if (!symbol) return undefined;
+    // A `const enum` has no runtime object: `Mode.Alpha` becomes the member's
+    // value, so it is nothing a callback closes over.
+    if (hasOnlyErasedDeclarations(symbol)) return undefined;
 
     const declarations = symbol.getDeclarations();
     if (!declarations || declarations.length === 0) return undefined;
@@ -310,7 +326,7 @@ export class CaptureCollector {
     }
 
     const symbol = this.#checker.getSymbolAtLocation(node);
-    if (!symbol) {
+    if (!symbol || hasOnlyErasedDeclarations(symbol)) {
       return undefined;
     }
 

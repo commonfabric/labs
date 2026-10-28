@@ -282,8 +282,6 @@ const DIRECTIVE_CASES: Array<[string, string, string | undefined]> = [
   ["cf piece new --root ", "dirs", undefined],
   ["cf piece setsrc --root ", "dirs", undefined],
   ["cf piece survey --root ", "dirs", undefined],
-  ["cf space set-home --root ", "dirs", undefined],
-  ["cf piece set-home --root ", "dirs", undefined],
   ["cf check --root ", "dirs", undefined],
   ["cf test --root ", "dirs", undefined],
   ["cf piece new --test ", "files", "*.tsx"],
@@ -295,11 +293,16 @@ const DIRECTIVE_CASES: Array<[string, string, string | undefined]> = [
   ["cf piece new --input-file ", "files", undefined],
   ["cf view ", "files", undefined],
   ["cf exec ", "files", undefined],
+  ["cf profile set-picture x0 ", "files", undefined],
+  ["cf profile get-picture x0 ", "files", undefined],
   ["cf space clone --to ", "dirs", undefined],
   ["cf space clone x --from ", "files", undefined],
   ["cf space verify ", "dirs", undefined],
+  ["cf space compact ", "files", "*.sqlite"],
+  ["cf space compact x --against ", "files", "*.sqlite"],
   ["cf space reset ", "dirs", undefined],
   ["cf inspect spaces --dir ", "dirs", undefined],
+  ["cf profile repair-root --from-snapshot ", "dirs", undefined],
   ["cf inspect html x --out ", "files", undefined],
   ["cf check --output ", "files", undefined],
   ["cf agent runner --loom-retrieval-config ", "files", "*.json"],
@@ -307,8 +310,6 @@ const DIRECTIVE_CASES: Array<[string, string, string | undefined]> = [
   ["cf agent runner --local-jobs-socket ", "files", undefined],
   ["cf agent runner --local-jobs-store ", "files", undefined],
   ["cf agent runner --work-root ", "dirs", undefined],
-  ["cf space set-home ", "files", "*.tsx"],
-  ["cf piece set-home ", "files", "*.tsx"],
   ["cf piece getsrc ", "files", undefined],
   ["cf deps update ", "files", undefined],
   ["cf fuse mount ", "dirs", undefined],
@@ -439,21 +440,19 @@ Deno.test("provider keys report which commands each option provider answers on",
   assertEquals(options.get("cell"), null);
   assertEquals(options.get("from"), ["space clone"]);
   assertEquals(options.get("to"), ["space clone"]);
-  assertEquals(options.get("scope"), ["wish"]);
+  assertEquals(options.get("scope"), ["wish", "space compact"]);
+  assertEquals(options.get("documents"), ["space compact"]);
   assertEquals(options.get("list"), ["piece survey", "piece repair"]);
   assertEquals(options.get("diff"), ["piece survey"]);
   // Both projection flags answer on `get` alone. On `call` and `exec` they
   // name positions in a verb's result, and the piece's root is a different
   // value — so offering its fields there would offer plausible names for
   // something else, which is worse than offering none.
-  // Both mounts: the superseded spelling still completes its own projection.
-  assertEquals(options.get("select"), ["cell get", "get"]);
-  assertEquals(options.get("schema"), ["cell get", "get"]);
+  assertEquals(options.get("select"), ["cell get"]);
+  assertEquals(options.get("schema"), ["cell get"]);
   assertEquals(options.get("root"), [
     "check",
     "piece new",
-    "piece set-home",
-    "space set-home",
     "piece setsrc",
     "piece survey",
     "test",
@@ -467,7 +466,7 @@ Deno.test("provider keys report which commands each option provider answers on",
   assertFalse(options.has("accept-unretained"));
   // A positional entry is keyed by command path already, so it carries no
   // command list of its own.
-  assert(positionals.has("call:callable"));
+  assert(positionals.has("piece call:callable"));
   assertFalse(positionals.has("callable"));
 });
 
@@ -1525,4 +1524,25 @@ Deno.test("live candidates preserve qualified space, user scope, and nested path
     await Deno.remove(keyPath);
     resetProcessDeployment();
   }
+});
+
+Deno.test("space compact: --scope and --documents offer the store's vocabulary", async () => {
+  // `--scope` means a scope KIND here and a search scope on `wish`; the same
+  // option name answers differently by command, which is what the provider's
+  // command scoping is for. `--documents` offers the three id namespaces a
+  // store holds; a longer prefix is typed past them.
+  assertEquals(
+    (await liveCandidates(lineFor("cf space compact x --scope ")))
+      .candidates.map((candidate) => candidate.value).sort(),
+    ["session", "space", "user"],
+  );
+  assertEquals(
+    (await liveCandidates(lineFor("cf space compact x --documents ")))
+      .candidates.map((candidate) => candidate.value).sort(),
+    ["cid:", "computed:", "of:"],
+  );
+  const wish = (await liveCandidates(lineFor("cf wish --scope ")))
+    .candidates.map((candidate) => candidate.value);
+  assert(wish.includes("~"), `wish keeps its own scope vocabulary: ${wish}`);
+  assert(!wish.includes("session"), "a scope kind is not a wish scope");
 });

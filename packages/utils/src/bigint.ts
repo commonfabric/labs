@@ -61,12 +61,24 @@ export function bigintToUnpaddedBase64url(value: bigint): string {
  * Interprets a base64url string as the minimal two's-complement big-endian
  * byte representation of an integer, and returns the corresponding bigint.
  * Trailing `=` padding is accepted but not required. Input that isn't valid
- * base64url, and input that decodes to zero bytes, both throw.
+ * base64url, input that decodes to zero bytes, and input whose bytes aren't
+ * minimal all throw. Bytes aren't minimal when they lead with a `0x00` or `0xff`
+ * that only repeats the sign the next byte already carries, as `0x00 0x7f` and
+ * `0xff 0x80` do, so that each integer has one encoding.
  */
 export function bigintFromUnpaddedBase64url(encoded: string): bigint {
-  // TODO(danfuzz): Refuse bytes that are not minimal, with a redundant
-  // leading `0x00` or `0xff`, which the `fvj1:` format refuses in a bigint
-  // state. The case `bigint state not minimal` in
-  // `packages/data-model/test/fixtures/fvj1-conformance.json` records it.
-  return bigintFromMinimalTwosComplement(fromBase64url(encoded));
+  const bytes = fromBase64url(encoded);
+  if (bytes.length > 1) {
+    const signOfNext = bytes[1]! & 0x80;
+    if (
+      ((bytes[0] === 0x00) && (signOfNext === 0)) ||
+      ((bytes[0] === 0xff) && (signOfNext !== 0))
+    ) {
+      throw new Error(
+        `\`bigintFromUnpaddedBase64url()\`: not minimal: \`${encoded}\``,
+      );
+    }
+  }
+
+  return bigintFromMinimalTwosComplement(bytes);
 }

@@ -26,7 +26,7 @@ import {
   loomCiDuration,
   weaverCiDuration,
 } from "./tiles/ci-duration.ts";
-import { commitGanttHref, recentRuns } from "./tiles/recent-runs.ts";
+import { recentCommits } from "./tiles/recent-commits.ts";
 import { dau, foldSeries, parseExcludes } from "./tiles/dau.ts";
 import { githubMembers } from "./tiles/github-members.ts";
 import { buildSnapshot, discordOnline } from "./tiles/discord-online.ts";
@@ -40,6 +40,7 @@ import { projectMonthly, settled } from "./spend.ts";
 import { modelSpend } from "./tiles/model-spend.ts";
 import { benchmark, trendPct, trendStatus } from "./tiles/benchmark.ts";
 import { TILES } from "./registry.ts";
+import { REPOS_PATH } from "./repo-page-href.ts";
 import {
   byUrl,
   collectFromWorkingRuns,
@@ -90,9 +91,74 @@ function attemptUrl(attempt: Run, repo = REPO): string {
   return `https://api.github.com/repos/${repo}/actions/runs/${attempt.id}/attempts/${attempt.run_attempt}`;
 }
 
-// Where the job count of `attempt` is requested.
+// Where the job listing of `attempt` starts.
 function jobsUrl(attempt: Run, repo = REPO): string {
-  return `${attemptUrl(attempt, repo)}/jobs?per_page=1`;
+  return jobPageUrl(attempt, 1, repo);
+}
+
+// A cancelled attempt's job listing when a newer run replaced it before it
+// listed any job.
+const NO_JOBS = { total_count: 0, jobs: [] };
+
+// A job a newer run replaced while it was queued.
+const QUEUED = { id: 1, conclusion: "cancelled", runner_name: "" };
+
+// A job a runner was running when its attempt was cancelled, here by its own
+// `timeout-minutes`, as its annotations say.
+const STOPPED = {
+  id: 2,
+  conclusion: "cancelled",
+  runner_name: "GitHub Actions 1",
+};
+
+// A cancelled attempt's job listing when it stopped a job a runner was running.
+const STOPPED_JOB = { total_count: 1, jobs: [STOPPED] };
+
+// A job a runner was running when a concurrency group cancelled it in favor
+// of a newer run, as its annotations say.
+const REPLACED = {
+  id: 3,
+  conclusion: "cancelled",
+  runner_name: "GitHub Actions 1",
+};
+
+// What GitHub annotates a job with when it cancels it for each reason, beside
+// an annotation every job on the runner gets.
+const RUNNER_NOTICE = {
+  annotation_level: "notice",
+  message: "The ubuntu-latest label will migrate to Ubuntu 26",
+};
+const REASONS = {
+  replaced: [{
+    annotation_level: "failure",
+    message:
+      "Canceling since a higher priority waiting request for ci-refs/heads/main exists",
+  }, RUNNER_NOTICE],
+  timedOut: [RUNNER_NOTICE, {
+    annotation_level: "failure",
+    message: "The job has exceeded the maximum execution time of 1h10m0s",
+  }],
+  stopped: [{
+    annotation_level: "failure",
+    message: "The run was canceled by @someone.",
+  }],
+};
+
+// Where page `page` of the annotations of `job`'s check run is requested.
+function annotationsUrl(
+  job: { readonly id: number },
+  repo = REPO,
+  page = 1,
+): string {
+  return `https://api.github.com/repos/${repo}/check-runs/${job.id}/annotations?per_page=100&page=${page}`;
+}
+
+// The answers for the annotations of STOPPED and REPLACED.
+function annotationAnswers(repo = REPO): [string, GithubAnswer][] {
+  return [
+    [annotationsUrl(STOPPED, repo), REASONS.timedOut],
+    [annotationsUrl(REPLACED, repo), REASONS.replaced],
+  ];
 }
 
 // The trust grid's cell colors, in the newest-first order the runs arrive in.
@@ -123,6 +189,21 @@ Deno.test("labs ci trust: only first-attempt success counts as green", async () 
   );
 });
 
+Deno.test("ci trust: each tile links to its repository's page, and each cell to its run", async () => {
+  const cases = [
+    { tile: labsCiTrust, page: "/repos?name=labs" },
+    { tile: loomCiTrust, page: "/repos?name=loom" },
+    { tile: weaverCiTrust, page: "/repos?name=commonfabric-weaver" },
+  ];
+  for (const { tile, page } of cases) {
+    const passed = run({ html_url: `https://github.com/${tile.repo}/actions/runs/1` });
+    const v = await tile.collect(ctx([passed]));
+    assertEquals(v.href, page);
+    assertEquals(v.hint, "repository ↗");
+    assertStringIncludes(v.extra ?? "", `href="${passed.html_url}"`);
+  }
+});
+
 Deno.test("labs and loom ci trust: a cancelled run that never started is left out of the share", async () => {
   const cases = [
     { tile: labsCiTrust, repo: REPO },
@@ -141,7 +222,7 @@ Deno.test("labs and loom ci trust: a cancelled run that never started is left ou
     ];
     const jobs = cancelled.map((attempt) => jobsUrl(attempt, repo));
     await withGithubAttempt(
-      byUrl(jobs.map((url) => [url, { total_count: 0 }])),
+      byUrl(jobs.map((url) => [url, NO_JOBS])),
       async (urls) => {
         const v = await tile.collect(ctx(runs));
         assertEquals(v.value, "50.0%");
@@ -158,7 +239,7 @@ Deno.test("labs and loom ci trust: a cancelled run that never started is left ou
   }
 });
 
-Deno.test("labs and loom ci trust: a cancelled run that ran jobs counts as a failure", async () => {
+Deno.test("labs and loom ci trust: a cancelled run that stopped a job on a runner counts as a failure", async () => {
   const cases = [
     { tile: labsCiTrust, repo: REPO },
     { tile: loomCiTrust, repo: LOOM_REPO },
@@ -172,7 +253,7 @@ Deno.test("labs and loom ci trust: a cancelled run that ran jobs counts as a fai
       run({ conclusion: "failure" }),
     ];
     await withGithubAttempt(
-      byUrl([[jobsUrl(timedOut, repo), { total_count: 38 }]]),
+      byUrl([[jobsUrl(timedOut, repo), STOPPED_JOB], ...annotationAnswers(repo)]),
       async (urls) => {
         const v = await tile.collect(ctx(runs));
         assertEquals(v.value, "50.0%");
@@ -183,13 +264,271 @@ Deno.test("labs and loom ci trust: a cancelled run that ran jobs counts as a fai
           "var(--status-good)",
           "var(--status-bad)",
         ]);
-        assertEquals(urls, [jobsUrl(timedOut, repo)]);
+        assertEquals(urls, [
+          jobsUrl(timedOut, repo),
+          annotationsUrl(STOPPED, repo),
+        ]);
       },
     );
   }
 });
 
-Deno.test("labs ci trust: a run is green only when its one attempt not cancelled before starting succeeded", async () => {
+Deno.test("labs and loom ci trust: a cancelled run is left out of the share only when a concurrency group stopped the jobs it ran", async () => {
+  // A concurrency group that cancels in progress stops a run's jobs on their
+  // runners when a newer run starts. A timeout or a person stopping them
+  // instead says something about the commit.
+  const cases = [
+    { tile: labsCiTrust, repo: REPO },
+    { tile: loomCiTrust, repo: LOOM_REPO },
+  ];
+  const reasons = [
+    { annotations: REASONS.replaced, color: "var(--status-unknown)" },
+    { annotations: REASONS.timedOut, color: "var(--status-bad)" },
+    { annotations: REASONS.stopped, color: "var(--status-bad)" },
+    { annotations: [RUNNER_NOTICE], color: "var(--status-bad)" },
+    { annotations: [], color: "var(--status-bad)" },
+    // GitHub's annotations may carry no message.
+    { annotations: [{ message: null }], color: "var(--status-bad)" },
+    {
+      annotations: [{ message: null }, ...REASONS.replaced],
+      color: "var(--status-unknown)",
+    },
+  ];
+  for (const { tile, repo } of cases) {
+    for (const { annotations, color } of reasons) {
+      const cancelled = run({ conclusion: "cancelled" });
+      const passed = { id: 4, conclusion: "success", runner_name: "Runner 2" };
+      await withGithubAttempt(
+        byUrl([
+          [jobsUrl(cancelled, repo), {
+            total_count: 3,
+            jobs: [passed, REPLACED, QUEUED],
+          }],
+          [annotationsUrl(REPLACED, repo), annotations],
+        ]),
+        async (urls) => {
+          const v = await tile.collect(ctx([
+            run({ conclusion: "success" }),
+            cancelled,
+          ]));
+          assertEquals(cellColors(v.extra), ["var(--status-good)", color]);
+          assertEquals(urls, [
+            jobsUrl(cancelled, repo),
+            annotationsUrl(REPLACED, repo),
+          ]);
+        },
+      );
+    }
+  }
+});
+
+Deno.test("labs ci trust: a cancelled attempt is a failure when any job stopped on a runner was not stopped by a concurrency group", async () => {
+  // A job timed out, and then a newer run replaced the run while its other
+  // jobs ran.
+  const cancelled = run({ conclusion: "cancelled" });
+  await withGithubAttempt(
+    byUrl([
+      [jobsUrl(cancelled), {
+        total_count: 3,
+        jobs: [REPLACED, STOPPED, REPLACED],
+      }],
+      ...annotationAnswers(),
+    ]),
+    async (urls) => {
+      const v = await labsCiTrust.collect(ctx([cancelled]));
+      assertEquals(v.value, "0.0%");
+      assertEquals(urls, [
+        jobsUrl(cancelled),
+        annotationsUrl(REPLACED),
+        annotationsUrl(STOPPED),
+      ]);
+    },
+  );
+});
+
+Deno.test("labs ci trust: a cancelled job's annotations are read page by page until one gives the reason", async () => {
+  const cancelled = run({ conclusion: "cancelled" });
+  const warnings = Array.from({ length: 100 }, () => RUNNER_NOTICE);
+  await withGithubAttempt(
+    byUrl([
+      [jobsUrl(cancelled), { total_count: 1, jobs: [REPLACED] }],
+      [annotationsUrl(REPLACED, REPO, 1), warnings],
+      [annotationsUrl(REPLACED, REPO, 2), REASONS.replaced],
+    ]),
+    async (urls) => {
+      const v = await labsCiTrust.collect(ctx([
+        run({ conclusion: "success" }),
+        cancelled,
+      ]));
+      assertEquals(v.value, "100.0%");
+      assertEquals(urls, [
+        jobsUrl(cancelled),
+        annotationsUrl(REPLACED, REPO, 1),
+        annotationsUrl(REPLACED, REPO, 2),
+      ]);
+    },
+  );
+});
+
+Deno.test("labs ci trust: annotations GitHub does not return fail the collection", async (t) => {
+  const cases: { name: string; answer: GithubAnswer; message: string }[] = [
+    {
+      name: "failed request",
+      answer: new Error("annotations unavailable"),
+      message: "annotations unavailable",
+    },
+    {
+      name: "answer that is not an array",
+      answer: NO_JOBS,
+      message: "is not an array of objects each with a string or null",
+    },
+    {
+      name: "annotation without a message",
+      answer: [{}],
+      message: "is not an array of objects each with a string or null",
+    },
+    {
+      name: "annotation whose message is not a string",
+      answer: [{ message: 7 }],
+      message: "is not an array of objects each with a string or null",
+    },
+  ];
+  for (const { name, answer, message } of cases) {
+    await t.step(name, async () => {
+      const cancelled = run({ conclusion: "cancelled" });
+      await withGithubAttempt(
+        byUrl([
+          [jobsUrl(cancelled), { total_count: 1, jobs: [REPLACED] }],
+          [annotationsUrl(REPLACED), answer],
+        ]),
+        async (urls) => {
+          await assertRejects(
+            () => labsCiTrust.collect(ctx([cancelled])),
+            Error,
+            message,
+          );
+          assertEquals(urls, [jobsUrl(cancelled), annotationsUrl(REPLACED)]);
+        },
+      );
+    });
+  }
+});
+
+Deno.test("labs and loom ci trust: a cancelled run whose cancelled jobs never reached a runner is left out of the share", async () => {
+  // A job-level concurrency group replaces the waiting job rather than the
+  // run, so the run lists the job, cancelled with an empty runner name, beside
+  // the jobs that ran.
+  const cases = [
+    { tile: labsCiTrust, repo: REPO },
+    { tile: loomCiTrust, repo: LOOM_REPO },
+  ];
+  for (const { tile, repo } of cases) {
+    const replaced = run({ conclusion: "cancelled" });
+    const runs = [
+      run({ conclusion: "success" }),
+      replaced,
+      run({ conclusion: "failure" }),
+    ];
+    await withGithubAttempt(
+      byUrl([[jobsUrl(replaced, repo), {
+        total_count: 3,
+        jobs: [
+          QUEUED,
+          { id: 4, conclusion: "success", runner_name: "GitHub Actions 2" },
+          { id: 5, conclusion: "skipped", runner_name: null },
+        ],
+      }]]),
+      async (urls) => {
+        const v = await tile.collect(ctx(runs));
+        assertEquals(v.value, "50.0%");
+        assertEquals(v.sub, "first-try green · 2 of last 3 runs");
+        assertEquals(urls, [jobsUrl(replaced, repo)]);
+        assertEquals(cellColors(v.extra), [
+          "var(--status-good)",
+          "var(--status-unknown)",
+          "var(--status-bad)",
+        ]);
+      },
+    );
+  }
+});
+
+Deno.test("labs ci trust: a cancelled run with a job that failed on a runner counts as a failure", async () => {
+  // Someone cancels a run after one job failed and while another was queued.
+  const cancelled = run({ conclusion: "cancelled" });
+  await withGithubAttempt(
+    byUrl([[jobsUrl(cancelled), {
+      total_count: 2,
+      jobs: [
+        { id: 4, conclusion: "failure", runner_name: "GitHub Actions 1" },
+        QUEUED,
+      ],
+    }]]),
+    async (urls) => {
+      const v = await labsCiTrust.collect(ctx([
+        run({ conclusion: "success" }),
+        cancelled,
+      ]));
+      assertEquals(v.value, "50.0%");
+      // A job that failed needs no annotation to say why.
+      assertEquals(urls, [jobsUrl(cancelled)]);
+      assertEquals(cellColors(v.extra), [
+        "var(--status-good)",
+        "var(--status-bad)",
+      ]);
+    },
+  );
+});
+
+Deno.test("labs ci trust: the job listing of a cancelled attempt is read only as far as its first job that did not succeed on a runner", async () => {
+  const timedOut = run({ conclusion: "cancelled" });
+  await withGithubAttempt(
+    byUrl([[
+      jobPageUrl(timedOut, 1),
+      {
+        total_count: 101,
+        jobs: [STOPPED, ...Array.from({ length: 99 }, () => QUEUED)],
+      },
+    ], ...annotationAnswers()]),
+    async (urls) => {
+      const v = await labsCiTrust.collect(ctx([timedOut]));
+      assertEquals(v.value, "0.0%");
+      assertEquals(urls, [jobPageUrl(timedOut, 1), annotationsUrl(STOPPED)]);
+    },
+  );
+});
+
+Deno.test("labs ci trust: a job cancelled on a runner counts as a failure on any page of the job listing", async () => {
+  const timedOut = run({ conclusion: "cancelled" });
+  await withGithubAttempt(
+    byUrl([
+      [
+        jobPageUrl(timedOut, 1),
+        { total_count: 101, jobs: Array.from({ length: 100 }, () => QUEUED) },
+      ],
+      [jobPageUrl(timedOut, 2), { total_count: 101, jobs: [STOPPED] }],
+      ...annotationAnswers(),
+    ]),
+    async (urls) => {
+      const v = await labsCiTrust.collect(ctx([
+        run({ conclusion: "success" }),
+        timedOut,
+      ]));
+      assertEquals(v.value, "50.0%");
+      assertEquals(cellColors(v.extra), [
+        "var(--status-good)",
+        "var(--status-bad)",
+      ]);
+      assertEquals(urls, [
+        jobPageUrl(timedOut, 1),
+        jobPageUrl(timedOut, 2),
+        annotationsUrl(STOPPED),
+      ]);
+    },
+  );
+});
+
+Deno.test("labs ci trust: a run is green only when the one attempt left once cancellations without a verdict are passed over succeeded", async () => {
   const afterUnstartedGreen = run({ conclusion: "success", run_attempt: 2 });
   const afterUnstartedRed = run({ conclusion: "failure", run_attempt: 2 });
   const redAfterUnstarted = run({ conclusion: "success", run_attempt: 3 });
@@ -233,11 +572,12 @@ Deno.test("labs ci trust: a run is green only when its one attempt not cancelled
     byUrl([
       ...earlier.map((attempt) => [attemptUrl(attempt), attempt] as const),
       ...unstarted.map((attempt) =>
-        [jobsUrl(attempt), { total_count: 0 }] as const
+        [jobsUrl(attempt), NO_JOBS] as const
       ),
       ...ranJobs.map((attempt) =>
-        [jobsUrl(attempt), { total_count: 38 }] as const
+        [jobsUrl(attempt), STOPPED_JOB] as const
       ),
+      ...annotationAnswers(),
     ]),
     async (urls) => {
       const v = await labsCiTrust.collect(ctx([
@@ -276,6 +616,7 @@ Deno.test("labs ci trust: a run is green only when its one attempt not cancelled
         [
           ...earlier.map((attempt) => attemptUrl(attempt)),
           ...[...unstarted, ...ranJobs].map((attempt) => jobsUrl(attempt)),
+          ...ranJobs.map(() => annotationsUrl(STOPPED)),
         ].toSorted(),
       );
     },
@@ -288,7 +629,7 @@ Deno.test("labs ci trust: an earlier attempt is requested once", async () => {
   await withGithubAttempt(
     byUrl([
       [attemptUrl(earlier), earlier],
-      [jobsUrl(earlier), { total_count: 0 }],
+      [jobsUrl(earlier), NO_JOBS],
     ]),
     async (urls) => {
       assertEquals((await labsCiTrust.collect(ctx([retried]))).value, "100.0%");
@@ -298,7 +639,7 @@ Deno.test("labs ci trust: an earlier attempt is requested once", async () => {
   );
 });
 
-Deno.test("labs ci trust: the job count of a cancelled attempt is requested once, and no other attempt's is", async () => {
+Deno.test("labs ci trust: the job listing of a cancelled attempt is requested once, and no other attempt's is", async () => {
   const neverStarted = run({ conclusion: "cancelled" });
   const timedOut = run({ conclusion: "cancelled" });
   const runs = [
@@ -310,22 +651,25 @@ Deno.test("labs ci trust: the job count of a cancelled attempt is requested once
   ];
   const jobs = [jobsUrl(neverStarted), jobsUrl(timedOut)];
   await withGithubAttempt(
-    byUrl([[jobs[0], { total_count: 0 }], [jobs[1], { total_count: 38 }]]),
+    byUrl([[jobs[0], NO_JOBS], [jobs[1], STOPPED_JOB], ...annotationAnswers()]),
     async (urls) => {
       for (let collection = 0; collection < 2; collection++) {
         const v = await labsCiTrust.collect(ctx(runs));
         assertEquals(v.value, "25.0%");
         assertEquals(v.sub, "first-try green · 4 of last 5 runs");
       }
-      assertEquals(urls.toSorted(), jobs.toSorted());
+      assertEquals(
+        urls.toSorted(),
+        [...jobs, annotationsUrl(STOPPED)].toSorted(),
+      );
     },
   );
 });
 
-Deno.test("labs ci trust: a job count is forgotten once its run leaves the window", async () => {
+Deno.test("labs ci trust: a job listing is forgotten once its run leaves the window", async () => {
   const cancelled = run({ conclusion: "cancelled" });
   const other = run({ conclusion: "success" });
-  await withGithubAttempt({ total_count: 0 }, async (urls) => {
+  await withGithubAttempt(NO_JOBS, async (urls) => {
     await labsCiTrust.collect(ctx([cancelled]));
     await labsCiTrust.collect(ctx([other]));
     await labsCiTrust.collect(ctx([cancelled]));
@@ -347,11 +691,71 @@ Deno.test("labs ci trust: an earlier attempt GitHub does not return fails the co
   );
 });
 
+// Attempt 1 of `of`, as GitHub returns an attempt it left in progress with no
+// conclusion after a rerun followed it.
+function unclosedFirstAttempt(of: Run): Run {
+  return { ...of, run_attempt: 1, status: "in_progress", conclusion: null };
+}
+
+Deno.test("labs ci trust: an earlier attempt GitHub left in progress takes its conclusion from its jobs", async () => {
+  const failedJob = run({ conclusion: "success", run_attempt: 2 });
+  const passedJobs = run({ conclusion: "success", run_attempt: 2 });
+  const queuedJobReplaced = run({ conclusion: "success", run_attempt: 2 });
+  const runningJobStopped = run({ conclusion: "success", run_attempt: 2 });
+  // Its second attempt was replaced while queued, so it is passed over.
+  const passedThenReplaced = run({ conclusion: "cancelled", run_attempt: 2 });
+  const noJobListed = run({ conclusion: "success", run_attempt: 2 });
+  const listings: [Run, GithubAnswer][] = [
+    [failedJob, jobPage(3, ["success", "failure", "skipped"])],
+    [passedJobs, jobPage(2, ["success", "skipped"])],
+    [queuedJobReplaced, {
+      total_count: 2,
+      jobs: [{ ...STOPPED, id: 4, conclusion: "success" }, QUEUED],
+    }],
+    [runningJobStopped, {
+      total_count: 2,
+      jobs: [{ ...STOPPED, id: 4, conclusion: "success" }, STOPPED],
+    }],
+    [passedThenReplaced, jobPage(2, ["success", "skipped"])],
+    [noJobListed, NO_JOBS],
+  ];
+  await withGithubAttempt(
+    byUrl([
+      ...listings.flatMap(([retried, jobs]) => {
+        const first = unclosedFirstAttempt(retried);
+        return [
+          [attemptUrl(first), first] as const,
+          [jobsUrl(first), jobs] as const,
+        ];
+      }),
+      [jobsUrl(passedThenReplaced), NO_JOBS],
+      ...annotationAnswers(),
+    ]),
+    async () => {
+      const v = await labsCiTrust.collect(
+        ctx(listings.map(([retried]) => retried)),
+      );
+      // Green: the third, whose first attempt is passed over because its one
+      // cancelled job never reached a runner; the fifth, whose first attempt
+      // passed and whose second is passed over; and the last, whose first
+      // attempt listed no job. The first attempt of every other run failed, or
+      // passed and still needed a rerun, or ran a job its own timeout stopped.
+      assertEquals(cellColors(v.extra), [
+        "var(--status-bad)",
+        "var(--status-bad)",
+        "var(--status-good)",
+        "var(--status-bad)",
+        "var(--status-good)",
+        "var(--status-good)",
+      ]);
+      assertEquals(v.value, "50.0%");
+    },
+  );
+});
+
 Deno.test("labs ci trust: an earlier attempt that is not the one asked for fails the collection", async () => {
   const retried = run({ conclusion: "success", run_attempt: 2 });
   const answers: Run[] = [
-    // Still going, so it carries no verdict to read.
-    { ...attemptOf(retried, 1, "failure"), status: "in_progress", conclusion: null },
     // Another run's attempt.
     { ...attemptOf(retried, 1, "failure"), id: retried.id + 1 },
     // Another attempt of the same run.
@@ -362,13 +766,13 @@ Deno.test("labs ci trust: an earlier attempt that is not the one asked for fails
       await assertRejects(
         () => labsCiTrust.collect(ctx([retried])),
         Error,
-        "did not include a completed conclusion",
+        `when asked for run ${retried.id} attempt 1`,
       );
     });
   }
 });
 
-Deno.test("labs ci trust: a job count GitHub does not return fails the collection", async (t) => {
+Deno.test("labs ci trust: a job listing GitHub does not return fails the collection", async (t) => {
   const cases: { name: string; answer: GithubAnswer; message: string }[] = [
     {
       name: "failed request",
@@ -384,6 +788,29 @@ Deno.test("labs ci trust: a job count GitHub does not return fails the collectio
       name: "missing count",
       answer: { total_count: undefined },
       message: "did not include a numeric `total_count`",
+    },
+    {
+      name: "missing jobs",
+      answer: { total_count: 1 },
+      message: "did not include a numeric `total_count` and a `jobs` array",
+    },
+    {
+      name: "listing that ends short of its count",
+      answer: { total_count: 2, jobs: [] },
+      message: "job listing ended after 0 of its 2 jobs",
+    },
+    {
+      name: "job without a runner name",
+      answer: { total_count: 1, jobs: [{ id: 1, conclusion: "failure" }] },
+      message: "holds a job without a numeric `id` and a string or null",
+    },
+    {
+      name: "job without an id",
+      answer: {
+        total_count: 1,
+        jobs: [{ conclusion: "failure", runner_name: "GitHub Actions 1" }],
+      },
+      message: "holds a job without a numeric `id` and a string or null",
     },
   ];
   for (const { name, answer, message } of cases) {
@@ -458,8 +885,9 @@ Deno.test("labs ci trust grid: cell colors match trust scoring", async () => {
   await withGithubAttempt(
     byUrl([
       [attemptUrl(earlier), earlier],
-      [jobsUrl(neverStarted), { total_count: 0 }],
-      [jobsUrl(timedOut), { total_count: 38 }],
+      [jobsUrl(neverStarted), NO_JOBS],
+      [jobsUrl(timedOut), STOPPED_JOB],
+      ...annotationAnswers(),
     ]),
     async () => {
       const view = await labsCiTrust.collect(ctx(runs));
@@ -592,11 +1020,16 @@ function jobPageUrl(attempt: Run, page: number, repo = REPO): string {
   return `${attemptUrl(attempt, repo)}/jobs?per_page=100&page=${page}`;
 }
 
-// A job listing page holding one job for each conclusion in `conclusions`.
+// A job listing page holding one job for each conclusion in `conclusions`,
+// each run on a runner unless it was skipped.
 function jobPage(total: number, conclusions: readonly string[]): GithubAnswer {
   return {
     total_count: total,
-    jobs: conclusions.map((conclusion) => ({ conclusion })),
+    jobs: conclusions.map((conclusion, id) => ({
+      id,
+      conclusion,
+      runner_name: conclusion === "skipped" ? null : "GitHub Actions 1",
+    })),
   };
 }
 
@@ -692,113 +1125,6 @@ Deno.test("ci-duration: a run's job counts are forgotten once it leaves the snap
   );
 });
 
-Deno.test("recent-runs: wide, failure tip -> bad, rows link to the landing PR", async () => {
-  const v = await recentRuns.collect(
-    ctx([
-      run({ conclusion: "failure", head_commit: { message: "oops (#42)" } }),
-    ]),
-  );
-  assertEquals(recentRuns.wide, true);
-  assertEquals(v.status, "bad");
-  assertStringIncludes(v.extra ?? "", "/pull/42");
-});
-
-Deno.test("recent runs: timestamps have a UTC fallback and a viewer-local marker", async () => {
-  const startedAt = "2024-01-02T17:05:00Z";
-  const runsByRepo = (repo: string) =>
-    repo === REPO ? [run({ run_started_at: startedAt })] : [];
-  const v = await recentRuns.collect(ctx([], {}, runsByRepo));
-  assertStringIncludes(
-    v.extra ?? "",
-    `<time class="t" datetime="${startedAt}" data-viewer-time>17:05 UTC</time>`,
-  );
-});
-
-Deno.test("recent runs: duration opens every successful run for the commit", async () => {
-  const sha = "a".repeat(40);
-  const start = Date.parse("2026-07-21T18:00:00Z");
-  const first = run({
-    id: 41,
-    head_sha: sha,
-    run_started_at: new Date(start).toISOString(),
-    updated_at: new Date(start + 185_000).toISOString(),
-  });
-  const second = run({
-    id: 42,
-    head_sha: sha,
-    run_attempt: 2,
-    run_started_at: new Date(start - 60_000).toISOString(),
-    updated_at: new Date(start + 120_000).toISOString(),
-  });
-  const failed = run({ id: 43, head_sha: sha, conclusion: "failure" });
-  const loom = run({ id: 44, repo: LOOM_REPO, head_sha: sha });
-  const dispatched = run({
-    id: 45,
-    event: "workflow_dispatch",
-    head_sha: sha,
-  });
-  const running = run({
-    id: 46,
-    status: "in_progress",
-    conclusion: null,
-    head_sha: "b".repeat(40),
-    run_started_at: new Date(start - 120_000).toISOString(),
-  });
-  const untimed = run({
-    id: 47,
-    head_sha: "c".repeat(40),
-    run_started_at: new Date(start - 180_000).toISOString(),
-    updated_at: "not-a-timestamp",
-  });
-  const brief = run({
-    id: 48,
-    head_sha: "d".repeat(40),
-    run_started_at: new Date(start - 240_000).toISOString(),
-    updated_at: new Date(start - 198_000).toISOString(),
-  });
-
-  const href = commitGanttHref(first, [
-    first,
-    second,
-    failed,
-    loom,
-    dispatched,
-  ]);
-  assert(href);
-  const target = new URL(href, "http://dashboard");
-  assertEquals(target.pathname, "/ci-gantt");
-  assertEquals(target.searchParams.get("repo"), "labs");
-  assertEquals(target.searchParams.get("sha"), sha);
-  assertEquals(target.searchParams.getAll("run"), ["41:1", "42:2"]);
-  assertEquals(commitGanttHref({ ...first, head_sha: "" }, [first]), null);
-  assertEquals(commitGanttHref(failed, [first, failed]), null);
-  const tooMany = Array.from(
-    { length: 151 },
-    (_, index) => run({ id: 1_000 + index, head_sha: sha }),
-  );
-  assertEquals(commitGanttHref(tooMany[0], tooMany), null);
-
-  const runsByRepo = (repo: string) =>
-    repo === REPO
-      ? [first, second, failed, dispatched, running, untimed, brief]
-      : [loom];
-  const html = (await recentRuns.collect(ctx([], {}, runsByRepo))).extra ?? "";
-  assertStringIncludes(
-    html,
-    `class="evdur" data-focus-key="gantt-41" href="${
-      href.replaceAll("&", "&amp;")
-    }"`,
-  );
-  assertStringIncludes(html, 'class="evtxt" data-focus-key="pr-title-41"');
-  assertStringIncludes(
-    html,
-    '>3m 05s</a><a class="evarrow" data-focus-key="pr-arrow-41"',
-  );
-  assertStringIncludes(html, '<span class="evdur">running</span>');
-  assertStringIncludes(html, '<span class="evdur">—</span>');
-  assertStringIncludes(html, '>42s</a><a class="evarrow"');
-});
-
 Deno.test("ci trust: every repository keeps its strip at the tile bottom", async () => {
   const one = ctx([run({ conclusion: "success" })]);
   for (const tile of [labsCiTrust, loomCiTrust, weaverCiTrust]) {
@@ -838,38 +1164,11 @@ Deno.test("CI tiles declare the workflow snapshots that drive them", () => {
     weaverCiDuration.runSources,
     pulls(WEAVER_REPO, WEAVER_CI_WORKFLOW),
   );
-  assertEquals(recentRuns.runSources, [
+  assertEquals(recentCommits.runSources, [
     ...main(REPO, CI_WORKFLOW),
     ...main(LOOM_REPO, LOOM_CI_WORKFLOW),
+    ...main(WEAVER_REPO, WEAVER_CI_WORKFLOW),
   ]);
-});
-
-Deno.test("recent runs: labs and loom runs interleave chronologically, each tagged", async () => {
-  const now = Date.now();
-  const mk = (repo: string, minsAgo: number, msg: string) =>
-    run({
-      repo,
-      run_started_at: new Date(now - minsAgo * 60_000).toISOString(),
-      head_commit: { message: msg },
-    });
-  const byRepo = (repo: string) =>
-    repo === LOOM_REPO
-      ? [mk(LOOM_REPO, 10, "loom c (#7)"), mk(LOOM_REPO, 30, "loom b (#6)")]
-      : [mk(REPO, 5, "labs c (#3)"), mk(REPO, 20, "labs a (#2)")];
-  const v = await recentRuns.collect(ctx([], {}, byRepo));
-  // Newest-first interleave across repos: labs 5m, loom 10m, labs 20m, loom 30m.
-  const order = [
-    ...(v.extra ?? "").matchAll(
-      /class="evtxt" data-focus-key="pr-title-\d+" href="[^"]*\/pull\/(\d+)/g,
-    ),
-  ]
-    .map((match) => match[1]);
-  assertEquals(order, ["3", "7", "2", "6"]);
-  assertStringIncludes(v.extra ?? "", "labs · ");
-  assertStringIncludes(v.extra ?? "", "loom · ");
-  assertStringIncludes(v.aside ?? "", ">4 in window</span>");
-  // The list's scroll position carries over live updates.
-  assertStringIncludes(v.extra ?? "", '<div class="evscroll" data-focus-key="runs">');
 });
 
 Deno.test("dau: distinct identities per UTC day, excluding the DIDs we name", () => {
@@ -1091,9 +1390,11 @@ Deno.test("registry: unique labels and positive intervals", () => {
 Deno.test("every tile's drill-down link reaches a route the dashboard serves", () => {
   // An unrecognized path falls through to the dashboard itself, so a tile
   // linking at a page nobody serves lands the viewer back where they started.
-  const served = new Set(
-    TILES.flatMap((tile) => tile.routes ?? []).map((route) => route.path),
-  );
+  // The server serves the repository pages beside the tiles' own routes.
+  const served = new Set([
+    ...TILES.flatMap((tile) => tile.routes ?? []).map((route) => route.path),
+    REPOS_PATH,
+  ]);
   for (const { label, view } of TILE_LAYOUT_FIXTURES) {
     if (view.href === undefined || /^https?:/.test(view.href)) continue;
     const path = new URL(view.href, "http://dashboard").pathname;

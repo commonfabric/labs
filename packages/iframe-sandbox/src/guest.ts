@@ -5,7 +5,9 @@
 
 import {
   cloneIfNecessary,
+  type FabricPlainObject,
   type FabricValue,
+  isFabricPlainObject,
   valueEqual,
 } from "@commonfabric/data-model";
 import {
@@ -24,6 +26,8 @@ import {
   type BridgeHostMessage,
   type BridgeManifest,
   type BridgeOperation,
+  type BridgePresenceEvent,
+  type BridgePresenceParticipant,
   type BridgeRequest,
   type BridgeResolvedCell,
   flushNonce,
@@ -576,6 +580,298 @@ export class RemoteSqlite {
   }
 }
 
+/** Guest-side sender for one stream resource, such as a pattern's verb. */
+export class RemoteStream<T = FabricValue> {
+  readonly #client: FabricClient;
+  readonly #name: string;
+
+  constructor(client: FabricClient, name: string) {
+    this.#client = client;
+    this.#name = name;
+  }
+
+  /**
+   * Sends `event` to the stream's handler, after every cell operation this
+   * guest made before the call has settled, so the handler reads what those
+   * operations wrote. What the promise waits for then is the host's to say;
+   * the `cf-iframe` host resolves it once the handler's run has committed, and
+   * rejects it with the reason when the runtime refuses the event or that run.
+   */
+  async send(event: T): Promise<void> {
+    const snapshot = cloneIfNecessary(event as FabricValue, { frozen: false });
+    await this.#client.callAfterCellOperations(this.#name, "send", snapshot);
+  }
+}
+
+/** One other member of a presence room, at its latest record. */
+export type PresenceParticipant = BridgePresenceParticipant;
+
+/** What a presence room tells a guest that joined it. */
+export type PresenceRoomEvent =
+  | BridgePresenceEvent
+  /**
+   * The room's end: the host has no relay (`presence-unsupported`), the
+   * relay refused the join or a publication (`presence-refused`), or the
+   * host lost the room (`presence-disconnected`). Nothing follows it, and a
+   * guest that still wants the room joins again.
+   */
+  | { kind: "failure"; error: FabricBridgeError };
+
+type PresenceListener = (event: PresenceRoomEvent) => void;
+
+/**
+ * Freezes `value` and every plain object and array inside it, in place.
+ * Other values, special objects among them, are left as they are.
+ */
+function freezePlain(value: FabricValue | undefined): void {
+  if (Array.isArray(value)) {
+    for (const member of value) freezePlain(member);
+    Object.freeze(value);
+  } else if (isFabricPlainObject(value)) {
+    for (const member of Object.values(value)) freezePlain(member);
+    Object.freeze(value);
+  }
+}
+
+/**
+ * Reads `value` as a participant, or returns `undefined` for any other
+ * shape. Facet contents are a peer's, and are not read here. The
+ * participant is frozen, facets included, since every reader of the room
+ * shares it.
+ */
+function presenceParticipant(
+  value: FabricValue | undefined,
+): PresenceParticipant | undefined {
+  if (
+    !isFabricPlainObject(value) || typeof value.participantId !== "string" ||
+    typeof value.name !== "string" || !isFabricPlainObject(value.facets)
+  ) {
+    return undefined;
+  }
+  const facets: Record<string, FabricPlainObject> = {};
+  for (const [facet, content] of Object.entries(value.facets)) {
+    if (!isFabricPlainObject(content)) return undefined;
+    Object.defineProperty(facets, facet, {
+      configurable: true,
+      enumerable: true,
+      value: content,
+      writable: true,
+    });
+  }
+  freezePlain(facets);
+  return Object.freeze({
+    participantId: value.participantId,
+    name: value.name,
+    facets,
+  });
+}
+
+/**
+ * Reads `value` as one delivery of a presence resource's sink, or returns
+ * `undefined` for a delivery of any other shape, which a guest ignores.
+ */
+function presenceEvent(
+  value: FabricValue | undefined,
+): BridgePresenceEvent | undefined {
+  if (!isFabricPlainObject(value)) return undefined;
+  switch (value.kind) {
+    case "snapshot": {
+      if (
+        typeof value.participantId !== "string" ||
+        !Array.isArray(value.participants)
+      ) {
+        return undefined;
+      }
+      const participants: PresenceParticipant[] = [];
+      for (const entry of value.participants) {
+        const participant = presenceParticipant(entry);
+        if (participant === undefined) return undefined;
+        participants.push(participant);
+      }
+      return {
+        kind: "snapshot",
+        participantId: value.participantId,
+        participants,
+      };
+    }
+    case "upsert": {
+      const participant = presenceParticipant(value.participant);
+      return participant && { kind: "upsert", participant };
+    }
+    case "remove":
+      return typeof value.participantId === "string"
+        ? { kind: "remove", participantId: value.participantId }
+        : undefined;
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Guest-side membership in one presence room: who else is in it right now,
+ * and what this guest tells them of itself. Nothing here is stored. A record
+ * is a display name and up to eight facets, each a plain object under a name
+ * such as `pointer`, and it is gone the moment its member leaves.
+ */
+export class RemotePresence {
+  readonly #client: FabricClient;
+  readonly #name: string;
+  readonly #listeners = new Set<{ readonly listener: PresenceListener }>();
+  readonly #participants = new Map<string, PresenceParticipant>();
+  #participantId: string | undefined;
+  #leaveRemote: (() => void) | undefined;
+
+  /** Constructs an instance for the presence resource `name` of `client`. */
+  constructor(client: FabricClient, name: string) {
+    this.#client = client;
+    this.#name = name;
+  }
+
+  /**
+   * The id of this guest's own membership, or `undefined` until the room's
+   * first `snapshot` arrives.
+   */
+  get participantId(): string | undefined {
+    return this.#participantId;
+  }
+
+  /** Every other member that has published, at its latest record. */
+  get participants(): readonly PresenceParticipant[] {
+    return [...this.#participants.values()];
+  }
+
+  /**
+   * Joins the room and calls `listener` with each of its events, after the
+   * event is applied to `.participants`. A listener added to a room already
+   * joined hears a `snapshot` of it at once, and one that throws as it hears
+   * it is not added. The room is left when the returned function has been
+   * called for every listener, and ends for all of them with a `failure`.
+   */
+  join(listener: PresenceListener): () => void {
+    const entry = { listener };
+    this.#listeners.add(entry);
+    if (this.#leaveRemote === undefined) {
+      // A sink this room has let go of can still answer, its request
+      // failing after a newer join began, so each hears only its own.
+      const leave = this.#client.sinkResource(
+        this.#name,
+        (value) => {
+          if (this.#leaveRemote === leave) this.#receive(value);
+        },
+        (cause) => {
+          if (this.#leaveRemote === leave) this.#fail(cause);
+        },
+      );
+      this.#leaveRemote = leave;
+    } else if (this.#participantId !== undefined) {
+      try {
+        listener({
+          kind: "snapshot",
+          participantId: this.#participantId,
+          participants: [...this.#participants.values()],
+        });
+      } catch (error) {
+        // A listener that threw as it was added was never added: nothing
+        // calls it again, and its caller holds no function to remove it.
+        this.#listeners.delete(entry);
+        throw error;
+      }
+    }
+    return () => {
+      if (!this.#listeners.delete(entry) || this.#listeners.size > 0) return;
+      this.#reset();
+    };
+  }
+
+  /**
+   * Sets the display name this guest publishes. The room publishes nothing
+   * of a member with no name. Rejects when the room is not joined.
+   */
+  async setName(name: string): Promise<void> {
+    await this.#client.call(this.#name, "setName", name);
+  }
+
+  /**
+   * Sets one facet of this guest's record, replacing its previous value. The
+   * host publishes the record at most once per animation frame, so a peer
+   * hears the latest value of a facet and not every one. Rejects when the
+   * room is not joined, or when `value` is not a plain object.
+   */
+  async setFacet(facet: string, value: FabricPlainObject): Promise<void> {
+    await this.#client.call(this.#name, "setFacet", { facet, value });
+  }
+
+  /** Removes one facet of this guest's record. */
+  async clearFacet(facet: string): Promise<void> {
+    await this.#client.call(this.#name, "clearFacet", facet);
+  }
+
+  #receive(value: FabricValue | undefined): void {
+    const event = presenceEvent(value);
+    if (event === undefined) return;
+    switch (event.kind) {
+      case "snapshot":
+        this.#participantId = event.participantId;
+        this.#participants.clear();
+        for (const participant of event.participants) {
+          this.#participants.set(participant.participantId, participant);
+        }
+        break;
+      case "upsert":
+        this.#participants.set(
+          event.participant.participantId,
+          event.participant,
+        );
+        break;
+      case "remove":
+        this.#participants.delete(event.participantId);
+        break;
+    }
+    this.#tell(event);
+  }
+
+  #fail(cause: unknown): void {
+    const error = cause instanceof FabricBridgeError
+      ? cause
+      : new FabricBridgeError({
+        code: "operation-failed",
+        message: cause instanceof Error ? cause.message : String(cause),
+        resource: this.#name,
+      });
+    // The room is reset before anyone hears of its end, so a listener that
+    // joins again from the failure joins a fresh one.
+    const listeners = [...this.#listeners];
+    this.#reset();
+    for (const { listener } of listeners) {
+      try {
+        listener({ kind: "failure", error });
+      } catch {
+        // One listener's failure must not keep the room's end from the rest.
+      }
+    }
+  }
+
+  #tell(event: BridgePresenceEvent): void {
+    for (const { listener } of [...this.#listeners]) {
+      try {
+        listener(event);
+      } catch {
+        // One listener's failure must not keep an event from the rest.
+      }
+    }
+  }
+
+  /** Helper for the methods that end the membership, which forgets the room. */
+  #reset(): void {
+    this.#listeners.clear();
+    this.#participants.clear();
+    this.#participantId = undefined;
+    const leave = this.#leaveRemote;
+    this.#leaveRemote = undefined;
+    leave?.();
+  }
+}
+
 type PendingRequest = {
   resolve: (value: FabricValue | undefined) => void;
   reject: (error: unknown) => void;
@@ -599,6 +895,7 @@ export class FabricClient {
   #cells = new Map<string, RemoteCell<unknown>>();
   #cellOperationQueues = new Map<string, CellOperationQueue>();
   #resolvedOperations = new Map<string, ReadonlySet<string>>();
+  #presences = new Map<string, RemotePresence>();
   #manifest: Promise<BridgeManifest> | undefined;
   #disconnected = false;
 
@@ -678,12 +975,45 @@ export class FabricClient {
     return new RemoteSqlite(this, name);
   }
 
+  /** Returns a sender for the stream resource `name`. */
+  stream<T = FabricValue>(name: string): RemoteStream<T> {
+    return new RemoteStream<T>(this, name);
+  }
+
+  /** Returns the one shared guest handle for the presence resource `name`. */
+  presence(name: string): RemotePresence {
+    let presence = this.#presences.get(name);
+    if (!presence) {
+      presence = new RemotePresence(this, name);
+      this.#presences.set(name, presence);
+    }
+    return presence;
+  }
+
   call(
     resource: string,
     method: string,
     value?: FabricValue,
   ): Promise<FabricValue | undefined> {
     return this.request("call", { resource, method, value });
+  }
+
+  /**
+   * As {@link call}, once every cell operation queued before this call has
+   * settled. Each cell holds its operations back until the one before has
+   * settled, so without this wait a call can reach the host ahead of a cell
+   * write the guest made first.
+   */
+  async callAfterCellOperations(
+    resource: string,
+    method: string,
+    value?: FabricValue,
+  ): Promise<FabricValue | undefined> {
+    const tails = [...this.#cellOperationQueues.values()].flatMap((queue) =>
+      queue.tail === undefined ? [] : [queue.tail]
+    );
+    await Promise.all(tails);
+    return await this.call(resource, method, value);
   }
 
   request(

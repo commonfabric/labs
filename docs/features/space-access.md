@@ -5,7 +5,10 @@ in a space: `"OWNER"`, `"WRITE"`, `"READ"`, or `"none"`, and `undefined` while
 that is not known. It is what a pattern consults to decide what to offer a
 person, such as whether to show the controls only an owner can use, or whether
 a room it lists is one they belong to. The implementation is
-`packages/runner/src/builder/space-access.ts`.
+`packages/runner/src/builder/space-access.ts`, which also holds
+`spaceMembers(target)`, the principals that space's access list names,
+described [below](#a-spaces-members), and `spaceOf(target)`, the DID of that
+same space, described [below](#the-spaces-own-did).
 
 The answer is advisory. A memory server in `enforce` mode, which is toolshed's
 default (`MEMORY_ACL_MODE`), checks every read and write against the space's
@@ -65,6 +68,57 @@ document, so its own read scope is `user` as well and its value lands in a
 per-user instance too. That holds on a client, and on a serving runtime, where
 two principals demanding the same derived value each get their own.
 
+## Another principal's level
+
+`spaceAccessOf(target, principal)` returns `principal`'s level, where
+`spaceAccess(target)` returns the caller's own, read from the same access list
+the same way. It is a function of its own because the two answers differ in
+kind: the caller's own depends on who is asking, and narrows a computation to
+a per-user value; another principal's does not. A
+handler that must know whether the principal a label names still belongs to
+the space asks this: the Loom root lets an OWNER remove a panel whose attested
+adder the list grants nothing. The answer does not depend on who is asking, so
+a call in a computation leaves the computation's read scope as it was, and the
+memory server's refusal of this runtime's session, which says something only
+about the caller's own principal, does not enter into it: the list alone
+decides, and `undefined` means it has not arrived. A `principal` that is not a
+well-formed DID throws; `*` is not a principal.
+
+## A space's members
+
+`spaceMembers(target)` returns the principals the access list of `target`'s
+space names, each with the level its entry grants, as an object whose
+`principals` maps each principal's DID to its level. It is what a pattern reads
+to list a space's members, rather than keeping a list of its own. It lists
+principals, not people: pairing a member with the profile they joined with is
+the pattern's to do, over the participants the space's root lists.
+
+The list's `"*"` entry is not a member. It admits whoever the list does not
+name, and names no one, so it is reported apart, as `anyone`, and is absent
+when the list has no such entry. A reader can then tell whether the space is
+open only to its members or to anyone with its address. A configured service
+DID holds `OWNER` without an entry and is not listed, and the space's own DID
+is listed only where the list names it.
+
+Only a principal the list grants access gets the list: the caller, found as
+[above](#who-the-principal-is), whether through its own entry or through
+`"*"`. Anyone else gets `undefined`, as does every call for which
+`spaceAccess(target)` returns `undefined`, so the result is never an empty
+list, and a reader can show "not known yet" rather than "nobody". It tells a
+member nothing a member could not already read, since the memory server serves
+the whole list to anyone holding `READ`. On a serving runtime, which reads
+every space as its owner, the check on the caller is what keeps a non-member's
+demand from reading it. On a client, a runtime the memory server has refused
+the space gets `undefined`.
+
+The answer depends on who asks, so a call in a computation narrows its read
+scope to `user`, as `spaceAccess(target)` does, and its value lives in a
+per-user instance. It reads the list the same way, so a grant, a revoke, a
+refusal, or a readmission runs the computation again, as
+[below](#keeping-the-answer-current) describes. The result carries no label. It
+reads nothing but the access list, so a computation that calls it in a space
+and reads nothing from another can write what it returns into that space.
+
 ## `"none"` and `undefined`
 
 | Answer | When |
@@ -110,20 +164,54 @@ when it is disposed, so a storage manager that outlives the runtime keeps no
 hold on it.
 
 A client does not ask the memory server again about a space it was refused on
-its own, since the refusal turns on an access list it cannot read. A host with
-word that the principal has been granted access, such as a notice naming the
-space, asks again with `retrySpaceAccess(space)`, on `Runtime` or, across the
-worker boundary, on `RuntimeClient`. That opens the session once more through
-the memory server's ordinary admission, so it admits only what that admission
-would. An admission reaches the computations above through the same
-access-change observer, and repeats every load the refusal failed, so a
-computation that read a document of the space without calling
-`spaceAccess(target)` runs again too. A refusal leaves the answer `"none"`. It
-acts only on a space the runtime has opened, and asks for admission only while
-that space's session is refused, one attempt per call. A session that stands is
-left alone, except that loads a failed repeat left recorded are repeated. The
-session also opens again when something reads a document of that space that the
-replica has not asked for.
+its own, since the refusal turns on an access list it cannot read. It asks again
+with `retrySpaceAccess(space)`, on `Runtime` or, across the worker boundary, on
+`RuntimeClient`, when it has word that the principal has been granted access.
+The memory server sends that word itself where it can: when an access-list
+change gives the principal `READ` in a space it refused the principal on a
+connection where both peers advertised `admissionNotice`, it sends that
+connection `session/admissible`, and the storage manager answers with the retry,
+which the server may still refuse. The connection has to be open still for that:
+a shared connection, or the connection of a session the change revoked, but not
+the connection a connection-per-space client closes on its first refusal of a
+space. A host with other word, such as a notice naming the space, or a person
+asking it to try again, calls `retrySpaceAccess(space)` itself. The retry opens
+the session once more through the memory server's ordinary admission, so it
+admits only what that admission would. An admission reaches the computations
+above through the same access-change observer, and repeats every load the
+refusal failed, so a computation that read a document of the space without
+calling `spaceAccess(target)` runs again too. A refusal leaves the answer
+`"none"`. It acts only on a space the runtime has opened, and asks for admission
+only while that space's session is refused, one attempt per call. A session that
+stands is left alone, except that loads a failed repeat left recorded are
+repeated. The session also opens again when something reads a document of that
+space that the replica has not asked for.
+
+
+Across the worker boundary, a retry of a space asked for while another retry of
+that space is still in flight shares it rather than asking again, whoever asks:
+a host calling `RuntimeClient.retrySpaceAccess(space)`, or one of the two
+callers built in. The renderer's "Access unavailable" placeholder carries a
+Retry button, which asks for the space whose refusal it stands in for. A refusal
+removes the handlers of the content it stands in for, and leaves this one. The
+shell asks on the person's behalf when they may have been granted access since:
+on navigating into a space the runtime reported refused (`spaceaccesslost`), and
+on the page's `focus` or `visibilitychange` to visible, for every space the
+runtime has reported refused, since a view can show content of a space other
+than its own. Both are event-driven, with no timer behind them. While a retry of
+the space is in flight, whoever asked for it, the placeholder is `aria-busy` and
+reads "Retrying…" after the button. The button itself stays as it was, so it
+keeps keyboard focus, and pressing it again shares the retry in flight. An
+admission re-renders the refused content; a refusal leaves the placeholder as it
+was before the retry. The placeholder's `data-space-access-retries` attribute
+counts the space's settled retries, which is what a test waits on to know that
+a retry has been decided.
+
+An admission also crosses the worker boundary as `spaceaccessrestored`, naming
+the space, whoever asked for the retry that decided it. The shell drops the
+loads of that space it remembered as failed, a piece's or the space root's, and
+runs again each one a view is showing, so a refused space's home or piece
+appears once access is granted, without a reload.
 
 ## Changing the level
 
@@ -136,6 +224,52 @@ replica has not asked for.
 The answer names no principal. It tells a member only what a member can
 already read, since the memory server serves the whole access list to anyone
 holding `READ`, and it tells a non-member only that they are one.
+`spaceMembers(target)` names every principal the list names, and does so only
+to a principal the list grants access, for the same reason.
+
+## The space's own DID
+
+`spaceOf(target)` returns the DID of the space `target`'s value lives in, the
+space `spaceAccess(target)` asks about. It is what a pattern writes into data
+that has to name a space, such as an invitation to a room it has just created
+with `PatternFactory.inSpace()`, which its recipient checks with
+`isWellFormedDID()` before acting on it. It shares the internal resolution of
+`target` with `spaceAccess(target)`, in
+`packages/runner/src/builder/space-access.ts`, so the two always name the same
+space.
+
+It can be called where `spaceAccess(target)` can: in a handler or a reactive
+computation, and a call in a pattern body throws. The answer does not depend on
+who asks, so a call in a computation leaves its read scope as it is.
+
+| Answer | When |
+| --- | --- |
+| a DID | the space `target`'s value lives in, after following any links it holds |
+| `undefined` | `target` was passed as `undefined`, or the run has named an `inSpace()` target whose space is not resolved yet |
+| `undefined` | the links `target` holds run in a cycle, so they name no value in any space; `spaceAccess(target)` throws for such a `target` |
+
+The second `undefined` comes from how `inSpace()` creates a space. A run that
+names a space not yet resolved records the name, and when the run ends the
+runner creates the space, discards everything the run wrote, and runs it again;
+in that run the name resolves at once. Until then the child the call created
+has no space, and neither has a cell linking to it, so `spaceOf(target)`
+returns `undefined` for every `target` in such a run rather than a DID for the
+cells it could resolve. Nothing the run wrote commits, so no DID it returned
+could reach a document either way. The run after it returns the new space's
+DID, for the child and for anything linking to it, and a later handler reading
+the child from the data that run wrote gets the same DID.
+
+With server execution on, a client creates no space for a name, since only the
+serving runtime does. A client's run of a handler naming a space that has no
+allocation record yet is a speculative echo of the serving runtime's run, and
+withdraws instead of running again; a client's reactive computation is run
+again a bounded number of times. So on a client, `spaceOf(target)` returns the
+new space's DID only once the record has arrived. See
+[client speculation](../specs/server-side-execution/speculation.md).
+
+The DID carries no label. A space's DID is an address rather than a principal,
+and a stored reference to a cell in another space already records that space's
+DID, so it is in data anyone holding the reference can read.
 
 ## In a pattern test
 

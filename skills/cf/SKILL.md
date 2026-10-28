@@ -241,7 +241,8 @@ no `--space`.
 | Shape a result     | `deno task cf piece call --cell ID addTopic ... -- --select topic.title`                                                                             |
 | List verbs         | `deno task cf piece verbs --cell ID --json ...` (`--all` adds wrapper/deprecated; `hidden` counts them)                                              |
 | Trigger recompute  | `deno task cf piece step --cell ID ...`                                                                                                              |
-| Mint a session     | `export CF_INVOCATION_SESSION="$(deno task cf invocation-session new)"` (once per run; ids deduplicate only within it)                               |
+| Mint a session     | `(umask 077 && set -C && s="$(deno task cf invocation-session new)" && echo "$s" > '<run session file>')` (once per run; a fresh path each run)      |
+| Carry the session  | `export CF_INVOCATION_SESSION="$(cat '<run session file>')"` (in every shell that passes `--invocation`; a call naming an id without it is refused)  |
 | Replayable call    | `deno task cf piece call --cell ID --invocation my-id-1 handlerName ...` (same pair retries settle on the original outcome)                          |
 | Detached call      | `deno task cf piece call --cell ID --no-wait --invocation my-id-1 handlerName ...` (exits at commit with `receipt` address)                          |
 | Collect a receipt  | `deno task cf cell get --cell <receipt> ...` (the envelope's `receipt` string, later, from any process)                                              |
@@ -338,16 +339,15 @@ intentional breaking migration.
 
 ### Source location metadata
 
-The local-source deployment commands `piece new`, `piece setsrc`, and custom
-`space set-home` accept repeatable `--test` flags as well as `--root` and
-`--repository`. Attach every authored pattern test. Use the repository checkout
-root for `--root`; this preserves `source.entry` as a path inside the
-repository. `--repository` is stored exactly as supplied in `source.repository`
-and is never inferred from Git configuration. On `setsrc`, omitting
-`--repository` preserves the existing value; supplying it replaces the value.
-Test flags are different: every source update must repeat the complete list.
-`piece inspect --json` and `piece ls --json` expose the resulting structured
-source locator.
+The local-source deployment commands `piece new` and `piece setsrc` accept
+repeatable `--test` flags as well as `--root` and `--repository`. Attach every
+authored pattern test. Use the repository checkout root for `--root`; this
+preserves `source.entry` as a path inside the repository. `--repository` is
+stored exactly as supplied in `source.repository` and is never inferred from Git
+configuration. On `setsrc`, omitting `--repository` preserves the existing
+value; supplying it replaces the value. Test flags are different: every source
+update must repeat the complete list. `piece inspect --json` and
+`piece ls --json` expose the resulting structured source locator.
 
 ## JSON Input Format
 

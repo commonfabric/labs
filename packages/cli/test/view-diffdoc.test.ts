@@ -1,6 +1,7 @@
 import { assert, assertEquals } from "@std/assert";
 import { parseDiff } from "../lib/view/diff.ts";
 import { buildDiffDocument, type DiffWorkspace } from "../lib/view/diffdoc.ts";
+import { diffSource } from "../lib/view/diffedit.ts";
 
 const NO_WS: DiffWorkspace = { resolve: () => null, read: () => null };
 
@@ -88,4 +89,59 @@ Deno.test("buildDiffDocument: a deleted .ts file (new path /dev/null) stays Type
       JSON.stringify(doc.lines[codeIdx].spans)
     }`,
   );
+});
+
+//
+// only files with hunks are read from the workspace
+//
+
+Deno.test("buildDiffDocument: a file section without hunks is not read from the workspace", () => {
+  // A pure rename is a file section with headers and no hunks. None of the
+  // renamed file's content is displayed, edited, or expanded. A file whose
+  // name does not settle its language would otherwise be read to detect one.
+  const diff = `diff --git a/old.ts b/moved.ts
+similarity index 100%
+rename from old.ts
+rename to moved.ts
+diff --git a/old-script b/moved-script
+similarity index 100%
+rename from old-script
+rename to moved-script
+diff --git a/edited.ts b/edited.ts
+index 1111111..2222222 100644
+--- a/edited.ts
++++ b/edited.ts
+@@ -1,2 +1,2 @@
+ const a = 1;
+-const b = 2;
++const b = 3;
+`;
+  const files: Record<string, string> = {
+    "/ws/moved.ts": "export const moved = true;\n",
+    "/ws/moved-script": "#!/usr/bin/env python3\nprint('moved')\n",
+    "/ws/edited.ts": "const a = 1;\nconst b = 3;\n",
+  };
+  const reads: string[] = [];
+  const ws: DiffWorkspace = {
+    resolve: (path) => `/ws/${path}` in files ? `/ws/${path}` : null,
+    read: (absPath) => {
+      reads.push(absPath);
+      return files[absPath] ?? null;
+    },
+  };
+  const model = parseDiff(diff)!;
+  assertEquals(model.files.map((f) => f.hunks.length), [0, 0, 1]);
+
+  const { maps, edit } = buildDiffDocument(diff, model, ws);
+
+  assertEquals([...new Set(reads)], ["/ws/edited.ts"]);
+  assertEquals([...edit.fileText.keys()], ["/ws/edited.ts"]);
+  assertEquals([...maps.rootFiles.keys()], ["/ws/edited.ts"]);
+  assertEquals(diffSource(ws, edit).label, "edited.ts");
+  const added = diff.split("\n").indexOf("+const b = 3;");
+  const offset = diff.split("\n").slice(0, added).join("\n").length + 2;
+  assertEquals(maps.toFile(offset), {
+    path: "/ws/edited.ts",
+    offset: files["/ws/edited.ts"].indexOf("const b"),
+  });
 });

@@ -1,0 +1,1 @@
+{"date":"2026-10-07","from":{"k":"unit","s":"runner","n":"native-ui > bindNativeUiControl() > sends an event that matches no contract once copied, and is not a trusted gesture"},"to":{"k":"unit","s":"runner","n":"native-ui > bindNativeUiControl() > sends an event that is a trusted gesture and matches the bound contract, where a copy of it is neither"}}

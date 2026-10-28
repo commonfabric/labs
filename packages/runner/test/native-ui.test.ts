@@ -9,10 +9,14 @@ import { cfcLabelViewForCell } from "../src/cfc/label-view.ts";
 import {
   isRendererTrustedEvent,
   isTrustedGesture,
+  markRendererTrustedEvent,
+  reviewedActionProvenance,
   trustedEventMatchesUiContract,
 } from "../src/cfc/ui-contract.ts";
 import { bindNativeUiControl } from "../src/native-ui.ts";
 import { Runtime } from "../src/runtime.ts";
+import { isAllowedAuthoredImportSpecifier } from "../src/sandbox/runtime-module-policy.ts";
+import { getRuntimeModuleExports } from "../src/sandbox/runtime-modules.ts";
 
 const signer = await Identity.fromPassphrase("native-ui-control-test");
 
@@ -218,7 +222,7 @@ describe("native-ui", () => {
       ).toBe(false);
     });
 
-    it("sends an event that matches no contract once copied, and is not a trusted gesture", () => {
+    it("sends an event that is a trusted gesture and matches the bound contract, where a copy of it is neither", () => {
       const { send, submit } = bindToSpy({
         surface: "ChatSendSurface",
         action: "ChatSend",
@@ -227,9 +231,10 @@ describe("native-ui", () => {
 
       const event = sentEvent(send) as Record<string, unknown>;
       expect(trustedEventMatchesUiContract(event, chatSendPolicy)).toBe(true);
-      expect(trustedEventMatchesUiContract({ ...event }, chatSendPolicy))
-        .toBe(false);
-      expect(isTrustedGesture(event)).toBe(false);
+      expect(isTrustedGesture(event)).toBe(true);
+      const copy = { ...event };
+      expect(trustedEventMatchesUiContract(copy, chatSendPolicy)).toBe(false);
+      expect(isTrustedGesture(copy)).toBe(false);
     });
 
     it("throws given a blank surface or action, and sends nothing", () => {
@@ -247,6 +252,26 @@ describe("native-ui", () => {
         );
       }
       expect(send.calls.length).toBe(0);
+    });
+
+    it("is not importable from a pattern, and no module a pattern imports exports it or the renderer-trust mark", () => {
+      expect(isAllowedAuthoredImportSpecifier("@commonfabric/runner/native-ui"))
+        .toBe(false);
+      expect(isAllowedAuthoredImportSpecifier("@commonfabric/runtime-client"))
+        .toBe(false);
+      const { runtimeExports } = getRuntimeModuleExports();
+      expect(Object.keys(runtimeExports)).toContain("commonfabric");
+      const minting = [
+        bindNativeUiControl,
+        markRendererTrustedEvent,
+        reviewedActionProvenance,
+      ];
+      for (const namespace of Object.values(runtimeExports)) {
+        for (const [name, value] of Object.entries(namespace as object)) {
+          expect(name).not.toMatch(/NativeUi|RendererTrusted|sendReviewed/);
+          expect(minting).not.toContain(value);
+        }
+      }
     });
   });
 });

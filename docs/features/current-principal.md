@@ -99,10 +99,18 @@ They part in two places.
 
 - A served run with no actor keeps the ambient trust snapshot, whose principal
   is the serving runtime's identity, where `currentPrincipal()` returns
-  `undefined`. A write of such a run that would mint a placeholder claim, on a
-  position that declares no `ownerPrincipal`, is refused rather than labeled
-  with that identity. A value it initializes on nobody's behalf mints no claim
-  and is admitted.
+  `undefined`. A write under that snapshot that would mint a placeholder
+  claim is refused rather than labeled with that identity. On a position that
+  declares an `ownerPrincipal`, that includes a write which would bind the
+  serving runtime as the field's owner or match it against one, so such a run
+  can neither claim an unowned field nor write a field a user owns. A value it
+  initializes on nobody's behalf mints no claim, binds no owner, and is
+  admitted, except under a literal owner DID, which every write must come
+  from. A run of the serving loop's own that it attaches a principal's
+  snapshot to, as the space-root ensure attaches the owner it resolves, acts
+  for that principal, and so does a piece start it defers that initializes on
+  its behalf. A demanded derivation with no actor carries its demander's
+  snapshot for its reads but acts for no one, and is refused the same writes.
 - A host embedding the runtime can supply its own trust snapshot naming a
   different acting principal. The placeholder then resolves to that principal,
   and `currentPrincipal()` still returns the identity the runtime authenticates
@@ -178,7 +186,18 @@ through the live serving loop, with a payload naming someone else.
 `packages/runner/test/cfc/authored-by-writer.test.ts` covers the claim on a
 position that declares a writer and no gesture: on a client, on a served run
 with an actor and with none, reached through another handler's `send()`, and
-against claims naming someone other than the acting principal.
+against claims naming someone other than the acting principal. Its owner cases
+cover a served run with no actor at an `ownerPrincipal` position: refused a
+write to a field with no owner yet and to one a user owns, refused an
+initialization attributed to it, and admitted, binding no one, an
+initialization on nobody's behalf. Its serving-loop cases cover a run of the
+loop's own under a principal's snapshot, which labels what it initializes for
+that principal and binds them as owner, and a demanded derivation with no
+actor under its demander's snapshot, which is refused both.
+`packages/runner/test/executor-space-root-ensure.test.ts` covers the root's
+deferred start taking the owner's snapshot from the ensure, and
+`packages/runner/test/executor-effect-channel.test.ts` a served handler's
+navigation target, returned or only called, taking the firing actor's.
 
 `packages/runner/test/cfc-current-principal-confidentiality.test.ts` covers the
 reader binding, under "a document created under a labeled parent": an item

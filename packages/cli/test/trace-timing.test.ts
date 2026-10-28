@@ -1,6 +1,10 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { type PhaseTrace, timeCliPhase } from "../lib/trace-timing.ts";
+import {
+  type PhaseTrace,
+  reportCliPhase,
+  timeCliPhase,
+} from "../lib/trace-timing.ts";
 
 function capturingTrace(enabled: boolean): PhaseTrace & { lines: string[] } {
   const lines: string[] = [];
@@ -31,5 +35,21 @@ describe("timeCliPhase", () => {
     ).rejects.toBe(failure);
     expect(trace.lines).toHaveLength(1);
     expect(trace.lines[0]).toMatch(/:: sync\.piece$/);
+  });
+});
+
+describe("reportCliPhase", () => {
+  it("reports a phase timed elsewhere in whole milliseconds", () => {
+    const trace = capturingTrace(true);
+    reportCliPhase("newPiece.create.server.instantiate.run", 12.6, trace);
+    expect(trace.lines).toEqual([
+      "[cf-phase] 13ms :: newPiece.create.server.instantiate.run",
+    ]);
+  });
+
+  it("reports nothing when tracing is off", () => {
+    const trace = capturingTrace(false);
+    reportCliPhase("newPiece.create.server.instantiate.run", 12.6, trace);
+    expect(trace.lines).toEqual([]);
   });
 });

@@ -261,10 +261,12 @@ describe("wish profile-create sidecar duplicate launch", () => {
       await rt1.idle();
       await rt2.idle();
 
-      // The wish UI names the create-surface cell the launches filled.
+      // The wish UI names the create-surface cell the launches filled. The
+      // wish state holds its view as an opaque handle, so the read into the
+      // view starts from the handle's own address, under no schema.
       await run1.pull();
-      const createCell = run1.key("profile").key(UI).key("props").key("$cell")
-        .resolveAsCell();
+      const createCell = run1.key("profile").key(UI).resolveAsCell()
+        .asSchema(undefined).key("props").key("$cell").resolveAsCell();
       await createCell.sync();
       await createCell.pull();
 

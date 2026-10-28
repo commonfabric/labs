@@ -1,0 +1,716 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "AnonymousType_1": {
+        "items": {
+          "$ref": "#/$defs/MentionablePiece"
+        },
+        "type": "array"
+      },
+      "AnonymousType_2": {
+        "items": {
+          "$ref": "#/$defs/NotePiece"
+        },
+        "type": "array"
+      },
+      "AnonymousType_3": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/NotebookPiece"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "MentionablePiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "backlinks": {
+            "$ref": "#/$defs/AnonymousType_1"
+          },
+          "isHidden": {
+            "type": "boolean"
+          },
+          "mentioned": {
+            "$ref": "#/$defs/AnonymousType_1"
+          }
+        },
+        "required": [
+          "mentioned",
+          "backlinks"
+        ],
+        "type": "object"
+      },
+      "NotePiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "backlinks": {
+            "$ref": "#/$defs/AnonymousType_1"
+          },
+          "content": {
+            "type": "string"
+          },
+          "isHidden": {
+            "type": "boolean"
+          },
+          "parentNotebook": {
+            "$ref": "#/$defs/AnonymousType_3"
+          },
+          "setTitle": {
+            "asCell": [
+              "stream"
+            ],
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "NotebookPiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "backlinks": {
+            "$ref": "#/$defs/AnonymousType_1"
+          },
+          "createNote": {
+            "asCell": [
+              "stream"
+            ],
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "navigate": {
+                "type": "boolean"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title",
+              "content"
+            ],
+            "type": "object"
+          },
+          "createNotebook": {
+            "asCell": [
+              "stream"
+            ],
+            "properties": {
+              "notesData": {
+                "items": {
+                  "properties": {
+                    "content": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "content"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "createNotes": {
+            "asCell": [
+              "stream"
+            ],
+            "properties": {
+              "notesData": {
+                "items": {
+                  "properties": {
+                    "content": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "content"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "notesData"
+            ],
+            "type": "object"
+          },
+          "isHidden": {
+            "type": "boolean"
+          },
+          "isNotebook": {
+            "type": "boolean"
+          },
+          "notes": {
+            "$ref": "#/$defs/AnonymousType_2"
+          },
+          "setTitle": {
+            "asCell": [
+              "stream"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "createNote",
+          "createNotes",
+          "setTitle",
+          "createNotebook"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "isHidden": {
+        "default": false,
+        "type": "boolean"
+      },
+      "isNotebook": {
+        "default": true,
+        "type": "boolean"
+      },
+      "notes": {
+        "$ref": "#/$defs/AnonymousType_2",
+        "asCell": [
+          "cell"
+        ],
+        "default": []
+      },
+      "parentNotebook": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/NotebookPiece"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "asCell": [
+          "cell"
+        ],
+        "default": null,
+        "description": "Parent notebook reference. Set at creation, can be updated for moves."
+      },
+      "title": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "Notebook",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "notes/notebook.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AnonymousType_1": {
+        "items": {
+          "$ref": "#/$defs/MentionablePiece"
+        },
+        "type": "array"
+      },
+      "AnonymousType_2": {
+        "items": {
+          "$ref": "#/$defs/NotePiece"
+        },
+        "type": "array"
+      },
+      "AnonymousType_3": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/NotebookPiece"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "MentionablePiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "backlinks": {
+            "$ref": "#/$defs/AnonymousType_1"
+          },
+          "isHidden": {
+            "type": "boolean"
+          },
+          "mentioned": {
+            "$ref": "#/$defs/AnonymousType_1"
+          }
+        },
+        "required": [
+          "mentioned",
+          "backlinks"
+        ],
+        "type": "object"
+      },
+      "NotePiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "backlinks": {
+            "$ref": "#/$defs/AnonymousType_1"
+          },
+          "content": {
+            "type": "string"
+          },
+          "isHidden": {
+            "type": "boolean"
+          },
+          "parentNotebook": {
+            "$ref": "#/$defs/AnonymousType_3"
+          },
+          "setTitle": {
+            "asCell": [
+              "stream"
+            ],
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "NotebookPiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "backlinks": {
+            "$ref": "#/$defs/AnonymousType_1"
+          },
+          "createNote": {
+            "asCell": [
+              "stream"
+            ],
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "navigate": {
+                "type": "boolean"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title",
+              "content"
+            ],
+            "type": "object"
+          },
+          "createNotebook": {
+            "asCell": [
+              "stream"
+            ],
+            "properties": {
+              "notesData": {
+                "items": {
+                  "properties": {
+                    "content": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "content"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "createNotes": {
+            "asCell": [
+              "stream"
+            ],
+            "properties": {
+              "notesData": {
+                "items": {
+                  "properties": {
+                    "content": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "content"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "notesData"
+            ],
+            "type": "object"
+          },
+          "isHidden": {
+            "type": "boolean"
+          },
+          "isNotebook": {
+            "type": "boolean"
+          },
+          "notes": {
+            "$ref": "#/$defs/AnonymousType_2"
+          },
+          "setTitle": {
+            "asCell": [
+              "stream"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "createNote",
+          "createNotes",
+          "setTitle",
+          "createNotebook"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "A #notebook that organizes notes into collections.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "backlinks": {
+        "$ref": "#/$defs/AnonymousType_1"
+      },
+      "cancelNewNestedNotebook": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "cancelNewNote": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "cancelNewNotebook": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "createAnotherNestedNotebookFromPrompt": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "createAnotherNoteFromPrompt": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "createNestedNotebookFromPrompt": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "createNote": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "content"
+        ],
+        "type": "object"
+      },
+      "createNoteFromPrompt": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "createNotebook": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "notesData": {
+            "items": {
+              "properties": {
+                "content": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title",
+                "content"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      },
+      "createNotebookFromSelectionPrompt": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "createNotes": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "notesData": {
+            "items": {
+              "properties": {
+                "content": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title",
+                "content"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "notesData"
+        ],
+        "type": "object"
+      },
+      "deleteSelected": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "deselectAllNotes": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "duplicateSelected": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "goToAllNotes": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "hasSelection": {
+        "type": "boolean"
+      },
+      "isEditingTitle": {
+        "type": "boolean"
+      },
+      "isHidden": {
+        "type": "boolean"
+      },
+      "isNotebook": {
+        "type": "boolean"
+      },
+      "noteCount": {
+        "type": "number"
+      },
+      "notes": {
+        "$ref": "#/$defs/AnonymousType_2"
+      },
+      "selectAllNotes": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "selectedCount": {
+        "type": "number"
+      },
+      "selectedNoteIndices": {
+        "items": {
+          "type": "number"
+        },
+        "type": "array"
+      },
+      "setTitle": {
+        "asCell": [
+          "stream"
+        ],
+        "type": "string"
+      },
+      "showNewNestedNotebookPrompt": {
+        "type": "boolean"
+      },
+      "showNewNoteModal": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "showNewNotePrompt": {
+        "type": "boolean"
+      },
+      "showNewNotebookModal": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "showNewNotebookPrompt": {
+        "type": "boolean"
+      },
+      "startEditTitle": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "stopEditTitle": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "summary": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "title",
+      "notes",
+      "noteCount",
+      "summary",
+      "isNotebook",
+      "isHidden",
+      "backlinks",
+      "createNote",
+      "createNotes",
+      "setTitle",
+      "createNotebook",
+      "selectAllNotes",
+      "deselectAllNotes",
+      "deleteSelected",
+      "duplicateSelected",
+      "showNewNoteModal",
+      "cancelNewNote",
+      "showNewNotebookModal",
+      "cancelNewNotebook",
+      "cancelNewNestedNotebook",
+      "startEditTitle",
+      "stopEditTitle",
+      "goToAllNotes",
+      "createNoteFromPrompt",
+      "createAnotherNoteFromPrompt",
+      "createNestedNotebookFromPrompt",
+      "createAnotherNestedNotebookFromPrompt",
+      "createNotebookFromSelectionPrompt",
+      "selectedNoteIndices",
+      "selectedCount",
+      "hasSelection",
+      "showNewNotePrompt",
+      "showNewNotebookPrompt",
+      "showNewNestedNotebookPrompt",
+      "isEditingTitle",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

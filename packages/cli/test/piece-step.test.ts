@@ -1,7 +1,7 @@
 /**
  * Unit tests for `stepPiece`'s write receipt. A step runs the pattern and
  * commits what recomputation produced, so it names the space it wrote to
- * like every other write path (docs/plans/cli-surface-shape.md, step 8);
+ * like every other write path (docs/history/plans/cli-surface-shape.md, step 8);
  * the injected controller stub is what lets the receipt be asserted
  * without a live space.
  */
@@ -49,7 +49,7 @@ describe("stepPiece", () => {
   it("emits the write receipt for the space it stepped in", async () => {
     // A step exists to run the pattern and commit what recomputation
     // produced, so it is a write path and owes the space receipt like any
-    // other (docs/plans/cli-surface-shape.md, step 8).
+    // other (docs/history/plans/cli-surface-shape.md, step 8).
     resetWriteReceipts();
     const calls: string[] = [];
     const lines = await captureStderr(() =>

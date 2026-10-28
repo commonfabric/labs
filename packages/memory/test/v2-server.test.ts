@@ -329,6 +329,29 @@ Deno.test("memory v2 server parser ignores transact invocation and authorization
   );
 });
 
+Deno.test("memory v2 server parses a watch removal naming watch ids, and refuses one naming anything else", () => {
+  const request = {
+    type: "session.watch.remove" as const,
+    requestId: "remove-1",
+    space: "did:key:z6Mk-space",
+    sessionId: "session:1",
+  };
+  assertEquals(
+    parseClientMessage(encodeMemoryBoundary({
+      ...request,
+      watchIds: ["watch-a", "watch-b"],
+    })),
+    { ...request, watchIds: ["watch-a", "watch-b"] },
+  );
+  assertEquals(
+    parseClientMessage(encodeMemoryBoundary({
+      ...request,
+      watchIds: ["watch-a", 7],
+    })),
+    { type: "invalid", requestId: "remove-1" },
+  );
+});
+
 Deno.test("memory v2 server parses entity identifier listing requests", () => {
   assertEquals(
     parseClientMessage(encodeMemoryBoundary({
@@ -370,7 +393,7 @@ Deno.test("memory v2 server parses entity identifier listing requests", () => {
       requestId: "entity-list-2",
       space: "did:key:z6Mk-space",
     })),
-    null,
+    { type: "invalid", requestId: "entity-list-2" },
   );
   assertEquals(
     parseClientMessage(encodeMemoryBoundary({
@@ -1284,6 +1307,51 @@ Deno.test("memory v2 server transfers session ownership and rejects stale resume
   }
 });
 
+Deno.test("memory v2 server does not open a session for a connection that closed during admission", async () => {
+  // The close detached the connection's sessions before the open finished,
+  // so a session it opened would be held by a connection that is gone and
+  // would never expire.
+  let gate: PromiseWithResolvers<void> | undefined;
+  const reached = Promise.withResolvers<void>();
+  const server = new Server({
+    store: new URL("memory://memory-v2-server-closed-during-admission"),
+    subscriptionRefreshDelayMs: 0,
+    async authorizeSessionOpen() {
+      if (gate !== undefined) {
+        reached.resolve();
+        await gate.promise;
+      }
+      return "did:key:z6Mk-memory-v2-server-principal";
+    },
+    sessionOpenAuth: { audience: TEST_AUDIENCE },
+  });
+  const space = "did:key:z6Mk-space-closed-during-admission";
+  const messages: ServerMessage[] = [];
+  const connection = server.connect((message) => messages.push(message));
+  try {
+    await connection.receive(encodeMemoryBoundary(HELLO));
+    const sessionOpen = expectHelloOk(messages);
+    gate = Promise.withResolvers<void>();
+    const opening = connection.receive(encodeMemoryBoundary({
+      type: "session.open",
+      requestId: "open-closing",
+      space,
+      session: { sessionId: "session:closing" },
+      invocation: authInvocation(sessionOpen),
+    }));
+    await reached.promise;
+    connection.close();
+    gate.resolve();
+    await opening;
+    assertEquals(
+      server.isSessionAttached(space, "session:closing", connection.id),
+      false,
+    );
+  } finally {
+    await server.close();
+  }
+});
+
 Deno.test("memory v2 server rejects handshakes when modernCellRep flags disagree", async () => {
   const server = createServer("memory://memory-v2-server-handshake-flags");
   const messages: ServerMessage[] = [];
@@ -1636,7 +1704,7 @@ Deno.test("memory v2 server watch sets expand to previously hidden nodes after r
   }
 });
 
-Deno.test("memory v2 server does not emit delayed exact-reconcile removes after shrink retargets", async () => {
+Deno.test("memory v2 server retracts what a shrink retarget stops reaching in the effect frame, and nothing later", async () => {
   const time = new FakeTime();
   const server = createServer(
     "memory://memory-v2-server-watch-shrink-no-reconcile",
@@ -1752,7 +1820,14 @@ Deno.test("memory v2 server does not emit delayed exact-reconcile removes after 
     await time.tickAsync(0);
     await time.runMicrotasks();
     const effect = assertEffect(shiftMessage(messages));
-    assertEquals(effect.effect.removes, []);
+    // The expanded root's `alternate` was the only way to the hidden half;
+    // the cycle its `alternate` targets share with the initial half stays.
+    assertEquals(
+      effect.effect.removes.map((entry) => entry.id),
+      fixture.expandedReachableIds.filter((id) =>
+        !fixture.initialReachableIds.includes(id)
+      ),
+    );
 
     await time.tickAsync(300);
     await time.runMicrotasks();

@@ -236,6 +236,288 @@ describe("applyCommit() with an identity commit", () => {
     ).toThrow(ConflictError);
   });
 
+  it("accepts a patch that reaches the stored document but is not idempotent on it, for a replica that drops elided layers", () => {
+    // The same race as above, from a session whose client advertised
+    // `elidedVerdicts`: its replica promotes the elided layer to the list it
+    // computed rather than replaying the splice over the stored list, so the
+    // second condition guards nothing for it, and the write is elided.
+    const install = applyCommit(engine, {
+      sessionId: "s:a",
+      commit: commit(1, { operations: [setOp("of:list", ["a"])] }),
+    });
+    applyCommit(engine, {
+      sessionId: "s:b",
+      commit: commit(1, {
+        operations: [patchOp("of:list", [
+          { op: "splice", path: "/value", index: 1, remove: 0, add: ["x"] },
+        ])],
+      }),
+    });
+    const headBefore = headSeqOf(engine, "of:list");
+
+    const verdict = applyCommit(engine, {
+      sessionId: "s:a",
+      elidedVerdicts: true,
+      commit: commit(2, {
+        reads: {
+          confirmed: [{ id: "of:list", path: [], seq: install.seq }],
+          pending: [],
+        },
+        operations: [patchOp("of:list", [
+          { op: "splice", path: "/value", index: 1, remove: 0, add: ["x"] },
+        ])],
+      }),
+    });
+
+    expect(verdict.elidedOpIndexes).toEqual([0]);
+    expect(verdict.revisions).toEqual([]);
+    expect(headSeqOf(engine, "of:list")).toBe(headBefore);
+  });
+
+  it("refuses a patch that does not reach the stored document, for a replica that drops elided layers", () => {
+    // Session b appended `y`, not `x`: the splice from the basis yields a
+    // list the store does not hold, and the first condition still refuses it.
+    const install = applyCommit(engine, {
+      sessionId: "s:a",
+      commit: commit(1, { operations: [setOp("of:list", ["a"])] }),
+    });
+    applyCommit(engine, {
+      sessionId: "s:b",
+      commit: commit(1, {
+        operations: [patchOp("of:list", [
+          { op: "splice", path: "/value", index: 1, remove: 0, add: ["y"] },
+        ])],
+      }),
+    });
+
+    expect(() =>
+      applyCommit(engine, {
+        sessionId: "s:a",
+        elidedVerdicts: true,
+        commit: commit(2, {
+          reads: {
+            confirmed: [{ id: "of:list", path: [], seq: install.seq }],
+            pending: [],
+          },
+          operations: [patchOp("of:list", [
+            { op: "splice", path: "/value", index: 1, remove: 0, add: ["x"] },
+          ])],
+        }),
+      })
+    ).toThrow(ConflictError);
+  });
+
+  // Session a appends `x` to a one-element list it installed, from a view
+  // that missed session b's identical append, and the store elides the splice
+  // as an identity. Returns the install's seq and the elided commit's.
+  function elideStaleSplice(): { installSeq: number; elidedSeq: number } {
+    const install = applyCommit(engine, {
+      sessionId: "s:a",
+      commit: commit(1, { operations: [setOp("of:list", ["a"])] }),
+    });
+    applyCommit(engine, {
+      sessionId: "s:b",
+      commit: commit(1, {
+        operations: [patchOp("of:list", [
+          { op: "splice", path: "/value", index: 1, remove: 0, add: ["x"] },
+        ])],
+      }),
+    });
+    const elided = applyCommit(engine, {
+      sessionId: "s:a",
+      elidedVerdicts: true,
+      commit: commit(2, {
+        reads: {
+          confirmed: [{ id: "of:list", path: [], seq: install.seq }],
+          pending: [],
+        },
+        operations: [patchOp("of:list", [
+          { op: "splice", path: "/value", index: 1, remove: 0, add: ["x"] },
+        ])],
+      }),
+    });
+    expect(elided.elidedOpIndexes).toEqual([0]);
+    return { installSeq: install.seq, elidedSeq: elided.seq };
+  }
+
+  it("accepts a commit whose pending read sits on an own layer the store elided as an identity", () => {
+    // The reader saw the list through the elided splice, which is the list
+    // the store holds: session b's append is the write the identity matched,
+    // not one the reader missed.
+    const { installSeq } = elideStaleSplice();
+
+    const verdict = applyCommit(engine, {
+      sessionId: "s:a",
+      elidedVerdicts: true,
+      commit: commit(3, {
+        reads: {
+          confirmed: [],
+          pending: [{
+            id: "of:list",
+            path: ["value"],
+            localSeq: [2],
+            basisSeq: installSeq,
+          }],
+        },
+        operations: [setOp("of:other", { m: 1 })],
+      }),
+    });
+
+    expect(verdict.revisions.map((revision) => revision.id)).toEqual([
+      "of:other",
+    ]);
+  });
+
+  it("accepts a commit whose pending read sits on an own set the store elided as an identity", () => {
+    // A set's value does not depend on the view it was written over, so the
+    // reader's view through it is the stored document whatever basis the
+    // reader declares.
+    const installSeq = installThenRewrite();
+    applyCommit(engine, {
+      sessionId: "s:a",
+      commit: commit(2, {
+        reads: {
+          confirmed: [{ id: "of:doc", path: [], seq: installSeq }],
+          pending: [],
+        },
+        operations: [setOp("of:doc", { n: 2 })],
+      }),
+    });
+
+    const verdict = applyCommit(engine, {
+      sessionId: "s:a",
+      commit: commit(3, {
+        reads: {
+          confirmed: [],
+          pending: [{
+            id: "of:doc",
+            path: ["value", "n"],
+            localSeq: [2],
+            basisSeq: 0,
+          }],
+        },
+        operations: [setOp("of:other", { m: 1 })],
+      }),
+    });
+
+    expect(verdict.revisions.map((revision) => revision.id)).toEqual([
+      "of:other",
+    ]);
+  });
+
+  it("refuses a commit whose pending read sits on an elided own layer when a write lands after it", () => {
+    const { installSeq } = elideStaleSplice();
+    applyCommit(engine, {
+      sessionId: "s:b",
+      commit: commit(2, {
+        operations: [patchOp("of:list", [
+          { op: "splice", path: "/value", index: 2, remove: 0, add: ["y"] },
+        ])],
+      }),
+    });
+
+    expect(() =>
+      applyCommit(engine, {
+        sessionId: "s:a",
+        elidedVerdicts: true,
+        commit: commit(3, {
+          reads: {
+            confirmed: [],
+            pending: [{
+              id: "of:list",
+              path: ["value"],
+              localSeq: [2],
+              basisSeq: installSeq,
+            }],
+          },
+          operations: [setOp("of:other", { m: 1 })],
+        }),
+      })
+    ).toThrow(ConflictError);
+  });
+
+  it("refuses a commit whose pending read sits on an elided own patch from a basis the identity was not proved against", () => {
+    // The splice was proved against the list at the install; a reader
+    // declaring the empty basis before it saw some other list through the
+    // splice, and session a's own install, which the read does not name,
+    // conflicts as it would without the elision.
+    elideStaleSplice();
+
+    expect(() =>
+      applyCommit(engine, {
+        sessionId: "s:a",
+        elidedVerdicts: true,
+        commit: commit(3, {
+          reads: {
+            confirmed: [],
+            pending: [{
+              id: "of:list",
+              path: ["value"],
+              localSeq: [2],
+              basisSeq: 0,
+            }],
+          },
+          operations: [setOp("of:other", { m: 1 })],
+        }),
+      })
+    ).toThrow(ConflictError);
+  });
+
+  it("refuses a commit whose pending read sits on an elided own patch from the basis of a read the identity proof did not use", () => {
+    // The elided splice carries two reads of the list. The identity proof
+    // takes the first, at the install; the second, at the empty basis, is a
+    // view nobody proved, so a reader declaring that basis is scanned from
+    // it and conflicts with session a's own install, which it does not name.
+    const install = applyCommit(engine, {
+      sessionId: "s:a",
+      commit: commit(1, { operations: [setOp("of:list", ["a"])] }),
+    });
+    applyCommit(engine, {
+      sessionId: "s:b",
+      commit: commit(1, {
+        operations: [patchOp("of:list", [
+          { op: "splice", path: "/value", index: 1, remove: 0, add: ["x"] },
+        ])],
+      }),
+    });
+    const elided = applyCommit(engine, {
+      sessionId: "s:a",
+      elidedVerdicts: true,
+      commit: commit(2, {
+        reads: {
+          confirmed: [
+            { id: "of:list", path: [], seq: install.seq },
+            { id: "of:list", path: ["value"], seq: 0 },
+          ],
+          pending: [],
+        },
+        operations: [patchOp("of:list", [
+          { op: "splice", path: "/value", index: 1, remove: 0, add: ["x"] },
+        ])],
+      }),
+    });
+    expect(elided.elidedOpIndexes).toEqual([0]);
+
+    expect(() =>
+      applyCommit(engine, {
+        sessionId: "s:a",
+        elidedVerdicts: true,
+        commit: commit(3, {
+          reads: {
+            confirmed: [],
+            pending: [{
+              id: "of:list",
+              path: ["value"],
+              localSeq: [2],
+              basisSeq: 0,
+            }],
+          },
+          operations: [setOp("of:other", { m: 1 })],
+        }),
+      })
+    ).toThrow(ConflictError);
+  });
+
   it("judges a patch on a document the commit did not read by its effect on the stored one", () => {
     const installSeq = installThenRewrite();
     applyCommit(engine, {
@@ -952,10 +1234,40 @@ describe("applyCommit() with an identity commit", () => {
     ).toThrow(ProtocolError);
   });
 
+  it("accepts and replays validation-only commits over confirmed and pending reads", () => {
+    const installed = applyCommit(engine, {
+      sessionId: "s:a",
+      commit: commit(1, { operations: [setOp("of:doc", { n: 1 })] }),
+    });
+    for (const pending of [false, true]) {
+      const validation = {
+        sessionId: "s:a",
+        commit: commit(pending ? 3 : 2, {
+          reads: pending
+            ? {
+              confirmed: [],
+              pending: [{ id: "of:doc", path: [], localSeq: 1 }],
+            }
+            : {
+              confirmed: [{ id: "of:doc", path: [], seq: installed.seq }],
+              pending: [],
+            },
+        }),
+      };
+      const accepted = applyCommit(engine, validation);
+      expect(accepted.seq).toBeGreaterThan(installed.seq);
+      expect(accepted.revisions).toEqual([]);
+      expect(applyCommit(engine, validation)).toEqual({
+        ...accepted,
+        replayed: true,
+      });
+      expect(headSeqOf(engine, "of:doc")).toBe(installed.seq);
+    }
+  });
+
   it("refuses a commit with no operations over a stale confirmed read", () => {
-    // Only the wave path admits an empty operation list, for a wave whose
-    // outbound appends ride the transaction; a stale read on one is still
-    // a stale read, with nothing for the identity proof to prove.
+    // Validation-only commits have no writes for the identity proof to
+    // elide, so a stale read must still reject.
     const installSeq = installThenRewrite();
 
     expect(() =>
@@ -967,7 +1279,6 @@ describe("applyCommit() with an identity commit", () => {
             pending: [],
           },
         }),
-        allowEmptyOperations: true,
       })
     ).toThrow(ConflictError);
   });

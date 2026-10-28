@@ -227,6 +227,13 @@ export interface HarnessHandleEntry {
    * a model-visible surface nowhere.
    */
   acquisition?: HarnessSkillAcquisition;
+
+  /**
+   * Present once `describe_handle` has answered for this handle in this
+   * table. `read_value` reads only a described handle, so a value is read
+   * after its shape was looked at rather than in place of looking.
+   */
+  described?: true;
 }
 
 /**

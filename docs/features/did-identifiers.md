@@ -50,8 +50,8 @@ A pattern is the exception, and it is a hard one. A pattern compiles against
 the `commonfabric` module and nothing else, so it cannot reach this module at
 all. A pattern that has to inspect a DID states the shape it accepts in its own
 source, and says which shape that is and why, the way
-`packages/patterns/system/profile-home.tsx` pins a share inbox pointer to a
-`did:key`. The `DID` type is available to a pattern, since `packages/api`
+`packages/patterns/system/private-inbox.tsx` states the DID shape an offer's
+`space` and `from` must take. The `DID` type is available to a pattern, since `packages/api`
 declares a standalone copy of it.
 
 ## Asking a narrower question
@@ -102,9 +102,6 @@ generic message will do:
   segment to `spaceDid`, so a DID-shaped name would not survive the round trip.
 
 A surface with something better to say tests `isDID` and raises its own error.
-The harness console's `--fabric-space` is the example: its message names
-`assign_slug` and says that a URL is composed from the space's name, which is
-the fact its caller needs and a generic message cannot carry.
 
 Refuse a DID at any new surface that takes a space name, an identity name, or
 anything else a DID would be mistaken for. Failing at the surface costs one

@@ -97,6 +97,18 @@ regression witness, alongside the legacy-shape engine test in
 model. The residual deviation retires when clients that omit `basisSeq`
 fall below the support floor.
 
+What a client SHOWS for a pending layer is bound by this invariant too,
+because a later commit's observation is whatever view it read. A positional
+`splice` shown as the array its writer computed (`03-commit-model.md`
+§3.3.3) is sound only where the commit read the array, since that read is
+what gets the layer refused once the array moves. Shown for a layer that
+read nothing, a reader over it observes a list the server, replaying the
+layer's ops, never reconstructs, and is accepted having missed the foreign
+write the substitution hid. The TLA+ model's `ViewMode` dial states this:
+`PendingStacks_ChannelIntended.cfg` is the witness, violating
+`ReadCoherence` within seconds, and the `*IntendedRead.cfg` configs certify
+the read-conditioned form.
+
 A second deviation is deliberate: an **identity commit**
 (`03-commit-model.md` §3.6.1), which leaves every document it writes as the
 space already holds it, is accepted without a staleness check. Its
@@ -108,7 +120,11 @@ inside the commit's transaction: per document, the commit's ordered `set`
 and `patch` operations replayed on the view the reader saw yield the stored
 document, and replayed on the stored document leave it unchanged, where a
 pending read's view is its declared confirmed basis with exactly the own
-layers it names replayed on it; a client claim would not do. The
+layers it names replayed on it; a client claim would not do. The second
+condition is waived for a session whose client advertised `elidedVerdicts`,
+since its replica promotes an elided layer to the document its transaction
+computed rather than folding it, and the first condition alone is what this
+invariant needs. The
 differential harness's reference model applies the idempotence half alone,
 so it admits a superset of what the engine admits. The TLA+ model's `IdentityMode = "elide"`
 (`PendingStacks_Identity.cfg`, `PendingStacks_ChannelIdentity.cfg`) certifies
@@ -120,7 +136,11 @@ foreign write that carried the same value, so the writer sets differ where
 the content does not (`PendingStacks_IdentityWriterForm.cfg` is the witness,
 on the writer-set form restricted to commits that wrote). `ElidedUnchanged`
 pins the exemption's premise: every path an elided commit would have written
-already held its value at its resolution point.
+already held its value at its resolution point. A later own commit whose
+pending read names such a layer is scanned from the layer's seq where its view
+through the layer is the one the identity was proved against
+(`03-commit-model.md` §3.6.3): the document at that seq is the reader's view,
+so the writes at or below it are already in what the reader saw.
 
 ### INV-2 — Overlap over-approximation only
 
@@ -507,7 +527,10 @@ separately stated motivation, and no spec gives one. Anyone proposing to relax
 it owes the argument #4670 did not record.
 
 Layer: server admission (`#validateAclCommit` in
-`packages/memory/v2/server.ts`); client emission (`writeAcl()` in
+`packages/memory/v2/server.ts`, for a session's transact and, with the carried
+actor as the principal, for a served run's change through
+`commitServedAclChange()` and `checkServedAclChange()`); client emission
+(`writeAcl()` in
 `packages/runner/src/acl-manager.ts`, which `ACLManager` and a handler's
 `grantSpaceAccess()` and `revokeSpaceAccess()` both write through, and which
 satisfies the rule by addressing the whole document at path `[]` — a write
@@ -516,12 +539,18 @@ details and is refused). The self-removal exception to the capability check
 is `#isSelfRemoval` in `packages/memory/v2/server.ts`, and `cf acl leave` is
 the client that sends one.
 
-The served plane has no writer of the ACL document, and refuses one outright,
-in every mode, `off` included. A serving wave commits engine-direct, so
-`#validateAclCommit` never sees its commits, and neither its `derived` lease
-admission nor its foreign batches' delegated admission checks this rule or
-the acting user's level. So the wave's seal refuses a run that writes
-`of:<space>` of any space, failing that run alone
+The served plane writes the ACL document only through the memory server. A
+serving wave commits engine-direct, so `#validateAclCommit` never sees its
+commits, and neither its `derived` lease admission nor its foreign batches'
+delegated admission checks this rule or the acting user's level. So no run
+writes the document itself, in any mode, `off` included: a served handler's
+`grantSpaceAccess()` or `revokeSpaceAccess()` stages its change instead, and
+the memory server commits it as an ACL-only authored commit, admitted by
+`#validateAclCommit` and the capability check with the event's actor as the
+principal
+([`space-access-changes.md`](../../features/space-access-changes.md#serving-runtimes)).
+The wave's seal refuses a run that writes `of:<space>` of any space, failing
+that run alone
 (`packages/runner/src/executor/wave.ts`); the engine's `derived` admission
 refuses a commit carrying such an operation (`packages/memory/v2/engine.ts`);
 and the wave sink refuses a foreign batch carrying one
@@ -554,7 +583,11 @@ resulting value. Served plane,
 `packages/runner/test/executor-acl-document-write.test.ts` drives a served
 handler's cell-shaped and whole-document writes under `off` and `enforce`,
 and `packages/runner/test/executor-wave.test.ts` hands the engine and the
-sink batches built directly, past the seal.
+sink batches built directly, past the seal. The served change's admission is
+"checkServedAclChange() and commitServedAclChange()" in
+`packages/memory/test/v2-server-acl.test.ts`, and
+`packages/runner/test/executor-space-access-change.test.ts` drives served
+handlers' grants and revokes, and their refusals, under `off` and `enforce`.
 
 ### INV-13 — ACL genesis precedence and authority
 

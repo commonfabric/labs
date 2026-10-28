@@ -9,7 +9,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { slugIdForSpace } from "../../runner/src/slugs.ts";
 import { collectLocalProgram } from "../lib/dev.ts";
 import { pinProgramFabricImports } from "../lib/fabric-deps.ts";
-import { cf, stripAnsi } from "./utils.ts";
+import { argv, cf, stripAnsi } from "./utils.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 
 const signer = await Identity.fromPassphrase("cli fabric deps test");
@@ -220,7 +220,7 @@ describe("cli fabric deps", () => {
   });
 
   it("exposes deps update help", async () => {
-    const { code, stdout } = await cf("deps update --help");
+    const { code, stdout } = await cf(argv`deps update --help`);
 
     expect(code).toBe(0);
     expect(stripAnsi(stdout.join("\n"))).toContain("--check");

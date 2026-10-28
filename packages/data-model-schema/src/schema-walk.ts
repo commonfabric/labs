@@ -179,27 +179,39 @@ type RecordKeyword =
   | (typeof UNUSED_RECORD_SUBSCHEMA_KEYS)[number]
   | (typeof DEFS_KEYS)[number];
 
+// The keyword lists a walk visits, one per combination of options, built
+// once: a walk visits one node per call, so a list built per call would be
+// an allocation per node.
+const ALL_SINGLE_KEYWORDS: readonly SingleKeyword[] = Object.freeze([
+  ...SINGLE_SUBSCHEMA_KEYS,
+  ...UNUSED_SINGLE_SUBSCHEMA_KEYS,
+]);
+const RECORD_KEYWORDS_WITH_DEFS: readonly RecordKeyword[] = Object.freeze([
+  ...RECORD_SUBSCHEMA_KEYS,
+  ...DEFS_KEYS,
+]);
+const ALL_RECORD_KEYWORDS: readonly RecordKeyword[] = Object.freeze([
+  ...RECORD_SUBSCHEMA_KEYS,
+  ...UNUSED_RECORD_SUBSCHEMA_KEYS,
+]);
+const ALL_RECORD_KEYWORDS_WITH_DEFS: readonly RecordKeyword[] = Object.freeze([
+  ...ALL_RECORD_KEYWORDS,
+  ...DEFS_KEYS,
+]);
+
 /** The single-subschema keywords a walk visits under `opts`. */
 const singleKeywordsFor = (
   opts: SchemaWalkOptions,
 ): readonly SingleKeyword[] =>
-  opts.includeUnused
-    ? [...SINGLE_SUBSCHEMA_KEYS, ...UNUSED_SINGLE_SUBSCHEMA_KEYS]
-    : SINGLE_SUBSCHEMA_KEYS;
+  opts.includeUnused ? ALL_SINGLE_KEYWORDS : SINGLE_SUBSCHEMA_KEYS;
 
 /** The record-subschema keywords a walk visits under `opts`. */
 const recordKeywordsFor = (
   opts: SchemaWalkOptions,
-): readonly RecordKeyword[] => {
-  const keys: RecordKeyword[] = [...RECORD_SUBSCHEMA_KEYS];
-  if (opts.includeUnused) {
-    for (const key of UNUSED_RECORD_SUBSCHEMA_KEYS) keys.push(key);
-  }
-  if (opts.includeDefs) {
-    for (const key of DEFS_KEYS) keys.push(key);
-  }
-  return keys;
-};
+): readonly RecordKeyword[] =>
+  opts.includeUnused
+    ? (opts.includeDefs ? ALL_RECORD_KEYWORDS_WITH_DEFS : ALL_RECORD_KEYWORDS)
+    : (opts.includeDefs ? RECORD_KEYWORDS_WITH_DEFS : RECORD_SUBSCHEMA_KEYS);
 
 /** Report a keyword holding `found` where `expected` belongs. */
 const warnNotSchema = (
@@ -302,13 +314,50 @@ export function forEachSubschema(
     const record = node[keyword];
     if (record === undefined) continue;
     if (!holdsSubschemaRecord(record, keyword, node)) continue;
-    for (const key of Object.keys(record)) {
+    // `for...in` reads the keys off the object's own enumeration cache, where
+    // `Object.keys()` would copy them into an array per record visited.
+    for (const key in record) {
+      if (!Object.hasOwn(record, key)) continue;
       const child = record[key];
       if (!holdsSubschema(child, keyword, key, node)) continue;
       if (visit(child, keyword, key, undefined)) return true;
     }
   }
   return false;
+}
+
+/**
+ * Invoke `visit` on `schema` and on every structural subschema below it,
+ * depth-first and pre-order, with no path and no node object: the walk for a
+ * visitor that reads only the schema, which allocates nothing per node where
+ * {@link walkSchema} allocates a node. A boolean subschema is visited only
+ * under `opts.visitBooleans`; `$defs` bodies only under `opts.includeDefs`;
+ * the never-emitted keywords only under `opts.includeUnused`. `resolveRef`
+ * is not honored. A cycle in the object graph is broken along the current
+ * path, while a subschema shared by sibling positions is visited at each.
+ * Returns `true` if a visit stopped the walk early (returned `true`), else
+ * `false`.
+ */
+export function forEachSchema(
+  schema: JSONSchema,
+  visit: (schema: JSONSchema) => boolean | void,
+  opts: SchemaWalkOptions = {},
+): boolean {
+  const onPath = new Set<JSONSchema>();
+  const recurse = (node: JSONSchema): boolean => {
+    if (!isSubschema(node)) return false;
+    const record = isObjectOrArray(node);
+    if (!record && !opts.visitBooleans) return false;
+    if (visit(node) === true) return true;
+    if (!record || onPath.has(node)) return false;
+    onPath.add(node);
+    try {
+      return forEachSubschema(node, recurse, opts);
+    } finally {
+      onPath.delete(node);
+    }
+  };
+  return recurse(schema);
 }
 
 /** One immediate subschema of a parent, with the edge that reached it. */
@@ -417,23 +466,27 @@ export function mapSubschemas(
     const children = schema[keyword];
     if (children === undefined) continue;
     if (!holdsSubschemaRecord(children, keyword, schema)) continue;
-    const entries = Object.entries(children);
-    let mapped: [string, unknown][] | undefined;
-    for (let index = 0; index < entries.length; index++) {
-      const [name, child] = entries[index]!;
+    let mapped: Record<string, unknown> | undefined;
+    for (const name in children) {
+      if (!Object.hasOwn(children, name)) continue;
+      const child = children[name];
       if (!holdsSubschema(child, keyword, name, schema)) continue;
       const next = map(child);
       if (next !== child) {
-        mapped ??= entries;
-        mapped[index] = [name, next];
+        mapped ??= { ...children };
+        mapped[name] = next;
       }
     }
-    if (mapped !== undefined) update(keyword, Object.fromEntries(mapped));
+    if (mapped !== undefined) update(keyword, mapped);
   }
   return (result ?? schema) as JSONSchemaObj;
 }
 
-/** A subschema node visited during a recursive walk. */
+/**
+ * A subschema node visited during a recursive walk. A visitor reads it by its
+ * members; it is not a plain object to spread or serialize, and `path` is
+ * computed the first time it is read.
+ */
 export interface SchemaNode {
   /** The subschema at this node. */
   readonly schema: JSONSchema;
@@ -441,7 +494,8 @@ export interface SchemaNode {
   /**
    * Structural path from the walk root: keyword-segmented, e.g.
    * `["properties", "user", "items"]` or `["allOf", 0, "properties", "id"]`.
-   * Empty at the root.
+   * Empty at the root. Built on first read, and the same array on every read
+   * after.
    */
   readonly path: ReadonlyArray<string | number>;
 
@@ -478,6 +532,68 @@ export type WalkControl =
 
 export type SchemaVisitor = (node: SchemaNode) => WalkControl | void;
 
+const ROOT_PATH: ReadonlyArray<string | number> = Object.freeze([]);
+
+/**
+ * A node of a {@link walkSchema} walk. Its path is built the first time it is
+ * read, from the node above it: a walk visits every node, and most visitors
+ * read only the schema, so building the path at every node would allocate two
+ * arrays per node for nothing. Module-internal, which is what lets it expose
+ * its members as properties.
+ */
+class WalkNode implements SchemaNode {
+  readonly schema: JSONSchema;
+  readonly keyword: SubschemaKeyword | undefined;
+  readonly key: string | undefined;
+  readonly index: number | undefined;
+  readonly parent: JSONSchemaObj | undefined;
+  readonly viaRef: boolean;
+  readonly #above: WalkNode | undefined;
+  #path: ReadonlyArray<string | number> | undefined;
+
+  /**
+   * Constructs an instance for `schema`, reached from the node `above` by the
+   * edge the keyword, key and index name, or, for a `$ref` target, with
+   * `viaRef` and no edge.
+   */
+  constructor(
+    schema: JSONSchema,
+    above: WalkNode | undefined,
+    keyword: SubschemaKeyword | undefined,
+    key: string | undefined,
+    index: number | undefined,
+    viaRef: boolean,
+  ) {
+    this.schema = schema;
+    this.#above = above;
+    this.keyword = keyword;
+    this.key = key;
+    this.index = index;
+    this.parent = above === undefined
+      ? undefined
+      : above.schema as JSONSchemaObj;
+    this.viaRef = viaRef;
+  }
+
+  /** @inheritDoc */
+  get path(): ReadonlyArray<string | number> {
+    if (this.#path === undefined) {
+      const above = this.#above;
+      if (above === undefined) {
+        this.#path = ROOT_PATH;
+      } else if (this.viaRef) {
+        this.#path = above.path;
+      } else {
+        const path: Array<string | number> = [...above.path, this.keyword!];
+        if (this.index !== undefined) path.push(this.index);
+        else if (this.key !== undefined) path.push(this.key);
+        this.#path = path;
+      }
+    }
+    return this.#path;
+  }
+}
+
 /**
  * Depth-first pre-order walk over `root` and every structural subschema,
  * invoking `visit` once per node. The visitor steers descent via its return
@@ -500,18 +616,14 @@ export function walkSchema(
   const onPath = new Set<JSONSchema>();
   let stopped = false;
 
-  const recurse = (
-    schema: JSONSchema,
-    path: ReadonlyArray<string | number>,
-    edge: Pick<SchemaNode, "keyword" | "key" | "index" | "viaRef">,
-    parent: JSONSchemaObj | undefined,
-  ): void => {
+  const recurse = (node: WalkNode): void => {
+    const schema = node.schema;
     // The root and a `resolveRef` result come straight from the caller; every
     // other node arrives already filtered by `forEachSubschema`.
     if (!isSubschema(schema)) return;
     const record = isObjectOrArray(schema);
     if (!record && !opts.visitBooleans) return;
-    const control = visit({ schema, path, ...edge, parent });
+    const control = visit(node);
     if (control === "stop") {
       stopped = true;
       return;
@@ -523,17 +635,7 @@ export function walkSchema(
     onPath.add(schema);
     try {
       forEachSubschema(schema, (child, keyword, key, index) => {
-        const step: Array<string | number> = index !== undefined
-          ? [keyword, index]
-          : key !== undefined
-          ? [keyword, key]
-          : [keyword];
-        recurse(
-          child,
-          [...path, ...step],
-          { keyword, key, index },
-          schema as JSONSchemaObj,
-        );
+        recurse(new WalkNode(child, node, keyword, key, index, false));
         return stopped; // halt the enumeration if the walk aborted
       }, opts);
       if (stopped) return;
@@ -544,7 +646,9 @@ export function walkSchema(
       ) {
         const resolved = opts.resolveRef(schema as JSONSchemaObj);
         if (resolved !== undefined && resolved !== schema) {
-          recurse(resolved, path, { viaRef: true }, schema as JSONSchemaObj);
+          recurse(
+            new WalkNode(resolved, node, undefined, undefined, undefined, true),
+          );
           if (stopped) return;
         }
       }
@@ -553,7 +657,9 @@ export function walkSchema(
     }
   };
 
-  recurse(root, [], {}, undefined);
+  recurse(
+    new WalkNode(root, undefined, undefined, undefined, undefined, false),
+  );
 }
 
 /**

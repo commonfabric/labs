@@ -1,5 +1,6 @@
 import type { JSONSchema } from "@commonfabric/api";
 import { toCompactDebugString } from "@commonfabric/data-model";
+import { EVENT_ROOT_POSITION, nearestName } from "@commonfabric/piece/refusal";
 import {
   ContextualFlowControl,
   resolveExternalRootRefForStructure,
@@ -18,7 +19,6 @@ import {
   requiredEventFieldsOwed,
   verbRunsWithoutPayload,
 } from "./callable.ts";
-import { EVENT_ROOT_POSITION, nearestName } from "./refusal.ts";
 import { shellQuote } from "./shell-quote.ts";
 import {
   firstReadOption,

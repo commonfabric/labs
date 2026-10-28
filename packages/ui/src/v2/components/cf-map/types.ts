@@ -100,6 +100,13 @@ export interface CfBoundsChangeDetail {
   bounds: Bounds;
   center: LatLng;
   zoom: number;
+  /**
+   * Whether a person moved the map (drag, pinch, wheel, double click, zoom
+   * control, keyboard), as opposed to cf-map moving it itself: applying a
+   * bound center, zoom, or bounds, fitting to features, or following a
+   * container resize.
+   */
+  userInitiated: boolean;
 }
 
 /**

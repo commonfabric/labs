@@ -15,11 +15,12 @@ import {
 import { invocationPhaseReporter } from "../commands/piece.ts";
 import { writeMountState } from "../lib/fuse.ts";
 import { CF_RUNTIME_ERROR_LOG } from "../lib/callable.ts";
+import { commandLine } from "../lib/verb-section.ts";
 import {
   type CellSelection,
   parseCellSelectionOptions,
 } from "../lib/cell-selection.ts";
-import { cf, relevantStderr, sendThroughStandIn } from "./utils.ts";
+import { argv, cf, relevantStderr, sendThroughStandIn } from "./utils.ts";
 import { createTransactionCommitReceipt } from "../../runner/src/storage/commit-receipt.ts";
 
 /**
@@ -513,7 +514,7 @@ describe("cf exec read options", () => {
   it("consumes a read option before the file and leaves the rest to the callable", async () => {
     const missing = join(tmpDir, "not-a-mount", "search.tool");
     const { code, stderr } = await cf(
-      `exec --select id ${missing} --query milk`,
+      argv`exec --select id ${missing} --query milk`,
     );
     const relevant = relevantStderr(stderr).filter((line) =>
       !line.includes("deno run ")
@@ -526,7 +527,9 @@ describe("cf exec read options", () => {
     // positional would put "--select" or "id" in this message instead, and
     // `--query milk` would have been rejected as an unknown flag rather than
     // left for the callable to parse.
-    expect(relevant).toContain(missing);
+    expect(relevant).toContain(
+      commandLine("exec", argv`--select id ${missing} --query milk`),
+    );
     expect(relevant).not.toContain("Unknown option");
     // Pre-dispatch: nothing was resolved, nothing ran, and no invocation was
     // spent — so the failure names none. This is the action body's own path,
@@ -537,7 +540,7 @@ describe("cf exec read options", () => {
 
   it("refuses --select beside --schema, which name one projection twice", async () => {
     const { code, stderr } = await cf(
-      `exec --select id --schema id ${join(tmpDir, "search.tool")}`,
+      argv`exec --select id --schema id ${join(tmpDir, "search.tool")}`,
     );
 
     expect(code).not.toBe(0);

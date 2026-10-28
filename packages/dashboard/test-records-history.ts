@@ -25,6 +25,9 @@ import { dashboardCacheFile } from "./history-files.ts";
 
 export const TEST_RECORDS_BUCKET = "cf-ci-metadata";
 export const TEST_RECORDS_CI_PREFIX = "labs/test-records/submissions/ci";
+
+/** The repository whose CI runs wrote the records under that prefix. */
+export const TEST_RECORDS_REPO = "commonfabric/labs";
 export const TEST_RECORDS_HISTORY_DAYS = 60;
 
 /**

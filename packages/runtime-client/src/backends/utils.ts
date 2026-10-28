@@ -242,9 +242,27 @@ export function getCell(runtime: Runtime, ref: CellRef): Cell<unknown> {
   // display. We strip the view from the ref object itself, because
   // `getCellFromLink()` reads the property off an input shaped like a
   // normalized link.
-  if (ref.cfcLabelView === undefined) {
+  if (ref.cfcLabelView === undefined && ref.keyedFrom === undefined) {
     return runtime.getCellFromLink(ref);
   }
-  const { cfcLabelView: _cfcLabelView, ...cleanRef } = ref;
-  return runtime.getCellFromLink(cleanRef);
+  const { cfcLabelView: _cfcLabelView, keyedFrom, ...link } = ref;
+  if (keyedFrom === undefined || link.schema !== undefined) {
+    return runtime.getCellFromLink(link);
+  }
+  // A ref keyed from an ancestor is read as the runtime keys one, so its
+  // schema is the ancestor's narrowed along the rest of the path.
+  const { depth, schema } = keyedFrom;
+  if (!Number.isInteger(depth) || depth < 0 || depth > link.path.length) {
+    throw new TypeError(
+      `A cell ref's \`keyedFrom.depth\` (${depth}) must be a whole number ` +
+        `no greater than its path's length (${link.path.length}).`,
+    );
+  }
+  const ancestor = runtime.getCellFromLink({
+    ...link,
+    path: link.path.slice(0, depth),
+    schema,
+  });
+  const rest = link.path.slice(depth);
+  return rest.length === 0 ? ancestor : ancestor.key(...rest);
 }

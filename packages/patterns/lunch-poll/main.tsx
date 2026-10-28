@@ -8,7 +8,7 @@
  *
  * Identity is the viewer's shared profile CELL, compared with `equals()`:
  * - `users` is a per-space roster; each entry carries the participant's
- *   `#profile` cell as its identity, plus a name/avatar snapshot that is
+ *   `#profile` cell as its identity, plus a name snapshot that is
  *   purely cosmetic. Two people who share a display name are two participants,
  *   and renaming yourself orphans nothing.
  * - "Am I joined?" is DERIVED by comparing the viewer's profile against the
@@ -136,7 +136,8 @@ export interface User {
   /** Display name at join time — cosmetic, may duplicate another participant. */
   name: string;
 
-  /** Avatar URL or glyph, snapshotted from the joiner's shared profile. */
+  /** Avatar text a stored entry may carry. Nothing writes or reads it; the
+   * roster shows each participant's live profile. */
   avatar?: string;
   color: string;
 }
@@ -178,8 +179,10 @@ export type ClockValue = ClockOverride | Default<typeof DEFAULT_CLOCK>;
 export interface ViewerOverride {
   readonly profile?: LunchProfileCell;
 
-  /** Stands in for `#profileName` / `#profileAvatar`, which also need a wish. */
+  /** Stands in for `#profileName`, which also needs a wish. */
   readonly name?: string;
+
+  /** Accepted in a claim and ignored. */
   readonly avatar?: string;
 }
 
@@ -698,7 +701,7 @@ const isHost = (
 
 /**
  * Test seam: claim the sender's viewer identity — the headless stand-in for
- * the `#profile` / `#profileName` / `#profileAvatar` wishes, which have no
+ * the `#profile` / `#profileName` wishes, which have no
  * resolving environment in a unit test. The handler runs in the SENDING
  * session's runtime, so the write lands in the sender's own per-user slot: a
  * multi-user test claims a distinct identity per participant on one shared
@@ -708,11 +711,10 @@ const isHost = (
 const overrideViewer = handler<ViewerOverride, {
   viewer: ViewerCell;
 }>((event, { viewer }) => {
-  const { profile, name, avatar } = event;
+  const { profile, name } = event;
   viewer.set({
     ...(profile !== undefined ? { profile } : {}),
     ...(name !== undefined ? { name } : {}),
-    ...(avatar !== undefined ? { avatar } : {}),
   });
 });
 
@@ -1027,11 +1029,16 @@ interface OptionTally {
     initials: string;
 
     /**
-     * Whether this vote is the viewer's own, decided by profile cell.
-     * Resolved here rather than in the view, which has only a display name
-     * to compare — and two participants may share one.
+     * The vote's voter, by profile cell, or `undefined` for a vote that
+     * names none. The view compares it with the viewer's profile, with
+     * `equals`, to ring the viewer's own vote. That comparison happens at the
+     * swatch rather than here so that the tally reads nothing of the viewer
+     * and is one derivation shared by everyone: a tally that marked the
+     * viewer's vote itself would be one derivation per viewer wherever a
+     * server derives it for everyone, and so would the ranking and every
+     * card downstream of it.
      */
-    isSelf: boolean;
+    voter: LunchProfileCell | undefined;
   }>;
 }
 
@@ -1060,10 +1067,6 @@ const tallyOption = (
   option: Option,
   votes: readonly Vote[],
   users: readonly User[],
-  // The union the call site actually has: inside a `computed` the viewer's
-  // profile arrives unwrapped, and `equals` compares either form. Narrowing
-  // to the cell alone would only push a cast to the caller.
-  viewer: LunchProfile | LunchProfileCell | undefined,
 ): OptionTally => {
   // A vote carries its voter's identity, so the display name and swatch color
   // are looked up from the roster by comparison. The roster is read once per
@@ -1091,10 +1094,6 @@ const tallyOption = (
     voter: LunchProfileCell | undefined,
   ): (typeof roster)[number] | undefined =>
     voter === undefined ? undefined : rosterEntryOf(voter);
-  // One comparison per vote. The poll addresses a vote by its voter and
-  // option, so a voter holds at most one vote in the group tallied here.
-  const isSelf = (voter: LunchProfileCell | undefined): boolean =>
-    viewer !== undefined && voter !== undefined && equals(voter, viewer);
   let green = 0;
   let yellow = 0;
   let red = 0;
@@ -1112,7 +1111,7 @@ const tallyOption = (
       color: entry?.color ?? "#888",
       initials: initialsByName.get(name) ??
         getInitials(name, participantNames),
-      isSelf: isSelf(voter),
+      voter,
     };
   });
   return { option, green, yellow, red, voters };
@@ -1302,14 +1301,13 @@ export default pattern<CozyPollInput, CozyPollOutput>(
     // Resolve the viewer's shared profile at the TOP LEVEL, per the
     // shared-profile-rosters spec (docs/specs/shared-profile-rosters.md): the
     // `#profile` cell is the stable identity (badge + `equals()` dedup), and
-    // `#profileName` / `#profileAvatar` are the display strings. Simple schema
+    // `#profileName` is the display string. Simple schema
     // on purpose — a rich schema fails to resolve the cross-space result. The
     // claimed override (tests) takes precedence over the wish cell. These pass
     // DOWN into the identity card; the card no longer wishes for itself, so
     // resolution happens in this piece's top-level context where it works.
     const profileWish = wish<LunchProfile>({ query: "#profile" });
     const profileNameWish = wish<string>({ query: "#profileName" });
-    const profileAvatarWish = wish<string>({ query: "#profileAvatar" });
     // The override cell when a test has claimed an identity, else the resolved
     // wish. The predicate gates on the claim's NAME STRING, never on the
     // profile cell: a presence test on a cell-typed field lowers to an
@@ -1332,9 +1330,6 @@ export default pattern<CozyPollInput, CozyPollOutput>(
     // Strings, unlike cells, are honestly absent when unset, so `??` is safe.
     const viewerProfileName = computed(() =>
       trimmedName(viewer.name ?? profileNameWish.result ?? "")
-    );
-    const viewerProfileAvatar = computed(() =>
-      (viewer.avatar ?? profileAvatarWish.result ?? "").trim()
     );
     // Who this viewer is in THIS poll: their roster entry, found by comparing
     // profile cells. Derived, never stored per-user — so a viewer is recognised
@@ -1365,7 +1360,6 @@ export default pattern<CozyPollInput, CozyPollOutput>(
       host,
       profile: viewerProfileCell,
       profileName: viewerProfileName,
-      profileAvatar: viewerProfileAvatar,
       profileSetupUI: profileWish[UI],
     });
     const boundOverrideViewer = overrideViewer({ viewer });
@@ -1489,13 +1483,13 @@ export default pattern<CozyPollInput, CozyPollOutput>(
       clearHistoryConfirmPending.get()
     );
     // Rank from today's votes only — the tallies, swatches, and top choice all
-    // reflect the current day.
+    // reflect the current day. The tallies, the ranking and the cards' ranks
+    // read nothing of the viewer, so each is one derivation shared by every
+    // viewing session; the viewer enters at the swatch that rings their vote.
     const votesByOption = indexVotesByOption({ votes: todaysVotes });
     const optionTallies = options.map((option) => {
       const optionVotes = votesByOption.index.lookup(option.id);
-      return computed(() =>
-        tallyOption(option, optionVotes, users, viewerProfileCell)
-      );
+      return computed(() => tallyOption(option, optionVotes, users));
     });
     const ranked = computed(() =>
       [...optionTallies].sort((a, b) => (a.red - b.red) || (b.green - a.green))
@@ -1828,33 +1822,43 @@ export default pattern<CozyPollInput, CozyPollOutput>(
                                 justifyContent: "flex-end",
                               }}
                             >
-                              {tally.voters.map((voter) => (
-                                <span
-                                  title={voter.name}
-                                  role="img"
-                                  aria-label={`${voter.name}: ${voter.voteType} vote`}
-                                  data-vote-swatch-name={voter.name}
-                                  style={{
-                                    display: "inline-flex",
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                    minWidth: "22px",
-                                    height: "22px",
-                                    padding: "0 6px",
-                                    borderRadius: "9999px",
-                                    backgroundColor:
-                                      VOTE_SWATCH[voter.voteType],
-                                    color: "white",
-                                    fontSize: "11px",
-                                    fontWeight: 700,
-                                    boxShadow: voter.isSelf
-                                      ? "0 0 0 2px white, 0 0 0 3px #111827"
-                                      : "none",
-                                  }}
-                                >
-                                  {voter.initials}
-                                </span>
-                              ))}
+                              {tally.voters.map((voter) => {
+                                // The one per-viewer step: this swatch is
+                                // ringed when its voter is the viewer, by
+                                // profile cell, since two participants may
+                                // share a display name.
+                                const selfRing = computed(() =>
+                                  voter.voter !== undefined &&
+                                    equals(voter.voter, viewerProfileCell)
+                                    ? "0 0 0 2px white, 0 0 0 3px #111827"
+                                    : "none"
+                                );
+                                return (
+                                  <span
+                                    title={voter.name}
+                                    role="img"
+                                    aria-label={`${voter.name}: ${voter.voteType} vote`}
+                                    data-vote-swatch-name={voter.name}
+                                    style={{
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      justifyContent: "center",
+                                      minWidth: "22px",
+                                      height: "22px",
+                                      padding: "0 6px",
+                                      borderRadius: "9999px",
+                                      backgroundColor:
+                                        VOTE_SWATCH[voter.voteType],
+                                      color: "white",
+                                      fontSize: "11px",
+                                      fontWeight: 700,
+                                      boxShadow: selfRing,
+                                    }}
+                                  >
+                                    {voter.initials}
+                                  </span>
+                                );
+                              })}
                             </div>
                           </div>
                         ))}

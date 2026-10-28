@@ -9,9 +9,8 @@ import { isObjectNotArray } from "@commonfabric/utils/types";
 import type { SandboxCommandResult } from "./types.ts";
 
 // The trusted CFC result runsc reports for a container, and how it becomes a
-// `CfcSandboxResult` the engine mediates on. Shared by the docker-runsc
-// driver (which reads it from a sidecar file) and the direct runsc driver
-// (which reads it from a descriptor).
+// `CfcSandboxResult` the engine mediates on. The direct runsc driver reads it
+// from a descriptor.
 //
 // WHAT IS PUBLIC. runsc writes the final taint twice: `string`, the label's
 // `cfc.Label.String`, and `xattrJSON`, its `cfc.MarshalXattr`, which holds
@@ -29,43 +28,29 @@ import type { SandboxCommandResult } from "./types.ts";
 //     empty array. `denied` when either is present and not an array, which is
 //     what runsc's own `UnmarshalXattr` rejects; `opaque` for a key runsc does
 //     not write, whatever it holds.
-//   - `string`, when present, is not blank, and on the direct driver is
-//     exactly runsc's spelling of the empty label.
+//   - `string`, when present, is exactly runsc's spelling of the empty label.
+//     A string that is blank, or spells anything else, is withheld even
+//     beside an empty `xattrJSON`: the two forms have to agree.
 //
-// WHAT THE MOVE CHANGED. This parser came out of `docker-runsc.ts`, and the
-// Docker driver still reads through it, so every verdict here is also a
-// verdict on the default Docker path. The rule for that path is that nothing
-// is `observed` here that main withheld. The reverse is allowed: a withheld
-// output is safe, so the shapes below are read MORE strictly than main read
-// them, on purpose. runsc writes none of them.
+// Shapes runsc does not write are read strictly, since a withheld output is
+// safe:
 //
-//   | `cfcTaint`                                  | main     | here   |
-//   | ------------------------------------------- | -------- | ------ |
-//   | `{}`                                        | observed | denied |
-//   | `{string: ""}`, `{string: "{}"}`            | observed | opaque |
-//   | `{string: 5, xattrJSON: {}}`                | observed | denied |
-//   | `{string: "", xattrJSON: {}}` (or blank)    | observed | opaque |
-//   | `{xattrJSON: {confidentiality: {}}}`        | observed | denied |
-//   | `{xattrJSON: {confidentiality: null}}`      | observed | denied |
-//   | `{xattrJSON: {conf: [], labels: {}}}`       | observed | opaque |
-//   | `{xattrJSON: {extra: {inner: []}}}`         | observed | opaque |
-//   | `{string: ..., xattrJSON: null}`            | opaque   | denied |
-//   | `{string: "x", xattrJSON: []}`              | opaque   | denied |
-//   | `{xattrJSON: {confidentiality: "secret"}}`  | opaque   | denied |
+//   | `cfcTaint`                                  | verdict |
+//   | ------------------------------------------- | ------- |
+//   | `{}`                                        | denied  |
+//   | `{string: ""}`, `{string: "{}"}`            | opaque  |
+//   | `{string: 5, xattrJSON: {}}`                | denied  |
+//   | `{string: "", xattrJSON: {}}` (or blank)    | opaque  |
+//   | `{xattrJSON: {confidentiality: {}}}`        | denied  |
+//   | `{xattrJSON: {confidentiality: null}}`      | denied  |
+//   | `{xattrJSON: {conf: [], labels: {}}}`       | opaque  |
+//   | `{xattrJSON: {extra: {inner: []}}}`         | opaque  |
+//   | `{string: ..., xattrJSON: null}`            | denied  |
+//   | `{string: "x", xattrJSON: []}`              | denied  |
+//   | `{xattrJSON: {confidentiality: "secret"}}`  | denied  |
+//   | `{string: "{conf: ⊤, integ: ∅}"}`           | opaque  |
 //
-// The move had also made one shape MORE permissive, `{string: "{conf: ⊤,
-// integ: ∅}"}` with no `xattrJSON`, which main withheld. That is withheld
-// again, on both drivers.
-//
-// WHERE THE DRIVERS DIFFER. One place: a `string` that is not the empty
-// spelling beside an empty `xattrJSON`. main did not consult the string when
-// `xattrJSON` was an object, and its Docker tests pin that with a spelling
-// runsc does not write (`{conf: public, integ: empty}`), so the Docker driver
-// keeps main's reading. The direct driver has no such history and requires
-// the two forms to agree. See `RunscCfcResultReader`.
-//
-// `test/runsc-cfc-result.test.ts` holds the whole table for both drivers and
-// checks it against a copy of main's predicate.
+// `test/runsc-cfc-result.test.ts` holds the whole table.
 
 const textEncoder = new TextEncoder();
 
@@ -156,49 +141,13 @@ const RUNSC_EMPTY_LABEL_STRING = "{conf: ⊤, integ: ∅}";
 /** The keys `cfc.MarshalXattr` writes. Each holds an array. */
 const RUNSC_XATTR_LABEL_KEYS = ["confidentiality", "integrity"] as const;
 
-/**
- * How one driver reads the result. The verdicts are the same for every
- * driver except where a field here says otherwise.
- */
-export interface RunscCfcResultReader {
-  /**
-   * What the driver calls the id the result has to name, for the mismatch
-   * message.
-   */
-  readonly containerIdNoun: string;
-  /**
-   * Whether `string`, beside an `xattrJSON` object, has to be runsc's
-   * spelling of the empty label for the output to be public. Where it is
-   * false any non-blank string is accepted there, which is how main read it.
-   */
-  readonly requireEmptyLabelSpelling: boolean;
-}
-
-/** The direct runsc driver, and the reading a caller gets by default. */
-export const DIRECT_RUNSC_CFC_RESULT_READER: RunscCfcResultReader = {
-  containerIdNoun: "container ID",
-  requireEmptyLabelSpelling: true,
-};
-
-/**
- * The Docker driver: main's wording, and main's reading of a string that
- * disagrees with an empty `xattrJSON`.
- */
-export const DOCKER_RUNSC_CFC_RESULT_READER: RunscCfcResultReader = {
-  containerIdNoun: "Docker container ID",
-  requireEmptyLabelSpelling: false,
-};
-
 const isEmptyRunscXattr = (xattr: Record<string, unknown>): boolean =>
   Object.entries(xattr).every(([key, value]) =>
     (RUNSC_XATTR_LABEL_KEYS as readonly string[]).includes(key) &&
     Array.isArray(value) && value.length === 0
   );
 
-const isPublicRunscTaint = (
-  taint: RunscCfcLabelSidecar,
-  reader: RunscCfcResultReader,
-): boolean => {
+const isPublicRunscTaint = (taint: RunscCfcLabelSidecar): boolean => {
   if (!isObjectNotArray(taint.xattrJSON)) {
     // The string form alone: not public, whatever it spells. main withheld
     // runsc's spelling of the empty label here, and an empty or unfamiliar
@@ -211,11 +160,7 @@ const isPublicRunscTaint = (
   if (typeof taint.string !== "string") {
     return true;
   }
-  if (taint.string.trim().length === 0) {
-    return false;
-  }
-  return !reader.requireEmptyLabelSpelling ||
-    taint.string === RUNSC_EMPTY_LABEL_STRING;
+  return taint.string === RUNSC_EMPTY_LABEL_STRING;
 };
 
 /**
@@ -249,7 +194,6 @@ export const cfcResultFromRunscSidecar = (
   parsed: RunscCfcResultSidecar,
   expectedContainerID: string,
   commandResult: SandboxCommandResult,
-  reader: RunscCfcResultReader = DIRECT_RUNSC_CFC_RESULT_READER,
 ): CfcSandboxResult => {
   if (parsed.version !== 1) {
     return deniedCfcResult(
@@ -261,7 +205,7 @@ export const cfcResultFromRunscSidecar = (
   if (parsed.containerId !== expectedContainerID) {
     return deniedCfcResult(
       "runsc_cfc_sidecar_container_mismatch",
-      `runsc CFC result sidecar did not match the ${reader.containerIdNoun}`,
+      "runsc CFC result sidecar did not match the container ID",
       {
         expectedContainerId: expectedContainerID,
         actualContainerId: typeof parsed.containerId === "string"
@@ -303,7 +247,7 @@ export const cfcResultFromRunscSidecar = (
     details.runscTaintXattrJSON = cfcTaint.xattrJSON as CfcSandboxJsonValue;
   }
 
-  if (isPublicRunscTaint(cfcTaint, reader)) {
+  if (isPublicRunscTaint(cfcTaint)) {
     return {
       version: 1,
       stdout: observedStream("stdout", commandResult.stdout, label),

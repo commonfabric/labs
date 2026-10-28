@@ -6,6 +6,14 @@ export interface DenoCommandWithTemporaryLockOptions {
   cwd?: string;
   args: (lockPath: string) => string[];
   env?: Record<string, string>;
+
+  /**
+   * Where the child's stderr goes. `"piped"`, the default, collects it into
+   * the returned output. `"inherit"` writes it to this process's stderr as the
+   * child writes it, for a child whose progress belongs in the caller's log
+   * while it runs; the returned output then holds no stderr to read.
+   */
+  stderr?: "piped" | "inherit";
 }
 
 export interface DenoCheckWithTemporaryConfigOptions {
@@ -84,7 +92,7 @@ export async function runDenoCommandWithTemporaryLock(
       cwd: options.cwd ?? options.root,
       args: options.args(tempLock),
       stdout: "piped",
-      stderr: "piped",
+      stderr: options.stderr ?? "piped",
     };
     if (options.env) {
       commandOptions.env = options.env;

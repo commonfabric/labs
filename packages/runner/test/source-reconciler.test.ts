@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
-import { spy } from "@std/testing/mock";
+import { spy, stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 
-import { defer, type Deferred } from "@commonfabric/utils/defer";
+import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
+import { defer, type Deferred } from "@commonfabric/utils/defer";
 import {
   EmulatedStorageManager,
   newLoopbackServer,
@@ -14,21 +15,28 @@ import {
   type SidecarSurfaceState,
 } from "../src/builtins/wish.ts";
 import {
+  applyPieceSourceTransition,
   type Cell,
   getPatternIdentityRef,
   getPatternSetupIdentityRef,
   getPatternSource,
   getPieceReconciliation,
   getPieceSourceRevisions,
+  getPieceSourceSnapshot,
+  type IExtendedStorageTransaction,
+  preparePieceSourceTransitionBaseline,
   resolveEntryIdentity,
   Runtime,
   type RuntimeFetch,
   type RuntimeProgram,
   setPatternSource,
+  setPieceReconciliation,
   systemPatternSource,
 } from "../src/index.ts";
+import { readStoredCfcSchemaHash } from "../src/cfc/metadata.ts";
 import { PatternsRoute } from "../src/harness/patterns-route.deno.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
+import type { MemorySpace } from "../src/storage/interface.ts";
 
 const signer = await Identity.fromPassphrase("piece source reconciliation");
 const PARENT_PATH = "/api/patterns/system/reconcile-parent.tsx";
@@ -169,11 +177,30 @@ describe("piece source reconciliation", () => {
     return runtime.sourceReconciler.reconcile(piece);
   }
 
-  /** Serves the tracked pattern's route, advertising `identity` for it. */
+  /**
+   * Captures the observer the reconciler subscribes when the runtime is
+   * constructed, so a test can report a replacement itself.
+   */
+  function captureSessionReplaced(): (space: MemorySpace) => void {
+    let observer: ((space: MemorySpace) => void) | undefined;
+    storageManager.subscribeSpaceSessionReplaced = (subscribed) => {
+      observer = subscribed;
+      return () => {
+        observer = undefined;
+      };
+    };
+    return (space) => observer?.(space);
+  }
+
+  /**
+   * Serves the tracked pattern's route, advertising `identity` for it, and the
+   * release time `releasedAt` returns beside it when that is not `undefined`.
+   */
   function servingFetch(
     identity: () => string,
     contents: () => string,
     record?: (url: URL, init?: RequestInit) => void,
+    releasedAt?: () => string | undefined,
   ): RuntimeFetch {
     return (input, init) => {
       const url = new URL(
@@ -185,10 +212,16 @@ describe("piece source reconciliation", () => {
       );
       record?.(url, init);
       if (url.pathname === PARENT_PATH) {
+        if (!url.searchParams.has("identity")) {
+          return Promise.resolve(new Response(parentSource));
+        }
+        const released = releasedAt?.();
         return Promise.resolve(
-          url.searchParams.has("identity")
-            ? new Response(identity())
-            : new Response(parentSource),
+          new Response(identity(), {
+            headers: released === undefined
+              ? {}
+              : { "CF-Released-At": released },
+          }),
         );
       }
       if (url.pathname === SOURCE_PATH) {
@@ -436,6 +469,139 @@ describe("piece source reconciliation", () => {
       expect((await piece.pull())?.marker).toBe("v2");
     });
 
+    describe("when the space's memory session is replaced", () => {
+      /** A running piece following the tracked pattern's system origin, current
+       * at v1, with the route's advertised source switchable to v2. */
+      async function followingPiece(record?: (url: URL) => void) {
+        const v1Identity = await identityFor(source("v1"));
+        const v2Identity = await identityFor(source("v2"));
+        let served = "v1";
+        const piece = await preparePiece(
+          servingFetch(
+            () => served === "v1" ? v1Identity : v2Identity,
+            () => source(served),
+            record,
+          ),
+        );
+        await stampSource(piece, PARENT_SOURCE);
+        expect(await runtime.start(piece)).toBe(true);
+        expect(await reconcile(piece)).toBe("current");
+        return { piece, v1Identity, v2Identity, redeploy: () => served = "v2" };
+      }
+
+      async function settle() {
+        await runtime.sourceReconciler.idle();
+        await runtime.idle();
+        await runtime.runner.idlePointerMaintenance();
+      }
+
+      it("adopts the source the restarted host serves", async () => {
+        const replace = captureSessionReplaced();
+        const { piece, v2Identity, redeploy } = await followingPiece();
+
+        redeploy();
+        replace(piece.space);
+        await settle();
+
+        expect(getPatternIdentityRef(piece)).toEqual({
+          identity: v2Identity,
+          symbol: SYMBOL,
+        });
+        expect((await piece.pull())?.marker).toBe("v2");
+      });
+
+      it("leaves the piece on its source for a replacement in another space", async () => {
+        const replace = captureSessionReplaced();
+        const { piece, v1Identity, redeploy } = await followingPiece();
+        const other = await Identity.fromPassphrase("another reconciled space");
+
+        redeploy();
+        replace(other.did());
+        await settle();
+
+        expect(getPatternIdentityRef(piece)).toEqual({
+          identity: v1Identity,
+          symbol: SYMBOL,
+        });
+      });
+
+      it("revalidates an unchanged piece once per replacement", async () => {
+        const replace = captureSessionReplaced();
+        const requests: string[] = [];
+        const { piece } = await followingPiece((url) => {
+          if (url.searchParams.has("identity")) requests.push(url.href);
+        });
+        requests.length = 0;
+
+        replace(piece.space);
+        await settle();
+
+        expect(requests).toHaveLength(1);
+      });
+
+      it("leaves a piece stopped while its legacy origin migrated on its source", async () => {
+        const replace = captureSessionReplaced();
+        const v1Identity = await identityFor(source("v1"));
+        const v2Identity = await identityFor(source("v2"));
+        let served = "v1";
+        const piece = await preparePiece(
+          servingFetch(
+            () => served === "v1" ? v1Identity : v2Identity,
+            () => source(served),
+          ),
+        );
+        await stampSource(piece, PARENT_PATH);
+        expect(await runtime.start(piece)).toBe(true);
+
+        const entered = defer<void>();
+        const release = defer<void>();
+        const read = runtime.patternManager.getPatternSourceProgramByIdentity
+          .bind(runtime.patternManager);
+        const held = stub(
+          runtime.patternManager,
+          "getPatternSourceProgramByIdentity",
+          async (...args) => {
+            entered.resolve();
+            await release.promise;
+            return await read(...args);
+          },
+        );
+        try {
+          const reconciled = reconcile(piece);
+          await entered.promise;
+          runtime.runner.stop(piece);
+          release.resolve();
+          await reconciled;
+        } finally {
+          held.restore();
+        }
+
+        served = "v2";
+        replace(piece.space);
+        await settle();
+
+        expect(getPatternIdentityRef(piece)).toEqual({
+          identity: v1Identity,
+          symbol: SYMBOL,
+        });
+      });
+
+      it("leaves the piece on its source once it stopped following", async () => {
+        const replace = captureSessionReplaced();
+        const { piece, v1Identity, redeploy } = await followingPiece();
+
+        runtime.sourceReconciler.unwatch(piece);
+        redeploy();
+        replace(piece.space);
+        await settle();
+
+        expect(getPatternIdentityRef(piece)).toEqual({
+          identity: v1Identity,
+          symbol: SYMBOL,
+        });
+      });
+    });
+
     it("treats a pattern index that errors as an artifact that will not load", async () => {
       // Asking whether the running pattern still loads is a question that can
       // fail rather than answer. A failure is read as "it will not load",
@@ -653,6 +819,651 @@ describe("piece source reconciliation", () => {
       expect(getPatternIdentityRef(piece)).toEqual(originalRef);
       expect(getPieceSourceRevisions(piece)).toEqual([]);
     });
+
+    describe("ordered by the release time its host sends", () => {
+      // Each case runs one piece through a sequence of offers, as two hosts
+      // serving its space offering different releases would make them, and
+      // reads back where the piece settled.
+
+      const EARLIER = "2026-10-16T14:03:00Z";
+      const BETWEEN = "2026-10-16T14:33:00Z";
+      const LATER = "2026-10-16T15:03:00Z";
+
+      type Offer = { marker: "v1" | "v2" | "v3"; releasedAt?: string };
+
+      /**
+       * A piece following the tracked pattern's system origin, running v1 with
+       * no release time, and a function that makes its host offer `offer` and
+       * reconciles the piece against it. Each returns the outcome and the
+       * marker of the source the piece then runs. `sourceRequests` lists the
+       * path of every request for source rather than for an identity.
+       */
+      async function followingPiece() {
+        const identities = {
+          v1: await identityFor(source("v1")),
+          v2: await identityFor(source("v2")),
+          v3: await identityFor(source("v3")),
+        };
+        let served: Offer = { marker: "v1" };
+        const sourceRequests: string[] = [];
+        const piece = await preparePiece(
+          servingFetch(
+            () => identities[served.marker],
+            () => source(served.marker),
+            (url) => {
+              if (!url.searchParams.has("identity")) {
+                sourceRequests.push(url.pathname);
+              }
+            },
+            () => served.releasedAt,
+          ),
+        );
+        await stampSource(piece, PARENT_SOURCE);
+        const runningMarker = () => {
+          const running = getPatternIdentityRef(piece)?.identity;
+          return running === identities.v1
+            ? "v1"
+            : running === identities.v2
+            ? "v2"
+            : running === identities.v3
+            ? "v3"
+            : running;
+        };
+        const offer = async (next: Offer) => {
+          served = next;
+          const outcome = await reconcile(piece);
+          return { outcome, running: runningMarker() };
+        };
+        return { piece, identities, offer, sourceRequests };
+      }
+
+      function originUpdates(piece: Cell<unknown>) {
+        return getPieceSourceRevisions(piece).filter((revision) =>
+          revision.operation === "origin-update"
+        );
+      }
+
+      /**
+       * Makes this runtime unable to load `identity` while `when()` returns
+       * `true`, as a runtime older than that release is.
+       */
+      function cannotLoad(
+        identity: string,
+        when: () => boolean = () => true,
+      ) {
+        const manager = runtime.patternManager;
+        const load = manager.loadPatternByIdentity.bind(manager);
+        return stub(
+          manager,
+          "loadPatternByIdentity",
+          (...args: Parameters<typeof load>) =>
+            when() && args[0] === identity
+              ? Promise.resolve(undefined)
+              : load(...args),
+        );
+      }
+
+      /**
+       * Applies to `piece` a transition that leaves the source it runs in
+       * place, as a repoint onto that same source does. `alongside` runs in
+       * the same transaction, after it.
+       */
+      async function keepInPlace(
+        piece: Cell<unknown>,
+        alongside?: (tx: IExtendedStorageTransaction) => void,
+      ) {
+        const expected = getPieceSourceSnapshot(piece)!;
+        const baseline = await preparePieceSourceTransitionBaseline(
+          runtime,
+          piece,
+          expected,
+        );
+        const kept = await runtime.editWithRetry((tx) => {
+          applyPieceSourceTransition(runtime, piece, tx, expected.pattern, {
+            revisionId: crypto.randomUUID(),
+            baseline,
+            timestamp: Date.now(),
+            operation: "repoint",
+            origin: expected.origin,
+            expected,
+          });
+          alongside?.(tx);
+        });
+        expect(kept.error).toBeUndefined();
+      }
+
+      it("records the release time on the revision that adopts a release", async () => {
+        const { piece, offer } = await followingPiece();
+
+        expect(await offer({ marker: "v2", releasedAt: LATER })).toEqual({
+          outcome: "updated",
+          running: "v2",
+        });
+        expect(getPieceSourceRevisions(piece).at(-1)?.releasedAt).toBe(
+          Date.parse(LATER),
+        );
+      });
+
+      it("keeps a later release when its host offers an earlier one", async () => {
+        const { piece, identities, offer } = await followingPiece();
+        await offer({ marker: "v2", releasedAt: LATER });
+
+        expect(await offer({ marker: "v1", releasedAt: EARLIER })).toEqual({
+          outcome: "ahead",
+          running: "v2",
+        });
+        expect(originUpdates(piece)).toHaveLength(1);
+        // The record says the piece follows its origin, and names the source
+        // it runs, which the later release offered.
+        expect(getPieceReconciliation(piece)).toMatchObject({
+          outcome: "followed",
+          offered: { identity: identities.v2, symbol: SYMBOL },
+        });
+      });
+
+      it("keeps a later release when the revision that last kept it in place records no release time", async () => {
+        // A runtime that does not carry the running source's release time onto
+        // a revision leaving that source in place writes the revision without
+        // one, and the transition clears the record that confirmed it. The
+        // revision that adopted the source still records its time.
+
+        const { piece, identities, offer } = await followingPiece();
+        await offer({ marker: "v2", releasedAt: LATER });
+        await keepInPlace(piece, (tx) => {
+          const history = piece.withTx(tx).getMetaRaw(
+            "pieceSourceHistory",
+          ) as Record<string, unknown>[];
+          const { releasedAt: _carried, ...untimed } = history.at(-1)!;
+          piece.withTx(tx).setMetaRaw(
+            "pieceSourceHistory",
+            [...history.slice(0, -1), untimed] as FabricValue,
+            rawMetaWriteAuthorization,
+          );
+        });
+        expect(
+          getPieceSourceRevisions(piece).map(({ pattern, releasedAt }) => ({
+            identity: pattern.identity,
+            releasedAt,
+          })).slice(-2),
+        ).toEqual([
+          { identity: identities.v2, releasedAt: Date.parse(LATER) },
+          { identity: identities.v2, releasedAt: undefined },
+        ]);
+        expect(getPieceReconciliation(piece)).toBeUndefined();
+
+        expect(await offer({ marker: "v1", releasedAt: EARLIER })).toEqual({
+          outcome: "ahead",
+          running: "v2",
+        });
+        expect(originUpdates(piece)).toHaveLength(1);
+        expect(getPieceReconciliation(piece)?.confirmed).toEqual({
+          identity: identities.v2,
+          releasedAt: Date.parse(LATER),
+        });
+      });
+
+      it("settles on the later of two releases its hosts offer in turn", async () => {
+        const { piece, offer } = await followingPiece();
+        const outcomes: string[] = [];
+        const round = async () => {
+          outcomes.push(
+            (await offer({ marker: "v2", releasedAt: LATER })).outcome,
+            (await offer({ marker: "v1", releasedAt: EARLIER })).outcome,
+          );
+        };
+        await round();
+        // Once the piece has settled, the alternation is a read: the record
+        // an earlier offer leaves is the one the later offer leaves.
+        using writes = spy(runtime, "editWithRetry");
+        await round();
+        await round();
+
+        expect(writes.calls).toHaveLength(0);
+        expect(outcomes).toEqual([
+          "updated",
+          "ahead",
+          "current",
+          "ahead",
+          "current",
+          "ahead",
+        ]);
+        expect(originUpdates(piece)).toHaveLength(1);
+      });
+
+      it("adopts a later release of the source an earlier release replaced", async () => {
+        // Deploying an earlier commit again, to roll a bad release back, is a
+        // later release than the one it rolls back.
+
+        const { offer } = await followingPiece();
+        await offer({ marker: "v2", releasedAt: EARLIER });
+
+        expect(await offer({ marker: "v1", releasedAt: LATER })).toEqual({
+          outcome: "updated",
+          running: "v1",
+        });
+      });
+
+      it("keeps a stated release when its host states no release time", async () => {
+        const { offer } = await followingPiece();
+        await offer({ marker: "v2", releasedAt: LATER });
+
+        expect(await offer({ marker: "v1" })).toEqual({
+          outcome: "ahead",
+          running: "v2",
+        });
+      });
+
+      it("adopts a stated release over source adopted without one, and keeps it", async () => {
+        const { piece, offer } = await followingPiece();
+        expect(await offer({ marker: "v2" })).toEqual({
+          outcome: "updated",
+          running: "v2",
+        });
+        expect(getPieceSourceRevisions(piece).at(-1)?.releasedAt)
+          .toBeUndefined();
+
+        expect(await offer({ marker: "v1", releasedAt: EARLIER })).toEqual({
+          outcome: "updated",
+          running: "v1",
+        });
+        expect(await offer({ marker: "v2" })).toEqual({
+          outcome: "ahead",
+          running: "v1",
+        });
+      });
+
+      it("adopts different source offered at the same release time", async () => {
+        const { offer } = await followingPiece();
+        await offer({ marker: "v2", releasedAt: LATER });
+
+        expect(await offer({ marker: "v1", releasedAt: LATER })).toEqual({
+          outcome: "updated",
+          running: "v1",
+        });
+      });
+
+      it("reports a later release of the running source as current", async () => {
+        const { piece, offer } = await followingPiece();
+        await offer({ marker: "v2", releasedAt: EARLIER });
+
+        expect(await offer({ marker: "v2", releasedAt: LATER })).toEqual({
+          outcome: "current",
+          running: "v2",
+        });
+        expect(originUpdates(piece)).toHaveLength(1);
+      });
+
+      describe("when a later release offers the source the piece runs", () => {
+        // A release between the one the piece adopted and the one that later
+        // offered the same source again is earlier than what the piece runs:
+        // still served by an instance a deploy left behind, it is the release
+        // a rollback replaced.
+
+        it("keeps that source against a release between the two", async () => {
+          const { piece, identities, offer } = await followingPiece();
+          await offer({ marker: "v2", releasedAt: EARLIER });
+
+          expect(await offer({ marker: "v2", releasedAt: LATER })).toEqual({
+            outcome: "current",
+            running: "v2",
+          });
+          expect(getPieceReconciliation(piece)?.confirmed).toEqual({
+            identity: identities.v2,
+            releasedAt: Date.parse(LATER),
+          });
+          expect(await offer({ marker: "v1", releasedAt: BETWEEN })).toEqual({
+            outcome: "ahead",
+            running: "v2",
+          });
+          expect(originUpdates(piece)).toHaveLength(1);
+        });
+
+        it("gives a source adopted with no release time the time that confirms it", async () => {
+          const { piece, identities, offer } = await followingPiece();
+          await offer({ marker: "v2" });
+
+          expect(await offer({ marker: "v2", releasedAt: LATER })).toEqual({
+            outcome: "current",
+            running: "v2",
+          });
+          expect(getPieceReconciliation(piece)?.confirmed).toEqual({
+            identity: identities.v2,
+            releasedAt: Date.parse(LATER),
+          });
+          expect(await offer({ marker: "v1", releasedAt: EARLIER })).toEqual({
+            outcome: "ahead",
+            running: "v2",
+          });
+        });
+
+        it("carries the time that confirms a source adopted with no release time onto a revision that leaves it in place", async () => {
+          // The record is the only place that time is kept, and the
+          // transition clears the record.
+
+          const { piece, identities, offer } = await followingPiece();
+          await offer({ marker: "v2" });
+          await offer({ marker: "v2", releasedAt: LATER });
+          expect(
+            getPieceSourceRevisions(piece).map(({ releasedAt }) => releasedAt),
+          ).not.toContain(Date.parse(LATER));
+
+          await keepInPlace(piece);
+
+          expect(getPieceReconciliation(piece)).toBeUndefined();
+          expect(getPieceSourceRevisions(piece).at(-1)).toMatchObject({
+            pattern: { identity: identities.v2 },
+            releasedAt: Date.parse(LATER),
+          });
+          expect(await offer({ marker: "v1", releasedAt: EARLIER })).toEqual({
+            outcome: "ahead",
+            running: "v2",
+          });
+        });
+
+        it("keeps the later release time across an attempt that cannot read one", async () => {
+          const { piece, identities, offer } = await followingPiece();
+          await offer({ marker: "v2", releasedAt: EARLIER });
+          await offer({ marker: "v2", releasedAt: LATER });
+
+          expect(
+            (await offer({ marker: "v2", releasedAt: "yesterday" })).outcome,
+          )
+            .toBe("unavailable");
+          expect(getPieceReconciliation(piece)?.confirmed).toEqual({
+            identity: identities.v2,
+            releasedAt: Date.parse(LATER),
+          });
+          expect(await offer({ marker: "v1", releasedAt: BETWEEN })).toEqual({
+            outcome: "ahead",
+            running: "v2",
+          });
+        });
+
+        it("keeps the later release time when an earlier release offers the same source", async () => {
+          const { piece, identities, offer } = await followingPiece();
+          await offer({ marker: "v2", releasedAt: EARLIER });
+          await offer({ marker: "v2", releasedAt: LATER });
+
+          expect(await offer({ marker: "v2", releasedAt: BETWEEN })).toEqual({
+            outcome: "current",
+            running: "v2",
+          });
+          expect(getPieceReconciliation(piece)?.confirmed).toEqual({
+            identity: identities.v2,
+            releasedAt: Date.parse(LATER),
+          });
+        });
+      });
+
+      describe("when another runtime confirms a later release meanwhile", () => {
+        // Another runtime reconciling the same piece can confirm the running
+        // source at a later release while this one is part way through. The
+        // order is read again where this one writes, so it neither adopts the
+        // release that confirmation overtook nor moves the confirmed time
+        // back.
+
+        /** Records, as another runtime would, `identity` confirmed at `at`. */
+        async function confirmElsewhere(
+          piece: Cell<unknown>,
+          identity: string,
+          at: string,
+        ) {
+          const written = await runtime.editWithRetry((tx) => {
+            setPieceReconciliation(piece, tx, {
+              outcome: "followed",
+              at: Date.now(),
+              origin: PARENT_SOURCE,
+              offered: { identity, symbol: SYMBOL },
+              confirmed: { identity, releasedAt: Date.parse(at) },
+            });
+          });
+          expect(written.error).toBeUndefined();
+        }
+
+        it("does not adopt a release that confirmation makes earlier", async () => {
+          const { piece, identities, offer } = await followingPiece();
+          await offer({ marker: "v2", releasedAt: EARLIER });
+          const sync = runtime.runner.syncStoredPieceCells.bind(runtime.runner);
+          using _overtaken = stub(
+            runtime.runner,
+            "syncStoredPieceCells",
+            async (...args: Parameters<typeof sync>) => {
+              await confirmElsewhere(piece, identities.v2, LATER);
+              return sync(...args);
+            },
+          );
+
+          expect(await offer({ marker: "v1", releasedAt: BETWEEN })).toEqual({
+            outcome: "ahead",
+            running: "v2",
+          });
+          expect(originUpdates(piece)).toHaveLength(1);
+          expect(getPieceReconciliation(piece)?.confirmed).toEqual({
+            identity: identities.v2,
+            releasedAt: Date.parse(LATER),
+          });
+        });
+
+        it("keeps that later time when this one confirms the same source earlier", async () => {
+          const { piece, identities, offer } = await followingPiece();
+          await offer({ marker: "v2", releasedAt: EARLIER });
+          const load = runtime.patternManager.loadPatternByIdentity.bind(
+            runtime.patternManager,
+          );
+          let confirmed = false;
+          using _confirming = stub(
+            runtime.patternManager,
+            "loadPatternByIdentity",
+            async (...args: Parameters<typeof load>) => {
+              if (!confirmed) {
+                confirmed = true;
+                await confirmElsewhere(piece, identities.v2, LATER);
+              }
+              return load(...args);
+            },
+          );
+
+          expect(await offer({ marker: "v2", releasedAt: BETWEEN })).toEqual({
+            outcome: "current",
+            running: "v2",
+          });
+          expect(confirmed).toBe(true);
+          expect(getPieceReconciliation(piece)?.confirmed).toEqual({
+            identity: identities.v2,
+            releasedAt: Date.parse(LATER),
+          });
+        });
+
+        it("does not adopt a release that confirmation makes earlier than a running source this runtime cannot load but moved to", async () => {
+          // The offer is later than the running source when this pass begins,
+          // so only the commit can find it earlier, and only the history the
+          // commit reads can say this runtime is behind what the piece runs.
+
+          const { piece, identities, offer } = await followingPiece();
+          await offer({ marker: "v2", releasedAt: EARLIER });
+          using _unloadable = cannotLoad(identities.v2);
+          const sync = runtime.runner.syncStoredPieceCells.bind(runtime.runner);
+          using _overtaken = stub(
+            runtime.runner,
+            "syncStoredPieceCells",
+            async (...args: Parameters<typeof sync>) => {
+              await confirmElsewhere(piece, identities.v2, LATER);
+              return sync(...args);
+            },
+          );
+
+          expect(await offer({ marker: "v1", releasedAt: BETWEEN })).toEqual({
+            outcome: "ahead",
+            running: "v2",
+          });
+          expect(originUpdates(piece)).toHaveLength(1);
+        });
+      });
+
+      describe("when this runtime cannot load the running pattern", () => {
+        // A runtime cannot load a pattern every runtime has lost, and cannot
+        // load a release newer than itself either. Only the piece's history
+        // tells the two apart: a recorded move to the running source means
+        // some runtime loaded it, so this one is behind it.
+
+        it("adopts an earlier release the history records no move from", async () => {
+          // Nothing says any runtime can load the running source, so the piece
+          // has nothing it can start, and the earlier release is a rescue.
+
+          const { piece, identities, offer } = await followingPiece();
+          await offer({ marker: "v2", releasedAt: LATER });
+          using _unloadable = cannotLoad(identities.v2);
+
+          expect(await offer({ marker: "v3", releasedAt: EARLIER })).toEqual({
+            outcome: "updated",
+            running: "v3",
+          });
+          expect(originUpdates(piece)).toHaveLength(2);
+        });
+
+        it("keeps a later release whose move from the earlier one the history records", async () => {
+          const { piece, identities, offer, sourceRequests } =
+            await followingPiece();
+          await offer({ marker: "v2", releasedAt: LATER });
+          using _unloadable = cannotLoad(identities.v2);
+          sourceRequests.length = 0;
+
+          expect(await offer({ marker: "v1", releasedAt: EARLIER })).toEqual({
+            outcome: "ahead",
+            running: "v2",
+          });
+          // The identity's answer settles it: the earlier source is not fetched.
+          expect(sourceRequests).toEqual([]);
+          expect(originUpdates(piece)).toHaveLength(1);
+          expect(getPieceReconciliation(piece)).toMatchObject({
+            outcome: "followed",
+            offered: { identity: identities.v2, symbol: SYMBOL },
+          });
+        });
+
+        it("stays on the later release while a runtime that can load it shares the piece", async () => {
+          // Partway through a deploy, a host still serving the earlier release
+          // offers it to a runtime too old to load the later one, and a host
+          // serving the later release offers that to a runtime that can.
+
+          const { piece, identities, offer } = await followingPiece();
+          await offer({ marker: "v2", releasedAt: LATER });
+          let stale = false;
+          using _unloadable = cannotLoad(identities.v2, () => stale);
+          const outcomes: unknown[] = [];
+          for (let cycle = 0; cycle < 2; cycle++) {
+            stale = true;
+            outcomes.push(await offer({ marker: "v1", releasedAt: EARLIER }));
+            stale = false;
+            outcomes.push(await offer({ marker: "v2", releasedAt: LATER }));
+          }
+
+          expect(outcomes).toEqual([
+            { outcome: "ahead", running: "v2" },
+            { outcome: "current", running: "v2" },
+            { outcome: "ahead", running: "v2" },
+            { outcome: "current", running: "v2" },
+          ]);
+          expect(originUpdates(piece)).toHaveLength(1);
+        });
+
+        describe("when no offer states a release time", () => {
+          // Without release times nothing orders the offer against what the
+          // piece runs. A host a deploy has not restarted yet and a deliberate
+          // rollback across a runtime too old to load the later source offer
+          // the same thing, the source the history records moving from, and
+          // only the rollback leaves no runtime that can start the later one.
+
+          it("adopts the source its history records moving from, as a rollback", async () => {
+            const { piece, identities, offer } = await followingPiece();
+            await offer({ marker: "v2" });
+            using _unloadable = cannotLoad(identities.v2);
+
+            expect(await offer({ marker: "v1" })).toEqual({
+              outcome: "updated",
+              running: "v1",
+            });
+            expect(originUpdates(piece)).toHaveLength(2);
+          });
+        });
+
+        describe("when the move to it displaced the earlier release without a baseline", () => {
+          // A transition whose predecessor's source is not retained records no
+          // baseline revision for it. It names the predecessor in
+          // `displacedPattern`, stamped with the transition's own timestamp.
+
+          /**
+           * Rewrites `piece`'s history as such a transition leaves it: the
+           * adopting revision alone, and `displacedPattern` naming `displaced`
+           * at `displacedAt`, which defaults to that revision's timestamp.
+           */
+          async function displaceWithoutBaseline(
+            piece: Cell<unknown>,
+            displaced: string,
+            displacedAt = getPieceSourceRevisions(piece).at(-1)!.timestamp,
+          ) {
+            const written = await runtime.editWithRetry((tx) => {
+              const history = piece.withTx(tx).getMetaRaw(
+                "pieceSourceHistory",
+              ) as unknown[];
+              piece.withTx(tx).setMetaRaw(
+                "pieceSourceHistory",
+                history.slice(-1) as FabricValue,
+                rawMetaWriteAuthorization,
+              );
+              piece.withTx(tx).setMetaRaw("displacedPattern", {
+                identity: displaced,
+                symbol: SYMBOL,
+                displacedAt,
+              }, rawMetaWriteAuthorization);
+            });
+            expect(written.error).toBeUndefined();
+          }
+
+          it("keeps a later release whose transition displaced the earlier one", async () => {
+            const { piece, identities, offer } = await followingPiece();
+            await offer({ marker: "v2", releasedAt: LATER });
+            await displaceWithoutBaseline(piece, identities.v1);
+            expect(
+              getPieceSourceRevisions(piece).map(({ pattern }) =>
+                pattern.identity
+              ),
+            ).toEqual([identities.v2]);
+            using _unloadable = cannotLoad(identities.v2);
+
+            expect(await offer({ marker: "v1", releasedAt: EARLIER })).toEqual(
+              { outcome: "ahead", running: "v2" },
+            );
+          });
+
+          it("adopts the earlier release when the displacement matches no recorded revision", async () => {
+            const { piece, identities, offer } = await followingPiece();
+            await offer({ marker: "v2", releasedAt: LATER });
+            await displaceWithoutBaseline(
+              piece,
+              identities.v1,
+              getPieceSourceRevisions(piece).at(-1)!.timestamp - 1,
+            );
+            using _unloadable = cannotLoad(identities.v2);
+
+            expect(await offer({ marker: "v1", releasedAt: EARLIER })).toEqual(
+              { outcome: "updated", running: "v1" },
+            );
+          });
+        });
+      });
+
+      it("keeps the running source when its host's release time is not a time", async () => {
+        const { piece, offer } = await followingPiece();
+
+        expect(await offer({ marker: "v2", releasedAt: "yesterday" }))
+          .toEqual({ outcome: "unavailable", running: "v1" });
+        expect(getPieceReconciliation(piece)).toMatchObject({
+          outcome: "unreachable",
+          detail: 'the origin\'s release time is not a time: `"yesterday"`',
+        });
+      });
+    });
   });
 
   describe("what a reconciliation leaves behind", () => {
@@ -745,6 +1556,56 @@ describe("piece source reconciliation", () => {
       });
     });
 
+    it("records why the write that adopts the origin's source did not commit", async () => {
+      // The origin answered and its source compiled, so a record saying only
+      // that it could not be reached would point a reader at the network. The
+      // commit's own reason is what says where the update stopped.
+      const demanding = sourceWithRequiredInput("v2");
+      const demandingIdentity = await identityFor(demanding);
+      const piece = await preparePiece(
+        servingFetch(() => demandingIdentity, () => demanding),
+      );
+      await stampSource(piece, PARENT_SOURCE);
+
+      expect(await reconcile(piece)).toBe("unavailable");
+
+      expect(getPieceReconciliation(piece)).toMatchObject({
+        outcome: "unreachable",
+        origin: PARENT_SOURCE,
+        offered: { identity: demandingIdentity, symbol: SYMBOL },
+      });
+      expect(getPieceReconciliation(piece)?.detail).toContain(
+        "updated arguments do not match the candidate schema",
+      );
+    });
+
+    it("records that the piece changed while its write was being prepared", async () => {
+      // A stored argument that moves between the snapshot and the commit
+      // declines the write, which the store never sees.
+      const v2Identity = await identityFor(source("v2"));
+      const piece = await preparePiece(
+        servingFetch(() => v2Identity, () => source("v2")),
+      );
+      await stampSource(piece, PARENT_SOURCE);
+      const moved = stub(
+        runtime,
+        "syncStoredSetupArgument",
+        () => Promise.resolve(() => false),
+      );
+      try {
+        expect(await reconcile(piece)).toBe("unavailable");
+      } finally {
+        moved.restore();
+      }
+
+      expect(getPieceReconciliation(piece)).toMatchObject({
+        outcome: "unreachable",
+        origin: PARENT_SOURCE,
+        offered: { identity: v2Identity, symbol: SYMBOL },
+        detail: "the piece changed while its write was being prepared",
+      });
+    });
+
     it("settles on a failure that arrives without a message", async () => {
       // An empty reason is dropped when the record is read, so recording one
       // would leave every later attempt rewriting the same conclusion.
@@ -814,6 +1675,414 @@ describe("piece source reconciliation", () => {
       expect(await reconcile(piece)).toBe("unusable");
 
       expect(getPieceReconciliation(piece)).toBeUndefined();
+    });
+  });
+
+  describe("a write the store refuses for good", () => {
+    // Each case refuses the write that adopts the origin's source, and only
+    // that write. The adoption is the commit that follows the reconciler
+    // loading the piece's stored argument; every other write — the record a
+    // pass leaves, a case's own edits — reaches the store.
+
+    const tooLarge = {
+      name: "MessageTooLargeError",
+      message: "Memory message stands for more than 100000 array slots " +
+        "and record members",
+      transaction: { marker: "the-whole-refused-transaction" },
+    };
+
+    const policyChanged = {
+      name: "CfcCommitRefusalError",
+      message: "CFC enforcement rejected commit: relevant transaction was " +
+        "not prepared: writePolicyAnyOf must remain stable at /messages/*",
+      reasons: [
+        "cfc-envelope-stability: writePolicyAnyOf must remain stable at " +
+        "/messages/*",
+      ],
+    };
+
+    /**
+     * Refuses every adoption with `error`, and counts the refusals.
+     * `onRefusal` runs as each refusal is made, before the reconciler sees it.
+     */
+    function refuseAdoptions(
+      error: Record<string, unknown>,
+      onRefusal?: () => void,
+    ) {
+      let adopting = false;
+      const counted = { refusals: 0 };
+      const loadArgument = runtime.syncStoredSetupArgument.bind(runtime);
+      const write = runtime.editWithRetry.bind(runtime);
+      const argumentStub = stub(
+        runtime,
+        "syncStoredSetupArgument",
+        (piece) => {
+          adopting = true;
+          return loadArgument(piece);
+        },
+      );
+      const writeStub = stub(
+        runtime,
+        "editWithRetry",
+        ((fn, maxRetries, options) => {
+          if (!adopting) return write(fn, maxRetries, options);
+          adopting = false;
+          counted.refusals++;
+          onRefusal?.();
+          return Promise.resolve({ error });
+        }) as Runtime["editWithRetry"],
+      );
+      return {
+        get refusals() {
+          return counted.refusals;
+        },
+        [Symbol.dispose]() {
+          writeStub.restore();
+          argumentStub.restore();
+        },
+      };
+    }
+
+    /** A piece running v1 and following an origin that serves `contents`. */
+    async function pieceOffered(contents: string) {
+      const identity = await identityFor(contents);
+      const piece = await preparePiece(
+        servingFetch(() => identity, () => contents),
+      );
+      await stampSource(piece, PARENT_SOURCE);
+      return piece;
+    }
+
+    /** The schema hash of the envelope the piece's argument document stores. */
+    function argumentEnvelope(piece: Cell<unknown>): string | undefined {
+      const tx = runtime.edit();
+      try {
+        const { space, id, scope } = piece.getArgumentCell()!
+          .getAsNormalizedFullLink();
+        return readStoredCfcSchemaHash(tx, { space, id, scope });
+      } finally {
+        tx.abort();
+      }
+    }
+
+    for (const refusal of [tooLarge, policyChanged]) {
+      it(`records a \`${refusal.name}\`, and builds nothing for the same source again`, async () => {
+        const v1Identity = await identityFor(source("v1"));
+        const v2Identity = await identityFor(source("v2"));
+        const piece = await pieceOffered(source("v2"));
+        using adoptions = refuseAdoptions(refusal);
+        using compiles = spy(runtime.patternManager, "compilePattern");
+
+        expect(await reconcile(piece)).toBe("rejected");
+        expect(adoptions.refusals).toBe(1);
+        expect(compiles.calls).toHaveLength(1);
+        const recorded = getPieceReconciliation(piece);
+        // The store refused the source rather than the origin failing to
+        // answer, so the piece says it refused what was offered.
+        expect(recorded).toMatchObject({
+          outcome: "refused",
+          reason: "apply-failed",
+          origin: PARENT_SOURCE,
+          offered: { identity: v2Identity, symbol: SYMBOL },
+          detail: refusal.message,
+        });
+
+        expect(await reconcile(piece)).toBe("rejected");
+        expect(adoptions.refusals).toBe(1);
+        expect(compiles.calls).toHaveLength(1);
+        expect(getPieceReconciliation(piece)).toEqual(recorded);
+        expect(getPatternIdentityRef(piece)?.identity).toBe(v1Identity);
+      });
+    }
+
+    it("builds nothing again for a piece stopped and started since", async () => {
+      // A host that keeps a piece running stops and starts it again, and
+      // reconciles it on each start. A refusal forgotten when the piece stops
+      // would be built and sent again on every cycle.
+
+      const piece = await pieceOffered(source("v2"));
+      using adoptions = refuseAdoptions(tooLarge);
+      expect(await reconcile(piece)).toBe("rejected");
+
+      expect(await runtime.start(piece)).toBe(true);
+      runtime.runner.stop(piece);
+      expect(await runtime.start(piece)).toBe(true);
+      expect(await reconcile(piece)).toBe("rejected");
+
+      expect(adoptions.refusals).toBe(1);
+    });
+
+    it("builds nothing again for a fabric origin's same source", async () => {
+      const piece = await preparePiece(refuseEveryFetch);
+      const v2 = await compileMarkerPattern("v2");
+      const v2Ref = runtime.patternManager.getArtifactEntryRef(v2)!;
+      await stampSource(piece, `cf:pattern:${v2Ref.identity}`);
+      using adoptions = refuseAdoptions(tooLarge);
+      using sourceReads = spy(
+        runtime.patternManager,
+        "getPatternSourceProgramByIdentity",
+      );
+
+      expect(await reconcile(piece)).toBe("rejected");
+      expect(adoptions.refusals).toBe(1);
+      const reads = sourceReads.calls.length;
+      expect(reads).toBeGreaterThan(0);
+
+      expect(await reconcile(piece)).toBe("rejected");
+      expect(adoptions.refusals).toBe(1);
+      expect(sourceReads.calls).toHaveLength(reads);
+      expect(getPieceReconciliation(piece)).toMatchObject({
+        outcome: "refused",
+        reason: "apply-failed",
+        offered: v2Ref,
+      });
+    });
+
+    it("proposes again once the origin offers different source", async () => {
+      let served = source("v2");
+      let servedIdentity = await identityFor(served);
+      const piece = await preparePiece(
+        servingFetch(() => servedIdentity, () => served),
+      );
+      await stampSource(piece, PARENT_SOURCE);
+      using adoptions = refuseAdoptions(tooLarge);
+      expect(await reconcile(piece)).toBe("rejected");
+
+      served = source("v3");
+      servedIdentity = await identityFor(served);
+      expect(await reconcile(piece)).toBe("rejected");
+
+      expect(adoptions.refusals).toBe(2);
+      expect(getPieceReconciliation(piece)?.offered).toEqual({
+        identity: servedIdentity,
+        symbol: SYMBOL,
+      });
+    });
+
+    for (const refusal of [tooLarge, policyChanged]) {
+      it(`builds nothing again after a \`${refusal.name}\` once the piece's stored argument changes`, async () => {
+        // A write refused as too large grows with what the piece holds, so a
+        // change to its data rarely makes it fit. A write under the schema
+        // the piece runs leaves the envelopes a stored envelope's refusal
+        // answered for as they were. A piece taking writes keeps either one.
+
+        const piece = await pieceOffered(source("v2"));
+        using adoptions = refuseAdoptions(refusal);
+        expect(await reconcile(piece)).toBe("rejected");
+        const envelope = argumentEnvelope(piece);
+
+        const argument = piece.getArgumentCell<Record<string, string>>()!;
+        const edited = await runtime.editWithRetry((tx) => {
+          argument.withTx(tx).setRaw({ note: "changed" });
+        });
+        expect(edited.error).toBeUndefined();
+        expect(argument.getRaw()).toEqual({ note: "changed" });
+        expect(argumentEnvelope(piece)).toBe(envelope);
+        expect(await reconcile(piece)).toBe("rejected");
+
+        expect(adoptions.refusals).toBe(1);
+      });
+    }
+
+    it("proposes again after a stored envelope's refusal once the envelope the piece's argument stores changes", async () => {
+      // A migration that rewrites what the piece stores is what can change
+      // the merge's answer.
+
+      const piece = await pieceOffered(sourceWithChangedContract("v2"));
+      using adoptions = refuseAdoptions(policyChanged);
+      expect(await reconcile(piece)).toBe("rejected");
+      const before = argumentEnvelope(piece);
+
+      const labeled = await runtime.editWithRetry((tx) => {
+        const argument = piece.withTx(tx).getArgumentCell()!;
+        runtime.getCellFromLink(
+          {
+            ...argument.getAsNormalizedFullLink(),
+            schema: {
+              type: "object",
+              properties: {
+                optional: {
+                  type: "string",
+                  ifc: { confidentiality: ["migrated"] },
+                },
+              },
+            },
+          },
+          undefined,
+          tx,
+        ).set({ optional: "migrated" });
+      });
+      expect(labeled.error).toBeUndefined();
+      expect(argumentEnvelope(piece)).not.toBe(before);
+      expect(await reconcile(piece)).toBe("rejected");
+
+      expect(adoptions.refusals).toBe(2);
+    });
+
+    it("proposes again once the piece's source state changes", async () => {
+      const piece = await pieceOffered(source("v2"));
+      using adoptions = refuseAdoptions(tooLarge);
+      expect(await reconcile(piece)).toBe("rejected");
+
+      // A revision that keeps both the pattern and the origin, so the source
+      // state is all that moves.
+      const expected = getPieceSourceSnapshot(piece)!;
+      const baseline = await preparePieceSourceTransitionBaseline(
+        runtime,
+        piece,
+        expected,
+        { allowUnavailable: true },
+      );
+      const revised = await runtime.editWithRetry((tx) => {
+        applyPieceSourceTransition(runtime, piece, tx, expected.pattern, {
+          revisionId: crypto.randomUUID(),
+          baseline,
+          timestamp: Date.now(),
+          operation: "origin-update",
+          origin: expected.origin,
+          expected,
+        });
+      });
+      expect(revised.error).toBeUndefined();
+      expect(getPieceSourceSnapshot(piece)?.revisionId).not.toBe(
+        expected.revisionId,
+      );
+      expect(await reconcile(piece)).toBe("rejected");
+
+      expect(adoptions.refusals).toBe(2);
+    });
+
+    const notForGood = [
+      {
+        name: "ConflictError",
+        message: "stale confirmed read: of:doc at seq 1 conflicted with seq 2",
+      },
+      {
+        name: "SpeculativeBasisError",
+        message: "commit read basis names a speculative layer",
+      },
+      // A flow-control refusal other than a stored envelope's, which a grant
+      // can lift.
+      {
+        name: "CfcCommitRefusalError",
+        message: "the write would carry data where policy forbids it",
+        reasons: ["the write would carry data where policy forbids it"],
+      },
+      {
+        name: "RowLabelCommitError",
+        message: "a row's label forbids the write",
+      },
+    ];
+
+    for (const refusal of notForGood) {
+      it(`proposes again after a \`${refusal.name}\``, async () => {
+        const piece = await pieceOffered(source("v2"));
+        using adoptions = refuseAdoptions(refusal);
+
+        expect(await reconcile(piece)).toBe("unavailable");
+        expect(await reconcile(piece)).toBe("unavailable");
+
+        expect(adoptions.refusals).toBe(2);
+        expect(getPieceReconciliation(piece)).toMatchObject({
+          outcome: "unreachable",
+        });
+      });
+    }
+
+    it("proposes again after a `CfcCommitRefusalError` that names a stored envelope's refusal only in prose", async () => {
+      // The class is read off the reason the boundary tagged, never off the
+      // words of one it did not.
+
+      const prose = "writePolicyAnyOf must remain stable at /messages/*";
+      const piece = await pieceOffered(source("v2"));
+      using adoptions = refuseAdoptions({
+        name: "CfcCommitRefusalError",
+        message: prose,
+        reasons: [prose],
+      });
+
+      expect(await reconcile(piece)).toBe("unavailable");
+      expect(await reconcile(piece)).toBe("unavailable");
+
+      expect(adoptions.refusals).toBe(2);
+    });
+
+    it("proposes again once the space's memory session is replaced", async () => {
+      const replace = captureSessionReplaced();
+      const piece = await pieceOffered(source("v2"));
+      using adoptions = refuseAdoptions(tooLarge);
+      expect(await reconcile(piece)).toBe("rejected");
+
+      // The replacement is itself what reconciles a piece following a
+      // system origin again.
+      replace(piece.space);
+      await runtime.sourceReconciler.idle();
+      expect(adoptions.refusals).toBe(2);
+
+      expect(await reconcile(piece)).toBe("rejected");
+      expect(adoptions.refusals).toBe(2);
+    });
+
+    it("proposes again after a refusal received while the space's memory session was replaced", async () => {
+      // The refusal answered for the store the session was replaced away
+      // from, so the pass the replacement starts proposes again.
+
+      const replace = captureSessionReplaced();
+      const piece = await pieceOffered(source("v2"));
+      let replaced = false;
+      using adoptions = refuseAdoptions(tooLarge, () => {
+        if (replaced) return;
+        replaced = true;
+        replace(piece.space);
+      });
+
+      expect(await reconcile(piece)).toBe("rejected");
+      await runtime.sourceReconciler.idle();
+
+      expect(adoptions.refusals).toBe(2);
+    });
+
+    it("builds nothing again after a refusal received while another space's memory session was replaced", async () => {
+      // A replacement stands for the store of its own space only.
+
+      const replace = captureSessionReplaced();
+      const other = await Identity.fromPassphrase("another space");
+      const piece = await pieceOffered(source("v2"));
+      using adoptions = refuseAdoptions(tooLarge, () => replace(other.did()));
+
+      expect(await reconcile(piece)).toBe("rejected");
+      await runtime.sourceReconciler.idle();
+      expect(await reconcile(piece)).toBe("rejected");
+
+      expect(adoptions.refusals).toBe(1);
+    });
+
+    it("logs a summary of the refusal once, and never the transaction", async () => {
+      const v2Identity = await identityFor(source("v2"));
+      const piece = await pieceOffered(source("v2"));
+      using adoptions = refuseAdoptions(tooLarge);
+      using warnings = spy(console, "warn");
+
+      expect(await reconcile(piece)).toBe("rejected");
+      expect(await reconcile(piece)).toBe("rejected");
+
+      expect(adoptions.refusals).toBe(1);
+      const refused = warnings.calls.filter((call) =>
+        call.args.includes("reconcile-commit-failed")
+      );
+      expect(refused).toHaveLength(1);
+      const logged = refused[0].args
+        .map((arg) => typeof arg === "string" ? arg : Deno.inspect(arg))
+        .join(" ");
+      expect(logged).toContain(
+        "refused a source reconciliation's write for good",
+      );
+      expect(logged).toContain("MessageTooLargeError");
+      expect(logged).toContain(tooLarge.message);
+      expect(logged).toContain(piece.space);
+      expect(logged).toContain(piece.sourceURI);
+      expect(logged).toContain(v2Identity);
+      expect(logged).not.toContain(tooLarge.transaction.marker);
     });
   });
 
@@ -1391,6 +2660,54 @@ describe("piece source reconciliation", () => {
       }
     });
 
+    it("compiles concurrent opens into one destination once", async () => {
+      // Every open is held at the source download until all of them have
+      // asked for the advertised identity, so they reach the compile
+      // together.
+      const identity = await identityFor(source("v1"));
+      const opens = 3;
+      const allIdentities = defer<void>();
+      let identities = 0;
+      const fetch = servingFetch(() => identity, () => source("v1"), (url) => {
+        if (url.searchParams.has("identity") && ++identities === opens) {
+          allIdentities.resolve();
+        }
+      });
+      createRuntime(async (input, init) => {
+        const url = new URL(
+          input instanceof Request ? input.url : String(input),
+        );
+        if (url.pathname === PARENT_PATH && !url.searchParams.has("identity")) {
+          await allIdentities.promise;
+        }
+        return await fetch(input, init);
+      });
+      const harness = runtime.harness;
+      const compileToRecordGraph = harness.compileToRecordGraph.bind(harness);
+      let compiles = 0;
+      harness.compileToRecordGraph = (...args) => {
+        compiles++;
+        return compileToRecordGraph(...args);
+      };
+      try {
+        const patterns = await Promise.all(
+          Array.from(
+            { length: opens },
+            (_, slot) =>
+              open(runtime.getCell(signer.did(), `concurrent-slot-${slot}`)),
+          ),
+        );
+        expect(new Set(patterns).size).toBe(1);
+        expect(
+          runtime.patternManager.getArtifactEntryRef(patterns[0]!)?.identity,
+        ).toBe(identity);
+        expect(compiles).toBe(1);
+      } finally {
+        allIdentities.resolve();
+        harness.compileToRecordGraph = compileToRecordGraph;
+      }
+    });
+
     it("refuses mismatched source in a destination that keeps a verified pattern", async () => {
       const v1 = await identityFor(source("v1"));
       const v2 = await identityFor(source("v2"));
@@ -1522,52 +2839,114 @@ describe("piece source reconciliation", () => {
       expect(downloads).toBe(4);
     });
 
-    it("retries compilation failure without evicting a newer successful source", async () => {
+    it("compiles once for an open that arrives during the compile after its source was retired", async () => {
+      // The retained source is retired while the first open compiles, as
+      // eviction or the retention limit retires it, so the second open
+      // resolves the source again and finds no retained entry to join
+      // through. The first compile is released as the second open's
+      // resolution returns, and runs on well past the second's arrival.
       const identity = await identityFor(source("v1"));
-      let downloads = 0;
-      createRuntime(servingFetch(() => identity, () => source("v1"), (url) => {
-        if (!url.searchParams.has("identity")) downloads++;
-      }));
+      createRuntime(servingFetch(() => identity, () => source("v1")));
       const compile = runtime.patternManager.compilePattern.bind(
         runtime.patternManager,
       );
-      const entered = [defer<void>(), defer<void>()];
-      const release = [defer<void>(), defer<void>()];
+      const resolve = runtime.harness.resolve.bind(runtime.harness);
+      const entered = defer<void>();
+      const release = defer<void>();
       let calls = 0;
       runtime.patternManager.compilePattern = async (...args) => {
-        const index = calls++;
-        if (index < 2) {
-          entered[index].resolve();
-          await release[index].promise;
-          throw new Error("controlled compile failure");
+        if (calls++ === 0) {
+          entered.resolve();
+          await release.promise;
         }
         return await compile(...args);
       };
-      const first = open(runtime.getCell(signer.did(), "failure-first"));
-      await entered[0].promise;
-      const second = open(runtime.getCell(signer.did(), "failure-second"));
+      let resolutions = 0;
+      runtime.harness.resolve = async (...args) => {
+        const program = await resolve(...args);
+        if (++resolutions === 2) release.resolve();
+        return program;
+      };
+      const first = open(runtime.getCell(signer.did(), "retired-first"));
+      let second: Promise<unknown> | undefined;
       try {
-        await entered[1].promise;
-        release[0].resolve();
-        expect(await first).toBeUndefined();
+        await entered.promise;
+        runtime.sourceReconciler.accessForTestingOnly.suppliedSources.clear();
+        second = open(runtime.getCell(signer.did(), "retired-second"));
+        const [firstPattern, secondPattern] = await Promise.all([
+          first,
+          second,
+        ]);
+        expect(firstPattern).toBeDefined();
+        expect(secondPattern).toBe(firstPattern);
+        expect(resolutions).toBe(2);
+        expect(calls).toBe(1);
+      } finally {
+        release.resolve();
+        await Promise.all([first, second]);
+        runtime.harness.resolve = resolve;
+        runtime.patternManager.compilePattern = compile;
+      }
+    });
+
+    it("shares a concurrent open's failed compile, and compiles again for the next open", async () => {
+      // Both opens are held at the source download until both have asked for
+      // the advertised identity, so they reach the compile together.
+      const identity = await identityFor(source("v1"));
+      const bothIdentities = defer<void>();
+      let identities = 0;
+      let downloads = 0;
+      const fetch = servingFetch(() => identity, () => source("v1"), (url) => {
+        if (!url.searchParams.has("identity")) downloads++;
+        else if (++identities === 2) bothIdentities.resolve();
+      });
+      createRuntime(async (input, init) => {
+        const url = new URL(
+          input instanceof Request ? input.url : String(input),
+        );
+        if (url.pathname === PARENT_PATH && !url.searchParams.has("identity")) {
+          await bothIdentities.promise;
+        }
+        return await fetch(input, init);
+      });
+      const compile = runtime.patternManager.compilePattern.bind(
+        runtime.patternManager,
+      );
+      let calls = 0;
+      runtime.patternManager.compilePattern = async (...args) => {
+        if (calls++ === 0) throw new Error("controlled compile failure");
+        return await compile(...args);
+      };
+      try {
+        expect(
+          await Promise.all([
+            open(runtime.getCell(signer.did(), "failure-first")),
+            open(runtime.getCell(signer.did(), "failure-second")),
+          ]),
+        ).toEqual([undefined, undefined]);
+        expect(calls).toBe(1);
         expect(await open(runtime.getCell(signer.did(), "failure-retry")))
           .toBeDefined();
+        // The supplied closure has two files, downloaded once for the shared
+        // attempt and once again for the retry.
         expect(downloads).toBe(4);
-        release[1].resolve();
-        expect(await second).toBeUndefined();
-        expect(await open(runtime.getCell(signer.did(), "after-late-failure")))
+        expect(await open(runtime.getCell(signer.did(), "after-retry")))
           .toBeDefined();
         expect(downloads).toBe(4);
         // The last open reuses the pattern the retry verified.
-        expect(calls).toBe(3);
+        expect(calls).toBe(2);
       } finally {
-        for (const gate of release) gate.resolve();
-        await Promise.all([first, second]);
+        bothIdentities.resolve();
         runtime.patternManager.compilePattern = compile;
       }
     });
 
     it("isolates retained source containers from compiler-owned inputs", async () => {
+      // The second compile is reached through the end of the registry epoch
+      // that verified the first, which leaves the retained source in place.
+      await storageManager.close();
+      const server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+      storageManager = EmulatedStorageManager.connectTo(server, { as: signer });
       const dataFiles = ["/attached.txt"];
       const sourceRoots = ["/retained.ts"];
       const attached = [
@@ -1601,16 +2980,9 @@ describe("piece source reconciliation", () => {
       const compile = runtime.patternManager.compilePattern.bind(
         runtime.patternManager,
       );
-      // The second open starts while the first is still compiling, so it
-      // compiles the retained source again rather than answering with a
-      // pattern the first has verified.
-      const firstMutated = defer<void>();
-      const releaseFirst = defer<void>();
-      const secondEntered = defer<void>();
       let calls = 0;
       runtime.patternManager.compilePattern = async (...args) => {
-        const call = ++calls;
-        if (call === 2) secondEntered.resolve();
+        calls++;
         if (typeof args[0] === "string") {
           throw new Error("supplied source must carry its resolved program");
         }
@@ -1624,26 +2996,16 @@ describe("piece source reconciliation", () => {
         args[0].files.pop();
         args[0].dataFiles!.push("owner-data.txt");
         args[0].sourceRoots!.push("owner-root.tsx");
-        if (call === 1) {
-          firstMutated.resolve();
-          await releaseFirst.promise;
-        }
         return pattern;
       };
-      const first = open(runtime.getCell(signer.did(), "containers-first"));
-      let second: Promise<unknown> | undefined;
       try {
-        await Promise.race([
-          firstMutated.promise,
-          first.then(() => {
-            throw new Error("the first open did not finish its compile");
-          }),
-        ]);
-        second = open(runtime.getCell(signer.did(), "containers-next"));
-        await secondEntered.promise;
-        releaseFirst.resolve();
-        expect(await first).toBeDefined();
-        expect(await second).toBeDefined();
+        expect(await open(runtime.getCell(signer.did(), "containers-first")))
+          .toBeDefined();
+        await runtime.patternManager.flushCompileCacheWrites();
+        await storageManager.synced();
+        await storageManager.close();
+        expect(await open(runtime.getCell(signer.did(), "containers-next")))
+          .toBeDefined();
         expect(calls).toBe(2);
         expect(downloads).toBe(2);
         const stored = await runtime.patternManager
@@ -1652,10 +3014,10 @@ describe("piece source reconciliation", () => {
         expect(stored?.sourceRoots).toEqual(sourceRoots);
         expect(stored?.files).toEqual(expect.arrayContaining(attached));
       } finally {
-        releaseFirst.resolve();
-        await Promise.all([first, second]);
         runtime.harness.resolve = resolve;
         runtime.patternManager.compilePattern = compile;
+        await runtime.dispose();
+        await server.close();
       }
     });
 
@@ -2139,16 +3501,17 @@ describe("piece source reconciliation", () => {
       // pattern its own space retains no source for: what the origin names
       // now is the only code that space can give it, so it takes that in the
       // same revision that records the origin, and keeps the identity it
-      // displaced. The pattern stays live in this runtime's index, compiled
-      // into another space, because the index answers by identity alone and
-      // an answer from there is not this space holding the source.
+      // displaced. The pattern stays live in this runtime's index, because
+      // the index answers by identity alone and an answer from there is not
+      // this space holding the source. It is compiled into no space at all:
+      // a closure this runtime had written into another space it would copy
+      // into the piece's space on that load, and the space would then hold
+      // the source.
       const v1Identity = await identityFor(source("v1"));
       const v2Identity = await identityFor(source("v2"));
       createRuntime(servingFetch(() => v2Identity, () => source("v2")));
-      const elsewhere = (await Identity.fromPassphrase("another space")).did();
       const v1 = await runtime.patternManager.compilePattern(
         parentProgram(source("v1")),
-        { space: elsewhere },
       );
       const piece = runtime.getCell<{ marker?: string }>(
         signer.did(),

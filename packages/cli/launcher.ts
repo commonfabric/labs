@@ -1,3 +1,5 @@
+import { CF_PERMISSION_FLAGS } from "./lib/cf-permissions.ts";
+
 export interface CfLauncherOptions {
   denoPath: string;
   labsRoot: string;
@@ -249,12 +251,7 @@ export const buildCfLauncherCommand = (
     "--quiet",
     "--config",
     options.configPath,
-    "--allow-net",
-    "--allow-ffi",
-    "--allow-read",
-    "--allow-write",
-    "--allow-env",
-    "--allow-run",
+    ...CF_PERMISSION_FLAGS,
     options.cliEntrypoint,
     ...options.cfArgs,
   ],

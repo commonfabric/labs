@@ -24,6 +24,7 @@ import {
   defaultTheme,
   getSemanticSpacing,
   mergeWithDefaultTheme,
+  tokenAround,
 } from "../theme-context.ts";
 
 // TODO(v2-token-migration): Migrate this component to component-level tokens,
@@ -164,27 +165,30 @@ export class CFChat extends BaseElement {
   @property({ type: Boolean, reflect: true })
   accessor pending = false;
 
-  @property({ type: Object })
-  accessor theme: any = {}; // Accept any theme object (partial or full)
-
   /**
-   * The theme consumed from the provider. This is used when there is no
-   * direct `theme` prop.
+   * A theme given to this element directly, partial or full, written over the
+   * theme it would otherwise inherit. Left empty, the element draws the
+   * ambient theme.
    */
+  @property({ type: Object })
+  accessor theme: any = {};
+
+  /** The ambient theme, whose density the chat's own spacing follows. */
   @consume({ context: cfThemeContext, subscribe: true })
   @property({ attribute: false })
   accessor parentTheme: CFTheme = defaultTheme;
 
-  /** Internal computed theme, for applying CSS variables locally. */
-  @property({ type: Object, attribute: false })
-  accessor _computedTheme: CFTheme = defaultTheme;
+  /**
+   * Whether a given theme's tokens are on the host, to be taken off when it
+   * is withdrawn; tokens the element did not write are left alone.
+   */
+  #wroteGivenTheme = false;
 
   constructor() {
     super();
     this.messages = [];
     this.pending = false;
     this.theme = {};
-    this._computedTheme = defaultTheme;
   }
 
   private get _messagesArray(): readonly BuiltInLLMMessage[] {
@@ -195,33 +199,33 @@ export class CFChat extends BaseElement {
     super.firstUpdated(changedProperties);
     // Initialize cell controller binding
     this._cellController.bind(this.messages, BuiltInLLMMessagesArraySchema);
-    // Compute and apply theme on first render
-    const source = this.theme && Object.keys(this.theme).length > 0
-      ? this.theme
-      : this.parentTheme;
-    this._computedTheme = mergeWithDefaultTheme(source ?? {});
-    this._updateThemeProperties();
   }
 
-  private _updateThemeProperties() {
-    // Apply standard theme properties with custom spacing for chat-specific needs
-    applyThemeToElement(this, this._computedTheme, {
-      "message-bottom": getSemanticSpacing(
-        this._computedTheme.density,
-        "sm",
-        "tight",
-      ),
-      "padding-bubble": getSemanticSpacing(
-        this._computedTheme.density,
-        "lg",
-        "normal",
-      ),
-      "padding-bubble-horizontal": getSemanticSpacing(
-        this._computedTheme.density,
-        "xl",
-        "normal",
-      ),
-    });
+  /**
+   * Writes the given theme, if any, and the chat's own spacing, which no
+   * theme element sets and which follows the density in effect here.
+   */
+  #applyTheme() {
+    const given = this.theme && Object.keys(this.theme).length > 0
+      ? mergeWithDefaultTheme(this.theme, this.parentTheme)
+      : undefined;
+    if (given || this.#wroteGivenTheme) {
+      applyThemeToElement(this, given, this.parentTheme);
+    }
+    this.#wroteGivenTheme = given !== undefined;
+    const { density } = given ?? this.parentTheme;
+    const spacing = {
+      "message-bottom": getSemanticSpacing(density, "sm", "tight"),
+      "padding-bubble": getSemanticSpacing(density, "lg", "normal"),
+      "padding-bubble-horizontal": getSemanticSpacing(density, "xl", "normal"),
+    };
+    // A host that sets one of these by CSS keeps it: a token written here
+    // would hide the host's.
+    for (const [name, value] of Object.entries(spacing)) {
+      const token = `--cf-theme-spacing-${name}`;
+      if (tokenAround(this, token)) this.style.removeProperty(token);
+      else this.style.setProperty(token, value);
+    }
   }
 
   override willUpdate(changedProperties: Map<string, any>) {
@@ -233,15 +237,11 @@ export class CFChat extends BaseElement {
       this._cellController.bind(this.messages, BuiltInLLMMessagesArraySchema);
     }
 
-    // If the theme property or provided theme changed, recompute
     if (
-      changedProperties.has("theme") || changedProperties.has("parentTheme")
+      !this.hasUpdated || changedProperties.has("theme") ||
+      changedProperties.has("parentTheme")
     ) {
-      const source = this.theme && Object.keys(this.theme).length > 0
-        ? this.theme
-        : this.parentTheme;
-      this._computedTheme = mergeWithDefaultTheme(source ?? {});
-      this._updateThemeProperties();
+      this.#applyTheme();
     }
   }
 
@@ -388,11 +388,6 @@ export class CFChat extends BaseElement {
 
   override updated(changed: Map<string | number | symbol, unknown>) {
     super.updated(changed);
-
-    // Update theme properties when computed theme changes
-    if (changed.has("_computedTheme")) {
-      this._updateThemeProperties();
-    }
 
     // Emit event when pending state changes
     if (changed.has("pending")) {

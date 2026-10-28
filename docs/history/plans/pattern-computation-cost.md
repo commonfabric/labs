@@ -130,7 +130,7 @@ than competing with them.
   proposal for a new declarative layer should first say why that one is not the
   vehicle.
 - **Per-access cost work.**
-  [Lazy cell materialization](../../plans/lazy-cell-materialization.md) is the
+  [Lazy cell materialization](lazy-cell-materialization.md) is the
   plan that owns the constant this plan multiplies against. It is on by default
   behind `lazyMaterialization`; its remaining stages include the handler path
   and flag removal. This plan adds no work there and depends on it.
@@ -445,7 +445,7 @@ over a sub-millisecond access are still one large collection away from a slow
 interaction.
 
 - [ ] **D1. Track
-      [lazy cell materialization](../../plans/lazy-cell-materialization.md)
+      [lazy cell materialization](lazy-cell-materialization.md)
       through flag removal**, including the handler path it lists as
       deliberately deferred.
 - [ ] **D2. Re-run the Track A baseline after each stage of it lands**, so the

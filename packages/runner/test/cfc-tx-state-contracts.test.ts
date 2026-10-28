@@ -234,6 +234,70 @@ describe("CFC tx state contracts", () => {
     expect(backing.nested.flag).toBe(true);
   });
 
+  it("the read-only view of a Map exposes its read surface and nothing that reaches the backing map", () => {
+    // `Object.prototype.valueOf` returns its receiver and `__defineGetter__`
+    // installs a getter whose `this` is the receiver, so either one bound to
+    // the backing map hands it out writable. And a Map proxy with no
+    // `preventExtensions` trap lets `Object.freeze(view)` freeze the backing
+    // map, which a frozen-value shortcut then returns raw, its entries still
+    // writable.
+    const backing = new Map<string, string[]>([["a", ["b"]]]);
+    const view = readOnlyCfcView(backing);
+    expect(view.size).toBe(1);
+    expect(view.has("a")).toBe(true);
+    expect([...view.keys()]).toEqual(["a"]);
+    expect(String(view)).toBe("[object Map]");
+    expect(view).toBeInstanceOf(Map);
+    const unwrapped = view.valueOf() as Map<string, string[]>;
+    expect(unwrapped).toBe(view);
+    expect(() => unwrapped.set("c", ["d"])).toThrow("read-only");
+    expect(
+      (view as unknown as { __defineGetter__?: unknown }).__defineGetter__,
+    ).toBeUndefined();
+    expect(() => Object.freeze(view)).toThrow("read-only");
+    expect(Object.isFrozen(backing)).toBe(false);
+    expect(readOnlyCfcView(backing)).toBe(view);
+    const frozen = Object.freeze(new Map<string, string[]>([["a", ["b"]]]));
+    expect(() => readOnlyCfcView(frozen).set("c", ["d"])).toThrow("read-only");
+    expect(backing.size).toBe(1);
+    expect(frozen.size).toBe(1);
+  });
+
+  it("the read-only view of a Map reads through the intrinsics captured at load, not `Map.prototype` as it stands", () => {
+    // A `Map.prototype` member replaced to return its receiver would, called
+    // on the backing map, answer `keys()`, `forEach()`, and `size` with that
+    // map. The view calls the intrinsics it captured when its module loaded.
+    const backing = new Map<string, string[]>([["a", ["b"]]]);
+    const view = readOnlyCfcView(backing);
+    const saved = {
+      keys: Map.prototype.keys,
+      forEach: Map.prototype.forEach,
+      size: Object.getOwnPropertyDescriptor(Map.prototype, "size")!,
+    };
+    const receiver = function (this: unknown) {
+      return this;
+    };
+    try {
+      Map.prototype.keys = receiver as typeof Map.prototype.keys;
+      Map.prototype.forEach = receiver as typeof Map.prototype.forEach;
+      Object.defineProperty(Map.prototype, "size", {
+        get: receiver,
+        configurable: true,
+      });
+
+      expect([...view.keys()]).toEqual(["a"]);
+      expect(view.size).toBe(1);
+      let visited = 0;
+      expect(view.forEach(() => visited++)).toBeUndefined();
+      expect(visited).toBe(1);
+      expect(view.constructor).toBeUndefined();
+    } finally {
+      Map.prototype.keys = saved.keys;
+      Map.prototype.forEach = saved.forEach;
+      Object.defineProperty(Map.prototype, "size", saved.size);
+    }
+  });
+
   it("noteCfcSinkReleaseReject lands in diagnostics", async () => {
     await withTx(async (_runtime, tx) => {
       tx.noteCfcSinkReleaseReject({

@@ -49,6 +49,20 @@ const noteSchema = (
 ): JSONSchema => ({ type: "string", ...extra, ifc } as JSONSchema);
 
 /**
+ * profile-home's field shape: `owner` bound by the first write, a claim
+ * representing them, and one declared writer.
+ */
+const ownedSchema = (
+  owner: unknown = CURRENT_PRINCIPAL,
+  extra: Record<string, unknown> = {},
+): JSONSchema =>
+  noteSchema({
+    ownerPrincipal: owner,
+    addIntegrity: [{ kind: "represents-principal", subject: owner }],
+    writeAuthorizedBy: WRITER,
+  }, extra);
+
+/**
  * A pattern whose `post` handler is the declared writer of every note it
  * appends, with no gesture, and whose `relay` reaches `post` with a
  * `send()`. `seen` records what `principalOf()` returns for the first note.
@@ -98,8 +112,15 @@ const NOTES_PATTERN = [
   "});",
 ].join("\n");
 
-/** Every `authored-by` subject the stored label of `cell`'s document names. */
-const authoredBy = (runtime: Runtime, cell: Cell<unknown>): string[] => {
+/**
+ * Every subject of a `kind` claim the stored label of `cell`'s document
+ * names.
+ */
+const claimSubjects = (
+  runtime: Runtime,
+  cell: Cell<unknown>,
+  kind: string,
+): string[] => {
   const inspect = runtime.edit();
   try {
     const stored = readStoredCfcMetadata(
@@ -110,7 +131,7 @@ const authoredBy = (runtime: Runtime, cell: Cell<unknown>): string[] => {
       .flatMap((entry) => entry.label.integrity ?? [])
       .flatMap((atom) => {
         const claim = atom as { kind?: unknown; subject?: unknown };
-        return claim.kind === "authored-by" ? [claim.subject] : [];
+        return claim.kind === kind ? [claim.subject] : [];
       })
       .map(String)
       .sort();
@@ -118,6 +139,14 @@ const authoredBy = (runtime: Runtime, cell: Cell<unknown>): string[] => {
     inspect.abort();
   }
 };
+
+/** Every `authored-by` subject the stored label of `cell`'s document names. */
+const authoredBy = (runtime: Runtime, cell: Cell<unknown>): string[] =>
+  claimSubjects(runtime, cell, "authored-by");
+
+/** Every principal the stored label of `cell`'s document says it represents. */
+const representedBy = (runtime: Runtime, cell: Cell<unknown>): string[] =>
+  claimSubjects(runtime, cell, "represents-principal");
 
 describe("authored-by-writer", () => {
   let client: Runtime;
@@ -214,6 +243,48 @@ describe("authored-by-writer", () => {
       ...(actor !== undefined ? { acting: { user: actor.did() } } : {}),
     });
   };
+
+  /**
+   * Initializes the document `cause` names in `serving`'s own space with
+   * `schema`'s default, in the run `setup` stamps (a served run with no actor
+   * unless given), as the run's own act (`attributed`) or on nobody's behalf.
+   * Returns the commit's error, if any, and the cell.
+   */
+  const initialize = async (
+    cause: string,
+    schema: JSONSchema,
+    attributed: boolean,
+    setup: (tx: IExtendedStorageTransaction) => void = servedRun(),
+  ): Promise<{ error?: string; cell: Cell<unknown> }> => {
+    const tx = serving.edit();
+    setup(tx);
+    if (attributed) {
+      tx.markCfcAttributedInitialization(runtimeWritePolicyAuthorization);
+    }
+    const space = serving.userIdentityDID;
+    const cell = serving.getCell(space, cause, schema, tx);
+    serving.getCell(space, `${cause}-holder`, undefined, tx).set({ cell });
+    serving.prepareTxForCommit(tx);
+    const { error } = await tx.commit().settled;
+    return { error: error?.message, cell };
+  };
+
+  /**
+   * Stamps `tx` as one of the serving loop's own runs, which acts for no one,
+   * carrying the trust snapshot of `principal`, as the space-root ensure
+   * carries the owner it resolves.
+   */
+  const bookkeepingRunFor =
+    (principal: Identity) => (tx: IExtendedStorageTransaction) => {
+      stampWaveRunContext(tx, {
+        actionId: "space-root-ensure/authored-by-writer",
+        kind: "bookkeeping",
+      });
+      setCfcTrustSnapshot(
+        tx,
+        serving.trustSnapshotForPrincipal(principal.did()),
+      );
+    };
 
   describe("a position whose writer declares no gesture", () => {
     it("labels the declared writer's write `authored-by` the runtime's own user on a client", async () => {
@@ -343,6 +414,130 @@ describe("authored-by-writer", () => {
       );
       inspect.abort();
       expect(authoredBy(serving, seed)).toEqual([]);
+    });
+
+    describe("at a position that declares an `ownerPrincipal`", () => {
+      it("refuses the declared writer's write to a field with no owner, and leaves it for a user to claim", async () => {
+        const refused = await write(serving, "unowned-field", ownedSchema(), {
+          setup: servedRun(),
+        });
+        expect(refused.error).toContain(
+          "ownerPrincipal requires the run's actor",
+        );
+        expect(representedBy(serving, refused.cell)).toEqual([]);
+
+        const claimed = await write(serving, "unowned-field", ownedSchema(), {
+          setup: servedRun(alice),
+        });
+        expect(claimed.error).toBeUndefined();
+        expect(representedBy(serving, claimed.cell)).toEqual([alice.did()]);
+      });
+
+      it("refuses the declared writer's write to a field a user owns", async () => {
+        const owned = await write(serving, "owned-field", ownedSchema(), {
+          setup: servedRun(alice),
+        });
+        expect(owned.error).toBeUndefined();
+
+        const { error } = await write(serving, "owned-field", ownedSchema(), {
+          setup: servedRun(),
+        });
+        expect(error).toContain("ownerPrincipal requires the run's actor");
+        expect(representedBy(serving, owned.cell)).toEqual([alice.did()]);
+      });
+
+      it("refuses a value it initializes in a handler run", async () => {
+        const { error, cell } = await initialize(
+          "attributed-owned-seed",
+          ownedSchema(CURRENT_PRINCIPAL, { default: "a default" }),
+          true,
+        );
+        expect(error).toContain("ownerPrincipal requires the run's actor");
+        expect(representedBy(serving, cell)).toEqual([]);
+      });
+
+      it("admits a value it initializes on nobody's behalf, binding no owner", async () => {
+        const { error, cell } = await initialize(
+          "unattributed-owned-seed",
+          ownedSchema(CURRENT_PRINCIPAL, { default: "a default" }),
+          false,
+        );
+        expect(error).toBeUndefined();
+        expect(representedBy(serving, cell)).toEqual([]);
+      });
+
+      it("refuses a value it initializes on nobody's behalf under a literal owner that names the serving runtime", async () => {
+        const { error } = await initialize(
+          "literal-owned-seed",
+          ownedSchema(service.did(), { default: "a default" }),
+          false,
+        );
+        expect(error).toContain("ownerPrincipal requires the run's actor");
+      });
+    });
+  });
+
+  describe("a serving-loop run under a principal's trust snapshot", () => {
+    it("labels a value it initializes as its own act `authored-by` that principal", async () => {
+      const { error, cell } = await initialize(
+        "bookkeeping-note",
+        noteSchema(undefined, { default: "a default" }),
+        true,
+        bookkeepingRunFor(alice),
+      );
+      expect(error).toBeUndefined();
+      expect(authoredBy(serving, cell)).toEqual([alice.did()]);
+    });
+
+    it("binds that principal as the owner of a field it initializes as its own act", async () => {
+      const { error, cell } = await initialize(
+        "bookkeeping-owned-seed",
+        ownedSchema(CURRENT_PRINCIPAL, { default: "a default" }),
+        true,
+        bookkeepingRunFor(alice),
+      );
+      expect(error).toBeUndefined();
+      expect(representedBy(serving, cell)).toEqual([alice.did()]);
+    });
+  });
+
+  describe("a demanded derivation with no actor, under its demander's trust snapshot", () => {
+    // The serving loop attaches the demander's snapshot to a derivation it
+    // runs for a demanded instance, before the seal settles whether the run
+    // acts for anyone; the snapshot alone does not make it act for them.
+
+    /** Stamps `tx` as such a derivation, demanded by `alice`. */
+    const demandedDerivation = (tx: IExtendedStorageTransaction) => {
+      stampWaveRunContext(tx, {
+        actionId: "derivation/authored-by-writer",
+        kind: "derivation",
+        attributionFromScope: true,
+      });
+      setCfcTrustSnapshot(tx, serving.trustSnapshotForPrincipal(alice.did()));
+    };
+
+    it("refuses the declared writer's write", async () => {
+      const { error, cell } = await write(
+        serving,
+        "derivation-note",
+        noteSchema(),
+        { setup: demandedDerivation },
+      );
+      expect(error).toContain(
+        "current-principal integrity requires the run's actor",
+      );
+      expect(authoredBy(serving, cell)).toEqual([]);
+    });
+
+    it("refuses the declared writer's write to a field with no owner", async () => {
+      const { error, cell } = await write(
+        serving,
+        "derivation-owned-field",
+        ownedSchema(),
+        { setup: demandedDerivation },
+      );
+      expect(error).toContain("ownerPrincipal requires the run's actor");
+      expect(representedBy(serving, cell)).toEqual([]);
     });
   });
 

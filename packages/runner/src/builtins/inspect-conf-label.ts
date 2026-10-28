@@ -1,5 +1,6 @@
 import { type Cell, isCell } from "../cell.ts";
 import { type Action } from "../scheduler.ts";
+import { type RawBuiltinResult } from "../module.ts";
 import { type Runtime } from "../runtime.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import {
@@ -8,7 +9,7 @@ import {
   type InspectConfLabelResult,
   inspectStoredConfLabel,
 } from "../cfc/label-introspection.ts";
-import { ownedCell } from "./runtime-owned-store.ts";
+import { ownedCell, ownedStoreLinks } from "./runtime-owned-store.ts";
 import { resolvedCellScope } from "./scope-policy.ts";
 
 // Inv-12 Stage 2 (spec §4.6.4.1; docs/specs/cfc-label-metadata-confidentiality
@@ -62,8 +63,13 @@ export function inspectConfLabel(
   cause: Cell<unknown>[],
   parentCell: Cell<unknown>,
   runtime: Runtime,
-): Action {
-  return (tx: IExtendedStorageTransaction) => {
+): RawBuiltinResult {
+  // The stores this node keeps, each keyed by its cause alone, so the
+  // action declares them when it is set up.
+  const stores = {
+    result: { inspectConfLabel: cause },
+  };
+  const action: Action = (tx: IExtendedStorageTransaction) => {
     const inputsWithTx = inputsCell.withTx(tx);
     // Scope the result to the resolved TARGET slot's scope (the `when`
     // idiom): metadata about a session-scoped target stays session-scoped.
@@ -76,7 +82,7 @@ export function inspectConfLabel(
       runtime,
       tx,
       parentCell,
-      { inspectConfLabel: cause },
+      stores.result,
       undefined,
       resultScope,
     );
@@ -112,5 +118,9 @@ export function inspectConfLabel(
     // non-JSON-safe `FabricValue` a stored atom might carry, breaking the
     // stored-form-verbatim promise (codex/cubic P2 on the Stage 2 PR).
     result.withTx(tx).set(outcome);
+  };
+  return {
+    action,
+    storeWrites: ownedStoreLinks(runtime, parentCell, Object.values(stores)),
   };
 }

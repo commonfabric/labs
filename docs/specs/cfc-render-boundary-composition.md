@@ -52,24 +52,32 @@ each slot holding a link the read followed, which a dereference retains
   is decided on that document's label as well as the table's. A view a child
   reaches through a link, as a pattern's output does through `[UI]`, is part
   of the child's read, so a refused view renders as the placeholder.
-- A property whose value is read through a link, or is an object, is read by a
-  sink of its own and decided on that read. A property the ceiling refuses is
-  not set, and is removed if it was. That covers a cell passed as a property
-  (`<span title={cell}>`) and, in a view read from a cell, as a pattern's view
-  is, a property that links to one and an object or `style` property holding
-  such a link. A literal property is decided with the props object it sits in:
-  it is set directly while the ceiling admits that object's own label, and
-  read by a sink of its own, like the others, while it does not, as when the
-  view or its props are linked from a document of their own. An object written
-  inline in a view built outside a cell sends a cell it holds as a link, not as
-  the cell's value.
+- A property whose value is read through a link, or is an object the view's
+  schema does not state, is read by a sink of its own and decided on that
+  read. A property the ceiling refuses is not set, and is removed if it was.
+  That covers a cell passed as a property (`<span title={cell}>`) and, in a
+  view read from a cell, as a pattern's view is, a property that links to one
+  and an object or `style` property holding such a link. A literal property,
+  a `style` object holding no link among them, is decided with the props
+  object it sits in: it is set directly while the ceiling admits that object's
+  own label, and read by a sink of its own, like the others, while it does
+  not, as when the view or its props are linked from a document of their own.
+  An object written inline in a view built outside a cell sends a cell it
+  holds as a link, not as the cell's value.
 - A `$` binding is made only while the ceiling admits the worker's read of
   the bound cell, under the cell's schema; a nested render root is decided on
   the reads its component makes instead, as the nested-render paragraphs
   below describe. The worker keeps reading the bound cell and removes the
   binding when a write leaves that read consuming a label the ceiling
   refuses, or while the read cannot complete, as when a space it reads is out
-  of reach: a read that cannot complete is never taken for an empty one. The
+  of reach: a read that cannot complete is never taken for an empty one. While
+  a `cf-render` or `cf-picker` binding is withheld because the space of the
+  read refusing it is out of reach, the element holds the access placeholder
+  (`data-space-access-lost`) as its child, the one a cell child of an out of
+  reach space renders as, and the component shows its children while it holds
+  no value for the binding. The placeholder carries nothing read from the
+  space, and goes once the read completes and decides the binding again. A
+  binding withheld for any other reason leaves the element empty. The
   binding hands the host a live
   handle, and the worker answers the host's reads through it without the
   ceiling: a read that follows a link the worker's read did not, and the
@@ -92,7 +100,9 @@ Regression guards: `test/worker-reconciler-cfc-prop-ceiling.test.ts`.
 
 `cf-render` shows what its `cell` binding names only through renders of its
 own, each mounted from the cell's reference under the root ceiling, the way the
-shell mounts a piece opened by its address. What reaches the page through it
+shell mounts a piece opened by its address. A render that displays the piece
+opens it the way navigating to it does (`getPiece` with `runIt`); running it
+adds values to render and changes no gate. What reaches the page through it
 passes the same confidentiality gates as opening the piece, the blocked
 placeholder included, with the exceptions listed below. Such a binding is a
 nested render root. The component read contract
@@ -152,7 +162,9 @@ The exceptions hold for every reference a nested render root decides:
   only where the read consumed no stored label. A `cf-render` or `cf-picker`
   whose binding is withheld shows nothing, and a `cf-map` whose binding is
   withheld shows no value, where opening a refused piece shows the
-  placeholder.
+  placeholder. A `cf-render` or `cf-picker` whose binding is withheld because
+  a space its read reaches is out of reach shows the access placeholder
+  instead, as the `$` binding item above says.
 - A nested render applies the root ceiling, and none of the declassification
   or text-integrity requirement of a boundary around the component. A
   boundary that only declassifies admits more than the root, so there the

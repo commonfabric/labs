@@ -4,18 +4,31 @@ import type {
   HarnessSubagentProfile,
 } from "../contracts/subagent.ts";
 import {
+  DEFAULT_SUBAGENT_PROFILE,
   HARNESS_SUBAGENT_PROFILES,
   MAX_DELEGATE_PATTERN_REF_NOTE_LENGTH,
   MAX_DELEGATE_PATTERN_REFS,
+  PATTERN_AUTHOR_SUBAGENT_PROFILE,
 } from "../contracts/subagent.ts";
+import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import type { HarnessToolDefinition } from "./types.ts";
 import { createUnimplementedToolError } from "./types.ts";
 
-export const delegateTaskTool: HarnessToolDefinition<
-  DelegateTaskToolInput,
-  DelegateTaskToolOutput
-> = {
-  descriptor: {
+const PROFILE_DESCRIPTION =
+  "Subagent profile; the default profile when omitted.";
+
+const PATTERN_AUTHOR_DESCRIPTION =
+  '"pattern-author" writes, runs or revises a pattern and returns a reference to its result, never source.';
+
+/**
+ * The delegate_task descriptor offering `profiles`, in their usual order, and
+ * naming pattern-author only when it is among them.
+ */
+const delegateTaskDescriptor = (
+  profiles: readonly HarnessSubagentProfile[],
+): HarnessToolDescriptor => {
+  const authors = profiles.includes(PATTERN_AUTHOR_SUBAGENT_PROFILE);
+  return {
     toolId: "delegate_task",
     title: "Delegate Task",
     description:
@@ -24,25 +37,30 @@ export const delegateTaskTool: HarnessToolDefinition<
     inputSchema: {
       type: "object",
       additionalProperties: false,
-      required: ["goal"],
+      // An omitted profile is the default one, so a run that may not use it
+      // must name the profile it delegates to.
+      required: profiles.includes(DEFAULT_SUBAGENT_PROFILE)
+        ? ["goal"]
+        : ["goal", "profile"],
       properties: {
         goal: {
           type: "string",
           description:
-            'Specific task for the child run. Include all context the child needs; it will not see the parent transcript. Keep a "pattern-author" delegation focused on one buildable piece so its compile/fix loop fits the child turn budget. Name the words the capability should be findable under, so a later delegation can search the pattern index for the same component instead of asking for it again.',
+            "The child's task, with all the context it needs: it does not see this transcript.",
         },
         profile: {
           type: "string",
-          enum: [
-            ...HARNESS_SUBAGENT_PROFILES,
-          ] satisfies HarnessSubagentProfile[],
-          description:
-            "Named subagent profile to spawn. Defaults to the harness default profile. Authoring or running a Common Fabric pattern goes through \"pattern-author\": when the configured skill registry carries the pattern skills, this profile preloads them; the default profile does not. A \"pattern-author\" child runs what it wrote and answers with a reference to the result cell, never with source: you get something to assign_slug or wire into a run_pattern input, and you never compile anything yourself. It is also the only way to CHANGE a piece that already exists: hand it the piece's handle and say what should be different, and it reads that piece's current source and revises it in place, keeping the data. You cannot do that yourself — the tools that read and replace a piece's source are on that child's surface and on no parent's.",
+          enum: HARNESS_SUBAGENT_PROFILES.filter((profile) =>
+            profiles.includes(profile)
+          ),
+          description: authors
+            ? `${PROFILE_DESCRIPTION} ${PATTERN_AUTHOR_DESCRIPTION}`
+            : PROFILE_DESCRIPTION,
         },
         context: {
           type: "string",
           description:
-            "Optional supporting context, paths, constraints, or expected output for the child run.",
+            "Supporting context, paths, constraints, or expected output.",
         },
         patternRefs: {
           type: "array",
@@ -54,27 +72,26 @@ export const delegateTaskTool: HarnessToolDefinition<
                 type: "string",
                 minLength: 1,
                 description:
-                  "Pattern id exactly as this parent received it from search_patterns or host-confirmed research.",
+                  "As search_patterns or host-confirmed research gave it.",
               },
               note: {
                 type: "string",
                 maxLength: MAX_DELEGATE_PATTERN_REF_NOTE_LENGTH,
-                description:
-                  "Optional parent-authored context for this pattern selection. It reaches the child verbatim.",
+                description: "Your note on this pattern, passed verbatim.",
               },
             },
             required: ["patternId"],
             additionalProperties: false,
           },
           description:
-            "Optional published patterns selected from this parent's earlier search_patterns results or host-confirmed research. The harness attaches their trusted metadata to the child; supply ids and optional notes only.",
+            "Published patterns to attach, with their trusted metadata.",
         },
         maxModelTurns: {
           type: "integer",
           minimum: 1,
           maximum: 64,
           description:
-            "Optional child model-turn cap. Defaults to the harness subagent cap.",
+            "Child model-turn cap; the harness subagent cap when omitted.",
         },
         returnSchema: {
           anyOf: [
@@ -82,22 +99,38 @@ export const delegateTaskTool: HarnessToolDefinition<
             { type: "object", additionalProperties: true },
           ],
           description:
-            'Optional JSON Schema for a structured child return. When provided, the child must return only JSON matching this schema; open-ended strings are linkified before the parent sees them. Some profiles declare their own return contract and refuse a schema here — "pattern-author" is one — because the shape of what they hand back is the point of the profile.',
+            "JSON Schema the child's whole return must match; open-ended strings are linkified before you see them.",
         },
         skillHandle: {
           type: "string",
           description:
-            "Optional handle (cfh:a:… token) naming a cell whose string value is skill text for the child. The text is materialized on the trusted host side and injected into the child's context; this run never sees it. A delegation that failed does not carry its handle forward: re-issuing it means passing the same token again.",
+            "A cfh:a: handle to a cell of skill text, injected into the child's context unseen by this run.",
         },
         withoutSkillHandle: {
           type: "boolean",
-          description:
-            "States that this delegation deliberately runs with no acquired skill. Required only after a delegation carrying a skillHandle failed, where omitting both fields is refused: the harness cannot tell a considered choice from a dropped one, and the child's work would carry no record either way. It attaches nothing and permits nothing.",
+          description: "Declares this delegation runs with no skill.",
         },
       },
     },
     tags: ["subagent", "orchestration"],
-  },
+  };
+};
+
+const delegateTaskDescriptorAll = delegateTaskDescriptor(
+  HARNESS_SUBAGENT_PROFILES,
+);
+
+export const delegateTaskTool: HarnessToolDefinition<
+  DelegateTaskToolInput,
+  DelegateTaskToolOutput
+> = {
+  descriptor: delegateTaskDescriptorAll,
+  // A run with no profile to offer keeps the full list rather than an empty
+  // enum; the prompt loop refuses whatever it names.
+  descriptorForRuntime: (_runtime, run) =>
+    run.subagentProfiles === undefined || run.subagentProfiles.length === 0
+      ? delegateTaskDescriptorAll
+      : delegateTaskDescriptor(run.subagentProfiles),
   invoke() {
     throw createUnimplementedToolError(
       "delegate_task is orchestrated by the prompt loop",

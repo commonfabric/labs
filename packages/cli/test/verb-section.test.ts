@@ -465,7 +465,7 @@ describe("verb-section", () => {
 
     it("refuses a projection before the verb on `call`", async () => {
       const { text, exitCode } = await outputFrom(
-        pieceDataCommand("call", { spelling: "piece call" }),
+        pieceDataCommand("call"),
         [
           "--piece",
           "board",
@@ -502,7 +502,7 @@ describe("verb-section", () => {
       // what answers it once a verb is resolved, with that verb's vocabulary
       // in hand.
       const { text } = await outputFrom(
-        pieceDataCommand("call", { spelling: "piece call" }),
+        pieceDataCommand("call"),
         [
           "--piece",
           "board",
@@ -517,7 +517,7 @@ describe("verb-section", () => {
 
     it("refuses a verb's own flag past the marker on `call`", async () => {
       const { text } = await outputFrom(
-        pieceDataCommand("call", { spelling: "piece call" }),
+        pieceDataCommand("call"),
         [
           "--piece",
           "board",
@@ -537,7 +537,7 @@ describe("verb-section", () => {
       // It must reach the action, so the refusal it meets is about the
       // identity it never named rather than about the grammar.
       const { text } = await outputFrom(
-        pieceDataCommand("call", { spelling: "piece call" }),
+        pieceDataCommand("call"),
         [
           "--piece",
           "board",
@@ -557,7 +557,7 @@ describe("verb-section", () => {
       // from where they land or it silently stops firing — and a detached
       // exit would return an unprojected value.
       const { text } = await outputFrom(
-        pieceDataCommand("call", { spelling: "piece call" }),
+        pieceDataCommand("call"),
         [
           "--piece",
           "board",
@@ -574,7 +574,7 @@ describe("verb-section", () => {
 
     it("reports a malformed projection as a data error, not a grammar one", async () => {
       const { text } = await outputFrom(
-        pieceDataCommand("call", { spelling: "piece call" }),
+        pieceDataCommand("call"),
         [
           "--piece",
           "board",

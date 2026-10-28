@@ -1,0 +1,532 @@
+{
+  "runtime": {
+    "deno": "2.9.4",
+    "v8": "15.0.245.2-rusty",
+    "typescript": "6.0.3"
+  },
+  "host": {
+    "target": "aarch64-apple-darwin",
+    "arch": "aarch64",
+    "os": "darwin",
+    "vendor": "apple",
+    "standalone": false
+  },
+  "results": [
+    {
+      "size": 100,
+      "schemaShape": "inline",
+      "mode": "fresh frozen",
+      "iterations": 1,
+      "legacyIdChars": 45487,
+      "nativeIdChars": 96,
+      "sharesMeasuredInput": [
+        false
+      ],
+      "legacyMedianMs": 14.40941600000042,
+      "nativeMedianMs": 112.8890420000007,
+      "samples": [
+        {
+          "legacyMs": 69.30462500000067,
+          "nativeMs": 38.879792000001544
+        },
+        {
+          "legacyMs": 9.15008300000045,
+          "nativeMs": 162.14183299999968
+        },
+        {
+          "legacyMs": 101.76258300000154,
+          "nativeMs": 272.0677919999998
+        },
+        {
+          "legacyMs": 1.842624999999316,
+          "nativeMs": 24.76800000000003
+        },
+        {
+          "legacyMs": 14.40941600000042,
+          "nativeMs": 190.01916600000004
+        },
+        {
+          "legacyMs": 9.34020799999962,
+          "nativeMs": 29.077832999999373
+        },
+        {
+          "legacyMs": 38.34416699999929,
+          "nativeMs": 112.8890420000007
+        }
+      ]
+    },
+    {
+      "size": 100,
+      "schemaShape": "inline",
+      "mode": "fresh mutable",
+      "iterations": 1,
+      "legacyIdChars": 45487,
+      "nativeIdChars": 96,
+      "sharesMeasuredInput": [
+        false
+      ],
+      "legacyMedianMs": 350.68224999999984,
+      "nativeMedianMs": 220.3779169999998,
+      "samples": [
+        {
+          "legacyMs": 368.8294589999987,
+          "nativeMs": 220.3779169999998
+        },
+        {
+          "legacyMs": 311.90687499999876,
+          "nativeMs": 440.4036669999987
+        },
+        {
+          "legacyMs": 350.68224999999984,
+          "nativeMs": 441.04854200000045
+        },
+        {
+          "legacyMs": 149.36691599999904,
+          "nativeMs": 115.57445800000096
+        },
+        {
+          "legacyMs": 86.08379199999945,
+          "nativeMs": 664.2415000000001
+        },
+        {
+          "legacyMs": 491.2704589999994,
+          "nativeMs": 136.07629199999974
+        },
+        {
+          "legacyMs": 459.75204100000155,
+          "nativeMs": 122.23829199999818
+        }
+      ]
+    },
+    {
+      "size": 100,
+      "schemaShape": "inline",
+      "mode": "reused frozen",
+      "iterations": 10,
+      "legacyIdChars": 45487,
+      "nativeIdChars": 96,
+      "sharesMeasuredInput": [
+        true
+      ],
+      "legacyMedianMs": 5.589279200000237,
+      "nativeMedianMs": 0.0029083000001264734,
+      "samples": [
+        {
+          "legacyMs": 1.0200582999998005,
+          "nativeMs": 0.0034374999999272405
+        },
+        {
+          "legacyMs": 6.185191599999962,
+          "nativeMs": 0.0011916999999812105
+        },
+        {
+          "legacyMs": 0.6400792000000365,
+          "nativeMs": 0.0029083000001264734
+        },
+        {
+          "legacyMs": 2.474725000000035,
+          "nativeMs": 0.0009916999999404652
+        },
+        {
+          "legacyMs": 47.58060829999995,
+          "nativeMs": 0.007541700000001583
+        },
+        {
+          "legacyMs": 15.450400000000082,
+          "nativeMs": 0.0013209000000642846
+        },
+        {
+          "legacyMs": 5.589279200000237,
+          "nativeMs": 0.28805840000022725
+        }
+      ]
+    },
+    {
+      "size": 1000,
+      "schemaShape": "inline",
+      "mode": "fresh frozen",
+      "iterations": 1,
+      "legacyIdChars": 458287,
+      "nativeIdChars": 96,
+      "sharesMeasuredInput": [
+        false
+      ],
+      "legacyMedianMs": 127.93916600000011,
+      "nativeMedianMs": 487.16720799999894,
+      "samples": [
+        {
+          "legacyMs": 56.608500000002095,
+          "nativeMs": 459.5732500000013
+        },
+        {
+          "legacyMs": 309.53158399999666,
+          "nativeMs": 487.16720799999894
+        },
+        {
+          "legacyMs": 37.699790999999095,
+          "nativeMs": 64.11041699999987
+        },
+        {
+          "legacyMs": 164.69758300000103,
+          "nativeMs": 844.6012919999994
+        },
+        {
+          "legacyMs": 148.87566700000025,
+          "nativeMs": 357.1267090000001
+        },
+        {
+          "legacyMs": 26.85870799999975,
+          "nativeMs": 525.4089999999997
+        },
+        {
+          "legacyMs": 127.93916600000011,
+          "nativeMs": 561.0248339999998
+        }
+      ]
+    },
+    {
+      "size": 1000,
+      "schemaShape": "inline",
+      "mode": "fresh mutable",
+      "iterations": 1,
+      "legacyIdChars": 458287,
+      "nativeIdChars": 96,
+      "sharesMeasuredInput": [
+        false
+      ],
+      "legacyMedianMs": 1770.411457999995,
+      "nativeMedianMs": 1704.598874999996,
+      "samples": [
+        {
+          "legacyMs": 1103.5662090000042,
+          "nativeMs": 1929.0082079999993
+        },
+        {
+          "legacyMs": 1344.6575420000008,
+          "nativeMs": 2189.1991659999985
+        },
+        {
+          "legacyMs": 1770.411457999995,
+          "nativeMs": 1470.5720419999998
+        },
+        {
+          "legacyMs": 3596.444125000002,
+          "nativeMs": 1514.672166999997
+        },
+        {
+          "legacyMs": 2257.7112080000006,
+          "nativeMs": 2061.5622499999954
+        },
+        {
+          "legacyMs": 1014.7131670000017,
+          "nativeMs": 1522.1604169999991
+        },
+        {
+          "legacyMs": 2555.926249999997,
+          "nativeMs": 1704.598874999996
+        }
+      ]
+    },
+    {
+      "size": 1000,
+      "schemaShape": "inline",
+      "mode": "reused frozen",
+      "iterations": 10,
+      "legacyIdChars": 458287,
+      "nativeIdChars": 96,
+      "sharesMeasuredInput": [
+        true
+      ],
+      "legacyMedianMs": 116.76109580000048,
+      "nativeMedianMs": 0.004508400001213886,
+      "samples": [
+        {
+          "legacyMs": 109.10426670000015,
+          "nativeMs": 0.004508400001213886
+        },
+        {
+          "legacyMs": 84.35903330000001,
+          "nativeMs": 0.001404200000979472
+        },
+        {
+          "legacyMs": 116.76109580000048,
+          "nativeMs": 0.00478750000038417
+        },
+        {
+          "legacyMs": 69.48794999999954,
+          "nativeMs": 0.0016250000000582077
+        },
+        {
+          "legacyMs": 126.35270840000013,
+          "nativeMs": 0.005258299999695737
+        },
+        {
+          "legacyMs": 129.23500000000058,
+          "nativeMs": 0.0012499999997089618
+        },
+        {
+          "legacyMs": 120.77756249999948,
+          "nativeMs": 0.004558299999916926
+        }
+      ]
+    },
+    {
+      "size": 100,
+      "schemaShape": "reference",
+      "mode": "fresh frozen",
+      "iterations": 1,
+      "legacyIdChars": 45487,
+      "nativeIdChars": 96,
+      "sharesMeasuredInput": [
+        false
+      ],
+      "legacyMedianMs": 4.224375000005239,
+      "nativeMedianMs": 6.646374999996624,
+      "samples": [
+        {
+          "legacyMs": 1.2342499999940628,
+          "nativeMs": 1.4227499999979045
+        },
+        {
+          "legacyMs": 4.122541000004276,
+          "nativeMs": 37.31120799999917
+        },
+        {
+          "legacyMs": 49.806082999988575,
+          "nativeMs": 6.646374999996624
+        },
+        {
+          "legacyMs": 4.224375000005239,
+          "nativeMs": 1.3959590000013122
+        },
+        {
+          "legacyMs": 60.318791999990935,
+          "nativeMs": 12.437332999994396
+        },
+        {
+          "legacyMs": 1.2063749999942956,
+          "nativeMs": 135.6151669999963
+        },
+        {
+          "legacyMs": 64.01954199999454,
+          "nativeMs": 1.5887500000098953
+        }
+      ]
+    },
+    {
+      "size": 100,
+      "schemaShape": "reference",
+      "mode": "fresh mutable",
+      "iterations": 1,
+      "legacyIdChars": 45487,
+      "nativeIdChars": 96,
+      "sharesMeasuredInput": [
+        false
+      ],
+      "legacyMedianMs": 7.086332999999286,
+      "nativeMedianMs": 8.898583000001963,
+      "samples": [
+        {
+          "legacyMs": 34.66358300000138,
+          "nativeMs": 2.2947500000009313
+        },
+        {
+          "legacyMs": 29.423666999995476,
+          "nativeMs": 70.13595799999894
+        },
+        {
+          "legacyMs": 4.163708000007318,
+          "nativeMs": 2.178583000000799
+        },
+        {
+          "legacyMs": 7.086332999999286,
+          "nativeMs": 40.26212499999383
+        },
+        {
+          "legacyMs": 1.9500410000036936,
+          "nativeMs": 71.47520799998892
+        },
+        {
+          "legacyMs": 20.83270800000173,
+          "nativeMs": 8.898583000001963
+        },
+        {
+          "legacyMs": 1.8499580000061542,
+          "nativeMs": 2.2562920000054874
+        }
+      ]
+    },
+    {
+      "size": 100,
+      "schemaShape": "reference",
+      "mode": "reused frozen",
+      "iterations": 10,
+      "legacyIdChars": 45487,
+      "nativeIdChars": 96,
+      "sharesMeasuredInput": [
+        true
+      ],
+      "legacyMedianMs": 8.858112500001152,
+      "nativeMedianMs": 0.003554200001235586,
+      "samples": [
+        {
+          "legacyMs": 3.62744160000002,
+          "nativeMs": 0.0036041999992448837
+        },
+        {
+          "legacyMs": 8.858112500001152,
+          "nativeMs": 0.0015749999991385266
+        },
+        {
+          "legacyMs": 3.756424999999581,
+          "nativeMs": 0.004170899999735411
+        },
+        {
+          "legacyMs": 27.668658400001004,
+          "nativeMs": 0.0012624999988474883
+        },
+        {
+          "legacyMs": 11.063312500000757,
+          "nativeMs": 0.003554200001235586
+        },
+        {
+          "legacyMs": 16.916883300000336,
+          "nativeMs": 0.0015459000002010725
+        },
+        {
+          "legacyMs": 2.0573749999995927,
+          "nativeMs": 0.00413330000010319
+        }
+      ]
+    },
+    {
+      "size": 1000,
+      "schemaShape": "reference",
+      "mode": "fresh frozen",
+      "iterations": 1,
+      "legacyIdChars": 458287,
+      "nativeIdChars": 96,
+      "sharesMeasuredInput": [
+        false
+      ],
+      "legacyMedianMs": 119.24008299999696,
+      "nativeMedianMs": 105.57829099999799,
+      "samples": [
+        {
+          "legacyMs": 135.32170800000313,
+          "nativeMs": 105.57829099999799
+        },
+        {
+          "legacyMs": 95.19408299999486,
+          "nativeMs": 70.27970800000185
+        },
+        {
+          "legacyMs": 45.266875000001164,
+          "nativeMs": 162.2562920000055
+        },
+        {
+          "legacyMs": 119.24008299999696,
+          "nativeMs": 73.65795799999614
+        },
+        {
+          "legacyMs": 88.94741699998849,
+          "nativeMs": 32.6773749999993
+        },
+        {
+          "legacyMs": 153.9332080000022,
+          "nativeMs": 167.28854199999478
+        },
+        {
+          "legacyMs": 257.07312499999534,
+          "nativeMs": 119.20262499997625
+        }
+      ]
+    },
+    {
+      "size": 1000,
+      "schemaShape": "reference",
+      "mode": "fresh mutable",
+      "iterations": 1,
+      "legacyIdChars": 458287,
+      "nativeIdChars": 96,
+      "sharesMeasuredInput": [
+        false
+      ],
+      "legacyMedianMs": 122.80662499999744,
+      "nativeMedianMs": 644.3985410000023,
+      "samples": [
+        {
+          "legacyMs": 63.584165999986,
+          "nativeMs": 2977.405375000002
+        },
+        {
+          "legacyMs": 122.80662499999744,
+          "nativeMs": 333.26625000001513
+        },
+        {
+          "legacyMs": 413.845209000021,
+          "nativeMs": 644.3985410000023
+        },
+        {
+          "legacyMs": 494.0248749999737,
+          "nativeMs": 5057.854958000011
+        },
+        {
+          "legacyMs": 155.34587499999907,
+          "nativeMs": 622.2538329999952
+        },
+        {
+          "legacyMs": 22.921082999993814,
+          "nativeMs": 73.51812500000233
+        },
+        {
+          "legacyMs": 69.47474999999395,
+          "nativeMs": 1373.6663750000007
+        }
+      ]
+    },
+    {
+      "size": 1000,
+      "schemaShape": "reference",
+      "mode": "reused frozen",
+      "iterations": 10,
+      "legacyIdChars": 458287,
+      "nativeIdChars": 96,
+      "sharesMeasuredInput": [
+        true
+      ],
+      "legacyMedianMs": 71.51193750000093,
+      "nativeMedianMs": 0.004258299997309223,
+      "samples": [
+        {
+          "legacyMs": 111.87445000000007,
+          "nativeMs": 0.005012500000884756
+        },
+        {
+          "legacyMs": 94.7561916000006,
+          "nativeMs": 0.0015583000000333413
+        },
+        {
+          "legacyMs": 43.87597919999971,
+          "nativeMs": 0.006791700000758283
+        },
+        {
+          "legacyMs": 71.51193750000093,
+          "nativeMs": 0.0023374999989755453
+        },
+        {
+          "legacyMs": 109.87932499999879,
+          "nativeMs": 0.00493750000023283
+        },
+        {
+          "legacyMs": 65.0320584000001,
+          "nativeMs": 0.001445899999816902
+        },
+        {
+          "legacyMs": 57.67633339999884,
+          "nativeMs": 0.004258299997309223
+        }
+      ]
+    }
+  ]
+}

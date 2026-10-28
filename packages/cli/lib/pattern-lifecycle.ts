@@ -36,6 +36,16 @@ export interface PatternRef {
 }
 
 /**
+ * One step the serving side timed while answering a request: `phase` names
+ * it (`instantiate.queue`, `registration.delivery`), and `ms` is its elapsed
+ * time in milliseconds.
+ */
+export interface ServedPhaseTiming {
+  phase: string;
+  ms: number;
+}
+
+/**
  * A refusal the serving side answered with. `code` is the server's stable
  * name for it, and `status` the HTTP status it came on.
  */
@@ -164,6 +174,9 @@ export async function instantiatePieceOnServer(
     attempt?: number;
     terminal?: true;
   };
+
+  /** The steps the serving side timed; absent from a server that does not. */
+  timings?: ServedPhaseTiming[];
 }> {
   return await call(config, "instantiate", {
     space: input.space,

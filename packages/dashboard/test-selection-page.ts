@@ -30,6 +30,7 @@ import {
   sharedTestSelection,
 } from "./test-selection-history.ts";
 import {
+  corpusSeconds,
   FLAKE_EXCLUSION_FALLBACK,
   FLAKE_WINDOW_FALLBACK_DAYS,
   flakyCount,
@@ -38,8 +39,11 @@ import {
   type ManifestReader,
   numberDial,
   selectedCount,
+  selectedSeconds,
+  shareLabel,
 } from "./test-selection-manifest.ts";
 import { statusLayer } from "./theme.ts";
+import { humanDuration } from "./tile-render-values.ts";
 
 /** The fragment the flaky tests tile links to. */
 export const FLAKY_SECTION_ID = "flaky";
@@ -311,15 +315,24 @@ function healthLead(health: CalibrationHealth): string {
 
 /** The counts the two tiles headline, spelled out. */
 function summary(manifest: Manifest): string {
-  const selected = selectedCount(manifest);
-  const known = manifest.entries.length;
-  const share = known === 0 ? 0 : (selected / known) * 100;
+  const selected = selectedSeconds(manifest);
+  const corpus = corpusSeconds(manifest);
   const facts: Array<[string, string]> = [
-    ["selected", `${share.toFixed(0)}%`],
-    ["tests", `${groupDigits(selected)} of ${groupDigits(known)}`],
+    ["selected", shareLabel(selected, corpus)],
+    [
+      "test time",
+      `${humanDuration(selected * 1_000)} of ${
+        humanDuration(corpus * 1_000)
+      }`,
+    ],
+    [
+      "tests",
+      `${groupDigits(selectedCount(manifest))} of ${
+        groupDigits(manifest.entries.length)
+      }`,
+    ],
     ["lanes", String(manifest.lanes.length)],
     ["flaky", groupDigits(flakyCount(manifest))],
-    ["runs seen", groupDigits(manifest.runs)],
   ];
   return `<dl class="summary">${
     facts.map(([term, value]) =>

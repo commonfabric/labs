@@ -1,14 +1,29 @@
 import {
   action,
   assert,
+  type Cell,
+  equals,
   NAME,
   pattern,
+  type Stream,
   TESTS,
   UI,
   Writable,
 } from "commonfabric";
-import { findNodeByProp, hasText } from "../test/vnode-helpers.ts";
+import {
+  findElementByExactText,
+  findNode,
+  findNodeById,
+  findNodeByProp,
+  hasText,
+  propValue,
+} from "../test/vnode-helpers.ts";
 import Home from "./home.tsx";
+import PrivateInbox, {
+  type PrivateInboxPiece,
+  TRUSTED_PRIVATE_INBOX_REFUSAL_SURFACE,
+  TRUSTED_REPLACE_REFUSED_INBOX_ACTION,
+} from "./private-inbox.tsx";
 
 type SpaceEntry = { name: string; did?: string };
 
@@ -20,6 +35,63 @@ function entryFor(
   return (list ?? []).find((entry) => entry.did === did);
 }
 
+/** When the test's refusals were first recorded. */
+const REFUSED_AT = Date.UTC(2026, 9, 9, 12, 0, 0);
+
+/** Home's private-inbox refusal notice in the rendering `ui`, if it shows. */
+function refusalNoticeIn(ui: unknown): unknown {
+  return findNodeById(ui, "home-private-inbox-refusal");
+}
+
+/**
+ * Whether the rendering `ui` holds the refusal notice inside an element given
+ * the screen's header slot, which is what shows it above the tabs.
+ */
+function refusalNoticeInHeaderSlot(ui: unknown): boolean {
+  return findNode(ui, (node) =>
+    propValue(node, "slot") === "header" &&
+    refusalNoticeIn(node) !== undefined) !== undefined;
+}
+
+/**
+ * Each of the host's refusal codes, with a fragment of the sentence the notice
+ * shows for it and of no other code's sentence.
+ */
+const REFUSAL_SENTENCES: readonly (readonly [string, string])[] = [
+  ["inbox-home-space", "It is in your Home space"],
+  ["inbox-profile-space", "It is in the profile's own space"],
+  ["inbox-access-refused", "Home was refused access to it."],
+  ["inbox-adoption-acl-mismatch", "does not make you its owner"],
+  ["inbox-offers-invalid", "It holds no list of offers."],
+  ["inbox-receive-missing", "It has no way to receive offers."],
+];
+
+/**
+ * Whether the rendering `ui` shows the button that replaces the refused inbox,
+ * marked as the action it is and sending `replace`, inside the notice marked as
+ * its trusted surface.
+ */
+function offersReplacementIn(ui: unknown, replace: Stream<void>): boolean {
+  const notice = refusalNoticeIn(ui);
+  const button = findNodeById(notice, "home-private-inbox-replace");
+  const onClick = propValue(button, "onClick");
+  return propValue(notice, "data-ui-pattern") ===
+      TRUSTED_PRIVATE_INBOX_REFUSAL_SURFACE &&
+    propValue(notice, "data-ui-event-integrity") ===
+      TRUSTED_PRIVATE_INBOX_REFUSAL_SURFACE &&
+    propValue(button, "data-ui-action") ===
+      TRUSTED_REPLACE_REFUSED_INBOX_ACTION &&
+    typeof onClick === "object" && onClick !== null &&
+    equals(onClick, replace) &&
+    hasText(notice, "Use a new inbox");
+}
+
+/** An inbox's result, as the link a refusal record keeps. */
+function linkOf(inbox: unknown): Cell<PrivateInboxPiece>;
+function linkOf(inbox: unknown): unknown {
+  return inbox;
+}
+
 export default pattern(() => {
   const home = Home({});
 
@@ -27,7 +99,7 @@ export default pattern(() => {
   const piece = new Writable<{ [NAME]?: string }>({ [NAME]: "Fav Piece" });
 
   const assert_initial_profile_missing = assert(() =>
-    ((home.profiles as unknown[])?.length ?? 0) === 0
+    (home.profiles.get() ?? []).length === 0
   );
 
   // The agent queue is held in a field of its own and starts empty, with no
@@ -45,11 +117,12 @@ export default pattern(() => {
     hasText(findNodeByProp(home[UI], "value", "self"), "Self")
   );
   // The chat manager is held in a field of its own, starts with no rooms, and
-  // has no tab of its own.
+  // is shown in a tab of its own, whose panel renders the manager's heading.
   const assert_chat_manager_starts_empty = assert(() =>
     home.chatManager.rooms.length === 0 &&
     home.chatManager.outgoingNotices.length === 0 &&
-    findNodeByProp(home[UI], "value", "chats") === undefined
+    findElementByExactText(home[UI], "cf-tab", "Chats") !== undefined &&
+    hasText(findNodeByProp(home[UI], "id", "home-chats"), "Chats")
   );
   const action_register_runner = action(() => {
     home.agentQueue.setAgentRunner.send({
@@ -192,6 +265,95 @@ export default pattern(() => {
     !hasText(home[UI], "No spaces yet. Create one below.")
   );
 
+  // The refusal notice shows while Home records a refusal, in the screen's
+  // header slot, with the host's code as given, a sentence saying what a code
+  // Home knows means, when Home first recorded it, in UTC, and the button that
+  // replaces the refused inbox, marked as its trusted surface's action; it is
+  // gone once the record is cleared.
+  const refusedInbox = PrivateInbox({ offers: [] });
+  const assert_no_refusal_notice = assert(() =>
+    refusalNoticeIn(home[UI]) === undefined
+  );
+  const action_record_refusal = action(() => {
+    home.privateInboxRefusal.set({
+      refusal: {
+        reason: "inbox-adoption-acl-mismatch",
+        inbox: linkOf(refusedInbox),
+        refusedAt: REFUSED_AT,
+      },
+    });
+  });
+  const assert_refusal_notice_shown = assert(() =>
+    hasText(refusalNoticeIn(home[UI]), "Shares may not reach you") &&
+    hasText(
+      refusalNoticeIn(home[UI]),
+      "Reason: inbox-adoption-acl-mismatch.",
+    ) &&
+    hasText(
+      refusalNoticeIn(home[UI]),
+      "First noticed 10/9/2026, 12:00:00 PM UTC.",
+    ) &&
+    hasText(refusalNoticeIn(home[UI]), "loom shares still reach that daemon") &&
+    hasText(refusalNoticeIn(home[UI]), "stops receiving loom shares") &&
+    refusalNoticeInHeaderSlot(home[UI]) &&
+    offersReplacementIn(home[UI], home.replaceRefusedPrivateInbox)
+  );
+  // Each code the host sends shows its own sentence, and a record with an empty
+  // code says that none was given.
+  const sentenceSteps = REFUSAL_SENTENCES.flatMap(([code, fragment]) => [
+    {
+      action: action(() => {
+        home.privateInboxRefusal.set({
+          refusal: {
+            reason: code,
+            inbox: linkOf(refusedInbox),
+            refusedAt: REFUSED_AT,
+          },
+        });
+      }),
+    },
+    {
+      assertion: assert(() =>
+        hasText(refusalNoticeIn(home[UI]), `Reason: ${code}.`) &&
+        hasText(refusalNoticeIn(home[UI]), fragment) &&
+        REFUSAL_SENTENCES.every(([other, otherFragment]) =>
+          other === code ||
+          !hasText(refusalNoticeIn(home[UI]), otherFragment)
+        )
+      ),
+    },
+  ]);
+  const action_record_codeless_refusal = action(() => {
+    home.privateInboxRefusal.set({
+      refusal: {
+        reason: "",
+        inbox: linkOf(refusedInbox),
+        refusedAt: REFUSED_AT,
+      },
+    });
+  });
+  const assert_codeless_refusal_says_none_given = assert(() =>
+    hasText(refusalNoticeIn(home[UI]), "Reason: none given.")
+  );
+  const action_record_unknown_refusal = action(() => {
+    home.privateInboxRefusal.set({
+      refusal: {
+        reason: "inbox-from-a-newer-host",
+        inbox: linkOf(refusedInbox),
+        refusedAt: REFUSED_AT,
+      },
+    });
+  });
+  const assert_unknown_code_shown_as_given = assert(() =>
+    hasText(refusalNoticeIn(home[UI]), "Reason: inbox-from-a-newer-host.") &&
+    REFUSAL_SENTENCES.every(([, fragment]) =>
+      !hasText(refusalNoticeIn(home[UI]), fragment)
+    )
+  );
+  const action_clear_refusal = action(() => {
+    home.privateInboxRefusal.set({});
+  });
+
   return {
     [TESTS]: [
       { assertion: assert_initial_profile_missing },
@@ -228,6 +390,16 @@ export default pattern(() => {
       { action: action_remove_adopted_space },
       { assertion: assert_empty_space_notice },
       { assertion: assert_initial_profile_missing },
+      { assertion: assert_no_refusal_notice },
+      { action: action_record_refusal },
+      { assertion: assert_refusal_notice_shown },
+      ...sentenceSteps,
+      { action: action_record_codeless_refusal },
+      { assertion: assert_codeless_refusal_says_none_given },
+      { action: action_record_unknown_refusal },
+      { assertion: assert_unknown_code_shown_as_given },
+      { action: action_clear_refusal },
+      { assertion: assert_no_refusal_notice },
     ],
   };
 });

@@ -9,9 +9,15 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { ValidationError } from "@cliffy/command";
 
-import { followPieceSourceAction } from "../commands/piece.ts";
+import { PieceSourceChangedError } from "@commonfabric/piece/ops";
+import {
+  FOLLOW_PIN_REFUSED_EXIT_CODE,
+  followPieceSourceAction,
+  parsePatternPin,
+  parseRevisionPin,
+} from "../commands/piece.ts";
 import { followPieceSource, type PieceConfig } from "../lib/piece.ts";
-import { cf, stripAnsi } from "./utils.ts";
+import { argv, cf, stripAnsi } from "./utils.ts";
 
 const BASE_OPTIONS = {
   apiUrl: "http://127.0.0.1:8000",
@@ -23,9 +29,9 @@ const BASE_OPTIONS = {
 describe("cf piece follow", () => {
   it("accepts explicit confirmation while still requiring a source origin", async () => {
     const result = await cf(
-      "piece follow --dangerously-allow-incompatible-schema " +
-        "--identity /nonexistent-but-unread.key --space did:key:zSpace " +
-        '--cell of:profile --api-url http://127.0.0.1:8000 "   "',
+      argv`piece follow --dangerously-allow-incompatible-schema
+        --identity /nonexistent-but-unread.key --space did:key:zSpace
+        --cell of:profile --api-url http://127.0.0.1:8000 ${"   "}`,
     );
     expect(result.code).toBe(1);
     expect(stripAnsi(result.stdout.join("\n"))).toContain(
@@ -88,6 +94,73 @@ describe("cf piece follow", () => {
       expect(actions).toEqual([
         { kind: "repoint", url: "system:system/profile-home.tsx" },
       ]);
+    });
+
+    it("passes both pins to the review and to its confirmation", async () => {
+      const calls: unknown[][] = [];
+      const pattern = { identity: "abc", symbol: "default" };
+      const controller = {
+        changeSource: (...args: unknown[]) => {
+          calls.push(args);
+          return Promise.resolve(
+            calls.length === 1
+              ? {
+                status: "incompatible" as const,
+                message: "result.x: field removed",
+                prepared: { review: "candidate" },
+              }
+              : { status: "applied" as const },
+          );
+        },
+      };
+      await followPieceSource(
+        { ...BASE_OPTIONS, piece: "of:profile" },
+        "system:fabrichat/room.tsx",
+        {
+          dangerouslyAllowIncompatibleSchema: true,
+          expectedPattern: pattern,
+          expectedRevision: null,
+        },
+        {
+          // deno-lint-ignore no-explicit-any
+          loadPieces: () =>
+            Promise.resolve({ get: () => Promise.resolve(controller) } as any),
+          resolvePieceAddress: () => Promise.resolve("of:profile"),
+        },
+      );
+      expect(calls.map((call) => call[1])).toEqual([
+        { expectedPattern: pattern, expectedRevision: null },
+        {
+          expectedPattern: pattern,
+          expectedRevision: null,
+          confirmedChange: { review: "candidate" },
+        },
+      ]);
+    });
+  });
+
+  describe("parsePatternPin()", () => {
+    it("returns the identity and symbol of a pin written as inspect prints it", () => {
+      expect(parsePatternPin("cf:module/abc#default")).toEqual({
+        identity: "abc",
+        symbol: "default",
+      });
+      expect(parsePatternPin("abc#Room")).toEqual({
+        identity: "abc",
+        symbol: "Room",
+      });
+    });
+
+    it("throws a `ValidationError` for a pin with no symbol", () => {
+      expect(() => parsePatternPin("abc")).toThrow(ValidationError);
+      expect(() => parsePatternPin("abc#")).toThrow(ValidationError);
+    });
+  });
+
+  describe("parseRevisionPin()", () => {
+    it("returns `null` for none and the revision id otherwise", () => {
+      expect(parseRevisionPin("none")).toBeNull();
+      expect(parseRevisionPin(" r-1 ")).toBe("r-1");
     });
   });
 
@@ -261,6 +334,57 @@ describe("cf piece follow", () => {
         "injected post-commit failure",
       ]);
       expect(codes).toEqual([1]);
+    });
+
+    it("pins the follow to the pattern and source log the flags name", async () => {
+      let pins: unknown;
+      await followPieceSourceAction(
+        {
+          ...BASE_OPTIONS,
+          expect: "cf:module/abc#default",
+          expectRevision: "none",
+        },
+        "system:fabrichat/room.tsx",
+        {
+          followPieceSource: (_config, _origin, options) => {
+            pins = options;
+            return Promise.resolve({ status: "applied" });
+          },
+          render: () => {},
+          hint: () => {},
+        },
+      );
+      expect(pins).toEqual({
+        dangerouslyAllowIncompatibleSchema: undefined,
+        expectedPattern: { identity: "abc", symbol: "default" },
+        expectedRevision: null,
+      });
+    });
+
+    it("ends with exit status 3 and renders nothing for a piece off its pin", async () => {
+      const codes: number[] = [];
+      const rendered: unknown[] = [];
+      const errors: string[] = [];
+      await followPieceSourceAction(
+        { ...BASE_OPTIONS, expectRevision: "none" },
+        "system:fabrichat/room.tsx",
+        {
+          followPieceSource: () =>
+            Promise.reject(
+              new PieceSourceChangedError("The piece's source log moved."),
+            ),
+          render: (value) => rendered.push(value),
+          printError: (message) => errors.push(message),
+          setExitCode: (code) => codes.push(code),
+        },
+      );
+      expect(codes).toEqual([FOLLOW_PIN_REFUSED_EXIT_CODE]);
+      expect(FOLLOW_PIN_REFUSED_EXIT_CODE).toBe(3);
+      expect(rendered).toEqual([]);
+      expect(errors).toEqual([
+        "of:profile was not pointed at system:fabrichat/room.tsx: " +
+        "The piece's source log moved.",
+      ]);
     });
 
     it("throws a `ValidationError` for a blank origin", async () => {

@@ -13,9 +13,13 @@ const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
 // FIXTURE: computed-reassigned-alias-no-rewrite
 // Verifies: mutable aliases to `computed()` are not treated as stable builder aliases.
-let alias = computed;
-alias = ((fn: () => number) => fn()) as typeof alias;
-export default __cfHelpers.__cf_data(alias(() => 1));
+// Context: the alias lives in a function, where `let` is ordinary code; module scope allows only `const`
+export default function run() {
+    let alias = computed;
+    alias = ((fn: () => number) => fn()) as typeof alias;
+    return alias(() => 1);
+}
+__cfHardenFn(run);
 // @ts-ignore: Internals
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);

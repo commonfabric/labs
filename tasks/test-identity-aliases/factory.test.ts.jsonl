@@ -1,0 +1,1 @@
+{"date":"2026-10-09","from":{"k":"unit","s":"cf-harness","n":"PatternIndexClient > constructs clients that sign as the identity read from the configured keyfile"},"to":{"k":"unit","s":"cf-harness","n":"createHarnessPatternIndexClientFactory() > constructs clients that sign as the identity read from the configured keyfile"}}

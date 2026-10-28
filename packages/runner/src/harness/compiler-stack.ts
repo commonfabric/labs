@@ -30,6 +30,7 @@ export {
   collectDataFileNames,
   collectImportSpecifiers,
   getTypeScriptEnvironmentTypes,
+  scanModuleDeclarations,
   TypeScriptCompiler,
 } from "@commonfabric/js-compiler";
 export { resolveProgram, TARGET } from "@commonfabric/js-compiler/typescript";

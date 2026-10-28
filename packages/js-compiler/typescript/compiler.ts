@@ -21,6 +21,8 @@ import { Program, ProgramResolver, Source } from "../interface.ts";
 import type { SourceMap } from "../interface.ts";
 import { parseSourceMap } from "../source-map.ts";
 import {
+  authoredLocation,
+  type AuthoredSourceLookup,
   Checker,
   type DiagnosticMessageTransformer,
   formatTransformerDiagnostic,
@@ -57,6 +59,7 @@ const compileTimingLogger = getLogger("js-compiler", { enabled: false });
 function surfaceTransformerWarnings(
   diagnostics: readonly TransformerDiagnosticInfo[],
   program: Program,
+  authoredSource: AuthoredSourceLookup | undefined,
 ): void {
   const warnings = diagnostics.filter((d) => d.severity === "warning");
   if (warnings.length === 0) return;
@@ -65,7 +68,11 @@ function surfaceTransformerWarnings(
   for (const warning of warnings) {
     transformerLogger.warn(
       "transform-diagnostic",
-      formatTransformerDiagnostic(warning, sources.get(warning.fileName) ?? ""),
+      formatTransformerDiagnostic(
+        warning,
+        sources.get(warning.fileName) ?? "",
+        authoredSource,
+      ),
     );
   }
 }
@@ -322,6 +329,13 @@ export interface TypeScriptCompilerOptions {
   // Optional transformer for diagnostic error messages.
   // Allows converting confusing TypeScript errors into clearer messages.
   diagnosticMessageTransformer?: DiagnosticMessageTransformer;
+
+  /**
+   * The authored source behind each compiler input, for a caller that adds
+   * lines to its sources before compiling them. Diagnostics then name the
+   * line the author wrote and quote the author's text.
+   */
+  authoredSource?: AuthoredSourceLookup;
 }
 
 export class TypeScriptCompiler {
@@ -441,6 +455,7 @@ export class TypeScriptCompiler {
     const checker = new Checker(tsProgram, {
       messageTransformer: inputOptions.diagnosticMessageTransformer,
       storedSource,
+      authoredSource: inputOptions.authoredSource,
     });
     // Parse and program-level errors are fatal unconditionally — `noCheck`
     // skips type-checking, never parsing, and stored-source mode filters
@@ -520,14 +535,22 @@ export class TypeScriptCompiler {
 
     if (getDiagnostics) {
       const transformerDiagnostics = getDiagnostics();
-      surfaceTransformerWarnings(transformerDiagnostics, program);
+      surfaceTransformerWarnings(
+        transformerDiagnostics,
+        program,
+        inputOptions.authoredSource,
+      );
       const errors = transformerDiagnostics.filter((d) =>
         d.severity === "error"
       );
       if (errors.length > 0) {
         const sources = new Map<string, string>();
         for (const file of program.files) sources.set(file.name, file.contents);
-        throw new TransformerError(errors, sources);
+        throw new TransformerError(
+          errors,
+          sources,
+          inputOptions.authoredSource,
+        );
       }
     }
     if (emitSkipped) {
@@ -624,9 +647,15 @@ export class TypeScriptCompiler {
       const message = ts.flattenDiagnosticMessageText(d.messageText, "\n");
       if (d.file) {
         const { line } = d.file.getLineAndCharacterOfPosition(d.start ?? 0);
+        const location = authoredLocation(
+          d.file.fileName,
+          line + 1,
+          d.file.text,
+          inputOptions.authoredSource,
+        );
         diagnostics.push({
           file: d.file.fileName,
-          message: `${line + 1}: ${message}`,
+          message: `${location.line}: ${message}`,
         });
       } else {
         diagnostics.push({ file: "", message });
@@ -691,9 +720,16 @@ export class TypeScriptCompiler {
     if (getDiagnostics) {
       for (const d of getDiagnostics()) {
         if (d.severity !== "error") continue;
+        const { line } = authoredLocation(
+          d.fileName,
+          d.line,
+          program.files.find((file) => file.name === d.fileName)?.contents ??
+            "",
+          inputOptions.authoredSource,
+        );
         diagnostics.push({
           file: d.fileName,
-          message: `${d.line}: ${d.message}`,
+          message: `${line}: ${d.message}`,
         });
       }
     }

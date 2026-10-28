@@ -157,7 +157,9 @@ describe("profile-home verified external identities", () => {
     // The self-assertion case: any writer in the principal's home space can
     // name the verified-identity atom in its write schema. Only a write the
     // runtime attributes to a builtin may mint it, so this label is dropped
-    // at persist time and the assertion fails the profile's integrity floor.
+    // at persist time, and the reference the publish handler writes into the
+    // profile's list fails the list's integrity floor on the assertion's own
+    // stored label.
     const runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: manager,
@@ -216,7 +218,7 @@ describe("profile-home verified external identities", () => {
     }
   });
 
-  it("rejects an unlabeled assertion before the publish handler runs", async () => {
+  it("refuses an unlabeled assertion at the publish handler's write", async () => {
     const runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: manager,

@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import { labelsReached } from "./support/reached-labels.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
@@ -156,6 +157,15 @@ const writeAsAlice = async (schema: JSONSchema, cause: string) => {
   }
 };
 
+// Every subject a principal claim of either kind names among `integrity`.
+const claimSubjectsOf = (integrity: readonly unknown[]): string[] =>
+  integrity.flatMap((atom) =>
+    [...PRINCIPAL_CLAIM_KINDS].flatMap((kind) => {
+      const subject = principalClaimSubject(atom, kind);
+      return subject === undefined ? [] : [subject];
+    })
+  );
+
 // Every subject a principal claim of either kind names in the label stored on
 // `target`'s document.
 const storedClaimSubjects = (
@@ -170,13 +180,10 @@ const storedClaimSubjects = (
     path: [],
   }) as { cfc?: { labelMap?: { entries?: StoredLabelEntry[] } } } | undefined;
   verify.abort();
-  return (stored?.cfc?.labelMap?.entries ?? []).flatMap((entry) =>
-    (entry.label.integrity ?? []).flatMap((atom) =>
-      [...PRINCIPAL_CLAIM_KINDS].flatMap((kind) => {
-        const subject = principalClaimSubject(atom, kind);
-        return subject === undefined ? [] : [subject];
-      })
-    )
+  return claimSubjectsOf(
+    (stored?.cfc?.labelMap?.entries ?? []).flatMap((entry) =>
+      entry.label.integrity ?? []
+    ),
   );
 };
 
@@ -385,6 +392,9 @@ describe("represents-principal writer check", () => {
             runtime,
             target.getAsNormalizedFullLink(),
           ),
+          reached: claimSubjectsOf(
+            labelsReached(runtime, target.getAsNormalizedFullLink()).integrity,
+          ),
         };
       } finally {
         await runtime.dispose();
@@ -530,6 +540,11 @@ describe("represents-principal writer check", () => {
             runtime,
             target.getAsNormalizedFullLink(),
           ),
+          reached: claimSubjectsOf(
+            labelsReached(runtime, target.getAsNormalizedFullLink(), [
+              "avatar",
+            ]).integrity,
+          ),
         };
       } finally {
         await runtime.dispose();
@@ -586,12 +601,11 @@ describe("represents-principal writer check", () => {
         expect(subjects).not.toContain(bob.did());
       });
 
-      // Source first, the link reads the source's label as this transaction
-      // stages it; link first, the source is not staged yet and the claim
-      // comes from `checkedSchemaPrincipalClaims`, which only the link-first
-      // case exercises.
-      it(`carries a same-transaction source's checked self-attestation, ${order}`, async () => {
-        const { error, subjects } = await linkSameTransactionAsAlice(
+      // The claim stays on the source, whichever order the two writes come
+      // in: the slot stores no claim of the source's, and a read through the
+      // link reaches the one the source's own label holds.
+      it(`reaches a same-transaction source's checked self-attestation through the link, ${order}`, async () => {
+        const { error, subjects, reached } = await linkSameTransactionAsAlice(
           "represents-principal-link-pending-genuine",
           (tx, runtime) => {
             const source = runtime.getCell(
@@ -615,8 +629,9 @@ describe("represents-principal writer check", () => {
           order,
         );
         expect(error).toBeUndefined();
-        expect(subjects).toContain(alice.did());
-        expect(subjects).not.toContain(bob.did());
+        expect(subjects).toEqual([]);
+        expect(reached).toContain(alice.did());
+        expect(reached).not.toContain(bob.did());
       });
 
       // Under `observe` a failed check does not abort the commit; it only
@@ -666,9 +681,9 @@ describe("represents-principal writer check", () => {
       });
     }
 
-    it("refuses a link to an unlabeled source whose carried view holds only claims", async () => {
-      // With the claims gone the view carries nothing, so the link must meet
-      // the same refusal as one that carries no view.
+    it("stores no claim a carried view holds on a link to an unlabeled source", async () => {
+      // A claim is never taken from a carried view, and with the claims gone
+      // the view carries nothing: the link commits as one carrying no view.
       const { error, subjects } = await linkAsAlice(
         "represents-principal-link-view-only-claims",
         undefined,
@@ -691,12 +706,12 @@ describe("represents-principal writer check", () => {
           return link;
         },
       );
+      expect(error).toBeUndefined();
       expect(subjects).not.toContain(bob.did());
-      expect(error).toContain("missing link source metadata");
     });
 
-    it("carries the claim the source's own stored label holds", async () => {
-      const { error, subjects } = await linkAsAlice(
+    it("reaches the claim the source's own stored label holds through the link", async () => {
+      const { error, subjects, reached } = await linkAsAlice(
         "represents-principal-link-genuine",
         claimSchema([{
           kind: "represents-principal",
@@ -705,7 +720,8 @@ describe("represents-principal writer check", () => {
         (source) => source.key("name"),
       );
       expect(error).toBeUndefined();
-      expect(subjects).toEqual([alice.did()]);
+      expect(subjects).toEqual([]);
+      expect(reached).toEqual([alice.did()]);
     });
   });
 });

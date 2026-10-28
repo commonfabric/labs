@@ -22,6 +22,7 @@ import { validateAgainstSchema } from "../cfc/schema-sanitization.ts";
 import { enqueueSinkRequestPostCommitEffect } from "../cfc/sink-request.ts";
 import type { NormalizedFullLink } from "../link-utils.ts";
 import { setResultCell } from "../result-utils.ts";
+import { type RawBuiltinResult } from "../module.ts";
 import type { Runtime } from "../runtime.ts";
 import { type Action } from "../scheduler.ts";
 import {
@@ -45,7 +46,7 @@ import {
   tryClaimMutex,
   tryWriteResult,
 } from "./fetch-utils.ts";
-import { ownedCell } from "./runtime-owned-store.ts";
+import { ownedCell, ownedStoreLinks } from "./runtime-owned-store.ts";
 import { settleAbandonedRequest } from "./abandoned-request.ts";
 import {
   effectTargetKey,
@@ -379,7 +380,15 @@ function fetchBuiltin(kind: FetchKind) {
     _outputBinding?: NormalizedFullLink,
     _awaitSync?: boolean,
     publicationBinding?: NormalizedFullLink,
-  ): Action {
+  ): RawBuiltinResult {
+    // The stores this node keeps, each keyed by its cause alone, so the
+    // action declares them when it is set up.
+    const stores = {
+      pending: { [kind.name]: { pending: cause } },
+      result: { [kind.name]: { result: cause } },
+      error: { [kind.name]: { error: cause } },
+      internal: { [kind.name]: { internal: cause } },
+    };
     const instances = new Map<string, ReturnType<typeof createInstance>>();
     let publicationSequence = 0;
     addCancel(() => {
@@ -565,7 +574,7 @@ function fetchBuiltin(kind: FetchKind) {
             runtime,
             tx,
             parentCell,
-            { [kind.name]: { pending: cause } },
+            stores.pending,
             undefined,
             outputScope,
           );
@@ -574,9 +583,7 @@ function fetchBuiltin(kind: FetchKind) {
             runtime,
             tx,
             parentCell,
-            {
-              [kind.name]: { result: cause },
-            },
+            stores.result,
             undefined,
             outputScope,
           );
@@ -585,9 +592,7 @@ function fetchBuiltin(kind: FetchKind) {
             runtime,
             tx,
             parentCell,
-            {
-              [kind.name]: { error: cause },
-            },
+            stores.error,
             undefined,
             outputScope,
           );
@@ -596,7 +601,7 @@ function fetchBuiltin(kind: FetchKind) {
             runtime,
             tx,
             parentCell,
-            { [kind.name]: { internal: cause } },
+            stores.internal,
             internalSchema,
             outputScope,
           );
@@ -952,7 +957,7 @@ function fetchBuiltin(kind: FetchKind) {
       return instance;
     }
 
-    return (tx: IExtendedStorageTransaction) => {
+    const action: Action = (tx: IExtendedStorageTransaction) => {
       tx.resetNarrowestReadScope();
       const inputsSnapshot = snapshotInputs(inputsCell.withTx(tx));
       const mutexTimeoutMs = mutexTimeoutForCell(kind, inputsCell.withTx(tx));
@@ -968,6 +973,10 @@ function fetchBuiltin(kind: FetchKind) {
       }
       instance.run(tx, inputsSnapshot, mutexTimeoutMs, outputScope, identity);
       instance.releaseIfIdle();
+    };
+    return {
+      action,
+      storeWrites: ownedStoreLinks(runtime, parentCell, Object.values(stores)),
     };
   };
 }

@@ -2,6 +2,7 @@ import {
   action,
   assert,
   equals,
+  FabricBytes,
   NAME,
   pattern,
   TESTS,
@@ -12,9 +13,18 @@ import ProfileHome, {
   identityProvider,
   isFreshIdentity,
   isShownIdentity,
+  type ShareInboxPiece,
   VerifiedIdentitiesSection,
   VerifiedIdentityRow,
 } from "./profile-home.tsx";
+
+// Stand-ins for two pictures. The profile stores the bytes it is sent and
+// never decodes them.
+const PICTURE = [0x89, 0x50, 0x4e, 0x47];
+const PICKED_PICTURE = [0xff, 0xd8, 0xff];
+
+const bytesAre = (actual: FabricBytes | undefined, expected: number[]) =>
+  actual?.slice().join() === expected.join();
 
 export default pattern(() => {
   const profile = ProfileHome({ initialName: "Ada Lovelace" });
@@ -128,6 +138,31 @@ export default pattern(() => {
   const action_set_avatar = action(() => {
     profile.setAvatar.send({ avatar: "AL" });
   });
+  const action_set_picture = action(() => {
+    profile.setPicture.send({
+      picture: new FabricBytes(new Uint8Array(PICTURE)),
+    });
+  });
+  // `<cf-avatar-input>` carries the picked picture as its change event's
+  // `detail.bytes`.
+  const action_pick_picture = action(() => {
+    profile.setPicture.send({
+      detail: { bytes: new FabricBytes(new Uint8Array(PICKED_PICTURE)) },
+    });
+  });
+  // An event without bytes leaves the picture alone.
+  const action_send_no_picture = action(() => {
+    profile.setPicture.send({ picture: new FabricBytes(new Uint8Array()) });
+    profile.setPicture.send({});
+  });
+  // An explicit clear removes it, and leaves the avatar text alone.
+  const action_clear_picture = action(() => {
+    profile.setPicture.send({ clear: true });
+  });
+  // An explicit clear of the avatar text removes it.
+  const action_clear_avatar_text = action(() => {
+    profile.setAvatar.send({ clear: true });
+  });
   // The share inbox link. Loom sends it serialized, as the `link@1` sigil
   // naming the inbox piece and its space; here the link is a live cell, the
   // catalog card added below, because a link into a space the harness does
@@ -173,6 +208,43 @@ export default pattern(() => {
     profile.elements[1]?.cell?.[NAME] === "Second card"
   );
   const assert_inbox_cleared = assert(() => profile.inbox?.piece === undefined);
+  // A conditional send writes only while the pointer meets its condition:
+  // `replacing: undefined` only while the profile points at no inbox, and
+  // `replacing: <link>` only while it points at the inbox named. A link to a
+  // cell holding nothing is a link, not `undefined`, so it names an inbox the
+  // profile does not point at.
+  const emptyLink = new Writable<ShareInboxPiece>().for("emptyLink");
+  const action_set_first_if_unset = action(() => {
+    const first = profile.elements[0];
+    if (first) {
+      profile.setInbox.send({ inbox: first.cell, replacing: undefined });
+    }
+  });
+  const action_set_second_if_unset = action(() => {
+    const second = profile.elements[1];
+    if (second) {
+      profile.setInbox.send({ inbox: second.cell, replacing: undefined });
+    }
+  });
+  const action_set_first_replacing_an_empty_link = action(() => {
+    const first = profile.elements[0];
+    if (first) {
+      profile.setInbox.send({ inbox: first.cell, replacing: emptyLink });
+    }
+  });
+  const action_set_second_replacing_second = action(() => {
+    const second = profile.elements[1];
+    if (second) {
+      profile.setInbox.send({ inbox: second.cell, replacing: second.cell });
+    }
+  });
+  const action_set_second_replacing_first = action(() => {
+    const first = profile.elements[0];
+    const second = profile.elements[1];
+    if (first && second) {
+      profile.setInbox.send({ inbox: second.cell, replacing: first.cell });
+    }
+  });
   const action_remove_second_card = action(() => {
     const second = profile.elements[1];
     if (second) profile.removeElement.send({ cell: second.cell });
@@ -197,6 +269,20 @@ export default pattern(() => {
   // The avatar the badge binds resolves (single context — owner-protected reads
   // are clean here; cross-stamp masking is the browser-only CT-1740 issue).
   const assert_avatar_set = assert(() => profile.avatar === "AL");
+  const assert_no_picture = assert(() => profile.picture === undefined);
+  const assert_picture_set = assert(() => bytesAre(profile.picture, PICTURE));
+  const assert_picture_picked = assert(() =>
+    bytesAre(profile.picture, PICKED_PICTURE)
+  );
+  const assert_picture_unchanged_after_empty = assert(() =>
+    bytesAre(profile.picture, PICKED_PICTURE) && profile.avatar === "AL"
+  );
+  const assert_picture_cleared = assert(() =>
+    profile.picture === undefined && profile.avatar === "AL"
+  );
+  const assert_avatar_cleared = assert(() =>
+    profile.picture === undefined && profile.avatar === ""
+  );
   // CT-1828: an empty send must not clear a previously-set avatar.
   const assert_avatar_unchanged_after_empty = assert(() =>
     profile.avatar === "AL"
@@ -240,6 +326,11 @@ export default pattern(() => {
 
   const action_set_name = action(() => {
     profile.setName.send({ name: "Grace Hopper" });
+  });
+
+  // A name holding a control character is refused, not stored.
+  const action_control_character_name = action(() => {
+    profile.setName.send({ name: "Grace\u0007Hopper" });
   });
 
   const action_add_external_profile_link = action(() => {
@@ -329,6 +420,8 @@ export default pattern(() => {
       { assertion: assert_name_unchanged_after_empty },
       { action: action_whitespace_name },
       { assertion: assert_name_unchanged_after_empty },
+      { action: action_control_character_name },
+      { assertion: assert_name_unchanged_after_empty },
       // External profile links are owner-authored public https links. Unsafe
       // schemes are rejected at write time, then the owner can remove a link.
       { action: action_add_external_profile_link },
@@ -343,6 +436,17 @@ export default pattern(() => {
       // CT-1828: an empty send must not erase the avatar either.
       { action: action_clear_avatar },
       { assertion: assert_avatar_unchanged_after_empty },
+      { assertion: assert_no_picture },
+      { action: action_set_picture },
+      { assertion: assert_picture_set },
+      { action: action_pick_picture },
+      { assertion: assert_picture_picked },
+      { action: action_send_no_picture },
+      { assertion: assert_picture_unchanged_after_empty },
+      { action: action_clear_picture },
+      { assertion: assert_picture_cleared },
+      { action: action_clear_avatar_text },
+      { assertion: assert_avatar_cleared },
       // Add/remove exercise the full owner-protected element write stack:
       // the same-transaction card instantiation linked into the
       // writeAuthorizedBy-protected list (prepare's setup-schema / child-doc
@@ -360,6 +464,25 @@ export default pattern(() => {
       { action: action_clear_inbox },
       { assertion: assert_inbox_cleared },
       { assertion: assert_both_cards_intact },
+      // A link to a cell holding nothing names an inbox the profile does not
+      // point at, so the send leaves the unset pointer unset.
+      { action: action_set_first_replacing_an_empty_link },
+      { assertion: assert_inbox_cleared },
+      // `replacing: undefined` sets an unset pointer, and leaves a set one as
+      // it is.
+      { action: action_set_first_if_unset },
+      { assertion: assert_inbox_links_the_first_card },
+      { action: action_set_second_if_unset },
+      { assertion: assert_inbox_links_the_first_card },
+      // `replacing: <link>` sets the pointer only in place of the inbox it
+      // names.
+      { action: action_set_second_replacing_second },
+      { assertion: assert_inbox_links_the_first_card },
+      { action: action_set_second_replacing_first },
+      { assertion: assert_inbox_links_the_second_card },
+      { assertion: assert_both_cards_intact },
+      { action: action_clear_inbox },
+      { assertion: assert_inbox_cleared },
       { action: action_remove_second_card },
       { assertion: assert_added_element },
       { action: action_remove_catalog_element },
@@ -374,5 +497,7 @@ export default pattern(() => {
       { action: action_remove_with_empty_event },
       { assertion: assert_removed_element },
     ],
+    // The refused control-character name.
+    expectRuntimeErrors: 1,
   };
 });

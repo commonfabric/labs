@@ -83,6 +83,45 @@ const FAN_OUT_PATTERN = [
   "});",
 ].join("\n");
 
+/** A piece OWNING a per-session draft with a default (the FabriChat
+ * group-draft shape): the result links to the draft, so a viewer's `$value`
+ * binding writes one field of it, and `echo` reads it per session. */
+const OWNED_DRAFT_PATTERN = [
+  "import { computed, pattern, Writable } from 'commonfabric';",
+  "interface Draft { title: string; members: string }",
+  "const EMPTY_DRAFT: Draft = { title: '', members: '' };",
+  "export default pattern<",
+  "  { n?: number },",
+  "  { draft: Writable<Draft>; echo: string }",
+  ">(() => {",
+  "  const draft = new Writable.perSession<Draft>(EMPTY_DRAFT);",
+  "  return { draft, echo: computed(() => 'echo:' + draft.get().title) };",
+  "});",
+].join("\n");
+
+/** A per-user wish into the viewer's Home, and a reader of its result: the
+ * reader's instance for a user follows the wish's per-user state store. */
+const WISH_TAG = "fan_out_wish_profile";
+const WISH_PATTERN = [
+  "import { computed, pattern, wish } from 'commonfabric';",
+  "export default pattern<{ n?: number }, { reader: string }>(() => {",
+  `  const found = wish<{ name: string }>({ query: '#${WISH_TAG}', scope: ['~'] });`,
+  "  return { reader: computed(() => 'reader:' + String(found.result?.name)) };",
+  "});",
+].join("\n");
+
+/** Whether any revision ever written under `scopeKey` held `needle`. */
+const everHeld = (
+  engine: Engine.Engine,
+  scopeKey: string,
+  needle: string,
+): boolean =>
+  (engine.database.prepare(
+    `SELECT data FROM revision WHERE scope_key = :scope_key`,
+  ).all({ scope_key: scopeKey }) as Array<{ data: unknown }>).some((row) =>
+    JSON.stringify(row.data ?? null).includes(needle)
+  );
+
 /** A per-user subtree reachable ONLY through a per-user VALUE (design
  * §B4/§G B-f): `view` links to the `guarded` computed only for a user
  * whose per-user flag is set — the result exposes `view`, never
@@ -132,6 +171,37 @@ const TYPE_SAVE_PATTERN = [
   "    type: type({ draft: draftCell }),",
   "    save: save({ echo, saved: savedCell }),",
   "  };",
+  "});",
+].join("\n");
+
+/** The lost-first-message shape: the `save` handler belongs to a NESTED
+ * pattern, and reads the `echo` DERIVATION the enclosing pattern computes
+ * per user, refusing the event while `echo` has no value, as a room's send
+ * refuses one from a sender whose profile has not resolved. */
+const NESTED_SAVE_PATTERN = [
+  "import { computed, Default, handler, pattern, PerUser, Stream, Writable } from 'commonfabric';",
+  "type Draft = Writable<string | Default<''>>;",
+  "const draftText = (draft: Draft): string =>",
+  "  (draft.get() as string | undefined) ?? '';",
+  "const save = handler<unknown, { echo?: string; saved: Draft }>(",
+  "  (_ev, { echo, saved }) => {",
+  "    if (echo === undefined) throw new Error('echo has not loaded');",
+  "    saved.set('saved:' + echo);",
+  "  },",
+  ");",
+  "const saver = pattern<",
+  "  { echo?: string; saved: Draft },",
+  "  { save: Stream<unknown> }",
+  ">(({ echo, saved }) => ({ save: save({ echo, saved }) }));",
+  "export default pattern<",
+  "  { draft?: PerUser<Draft>; saved?: PerUser<Draft>; n?: number },",
+  "  { echo: string; save: Stream<unknown> }",
+  ">(({ draft, saved }) => {",
+  "  const draftCell: Draft = draft!;",
+  "  const savedCell: Draft = saved!;",
+  "  const echo = computed(() => 'echo:' + draftText(draftCell));",
+  "  const nested = saver({ echo, saved: savedCell });",
+  "  return { echo, save: nested.save };",
   "});",
 ].join("\n");
 
@@ -597,6 +667,49 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
     setup.cancel();
   });
 
+  it("(n) a session that arrives watching a piece OWNING a per-session default finds that default seeded in its own instance — the ARRIVAL SEED — so its first blind write of one field lands beside the other defaults", async () => {
+    // The piece's start seeded the draft for Alice alone. Bob's runtime
+    // runs none of the pattern — his page is a served view — so nothing
+    // on his side seeds his session's draft; the serving loop seeds it
+    // when his demand arrives. Without the seed his first keystroke, a
+    // blind write of `title`, creates his instance as `{title}` and the
+    // handler reading it under the draft's schema sees no draft at all.
+
+    const setup = await standUp({
+      names: { arg: "fo-n-arg", result: "fo-n-result" },
+      pattern: OWNED_DRAFT_PATTERN,
+      clients: [aliceSigner],
+    });
+    const { engine, compiled } = setup;
+    const bob = await setup.watchRoot(bobSigner);
+    const bobSession = resolveScopeKey("session", bob.scopeKeyIdentity);
+    await awaitAdmitted(
+      server,
+      () => instanceHolds(engine, bobSession, '"members":""'),
+    );
+    expect(host!.stats().demand.ownedDefaultSeeds).toBeGreaterThan(0);
+
+    const draft = bob.getCell<{ draft: { title: string; members: string } }>(
+      space,
+      "fo-n-result",
+      compiled.resultSchema,
+    ).key("draft");
+    await draft.sync();
+    const written = await bob.commitUiCellWrite(draft.key("title"), "B", {
+      blind: true,
+    });
+    expect(written.error).toBeUndefined();
+    await awaitAdmitted(
+      server,
+      () => instanceHolds(engine, bobSession, '"echo:B"'),
+    );
+    const drafts = [...rowsUnder(engine, bobSession).values()].filter((
+      value,
+    ) => JSON.stringify(value ?? null).includes('"title":"B"'));
+    expect(drafts).toEqual([{ title: "B", members: "" }]);
+    setup.cancel();
+  });
+
   it("(c) RAGGED: a node user-scoped for Alice and session-scoped for Bob — Bob's instance per session, Alice's per user, both correct, no session-keyed rows for Alice (S4)", async () => {
     const setup = await standUp({
       names: { arg: "fo-c-arg", result: "fo-c-result" },
@@ -804,6 +917,51 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
     expect(labelRuns[0].instanceKey).toBe("space");
     // And the label's basis rows key `space` only.
     expect(basisKeys(engine).has(setup.serviceUserKey)).toBe(false);
+    setup.cancel();
+  });
+
+  it("(m) a user who arrives after a per-user wish ran for another user never has a reader of the wish's state commit a value derived from its absence", async () => {
+    // The reader's run for the arriving user reads the wish's state store
+    // through the wish's output; that user's instance of the store does not
+    // exist until the wish runs for them. The wish declares the store at
+    // setup, so the serving loop holds the reader's commit back until then.
+
+    const seedHome = async (signer: Identity) => {
+      const runtime = openClient(signer);
+      const home = signer.did() as MemorySpace;
+      const tx = runtime.edit();
+      const favorite = runtime.getCell(home, "favorite", undefined, tx);
+      favorite.set({ name: `fav-${signer === aliceSigner ? "alice" : "bob"}` });
+      runtime.getCell(home, home, undefined, tx).set({
+        defaultPattern: { favorites: [{ cell: favorite, tags: [WISH_TAG] }] },
+      });
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await runtime.storageManager.synced();
+    };
+    await seedHome(aliceSigner);
+    await seedHome(bobSigner);
+    const setup = await standUp({
+      names: { arg: "fo-m-arg", result: "fo-m-result" },
+      pattern: WISH_PATTERN,
+      clients: [aliceSigner],
+    });
+    const { engine } = setup;
+    const aliceKey = setup.userKey(aliceSigner);
+    const bobKey = setup.userKey(bobSigner);
+    await awaitAdmitted(
+      server,
+      () => instanceHolds(engine, aliceKey, '"reader:fav-alice"'),
+    );
+    await settleACycle(engine);
+    await servingRuntime!.idle();
+
+    await setup.watchRoot(bobSigner);
+    await awaitAdmitted(
+      server,
+      () => instanceHolds(engine, bobKey, '"reader:fav-bob"'),
+    );
+    expect(everHeld(engine, bobKey, "reader:undefined")).toBe(false);
+    expect(everHeld(engine, aliceKey, "reader:undefined")).toBe(false);
     setup.cancel();
   });
 
@@ -1195,6 +1353,132 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
       cancel();
     });
   }
+
+  it("runs a served event on a nested pattern's stream, while nothing runs the enclosing piece, against the actor's own instance of the enclosing piece's per-user derivation", async () => {
+    // A room's first message, reduced: its sender set the piece up and
+    // nothing has run it since, so the serving runtime first reaches it
+    // through an event on a stream its NESTED instance defines, whose
+    // handler reads what the enclosing instance derives per user.
+    const names = { arg: "fo-nested-arg", result: "fo-nested-result" };
+    const sessions = new MemoryV2Server.SessionRegistry({ ttlMs: 250 });
+    server = await (async () => {
+      await server.close();
+      return newSharedServer({ subscriptionRefreshDelayMs: 0, sessions });
+    })();
+    const engine = await server.engineForSpace(space);
+    let resultId: string;
+    let stream: { id: string; path: readonly string[] };
+    {
+      const manager = EmulatedStorageManager.connectTo(server, {
+        as: aliceSigner,
+      });
+      const creator = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: manager,
+        experimental: { serverExecution: true },
+      });
+      const compiled = await creator.patternManager.compilePattern({
+        main: "/main.tsx",
+        files: [{ name: "/main.tsx", contents: NESTED_SAVE_PATTERN }],
+      }, { space });
+      const arg = creator.getCell<Record<string, unknown>>(
+        space,
+        names.arg,
+        undefined,
+      );
+      const result = creator.getCell<Record<string, unknown>>(
+        space,
+        names.result,
+        compiled.resultSchema,
+      );
+      await arg.sync();
+      await result.sync();
+      {
+        const seed = creator.edit();
+        arg.withTx(seed).set({ n: 1 });
+        expect((await seed.commit().settled).error).toBeUndefined();
+      }
+      {
+        const tx = creator.edit();
+        creator.run(tx, compiled, arg, result);
+        expect((await tx.commit().settled).error).toBeUndefined();
+      }
+      await creator.idle();
+      await creator.storageManager.synced();
+      resultId = result.getAsNormalizedFullLink().id;
+      // The stream the nested instance's handler is registered on, as a
+      // client's send resolves it.
+      const resolved = result.key("save").resolveAsCell()
+        .getAsNormalizedFullLink();
+      stream = { id: resolved.id, path: resolved.path };
+      expect(stream.id).not.toBe(resultId);
+      // Alice's draft, written through the schema so `echo` narrows to
+      // her (the (k) idiom).
+      {
+        const typed = creator.getCell<{ draft: string; saved: string }>(
+          space,
+          names.arg,
+          compiled.argumentSchema,
+        );
+        const tx = creator.edit();
+        typed.key("draft").withTx(tx).set("A");
+        typed.key("saved").withTx(tx).set("");
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await creator.storageManager.synced();
+      }
+      const creatorSession = manager.id;
+      await creator.dispose();
+      await manager.close();
+      sessions.remove(space, creatorSession);
+    }
+    const aliceKey = resolveScopeKey("user", {
+      principal: aliceSigner.did(),
+    });
+    host = newHost();
+    const sidecarEntries = () =>
+      (engine.database.prepare(
+        `SELECT id FROM head WHERE id LIKE 'of:stream-events:%' AND op != 'delete'`,
+      ).all() as Array<{ id: string }>).flatMap(({ id }) =>
+        ((Engine.read(engine, { id })?.value as
+          | StreamEventsDocValue
+          | undefined)
+          ?.entries ?? []).map((entry) => ({
+            consequenced: entry.consequenced,
+            error: entry.error,
+          }))
+      );
+    // Alice raw-appends, watching nothing: no demand starts the piece.
+    {
+      const manager = EmulatedStorageManager.connectTo(server, {
+        as: aliceSigner,
+      });
+      try {
+        const delivery = await manager.open(space).replica
+          .enqueueEventAppend!({
+            sidecarId: streamEntriesDocId(stream as never),
+            stream: stream as never,
+            eventId: `evt:${crypto.randomUUID()}:${resultId}`,
+            payload: {} as never,
+          });
+        expect(delivery.delivered).toBe(true);
+      } finally {
+        await manager.close();
+      }
+    }
+    await awaitAdmitted(
+      server,
+      () =>
+        sidecarEntries().length >= 1 &&
+        sidecarEntries().every((entry) => entry.consequenced === true),
+    );
+    // Consequenced CLEAN: the handler found her `echo`, rather than
+    // refusing the event as one whose input had not loaded.
+    expect(sidecarEntries().map((entry) => entry.error)).toEqual([undefined]);
+    await awaitAdmitted(
+      server,
+      () => instanceHolds(engine, aliceKey, '"saved:echo:A"'),
+    );
+  });
 
   it("(h) B7 scaling probe — N users × M narrowed nodes: ONE user's input change re-runs only that user's M instances, never the other users' (precise per-instance dirtiness); the node count stays independent of N (C11b)", async () => {
     const M = 3;

@@ -15,6 +15,7 @@ import {
   CellUpdateNotification,
   ClientNotificationType,
   ClientTransportNotificationType,
+  ConnectionRestoredNotification,
   ConsoleNotification,
   ErrorNotification,
   EventIntentOutcomeNotification,
@@ -32,7 +33,9 @@ import {
   PendingWritesNotification,
   PresenceUpdateNotification,
   RequestType,
+  RuntimeErrorCode,
   SpaceAccessLostNotification,
+  SpaceAccessRestoredNotification,
   TelemetryNotification,
   TransportNotificationType,
   VDomBatchNotification,
@@ -159,6 +162,8 @@ export function isIPCRemoteNotification(
     isPresenceUpdateNotification(value) ||
     isEventNeedsAttentionNotification(value) ||
     isSpaceAccessLostNotification(value) ||
+    isSpaceAccessRestoredNotification(value) ||
+    isConnectionRestoredNotification(value) ||
     isEventIntentOutcomeNotification(value);
 }
 
@@ -242,9 +247,9 @@ export function isNavigateRequestNotification(
 }
 
 /**
- * Is `value` an {@link ErrorNotification}? Only `message` is required; the
- * context fields an error may carry -- its piece, space, pattern, and stack --
- * are all optional and unchecked.
+ * Is `value` an {@link ErrorNotification}? Checks the message and the write
+ * uncertainty required only by update-required reports. Other context is
+ * optional and unchecked.
  */
 export function isErrorNotification(
   value: unknown,
@@ -252,7 +257,10 @@ export function isErrorNotification(
   return (
     isObjectNotArray(value) &&
     value.type === NotificationType.ErrorReport &&
-    typeof value.message === "string"
+    typeof value.message === "string" &&
+    (value.code === RuntimeErrorCode.ClientUpdateRequired
+      ? typeof value.unconfirmedWrites === "boolean"
+      : value.unconfirmedWrites === undefined)
   );
 }
 
@@ -272,6 +280,22 @@ export function isSpaceAccessLostNotification(
 ): value is SpaceAccessLostNotification {
   return isObjectNotArray(value) &&
     value.type === NotificationType.SpaceAccessLost && isDID(value.space);
+}
+
+/** Recognizes a space-scoped notification that access was restored. */
+export function isSpaceAccessRestoredNotification(
+  value: unknown,
+): value is SpaceAccessRestoredNotification {
+  return isObjectNotArray(value) &&
+    value.type === NotificationType.SpaceAccessRestored && isDID(value.space);
+}
+
+/** Recognizes a notification that a memory connection was restored. */
+export function isConnectionRestoredNotification(
+  value: unknown,
+): value is ConnectionRestoredNotification {
+  return isObjectNotArray(value) &&
+    value.type === NotificationType.ConnectionRestored;
 }
 
 /**

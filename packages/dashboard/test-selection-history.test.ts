@@ -39,7 +39,8 @@ const CTX: Ctx = {
 function measurement(at: string, selected = 2, flaky = 1): Manifest {
   const entries = Array.from(
     { length: 4 },
-    (_, i) => sampleEntry({ k: "unit", s: "memory", n: `test ${i}` }),
+    (_, i) =>
+      sampleEntry({ k: "unit", s: "memory", n: `test ${i}` }, { cost: 1 }),
   );
   return sampleManifest({
     generatedAt: at,
@@ -155,15 +156,15 @@ describe("test-selection-history", () => {
       expect(history.samples).toEqual([
         {
           at: Date.parse(first.generatedAt),
-          counts: { known: 4, selected: 1, flaky: 0 },
+          counts: { flaky: 0, corpusSeconds: 4, selectedSeconds: 1 },
         },
         {
           at: Date.parse(middle.generatedAt),
-          counts: { known: 4, selected: 2, flaky: 1 },
+          counts: { flaky: 1, corpusSeconds: 4, selectedSeconds: 2 },
         },
         {
           at: Date.parse(last.generatedAt),
-          counts: { known: 4, selected: 1, flaky: 2 },
+          counts: { flaky: 2, corpusSeconds: 4, selectedSeconds: 1 },
         },
       ]);
       expect(history.errors).toEqual([]);
@@ -369,7 +370,7 @@ describe("test-selection-history", () => {
         cacheFile,
       });
       const history = await restarted.history();
-      expect(history.samples.map((sample) => sample.counts?.known)).toEqual([
+      expect(history.samples.map((sample) => sample.counts?.corpusSeconds)).toEqual([
         4,
         4,
       ]);
@@ -442,7 +443,7 @@ describe("test-selection-history", () => {
         fetchImpl: store.fetchImpl,
         cacheFile,
       }).history();
-      expect(later.samples.map((sample) => sample.counts?.known)).toEqual([4]);
+      expect(later.samples.map((sample) => sample.counts?.corpusSeconds)).toEqual([4]);
       expect(store.reads.filter((n) => !n.startsWith("list:"))).toEqual([name]);
     });
 
@@ -567,9 +568,9 @@ describe("test-selection-history", () => {
       store.reads.length = 0;
       time.tick(MANIFEST_SHARE_MS + 1);
       expect((await source.history()).samples[0].counts).toEqual({
-        known: 4,
-        selected: 2,
         flaky: 1,
+        corpusSeconds: 4,
+        selectedSeconds: 2,
       });
       expect(store.reads.filter((name) => !name.startsWith("list:")))
         .toEqual([objectName(manifest.generatedAt)]);
@@ -595,7 +596,7 @@ describe("test-selection-history", () => {
         null,
         null,
         null,
-        { known: 4, selected: 0, flaky: 0 },
+        { flaky: 0, corpusSeconds: 4, selectedSeconds: 0 },
       ]);
       expect(result.errors).toHaveLength(2);
       store.objects[objectName(broken.generatedAt)] = serializeManifest(broken);
@@ -606,7 +607,7 @@ describe("test-selection-history", () => {
       time.tick(MANIFEST_SHARE_MS + 1);
       const recovered = await source.history();
       expect(recovered.errors).toEqual([]);
-      expect(recovered.samples.map((sample) => sample.counts?.known)).toEqual([
+      expect(recovered.samples.map((sample) => sample.counts?.corpusSeconds)).toEqual([
         undefined,
         4,
         4,
@@ -678,9 +679,9 @@ describe("test-selection-history", () => {
         prefix: TEST_SELECTION_PREFIX,
         counts: {
           [objectName(manifest.generatedAt)]: {
-            known: 1,
-            selected: 0,
             flaky: 0,
+            corpusSeconds: 1,
+            selectedSeconds: 0,
           },
         },
       };
@@ -694,7 +695,17 @@ describe("test-selection-history", () => {
             ...incompatible,
             counts: {
               [objectName(manifest.generatedAt)]: {
-                known: -1,
+                flaky: 0,
+                corpusSeconds: -1,
+                selectedSeconds: 0,
+              },
+            },
+          }),
+          // Counts of tests with no test time.
+          JSON.stringify({
+            ...incompatible,
+            counts: {
+              [objectName(manifest.generatedAt)]: {
                 selected: 0,
                 flaky: 0,
               },
@@ -708,9 +719,9 @@ describe("test-selection-history", () => {
           cacheFile,
         }).history();
         expect(history.samples[0].counts).toEqual({
-          known: 4,
-          selected: 2,
           flaky: 1,
+          corpusSeconds: 4,
+          selectedSeconds: 2,
         });
         expect(history.errors).toEqual([]);
       }
@@ -725,9 +736,9 @@ describe("test-selection-history", () => {
       });
       const failed = await source.history();
       expect(failed.samples[0].counts).toEqual({
-        known: 4,
-        selected: 2,
         flaky: 1,
+        corpusSeconds: 4,
+        selectedSeconds: 2,
       });
       expect(failed.errors).toHaveLength(1);
       expect(failed.errors[0]).toContain("Could not write history cache");
@@ -805,9 +816,9 @@ describe("test-selection-history", () => {
       value: "50%",
     };
     const counts = (value: number) => ({
-      known: 100,
-      selected: value,
       flaky: value,
+      corpusSeconds: 100,
+      selectedSeconds: value,
     });
 
     it("breaks lines at missing measurements without compressing time or changing scale", () => {
@@ -835,12 +846,21 @@ describe("test-selection-history", () => {
       expect(chart.duration).toBe(5 * DAY);
     });
 
-    it("uses each sample's corpus for the selected percentage", () => {
+    it("uses each sample's corpus time for the selected percentage", () => {
+      // The last corpus has the second's count of tests and twice its time.
+      const sample = (at: number, corpus: number, selected: number) => ({
+        at,
+        counts: {
+          flaky: 1,
+          corpusSeconds: corpus,
+          selectedSeconds: selected,
+        },
+      });
       const history: SelectionHistory = {
         samples: [
-          { at: 0, counts: { known: 10, selected: 5, flaky: 1 } },
-          { at: DAY, counts: { known: 20, selected: 10, flaky: 2 } },
-          { at: 2 * DAY, counts: { known: 20, selected: 5, flaky: 1 } },
+          sample(0, 10, 5),
+          sample(DAY, 20, 10),
+          sample(2 * DAY, 40, 10),
         ],
         errors: [],
       };

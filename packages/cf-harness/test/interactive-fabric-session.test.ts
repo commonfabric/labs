@@ -17,12 +17,14 @@ import {
 } from "../src/contracts/interactive-chat.ts";
 import {
   runHarnessInteractiveChatStdio,
-  runHarnessInteractiveChatStdioCli,
   type RunHarnessInteractiveChatStdioOptions,
 } from "../src/interactive-chat-stdio.ts";
+import {
+  createLoomLocalCfHarnessHost,
+  parseCfHarnessCliArgs,
+  runHarnessInteractiveChatStdioCli,
+} from "./support/on-linux.ts";
 import type { HarnessFabricSession } from "../src/fabric-session.ts";
-import { createLoomLocalCfHarnessHost } from "../src/loom-local-host.ts";
-import { parseCfHarnessCliArgs } from "../src/cli.ts";
 
 /** Host settings isolated from the invoking developer's persisted sessions. */
 const hostKeys = [

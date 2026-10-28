@@ -2,9 +2,17 @@
  * Tests for CFButton component
  */
 
+import {
+  getLogger,
+  getLoggerCountsBreakdown,
+} from "@commonfabric/utils/logger";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { CFButton } from "./index.ts";
+
+/** How many drops the `cf-button` logger has counted. */
+const droppedCount = (): number =>
+  getLoggerCountsBreakdown()["cf-button"]?.dropped?.debug ?? 0;
 
 describe("CFButton", () => {
   it("should be defined", () => {
@@ -106,6 +114,41 @@ describe("CFButton", () => {
 
     // When disabled, the capture-phase listener should stop immediate propagation
     expect(listenerCalled).toBe(false);
+  });
+
+  it("counts a click it drops while disabled, and logs it once its logger is enabled", () => {
+    const element = new CFButton();
+    element.disabled = true;
+    element.textContent = "Send";
+    let listenerCalled = false;
+    element.addEventListener("click", () => {
+      listenerCalled = true;
+    });
+    const logger = getLogger("cf-button");
+    const wasDisabled = logger.disabled;
+    const logged: unknown[][] = [];
+    const originalDebug = console.debug;
+    console.debug = (...args: unknown[]) => {
+      logged.push(args);
+    };
+    const before = droppedCount();
+    try {
+      logger.disabled = false;
+      element.dispatchEvent(
+        new Event("click", { bubbles: true, cancelable: true }),
+      );
+    } finally {
+      console.debug = originalDebug;
+      logger.disabled = wasDisabled;
+    }
+
+    expect(listenerCalled).toBe(false);
+    expect(droppedCount()).toBe(before + 1);
+    expect(logged.map((args) => args.join(" "))).toEqual([
+      expect.stringContaining(
+        'dropped cf-button dropped a click while disabled ("Send")',
+      ),
+    ]);
   });
 
   it("should allow click events when not disabled", () => {

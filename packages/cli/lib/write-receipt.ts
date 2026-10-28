@@ -8,7 +8,7 @@
  * `CF_SPACE` takes on, and naming the space in what the command prints is what
  * answers it — a receipt rather than a prompt, so it costs a non-interactive
  * caller nothing and leaves a wrong space visible the moment it happens
- * (docs/plans/cli-surface-shape.md, step 8).
+ * (docs/history/plans/cli-surface-shape.md, step 8).
  *
  * Three properties are what make it a receipt:
  *

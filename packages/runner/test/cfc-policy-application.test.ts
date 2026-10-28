@@ -440,8 +440,10 @@ describe("a runtime policy application", () => {
         },
       }, tx),
     );
+    // The stored branch's `items` has no counterpart in the application's,
+    // so the claim-bearing union cannot be reconciled.
     expect(refusalOf(await tx.commit().settled)).toContain(
-      "drops the stored writeAuthorizedBy at /queue",
+      "cannot reconcile policy-bearing union branches at /queue",
     );
   });
 

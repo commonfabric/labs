@@ -7,6 +7,10 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 
 export const scrubBareFabricIdentifiers = (text: string): string =>
   text
+    .replaceAll(
+      /(?<![A-Za-z0-9:])snapshot:[A-Za-z0-9_-]{43}(?::[A-Za-z0-9_-]{43})?(?![A-Za-z0-9_-])/g,
+      "[fabric-id]",
+    )
     .replaceAll(/\bdata:[^\s"'`)\]}]+/gi, "[fabric-id]")
     .replaceAll(/\bdid:[A-Za-z0-9]+:[A-Za-z0-9._%-]+/g, "[fabric-id]")
     .replaceAll(

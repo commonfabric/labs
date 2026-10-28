@@ -2,8 +2,8 @@ import { expect } from "@std/expect";
 import { parse as parseJsonc } from "@std/jsonc";
 import { describe, it } from "@std/testing/bdd";
 import {
-  dropContainerCases,
   parseJUnit,
+  recordedCases,
   RECORDS_DIR_VARIABLE,
   SKIP_LIST_VARIABLE,
 } from "@commonfabric/test-support/records";
@@ -289,7 +289,7 @@ describe("the workspace unit suites", () => {
     );
     expect(
       new Map(
-        dropContainerCases(report).map((leaf) => [leaf.name, leaf.outcome]),
+        recordedCases(report).map((leaf) => [leaf.name, leaf.outcome]),
       ),
     ).toEqual(
       new Map([["sets overnight", "skip"], ["proofs the dough", "pass"]]),

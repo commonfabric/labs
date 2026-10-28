@@ -1,17 +1,26 @@
+import type { IframePresentation } from "@commonfabric/iframe-sandbox";
 import { type CellHandle, isCellHandle } from "@commonfabric/runtime-client";
-import { provide } from "@lit/context";
+import { ContextConsumer, provide } from "@lit/context";
 import { css, html } from "lit";
 import { property } from "lit/decorators.js";
 
 import { BaseElement } from "../../core/base-element.ts";
 import { valueForDisplay } from "../../core/value-for-display.ts";
+import { iframePresentationContext } from "../cf-iframe/cf-iframe.ts";
 import {
   applyThemeToElement,
   type CFTheme,
   cfThemeContext,
   defaultTheme,
   mergeWithDefaultTheme,
+  resolveColorScheme,
+  tokenAround,
 } from "../theme-context.ts";
+import {
+  computedThemeValues,
+  guestPresentation,
+  sameGuestPresentation,
+} from "./guest-presentation.ts";
 
 export function unwrapThemeCellValues(
   value: unknown,
@@ -95,8 +104,23 @@ export function subscribeToThemeCellValues(
  * <cf-theme .theme=${partialTheme}><slot/></cf-theme>
  *
  * The component unwraps CellHandle values inside a partial theme, merges the
- * result with defaults, provides it via context, and sets CSS custom properties
- * on the host so descendants pick up tokens.
+ * result over the enclosing `cf-theme`'s theme, or over the defaults when there
+ * is none, provides it via context, and sets CSS custom properties on the host
+ * so descendants pick up tokens. A nested instance sets only the properties
+ * its partial changes, and the rest inherit from the enclosing one. An
+ * outermost instance sets them all, unless a host already has `--cf-theme-*`
+ * tokens in effect by CSS: then it sets only what its partial changes from
+ * the defaults.
+ *
+ * It also provides `iframePresentationContext`, so every `cf-iframe` beneath
+ * it that has no `presentation` of its own themes its guest: the
+ * `--cf-theme-*` values computed on this element, which include a host's CSS
+ * overrides of them, followed by the guest base sheet, with the resolved
+ * color scheme as the guest root's `data-color-scheme`. It reads them again
+ * whenever it recomputes, including on `theme-preference-changed`, the event
+ * a host dispatches on `document` after changing the tokens by CSS, since a
+ * custom property changes without one; an unchanged reading provides nothing
+ * new.
  *
  * @element cf-theme
  */
@@ -116,14 +140,42 @@ export class CFThemeProvider extends BaseElement {
   @property({ attribute: false })
   accessor _computedTheme: CFTheme = defaultTheme;
 
+  /**
+   * The presentation provided to `cf-iframe` guests beneath, `null` until the
+   * first computation; a guest receives the latest one when it loads.
+   */
+  @provide({ context: iframePresentationContext })
+  @property({ attribute: false })
+  accessor _guestPresentation: IframePresentation | null = null;
+
   #unsubs: Array<() => void> = [];
+
+  /** The enclosing `cf-theme`'s theme, or `undefined` for an outermost one. */
+  #enclosing: CFTheme | undefined;
 
   private _mediaQuery?: MediaQueryList;
   private _onMediaChange = () => this._recomputeAndApply();
   private _onThemePreferenceChanged = () => this._recomputeAndApply();
 
+  constructor() {
+    super();
+    // A provider ignores requests from its own host, so this one is answered
+    // by the enclosing `cf-theme`, if there is one.
+    new ContextConsumer(this, {
+      context: cfThemeContext,
+      subscribe: true,
+      callback: (theme) => {
+        this.#enclosing = theme;
+        if (this.hasUpdated) this._recomputeAndApply();
+      },
+    });
+  }
+
   override connectedCallback(): void {
+    // Reconnected elsewhere, it is outermost unless a provider answers again.
+    this.#enclosing = undefined;
     super.connectedCallback();
+    if (this.hasUpdated) this._recomputeAndApply();
     // Re-resolve when user toggles theme preference (data-theme attribute)
     document.addEventListener(
       "theme-preference-changed",
@@ -144,10 +196,19 @@ export class CFThemeProvider extends BaseElement {
   }
 
   private _recomputeAndApply() {
-    this._computedTheme = mergeWithDefaultTheme(
+    // Under a host's tokens an outermost instance is a tint: it writes what
+    // its partial changes from the defaults, and the host's values stand
+    // wherever the partial is silent.
+    const around = this.#enclosing ??
+      (tokenAround(this, "--cf-theme-color-text") ? defaultTheme : undefined);
+    const computed = mergeWithDefaultTheme(
       unwrapThemeCellValues(this.theme),
+      this.#enclosing,
     );
-    applyThemeToElement(this, this._computedTheme);
+    // Styles first: a consumer told of the new theme reads them at once.
+    applyThemeToElement(this, computed, around);
+    this._computedTheme = computed;
+    this.#provideGuestPresentation();
     this.#setupSubscriptions();
 
     // Manage the matchMedia listener based on the resolved colorScheme
@@ -167,6 +228,17 @@ export class CFThemeProvider extends BaseElement {
         this._mediaQuery = undefined;
       }
     }
+  }
+
+  /** Provides the guest presentation read now, unless it reads as before. */
+  #provideGuestPresentation() {
+    const next = guestPresentation(
+      computedThemeValues(this),
+      resolveColorScheme(this._computedTheme.colorScheme),
+    );
+    const held = this._guestPresentation;
+    if (held && sameGuestPresentation(held, next)) return;
+    this._guestPresentation = next;
   }
 
   #setupSubscriptions() {

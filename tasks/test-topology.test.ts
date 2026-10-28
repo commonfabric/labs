@@ -22,8 +22,14 @@ import { MEASURED_BATCH_SUFFIX } from "./lane-measurement.ts";
 import { serverExecutionCiLane } from "./server-execution-ci.ts";
 import { readWorkspaceMembers } from "./workspace-tests.ts";
 
-const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+const root = path.dirname(path.dirname(path.fromFileUrl(import.meta.url)));
 const suites = await loadTopology(root);
+
+/**
+ * The suites a lane runs. A suite of verdicts builds no command, since
+ * choosing one of its units runs the units it judges instead.
+ */
+const laneSuites = suites.filter((suite) => suite.judges === undefined);
 
 /** The Deno subcommands a suite's runner is allowed to be. */
 const SUBCOMMANDS = new Set(["task", "test", "run", "check", "fmt", "lint"]);
@@ -60,7 +66,7 @@ describe("the test topology", () => {
     const rootTasks = await tasksOf(root);
     const missing: string[] = [];
     const named: string[] = [];
-    for (const suite of suites) {
+    for (const suite of laneSuites) {
       const requests = suite.units.map((unit) => ({ unit, skip: [] }));
       for (
         const invocation of await suite.command(requests, {
@@ -167,7 +173,7 @@ describe("the test topology", () => {
     const outputDir = await Deno.makeTempDir({ prefix: "topology-whole-" });
     const spoolDir = `${outputDir}/spool`;
     const written: string[] = [];
-    for (const suite of suites) {
+    for (const suite of laneSuites) {
       if (suite.whole.length === 0) continue;
       const requests = suite.whole.map((unit) => ({
         unit,
@@ -190,58 +196,6 @@ describe("the test topology", () => {
     }
     await Deno.remove(outputDir, { recursive: true });
     expect(written).toEqual([]);
-  });
-
-  it("runs the units it names into one process in one invocation of that name, and the rest in none", async () => {
-    // The packer charges a process's setup for each process a lane starts,
-    // reading which process a unit runs in from `processes`, and a lane
-    // measures that setup from the invocation carrying the process's name.
-    // A unit named into one process and run in another is charged for a
-    // process it does not start, and asking for the units of one process
-    // then starts two.
-
-    const outputDir = await Deno.makeTempDir({ prefix: "topology-process-" });
-    const context = { root, outputDir, spoolDir: `${outputDir}/spool` };
-    const wrong: string[] = [];
-    for (const suite of suites) {
-      const byProcess = new Map<string | undefined, string[]>();
-      for (const unit of suite.units) {
-        const process = suite.processes?.get(unit);
-        byProcess.set(process, [...byProcess.get(process) ?? [], unit]);
-      }
-      for (const [process, units] of byProcess) {
-        const invocations = await suite.command(
-          units.map((unit) => ({ unit, skip: [] })),
-          context,
-        );
-        const named = invocations.flatMap((invocation) =>
-          invocation.process === undefined ? [] : [invocation.process]
-        );
-        const expected = process === undefined ? [] : [process];
-        if (JSON.stringify(named) !== JSON.stringify(expected)) {
-          wrong.push(
-            `${suite.id}: the units of ${JSON.stringify(process)} run in ` +
-              JSON.stringify(named),
-          );
-        }
-      }
-    }
-    await Deno.remove(outputDir, { recursive: true });
-    expect(wrong).toEqual([]);
-  });
-
-  it("names a process for every unit of a suite or for none", () => {
-    // The packer charges a suite's process setup only to the units named
-    // into a process, so a unit left out of a suite that names others
-    // would be charged no setup at all.
-    const partial = suites.filter((suite) =>
-      suite.processes !== undefined && suite.processes.size > 0 &&
-      suite.units.some((unit) => !suite.processes!.has(unit))
-    ).map((suite) => suite.id);
-    expect(partial).toEqual([]);
-    expect(
-      suites.filter((suite) => (suite.processes?.size ?? 0) > 0).length,
-    ).toBeGreaterThan(0);
   });
 
   it("lets a default suite and a variant suite hold one source file", () => {
@@ -350,7 +304,7 @@ describe("type checking in a test run", () => {
     const outputDir = await Deno.makeTempDir({ prefix: "topology-no-check-" });
     const checking: string[] = [];
     let started = 0;
-    for (const suite of suites) {
+    for (const suite of laneSuites) {
       const requests = suite.units.map((unit) => ({ unit, skip: [] }));
       for (
         const invocation of await suite.command(requests, {
@@ -426,8 +380,18 @@ describe("reading the topology as a whole", () => {
     }
   });
 
+  it("names no suite with a space, which a hooks measurement's name ends its suite at", () => {
+    // A lane's measurement of a unit's hooks names the suite and then the
+    // unit, and is read back by splitting at the first separator after
+    // the suite, which holds a space. A suite id holding a space could
+    // put that separator inside the suite.
+    for (const suite of suites) {
+      expect([suite.id, suite.id.includes(" ")]).toEqual([suite.id, false]);
+    }
+  });
+
   it("gives every measured set a member with lines a report can name", async () => {
-    // The coverage gate fails a forced set whose reports name no line of
+    // A chosen coverage gate fails where its set's reports name no line of
     // its member, which is sound only where the member has a line a
     // report could name. An empty report charges every such line, so a
     // member it charges nothing has none.

@@ -25,12 +25,12 @@ function withBoard(
   }
 }
 
-// Each row has a title link and an arrow link with the same href, as the
-// recent-runs tile renders them.
+// Rows as the recent commits tile renders them, each titled with the same pull
+// request number, which its title and arrow both link to.
 function runRows(titles: string[]): string {
-  return `<div class="evscroll" data-focus-key="runs" style="height:40px;overflow:auto">${
+  return `<div class="evscroll" data-focus-key="commits" style="height:40px;overflow:auto">${
     titles.map((title) =>
-      `<div class="ev" style="height:30px"><a class="evtxt" data-focus-key="pr-title-${title}" href="https://example.com/${title}">${title}</a><a class="evarrow" data-focus-key="pr-arrow-${title}" href="https://example.com/${title}">↗</a></div>`
+      `<div class="ev" style="height:30px"><span class="evtxt"><a data-focus-key="title-${title}-0" href="https://example.com/${title}">${title} </a><a class="pr" data-focus-key="title-${title}-1" href="https://github.com/o/r/pull/1">(#1)</a></span><a class="evarrow" data-focus-key="pr-arrow-${title}" href="https://github.com/o/r/pull/1">↗</a></div>`
     ).join("")
   }</div>`;
 }
@@ -86,7 +86,7 @@ Deno.test("an update adds, removes and reorders tiles by label, keeping the elem
 Deno.test("an update keeps focus and scroll position in a tile when a tile before it leaves the page", () => {
   withBoard([
     ["scheduled workflows", { status: "bad", value: "1 failing" }],
-    ["recent main runs", { status: "good", extra: runRows(["c", "b", "a"]) }],
+    ["recent commits", { status: "good", extra: runRows(["c", "b", "a"]) }],
   ], (container) => {
     container.querySelector<HTMLElement>('[data-focus-key="pr-arrow-a"]')
       ?.focus({ preventScroll: true });
@@ -94,7 +94,7 @@ Deno.test("an update keeps focus and scroll position in a tile when a tile befor
     reconcileTiles(
       container,
       rendering([
-        "recent main runs",
+        "recent commits",
         { status: "warn", extra: runRows(["d", "c", "b", "a"]) },
       ]),
     );
@@ -125,9 +125,32 @@ Deno.test("an update moves focus from a replaced linked tile to its replacement"
   });
 });
 
+Deno.test("an update keeps focus on a tile's link when the chart under it gains or loses links of its own", () => {
+  // A chart holding a link takes the tile's link off the whole tile and puts
+  // it around the tile's text alone, and an empty chart puts it back.
+  const trust = (extra: string): TileView => ({
+    status: "good",
+    value: "99.0%",
+    extra,
+    href: "/repos?name=labs",
+  });
+  const strip = `<div class="cells"><a class="cell" href="https://example.com/run"></a></div>`;
+  withBoard([["labs ci trust", trust("")]], (container) => {
+    (container.children[0] as HTMLElement).focus();
+    reconcileTiles(container, rendering(["labs ci trust", trust(strip)]));
+    const head = container.querySelector("a.tile-head");
+    expect(head?.getAttribute("href")).toBe("/repos?name=labs");
+    expect(document.activeElement).toBe(head);
+
+    reconcileTiles(container, rendering(["labs ci trust", trust("")]));
+    expect(container.children[0].localName).toBe("a");
+    expect(document.activeElement).toBe(container.children[0]);
+  });
+});
+
 Deno.test("an update moves focus inside a replaced tile to the link with the same focus key", () => {
   withBoard([[
-    "recent main runs",
+    "recent commits",
     { status: "good", extra: runRows(["b", "a"]) },
   ]], (container) => {
     container.querySelector<HTMLElement>('[data-focus-key="pr-arrow-a"]')
@@ -135,13 +158,33 @@ Deno.test("an update moves focus inside a replaced tile to the link with the sam
     reconcileTiles(
       container,
       rendering([
-        "recent main runs",
+        "recent commits",
         { status: "good", extra: runRows(["c", "b", "a"]) },
       ]),
     );
     const arrow = container.querySelector('[data-focus-key="pr-arrow-a"]');
     expect(arrow).not.toBeNull();
     expect(document.activeElement).toBe(arrow);
+  });
+});
+
+Deno.test("an update keeps focus on a row's pull request number when other rows link the same pull request", () => {
+  withBoard([[
+    "recent commits",
+    { status: "good", extra: runRows(["b", "a"]) },
+  ]], (container) => {
+    container.querySelector<HTMLElement>('[data-focus-key="title-a-1"]')
+      ?.focus();
+    reconcileTiles(
+      container,
+      rendering([
+        "recent commits",
+        { status: "warn", extra: runRows(["c", "b", "a"]) },
+      ]),
+    );
+    const number = container.querySelector('[data-focus-key="title-a-1"]');
+    expect(number?.textContent).toBe("(#1)");
+    expect(document.activeElement).toBe(number);
   });
 });
 
@@ -187,14 +230,14 @@ Deno.test("an update moves focus inside a replaced tile to the link with the sam
 
 Deno.test("an update keeps the scroll position of a replaced tile's list", () => {
   withBoard([[
-    "recent main runs",
+    "recent commits",
     { status: "good", extra: runRows(["c", "b", "a"]) },
   ]], (container) => {
     container.querySelector(".evscroll")!.scrollTop = 25;
     reconcileTiles(
       container,
       rendering([
-        "recent main runs",
+        "recent commits",
         { status: "warn", extra: runRows(["d", "c", "b", "a"]) },
       ]),
     );

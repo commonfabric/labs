@@ -7,6 +7,8 @@ import {
   NAME,
   pattern,
   type PatternFactory,
+  SELF,
+  spaceOf,
   Stream,
   toSchema,
   UI,
@@ -22,27 +24,63 @@ import FabriChatManager, {
 } from "../fabrichat/manager.tsx";
 import FavoritesManager from "./favorites-manager.tsx";
 import Self from "../self.tsx";
+import SharedSpaceCollection, {
+  type SharedSpaceCollectionOutput,
+} from "./shared-space-collection.tsx";
+import {
+  sharedSpaceCollectionViewOf,
+  type SharedSpaceInterface,
+  sharedSpaceProfileViewOf,
+  sharedSpaceReceiptViewOf,
+} from "./shared-space-interface.ts";
 import {
   changeSharedSpaceMembership,
   readSharedSpaceCatalog,
   registerSharedSpace,
+  removeSharedSpace,
   type SharedSpaceCatalog,
   type SharedSpaceCatalogStorage,
   type SharedSpaceMembershipChange,
   type SharedSpaceMembershipResult,
   type SharedSpaceRegistration,
   type SharedSpaceRegistrationResult,
+  type SharedSpaceRemoval,
+  type SharedSpaceRemovalResult,
+  type TrustedSharedSpaceProfiles,
 } from "./shared-space-catalog.ts";
 import {
   type CreateProfileEvent,
+  ownProfileSpaces,
+  type ProfileRetirementEvent,
   seedProfileName,
+  setProfileRetired,
   submitProfileCreation,
   type TrustedDefaultProfile,
+  type TrustedLegacyDefaultProfile,
   type TrustedProfileList,
   type TrustedProfileMru,
+  type TrustedRetiredProfileList,
 } from "./profile-create.tsx";
 import ProfilePicker from "./profile-picker.tsx";
+import { refusalReasonText } from "./private-inbox-refusal-text.ts";
 import type { BackwardsCompatibleProfile } from "./profile-home.tsx";
+import {
+  ensurePrivateInbox,
+  type EnsurePrivateInboxEvent,
+  pointProfilesAtPrivateInbox,
+  PrivateInboxAnswering,
+  type PrivateInboxHolder,
+  type PrivateInboxReceipt,
+  type PrivateInboxRefusalHolder,
+  type PrivateInboxReplacementHolder,
+  type PrivateInboxRequest,
+  replaceRefusedPrivateInbox,
+  repointProfilesFromReplacedInbox,
+  requestPrivateInbox,
+  type RetainedPrivateInboxes,
+  TRUSTED_PRIVATE_INBOX_REFUSAL_SURFACE,
+  TRUSTED_REPLACE_REFUSED_INBOX_ACTION,
+} from "./private-inbox.tsx";
 
 // Types from favorites-manager.tsx
 type Favorite = {
@@ -77,6 +115,8 @@ type SpaceEntry = {
 };
 
 export type HomeOutput = {
+  /** The collection browser's named instance and session-local controls. */
+  socialSpaceCollection: SharedSpaceCollectionOutput;
   [NAME]: string;
   [UI]: VNode;
   // These defaults are part of Home's published result contract. Pattern setup
@@ -98,10 +138,19 @@ export type HomeOutput = {
   // `legacyDefaultProfile` is a default held as a link at the root of the
   // `defaultProfile` cell, the shape a home holds one in when it was chosen
   // before the slot. It is the default while the slot holds none.
-  profiles: Default<TrustedProfileList, []>;
-  defaultProfile?: TrustedDefaultProfile;
-  legacyDefaultProfile?: BackwardsCompatibleProfile;
-  mru: Default<TrustedProfileMru, []>;
+  profiles: Writable<Default<TrustedProfileList, []>>;
+  defaultProfile?: Writable<TrustedDefaultProfile>;
+  legacyDefaultProfile?: Writable<BackwardsCompatibleProfile>;
+  // The space of `legacyDefaultProfile`, which the retire guard and the
+  // picker read: a cell of Home's own, where a handle to the cell holding the
+  // link denotes the linked profile.
+  legacyDefaultProfileSpace?: string;
+  mru: Writable<Default<TrustedProfileMru, []>>;
+  // The profiles the user retired, appended through `retireProfile` and
+  // removed through `restoreProfile`, both bindings of `setProfileRetired`.
+  // A retired profile stays in `profiles`, and is not one of the user's
+  // profiles: `#profile` and the picker leave it out.
+  retiredProfiles: Writable<Default<TrustedRetiredProfileList, []>>;
   // The user's agent queue: the index of their agent runs and their
   // registered runner. `wish({ query: "#agent_queue" })` resolves to it, and
   // the `agent` builtin appends to its `entries`.
@@ -109,7 +158,55 @@ export type HomeOutput = {
   // The user's chat manager: the index of the FabriChat rooms they belong to.
   // `wish({ query: "#chatManager" })` resolves to it.
   chatManager: FabriChatManagerOutput;
+  // The user's private inbox, where others deliver offers to them: the one the
+  // deciding profile points at, if the host vetted it, or, when no profile
+  // advertises an inbox, one it created. The deciding profile is the first, in
+  // the order `#profile` answers in, that points at an inbox. Home keeps the
+  // inbox it holds while that profile points at it, and while no profile
+  // points at an inbox. Each of their profiles that points at no inbox is
+  // pointed here; one that points at another inbox keeps it. Absent until
+  // `ensurePrivateInbox` runs, and while Home holds none and the advertised
+  // inbox failed vetting.
+  privateInbox: Writable<PrivateInboxHolder>;
+  // The inboxes `privateInbox` held before, in the order Home gave them up, so
+  // that what senders delivered to them stays readable.
+  retainedPrivateInboxes: Writable<RetainedPrivateInboxes | Default<[]>>;
+  // The host's refusal of the inbox the deciding profile points at, under
+  // `refusal`: why the host refused it, by the host's code; the refused inbox;
+  // and when Home first recorded it. `ensurePrivateInbox` records one only
+  // while that profile is in Home's list and still points at the refused inbox,
+  // which is not the one Home holds. The next ensure clears it when Home adopts
+  // or creates an inbox, when the deciding profile points at the inbox Home
+  // holds, or when no profile points at the refused inbox any longer; nothing
+  // else clears it automatically between ensures, though the owner's own code
+  // can, through `ensurePrivateInbox`. No `refusal` while there is none to
+  // report.
+  privateInboxRefusal: Writable<
+    PrivateInboxRefusalHolder | Default<Record<PropertyKey, never>>
+  >;
+  // The last refusal the owner had Home replace, under `replacement`: the
+  // refused inbox, the refusal's code and time, and when the owner acted. Only
+  // `replaceRefusedPrivateInbox` writes it, from the button on Home's refusal
+  // notice. No `replacement` before the first.
+  privateInboxReplacement: Writable<PrivateInboxReplacementHolder>;
+  // Independent roles for product consumers. Select `commands` for writes,
+  // `view` for collection lists, `receipts` for offer admission evidence, and
+  // `profiles` for which of the person's profiles acts in each space.
+  sharedSpaces: SharedSpaceInterface;
+  // Flat aliases address the same catalog and command streams.
   sharedSpaceCatalog: SharedSpaceCatalog;
+  // The document the catalog is stored in, which `sharedSpaceCatalog` reads,
+  // so that `registerSharedSpace` can tell it is bound to Home's own.
+  sharedSpaceCatalogStorage: Writable<SharedSpaceCatalogStorage>;
+  // Which of the person's profiles acts in each space, by the space's DID, as
+  // `registerSharedSpace` records it, adding a record where there is none,
+  // and no other handler writes it. `sharedSpaces.profiles` reads it for a
+  // reader, saying also which records it cannot read and which name a
+  // retired profile or one that is not the person's own.
+  sharedSpaceProfiles: Writable<TrustedSharedSpaceProfiles>;
+  // Registers a space the caller vetted, and records the profile the
+  // registration names as the one acting in the space, unless Home records
+  // one already (see `registerSharedSpaceIn`).
   registerSharedSpace: Stream<
     SharedSpaceRegistration,
     SharedSpaceRegistrationResult
@@ -118,7 +215,40 @@ export type HomeOutput = {
     SharedSpaceMembershipChange,
     SharedSpaceMembershipResult
   >;
+  // Only for an application undoing its own import of shared spaces: removes
+  // one entry no offer receipt names, at the revision the caller observed (see
+  // `removeSharedSpace` for what the caller must do). Home renders no control
+  // for it, and nothing a person invokes calls it: archive is how a person puts
+  // a shared space away.
+  removeSharedSpace: Stream<SharedSpaceRemoval, SharedSpaceRemovalResult>;
   createProfile: Stream<CreateProfileEvent>;
+  // Retires the profile the event links, as the picker's Remove does, unless
+  // it is the one `#profile` returns (see `setProfileRetired`).
+  retireProfile: Stream<ProfileRetirementEvent>;
+  // Restores the retired profile the event links.
+  restoreProfile: Stream<ProfileRetirementEvent>;
+  // Gives Home the private inbox the deciding profile advertises: it adopts the
+  // one the host vetted and names, with that profile, when the profile is in
+  // Home's list and still points at it, or creates one when Home holds none
+  // and no profile points at an inbox, and points every profile that points at
+  // no inbox at Home's. It records the host's refusal of the deciding
+  // profile's inbox in `privateInboxRefusal`.
+  // The host sends it the first time a runtime worker brings up Home, and
+  // again at that worker's next bring-up if the ensure failed, so Home adopts
+  // again only then. `requestPrivateInbox` sends it an event naming nothing,
+  // which adopts nothing.
+  ensurePrivateInbox: Stream<EnsurePrivateInboxEvent>;
+  // For a client, such as a loom daemon, that would otherwise create an inbox
+  // of its own: has Home ensure its inbox, as `ensurePrivateInbox` does for an
+  // event naming nothing, and links the handling's receipt to Home's answer
+  // for the profile the request names, which reads `ensured` once that profile
+  // points at Home's inbox, or a final status saying why it never will.
+  requestPrivateInbox: Stream<PrivateInboxRequest, PrivateInboxReceipt>;
+  // For the owner, from the button on Home's refusal notice: replaces the
+  // refused inbox with the one Home holds, or with one it creates when it holds
+  // none, and points the profiles that point at the refused inbox at Home's.
+  // Refused unless the renderer marks the event as a click on that button.
+  replaceRefusedPrivateInbox: Stream<void>;
   addFavorite: Stream<{
     piece: Writable<{ [NAME]?: string }>;
     tags?: string[];
@@ -268,7 +398,8 @@ const homeResultSchema = __cf_data(
 );
 
 const Home = pattern(
-  (_: Record<string, never>): HomeOutput => {
+  (input: Record<string, never> & { [SELF]: HomeOutput }): HomeOutput => {
+    const home = input[SELF];
     // OWN the data cells (.for for id stability)
     const favorites = new Writable<Favorite[]>([]).for("favorites");
     const journal = new Writable<JournalEntry[]>([]).for("journal");
@@ -277,59 +408,172 @@ const Home = pattern(
       entries: {},
       offers: {},
     }).for("sharedSpaceCatalog");
+    // Which of the person's profiles acts in each space the catalog holds,
+    // written by `registerSharedSpace` alone, which only adds records.
+    const sharedSpaceProfiles = new Writable<TrustedSharedSpaceProfiles>({})
+      .for("sharedSpaceProfiles");
     const defaultAppUrl = new Writable("").for("defaultAppUrl");
-    // NOTE(CT-1628): the `as any` casts around the profile cells below are
-    // required because the CFC wrapper types (TrustedProfile*) don't yet compose
-    // with Writable/the pattern factory output type. Tracked for a proper type
-    // fix.
-    //
     // Multi-profile model: a user has many profiles, each in its own `inSpace`
     // space. `profiles` is the durable list (appended on create).
     // `defaultProfile` holds, under `profile`, the one `#profile` resolves to
     // in headless mode and orders first in the picker; `mru` is the
-    // recency-ordered list driving the rest of the ordering. The default's cell
-    // carries its trusted type, so its write contract labels the document
-    // `setDefaultProfile` writes.
-    const profiles = new Writable<BackwardsCompatibleProfile[]>([]).for(
-      "profiles",
-    );
+    // recency-ordered list driving the rest of the ordering. Each cell carries
+    // its trusted type, so its write contract labels the document it is,
+    // the document an older Home already holds as well as a new one.
+    const profiles = new Writable<TrustedProfileList>([]).for("profiles");
     const defaultProfile = new Writable<TrustedDefaultProfile>({}).for(
       "defaultProfileSlot",
     );
     // A default chosen before the slot: a link at the root of this cell. It
     // stays the default until one is chosen in the slot, and nothing writes
     // it, since a handle to a cell whose root holds a link denotes the linked
-    // profile rather than the cell.
-    const legacyDefaultProfile = new Writable<
-      BackwardsCompatibleProfile | undefined
-    >(undefined).for("defaultProfile");
-    const mru = new Writable<BackwardsCompatibleProfile[]>([]).for("mru");
+    // profile rather than the cell. For the same reason Home's handlers take
+    // the default's space instead (`legacyDefaultProfileSpace`), a cell of
+    // Home's own whatever the link.
+    const legacyDefaultProfile = new Writable<TrustedLegacyDefaultProfile>()
+      .for("defaultProfile");
+    const legacyDefaultProfileSpace = computed(() =>
+      spaceOf(legacyDefaultProfile)
+    );
+    const mru = new Writable<TrustedProfileMru>([]).for("mru");
+    const retiredProfiles = new Writable<TrustedRetiredProfileList>([])
+      .for("retiredProfiles");
+    // Home's private inbox, which a profile is pointed at when it is created
+    // and when the host ensures the inbox.
+    const privateInbox = new Writable<PrivateInboxHolder>({}).for(
+      "privateInbox",
+    );
+    // The inboxes Home held before, where `ensurePrivateInbox` moves the one
+    // Home holds when it adopts another.
+    const retainedPrivateInboxes = new Writable<RetainedPrivateInboxes>([])
+      .for("retainedPrivateInboxes");
+    // Where `ensurePrivateInbox` records the host's refusal of the inbox the
+    // deciding profile points at.
+    const privateInboxRefusal = new Writable<PrivateInboxRefusalHolder>({})
+      .for("privateInboxRefusal");
+    // The last refusal the owner had Home replace, which only the notice's
+    // button writes.
+    const privateInboxReplacement = new Writable<PrivateInboxReplacementHolder>(
+      {},
+    ).for("privateInboxReplacement");
+    // The profiles requests for Home's inbox have named, by entity, which
+    // Home goes on answering for.
+    const privateInboxRequests = new Writable<Record<string, boolean>>({}).for(
+      "privateInboxRequests",
+    );
+    // The refusal notice reads the refusal's code and time, and never its
+    // `inbox`: the stored link carries the label the refused inbox's owner
+    // gives its offers. The notice renders after everything else, for the
+    // reason the chats panel does, and the screen's header slot shows it
+    // above the tabs. Only its text is computed: its markup, button included,
+    // is static, and `refused` decides whether it shows.
+    const refusalReason = privateInboxRefusal.key("refusal").key("reason");
+    const refusedAt = privateInboxRefusal.key("refusal").key("refusedAt");
+    const refused = computed(() => typeof refusedAt.get() === "number");
+    const refusalNoticeText = computed(() => {
+      const stored = refusalReason.get();
+      const reason = typeof stored === "string" ? stored : "";
+      const at = refusedAt.get();
+      return {
+        explanation: refusalReasonText(reason) ?? "",
+        code: reason || "none given",
+        // The sandbox formats a date given no zone in UTC and one given a
+        // zone in that zone, while a date's local getters read the host's
+        // zone, so the zone is given here and named in the text.
+        noticed: typeof at === "number"
+          ? new Date(at).toLocaleString("en-US", {
+            timeZone: "UTC",
+            timeZoneName: "short",
+          })
+          : "",
+      };
+    });
     // Untrusted-write regression surface: this stream is exported so tests can
     // verify that sending it from outside the trusted create surface does NOT
     // create a profile. The actual create UI lives in the profile picker below.
     const createProfileStream = submitProfileCreation({
-      profiles: profiles as any,
-      seedName: seedProfileName({ profiles: profiles as any }),
+      profiles,
+      seedName: seedProfileName({ privateInbox }),
     });
     // The home Profile tab IS the profile picker: it lists profiles natively,
     // sets the default, stamps MRU on selection, and creates more inline.
     const profilePicker = ProfilePicker({
-      profiles: profiles as any,
-      defaultProfile: defaultProfile as any,
-      legacyDefaultProfile: legacyDefaultProfile as any,
+      profiles,
+      defaultProfile,
+      legacyDefaultProfileSpace,
       offersSetDefault: true,
-      mru: mru as any,
+      mru,
+      retiredProfiles,
+      privateInbox,
     });
 
     // Child components
     const favoritesComponent = FavoritesManager({});
     const agentQueue = AgentQueue({});
-    const chatManager = FabriChatManager({});
+    const chatManager = FabriChatManager({ sharedSpaceCatalog: catalog });
+    const ensurePrivateInboxStream = ensurePrivateInbox({
+      privateInbox,
+      retainedPrivateInboxes,
+      privateInboxRefusal,
+      profiles,
+      pointProfiles: pointProfilesAtPrivateInbox({
+        privateInbox,
+        profiles,
+      }),
+    });
+    const replaceRefusedInboxStream = replaceRefusedPrivateInbox({
+      privateInbox,
+      privateInboxRefusal,
+      privateInboxReplacement,
+      repointProfiles: repointProfilesFromReplacedInbox({
+        privateInbox,
+        privateInboxReplacement,
+        profiles,
+      }),
+    });
     // Private self-model — the "real you" tier (values, neurotype, meaning Q&A),
     // home-local and never shared. Distinct from the outward profile/personas in
     // the Profile tab. Owns its own durable cell (seeded via Default<>).
     const selfComponent = Self({});
     const activeTab = new Writable("spaces").for("activeTab");
+    // Home's answers to requests for its inbox, which `requestPrivateInbox`
+    // links a request's receipt to.
+    const privateInboxAnswering = PrivateInboxAnswering({
+      privateInbox,
+      profiles,
+      requested: privateInboxRequests,
+    });
+    const sharedSpaces = {
+      view: computed(() => sharedSpaceCollectionViewOf(catalog.get())),
+      receipts: computed(() => sharedSpaceReceiptViewOf(catalog.get())),
+      // The builder numbers unnamed nodes in the order it reaches them, and
+      // it reaches whatever Home's cells lead to from the first place it
+      // visits them, such as the profile tab. This reads Home's own result,
+      // which leads nowhere, so that every unnamed node keeps its number.
+      // The person's own profiles in each list (`ownProfileSpaces()`), by
+      // their spaces: those `profileOwnerOf()` names Home's owner for, whose
+      // DID is Home's space's.
+      profiles: computed(() => {
+        const owner = spaceOf(sharedSpaceProfiles);
+        return sharedSpaceProfileViewOf(
+          home.sharedSpaces.view,
+          home.sharedSpaceProfiles.get(),
+          ownProfileSpaces(home.retiredProfiles, owner),
+          ownProfileSpaces(home.profiles, owner),
+        );
+      }),
+      commands: {
+        register: home.registerSharedSpace,
+        changeMembership: home.changeSharedSpaceMembership,
+      },
+      imports: { remove: home.removeSharedSpace },
+    };
+    // The builder numbers unnamed roots in input/result walk order, including
+    // the UI. Naming this spot preserves every existing positional cause.
+    const socialSpaceCollection = SharedSpaceCollection({
+      catalog,
+      view: sharedSpaces.view,
+    });
 
     return {
       [NAME]: `Home`,
@@ -346,6 +590,8 @@ const Home = pattern(
               <cf-tab value="profile">Profile</cf-tab>
               <cf-tab value="self">Self</cf-tab>
               <cf-tab value="agent-runs">Agent runs</cf-tab>
+              <cf-tab value="chats">Chats</cf-tab>
+              <cf-tab value="social-spaces">Social spaces</cf-tab>
             </cf-tab-list>
             <cf-tab-panel value="agent-runs" id="home-agent-runs">
               {agentQueue}
@@ -445,27 +691,95 @@ const Home = pattern(
                 </cf-vstack>
               </cf-vstack>
             </cf-tab-panel>
+            <cf-tab-panel value="chats" id="home-chats">
+              {chatManager}
+            </cf-tab-panel>
+            <cf-tab-panel value="social-spaces" id="home-social-spaces">
+              {socialSpaceCollection}
+            </cf-tab-panel>
           </cf-tabs>
+
+          <div slot="header">
+            {refused
+              ? (
+                <div
+                  id="home-private-inbox-refusal"
+                  data-ui-pattern={TRUSTED_PRIVATE_INBOX_REFUSAL_SURFACE}
+                  data-ui-event-integrity={TRUSTED_PRIVATE_INBOX_REFUSAL_SURFACE}
+                >
+                  <cf-alert status="warning">
+                    <h4 slot="title">Shares may not reach you</h4>
+                    <cf-vstack slot="description" gap="1">
+                      <span>
+                        One of your profiles points others at an inbox Home
+                        can't use, so what they share with you may not arrive.
+                        {" "}
+                        {refusalNoticeText.explanation}
+                      </span>
+                      <span style={{ fontSize: "12px", color: "#666" }}>
+                        Reason:{" "}
+                        <code>{refusalNoticeText.code}</code>. First noticed
+                        {" "}
+                        {refusalNoticeText.noticed}.
+                      </span>
+                      <span style={{ fontSize: "12px", color: "#666" }}>
+                        Using a new inbox points the profiles that point at the
+                        refused one at Home's own inbox instead. A loom daemon
+                        running as an identity other than yours then stops
+                        receiving loom shares.
+                      </span>
+                      <div>
+                        <cf-button
+                          id="home-private-inbox-replace"
+                          size="sm"
+                          data-ui-action={TRUSTED_REPLACE_REFUSED_INBOX_ACTION}
+                          onClick={replaceRefusedInboxStream}
+                        >
+                          Use a new inbox
+                        </cf-button>
+                      </div>
+                    </cf-vstack>
+                  </cf-alert>
+                </div>
+              )
+              : null}
+          </div>
         </cf-screen>
       ) as VNode,
 
       // Exported data
+      socialSpaceCollection,
       favorites,
       journal,
       spaces,
       defaultAppUrl,
-      profiles: profiles as any,
-      defaultProfile: defaultProfile as any,
-      legacyDefaultProfile: legacyDefaultProfile as any,
-      mru: mru as any,
+      profiles,
+      defaultProfile,
+      legacyDefaultProfile,
+      legacyDefaultProfileSpace,
+      mru,
+      retiredProfiles,
       agentQueue,
       chatManager,
+      privateInbox,
+      retainedPrivateInboxes,
+      privateInboxRefusal,
+      privateInboxReplacement,
 
+      sharedSpaces,
       sharedSpaceCatalog: computed(() => readSharedSpaceCatalog(catalog)),
+      sharedSpaceCatalogStorage: catalog,
+      sharedSpaceProfiles,
 
       // Exported handlers
-      registerSharedSpace: registerSharedSpace({ catalog }),
+      registerSharedSpace: registerSharedSpace({
+        catalog,
+        sharedSpaceProfiles,
+        profiles: home.profiles,
+        retiredProfiles: home.retiredProfiles,
+      }),
       changeSharedSpaceMembership: changeSharedSpaceMembership({ catalog }),
+      removeSharedSpace: removeSharedSpace({ catalog }),
       addFavorite: addFavorite({ favorites }),
       removeFavorite: removeFavorite({ favorites }),
       addJournalEntry: addJournalEntry({ journal }),
@@ -474,6 +788,30 @@ const Home = pattern(
       adoptSpace: adoptSpaceHandler({ spaces }),
       renameSpace: renameSpaceHandler({ spaces }),
       createProfile: createProfileStream,
+      retireProfile: setProfileRetired({
+        profiles,
+        mru,
+        retiredProfiles,
+        defaultProfile,
+        legacyDefaultProfileSpace,
+        retired: true,
+      }),
+      restoreProfile: setProfileRetired({
+        profiles,
+        mru,
+        retiredProfiles,
+        defaultProfile,
+        legacyDefaultProfileSpace,
+        retired: false,
+      }),
+      ensurePrivateInbox: ensurePrivateInboxStream,
+      requestPrivateInbox: requestPrivateInbox({
+        profiles,
+        requested: privateInboxRequests,
+        answers: privateInboxAnswering.answers,
+        ensure: ensurePrivateInboxStream,
+      }),
+      replaceRefusedPrivateInbox: replaceRefusedInboxStream,
     };
   },
   homeArgumentSchema,

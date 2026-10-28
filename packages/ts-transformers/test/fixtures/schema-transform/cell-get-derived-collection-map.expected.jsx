@@ -278,12 +278,12 @@ export default pattern((__cf_pattern_input) => {
             anyOf: [{
                     type: "null"
                 }, {
-                    $ref: "https://commonfabric.org/schemas/vnode.json"
+                    type: "object",
+                    properties: {}
                 }, {
                     $ref: "#/$defs/UIRenderable"
                 }, {
-                    type: "object",
-                    properties: {}
+                    $ref: "https://commonfabric.org/schemas/vnode.json"
                 }],
             $defs: {
                 UIRenderable: {

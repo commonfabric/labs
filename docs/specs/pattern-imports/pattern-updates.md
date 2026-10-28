@@ -43,7 +43,7 @@ during that implementation are archived at
 
 ## Last Updated
 
-2026-08-27
+2026-10-12
 
 ## Motivation
 
@@ -98,7 +98,7 @@ during that implementation are archived at
 | **In-place re-run watcher** — `setupPatternWatcher` sinks the `patternIdentity` meta; on change it cancels the old pattern's nodes and re-instantiates the new pattern **onto the same result cell** | `runner.ts` (enabled unless `doNotUpdateOnPatternChange`) | Applies a pointer move when the piece is already running; a piece that is not running has the new pattern staged over its document by the transition itself |
 | `SourceReconciler` | `packages/runner/src/source-reconciler.ts` | Origin resolution, identity lookup, verified closure compile, and the guarded transition — one path for every piece |
 | Space root: `spaceCell.defaultPattern` link → root piece → `patternIdentity` | `packages/piece/src/ops/pieces-controller.ts` (`linkDefaultPattern`/`getDefaultPattern`) | What a system update rewrites |
-| `ensureDefaultPattern` (resolve → follow the origin → start) / `recreateDefaultPattern` (manual, **not** state-preserving) | `packages/piece/src/ops/pieces-controller.ts` | The root's open path and its repair ladder, and the state-losing escape hatch (recreate); both URL-based creation paths stamp `patternSource` |
+| `ensureDefaultPattern` (resolve → follow the origin → start; with `reconcile: false`, resolve → start, following the origin only if the held pattern cannot load) / `recreateDefaultPattern` (manual, **not** state-preserving) | `packages/piece/src/ops/pieces-controller.ts` | The root's open path and its repair ladder, and the state-losing escape hatch (recreate); both URL-based creation paths stamp `patternSource` |
 | System patterns = **raw TSX served by path**, bundled via `deno compile --include`; **no name→identity manifest** | `packages/runner/src/harness/patterns-route.deno.ts` defines the route; `packages/toolshed/routes/patterns/patterns-server.ts` and `patterns.routes.ts` name this deployment's directories and wire it into the server | Where the current system source + its identity come from |
 | Per-space host resolution: `mappedHostFor(space)` / `registerSpaceHost` (3-tier: seed `spaceHostMap` → learned site-table → default) | `Runtime.mappedHostFor` / `registerSpaceHost` in `packages/runner/src/runtime.ts`, `storage/v2-remote-session.ts` | Which toolshed a space's source is fetched from |
 | Identity computation: `transformInjectHelperModule` + `computeModuleIdentities` | `harness/pretransform.ts`, `sandbox/module-record-compiler.ts` | What toolshed runs to answer `?identity` |
@@ -342,13 +342,49 @@ rather than refused: a slot whose stored value is a link that cannot be
 dereferenced in that transaction (a nested piece's argument lives in its host's
 document, and "not yet synced" is not "invalid"), and a root carrying no
 completion marker at all, which gets one unvalidated setup because absence
-cannot be distinguished from a pending apply.
+cannot be distinguished from a pending apply. A link stored in a slot the new
+schema types as a cell handle (`Writable`, `Cell`, `Stream`) is judged as a
+handle, as it is in a slot typed as a handle or `undefined` (or `null`), since
+a link is neither: validation reads only the top level of what it reaches,
+without descending, and holds it to the type the slot's schema allows. What lies
+below is checked by the reactive reads that follow the handle, and leaving it
+unread keeps its labels out of the transaction that writes the piece's own
+stores. A write to a piece's input validates the input it lands in the same way.
+
+A nested piece is set up again the same way when its code changes, over its
+existing argument document, with the argument its parent's expression supplies
+written over the slots that document holds. The slots the parent does not
+supply are the nested piece's own state, and they are carried over, except
+that a stored slot the new argument schema refuses is dropped, with a warning
+naming the pattern, the piece, the slot and the mismatch, and its default fills
+it where it has one. Where the argument still fails the schema as a whole, as
+a union at its root can once the parent's slots pick a branch, every stored
+slot the parent does not supply is dropped the same way. A stored slot that no
+longer fits therefore does not stop the parent from starting. A slot the parent
+supplied once and supplies no longer keeps the value it last held.
+
+Dropping a slot does not destroy what it held. In the same transaction as the
+write that fills it, setup copies the slot's stored value into the nested piece's
+refused-slot store: a document minted from the piece's result cell, in its space
+and at its scope, which `refusedArgumentSlotsCell()` in `@commonfabric/runner`
+names from that cell alone, so each scoped instance of a piece keeps its own. A
+link in the value that leaves its document, space or scope to the document
+holding it is written naming the argument document's, so it points where it did.
+The store holds the dropped values by slot, then by the `identity#symbol` of the
+pattern whose setup dropped them (`keyless` for a pattern with no artifact
+identity), each beside its mismatch. A value already kept under the same slot
+and pattern is not kept again, and nothing kept is replaced. The warning names
+the store. The runtime names the store as one it owns for the piece, so a value
+copied out of a labeled argument keeps its confidentiality there.
 
 A refusal is a repair failure, not a silent one. The pointer has already moved
 by the time setup runs, so re-running the same identity refuses identically;
 the boot repair therefore classifies this failure and escalates it to the
 roll-forward backstop — the same route a refused CFC migration takes — rather
-than retrying a version that cannot read its own root.
+than retrying a version that cannot read its own root. A root an `inSpace()`
+call placed at its space's reserved root address is not rolled forward, nor is
+one whose own stored label says it represents a principal, as a profile's
+does: the failure surfaces and the root stays as it is.
 
 During space open,
 `ensureDefaultPattern` performs this transaction before calling `startPiece`,
@@ -357,7 +393,22 @@ before its first start. This lets an obsolete pattern that cannot load be
 replaced before bootstrap without reading unsynchronized owned cells as their
 schema defaults. If the piece is already running, the
 watcher cancels its old reactive nodes and re-instantiates the new pattern onto
-the **same result cell**.
+the **same result cell**. The watcher reads from storage before it does: the
+writer authority the new pattern inherits, and any document the new pattern
+reads that the replica lacks. `ensureDefaultPattern` waits for that
+re-instantiation, through the runner's `patternPointerFollowed()`, so the root
+it returns runs the new pattern whether or not the root was running when it
+was opened. A runtime that seals its writes into a serving wave is the
+exception. There the watcher re-instantiates once the wave carrying the new
+pattern's setup has settled, so that a withdrawn setup leaves the old graph in
+place, and a wave settles after the cycle that sealed into it has ended. A call
+made within that cycle cannot wait for the settlement, so on such a runtime
+`ensureDefaultPattern` returns with the old pattern's graph still running.
+On a client runtime the watcher re-instantiates only once the setup it stages
+for the new pattern has committed, and a refused setup leaves the old pattern
+running under the moved pointer. Until the piece settles on one of the two, an
+event for its streams waits, and then runs the handler of the pattern it
+settled on.
 
 - **Survives**: the result cell's entity and inbound links. State remains
   reachable when the new pattern reads it through the same stable keys and
@@ -367,6 +418,29 @@ the **same result cell**.
   must exercise representative prior state and verify that the proposed source
   still reads and preserves it. The deployment runtime does not try to infer
   stable-key or stable-cause compatibility.
+
+Opening any other piece that is already running waits the same way, through
+the same `patternPointerFollowed()`, for two kinds of pointer move. `openPiece`,
+and a `getPieceCell` that reconciles, wait for the move their own reconcile
+made, and for any earlier move the piece's watcher has already observed. They
+wait after the reconcile, and again after the start where the open starts the
+piece, since a start that was in flight before the pointer moved can
+instantiate the outgoing pattern.
+
+The watcher observes a move in a scheduler pass. An open whose reconcile moved
+the pointer therefore waits for the runtime to go idle first. An open that
+moved nothing does not, because that wait lasts until every piece in the
+runtime is quiescent. Such an open does not wait for a move committed
+elsewhere that the watcher has yet to observe.
+
+The wait is for the opened piece's watcher alone, and lasts as long as that
+watcher takes. For a pointer another replica moved to a pattern this runtime
+has not compiled, that includes loading the pattern, which starting the same
+piece would wait for if it were not running. A re-instantiation that fails is
+logged and leaves the piece on the pattern it was running, and the open
+resolves all the same. On a runtime that seals its writes into a serving wave
+the re-instantiation follows the wave's settlement, which the wait does not
+cover.
 
 An automatic update from a `system:` origin runs no structural comparison,
 because the release gate below is a better check than the runtime could make
@@ -428,6 +502,15 @@ light computation (`resolveEntryIdentity` in the runner). The worker
 independently checks the result by compiling the downloaded closure and
 comparing its compiler-produced entry identity.
 
+Where the deployment states when it released what it serves
+(`TOOLSHED_RELEASED_AT`), the response carries that time beside the identity, in
+a `CF-Released-At` header holding an RFC 3339 date-time, exposed to cross-origin
+readers. It is one value for everything the deployment serves, and it is what
+orders two identities of one file: a content hash says only that two sources
+differ, never which is the later release. It is the time of the deploy rather
+than of a commit or a build, so deploying an earlier commit again, to roll a bad
+release back, is the latest release the deployment has made.
+
 Attached source roots travel as repeated `sourceRoot` query parameters naming
 full `/api/patterns/` pathnames, retaining any percent-encoding. The route accepts
 up to 32 distinct roots, validates their paths, and caches by the entry and sorted
@@ -453,15 +536,18 @@ as `patternIdentity`, verified by a parity test against the real
   adopt.
 - **Assemble the program the worker assembles.** Resolving a pattern for a
   compile attaches every file that a `dataFile()` call in its closure reads,
-  and the compiler folds each one into the entry's hash. The light path
+  and the compiler folds each one into the hash of the module that reads it,
+  which the entry's hash covers. The light path
   attaches them by the same step (`attachDeclaredDataFiles`), and reads each
   one as a program stores it: strictly as UTF-8, keeping a leading byte order
   mark that decoding it as source would drop.
 
 Both the `?identity` representation and every source-module representation use
 strong checksum `ETag`s with `Cache-Control: public, no-cache`. The identity
-itself is the `?identity` validator; a source module's validator is the SHA-256
-of its exact response bytes. Clients therefore retain unchanged bytes but must
+itself, with the release time where there is one, is the `?identity` validator,
+so revalidating after a redeploy of unchanged source gets a `200` carrying its
+new time rather than a `304`; a source module's validator is the SHA-256 of its
+exact response bytes. Clients therefore retain unchanged bytes but must
 conditionally revalidate them before every update attempt.
 
 **Runtime side (when the piece is opened).** Resolve the piece without starting
@@ -491,14 +577,34 @@ then start it:
 3. If `currentId` equals the running `patternIdentity.identity`, probe that
    exact stored artifact. A successful load is done. A missing or unloadable
    artifact continues to compile from source rather than taking the fast path,
-   which is what puts the artifact back.
-4. Revalidate `{host}{url}` and every module in its complete authored import
+   which is what puts the artifact back. Either way, an answer stating a later
+   release time than the running source's moves that time forward: the
+   reconciliation record confirms the running source at it.
+4. The running source's release time is the later of the one the revision that
+   adopted it records and the one the reconciliation record confirms for it.
+   If `currentId` differs and the running source has a release time, an answer
+   stating an earlier time or none is an earlier release than the piece runs.
+   The piece keeps its source, and the attempt records that it follows its
+   origin, naming the source it runs rather than the earlier one offered, so
+   that hosts offering the two releases in turn leave the record as it is.
+   Two answers stating the same time are not ordered, and an answer to a piece
+   whose source records no time is not either. A running artifact that will
+   not load has nothing to start and continues regardless, so the earlier
+   release is a rescue, unless the piece's history records its move from the
+   offered source to the running one. A runtime older than the release a piece
+   moved to cannot load it either, and in that case is behind it rather than
+   holding a dead pattern: the piece keeps its source, as against any earlier
+   release, so a stale runtime and a current one sharing the piece do not move
+   it between the two. A release time that is not one leaves the piece's
+   source as it is, like a failed identity request.
+5. Revalidate `{host}{url}` and every module in its complete authored import
    closure with the same `no-cache` fetch policy, then compile with the export
    symbol the piece already runs. Apply only when the compiler supplies an
    entry ref whose identity exactly equals `currentId`; never synthesize a ref
    or fall back around `?identity`. A fetch, compile, evaluation,
    missing-entry-ref, or identity-mismatch failure leaves the piece unchanged.
-5. Synchronize the piece's stored argument, then write the transition. The
+6. Synchronize the piece's stored argument, then write the transition, whose
+   revision records the release time the answer stated, if any. The
    captured identity and source must still match on every attempt, and so must
    that argument, so a concurrent edit, detach, repoint, or replacement wins.
    A piece that is not running has the candidate staged over its document in
@@ -506,10 +612,10 @@ then start it:
    re-instantiated by the watcher already installed on it. Staging the candidate
    is also what refuses one the piece's stored data cannot satisfy: the setup
    rejects it, the transaction fails, and the piece stays as it was.
-6. Start the piece. A piece compiled moments ago from the source it was created
+7. Start the piece. A piece compiled moments ago from the source it was created
    with is started directly: following that origin again would only fetch what
    it was just built from. A surface the runtime is instantiating for the first
-   time reaches this loop with no piece to follow yet, so steps 2 and 4 resolve
+   time reaches this loop with no piece to follow yet, so steps 2 and 5 resolve
    its supplied ref outright, and the run that brings the piece into being
    records that ref with its creation revision.
 
@@ -527,7 +633,18 @@ normally hashes to a different entry identity and the pattern pointer is not
 written. The same rule covers an identity-algorithm incompatibility between an
 older worker and a newer toolshed: disagreement prevents the update. No
 `/api/meta` request, git-SHA comparison, pattern response build header, or
-worker-to-shell version-skew signal is part of the authorization path.
+worker-to-shell version-skew signal is part of the authorization path. The
+release time is not part of it either: it decides whether a candidate is a later
+release than the running one, never whether the content is what the host
+advertised.
+
+What fails closed within one attempt does not settle anything across attempts.
+Instances serving two releases at once — a deployment partway through
+restarting them, two deployments reaching the same memory — answer one piece's
+successive attempts differently, each consistently, and each answer differs from
+what the last attempt adopted. Ordered by identity alone, the piece would move
+on every attempt. The release time is what keeps it on the later release:
+step 4 refuses the earlier one.
 
 Authored identity deliberately does not fingerprint bare runtime imports or the
 runtime's implementation. Local compilation and evaluation are a capability

@@ -15,6 +15,7 @@ import { ContextualFlowControl } from "../src/cfc.ts";
 import { registerSchemaDocument } from "../src/schema-registry.ts";
 import { parseExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
 import { externalizeSchema } from "../src/link-utils.ts";
+import { labelsReached } from "./support/reached-labels.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 
@@ -825,9 +826,22 @@ describe("cfc-current-principal-confidentiality", () => {
         expect(itemLabel).not.toContainEqual(
           cfcAtom.user(visitorIdentity.did()),
         );
-        const slotLabel = storedConfidentialityAt(visitor, link, ["0"]);
-        expect(slotLabel).toContainEqual(cfcAtom.user(ownerIdentity.did()));
-        expect(slotLabel).not.toContainEqual(
+        // The slot stores nothing of the item's label. It carries the join
+        // of the appending attempt, which read the list under its owner's
+        // binding; the list's declared template entry binds the owner to
+        // every position as well, and a read of the item through the slot
+        // answers to the owner.
+        const slot = storedConfidentialityAt(visitor, link, ["0"]);
+        expect(slot).toContainEqual(cfcAtom.user(ownerIdentity.did()));
+        expect(slot).not.toContainEqual(cfcAtom.user(visitorIdentity.did()));
+        const template = storedConfidentialityAt(visitor, link, ["*"]);
+        expect(template).toContainEqual(cfcAtom.user(ownerIdentity.did()));
+        expect(template).not.toContainEqual(
+          cfcAtom.user(visitorIdentity.did()),
+        );
+        const reached = labelsReached(visitor, link, ["0"]).confidentiality;
+        expect(reached).toContainEqual(cfcAtom.user(ownerIdentity.did()));
+        expect(reached).not.toContainEqual(
           cfcAtom.user(visitorIdentity.did()),
         );
         expect(owner.getCellFromLink(link).get()).toEqual([

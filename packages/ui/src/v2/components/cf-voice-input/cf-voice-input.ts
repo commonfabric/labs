@@ -1,7 +1,6 @@
 import type { Schema } from "@commonfabric/api/schema";
 import { TranscriptionDataSchema } from "@commonfabric/runner/component-read-contract";
 import { type CellHandle } from "@commonfabric/runtime-client";
-import { consume } from "@lit/context";
 import { css, html } from "lit";
 import { property } from "lit/decorators.js";
 import { classMap } from "lit/directives/class-map.js";
@@ -9,12 +8,7 @@ import { createRef, type Ref, ref } from "lit/directives/ref.js";
 
 import { BaseElement } from "../../core/base-element.ts";
 import { createCellController } from "../../core/cell-controller.ts";
-import {
-  applyThemeToElement,
-  type CFTheme,
-  cfThemeContext,
-  defaultTheme,
-} from "../theme-context.ts";
+import { applyThemeToElement, type CFTheme } from "../theme-context.ts";
 
 import "../cf-audio-visualizer/index.ts";
 
@@ -280,9 +274,12 @@ export class CFVoiceInput extends BaseElement {
   @property({ type: String })
   private accessor errorMessage = "";
 
-  @consume({ context: cfThemeContext, subscribe: true })
+  /**
+   * A theme given to this element directly, written over the theme it would
+   * otherwise inherit. Left unset, the element draws the ambient theme.
+   */
   @property({ attribute: false })
-  accessor theme: CFTheme = defaultTheme;
+  accessor theme: CFTheme | undefined = undefined;
 
   private _cellController = createCellController<TranscriptionData | null>(
     this,
@@ -310,7 +307,6 @@ export class CFVoiceInput extends BaseElement {
     changedProperties: Map<string | number | symbol, unknown>,
   ) {
     super.firstUpdated(changedProperties);
-    this._updateThemeProperties();
     this._cellController.bind(this.transcription, TranscriptionDataSchema);
   }
 
@@ -319,7 +315,7 @@ export class CFVoiceInput extends BaseElement {
   ) {
     super.updated(changedProperties);
     if (changedProperties.has("theme")) {
-      this._updateThemeProperties();
+      applyThemeToElement(this, this.theme);
     }
   }
 
@@ -334,11 +330,6 @@ export class CFVoiceInput extends BaseElement {
   override disconnectedCallback() {
     super.disconnectedCallback();
     this._cleanup();
-  }
-
-  private _updateThemeProperties() {
-    const currentTheme = this.theme || defaultTheme;
-    applyThemeToElement(this, currentTheme);
   }
 
   private _cleanup() {

@@ -6,13 +6,16 @@ import {
   cloneIfNecessary,
   isFabricPlainObject,
   valueEqual,
+  valueEqualByWalk,
 } from "@commonfabric/data-model";
 import { SlotLimitError } from "@commonfabric/data-model/codec-json";
+import { isRoutedIdentifier } from "./routed-parser.ts";
 import { getLogger } from "@commonfabric/utils/logger";
 import { StagedMap } from "@commonfabric/utils/staged-map";
 import { metrics, SpanStatusCode, trace } from "@opentelemetry/api";
 
 import {
+  type ACL,
   aclDocId,
   ANYONE_USER,
   type Capability,
@@ -51,6 +54,7 @@ import {
   type GraphQueryRequest,
   type GraphQueryResult,
   type HelloMessage,
+  identityOfScopeKey,
   isScopeKey,
   MAX_ENTITY_ID_PAGE_SIZE,
   MAX_UNTRUSTED_MESSAGE_SLOTS,
@@ -84,6 +88,7 @@ import {
   type SessionOpenRequest,
   type SessionOpenResult,
   type SessionReadCeiling,
+  type SessionReportRequest,
   type SessionRevokedMessage,
   type SessionSync,
   type SessionViewHandle,
@@ -102,6 +107,7 @@ import {
   type StreamEventEntry,
   type StreamEventsDocValue,
   type StreamLinkRef,
+  type SyncCrossing,
   type TransactRequest,
   type V2Error,
   type ViewInterest,
@@ -109,12 +115,28 @@ import {
   type ViewQuery,
   type WatchAddRequest,
   type WatchAddResult,
+  type WatchRemoveRequest,
   type WatchSetRequest,
   type WatchSetResult,
   type WatchSpec,
   type WireMemoryProtocolFlags,
 } from "../v2.ts";
+import { AdmissionWaiters } from "./admission-waiters.ts";
+import {
+  type CommitRatesReport,
+  CommitRateTracker,
+  commitStormThresholds,
+} from "./commit-rates.ts";
 import { classifyCommitTelemetry } from "./commit-telemetry.ts";
+import type {
+  DocumentInterestQuery,
+  DocumentInterestsReport,
+} from "./document-interests.ts";
+import {
+  parseSessionReport,
+  SessionReportLog,
+  type SessionReportsReport,
+} from "./session-reports.ts";
 import * as Engine from "./engine.ts";
 import {
   executeInvite,
@@ -122,11 +144,16 @@ import {
   type InviteResult,
 } from "./invites.ts";
 import { SpaceInviteError } from "../space-invites.ts";
-import { isGenesisRoot, readGenesisRoot } from "./genesis-root.ts";
+import {
+  isGenesisRoot,
+  readGenesisRoot,
+  readSpaceKind,
+} from "./genesis-root.ts";
 import {
   executionLeaseHolder,
   liveExecutionLeaseHolder,
 } from "./execution-lease.ts";
+import { parseClientInfo } from "./client-info.ts";
 import { respondToHello } from "./handshake.ts";
 import {
   createDefaultOperationCodecRegistry,
@@ -144,7 +171,6 @@ import {
   extendTrackedGraph,
   fromDirtyKey,
   fromDocKey,
-  isGraphQueryCoveredByState,
   type QueryDocKey,
   type QueryEvaluationCache,
   type QueryEvaluationCacheDiagnostics,
@@ -153,8 +179,11 @@ import {
   type QueryGraphReuseContext,
   type QueryTraversalStats,
   refreshTrackedGraph,
+  releaseTrackedRoots,
+  rootReferrersOf,
   type SlowestQueryRoot,
   stageTrackedGraphState,
+  syncCrossingsOf,
   toDirtyKey,
   type TrackedGraphState,
   trackGraph,
@@ -164,6 +193,7 @@ import {
   buildFullSync,
   cacheKeyForEntity,
   compareSyncAddress,
+  graphWatchesByBranch,
   groupedQueries,
   holdingsToCacheEntries,
   isEmptySync,
@@ -175,9 +205,15 @@ import {
   toWireRemove,
   toWireUpsert,
   trackedIdsFromEntries,
+  unionQuery,
 } from "./server-sync.ts";
 import { authorizationError } from "./session-open-auth.ts";
-import { SessionRegistry, type SessionState } from "./session-registry.ts";
+import {
+  type SessionLifecycleEvent,
+  SessionRegistry,
+  type SessionState,
+} from "./session-registry.ts";
+import { isSpaceKind } from "./space-kind.ts";
 import {
   columnOriginUnavailableReason,
   ensureColumnOriginAvailable,
@@ -194,7 +230,24 @@ import { assertReadOnly } from "./sqlite/guard.ts";
 import { ReadConnectionPool } from "./sqlite/read-pool.ts";
 import type { TableSchema } from "./sqlite/schema.ts";
 import { resolveSpaceStoreUrl } from "./storage-path.ts";
+import { compressServerMessageLabels } from "./sync-label-table.ts";
+import {
+  compressServerMessageCommitLabels,
+  expandClientMessageLabels,
+  hasClientMessageLabelMetadata,
+} from "./commit-label-table.ts";
 import { compressServerMessageSchemas } from "./sync-schema-table.ts";
+import {
+  appendWatchSetPart,
+  halveSyncPart,
+  type PartLimits,
+  payloadFits,
+  serverMessageSync,
+  splitSyncMessage,
+  stagedWatchSet,
+  type SyncPartSession,
+  wholeLimits,
+} from "./message-parts.ts";
 import { type ArmedTurn, armTurn } from "./turn.ts";
 import {
   parseViewInterests,
@@ -202,7 +255,11 @@ import {
   viewWatches,
 } from "./view-interest.ts";
 
-export { SessionRegistry } from "./session-registry.ts";
+export { MAX_DOCUMENT_INTEREST_SESSIONS } from "./document-interests.ts";
+export {
+  type SessionLifecycleEvent,
+  SessionRegistry,
+} from "./session-registry.ts";
 
 /**
  * A space DID pinned tightly enough to name a store. `isDID`
@@ -212,6 +269,17 @@ export { SessionRegistry } from "./session-registry.ts";
  * `foreignWriteAuthorityFor` has to ask.
  */
 const WELL_FORMED_SPACE_DID = /^did:[^:]+:[^:]+$/;
+
+/** What a foreign authority probe answers: a grant, or a refusal with the
+ * reason the serving loop logs. */
+export type ForeignAuthorityVerdict =
+  | { granted: true }
+  | { granted: false; reason: string };
+
+/** The capability a foreign authority probe resolves: WRITE for a
+ * provisioning write under the carried actor's grant (protocol.md §2b),
+ * READ for a scoped read of the actor's own instance (protocol.md §2). */
+type ForeignAuthorityRequirement = "READ" | "WRITE";
 
 // Global OTel API tracer. Interface-only and inert when no provider is
 // registered, so this is a no-op unless the host process (toolshed) has an
@@ -246,6 +314,22 @@ const operationCodecFailureCount = operationMeter.createCounter(
 const operationActiveWatchCount = operationMeter.createHistogram(
   "ct.memory.operation.active_watches",
   { description: "Active operation watches observed during sync assembly." },
+);
+const commitCount = operationMeter.createCounter(
+  "ct.memory.commits",
+  {
+    description:
+      "Commits decided on every path, by space, by outcome, and by whether " +
+      "the space was in a write storm at the time.",
+  },
+);
+const echoBreakerReportCount = operationMeter.createCounter(
+  "ct.memory.echo_breaker",
+  {
+    description:
+      "Remote-echo breaker trips and clears clients reported, by space, by " +
+      "event, and for a clear by how the trip ended.",
+  },
 );
 
 /**
@@ -296,6 +380,12 @@ const QUERY_EVALUATION_CACHE_MAX_SPACES = 8;
 // state's parsed documents, which scale with the entities delivered.
 const QUERY_EVALUATION_CACHE_BUDGET = 32_768;
 const SLOW_QUERY_BUFFER_SIZE = 100;
+// The write-storm thresholds the commit-rate tracker judges a space by,
+// `CF_COMMIT_STORM_PER_MINUTE` and `CF_COMMIT_STORM_SUSTAINED_SECONDS`, read
+// the way the slow-query threshold is.
+const COMMIT_STORM_THRESHOLDS = commitStormThresholds((name) =>
+  Deno.env.get(name)
+);
 const DEFAULT_SESSION_OPEN_CHALLENGE_TTL_SECONDS = 300;
 
 /**
@@ -353,9 +443,10 @@ export type SlowQuery = {
   /** transact only: the commit's pending read count. */
   readsPending?: number;
 
-  /** transact only: "ok", the response error's name (a rejected commit
-   * that took this long is at least as interesting as an applied one), or
-   * "threw" when evaluation raised instead of responding. */
+  /** transact and sqlite.query: "ok", or the error's name (a rejected
+   * commit or a failed read that took this long is at least as interesting
+   * as one that succeeded). A transact reports "threw" when evaluation raised
+   * instead of responding. */
   outcome?: string;
 
   /** Query and watch operations: how many roots the request's evaluations
@@ -402,6 +493,12 @@ export type SlowQuery = {
    * {@link SlowestQueryRoot} for why overlapping closures charge whichever
    * root ran first, and what to check before calling one the cause. */
   slowestRoot?: SlowestQueryRoot;
+
+  /** sqlite.query only: the id of the database handle the read named. */
+  db?: string;
+
+  /** sqlite.query only: the rows a read that succeeded returned. */
+  rows?: number;
 };
 
 /** The root attribution accumulated across one request's branch groups. */
@@ -477,8 +574,8 @@ const recordSlowQueryDuration = (
   });
 };
 
-/** Returns the last N slow query, watch, and commit operations — those over
- * `CF_SLOW_QUERY_THRESHOLD_MS`, 100 ms unless set. */
+/** Returns the last N slow query, watch, commit, and SQLite read operations —
+ * those over `CF_SLOW_QUERY_THRESHOLD_MS`, 100 ms unless set. */
 export const getSlowQueries = (): readonly SlowQuery[] => slowQueries;
 
 /**
@@ -555,6 +652,36 @@ export const getDocumentCachesDiagnostics = ():
   | DocumentCachesDiagnostics
   | undefined => documentCachesDiagnosticsProviders.at(-1)?.();
 
+/** Live servers' commit-rate providers in construction order; a server
+ * removes its own on close(), so the newest LIVE server is always the one
+ * reported. */
+const commitRatesProviders: (() => CommitRatesReport)[] = [];
+
+/** The co-hosted memory server's commit rates for the health route — the
+ * most recently constructed server still open; undefined when none is. */
+export const getCommitRates = (): CommitRatesReport | undefined =>
+  commitRatesProviders.at(-1)?.();
+
+/** Live servers' session-report providers in construction order; a server
+ * removes its own on close(), so the newest LIVE server is always the one
+ * reported. */
+const sessionReportsProviders: (() => SessionReportsReport)[] = [];
+
+/** The co-hosted memory server's session reports for the health route — the
+ * most recently constructed server still open; undefined when none is. */
+export const getSessionReports = (): SessionReportsReport | undefined =>
+  sessionReportsProviders.at(-1)?.();
+
+/** Live servers' document-interest providers, newest live server last. */
+const documentInterestsProviders:
+  ((query: DocumentInterestQuery) => DocumentInterestsReport)[] = [];
+
+/** Reads the co-hosted server's session metadata; undefined without a server. */
+export const getDocumentInterests = (
+  query: DocumentInterestQuery,
+): DocumentInterestsReport | undefined =>
+  documentInterestsProviders.at(-1)?.(query);
+
 const randomHex = (bytes: number): string => {
   const data = crypto.getRandomValues(new Uint8Array(bytes));
   return [...data].map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -600,6 +727,43 @@ type AclState =
   | { kind: "invalid" }
   | { kind: "valid"; acl: Record<string, Capability | undefined> };
 
+/** The access list `engine` stores for `space`, classified. */
+const readAclState = (engine: Engine.Engine, space: string): AclState => {
+  const state = Engine.readState(engine, { id: aclDocId(space) });
+  if (state === null) return { kind: "missing" };
+  // A retracted ACL is not equivalent to a never-created ACL: treating the
+  // tombstone as public would turn deletion into an authorization bypass.
+  if (state.document === null) return { kind: "invalid" };
+  const acl = state.document.value;
+  if (!isACL(acl)) return { kind: "invalid" };
+  const byPrincipal = acl as Record<string, Capability | undefined>;
+  if (!hasConcreteOwner(byPrincipal)) return { kind: "invalid" };
+  return { kind: "valid", acl: byPrincipal };
+};
+
+/**
+ * The owner of `space` as the access list `engine` stores resolves it: the
+ * space itself when its list names it `OWNER`, else the first other concrete
+ * `OWNER` in sorted order, and `undefined` for a space whose list is missing
+ * or invalid. {@link Server.resolveSpaceOwner} returns this, and a serving
+ * loop holding its own connection to the store reads it directly.
+ */
+export const resolveSpaceOwnerOf = (
+  engine: Engine.Engine,
+  space: string,
+): string | undefined => {
+  const state = readAclState(engine, space);
+  if (state.kind !== "valid") return undefined;
+  if (state.acl[space] === "OWNER") return space;
+  const owners = Object.entries(state.acl)
+    .filter(([principal, capability]) =>
+      principal !== ANYONE_USER && capability === "OWNER"
+    )
+    .map(([principal]) => principal)
+    .sort();
+  return owners[0];
+};
+
 const commitTouchesAclDoc = (
   operations: readonly Operation[],
   space: string,
@@ -609,6 +773,52 @@ const commitTouchesAclDoc = (
     "id" in operation && operation.id === id
   );
 };
+
+/**
+ * The facts a space's genesis commit may declare beside its access list, each
+ * with the validator its value is held to and the words its refusals use. A
+ * session declares the same fact in its descriptor, and the commit carries it
+ * under the same name.
+ */
+const GENESIS_DECLARATIONS = [
+  {
+    field: "genesisRoot",
+    isValid: isGenesisRoot,
+    invalid: "Invalid genesis root reservation",
+    declared: "A root reservation",
+    sealed: "The genesis root",
+    intent: "root",
+  },
+  {
+    field: "spaceKind",
+    isValid: isSpaceKind,
+    invalid: "Invalid space kind",
+    declared: "A space kind",
+    sealed: "The space kind",
+    intent: "space kind",
+  },
+] as const;
+
+/**
+ * Whether `commit`, made as `principal`, is the genesis of `space` signed by
+ * the space's own key: the first commit the space holds, on the default
+ * branch, and nothing but a `set` of the space-scoped access list to a valid
+ * list naming a concrete owner.
+ */
+const isSpaceKeyAclGenesis = (
+  engine: Engine.Engine,
+  space: string,
+  principal: string | undefined,
+  commit: ClientCommit,
+): boolean =>
+  principal === space && Engine.serverSeq(engine) === 0 &&
+  commit.operations.length === 1 && commit.operations[0].op === "set" &&
+  commit.operations[0].id === aclDocId(space) &&
+  (commit.operations[0].scope === undefined ||
+    commit.operations[0].scope === "space") &&
+  (commit.branch === undefined || commit.branch === "") &&
+  isACL(commit.operations[0].value?.value) &&
+  hasConcreteOwner(commit.operations[0].value?.value);
 
 /** Deterministic, collision-resistant-enough token for a filename component
  *  (FNV-1a 32-bit + length). Used to derive cell-db file names from (space,id). */
@@ -672,7 +882,25 @@ const respondTypedError = <Result>(
 const sessionKey = (space: string, sessionId: string): string =>
   `${space}\0${sessionId}`;
 
-type Send = (message: ServerMessage) => void;
+/**
+ * Most parts a session may hold of a watch set staged in parts before the
+ * part that applies it, 64 of the routed client's 1 MiB parts, and most
+ * characters of their messages a connection may hold over every set its
+ * sessions are staging. A direct client bounds each part by the slot limit on
+ * a message alone, so these bound its staged sets. The characters are bounded
+ * per connection, not per set, since a connection may stage a set for each of
+ * its sessions: the routed quotas count watch IDs, views and holdings, not
+ * characters. Sets a connection stages at once share the bound, so a client
+ * staging sets that together pass it has a part refused.
+ */
+const MAX_STAGED_WATCH_SET_PARTS = 64;
+const MAX_STAGED_WATCH_SET_CHARACTERS = 64 * 1024 * 1024;
+
+/**
+ * A transport's sender. `payload`, when given, is `message` already encoded,
+ * which the transport sends instead of encoding it again.
+ */
+type Send = (message: ServerMessage, payload?: string) => void;
 
 type PublishTransactVerdict = (
   response: ResponseMessage<Engine.AppliedCommit>,
@@ -681,6 +909,10 @@ type PublishTransactVerdict = (
 type TransactDecision = {
   response: ResponseMessage<Engine.AppliedCommit>;
   postCommit?: () => Promise<void>;
+
+  /** Whether the engine decided the commit, and so reported it to the
+   * server's commit observer; false for one refused before reaching it. */
+  engineDecided: boolean;
 };
 
 type SessionOpenAuthContext = {
@@ -769,6 +1001,45 @@ export type AdmittedCommitNotice = {
 };
 
 /**
+ * A served run's change to a space's access list, as the serving loop hands
+ * it to {@link Server.checkServedAclChange} and
+ * {@link Server.commitServedAclChange}. The run is a handler run delivering a
+ * durable stream entry, and the change is made under its delegated carriage
+ * (protocol.md §2's delegated row).
+ */
+export type ServedAclChange = {
+  /** The space whose access list changes. */
+  space: string;
+
+  /** The carried actor: the event's actor, whom the change is made as. */
+  actingPrincipal: string;
+
+  /** The carried actor's session, where the event names one. */
+  actingSession?: string;
+
+  /**
+   * The grant the change is admitted under, which names the event:
+   * `event-consequence:<eventId>`.
+   */
+  capabilityRef: string;
+
+  /** The durable stream entry the run delivers, which `capabilityRef` names. */
+  sourceEvent: { space: string; sidecarId: string; eventId: string };
+
+  /**
+   * Returns the access list the change leaves, given the stored list's value
+   * (`undefined` for a space with no list). It throws to refuse the change,
+   * and the refusal names what it threw.
+   */
+  change: (stored: unknown) => ACL;
+};
+
+/** What {@link Server.checkServedAclChange} and its commit decide. */
+export type ServedAclChangeVerdict =
+  | { readonly refused: string }
+  | { readonly admitted: true; readonly seq?: number };
+
+/**
  * The ExecutorHost's in-process observer (serving-loop.md §1's wiring):
  * plane (b) — `commitAdmitted` is the admission-side activation hook (an
  * authored admission into a space with no live SpaceServer notifies the
@@ -791,12 +1062,34 @@ export type ServerExecutionObserver = {
    * the serving runtime's OWN loopback session — the service principal's
    * tracked-set growth is the serving graph's own reads, not client
    * demand, and must neither wake the loop nor count in `pushGrowthWakes`
-   * (W1 review MINOR-4). */
+   * (W1 review MINOR-4). `sessionId` names the changed session where the
+   * change is one session's, so a mirror of the demand set can re-read
+   * that session's share alone. */
   demandChanged?: (
     space: string,
     reason?: DemandChangeReason,
     principal?: string,
+    sessionId?: string,
   ) => void;
+
+  /**
+   * A session's VIEW SET was set: a `session.watch.set` carried views,
+   * which is the one message that registers, revises or withdraws them.
+   * Fires beside the `demandChanged` the same message raises, and only
+   * then: a watch set without views leaves the session's views as they
+   * are, and a mirror of `viewInterestsForSpace` can hold its list across
+   * every such message.
+   */
+  viewsChanged?: (space: string, sessionId: string) => void;
+
+  /**
+   * A session opened, resumed, detached or removed on this server, as
+   * {@link SessionLifecycleEvent} describes it. Installing an observer that
+   * has this replays every session the server then holds, so a host that
+   * mirrors the sessions starts from the whole set. For an open, it fires
+   * before `sessionOpened` does.
+   */
+  sessionChanged?: (event: SessionLifecycleEvent) => void;
 };
 
 /** (d′): why `demandChanged` fired — `watch` (the pre-existing
@@ -893,15 +1186,62 @@ const graphWatchRootQueries = (watches: readonly WatchSpec[]) =>
       }))
     );
 
+/**
+ * A failure to hand a message to the host's send, carrying what failed as its
+ * cause. It is a failure of the connection, not of whatever request the message
+ * answers: a commit whose verdict could not be delivered is already applied, so
+ * the connection closes and the client's replay is answered from the record.
+ */
+class DeliveryError extends Error {
+  /** Constructs an instance for the delivery failure `cause`. */
+  constructor(cause: unknown) {
+    super(
+      cause instanceof Error ? cause.message : "Memory message delivery failed",
+      { cause },
+    );
+    this.name = "DeliveryError";
+  }
+}
+
 class Connection {
   #ready = false;
   #closed = false;
   #syncSchemaTable = false;
+  #syncLabelTable = false;
+  #commitLabelTable = false;
+
+  /**
+   * The bounds a sync is split to fit, when the transport bounds its
+   * messages and both peers advertised `syncPartsV1`.
+   */
+  #syncPartBounds: PartLimits | undefined;
   #stableExpressionResultIds = false;
+  #admissionNotice = false;
+  #elidedVerdicts = false;
   #sessions = new Map<string, SessionHandle>();
   #sessionOpenChallenge: SessionOpenChallengeState | null = null;
   #routedOwns: ((space: string) => boolean) | undefined;
   #routedExpiries = new Map<string, ReturnType<typeof setTimeout>>();
+
+  /**
+   * By session, the watch set it is sending in staged parts: its name, the
+   * set its parts so far make, how many parts and their messages'
+   * characters, until the part without `more` applies it. A connection's
+   * staged sets end with it, and a session's when it leaves the connection,
+   * opens again, or sends another watch mutation, unless that one is refused
+   * unread or for a lapsed lease; see `#endStagedWatchSet`.
+   */
+  #stagedWatchSets = new Map<
+    string,
+    {
+      stage: string;
+      request: WatchSetRequest;
+      parts: number;
+      characters: number;
+    }
+  >();
+  /** The characters of every set in `#stagedWatchSets`, summed. */
+  #stagedCharacters = 0;
 
   /** Every unexpired challenge issued on this connection, oldest first. */
   #challenges = new Map<string, ConnectionChallengeState>();
@@ -927,28 +1267,140 @@ class Connection {
   #pendingReceives = 0;
   #receiveIdle: PromiseWithResolvers<void> | null = null;
 
+  /**
+   * The request ids a response has gone out for, each kept until its frame's
+   * handling ends, so that a request is answered once: a failure after its
+   * response left is not answered again on the same id. A frame whose failure
+   * is left to the host keeps its id, which no later request shares.
+   */
+  #answered = new Set<string>();
+
   readonly #server: Server;
   readonly #sendRaw: Send;
+  readonly #syncPartLimits: PartLimits | undefined;
 
   constructor(
     readonly id: string,
     server: Server,
     sendRaw: Send,
     routedOwns?: (space: string) => boolean,
+    syncPartLimits?: PartLimits,
   ) {
     this.#server = server;
     this.#sendRaw = sendRaw;
     this.#routedOwns = routedOwns;
+    this.#syncPartLimits = syncPartLimits;
   }
 
-  #send(message: ServerMessage): void {
+  /**
+   * Sends `message`, splitting the sync it carries when the peer takes a sync
+   * in parts and its encoding exceeds the transport's bounds. A response's
+   * `session` names the session its later parts go to; an effect names its
+   * own, and a response without one is sent whole.
+   */
+  #send(message: ServerMessage, session?: SyncPartSession): void {
+    if (message.type === "response") this.#answered.add(message.requestId);
+    try {
+      const limits = this.#syncPartBounds;
+      const target = message.type === "session/effect"
+        ? { space: message.space, sessionId: message.sessionId }
+        : session;
+      if (
+        limits === undefined || target === undefined ||
+        serverMessageSync(message) === undefined
+      ) {
+        this.#transmit(this.#prepare(message));
+        return;
+      }
+      const prepared = this.#prepare(message);
+      const encodeStart = performance.now();
+      const payload = encodeMemoryBoundary(prepared);
+      const fits = payloadFits(payload, wholeLimits(limits));
+      timing.time(encodeStart, "memory", "response", "encode");
+      if (fits) {
+        this.#transmit(prepared, payload);
+        return;
+      }
+      const splitStart = performance.now();
+      const parts = this.#syncParts(message, prepared, payload, target, limits);
+      timing.time(splitStart, "memory", "response", "split");
+      // The parts go to the transport in one synchronous pass, so that no
+      // other message of this connection's comes between them, and only once
+      // all are prepared, so that a part that cannot be prepared sends none.
+      for (const [partPrepared, partPayload] of parts) {
+        this.#transmit(partPrepared, partPayload);
+      }
+    } catch (cause) {
+      throw new DeliveryError(cause);
+    }
+  }
+
+  /**
+   * Helper for `#send()`, which divides a sync too large for one message into
+   * parts and returns each prepared and encoded. A part cut to its bounds by
+   * its entries can exceed them once it carries its own tables, as can the
+   * whole message when its entries fit one part, so a part that does is
+   * halved until its halves fit, or a half is one entry, which goes as it is.
+   */
+  #syncParts(
+    message: ServerMessage,
+    prepared: ServerMessage,
+    payload: string,
+    target: SyncPartSession,
+    limits: PartLimits,
+  ): [ServerMessage, string][] {
+    const split = splitSyncMessage(message, target, limits, prepared);
+    const queue: {
+      part: ServerMessage;
+      prepared?: ServerMessage;
+      payload?: string;
+    }[] = split.length === 1
+      ? [{ part: message, prepared, payload }]
+      : split.map((part) => ({ part })).reverse();
+    const ready: [ServerMessage, string][] = [];
+    while (queue.length > 0) {
+      const item = queue.pop()!;
+      const partPrepared = item.prepared ?? this.#prepare(item.part);
+      const partPayload = item.payload ?? encodeMemoryBoundary(partPrepared);
+      const halves = payloadFits(partPayload, limits)
+        ? undefined
+        : halveSyncPart(item.part, target);
+      if (halves === undefined) ready.push([partPrepared, partPayload]);
+      else queue.push({ part: halves[1] }, { part: halves[0] });
+    }
+    return ready;
+  }
+
+  /** Helper for `#send()`, which applies the negotiated table encodings. */
+  #prepare(message: ServerMessage): ServerMessage {
+    let prepared = message;
+    if (this.#syncLabelTable) {
+      const labelStart = performance.now();
+      prepared = compressServerMessageLabels(prepared);
+      timing.time(labelStart, "memory", "response", "prepareLabels");
+    }
+    if (this.#commitLabelTable) {
+      const commitLabelStart = performance.now();
+      prepared = compressServerMessageCommitLabels(prepared);
+      timing.time(
+        commitLabelStart,
+        "memory",
+        "response",
+        "prepareCommitLabels",
+      );
+    }
     const schemaStart = performance.now();
-    const prepared = this.#syncSchemaTable
-      ? compressServerMessageSchemas(message)
-      : message;
+    if (this.#syncSchemaTable) {
+      prepared = compressServerMessageSchemas(prepared);
+    }
     timing.time(schemaStart, "memory", "response", "prepareSchemas");
+    return prepared;
+  }
+
+  /** Helper for `#send()`, which hands one prepared message to the transport. */
+  #transmit(prepared: ServerMessage, payload?: string): void {
     const sendStart = performance.now();
-    this.#sendRaw(prepared);
+    this.#sendRaw(prepared, payload);
     timing.time(sendStart, "memory", "response", "sendRaw");
   }
 
@@ -957,8 +1409,30 @@ class Connection {
     return this.#stableExpressionResultIds;
   }
 
+  /** Whether both peers advertised `admissionNotice`. */
+  get admissionNotice(): boolean {
+    return this.#admissionNotice;
+  }
+
+  /** Whether both peers advertised `elidedVerdicts`. */
+  get elidedVerdicts(): boolean {
+    return this.#elidedVerdicts;
+  }
+
   hasSession(space: string, sessionId: string): boolean {
     return this.#sessions.has(sessionKey(space, sessionId));
+  }
+
+  /**
+   * Ends a session this connection holds: its handle and presence memberships
+   * leave the connection, and the registry detaches it for its resume grace
+   * period. Routed sessions release their retained interests immediately.
+   */
+  closeSession(space: string, sessionId: string): void {
+    this.#sessions.delete(sessionKey(space, sessionId));
+    this.#endStagedWatchSet(sessionKey(space, sessionId));
+    this.#server.endPresenceForSession(space, sessionId, this.id);
+    this.#server.detachSession(space, sessionId, this.id);
   }
 
   #shouldSuppressSessionSend(
@@ -994,7 +1468,7 @@ class Connection {
       });
       return;
     }
-    this.#send(response);
+    this.#send(response, { space, sessionId });
   }
 
   addSession(space: string, sessionId: string, principal?: string): void {
@@ -1020,6 +1494,7 @@ class Connection {
     reason: SessionRevokedMessage["reason"],
   ): void {
     const key = sessionKey(space, sessionId);
+    this.#endStagedWatchSet(key);
     if (!this.#sessions.delete(key) || this.#closed) {
       return;
     }
@@ -1032,6 +1507,11 @@ class Connection {
       sessionId,
       reason,
     });
+  }
+
+  /** Tells the peer that `principal` would now be admitted to `space`. */
+  sendAdmissible(space: string, principal: string): void {
+    this.#send({ type: "session/admissible", space, principal });
   }
 
   issueSessionOpenAuth(): SessionOpenAuthMetadata {
@@ -1067,6 +1547,12 @@ class Connection {
   /** Ends the authentication of `principal`, if it has one. */
   releasePrincipal(principal: string): void {
     this.#principals.delete(principal);
+    this.#server.forgetAdmissionWaits(this.id, principal);
+  }
+
+  /** Whether this connection has closed. */
+  get closed(): boolean {
+    return this.#closed;
   }
 
   /** Whether this connection is bound to a verified Mode A context. */
@@ -1197,12 +1683,15 @@ class Connection {
     this.#challenges.get(challenge.value)?.acceptedFor.add(issuer);
     this.#principals.set(principal, { leaseEnd });
     // The sessions opened as the principal take the renewed lease, and one
-    // whose lease had run out is evaluated again for whatever it missed.
+    // whose lease had run out is evaluated again for whatever it missed. An
+    // empty dirty batch schedules that pass: the lapsed session runs the
+    // full evaluation it is marked for, and every other session of the
+    // space evaluates as untouched.
     for (const handle of this.#sessions.values()) {
       if (handle.principal !== principal) continue;
       if (this.#leaseExpired(handle)) {
         this.#server.markSessionForFullResync(handle.space, handle.sessionId);
-        this.#server.markSpaceDirty(handle.space);
+        this.#server.markSpaceDirty(handle.space, []);
       }
       handle.leaseEnd = leaseEnd;
     }
@@ -1270,15 +1759,23 @@ class Connection {
   }
 
   async receive(payload: string): Promise<void> {
-    const parsed = parseClientMessage(payload);
-    // A presence message is handled as it is handed over, not behind the
-    // frames already queued here: it carries no seq and settles nothing.
-    // Whether it can overtake a frame ahead of it on the socket is the
-    // host's business — one that hands frames over one at a time keeps it
-    // behind them (04-protocol.md §4.13.4). Everything else keeps the
-    // connection's order.
-    if (parsed !== null && isPresenceClientMessage(parsed)) {
-      this.#receivePresence(parsed);
+    const parsed = parseClientMessage(payload, {
+      commitLabelTableV1: this.#commitLabelTable,
+    });
+    // A presence message or a session report is handled as it is handed
+    // over, not behind the frames already queued here: it carries no seq and
+    // settles nothing, and the space a report describes is often the one
+    // whose frames are queued deepest (04-protocol.md §4.14). Whether it can
+    // overtake a frame ahead of it on the socket is the host's business — one
+    // that hands frames over one at a time keeps it behind them
+    // (04-protocol.md §4.13.4). Everything else keeps the connection's order.
+    if (parsed !== null && isImmediateClientMessage(parsed)) {
+      try {
+        this.#receiveImmediate(parsed);
+      } catch (error) {
+        if (!this.#answerFailedRequest(parsed, error)) throw error;
+      }
+      this.#answered.delete(parsed.requestId);
       return;
     }
     this.#pendingReceives += 1;
@@ -1296,10 +1793,14 @@ class Connection {
         const startedAt = performance.now();
         timing.time(arrivedAt, startedAt, "memory", "frame", "queue");
         try {
-          await this.#receiveOrdered(parsed);
+          await this.#receiveOrdered(parsed, payload.length);
+        } catch (error) {
+          if (!this.#answerFailedRequest(parsed, error)) throw error;
         } finally {
           timing.time(startedAt, "memory", "frame", "handle");
         }
+        const requestId = requestIdOf(parsed);
+        if (requestId !== undefined) this.#answered.delete(requestId);
       });
     } finally {
       this.#pendingReceives = Math.max(0, this.#pendingReceives - 1);
@@ -1381,6 +1882,52 @@ class Connection {
     return current;
   }
 
+  /**
+   * Helper for `receive()`, which answers a request whose handling threw with
+   * an error response on its own request id, so that the connection carries
+   * on: every error is returned in a response (04-protocol.md §4.7). A commit
+   * is answered with a `TransactionError` and any other request with a
+   * `QueryError`, while an engine `ProtocolError` keeps its own name, as the
+   * handlers name the failures they classify themselves.
+   *
+   * Returns whether it answered. A failure to deliver a response, an accepted
+   * commit's verdict among them, is a `DeliveryError` and is left to the
+   * caller, as is a frame naming no request and a failure after the request's
+   * response has already gone out, a commit's deferred self-revocation among
+   * them: a request is answered once. The host then closes the connection, and
+   * the client replays what it was waiting for, or learns on reconnecting what
+   * the lost message would have told it.
+   */
+  #answerFailedRequest(
+    parsed: ClientMessage | RejectedClientMessage | null,
+    error: unknown,
+  ): boolean {
+    const requestId = requestIdOf(parsed);
+    if (
+      error instanceof DeliveryError || parsed === null ||
+      requestId === undefined || this.#answered.has(requestId)
+    ) {
+      return false;
+    }
+    console.error(
+      `memory v2: handling a ${parsed.type} request failed; answering it with an error response`,
+      error,
+    );
+    this.#send({
+      type: "response",
+      requestId,
+      error: toError(
+        error instanceof Engine.ProtocolError
+          ? error.name
+          : parsed.type === "transact"
+          ? "TransactionError"
+          : "QueryError",
+        error instanceof Error ? error.message : String(error),
+      ),
+    });
+    return true;
+  }
+
   #requireSession(
     requestId: string,
     space: string,
@@ -1427,6 +1974,37 @@ class Connection {
   }
 
   /**
+   * Ends the watch set the session `key` names was staging, if any, and
+   * returns it; the only way a set leaves `#stagedWatchSets`, so
+   * `#stagedCharacters` stays its sum.
+   */
+  #endStagedWatchSet(key: string) {
+    const staged = this.#stagedWatchSets.get(key);
+    if (staged !== undefined) {
+      this.#stagedWatchSets.delete(key);
+      this.#stagedCharacters -= staged.characters;
+    }
+    return staged;
+  }
+
+  /** Helper for the staged watch set parts, which refuses one as a protocol error. */
+  #refuseWatchSetPart(
+    parsed: { requestId: string; space: string; sessionId: string },
+    message: string,
+  ): void {
+    this.#sendSessionResponse(
+      parsed.space,
+      parsed.sessionId,
+      parsed.requestId,
+      {
+        type: "response",
+        requestId: parsed.requestId,
+        error: toError("ProtocolError", message),
+      },
+    );
+  }
+
+  /**
    * Helper for the methods that issue a challenge, which records `challenge`
    * as one this connection holds, dropping the expired ones and, past the
    * limit, the oldest.
@@ -1447,24 +2025,7 @@ class Connection {
     });
   }
 
-  /**
-   * Helper for `#receiveOrdered()`, which ends a session this connection
-   * holds the way closing the connection ends it: the session leaves the
-   * connection, its presence memberships end, and the registry keeps it
-   * detached, resumable until its grace runs out.
-   */
-  #closeSession(space: string, sessionId: string): void {
-    this.#sessions.delete(sessionKey(space, sessionId));
-    this.#server.endPresenceForSession(space, sessionId, this.id);
-    this.#server.detachSession(space, sessionId, this.id);
-  }
-
-  #receivePresence(
-    message:
-      | PresenceJoinRequest
-      | PresencePublishRequest
-      | PresenceLeaveRequest,
-  ): void {
+  #receiveImmediate(message: ImmediateClientMessage): void {
     if (this.#closed) return;
     if (!this.#ready) {
       this.#send({
@@ -1479,20 +2040,28 @@ class Connection {
     ) {
       return;
     }
-    this.#send(this.#server.receivePresence(message, this));
+    this.#send(
+      message.type === "session.report"
+        ? this.#server.receiveSessionReport(message, this)
+        : this.#server.receivePresence(message, this),
+    );
   }
 
   async #receiveOrdered(
-    parsed: ClientMessage | OversizedClientMessage | null,
+    parsed: ClientMessage | RejectedClientMessage | null,
+    characters: number,
   ): Promise<void> {
     if (this.#closed) {
       return;
     }
 
-    if (parsed === null) {
+    if (parsed === null || parsed.type === "invalid") {
+      // Answered on the request the envelope named when it named one the
+      // reply may echo, so the client settles that request instead of
+      // waiting for its connection to close.
       this.#send({
         type: "response",
-        requestId: "invalid",
+        requestId: parsed?.requestId ?? "invalid",
         error: toError(
           "InvalidMessageError",
           "Unable to parse memory message",
@@ -1537,8 +2106,20 @@ class Connection {
       const serverFlags = parseMemoryProtocolFlags(response.flags);
       this.#stableExpressionResultIds =
         clientFlags?.stableExpressionResultIds === true;
+      this.#admissionNotice = clientFlags?.admissionNotice === true &&
+        serverFlags?.admissionNotice === true;
+      this.#elidedVerdicts = clientFlags?.elidedVerdicts === true &&
+        serverFlags?.elidedVerdicts === true;
       this.#syncSchemaTable = clientFlags?.syncSchemaTableV2 === true &&
         serverFlags?.syncSchemaTableV2 === true;
+      this.#syncLabelTable = clientFlags?.syncLabelTableV1 === true &&
+        serverFlags?.syncLabelTableV1 === true;
+      this.#commitLabelTable = clientFlags?.commitLabelTableV1 === true &&
+        serverFlags?.commitLabelTableV1 === true;
+      this.#syncPartBounds = clientFlags?.syncPartsV1 === true &&
+          serverFlags?.syncPartsV1 === true
+        ? this.#syncPartLimits
+        : undefined;
       this.#ready = true;
       return;
     }
@@ -1595,14 +2176,22 @@ class Connection {
           return;
         }
         const response = await this.#server.openSession(parsed, this);
-        if (response.ok?.sessionId && !this.routed) {
-          this.addSession(
-            parsed.space,
-            response.ok.sessionId,
-            parsed.principal,
+        // An open of a session ends the watch set it was staging.
+        if (
+          isFabricPlainObject(response.ok) &&
+          typeof response.ok.sessionId === "string"
+        ) {
+          this.#endStagedWatchSet(
+            sessionKey(parsed.space, response.ok.sessionId),
           );
         }
-        this.#send(response);
+        this.#send(
+          response,
+          isFabricPlainObject(response.ok) &&
+            typeof response.ok.sessionId === "string"
+            ? { space: parsed.space, sessionId: response.ok.sessionId }
+            : undefined,
+        );
         return;
       }
       case "transact": {
@@ -1729,6 +2318,20 @@ class Connection {
         }
         return;
       case "sqlite.register-disk-source":
+        // Maps a toolshed path into a space: an operator surface, never
+        // offered to the public router's clients, any of whom can create a
+        // space and own it.
+        if (this.routed) {
+          this.#send({
+            type: "response",
+            requestId: parsed.requestId,
+            error: toError(
+              "AuthorizationError",
+              "Routed memory request denied",
+            ),
+          });
+          return;
+        }
         if (
           !this.#requireSession(
             parsed.requestId,
@@ -1759,7 +2362,77 @@ class Connection {
           return;
         }
         {
-          const response = await this.#server.watchSet(parsed);
+          // A part numbered 0 starts a staged set, and a later part must
+          // follow the parts of its set the session holds; a set without a
+          // number is whole. Either way the set held so far ends here, kept
+          // only by the part that continues it.
+          const key = sessionKey(parsed.space, parsed.sessionId);
+          const held = this.#endStagedWatchSet(key);
+          if (parsed.part === undefined) {
+            const response = await this.#server.watchSet(parsed);
+            this.#sendSessionResponse(
+              parsed.space,
+              parsed.sessionId,
+              parsed.requestId,
+              response,
+            );
+            return;
+          }
+          const continues = parsed.part > 0;
+          if (
+            continues &&
+            (held === undefined || held.stage !== parsed.stage ||
+              held.parts !== parsed.part)
+          ) {
+            this.#refuseWatchSetPart(
+              parsed,
+              "A staged watch set part does not follow the parts held",
+            );
+            return;
+          }
+          const staged = continues ? held! : {
+            stage: parsed.stage!,
+            request: stagedWatchSet(parsed),
+            parts: 0,
+            characters: 0,
+          };
+          if (continues) appendWatchSetPart(staged.request, parsed);
+          staged.parts += 1;
+          staged.characters += characters;
+          if (parsed.more === true) {
+            // This session's set ended above, so the total counts the
+            // connection's other staged sets.
+            if (
+              staged.parts > MAX_STAGED_WATCH_SET_PARTS ||
+              this.#stagedCharacters + staged.characters >
+                MAX_STAGED_WATCH_SET_CHARACTERS
+            ) {
+              this.#refuseWatchSetPart(
+                parsed,
+                `A staged watch set holds at most ${MAX_STAGED_WATCH_SET_PARTS} parts, and a connection's staged sets at most ${MAX_STAGED_WATCH_SET_CHARACTERS} characters together`,
+              );
+              return;
+            }
+            this.#stagedWatchSets.set(key, staged);
+            this.#stagedCharacters += staged.characters;
+            this.#sendSessionResponse(
+              parsed.space,
+              parsed.sessionId,
+              parsed.requestId,
+              {
+                type: "response",
+                requestId: parsed.requestId,
+                ok: { staged: true },
+              },
+            );
+            return;
+          }
+          // The joined set is checked as one set: a view named in two parts
+          // is refused as one named twice in one set is.
+          const response = await this.#server.watchSet({
+            ...staged.request,
+            requestId: parsed.requestId,
+          });
           this.#sendSessionResponse(
             parsed.space,
             parsed.sessionId,
@@ -1778,8 +2451,36 @@ class Connection {
         ) {
           return;
         }
+        // Another watch mutation ends a set the session was staging, which a
+        // router or a routed host can have left incomplete by refusing its
+        // last part itself.
+        this.#endStagedWatchSet(sessionKey(parsed.space, parsed.sessionId));
         {
           const response = await this.#server.watchAdd(parsed);
+          this.#sendSessionResponse(
+            parsed.space,
+            parsed.sessionId,
+            parsed.requestId,
+            response,
+          );
+        }
+        return;
+      case "session.watch.remove":
+        if (
+          !this.#requireSession(
+            parsed.requestId,
+            parsed.space,
+            parsed.sessionId,
+          )
+        ) {
+          return;
+        }
+        // Another watch mutation ends a set the session was staging, which a
+        // router or a routed host can have left incomplete by refusing its
+        // last part itself.
+        this.#endStagedWatchSet(sessionKey(parsed.space, parsed.sessionId));
+        {
+          const response = await this.#server.watchRemove(parsed);
           this.#sendSessionResponse(
             parsed.space,
             parsed.sessionId,
@@ -1818,7 +2519,7 @@ class Connection {
         ) {
           return;
         }
-        this.#closeSession(parsed.space, parsed.sessionId);
+        this.closeSession(parsed.space, parsed.sessionId);
         this.#send({ type: "response", requestId: parsed.requestId, ok: {} });
         return;
       case "event.attention.resolve":
@@ -1987,7 +2688,7 @@ class Connection {
  * at a time however many spaces the opens name.
  */
 const spaceOfFrame = (
-  message: ClientMessage | OversizedClientMessage | null,
+  message: ClientMessage | RejectedClientMessage | null,
 ): string | undefined => {
   if (message === null || !("space" in message)) return undefined;
   if (message.type === "session.open" && message.principal === undefined) {
@@ -1996,14 +2697,40 @@ const spaceOfFrame = (
   return message.space;
 };
 
+/**
+ * The request a frame names, or `undefined` for one naming none: a frame that
+ * could not be read, or a `hello`.
+ */
+const requestIdOf = (
+  message: ClientMessage | RejectedClientMessage | null,
+): string | undefined => {
+  if (message === null || !("requestId" in message)) return undefined;
+  return typeof message.requestId === "string" ? message.requestId : undefined;
+};
+
 const isPresenceClientMessage = (
-  message: ClientMessage | OversizedClientMessage,
+  message: ClientMessage | RejectedClientMessage,
 ): message is
   | PresenceJoinRequest
   | PresencePublishRequest
   | PresenceLeaveRequest =>
   message.type === "presence.join" || message.type === "presence.publish" ||
   message.type === "presence.leave";
+
+/**
+ * A request a connection handles as it is handed over rather than in frame
+ * order: presence, and a session report.
+ */
+type ImmediateClientMessage =
+  | PresenceJoinRequest
+  | PresencePublishRequest
+  | PresenceLeaveRequest
+  | SessionReportRequest;
+
+const isImmediateClientMessage = (
+  message: ClientMessage | RejectedClientMessage,
+): message is ImmediateClientMessage =>
+  isPresenceClientMessage(message) || message.type === "session.report";
 
 /**
  * The engine opener a test supplies in place of `Server`'s own step, which
@@ -2015,6 +2742,73 @@ export type EngineOpener = (
   space: string,
   open: (space: string) => Promise<Engine.Engine>,
 ) => Promise<Engine.Engine>;
+
+/** Whether every member of `subset` is in `superset`. */
+function isSubset(subset: Set<string>, superset: Set<string>): boolean {
+  for (const key of subset) if (!superset.has(key)) return false;
+  return true;
+}
+
+/**
+ * A planner delivery root's key: the branch its query reads, its address and
+ * its selector. A root whose selector changed reaches different documents,
+ * which only a full evaluation diffs out, so it is not the same root.
+ */
+function deliveryRootKey(
+  query: ViewQuery,
+  root: ViewQuery["roots"][number],
+): string {
+  return JSON.stringify([
+    query.branch ?? "",
+    root.scope ?? "space",
+    root.id,
+    root.selector,
+  ]);
+}
+
+/**
+ * The keys of the roots a planner delivery names (`deliveryRootKey()`): two
+ * deliveries naming the same keys, in whatever order, deliver the same
+ * documents.
+ */
+function deliveryRootKeys(delivery: readonly ViewQuery[]): Set<string> {
+  const keys = new Set<string>();
+  for (const query of delivery) {
+    for (const root of query.roots) keys.add(deliveryRootKey(query, root));
+  }
+  return keys;
+}
+
+/**
+ * What of `delivery`, a selection a view's planner proposes, the server has
+ * yet to resolve: the roots that `installed`, the selection the view holds
+ * under the same revision, does not deliver on the same branch, each query
+ * kept with those of its roots alone. Without such a selection it is all of
+ * `delivery`. A root the installed selection delivers was resolved when that
+ * selection was, and the session's refresh passes evaluate it whichever of
+ * the two selections is installed. A root that stops resolving in between,
+ * a schema it names gone, fails those passes either way: `refreshDirty`
+ * logs the failure, skips the session's frame and marks it for a full
+ * re-evaluation, which each later pass makes until the root resolves again
+ * or a selection without it is installed. Resolving the root here again
+ * would only refuse the new selection in favor of the installed one, which
+ * delivers the same root.
+ */
+function deliveryToResolve(
+  delivery: readonly ViewQuery[],
+  installed: { delivery: readonly ViewQuery[] } | undefined,
+): readonly ViewQuery[] {
+  if (installed === undefined) return delivery;
+  const held = deliveryRootKeys(installed.delivery);
+  const added: ViewQuery[] = [];
+  for (const query of delivery) {
+    const roots = query.roots.filter((root) =>
+      !held.has(deliveryRootKey(query, root))
+    );
+    if (roots.length > 0) added.push({ ...query, roots });
+  }
+  return added;
+}
 
 /**
  * The memory v2 server. An instance accepts connections and serves the
@@ -2029,6 +2823,9 @@ export type EngineOpener = (
 export class Server {
   #sessions: SessionRegistry;
   #connections = new Map<string, Connection>();
+
+  /** The principals refused a space, by the connection to tell on a grant. */
+  #admissionWaiters = new AdmissionWaiters();
 
   /** Whole-evaluation caches, one per space (see QueryEvaluationCache in
    * query.ts for the sharing, purity, and seq-rotation rules), held for at
@@ -2052,6 +2849,8 @@ export class Server {
   /** Holds `documentCacheTotalBudgetBytes` across this server's engines and
    * keeps their recency; every engine this server opens reports to it. */
   #documentCacheCoordinator: Engine.DocumentCacheCoordinator;
+  #commitRates = new CommitRateTracker({ storm: COMMIT_STORM_THRESHOLDS });
+  #sessionReports = new SessionReportLog();
 
   /**
    * Synthesized session id for direct out-of-band document writes, such as
@@ -2122,6 +2921,10 @@ export class Server {
   #deliveredFrameEntries = new WeakMap<SessionEffectMessage, {
     upserts: SessionCacheEntry[];
     removes: SessionCacheEntry[];
+
+    /** The crossing keys the frame marked delivered, forgotten again when
+     * the frame is lost so the next frame carries them. */
+    crossings?: string[];
   }>();
 
   /**
@@ -2137,6 +2940,14 @@ export class Server {
 
   /** How many times `#buildSessionDemand()` has run, for a test to read. */
   #sessionDemandBuilds = 0;
+
+  /**
+   * The kind each space's genesis receipt declares, `undefined` included, as
+   * {@link #spaceKindOf} read it. The receipt never changes once written, so
+   * an entry never goes stale. Keyed by engine, so a store opened again is
+   * read afresh.
+   */
+  #spaceKinds = new WeakMap<Engine.Engine, string | undefined>();
 
   #store?: URL;
   #operationCodecs: OperationCodecRegistry;
@@ -2175,11 +2986,30 @@ export class Server {
   constructor(
     readonly options: {
       sessions?: SessionRegistry;
+
+      /**
+       * Client retirement is disabled. Only `0` is accepted; any other value
+       * throws during construction.
+       * @deprecated Client attribution does not control admission.
+       */
+      minimumClientGeneration?: 0;
+
       store?: URL;
       /** Synchronous authoritative fence, checked in protected engine turns. */
       ownsSpace?: (space: string) => boolean;
-      /** Existing-space stage: refuse missing ACLs and implicit legacy grants. */
+      /**
+       * Mode A: refuse missing ACLs and implicit legacy grants. A space with
+       * no history admits only its own DID, to write its genesis ACL, and an
+       * open by anyone else creates no store for it. A service DID may still
+       * give a space with history an ACL, or repair an invalid one.
+       */
       requireExplicitAcl?: boolean;
+      /**
+       * Mode A: whether a space with no store may be created here. A space
+       * the directory lists must already have its store, so an open of one
+       * whose store has not arrived is refused rather than re-created empty.
+       */
+      createsSpace?: (space: string) => boolean;
 
       operationCodecs?: OperationCodecRegistry;
 
@@ -2250,8 +3080,8 @@ export class Server {
       };
 
       /**
-       * Space access control. `off` (default) preserves the historical
-       * any-authenticated-session-may-do-anything behavior. `observe`
+       * Space access control. `off` (default) permits any operation by an
+       * authenticated session. `observe`
        * evaluates ordinary capability decisions, counts and logs
        * would-denies, but allows those decisions. Invalid ACL state,
        * fresh-space genesis violations, and OWNER shortfalls remain hard
@@ -2262,10 +3092,14 @@ export class Server {
        * (entity id == the space DID, as managed by the runner's
        * `ACLManager` / `cf acl`) grants per-DID or `"*"` capabilities. A
        * missing ACL on a populated legacy space grants every authenticated
-       * principal READ and WRITE (never OWNER). A fresh space grants
-       * authenticated READ only, and the space DID OWNER: its first write
-       * must be a valid ACL initialized by the space identity or a service
-       * DID. Past that genesis the space DID holds what the ACL grants it.
+       * principal READ and WRITE (never OWNER) unless `requireExplicitAcl`
+       * is set. Without that option, a fresh space grants authenticated READ
+       * and the space DID OWNER; its first write must be a valid ACL
+       * initialized by the space identity or a service DID. With
+       * `requireExplicitAcl` (Mode A), only the space's own DID may open a
+       * fresh space and initialize its ACL. A service DID may repair or add
+       * an ACL only once the space has history. Past genesis the space DID
+       * holds what the ACL grants it.
        *
        * Requirements: session.open, queries, and watches need READ;
        * transact needs WRITE; ACL-document writes and disk-source
@@ -2303,7 +3137,16 @@ export class Server {
       };
     },
   ) {
+    if (
+      options.minimumClientGeneration !== undefined &&
+      options.minimumClientGeneration !== 0
+    ) {
+      throw new RangeError(
+        "Client retirement is disabled; `minimumClientGeneration` must be `0`",
+      );
+    }
     this.#sessions = options.sessions ?? new SessionRegistry();
+    this.#sessions.setObserver((event) => this.#notifySessionChanged(event));
     this.#store = options.store;
     this.#operationCodecs = options.operationCodecs ??
       createDefaultOperationCodecRegistry();
@@ -2321,12 +3164,15 @@ export class Server {
         DOCUMENT_CACHE_TOTAL_BUDGET_BYTES,
     );
     // Module-level providers for the health route (push-priority counters,
-    // Phase 6; document caches): the newest live server is reported, and
-    // close() withdraws exactly this server's.
+    // Phase 6; document caches; commit rates): the newest live server is
+    // reported, and close() withdraws exactly this server's.
     pushPriorityStatsProviders.push(this.#pushPriorityStatsProvider);
     documentCachesDiagnosticsProviders.push(
       this.#documentCachesDiagnosticsProvider,
     );
+    commitRatesProviders.push(this.#commitRatesProvider);
+    sessionReportsProviders.push(this.#sessionReportsProvider);
+    documentInterestsProviders.push(this.#documentInterestsProvider);
   }
 
   /**
@@ -2374,6 +3220,10 @@ export class Server {
    * exactly them and no other server's. */
   #pushPriorityStatsProvider = () => this.pushPriorityStats();
   #documentCachesDiagnosticsProvider = () => this.documentCachesDiagnostics();
+  #commitRatesProvider = () => this.commitRates();
+  #sessionReportsProvider = () => this.sessionReports();
+  #documentInterestsProvider = (query: DocumentInterestQuery) =>
+    this.#sessions.documentInterests(query);
 
   /** Every open engine's document-cache counters, keyed by space. A peek:
    * nothing is opened by asking. */
@@ -2391,12 +3241,51 @@ export class Server {
     };
   }
 
+  /** Every space with a commit in the last ten minutes, ranked, with the
+   * sessions behind those commits and whether the space is in a write
+   * storm. A read, which also lets go of the spaces and writers that have
+   * gone quiet. */
+  commitRates(): CommitRatesReport {
+    return this.#commitRates.report();
+  }
+
+  /** The diagnostics clients have reported about their sessions: running
+   * totals and the most recent reports in full (04-protocol.md §4.14). */
+  sessionReports(): SessionReportsReport {
+    return this.#sessionReports.report();
+  }
+
+  /** Helper for the engines' commit observer and for `transact()`'s own
+   * refusals, which counts one decided commit toward its space's rate and
+   * the `ct.memory.commits` counter, under the session and, where known,
+   * the principal it came from (an anonymous session carries none). */
+  #observeCommit(decision: Engine.CommitDecision & { space: string }): void {
+    const principal = decision.principal;
+    const { storm } = this.#commitRates.record({
+      space: decision.space,
+      session: decision.sessionId,
+      ...(principal === undefined || principal === ANYONE_USER
+        ? {}
+        : { principal }),
+      accepted: decision.accepted,
+      operations: decision.operations,
+    });
+    commitCount.add(1, {
+      "space.did": decision.space,
+      outcome: decision.accepted ? "ok" : "rejected",
+      storm,
+    });
+  }
+
   memoryProtocolFlags(): MemoryProtocolFlags {
     return {
       ...getMemoryProtocolFlags(),
+      // Server execution is attached through the observer, and only then.
+      serverExecution: this.#serverExecutionObserver !== undefined,
       operationCodecs: this.#operationCodecs.ids(),
       connectionAuth: this.options.authorizeConnection !== undefined,
       routedAuthV1: false,
+      routedCompressionV1: false,
     };
   }
 
@@ -2456,9 +3345,25 @@ export class Server {
    *  would break that traffic). */
   readonly aclStats = { wouldDeny: 0, denied: 0 };
 
-  /** space → (principal key → capability). Invalidated whenever a commit
-   *  touches the space's ACL document. */
-  #aclCapabilities = new Map<string, Map<string, Capability | null>>();
+  /** space → the capabilities its ACL grants, by principal key, and what
+   *  they were resolved from: the space's engine, its store's data version
+   *  as read before the ACL, and the ACL document's revision. A space's
+   *  entry is dropped when this process commits a change to its ACL, and by
+   *  {@link #capabilityFor} when the store's data version has moved, which
+   *  is how a grant or revocation written through another connection to
+   *  the same store takes effect here at the next access. */
+  #aclCapabilities = new Map<string, {
+    engine: Engine.Engine;
+    dataVersion: number;
+    aclRevision: string | null;
+    byPrincipal: Map<string, Capability | null>;
+  }>();
+
+  /** Spaces whose ACL document another connection changed, as
+   *  {@link #capabilityFor} found. At the space's next refresh turn the
+   *  server revokes the sessions the change deauthorized and notices the
+   *  admissions it allows, as it does when an ACL commit of its own lands. */
+  #aclChangedElsewhere = new Set<string>();
 
   #aclMode(): MemoryAclMode {
     return this.options.acl?.mode ?? "off";
@@ -2488,16 +3393,7 @@ export class Server {
     engine: Engine.Engine,
     space: string,
   ): string | undefined {
-    const state = this.#aclState(engine, space);
-    if (state.kind !== "valid") return undefined;
-    if (state.acl[space] === "OWNER") return space;
-    const owners = Object.entries(state.acl)
-      .filter(([principal, capability]) =>
-        principal !== ANYONE_USER && capability === "OWNER"
-      )
-      .map(([principal]) => principal)
-      .sort();
-    return owners[0];
+    return resolveSpaceOwnerOf(engine, space);
   }
 
   /**
@@ -2528,16 +3424,7 @@ export class Server {
   }
 
   #aclState(engine: Engine.Engine, space: string): AclState {
-    const state = Engine.readState(engine, { id: aclDocId(space) });
-    if (state === null) return { kind: "missing" };
-    // A retracted ACL is not equivalent to a never-created ACL: treating the
-    // tombstone as public would turn deletion into an authorization bypass.
-    if (state.document === null) return { kind: "invalid" };
-    const acl = state.document.value;
-    if (!isACL(acl)) return { kind: "invalid" };
-    const byPrincipal = acl as Record<string, Capability | undefined>;
-    if (!hasConcreteOwner(byPrincipal)) return { kind: "invalid" };
-    return { kind: "valid", acl: byPrincipal };
+    return readAclState(engine, space);
   }
 
   #resolveCapability(
@@ -2545,9 +3432,6 @@ export class Server {
     space: string,
     principal: string | undefined,
   ): Capability | null {
-    if (principal !== undefined && this.#isServicePrincipal(principal)) {
-      return "OWNER";
-    }
     const state = this.#aclState(engine, space);
     if (state.kind === "valid") {
       return (principal !== undefined ? state.acl[principal] : undefined) ??
@@ -2575,18 +3459,58 @@ export class Server {
     space: string,
     principal: string | undefined,
   ): Capability | null {
+    // A service DID is OWNER whatever the ACL says, so neither the store nor
+    // the cache is consulted for it.
+    if (principal !== undefined && this.#isServicePrincipal(principal)) {
+      return "OWNER";
+    }
     const key = principal ?? "";
-    let bySpace = this.#aclCapabilities.get(space);
-    if (bySpace !== undefined && bySpace.has(key)) {
-      return bySpace.get(key) ?? null;
+    // The version is read before the ACL, never after: a commit from another
+    // connection landing between the two pairs the old version with the new
+    // list, and the next check re-reads; the other order would pair the new
+    // version with the old list and serve it until the version next moved.
+    const dataVersion = Engine.dataVersion(engine);
+    let cached = this.#aclCapabilities.get(space);
+    if (
+      cached !== undefined &&
+      (cached.engine !== engine || cached.dataVersion !== dataVersion)
+    ) {
+      this.#invalidateAclCapabilities(space);
+      // Another connection committed to the store. Only a commit that moved
+      // the ACL document calls for the follow-ups of an ACL change; any
+      // other costs the re-read alone. A version from another engine says
+      // nothing about this one's connection.
+      if (
+        cached.engine === engine &&
+        cached.aclRevision !== this.#aclRevision(engine, space)
+      ) {
+        this.#aclChangedElsewhere.add(space);
+        this.markSpaceDirty(space, [toDirtyKey(aclDocId(space))]);
+      }
+      cached = undefined;
+    }
+    if (cached !== undefined && cached.byPrincipal.has(key)) {
+      return cached.byPrincipal.get(key) ?? null;
     }
     const capability = this.#resolveCapability(engine, space, principal);
-    if (bySpace === undefined) {
-      bySpace = new Map();
-      this.#aclCapabilities.set(space, bySpace);
+    if (cached === undefined) {
+      cached = {
+        engine,
+        dataVersion,
+        aclRevision: this.#aclRevision(engine, space),
+        byPrincipal: new Map(),
+      };
+      this.#aclCapabilities.set(space, cached);
     }
-    bySpace.set(key, capability);
+    cached.byPrincipal.set(key, capability);
     return capability;
+  }
+
+  /** The revision of `space`'s ACL document, `seq/opIndex`, or `null` when
+   *  its store holds no row for it. */
+  #aclRevision(engine: Engine.Engine, space: string): string | null {
+    const state = Engine.readState(engine, { id: aclDocId(space) });
+    return state === null ? null : `${state.seq}/${state.opIndex}`;
   }
 
   /** Evaluate the ACL policy for a message. Returns `null` when the message
@@ -2604,11 +3528,23 @@ export class Server {
     ) {
       return toError("AuthorizationError", "Routed memory request denied");
     }
-    if (
-      this.options.requireExplicitAcl === true &&
-      this.#aclState(engine, space).kind !== "valid"
-    ) {
-      return toError("AuthorizationError", "Routed memory request denied");
+    if (this.options.requireExplicitAcl === true) {
+      const kind = this.#aclState(engine, space).kind;
+      // Creation: until its genesis ACL lands, a space with no history
+      // admits its own DID alone, which `#resolveCapability` makes OWNER.
+      const genesis = kind === "missing" && principal === space &&
+        Engine.serverSeq(engine) === 0;
+      // Operators: a service DID may give a space with history an ACL, or
+      // repair an invalid one, as in direct mode, so legacy spaces can be
+      // given ACLs after cutover. It already acts as OWNER of every space
+      // that has one. A space with no history is its own DID's to create,
+      // so no operator writes its genesis ACL. An invalid ACL is a stored
+      // document, so its space has history too.
+      const operator = principal !== undefined &&
+        this.#isServicePrincipal(principal) && Engine.serverSeq(engine) > 0;
+      if (kind !== "valid" && !genesis && !operator) {
+        return toError("AuthorizationError", "Routed memory request denied");
+      }
     }
     if (this.#aclMode() === "off") return null;
     const capability = this.#capabilityFor(engine, space, principal);
@@ -2699,55 +3635,70 @@ export class Server {
     );
   }
 
+  /**
+   * The kind the genesis receipt of the space `engine` stores declares, or
+   * `undefined` when it declares none or the space has no history yet.
+   */
+  #spaceKindOf(engine: Engine.Engine): string | undefined {
+    // A space with no history has no receipt to read, and one yet to come.
+    if (Engine.serverSeq(engine) === 0) return undefined;
+    if (!this.#spaceKinds.has(engine)) {
+      this.#spaceKinds.set(engine, readSpaceKind(engine));
+    }
+    return this.#spaceKinds.get(engine);
+  }
+
   /** Enforce ACL document shape and fresh-space genesis in the `observe` and
    *  `enforce` modes alike, apart from the access decision those modes
    *  differ on. These are storage invariants: an invalid ACL or an ordinary
    *  first write would make later enforcement ambiguous or impossible. The
-   *  `off` mode skips them, and checks only a genesis root reservation. */
+   *  `off` mode skips them, and checks only the facts a genesis commit
+   *  declares ({@link GENESIS_DECLARATIONS}), which every mode admits only
+   *  on a space-key genesis matching its session's intent. `committer` is
+   *  the principal the commit is made as, with the genesis facts its session
+   *  declared: a session's own, or a served run's carried actor, which
+   *  declares none. */
   #validateAclCommit(
     engine: Engine.Engine,
     space: string,
-    session: SessionState,
+    committer: Pick<SessionState, "principal" | "genesisRoot" | "spaceKind">,
     commit: ClientCommit,
   ): V2Error | null {
-    const principal = session.principal;
-    if (commit.genesisRoot !== undefined) {
-      if (!isGenesisRoot(commit.genesisRoot)) {
-        return toError("ProtocolError", "Invalid genesis root reservation");
-      }
-      if (
-        principal !== space || Engine.serverSeq(engine) !== 0 ||
-        commit.operations.length !== 1 || commit.operations[0].op !== "set" ||
-        commit.operations[0].id !== aclDocId(space) ||
-        (commit.operations[0].scope !== undefined &&
-          commit.operations[0].scope !== "space") ||
-        (commit.branch !== undefined && commit.branch !== "") ||
-        !isACL(commit.operations[0].value?.value) ||
-        !hasConcreteOwner(commit.operations[0].value?.value)
-      ) {
+    const principal = committer.principal;
+    for (const declaration of GENESIS_DECLARATIONS) {
+      const declared = commit[declaration.field];
+      const intended = committer[declaration.field];
+      if (declared !== undefined) {
+        if (!declaration.isValid(declared)) {
+          return toError("ProtocolError", declaration.invalid);
+        }
+        if (!isSpaceKeyAclGenesis(engine, space, principal, commit)) {
+          return toError(
+            "AuthorizationError",
+            `${declaration.declared} requires space-key ACL genesis`,
+          );
+        }
+        if (!valueEqual(declared, intended)) {
+          return toError(
+            "AuthorizationError",
+            `${declaration.sealed} must match the authenticated session intent`,
+          );
+        }
+      } else if (Engine.serverSeq(engine) === 0 && intended !== undefined) {
         return toError(
           "AuthorizationError",
-          "A root reservation requires space-key ACL genesis",
+          "The genesis commit must retain the authenticated " +
+            `${declaration.intent} intent`,
         );
       }
-      if (!valueEqual(commit.genesisRoot, session.genesisRoot)) {
-        return toError(
-          "AuthorizationError",
-          "The genesis root must match the authenticated session intent",
-        );
-      }
-    } else if (
-      Engine.serverSeq(engine) === 0 && session.genesisRoot !== undefined
-    ) {
-      return toError(
-        "AuthorizationError",
-        "The genesis commit must retain the authenticated root intent",
-      );
     }
     if (this.#aclMode() === "off") return null;
 
-    const state = this.#aclState(engine, space);
     const aclTouched = commitTouchesAclDoc(commit.operations, space);
+    // Ordinary writes to established spaces need no genesis shape check.
+    // Their current ACL and ownership are enforced by message authorization.
+    if (!aclTouched && Engine.serverSeq(engine) !== 0) return null;
+    const state = this.#aclState(engine, space);
 
     if (!aclTouched) {
       if (state.kind === "missing" && Engine.serverSeq(engine) === 0) {
@@ -2800,6 +3751,36 @@ export class Server {
       );
     }
     return null;
+  }
+
+  /**
+   * The capability check of `commit`, made as `principal` to `space`, whose
+   * shape {@link #validateAclCommit} admitted. A commit that leaves the ACL
+   * document alone needs `WRITE`. One that writes it changes who may access
+   * the space, so it needs `OWNER`, with one exception: a member removing its
+   * own entry and nothing else ({@link #isSelfRemoval}, INV-12) needs only
+   * `READ`, which any entry grants. That holds in `observe` mode as in
+   * `enforce`. A session's transact and a served run's access-list change
+   * are both admitted through this check.
+   */
+  #authorizeCommitWithEngine(
+    engine: Engine.Engine,
+    space: string,
+    principal: string | undefined,
+    commit: ClientCommit,
+  ): V2Error | null {
+    const requirement: Capability =
+      !commitTouchesAclDoc(commit.operations, space)
+        ? "WRITE"
+        : this.#isSelfRemoval(engine, space, principal, commit)
+        ? "READ"
+        : "OWNER";
+    return this.#authorizeMessageWithEngine(
+      engine,
+      space,
+      principal,
+      requirement,
+    );
   }
 
   /**
@@ -2904,6 +3885,13 @@ export class Server {
         session.actingPrincipal ?? session.principal,
       );
       if (capability !== null && isCapable(capability, "READ")) continue;
+      if (session.actingPrincipal === undefined) {
+        this.#awaitAdmission(
+          session.ownerConnectionId,
+          space,
+          session.principal,
+        );
+      }
       // Drop the de-authorized session from the registry: the refresh loop
       // iterates registered sessions, so removal stops all further watch
       // pushes, and its next message fails closed (Unknown session).
@@ -2932,20 +3920,89 @@ export class Server {
     }
   }
 
-  connect(send: Send): Connection {
-    const connection = new Connection(crypto.randomUUID(), this, send);
+  /**
+   * Records that `principal` was refused `space` on `connectionId`, so that
+   * an access-list change admitting it tells that connection
+   * (`#noticeAdmissions()`). A routed connection records nothing, and
+   * neither does one whose peer did not advertise `admissionNotice`.
+   *
+   * The callers in this file record nothing for a session opened
+   * `actingAs: "space-owner"`. Only a co-hosted serving runtime opens one,
+   * and it already hears of every access-list commit in process
+   * (`noteSpaceAclChanged()`), after which its next load of the space opens
+   * the session again through ordinary admission.
+   */
+  #awaitAdmission(
+    connectionId: string | null,
+    space: string,
+    principal: string | undefined,
+  ): void {
+    if (connectionId === null || principal === undefined) return;
+    const connection = this.#connections.get(connectionId);
+    if (
+      connection === undefined || connection.routed ||
+      !connection.admissionNotice
+    ) {
+      return;
+    }
+    this.#admissionWaiters.add(connectionId, space, principal);
+  }
+
+  /**
+   * After an access-list change, sends `session/admissible` to each
+   * connection that was refused `space` for a principal that now holds
+   * `READ` there. Each refusal is told once.
+   */
+  #noticeAdmissions(engine: Engine.Engine, space: string): void {
+    if (!this.isAclActive()) return;
+    const admitted = this.#admissionWaiters.take(space, (principal) => {
+      const capability = this.#capabilityFor(engine, space, principal);
+      return capability !== null && isCapable(capability, "READ");
+    });
+    for (const { connectionId, principal } of admitted) {
+      this.#connections.get(connectionId)?.sendAdmissible(space, principal);
+    }
+  }
+
+  /**
+   * Creates a connection whose messages `send` delivers. `syncParts` bounds
+   * the messages a sync is split into for a client that takes a sync in
+   * parts; without it, every sync goes whole.
+   */
+  connect(send: Send, syncParts?: PartLimits): Connection {
+    const connection = new Connection(
+      crypto.randomUUID(),
+      this,
+      send,
+      undefined,
+      syncParts,
+    );
     this.#connections.set(connection.id, connection);
     return connection;
   }
 
-  /** Creates one ticketed backend context with independent client authority. */
-  connectRouted(send: Send, owns: (space: string) => boolean): Connection {
+  /**
+   * Creates one ticketed backend context with independent client authority.
+   * `syncParts` bounds the messages a sync is split into for a client that
+   * takes a sync in parts.
+   */
+  connectRouted(
+    send: Send,
+    owns: (space: string) => boolean,
+    syncParts?: PartLimits,
+  ): Connection {
     if (this.#aclMode() !== "enforce" || this.options.ownsSpace === undefined) {
       throw authorizationError(
         "Routed memory requires enforced ACLs and ownership fencing",
       );
     }
-    const connection = new Connection(crypto.randomUUID(), this, send, owns);
+    const connection = new Connection(
+      crypto.randomUUID(),
+      this,
+      send,
+      owns,
+      syncParts,
+    );
     this.#connections.set(connection.id, connection);
     return connection;
   }
@@ -2965,9 +4022,15 @@ export class Server {
 
   disconnect(connection: Connection): void {
     this.#connections.delete(connection.id);
+    this.#admissionWaiters.removeConnection(connection.id);
     if (this.#connections.size === 0) {
       this.#cancelScheduledRefresh();
     }
+  }
+
+  /** Forgets every refusal of `principal` on `connectionId`. */
+  forgetAdmissionWaits(connectionId: string, principal: string): void {
+    this.#admissionWaiters.removePrincipal(connectionId, principal);
   }
 
   detachSession(
@@ -3000,26 +4063,8 @@ export class Server {
     connection: Connection,
   ): ResponseMessage<PresenceJoinResult | Record<PropertyKey, never>> {
     const { requestId, space, sessionId, room } = message;
-    if (!this.isSessionAttached(space, sessionId, connection.id)) {
-      return respondTypedError(
-        requestId,
-        toError("SessionRevokedError", "Session is not attached"),
-      );
-    }
-    if (connection.routed) {
-      const engine = this.#resolvedEngines.get(space);
-      const session = this.#sessions.get(space, sessionId);
-      const deny = engine === undefined || session === null
-        ? toError("SessionRevokedError", "Routed memory authority ended")
-        : this.#authorizeCurrentSessionWithEngine(
-          engine,
-          space,
-          sessionId,
-          session,
-          "READ",
-        );
-      if (deny) return respondTypedError(requestId, deny);
-    }
+    const refusal = this.#refuseImmediateRequest(space, sessionId, connection);
+    if (refusal !== null) return respondTypedError(requestId, refusal);
     if (!isPresenceRoom(room)) {
       return respondTypedError(
         requestId,
@@ -3067,6 +4112,81 @@ export class Server {
     }
   }
 
+  /**
+   * Records one session report on behalf of `connection`, which has already
+   * established that the request's session is open on it, and returns the
+   * response to send (04-protocol.md §4.14). The report is counted, kept in
+   * the log the health route reads, and written to the server's log as one
+   * line; a session the connection no longer owns gets a
+   * `SessionRevokedError`.
+   */
+  receiveSessionReport(
+    message: SessionReportRequest,
+    connection: Connection,
+  ): ResponseMessage<Record<PropertyKey, never>> {
+    const { requestId, space, sessionId, report } = message;
+    const refusal = this.#refuseImmediateRequest(space, sessionId, connection);
+    if (refusal !== null) return respondTypedError(requestId, refusal);
+    const principal = this.#sessions.get(space, sessionId)?.principal;
+    this.#sessionReports.record({
+      space,
+      session: sessionId,
+      ...(principal === undefined || principal === ANYONE_USER
+        ? {}
+        : { principal }),
+      report,
+    });
+    const document = `${report.document.scopeKey} ${report.document.id}`;
+    if (report.event === "trip") {
+      echoBreakerReportCount.add(1, { "space.did": space, event: "trip" });
+      console.warn(
+        `[memory-echo-breaker] session ${sessionId} on ${space} is ` +
+          `backing off action ${report.action}: it kept rewriting ` +
+          `${document} against another writer`,
+      );
+    } else {
+      echoBreakerReportCount.add(1, {
+        "space.did": space,
+        event: "clear",
+        reason: report.reason,
+      });
+      console.info(
+        `[memory-echo-breaker] session ${sessionId} on ${space} cleared ` +
+          `action ${report.action} on ${document} (${report.reason}) after ` +
+          `${report.trippedMs}ms and ${report.renewals} renewals`,
+      );
+    }
+    return { type: "response", requestId, ok: {} };
+  }
+
+  /**
+   * The error refusing a presence request or session report `connection`
+   * makes on `sessionId`, or `null` to handle it: the session must still be
+   * attached to the connection, and on a routed connection its routed
+   * authority must still hold `READ` on the space.
+   */
+  #refuseImmediateRequest(
+    space: string,
+    sessionId: string,
+    connection: Connection,
+  ): V2Error | null {
+    if (!this.isSessionAttached(space, sessionId, connection.id)) {
+      return toError("SessionRevokedError", "Session is not attached");
+    }
+    if (!connection.routed) return null;
+    const engine = this.#resolvedEngines.get(space);
+    const session = this.#sessions.get(space, sessionId);
+    return engine === undefined || session === null
+      ? toError("SessionRevokedError", "Routed memory authority ended")
+      : this.#authorizeCurrentSessionWithEngine(
+        engine,
+        space,
+        sessionId,
+        session,
+        "READ",
+      );
+  }
+
   /** Ends every presence membership the connection holds. */
   endPresenceForConnection(connectionId: string): void {
     this.#presence.leaveConnection(connectionId);
@@ -3109,6 +4229,12 @@ export class Server {
     withdrawProvider(
       documentCachesDiagnosticsProviders,
       this.#documentCachesDiagnosticsProvider,
+    );
+    withdrawProvider(commitRatesProviders, this.#commitRatesProvider);
+    withdrawProvider(sessionReportsProviders, this.#sessionReportsProvider);
+    withdrawProvider(
+      documentInterestsProviders,
+      this.#documentInterestsProvider,
     );
     this.#cancelScheduledRefresh();
     for (const connection of [...this.#connections.values()]) {
@@ -3175,6 +4301,7 @@ export class Server {
       if (commit !== undefined) {
         this.#invalidateAclCapabilities(request.space);
         this.#revokeDeauthorizedSessions(engine, request.space);
+        this.#noticeAdmissions(engine, request.space);
         this.markSpaceDirty(request.space, [
           toDirtyKey(aclDocId(request.space)),
         ]);
@@ -3187,6 +4314,28 @@ export class Server {
         });
       }
       return result;
+    });
+  }
+
+  /**
+   * Flushes a space's WAL before a separate durable store records completion.
+   * Refuses a missing store without creating one. Throws when a reader
+   * prevents the full checkpoint.
+   */
+  async flushSpace(space: string): Promise<void> {
+    await this.#withSpacePublicationLock(space, async () => {
+      if (!(await this.#spaceStoreExists(space))) {
+        throw new Error("Cannot flush an unavailable space");
+      }
+      const engine = await this.#openEngine(space);
+      if (Engine.serverSeq(engine) === 0) {
+        throw new Error("Cannot flush a space without history");
+      }
+      const checkpoint = engine.database.prepare("PRAGMA wal_checkpoint(FULL)")
+        .get<{ busy: number }>();
+      if (checkpoint?.busy !== 0) {
+        throw new Error("Space durability checkpoint could not complete");
+      }
     });
   }
 
@@ -3341,7 +4490,8 @@ export class Server {
    * space's (or a cell-derived) `.sqlite` file and read it cross-tenant.
    * (Confining injected sources to an operator allowlist, and gating the verb to
    * an operator capability rather than any session, awaits CFC labels —
-   * 08-open-questions Q18.)
+   * 08-open-questions Q18. Mode A already admits only service DIDs, since any
+   * client there can create and own a space; see `sqliteRegisterDiskSource`.)
    */
   async registerDiskSource(
     space: string,
@@ -3820,6 +4970,159 @@ export class Server {
     return { seq: applied.seq, deduped: false };
   }
 
+  /**
+   * Decides `request`, a served run's change to an access list, as
+   * {@link commitServedAclChange} would against the store as it stands, and
+   * commits nothing. The serving loop asks this when the run seals, so that a
+   * refusal fails that run alone, before anything of it reaches the wave.
+   */
+  async checkServedAclChange(
+    request: ServedAclChange,
+  ): Promise<ServedAclChangeVerdict> {
+    const engine = await this.#openEngine(request.space);
+    const sourceEngine = await this.#openEngine(request.sourceEvent.space);
+    const prepared = this.#prepareServedAclChange(
+      engine,
+      sourceEngine,
+      request,
+      0,
+    );
+    return "refused" in prepared ? prepared : { admitted: true };
+  }
+
+  /**
+   * Commits `request`, a served run's change to an access list, as one
+   * authored commit holding a single whole-document `set` of the list, under
+   * the run's delegated carriage (protocol.md §2's delegated row), with the
+   * delegating SpaceServer's session `sessionId` as its envelope (LT5) and
+   * `localSeq` from that host's process-lifetime counter, as for
+   * {@link commitDelegatedAppend}. A change that leaves the list as it is
+   * commits nothing.
+   *
+   * The change is admitted as a session's transact is, with the carried actor
+   * as the principal: INV-12's shape and the genesis rule
+   * ({@link #validateAclCommit}), then the capability check
+   * ({@link #authorizeCommitWithEngine}), on the same mode dial. The actor is
+   * never the space, so a space with no list refuses. The grant is resolved
+   * too: `capabilityRef` must name the entry the run delivers, and that entry
+   * must have been fired by the carried actor. The list is read, changed and
+   * written in one immediate transaction, as an invitation's grant is, so a
+   * write to the store through another connection either precedes the read
+   * or waits for the commit; the whole-document `set` never writes over
+   * one. On admission the commit is published as a transact writing the
+   * list is.
+   */
+  async commitServedAclChange(
+    request: ServedAclChange & { sessionId: string; localSeq: number },
+  ): Promise<ServedAclChangeVerdict> {
+    return await this.#withSpacePublicationLock(request.space, async () => {
+      const engine = await this.#openEngine(request.space);
+      const sourceEngine = await this.#openEngine(request.sourceEvent.space);
+      const outcome = Engine.runAtomicCommit(
+        engine,
+        (apply): { refused: string } | { applied?: Engine.AppliedCommit } => {
+          const prepared = this.#prepareServedAclChange(
+            engine,
+            sourceEngine,
+            request,
+            request.localSeq,
+          );
+          if ("refused" in prepared) return prepared;
+          if (prepared.commit === undefined) return {};
+          return {
+            applied: apply({
+              sessionId: request.sessionId,
+              space: request.space,
+              commit: prepared.commit,
+              commitClass: "authored",
+              delegated: {
+                actingPrincipal: request.actingPrincipal,
+                ...(request.actingSession === undefined
+                  ? {}
+                  : { actingSession: request.actingSession }),
+                capabilityRef: request.capabilityRef,
+              },
+            }),
+          };
+        },
+      );
+      if ("refused" in outcome) return outcome;
+      if (outcome.applied === undefined) return { admitted: true };
+      const applied = outcome.applied;
+      const aclId = aclDocId(request.space);
+      this.#invalidateAclCapabilities(request.space);
+      this.#revokeDeauthorizedSessions(engine, request.space);
+      this.#noticeAdmissions(engine, request.space);
+      this.markSpaceDirty(request.space, [toDirtyKey(aclId)]);
+      this.#notifyCommitAdmitted({
+        space: request.space,
+        seq: applied.seq,
+        class: "authored",
+        sessionId: request.sessionId,
+        writes: [{ id: aclId, scopeKey: "space" }],
+      });
+      return { admitted: true, seq: applied.seq };
+    });
+  }
+
+  /**
+   * Helper for {@link checkServedAclChange} and {@link commitServedAclChange},
+   * which returns the commit `request` makes against `engine`, the store of
+   * `request.space`, numbered `localSeq`: `undefined` when the change leaves
+   * the list as it is, or why it is refused. `sourceEngine` is the store of
+   * the space whose stream holds the entry the run delivers.
+   */
+  #prepareServedAclChange(
+    engine: Engine.Engine,
+    sourceEngine: Engine.Engine,
+    request: ServedAclChange,
+    localSeq: number,
+  ): { refused: string } | { commit: ClientCommit | undefined } {
+    const { space, actingPrincipal, sourceEvent } = request;
+    if (request.capabilityRef !== `event-consequence:${sourceEvent.eventId}`) {
+      return {
+        refused: `The grant ${request.capabilityRef} does not name the ` +
+          `event ${sourceEvent.eventId} the run delivers.`,
+      };
+    }
+    const sidecar = Engine.read(sourceEngine, { id: sourceEvent.sidecarId })
+      ?.value as StreamEventsDocValue | undefined;
+    const entry = (Array.isArray(sidecar?.entries) ? sidecar.entries : [])
+      .find((candidate) => candidate?.eventId === sourceEvent.eventId);
+    if (entry?.firedAt?.user !== actingPrincipal) {
+      return {
+        refused: `The event ${sourceEvent.eventId} was not fired by ` +
+          `${actingPrincipal}, the actor the change is made as.`,
+      };
+    }
+    const aclId = aclDocId(space);
+    const stored = Engine.read(engine, { id: aclId });
+    let next: ACL;
+    try {
+      next = request.change(stored?.value);
+    } catch (error) {
+      return {
+        refused: error instanceof Error ? error.message : String(error),
+      };
+    }
+    if (stored !== null && valueEqual(stored.value as FabricValue, next)) {
+      return { commit: undefined };
+    }
+    const commit: ClientCommit = {
+      localSeq,
+      reads: { confirmed: [], pending: [] },
+      operations: [{
+        op: "set",
+        id: aclId,
+        value: { ...(stored ?? {}), value: next } as EntityDocument,
+      }],
+    };
+    const committer = { principal: actingPrincipal };
+    const invalid = this.#validateAclCommit(engine, space, committer, commit) ??
+      this.#authorizeCommitWithEngine(engine, space, actingPrincipal, commit);
+    return invalid === null ? { commit } : { refused: invalid.message };
+  }
+
   async sqliteQuery(
     message: SqliteQueryRequest,
   ): Promise<ResponseMessage<SqliteQueryWireResult>> {
@@ -3902,30 +5205,46 @@ export class Server {
         );
       }
       const disk = this.#diskSources.get(message.space, message.db.id);
-      const result = disk
-        ? (wantColumns
-          ? this.#readPool.queryWithOrigins(
-            disk.path,
+      // A read past the slow-operation threshold is recorded with what its
+      // caller is told: its rows, the error it failed with, or the refusal of
+      // the access check that follows it.
+      const readStartedAt = performance.now();
+      const recordRead = (outcome: string, rows?: number) =>
+        recordSlowQueryDuration("sqlite.query", message.space, readStartedAt, {
+          db: message.db.id,
+          outcome,
+          ...(rows === undefined ? {} : { rows }),
+        });
+      let result: { rows: SqliteNativeRow[]; columns?: SqliteResultColumn[] };
+      try {
+        result = disk
+          ? (wantColumns
+            ? this.#readPool.queryWithOrigins(
+              disk.path,
+              message.sql,
+              queryParams,
+            )
+            : {
+              rows: this.#readPool.query(disk.path, message.sql, queryParams),
+            })
+          : await this.#readCellDb(
+            message.space,
+            message.db,
             message.sql,
             queryParams,
-          )
-          : {
-            rows: this.#readPool.query(disk.path, message.sql, queryParams),
-          })
-        : await this.#readCellDb(
-          message.space,
-          message.db,
-          message.sql,
-          queryParams,
-          Engine.resolveScopeKey(
-            message.db.scope,
-            message.reader ?? {
-              principal: session.principal,
-              sessionId: message.sessionId,
-            },
-          ),
-          wantColumns,
-        );
+            Engine.resolveScopeKey(
+              message.db.scope,
+              message.reader ?? {
+                principal: session.principal,
+                sessionId: message.sessionId,
+              },
+            ),
+            wantColumns,
+          );
+      } catch (error) {
+        recordRead(error instanceof Error ? error.name : "SqliteError");
+        throw error;
+      }
       // SQLite reads necessarily await filesystem work. Re-check both the
       // session identity and its current ACL immediately before exposing the
       // rows, so a revoke during that I/O cannot leak a late result.
@@ -3945,9 +5264,11 @@ export class Server {
             "READ",
           ));
         if (deny) {
+          recordRead(deny.name);
           return respondTypedError<never>(message.requestId, deny);
         }
       }
+      recordRead("ok", result.rows.length);
       return {
         type: "response",
         requestId: message.requestId,
@@ -3987,6 +5308,18 @@ export class Server {
       return respondTypedError<SqliteRegisterDiskSourceResult>(
         message.requestId,
         toError("SessionError", "Unknown session for space"),
+      );
+    }
+    // Mode A: any client can create and own a space, so this operator
+    // surface is open only to service DIDs, on any connection.
+    if (
+      this.options.requireExplicitAcl === true &&
+      (session.principal === undefined ||
+        !this.#isServicePrincipal(session.principal))
+    ) {
+      return respondTypedError<SqliteRegisterDiskSourceResult>(
+        message.requestId,
+        toError("AuthorizationError", "Routed memory request denied"),
       );
     }
     const aclEngine = this.#aclMode() === "off"
@@ -4106,6 +5439,9 @@ export class Server {
     message: SessionOpenRequest,
     connection: Connection,
   ): Promise<ResponseMessage<SessionOpenResult>> {
+    let opened: ReturnType<SessionRegistry["open"]> | undefined;
+    let catchup: SessionEffectMessage | null = null;
+    let completed = false;
     try {
       if (
         this.options.ownsSpace !== undefined &&
@@ -4130,11 +5466,14 @@ export class Server {
       if (!connection.stableExpressionResultIds) {
         return respondTypedError<SessionOpenResult>(
           message.requestId,
-          toError(
-            "SessionRevokedError",
-            "This runtime uses incompatible expression result identities. " +
-              "Reload the browser tab or update the CLI checkout.",
-          ),
+          {
+            ...toError(
+              "SessionRevokedError",
+              "This runtime uses incompatible expression result identities. " +
+                "Reload the browser tab or update the CLI checkout.",
+            ),
+            clientUpdateRequired: true,
+          },
         );
       }
       const principal = authContext === undefined
@@ -4142,6 +5481,20 @@ export class Server {
         : await this.options.authorizeSessionOpen(message, authContext);
       if (authContext !== undefined) {
         connection.consumeSessionOpenChallenge(authContext.challenge);
+      }
+      // Mode A: a DID with no store here names a space nobody has created
+      // here. Only its own key may create it, and only where `createsSpace`
+      // allows; anyone else is refused before opening the engine would
+      // create the store. `createsSpace` is asked after the existence check,
+      // so a directory change during that wait is seen. The refusal stays
+      // permanent: a retriable one would show which DIDs the directory lists.
+      if (
+        this.options.requireExplicitAcl === true &&
+        !(await this.#spaceStoreExists(message.space)) &&
+        (principal !== message.space ||
+          this.options.createsSpace?.(message.space) === false)
+      ) {
+        throw authorizationError("Routed memory request denied");
       }
       const engine = await this.#openEngine(message.space);
       if (!connection.allowsRoutedOpen(message.space, named)) {
@@ -4203,6 +5556,9 @@ export class Server {
         "READ",
       );
       if (deny) {
+        if (actingAs === undefined) {
+          this.#awaitAdmission(connection.id, message.space, principal);
+        }
         return respondTypedError<SessionOpenResult>(message.requestId, deny);
       }
       const requestedRoot = message.session.genesisRoot;
@@ -4220,19 +5576,60 @@ export class Server {
           ),
         );
       }
+      const spaceKind = this.#spaceKindOf(engine);
+      const requestedKind = message.session.spaceKind;
+      if (
+        requestedKind !== undefined &&
+        (!isSpaceKind(requestedKind) ||
+          (Engine.serverSeq(engine) > 0 && spaceKind !== requestedKind))
+      ) {
+        return respondTypedError<SessionOpenResult>(
+          message.requestId,
+          toError(
+            "ProtocolError",
+            "The requested space kind differs from the space's immutable genesis",
+          ),
+        );
+      }
+      // Admission awaited, and the connection may have closed meanwhile: its
+      // sessions were detached at the close, so one opened now would be held
+      // by a connection that is gone, and never expire.
+      if (connection.closed) {
+        return respondTypedError<SessionOpenResult>(
+          message.requestId,
+          toError("SessionError", "The connection closed during admission"),
+        );
+      }
       const priorOwner = message.session.sessionId === undefined
         ? undefined
         : this.#sessions.get(message.space, message.session.sessionId)
           ?.ownerConnectionId;
-      const opened = this.#sessions.open(
-        message.space,
-        message.session,
-        Engine.serverSeq(engine),
-        connection.id,
-        principal,
-        actingPrincipal,
-        connection.routed,
-      );
+      try {
+        opened = this.#sessions.open(
+          message.space,
+          message.session,
+          Engine.serverSeq(engine),
+          connection.id,
+          principal,
+          actingPrincipal,
+          connection.routed,
+          connection.elidedVerdicts,
+        );
+      } catch (error) {
+        // Record the refused resume together with its session and connection.
+        if (error instanceof Error && error.name === "SessionRevokedError") {
+          // Quoted: the id, the space and the message (which repeats the id)
+          // are the peer's text, and a line break in one would read as a log
+          // record of its own.
+          console.warn(
+            `[memory-session] refused to resume session ` +
+              `${JSON.stringify(message.session.sessionId)} on ` +
+              `${JSON.stringify(message.space)} for connection ` +
+              `${connection.id}: ${JSON.stringify(error.message)}`,
+          );
+        }
+        throw error;
+      }
       if (connection.routed) {
         if (priorOwner !== connection.id) {
           this.#sessions.clearRoutedInterests(message.space, opened.sessionId);
@@ -4240,9 +5637,19 @@ export class Server {
         connection.addSession(message.space, opened.sessionId, principal);
         const admitted = this.#sessions.get(message.space, opened.sessionId)!;
         admitted.routedAuthority = () =>
-          connection.allowsRoutedSession(message.space, opened.sessionId);
+          connection.allowsRoutedSession(message.space, admitted.id);
+      } else {
+        // Catch-up awaits below. The connection must already track its
+        // session so closing it detaches this owner during that wait.
+        connection.addSession(message.space, opened.sessionId, named);
       }
       if (opened.revokedConnectionId !== undefined) {
+        console.warn(
+          `[memory-session] session ${JSON.stringify(opened.sessionId)} on ` +
+            `${JSON.stringify(message.space)} moved from connection ` +
+            `${opened.revokedConnectionId} to ${connection.id}, which ` +
+            "revokes it there as taken over",
+        );
         this.#connections.get(opened.revokedConnectionId)?.revokeSession(
           message.space,
           opened.sessionId,
@@ -4281,18 +5688,22 @@ export class Server {
       // instances instead, KEYED (the session's wire vocabulary is
       // sticky), so the retraction names exactly them and never the
       // session's own instance.
-      const catchup = opened.resumed === true
+      catchup = opened.resumed === true
         ? await this.syncSessionForConnection(
           message.space,
           opened.sessionId,
         )
         : null;
+      if (connection.closed) {
+        return respondTypedError<SessionOpenResult>(
+          message.requestId,
+          toError("SessionError", "The connection closed during catch-up"),
+        );
+      }
       // A resumed session is registered before catch-up, and catch-up awaits
       // graph evaluation. An ACL commit (or takeover) can remove or replace it
-      // during that await, before Connection.#receiveOrdered has added its
-      // local handle. In active ACL modes, never return catch-up data or let
-      // the connection add a ghost handle unless this exact token is still
-      // owned by this connection. Off mode preserves the legacy session timing.
+      // during that await. In active ACL modes, only the connection that
+      // still owns this exact token may receive its catch-up data.
       const current = this.#sessions.get(message.space, opened.sessionId);
       if (
         (connection.routed &&
@@ -4309,10 +5720,14 @@ export class Server {
           ),
         );
       }
+      if (principal !== undefined) {
+        this.#admissionWaiters.remove(connection.id, message.space, principal);
+      }
       const nextSessionOpen = connection.issueSessionOpenAuth();
       // Activation trigger (serving-loop.md §1): session open makes the
       // space ACTIVE-eligible; notify the host after the open succeeded.
       this.#notifySessionOpened(message.space);
+      completed = true;
       return {
         type: "response",
         requestId: message.requestId,
@@ -4323,6 +5738,7 @@ export class Server {
           caughtUpLocalSeq: opened.caughtUpLocalSeq,
           ...(opened.resumed === true ? { resumed: true } : {}),
           ...(catchup ? { sync: catchup.effect } : {}),
+          ...(spaceKind !== undefined ? { spaceKind } : {}),
           sessionOpen: nextSessionOpen,
         },
       };
@@ -4346,6 +5762,26 @@ export class Server {
         wireError.retriable = true;
       }
       return respondTypedError<SessionOpenResult>(message.requestId, wireError);
+    } finally {
+      if (!completed && opened !== undefined) {
+        const current = this.#sessions.get(message.space, opened.sessionId);
+        // A takeover rotates the token. Cleanup belongs to this exact open;
+        // an older catch-up must leave a newer owner's delivery state intact.
+        if (current === null || current.sessionToken === opened.sessionToken) {
+          if (current !== null) {
+            if (catchup !== null) {
+              this.rollbackUndeliveredSync(
+                message.space,
+                opened.sessionId,
+                catchup,
+              );
+            } else {
+              this.markSessionForFullResync(message.space, opened.sessionId);
+            }
+          }
+          connection.closeSession(message.space, opened.sessionId);
+        }
+      }
     }
   }
 
@@ -4410,8 +5846,10 @@ export class Server {
     return await this.#withSpacePublicationLock(message.space, async () => {
       const lockWaitMs = performance.now() - requestedAt;
       let outcome = "threw";
+      let engineDecided = false;
       try {
         const decision = await this.#decideTransaction(message, originating);
+        engineDecided = decision.engineDecided;
         outcome = decision.response.error?.name ?? "ok";
         let verdictError: { value: unknown } | undefined;
         try {
@@ -4445,13 +5883,30 @@ export class Server {
         const commit = message.commit as Partial<ClientCommit>;
         const count = (value: unknown): number | undefined =>
           Array.isArray(value) ? value.length : undefined;
+        const operations = count(commit.operations);
         recordSlowQueryDuration("transact", message.space, requestedAt, {
           lockWaitMs: Math.round(lockWaitMs),
-          operations: count(commit.operations),
+          operations,
           readsConfirmed: count(commit.reads?.confirmed),
           readsPending: count(commit.reads?.pending),
           outcome,
         });
+        // The engine reports every commit it decides to this server's
+        // commit observer, whichever path brought it. A commit refused
+        // before reaching the engine (an unknown session, a denied
+        // capability, a decision that threw) is counted here instead, so
+        // every decision counts exactly once, slow or not.
+        if (!engineDecided) {
+          this.#observeCommit({
+            space: message.space,
+            sessionId: message.sessionId,
+            ...(originating?.principal === undefined
+              ? {}
+              : { principal: originating.principal }),
+            accepted: outcome === "ok",
+            operations: operations ?? 0,
+          });
+        }
       }
     });
   }
@@ -4771,6 +6226,7 @@ export class Server {
     originating: SessionState | null,
   ): Promise<TransactDecision> {
     let postCommit: (() => Promise<void>) | undefined;
+    let engineDecided = false;
     const response = await tracer.startActiveSpan(
       "memory.transact",
       async (span): Promise<ResponseMessage<Engine.AppliedCommit>> => {
@@ -4867,32 +6323,18 @@ export class Server {
               invalid,
             );
           }
-          // ACL-document writes change who may access the space, so they need
-          // OWNER, with one exception: a member removing its own entry and
-          // nothing else (`#isSelfRemoval()`, INV-12) needs only READ, which
-          // any entry grants. That holds in `observe` mode as in `enforce`.
           const aclTouched = commitTouchesAclDoc(
             message.commit.operations,
             message.space,
           );
-          const requirement: Capability = !aclTouched
-            ? "WRITE"
-            : this.#isSelfRemoval(
-                engine,
-                message.space,
-                session.principal,
-                message.commit,
-              )
-            ? "READ"
-            : "OWNER";
           const routedDeny = session.routedAuthority?.() === false
             ? toError("SessionRevokedError", "Routed memory authority ended")
             : null;
-          const deny = routedDeny ?? this.#authorizeMessageWithEngine(
+          const deny = routedDeny ?? this.#authorizeCommitWithEngine(
             engine,
             message.space,
             session.principal,
-            requirement,
+            message.commit,
           );
           if (deny) {
             return respondTypedError<Engine.AppliedCommit>(
@@ -4918,12 +6360,16 @@ export class Server {
               "memory.commit.persist",
               (persistSpan) => {
                 try {
+                  engineDecided = true;
                   return Engine.applyCommit(engine, {
                     sessionId: message.sessionId,
                     space: message.space,
                     principal: session.principal,
                     commit: message.commit,
                     sqliteAttachments,
+                    ...(session.elidedVerdicts === true
+                      ? { elidedVerdicts: true }
+                      : {}),
                     // Session-facing transact admission: `authored`, always.
                     // The class is determined HERE, by the admission path —
                     // never read from the client payload (protocol.md §1).
@@ -4960,8 +6406,13 @@ export class Server {
                 duplicate: resolution.duplicate,
               };
               operationApplyCount.add(1, attributes);
+              // An `apply-op` without a base lands at the field's current
+              // version, so it is rebased over nothing.
+              const baseVersion = operation.base === undefined
+                ? resolution.from.version
+                : operation.base?.version ?? 0;
               operationTransformSuffix.record(
-                resolution.from.version - (operation.base?.version ?? 0),
+                resolution.from.version - baseVersion,
                 attributes,
               );
             }
@@ -4993,9 +6444,11 @@ export class Server {
           } else {
             // Every operation elided: nothing was written, so no document
             // turns dirty — but the accept still owes this session its
-            // catch-up marker, and the marker rides the batched flush.
-            // Schedule the pass without dirtying anything.
-            this.markSpaceDirty(message.space);
+            // catch-up marker, and the marker rides the batched flush. An
+            // empty dirty batch schedules that pass: every session of the
+            // space evaluates as untouched, and the writer's otherwise-empty
+            // frame carries the marker.
+            this.markSpaceDirty(message.space, []);
           }
           // Plane (b): the admission-side activation hook — synchronous
           // with the dirty marking, observer errors shielded. An
@@ -5063,6 +6516,7 @@ export class Server {
               message.space,
               message.sessionId,
             );
+            this.#noticeAdmissions(engine, message.space);
           }
           span.setAttribute("commit.seq", commit.seq);
           return {
@@ -5149,7 +6603,7 @@ export class Server {
         }
       },
     );
-    return { response, postCommit };
+    return { response, postCommit, engineDecided };
   }
 
   async graphQuery(
@@ -5534,39 +6988,89 @@ export class Server {
         }))),
       );
       if (denyForeign) return false;
-      // Resolve schema and graph closure before publishing planner output.
-      // A failed selection leaves the session's existing delivery intact.
-      await this.evaluateWatchSet(
-        space,
-        selection.delivery.map((query, index) => ({
-          id: `selection:${index}`,
-          kind: "graph" as const,
-          query,
-        })),
-        engine,
-        { principal: session!.principal, sessionId: session!.id },
-      );
-      if (!current()) return false;
+      // A selection delivering what the view's current one delivers changes
+      // only what the client may run or adopt: its support graphs stand, and
+      // the next frame carries the plans. One that delivers differently is
+      // resolved to its schema and graph closure first, so a failed selection
+      // leaves the session's existing delivery intact, and then rebuilds the
+      // graphs and diffs against the session's delivery state. The roots the
+      // current selection delivers were resolved when it was installed, so
+      // only the roots it does not deliver are resolved here
+      // (`deliveryToResolve`).
+      const deliveryKeys = deliveryRootKeys(selection.delivery);
+      const sameDelivery = (
+        previous: ReturnType<SessionState["viewSelections"]["get"]>,
+      ) => {
+        if (previous === undefined || previous.revision !== handle.revision) {
+          return false;
+        }
+        const previousKeys = deliveryRootKeys(previous.delivery);
+        return previousKeys.size === deliveryKeys.size &&
+          isSubset(previousKeys, deliveryKeys);
+      };
+      const installed = session!.viewSelections.get(handle.viewId);
+      if (!sameDelivery(installed)) {
+        await this.evaluateWatchSet(
+          space,
+          deliveryToResolve(
+            selection.delivery,
+            installed?.revision === handle.revision ? installed : undefined,
+          ).map((query, index) => ({
+            id: `selection:${index}`,
+            kind: "graph" as const,
+            query,
+          })),
+          engine,
+          { principal: session!.principal, sessionId: session!.id },
+        );
+        if (!current()) return false;
+      }
       this.#assertRoutedAuthority(session!);
       const previous = session!.viewSelections.get(handle.viewId);
       if (
         previous !== undefined && selection.generation <= previous.generation
       ) {
         return selection.generation === previous.generation &&
-          valueEqual(previous, { ...selection, revision: handle.revision });
+          valueEqualByWalk(previous, {
+            ...selection,
+            revision: handle.revision,
+          });
       }
       session!.viewSelections.set(handle.viewId, {
         ...selection,
         revision: handle.revision,
       });
-      session!.forceFullResync = true;
+      // A delivery that only grew extends the view's support graph on the
+      // next pass; one that dropped a root rebuilds the support graphs over
+      // the demand graphs the session holds, and diffs the departed
+      // documents out. A view's first selection evaluates everything.
+      if (sameDelivery(previous)) {
+        session!.viewPlansPending = true;
+      } else if (
+        previous !== undefined && previous.revision === handle.revision
+      ) {
+        if (
+          isSubset(deliveryRootKeys(previous.delivery), deliveryKeys)
+        ) {
+          session!.viewSupportGrown = true;
+        } else {
+          session!.viewSupportReplaced = true;
+        }
+        session!.viewPlansPending = true;
+      } else {
+        session!.forceFullResync = true;
+      }
       this.markSpaceDirty(space, []);
       return true;
     });
   }
 
-  /** Publishes eligibility only with the document frame that supplies its inputs. */
+  /**
+   * Publishes eligibility only with the document frame that supplies its
+   * inputs; the frame carries the plans a changed selection owed.
+   */
   #attachViewPlans(session: SessionState, sync: SessionSync): void {
+    session.viewPlansPending = false;
     sync.viewPlans = session.views.map((view) => {
       const selection = session.viewSelections.get(view.id);
       return {
@@ -5605,18 +7109,7 @@ export class Server {
       engine,
       identity,
     );
-    const selected: WatchSpec[] = [];
-    for (const view of views) {
-      const selection = session.viewSelections.get(view.id);
-      if (selection?.revision !== view.revision) continue;
-      for (const [index, query] of selection.delivery.entries()) {
-        selected.push({
-          id: `view-support:${view.id}:${index}`,
-          kind: "graph",
-          query,
-        });
-      }
-    }
+    const selected = this.#viewSupportWatches(session, views);
     const delivery = selected.length === 0
       ? demand
       : await this.evaluateWatchSet(
@@ -5641,6 +7134,72 @@ export class Server {
       demandGraphs: demand.graphs,
       demandEntities: demand.entities,
     };
+  }
+
+  /**
+   * Rebuilds a view session's support graphs from the planner's current
+   * selections over the demand graphs the session holds, after refreshing
+   * those by `dirtyIds`, the batch the pass would otherwise have refreshed
+   * incrementally: the full evaluation's result for a session whose
+   * delivery dropped a root, without walking its demand again.
+   */
+  async #reevaluateViewSupport(
+    session: SessionState,
+    dirtyIds: ReadonlySet<string> | undefined,
+  ) {
+    this.#assertRoutedAuthority(session);
+    const engine = await this.#openEngine(session.space);
+    this.#assertRoutedAuthority(session);
+    const identity = { principal: session.principal, sessionId: session.id };
+    if (dirtyIds !== undefined && dirtyIds.size > 0) {
+      for (const graph of session.viewDemandGraphs.values()) {
+        refreshTrackedGraph(session.space, engine, graph, dirtyIds);
+      }
+    }
+    const demandGraphs = session.viewDemandGraphs;
+    const selected = this.#viewSupportWatches(session, session.views);
+    const delivery = selected.length === 0
+      ? undefined
+      : await this.evaluateWatchSet(
+        session.space,
+        selected,
+        engine,
+        identity,
+      );
+    const graphs = new Map([...demandGraphs].map(([branch, graph]) => [
+      `view-demand:${branch}`,
+      graph,
+    ]));
+    for (const [branch, graph] of delivery?.graphs ?? []) {
+      graphs.set(`view-support:${branch}`, graph);
+    }
+    return {
+      serverSeq: delivery?.serverSeq ?? Engine.serverSeq(engine),
+      graphs,
+      entities: this.#entriesFromGraphs(graphs.values(), identity),
+      demandGraphs,
+      demandEntities: this.#entriesFromGraphs(demandGraphs.values(), identity),
+    };
+  }
+
+  /** The delivery-only watches the planner's current selections give views. */
+  #viewSupportWatches(
+    session: SessionState,
+    views: readonly ViewInterest[],
+  ): WatchSpec[] {
+    const selected: WatchSpec[] = [];
+    for (const view of views) {
+      const selection = session.viewSelections.get(view.id);
+      if (selection?.revision !== view.revision) continue;
+      for (const [index, query] of selection.delivery.entries()) {
+        selected.push({
+          id: `view-support:${view.id}:${index}`,
+          kind: "graph",
+          query,
+        });
+      }
+    }
+    return selected;
   }
 
   /** Extends ordinary demand while retaining the view's rendered and support graphs. */
@@ -5689,11 +7248,308 @@ export class Server {
     return await this.#watchSet(message);
   }
 
-  /** Helper for watchSet(), which stages and installs one watch union. */
+  /**
+   * Removes the named watches from a session and answers with the difference
+   * between what the session was delivered and the union that remains.
+   */
+  async watchRemove(
+    message: WatchRemoveRequest,
+  ): Promise<ResponseMessage<WatchSetResult>> {
+    const startedAt = performance.now();
+    try {
+      return await this.#watchRemove(message);
+    } finally {
+      timing.time(startedAt, "memory", "watchRemove", "total");
+    }
+  }
+
+  /**
+   * Helper for watchRemove(), which releases the removed watches' roots from
+   * the session's graphs, retracting what nothing else reaches, and walks
+   * nothing a remaining watch already reaches. A session that holds views,
+   * or one marked for a full re-evaluation, replaces its watch set with the
+   * remaining watches instead, which walks every one of them.
+   */
+  async #watchRemove(
+    message: WatchRemoveRequest,
+  ): Promise<ResponseMessage<WatchSetResult>> {
+    // Read when the request runs, which for a session with views is once the
+    // publication lock is held.
+    const remaining = (): WatchSetRequest => {
+      const removed = new Set(message.watchIds);
+      return {
+        type: "session.watch.set",
+        requestId: message.requestId,
+        space: message.space,
+        sessionId: message.sessionId,
+        watches: (this.#sessions.get(message.space, message.sessionId)
+          ?.watches ?? []).filter((watch) => !removed.has(watch.id)),
+      };
+    };
+    const session = this.#sessions.get(message.space, message.sessionId);
+    if (session !== null && session.views.length > 0) {
+      return await this.#withSpacePublicationLock(
+        message.space,
+        () => this.#watchSet(remaining(), "remove"),
+      );
+    }
+    if (session === null || session.forceFullResync) {
+      return await this.#watchSet(remaining(), "remove");
+    }
+    return await this.#removeWatchesByRelease(message, session);
+  }
+
+  /**
+   * Helper for `#watchRemove()`, which releases the removed watches' roots
+   * from their branches' graphs (`releaseTrackedRoots`): what no remaining
+   * root or link keeps retires and is retracted, a root a retired record
+   * had covered is walked again on its own, and a branch with no watch
+   * left drops its graph. Nothing else is walked.
+   */
+  async #removeWatchesByRelease(
+    message: WatchRemoveRequest,
+    session: SessionState,
+  ): Promise<ResponseMessage<WatchSetResult>> {
+    const aclEngine = this.#aclMode() === "off"
+      ? undefined
+      : await this.#openEngine(message.space);
+    {
+      const deny = aclEngine === undefined
+        ? await this.#authorizeMessage(
+          message.space,
+          session.principal,
+          "READ",
+        )
+        : this.#authorizeCurrentSessionWithEngine(
+          aclEngine,
+          message.space,
+          message.sessionId,
+          session,
+          "READ",
+        );
+      if (deny) {
+        return respondTypedError<WatchSetResult>(message.requestId, deny);
+      }
+    }
+    try {
+      const startedAt = performance.now();
+      const engine = aclEngine ?? await this.#openEngine(message.space);
+      this.#assertRoutedAuthority(session);
+      // Resume can share watch containers with an older registry object. Only
+      // the current registry object may publish into those containers.
+      if (this.#sessions.get(message.space, message.sessionId) !== session) {
+        return respondTypedError<WatchSetResult>(
+          message.requestId,
+          toError("SessionError", "Unknown session for space"),
+        );
+      }
+      const removedIds = new Set(message.watchIds);
+      const removedWatches = session.watches.filter((watch) =>
+        removedIds.has(watch.id)
+      );
+      if (removedWatches.length === 0) {
+        const serverSeq = Engine.serverSeq(engine);
+        return {
+          type: "response",
+          requestId: message.requestId,
+          ok: {
+            serverSeq,
+            sync: {
+              type: "sync",
+              fromSeq: session.lastSyncedSeq,
+              toSeq: serverSeq,
+              upserts: [],
+              removes: [],
+            },
+          },
+        };
+      }
+      const remaining = session.watches.filter((watch) =>
+        !removedIds.has(watch.id)
+      );
+      const remainingByBranch = graphWatchesByBranch(remaining);
+      const identity = this.#sessionScopeIdentity(session);
+      const graphs = new StagedMap(session.graphs);
+      const graphCommits: Array<() => void> = [];
+      const attribution = createRootAttribution();
+      // The graphs the release walked roots of again, whose crossings the
+      // session may not have been told of.
+      const touchedGraphs: TrackedGraphState[] = [];
+      const updates = new Map<string, SessionCacheEntry>();
+      const removes = new Map<string, SessionCacheEntry>();
+      const changedInterests = new Set<string>();
+      for (
+        const [branch, removedGroup] of graphWatchesByBranch(removedWatches)
+      ) {
+        const existing = graphs.get(branch);
+        if (existing === undefined) continue;
+        const retract = (docKey: QueryDocKey) => {
+          const { id, scopeKey } = fromDocKey(docKey);
+          const entry = session.entities.get(
+            cacheKeyForEntity(branch, id, scopeKey),
+          );
+          if (entry !== undefined) {
+            removes.set(cacheKeyForEntity(branch, id, scopeKey), entry);
+          }
+          changedInterests.add(toDirtyKey(id, scopeKey));
+        };
+        const group = remainingByBranch.get(branch) ?? [];
+        if (group.length === 0) {
+          for (const docKey of existing.entities.keys()) retract(docKey);
+          for (const [key] of existing.missed) {
+            try {
+              const { id, scopeKey } = fromDocKey(key as QueryDocKey);
+              changedInterests.add(toDirtyKey(id, scopeKey));
+            } catch {
+              continue;
+            }
+          }
+          graphs.delete(branch);
+          continue;
+        }
+        // A root two watches share stays while either does.
+        const kept = new Set(rootReferrersOf(
+          message.space,
+          group.flatMap((watch) => watch.query.roots),
+          identity,
+        ));
+        const released = rootReferrersOf(
+          message.space,
+          removedGroup.flatMap((watch) => watch.query.roots),
+          identity,
+        ).filter((referrer) => !kept.has(referrer));
+        if (released.length === 0) continue;
+        const staged = stageTrackedGraphState(engine, existing);
+        graphCommits.push(staged.commit);
+        touchedGraphs.push(staged.value);
+        const result = releaseTrackedRoots(
+          message.space,
+          engine,
+          staged.value,
+          released,
+        );
+        foldRootAttribution(attribution, result.stats);
+        for (const [docKey, entity] of result.updates) {
+          const { scopeKey } = fromDocKey(docKey);
+          const entry = toCacheEntry(entity, identity, scopeKey);
+          updates.set(
+            cacheKeyForEntity(entry.branch, entry.id, entry.scopeKey),
+            entry,
+          );
+          changedInterests.add(toDirtyKey(entry.id, entry.scopeKey));
+        }
+        for (const docKey of result.removed) retract(docKey);
+        for (const key of result.changedMisses) {
+          const { id, scopeKey } = fromDocKey(key as QueryDocKey);
+          changedInterests.add(toDirtyKey(id, scopeKey));
+        }
+      }
+      const upserts: SessionCacheEntry[] = [];
+      for (const [key, entry] of updates) {
+        if (!sameSnapshot(session.entities.get(key), entry)) {
+          upserts.push(entry);
+        }
+      }
+      // Stage A (OW17's wire leg): a lease-holder session's frames carry
+      // instance keys (see `#watchSet()`).
+      const keyed = session.leaseHolderReads === true;
+      const serverSeq = Engine.serverSeq(engine);
+      const sync: SessionSync = {
+        type: "sync",
+        fromSeq: session.lastSyncedSeq,
+        toSeq: serverSeq,
+        upserts: upserts.toSorted(compareSyncAddress).map((entry) =>
+          toWireUpsert(entry, keyed)
+        ),
+        removes: [...removes.values()].sort(compareSyncAddress).map((entry) =>
+          toWireRemove(entry, keyed)
+        ),
+      };
+      const newCrossings = this.#undeliveredCrossings(session, touchedGraphs);
+      if (newCrossings.crossings.length > 0) {
+        sync.crossings = newCrossings.crossings;
+      }
+      const response: ResponseMessage<WatchSetResult> = {
+        type: "response",
+        requestId: message.requestId,
+        ok: { serverSeq, sync },
+      };
+      // There is no await between graph evaluation and publication.
+      for (const commit of graphCommits) commit();
+      graphs.commit();
+      this.#markCrossingsDelivered(session, newCrossings.keys);
+      this.#forgetUnfollowedCrossings(session, session.graphs.values());
+      const watchIdentity = {
+        principal: session.principal,
+        sessionId: session.id,
+      };
+      session.watches = remaining;
+      session.watchIndex = new Map(
+        remaining.map((watch) => [watch.id, watch]),
+      );
+      session.operationWatches = remaining.filter((watch) =>
+        watch.kind === "operation"
+      );
+      for (const id of removedIds) session.operationCursors.delete(id);
+      session.operationTrackedIds = addOperationWatchTrackedIds(
+        new Set(),
+        remaining,
+        watchIdentity,
+      );
+      // A removed operation watch's keys stay interests only while a
+      // remaining watch owns them.
+      for (
+        const key of addOperationWatchTrackedIds(
+          new Set(),
+          removedWatches,
+          watchIdentity,
+        )
+      ) {
+        changedInterests.add(key);
+      }
+      for (const [key, entry] of updates) session.entities.set(key, entry);
+      for (const key of removes.keys()) session.entities.delete(key);
+      this.#reconcileTrackedInterests(session, changedInterests);
+      this.#touchDemand(session);
+      session.lastSyncedSeq = serverSeq;
+      this.#notifyDemandChanged(message.space, "watch", session.principal);
+      recordSlowQueryDuration(
+        "session.watch.remove",
+        message.space,
+        startedAt,
+        {
+          watches: message.watchIds.length,
+          upserts: upserts.length,
+          ...attribution,
+        },
+      );
+      return response;
+    } catch (error) {
+      // Evaluation state is staged (the session's graphs and watches are
+      // assigned only on success), so a failure answers the requester.
+      return respondTypedError<WatchSetResult>(
+        message.requestId,
+        toError(
+          "QueryError",
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
+    }
+  }
+
+  /**
+   * Helper for watchSet(), watchAdd() and watchRemove(), which stages and
+   * installs one watch union. A `replace` delivers against the request's
+   * holdings, or in full; an `add` merges the request's watches into the
+   * session's and keeps the session's operation cursors; a `remove` keeps the
+   * cursors of the watches that remain. Both an `add` and a `remove` deliver
+   * against what the session was delivered.
+   */
   async #watchSet(
     message: WatchSetRequest,
-    incremental = false,
+    mode: "replace" | "add" | "remove" = "replace",
   ): Promise<ResponseMessage<WatchSetResult>> {
+    const incremental = mode === "add";
     const session = this.#sessions.get(message.space, message.sessionId);
     if (session === null) {
       return respondTypedError<WatchSetResult>(
@@ -5804,9 +7660,19 @@ export class Server {
 
     try {
       this.#assertRoutedAuthority(session);
-      const nextOperationCursors = incremental
-        ? new Map(session.operationCursors)
-        : new Map<string, OpCursor>();
+      const nextOperationCursors = mode === "replace"
+        ? new Map<string, OpCursor>()
+        : new Map(session.operationCursors);
+      if (mode === "remove") {
+        const kept = new Set(message.watches.map((watch) => watch.id));
+        for (const id of nextOperationCursors.keys()) {
+          if (!kept.has(id)) nextOperationCursors.delete(id);
+        }
+      }
+      // An addition to a view session extends the graphs it holds; every
+      // other watch set evaluates them whole.
+      const extended = views.length > 0 && incremental &&
+        !session.forceFullResync;
       const evaluated: Awaited<ReturnType<Server["evaluateWatchSet"]>> & {
         demandGraphs?: typeof session.graphs;
         demandEntities?: typeof session.entities;
@@ -5820,7 +7686,7 @@ export class Server {
             sessionId: message.sessionId,
           },
         )
-        : incremental && !session.forceFullResync
+        : extended
         ? await this.#extendViewWatchSet(session, message.watches, aclEngine)
         : await this.#evaluateViewWatchSet(
           session,
@@ -5838,11 +7704,12 @@ export class Server {
       // scope name alone cannot distinguish. Every other session's
       // frames are byte-identical to before.
       const keyed = session.leaseHolderReads === true;
-      // Additions diff against this session's delivery state. Replacements
-      // use the client's declared holdings, or supply the full union when
-      // it declares none. A re-established session can therefore recover
-      // missing documents without assuming that its client holds them.
-      const sync = incremental
+      // Additions and removals diff against this session's delivery state.
+      // Replacements use the client's declared holdings, or supply the full
+      // union when it declares none. A re-established session can therefore
+      // recover missing documents without assuming that its client holds
+      // them.
+      const sync = mode !== "replace"
         ? buildDiffSync(
           session.entities,
           entities,
@@ -5870,6 +7737,19 @@ export class Server {
           undefined,
           keyed,
         );
+      // A replacement that declares no holdings, or holding nothing, tells
+      // the client every crossing again; any other frame tells it only the
+      // new ones.
+      const resetCrossings = mode === "replace" &&
+        (message.holdings === undefined || message.holdings.length === 0);
+      const newCrossings = this.#undeliveredCrossings(
+        session,
+        [...graphs.values(), ...demandGraphs.values()],
+        resetCrossings,
+      );
+      if (newCrossings.crossings.length > 0) {
+        sync.crossings = newCrossings.crossings;
+      }
       await this.#attachOperationFields(
         message.space,
         message.sessionId,
@@ -5912,6 +7792,13 @@ export class Server {
         ),
       );
       session.forceFullResync = false;
+      // A full evaluation installed every view's whole support graph, so a
+      // growth or a rebuild an earlier selection owed is already in it; an
+      // extension leaves both owed to the next pass.
+      if (!extended) {
+        session.viewSupportGrown = false;
+        session.viewSupportReplaced = false;
+      }
       session.viewDemandGraphs = demandGraphs;
       session.viewDemandEntities = demandEntities;
       session.watches = [...message.watches];
@@ -5929,6 +7816,17 @@ export class Server {
       session.operationCursors = nextOperationCursors;
       session.graphs = graphs;
       session.entities = entities;
+      this.#markCrossingsDelivered(
+        session,
+        newCrossings.keys,
+        resetCrossings,
+      );
+      if (mode === "remove") {
+        this.#forgetUnfollowedCrossings(session, [
+          ...graphs.values(),
+          ...demandGraphs.values(),
+        ]);
+      }
       session.trackedIds = addOperationWatchTrackedIds(
         trackedIdsFromEntries(entities.values()),
         message.watches,
@@ -5944,7 +7842,15 @@ export class Server {
       if (message.views !== undefined || views.length > 0) {
         this.#attachViewPlans(session, sync);
       }
-      this.#notifyDemandChanged(message.space, "watch", session.principal);
+      this.#notifyDemandChanged(
+        message.space,
+        "watch",
+        session.principal,
+        session.id,
+      );
+      if (message.views !== undefined) {
+        this.#notifyViewsChanged(message.space, session.id);
+      }
       return {
         type: "response",
         requestId: message.requestId,
@@ -5974,6 +7880,7 @@ export class Server {
     engine: Engine.Engine,
     watches: readonly WatchSpec[],
     previous: SessionState["graphs"],
+    keyOf: (branch: string) => string = (branch) => branch,
   ) {
     const graphs = new Map(previous);
     const identity = this.#sessionScopeIdentity(session);
@@ -5988,13 +7895,14 @@ export class Server {
       );
     };
     const attribution = createRootAttribution();
-    for (const [branch, query] of groupedQueries(watches)) {
-      const existing = graphs.get(branch);
+    for (const [branch, group] of graphWatchesByBranch(watches)) {
+      const key = keyOf(branch);
+      const existing = graphs.get(key);
       if (existing === undefined) {
         const tracked = trackGraph(
           session.space,
           engine,
-          query,
+          unionQuery(branch, group),
           undefined,
           {
             principal: session.principal,
@@ -6007,24 +7915,20 @@ export class Server {
         // failure (or a failing operation-field attachment) must not
         // leave an already-inserted entry over budget.
         this.#enforceEvaluationCacheBudget();
-        graphs.set(branch, tracked.state);
+        graphs.set(key, tracked.state);
         for (const [docKey, entity] of tracked.state.entities) {
           recordUpdate(docKey, entity);
         }
         continue;
       }
 
-      if (isGraphQueryCoveredByState(session.space, existing, query)) {
-        continue;
-      }
-
       const staged = cloneTrackedGraphState(engine, existing);
-      graphs.set(branch, staged);
+      graphs.set(key, staged);
       const extended = extendTrackedGraph(
         session.space,
         engine,
         staged,
-        query,
+        unionQuery(branch, group),
       );
       foldRootAttribution(attribution, extended.stats);
       for (const [docKey, entity] of extended.updates) {
@@ -6065,7 +7969,7 @@ export class Server {
           this.#watchSet({
             ...message,
             type: "session.watch.set",
-          }, true),
+          }, "add"),
       );
     }
     const aclEngine = this.#aclMode() === "off"
@@ -6208,13 +8112,17 @@ export class Server {
         );
       };
       const attribution = createRootAttribution();
-      for (const [branch, query] of groupedQueries(newWatches)) {
+      // The graphs the added roots were walked into, as the walk left them:
+      // a new graph's state, or an extended graph's STAGED state, which is
+      // where the extension's crossings sit until it commits.
+      const touchedGraphs: TrackedGraphState[] = [];
+      for (const [branch, group] of graphWatchesByBranch(newWatches)) {
         const existing = graphs.get(branch);
         if (existing === undefined) {
           const tracked = trackGraph(
             message.space,
             engine,
-            query,
+            unionQuery(branch, group),
             undefined,
             {
               principal: session.principal,
@@ -6228,6 +8136,7 @@ export class Server {
           // leave an already-inserted entry over budget.
           this.#enforceEvaluationCacheBudget();
           graphs.set(branch, tracked.state);
+          touchedGraphs.push(tracked.state);
           this.#addMissedToTrackedIds(addedInterests, [tracked.state]);
           for (const [docKey, entity] of tracked.state.entities) {
             recordUpdate(docKey, entity);
@@ -6235,17 +8144,14 @@ export class Server {
           continue;
         }
 
-        if (isGraphQueryCoveredByState(message.space, existing, query)) {
-          continue;
-        }
-
         const staged = stageTrackedGraphState(engine, existing);
         graphCommits.push(staged.commit);
+        touchedGraphs.push(staged.value);
         const extended = extendTrackedGraph(
           message.space,
           engine,
           staged.value,
-          query,
+          unionQuery(branch, group),
         );
         foldRootAttribution(attribution, extended.stats);
         for (const [docKey, entity] of extended.updates) {
@@ -6280,6 +8186,12 @@ export class Server {
         ),
         removes: [],
       };
+      // The crossings the added roots' walks found that this session has
+      // not been told of; a branch the additions left alone can hold none.
+      const newCrossings = this.#undeliveredCrossings(session, touchedGraphs);
+      if (newCrossings.crossings.length > 0) {
+        sync.crossings = newCrossings.crossings;
+      }
       this.#attachOperationFieldsWithEngine(
         engine,
         session,
@@ -6307,6 +8219,7 @@ export class Server {
       // operation cursors, and wire conversion can all fail before this point.
       for (const commit of graphCommits) commit();
       graphs.commit();
+      this.#markCrossingsDelivered(session, newCrossings.keys);
       nextOperationCursors.commit();
       existingById.commit();
       for (const watch of addedWatches) nextWatches.push(watch);
@@ -6347,7 +8260,12 @@ export class Server {
       }
       this.#touchDemand(session);
       session.lastSyncedSeq = serverSeq;
-      this.#notifyDemandChanged(message.space, "watch", session.principal);
+      this.#notifyDemandChanged(
+        message.space,
+        "watch",
+        session.principal,
+        session.id,
+      );
       recordSlowQueryDuration(
         "session.watch.add",
         message.space,
@@ -6464,9 +8382,10 @@ export class Server {
     try {
       // `stats` is diagnostics, not wire: split it off here so the
       // response carries exactly the declared result shape.
+      const queryEngine = engine ?? await this.#openEngine(space);
       const { stats, ...result } = queryGraph(
         space,
-        engine ?? await this.#openEngine(space),
+        queryEngine,
         query,
         reuse,
         {
@@ -6480,6 +8399,16 @@ export class Server {
         roots: query.roots.length,
         ...rootAttributionOf(stats),
       });
+      if (query.includeAuthoredSeq === true) {
+        return {
+          ...result,
+          authoredSeq: Engine.authoredSeqThrough(
+            queryEngine,
+            query.atSeq ?? result.serverSeq,
+            query.branch,
+          ),
+        };
+      }
       return result;
     } finally {
       // The insert precedes the snapshot mapping, so enforcement must
@@ -6673,10 +8602,10 @@ export class Server {
    * buffering: only a locally-throwing send is visible in-process, and a
    * dying socket loses "successfully sent" frames just the same — the
    * durable repair for that is resume-time catch-up, not a server-side
-   * buffer. A doc REMOVED by the lost frame is the accepted residue: its
-   * cache entry is already gone and cannot be re-diffed; the client keeps
-   * it until a full re-evaluation or reconnect (watch-shrink removes are
-   * advisory today). */
+   * buffer. A doc REMOVED by the lost frame is re-inserted as a tombstone
+   * and the next sync runs a full evaluation, which re-diffs it out: the
+   * incremental refresh retracts only what its own re-walks retire, and
+   * knows nothing of a frame the socket lost. */
   rollbackUndeliveredSync(
     space: string,
     sessionId: string,
@@ -6699,6 +8628,11 @@ export class Server {
     // its own here). The session-identity recovery below remains as the
     // fallback for frames without a record (none are built today).
     const record = this.#deliveredFrameEntries.get(undelivered);
+    // The lost frame told the client of these crossings, so it did not: the
+    // next frame carries them again.
+    for (const key of record?.crossings ?? []) {
+      session.deliveredCrossings.delete(key);
+    }
     for (const delivery of sync.operationFields ?? []) {
       // A failed send did not advance the client. Forget the delivery cursor so
       // the recomputed frame includes a complete safe snapshot rather than
@@ -6727,8 +8661,9 @@ export class Server {
         // The remove's cache entry died when the frame was built;
         // re-insert a tombstone claiming the client still holds the doc,
         // and force the next sync through a FULL evaluation — the
-        // incremental path never emits removes, so only a full re-diff
-        // (tombstone present, entity absent) regenerates the removal.
+        // incremental path retracts only what its re-walks retire, so only
+        // a full re-diff (tombstone present, entity absent) regenerates
+        // the removal.
         session.entities.set(
           cacheKeyForEntity(entry.branch, entry.id, entry.scopeKey),
           {
@@ -6822,6 +8757,61 @@ export class Server {
    * are wake-reactivity only — they are never delivered, so they flow
    * into `trackedIds` beside the delivered entities at every site that
    * rebuilds or folds that set. */
+  /**
+   * The crossings `graphs` recorded that `session` has not been told of,
+   * in wire form with the keys to record them under once the frame that
+   * carries them is published (`#markCrossingsDelivered`). With `reset`,
+   * every crossing counts as untold: a full replacement of the watch set
+   * with no declared holdings tells the client everything again.
+   */
+  #undeliveredCrossings(
+    session: SessionState,
+    graphs: Iterable<TrackedGraphState>,
+    reset = false,
+  ): { keys: string[]; crossings: SyncCrossing[] } {
+    const keys: string[] = [];
+    const crossings: SyncCrossing[] = [];
+    const seen = new Set<string>();
+    for (const graph of graphs) {
+      for (const [key, crossing] of syncCrossingsOf(graph)) {
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (!reset && session.deliveredCrossings.has(key)) continue;
+        keys.push(key);
+        crossings.push(crossing);
+      }
+    }
+    return { keys, crossings };
+  }
+
+  /** Records that a published frame carried the crossings `keys` name. */
+  #markCrossingsDelivered(
+    session: SessionState,
+    keys: readonly string[],
+    reset = false,
+  ): void {
+    if (reset) session.deliveredCrossings.clear();
+    for (const key of keys) session.deliveredCrossings.add(key);
+  }
+
+  /**
+   * Forgets the delivered crossings that none of `graphs` follows, so that
+   * a crossing a removed watch followed is told again when a later watch
+   * follows it, and the client loads its target.
+   */
+  #forgetUnfollowedCrossings(
+    session: SessionState,
+    graphs: Iterable<TrackedGraphState>,
+  ): void {
+    const followed = new Set<string>();
+    for (const graph of graphs) {
+      for (const key of syncCrossingsOf(graph).keys()) followed.add(key);
+    }
+    for (const key of session.deliveredCrossings) {
+      if (!followed.has(key)) session.deliveredCrossings.delete(key);
+    }
+  }
+
   #addMissedToTrackedIds(
     trackedIds: Set<string>,
     graphs: Iterable<TrackedGraphState>,
@@ -6927,10 +8917,24 @@ export class Server {
     const preCallCaughtUp = session.caughtUpLocalSeq;
     const preCallPending = session.pendingCaughtUpLocalSeq;
     const preCallForceFullResync = session.forceFullResync;
+    const preCallViewPlansPending = session.viewPlansPending;
     // Whether THIS pass re-armed a lapsed lease-holder exemption (see
     // below); restored on a throw so the re-arm's full evaluation is
     // not lost with the failed pass.
     let rearmedLeaseHolder = false;
+    const preCallViewSupportReplaced = session.viewSupportReplaced;
+    // A dropped delivery root rebuilds the support graphs over the demand
+    // graphs, which first take this pass's dirty batch; a full evaluation
+    // rebuilds both, so it owes no separate rebuild.
+    let supportReplaced: { dirtyIds?: ReadonlySet<string> } | undefined;
+    if (session.viewSupportReplaced) {
+      session.viewSupportReplaced = false;
+      if (!session.forceFullResync && session.views.length > 0) {
+        supportReplaced = { dirtyIds };
+        dirtyIds = undefined;
+        dirtyOrigins = undefined;
+      }
+    }
     if (session.forceFullResync) {
       // Rollback re-inserted tombstones for a lost frame's removes; only a
       // full evaluation re-diffs them out. Self-clearing (restored by the
@@ -6968,7 +8972,17 @@ export class Server {
               sync.caughtUpLocalSeq = session.caughtUpLocalSeq;
             }
             await this.#attachOperationFields(space, sessionId, sync);
-            if (session.views.length > 0) this.#attachViewPlans(session, sync);
+            // A frame carries the plans when they are owed: a full
+            // evaluation rebuilt the graphs they describe, or a selection
+            // changed what the views may run or adopt. An incremental frame
+            // that owes none carries the documents alone, and the client
+            // keeps the plans it holds.
+            if (
+              session.views.length > 0 &&
+              (dirtyIds === undefined || session.viewPlansPending)
+            ) {
+              this.#attachViewPlans(session, sync);
+            }
             return {
               type: "session/effect",
               space,
@@ -6986,7 +9000,8 @@ export class Server {
               serverSeq > fromSeq;
             if (
               !hasPendingCatchUp && !mayCarryOperations &&
-              (session.views.length === 0 || !preCallForceFullResync)
+              (session.views.length === 0 ||
+                !(preCallForceFullResync || preCallViewPlansPending))
             ) {
               return null;
             }
@@ -7077,6 +9092,7 @@ export class Server {
             // branch).
             const batchDirtyIds = dirtyIds;
             const startedAt = performance.now();
+            const refreshFromSeq = session.lastSyncedSeq;
             // Per-session refresh rows (`memory/refresh/session/{untouched,
             // touched}`) and, for a touched session, the phase rows
             // (`memory/refresh/phase/{walk,diff,tracked,frame}`):
@@ -7088,8 +9104,9 @@ export class Server {
             // expensive failure is the one most worth attributing.
             let sessionKind: "untouched" | "touched" = "untouched";
             try {
-              let touched = false;
+              let touched = session.viewSupportGrown;
               for (const dirtyId of batchDirtyIds) {
+                if (touched) break;
                 if (session.trackedIds.has(dirtyId)) {
                   touched = true;
                   break;
@@ -7110,6 +9127,11 @@ export class Server {
               const fromSeq = session.lastSyncedSeq;
               const identity = this.#sessionScopeIdentity(session);
               const updates = new Map<string, SessionCacheEntry>();
+              // The delivered entries of the documents the re-walks retired:
+              // the frame retracts them.
+              const removed = new Map<string, SessionCacheEntry>();
+              const retired: Array<{ docKey: QueryDocKey; branch: string }> =
+                [];
               const changedInterests = new Set<string>();
               const walkStartedAt = performance.now();
 
@@ -7155,6 +9177,9 @@ export class Server {
                       entry,
                     );
                   }
+                  for (const docKey of refreshed.removed) {
+                    retired.push({ docKey, branch: graph.branch });
+                  }
                 }
               } finally {
                 timing.time(
@@ -7164,6 +9189,43 @@ export class Server {
                   "phase",
                   "walk",
                 );
+              }
+              // A planner selection that grew a view's delivery extends its
+              // support graph here, by the added roots, over the demand graph
+              // the refresh above kept current; the grown graphs take effect
+              // as this frame commits.
+              let grownGraphs: SessionState["graphs"] | undefined;
+              if (session.viewSupportGrown) {
+                const grown = this.#extendWatchGraphs(
+                  session,
+                  engine,
+                  this.#viewSupportWatches(session, session.views),
+                  session.graphs,
+                  (branch) => `view-support:${branch}`,
+                );
+                grownGraphs = grown.graphs;
+                for (const [key, entry] of grown.updates) {
+                  changedInterests.add(toDirtyKey(entry.id, entry.scopeKey));
+                  updates.set(key, entry);
+                }
+              }
+              // A session with views holds a demand graph and a support
+              // graph over one branch, so a document one of them retired can
+              // still be one the other reaches, the support graph as it grew
+              // above included. Only what no graph of the session over that
+              // branch tracks any more is retracted.
+              const frameGraphs = [...(grownGraphs ?? session.graphs).values()];
+              for (const { docKey, branch } of retired) {
+                if (
+                  frameGraphs.some((other) =>
+                    other.branch === branch && other.tracker.has(docKey)
+                  )
+                ) continue;
+                const { id, scopeKey } = fromDocKey(docKey);
+                const key = cacheKeyForEntity(branch, id, scopeKey);
+                const entry = session.entities.get(key);
+                if (entry !== undefined) removed.set(key, entry);
+                changedInterests.add(toDirtyKey(id, scopeKey));
               }
               if (
                 updates.size === 0 && changedInterests.size === 0 &&
@@ -7243,12 +9305,23 @@ export class Server {
               const commitEntities = () => {
                 const trackedStartedAt = performance.now();
                 try {
+                  if (grownGraphs !== undefined) {
+                    session.graphs = grownGraphs;
+                    this.#addMissedToTrackedIds(
+                      session.trackedIds,
+                      grownGraphs.values(),
+                    );
+                    session.viewSupportGrown = false;
+                  }
                   // A new delivered entity adds a key to the session's
                   // demand; a changed snapshot of a held one does not.
                   let enteredEntity = false;
                   for (const [key, entry] of updates) {
                     if (!session.entities.has(key)) enteredEntity = true;
                     session.entities.set(key, entry);
+                  }
+                  for (const key of removed.keys()) {
+                    session.entities.delete(key);
                   }
                   let changed = this.#reconcileTrackedInterests(
                     session,
@@ -7282,6 +9355,7 @@ export class Server {
                       space,
                       "push-growth",
                       session.principal,
+                      session.id,
                     );
                   }
                 } finally {
@@ -7295,7 +9369,17 @@ export class Server {
                 }
               };
               const toSeq = Engine.serverSeq(engine);
-              if (upserts.length === 0) {
+              // A re-walk that followed a link out of the space for the
+              // first time has a crossing to tell of, upserts or none, and so
+              // does the support graph's growth.
+              const newCrossings = this.#undeliveredCrossings(
+                session,
+                frameGraphs,
+              );
+              if (
+                upserts.length === 0 && removed.size === 0 &&
+                newCrossings.crossings.length === 0
+              ) {
                 // The watched set was re-evaluated current as of toSeq even though it
                 // produced no net upserts; advance the watermark so a later default
                 // fromSeq is not stale. emptyCatchUp receives the original fromSeq
@@ -7333,14 +9417,20 @@ export class Server {
                     // before.
                     toWireUpsert(entry, keyed)
                   ),
-                  removes: [],
+                  removes: [...removed.values()].sort(compareSyncAddress).map(
+                    (entry) => toWireRemove(entry, keyed),
+                  ),
+                  ...(newCrossings.crossings.length === 0
+                    ? {}
+                    : { crossings: newCrossings.crossings }),
                 });
                 // An unkeyed wire frame strips instance keys; retain the
                 // frame's true instance-keyed entries so a delivery failure
                 // rolls back the EXACT instances (rollbackUndeliveredSync).
                 this.#deliveredFrameEntries.set(message, {
                   upserts: [...upserts],
-                  removes: [],
+                  removes: [...removed.values()],
+                  crossings: newCrossings.keys,
                 });
               } finally {
                 timing.time(
@@ -7352,10 +9442,22 @@ export class Server {
                 );
               }
               commitEntities();
+              this.#markCrossingsDelivered(session, newCrossings.keys);
               session.lastSyncedSeq = toSeq;
               return message;
             } finally {
-              timing.time(
+              timing.timeDetailed(
+                () =>
+                  JSON.stringify({
+                    space,
+                    session: sessionId,
+                    fromSeq: refreshFromSeq,
+                    toSeq: session.lastSyncedSeq,
+                    dirty: batchDirtyIds.size,
+                    graphs: session.graphs.size,
+                    tracked: session.trackedIds.size,
+                    views: session.views.length,
+                  }),
                 startedAt,
                 "memory",
                 "refresh",
@@ -7365,12 +9467,23 @@ export class Server {
             }
           }
 
+          // A support rebuild refreshes the demand graphs in place, so the
+          // demand they held before is read ahead of it.
+          const demandBeforeRebuild = supportReplaced !== undefined &&
+              this.#serverExecutionObserver?.demandChanged !== undefined
+            ? this.#viewDemandIds(session)
+            : undefined;
           const { serverSeq, graphs, entities, demandGraphs, demandEntities } =
-            await this.#evaluateViewWatchSet(
-              session,
-              session.watches,
-              session.views,
-            );
+            supportReplaced === undefined
+              ? await this.#evaluateViewWatchSet(
+                session,
+                session.watches,
+                session.views,
+              )
+              : await this.#reevaluateViewSupport(
+                session,
+                supportReplaced.dirtyIds,
+              );
           // protocol.md §3's applicable-set filter on the FULL
           // evaluation path: explicit foreign instances enter `entities`
           // only through admitted lease-holder reads, and the exemption
@@ -7400,6 +9513,13 @@ export class Server {
             delivered,
             keyed,
           );
+          const newCrossings = this.#undeliveredCrossings(
+            session,
+            [...graphs.values(), ...demandGraphs.values()],
+          );
+          if (newCrossings.crossings.length > 0) {
+            sync.crossings = newCrossings.crossings;
+          }
           // As above: commit the re-evaluated watch state only once the
           // frame is built, so a throw leaves the diff recomputable. The
           // empty-sync branch commits first — its frame carries no doc
@@ -7450,15 +9570,10 @@ export class Server {
               this.#serverExecutionObserver?.demandChanged !== undefined;
             let changed = false;
             if (wantsDemandNotify) {
-              const previous = session.views.length === 0
-                ? session.trackedIds
-                : trackedIdsFromEntries(session.viewDemandEntities.values());
-              if (session.views.length > 0) {
-                this.#addMissedToTrackedIds(
-                  previous,
-                  session.viewDemandGraphs.values(),
-                );
-              }
+              const previous = demandBeforeRebuild ??
+                (session.views.length === 0
+                  ? session.trackedIds
+                  : this.#viewDemandIds(session));
               const next = session.views.length === 0
                 ? evaluatedTrackedIds
                 : evaluatedDemandIds;
@@ -7475,7 +9590,11 @@ export class Server {
             session.viewDemandGraphs = demandGraphs;
             session.viewDemandEntities = demandEntities;
             session.graphs = graphs;
+            // The full evaluation built the whole support graph, so a growth
+            // an earlier selection owed is already in it.
+            session.viewSupportGrown = false;
             session.entities = entities;
+            this.#markCrossingsDelivered(session, newCrossings.keys);
             session.trackedIds = evaluatedTrackedIds;
             this.#touchDemand(session);
             session.lastSyncedSeq = serverSeq;
@@ -7484,6 +9603,7 @@ export class Server {
                 space,
                 "push-growth",
                 session.principal,
+                session.id,
               );
             }
           };
@@ -7495,7 +9615,10 @@ export class Server {
           this.#assertRoutedAuthority(session);
           // As on the incremental branch: retain the frame's true
           // instance-keyed entries for exact delivery rollback.
-          this.#deliveredFrameEntries.set(message, delivered);
+          this.#deliveredFrameEntries.set(message, {
+            ...delivered,
+            crossings: newCrossings.keys,
+          });
           commitWatchState();
           return message;
         } catch (error) {
@@ -7512,6 +9635,10 @@ export class Server {
           );
           session.forceFullResync = session.forceFullResync ||
             preCallForceFullResync;
+          session.viewPlansPending = session.viewPlansPending ||
+            preCallViewPlansPending;
+          session.viewSupportReplaced = session.viewSupportReplaced ||
+            preCallViewSupportReplaced;
           // A re-arm consumed by a throwing pass re-stages: the next
           // pass runs the full evaluation the lapse still owes.
           if (rearmedLeaseHolder) session.leaseHolderReadsLapsed = true;
@@ -7583,6 +9710,16 @@ export class Server {
     });
   }
 
+  /**
+   * Marks `space` for the next batched flush. `dirtyIds` names the dirty keys
+   * whose watchers that flush re-evaluates incrementally. An empty iterable
+   * schedules the pass with every session of the space evaluating as
+   * untouched, and a session then sends a frame only for what it is otherwise
+   * owed, such as a catch-up marker or a forced full resync. Leaving
+   * `dirtyIds` out has the flush evaluate every session of the space in full
+   * from its watch roots, which replaces each session's tracked graphs and is
+   * the costly path.
+   */
   markSpaceDirty(
     space: string,
     dirtyIds?: Iterable<string>,
@@ -7876,6 +10013,40 @@ export class Server {
     return demand;
   }
 
+  /**
+   * The shares of the sessions `sessionIds` name among `space`'s sessions, as
+   * `demandForSpace()` builds them, the sessions of `excludePrincipal` and
+   * the ids the registry no longer holds left out: what a mirror of the
+   * demand set reads for the sessions whose demand it was told changed.
+   */
+  demandForSessions(
+    space: string,
+    sessionIds: readonly string[],
+    options: { excludePrincipal?: string } = {},
+  ): SessionDemand[] {
+    // Prune once for the batch before the targeted, non-pruning lookups.
+    this.#sessions.sessionsForSpace(space);
+    const demand: SessionDemand[] = [];
+    for (const sessionId of sessionIds) {
+      const session = this.#sessions.peek(space, sessionId);
+      if (
+        session === undefined ||
+        (options.excludePrincipal !== undefined &&
+          session.principal === options.excludePrincipal)
+      ) {
+        continue;
+      }
+      let share = this.#sessionDemand.get(session);
+      if (share === undefined) {
+        share = this.#buildSessionDemand(session);
+        this.#sessionDemand.set(session, share);
+        this.#sessionDemandBuilds += 1;
+      }
+      demand.push(share);
+    }
+    return demand;
+  }
+
   /** (d′) DIAGNOSTIC: per-session `trackedIds.size` for a
    * space's client sessions, plus the union size (design §2.6 — the
    * demand-set size and its drift are measured, not assumed). */
@@ -7932,6 +10103,11 @@ export class Server {
     observer: ServerExecutionObserver | undefined,
   ): void {
     this.#serverExecutionObserver = observer;
+    if (observer?.sessionChanged !== undefined) {
+      for (const event of this.#sessions.snapshot()) {
+        this.#notifySessionChanged(event);
+      }
+    }
   }
 
   /**
@@ -7982,6 +10158,19 @@ export class Server {
     }
   }
 
+  #notifySessionChanged(event: SessionLifecycleEvent): void {
+    const observer = this.#serverExecutionObserver;
+    if (observer?.sessionChanged === undefined) return;
+    try {
+      observer.sessionChanged(event);
+    } catch (error) {
+      console.warn(
+        "memory v2: server-execution observer threw on sessionChanged",
+        error,
+      );
+    }
+  }
+
   #notifySessionOpened(space: string): void {
     const observer = this.#serverExecutionObserver;
     if (observer?.sessionOpened === undefined) return;
@@ -7995,15 +10184,29 @@ export class Server {
     }
   }
 
+  #notifyViewsChanged(space: string, sessionId: string): void {
+    const observer = this.#serverExecutionObserver;
+    if (observer?.viewsChanged === undefined) return;
+    try {
+      observer.viewsChanged(space, sessionId);
+    } catch (error) {
+      console.warn(
+        "memory v2: server-execution observer threw on viewsChanged",
+        error,
+      );
+    }
+  }
+
   #notifyDemandChanged(
     space: string,
     reason: DemandChangeReason = "watch",
     principal?: string,
+    sessionId?: string,
   ): void {
     const observer = this.#serverExecutionObserver;
     if (observer?.demandChanged === undefined) return;
     try {
-      observer.demandChanged(space, reason, principal);
+      observer.demandChanged(space, reason, principal, sessionId);
     } catch (error) {
       console.warn(
         "memory v2: server-execution observer threw on demandChanged",
@@ -8104,7 +10307,8 @@ export class Server {
     const identity = this.#sessionScopeIdentity(session);
     const instanceByAddress = new Map<string, string>();
     let collapse: V2Error | undefined;
-    for (const { branch, root } of entries) {
+    const rows = [...entries];
+    for (const { branch, root } of rows) {
       if (root.entityScopeKey !== undefined) {
         named = true;
         if (!isScopeKey(root.entityScopeKey)) {
@@ -8168,6 +10372,34 @@ export class Server {
           "hold a live execution_lease on this memory server " +
           "(protocol.md §2's read row)",
       );
+    }
+    if (!holdsReadSpace) {
+      // The grant-scoped read (protocol.md §2, RULED 2026-10-27): a holder
+      // reading a space whose lease it does not hold names an instance of
+      // an actor that space's own ACL grants READ — the actor's own
+      // instance under the actor's own grant, the read twin of §2b's
+      // write grant — or is refused. Resolved against the engine already
+      // open, mode-independently, as the write probe resolves its grant:
+      // this is the serving plane's rule, not the client ACL rollout, so
+      // neither the service-DID blanket nor the missing-ACL compat arm
+      // applies, and a key naming no actor grants nothing.
+      for (const { root } of rows) {
+        const key = root.entityScopeKey;
+        if (key === undefined || key === "space") continue;
+        const actor = identityOfScopeKey(key)?.principal;
+        const verdict = actor === undefined
+          ? { granted: false as const, reason: `"${key}" names no actor` }
+          : this.#foreignGrantOn(engine, space, actor, "READ");
+        if (!verdict.granted) {
+          return toError(
+            "ProtocolError",
+            `read naming entity_scope_key "${key}" on root ${root.id} ` +
+              `rejected: ${verdict.reason} — a foreign scoped instance is ` +
+              "read under its actor's own READ grant on the space " +
+              "(protocol.md §2's grant-scoped read)",
+          );
+        }
+      }
     }
     session.leaseHolderReads = true;
     return undefined;
@@ -8345,6 +10577,7 @@ export class Server {
     session: SessionState,
     commit: ClientCommit,
   ): void {
+    const startedAt = performance.now();
     session.pendingCaughtUpLocalSeq = Math.max(
       session.pendingCaughtUpLocalSeq,
       commit.localSeq,
@@ -8370,6 +10603,22 @@ export class Server {
       addInstanceKey(read.id, read.scope);
     }
     this.markSpaceDirty(space, ids);
+    timing.timeDetailed(
+      () =>
+        JSON.stringify({
+          space,
+          session: session.id,
+          localSeq: commit.localSeq,
+          dirty: [...ids],
+          operations: commit.operations.length,
+          confirmedReads: commit.reads.confirmed.length,
+          pendingReads: commit.reads.pending.length,
+        }),
+      startedAt,
+      "memory",
+      "refresh",
+      "conflict",
+    );
   }
 
   async flushSessions(spaces?: Iterable<string>): Promise<void> {
@@ -8560,6 +10809,10 @@ export class Server {
 
       for (const space of spaces) {
         await this.#withSpacePublicationLock(space, async () => {
+          // A space a caller names that nothing dirtied has no batch to send:
+          // every write and every owed frame marks its space dirty, and an
+          // absent batch would otherwise read as one that dirtied everything.
+          if (!this.#dirtySpaces.has(space)) return;
           // Removed at its own processing turn (CT-1927): pre-deleting the
           // whole selection meant a failure mid-batch stranded every
           // not-yet-processed space — dirty maps intact but the space no
@@ -8584,11 +10837,23 @@ export class Server {
           // context manager propagates the active context into timer callbacks,
           // so without it this span could parent under whichever memory.transact
           // happened to schedule the refresh.
+          const aclChangedElsewhere = this.#aclChangedElsewhere.delete(space);
           try {
+            if (aclChangedElsewhere) {
+              // An ACL change written through another connection: revoke
+              // the sessions it deauthorized and notice the admissions it
+              // allows, as an ACL commit of this server's own does when it
+              // lands, before any frame of this turn can reach a revoked
+              // session.
+              const engine = await this.#openEngine(space);
+              this.#revokeDeauthorizedSessions(engine, space);
+              this.#noticeAdmissions(engine, space);
+            }
             await tracer.startActiveSpan(
               "memory.fanout",
               { root: true },
               async (span) => {
+                const startedAt = performance.now();
                 span.setAttribute("space.did", space);
                 span.setAttribute("subscriber.count", this.#connections.size);
                 span.setAttribute("dirty.count", dirtyIds?.size ?? 0);
@@ -8635,6 +10900,19 @@ export class Server {
                     }
                   }
                 } finally {
+                  timing.timeDetailed(
+                    () =>
+                      JSON.stringify({
+                        space,
+                        dirty: dirtyIds === undefined ? null : [...dirtyIds],
+                        derived: derivedDirty?.size ?? 0,
+                        connections: this.#connections.size,
+                      }),
+                    startedAt,
+                    "memory",
+                    "refresh",
+                    "batch",
+                  );
                   span.end();
                 }
               },
@@ -8648,6 +10926,9 @@ export class Server {
             // (newer provenance wins), reschedule, and rethrow so callers
             // see the failure.
             this.#dirtySpaces.add(space);
+            if (aclChangedElsewhere) {
+              this.#aclChangedElsewhere.add(space);
+            }
             if (dirtyIds !== undefined) {
               let current = this.#dirtyDocsBySpace.get(space);
               if (current === undefined) {
@@ -8775,40 +11056,95 @@ export class Server {
   async foreignWriteAuthorityFor(
     space: string,
     principal: string | undefined,
-  ): Promise<{ granted: true } | { granted: false; reason: string }> {
+  ): Promise<ForeignAuthorityVerdict> {
+    return await this.#foreignAuthorityFor(space, principal, "WRITE");
+  }
+
+  /**
+   * The structural read grant for a FOREIGN scoped read made on a carried
+   * actor's behalf (protocol.md §2's grant-scoped read; serving-loop.md
+   * §3b): whether `principal` — the actor whose instance a serving
+   * runtime's read of another space names — holds READ on `space`. The
+   * serving runtime's storage plane asks this before such a read leaves
+   * it, and admission asks the same question of the engine it has open
+   * (`#denyExplicitInstanceReads`), so a producer that skipped the probe
+   * is refused at the wire.
+   *
+   * Everything `foreignWriteAuthorityFor` says of its grant holds here
+   * with READ in place of WRITE: the target's own ACL document is the one
+   * grant, checked mode-independently, with neither the service-DID
+   * blanket nor the missing-ACL compat arm, and a malformed space name or
+   * a space no store holds grants nothing.
+   */
+  async foreignReadAuthorityFor(
+    space: string,
+    principal: string | undefined,
+  ): Promise<ForeignAuthorityVerdict> {
+    return await this.#foreignAuthorityFor(space, principal, "READ");
+  }
+
+  /**
+   * The two foreign authority probes' shared body: the checks on the space
+   * name, the actor and the store's existence, then
+   * `#foreignGrantOn` against the space's engine.
+   */
+  async #foreignAuthorityFor(
+    space: string,
+    principal: string | undefined,
+    requirement: ForeignAuthorityRequirement,
+  ): Promise<ForeignAuthorityVerdict> {
+    const rule = requirement === "WRITE" ? "protocol.md §2b" : "protocol.md §2";
     if (!WELL_FORMED_SPACE_DID.test(space)) {
       return {
         granted: false,
         reason: `"${space}" is not a space DID — refusing to resolve (or ` +
-          "provision) a store for a malformed space name (protocol.md §2b)",
+          `provision) a store for a malformed space name (${rule})`,
       };
     }
     if (principal === undefined || principal === "") {
       return {
         granted: false,
-        reason: "no acting principal — a foreign provisioning write is " +
-          "admitted only under a carried actor's grant (protocol.md §2b)",
+        reason: requirement === "WRITE"
+          ? "no acting principal — a foreign provisioning write is " +
+            "admitted only under a carried actor's grant (protocol.md §2b)"
+          : "no acting principal — a foreign scoped read is admitted only " +
+            "under the carried actor's own grant (protocol.md §2)",
       };
     }
     if (!(await this.#spaceStoreExists(space))) {
       return {
         granted: false,
         reason: `no space has the DID ${space} — a space exists once its ` +
-          "genesis ACL commit lands (protocol.md §2b)",
+          `genesis ACL commit lands (${rule})`,
       };
     }
     const engine = await this.#openEngine(space);
+    return this.#foreignGrantOn(engine, space, principal, requirement);
+  }
+
+  /**
+   * Whether the ACL `engine` stores for `space` grants `principal` (or
+   * `ANYONE`) `requirement`: the one structural grant both foreign
+   * authority probes and the read admission resolve, fail-closed for a
+   * missing, malformed, ownerless or retracted list.
+   */
+  #foreignGrantOn(
+    engine: Engine.Engine,
+    space: string,
+    principal: string,
+    requirement: ForeignAuthorityRequirement,
+  ): ForeignAuthorityVerdict {
     const state = this.#aclState(engine, space);
     if (state.kind === "valid") {
       const capability = state.acl[principal] ?? state.acl[ANYONE_USER] ??
         null;
-      if (capability !== null && isCapable(capability, "WRITE")) {
+      if (capability !== null && isCapable(capability, requirement)) {
         return { granted: true };
       }
       return {
         granted: false,
         reason: `the ACL of ${space} grants ${principal} ` +
-          `${capability ?? "nothing"} (WRITE required)`,
+          `${capability ?? "nothing"} (${requirement} required)`,
       };
     }
     return {
@@ -8881,6 +11217,11 @@ export class Server {
         documentCacheBudgetBytes: this.options.documentCacheBudgetBytes,
         documentCacheMaxEntries: this.options.documentCacheMaxEntries,
         documentCacheCoordinator: this.#documentCacheCoordinator,
+        // Every commit this engine decides, on whichever path, counts
+        // toward the space's commit rate; the engine is this space's, so
+        // the space is known here whatever the committing caller named.
+        commitObserver: (decision) =>
+          this.#observeCommit({ ...decision, space }),
       });
     })();
     // The SYNC engine view (server-execution v2 Phase 5): the read-row
@@ -8992,23 +11333,29 @@ function isSqliteNamedParamEntries(
 }
 
 /**
- * A client message refused for standing for more than
- * `MAX_UNTRUSTED_MESSAGE_SLOTS` slots, with the id of the request it carried
- * so that the refusal can be answered on that request.
+ * A client message refused before it was understood, with the id of the
+ * request it carried so that the refusal can be answered on that request:
+ * `oversized` for one standing for more than `MAX_UNTRUSTED_MESSAGE_SLOTS`
+ * slots, `invalid` for one that decoded but failed metadata expansion or
+ * request-shape validation.
  */
-export type OversizedClientMessage = {
-  type: "oversized";
+export type RejectedClientMessage = {
+  type: "oversized" | "invalid";
   requestId: string;
 };
 
 /**
- * Decodes and validates one message from a client. Returns `null` for a
- * message that is malformed, or that is refused for its size without carrying
- * a request id to answer it on.
+ * Decodes and validates one message from a client. A message that decodes but
+ * is then refused is reported as `invalid` on its root `requestId` when that
+ * is a bounded identifier (see `isRoutedIdentifier()`); the result is `null`
+ * for a message that cannot be decoded, or that is refused without a usable
+ * request id to answer it on. Negotiated commit metadata expands after bounded
+ * wire decoding and before request-shape validation or downstream CFC checks.
  */
 export const parseClientMessage = (
   payload: string,
-): ClientMessage | OversizedClientMessage | null => {
+  options: { commitLabelTableV1?: boolean } = {},
+): ClientMessage | RejectedClientMessage | null => {
   let parsed: FabricValue;
   try {
     parsed = decodeMemoryBoundary(payload);
@@ -9021,7 +11368,26 @@ export const parseClientMessage = (
     }
     return null;
   }
+  const requestId = isFabricPlainObject(parsed) ? parsed.requestId : undefined;
+  const rejected: RejectedClientMessage | null = isRoutedIdentifier(requestId)
+    ? { type: "invalid", requestId }
+    : null;
+  try {
+    if (options.commitLabelTableV1 === true) {
+      parsed = expandClientMessageLabels(parsed);
+    } else if (hasClientMessageLabelMetadata(parsed)) {
+      return rejected;
+    }
+  } catch {
+    return rejected;
+  }
+  return parseDecodedClientMessage(parsed) ?? rejected;
+};
 
+/** Helper for `parseClientMessage()`, which checks a decoded message's shape. */
+const parseDecodedClientMessage = (
+  parsed: FabricValue,
+): ClientMessage | null => {
   if (!isFabricPlainObject(parsed)) {
     return null;
   }
@@ -9086,6 +11452,11 @@ export const parseClientMessage = (
       parsed.session.genesisRoot !== undefined &&
       !isGenesisRoot(parsed.session.genesisRoot)
     ) return null;
+    if (
+      parsed.session.spaceKind !== undefined &&
+      !isSpaceKind(parsed.session.spaceKind)
+    ) return null;
+    const client = parseClientInfo(parsed.session.client) ?? undefined;
     // A malformed ceiling refuses the message: a session opened without the
     // ceiling its client asked for would read unbounded, silently.
     const readCeiling = parseSessionReadCeiling(parsed.session.readCeiling);
@@ -9099,6 +11470,7 @@ export const parseClientMessage = (
         : { principal: parsed.principal }),
       ...(holdings === undefined ? {} : { holdings }),
       session: {
+        ...(client === undefined ? {} : { client }),
         sessionId: typeof parsed.session.sessionId === "string"
           ? parsed.session.sessionId
           : undefined,
@@ -9108,6 +11480,12 @@ export const parseClientMessage = (
         sessionToken: typeof parsed.session.sessionToken === "string"
           ? parsed.session.sessionToken
           : undefined,
+        ...(typeof parsed.session.resumeKey === "string"
+          ? { resumeKey: parsed.session.resumeKey }
+          : {}),
+        ...(Number.isSafeInteger(parsed.session.resumeAttempt)
+          ? { resumeAttempt: parsed.session.resumeAttempt as number }
+          : {}),
         // The delegated READ binding (OW31): parsed as the LITERAL
         // marker only — any other string reaches openSession's
         // unknown-value refusal rather than being silently dropped.
@@ -9119,6 +11497,9 @@ export const parseClientMessage = (
         ...(readCeiling !== undefined ? { readCeiling } : {}),
         ...(isGenesisRoot(parsed.session.genesisRoot)
           ? { genesisRoot: parsed.session.genesisRoot }
+          : {}),
+        ...(isSpaceKind(parsed.session.spaceKind)
+          ? { spaceKind: parsed.session.spaceKind }
           : {}),
       },
       invocation: isFabricPlainObject(parsed.invocation)
@@ -9303,6 +11684,18 @@ export const parseClientMessage = (
     if (views === null) return null;
     const holdings = parseHoldings(parsed.holdings);
     if (holdings === null) return null;
+    // A staged part names its set and is numbered, and only a staged part
+    // says more follow.
+    if (
+      (parsed.stage === undefined) !== (parsed.part === undefined) ||
+      (parsed.part !== undefined &&
+        !(Number.isSafeInteger(parsed.part) && (parsed.part as number) >= 0 &&
+          isRoutedIdentifier(parsed.stage))) ||
+      (parsed.more !== undefined &&
+        (parsed.more !== true || parsed.part === undefined))
+    ) {
+      return null;
+    }
     return {
       type: "session.watch.set",
       requestId: parsed.requestId,
@@ -9311,6 +11704,10 @@ export const parseClientMessage = (
       watches: parsed.watches as WatchSpec[],
       ...(views === undefined ? {} : { views }),
       ...(holdings === undefined ? {} : { holdings }),
+      ...(parsed.part === undefined
+        ? {}
+        : { stage: parsed.stage as string, part: parsed.part as number }),
+      ...(parsed.more === true ? { more: true as const } : {}),
     };
   }
 
@@ -9350,6 +11747,26 @@ export const parseClientMessage = (
       space: parsed.space,
       sessionId: parsed.sessionId,
       watches: parsed.watches as WatchSpec[],
+    };
+  }
+
+  if (
+    parsed.type === "session.watch.remove" &&
+    typeof parsed.requestId === "string" &&
+    typeof parsed.space === "string" &&
+    typeof parsed.sessionId === "string" &&
+    Array.isArray(parsed.watchIds)
+  ) {
+    const watchIds = parsed.watchIds.filter((id: unknown): id is string =>
+      typeof id === "string"
+    );
+    if (watchIds.length !== parsed.watchIds.length) return null;
+    return {
+      type: "session.watch.remove",
+      requestId: parsed.requestId,
+      space: parsed.space,
+      sessionId: parsed.sessionId,
+      watchIds,
     };
   }
 
@@ -9422,6 +11839,23 @@ export const parseClientMessage = (
       revision: parsed.revision,
       name: parsed.name,
       facets,
+    };
+  }
+
+  if (
+    parsed.type === "session.report" &&
+    typeof parsed.requestId === "string" &&
+    typeof parsed.space === "string" &&
+    typeof parsed.sessionId === "string"
+  ) {
+    const report = parseSessionReport(parsed.report);
+    if (report === null) return null;
+    return {
+      type: "session.report",
+      requestId: parsed.requestId,
+      space: parsed.space,
+      sessionId: parsed.sessionId,
+      report,
     };
   }
 

@@ -52,16 +52,15 @@ const joinAs = handler<JoinEvent, {
   users: ParticipantIdentityUsersCell;
   host: HostCell | undefined;
   profile: LunchProfileCell | undefined;
-  // Display strings arrive pre-resolved from `#profileName` / `#profileAvatar`.
-  // Field reads off the live `#profile` result are not a reliable display
-  // source; the dedicated string wishes are.
+  // The display name arrives pre-resolved from `#profileName`. Field reads off
+  // the live `#profile` result are not a reliable display source; the
+  // dedicated string wish is.
   profileName: string;
-  profileAvatar: string;
   joinMessage: Writable<string>;
 }>(
   (
     _event,
-    { users, host, profile, profileName, profileAvatar, joinMessage },
+    { users, host, profile, profileName, joinMessage },
   ) => {
     // Gate on the NAME, not on `profile` being falsy: an unset optional CELL
     // input reads as a present-but-empty cell, so `!profile` never fires and a
@@ -100,7 +99,6 @@ const joinAs = handler<JoinEvent, {
     users.set([...existing, {
       profile: identity,
       name,
-      avatar: (profileAvatar ?? "").trim(),
       color: colorForIndex(existing.length),
     }]);
     // First to join hosts the poll. (`host` is typed optional only for the
@@ -164,9 +162,6 @@ export interface ParticipantIdentityCardInput {
   /** The viewer's resolved display name ("" until `#profileName` resolves). */
   profileName: string;
 
-  /** The viewer's resolved avatar. */
-  profileAvatar: string;
-
   /**
    * The `#profile` wish's built-in create/pick surface, rendered by the parent
    * and passed down so the card can show it when no profile resolves.
@@ -199,7 +194,7 @@ export default pattern<
   ParticipantIdentityCardInput,
   ParticipantIdentityCardOutput
 >(
-  ({ users, host, profile, profileName, profileAvatar, profileSetupUI }) => {
+  ({ users, host, profile, profileName, profileSetupUI }) => {
     // Per-user so the complaint follows the identity, not the tab: the CLI
     // invocation that sent the join and the one that reads the answer are
     // different sessions of the same user (the lot-watch `reporterName`
@@ -210,7 +205,6 @@ export default pattern<
       host,
       profile,
       profileName,
-      profileAvatar,
       joinMessage,
     });
     const boundClaimHost = claimHost({ users, host, profile });

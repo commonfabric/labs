@@ -28,6 +28,7 @@ import {
 } from "./sigil-types.ts";
 import { arrayEqual } from "./path-utils.ts";
 import type { IMemorySpaceAddress } from "./storage/interface.ts";
+import { immutableOrigin, pinImmutableCell } from "./immutable-cell.ts";
 
 export { decodeJsonPointer, encodeJsonPointer };
 
@@ -268,6 +269,7 @@ export function parseLinkPrimitive(
   base?: NormalizedLink,
 ): NormalizedLink {
   if (isSigilLink(value)) {
+    if (base !== undefined) base = immutableOrigin(base);
     const link = linkRefPayload(value);
 
     // Resolve relative references
@@ -283,14 +285,14 @@ export function parseLinkPrimitive(
       id = base.id;
     }
 
-    return {
+    return pinImmutableCell({
       ...(id && { id }),
       path: path.map((p) => p.toString()),
       ...(resolvedSpace && { space: resolvedSpace }),
       ...(resolvedScope && { scope: resolvedScope }),
       ...(link.schema !== undefined && { schema: link.schema }),
       ...(link.overwrite === "redirect" && { overwrite: "redirect" }),
-    };
+    }, id);
   }
   throw new Error(
     debugStr`Link is not a primitive: $quote${value}`,

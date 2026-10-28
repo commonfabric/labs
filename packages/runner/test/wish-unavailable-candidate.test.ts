@@ -8,6 +8,7 @@ import { defer } from "@commonfabric/utils/defer";
 
 import { NAME } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
+import { seedProfileOwner } from "./cfc-seed-envelope.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 
 /** Discovery collections with reference-based candidate lists. */
@@ -65,6 +66,7 @@ async function makeFixture(
       avatar: "",
       elements: cells.map((cell) => ({ cell, tag: "#resources" })),
     });
+    seedProfileOwner(profileTx, profile.getAsNormalizedFullLink(), space);
     expect((await profileTx.commit().settled).error).toBeUndefined();
     runtime.getHomeSpaceCell(home).key("defaultPattern").set({
       profiles: [profile],

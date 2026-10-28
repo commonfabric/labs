@@ -10,17 +10,17 @@
  * inside it. Dispatch is generic in the base class, so nothing here enumerates
  * concrete subclasses.
  *
- * This module and the freeze utility import each other. The cycle is
+ * This module and the clone utility import each other. The cycle is
  * deliberate, and is safe only because each side reaches the other from inside
  * a function body; a dereference during module evaluation would break it.
  */
 
 import { FabricInstance, type FabricValue } from "@/interface.ts";
 // Used only inside method bodies: this import participates in a module cycle
-// with `deep-freeze.ts` (which imports this module's symbols and class for its
+// with `value-clone.ts` (which imports this module's symbols and class for its
 // generic dispatch), which is safe for call-time function use but must not be
 // dereferenced during module evaluation.
-import { deepFreeze, isDeepFrozen } from "@/deep-freeze.ts";
+import { cloneHelper } from "@/value-clone.ts";
 
 /**
  * Well-known symbol for deeply freezing a `FabricInstance` in place. The method
@@ -86,8 +86,8 @@ export const SHALLOW_UNFROZEN_CLONE: unique symbol = Symbol(
 /**
  * Well-known symbol for producing a new deep clone of a `FabricInstance`,
  * cloning nested `FabricValue`s to the requested frozenness. This is the
- * `protected` template-method primitive that the concrete `deepClone()` calls
- * when a fresh instance is needed; each concrete subclass implements it.
+ * symbol protocol invoked by the canonical cloner when a fresh instance is
+ * needed. Nested values go through `subClone`, preserving its cycle state.
  * Symbol-keyed as implementation plumbing (matching
  * `[SHALLOW_UNFROZEN_CLONE]`), while `deepClone()` stays a regular-named
  * client method. Unlike the shallow core, this core takes the `frozen` intent:
@@ -187,11 +187,14 @@ export abstract class BaseFabricInstance extends FabricInstance {
   /**
    * Returns a new deep clone of this instance, cloning nested `FabricValue`s
    * to the requested frozenness (see `[DEEP_CLONE_CORE]`'s symbol doc). The
-   * returned instance itself is not yet frozen: the `deepClone()` template
-   * method owns the identity optimization and the final freeze. Called by
-   * `deepClone()` when a fresh instance is needed.
+   * returned instance itself is not yet frozen; the canonical cloner owns the
+   * identity optimization and final freeze. Nested values use `subClone`,
+   * preserving ancestor tracking across instance boundaries.
    */
-  protected abstract [DEEP_CLONE_CORE](frozen: boolean): FabricInstance;
+  abstract [DEEP_CLONE_CORE](
+    frozen: boolean,
+    subClone: (value: FabricValue) => FabricValue,
+  ): FabricInstance;
 
   //
   // Instance members
@@ -226,9 +229,7 @@ export abstract class BaseFabricInstance extends FabricInstance {
    * and deep-freezes it if requested.
    */
   deepClone(frozen: boolean): FabricInstance {
-    if (frozen && isDeepFrozen(this)) return this;
-    const copy = this[DEEP_CLONE_CORE](frozen);
-    return frozen ? deepFreeze(copy) : copy;
+    return cloneHelper(this, frozen, true, !frozen) as FabricInstance;
   }
 
   //

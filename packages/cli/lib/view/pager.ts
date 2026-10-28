@@ -11,6 +11,7 @@
  */
 
 import { CSI, term } from "./ansi.ts";
+import { type BlameRunner, blameRunner } from "./blame.ts";
 import type { Document } from "./model.ts";
 import { decodeKeys } from "./keys.ts";
 import { cursorScreenPos, renderFrame, type ViewState } from "./render.ts";
@@ -20,6 +21,7 @@ import { onGrammarLoad, type Semantics } from "./languages/language.ts";
 import type { EditableSource } from "./editsource.ts";
 import { realFileGateway } from "./filegateway.ts";
 import { ViewError } from "./errors.ts";
+import { pushBranch, type PushIo, realPushIo } from "./push.ts";
 
 const encoder = new TextEncoder();
 
@@ -77,6 +79,15 @@ export interface PagerDeps {
    * when it failed; returns a function that stops the calls.
    */
   onGrammarLoad(listener: (failure?: string) => void): () => void;
+
+  /** The operations a branch push performs, against the repository the viewer
+   * is running in, showing git's output with `write` and stopping git when
+   * `signal` aborts. */
+  pushIo(write: (text: string) => void, signal: AbortSignal): PushIo;
+
+  /** Attribute each line of a file with `git blame`, rejecting with git's
+   * message when it cannot, and stopping git when `signal` aborts. */
+  blame: BlameRunner;
 }
 
 /** The real terminal and process operations. */
@@ -97,6 +108,8 @@ export function realPagerDeps(): PagerDeps {
     },
     delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     onGrammarLoad,
+    pushIo: (write, signal) => realPushIo({ write, signal }),
+    blame: blameRunner(),
   };
 }
 
@@ -134,6 +147,9 @@ export async function runPager(
   );
 
   const paint = (doc: Document, view: ViewState) => {
+    // A push still running when the viewer closes ends after the screen is
+    // gone, and has nothing left to draw on.
+    if (cleanedUp) return;
     const rows = renderFrame(doc, view);
     // Re-assert the padding background every frame. Some terminals drop the
     // OSC 11 default set at startup after the first repaint, so setting it once
@@ -151,7 +167,27 @@ export async function runPager(
     deps.write(out);
   };
 
-  const draw = () => paint(session.displayDoc(), session.view());
+  // Drawing the blame column can ask for files' blame. Each load runs while
+  // keys keep arriving, and draws again when it lands, unless a reveal or a
+  // button press is playing its frames, which end with a draw of their own.
+  // Closing the viewer stops the loads still running.
+  const blameController = new AbortController();
+  const draw = () => {
+    if (cleanedUp) return;
+    paint(session.displayDoc(), session.view());
+    for (const load of session.takeBlameLoads()) {
+      deps.blame(load.request, blameController.signal).then(
+        (lines) => session.finishBlameLoad(load, lines),
+        (error) =>
+          session.failBlameLoad(
+            load,
+            error instanceof Error ? error.message : String(error),
+          ),
+      ).then(() => {
+        if (!cancelReveal && !cancelPush) draw();
+      });
+    }
+  };
 
   // Ctrl-L leaves the session at the finished state; these frames walk the lines
   // it revealed in one at a time so where they land is visible. Any key, or a
@@ -244,10 +280,17 @@ export async function runPager(
     }, REPARSE_DEBOUNCE_MS);
   };
 
+  // A push runs while keys keep arriving, so that its dialog's Abort button
+  // works. Its output, and its end, each draw the dialog again. However the
+  // viewer ends, a push still running stops.
+  let branchPushController: AbortController | undefined;
+
   let cleanedUp = false;
   const cleanup = () => {
     if (cleanedUp) return;
     cleanedUp = true;
+    branchPushController?.abort();
+    blameController.abort();
     try {
       tty.setRaw(false);
     } catch { /* ignore */ }
@@ -308,6 +351,27 @@ export async function runPager(
 
   const buf = new Uint8Array(4096);
   let leftover: Uint8Array = new Uint8Array(0);
+
+  const startBranchPush = async () => {
+    session.branchPushRequested = false;
+    const controller = new AbortController();
+    branchPushController = controller;
+    session.beginBranchPush(() => controller.abort());
+    let summary: string;
+    try {
+      const io = deps.pushIo((text) => {
+        session.appendPushOutput(text);
+        draw();
+      }, controller.signal);
+      summary = await pushBranch(io, controller.signal);
+    } catch (error) {
+      summary = `Push failed: ${
+        error instanceof Error ? error.message : error
+      }`;
+    }
+    session.finishBranchPush(summary);
+    draw();
+  };
   try {
     tty.setRaw(true);
     deps.write(
@@ -358,6 +422,7 @@ export async function runPager(
         }
         break;
       }
+      if (session.branchPushRequested) startBranchPush();
       // A reveal or a button press draws its own frames, ending on the finished
       // one; otherwise draw the new state now.
       if (!startReveal() && !pushStarted) {

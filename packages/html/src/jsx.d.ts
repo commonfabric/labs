@@ -5,6 +5,7 @@ import type {
   AnyStream,
   CELL_LIKE,
   CellLike,
+  FabricBytes,
   JSXElement,
   RenderNode,
 } from "commonfabric";
@@ -2903,6 +2904,7 @@ interface CFTextAreaElement extends CFHTMLElement {}
 interface CFFileInputElement extends CFHTMLElement {}
 interface CFImageInputElement extends CFHTMLElement {}
 interface CFImageElement extends CFHTMLElement {}
+interface CFBlobLinkElement extends CFHTMLElement {}
 interface CFInputLegacyElement extends CFHTMLElement {}
 interface CFCheckboxElement extends CFHTMLElement {}
 interface CFAutocompleteElement extends CFHTMLElement {}
@@ -3004,6 +3006,7 @@ interface CFFieldElement extends CFHTMLElement {}
 // Display components
 interface CFTextElement extends CFHTMLElement {}
 interface CFAvatarElement extends CFHTMLElement {}
+interface CFAvatarInputElement extends CFHTMLElement {}
 interface CFProfileBadgeElement extends CFHTMLElement {}
 interface CFShareSnapshotElement extends CFHTMLElement {}
 interface CFCustodySealElement extends CFHTMLElement {}
@@ -3512,6 +3515,9 @@ interface CFButtonAttributes<T> extends CFHTMLAttributes<T> {
   "disabled"?: boolean;
   "outline"?: boolean;
   "type"?: "button" | "submit" | "reset";
+  // A cell bound as the button's `name` crosses into a click's event as
+  // `target.name`, the link to that cell.
+  "$name"?: CellLike<unknown>;
 }
 
 interface CFCopyButtonAttributes<T> extends CFHTMLAttributes<T> {
@@ -3600,7 +3606,7 @@ interface CFIframeAttributes<T> extends CFHTMLAttributes<T> {
   "$context"?: CellLike<any>;
   "resourceKinds"?: Record<
     string,
-    "cell" | "readonly" | "stream" | "sqlite"
+    "cell" | "readonly" | "stream" | "sqlite" | "presence"
   >;
 }
 
@@ -3888,9 +3894,18 @@ interface CFImageInputAttributes<T> extends CFHTMLAttributes<T> {
 interface CFImageAttributes<T> extends CFHTMLAttributes<T> {
   "bytes"?: unknown;
   "$bytes"?: CellLike<unknown>;
+  /** A blob to show, by its space and id, where there are no `bytes`. */
+  "blob"?: { space: string; id: string };
   "mediaType"?: string;
   "media-type"?: string;
   "alt"?: string;
+}
+
+interface CFBlobLinkAttributes<T> extends CFHTMLAttributes<T> {
+  /** The blob to link to, by its space and id. */
+  "blob"?: { space: string; id: string };
+  /** The name the file is saved under. */
+  "name"?: string;
 }
 
 interface CFCheckboxAttributes<T> extends CFHTMLAttributes<T> {
@@ -4296,11 +4311,20 @@ interface CFBadgeAttributes<T> extends CFHTMLAttributes<T> {
 }
 
 interface CFAvatarAttributes<T> extends CFHTMLAttributes<T> {
+  /** The bytes of a raster image, such as a profile's picture. */
+  "bytes"?: FabricBytes | CellLike<FabricBytes | undefined>;
   "src"?: string | CellLike<string>;
   "name"?: string | CellLike<string>;
   "alt"?: string | CellLike<string>;
   "size"?: "xs" | "sm" | "md" | "lg" | "xl" | CellLike<string>;
   "shape"?: "circle" | "square" | CellLike<"circle" | "square">;
+}
+
+interface CFAvatarInputAttributes<T> extends CFHTMLAttributes<T> {
+  "disabled"?: boolean | CellLike<boolean>;
+  /** Fired with the picked image, scaled down to avatar size. */
+  "oncf-change"?: EventHandler<{ bytes: FabricBytes }>;
+  "oncf-error"?: EventHandler<{ message: string }>;
 }
 
 interface CFProfileBadgeAttributes<T> extends CFHTMLAttributes<T> {
@@ -4586,7 +4610,12 @@ interface CFMapAttributes<T> extends CFHTMLAttributes<T> {
   "oncf-click"?: (event: CustomEvent<{ lat: number; lng: number }>) => void;
   "oncf-bounds-change"?: (
     event: CustomEvent<
-      { bounds: CFMapBounds; center: CFMapLatLng; zoom: number }
+      {
+        bounds: CFMapBounds;
+        center: CFMapLatLng;
+        zoom: number;
+        userInitiated: boolean;
+      }
     >,
   ) => void;
   "oncf-marker-click"?: (
@@ -5069,6 +5098,10 @@ declare global {
         CFImageInputAttributes<CFImageInputElement>,
         CFImageInputElement
       >;
+      "cf-blob-link": CFDOM.DetailedHTMLProps<
+        CFBlobLinkAttributes<CFBlobLinkElement>,
+        CFBlobLinkElement
+      >;
       "cf-image": CFDOM.DetailedHTMLProps<
         CFImageAttributes<CFImageElement>,
         CFImageElement
@@ -5416,6 +5449,10 @@ declare global {
       "cf-avatar": CFDOM.DetailedHTMLProps<
         CFAvatarAttributes<CFAvatarElement>,
         CFAvatarElement
+      >;
+      "cf-avatar-input": CFDOM.DetailedHTMLProps<
+        CFAvatarInputAttributes<CFAvatarInputElement>,
+        CFAvatarInputElement
       >;
       "cf-profile-badge": CFDOM.DetailedHTMLProps<
         CFProfileBadgeAttributes<CFProfileBadgeElement>,

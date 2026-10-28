@@ -426,20 +426,39 @@ describe("client command contract", () => {
       expect(harnessClientProtocolEcho(HARNESS_SUPPORTED_CLIENT_FEATURES))
         .toEqual({
           protocolVersion: 1,
-          features: ["client_actions", "typed_commands", "starts_run"],
+          features: [
+            "client_actions",
+            "typed_commands",
+            "starts_run",
+            "automatic_mutations",
+          ],
         });
     });
 
-    it("refuses a catalog entry that runs a mutation automatically", () => {
+    it("reads effect independently of the host's confirmation policy", () => {
       const catalog = (fixture("resolve-executed-catalog").settlement as {
         catalog: { entries: Record<string, unknown>[] };
       }).catalog;
       const [, , move] = catalog.entries;
+      const style = {
+        ...move,
+        command: "loom.set-style",
+        approval: "automatic",
+      };
+      expect(HARNESS_SUPPORTED_CLIENT_FEATURES).toContain(
+        "automatic_mutations",
+      );
       expect(
         readHarnessCommandCatalog({
-          entries: [{ ...move, approval: "automatic" }],
+          entries: [style],
         }),
-      ).toBeUndefined();
+      ).toEqual({ entries: [style] });
+      expect(
+        readHarnessCommandCatalog({
+          entries: [{ ...style, approval: "unrestricted" }],
+        }),
+      )
+        .toBeUndefined();
     });
   });
 

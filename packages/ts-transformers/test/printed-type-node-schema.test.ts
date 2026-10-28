@@ -162,7 +162,7 @@ describe("printed type node schema", () => {
       const scoped = {
         type: "array",
         items: {
-          anyOf: [{ type: "array", items: false }, box({ type: "number" })],
+          anyOf: [box({ type: "number" }), { type: "array", items: false }],
         },
         scope: "user",
       };
@@ -180,13 +180,13 @@ describe("printed type node schema", () => {
         type: "array",
         items: {
           anyOf: [
-            { type: "array", items: false },
             box({
               type: "object",
               properties: { text: { type: "string" } },
               required: ["text"],
               asCell: ["cell"],
             }),
+            { type: "array", items: false },
           ],
         },
         scope: "user",
@@ -828,6 +828,201 @@ export default pattern<{ ref: Ref }>(({ ref }) => ({ ${before}ref, refs: [ref] }
     }
   });
 
+  describe("a generic alias that instantiates itself without end", () => {
+    // Each `Nest<T[]>` is a new type, so no reading of it meets one in
+    // progress, and the nesting bound ends the reading: the innermost level
+    // accepts any value and is reported as not fully read. A plain alias holds
+    // no policy that the unread remainder could discard, so the report is a
+    // warning; a CFC alias's remainder could, and the report is an error.
+
+    const declaration =
+      "type Nest<T> = { v: T; ref: unknown; inner?: Nest<T[]> };";
+
+    /** `level` and each `Nest` level read inside it, outermost first. */
+    function levelsOf(level: Schema): Schema[] {
+      const inner = (level.properties as Record<string, Schema>).inner!;
+      const next = (inner.anyOf as Schema[] | undefined)?.find((member) =>
+        member.type === "object"
+      );
+      return next ? [level, ...levelsOf(next)] : [level];
+    }
+
+    /**
+     * Expects `nested` to read each level's `v` one array deeper than the
+     * last, down to an `inner` that accepts any value.
+     */
+    function expectReadToBound(nested: Schema): void {
+      const levels = levelsOf(nested);
+      const values = levels.map((level) =>
+        (level.properties as Record<string, Schema>).v
+      );
+      let expected: Schema = { type: "string" };
+      const expectedValues = levels.map(() => {
+        const value = expected;
+        expected = { type: "array", items: value };
+        return value;
+      });
+
+      expect(levels.length).toBeGreaterThan(1);
+      expect(values).toEqual(expectedValues);
+      expect((levels.at(-1)!.properties as Record<string, Schema>).inner)
+        .toEqual({ anyOf: [{}, { type: "undefined" }] });
+    }
+
+    /** Expects `diagnostics` to report the unread remainder as a warning. */
+    function expectUnreadWarning(
+      diagnostics: readonly TransformationDiagnostic[],
+    ): void {
+      const reported = diagnostics.filter((diagnostic) =>
+        diagnostic.type === "schema-type:unread" ||
+        diagnostic.type === "cfc-schema:recursion-limit"
+      );
+
+      expect(reported.length).toBeGreaterThan(0);
+      for (const { type, severity } of reported) {
+        expect({ type, severity }).toEqual({
+          type: "schema-type:unread",
+          severity: "warning",
+        });
+      }
+    }
+
+    it("reads a result printed from an inferred type to the nesting bound", async () => {
+      const diagnostics: TransformationDiagnostic[] = [];
+      const files = await transformFiles({
+        "/main.tsx": `/// <cts-enable />
+import { pattern } from "commonfabric";
+${declaration}
+function nest(): Nest<string> { return { v: "", ref: 1 }; }
+export default pattern(() => ({ nested: nest() }));`,
+      }, {
+        types: COMMONFABRIC_TYPES,
+        typeCheck: true,
+        pipelineDiagnostics: diagnostics,
+      });
+      const { output } = patternSchemas(parseModule(files["/main.tsx"]!));
+
+      expectReadToBound((output.properties as Record<string, Schema>).nested!);
+      expectUnreadWarning(diagnostics);
+    });
+
+    it("reads an annotated binding to the nesting bound, on both sides", async () => {
+      const diagnostics: TransformationDiagnostic[] = [];
+      const files = await transformFiles({
+        "/main.tsx": `/// <cts-enable />
+import { pattern } from "commonfabric";
+${declaration}
+export default pattern<{ a: Nest<string> }>(({ a }) => ({ a }));`,
+      }, {
+        types: COMMONFABRIC_TYPES,
+        typeCheck: true,
+        pipelineDiagnostics: diagnostics,
+      });
+      const { input, output } = patternSchemas(
+        parseModule(files["/main.tsx"]!),
+      );
+
+      for (const root of [input, output]) {
+        expectReadToBound((root.properties as Record<string, Schema>).a!);
+      }
+      expectUnreadWarning(diagnostics);
+    });
+
+    for (const member of ["inner?: Nest<T[]>", "children: Nest<T[]>[]"]) {
+      it(`reports the CFC form, as \`${member}\`, printed from an inferred type, as an error`, async () => {
+        const diagnostics: TransformationDiagnostic[] = [];
+        await transformFiles({
+          "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern } from "commonfabric";
+type Nest<T> = Confidential<{ v: T; ${member} }, ["secret"]>;
+function nest(): Nest<string> { return { v: "" } as Nest<string>; }
+export default pattern(() => ({ nested: nest() }));`,
+        }, {
+          types: COMMONFABRIC_TYPES,
+          typeCheck: true,
+          pipelineDiagnostics: diagnostics,
+        });
+
+        expect(
+          diagnostics.filter((diagnostic) =>
+            diagnostic.type === "schema-type:unread" ||
+            diagnostic.type === "cfc-schema:recursion-limit"
+          ).map(({ type, severity }) => ({ type, severity })),
+        ).toEqual([{ type: "cfc-schema:recursion-limit", severity: "error" }]);
+      });
+    }
+
+    for (
+      const [form, source] of [
+        [
+          "printed from an inferred type",
+          `function tup(): Tup<string> { return [""]; }
+export default pattern(() => ({ a: tup() }));`,
+        ],
+        [
+          "annotated",
+          "export default pattern<{ a: Tup<string> }>(({ a }) => ({ a }));",
+        ],
+      ] as const
+    ) {
+      it(`reports a tuple alias that instantiates itself without end, ${form}, as unread`, async () => {
+        // `Tup<T[]>` is read by its instantiation, whose arguments differ at
+        // each level, so the nesting bound under bindings never finds it
+        // repeated; the cut by the instantiations it is read within ends it.
+
+        const diagnostics: TransformationDiagnostic[] = [];
+        const files = await transformFiles({
+          "/main.tsx": `/// <cts-enable />
+import { pattern } from "commonfabric";
+type Tup<T> = [T, Tup<T[]>?];
+${source}`,
+        }, {
+          types: COMMONFABRIC_TYPES,
+          typeCheck: true,
+          pipelineDiagnostics: diagnostics,
+        });
+        const { output } = patternSchemas(parseModule(files["/main.tsx"]!));
+
+        expect(((output.properties as Record<string, Schema>).a!).type)
+          .toBe("array");
+        expectUnreadWarning(diagnostics);
+      });
+    }
+  });
+
+  describe("a finite chain of one declaration that shrinks toward its end", () => {
+    it("reads every level of an annotated binding, more than the recursion cut allows", async () => {
+      // Each level is a newer instantiation of `Chain`, as in a recursion
+      // without end, but the chain ends after twelve levels. Read under
+      // bindings, a declaration is left to the nesting bound, which reads it
+      // to its end.
+
+      const ones = Array.from({ length: 12 }, () => "1").join(", ");
+      const diagnostics: TransformationDiagnostic[] = [];
+      const files = await transformFiles({
+        "/main.tsx": `/// <cts-enable />
+import { pattern } from "commonfabric";
+interface Chain<N extends unknown[]> {
+  value: string;
+  next?: N extends [unknown, ...infer R] ? Chain<R> : { end: number };
+}
+export default pattern<{ a: Chain<[${ones}]> }>(({ a }) => ({ a }));`,
+      }, {
+        types: COMMONFABRIC_TYPES,
+        typeCheck: true,
+        pipelineDiagnostics: diagnostics,
+      });
+      const { input } = patternSchemas(parseModule(files["/main.tsx"]!));
+
+      expect(JSON.stringify(input)).toContain('"end"');
+      expect(
+        diagnostics.filter((diagnostic) =>
+          diagnostic.type === "schema-type:unread"
+        ),
+      ).toEqual([]);
+    });
+  });
+
   describe("a printed result type that holds CFC labels", () => {
     const policy = {
       type: "https://commonfabric.org/cfc/atom/Policy",
@@ -1159,11 +1354,13 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
       }
     });
 
-    describe("a CFC alias whose type the checker reduced", () => {
-      // `Confidential<string | null, …>` is `string & carrier` once
-      // `null & carrier` is nothing, and the reduced type keeps no alias name.
-      // A written reference still names the policy; a type alone has only its
-      // carrier, which holds the labels but cannot spell a writer binding.
+    describe("a CFC alias around a nullable payload", () => {
+      // `Confidential<string | null, …>` is `(string & carrier) | null`: the
+      // carrier distributes over the payload's members and leaves `null`
+      // beside them, so the type keeps both `null` and the alias's name, and
+      // the result reads as the argument does. A writer binding is the
+      // exception, which only a written reference spells, so the result,
+      // read from its type, has none.
       const TITLE_AND_RANK = {
         type: "object",
         properties: { title: { type: "string" }, rank: { type: "number" } },
@@ -1179,7 +1376,10 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
               anyOf: [{ type: "string" }, { type: "null" }],
               ifc: { confidentiality: ["secret"] },
             },
-            { type: "string", ifc: { confidentiality: ["secret"] } },
+            {
+              anyOf: [{ type: "string" }, { type: "null" }],
+              ifc: { confidentiality: ["secret"] },
+            },
           ],
           [
             "a nullable object written directly",
@@ -1197,9 +1397,14 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
               ifc: { confidentiality: ["secret"] },
             },
             {
-              type: "object",
-              properties: { title: { type: "string" } },
-              required: ["title"],
+              anyOf: [
+                {
+                  type: "object",
+                  properties: { title: { type: "string" } },
+                  required: ["title"],
+                },
+                { type: "null" },
+              ],
               ifc: { confidentiality: ["secret"] },
             },
           ],
@@ -1218,7 +1423,7 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
                 },
               },
             },
-            { type: "string" },
+            { anyOf: [{ type: "string" }, { type: "null" }] },
           ],
           [
             "a nullable projection",
@@ -1236,9 +1441,14 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
               ifc: { projection: { from: "/", path: "/x~1y/m~0n" } },
             },
             {
-              type: "object",
-              properties: { t: { type: "string" } },
-              required: ["t"],
+              anyOf: [
+                {
+                  type: "object",
+                  properties: { t: { type: "string" } },
+                  required: ["t"],
+                },
+                { type: "null" },
+              ],
               ifc: { projection: { from: "/", path: "/x~1y/m~0n" } },
             },
           ],
@@ -1250,7 +1460,10 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
               anyOf: [{ type: "string" }, { type: "null" }],
               ifc: { confidentiality: ["secret"] },
             },
-            { type: "string", ifc: { confidentiality: ["secret"] } },
+            {
+              anyOf: [{ type: "string" }, { type: "null" }],
+              ifc: { confidentiality: ["secret"] },
+            },
           ],
           [
             "a nullable array in another label's payload",
@@ -1264,8 +1477,10 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
               ifc: { confidentiality: ["secret"], integrity: ["trusted"] },
             },
             {
-              type: "array",
-              items: { type: "string" },
+              anyOf: [
+                { type: "array", items: { type: "string" } },
+                { type: "null" },
+              ],
               ifc: { confidentiality: ["secret"], integrity: ["trusted"] },
             },
           ],
@@ -1277,7 +1492,10 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
               anyOf: [TITLE_AND_RANK, { type: "null" }],
               ifc: { confidentiality: ["secret"] },
             },
-            { ...TITLE_AND_RANK, ifc: { confidentiality: ["secret"] } },
+            {
+              anyOf: [TITLE_AND_RANK, { type: "null" }],
+              ifc: { confidentiality: ["secret"] },
+            },
           ],
           [
             "a nullable intersection in another label's payload",
@@ -1288,7 +1506,7 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
               ifc: { confidentiality: ["secret"], integrity: ["trusted"] },
             },
             {
-              ...TITLE_AND_RANK,
+              anyOf: [TITLE_AND_RANK, { type: "null" }],
               ifc: { confidentiality: ["secret"], integrity: ["trusted"] },
             },
           ],
@@ -1314,7 +1532,7 @@ export default pattern<{ ${fields[order[0]]}; ${fields[order[1]]} }>(
                 },
               },
             },
-            TITLE_AND_RANK,
+            { anyOf: [TITLE_AND_RANK, { type: "null" }] },
           ],
         ] as const
       ) {
@@ -1326,8 +1544,6 @@ ${declaration}
 export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
           }, { types: COMMONFABRIC_TYPES, typeCheck: true });
           const schemas = patternSchemas(parseModule(files["/main.tsx"]!));
-          // The argument is read from its written reference, which keeps
-          // `null`; the result from the reduced type, which has none.
           expect((schemas.input.properties as Schema).a).toEqual(input);
           expect((schemas.output.properties as Schema).a).toEqual(output);
         });
@@ -2832,6 +3048,21 @@ export default pattern<{ value: Secret }>(({ value }) => {
       ).toMatchObject({ ifc: { confidentiality: [policy] } });
     });
 
+    it("reads the policy of a scoped value captured whole once", async () => {
+      expect(
+        await captured({
+          "/main.tsx":
+            `import { computed, pattern, type Confidential, type PerUser } from "commonfabric";
+import { type PolicyOf } from "commonfabric/cfc";
+import { rules } from "./rules.ts";
+interface Secret { a: string; b: string; }
+export default pattern<{ secret: PerUser<Confidential<Secret, [PolicyOf<typeof rules>]>> }>(
+  ({ secret }) => ({ out: computed(() => ({ whole: secret })) }),
+);`,
+        }, "secret"),
+      ).toMatchObject({ ifc: { confidentiality: [policy] }, scope: "user" });
+    });
+
     it("reads the policy of a value an alias of a nullable union names", async () => {
       expect(
         await captured({
@@ -2983,6 +3214,294 @@ export default pattern(() => {
     });
   });
 
+  describe("an inferred result that reads a binding whose annotation names one", () => {
+    // `readers` and `writers` are declared with one type, so only the
+    // annotation each value is read at tells their policies apart.
+    const RULES =
+      `import { type CfcExchangeRulesDeclaration, exchangeRule, exchangeRules, THIS_POLICY } from "commonfabric/cfc";
+const release = (role: string) => exchangeRule({
+  appliesTo: THIS_POLICY,
+  pre: { integrity: [role] },
+  post: { dropClause: true },
+});
+export const readers: CfcExchangeRulesDeclaration = exchangeRules([release("reader")]);
+export const writers: CfcExchangeRulesDeclaration = exchangeRules([release("writer")]);`;
+
+    const policy = (binding: string) => ({
+      confidentiality: [{
+        type: "https://commonfabric.org/cfc/atom/Policy",
+        policyRefKind: "module",
+        __ctPolicyIdentityOf: { file: "/rules.ts", path: [binding] },
+      }],
+    });
+
+    /**
+     * The result schema of the one `computed()` in a module whose pattern
+     * takes `input` and returns `result`, and a reader of the pattern's own.
+     */
+    async function inferred(
+      input: string,
+      result: string,
+    ): Promise<{ lift?: Schema; pattern: () => Schema }> {
+      const output = await transformFiles({
+        "/rules.ts": RULES,
+        "/main.tsx":
+          `import { computed, pattern, type Confidential } from "commonfabric";
+import { type PolicyOf } from "commonfabric/cfc";
+import { readers, writers } from "./rules.ts";
+export default pattern<{ ${input} }>(({ a, b }) => (${result}));`,
+      }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+      const root = parseModule(output["/main.tsx"]!);
+      const [lift] = callsNamed(root, "lift");
+      const resultSchema = lift?.arguments[2];
+      return {
+        ...(resultSchema && ts.isSatisfiesExpression(resultSchema) && {
+          lift: literalToValue(resultSchema.expression) as Schema,
+        }),
+        pattern: () => patternSchemas(root).output.properties as Schema,
+      };
+    }
+
+    it("reads the policy of a lift's result member written from a binding", async () => {
+      const { lift, pattern } = await inferred(
+        "a: Confidential<string[], [PolicyOf<typeof readers>]>; b: string",
+        "{ out: computed(() => ({ whole: a, length: a.length })) }",
+      );
+
+      expect((lift!.properties as Schema).whole).toMatchObject({
+        ifc: policy("readers"),
+      });
+      expect(
+        ((pattern().out as Schema).properties as Schema).whole,
+      ).toMatchObject({ ifc: policy("readers") });
+    });
+
+    it("reads the policy of a lift's result member written from a nullable binding", async () => {
+      const { lift } = await inferred(
+        "a: Confidential<string[] | null, [PolicyOf<typeof readers>]>; b: string",
+        "{ out: computed(() => ({ whole: a, length: a?.length })) }",
+      );
+
+      expect((lift!.properties as Schema).whole).toMatchObject({
+        ifc: policy("readers"),
+      });
+    });
+
+    it("reads the policy of a lift's result that returns a binding", async () => {
+      const { lift } = await inferred(
+        "a: Confidential<string[], [PolicyOf<typeof readers>]>; b: string",
+        "{ out: computed(() => a) }",
+      );
+
+      expect(lift).toMatchObject({ ifc: policy("readers") });
+    });
+
+    for (
+      const [form, result] of [
+        ["in parentheses", "{ out: computed(() => (a)) }"],
+        [
+          "in parentheses from a block",
+          "{ out: computed(() => { return (a); }) }",
+        ],
+      ]
+    ) {
+      it(`reads the policy of a lift's result that returns a binding ${form}`, async () => {
+        const { lift } = await inferred(
+          "a: Confidential<string[], [PolicyOf<typeof readers>]>; b: string",
+          result!,
+        );
+
+        expect(lift).toMatchObject({ ifc: policy("readers") });
+      });
+    }
+
+    it("reads the policy of a lift's result member written from a binding in parentheses", async () => {
+      const { lift } = await inferred(
+        "a: Confidential<string[], [PolicyOf<typeof readers>]>; b: string",
+        "{ out: computed(() => ({ whole: (a), length: a.length })) }",
+      );
+
+      expect((lift!.properties as Schema).whole).toMatchObject({
+        ifc: policy("readers"),
+      });
+    });
+
+    it("reads the policy of a pattern's result member written from a binding", async () => {
+      const { pattern } = await inferred(
+        "a: Confidential<string[], [PolicyOf<typeof readers>]>; b: string",
+        "{ out: a }",
+      );
+
+      expect(pattern().out).toMatchObject({ ifc: policy("readers") });
+    });
+
+    it("reads the policy of a lift's result element written from a binding in an array literal", async () => {
+      // The element's type spells the policy as its brand; the literal's one
+      // element reads the binding, so the element is read at its annotation,
+      // in the lift's result and in the pattern's member holding it.
+      const { lift, pattern } = await inferred(
+        "a: Confidential<string[], [PolicyOf<typeof readers>]>; b: string",
+        "{ out: computed(() => [a]) }",
+      );
+
+      expect(lift!.items).toMatchObject({ ifc: policy("readers") });
+      expect((pattern().out as Schema).items).toMatchObject({
+        ifc: policy("readers"),
+      });
+    });
+
+    it("reads the policy of a pattern's result member holding a lift that returns a binding", async () => {
+      const { lift, pattern } = await inferred(
+        "a: Confidential<string[], [PolicyOf<typeof readers>]>; b: string",
+        "{ out: computed(() => a) }",
+      );
+
+      expect(lift).toMatchObject({ ifc: policy("readers") });
+      expect(pattern().out).toMatchObject({ ifc: policy("readers") });
+    });
+
+    it("leaves a lift's result element unread where the literal's elements read bindings declared apart", async () => {
+      // The elements' annotations differ, and no one annotation denotes the
+      // element type, so the print stays as the type spells it: the policy's
+      // brand with no binding, which the schema carries as it read it.
+      const output = await transformFiles({
+        "/rules.ts": RULES,
+        "/main.tsx":
+          `import { computed, pattern, type Confidential } from "commonfabric";
+import { type PolicyOf } from "commonfabric/cfc";
+import { readers, writers } from "./rules.ts";
+export default pattern<{ a: Confidential<string[], [PolicyOf<typeof readers>]>; b: Confidential<string[], [PolicyOf<typeof writers>]> }>(({ a, b }) => ({ out: computed(() => [a, b]) }));`,
+      }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+
+      expect(output["/main.tsx"]).toContain("__ct_cfc_policy_of__: undefined");
+    });
+
+    /**
+     * The emitted module for `main`, beside the rules module: its text, the
+     * first lift's result schema where that is a literal, and the pattern's
+     * result properties.
+     */
+    const emitted = async (main: string) => {
+      const output = await transformFiles({
+        "/rules.ts": RULES,
+        "/main.tsx":
+          `import { computed, pattern, type Confidential } from "commonfabric";
+import { type PolicyOf } from "commonfabric/cfc";
+import { readers, writers } from "./rules.ts";
+${main}`,
+      }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+      const text = output["/main.tsx"]!;
+      const root = parseModule(text);
+      const [lift] = callsNamed(root, "lift");
+      const resultSchema = lift?.arguments[2];
+      let liftResult: Schema | undefined;
+      try {
+        liftResult = resultSchema && ts.isSatisfiesExpression(resultSchema)
+          ? literalToValue(resultSchema.expression) as Schema
+          : undefined;
+      } catch {
+        // A schema holding an unread atom writes `undefined`, which is no
+        // literal; such a schema is read from the text instead.
+        liftResult = undefined;
+      }
+      return {
+        text,
+        lift: liftResult,
+        pattern: () => patternSchemas(root).output.properties as Schema,
+      };
+    };
+
+    it("reads the policy of a lift's result element written from a binding in a parenthesized array literal", async () => {
+      const { lift } = await emitted(
+        `export default pattern<{ a: Confidential<string[], [PolicyOf<typeof readers>]> }>(({ a }) => ({ out: computed(() => ([a])) }));`,
+      );
+
+      expect(lift!.items).toMatchObject({ ifc: policy("readers") });
+    });
+
+    it("reads the policy of a lift's result elements written from two bindings annotated alike in full", async () => {
+      const { lift } = await emitted(
+        `export default pattern<{ a: Confidential<string[], [PolicyOf<typeof readers>]>; b: Confidential<string[], [PolicyOf<typeof readers>]> }>(({ a, b }) => ({ out: computed(() => [a, b]) }));`,
+      );
+
+      expect(lift!.items).toMatchObject({ ifc: policy("readers") });
+    });
+
+    it("leaves a lift's result element unread where the literal spreads a binding or reads a member of one", async () => {
+      // A spread stands for elements of the list it is, and a member read is
+      // no binding, so neither spells the element at an annotation.
+      const spread = await emitted(
+        `export default pattern<{ a: Confidential<string[], [PolicyOf<typeof readers>]> }>(({ a }) => ({ out: computed(() => [...a]) }));`,
+      );
+      const member = await emitted(
+        `export default pattern<{ a: Confidential<string[], [PolicyOf<typeof readers>]> }>(({ a }) => ({ out: computed(() => [a.length]) }));`,
+      );
+
+      expect(spread.lift).toEqual({ type: "array", items: { type: "string" } });
+      expect(member.lift).toEqual({ type: "array", items: { type: "number" } });
+    });
+
+    it("leaves a pattern's result element unread where an element has no authored type, or the literal spreads one", async () => {
+      // A literal element has no declaration to read, and a spread stands for
+      // the elements of the list it is, so the member is printed from its type.
+      const mixed = await emitted(
+        `export default pattern<{ a: Confidential<string[], [PolicyOf<typeof readers>]> }>(({ a }) => ({ mixed: ["x", a] }));`,
+      );
+      const spread = await emitted(
+        `export default pattern<{ b: string[] }>(({ b }) => ({ spread: [...b] }));`,
+      );
+
+      expect(mixed.text).toContain("__ct_cfc_policy_of__: undefined");
+      expect(spread.pattern().spread).toEqual({
+        type: "array",
+        items: { type: "string" },
+      });
+    });
+
+    it("reads a pattern's result member holding a lift with no binding to read from its type", async () => {
+      const { pattern } = await emitted(
+        `export default pattern<{ a: Confidential<string[], [PolicyOf<typeof readers>]> }>(({ a }) => ({ out: computed(() => a.length) }));`,
+      );
+
+      expect(pattern().out).toEqual({ type: "number" });
+    });
+
+    it("reads the policy of a pattern's result element declared by a local annotation over an unlabelled input", async () => {
+      // The annotation introduces the label, so nothing else carries it; the
+      // member reads the element at that annotation.
+      const output = await transformFiles({
+        "/rules.ts": RULES,
+        "/main.tsx": `import { pattern, type Confidential } from "commonfabric";
+import { type PolicyOf } from "commonfabric/cfc";
+import { readers } from "./rules.ts";
+export default pattern<{ a: string }>(({ a }) => {
+  const secret: Confidential<string, [PolicyOf<typeof readers>]> = a;
+  return { out: [secret] };
+});`,
+      }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+      const out = patternSchemas(parseModule(output["/main.tsx"]!)).output
+        .properties as Schema;
+
+      expect((out.out as Schema).items).toMatchObject({
+        ifc: policy("readers"),
+      });
+    });
+
+    it("reads each member at its own binding's policy where the two policies' rules share a type", async () => {
+      const { lift } = await inferred(
+        "a: Confidential<string, [PolicyOf<typeof readers>]>; b: Confidential<string, [PolicyOf<typeof writers>]>",
+        "{ out: computed(() => ({ r: a, w: b })) }",
+      );
+
+      expect((lift!.properties as Schema).r).toMatchObject({
+        ifc: policy("readers"),
+      });
+      expect((lift!.properties as Schema).w).toMatchObject({
+        ifc: policy("writers"),
+      });
+    });
+  });
+
   describe("a pass reading inside a print", () => {
     // A pass that narrows, shrinks, or marks identity inside a print reads the
     // print's unfolding, each part printed afresh from its type, and leaves no
@@ -3102,6 +3621,71 @@ export default pattern<Record<string, never>>(() => {
         .toEqual({
           type: "boolean",
           asCell: [{ kind: "readonly", scope: "session" }],
+        });
+    });
+
+    it("writes a scoped value's print as its scope wrapper", async () => {
+      // Assignment narrows the declared type to the brand distributed over
+      // `false` and `true`, a type with no alias, so the print is written as
+      // the wrapper around its payload rather than as the payload intersected
+      // with the brand. The payload is printed whole, joining the `false` and
+      // `true` the brand was distributed over.
+      const output = await transformSource(
+        `import { computed, pattern, UI, type PerUser } from "commonfabric";
+export default pattern<{ owner: string; me: string }>(({ owner, me }) => {
+  const isOwner: PerUser<boolean> | null = computed(() => owner === me);
+  const label = computed(() => (isOwner ? "yes" : "no"));
+  return { [UI]: <div>{label}</div> };
+});`,
+        { types: COMMONFABRIC_TYPES, typeCheck: true },
+      );
+      const root = parseModule(output);
+      const captures = callsNamed(root, "lift")
+        .map((lift) => lift.typeArguments![0]! as ts.TypeLiteralNode)
+        .flatMap((literal) => literal.members.filter(ts.isPropertySignature))
+        .find((member) => member.name.getText(root) === "isOwner")!;
+
+      expect(captures.type!.getText(root)).toBe(
+        "__cfHelpers.PerUser<boolean>",
+      );
+    });
+
+    it("writes a nullable scoped boolean's capture as the wrapper around the whole payload", async () => {
+      // `PerUser<boolean> | null` resolves to `null` beside the brand
+      // distributed over `false` and `true`. The shrunk capture rejoins the
+      // literals and keeps `null` inside the wrapper, where its scope sits at
+      // the top of the slot.
+      const output = await transformSource(
+        `import { computed, pattern, UI, Writable, type PerUser } from "commonfabric";
+export default pattern<Record<string, never>>(() => {
+  const ownerState = new Writable.perUser<boolean | null>(null);
+  const isOwner: PerUser<boolean> | null = computed(
+    (): PerUser<boolean> | null => ownerState.get(),
+  );
+  const label = computed(() => (isOwner !== false ? "yes" : "no"));
+  return { [UI]: <div>{label}</div> };
+});`,
+        { types: COMMONFABRIC_TYPES, typeCheck: true },
+      );
+      const root = parseModule(output);
+      const capture = callsNamed(root, "lift")
+        .flatMap((lift) =>
+          (lift.typeArguments![0]! as ts.TypeLiteralNode).members
+        )
+        .find((member) =>
+          member.name?.getText(root) === "isOwner"
+        ) as ts.PropertySignature;
+      const schema = callSchemas(root, "lift").find((schema) =>
+        (schema.properties as Schema | undefined)?.isOwner
+      )!;
+
+      expect(capture.type!.getText(root)).toBe(
+        "__cfHelpers.PerUser<boolean | null>",
+      );
+      expect((schema.properties as Schema).isOwner)
+        .toEqual({
+          anyOf: [{ type: "boolean" }, { type: "null" }],
+          scope: "user",
         });
     });
 

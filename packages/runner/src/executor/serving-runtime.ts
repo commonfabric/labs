@@ -1,16 +1,25 @@
 /**
  * The runtime factory an `ExecutorHost` builds its per-space serving runtimes
- * with: a runtime over a loopback storage manager on the co-hosted memory
- * server, signing its session opens as the service identity, in the serving
- * posture. It is the one construction of a serving runtime, so a test that
- * builds its host with it serves its spaces the way a deployment does.
+ * with: a runtime over a loopback storage manager on the memory server,
+ * reached in-process or over transports from the thread that holds it,
+ * signing its session opens as the service identity, in the serving posture.
+ * It is the one construction of a serving runtime, so a test that builds its
+ * host with it serves its spaces the way a deployment does.
  */
 
-import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
-import { type ExperimentalOptions, Runtime } from "../runtime.ts";
+import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
+import {
+  type ExperimentalOptions,
+  type ModuleByteCache,
+  Runtime,
+  type RuntimeFetch,
+} from "../runtime.ts";
 import type { ExecutorHostOptions } from "./host.ts";
-import { LoopbackStorageManager } from "./loopback-storage.ts";
+import {
+  type LoopbackPlane,
+  LoopbackStorageManager,
+} from "./loopback-storage.ts";
 
 /**
  * The flags a serving runtime runs regardless of the flags it is otherwise
@@ -24,8 +33,14 @@ export const SERVING_RUNTIME_EXPERIMENTAL = {
 
 /** What {@link servingRuntimeFactory} builds each serving runtime from. */
 export type ServingRuntimeFactoryOptions = {
-  /** The co-hosted memory server the loopback storage plane connects to. */
-  server: MemoryServer;
+  /** Application and loaded labs build reported by each serving runtime. */
+  clientBuild?: ClientBuild;
+
+  /**
+   * The co-hosted memory server the loopback storage plane connects to, or
+   * the transports that reach it from another thread.
+   */
+  server: LoopbackPlane;
 
   /** Signs the serving sessions' `session.open`; the host's service identity. */
   identity: Signer;
@@ -34,10 +49,28 @@ export type ServingRuntimeFactoryOptions = {
   apiUrl: URL;
 
   /**
+   * The outbound `fetch` each serving runtime uses for its source loads and
+   * network builtins. Toolshed passes one that sends requests addressed to
+   * `apiUrl`, its public origin, to its own listener (`API_INTERNAL_URL`);
+   * `apiUrl` itself stays the public origin, since it is also what the
+   * runtime records as a space's host and compares origins against. Unset,
+   * the platform fetch.
+   */
+  fetch?: RuntimeFetch;
+
+  /**
    * Experimental flags for the serving runtimes, with
    * {@link SERVING_RUNTIME_EXPERIMENTAL} applied on top.
    */
   experimental?: ExperimentalOptions;
+
+  /**
+   * A cache of compiled module bytes every serving runtime the factory builds
+   * shares, so the root pattern a space's activation compiles is transformed
+   * and emitted once per process rather than once per space. Absent, each
+   * runtime compiles from its space's storage closure alone.
+   */
+  moduleByteCache?: ModuleByteCache;
 
   /**
    * Called with each serving runtime's storage manager before the runtime
@@ -62,10 +95,15 @@ export function servingRuntimeFactory(
   return (space, context) => {
     const storageManager = LoopbackStorageManager.connect(options.server, {
       as: options.identity,
+      clientBuild: options.clientBuild,
       // Naming the home space makes the manager's foreign-space providers
-      // refuse scoped reads, fail-closed (protocol.md §2's grant-scoped read
-      // design).
+      // gate scoped reads: admitted on the reading actor's own READ grant
+      // in the foreign space, which the server's probe resolves, refused
+      // otherwise (protocol.md §2's grant-scoped read).
       servingHomeSpace: space,
+      ...(context.foreignScopedReadGrant === undefined
+        ? {}
+        : { foreignScopedReadGrant: context.foreignScopedReadGrant }),
     });
     // Installed ahead of the runtime, so no read this factory could ever
     // perform reaches the session.
@@ -75,6 +113,7 @@ export function servingRuntimeFactory(
     const release = options.prepareStorageManager?.(storageManager, space);
     const runtime = new Runtime({
       apiUrl: options.apiUrl,
+      ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
       storageManager,
       // The SpaceServer's own runtime (serving-loop.md §3): never the
       // speculation-overlay default. Its factory-time loads commit through
@@ -85,6 +124,9 @@ export function servingRuntimeFactory(
         ...options.experimental,
         ...SERVING_RUNTIME_EXPERIMENTAL,
       },
+      ...(options.moduleByteCache === undefined
+        ? {}
+        : { moduleByteCache: options.moduleByteCache }),
     });
     return Promise.resolve({
       runtime,

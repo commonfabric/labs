@@ -49,8 +49,15 @@
 # console. The identity keyfile is read from CF_HARNESS_FABRIC_IDENTITY in the
 # environment and never echoed, logged, or copied.
 #
-# Requires: docker with the runsc-cfc runtime, network (GitHub + skills.sh), a
-# running toolshed, and the pinned Deno on PATH.
+# Requires: the native runsc runtime set up for this platform (the cfc-vm
+# store on an Apple-silicon Mac, the runsc-cfc store on Linux), network
+# (GitHub + skills.sh), a running toolshed, and the pinned Deno on PATH. The
+# run takes the platform's default sandbox runtime unless the environment names
+# one in CF_HARNESS_SANDBOX_RUNTIME. On Linux the default network also needs
+# pasta and setpriv on PATH, unshare too for root, and for a user that is not
+# root a host that allows unprivileged user namespaces; each refusal names what
+# is missing, or the `sysctl -w` that allows them. CF_HARNESS_DOCKER_NETWORK_MODE
+# set to none or host needs none of them.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # packages/cf-harness
@@ -78,10 +85,6 @@ ACQUIRE_SKILL_SCRIPT="${ACQUIRE_SKILL_SCRIPT:-scripts/category-budgets.sh}"
 ARTIFACT_ROOT="${ARTIFACT_ROOT:-$here/.cf-harness-hostile-demo}"
 WORKSPACE="${WORKSPACE:-$ARTIFACT_ROOT/workspace}"
 MAX_TURNS="${MAX_TURNS:-40}"
-
-: "${CF_HARNESS_RUNSC_CFC_RESULT_DIR:=$HOME/.local/share/runsc-cfc/sidecars/results}"
-: "${CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR:=$HOME/.local/share/runsc-cfc/sidecars/invocation-context}"
-export CF_HARNESS_RUNSC_CFC_RESULT_DIR CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR
 
 mkdir -p "$ARTIFACT_ROOT" "$WORKSPACE"
 RESULT_JSON="$ARTIFACT_ROOT/result.json"
@@ -183,6 +186,7 @@ echo "acquire id:    $ACQUIRE_SKILL_ID"
 echo "acquired pin:  $ACQUIRE_SKILL_ID@$ACQUIRE_COMMIT"
 echo "allowed:       $ACQUIRE_SKILL_SCRIPT (run_skill_script at that pin)"
 echo "posture:       max-enforcement / enforce-strict / flow-labels persist"
+echo "sandbox:       ${CF_HARNESS_SANDBOX_RUNTIME:-the platform default} (CF_HARNESS_SANDBOX_RUNTIME)"
 echo
 
 set +e

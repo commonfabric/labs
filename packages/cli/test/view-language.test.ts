@@ -1,7 +1,7 @@
 /**
- * Language selection: declarative metadata covers filenames, aliases, and
- * shebangs, with plain text when none match. Transformed compiler output selects
- * TypeScript through a separate path. `languageMatchingSources` falls back from
+ * Language selection: declarative metadata covers filenames, aliases,
+ * shebangs, and signatures, with plain text when none match. Transformed
+ * compiler output selects TypeScript through a separate path. `languageMatchingSources` falls back from
  * filenames to content evidence, and `diffSemanticsFor` composes the diff view's
  * semantic layer from the languages present, scoped to each one's files.
  */
@@ -39,9 +39,12 @@ import { pythonLanguage } from "../lib/view/languages/python/language.ts";
 import { swiftLanguage } from "../lib/view/languages/swift/language.ts";
 import { kotlinLanguage } from "../lib/view/languages/kotlin/language.ts";
 import { tomlLanguage } from "../lib/view/languages/toml/language.ts";
+import { hclLanguage } from "../lib/view/languages/hcl/language.ts";
 import { shellLanguage } from "../lib/view/languages/shell/language.ts";
+import { makeLanguage } from "../lib/view/languages/make/language.ts";
 import { propertiesLanguage } from "../lib/view/languages/properties/language.ts";
 import { proguardLanguage } from "../lib/view/languages/proguard/language.ts";
+import { iniLanguage } from "../lib/view/languages/ini/language.ts";
 import { xmlLanguage } from "../lib/view/languages/xml/language.ts";
 import { binaryLanguage } from "../lib/view/languages/binary/language.ts";
 import { plainTextLanguage } from "../lib/view/languages/plain-text/language.ts";
@@ -79,6 +82,7 @@ Deno.test("language metadata matches extensions, exact names, and compound patte
     filenamePatterns: [/^Dockerfile\..+$/i],
     aliases: ["example"],
     interpreters: ["example-runner"],
+    signatures: [],
     sharedExtensions: [{ extension: ".shared", content: /^demo:/ }],
   };
 
@@ -98,6 +102,7 @@ Deno.test("language metadata claims a shared extension only with its evidence", 
     filenamePatterns: [],
     aliases: [],
     interpreters: [],
+    signatures: [],
     sharedExtensions: [{ extension: ".shared", content: /^demo:/ }],
   };
 
@@ -142,13 +147,21 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("kotlin"), kotlinLanguage);
   assertEquals(languageForName("kt"), kotlinLanguage);
   assertEquals(languageForName("toml"), tomlLanguage);
+  assertEquals(languageForName("hcl"), hclLanguage);
+  assertEquals(languageForName("opentofu"), hclLanguage);
+  assertEquals(languageForName("terraform"), hclLanguage);
   assertEquals(languageForName("shell"), shellLanguage);
   assertEquals(languageForName("sh"), shellLanguage);
   assertEquals(languageForName("bash"), shellLanguage);
+  assertEquals(languageForName("make"), makeLanguage);
+  assertEquals(languageForName("makefile"), makeLanguage);
+  assertEquals(languageForName("mk"), makeLanguage);
   assertEquals(languageForName("properties"), propertiesLanguage);
   assertEquals(languageForName("java-properties"), propertiesLanguage);
   assertEquals(languageForName("proguard"), proguardLanguage);
   assertEquals(languageForName("r8"), proguardLanguage);
+  assertEquals(languageForName("ini"), iniLanguage);
+  assertEquals(languageForName("dosini"), iniLanguage);
   assertEquals(languageForName("xml"), xmlLanguage);
   assertEquals(languageForName("svg"), xmlLanguage);
   assertEquals(languageForName("plist"), xmlLanguage);
@@ -168,8 +181,11 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "swift",
     "kotlin",
     "toml",
+    "hcl",
     "shell",
+    "make",
     "properties",
+    "ini",
     "proguard",
     "xml",
     "binary",
@@ -195,11 +211,22 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "kotlin",
     "kt",
     "toml",
+    "hcl",
+    "opentofu",
+    "tofu",
+    "terraform",
+    "tf",
     "shell",
     "sh",
     "bash",
+    "make",
+    "makefile",
+    "mk",
     "properties",
     "java-properties",
+    "ini",
+    "dosini",
+    "cfg",
     "proguard",
     "r8",
     "xml",
@@ -589,7 +616,10 @@ describe("languageMatchingSources()", () => {
     expect(languageMatchingSources("tool", sources())).toBe(pythonLanguage);
     expect(read).toEqual(["workspace", "hunk"]);
     expect(
-      languageMatchingSources("settings.cfg", ["[defaults]\n", '{"a": 1}\n']),
+      languageMatchingSources("settings.cfg", [
+        "SPECIFICATION Spec\n",
+        '{"a": 1}\n',
+      ]),
     ).toBe(jsonLanguage);
   });
 

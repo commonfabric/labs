@@ -14,6 +14,7 @@ import {
   prepareSnapshotShare,
   type SnapshotShareConsent,
 } from "../src/cfc/share-snapshot.ts";
+import { hostGestureProvenance } from "../src/cfc/host-review.ts";
 import { markRendererTrustedEvent } from "../src/cfc/ui-contract.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -28,11 +29,7 @@ const third = await Identity.fromPassphrase("snapshot-share-third");
 const trustedClick = () => {
   const event = {
     type: "click",
-    provenance: {
-      origin: "dom",
-      trusted: true,
-      ui: { pattern: "ShareSnapshot" },
-    },
+    provenance: hostGestureProvenance("ShareSnapshot"),
   };
   markRendererTrustedEvent(event);
   return event;
@@ -430,11 +427,7 @@ describe("cfc-share-snapshot", () => {
       });
       await expect(commitSnapshotShare(untrusted.consent, {
         type: "click",
-        provenance: {
-          origin: "dom",
-          trusted: true,
-          ui: { pattern: "ShareSnapshot" },
-        },
+        provenance: hostGestureProvenance("ShareSnapshot"),
       })).rejects.toThrow(/trusted host share gesture/);
       const genuine = prepareSnapshotShare(fixture.source, {
         user: fixture.recipient,

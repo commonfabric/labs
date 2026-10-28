@@ -5,6 +5,12 @@
  */
 
 import { encodeHex } from "@std/encoding/hex";
+import type {
+  PatternIndexPattern,
+  PatternIndexProgram,
+  PatternIndexSearchRequest,
+  PatternIndexSearchResponse,
+} from "@commonfabric/pattern-index/client";
 import { sha256 } from "@commonfabric/content-hash";
 import {
   computeEntryIdentity,
@@ -43,7 +49,8 @@ import type { HarnessDocsCorpus } from "../docs-corpus/corpus.ts";
 import { findSectionPassage, rankSections } from "../docs-corpus/sections.ts";
 import { errorMessage } from "../error-message.ts";
 import { inputCellsContextMessage } from "../input-cells.ts";
-import { ORIENTATION_GUIDANCE } from "../orientation.ts";
+import { orientationGuidance } from "../orientation.ts";
+import { DEFAULT_HARNESS_RUN_DEPTH } from "../contracts/run-depth.ts";
 import { PATTERN_COMPOSITION_GUIDANCE } from "../pattern-authoring.ts";
 import { PIECE_TARGETING_GUIDANCE } from "../piece-targeting.ts";
 import type {
@@ -51,19 +58,16 @@ import type {
   HarnessModelClient,
   HarnessModelUsage,
 } from "../model/client.ts";
-import type {
-  PatternIndexPattern,
-  PatternIndexProgram,
-  PatternIndexSearchRequest,
-  PatternIndexSearchResponse,
-} from "../pattern-index/client.ts";
 import { patternIndexDependencies } from "../pattern-index/composition.ts";
 import type { DescribeHandleResearchResult } from "../tools/describe-handle.ts";
 import {
   patternIndexDeclaredType,
   patternIndexImportHint,
 } from "../tools/search-patterns.ts";
-import { parseStructuredResultJson } from "../structured-result.ts";
+import {
+  parseStructuredResultJson,
+  validateStructuredResultValue,
+} from "../structured-result.ts";
 import {
   admitResearchResult,
   type RawResearchResult,
@@ -520,10 +524,14 @@ const sourceCatalog = (state: ResearchState): string =>
     "A documentation source location includes its section-N reopen argument. Pass that sectionId to open_doc_section; never pass a documentation:* sourceId as sectionId.",
   ].join("\n");
 
-const researchModel = (providerId: string): string =>
+/** The cheap model a provider's private calls run on. */
+export const researchModel = (providerId: string): string =>
   providerId === "openai-codex" ? RESEARCH_CODEX_MODEL : RESEARCH_MODEL;
 
-const systemPrompt = (purpose?: HarnessResearchPurpose): string =>
+const systemPrompt = (
+  purpose: HarnessResearchPurpose | undefined,
+  patternIndex: boolean,
+): string =>
   [
     "You are the private Common Fabric research loop inside the harness.",
     purpose === "orient"
@@ -534,7 +542,12 @@ const systemPrompt = (purpose?: HarnessResearchPurpose): string =>
     "This is CF documentation, skills, pattern-index, source, dependency, and handle research; it is not web research.",
     PIECE_TARGETING_GUIDANCE,
     PATTERN_COMPOSITION_GUIDANCE,
-    ...(purpose === "orient" ? [ORIENTATION_GUIDANCE] : []),
+    ...(purpose === "orient"
+      ? [orientationGuidance({
+        patternIndex,
+        shape: { depth: DEFAULT_HARNESS_RUN_DEPTH },
+      })]
+      : []),
     "Search for the next unresolved fact. Search results are leads, not proof of applicability. Read exact evidence only when it changes the decision; do not keep searching after the question is answered.",
     "A long section or source file is never represented by its first chunk alone. Follow nextOffset with another exact read whenever the needed answer could continue later.",
     "Use the pattern index and available data to find a short path to the goal. Prefer composing suitable existing pieces; describe the smallest missing reusable capability when authoring is needed. If the approach becomes large or tangled, reconsider the component boundaries and data contracts before expanding it. One source file per component does not mean one component for the entire goal.",
@@ -555,7 +568,7 @@ const systemPrompt = (purpose?: HarnessResearchPurpose): string =>
     ],
     "Distinguish available inputs, the requirements of one candidate, and missing user data. A candidate's SQLite or connector contract is specific to that candidate, not a universal task prerequisite. No current mailbox handle means mail is not yet given, not that permitted discovery cannot find it; local-only apps need no external handle.",
     "Check documentTitle and headingPath before applying a snippet. Iframe React guest code and ordinary commonfabric patterns use different execution environments. A React JSX pragma or React import belongs to an iframe guest, never add it to an ordinary compiled CF pattern. Use the relevant canonical guide sections for the execution environment. Search matching passages or list an outline to choose what to read; read larger sections when their context matters.",
-    "On your final turn, make no tool calls and return only JSON matching this schema:",
+    "On your final turn, make no tool calls and return only JSON that is an instance of this schema, not the schema itself:",
     JSON.stringify(researchResultSchema(purpose)),
   ].join("\n");
 
@@ -1073,13 +1086,51 @@ const readDocSection = (
   };
 };
 
-/** What `JSON.parse` says is wrong with `text`, or `undefined` when it parses. */
-const jsonSyntaxError = (text: string): string | undefined => {
+/** Why a final answer earns a repair turn, in the words of the check it failed. */
+interface FinalAnswerComplaint {
+  /** The repair turn's name, as its instruction and withheld-tool errors say it. */
+  turnName: string;
+
+  /** What is wrong with the answer, addressed to the model. */
+  problem: string;
+
+  /** The check's own complaint, quoted. */
+  report: string;
+}
+
+/**
+ * What is wrong with `text` as a final answer: the parser's complaint when it
+ * is not JSON, else the schema validator's when scoped admission would refuse
+ * its shape, or `undefined` when neither check fails.
+ */
+const finalAnswerComplaint = (
+  text: string,
+  purpose: HarnessResearchPurpose | undefined,
+): FinalAnswerComplaint | undefined => {
+  let value: unknown;
   try {
-    JSON.parse(text.trim());
+    value = JSON.parse(text.trim());
+  } catch (error) {
+    return {
+      turnName: "JSON repair",
+      problem: "Your final answer was not valid JSON.",
+      report: `The parser reported: ${errorMessage(error)}`,
+    };
+  }
+  if (purpose === undefined) return undefined;
+  try {
+    validateStructuredResultValue({
+      schema: researchResultSchema(purpose),
+      value,
+    });
     return undefined;
   } catch (error) {
-    return errorMessage(error);
+    return {
+      turnName: "schema repair",
+      problem:
+        "Your final answer was JSON but not an instance of the schema: give the values the schema describes, not the schema itself.",
+      report: `The validator reported: ${errorMessage(error)}`,
+    };
   }
 };
 
@@ -1379,7 +1430,13 @@ async (request) => {
     ? undefined
     : await carryPriorResearch(request, state, request.priorResearch);
   const transcript: HarnessTranscriptMessage[] = [
-    { role: "system", content: systemPrompt(request.purpose) },
+    {
+      role: "system",
+      content: systemPrompt(
+        request.purpose,
+        request.getPatternIndex !== undefined,
+      ),
+    },
     { role: "user", content: userPrompt(request, carried) },
   ];
   for (const pattern of request.attachedPatterns ?? []) {
@@ -1562,16 +1619,20 @@ async (request) => {
       }
       return repairCalls.length === 0 ? repaired.assistant.content : undefined;
     };
-    // A final answer that is not JSON gets one re-ask while the budget has a
-    // turn for it, quoting only the parser's own complaint. What comes back
-    // is parsed as strictly as the first answer, and failing again fails the
-    // call as it would have without the re-ask.
+    // A final answer that is not JSON, or whose shape scoped admission would
+    // refuse, gets one re-ask while the budget has a turn for it, quoting only
+    // the failed check's own complaint. What comes back is parsed and admitted
+    // as strictly as the first answer, and failing again fails the call as it
+    // would have without the re-ask.
     let finalText = finalAssistant.content;
-    const syntaxError = jsonSyntaxError(finalText);
-    if (syntaxError !== undefined && modelTurns < budget.modelTurns) {
-      finalText = await repairTurn("JSON repair", [
-        "JSON repair turn: private tools are withheld. Your final answer was not valid JSON.",
-        `The parser reported: ${syntaxError}`,
+    const complaint = finalAnswerComplaint(finalText, request.purpose);
+    if (complaint !== undefined && modelTurns < budget.modelTurns) {
+      const { turnName, problem, report } = complaint;
+      finalText = await repairTurn(turnName, [
+        `${turnName[0].toUpperCase()}${
+          turnName.slice(1)
+        } turn: private tools are withheld. ${problem}`,
+        report,
         "Return the entire final JSON again, matching the schema, with nothing before or after it.",
         `This is model turn ${modelTurns + 1} of ${budget.modelTurns}.`,
       ]) ?? "";

@@ -3,7 +3,7 @@
 /**
  * Guards tasks/test-identity-aliases, the append-only directory that
  * bridges test-identity renames for readers of the test-run record store
- * (docs/history/plans/test-run-telemetry.md). The directory holds one
+ * (docs/specs/test-records.md). The directory holds one
  * JSON-lines file per test file, which keeps two changes that rename tests
  * in different test files from appending to the same file. Each line maps
  * an old identity — or a whole scope, for package renames — to its

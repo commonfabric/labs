@@ -27,6 +27,16 @@ not evidence of what to write. A new file follows this guide closely. An edit
 to an existing file conforms the area around the edit; converting a whole file
 is its own change, made deliberately rather than as a side effect.
 
+## What a test checks
+
+A test checks the behavior that users care about, not implementation details,
+so a correct refactor leaves it unchanged. It fails when that behavior breaks;
+check this by breaking the behavior and running the test.
+
+A test checks the negative as well as the positive: the code acts where it
+should, and does not act where it should not. A test of a filter checks that it
+keeps a match and that it drops a non-match.
+
 ## Where a test file lives, and what it is called
 
 Unit tests go in a `test` directory directly under the package they test, not

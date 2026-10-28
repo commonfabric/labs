@@ -267,8 +267,8 @@ describe("aliased-cell-value-schema", () => {
       );
       expect(aliased).toEqual({
         anyOf: [
-          { $ref: "#/$defs/Stored", asCell: ["readonly"] },
           { type: "undefined" },
+          { $ref: "#/$defs/Stored", asCell: ["readonly"] },
         ],
       });
     });

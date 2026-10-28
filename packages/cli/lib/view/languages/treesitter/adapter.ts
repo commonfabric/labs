@@ -78,7 +78,8 @@ export interface TreeSitterGrammar {
   readonly highlightQuery: string;
 
   /** The structure entry a node declares, or undefined when it declares none.
-   * The walk descends into every node either way. */
+   * The walk descends into the node either way, unless
+   * {@link structureParents} leaves out the node's type. */
   structureEntry(node: SyntaxNode): StructureEntry | undefined;
 
   /** Stretches of source whose line breaks the language ignores and the
@@ -87,6 +88,10 @@ export interface TreeSitterGrammar {
    * must not hold the line break that ends a line comment. The expression must
    * be global. */
   readonly insignificantLineBreaks?: RegExp;
+
+  /** The node types a structure entry can be found inside. When given, the
+   * walk does not descend into nodes of any other type. */
+  readonly structureParents?: ReadonlySet<string>;
 }
 
 interface LoadedGrammar {
@@ -229,12 +234,27 @@ export function highlightLines(
   grammar: TreeSitterGrammar,
   text: string,
 ): Line[] {
+  const classes = tokenClasses(grammar, text);
+  return classes === undefined
+    ? plainTextLines(text)
+    : linesFromClasses(text, classes);
+}
+
+/**
+ * The token class of every character of `text` through its grammar, left
+ * undefined where the query claims nothing, or undefined while the grammar
+ * loads. A language that colors part of its source with another language's
+ * grammar reads that part's classes here.
+ */
+export function tokenClasses(
+  grammar: TreeSitterGrammar,
+  text: string,
+): (TokenClass | undefined)[] | undefined {
   const ready = loadedGrammar(grammar);
-  if (ready === undefined) return plainTextLines(text);
+  if (ready === undefined) return undefined;
   const tree = parseWith(ready, parserText(grammar, text));
   try {
-    const lineStarts = computeLineStarts(text);
-    return colorLines(ready, tree, text, lineStarts);
+    return classify(ready, tree, text.length);
   } finally {
     tree.delete();
   }
@@ -422,6 +442,7 @@ function structureNodes(
   source: StructureSource,
   depth: number,
 ): StructureNode[] {
+  if (grammar.structureParents?.has(node.type) === false) return [];
   const out: StructureNode[] = [];
   for (const child of node.children) {
     const entry = grammar.structureEntry(child);

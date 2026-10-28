@@ -1438,6 +1438,37 @@ describe(
       c.set(NaN);
       expect(c.get()).toBe(undefined);
     });
+
+    it("projects a `bigint` through an `integer` schema", () => {
+      const c = runtime.getCell<bigint>(
+        space,
+        "integer schema vs bigint",
+        { type: "integer" },
+        tx,
+      );
+      c.set(42n);
+      expect(c.get()).toBe(42n);
+    });
+
+    it("projects a `bigint` property through an object schema typing it `integer` or `number`", () => {
+      // A `bigint` is an integer, and `integer` is a subtype of `number`, so
+      // either declaration reads it; a `string` declaration does not.
+      const c = runtime.getCell<{ a: bigint; b: bigint; c: bigint }>(
+        space,
+        "schema'd bigint properties",
+        {
+          type: "object",
+          properties: {
+            a: { type: ["integer", "null"] },
+            b: { type: "number" },
+            c: { type: "string" },
+          },
+        },
+        tx,
+      );
+      c.set({ a: 1n, b: 2n, c: 3n });
+      expect(c.get()).toEqual({ a: 1n, b: 2n });
+    });
   },
 );
 

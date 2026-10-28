@@ -4,12 +4,13 @@
  * language, or of another wire format that has to agree with this one, tests
  * against the fixture rather than against this package's code.
  *
- * Each case is a value or a text, and the fixture records what this package's
- * default JSON codec does with it: the exact text a value encodes to, and the
- * value a text decodes to, or the refusal. Values are written in the
- * descriptor notation that `test/fixtures/fvj1-conformance.md` defines, which
- * says everything about a value that the format carries and nothing about how
- * the format carries it.
+ * Each case is a value or a text, and the fixture states it as a text, with
+ * the mods to decoding it, and records what decoding it does: the value it
+ * returns, stated by probes, or the refusal; then the text that value
+ * re-encodes to. `test/fixtures/value-probes.md` defines the mods and the
+ * probes. Probes state a value without a
+ * reader having to build one, or to compare two by an equality that agrees
+ * with this package's.
  *
  * Where the formal spec says outright that this package falls short of it, the
  * case says so: the fixture records the spec's outcome, and this package's
@@ -21,21 +22,13 @@
  * barrel.
  */
 
-import { utf8Compare } from "@commonfabric/utils/utf8";
-
 import type { FabricValue } from "@/interface.ts";
-import {
-  ProblematicStateError,
-  ProblematicValue,
-  UnknownValue,
-} from "@/codec-common";
+import { ProblematicStateError, ProblematicValue } from "@/codec-common";
 import { JsonCodecEngine } from "@/codec-json";
 import {
   FabricError,
   type FabricInstanceClassesByName,
   FabricLink,
-  FabricMap,
-  FabricSet,
 } from "@/fabric-instances";
 import {
   FabricBytes,
@@ -43,87 +36,85 @@ import {
   FabricDurationNsec,
   FabricEpochDay,
   FabricEpochNsec,
-  FabricHash,
-  FabricKeyPair,
   type FabricPrimitiveClassesByName,
   FabricRegExp,
   FabricUnavailable,
-  UNAVAILABLE_ERROR_KINDS,
-  UNAVAILABLE_REASONS,
 } from "@/fabric-primitives";
-import { isFabricArray, isFabricPlainObject } from "@/types";
-import { fabricFromJsonValue, jsonFromFabricValue } from "./codecs.ts";
+import { jsonFromFabricValue, newDefaultJsonCodecEngine } from "./codecs.ts";
+import {
+  assertDistinctCaseNames,
+  type ClassCaseNotes,
+  classCasesOf,
+  type ExampleMakers,
+  fabricValueOfTextWithMods,
+  type FixtureJson,
+  type FixtureRequirements,
+  fixtureTextOf,
+  plainJsonTextOf,
+  probedPathsOf,
+  probesOf,
+  requirementsOf,
+  sparseArrayOf,
+  STUB_CODEC_EXCLUSION,
+  type TextWithMods,
+  textWithModsOf,
+  type ValuePath,
+  type ValueProbe,
+} from "./conformance-fixtures.ts";
 
 //
 // Types
 //
 
 /**
- * A value in the descriptor notation `test/fixtures/fvj1-conformance.md`
- * defines. It is JSON, so that any language can read it.
+ * Why a decode or an encode is refused. A decode is refused when the text
+ * lacks the `fvj1:` prefix, when what follows the prefix is not JSON, or when
+ * the JSON is not a form the format allows; the spec settles all three alike,
+ * so the kind says why and not how. An encode is refused when the format has
+ * no text for the value.
  */
-export type Fvj1Descriptor =
-  | null
-  | boolean
-  | number
-  | string
-  | readonly Fvj1Descriptor[]
-  | { readonly [key: string]: Fvj1Descriptor };
+export type Fvj1Refusal = "not-fvj1" | "not-json" | "malformed" | "unencodable";
 
 /**
- * Why a decode is refused: the text lacks the `fvj1:` prefix, what follows
- * the prefix is not JSON, or the JSON is not a form the format allows. The
- * spec settles all three alike, so the kind says why and not how.
+ * What decoding one text or encoding one value does: a decode returns the
+ * value these probes state, an encode writes this text, and either can be
+ * refused.
  */
-export type Fvj1DecodeRefusal = "not-fvj1" | "not-json" | "malformed";
-
-/** What encoding one value does: writes this text, or is refused. */
-export type Fvj1EncodeOutcome =
+export type Fvj1Outcome =
+  | { readonly probes: readonly ValueProbe[] }
   | { readonly text: string }
-  | { readonly refused: "unencodable" };
-
-/** What decoding one text does: returns this value, or is refused. */
-export type Fvj1DecodeOutcome =
-  | { readonly value: Fvj1Descriptor }
-  | { readonly refused: Fvj1DecodeRefusal };
+  | { readonly refused: Fvj1Refusal };
 
 /**
- * One conformance case: a value to encode, made fresh by `make`, or a text to
- * decode. A value whose text decodes back to it makes a round trip, and a
- * text that decodes makes an encode case of the value it decodes to, so most
- * cases check both directions.
+ * One conformance case: a value, made fresh by `make`, or a text. The fixture
+ * states a value as its canonical text and mods, so either way a case is
+ * decoded, and what it decodes to is re-encoded.
  *
  * `section` names the part of the formal spec the case exercises.
+ * `requires` names the flavors of regular expression whose construction the
+ * case's outcome depends on; the fixture entry adds the guarantees of size the
+ * case needs past the floors.
  * `divergence` is a note on what the format requires, for a case where this
  * package does not do it. The format's outcome is never typed here. For a
- * value, it is the text {@link plainJsonTextOf} computes, so a divergence can
- * only be declared for a value that function writes. For a text, it is that
- * the text is refused, the format refusing every text this package
- * over-accepts.
+ * value, it is the value's own probes, and the text {@link plainJsonTextOf}
+ * computes, so a divergence can only be declared for a value that function
+ * writes. For a text, it is that the text is refused, the format refusing
+ * every text this package over-accepts, unless `specDecodes` says the format
+ * decodes the text as this package does. Then the format's outcome is the
+ * text {@link plainJsonTextOf} computes for what it decodes to, and the
+ * divergence is in re-encoding that.
  */
 export type Fvj1ConformanceCase =
   & {
     readonly name: string;
     readonly section: string;
+    readonly requires?: Pick<FixtureRequirements, "flavors">;
     readonly divergence?: string;
   }
   & (
     | { readonly make: () => FabricValue }
-    | { readonly text: string }
+    | { readonly text: string; readonly specDecodes?: true }
   );
-
-/** Makers of examples of each class in one of the class tables. */
-type ExampleMakers<ClassesByName> = {
-  readonly [Name in keyof ClassesByName]: readonly (() => FabricValue)[];
-};
-
-/**
- * What a class's examples need beyond their makers: the spec section, or a
- * note saying why the class's examples are not cases.
- */
-type ClassCaseNotes =
-  | { readonly section: string }
-  | { readonly excluded: string };
 
 //
 // The cases
@@ -148,10 +139,15 @@ export function fvj1ConformanceCases(
 const SECTION_PREFIX = "3-json-encoding.md section 1.1";
 const SECTION_NUMBERS = "3-json-encoding.md section 3, `SpecialNumber@1`";
 const SECTION_STRINGS = "1-fabric-values.md section 6.7";
+const SECTION_NUMBER_TEXT = "3-json-encoding.md section 11.2";
+const SECTION_STRING_TEXT = "3-json-encoding.md section 11.3";
+const SECTION_DECODED_TEXT = "3-json-encoding.md section 11.4";
 const SECTION_KEY_ORDER = "3-json-encoding.md section 10";
 const SECTION_HOLES = "3-json-encoding.md section 3, sparse array encoding";
 const SECTION_UNDEFINED = "3-json-encoding.md section 5";
 const SECTION_ESCAPES = "3-json-encoding.md section 6";
+const SECTION_ESCAPE_DISPATCH =
+  "3-json-encoding.md section 6, encoder dispatch";
 const SECTION_RESERVED_KEYS = "3-json-encoding.md section 4";
 const SECTION_SYMBOL = "3-json-encoding.md section 3, `Symbol@1`";
 const SECTION_BIGINT = "3-json-encoding.md section 3, `BigInt@1`";
@@ -160,10 +156,25 @@ const SECTION_UNKNOWN = "3-json-encoding.md section 8";
 const SECTION_TAG_SYNTAX = "3-json-encoding.md section 2";
 const SECTION_RESERVATION = "3-json-encoding.md section 9";
 const SECTION_TYPES = "3-json-encoding.md section 3";
+const SECTION_TEMPORAL = "3-json-encoding.md section 3, temporal quantities";
+const SECTION_ERROR = "3-json-encoding.md section 3, `Error@1`";
+const SECTION_LINK = "3-json-encoding.md section 3, `Link@1`";
+const SECTION_REGEXP = "3-json-encoding.md section 3, `RegExp@1`";
+const SECTION_UNAVAILABLE = "3-json-encoding.md section 3, `Unavailable@1`";
 
-/** Why the classes whose codecs are stubs have no cases. */
-const STUB_CODEC_EXCLUSION = "Its codec is a stub, pending general " +
-  "`FabricInstance` support (1-fabric-values.md sections 1.4.3 and 1.4.4).";
+/**
+ * The integers at and just past the edges of a signed 64-bit integer, and a
+ * pair far past them. The format bounds none of them, and an implementation
+ * that holds these counts in an `int64` meets its edges here.
+ */
+const WIDE_INTEGERS: readonly (readonly [string, bigint])[] = [
+  ["2^63 - 1", 2n ** 63n - 1n],
+  ["-2^63", -(2n ** 63n)],
+  ["2^63", 2n ** 63n],
+  ["-2^63 - 1", -(2n ** 63n) - 1n],
+  ["2^100", 2n ** 100n],
+  ["-2^100", -(2n ** 100n)],
+];
 
 /** Note shared by the cases with a key this implementation reserves. */
 const RESERVED_KEY_NOTE = "Section 4 lets a record carry any key, and its " +
@@ -174,39 +185,39 @@ const RESERVED_KEY_NOTE = "Section 4 lets a record carry any key, and its " +
 
 /** The cases that do not range over the class tables. */
 const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
-  // JSON's own values.
+  // JSON's own values, and how their text is written.
   { name: "null", section: SECTION_PREFIX, make: () => null },
   { name: "true", section: SECTION_PREFIX, make: () => true },
   { name: "false", section: SECTION_PREFIX, make: () => false },
-  { name: "zero", section: SECTION_PREFIX, make: () => 0 },
-  { name: "integer", section: SECTION_PREFIX, make: () => 42 },
-  { name: "negative fraction", section: SECTION_PREFIX, make: () => -1.5 },
-  { name: "inexact fraction", section: SECTION_PREFIX, make: () => 0.1 },
-  { name: "large exponent", section: SECTION_PREFIX, make: () => 1e21 },
-  { name: "small exponent", section: SECTION_PREFIX, make: () => 1e-7 },
+  { name: "zero", section: SECTION_NUMBER_TEXT, make: () => 0 },
+  { name: "integer", section: SECTION_NUMBER_TEXT, make: () => 42 },
+  { name: "negative fraction", section: SECTION_NUMBER_TEXT, make: () => -1.5 },
+  { name: "inexact fraction", section: SECTION_NUMBER_TEXT, make: () => 0.1 },
+  { name: "large exponent", section: SECTION_NUMBER_TEXT, make: () => 1e21 },
+  { name: "small exponent", section: SECTION_NUMBER_TEXT, make: () => 1e-7 },
   {
     name: "smallest subnormal",
-    section: SECTION_PREFIX,
+    section: SECTION_NUMBER_TEXT,
     make: () => Number.MIN_VALUE,
   },
   {
     name: "largest double",
-    section: SECTION_PREFIX,
+    section: SECTION_NUMBER_TEXT,
     make: () => Number.MAX_VALUE,
   },
   {
     name: "integer past 2^53",
-    section: SECTION_PREFIX,
+    section: SECTION_NUMBER_TEXT,
     make: () => 2 ** 53 + 2,
   },
   {
     name: "number spelled with fraction and exponent",
-    section: SECTION_PREFIX,
+    section: SECTION_DECODED_TEXT,
     text: "fvj1:1.0E2",
   },
   {
     name: "whitespace around and inside the JSON",
-    section: SECTION_PREFIX,
+    section: SECTION_DECODED_TEXT,
     text: "fvj1: [ 1 , 2 ] ",
   },
   {
@@ -237,15 +248,15 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
   },
 
   // Strings.
-  { name: "empty string", section: SECTION_STRINGS, make: () => "" },
+  { name: "empty string", section: SECTION_STRING_TEXT, make: () => "" },
   {
     name: "string of characters JSON escapes",
-    section: SECTION_STRINGS,
+    section: SECTION_STRING_TEXT,
     make: () => '"\\/\b\f\n\r\t\u0000\u001f\u007f\u2028',
   },
   {
     name: "string beyond ASCII",
-    section: SECTION_STRINGS,
+    section: SECTION_STRING_TEXT,
     make: () => "\u00e9\u{1F600}\uffff",
   },
   {
@@ -260,22 +271,22 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
   },
   {
     name: "lone high surrogate",
-    section: SECTION_STRINGS,
+    section: SECTION_STRING_TEXT,
     make: () => "\ud800",
   },
   {
     name: "lone low surrogate between characters",
-    section: SECTION_STRINGS,
+    section: SECTION_STRING_TEXT,
     make: () => "a\udc00b",
   },
   {
     name: "surrogates in reverse order",
-    section: SECTION_STRINGS,
+    section: SECTION_STRING_TEXT,
     make: () => "\udc00\ud800",
   },
   {
     name: "lone surrogate escaped in uppercase",
-    section: SECTION_STRINGS,
+    section: SECTION_DECODED_TEXT,
     text: 'fvj1:"\\uD800"',
   },
 
@@ -376,32 +387,32 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
   // Records with `/`-prefixed keys.
   {
     name: "slash key over a literal",
-    section: SECTION_ESCAPES,
+    section: SECTION_ESCAPE_DISPATCH,
     make: () => ({ "/a": 1 }),
   },
   {
     name: "slash key alone",
-    section: SECTION_ESCAPES,
+    section: SECTION_ESCAPE_DISPATCH,
     make: () => ({ "/": 1 }),
   },
   {
     name: "slash key over a value that needs encoding",
-    section: SECTION_ESCAPES,
+    section: SECTION_ESCAPE_DISPATCH,
     make: () => ({ "/a": 10n, b: [undefined] }),
   },
   {
     name: "slash keys nested over literals",
-    section: SECTION_ESCAPES,
+    section: SECTION_ESCAPE_DISPATCH,
     make: () => ({ "/a": { "/b": 1 } }),
   },
   {
     name: "slash keys nested over a value that needs encoding",
-    section: SECTION_ESCAPES,
+    section: SECTION_ESCAPE_DISPATCH,
     make: () => ({ "/a": { "/b": 1n } }),
   },
   {
     name: "object escape over literals",
-    section: SECTION_ESCAPES,
+    section: SECTION_ESCAPE_DISPATCH,
     text: 'fvj1:{"/object":{"/x":1}}',
   },
   {
@@ -457,9 +468,24 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     name: "bigint state not minimal",
     section: SECTION_BIGINT,
     text: 'fvj1:{"/BigInt@1":"AAA"}',
-    divergence: "A state with a redundant leading `0x00` or `0xff` byte is " +
-      "refused. This implementation reads it as the value it stands for.",
   },
+  // `0xff 0xff`, `0x00 0x7f` and `0xff 0x80`: sign-extended.
+  ...["__8", "AH8", "_4A"].map((state): Fvj1ConformanceCase => ({
+    name: `bigint state sign-extended, ${JSON.stringify(state)}`,
+    section: SECTION_BIGINT,
+    text: `fvj1:{"/BigInt@1":${JSON.stringify(state)}}`,
+  })),
+  // Each temporal decodes its state as `BigInt@1` does, through its own path.
+  ...[
+    ["EpochNsec", "AAA"],
+    ["EpochDay", "__8"],
+    ["DurationNsec", "AH8"],
+    ["DurationDay", "_4A"],
+  ].map(([tag, state]): Fvj1ConformanceCase => ({
+    name: `${tag} state not minimal`,
+    section: "3-json-encoding.md section 3, temporal quantities",
+    text: `fvj1:{"/${tag}@1":${JSON.stringify(state)}}`,
+  })),
   {
     name: "bigint state of no bytes",
     section: SECTION_BIGINT,
@@ -484,17 +510,24 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     name: "bytes state holding whitespace",
     section: SECTION_BASE64,
     text: 'fvj1:{"/Bytes@1":"AQ I"}',
-    divergence: "A base64url state holding whitespace is refused. This " +
-      "implementation skips the whitespace.",
   },
   {
     name: "bytes state with nonzero trailing bits",
     section: SECTION_BASE64,
     text: 'fvj1:{"/Bytes@1":"AR"}',
-    divergence: "A base64url state whose bits after its last whole byte are " +
-      "not all zero is refused. This implementation ignores them, reading " +
-      "`AR` as the byte `AQ` writes.",
   },
+  {
+    name: "bytes state with one padding character",
+    section: SECTION_BASE64,
+    text: 'fvj1:{"/Bytes@1":"AQI="}',
+  },
+  // Padding other than RFC 4648's: too little, too much, after whole groups,
+  // and with no characters before it.
+  ...["AA=", "AAA==", "AAAA=", "=="].map((state): Fvj1ConformanceCase => ({
+    name: `bytes state with padding ${JSON.stringify(state)}`,
+    section: SECTION_BASE64,
+    text: `fvj1:{"/Bytes@1":${JSON.stringify(state)}}`,
+  })),
 
   // Nesting, and values beyond the class examples.
   {
@@ -650,6 +683,7 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     name: "regular expression that does not construct",
     section: "3-json-encoding.md section 3, `RegExp@1`",
     text: 'fvj1:{"/RegExp@1":{"flags":"","flavor":"es2025","source":"("}}',
+    requires: { flavors: ["es2025"] },
   },
   {
     name: "unavailable pairing an error kind with a transient reason",
@@ -661,22 +695,306 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     section: "3-json-encoding.md section 3, `Problematic@1`",
     text: 'fvj1:{"/Problematic@1":{"error":"e","tag":"x"}}',
   },
-];
 
-/**
- * Returns an array of length `length` holding `entries`, each an index and the
- * value there, and a hole at every other index.
- */
-function sparseArrayOf(
-  length: number,
-  entries: readonly (readonly [number, FabricValue])[],
-): FabricValue[] {
-  const result: FabricValue[] = new Array(length);
-  for (const [index, value] of entries) {
-    result[index] = value;
-  }
-  return result;
-}
+  // Escapes, and what the reservation of `/` keys refuses.
+  {
+    name: "slash key that is a tag, over a literal",
+    section: SECTION_ESCAPE_DISPATCH,
+    make: () => ({ "/Bytes@1": "AQ" }),
+  },
+  {
+    name: "quote escape nested in an object escape",
+    section: SECTION_ESCAPES,
+    text: 'fvj1:{"/object":{"/a":{"/quote":{"/b":1}}}}',
+  },
+  {
+    name: "object escape nested in a quote escape",
+    section: SECTION_ESCAPES,
+    text: 'fvj1:{"/quote":{"/object":{"/x":1}}}',
+  },
+  {
+    name: "object escape over the empty record",
+    section: SECTION_ESCAPES,
+    text: 'fvj1:{"/object":{}}',
+  },
+  {
+    name: "quote escape over the empty record",
+    section: SECTION_ESCAPES,
+    text: 'fvj1:{"/quote":{}}',
+  },
+  {
+    name: "quote escape over an undefined",
+    section: SECTION_ESCAPES,
+    text: 'fvj1:{"/quote":{"/Undefined@1":null}}',
+  },
+  {
+    name: "quote escape over a key that is not a tag",
+    section: SECTION_ESCAPES,
+    text: 'fvj1:{"/quote":{"/bytes@1":1}}',
+  },
+  {
+    name: "object escape over a key that is an escape",
+    section: SECTION_ESCAPES,
+    text: 'fvj1:{"/object":{"/quote":1}}',
+  },
+  {
+    name: "object escape over slash and plain keys",
+    section: SECTION_ESCAPES,
+    text: 'fvj1:{"/object":{"/x":1,"y":2}}',
+  },
+  {
+    name: "object escape beside a plain key",
+    section: SECTION_RESERVATION,
+    text: 'fvj1:{"/object":{"a":1},"b":2}',
+  },
+  {
+    name: "quote escape beside a plain key",
+    section: SECTION_RESERVATION,
+    text: 'fvj1:{"/quote":1,"a":1}',
+  },
+  {
+    name: "link payload with a bare slash key",
+    section: SECTION_RESERVATION,
+    text: 'fvj1:{"/Link@1":{"/x":1}}',
+  },
+
+  // Keys this implementation reserves, below the top of a value.
+  {
+    name: "record with key __proto__ nested in a record",
+    section: SECTION_RESERVED_KEYS,
+    make: () => ({ a: JSON.parse('{"__proto__":1}') }),
+    divergence: RESERVED_KEY_NOTE,
+  },
+  {
+    name: "record with key constructor nested in a record",
+    section: SECTION_RESERVED_KEYS,
+    make: () => ({ a: { constructor: 1 } }),
+    divergence: RESERVED_KEY_NOTE,
+  },
+  {
+    name: "quote escape over a record with key __proto__",
+    section: SECTION_RESERVED_KEYS,
+    text: 'fvj1:{"/quote":{"__proto__":1}}',
+    specDecodes: true,
+    divergence: RESERVED_KEY_NOTE + " Here it decodes the text, the " +
+      "`/quote` escape taking the record as it is, but refuses to encode the " +
+      "record it decodes to.",
+  },
+
+  // Integers at and past the edges of a signed 64-bit integer.
+  ...WIDE_INTEGERS.map(([label, count]): Fvj1ConformanceCase => ({
+    name: `bigint ${label}`,
+    section: SECTION_BIGINT,
+    make: () => count,
+  })),
+  ...WIDE_INTEGERS.map(([label, count]): Fvj1ConformanceCase => ({
+    name: `EpochNsec of ${label}`,
+    section: SECTION_TEMPORAL,
+    make: () => new FabricEpochNsec(count),
+  })),
+  ...([
+    ["EpochDay", (count: bigint) => new FabricEpochDay(count)],
+    ["DurationNsec", (count: bigint) => new FabricDurationNsec(count)],
+    ["DurationDay", (count: bigint) => new FabricDurationDay(count)],
+  ] as const).flatMap(([tag, made]) =>
+    WIDE_INTEGERS.filter(([label]) => label === "2^63" || label === "-2^63")
+      .map(([label, count]): Fvj1ConformanceCase => ({
+        name: `${tag} of ${label}`,
+        section: SECTION_TEMPORAL,
+        make: () => made(count),
+      }))
+  ),
+
+  // Errors and links.
+  {
+    name: "error with extras of every primitive kind",
+    section: SECTION_ERROR,
+    make: () =>
+      new FabricError({
+        type: "Error",
+        name: null,
+        message: "m",
+        stack: undefined,
+        cause: undefined,
+        extras: {
+          bigint: 2n,
+          boolean: true,
+          null: null,
+          number: -1.5,
+          string: "s",
+          symbol: Symbol.for("key"),
+          undefined: undefined,
+        },
+      }),
+  },
+  {
+    name: "link with a payload key that is an escape",
+    section: SECTION_LINK,
+    make: () => new FabricLink({ "/quote": { "/Link@1": { id: "x" } } }),
+  },
+  {
+    name: "link with a payload key that is a tag, over a bigint",
+    section: SECTION_LINK,
+    make: () => new FabricLink({ "/Bytes@1": 1n }),
+  },
+  {
+    name: "link with a numeric payload",
+    section: SECTION_LINK,
+    text: 'fvj1:{"/Link@1":5}',
+  },
+  {
+    name: "link with an array payload",
+    section: SECTION_LINK,
+    text: 'fvj1:{"/Link@1":[]}',
+  },
+  {
+    name: "link with the empty record as payload",
+    section: SECTION_LINK,
+    text: 'fvj1:{"/Link@1":{}}',
+  },
+
+  // More decodes the spec refuses.
+  {
+    name: "hole run of a negative number",
+    section: SECTION_HOLES,
+    text: 'fvj1:[{"/hole":-1}]',
+  },
+  {
+    name: "error with a string state",
+    section: SECTION_ERROR,
+    text: 'fvj1:{"/Error@1":"boom"}',
+  },
+  {
+    name: "error with a numeric type",
+    section: SECTION_ERROR,
+    text: 'fvj1:{"/Error@1":{"message":"m","name":null,"type":7}}',
+  },
+  {
+    name: "error with a numeric name",
+    section: SECTION_ERROR,
+    text: 'fvj1:{"/Error@1":{"message":"m","name":1,"type":"Error"}}',
+  },
+  {
+    name: "error with a numeric stack",
+    section: SECTION_ERROR,
+    text: 'fvj1:{"/Error@1":{"message":"m","name":null,"stack":5,' +
+      '"type":"Error"}}',
+  },
+  {
+    name: "error with a type that is not a string",
+    section: SECTION_ERROR,
+    text: 'fvj1:{"/Error@1":{"message":"m","name":null,' +
+      '"type":{"/Undefined@1":null}}}',
+  },
+  {
+    name: "error with no name",
+    section: SECTION_ERROR,
+    text: 'fvj1:{"/Error@1":{"message":"m","type":"TypeError"}}',
+  },
+  {
+    name: "error with no message",
+    section: SECTION_ERROR,
+    text: 'fvj1:{"/Error@1":{"name":null,"type":"Error"}}',
+  },
+  {
+    name: "error with no type",
+    section: SECTION_ERROR,
+    text: 'fvj1:{"/Error@1":{"message":"m","name":null}}',
+  },
+  {
+    name: "error with the empty state",
+    section: SECTION_ERROR,
+    text: 'fvj1:{"/Error@1":{}}',
+  },
+  {
+    name: "unavailable with a string state",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":"pending"}',
+  },
+  {
+    name: "unavailable with an unknown reason",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":{"reason":"gone"}}',
+  },
+  {
+    name: "unavailable error with no kind",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":{"reason":"error"}}',
+  },
+  {
+    name: "unavailable error with an unknown kind",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":{"errorKind":"nope","reason":"error"}}',
+  },
+  {
+    name: "unavailable error with a numeric message",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":{"errorKind":"network","errorMessage":5,' +
+      '"reason":"error"}}',
+  },
+  {
+    name: "unavailable error with a null message",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":{"errorKind":"network",' +
+      '"errorMessage":null,"reason":"error"}}',
+  },
+  {
+    name: "unavailable pairing a message with a transient reason",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":{"errorMessage":"m","reason":"pending"}}',
+  },
+  {
+    name: "regular expression with a string state",
+    section: SECTION_REGEXP,
+    text: 'fvj1:{"/RegExp@1":"a"}',
+  },
+  {
+    name: "regular expression with a numeric source",
+    section: SECTION_REGEXP,
+    text: 'fvj1:{"/RegExp@1":{"flags":"","flavor":"es2025","source":1}}',
+  },
+  {
+    name: "regular expression with a numeric flavor",
+    section: SECTION_REGEXP,
+    text: 'fvj1:{"/RegExp@1":{"flags":"","flavor":1,"source":"a"}}',
+  },
+  {
+    name: "regular expression with a flag es2025 lacks",
+    section: SECTION_REGEXP,
+    text: 'fvj1:{"/RegExp@1":{"flags":"z","flavor":"es2025","source":"a"}}',
+    requires: { flavors: ["es2025"] },
+  },
+  {
+    name: "regular expression with no flags",
+    section: SECTION_REGEXP,
+    text: 'fvj1:{"/RegExp@1":{"flavor":"es2025","source":"a"}}',
+  },
+  {
+    name: "regular expression with no flavor",
+    section: SECTION_REGEXP,
+    text: 'fvj1:{"/RegExp@1":{"flags":"","source":"a"}}',
+  },
+  {
+    name: "regular expression with no source",
+    section: SECTION_REGEXP,
+    text: 'fvj1:{"/RegExp@1":{"flags":"","flavor":"es2025"}}',
+  },
+  {
+    name: "regular expression with the empty state",
+    section: SECTION_REGEXP,
+    text: 'fvj1:{"/RegExp@1":{}}',
+  },
+  {
+    name: "tag with no version",
+    section: SECTION_TAG_SYNTAX,
+    text: 'fvj1:{"/EpochNsec":"AA"}',
+  },
+  {
+    name: "special number with a numeric state",
+    section: SECTION_NUMBERS,
+    text: 'fvj1:{"/SpecialNumber@1":0}',
+  },
+];
 
 /** What the primitive classes' examples need beyond their makers. */
 const PRIMITIVE_CLASS_NOTES: {
@@ -717,29 +1035,6 @@ const INSTANCE_CLASS_NOTES: {
   UnknownValue: { section: SECTION_UNKNOWN },
 };
 
-/**
- * Returns one case for each maker in `makers`, named for its class and its
- * place among that class's makers.
- */
-function classCasesOf<Name extends string>(
-  makers: { readonly [N in Name]: readonly (() => FabricValue)[] },
-  notes: { readonly [N in Name]: ClassCaseNotes },
-): Fvj1ConformanceCase[] {
-  const cases: Fvj1ConformanceCase[] = [];
-  for (const name in notes) {
-    const classNotes = notes[name];
-    if ("excluded" in classNotes) continue;
-    makers[name].forEach((make, index) => {
-      cases.push({
-        name: `${name}, example ${index + 1}`,
-        section: classNotes.section,
-        make,
-      });
-    });
-  }
-  return cases;
-}
-
 //
 // The fixture
 //
@@ -756,24 +1051,17 @@ const FIXTURE_ABOUT = "Generated by `deno task regenerate-fvj1-conformance` " +
  * normalizes text.
  *
  * @throws If two cases share a name; if the codec fails other than by
- *   refusing; if a value case's text does not decode back to its value, or
- *   differs from what {@link plainJsonTextOf} writes for it, and no divergence
- *   says so; or if a divergence a case declares does not hold.
+ *   refusing; if a case's text decodes, or what it decodes to re-encodes,
+ *   other than as the spec has it and no divergence says so; if a value
+ *   encodes other than as what its text decodes to does; if a lenient decode
+ *   of a text the spec refuses yields other than one `ProblematicValue`; or if
+ *   a divergence a case declares does not hold.
  */
 export function fvj1ConformanceFixtureText(
   cases: readonly Fvj1ConformanceCase[],
 ): string {
-  const names = new Set<string>();
-  const lines = cases.map((conformanceCase) => {
-    if (names.has(conformanceCase.name)) {
-      throw new Error(`Two cases are named ${conformanceCase.name}.`);
-    }
-    names.add(conformanceCase.name);
-    return asciiJsonOf(fixtureEntryOf(conformanceCase));
-  });
-
-  return `{\n  "about": ${asciiJsonOf(FIXTURE_ABOUT)},\n  "cases": [\n    ` +
-    `${lines.join(",\n    ")}\n  ]\n}\n`;
+  assertDistinctCaseNames(cases);
+  return fixtureTextOf(FIXTURE_ABOUT, cases.map(fixtureEntryOf));
 }
 
 /**
@@ -784,7 +1072,7 @@ export function fvj1ConformanceFixtureText(
  * @throws What the codec throws, when it is anything else: a `TypeError`,
  *   say, is a fault in the codec rather than an answer from it.
  */
-export function fvj1EncodeOutcomeOf(value: FabricValue): Fvj1EncodeOutcome {
+export function fvj1EncodeOutcomeOf(value: FabricValue): Fvj1Outcome {
   try {
     return { text: jsonFromFabricValue(value) };
   } catch (e) {
@@ -798,23 +1086,50 @@ export function fvj1EncodeOutcomeOf(value: FabricValue): Fvj1EncodeOutcome {
 }
 
 /**
- * Returns what decoding `text` with this package's default JSON codec does,
- * the codec being strict, so that a malformation is refused rather than
- * returned as a `ProblematicValue`. A refusal is a throw of a
+ * Returns what decoding `stated` with this package's JSON codec does: the
+ * probes of what `fabricValueOfTextWithMods()` returns for it, or the refusal.
+ * The codec is strict, so that a malformation is refused rather than returned
+ * as a `ProblematicValue`, and a refusal is a throw of a
  * `ProblematicStateError`, which is what a strict codec refuses with.
  *
- * @throws What the codec throws, when it is anything else.
+ * @throws What decoding throws, when it is anything else: a fault in the
+ *   codec, or mods that break their rules.
  */
-export function fvj1DecodeOutcomeOf(text: string): Fvj1DecodeOutcome {
+export function fvj1DecodeOutcomeOf(stated: TextWithMods): Fvj1Outcome {
   let decoded: FabricValue;
   try {
-    decoded = fabricFromJsonValue(text);
+    decoded = fabricValueOfTextWithMods(stated);
   } catch (e) {
     return refusalOrRethrow(e, e instanceof ProblematicStateError, {
-      refused: decodeRefusalOf(text),
+      refused: decodeRefusalOf(stated.text),
     });
   }
-  return { value: fvj1DescriptorOf(decoded) };
+  return { probes: probesOf(decoded, stated.patches) };
+}
+
+/**
+ * Returns the path of each `ProblematicValue` that decoding `text` with this
+ * package's default JSON codec, made lenient, returns in place of refusing.
+ * Section 9 of `3-json-encoding.md` has a lenient decoder return one for a
+ * text a strict one refuses, and does not say where; these are where this
+ * package puts them. A `ProblematicValue` within another's state is part of
+ * what the other preserves, and has no path here.
+ *
+ * @throws What the codec throws.
+ */
+export function fvj1ProblematicPathsOf(text: string): ValuePath[] {
+  const paths = probedPathsOf(
+    newDefaultJsonCodecEngine({ lenient: true }).decode(text),
+    (node) => node instanceof ProblematicValue,
+  );
+  return paths.filter((path) =>
+    !paths.some((outer) =>
+      outer.length < path.length &&
+      outer.every((step, index) =>
+        JSON.stringify(step) === JSON.stringify(path[index])
+      )
+    )
+  );
 }
 
 /**
@@ -835,68 +1150,132 @@ function refusalOrRethrow<Refusal>(
 /** Returns the fixture entry for one case. */
 function fixtureEntryOf(
   conformanceCase: Fvj1ConformanceCase,
-): Record<string, Fvj1Descriptor> {
+): Record<string, FixtureJson> {
   const { name, section, divergence } = conformanceCase;
-  const entry: Record<string, Fvj1Descriptor> = { name, section };
-  const implementation: Record<string, Fvj1Descriptor> = {};
+  const implementation: Record<string, FixtureJson> = {};
+
+  // Records this package's outcome where it differs from the spec's, which
+  // only a divergence permits.
+  const compare = (
+    step: "decode" | "encode",
+    ours: Fvj1Outcome,
+    spec: Fvj1Outcome,
+  ) => {
+    if (isSameOutcome(ours, spec)) {
+      return;
+    } else if (divergence === undefined) {
+      throw new Error(
+        `${name}: the ${step} is ${JSON.stringify(ours)}, not ` +
+          `${JSON.stringify(spec)}, and no divergence says so.`,
+      );
+    }
+    implementation[step] = ours;
+  };
+
+  let stated: TextWithMods;
+  let specDecoded: Fvj1Outcome;
+  let specReencoded: Fvj1Outcome | undefined;
+  let canonical: string | undefined;
+  let reencode: () => Fvj1Outcome;
 
   if ("make" in conformanceCase) {
     const value = conformanceCase.make();
-    const described = fvj1DescriptorOf(value);
-    const encoded = fvj1EncodeOutcomeOf(value);
-    const plainText = plainJsonTextOf(value);
-    if (divergence !== undefined && plainText === undefined) {
+    if (divergence !== undefined && plainJsonTextOf(value) === undefined) {
       throw new Error(
         `${name}: declares a divergence for a value whose spec text this ` +
           "module does not compute.",
       );
     }
-    const specEncoded = (plainText === undefined)
-      ? encoded
-      : { text: plainText };
-    entry.encode = { value: described, ...specEncoded };
-    if (!isSameOutcome(encoded, specEncoded)) {
-      if (divergence === undefined) {
+    stated = textWithModsOf(value);
+    specDecoded = { probes: probesOf(value, stated.patches) };
+
+    // What no text carries, a cycle or a symbol of no registry key, has no
+    // encoding either.
+    specReencoded = (stated.patches === undefined)
+      ? { text: stated.text }
+      : { refused: "unencodable" };
+
+    const encoded = fvj1EncodeOutcomeOf(value);
+    reencode = () => {
+      const reencoded = fvj1EncodeOutcomeOf(fabricValueOfTextWithMods(stated));
+      if (!isSameOutcome(reencoded, encoded)) {
         throw new Error(
-          `${name}: encodes to ${JSON.stringify(encoded)}, not to ` +
-            `\`${plainText}\`.`,
+          `${name}: encodes to ${JSON.stringify(encoded)}, but what its ` +
+            `text decodes to encodes to ${JSON.stringify(reencoded)}.`,
         );
       }
-      implementation.encode = encoded;
-    }
-
-    if ("text" in specEncoded) {
-      const decoded = fvj1DecodeOutcomeOf(specEncoded.text);
-      entry.decode = { text: specEncoded.text, value: described };
-      if (!isSameOutcome(decoded, { value: described })) {
-        if (divergence === undefined) {
-          throw new Error(
-            `${name}: \`${specEncoded.text}\` does not decode to the value ` +
-              "it was encoded from.",
-          );
-        }
-        implementation.decode = decoded;
+      return reencoded;
+    };
+  } else {
+    const { text, specDecodes } = conformanceCase;
+    stated = { text };
+    specDecoded = (divergence === undefined || specDecodes)
+      ? fvj1DecodeOutcomeOf(stated)
+      : { refused: decodeRefusalOf(text) };
+    reencode = () => fvj1EncodeOutcomeOf(fabricValueOfTextWithMods(stated));
+    if (specDecodes && !("probes" in specDecoded)) {
+      throw new Error(
+        `${name}: says the spec decodes a text this package refuses, whose ` +
+          "decoding this module therefore does not compute.",
+      );
+    } else if ("probes" in specDecoded) {
+      const value = fabricValueOfTextWithMods(stated);
+      if (divergence !== undefined && plainJsonTextOf(value) === undefined) {
+        throw new Error(
+          `${name}: declares a divergence for a value whose spec text this ` +
+            "module does not compute.",
+        );
+      }
+      const restated = textWithModsOf(value);
+      if (restated.unclaimed !== undefined || restated.patches !== undefined) {
+        throw new Error(`${name}: decodes to a value no text alone writes.`);
+      }
+      specReencoded = { text: restated.text };
+      if (restated.text !== text) {
+        canonical = restated.text;
       }
     }
-  } else {
-    const { text } = conformanceCase;
-    const decoded = fvj1DecodeOutcomeOf(text);
-    const specDecoded: Fvj1DecodeOutcome = (divergence === undefined)
-      ? decoded
-      : { refused: decodeRefusalOf(text) };
-    entry.decode = { text, ...specDecoded };
-    if (!isSameOutcome(decoded, specDecoded)) {
-      implementation.decode = decoded;
-    }
+  }
 
-    if ("value" in specDecoded) {
-      // Built from the descriptor, so that the value encoded is the one the
-      // fixture states rather than the one this decode happened to return.
-      entry.encode = {
-        value: specDecoded.value,
-        ...fvj1EncodeOutcomeOf(fabricValueOfFvj1Descriptor(specDecoded.value)),
-      };
+  const decoded = fvj1DecodeOutcomeOf(stated);
+  compare("decode", decoded, specDecoded);
+  if (specReencoded !== undefined) {
+    if (isSameOutcome(decoded, specDecoded)) {
+      compare("encode", reencode(), specReencoded);
+    } else if ("make" in conformanceCase) {
+      // This package's decoder refuses the text, or returns a value other
+      // than the one the case makes, so what is re-encoded is that value.
+      compare(
+        "encode",
+        fvj1EncodeOutcomeOf(conformanceCase.make()),
+        specReencoded,
+      );
     }
+  }
+
+  const requires = requirementsOf(stated, conformanceCase.requires?.flavors);
+  const entry: Record<string, FixtureJson> = {
+    name,
+    section,
+    ...(requires === undefined ? {} : { requires }),
+    ...stated,
+    ...specDecoded,
+  };
+  if (canonical !== undefined) {
+    entry.canonical = canonical;
+  }
+  if (specReencoded !== undefined && "refused" in specReencoded) {
+    entry.reencode = specReencoded;
+  }
+  if ("refused" in specDecoded && implementation.decode === undefined) {
+    const paths = fvj1ProblematicPathsOf(stated.text);
+    if (paths.length !== 1) {
+      throw new Error(
+        `${name}: a lenient decode yields ${paths.length} problematic ` +
+          "values, not one.",
+      );
+    }
+    entry.problematicAt = paths[0]!;
   }
 
   if (divergence !== undefined) {
@@ -913,57 +1292,10 @@ function fixtureEntryOf(
 }
 
 /**
- * Returns the `fvj1:` text the spec gives `value`, when `value` is plain JSON
- * that needs no encoding: `null`, a boolean, a finite number other than
- * negative zero, a string, or an array or record of these, holding no hole and
- * no key starting with `/`. Returns `undefined` for anything else.
- *
- * This writes the text without the codec, sorting the value's own keys with
- * `utf8Compare()`, the canonical comparator section 10 names, so that the
- * codec's key order is held to a computation from the case rather than to
- * the codec's output or to text typed by hand.
- */
-function plainJsonTextOf(value: FabricValue): string | undefined {
-  const body = plainJsonBodyOf(value);
-  return (body === undefined)
-    ? undefined
-    : JsonCodecEngine.wrapEncodedValueForTesting(body, true);
-}
-
-/** Helper for {@link plainJsonTextOf}, which writes the JSON alone. */
-function plainJsonBodyOf(value: FabricValue): string | undefined {
-  if (
-    value === null || typeof value === "boolean" || typeof value === "string" ||
-    (typeof value === "number" && Number.isFinite(value) &&
-      !Object.is(value, -0))
-  ) {
-    return JSON.stringify(value);
-  }
-
-  const parts: string[] = [];
-  if (isFabricArray(value)) {
-    for (let index = 0; index < value.length; index++) {
-      const part = (index in value) ? plainJsonBodyOf(value[index]) : undefined;
-      if (part === undefined) return undefined;
-      parts.push(part);
-    }
-    return `[${parts.join(",")}]`;
-  } else if (isFabricPlainObject(value)) {
-    for (const key of Object.keys(value).sort(utf8Compare)) {
-      const part = plainJsonBodyOf(value[key]);
-      if (part === undefined || key.startsWith("/")) return undefined;
-      parts.push(`${JSON.stringify(key)}:${part}`);
-    }
-    return `{${parts.join(",")}}`;
-  }
-  return undefined;
-}
-
-/**
  * Returns why `text` is refused, read off the text: whether it has the
  * prefix, and whether what follows the prefix parses as JSON.
  */
-function decodeRefusalOf(text: string): Fvj1DecodeRefusal {
+function decodeRefusalOf(text: string): Fvj1Refusal {
   if (!JsonCodecEngine.seemsLikeEncoded(text)) {
     return "not-fvj1";
   }
@@ -975,620 +1307,7 @@ function decodeRefusalOf(text: string): Fvj1DecodeRefusal {
   return "malformed";
 }
 
-/** Indicates whether two outcomes are the same, descriptors being JSON. */
-function isSameOutcome(
-  a: Fvj1EncodeOutcome | Fvj1DecodeOutcome,
-  b: Fvj1EncodeOutcome | Fvj1DecodeOutcome,
-): boolean {
+/** Indicates whether two outcomes are the same, outcomes being JSON. */
+function isSameOutcome(a: Fvj1Outcome, b: Fvj1Outcome): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
-}
-
-/** Returns the JSON text of `value`, with every non-ASCII code unit escaped. */
-function asciiJsonOf(value: Fvj1Descriptor): string {
-  return JSON.stringify(value).replace(
-    /[\u007f-\uffff]/g,
-    (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`,
-  );
-}
-
-//
-// Descriptors
-//
-
-/**
- * Returns the descriptor of `value`, in the notation
- * `test/fixtures/fvj1-conformance.md` defines.
- *
- * @throws If `value` is a key pair holding `CryptoKey` handles rather than
- *   key material, which no descriptor can write down.
- */
-export function fvj1DescriptorOf(value: FabricValue): Fvj1Descriptor {
-  switch (typeof value) {
-    case "undefined": {
-      return { undefined: null };
-    }
-    case "boolean": {
-      return value;
-    }
-    case "string": {
-      return stringDescriptorOf(value);
-    }
-    case "bigint": {
-      return { bigint: value.toString() };
-    }
-    case "symbol": {
-      const key = Symbol.keyFor(value);
-      return (key === undefined)
-        ? {
-          unregisteredSymbol: (value.description === undefined)
-            ? null
-            : stringDescriptorOf(value.description),
-        }
-        : { symbol: stringDescriptorOf(key) };
-    }
-    case "number": {
-      if (Number.isFinite(value) && !Object.is(value, -0)) {
-        return value;
-      }
-      const special = SPECIAL_NUMBER_NAMES.find(([, number]) =>
-        Object.is(number, value)
-      );
-      return { number: (special === undefined) ? "NaN" : special[0] };
-    }
-  }
-
-  if (value === null) {
-    return null;
-  } else if (isFabricArray(value)) {
-    return { array: arrayEntriesOf(value) };
-  } else if (isFabricPlainObject(value)) {
-    return { record: recordEntriesOf(value) };
-  }
-
-  for (const notation of Object.values(CLASS_NOTATIONS)) {
-    const described = notation.describe(value);
-    if (described !== undefined) {
-      return described;
-    }
-  }
-  throw new Error("No descriptor for a value of an unknown class.");
-}
-
-/**
- * Returns the value `descriptor` describes. The inverse of
- * {@link fvj1DescriptorOf}: the descriptor of the result is `descriptor`.
- *
- * @throws If `descriptor` is not one the notation defines.
- */
-export function fabricValueOfFvj1Descriptor(
-  descriptor: Fvj1Descriptor,
-): FabricValue {
-  if (
-    descriptor === null || typeof descriptor === "boolean" ||
-    typeof descriptor === "number" || typeof descriptor === "string"
-  ) {
-    return descriptor;
-  }
-
-  const [kind, payload] = soleEntryOf(descriptor);
-  switch (kind) {
-    case "undefined": {
-      return undefined;
-    }
-    case "number": {
-      const found = SPECIAL_NUMBER_NAMES.find(([name]) => name === payload);
-      if (found === undefined) {
-        throw new Error(`Not a special number: ${JSON.stringify(payload)}`);
-      }
-      return found[1];
-    }
-    case "utf16": {
-      return stringOf(descriptor);
-    }
-    case "bigint": {
-      return BigInt(stringOf(payload));
-    }
-    case "symbol": {
-      return Symbol.for(stringOf(payload));
-    }
-    case "unregisteredSymbol": {
-      return (payload === null) ? Symbol() : Symbol(stringOf(payload));
-    }
-    case "array": {
-      return arrayOf(payload);
-    }
-    case "record": {
-      return Object.fromEntries(
-        listOf(payload).map((pair) => {
-          const [key, value] = pairOf(pair);
-          return [stringOf(key), fabricValueOfFvj1Descriptor(value)];
-        }),
-      );
-    }
-  }
-
-  for (const notation of Object.values(CLASS_NOTATIONS)) {
-    if (notation.key === kind) {
-      return notation.make(payload);
-    }
-  }
-  throw new Error(`Not a descriptor kind: ${kind}`);
-}
-
-/** The special numbers, under the names their descriptors use. */
-const SPECIAL_NUMBER_NAMES: readonly (readonly [string, number])[] = [
-  ["-0", -0],
-  ["NaN", NaN],
-  ["+Infinity", Infinity],
-  ["-Infinity", -Infinity],
-];
-
-/**
- * How one class's instances are described, and made back from a descriptor.
- * `cls` is there for its type, which ties the entry to the class it is keyed
- * under in {@link CLASS_NOTATIONS}.
- */
-interface ClassNotation<Class> {
-  readonly cls: Class;
-  readonly key: string;
-  /** The descriptor of `value`, or `undefined` if it is not of this class. */
-  readonly describe: (value: FabricValue) => Fvj1Descriptor | undefined;
-  readonly make: (payload: Fvj1Descriptor) => FabricValue;
-}
-
-/**
- * Returns the notation for instances of `cls`, under the descriptor key `key`.
- * `describe` returns the payload a descriptor holds under that key, and `make`
- * returns the instance a payload describes.
- */
-function notate<Class extends abstract new (...args: never) => object>(
-  cls: Class,
-  key: string,
-  describe: (value: InstanceType<Class>) => Fvj1Descriptor,
-  make: (payload: Fvj1Descriptor) => InstanceType<Class>,
-): ClassNotation<Class> {
-  return {
-    cls,
-    key,
-    describe: (value) =>
-      isInstanceOf(cls, value) ? { [key]: describe(value) } : undefined,
-    make,
-  };
-}
-
-/** Indicates whether `value` is an instance of `cls`. */
-function isInstanceOf<Class extends abstract new (...args: never) => object>(
-  cls: Class,
-  value: unknown,
-): value is InstanceType<Class> {
-  return value instanceof cls;
-}
-
-/**
- * The notation for every concrete class, keyed the way the two class tables
- * key the classes. Its type is what holds it complete.
- */
-const CLASS_NOTATIONS:
-  & {
-    readonly [Name in keyof FabricPrimitiveClassesByName]: ClassNotation<
-      FabricPrimitiveClassesByName[Name]
-    >;
-  }
-  & {
-    readonly [Name in keyof FabricInstanceClassesByName]: ClassNotation<
-      FabricInstanceClassesByName[Name]
-    >;
-  } = {
-    FabricBytes: notate(
-      FabricBytes,
-      "Bytes",
-      (value) => hexOf(value.slice()),
-      (payload) => new FabricBytes(bytesOf(payload)),
-    ),
-    FabricDurationDay: notate(
-      FabricDurationDay,
-      "DurationDay",
-      (value) => value.value.toString(),
-      (payload) => new FabricDurationDay(BigInt(stringOf(payload))),
-    ),
-    FabricDurationNsec: notate(
-      FabricDurationNsec,
-      "DurationNsec",
-      (value) => value.value.toString(),
-      (payload) => new FabricDurationNsec(BigInt(stringOf(payload))),
-    ),
-    FabricEpochDay: notate(
-      FabricEpochDay,
-      "EpochDay",
-      (value) => value.value.toString(),
-      (payload) => new FabricEpochDay(BigInt(stringOf(payload))),
-    ),
-    FabricEpochNsec: notate(
-      FabricEpochNsec,
-      "EpochNsec",
-      (value) => value.value.toString(),
-      (payload) => new FabricEpochNsec(BigInt(stringOf(payload))),
-    ),
-    FabricHash: notate(
-      FabricHash,
-      "Hash",
-      (value) => ({
-        tag: stringDescriptorOf(value.tag),
-        hash: hexOf(value.bytes),
-      }),
-      (payload) => {
-        const fields = fieldsOf(payload);
-        return new FabricHash(
-          bytesOf(fieldOf(fields, "hash")),
-          stringOf(fieldOf(fields, "tag")),
-        );
-      },
-    ),
-    FabricKeyPair: notate(
-      FabricKeyPair,
-      "KeyPair",
-      (value) => {
-        if (!value.hasMaterial) {
-          throw new Error(
-            "No descriptor for a key pair holding `CryptoKey` handles.",
-          );
-        }
-        return {
-          algorithm: stringDescriptorOf(value.algorithm),
-          publicKey: hexOf(value.publicKeyBytes.slice()),
-          privateKey: hexOf(value.privateKeyBytes.slice()),
-        };
-      },
-      (payload) => {
-        const fields = fieldsOf(payload);
-        return new FabricKeyPair(
-          stringOf(fieldOf(fields, "algorithm")),
-          bytesOf(fieldOf(fields, "publicKey")),
-          bytesOf(fieldOf(fields, "privateKey")),
-        );
-      },
-    ),
-    FabricRegExp: notate(
-      FabricRegExp,
-      "RegExp",
-      (value) => ({
-        flavor: stringDescriptorOf(value.flavor),
-        source: stringDescriptorOf(value.source),
-        flags: stringDescriptorOf(value.flags),
-      }),
-      (payload) => {
-        const fields = fieldsOf(payload);
-        return new FabricRegExp(
-          stringOf(fieldOf(fields, "flavor")),
-          stringOf(fieldOf(fields, "source")),
-          stringOf(fieldOf(fields, "flags")),
-        );
-      },
-    ),
-    FabricUnavailable: notate(
-      FabricUnavailable,
-      "Unavailable",
-      (value) => ({
-        reason: value.reason,
-        ...(value.errorKind === null ? {} : { errorKind: value.errorKind }),
-        ...(value.rawErrorMessage === null
-          ? {}
-          : { errorMessage: stringDescriptorOf(value.rawErrorMessage) }),
-      }),
-      (payload) => {
-        const fields = fieldsOf(payload);
-        const reasonName = stringOf(fieldOf(fields, "reason"));
-        const reason = Object.values(UNAVAILABLE_REASONS).find((r) =>
-          r === reasonName
-        );
-        if (reason === undefined) {
-          throw new Error(`Not an unavailable reason: ${reasonName}`);
-        }
-        const kindName = fields.errorKind;
-        const errorKind = (kindName === undefined)
-          ? null
-          : Object.values(UNAVAILABLE_ERROR_KINDS).find((k) =>
-            k === stringOf(kindName)
-          );
-        if (errorKind === undefined) {
-          throw new Error(`Not an error kind: ${JSON.stringify(kindName)}`);
-        }
-        const message = fields.errorMessage;
-        return new FabricUnavailable(
-          reason,
-          errorKind,
-          (message === undefined) ? null : stringOf(message),
-        );
-      },
-    ),
-    FabricError: notate(
-      FabricError,
-      "Error",
-      (value) => ({
-        type: stringDescriptorOf(value.type),
-        name: stringDescriptorOf(value.name),
-        message: stringDescriptorOf(value.message),
-        ...(value.stack === undefined
-          ? {}
-          : { stack: stringDescriptorOf(value.stack) }),
-        ...(value.cause === undefined
-          ? {}
-          : { cause: fvj1DescriptorOf(value.cause) }),
-        extras: [...value.extraEntries()]
-          .sort(([a], [b]) => utf8Compare(a, b))
-          .map(([key, extra]) => [
-            stringDescriptorOf(key),
-            fvj1DescriptorOf(extra),
-          ]),
-      }),
-      (payload) => {
-        const fields = fieldsOf(payload);
-        const { stack, cause } = fields;
-        return new FabricError({
-          type: stringOf(fieldOf(fields, "type")),
-          name: stringOf(fieldOf(fields, "name")),
-          message: stringOf(fieldOf(fields, "message")),
-          stack: (stack === undefined) ? undefined : stringOf(stack),
-          cause: (cause === undefined)
-            ? undefined
-            : fabricValueOfFvj1Descriptor(cause),
-          extras: listOf(fieldOf(fields, "extras")).map((pair) => {
-            const [key, extra] = pairOf(pair);
-            return [stringOf(key), fabricValueOfFvj1Descriptor(extra)] as const;
-          }),
-        });
-      },
-    ),
-    FabricLink: notate(
-      FabricLink,
-      "Link",
-      (value) => fvj1DescriptorOf(value.payload),
-      (payload) => {
-        const linkPayload = fabricValueOfFvj1Descriptor(payload);
-        if (!isFabricPlainObject(linkPayload)) {
-          throw new Error("A link's payload must be a record.");
-        }
-        return new FabricLink(linkPayload);
-      },
-    ),
-    FabricMap: notate(
-      FabricMap,
-      "Map",
-      (value) =>
-        [...value.map].map(([key, entry]) => [
-          fvj1DescriptorOf(key),
-          fvj1DescriptorOf(entry),
-        ]),
-      (payload) =>
-        new FabricMap(
-          new Map(
-            listOf(payload).map((pair) => {
-              const [key, entry] = pairOf(pair);
-              return [
-                fabricValueOfFvj1Descriptor(key),
-                fabricValueOfFvj1Descriptor(entry),
-              ];
-            }),
-          ),
-        ),
-    ),
-    FabricSet: notate(
-      FabricSet,
-      "Set",
-      (value) => [...value.set].map(fvj1DescriptorOf),
-      (payload) =>
-        new FabricSet(
-          new Set(listOf(payload).map(fabricValueOfFvj1Descriptor)),
-        ),
-    ),
-    ProblematicValue: notate(
-      ProblematicValue,
-      "Problematic",
-      (value) => ({
-        tag: stringDescriptorOf(value.wireTypeTag),
-        state: fvj1DescriptorOf(value.state),
-        error: stringDescriptorOf(value.error),
-      }),
-      (payload) => {
-        const fields = fieldsOf(payload);
-        return new ProblematicValue(
-          stringOf(fieldOf(fields, "tag")),
-          fabricValueOfFvj1Descriptor(fieldOf(fields, "state")),
-          stringOf(fieldOf(fields, "error")),
-        );
-      },
-    ),
-    UnknownValue: notate(
-      UnknownValue,
-      "Unknown",
-      (value) => ({
-        tag: value.wireTypeTag,
-        state: fvj1DescriptorOf(value.state),
-      }),
-      (payload) => {
-        const fields = fieldsOf(payload);
-        return new UnknownValue(
-          stringOf(fieldOf(fields, "tag")),
-          fabricValueOfFvj1Descriptor(fieldOf(fields, "state")),
-        );
-      },
-    ),
-  };
-
-/**
- * Returns the descriptor of a string: the string itself when it is well
- * formed, and its UTF-16 code units when it holds a lone surrogate, which not
- * every JSON reader keeps.
- */
-function stringDescriptorOf(value: string): Fvj1Descriptor {
-  return value.isWellFormed()
-    ? value
-    : { utf16: Array.from(value, (_, i) => value.charCodeAt(i)) };
-}
-
-/** Returns the entries of an array's descriptor, holes as maximal runs. */
-function arrayEntriesOf(value: readonly FabricValue[]): Fvj1Descriptor[] {
-  const entries: Fvj1Descriptor[] = [];
-  let index = 0;
-  while (index < value.length) {
-    if (index in value) {
-      entries.push(fvj1DescriptorOf(value[index]));
-      index++;
-    } else {
-      let count = 0;
-      for (; index < value.length && !(index in value); index++) {
-        count++;
-      }
-      entries.push({ hole: count });
-    }
-  }
-  return entries;
-}
-
-/** Returns the entries of a record's descriptor, in UTF-8 order of key. */
-function recordEntriesOf(
-  value: { readonly [key: string]: FabricValue },
-): Fvj1Descriptor[] {
-  return Object.keys(value).sort(utf8Compare).map((key) => [
-    stringDescriptorOf(key),
-    fvj1DescriptorOf(value[key]),
-  ]);
-}
-
-/** Returns the array an array descriptor's payload describes. */
-function arrayOf(payload: Fvj1Descriptor): FabricValue[] {
-  const result: FabricValue[] = [];
-  let index = 0;
-  for (const entry of listOf(payload)) {
-    const hole = holeCountOf(entry);
-    if (hole === undefined) {
-      result[index] = fabricValueOfFvj1Descriptor(entry);
-      index++;
-    } else {
-      index += hole;
-    }
-  }
-  result.length = index;
-  return result;
-}
-
-/**
- * Returns the count of a `hole` entry, or `undefined` for any other entry.
- *
- * @throws If a `hole` entry's count is not an integer of at least one, the
- *   least run the wire format writes.
- */
-function holeCountOf(entry: Fvj1Descriptor): number | undefined {
-  if (entry === null || typeof entry !== "object" || isList(entry)) {
-    return undefined;
-  }
-  const [kind, count] = soleEntryOf(entry);
-  if (kind !== "hole") {
-    return undefined;
-  } else if (
-    !(typeof count === "number" && Number.isSafeInteger(count) && count >= 1)
-  ) {
-    throw new Error(`Not a hole count: ${JSON.stringify(count)}`);
-  }
-  return count;
-}
-
-/** Returns the string a string descriptor describes. */
-function stringOf(descriptor: Fvj1Descriptor): string {
-  if (typeof descriptor === "string") {
-    return descriptor;
-  }
-  const [kind, units] = soleEntryOf(fieldsOf(descriptor));
-  if (kind !== "utf16") {
-    throw new Error(`Not a string descriptor: ${JSON.stringify(descriptor)}`);
-  }
-  return listOf(units).map((unit) => {
-    if (typeof unit !== "number") {
-      throw new Error(`Not a code unit: ${JSON.stringify(unit)}`);
-    }
-    return String.fromCharCode(unit);
-  }).join("");
-}
-
-/** Returns the bytes a lowercase hexadecimal string describes. */
-function bytesOf(descriptor: Fvj1Descriptor): Uint8Array {
-  const hex = stringOf(descriptor);
-  if (!/^(?:[0-9a-f]{2})*$/.test(hex)) {
-    throw new Error(`Not lowercase hexadecimal bytes: ${hex}`);
-  }
-  return Uint8Array.from(
-    { length: hex.length / 2 },
-    (_, i) => parseInt(hex.slice(i * 2, i * 2 + 2), 16),
-  );
-}
-
-/** Returns `bytes` as lowercase hexadecimal. */
-function hexOf(bytes: Uint8Array): string {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-/** Returns `descriptor` as a list, throwing if it is not one. */
-function listOf(descriptor: Fvj1Descriptor): readonly Fvj1Descriptor[] {
-  if (!isList(descriptor)) {
-    throw new Error(`Not a list: ${JSON.stringify(descriptor)}`);
-  }
-  return descriptor;
-}
-
-/**
- * Indicates whether `descriptor` is a list. `Array.isArray()` narrows to a
- * mutable array, which leaves a read-only one in the other branch.
- */
-function isList(
-  descriptor: Fvj1Descriptor,
-): descriptor is readonly Fvj1Descriptor[] {
-  return Array.isArray(descriptor);
-}
-
-/** Returns `descriptor` as a two-element list, throwing if it is not one. */
-function pairOf(
-  descriptor: Fvj1Descriptor,
-): readonly [Fvj1Descriptor, Fvj1Descriptor] {
-  const [first, second, ...rest] = listOf(descriptor);
-  if (first === undefined || second === undefined || rest.length > 0) {
-    throw new Error(`Not a pair: ${JSON.stringify(descriptor)}`);
-  }
-  return [first, second];
-}
-
-/** Returns `descriptor` as a JSON object, throwing if it is not one. */
-function fieldsOf(
-  descriptor: Fvj1Descriptor,
-): { readonly [key: string]: Fvj1Descriptor } {
-  if (
-    descriptor === null || typeof descriptor !== "object" || isList(descriptor)
-  ) {
-    throw new Error(`Not an object: ${JSON.stringify(descriptor)}`);
-  }
-  return descriptor;
-}
-
-/** Returns the field `key` of `fields`, throwing if it is absent. */
-function fieldOf(
-  fields: { readonly [key: string]: Fvj1Descriptor },
-  key: string,
-): Fvj1Descriptor {
-  const field = fields[key];
-  if (field === undefined) {
-    throw new Error(`No field \`${key}\` in ${JSON.stringify(fields)}`);
-  }
-  return field;
-}
-
-/** Returns the one key and value of `descriptor`, throwing unless one. */
-function soleEntryOf(
-  descriptor: Fvj1Descriptor,
-): readonly [string, Fvj1Descriptor] {
-  const entries = Object.entries(fieldsOf(descriptor));
-  const [entry] = entries;
-  if (entry === undefined || entries.length > 1) {
-    throw new Error(`Not a single-key object: ${JSON.stringify(descriptor)}`);
-  }
-  return entry;
 }

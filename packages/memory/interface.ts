@@ -140,6 +140,12 @@ export type Conflict = {
 
   /** Scope of the conflicting instance; omitted by peers without scoped errors. */
   scope?: CellScope;
+
+  /**
+   * Seq of the basis the refused read claimed, `0` for a document the reader
+   * held no revision of. Omitted where the refusal carried no sequences.
+   */
+  seq?: number;
 };
 
 export interface ConflictError extends Error {

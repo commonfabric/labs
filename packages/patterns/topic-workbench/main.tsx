@@ -30,6 +30,7 @@ import {
   action,
   computed,
   Default,
+  type FabricBytes,
   handler,
   lift,
   NAME,
@@ -104,7 +105,7 @@ export interface TopicView {
   commentCount: number | Default<0> | undefined;
   lastActivityAt: number | Default<0> | undefined;
   createdBy?:
-    | { kind: string; name: string; avatar?: string }
+    | { kind: string; name: string; picture?: FabricBytes; avatar?: string }
     | Default<{ kind: "person"; name: "" }>;
   links: TopicLinkView[] | Default<[]>;
 }

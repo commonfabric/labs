@@ -1,20 +1,22 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import { deepFreeze } from "@commonfabric/data-model";
+import { deepFreeze, isDeepFrozen } from "@commonfabric/data-model";
 import { linkRefPayload } from "@commonfabric/data-model/cell-rep";
+import { FabricError } from "@commonfabric/data-model/fabric-instances";
+import { FabricEpochNsec } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import {
-  areLinksSame,
   areNormalizedLinksSame,
   areNormalizedLinksSameIgnoringScope,
   createLLMFriendlyLink,
   createSigilLinkFromParsedLink,
   decodeJsonPointer,
   encodeJsonPointer,
+  externalizeLinkSchemasInValue,
   inlineExternalSchemaRefsInValue,
   isCellLink,
   isSigilLink,
@@ -25,10 +27,12 @@ import {
   parseLinkOrThrow,
   parseLLMFriendlyLink,
   parseReferenceParts,
+  sanitizeAndFreezeSchemaForLinks,
   sanitizeAndInternSchemaForLinks,
   sanitizeSchemaForLinks,
   schemaForSpaceCrossing,
 } from "../src/link-utils.ts";
+import { areLinksSame } from "../src/link-equality.ts";
 import { externalRefTo, resolvedSchema } from "./schema-ref-helpers.ts";
 import { registerSchemaDocument } from "../src/schema-registry.ts";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
@@ -42,6 +46,7 @@ import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
+const otherSpace = (await Identity.fromPassphrase("test other space")).did();
 
 describe("link-utils", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate>;
@@ -78,6 +83,24 @@ describe("link-utils", () => {
       const first = schemaForSpaceCrossing(tx, space, reference);
       expect(first).toEqual(schema);
       expect(schemaForSpaceCrossing(tx, space, { ...reference })).toBe(first);
+    });
+
+    it("loads the closure from the space it is given and from no other", () => {
+      // The document is written as a store holds it, without registering it,
+      // so the first call can find it nowhere and the second only in `space`.
+      const schema = {
+        type: "string",
+        title: "crossing closure residency",
+      } as const;
+      const hash = internSchemaAsTaggedHashString(schema);
+      const reference = { $ref: `cid:${hash}` };
+      tx.writeOrThrow(
+        { space, id: `cid:${hash}`, type: "application/json", path: [] },
+        { value: schema },
+      );
+
+      expect(schemaForSpaceCrossing(tx, otherSpace, reference)).toBe(false);
+      expect(schemaForSpaceCrossing(tx, space, reference)).toEqual(schema);
     });
 
     it("requires the closure again after the storage manager's registry lease ends", async () => {
@@ -783,6 +806,142 @@ describe("link-utils", () => {
       const value = { entry: sigil };
       expect(inlineExternalSchemaRefsInValue(value)).toEqual(value);
     });
+
+    it("returns the same inline form for a reference it has inlined before", () => {
+      setContentAddressedSchemasConfig(true);
+      const document: JSONSchema = {
+        type: "object",
+        properties: { name: { type: "string" } },
+      };
+      const hash = internSchemaAsTaggedHashString(document);
+      registerSchemaDocument(hash, document);
+      const link = () => ({
+        "/": {
+          [LINK_V1_TAG]: {
+            id: "of:memoized-schema-target",
+            path: [],
+            schema: { $ref: `cid:${hash}` },
+          },
+        },
+      });
+      const first = linkRefPayload(
+        inlineExternalSchemaRefsInValue({ entry: link() }).entry,
+      ).schema;
+      const second = linkRefPayload(
+        inlineExternalSchemaRefsInValue({ entry: link() }).entry,
+      ).schema;
+      expect(first).toEqual(document);
+      expect(second).toBe(first);
+    });
+  });
+
+  describe("externalizeLinkSchemasInValue", () => {
+    it("stamps a reference on an inline link schema and leaves the rest as it is", () => {
+      setContentAddressedSchemasConfig(true);
+      const document: JSONSchema = {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "The person's name." },
+          age: { type: "number", description: "The person's age in years." },
+        },
+      };
+      const link = (schema: JSONSchema) => ({
+        "/": {
+          [LINK_V1_TAG]: {
+            id: "of:externalized-target",
+            path: [],
+            schema,
+          },
+        },
+      });
+      const value = {
+        inline: link(document),
+        trivial: link({}),
+        plain: { name: "Ada" },
+      };
+      const stored = externalizeLinkSchemasInValue(value);
+      const stamped = linkRefPayload(stored.inline).schema as { $ref: string };
+      expect(stamped.$ref).toBe(
+        `cid:${internSchemaAsTaggedHashString(document)}`,
+      );
+      expect(resolvedSchema(stamped)).toEqual(document);
+      expect(stored.trivial).toBe(value.trivial);
+      expect(stored.plain).toBe(value.plain);
+      // A second pass finds nothing to rewrite.
+      expect(externalizeLinkSchemasInValue(stored)).toBe(stored);
+    });
+
+    it("leaves a handle stamp no longer than a reference inline", () => {
+      setContentAddressedSchemasConfig(true);
+      const value = {
+        entry: {
+          "/": {
+            [LINK_V1_TAG]: {
+              id: "of:stamped-target",
+              path: [],
+              schema: { asCell: ["stream"] },
+            },
+          },
+        },
+      };
+      expect(externalizeLinkSchemasInValue(value)).toBe(value);
+    });
+
+    it("measures a schema against its reference in wire bytes, not characters", () => {
+      setContentAddressedSchemasConfig(true);
+      // Shorter than a reference in UTF-16 code units, longer in the UTF-8
+      // bytes a frame carries.
+      const document: JSONSchema = { type: "string", title: "日".repeat(20) };
+      expect(JSON.stringify(document).length).toBeLessThan(63);
+      const value = {
+        entry: {
+          "/": {
+            [LINK_V1_TAG]: {
+              id: "of:wide-title-target",
+              path: [],
+              schema: document,
+            },
+          },
+        },
+      };
+      const stored = externalizeLinkSchemasInValue(value);
+      const stamped = linkRefPayload(stored.entry).schema as { $ref: string };
+      expect(stamped.$ref).toBe(
+        `cid:${internSchemaAsTaggedHashString(document)}`,
+      );
+    });
+
+    it("stamps a reference on a cyclic schema", () => {
+      setContentAddressedSchemasConfig(true);
+      const document: JSONSchema & { properties: Record<string, unknown> } = {
+        type: "object",
+        properties: {},
+      };
+      document.properties.next = document;
+      const value = {
+        entry: {
+          "/": {
+            [LINK_V1_TAG]: {
+              id: "of:cyclic-target",
+              path: [],
+              schema: document,
+            },
+          },
+        },
+      };
+      const stored = externalizeLinkSchemasInValue(value);
+      const stamped = linkRefPayload(stored.entry).schema as { $ref: string };
+      expect(stamped.$ref.startsWith("cid:")).toBe(true);
+      expect(resolvedSchema(stamped)).toBeDefined();
+    });
+
+    it("returns a value carrying no inline link schema as it is", () => {
+      setContentAddressedSchemasConfig(true);
+      const value = {
+        entry: { "/": { [LINK_V1_TAG]: { id: "of:x", path: [] } } },
+      };
+      expect(externalizeLinkSchemasInValue(value)).toBe(value);
+    });
   });
 
   describe("sanitizeSchemaForLinks through references", () => {
@@ -918,6 +1077,126 @@ describe("link-utils", () => {
       for (const primitive of [undefined, true, false]) {
         expect(sanitizeAndInternSchemaForLinks(primitive)).toBe(primitive);
       }
+    });
+
+    describe("sanitizeAndFreezeSchemaForLinks()", () => {
+      it("returns a deep-frozen strip of a mutable schema, leaving the schema unfrozen", () => {
+        const schema = {
+          type: "object",
+          properties: { name: { type: "string", asCell: ["cell"] } },
+          required: ["name"],
+        } satisfies JSONSchema;
+        const frozen = sanitizeAndFreezeSchemaForLinks(schema);
+        expect(frozen).toEqual({
+          type: "object",
+          properties: { name: { type: "string" } },
+          required: ["name"],
+        });
+        expect(isDeepFrozen(frozen)).toBe(true);
+        expect(Object.isFrozen(schema)).toBe(false);
+        expect(Object.isFrozen(schema.properties)).toBe(false);
+        expect(Object.isFrozen(schema.properties.name)).toBe(false);
+        expect(Object.isFrozen(schema.required)).toBe(false);
+      });
+
+      it("returns the strip `sanitizeSchemaForLinks()` returns, in every mode", () => {
+        const schema = () =>
+          ({
+            type: "object",
+            properties: {
+              name: { type: "string", asCell: ["cell"] },
+              events: { type: "number", asCell: ["stream"] },
+            },
+          }) as JSONSchema;
+        for (const mode of Object.values(KeepAsCell)) {
+          for (const input of [schema(), deepFreeze(schema())]) {
+            const frozen = sanitizeAndFreezeSchemaForLinks(input, mode);
+            expect(frozen).toEqual(sanitizeSchemaForLinks(input, mode));
+            expect(isDeepFrozen(frozen)).toBe(true);
+          }
+        }
+      });
+
+      it("returns a schema with a root of its own on each call", () => {
+        // Each caller holds an object of its own, as with the mutable form: a
+        // graph holding two of these must not hold one object twice.
+        const mutable = { type: "object", properties: { name: {} } };
+        expect(sanitizeAndFreezeSchemaForLinks(mutable as JSONSchema)).not
+          .toBe(sanitizeAndFreezeSchemaForLinks(mutable as JSONSchema));
+
+        const deepFrozen = deepFreeze({
+          type: "object",
+          properties: { name: {} },
+        }) as JSONSchema;
+        const first = sanitizeAndFreezeSchemaForLinks(deepFrozen);
+        const second = sanitizeAndFreezeSchemaForLinks(deepFrozen);
+        expect(second).not.toBe(first);
+        expect(second).not.toBe(deepFrozen);
+        expect(isDeepFrozen(first)).toBe(true);
+        expect(isDeepFrozen(second)).toBe(true);
+      });
+
+      it("returns a boolean schema and `undefined` as they are", () => {
+        for (const primitive of [undefined, true, false]) {
+          expect(sanitizeAndFreezeSchemaForLinks(primitive)).toBe(primitive);
+        }
+      });
+
+      it("leaves as they were the values a mutable schema holds that the strip does not rebuild", () => {
+        // The strip rebuilds every record and array, and carries by reference
+        // a fabric primitive, which is frozen from its construction, and a
+        // function.
+        const stamp = new FabricEpochNsec(123n);
+        const describeIt = () => "described";
+        const held = { list: [{ n: 1 }] };
+        const schema = {
+          type: "object",
+          default: { stamp, describeIt, held },
+        } as unknown as JSONSchema;
+        const frozen = sanitizeAndFreezeSchemaForLinks(schema) as {
+          default: { stamp: unknown; describeIt: unknown; held: unknown };
+        };
+        expect(isDeepFrozen(frozen)).toBe(true);
+        expect(frozen.default.stamp).toBe(stamp);
+        expect(frozen.default.describeIt).toBe(describeIt);
+        expect(Object.isFrozen(describeIt)).toBe(false);
+        expect(frozen.default.held).toEqual(held);
+        expect(frozen.default.held).not.toBe(held);
+        expect(Object.isFrozen(held)).toBe(false);
+        expect(Object.isFrozen(held.list)).toBe(false);
+        expect(Object.isFrozen(held.list[0])).toBe(false);
+      });
+
+      it("throws for a mutable schema holding a `FabricInstance`, as `sanitizeSchemaForLinks()` does", () => {
+        const schema = () =>
+          ({
+            type: "object",
+            default: FabricError.fromNativeError(new Error("boom")),
+          }) as unknown as JSONSchema;
+        expect(() => sanitizeAndFreezeSchemaForLinks(schema())).toThrow(
+          "FabricError",
+        );
+        expect(() => sanitizeSchemaForLinks(schema())).toThrow("FabricError");
+      });
+
+      it("leaves unfrozen a part of a mutable schema nested past the depth the strip rebuilds", () => {
+        // The strip carries what lies below a fixed depth by reference, so
+        // that part of a result is otherwise still the caller's object.
+        const innermost: Record<string, unknown> = { type: "string" };
+        let nested = innermost;
+        for (let level = 0; level < 60; level++) {
+          nested = { type: "object", properties: { next: nested } };
+        }
+        const schema = {
+          type: "object",
+          properties: { deep: nested },
+        } as JSONSchema;
+        const frozen = sanitizeAndFreezeSchemaForLinks(schema, KeepAsCell.All);
+        expect(isDeepFrozen(frozen)).toBe(true);
+        expect(frozen).toEqual(schema);
+        expect(Object.isFrozen(nested)).toBe(false);
+        expect(Object.isFrozen(innermost)).toBe(false);
+      });
     });
 
     it("memoizes a frozen input per keepAsCell mode, handing out a fresh top that shares the cached sub-tree", () => {

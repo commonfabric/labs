@@ -243,7 +243,7 @@ export function wrapIt(
     if (name === undefined) return through(...args);
     const identity = [...enclosing(args), name].join(NAME_SEPARATOR);
     const file = runningFile();
-    if (file !== undefined) capture.names.set(identity, file);
+    if (file !== undefined) capture.attribute(identity, file);
     return capture.skipped(file, identity) ? ignore(...args) : through(...args);
   };
 }

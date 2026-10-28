@@ -186,13 +186,23 @@ function getStringRep(value: string) {
  */
 export class ValueHasher {
   /** Hasher which receives the value's bytes. */
-  readonly #hasher: IncrementalHasher = createHasher();
+  readonly #hasher: IncrementalHasher;
 
   /**
    * The containers enclosing the position being fed, outermost first. A
    * container found here is a cycle, and is fed as a reference to its position.
    */
   readonly #path = new IndexTrackingStack<object>();
+
+  /**
+   * Constructs an instance which feeds the value's bytes to `hasher`, a new
+   * SHA-256 hasher unless one is given. A hasher of another kind is handed
+   * exactly the bytes a hash is computed over, and what it digests them to is
+   * not a `fid1` hash.
+   */
+  constructor(hasher: IncrementalHasher = createHasher()) {
+    this.#hasher = hasher;
+  }
 
   //
   // Instance members
@@ -505,7 +515,10 @@ export class ValueHasher {
     const keys = utf8SortedKeysOf(value);
 
     hasher.update(TAG_OBJECT_BYTES);
-    for (const key of keys) {
+    // Indexed rather than `for...of`, which would allocate an iterator per
+    // object fed; a document's hash feeds thousands of them.
+    for (let at = 0; at < keys.length; at++) {
+      const key = keys[at]!;
       // Keys are encoded in the same format as strings, and values are hashed
       // recursively.
       hasher.update(getStringRep(key));

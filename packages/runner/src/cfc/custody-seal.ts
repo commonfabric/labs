@@ -31,7 +31,7 @@ import {
 } from "@commonfabric/api/cfc";
 import { sha256 } from "@commonfabric/content-hash";
 import { debugStr, deepFreeze, hashStringOf } from "@commonfabric/data-model";
-import { isDID, isWellFormedDID } from "@commonfabric/identity/did";
+import { type DID, isDID, isWellFormedDID } from "@commonfabric/identity/did";
 import {
   aclDocId,
   ANYONE_USER,
@@ -44,6 +44,7 @@ import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { utf8Compare } from "@commonfabric/utils/utf8";
 
+import { profileNameWrittenAt } from "../builder/principal-of.ts";
 import { type Cell, cellRuntime, isCell } from "../cell.ts";
 import { resolveLink } from "../link-resolution.ts";
 import {
@@ -71,6 +72,7 @@ import {
   containsAtomPatternVariable,
   evidenceHolds,
   hasExactKeys,
+  isActorOwnedAlternative,
   isTrustedGestureOn,
   type ReadEvidence,
   readEvidence,
@@ -84,8 +86,10 @@ import { cfcPolicyManifestDocId, type PolicyTemplateV1 } from "./policy.ts";
 import { collectConsumedLabel } from "./prepare.ts";
 import { CfcReadCeilingError } from "./read-ceiling.ts";
 import {
-  exactPrincipalAttestations,
+  mintedProfilePrincipals,
   principalClaimEntries,
+  PROFILE_NAME_FIELD,
+  representsPrincipalEntries,
 } from "./represents-principal.ts";
 import { snapshotJsonValue } from "./share-snapshot-value.ts";
 import { type CfcTrustConfig, createTrustResolver } from "./trust.ts";
@@ -142,8 +146,9 @@ export interface CustodySealOptions {
   /**
    * The actor's own `Context` and `Resource` sources this room may draw on. A
    * value whose label names any other source is refused; an empty list admits
-   * only values labeled for the actor alone (`User` or a bare DID), which is
-   * what a value the actor typed in carries.
+   * only values that name none: one labeled for the actor alone (`User` or a
+   * bare DID), as a value the actor typed in is, or one made the actor's own
+   * from data shared with other people, whom the preview names (`heldWith`).
    *
    * A host passes the actor-private settings cell that holds the list, in the
    * form {@link readCustodySourcePolicy} reads, rather than a list it read
@@ -207,6 +212,14 @@ export interface PreparedCustodySeal {
   readonly sources: readonly CfcAtom[];
 
   /**
+   * The people the value was drawn from data shared with, such as a
+   * conversation: one sorted group per distinct set of people a clause of
+   * its label names beside the actor, the groups sorted. Empty when no clause names anyone
+   * else. The receipt records them; the box entry does not.
+   */
+  readonly heldWith: readonly (readonly DID[])[];
+
+  /**
    * Whether every release rule of the room's policy requires that everything
    * confidential its releasing code read was written by this seal (an
    * integrity guard on `TransformedBy` with the seal's builtin identity as its
@@ -266,6 +279,7 @@ interface Inspection {
   readonly instance: string;
   readonly policy: CfcModulePolicyRefAtom;
   readonly sources: readonly CfcAtom[];
+  readonly heldWith: readonly (readonly DID[])[];
   readonly entryKey: string;
   readonly witnessedRelease: boolean;
   readonly evidence: readonly ReadEvidence[];
@@ -349,36 +363,6 @@ const isSealStamp = (atom: unknown): boolean =>
   atom.identity.builtinId === CUSTODY_SEAL_WRITER;
 
 /**
- * Whether one confidentiality alternative stands for the actor alone. Each
- * shape is matched on its exact key set, so an atom carrying any further
- * field (a `hash` binding a named policy, a `scope`) is never the actor's.
- */
-const isActorOwnedAlternative = (atom: unknown, actor: string): boolean => {
-  if (typeof atom === "string") return atom === actor;
-  if (!isObjectNotArray(atom)) return false;
-  switch (atom.type) {
-    case CFC_ATOM_TYPE.User:
-      return hasExactKeys(atom, ["type", "subject"]) &&
-        atom.subject === actor;
-    case CFC_ATOM_TYPE.Context:
-      return hasExactKeys(atom, ["type", "name", "subject"]) &&
-        typeof atom.name === "string" && atom.subject === actor;
-    case CFC_ATOM_TYPE.Resource:
-      return hasExactKeys(atom, ["type", "class", "subject"]) &&
-        typeof atom.class === "string" && atom.subject === actor;
-    // The actor's home space is the space named by the actor's own DID. Its
-    // access list is the actor's to write, so what it admits is the actor's
-    // decision, as with a clause naming the actor.
-    case CFC_ATOM_TYPE.Space:
-      return hasExactKeys(atom, ["type", "id"]) && atom.id === actor;
-    case CFC_ATOM_TYPE.PersonalSpace:
-      return hasExactKeys(atom, ["type", "owner"]) && atom.owner === actor;
-    default:
-      return false;
-  }
-};
-
-/**
  * The DID an alternative would stand for if it were an actor-owned shape, for
  * naming an identity mismatch, or `undefined` when it has no such shape.
  */
@@ -398,17 +382,70 @@ const ownerShapedSubject = (atom: unknown): string | undefined => {
 };
 
 /**
- * Checks that every clause of the draft's label is the actor's own, and
- * returns the `Context` and `Resource` sources it draws on.
- *
- * @throws If a clause is empty, carries a caveat, names another principal, or
- *   holds any alternative that is not the actor's own.
+ * The person an alternative names when it is another principal: a
+ * well-formed DID, bare or as `User{subject}` on its exact key set.
+ * `undefined` for anything else.
  */
-const actorOwnedSources = (
+const personOf = (atom: unknown): DID | undefined => {
+  if (typeof atom === "string") {
+    return isWellFormedDID(atom) ? atom : undefined;
+  }
+  return isObjectNotArray(atom) && atom.type === CFC_ATOM_TYPE.User &&
+      hasExactKeys(atom, ["type", "subject"]) && isWellFormedDID(atom.subject)
+    ? atom.subject
+    : undefined;
+};
+
+/**
+ * One alternative as a comparable key, with the actor as a bare DID and as
+ * `User{subject}` the same principal: a store names its owner by bare DID
+ * (`dbOwner()`), and a value private to its reader by `User`.
+ */
+const alternativeKey = (atom: CfcAtom, actor: string): string =>
+  isActorOwnedAlternative(atom, actor) && personOf(atom) === actor
+    ? actor
+    : canonicalJson(atom);
+
+/** What the draft's label says about whose the value is. */
+interface ActorLabel {
+  /** The actor's own `Context` and `Resource` sources the value draws on. */
+  readonly sources: CfcAtom[];
+  /**
+   * The other people the shared clauses name: one sorted group per distinct
+   * set of people.
+   */
+  readonly heldWith: DID[][];
+}
+
+/**
+ * Checks that the actor alone can seal the draft, and returns the actor's
+ * sources it draws on and the people it was drawn from data shared with.
+ *
+ * Every clause must admit the actor through an alternative of the actor's
+ * own. A clause that also names other people is the actor's only when it is
+ * absorbed (§3.1.8(5)): another clause, all of whose alternatives are the
+ * actor's own, holds only alternatives the shared clause holds. The label
+ * then admits exactly who that clause admits (§3.1.4), and the shared clause
+ * adds no reader, so sealing it is sealing the actor's own value. That is a
+ * value made the actor's own from data shared with others, as a message row
+ * labeled for its participants and the store's owner (§13.12) is when it is
+ * joined with a clause naming the actor alone.
+ *
+ * Beside the actor, a shared clause may name only people, `User{subject}` or
+ * a bare DID, so that the dialog can name them; the seal refuses a policy, a
+ * source or a space there.
+ *
+ * @throws If a clause is empty, carries a caveat, has no alternative of the
+ *   actor's own, names something other than a person beside the actor, or
+ *   names others and is not absorbed.
+ */
+const actorLabel = (
   confidentiality: readonly CfcConfClause[],
   actor: string,
-): CfcAtom[] => {
+): ActorLabel => {
   const sources: CfcAtom[] = [];
+  const own: Set<string>[] = [];
+  const shared: { keys: Set<string>; people: DID[]; clause: unknown }[] = [];
   for (const clause of confidentiality) {
     const alternatives = clauseAlternatives(clause);
     if (alternatives.length === 0) {
@@ -425,29 +462,64 @@ const actorOwnedSources = (
         debugStr`Custody seal refuses a value that still carries a caveat: $quote${clause}`,
       );
     }
-    if (alternatives.every((atom) => isActorOwnedAlternative(atom, actor))) {
-      for (const atom of alternatives) {
-        if (
-          isObjectNotArray(atom) &&
-          (atom.type === CFC_ATOM_TYPE.Context ||
-            atom.type === CFC_ATOM_TYPE.Resource) &&
-          !sources.some((source) => deepEqual(source, atom))
-        ) sources.push(atom as CfcAtom);
+    const owned = alternatives.filter((atom) =>
+      isActorOwnedAlternative(atom, actor)
+    );
+    if (owned.length === 0) {
+      const other = alternatives.map(ownerShapedSubject)
+        .find((subject) => subject !== undefined && subject !== actor);
+      if (other !== undefined) {
+        throw new Error(
+          `Custody seal identity mismatch: the value is labeled for \`${other}\`, and this runtime acts as \`${actor}\``,
+        );
       }
-      continue;
-    }
-    const other = alternatives.map(ownerShapedSubject)
-      .find((subject) => subject !== undefined && subject !== actor);
-    if (other !== undefined) {
       throw new Error(
-        `Custody seal identity mismatch: the value is labeled for \`${other}\`, and this runtime acts as \`${actor}\``,
+        debugStr`Custody seal refuses a clause the authenticated actor does not own: $quote,long${clause}`,
       );
     }
-    throw new Error(
-      debugStr`Custody seal refuses a clause the authenticated actor does not own: $quote,long${clause}`,
+    const keys = new Set(
+      alternatives.map((atom) => alternativeKey(atom, actor)),
     );
+    const people: DID[] = [];
+    for (const atom of alternatives) {
+      if (isActorOwnedAlternative(atom, actor)) continue;
+      const person = personOf(atom);
+      if (person === undefined) {
+        throw new Error(
+          debugStr`Custody seal refuses a clause that names something other than a person beside the actor: $quote,long${clause}`,
+        );
+      }
+      if (!people.includes(person)) people.push(person);
+    }
+    if (people.length === 0) own.push(keys);
+    else shared.push({ keys, people: people.sort(), clause });
+    for (const atom of owned) {
+      if (
+        isObjectNotArray(atom) &&
+        (atom.type === CFC_ATOM_TYPE.Context ||
+          atom.type === CFC_ATOM_TYPE.Resource) &&
+        !sources.some((source) => deepEqual(source, atom))
+      ) sources.push(atom as CfcAtom);
+    }
   }
-  return sources;
+  const heldWith: DID[][] = [];
+  for (const { keys, people } of shared) {
+    const absorbed = own.some((alone) =>
+      [...alone].every((key) => keys.has(key))
+    );
+    if (!absorbed) {
+      throw new Error(
+        `Custody seal refuses a value \`${
+          people[0]
+        }\` can also read: no clause of its label admits this runtime's actor, \`${actor}\`, alone`,
+      );
+    }
+    if (!heldWith.some((group) => deepEqual(group, people))) {
+      heldWith.push(people);
+    }
+  }
+  heldWith.sort((a, b) => canonicalJson(a) < canonicalJson(b) ? -1 : 1);
+  return { sources, heldWith };
 };
 
 /** Stands in for a property the stance leaves out: its schema alone is checked. */
@@ -1291,7 +1363,7 @@ const clauseWithheldFromRoom = (
 /**
  * Returns `terms` with each seat named by a reference replaced by the one
  * principal its cell attests, in exactly the form a runtime mints (see
- * `exactPrincipalAttestations`), with a well-formed DID for its subject. A
+ * `mintedProfilePrincipals()`), with a well-formed DID for its subject. A
  * pattern holds a member's profile, not the member's DID, so a seat can name
  * what the member's own runtime attested. The reads are added to `evidence`,
  * so the transaction that writes the entry verifies them.
@@ -1312,6 +1384,9 @@ const resolveSeats = async (
     const seat = runtime.getCellFromLink(link);
     await seat.sync();
     await seat.resolveAsCell().sync();
+    // Whether the seat's owner wrote a name decides which of its fields
+    // attest, so the name's document is loaded too.
+    await seat.resolveAsCell().key(PROFILE_NAME_FIELD).resolveAsCell().sync();
     const tx = runtime.edit();
     try {
       const target = seat.withTx(tx).resolveAsCell().getAsNormalizedFullLink();
@@ -1322,13 +1397,19 @@ const resolveSeats = async (
       // The seal writes the DID into terms every reader of the room sees, so
       // the cell must already be one they hold, whether or not its label
       // traveled into the terms with the reference.
-      // The attestation is read from these entries, so they are the ones the
-      // room's readers must hold, whatever their observation class. The
-      // attestation's subject is itself public metadata (a
-      // `represents-principal` subject is classified public for invariant
-      // 12), so no label-metadata clause governs the DID.
+      // The attestation is read from the entries the profile rule counts, and
+      // checked on the root and top-level fields besides, so those are the
+      // entries the room's readers must hold, whatever their observation
+      // class. The attestation's subject is itself public
+      // metadata (a `represents-principal` subject is classified public for
+      // invariant 12), so no label-metadata clause governs the DID.
+      const nameWritten = profileNameWrittenAt(runtime, tx, target);
+      const attesting = new Set([
+        ...principalClaimEntries(view),
+        ...representsPrincipalEntries(view, nameWritten),
+      ]);
       const withheld = clauseWithheldFromRoom(
-        principalClaimEntries(view)
+        [...attesting]
           .flatMap((entry) =>
             (entry.label.confidentiality ?? []) as CfcConfClause[]
           ),
@@ -1340,10 +1421,7 @@ const resolveSeats = async (
           debugStr`Custody terms name seat ${index} by a cell with a clause the room's readers do not hold: $quote,long${withheld}`,
         );
       }
-      const principals = exactPrincipalAttestations(
-        view,
-        "represents-principal",
-      );
+      const principals = mintedProfilePrincipals(view, nameWritten);
       if (
         principals === undefined || !principals.every(isWellFormedDID)
       ) {
@@ -1631,6 +1709,7 @@ const inspect = async (
   let draftLink: NormalizedFullLink;
   let stance: JSONValue;
   let sources: CfcAtom[];
+  let heldWith: DID[][];
   try {
     const acting = draftTx.getCfcState().trustSnapshot?.actingPrincipal;
     if (!isDID(acting)) {
@@ -1639,10 +1718,10 @@ const inspect = async (
     actor = acting;
     draftLink = draft.withTx(draftTx).resolveAsCell().getAsNormalizedFullLink();
     stance = snapshotJsonValue(draft.withTx(draftTx).get());
-    sources = actorOwnedSources(
+    ({ sources, heldWith } = actorLabel(
       collectConsumedLabel(draftTx).confidentiality,
       actor,
-    );
+    ));
     for (const read of readEvidence(draftTx, "Custody seal")) {
       evidence.push(read);
     }
@@ -1727,6 +1806,7 @@ const inspect = async (
     instance,
     policy,
     sources,
+    heldWith,
     entryKey,
     witnessedRelease,
     evidence,
@@ -1738,7 +1818,7 @@ const inspect = async (
  * The preview is exactly what the commit writes; the consent it returns is
  * good for one commit.
  *
- * @throws If the value is not entirely the actor's own, is not instruction
+ * @throws If anyone but the actor can read the value, it is not instruction
  *   inert, draws on a source the room does not allow, or the room's policy is
  *   malformed, untrusted, not the room space's, or not installed there, or the
  *   actor holds no seat or has already sealed.
@@ -1756,6 +1836,7 @@ export async function prepareCustodySeal(
   deepFreeze(inspected.terms);
   deepFreeze(inspected.policy);
   deepFreeze(inspected.sources);
+  deepFreeze(inspected.heldWith);
   deepFreeze(inspected.allowedSources);
   deepFreeze(inspected.readers);
   const consent = Object.freeze({}) as CustodySealConsent;
@@ -1779,6 +1860,7 @@ export async function prepareCustodySeal(
     instance: inspected.instance,
     policy: inspected.policy,
     sources: inspected.sources,
+    heldWith: inspected.heldWith,
     witnessedRelease: inspected.witnessedRelease,
     consent,
   });
@@ -1826,6 +1908,7 @@ export async function commitCustodySeal(
     current.instance !== state.instance ||
     !deepEqual(current.policy, state.policy) ||
     !deepEqual(current.sources, state.sources) ||
+    !deepEqual(current.heldWith, state.heldWith) ||
     !deepEqual(current.draftLink, state.draftLink) ||
     !deepEqual(current.termsLink, state.termsLink) ||
     current.entryKey !== state.entryKey
@@ -1897,6 +1980,7 @@ export async function commitCustodySeal(
       instance,
       entryKey,
       sources: state.sources,
+      heldWith: state.heldWith,
       stanceDigest: hashStringOf(state.stance),
       draftId: state.draftLink.id,
     });

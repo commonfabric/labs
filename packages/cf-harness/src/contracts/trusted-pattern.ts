@@ -2,7 +2,7 @@ import type {
   PatternIndexPatternKind,
   PatternIndexQuality,
   PatternIndexSignals,
-} from "../pattern-index/client.ts";
+} from "@commonfabric/pattern-index/client";
 
 /**
  * What a run knows about a published pattern it may name by id. Search hits,

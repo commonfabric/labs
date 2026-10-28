@@ -28,6 +28,7 @@ import {
 } from "../src/cfc/policy.ts";
 import type { CfcTrustConfigInput } from "../src/cfc/trust.ts";
 import type { ImplementationIdentity } from "../src/cfc/types.ts";
+import { hostGestureProvenance } from "../src/cfc/host-review.ts";
 import { markRendererTrustedEvent } from "../src/cfc/ui-contract.ts";
 import type { Cell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -140,11 +141,7 @@ const termsFor = (question: string) => ({
 const trustedClick = () => {
   const event = {
     type: "click",
-    provenance: {
-      origin: "dom",
-      trusted: true,
-      ui: { pattern: "CustodySeal" },
-    },
+    provenance: hostGestureProvenance("CustodySeal"),
   };
   markRendererTrustedEvent(event);
   return event;

@@ -7,6 +7,7 @@ import { hashOf } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 
 import { MEMORY_PROTOCOL } from "../v2.ts";
+import { type ClientInfo, createClientInfo } from "../v2/client-info.ts";
 import {
   authorizeLoopbackSessionOpen,
   verifySessionOpenAuthorization,
@@ -46,10 +47,14 @@ const buildOpen = async (
   extra: { aud?: string; challenge?: string; iat?: number; exp?: number } = {},
   identity = alice,
   session: {
+    client?: ClientInfo;
     sessionId?: string;
     seenSeq?: number;
     sessionToken?: string;
+    resumeKey?: string;
+    resumeAttempt?: number;
     genesisRoot?: FabricValue;
+    spaceKind?: string;
   } = {},
 ) => {
   const sub = space.did();
@@ -98,6 +103,66 @@ describe("wireAuthorizationOf", () => {
 });
 
 describe("verifySessionOpenAuthorization", () => {
+  it("binds client identity to the signed session descriptor", async () => {
+    const client = createClientInfo({
+      application: "cf",
+      gitSha: "a".repeat(40),
+    });
+    const message = await buildOpen(signedFields(), alice, { client });
+    expect(await verifySessionOpenAuthorization(message, verifyOptions())).toBe(
+      alice.did(),
+    );
+    for (
+      const session of [
+        {},
+        { client: { ...client, generation: 2 } },
+        {
+          client: { ...client, application: "shell" },
+        },
+        { client: { ...client, gitSha: "b".repeat(40) } },
+        { client: { ...client, instanceId: "another-runtime" } },
+        { client: { ...client, startedAt: client.startedAt + 1 } },
+      ]
+    ) {
+      await expect(
+        verifySessionOpenAuthorization(
+          { ...message, session },
+          verifyOptions(),
+        ),
+      ).rejects.toMatchObject({ name: "AuthorizationError" });
+    }
+    const unsigned = await buildOpen(signedFields());
+    await expect(
+      verifySessionOpenAuthorization(
+        { ...unsigned, session: { client } },
+        verifyOptions(),
+      ),
+    ).rejects.toMatchObject({ name: "AuthorizationError" });
+  });
+
+  it("binds client identity when the reserved generation field is absent", async () => {
+    const client = { ...createClientInfo({ application: "cf", gitSha: null }) };
+    delete client.generation;
+    const message = await buildOpen(signedFields(), alice, { client });
+    expect(await verifySessionOpenAuthorization(message, verifyOptions())).toBe(
+      alice.did(),
+    );
+    for (
+      const session of [
+        {},
+        { client: { ...client, generation: 1 } },
+        { client: { ...client, application: "shell" } },
+      ]
+    ) {
+      await expect(
+        verifySessionOpenAuthorization(
+          { ...message, session },
+          verifyOptions(),
+        ),
+      ).rejects.toMatchObject({ name: "AuthorizationError" });
+    }
+  });
+
   it("binds the complete custom-root expectation to the signed descriptor", async () => {
     const root = {
       source: "system:loom/main.tsx",
@@ -124,6 +189,49 @@ describe("verifySessionOpenAuthorization", () => {
       }, verifyOptions())
     );
   });
+  it("binds the declared space kind to the signed descriptor", async () => {
+    const message = await buildOpen(signedFields(), alice, {
+      spaceKind: "fabrichat-room",
+    });
+    assertEquals(
+      await verifySessionOpenAuthorization(message, verifyOptions()),
+      alice.did(),
+    );
+    for (const session of [{}, { spaceKind: "notebook" }]) {
+      await assertRejects(
+        () =>
+          verifySessionOpenAuthorization(
+            { ...message, session },
+            verifyOptions(),
+          ),
+        Error,
+        "authorization mismatch",
+      );
+    }
+    const malformed = await buildOpen(signedFields(), alice, {
+      spaceKind: 7 as unknown as string,
+    });
+    await assertRejects(
+      () =>
+        verifySessionOpenAuthorization(
+          { ...malformed, session: {} },
+          verifyOptions(),
+        ),
+      Error,
+      "authorization mismatch",
+    );
+    const unsigned = await buildOpen(signedFields());
+    await assertRejects(
+      () =>
+        verifySessionOpenAuthorization(
+          { ...unsigned, session: { spaceKind: "fabrichat-room" } },
+          verifyOptions(),
+        ),
+      Error,
+      "authorization mismatch",
+    );
+  });
+
   it("accepts a valid signed open and returns the issuer principal", async () => {
     assertEquals(
       await verifySessionOpenAuthorization(
@@ -159,6 +267,66 @@ describe("verifySessionOpenAuthorization", () => {
       Error,
       "authorization mismatch",
     );
+  });
+
+  it("rejects a resume key added, changed or dropped outside the signed invocation", async () => {
+    const resume = {
+      sessionId: "session:resume",
+      seenSeq: 7,
+      sessionToken: "token:signed",
+    };
+    const msg = await buildOpen(signedFields(), alice, {
+      ...resume,
+      resumeKey: "key:signed",
+    });
+    assertEquals(
+      await verifySessionOpenAuthorization(msg, verifyOptions()),
+      alice.did(),
+    );
+    for (const session of [{ ...resume, resumeKey: "key:tampered" }, resume]) {
+      await assertRejects(
+        () =>
+          verifySessionOpenAuthorization({ ...msg, session }, verifyOptions()),
+        Error,
+        "authorization mismatch",
+      );
+    }
+    const unkeyed = await buildOpen(signedFields(), alice, resume);
+    await assertRejects(
+      () =>
+        verifySessionOpenAuthorization(
+          { ...unkeyed, session: { ...resume, resumeKey: "key:injected" } },
+          verifyOptions(),
+        ),
+      Error,
+      "authorization mismatch",
+    );
+  });
+
+  it("rejects a resume attempt added, changed or dropped outside the signed invocation", async () => {
+    const resume = {
+      sessionId: "session:resume",
+      seenSeq: 7,
+      sessionToken: "token:signed",
+      resumeKey: "key:signed",
+    };
+    const numbered = await buildOpen(signedFields(), alice, {
+      ...resume,
+      resumeAttempt: 2,
+    });
+    expect(await verifySessionOpenAuthorization(numbered, verifyOptions()))
+      .toBe(alice.did());
+    for (const session of [{ ...resume, resumeAttempt: 3 }, resume]) {
+      await expect(verifySessionOpenAuthorization(
+        { ...numbered, session },
+        verifyOptions(),
+      )).rejects.toThrow("authorization mismatch");
+    }
+    const unnumbered = await buildOpen(signedFields(), alice, resume);
+    await expect(verifySessionOpenAuthorization(
+      { ...unnumbered, session: { ...resume, resumeAttempt: 3 } },
+      verifyOptions(),
+    )).rejects.toThrow("authorization mismatch");
   });
 
   //

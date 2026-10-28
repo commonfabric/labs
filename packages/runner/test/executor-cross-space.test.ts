@@ -20,13 +20,13 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
-import type { Options } from "../src/storage/v2.ts";
+import type { Options, SpaceReplica } from "../src/storage/v2.ts";
 import {
   Runtime,
   type ServerRunInfo,
   spaceCellSchema,
 } from "../src/runtime.ts";
-import type { Cell } from "../src/cell.ts";
+import { type Cell, sendEvent } from "../src/cell.ts";
 import type {
   DID,
   IExtendedStorageTransaction,
@@ -54,21 +54,33 @@ import {
   serverSeq,
 } from "@commonfabric/memory/v2/engine";
 import {
+  resolveScopeKey,
   streamEntriesDocId,
   type StreamEventsDocValue,
 } from "@commonfabric/memory/v2";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import { type Frame, UI } from "../src/builder/types.ts";
 import { resolveEntryIdentity } from "../src/index.ts";
+import { resolveSpaceRootPattern } from "../src/ensure-space-root.ts";
+import { inSpaceRootCause } from "../src/runner.ts";
+import { readGenesisRoot } from "@commonfabric/memory/v2/genesis-root";
 import { parseLink } from "../src/link-utils.ts";
 import {
   newSharedServer,
   TEST_MEMORY_SERVER_AUTH,
 } from "./memory-v2-test-utils.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "./cfc-seed-envelope.ts";
 
 // The route the toolshed serves the profile-create surface from, which is what
 // the surface's `system:` origin resolves against.
 const SIDECAR_ROUTE = "/api/patterns/system/profile-create.tsx";
+
+// The route the toolshed serves the system default root from.
+const DEFAULT_APP_ROUTE = "/api/patterns/system/default-app.tsx";
 
 class SharedServerStorageManager extends EmulatedStorageManager {
   static override connectTo(
@@ -83,6 +95,8 @@ const homeSigner = await Identity.fromPassphrase("cross-space home");
 const homeSpace = homeSigner.did() as MemorySpace;
 const foreignSigner = await Identity.fromPassphrase("cross-space foreign");
 const foreignSpace = foreignSigner.did() as MemorySpace;
+const roomSigner = await Identity.fromPassphrase("cross-space room");
+const roomSpace = roomSigner.did() as MemorySpace;
 const serviceSigner = await Identity.fromPassphrase("cross-space service");
 const aliceSigner = await Identity.fromPassphrase("cross-space alice");
 const bobSigner = await Identity.fromPassphrase("cross-space bob");
@@ -419,13 +433,15 @@ describe("Phase 5 cross-space serving", () => {
       // A run acting for nobody asked for that space, and is not given it.
       expect(resolvedSync(serving, "ow31-granted-probe")).toBeUndefined();
 
-      // A CLIENT runtime supplies no owner: the space it creates is owned
-      // by its own user.
+      // A CLIENT runtime with server execution off supplies no owner: the
+      // space it creates is owned by its own user. With server execution on
+      // a client creates no space; a test below covers that.
       const client = new Runtime({
         apiUrl: new URL(import.meta.url),
         storageManager: SharedServerStorageManager.connectTo(server, {
           as: aliceSigner,
         }),
+        experimental: { serverExecution: false },
       });
       try {
         const clientDid = await client.resolveInSpaceName(
@@ -490,6 +506,56 @@ describe("Phase 5 cross-space serving", () => {
       );
       expect(actingDid === undefined ? undefined : await aclOf(actingDid))
         .toEqual({ [aliceSigner.did()]: "OWNER" });
+    } finally {
+      await serving.dispose();
+      await manager.close();
+    }
+  });
+
+  it("a serving runtime creates an `inSpace` target with the grants the run names, the acting identity an OWNER whatever they name it", async () => {
+    const manager = SharedServerStorageManager.connectTo(server, {
+      as: serviceSigner,
+      servingHomeSpace: homeSpace,
+    });
+    const serving = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: manager,
+      servingPosture: true,
+      experimental: { serverExecution: true },
+    });
+    const name = "co-owned-probe";
+    const grants = {
+      [aliceSigner.did()]: "READ",
+      [bobSigner.did()]: "OWNER",
+    } as const;
+    try {
+      const actingTx = serving.edit();
+      stampWaveRunContext(actingTx, {
+        actionId: "co-owned/acting",
+        kind: "event-handler",
+        eventId: "e-co-owned",
+        acting: { user: aliceSigner.did(), session: "sess-co-owned" },
+        capabilityRef: "event-consequence:e-co-owned",
+      });
+      await expect(
+        serving.runner.accessForTestingOnly.resolvePendingSpaceNamesAndRetry(
+          {
+            space: homeSpace,
+            pendingSpaceNames: new Map([[name, { grants }]]),
+          } as Frame,
+          actingTx,
+        ),
+      ).rejects.toThrow("Resolving in-space target spaces");
+      const did = serving.resolveInSpaceNameSync(homeSpace, name, actingTx, {
+        grants,
+      });
+      actingTx.abort(new Error("test-only"));
+
+      expect(did).toBeDefined();
+      expect((await server.readDocument(did!, `of:${did}`))?.value).toEqual({
+        [aliceSigner.did()]: "OWNER",
+        [bobSigner.did()]: "OWNER",
+      });
     } finally {
       await serving.dispose();
       await manager.close();
@@ -1962,39 +2028,112 @@ describe("Phase 5 cross-space serving", () => {
     }
   });
 
-  it("a serving manager's FOREIGN provider refuses scoped reads fail-closed (protocol.md §2's grant-scoped read design)", async () => {
+  it("a serving manager's FOREIGN provider admits a scoped read naming an actor's own instance the space grants READ, refuses every other, and asks again after the list changes (protocol.md §2's grant-scoped read)", async () => {
+    const aliceDid = aliceSigner.did();
+    const bobDid = bobSigner.did();
+    // Alice owns the foreign space; bob holds nothing there yet.
+    await server.writeDocument(foreignSpace, `of:${foreignSpace}`, {
+      [aliceDid]: "OWNER",
+    });
+    const probed: string[] = [];
     const manager = SharedServerStorageManager.connectTo(server, {
       as: serviceSigner,
       servingHomeSpace: homeSpace,
+      foreignScopedReadGrant: (space, principal) => {
+        probed.push(`${space}\0${principal}`);
+        return server.foreignReadAuthorityFor(space, principal);
+      },
     });
+    const foreignUser = { space: foreignSpace, scope: "user" as const };
     try {
-      // Scoped read of a FOREIGN space: refused at the producer, before
-      // any wire frame — the unnamed scoped root would resolve against
-      // the delegating service envelope (a silently empty instance).
-      const foreignScoped = await manager.open(foreignSpace).sync(
+      // UNNAMED: refused before any pull, and at the pull — the unnamed
+      // scoped root would resolve against the delegating service envelope,
+      // a silently empty instance.
+      expect(manager.scopedReadStanding(foreignUser, undefined)).toBe(
+        "refused",
+      );
+      const unnamed = await manager.open(foreignSpace).sync(
         "of:x-scoped" as never,
         { path: [], schema: false },
         "user",
       );
-      expect(foreignScoped.error?.message ?? "").toContain(
-        "foreign scoped read refused on the serving path",
+      expect(unnamed.error?.name).toBe("ForeignScopedReadRefusedError");
+      expect(unnamed.error?.message ?? "").toContain(
+        "names no actor's instance",
       );
 
-      // Space-scope foreign reads stay free (§2b's free-read row).
-      const foreignSpaceScope = await manager.open(foreignSpace).sync(
-        "of:x-plain" as never,
+      // Alice's own instance: unresolved until her grant is asked for,
+      // admitted once the probe answers, and asked for once per actor.
+      const alice = { principal: aliceDid };
+      expect(manager.scopedReadStanding(foreignUser, alice)).toBe(
+        "unresolved",
+      );
+      await manager.syncInstance(
+        { space: foreignSpace, id: "of:x-scoped" as never, scope: "user" },
+        alice,
+      );
+      expect(manager.scopedReadStanding(foreignUser, alice)).toBe("admitted");
+      expect(probed).toEqual([`${foreignSpace}\0${aliceDid}`]);
+      await manager.syncInstance(
+        { space: foreignSpace, id: "of:x-other" as never, scope: "session" },
+        { principal: aliceDid, sessionId: "alice-session" as never },
+      );
+      expect(probed).toHaveLength(1);
+
+      // Bob's instance: refused on the list, typed, with the list's reason.
+      const bob = { principal: bobDid };
+      const refused = await manager.open(foreignSpace).sync(
+        "of:x-scoped" as never,
         { path: [], schema: false },
+        "user",
+        resolveScopeKey("user", bob),
       );
-      expect(foreignSpaceScope.error).toBeUndefined();
+      expect(refused.error?.name).toBe("ForeignScopedReadRefusedError");
+      expect(refused.error?.message ?? "").toContain(
+        `grants ${bobDid} nothing (READ required)`,
+      );
+      expect(manager.scopedReadStanding(foreignUser, bob)).toBe("refused");
 
-      // The F3 fix — refusal is ENTRY-scoped, decided at sync() entry
-      // before the batch: a scoped read and an innocent SPACE-scope
-      // read issued concurrently coalesce into ONE watch-refresh batch
-      // with one shared pending promise, and pre-fix the scoped
-      // refusal threw over the whole batch — the load-bearing §2b
-      // free-read row failed alongside the offender (a persistently
-      // retrying scoped reader degraded a space's legitimate foreign
-      // reads into flake).
+      // Word of an access-list change asks about every actor again at once,
+      // each last verdict standing meanwhile: alice's instances, already
+      // loaded and never pulled again, stay admitted throughout. Once alice
+      // grants bob READ, his standing turns admitted on the probe's answer
+      // alone, and the read refused earlier is pulled again for him, since
+      // nothing else would load it.
+      const replica = manager.open(foreignSpace).replica as SpaceReplica;
+      const repulled: string[] = [];
+      const originalSync = replica.sync.bind(replica);
+      replica.sync = (id, selector, scope, instance) => {
+        repulled.push(`${id}|${instance}`);
+        return originalSync(id, selector, scope, instance);
+      };
+      await server.writeDocument(foreignSpace, `of:${foreignSpace}`, {
+        [aliceDid]: "OWNER",
+        [bobDid]: "READ",
+      });
+      manager.noteSpaceAclChanged(foreignSpace);
+      expect(manager.scopedReadStanding(foreignUser, alice)).toBe("admitted");
+      expect(manager.scopedReadStanding(foreignUser, bob)).toBe("refused");
+      await manager.syncInstance(
+        { space: foreignSpace, id: "of:x-other" as never, scope: "user" },
+        bob,
+      );
+      expect(manager.scopedReadStanding(foreignUser, bob)).toBe("admitted");
+      expect(manager.scopedReadStanding(foreignUser, alice)).toBe("admitted");
+      expect(probed).toEqual([
+        `${foreignSpace}\0${aliceDid}`,
+        `${foreignSpace}\0${bobDid}`,
+        `${foreignSpace}\0${aliceDid}`,
+        `${foreignSpace}\0${bobDid}`,
+      ]);
+      expect(repulled).toContain(
+        `of:x-scoped|${resolveScopeKey("user", bob)}`,
+      );
+
+      // Space-scope foreign reads stay free (§2b's free-read row), and
+      // the F3 fix holds: a refused scoped read and an innocent SPACE-scope
+      // read issued together coalesce into one watch-refresh batch, and
+      // only the offender's pull fails.
       const provider = manager.open(foreignSpace);
       const [poisoner, innocent] = await Promise.all([
         provider.sync(
@@ -2007,9 +2146,7 @@ describe("Phase 5 cross-space serving", () => {
           { path: [], schema: false },
         ),
       ]);
-      expect(poisoner.error?.message ?? "").toContain(
-        "foreign scoped read refused on the serving path",
-      );
+      expect(poisoner.error?.name).toBe("ForeignScopedReadRefusedError");
       expect(innocent.error).toBeUndefined();
 
       // HOME scoped reads keep today's behavior (the OW17 tolerated
@@ -2020,12 +2157,101 @@ describe("Phase 5 cross-space serving", () => {
         "user",
       );
       expect(homeScoped.error).toBeUndefined();
+      expect(
+        manager.scopedReadStanding({ space: homeSpace, scope: "user" }, bob),
+      ).toBe("admitted");
+    } finally {
+      await manager.close();
+    }
+  });
 
-      // A NON-serving manager (no servingHomeSpace) is untouched.
+  it("a tenure's serving runtime resolves a foreign scoped read's grant through the co-hosted server, whatever its factory handed the manager (protocol.md §2's grant-scoped read)", async () => {
+    // The factory above builds its manager with no probe; the SpaceServer
+    // installs the server's on the runtime it is handed, so a tenure admits
+    // the actor's own instance on the foreign space's list and refuses a
+    // stranger's.
+    const aliceDid = aliceSigner.did();
+    const bobDid = bobSigner.did();
+    await server.writeDocument(foreignSpace, `of:${foreignSpace}`, {
+      [aliceDid]: "OWNER",
+    });
+    host = newHost();
+    clientManager = SharedServerStorageManager.connectTo(server, {
+      as: aliceSigner,
+    });
+    clientRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: clientManager,
+    });
+    const demandCell = clientRuntime.getCell<{ ping: number }>(
+      homeSpace,
+      "grant-wiring-demand",
+      undefined,
+    );
+    const cancel = demandCell.sink(() => {});
+    try {
+      await activated(homeSpace);
+      const manager = servingRuntime!.storageManager;
+      const foreignUser = { space: foreignSpace, scope: "user" as const };
+      const alice = { principal: aliceDid };
+      const bob = { principal: bobDid };
+      // Unresolved rather than refused: a probe is installed and not yet asked.
+      expect(manager.scopedReadStanding!(foreignUser, alice)).toBe(
+        "unresolved",
+      );
+      await manager.syncInstance!(
+        { space: foreignSpace, id: "of:x-wired" as never, scope: "user" },
+        alice,
+      );
+      expect(manager.scopedReadStanding!(foreignUser, alice)).toBe("admitted");
+      await manager.syncInstance!(
+        { space: foreignSpace, id: "of:x-wired" as never, scope: "user" },
+        bob,
+      );
+      expect(manager.scopedReadStanding!(foreignUser, bob)).toBe("refused");
+    } finally {
+      cancel();
+    }
+  });
+
+  it("a serving manager with no read authority probe refuses every foreign scoped read, named or not, and a non-serving manager gates nothing", async () => {
+    const aliceDid = aliceSigner.did();
+    await server.writeDocument(foreignSpace, `of:${foreignSpace}`, {
+      [aliceDid]: "OWNER",
+    });
+    const manager = SharedServerStorageManager.connectTo(server, {
+      as: serviceSigner,
+      servingHomeSpace: homeSpace,
+    });
+    try {
+      const alice = { principal: aliceDid };
+      expect(
+        manager.scopedReadStanding(
+          { space: foreignSpace, scope: "user" },
+          alice,
+        ),
+      ).toBe("refused");
+      const named = await manager.open(foreignSpace).sync(
+        "of:x-scoped" as never,
+        { path: [], schema: false },
+        "user",
+        resolveScopeKey("user", alice),
+      );
+      expect(named.error?.name).toBe("ForeignScopedReadRefusedError");
+      expect(named.error?.message ?? "").toContain(
+        "no read authority probe",
+      );
+
       const plain = SharedServerStorageManager.connectTo(server, {
         as: aliceSigner,
       });
       try {
+        expect(
+          plain.scopedReadStanding(
+            { space: foreignSpace, scope: "user" },
+            alice,
+          ),
+        ).toBe("admitted");
         const clientScoped = await plain.open(foreignSpace).sync(
           "of:x-scoped" as never,
           { path: [], schema: false },
@@ -2035,6 +2261,48 @@ describe("Phase 5 cross-space serving", () => {
       } finally {
         await plain.close();
       }
+    } finally {
+      await manager.close();
+    }
+  });
+
+  it("a serving manager registers no pending load for a foreign scoped read its provider refuses, so nothing parks on the refusal", async () => {
+    // A served event's preflight parks on the closure documents with a load
+    // in flight. A refused read returns no data however long it is waited
+    // for, so a park on one would decide the event by whether the refusal
+    // had landed yet. Each load registers before the first `await` of the
+    // call making it, so the ledger read right after the calls holds exactly
+    // the loads that registered.
+    const manager = SharedServerStorageManager.connectTo(server, {
+      as: serviceSigner,
+      servingHomeSpace: homeSpace,
+    });
+    try {
+      const identity = { principal: aliceSigner.did() };
+      const loads = [
+        manager.syncInstance({
+          space: foreignSpace,
+          id: "of:x-pending-scoped" as never,
+          scope: "user",
+        }, identity),
+        manager.syncInstance({
+          space: foreignSpace,
+          id: "of:x-pending-plain" as never,
+        }, identity),
+        manager.syncInstance({
+          space: homeSpace,
+          id: "of:x-pending-home-scoped" as never,
+          scope: "user",
+        }, identity),
+      ];
+      const pending = manager.pendingLoadAddresses().map((address) =>
+        `${address.space} ${address.id}`
+      );
+      await Promise.all(loads);
+
+      expect(pending).not.toContain(`${foreignSpace} of:x-pending-scoped`);
+      expect(pending).toContain(`${foreignSpace} of:x-pending-plain`);
+      expect(pending).toContain(`${homeSpace} of:x-pending-home-scoped`);
     } finally {
       await manager.close();
     }
@@ -2188,6 +2456,374 @@ export default pattern<
     }
   });
 
+  /**
+   * Stands up `source` in the home space for Alice's client runtime, with
+   * `argument` as its argument, starts the serving host, and returns the
+   * pattern's result cell, its argument cell, and a reader of the home
+   * space's stored stream entries.
+   */
+  const standUpServed = async (
+    label: string,
+    source: string,
+    argument: (
+      client: Runtime,
+    ) => Promise<Record<string, unknown>> | Record<string, unknown>,
+  ) => {
+    clientManager = SharedServerStorageManager.connectTo(server, {
+      as: aliceSigner,
+    });
+    clientRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: clientManager,
+      experimental: { serverExecution: true },
+    });
+    const compiled = await clientRuntime.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{ name: "/main.tsx", contents: source }],
+    }, { space: homeSpace });
+    const argumentCell = clientRuntime.getCell<Record<string, unknown>>(
+      homeSpace,
+      `${label}-argument`,
+    );
+    const result = clientRuntime.getCell<Record<string, unknown>>(
+      homeSpace,
+      `${label}-result`,
+      compiled.resultSchema,
+    );
+    await Promise.all([argumentCell.sync(), result.sync()]);
+    const value = await argument(clientRuntime);
+    const seed = clientRuntime.edit();
+    argumentCell.withTx(seed).set(value);
+    clientRuntime.run(seed, compiled, argumentCell, result);
+    expect((await seed.commit().settled).error).toBeUndefined();
+    await clientManager.synced();
+    host = newHost();
+    const engine = await server.engineForSpace(homeSpace);
+    const entries = (): NonNullable<StreamEventsDocValue["entries"]> =>
+      (engine.database.prepare(
+        "SELECT id FROM head WHERE id LIKE 'of:stream-events:%' AND op != 'delete'",
+      ).all() as { id: string }[]).flatMap(({ id }) =>
+        (readDoc(engine, { id })?.value as StreamEventsDocValue)?.entries ?? []
+      );
+    const stored = (): Record<string, unknown> | undefined =>
+      readDoc(engine, { id: argumentCell.getAsNormalizedFullLink().id })
+        ?.value as Record<string, unknown> | undefined;
+    return { result, entries, stored };
+  };
+
+  /**
+   * Writes `value` as Alice into a document named `name` in the foreign
+   * space, at `scope`, and returns the cell.
+   */
+  const foreignDocument = async (
+    client: Runtime,
+    name: string,
+    scope: "space" | "user",
+    value: unknown,
+  ) => {
+    const target = client.getCell(
+      foreignSpace,
+      name,
+      undefined,
+      undefined,
+      scope,
+    );
+    const tx = client.edit();
+    target.withTx(tx).set(value);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await client.storageManager.synced();
+    return target;
+  };
+
+  /** A pattern whose `add` takes a piece by value and records its count. */
+  const VALUE_EVENT_PATTERN = `
+import { action, pattern, type Writable, type Stream } from "commonfabric";
+type Piece = { count: number; items: string[] };
+export default pattern<
+  { counts: Writable<number[]> },
+  { add: Stream<{ piece: Piece }> }
+>(({ counts }) => ({
+  add: action(({ piece }: { piece: Piece }) => {
+    counts.push(piece.count);
+  }),
+}));`;
+
+  it("seals a permanent dispatch-load failure for a served event whose declared value is a foreign scoped document, and runs nothing", async () => {
+    let target: Cell<unknown> | undefined;
+    const { result, entries, stored } = await standUpServed(
+      "declared-value-foreign-scoped",
+      VALUE_EVENT_PATTERN,
+      async (client) => {
+        target = await foreignDocument(
+          client,
+          "declared-value-foreign-scoped-target",
+          "user",
+          { count: 5, items: ["keep"] },
+        );
+        return { counts: [] };
+      },
+    );
+
+    result.key("add").send({ piece: target });
+    await clientManager.synced();
+    await awaitAdmitted(server, () => entries()[0]?.consequenced === true);
+
+    expect(entries()[0]).toMatchObject({
+      status: "needs-attention",
+      attention: {
+        phase: "dispatch-load",
+        failureClass: "protocol",
+        code: "permanent-delivery-failure",
+      },
+    });
+    expect(stored()?.counts).toEqual([]);
+  });
+
+  /**
+   * A pattern whose `name` handler records the principal the label on its
+   * event's `target.name` attests, read in a helper the handler hands its
+   * event to. The read is of the cell's label and never its value, and the
+   * capability analysis does not follow it into the helper, so the event
+   * schema declares the position opaque and nothing reads the cell's document
+   * ahead of the run.
+   */
+  const PRINCIPAL_EVENT_PATTERN = `
+import { handler, pattern, principalOf, type Writable, type Stream } from "commonfabric";
+type Profile = { name?: string };
+type NameEvent = { target?: { name?: Writable<Profile> } };
+const ownerOf = (event: NameEvent | undefined): string =>
+  principalOf(event?.target?.name, "represents-principal") ?? "none";
+const name = handler<NameEvent, { owners: Writable<string[]> }>(
+  (event, { owners }) => {
+    owners.push(ownerOf(event));
+  },
+);
+export default pattern<
+  { owners: Writable<string[]> },
+  { name: Stream<NameEvent> }
+>(({ owners }) => ({ name: name({ owners }) }));`;
+
+  /**
+   * Writes, as Alice, a document named `name` in the foreign space whose
+   * label says it represents Bob, as a profile's does, and a document in the
+   * room space that links to it, and returns the room document's link field:
+   * a two-hop chain whose second document the serving runtime has not read.
+   */
+  const labeledChain = async (client: Runtime, name: string) => {
+    const profile = client.getCell(foreignSpace, name);
+    const seed = client.edit();
+    writeSeedEnvelopeDoc(seed, foreignSpace);
+    seedStoredEnvelope(
+      seed,
+      {
+        space: foreignSpace,
+        scope: "space",
+        id: profile.getAsNormalizedFullLink().id,
+        path: [],
+      },
+      {
+        value: { name: "Bob" },
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: [],
+              label: {
+                integrity: [{
+                  kind: "represents-principal",
+                  subject: bobSigner.did(),
+                }],
+              },
+              origin: "declared",
+            }],
+          },
+        },
+      } as never,
+    );
+    expect((await seed.commit().settled).error).toBeUndefined();
+    const holder = client.getCell<{ name: unknown }>(
+      roomSpace,
+      `${name}-holder`,
+    );
+    const tx = client.edit();
+    holder.withTx(tx).set({ name: profile });
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await client.storageManager.synced();
+    return holder.key("name");
+  };
+
+  it("records the principal a served handler reads off a foreign document's label through a link chain in its event", async () => {
+    let name: Cell<unknown> | undefined;
+    const { result, entries, stored } = await standUpServed(
+      "principal-chain",
+      PRINCIPAL_EVENT_PATTERN,
+      async (client) => {
+        name = await labeledChain(client, "principal-chain-profile");
+        return { owners: [] };
+      },
+    );
+
+    result.key("name").send({ target: { name } });
+    await clientManager.synced();
+    await awaitAdmitted(server, () => entries()[0]?.consequenced === true);
+
+    expect(entries()[0].status).toBeUndefined();
+    expect(stored()?.owners).toEqual([bobSigner.did()]);
+  });
+
+  it("records no principal for a served handler whose event links through a chain to a foreign document that does not exist, and completes", async () => {
+    let name: Cell<unknown> | undefined;
+    const { result, entries, stored } = await standUpServed(
+      "principal-chain-missing",
+      PRINCIPAL_EVENT_PATTERN,
+      async (client) => {
+        const missing = client.getCell(
+          foreignSpace,
+          "principal-chain-missing-profile",
+        );
+        const holder = client.getCell<{ name: unknown }>(
+          roomSpace,
+          "principal-chain-missing-holder",
+        );
+        const tx = client.edit();
+        holder.withTx(tx).set({ name: missing });
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await client.storageManager.synced();
+        name = holder.key("name");
+        return { owners: [] };
+      },
+    );
+
+    result.key("name").send({ target: { name } });
+    await clientManager.synced();
+    await awaitAdmitted(server, () => entries()[0]?.consequenced === true);
+
+    expect(entries()[0].status).toBeUndefined();
+    expect(stored()?.owners).toEqual(["none"]);
+  });
+
+  /**
+   * A pattern whose `point` handler keeps the cell its holder's `piece`
+   * resolves to, as a profile's inbox pointer is set from an inbox holder.
+   * The holder names the piece by a stored link, so the handle the handler
+   * reads is minted at that link's target and resolving it walks on from
+   * there.
+   */
+  const RESOLVING_HANDLER_PATTERN = `
+import { type Cell, handler, pattern, type Writable, type Stream } from "commonfabric";
+type Piece = { name?: string };
+type Holder = { piece?: Cell<Piece> };
+const point = handler<void, { holder: Holder; kept: Writable<Holder> }>(
+  (_event, { holder, kept }) => {
+    kept.set({ piece: holder.piece?.resolveAsCell() });
+  },
+);
+export default pattern<
+  { holder: Holder; kept: Writable<Holder> },
+  { point: Stream<void> }
+>(({ holder, kept }) => ({ point: point({ holder, kept }) }));`;
+
+  it("keeps the document a served handler resolves a foreign cell to, through a document the serving runtime has not loaded", async () => {
+    let piece: Cell<unknown> | undefined;
+    const { result, entries, stored } = await standUpServed(
+      "resolve-unloaded-hop",
+      RESOLVING_HANDLER_PATTERN,
+      async (client) => {
+        piece = await foreignDocument(
+          client,
+          "resolve-unloaded-hop-piece",
+          "space",
+          { name: "inbox" },
+        );
+        // A document whose whole value is a link to the piece, which is what
+        // the holder names.
+        const alias = await foreignDocument(
+          client,
+          "resolve-unloaded-hop-alias",
+          "space",
+          piece,
+        );
+        return { holder: { piece: alias }, kept: {} };
+      },
+    );
+
+    result.key("point").send(undefined);
+    await clientManager.synced();
+    await awaitAdmitted(server, () => entries()[0]?.consequenced === true);
+
+    expect(entries()[0].status).toBeUndefined();
+    const kept = stored()?.kept as { piece?: unknown } | undefined;
+    expect(parseLink(kept?.piece)).toMatchObject({
+      space: foreignSpace,
+      id: piece!.getAsNormalizedFullLink().id,
+    });
+  });
+
+  it("runs a served event whose declared value is a foreign space-scope document", async () => {
+    let target: Cell<unknown> | undefined;
+    const { result, entries, stored } = await standUpServed(
+      "declared-value-foreign-space",
+      VALUE_EVENT_PATTERN,
+      async (client) => {
+        target = await foreignDocument(
+          client,
+          "declared-value-foreign-space-target",
+          "space",
+          { count: 5, items: ["keep"] },
+        );
+        return { counts: [] };
+      },
+    );
+
+    result.key("add").send({ piece: target });
+    await clientManager.synced();
+    await awaitAdmitted(server, () => entries()[0]?.consequenced === true);
+
+    expect(entries()[0].status).toBeUndefined();
+    expect(stored()?.counts).toEqual([5]);
+  });
+
+  it("seals a permanent dispatch-load failure for a served handler whose bound state is a foreign scoped document, and runs nothing", async () => {
+    // The shape of a handler that cancels a run record another space keeps
+    // per user: its state names the record as a value.
+    const { result, entries, stored } = await standUpServed(
+      "bound-state-foreign-scoped",
+      `
+import { handler, pattern, type Writable, type Stream } from "commonfabric";
+type Run = { status?: string };
+const cancel = handler<void, { run: Run; log: Writable<string[]> }>(
+  (_event, { run, log }) => {
+    log.push(run?.status ?? "none");
+  },
+);
+export default pattern<
+  { run: Run; log: Writable<string[]> },
+  { cancel: Stream<void> }
+>(({ run, log }) => ({ cancel: cancel({ run, log }) }));`,
+      async (client) => ({
+        run: await foreignDocument(
+          client,
+          "bound-state-foreign-scoped-run",
+          "user",
+          { status: "running" },
+        ),
+        log: [],
+      }),
+    );
+
+    result.key("cancel").send(undefined);
+    await clientManager.synced();
+    await awaitAdmitted(server, () => entries()[0]?.consequenced === true);
+
+    expect(entries()[0]).toMatchObject({
+      status: "needs-attention",
+      attention: { phase: "dispatch-load", failureClass: "protocol" },
+    });
+    expect(stored()?.log).toEqual([]);
+  });
+
   it("settles a served event whose declared argument reaches a foreign scoped document without a budgeted connection deferral, and runs the later event behind it", async () => {
     clientManager = SharedServerStorageManager.connectTo(server, {
       as: aliceSigner,
@@ -2200,6 +2836,9 @@ export default pattern<
     // The sibling of the pass-through test above, with one difference: the
     // handle's declared schema has a shape, so the dependency preflight
     // follows the link into the target. The handler body never reads it.
+    // The serving runtime refuses every foreign scoped read, and a refused
+    // read is no load in flight, so the preflight has nothing to park on and
+    // the event runs, as the pass-through event does.
     const compiled = await clientRuntime.patternManager.compilePattern({
       main: "/main.tsx",
       files: [{
@@ -2256,16 +2895,11 @@ export default pattern<
           entry.consequenced || entry.deliveryDeferral !== undefined
         ),
     );
-    // The serving runtime refuses every foreign scoped read, so the load can
-    // never succeed here. Either the event runs or its failure is recorded
-    // as permanent; a deferral without permanent evidence waits out the whole
-    // delivery-failure budget, and holds the space's later events with it.
+    // A deferral would wait out the whole delivery-failure budget, and hold
+    // the space's later events with it.
     const [first] = entries();
-    expect(
-      first.consequenced === true ||
-        first.deliveryDeferral?.permanentEvidence === true,
-      `entry: ${JSON.stringify(first.deliveryDeferral)}`,
-    ).toBe(true);
+    expect(first.deliveryDeferral).toBeUndefined();
+    expect(first.consequenced).toBe(true);
 
     const later = clientRuntime.getCell(homeSpace, "declared-local-reference");
     result.key("add").send({ piece: later });
@@ -2276,20 +2910,216 @@ export default pattern<
         entries().length === 2 &&
         entries().every((entry) => entry.consequenced),
     );
-    expect(entries()[0]).toMatchObject({
-      status: "needs-attention",
-      attention: {
-        phase: "dispatch-load",
-        failureClass: "protocol",
-        code: "permanent-delivery-failure",
-      },
-    });
+    expect(entries()[0].status).toBeUndefined();
     const stored = readDoc(engine, {
       id: argument.getAsNormalizedFullLink().id,
     })?.value as { links: unknown[] };
-    expect(stored.links).toHaveLength(1);
+    expect(stored.links).toHaveLength(2);
     expect(parseLink(stored.links[0])).toMatchObject({
+      id: target.getAsNormalizedFullLink().id,
+      space: foreignSpace,
+    });
+    expect(parseLink(stored.links[1])).toMatchObject({
       id: later.getAsNormalizedFullLink().id,
     });
+  });
+
+  /**
+   * Stands up, for Alice's client runtime with server execution on, a home
+   * pattern whose `create` handler places a child in the space it names
+   * `lobby`, which no record names yet, and starts the serving host. Returns
+   * the pattern's result and argument cells, and the count of spaces the
+   * client has created.
+   */
+  const standUpUnrecordedInSpace = async (label: string) => {
+    clientManager = SharedServerStorageManager.connectTo(server, {
+      as: aliceSigner,
+    });
+    let clientCreatedSpaces = 0;
+    const createSpace = clientManager.createSpace.bind(clientManager);
+    clientManager.createSpace = (...args) => {
+      clientCreatedSpaces++;
+      return createSpace(...args);
+    };
+    clientRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: clientManager,
+      experimental: { serverExecution: true },
+    });
+    const compiled = await clientRuntime.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `
+import { action, pattern, type Stream, type Writable } from "commonfabric";
+const Room = pattern<{ title: string }, { title: string }>(
+  ({ title }) => ({ title }),
+);
+export default pattern<
+  { rooms: Writable<unknown[]> },
+  { create: Stream<{ title: string }> }
+>(({ rooms }) => ({
+  create: action(({ title }: { title: string }) => {
+    rooms.push(Room.inSpace("lobby")({ title }));
+  }),
+}));`,
+      }],
+    }, { space: homeSpace });
+    const argument = clientRuntime.getCell<{ rooms: unknown[] }>(
+      homeSpace,
+      `${label}-argument`,
+    );
+    const result = clientRuntime.getCell<{ create: unknown }>(
+      homeSpace,
+      `${label}-result`,
+      compiled.resultSchema,
+    );
+    await Promise.all([argument.sync(), result.sync()]);
+    const seed = clientRuntime.edit();
+    argument.withTx(seed).set({ rooms: [] });
+    clientRuntime.run(seed, compiled, argument, result);
+    expect((await seed.commit().settled).error).toBeUndefined();
+    await clientManager.synced();
+    host = newHost();
+    return { argument, result, createdSpaces: () => clientCreatedSpaces };
+  };
+
+  it("a client creates no space for a served handler's unrecorded `inSpace(name)`, and its sender's callback settles done once the served handling consequenced", async () => {
+    // The client's speculative echo of the handler finds no record for the
+    // name. It creates no space of its own and withdraws; the serving run
+    // creates the space its record names. The sender's callbacks read the
+    // served outcome, not the withdrawn echo's aborted transaction: the
+    // append report as a clean append, the commit callback as done.
+    const { argument, result, createdSpaces } = await standUpUnrecordedInSpace(
+      "in-space-echo",
+    );
+
+    const appended = Promise.withResolvers<string>();
+    const acked = Promise.withResolvers<IExtendedStorageTransaction>();
+    sendEvent(result.key("create"), { title: "lobby" }, acked.resolve, {
+      onAppended: (_delivery, appendedTx) =>
+        appended.resolve(appendedTx.status().status),
+    });
+    const ackTx = await acked.promise;
+
+    expect(await appended.promise).toBe("done");
+    expect(ackTx.status().status).toBe("done");
+    expect(ackTx.handlingReceiptLink).toBeDefined();
+    const engine = await server.engineForSpace(homeSpace);
+    const rooms = (readDoc(engine, {
+      id: argument.getAsNormalizedFullLink().id,
+    })?.value as { rooms?: unknown[] } | undefined)?.rooms ?? [];
+    expect(rooms).toHaveLength(1);
+    expect(parseLink(rooms[0])!.space).not.toBe(homeSpace);
+    expect(createdSpaces()).toBe(0);
+  });
+
+  it("hands a sender's commit callback the withdrawn echo's own failure when no overlay observed the served handling", async () => {
+    // Without an overlay nothing observes the served consequence, so the
+    // callback is handed what the echo itself saw.
+    const { result } = await standUpUnrecordedInSpace("in-space-echo-bare");
+    Object.defineProperty(clientRuntime, "speculationOverlay", {
+      get: () => undefined,
+    });
+
+    const acked = Promise.withResolvers<IExtendedStorageTransaction>();
+    sendEvent(result.key("create"), { title: "lobby" }, acked.resolve);
+
+    expect((await acked.promise).status().status).toBe("error");
+  });
+
+  it("a served `inSpace(..., { root: true })` places its child as the root of the space it creates, whose genesis seals the reservation", async () => {
+    // The default root is servable, so the room space's own serving ensure
+    // can create one there if it reaches the space before the child.
+    const defaultAppSource = [
+      "import { pattern } from 'commonfabric';",
+      "export default pattern<Record<string, never>, { marker: string }>(",
+      "  () => ({ marker: 'default-app' }),",
+      ");",
+    ].join("\n");
+    const defaultAppIdentity = await resolveEntryIdentity(
+      DEFAULT_APP_ROUTE,
+      () => Promise.resolve(defaultAppSource),
+    );
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = ((input: Request | URL | string) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      return Promise.resolve(
+        url.pathname !== DEFAULT_APP_ROUTE
+          ? new Response("not found", { status: 404 })
+          : url.searchParams.has("identity")
+          ? new Response(defaultAppIdentity, { status: 200 })
+          : new Response(defaultAppSource, { status: 200 }),
+      );
+    }) as typeof fetch;
+    try {
+      clientManager = SharedServerStorageManager.connectTo(server, {
+        as: aliceSigner,
+      });
+      clientRuntime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: clientManager,
+        experimental: { serverExecution: true },
+      });
+      const compiled = await clientRuntime.patternManager.compilePattern({
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: `
+import { action, pattern, type Stream, type Writable } from "commonfabric";
+const Room = pattern<{ title: string }, { title: string }>(
+  ({ title }) => ({ title }),
+);
+export default pattern<
+  { rooms: Writable<unknown[]> },
+  { create: Stream<{ title: string }> }
+>(({ rooms }) => ({
+  create: action(({ title }: { title: string }) => {
+    rooms.push(Room.inSpace(undefined, { root: true })({ title }));
+  }),
+}));`,
+        }],
+      }, { space: homeSpace });
+      const argument = clientRuntime.getCell<{ rooms: unknown[] }>(
+        homeSpace,
+        "in-space-root-argument",
+      );
+      const result = clientRuntime.getCell<{ create: unknown }>(
+        homeSpace,
+        "in-space-root-result",
+        compiled.resultSchema,
+      );
+      await Promise.all([argument.sync(), result.sync()]);
+      const seed = clientRuntime.edit();
+      argument.withTx(seed).set({ rooms: [] });
+      clientRuntime.run(seed, compiled, argument, result);
+      expect((await seed.commit().settled).error).toBeUndefined();
+      await clientManager.synced();
+      host = newHost();
+
+      result.key("create").send({ title: "lobby" });
+      await clientManager.synced();
+      const engine = await server.engineForSpace(homeSpace);
+      const rooms = (): unknown[] =>
+        (readDoc(engine, { id: argument.getAsNormalizedFullLink().id })
+          ?.value as { rooms?: unknown[] } | undefined)?.rooms ?? [];
+      await awaitAdmitted(server, () => rooms().length > 0);
+      const roomSpace = parseLink(rooms()[0])!.space! as MemorySpace;
+      expect(roomSpace).not.toBe(homeSpace);
+      expect(readGenesisRoot(await server.engineForSpace(roomSpace))).toEqual({
+        cause: inSpaceRootCause(roomSpace),
+      });
+      const root = await resolveSpaceRootPattern(clientRuntime, roomSpace);
+      expect(
+        root?.equals(
+          clientRuntime.getCell(roomSpace, inSpaceRootCause(roomSpace)),
+        ),
+      ).toBe(true);
+      expect(
+        await root!.key("title").asSchema({ type: "string" }).pull(),
+      ).toBe("lobby");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

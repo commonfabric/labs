@@ -16,6 +16,7 @@ import type { JSONSchema } from "../src/builder/types.ts";
 
 import {
   buildSourceDocs,
+  type ClosureLoadTally,
   codeFieldVerifies,
   COMPILED_INTEGRITY_ATOM,
   compiledDocKey,
@@ -35,6 +36,7 @@ import { parseLink } from "../src/link-utils.ts";
 import { compileCachePersistenceSlotKey } from "../src/pattern-manager.ts";
 import type { URI } from "../src/sigil-types.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { observeCacheWriteBacks } from "./support/telemetry-observers.ts";
 
@@ -1102,6 +1104,170 @@ describe("cell-cache", () => {
       );
       rtx.abort?.();
       expect(loaded.get(utilIdentity)?.code).toBe("/* inline */");
+    });
+
+    describe("the load tally", () => {
+      const tally = (): ClosureLoadTally => ({ entry: "absent", dropped: 0 });
+
+      it("reports an entry no document backs as absent", async () => {
+        const rtx = runtime.edit();
+        const found = tally();
+        const loaded = await loadCompiledClosure(
+          runtime,
+          spaceA,
+          "never-written",
+          opts(),
+          rtx,
+          found,
+        );
+        rtx.abort?.();
+
+        expect(loaded.size).toBe(0);
+        expect(found).toEqual({ entry: "absent", dropped: 0 });
+      });
+
+      it("reports an entry whose label lacks the compiler atom as unverified", async () => {
+        const utilIdentity = identityOf(PROGRAM, "/util.ts");
+        const wtx = runtime.edit();
+        const record = runtime.getCell(
+          spaceA,
+          compiledDocKey(RTVER, utilIdentity),
+          compiledDocWriteSchema(),
+          wtx,
+        );
+        seedStoredEnvelope(wtx, {
+          space: spaceA,
+          id: record.getAsNormalizedFullLink().id!,
+          type: "application/json",
+          path: [],
+        }, {
+          value: {
+            kind: "compiled",
+            identity: utilIdentity,
+            code: "/* unstamped */",
+            filename: "/util.ts",
+            imports: [],
+          },
+        });
+        wtx.prepareCfc();
+        expect((await wtx.commit().settled).error).toBeUndefined();
+
+        const rtx = runtime.edit();
+        const found = tally();
+        const loaded = await loadCompiledClosure(
+          runtime,
+          spaceA,
+          utilIdentity,
+          opts(),
+          rtx,
+          found,
+        );
+        rtx.abort?.();
+
+        expect(loaded.size).toBe(0);
+        expect(found).toEqual({ entry: "unverified", dropped: 0 });
+      });
+
+      it("counts a child the walk refuses and keeps the rest", async () => {
+        const { modules, entryIdentity } = toModules(PROGRAM);
+        const utilIdentity = identityOf(PROGRAM, "/util.ts");
+        const wtx = runtime.edit();
+        writeCompiledDocs(runtime, spaceA, modules, entryIdentity, opts(), wtx);
+        wtx.prepareCfc();
+        expect((await wtx.commit().settled).error).toBeUndefined();
+
+        // Re-seed the child's envelope without its label map: the record and
+        // its code link stay, the compiler atom goes.
+        const stripTx = runtime.edit();
+        const child = runtime.getCell(
+          spaceA,
+          compiledDocKey(RTVER, utilIdentity),
+          undefined,
+          stripTx,
+        );
+        seedStoredEnvelope(stripTx, {
+          space: spaceA,
+          id: child.getAsNormalizedFullLink().id!,
+          type: "application/json",
+          path: [],
+        }, { value: child.getRaw() as never });
+        stripTx.prepareCfc();
+        expect((await stripTx.commit().settled).error).toBeUndefined();
+
+        const rtx = runtime.edit();
+        const found = tally();
+        const loaded = await loadCompiledClosure(
+          runtime,
+          spaceA,
+          entryIdentity,
+          opts(),
+          rtx,
+          found,
+        );
+        rtx.abort?.();
+
+        expect(found).toEqual({ entry: "verified", dropped: 1 });
+        expect(loaded.has(entryIdentity)).toBe(true);
+        expect(loaded.has(utilIdentity)).toBe(false);
+      });
+
+      it("counts a refused document once however many modules import it", async () => {
+        const diamond: RuntimeProgram = {
+          main: "/main.ts",
+          files: [
+            {
+              name: "/main.ts",
+              contents: `import "./a.ts"; import "./b.ts"; export const m = 1;`,
+            },
+            {
+              name: "/a.ts",
+              contents: `import "./util.ts"; export const a = 1;`,
+            },
+            {
+              name: "/b.ts",
+              contents: `import "./util.ts"; export const b = 1;`,
+            },
+            { name: "/util.ts", contents: "export const u = 1;" },
+          ],
+        };
+        const { modules, entryIdentity } = toModules(diamond);
+        const utilIdentity = computeModuleHashes(diamond).get("/util.ts")!;
+        const wtx = runtime.edit();
+        writeCompiledDocs(runtime, spaceA, modules, entryIdentity, opts(), wtx);
+        wtx.prepareCfc();
+        expect((await wtx.commit().settled).error).toBeUndefined();
+
+        const stripTx = runtime.edit();
+        const util = runtime.getCell(
+          spaceA,
+          compiledDocKey(RTVER, utilIdentity),
+          undefined,
+          stripTx,
+        );
+        seedStoredEnvelope(stripTx, {
+          space: spaceA,
+          id: util.getAsNormalizedFullLink().id!,
+          type: "application/json",
+          path: [],
+        }, { value: util.getRaw() as never });
+        stripTx.prepareCfc();
+        expect((await stripTx.commit().settled).error).toBeUndefined();
+
+        const rtx = runtime.edit();
+        const found = tally();
+        const loaded = await loadCompiledClosure(
+          runtime,
+          spaceA,
+          entryIdentity,
+          opts(),
+          rtx,
+          found,
+        );
+        rtx.abort?.();
+
+        expect(found).toEqual({ entry: "verified", dropped: 1 });
+        expect(loaded.size).toBe(3);
+      });
     });
 
     it("round-trips JSON coverage spans and rejects unsupported stored spans", async () => {

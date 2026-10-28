@@ -3,7 +3,11 @@ import { expect } from "@std/expect";
 import { assert } from "@std/assert";
 import { encodeBase64 } from "@std/encoding/base64";
 
-import { saAssertion, type ServiceAccountKey } from "./gcp-auth.ts";
+import {
+  importRsaSigningKey,
+  saAssertion,
+  type ServiceAccountKey,
+} from "./gcp-auth.ts";
 
 async function generateKey(): Promise<
   { key: ServiceAccountKey; publicKey: CryptoKey }
@@ -33,6 +37,13 @@ async function generateKey(): Promise<
   };
 }
 
+function b64Decode(pem: string): Uint8Array {
+  return Uint8Array.from(
+    atob(pem.replace(/-----[^-]+-----/g, "").replace(/\s+/g, "")),
+    (c) => c.charCodeAt(0),
+  );
+}
+
 function b64urlDecode(text: string): Uint8Array {
   const padded = text.replaceAll("-", "+").replaceAll("_", "/") +
     "=".repeat((4 - text.length % 4) % 4);
@@ -40,6 +51,39 @@ function b64urlDecode(text: string): Uint8Array {
 }
 
 describe("gcp-auth", () => {
+  describe("importRsaSigningKey()", () => {
+    it("imports a PKCS#1 key as one that signs like the same key in PKCS#8", async () => {
+      const { key, publicKey } = await generateKey();
+      const pkcs8 = b64Decode(key.private_key);
+      // A 2048-bit key's PKCS#8 structure carries its PKCS#1 key after a
+      // 26-byte header, the last four bytes of which open its octet string.
+      expect(Array.from(pkcs8.slice(22, 24))).toEqual([0x04, 0x82]);
+      const pkcs1 = `-----BEGIN RSA PRIVATE KEY-----\n${
+        encodeBase64(pkcs8.slice(26))
+      }\n-----END RSA PRIVATE KEY-----\n`;
+      const data = new TextEncoder().encode("signed");
+      const signature = await crypto.subtle.sign(
+        "RSASSA-PKCS1-v1_5",
+        await importRsaSigningKey(pkcs1),
+        data,
+      );
+      expect(
+        await crypto.subtle.verify(
+          "RSASSA-PKCS1-v1_5",
+          publicKey,
+          signature,
+          data,
+        ),
+      ).toBe(true);
+    });
+
+    it("rejects text that is not a PEM RSA private key", async () => {
+      await expect(importRsaSigningKey("not a key")).rejects.toThrow(
+        "expected a PEM RSA private key",
+      );
+    });
+  });
+
   describe("saAssertion()", () => {
     it("returns a JWT whose signature verifies with the public key", async () => {
       const { key, publicKey } = await generateKey();

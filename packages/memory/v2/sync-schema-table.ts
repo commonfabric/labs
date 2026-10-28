@@ -7,6 +7,7 @@ import type {
   ServerMessage,
   SessionEffectMessage,
   SessionSync,
+  SyncCrossing,
 } from "../v2.ts";
 import { mapLinkSchemas } from "./schema-table-links.ts";
 import {
@@ -135,6 +136,17 @@ export const compressSessionSyncSchemas = (
       doc: doc as typeof upsert.doc,
     };
   });
+  // A crossing's schema is a schema position of its own, interned like a
+  // link's: the walk reports the selector a read needed, which is as often
+  // as not the same schema the frame's documents carry inline.
+  const crossings = sync.crossings?.map((crossing) =>
+    isCompressibleSchema(crossing.schema)
+      ? {
+        ...crossing,
+        schema: rewriteSchemaValue(crossing.schema, state) as JSONSchema,
+      }
+      : crossing
+  );
 
   if (!state.changed) {
     return sync;
@@ -143,9 +155,24 @@ export const compressSessionSyncSchemas = (
   return {
     ...sync,
     upserts,
+    ...(crossings === undefined ? {} : { crossings }),
     schemaTable: Object.fromEntries(state.schemas),
   };
 };
+
+/** Expands the table references a frame's crossings carry in their schema
+ * position, throwing on one the table cannot resolve. */
+const expandCrossingSchemas = (
+  crossings: readonly SyncCrossing[],
+  schemas: SchemaTable | undefined,
+  onSchema?: (schema: JSONSchema) => void,
+): SyncCrossing[] =>
+  crossings.map((crossing) => {
+    const expanded = expandSchemaRef(crossing.schema, schemas, onSchema);
+    return expanded === undefined
+      ? crossing
+      : { ...crossing, schema: expanded };
+  });
 
 export const expandSessionSyncSchemas = (
   sync: SessionSync | SchemaTableSessionSync,
@@ -158,6 +185,11 @@ export const expandSessionSyncSchemas = (
       if (ref !== undefined) {
         expandSchemaRef(ref, schemas, onSchema);
       }
+    }
+    // A reference in a crossing's schema position with no table to resolve
+    // it against fails the frame the same way.
+    if (sync.crossings !== undefined) {
+      expandCrossingSchemas(sync.crossings, schemas, onSchema);
     }
     return sync;
   }
@@ -184,6 +216,9 @@ export const expandSessionSyncSchemas = (
   const withExpandedUpserts: SchemaTableSessionSync = {
     ...sync,
     upserts,
+    ...(sync.crossings === undefined ? {} : {
+      crossings: expandCrossingSchemas(sync.crossings, schemas, onSchema),
+    }),
   };
   const { schemaTable: _schemaTable, ...expanded } = withExpandedUpserts;
   return deepFreeze(expanded as SessionSync);

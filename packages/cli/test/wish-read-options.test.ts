@@ -15,6 +15,7 @@ import {
   CellSelectionError,
   parseCellSelectionOptions,
 } from "../lib/cell-selection.ts";
+import { seedProfileOwner } from "../../runner/test/cfc-seed-envelope.ts";
 
 const userIdentity = await Identity.fromPassphrase("cf-wish-read-options-user");
 
@@ -61,6 +62,11 @@ describe("cf wish read options", () => {
         { title: "Bernoulli numbers", done: false },
       ],
     });
+    seedProfileOwner(
+      tx,
+      profileCell.getAsNormalizedFullLink(),
+      userIdentity.did(),
+    );
     profileSpaceCell.key("defaultPattern").set(profileCell);
     await tx.commit().settled;
     await runtime.idle();

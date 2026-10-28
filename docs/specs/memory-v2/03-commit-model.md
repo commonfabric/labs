@@ -45,8 +45,9 @@ just a JSON subset.
 
 ## 3.2 Transaction Structure
 
-A transaction groups one or more operations into an atomic unit. All operations
-succeed or all fail.
+A transaction groups operations and their validation requirements into an atomic
+unit. All operations succeed or all fail; a validation-only transaction carries
+no operations.
 
 ```typescript
 // Shown at module scope.
@@ -57,8 +58,17 @@ interface Transaction {
 }
 ```
 
-A transaction MUST contain at least one operation. Validation of all reads
-happens before any writes are applied.
+A transaction MUST contain operations, reads, or preconditions, unless it is a
+server wave carrying outbound appends. A validation-only transaction
+checks its reads and records a commit verdict without creating document revisions.
+With `localSessionDocuments` enabled, a client-executed commit whose writes
+are all documents of the client's own session instance uses this form when it
+read a shared document or carries a shared precondition: the verdict decides
+whether its session writes stand, and a rejected one rolls them back. Writes
+to an explicitly named foreign session instance are admitted by the server
+like any other shared write. Validation of all reads happens
+before any writes are applied. Enabling local session storage requires
+servers that admit validation-only commits.
 
 ## 3.3 Client State: Confirmed and Pending
 
@@ -101,6 +111,44 @@ Read(entity, path):
   2. If found, read from the newest matching pending write
   3. Otherwise read from confirmed state
 ```
+
+A pending write is read as the ops of its commit replayed over the
+confirmed state beneath it, which is how the server folds them on accept.
+One op is the exception until the verdict. A `splice` is positional: the
+diff emits it against the array the transaction read, and replayed over an
+array a frame has since changed it says something its writer never wrote —
+where another writer appended the same tail, the tail reads twice, a list
+the store never holds. Where the commit carries a
+recursive read covering the array, the client reads a pending `splice` as
+the array its transaction computed, which the pending write carries, in the
+splice's place over the confirmed state's version of everything else. The
+read is what makes that sound: a write that moves the array makes the read
+stale, so the server refuses the commit, or elides it where the array
+already holds the result, and a commit built over the shown array is
+refused with it — no reader of the shown array is ever accepted against a
+different stored one. A `splice` the commit read nothing for is read as
+its ops replayed, because the server applies it where it stands whatever
+the array holds, and the server judges a reader's view by replaying the
+layers it names (§3.6.1): a reader shown the computed array would be
+accepted having observed a list the store never holds. The verdict is the
+server's as ever: a refusal drops the write, and an accept folds the ops as
+they stand, since that is how the store applied them. Mergeable ops are not
+positional and are never substituted: an `append` means "add to whatever is
+there", and a concurrent write must read through it.
+
+A pending write whose read a delivered value has already proved stale is
+still read as that write until its verdict, computed array included. The
+client's view changes only where the client holds one coherent prefix of the
+space's history: a refusal's drop waits for the catch-up marker, which rides
+the fan-out frame covering the verdict, and that frame carries the whole
+watch set at one seq (04-protocol.md §4.11.2), so what a re-run then reads
+is the single-snapshot view §3.3.4 requires. A single delivered document is
+not such a point: one that arrives alone, through a read of a document the
+session does not watch, is at head while the rest of the replica is not, and
+a view that switched on its arrival would have a re-run commit over a state
+no point in history held. Nothing built over the stale write can be accepted
+meanwhile, since the read that makes the write refusable dooms a commit that
+named it.
 
 ### 3.3.4 Single-Snapshot Rule
 
@@ -366,11 +414,33 @@ patches it is judged as one write of the final value:
 - replayed on the document as the commit's read of that document saw it, the
   sequence yields the stored document;
 - replayed on the stored document, the sequence leaves it unchanged. This
-  condition is for the writer's replica, which re-folds the operations over
+  condition is for a writer's replica that re-folds the operations over
   whatever confirmed base it holds when the accept arrives: a sequence
   idempotent on the durable value lands on that value from any base between
   the read and the head, where a positional splice replayed over a base
-  already carrying its elements would duplicate them.
+  already carrying its elements would duplicate them. A session whose client
+  advertised `elidedVerdicts` (04-protocol.md §4.1) promotes an elided layer
+  to the document its transaction computed instead of re-folding it, and the
+  server holds that session's commits to the first condition alone: a splice
+  that reaches the stored list from the view that produced it is an identity
+  for such a session.
+
+An accept reports the operations it elided on the verdict
+(`elidedOpIndexes`, 04-protocol.md §4.3.1). Where the commit read the
+document, the proof's first condition established that the stored document
+is the one the layer's transaction computed from its own view, which the
+pending layer carries, and a replica that advertised `elidedVerdicts`
+promotes a layer every operation of which was elided to that document, at
+the commit's seq, whatever ops the layer holds and whatever frames the
+replica has integrated meanwhile: replaying the ops is exact only over the
+base they were diffed from, and a frame delivered since may be an
+intermediate state the proof was not made against. Where the commit did not
+read the document, the proof was made against the stored document and shows
+only that the ops leave it unchanged, so the replica promotes by replaying
+them, as it does any accept. A frame already integrated at or after the
+commit's seq is newer and stands. A session opened with the capability is
+resumed only by a client that advertises it: a replayed verdict may carry
+an elision only such a replica handles.
 
 The reader's view of a document is reconstructed from the commit's own read
 of it, on the commit's branch: for a pending read, the document at the read's
@@ -500,7 +570,16 @@ by the read's shape:
   completeness attestation, not an extension of what a client may omit:
   the sanctioned omission remains a processed rejection (§3.5), and a
   client has nothing to gain from omitting a live layer — the scan
-  converts exactly that bug into a retryable conflict.
+  converts exactly that bug into a retryable conflict. A named layer the
+  server accepted as an identity commit (§3.6.1) wrote nothing, so the
+  exclusion has no revision of it to skip, while the foreign write its
+  proof matched lies inside the interval. Where the layer's operations on
+  the document begin with a `set`, or the read of the document the proof
+  reconstructed the layer's view from (§3.6.1) sat on the reader's declared
+  `basisSeq` through no own layer the reader does not name, the reader's
+  view through the layer is the document the proof was made against, which is the stored document at the layer's seq, and the
+  scan starts at that seq instead. The server looks for such a layer only
+  once the declared basis has found a conflict.
 - **Legacy basis (`basisSeq` absent).** The scan is based at the HIGHEST
   element's resolution seq. Writes landing between the reader's confirmed
   basis and that seq are not scanned — the pending-read basis over-advance
@@ -676,7 +755,10 @@ connection successfully resumes a session with the current token, ownership
 transfers to that connection, the old owner is revoked for that session, and
 the server rotates the token. A client presenting a stale token receives
 `SessionRevokedError` and must not assume it can continue replaying retained
-commits on that session.
+commits on that session. The one exception is the client whose resume's
+response was lost: its next resume presents the token the lost one presented,
+under the same `resumeKey` and a greater `resumeAttempt`, and the server
+accepts it (04-protocol.md section 4.1.2).
 
 On reconnect:
 
@@ -712,6 +794,13 @@ The client provider fires three notification types:
   notification.
 - A rejected local commit produces a later `revert` notification before the
   promise resolves with the conflict.
+- Before that `revert`, the client holds the store's copy of each document
+  the rejected commit touched that it holds no confirmed revision of — a
+  document the commit created, which another session may have written —
+  loading it where the conflict's read repair (04-protocol.md section 4.11.2)
+  does not deliver it, as it does not for a document no watch reaches or for
+  a commit refused for a pending dependency. The `revert` then reveals that
+  copy rather than an absence.
 - `integrate` notifications MUST be suppressed for entity paths still shadowed
   by newer local pending state.
 - If multiple pending commits overlap the same entity/path, visible
@@ -723,10 +812,10 @@ The client provider fires three notification types:
 A principal may read a space it cannot write, and a reactive computation it
 runs there still writes its outputs. Those writes are derived: running the
 computation again reproduces them. When the server refuses such a commit with
-an `AuthorizationError` it has not marked retriable, the client keeps each
-written document's new value instead of reverting it, as a _local fold_: the
-confirmed value at the same `seq`, with the refused write applied, held by
-that replica alone.
+an `AuthorizationError` it has not marked retriable, a client running under
+the `localFold` flag keeps each written document's new value instead of
+reverting it, as a _local fold_: the confirmed value at the same `seq`, with
+the refused write applied, held by that replica alone.
 
 - A document is folded only where the refused write sits directly on the
   confirmed version it was made over. Where a newer confirmed version arrived
@@ -746,6 +835,13 @@ that replica alone.
 
 Event handlers are not folded. Their writes are acts rather than derivations,
 and a refusal of one is reverted and reported.
+
+The fold is gated by the `localFold` experimental flag
+([registry](../../development/EXPERIMENTAL_OPTIONS.md#localfold)), off by
+default. Without it, a refused derived write is reverted as any other
+rejection is. The computation is not retried, and the revert of its own
+write does not run it again; it runs again when an input it did not write
+changes, and is refused again while the grant is missing.
 
 ## 3.9 Commit Ordering
 

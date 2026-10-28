@@ -2,6 +2,8 @@
 // ingest-channels handlers set: the verified caller DID, the deployment's
 // dependencies, and the call.
 
+import { trace } from "@opentelemetry/api";
+
 import env from "@/env.ts";
 import { runtime } from "@/index.ts";
 import { identity } from "@/lib/identity.ts";
@@ -41,11 +43,11 @@ const deps = (logger: LifecycleDeps["logger"]): LifecycleDeps => ({
       (await memoryServer.readDocument(space, aclDocId(space)))?.value,
   },
   host: serverExecutionHost,
-  serviceIdentity: identity,
   append: (entry) => memoryServer.commitDelegatedAppend(entry),
   readDocument: (space, id) => memoryServer.readDocument(space, id),
   watchAdmittedCommits: (watcher) => memoryServer.watchAdmittedCommits(watcher),
   logger,
+  requestSpan: trace.getActiveSpan(),
 });
 
 /**

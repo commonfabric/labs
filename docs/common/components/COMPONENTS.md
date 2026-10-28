@@ -105,9 +105,11 @@ cell means none confirmed — check the component source before assuming.
 | `cf-autocomplete` | Search input with filterable dropdown; single/multi select | `$value`, `$items` |
 | `cf-autolayout` | Responsive multi-panel layout | |
 | `cf-autostart` | Zero-UI element that emits a `start` event once on connect | |
-| `cf-avatar` | Avatar showing data-URI image, emoji glyph, or initials | |
+| `cf-avatar` | Avatar showing image bytes, a data-URI image, an emoji glyph, or initials | |
+| `cf-avatar-input` | Picks an image and fires it as profile-picture bytes, cropped square and scaled down | |
 | `cf-badge` | Status indicator / label with visual variants | |
 | `cf-bar-mark` | Bar mark rendered inside `cf-chart` | `$data` |
+| `cf-blob-link` | Link that downloads a blob from a space's blob store, given its reference `{ space, id }` (see [files](../capabilities/files.md)) | |
 | `cf-button` | Interactive button with color/variant/size options | |
 | `cf-calendar` | Month-grid mini calendar | `$value`, `$markedDates` |
 | `cf-canvas` | Fixed-size canvas surface emitting `cf-canvas-click` with x/y | |
@@ -145,7 +147,8 @@ cell means none confirmed — check the component source before assuming.
 | `cf-hover-reveal` | Content whose `actions` slot appears on hover or focus (see [cf-hover-reveal](#cf-hover-reveal)) | |
 | `cf-hscroll` | Horizontal scroll container | |
 | `cf-hstack` | Horizontal stack layout (flexbox) (see [stacks](#cf-vstack--cf-hstack)) | |
-| `cf-iframe` | Sandboxed guest with explicit cell, stream, SQLite, or service capabilities | |
+| `cf-iframe` | Sandboxed guest with explicit cell, stream, SQLite, service, or presence-room capabilities | |
+| `cf-image` | Image from raw `bytes` and a `media-type`, or from a blob reference `{ space, id }` (see [files](../capabilities/files.md)) | |
 | `cf-image-input` | Image capture/upload with compression, EXIF, camera support | |
 | `cf-input` | Text input with validation and reactive binding | `$value` |
 | `cf-input-otp` | One-time-password input with individual digit fields | |
@@ -168,7 +171,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-picker` | Carousel selection over cells with `[UI]` | `$items`, `$selectedIndex` |
 | `cf-piece` | Provides piece context to child components | |
 | `cf-plaid-link` | Plaid banking integration | `$auth` |
-| `cf-profile-badge` | The blessed, trusted way to render a profile identity (avatar + name + the generative verification seal — a DID-derived aura ring + cursor glint, no shield icon); navigable to the profile. Variants `full`/`chip`/`circle`/`hero` + `size`/`noNavigate` attrs (CT-1761). Prefer it over a bare name/avatar anywhere an identity appears. | `$profile` |
+| `cf-profile-badge` | The blessed, trusted way to render a profile identity (avatar + name + the generative verification seal — an aura ring derived from the owner's DID and, for a profile, its space, + cursor glint, no shield icon); navigable to the profile. Variants `full`/`chip`/`circle`/`hero` + `size`/`noNavigate` attrs (CT-1761). Prefer it over a bare name/avatar anywhere an identity appears. | `$profile` |
 | `cf-progress` | Progress bar, determinate or indeterminate | |
 | `cf-prompt-input` | Multiline prompt input with `@`-mentions, attachments, voice | `$mentionable`, `$model` |
 | `cf-question` | Asks a single question and collects the answer | |
@@ -186,7 +189,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-separator` | Visual divider line between content sections | |
 | `cf-share-snapshot` | Native confirmation of an exact JSON snapshot and runtime-verified audience (see [snapshot sharing](#cf-share-snapshot)) | `$source`, `$recipient`, `$result` |
 | `cf-skeleton` | Animated loading placeholder | |
-| `cf-slider` | Range input slider | |
+| `cf-slider` | Range input slider | `$value` |
 | `cf-space-create` | Label field + create button that creates a new space owned by the signed-in identity, with a random DID, and adds it to that identity's Home space list; fires `cf-space-created` with `{ did, label }`; the label is the entry's name | |
 | `cf-space-link` | Renders a space as a clickable navigation pill; opens the space by `spaceDid` when given, else by the legacy `spaceName` | |
 | `cf-submit-input` | Text field + submit button whose real (trusted) click carries the typed text as `event.target.value` with the surface's UI integrity, so it can authorize an owner-protected runtime write; prefer over `cf-message-input` when the submit gesture must be trusted | |
@@ -404,6 +407,10 @@ the policy placeholder in the same places. The exceptions:
 
 - A piece whose own document the viewer may not see shows nothing at all, where
   opening it shows the placeholder.
+- A piece in a space the viewer cannot reach right now, as after being removed
+  from it or before a grant arrives, shows the "Access unavailable"
+  placeholder that any content of that space shows, and shows the piece again
+  once the space is back in reach.
 - A `cf-cfc-render-boundary` that only declassifies does not reach into the
   piece: what it would release shows as the placeholder. A boundary that also
   lowers the ceiling falls under the next item.
@@ -414,10 +421,17 @@ the policy placeholder in the same places. The exceptions:
   an authorship boundary the piece's own text shows whether or not it carries
   the required endorsement.
 
+Showing a piece bound to `cf-render` (full, its exported tile or chip, or the
+default tile) opens it the way navigating to it does, so a view computed for
+the viewer renders, and the piece keeps running after the display goes, as an
+opened one does. The default chip only names the piece and opens nothing.
+
 `cf-picker` shows each of its `$items` through a `cf-render` of its own, so
 each item passes the same gates as a piece bound to `cf-render`, with the same
 exceptions. Where a `cf-render` would show nothing for one item, the picker
-shows nothing at all, since it is handed the whole list or none of it.
+shows nothing at all, since it is handed the whole list or none of it, and
+where the list or an item lies in a space out of reach, the picker shows the
+"Access unavailable" placeholder in its place.
 `cf-map` shows each marker's and circle's `popup` the same way. Where the
 `$value`'s type holds each popup as a cell, each popup passes the gates of a
 piece bound to `cf-render`; otherwise the map reads everything its popups
@@ -465,8 +479,9 @@ A piece exports a variant when its own document holds any value at the key,
 what it holds, so a key holding `null` renders as an empty variant rather than
 the default. Leave the key out to get the default.
 
-A `cf-render` with no cell shows nothing; it shows its loading state only while
-the cell it holds is rendering.
+A `cf-render` with no cell shows nothing of its own, only the "Access
+unavailable" placeholder while its cell's space is out of reach; it shows its
+loading state only while the cell it holds is rendering.
 
 A pattern exports the spectrum by returning the sibling keys:
 
@@ -877,12 +892,14 @@ interface MapPolyline {
 | Event | Detail | Description |
 |-------|--------|-------------|
 | `cf-click` | `{ lat, lng }` | Map background clicked |
-| `cf-bounds-change` | `{ bounds, center, zoom }` | Viewport changed |
+| `cf-bounds-change` | `{ bounds, center, zoom, userInitiated }` | Viewport changed; `userInitiated` is true when a person moved the map, false when cf-map did (bound values, fitting, resize) |
 | `cf-marker-click` | `{ marker, index, lat, lng }` | Marker clicked |
 | `cf-marker-drag-end` | `{ marker, index, position, oldPosition }` | Marker drag completed |
 | `cf-circle-click` | `{ circle, index, lat, lng }` | Circle clicked |
 
 **Note:** Polylines do not emit click events. For clickable segments, use circles as waypoints.
+
+**Who moves the map:** while a person is dragging, zooming, or gliding after a drag, cf-map holds its own moves (a feature fit, a bound `center`/`zoom`/ `bounds` value) until their move ends. The person's view then wins: a refit set off by changed features and any queued bound value are dropped, while a fit asked for meanwhile (turning `fitToBounds` on) still runs. The first bound `bounds` value the map is given, the stored view, applies ahead of a bound `center`/`zoom`, whether it is there at mount or loads later; while `fitToBounds` is on, the fit to the features wins over it. Later `bounds` values always apply.
 
 ### Usage
 
@@ -1059,7 +1076,7 @@ and (for the current viewer) a verified seal that user-space cannot forge.
 
 | You are showing… | Use | Why |
 | --- | --- | --- |
-| **any participant** whose live profile cell you hold — the viewer (via `wish`) or anyone who contributed their cell on join | `cf-profile-badge` bound to that cell | trusted; draws name + avatar + a DID-derived verified seal; cross-space reads resolve for every viewer (CT-1667/1687) |
+| **any participant** whose live profile cell you hold — the viewer (via `wish`) or anyone who contributed their cell on join | `cf-profile-badge` bound to that cell | trusted; draws name + avatar + a verified seal; verification attests the owner, and the seal, derived from the owner's DID and the profile's space, tells their profiles apart (a record of the person that is not a profile wears the owner's seal alone); cross-space reads resolve for every viewer (CT-1667/1687) |
 | a person you hold **only a snapshot** for — a self-contained piece, or an offline remote profile space | `cf-avatar` + their name | untrusted fallback, safe for any value; needs no profile cell |
 | a row that **may or may not** carry a profile — one written before the space had profiles, beside rows that do | `cf-profile-badge` with `fallback-name` | one binding for both, so nothing has to test a cell-typed field for presence; the name shows only where no profile resolves |
 
@@ -1081,11 +1098,13 @@ Untrusted avatar primitive — safe for any code to render, for any person.
 
 ```tsx
 // Shown for illustration only.
-<cf-avatar name="Ada Lovelace" src={person.avatar} size="sm" /> // data: URI image
-<cf-avatar name="Grace Hopper" src="🦊" />                       // emoji glyph
-<cf-avatar name="Alan Turing" />                                 // initials "AT"
+<cf-avatar name="Ada Lovelace" bytes={person.picture} size="sm" /> // image bytes
+<cf-avatar name="Grace Hopper" src="🦊" />                          // emoji glyph
+<cf-avatar name="Alan Turing" />                                    // initials "AT"
 ```
 
+- `bytes`: the bytes of a raster image, such as a profile's `picture`.
+  Non-empty bytes take precedence over `src`.
 - `src`: a `data:` URI image, an emoji/glyph, or `""`. **Only `data:` URIs render
   as an image** — `http(s)`, `blob:`, and path URLs degrade to initials and are
   never fetched (no tracking/exfil beacon).
@@ -1097,11 +1116,25 @@ self-contained piece, or a participant whose remote profile space is offline. Wh
 you have the live profile cell (which you do for every participant who joined by
 contributing it), prefer `cf-profile-badge`.
 
+### cf-avatar-input
+
+A button that picks an image file and fires `cf-change` with
+`{ bytes: FabricBytes }`: the image's centered square, scaled to 128 pixels on
+each side. A profile's edit form binds it to the profile's `setPicture` stream,
+which reads `detail.bytes`. A file that is not an image fires `cf-error` with
+`{ message }` instead.
+
+```tsx
+// Shown for illustration only.
+<cf-avatar-input oncf-change={profile.setPicture} />
+```
+
 ### cf-profile-badge
 
 Trusted presentation of **a participant's profile** — the viewer's own, or anyone
 whose profile cell you stored on join. Bind a profile **cell** (not strings) via
-`$profile`; it renders name + avatar + a verified seal derived from the owner's
+`$profile`; it renders name + picture (or, without one, the profile's avatar
+text) + a verified seal derived from the owner's
 identity that user-space cannot mint.
 
 ```tsx
@@ -1116,8 +1149,10 @@ const profileWish = wish({ query: "#profile" }); // resolves the viewer's profil
   other participants, bind the profile cell they contributed to the shared roster
   on join.
 - `size`: `xs | sm | md | lg | xl`.
-- The verified seal only appears for a live, runtime-attested profile cell (it
-  will not show in stories or `--no-run` checks — that is expected, not a failure).
+- The verified seal only appears for a live, runtime-attested cell: a profile,
+  or another record of the person whose label attests them, which wears the
+  owner's seal alone (it will not show in stories or `--no-run` checks — that
+  is expected, not a failure).
 - **Every participant** with a stored profile cell can be badged — not just the
   viewer. Cross-space profile reads resolve for any authorized viewer (CT-1667/1687),
   so store each person's `#profile` cell in the shared `PerSpace` roster on join and

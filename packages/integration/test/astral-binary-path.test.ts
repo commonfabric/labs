@@ -10,6 +10,7 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { fromFileUrl } from "@std/path";
 
 import { astralBinaryPath } from "../astral-adapter.ts";
 
@@ -66,7 +67,7 @@ describe("astralBinaryPath()", () => {
       // The existence check, asked where the answer is known. Without it the
       // first candidate comes back whether or not it exists, and astral takes
       // that answer as final and fails to spawn it.
-      const real = new URL(import.meta.url).pathname;
+      const real = fromFileUrl(import.meta.url);
       withEnvironmentOverride(undefined, () => {
         expect(astralBinaryPath(["/nonexistent/one", "/nonexistent/two", real]))
           .toBe(real);

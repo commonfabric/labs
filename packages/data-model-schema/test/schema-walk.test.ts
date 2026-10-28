@@ -8,11 +8,13 @@ import {
   ARRAY_SUBSCHEMA_KEYS,
   DEFS_KEYS,
   findSchema,
+  forEachSchema,
   forEachSubschema,
   isSubschema,
   mapSubschemas,
   RECORD_SUBSCHEMA_KEYS,
   type SchemaNode,
+  type SchemaWalkOptions,
   SINGLE_SUBSCHEMA_KEYS,
   subschemaEdges,
   type SubschemaKeyword,
@@ -325,6 +327,89 @@ describe("walkSchema", () => {
       "",
       "properties/self",
     ]);
+  });
+});
+
+describe("forEachSchema", () => {
+  it("visits the root and every subschema, depth-first and pre-order", () => {
+    const root = {
+      properties: { a: { items: { type: "string" } } },
+      anyOf: [{ type: "number" }],
+    } as JSONSchemaObj;
+    const seen: JSONSchema[] = [];
+    expect(forEachSchema(root, (s) => {
+      seen.push(s);
+    })).toBe(false);
+    // Keyword groups walk in `forEachSubschema`'s order: the single-schema
+    // keywords, then the array-valued ones, then the records.
+    expect(seen).toEqual([
+      root,
+      (root.anyOf as JSONSchema[])[0],
+      root.properties!.a,
+      (root.properties!.a as JSONSchemaObj).items,
+    ]);
+  });
+
+  it("stops early and reports it when a visit returns `true`", () => {
+    const root = {
+      properties: { a: { type: "string" }, b: { type: "number" } },
+    } as JSONSchemaObj;
+    const seen: JSONSchema[] = [];
+    expect(forEachSchema(root, (s) => {
+      seen.push(s);
+      return s === root.properties!.a;
+    })).toBe(true);
+    expect(seen).toEqual([root, root.properties!.a]);
+  });
+
+  it("visits `$defs` bodies and the never-emitted keywords only under their options", () => {
+    const root = {
+      $defs: { d: { type: "string" } },
+      if: { type: "number" },
+    } as JSONSchemaObj;
+    const count = (opts: SchemaWalkOptions) => {
+      let n = 0;
+      forEachSchema(root, () => {
+        n++;
+      }, opts);
+      return n;
+    };
+    expect(count({})).toBe(1);
+    expect(count({ includeDefs: true })).toBe(2);
+    expect(count({ includeUnused: true })).toBe(2);
+    expect(count({ includeDefs: true, includeUnused: true })).toBe(3);
+  });
+
+  it("skips boolean subschemas unless `visitBooleans` is set", () => {
+    const root = { properties: { a: true } } as JSONSchemaObj;
+    const seen: JSONSchema[] = [];
+    forEachSchema(root, (s) => {
+      seen.push(s);
+    });
+    expect(seen).toEqual([root]);
+    forEachSchema(root, (s) => {
+      seen.push(s);
+    }, { visitBooleans: true });
+    expect(seen).toEqual([root, root, true]);
+  });
+
+  it("visits a subschema shared by two positions at both, and a self-referential one once more before stopping", () => {
+    const shared = { type: "string" } as JSONSchemaObj;
+    const root = { properties: { a: shared, b: shared } } as JSONSchemaObj;
+    let visits = 0;
+    forEachSchema(root, (s) => {
+      if (s === shared) visits++;
+    });
+    expect(visits).toBe(2);
+    const cyclic = { properties: {} } as JSONSchemaObj;
+    (cyclic.properties as Record<string, JSONSchema>).self = cyclic;
+    // The guard gates descent, not the visit: the edge back to the root is
+    // reported, and nothing below it is walked again.
+    let total = 0;
+    forEachSchema(cyclic, () => {
+      total++;
+    });
+    expect(total).toBe(2);
   });
 });
 

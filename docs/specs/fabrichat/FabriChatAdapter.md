@@ -31,6 +31,11 @@ panel. The adapter links to its placement, and the placement to its room:
                (renders)            (what a viewer may see)  (the conversation)
 ```
 
+A container that names its own chat, as the `loom` pattern's root does with
+its `chatRoom`, names the room itself, not an adapter or a placement: the
+room is the container's own conversation, in its own space, while the adapter
+and the placement are how it shows a room, its own or another's.
+
 A client that draws natively ignores the adapter's rendering and reads the
 placement's `chat` group, which the adapter re-exports in its own `[VIEWS]` (see
 [`clients.md`](clients.md)). So a placed chat is always a pair, created together

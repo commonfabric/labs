@@ -15,8 +15,6 @@ import { isDID } from "@commonfabric/identity/did";
 import { signFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
 import { loadIdentity } from "./identity.ts";
 
-const BASE = "/api/ingest-channels";
-
 /**
  * Join the control-plane path onto the configured API base, KEEPING the base's
  * own path.
@@ -25,10 +23,27 @@ const BASE = "/api/ingest-channels";
  * against the origin and silently drops `/fabric`, so a deployment served under
  * a path prefix has every command addressed at the wrong endpoint — and it
  * fails as a 404 from somewhere else, not as a configuration error.
+ *
+ * A verb that acts on one space names it in the path, which is what lets a
+ * server dispatch the request by space without reading the body. Without
+ * `space` the URL is the one for the caller's own list, the only verb that
+ * names none.
  */
-export const controlPlaneUrl = (apiUrl: URL, verb: string): URL => {
+export const controlPlaneUrl = (
+  apiUrl: URL,
+  verb: string,
+  space?: string,
+): URL => {
+  // The space is one path segment, so a value that is not a DID is refused
+  // here rather than reaching the server as a different path.
+  if (space !== undefined && !isDID(space)) {
+    throw new Error(`Not a space DID: ${space}`);
+  }
+  const base = space === undefined
+    ? "/api/ingest-channels"
+    : `/api/spaces/${space}/ingest-channels`;
   const url = new URL(apiUrl);
-  url.pathname = `${url.pathname.replace(/\/+$/, "")}${BASE}/${verb}`;
+  url.pathname = `${url.pathname.replace(/\/+$/, "")}${base}/${verb}`;
   return url;
 };
 
@@ -37,13 +52,41 @@ export interface ChannelConfig {
   identityPath: string;
 }
 
+/**
+ * What kind of channel a registration is. A `device` channel is written by a
+ * device POSTing records with the channel's token, into journal cells under
+ * its cause prefix. A `gmail` channel is written by the server on each Gmail
+ * push notification for the mailbox bound to it, into the cell its target
+ * names. A new mint decides it: a mailbox proof and a target make a gmail
+ * channel, and a mint without them makes a device channel. A re-mint keeps
+ * the channel's kind, and one carrying neither field keeps a gmail channel's
+ * binding and target as well.
+ */
+export type IngestChannelKind = "device" | "gmail";
+
+/**
+ * The cell a gmail channel writes, as the parts of a link: the space, the
+ * document id, and the path within it. A mint names it as the `fcl1:` wire
+ * string `linkRefPayloadToString()` writes from these parts.
+ */
+export interface CellTarget {
+  space: string;
+  id: string;
+  path: string[];
+}
+
 export interface ChannelSummary {
   id: string;
   name: string;
   space: string;
-  causePrefix: string;
+
+  /** A device channel's cause prefix; absent on a gmail channel. */
+  causePrefix?: string;
+
+  /** A gmail channel's cell; absent on a device channel. */
+  target?: CellTarget;
   installId: string;
-  sink: "journal";
+  kind: IngestChannelKind;
   createdAt: string;
   enabled: boolean;
   owner?: string;
@@ -58,15 +101,38 @@ export interface ChannelSummary {
 
 export interface MintedChannel {
   id: string;
-  url: string;
+
+  /** Where a device POSTs; absent for a gmail channel, as `token` is. */
+  url?: string;
   space: string;
-  causePrefix: string;
+
+  /** A device channel's cause prefix; absent on a gmail channel. */
+  causePrefix?: string;
+
+  /** A gmail channel's cell; absent on a device channel. */
+  target?: CellTarget;
   installId: string;
   expiresAt?: string;
 
-  /** Shown ONCE. The server keeps only its hash. */
-  token: string;
+  /**
+   * The device's bearer secret, shown ONCE; the server keeps only its hash.
+   * Absent for a gmail channel, which no device POSTs to.
+   */
+  token?: string;
+
+  /** The mailbox the channel was bound to, when the mint carried a proof. */
+  emailAddress?: string;
 }
+
+/**
+ * Proof of a Gmail mailbox, carried on a mint to bind the channel to it: a
+ * Google access token that reads the mailbox, used by the server for one
+ * profile lookup and kept nowhere, or a Google ID token naming it, which
+ * grants nothing. One of the two.
+ */
+export type GmailProof =
+  | { accessToken: string; idToken?: never }
+  | { idToken: string; accessToken?: never };
 
 /**
  * Accept either a space DID or a space NAME, mirroring `cf acl`. A name is
@@ -86,8 +152,9 @@ async function call<T>(
   config: ChannelConfig,
   verb: string,
   payload: Record<string, unknown>,
+  space?: string,
 ): Promise<T> {
-  const url = controlPlaneUrl(config.apiUrl, verb);
+  const url = controlPlaneUrl(config.apiUrl, verb, space);
   const identity = await loadIdentity(config.identityPath);
   // The proof commits to the body hash, so the bytes signed and the bytes sent
   // must be identical — serialize once.
@@ -135,10 +202,15 @@ export function mintChannel(
     causePrefix?: string;
     name?: string;
     ttlDays?: number;
+
+    /** With `gmail`, the cell the gmail channel writes, as a wire link string. */
+    target?: string;
+    gmail?: GmailProof;
     requestId: string;
   },
 ): Promise<MintedChannel> {
-  return call<MintedChannel>(config, "mint", input);
+  const { space, ...payload } = input;
+  return call<MintedChannel>(config, "mint", payload, space);
 }
 
 /**
@@ -154,25 +226,36 @@ export async function listChannels(
   const { channels } = await call<{ channels: ChannelSummary[] }>(
     config,
     "list",
-    input,
+    {},
+    input.space,
   );
   return channels;
 }
 
+/** Mints a new token for channel `input.id`, which writes into `input.space`. */
 export function rotateChannel(
   config: ChannelConfig,
-  input: { id: string; ttlDays?: number; requestId: string },
+  input: { space: string; id: string; ttlDays?: number; requestId: string },
 ): Promise<MintedChannel> {
-  return call<MintedChannel>(config, "rotate", input);
+  const { space, ...payload } = input;
+  return call<MintedChannel>(config, "rotate", payload, space);
 }
 
+/** Disables channel `input.id`, which writes into `input.space`. */
 export function revokeChannel(
   config: ChannelConfig,
-  input: { id: string; requestId: string; expectedRevision: number },
+  input: {
+    space: string;
+    id: string;
+    requestId: string;
+    expectedRevision: number;
+  },
 ): Promise<{ id: string; revokedAt: string; revision: number }> {
+  const { space, ...payload } = input;
   return call<{ id: string; revokedAt: string; revision: number }>(
     config,
     "revoke",
-    input,
+    payload,
+    space,
   );
 }

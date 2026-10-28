@@ -18,11 +18,14 @@ async function memberOf(code: string) {
   const other = checker.getTypeOfSymbol(type.getProperty("other")!);
   const context: GenerationContext = {
     typeChecker: checker,
-    cyclicTypes: new Set(),
-    cyclicNames: new Set(),
     definitions: {},
     emittedRefs: new Set(),
+    mergedIntersectionNames: new Map(),
+    nameAnonymousDefinition: () => "AnonymousType_1",
+    anyValuesBesideUnwritten: [],
     definitionStack: new Set(),
+    expandingPath: [],
+    expansionBudget: { readingsInside: 0 },
     inProgressNames: new Set(),
     boundTypeParameters: {
       declaredNode: reference,

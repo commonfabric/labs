@@ -81,6 +81,21 @@ changes; any other is tried again on the next editor focus. The editor fires
 `cf-presence-join`, with no detail, each time it joins its room, so a host that
 shows a presence failure can clear it once the editor has joined again.
 
+`cf-iframe` is the second consumer. A context name whose `resourceKinds` entry
+is `presence` grants the sandboxed guest the room of that context cell's
+resolved field, derived exactly as an editor's room is, and none of the cell's
+data. The guest chooses its own facets, such as a pointer position or a shape
+held mid-drag, and sets its own display name. What it is told of another
+member is that member's relay-assigned id, name, and facets; the DID the relay
+stamps on a record does not cross into the guest. A relay's refusal of the
+guest's join or of its publication reaches the guest in the relay's words,
+since it concerns what the guest did, and any other failure reaches it as a
+category alone.
+[`../../packages/iframe-sandbox/README.md`](../../packages/iframe-sandbox/README.md)
+covers the guest API, and
+[`../common/ai/iframe-pattern-guide.md`](../common/ai/iframe-pattern-guide.md)
+the authoring contract.
+
 ## Authority and lifecycle
 
 Memory is the only integration authority. A client submits an `apply-op` with a
@@ -89,10 +104,31 @@ same transaction stores the submitted projection, appends canonical integrated
 operations, advances the field cursor, and writes the ordinary materialized
 revision.
 
+Pattern code edits a collaborative field with `Writable<string>.applyChanges()`,
+which takes changes in the shape of a CodeMirror change spec against the value
+the handler read. The handler's commit carries them as an `apply-op` with no
+base, carrying the hash of the value read, beside the handler's read of the
+field. The edit lands only while the field still holds the value the handler
+read, at the field's current version with nothing to rebase over. Otherwise
+the read refuses the commit as an ordinary conflict, and the scheduler runs the
+handler again against the new text. Under server execution a wave drops the
+reads of what it seals, and the hash is what refuses a stale edit there.
+
+The commit's ordinary patch of the document leaves the edited field as it was,
+so that only the `apply-op` changes it, and Memory writes the field's new value
+when it integrates the edit. The handler's own view and the replica's pending
+layer show the changed text from the start. An `applyChanges()` on a field no
+editor has opened activates it from the value read.
+
 `cf-code-editor` submits every unconfirmed local update in one apply, and
 edits made while that apply is in flight go out in the next one, until none
 remain. A local update is confirmed by Memory or reported through the editor's
 error and reconciliation events; it is never dropped silently.
+
+Disabling collaboration keeps the editor read-only while it confirms pending
+operations and refreshes the bound Cell's materialized value. The operation
+stream remains the editor's display authority until that read completes. A
+failed refresh leaves the editor read-only and emits `cf-error`.
 
 One collaborative epoch owns a field until it is explicitly released or its
 entity is deleted. An ordinary write may change other paths, but it cannot

@@ -9,6 +9,7 @@ import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { ValidationError } from "@cliffy/command";
 
+import { selectHarnessJobSandboxRuntime } from "@commonfabric/agent-runner/harness-job";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { type Cell, Runtime } from "@commonfabric/runner";
@@ -18,6 +19,8 @@ import {
   AgentRunRecordSchema,
 } from "@commonfabric/runner/agent-run";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+
+import { HarnessControlError } from "@commonfabric/cf-harness/control-errors";
 
 import {
   type AgentRunnerCommandConfig,
@@ -40,6 +43,10 @@ const stubDeps = (env: Record<string, string> = {}) => {
     loadIdentity: (path) => {
       events.push(`identity:${path}`);
       return Promise.resolve({ did: () => DID });
+    },
+    selectSandboxRuntime: () => {
+      events.push("sandbox");
+      return Promise.resolve();
     },
     start: (config) => {
       started.push(config);
@@ -112,11 +119,116 @@ describe("cf agent runner", () => {
       model: "scripted",
     }]);
     expect(events.filter((event) => !event.startsWith("report:"))).toEqual([
+      "sandbox",
       "identity:/keys/me.key",
       "start",
       "wait",
       "stop",
     ]);
+  });
+
+  describe("with a sandbox runtime the harness would refuse every run for", () => {
+    const ARGV = [
+      "runner",
+      "-i",
+      "/keys/me.key",
+      "-a",
+      "http://localhost:8100",
+    ];
+
+    it("throws a validation error with the harness's refusal, naming the variable alone, and starts nothing", async () => {
+      // By the path the file system has for it: a home reached through a
+      // link is refused for that before its store is looked at.
+      const home = await Deno.realPath(await Deno.makeTempDir());
+      const { deps, started } = stubDeps();
+      // A Mac with no native runtime set up, and no runtime named.
+      deps.selectSandboxRuntime = () =>
+        selectHarnessJobSandboxRuntime({
+          platform: "darwin",
+          arch: "aarch64",
+          env: { HOME: home },
+        });
+
+      try {
+        const refusal = await run(deps, ARGV).then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+
+        expect(refusal).toBeInstanceOf(ValidationError);
+        expect(refusal).toMatchObject({
+          exitCode: 1,
+          message: expect.stringMatching(
+            /^No sandbox runtime is named, so the default applies, which on macOS is the native `runsc` runtime, and it is not set up at `.*`: .*\. Set it up there\.$/,
+          ),
+        });
+        expect(started).toEqual([]);
+      } finally {
+        await Deno.remove(home, { recursive: true });
+      }
+    });
+
+    it("throws what the selection threw where that is not a refusal, and starts nothing", async () => {
+      const broken = new Error("the selection broke");
+      const { deps, started } = stubDeps();
+      deps.selectSandboxRuntime = () => Promise.reject(broken);
+
+      await expect(run(deps, ARGV)).rejects.toBe(broken);
+      expect(started).toEqual([]);
+    });
+
+    it("selects, by default, as the harness would for a run of this machine with no flag", async () => {
+      const home = await Deno.realPath(await Deno.makeTempDir());
+      let selected: unknown;
+      // This case names no platform, so it takes the machine's: the half of
+      // it a machine runs depends on which it is.
+      const selecting = (): Promise<void> =>
+        defaultAgentRunnerCommandDeps.selectSandboxRuntime().then(
+          (selection) => {
+            selected = selection;
+          },
+          (error: unknown) => {
+            selected = error;
+          },
+        );
+
+      try {
+        await withEnv(
+          "HOME",
+          home,
+          () =>
+            withEnv(
+              "CFC_VM_HOME",
+              undefined,
+              () => withEnv("CF_HARNESS_SANDBOX_RUNTIME", undefined, selecting),
+            ),
+        );
+      } finally {
+        await Deno.remove(home, { recursive: true });
+      }
+
+      // A Mac, and Linux, default to the native runtime, which this home has
+      // no store for; every other platform has no default.
+      const native = Deno.build.os === "darwin"
+        ? "macOS"
+        : Deno.build.os === "linux"
+        ? "Linux"
+        : undefined;
+      expect(selected).toBeInstanceOf(HarnessControlError);
+      expect(selected).toMatchObject({
+        message: expect.stringMatching(
+          native !== undefined
+            ? new RegExp(
+              "^No sandbox runtime is named, so the default applies, which " +
+                `on ${native} is the native \`runsc\` runtime, and .*\\.$`,
+            )
+            : new RegExp(
+              "^No sandbox runtime is named, and " +
+                `\`${Deno.build.os}\` has no default`,
+            ),
+        ),
+      });
+    });
   });
 
   it("defaults the runner's host to the home host, one run at a time, and the base tools", async () => {
@@ -136,7 +248,7 @@ describe("cf agent runner", () => {
       maxConcurrent: 1,
       leaseMs: 300_000,
       workRoot: "/home/me/.cf-harness/agent-runs",
-      tools: ["describe_handle", "web_fetch"],
+      tools: ["web_fetch", "describe_handle", "read_value"],
     });
     expect(started[0].loomRetrievalConfigPath).toBeUndefined();
     expect(started[0].model).toBeUndefined();
@@ -217,7 +329,11 @@ describe("cf agent runner", () => {
       "/var/agent-runs",
     ]);
 
-    expect(started[0].tools).toEqual(["loom_search", "describe_handle"]);
+    expect(started[0].tools).toEqual([
+      "loom_search",
+      "describe_handle",
+      "read_value",
+    ]);
     expect(started[0].workRoot).toBe("/var/agent-runs");
   });
 

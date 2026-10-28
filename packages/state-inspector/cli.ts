@@ -25,6 +25,7 @@ import {
   summarize,
 } from "./decode.ts";
 import {
+  describeCommitPayload,
   entityHistory,
   hotEntities,
   listCommits,
@@ -557,9 +558,9 @@ export function main(argv: string[]): number {
         out(json, rows, () => {
           for (const r of rows) {
             console.log(
-              `#${r.seq}\t${
-                r.session.slice(0, 14)
-              }\tlocal=${r.localSeq}\tops=${r.ops}\treads=${r.reads}\t${r.createdAt}`,
+              `#${r.seq}\t${r.session.slice(0, 14)}\tlocal=${r.localSeq}\t${
+                describeCommitPayload(r)
+              }\t${r.createdAt}`,
             );
           }
         });

@@ -42,6 +42,9 @@ const C = {
   button: hex("#4b9e5f"),
 } as const;
 
+/** The palette, for a view outside this package drawn to match this one. */
+export const palette = C;
+
 const TOKEN_STYLES: Record<TokenClass, Style> = {
   plain: { fg: C.fg },
   whitespace: {},

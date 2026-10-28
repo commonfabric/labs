@@ -304,6 +304,7 @@ export function planBudgetBackoff(state: {
     record.gate.backoffStreak++;
     record.gate.convergenceHoldPasses++;
     record.gate.backoffUntil = now + delayMs;
+    state.nodes.noteBackoff(record);
     actions.push(action);
     backoffUntil = minDefined(backoffUntil, record.gate.backoffUntil);
   }

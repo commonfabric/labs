@@ -24,6 +24,7 @@ import {
   computed,
   Default,
   equals,
+  type FabricBytes,
   handler,
   NAME,
   pattern,
@@ -32,14 +33,18 @@ import {
   wish,
   Writable,
 } from "commonfabric";
+import { profileLook } from "../system/profile-look.ts";
 
 // ============ TYPES ============
 
 interface Person {
   name: string;
-  // Optional avatar snapshot (image URL or emoji/glyph), sourced from the
-  // person's shared profile when they "join with your profile". Display-only —
-  // `name` stays the natural key, so the money/balance logic is unaffected.
+  // Optional picture snapshot, sourced from the person's shared profile when
+  // they "join with your profile". Display-only — `name` stays the natural
+  // key, so the money/balance logic is unaffected.
+  picture?: FabricBytes;
+  // Avatar text (an image URL, `data:` URL or glyph), copied instead when the
+  // person's profile has no picture, and shown when there is no picture.
   avatar?: string;
 }
 
@@ -53,6 +58,7 @@ interface Expense {
 
 interface Balance {
   name: string;
+  picture?: FabricBytes;
   avatar?: string;
   paid: number;
   share: number;
@@ -119,7 +125,8 @@ const computeSettlements = (balances: Balance[]): Settlement[] => {
   return result;
 };
 
-// Snapshot the current viewer's shared profile (name + avatar) into the shared
+// Snapshot the current viewer's shared profile (name + picture, or avatar text
+// when it has no picture) into the shared
 // `people` ledger and select them as "you". This is the participant/roster
 // idiom: each viewer contributes their own #profile snapshot on join, rather
 // than the app querying everyone's private profile state (see
@@ -131,23 +138,26 @@ export const joinWithProfile = handler<
     people: Writable<Person[]>;
     myName: Writable<string>;
     name: string;
-    avatar: string;
+    picture?: FabricBytes;
+    avatar?: string;
   }
->((_event, { people, myName, name, avatar }) => {
+>((_event, { people, myName, name, picture, avatar }) => {
   const n = (name ?? "").trim();
   if (!n) return;
-  const av = (avatar ?? "").trim();
+  const look = profileLook(picture, avatar);
   const cur = people.get();
   const idx = cur.findIndex((p) => p.name === n);
   if (idx < 0) {
-    people.push(av ? { name: n, avatar: av } : { name: n });
-  } else if (av && !cur[idx].avatar) {
-    // Backfill the avatar snapshot if this name was added by hand earlier.
+    people.push({ name: n, ...look });
+  } else if (look.picture && !cur[idx].picture) {
+    // Backfill the picture snapshot if this name was added by hand earlier.
     // Write through the element's cell — replacing the array slot with a
     // fresh object literal would re-mint the person's entity identity and
     // orphan previously-held references (selection cells, expense rows read
     // earlier). See packages/patterns/primitives/editable-list.tsx.
-    people.key(idx).key("avatar").set(av);
+    people.key(idx).key("picture").set(look.picture);
+  } else if (look.avatar && !cur[idx].picture && !cur[idx].avatar) {
+    people.key(idx).key("avatar").set(look.avatar);
   }
   myName.set(n);
 });
@@ -166,16 +176,16 @@ export default pattern<State>(({ people, expenses, myName }) => {
   const me = (myName ?? "").trim();
 
   // The current viewer's *shared profile* (resolved via wish). `#profile` is the
-  // live cell bound to <cf-profile-badge>; the field targets give the name/avatar
+  // live cell bound to <cf-profile-badge>; the field targets give the name/picture
   // we snapshot into the ledger on "join". Profile-count-agnostic: resolves the
   // viewer's default profile.
   const profileWish = wish({ query: "#profile" });
   const profileNameWish = wish<string>({ query: "#profileName" });
+  const profilePictureWish = wish<FabricBytes>({ query: "#profilePicture" });
   const profileAvatarWish = wish<string>({ query: "#profileAvatar" });
   const myProfileName = computed(() => (profileNameWish.result ?? "").trim());
-  const myProfileAvatar = computed(() =>
-    (profileAvatarWish.result ?? "").trim()
-  );
+  const myProfilePicture = computed(() => profilePictureWish.result);
+  const myProfileAvatar = computed(() => profileAvatarWish.result);
   const hasProfile = computed(() =>
     (profileNameWish.result ?? "").trim() !== ""
   );
@@ -220,6 +230,7 @@ export default pattern<State>(({ people, expenses, myName }) => {
       const share = (shareCents.get(p.name) ?? 0) / 100;
       return {
         name: p.name,
+        picture: p.picture,
         avatar: p.avatar ?? "",
         paid,
         share,
@@ -260,7 +271,7 @@ export default pattern<State>(({ people, expenses, myName }) => {
           <cf-vstack gap="3">
             {
               /* Identity via shared profile: the trusted badge shows who you are,
-                and "Join" snapshots your profile name+avatar into the ledger. */
+                and "Join" snapshots your profile name+picture into the ledger. */
             }
             <cf-hstack gap="3" align="center" wrap>
               <cf-label>You are</cf-label>
@@ -273,6 +284,7 @@ export default pattern<State>(({ people, expenses, myName }) => {
                   people,
                   myName,
                   name: myProfileName,
+                  picture: myProfilePicture,
                   avatar: myProfileAvatar,
                 })}
               >
@@ -326,6 +338,7 @@ export default pattern<State>(({ people, expenses, myName }) => {
               {people.map((person) => (
                 <cf-hstack gap="1" align="center">
                   <cf-avatar
+                    bytes={person.picture}
                     src={person.avatar}
                     name={person.name}
                     size="xs"
@@ -576,7 +589,12 @@ export default pattern<State>(({ people, expenses, myName }) => {
                   }}
                 >
                   <cf-hstack gap="2" align="center">
-                    <cf-avatar src={b.avatar} name={b.name} size="xs" />
+                    <cf-avatar
+                      bytes={b.picture}
+                      src={b.avatar}
+                      name={b.name}
+                      size="xs"
+                    />
                     <span>{b.name === me ? `${b.name} (you)` : b.name}</span>
                   </cf-hstack>
                   <cf-badge

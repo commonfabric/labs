@@ -7,7 +7,7 @@ import { CfHarnessEngine } from "../../src/engine.ts";
 import { skillsShValueDigest } from "../../src/skills-sh/acquisition.ts";
 import { AcquiredSkillDirectoryReadableError } from "../../src/skills/acquired-skill-mount.ts";
 import type {
-  DockerRunscSandboxConfig,
+  SandboxAdditionalMountConfig,
   SandboxCommandRequest,
   SandboxCommandResult,
   SandboxRuntime,
@@ -32,7 +32,7 @@ class FakeSandboxRuntime implements SandboxRuntime {
 
   describe(): SandboxRuntimeDescription {
     return {
-      kind: "docker-runsc-cfc",
+      kind: "runsc-cfc",
       defaultWorkingDirectory: "/workspace",
       cfc: {
         runtimeRequested: true,
@@ -79,14 +79,13 @@ describe("acquiring a skill's scripts outside every run root", () => {
   let artifactRoot: string;
 
   const engineWith = (
-    additionalMounts: DockerRunscSandboxConfig["additionalMounts"],
+    additionalMounts: readonly SandboxAdditionalMountConfig[],
     root = artifactRoot,
   ) =>
     new CfHarnessEngine({
       runId: "run-1",
-      // The runtime describes the configuration it was built beside, which is
-      // what a real one does. The two are handed over separately here only
-      // because the test supplies both.
+      // The runtime describes the mounts it runs with, which is what a real
+      // one does.
       sandboxRuntime: new FakeSandboxRuntime([
         {
           kind: "workspace",
@@ -101,17 +100,7 @@ describe("acquiring a skill's scripts outside every run root", () => {
         })),
       ]),
       artifactRoot: root,
-      sandbox: {
-        dockerBinary: "docker",
-        runtimeName: "runsc-cfc",
-        image: "cf-harness:test",
-        workspaceHostPath: workspace,
-        workspaceMountPath: "/workspace",
-        shellPath: "/bin/bash",
-        dockerNetworkMode: "none",
-        additionalMounts,
-        extraDockerArgs: [],
-      },
+      workspaceHostPath: workspace,
     });
 
   const oneScript = {

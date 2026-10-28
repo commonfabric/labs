@@ -147,3 +147,32 @@ export function utf8SortedKeysOf(value: object): readonly string[] {
 
   return sorted;
 }
+
+/**
+ * The UTF-8 size of `text`, counted from its code units without encoding it:
+ * one byte below U+0080, two below U+0800, four for a surrogate pair, and
+ * three for the rest, a lone surrogate included, which the encoder writes as
+ * the three-byte replacement character.
+ */
+export function utf8ByteLength(text: string): number {
+  let bytes = 0;
+  for (let index = 0; index < text.length; index++) {
+    const unit = text.charCodeAt(index);
+    if (unit < 0x80) {
+      bytes += 1;
+    } else if (unit < 0x800) {
+      bytes += 2;
+    } else if (unit >= 0xd800 && unit <= 0xdbff && index + 1 < text.length) {
+      const next = text.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        bytes += 4;
+        index++;
+      } else {
+        bytes += 3;
+      }
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
+}

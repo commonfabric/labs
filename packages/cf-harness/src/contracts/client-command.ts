@@ -13,7 +13,7 @@
  * broken channel.
  *
  * Attribution is carried, not inferred. A command the Weaver runs without the
- * person (a reviewed read) runs as the agent; a command the person approves
+ * person (an automatic command) runs as the agent; a command the person approves
  * with a tap runs as the user, because the tap is the person's own act. The
  * invocation names the approval the console asks for and the settlement names
  * the approval and actor the Weaver applied, so the executor and the service
@@ -43,13 +43,15 @@ export const HARNESS_CLIENT_PROTOCOL_VERSION = 1 as const;
  * `browser_host` is a task's `browserHost` declaration, which only a console
  * launched with `--allow-browser-host` accepts; `starts_run` is a catalog
  * entry's `startsRun`, which a host sends only to a console that serves it,
- * since a console without it refuses the entry.
+ * since a console without it refuses the entry. `automatic_mutations` admits
+ * catalog entries whose effect is mutation and whose approval is automatic.
  */
 export const HARNESS_CLIENT_FEATURES = [
   "client_actions",
   "typed_commands",
   "browser_host",
   "starts_run",
+  "automatic_mutations",
 ] as const;
 
 /** One feature a host may require. */
@@ -65,6 +67,7 @@ export const HARNESS_SUPPORTED_CLIENT_FEATURES:
     "client_actions",
     "typed_commands",
     "starts_run",
+    "automatic_mutations",
   ];
 
 /**
@@ -243,13 +246,13 @@ export const HARNESS_COMMAND_SCHEMA_MAX_BYTES = 16 * 1024;
 
 /**
  * Who must approve a command before it runs. `automatic` runs without the
- * person, and only for a command on the Weaver's reviewed read-only list;
+ * person, and only for a command the Weaver permits without confirmation;
  * `person` waits for the person's tap.
  */
 export type HarnessCommandApproval = "automatic" | "person";
 
 /**
- * Who a command runs as. `agent` for an automatic read; `user` for a command
+ * Who a command runs as. `agent` for an automatic command; `user` for a command
  * the person approved.
  */
 export type HarnessCommandActor = "agent" | "user";
@@ -339,8 +342,8 @@ export interface HarnessCommandCatalogEntry {
   effect: HarnessCommandEffect;
 
   /**
-   * The approval it runs under: `automatic` only for a read on the Weaver's
-   * reviewed list, `person` for everything else.
+   * Whether the host requires interactive confirmation, independently of
+   * the command's effect. The host owns admission to automatic execution.
    */
   approval: HarnessCommandApproval;
 
@@ -427,7 +430,7 @@ export interface HarnessCommandOutcome {
 /**
  * Who ran a command and where, as the Weaver applied it. `loomActor` is the
  * actor string the executor received: `user` for the person's approval, or
- * `agent:<slug>` for an automatic read.
+ * `agent:<slug>` for an automatic command.
  */
 export interface HarnessCommandAttribution {
   approval: HarnessCommandApproval;
@@ -794,8 +797,6 @@ const readCatalogEntry = (
     !isExecutor(executes) ||
     (effect !== "read" && effect !== "mutation") ||
     !isApproval(approval) ||
-    // Only a read may run without the person.
-    (approval === "automatic" && effect !== "read") ||
     !isJsonObject(inputSchema) ||
     harnessCommandJsonBytes(inputSchema) > HARNESS_COMMAND_SCHEMA_MAX_BYTES ||
     (description !== undefined &&

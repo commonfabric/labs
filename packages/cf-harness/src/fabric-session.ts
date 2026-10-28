@@ -8,6 +8,7 @@
 
 import { Identity } from "@commonfabric/identity";
 import { isDIDKey } from "@commonfabric/identity/did";
+import { loadHarnessIdentity } from "./identity-key.ts";
 import { PiecesController } from "@commonfabric/piece/ops";
 import {
   fabricSessionPresetCfcDials,
@@ -143,8 +144,7 @@ async () => {
   const foreignSpaces = validateHarnessForeignSpaces(
     config.foreignSpaces ?? {},
   );
-  const loadIdentity = deps.loadIdentity ??
-    (async (path: string) => Identity.fromPkcs8(await Deno.readFile(path)));
+  const loadIdentity = deps.loadIdentity ?? loadHarnessIdentity;
   const initialize = deps.initialize ??
     ((options) => PiecesController.initialize(options));
   const identity = await loadIdentity(config.identityKeyPath);
@@ -154,6 +154,7 @@ async () => {
     ...options,
     identity,
     onPatternInstantiated: recorder.observe,
+    clientBuild: { application: "cf-harness", gitSha: null },
   });
   if (!fabricSessionRuntimeBoundedAsConfigured(pieces.runtime, options)) {
     await pieces.runtime.dispose().catch(() => {});
@@ -164,11 +165,18 @@ async () => {
   }
   try {
     for (const [space, host] of Object.entries(foreignSpaces)) {
-      if (
-        !isDIDKey(space) || space === pieces.getSpace() ||
-        !pieces.runtime.registerSpaceHost(space, host)
-      ) {
+      if (!isDIDKey(space) || space === pieces.getSpace()) {
         throw new Error("Foreign space host route was refused by the session");
+      }
+      // Against a deployment that publishes a memory URL, this first reads
+      // where the foreign host serves Memory; a host whose memory host
+      // cannot be learned is refused as `foreign-host-unread`.
+      const registration = await pieces.runtime.resolveSpaceHost(space, host);
+      if (!registration.accepted) {
+        throw new Error(
+          "Foreign space host route was refused by the session " +
+            `(${registration.reason})`,
+        );
       }
     }
   } catch (error) {

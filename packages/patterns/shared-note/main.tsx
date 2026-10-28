@@ -8,6 +8,7 @@ import {
   pattern,
   type PerSpace,
   type PerUser,
+  type Stream,
   TILE_UI,
   UI,
   type VNode,
@@ -33,7 +34,86 @@ export interface SharedNoteOutput {
   title: PerSpace<string>;
   content: PerSpace<string>;
   participantName: PerUser<string>;
+
+  /** Adds `text` to the end of the document, on a line of its own. */
+  appendLine: Stream<LineEvent>;
+
+  /** Adds `text` to the start of the document, on a line of its own. */
+  prependLine: Stream<LineEvent>;
+
+  /**
+   * Replaces the one occurrence of `old` in the document with `new`, and
+   * refuses when `old` is empty, occurs nowhere, or occurs more than once.
+   */
+  replaceText: Stream<ReplaceTextEvent>;
 }
+
+/** Text to add as a line of its own. */
+export interface LineEvent {
+  /** The line, without a trailing newline. */
+  text: string;
+}
+
+/** An exact replacement anchored on text the document holds once. */
+export interface ReplaceTextEvent {
+  /** Text the document holds exactly once, compared code unit for code unit. */
+  old: string;
+
+  /** Text that takes its place. */
+  new: string;
+}
+
+// The verbs edit the body through `applyChanges()` rather than `set()`: once an
+// editor has opened the body it accepts only edits, which the open editors
+// merge with their own typing. Each edit's positions refer to the text the verb
+// read, and land only while the body still holds it; a body that moved on
+// refuses the commit, and the verb runs again against the new text.
+
+const appendLine = handler<LineEvent, { content: Writable<string> }>(
+  ({ text }, { content }) => {
+    const current = content.get();
+    const separator = current === "" || current.endsWith("\n") ? "" : "\n";
+    content.applyChanges({ from: current.length, insert: separator + text });
+  },
+);
+
+const prependLine = handler<LineEvent, { content: Writable<string> }>(
+  ({ text }, { content }) => {
+    const current = content.get();
+    const separator = current === "" || text.endsWith("\n") ? "" : "\n";
+    content.applyChanges({ from: 0, insert: text + separator });
+  },
+);
+
+const replaceText = handler<ReplaceTextEvent, { content: Writable<string> }>(
+  (event, { content }) => {
+    if (event.old === "") {
+      throw new Error(
+        "replaceText needs a non-empty `old` to anchor on; to add text, use " +
+          "`appendLine` or `prependLine`",
+      );
+    }
+    const current = content.get();
+    const from = current.indexOf(event.old);
+    if (from === -1) {
+      throw new Error(
+        "replaceText found no occurrence of `old`; read the note again and " +
+          "anchor on text it holds",
+      );
+    }
+    if (current.indexOf(event.old, from + 1) !== -1) {
+      throw new Error(
+        "replaceText found `old` more than once; anchor on a longer passage " +
+          "that occurs once",
+      );
+    }
+    content.applyChanges({
+      from,
+      to: from + event.old.length,
+      insert: event.new,
+    });
+  },
+);
 
 const reportError = handler<
   { detail: { message?: string } },
@@ -169,6 +249,9 @@ export default pattern<SharedNoteInput, SharedNoteOutput>(
       title,
       content,
       participantName,
+      appendLine: appendLine({ content }),
+      prependLine: prependLine({ content }),
+      replaceText: replaceText({ content }),
     };
   },
 );

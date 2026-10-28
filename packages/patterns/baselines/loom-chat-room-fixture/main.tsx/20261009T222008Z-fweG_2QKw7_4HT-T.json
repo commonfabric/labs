@@ -1,0 +1,332 @@
+{
+  "argumentSchema": {
+    "properties": {
+      "members": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "members"
+    ],
+    "type": "object"
+  },
+  "pattern": "loom-chat-room-fixture/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "ChatRoomChoice": {
+        "properties": {
+          "room": {
+            "$ref": "#/$defs/LinkedChatRoom"
+          }
+        },
+        "type": "object"
+      },
+      "LinkedChatRoom": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "MemberEvent": {
+        "properties": {
+          "principal": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "principal"
+        ],
+        "type": "object"
+      },
+      "Panel": {
+        "anyOf": [
+          {
+            "properties": {
+              "addedBy": {
+                "$ref": "#/$defs/PanelAdderDid"
+              },
+              "addedByProfile": {
+                "$ref": "#/$defs/PanelAdderProfile"
+              },
+              "kind": {
+                "enum": [
+                  "piece"
+                ],
+                "type": "string"
+              },
+              "piece": {
+                "type": "unknown"
+              },
+              "titleOverride": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "piece"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "addedBy": {
+                "$ref": "#/$defs/PanelAdderDid"
+              },
+              "addedByProfile": {
+                "$ref": "#/$defs/PanelAdderProfile"
+              },
+              "content": {
+                "$ref": "#/$defs/PublishedDocument"
+              },
+              "kind": {
+                "enum": [
+                  "document"
+                ],
+                "type": "string"
+              },
+              "titleOverride": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "addedBy": {
+                "$ref": "#/$defs/PanelAdderDid"
+              },
+              "addedByProfile": {
+                "$ref": "#/$defs/PanelAdderProfile"
+              },
+              "kind": {
+                "enum": [
+                  "url"
+                ],
+                "type": "string"
+              },
+              "titleOverride": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "url"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "PanelAdderDid": {
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/loom/admission.tsx",
+              "moduleIdentity": "MKmFQ-WFreDWjrYqMlyjx3yozKydkQ1pSXMIS0sPRGE",
+              "path": [
+                "admitPanel"
+              ]
+            }
+          }
+        },
+        "type": "string"
+      },
+      "PanelAdderProfile": {
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "represents-principal",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "ownerPrincipal": {
+            "__ctCurrentPrincipal": true
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/loom/admission.tsx",
+              "moduleIdentity": "MKmFQ-WFreDWjrYqMlyjx3yozKydkQ1pSXMIS0sPRGE",
+              "path": [
+                "admitPanel"
+              ]
+            }
+          }
+        },
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "PublishedChannel": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
+        ],
+        "type": "object"
+      },
+      "PublishedDocument": {
+        "properties": {
+          "notes": {
+            "default": "",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/$defs/PublishedSource"
+          }
+        },
+        "required": [
+          "source",
+          "notes"
+        ],
+        "type": "object"
+      },
+      "PublishedSource": {
+        "anyOf": [
+          {
+            "properties": {
+              "body": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "page-excerpt"
+                ],
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "title",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "channels": {
+                "items": {
+                  "$ref": "#/$defs/PublishedChannel"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "person-card"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "photo": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "name",
+              "channels"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "chatRoom": {
+        "$ref": "#/$defs/LinkedChatRoom"
+      },
+      "ensureChatRoom": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "lowerToRead": {
+        "$ref": "#/$defs/MemberEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Lowers `principal` to READ in the Loom's space, as a trusted gesture."
+      },
+      "panels": {
+        "items": {
+          "$ref": "#/$defs/Panel"
+        },
+        "type": "array"
+      },
+      "pieceRegistry": {
+        "items": {
+          "type": "unknown"
+        },
+        "type": "array"
+      },
+      "setChatRoom": {
+        "$ref": "#/$defs/ChatRoomChoice",
+        "asCell": [
+          "stream"
+        ]
+      }
+    },
+    "required": [
+      "panels",
+      "pieceRegistry",
+      "setChatRoom",
+      "ensureChatRoom",
+      "lowerToRead",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

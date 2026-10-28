@@ -49,12 +49,23 @@ describe("paths", () => {
   });
 
   describe("repositoryRelativePath()", () => {
-    it("falls back to a cwd-relative path outside any repository", () => {
+    it("returns the path from the repository root, forward-slashed", () => {
+      expect(repositoryRelativePath(import.meta.filename!)).toBe(
+        "packages/test-support/src/records/paths.test.ts",
+      );
+    });
+
+    it("returns the path from the nearest .git above the file", async () => {
+      await Deno.mkdir(join(outside, ".git"));
+      expect(repositoryRelativePath(join(outside, "x", "file.ts")))
+        .toBe("x/file.ts");
+    });
+
+    it("returns undefined outside any repository", () => {
       // The temporary tree has no .git above it on the runners this suite
-      // uses; a path inside it resolves relative to the working directory.
-      const path = repositoryRelativePath(join(outside, "x", "file.ts"));
-      expect(path.endsWith("x/file.ts")).toBe(true);
-      expect(path.startsWith("/")).toBe(false);
+      // uses.
+      expect(repositoryRelativePath(join(outside, "x", "file.ts")))
+        .toBeUndefined();
     });
   });
 

@@ -10,7 +10,7 @@ import {
 } from "../query-result-proxy.ts";
 import { getAuthoredDebugSource } from "../harness/authored-debug-source.ts";
 import { closureCaptureErrorMessage } from "./closure-capture-diagnostic.ts";
-import { traverseValue } from "./traverse-utils.ts";
+import { traverseValue, visitValue } from "./traverse-utils.ts";
 import { type FactoryInput, type JSONSchema, type NodeRef } from "./types.ts";
 
 export function connectInputAndOutputs(node: NodeRef) {
@@ -85,7 +85,7 @@ export function applyInputIfcToOutput<T, R>(
   outputs: FactoryInput<R>,
 ) {
   const collectedClassifications = new Set<unknown>();
-  traverseValue(inputs, (item: unknown) => {
+  visitValue(inputs, (item: unknown) => {
     if (isCell(item)) {
       const { schema: inputSchema } = exportCell(item);
       if (inputSchema !== undefined) {

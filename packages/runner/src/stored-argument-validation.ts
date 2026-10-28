@@ -1,15 +1,27 @@
-/** Validates stored arguments without treating unreadable links as invalid values. */
+/**
+ * Validates stored arguments without treating unreadable links as invalid
+ * values, and without reading through a stored link the argument schema types
+ * as a cell handle.
+ */
 
 import {
   FabricInstance,
   type FabricValue,
+  isKeyableObjectNotArray,
+  isKeyableObjectOrArray,
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
 import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { JSONSchema } from "./builder/types.ts";
 import { type Cell, isCell } from "./cell.ts";
+import { ContextualFlowControl } from "./cfc.ts";
+import {
+  cfcSchemaResolvedRoot,
+  resolveCfcSchemaRefRoot,
+  resolveCfcSchemaRefs,
+} from "./cfc/schema-refs.ts";
 import { validateSchemaValue } from "./cfc/schema-sanitization.ts";
 import {
   type CellLink,
@@ -17,6 +29,11 @@ import {
   type NormalizedFullLink,
   parseLink,
 } from "./link-utils.ts";
+import {
+  getCellOrThrow,
+  isCellResult,
+  isFabricInstanceOrView,
+} from "./query-result-proxy.ts";
 import {
   mergeSchemaDefaults,
   schemaAcceptsOpaqueCellValue,
@@ -49,6 +66,300 @@ export const acceptsOpaqueCellOrUnresolvedLink = (
   schemaAcceptsOpaqueCellValue(value, schema);
 
 const READ_NON_RECURSIVE: IReadOptions = { nonRecursive: true };
+
+/** Per-validation state of the handle view. */
+interface HandleViewContext {
+  /** Container views keyed by materialized container, then by schema. */
+  views: WeakMap<object, Map<JSONSchema, object>>;
+
+  /** The handles the view holds in place of stored links. */
+  handles: WeakSet<object>;
+
+  /** The transaction the stored value is read through. */
+  tx: IExtendedStorageTransaction;
+}
+
+/**
+ * Returns the stored value at `cell` as validation reads it: its schemaless
+ * materialization through `tx`, in which a stored link at a position whose
+ * schema in `schema` declares a cell handle is that handle rather than the
+ * value the link reaches. What the link reaches is judged by its top level
+ * alone: a shallow read of it, which takes in no label declared below it, is
+ * held to the `type` the position's schema allows, and a primitive also to
+ * its `enum` and `const`. Nothing below that level is read, so no constraint
+ * on it is judged here; the reactive reads that follow the handle check it
+ * against the handle's own schema. A link whose top level does not fit is no
+ * handle: its position reads as the materialized value, judged in full.
+ *
+ * Every other position reads as the materialized value does. So do the
+ * positions along `materializedPath`, the one a caller writes at, whatever
+ * their schema declares, since what is written there lands in what the link
+ * reaches.
+ *
+ * `acceptsOpaque` is the predicate a merge of defaults and a validation over
+ * `value` take as their `acceptOpaqueValue`: it accepts the handles this view
+ * holds, and whatever {@link acceptsOpaqueCellOrUnresolvedLink} accepts. The
+ * handles never reach storage: a caller writes the value at
+ * `materializedPath`, which holds none.
+ */
+export function materializeStoredValueForValidation(
+  cell: Cell<unknown>,
+  schema: JSONSchema,
+  tx: IExtendedStorageTransaction,
+  materializedPath: readonly (string | number)[] = [],
+): {
+  value: unknown;
+  acceptsOpaque: (value: unknown, schema: JSONSchema) => boolean;
+} {
+  const context: HandleViewContext = {
+    views: new WeakMap(),
+    handles: new WeakSet(),
+    tx,
+  };
+  return {
+    value: viewStoredLinksAsHandles(
+      cell.asSchema(undefined).withTx(tx).get(),
+      schema,
+      materializedPath.map(String),
+      context,
+    ),
+    acceptsOpaque: (value, schema) =>
+      (isObjectOrArray(value) && context.handles.has(value)) ||
+      acceptsOpaqueCellOrUnresolvedLink(value, schema),
+  };
+}
+
+/**
+ * Helper for `viewStoredLinksAsHandles()`, which says whether the top level of
+ * what the link stored at `slot` reaches fits `schema`. A link that reaches
+ * nothing readable fits, its check deferred to the reactive reads that follow
+ * it, as an unreadable link is elsewhere in this validation.
+ */
+function reachedTopLevelFits(
+  slot: Cell<unknown>,
+  schema: JSONSchema,
+  tx: IExtendedStorageTransaction,
+): boolean {
+  const reached = readTopLevel(slot, tx);
+  if (reached === null) return true;
+  // A container is judged by its kind alone, so it stands in empty, and what
+  // the schema says of its members is left out of the judgement below.
+  const container = isKeyableObjectOrArray(reached.value);
+  const standIn = !container
+    ? reached.value
+    : Array.isArray(reached.value)
+    ? []
+    : {};
+  const topLevel = topLevelSchema(schema, schema, !container, new Set());
+  return validateSchemaValue(topLevel, standIn, topLevel) === undefined;
+}
+
+/**
+ * Helper for `reachedTopLevelFits()`, which reads the value the link stored
+ * at `slot` reaches without descending into it: a non-recursive read, which
+ * takes in the labels declared at its path and above and none below. `null`
+ * where the document or the path is absent.
+ */
+function readTopLevel(
+  slot: Cell<unknown>,
+  tx: IExtendedStorageTransaction,
+): { value: unknown } | null {
+  const target = slot.resolveAsCell().getAsNormalizedFullLink();
+  const { ok, error } = tx.read(
+    {
+      space: target.space,
+      id: target.id,
+      scope: target.scope,
+      type: "application/json",
+      path: ["value", ...target.path],
+    },
+    { ...READ_NON_RECURSIVE, meta: ignoreReadForScheduling },
+  );
+  if (error !== undefined) {
+    // The line `readStoredLinkChainRaw()` draws.
+    if (error.name !== "NotFoundError" && error.name !== "TypeMismatchError") {
+      throw toThrowable(error);
+    }
+    return null;
+  }
+  return ok.value === undefined ? null : { value: ok.value };
+}
+
+/**
+ * Helper for `reachedTopLevelFits()`, which reduces `schema`, whose
+ * references resolve against `root`, to what it says about a value's top level
+ * alone: its `type`, and also its `enum` and `const` when `primitive`.
+ * References are resolved in place and every combinator keeps its branches,
+ * reduced the same way, except that `oneOf` becomes `anyOf`: two branches that
+ * differ only below the top level reduce alike, so more than one of them may
+ * fit. `active` holds the schemas being reduced, so a reference that leads
+ * back to one says nothing more.
+ */
+function topLevelSchema(
+  schema: JSONSchema,
+  root: JSONSchema,
+  primitive: boolean,
+  active: Set<object>,
+): JSONSchema {
+  if (!isObjectOrArray(schema) || active.has(schema)) return schema ?? true;
+  active.add(schema);
+  try {
+    if (typeof schema.$ref === "string") {
+      const resolved = resolveCfcSchemaRefs(schema, root);
+      if (resolved === undefined) return true;
+      return topLevelSchema(
+        resolved,
+        isObjectOrArray(resolved)
+          ? cfcSchemaResolvedRoot(
+            resolved,
+            resolveCfcSchemaRefRoot(schema, root),
+          )
+          : root,
+        primitive,
+        active,
+      );
+    }
+    const reduced: Record<string, unknown> = {};
+    if (schema.type !== undefined) reduced.type = schema.type;
+    if (primitive && schema.enum !== undefined) reduced.enum = schema.enum;
+    if (primitive && Object.hasOwn(schema, "const")) {
+      reduced.const = schema.const;
+    }
+    const branches = (list: unknown) =>
+      (list as JSONSchema[]).map((branch) =>
+        topLevelSchema(branch, root, primitive, active)
+      );
+    if (Array.isArray(schema.allOf)) reduced.allOf = branches(schema.allOf);
+    const either = [
+      ...(Array.isArray(schema.anyOf) ? [schema.anyOf] : []),
+      ...(Array.isArray(schema.oneOf) ? [schema.oneOf] : []),
+    ];
+    if (either.length === 1) reduced.anyOf = branches(either[0]);
+    if (either.length === 2) {
+      reduced.allOf = [
+        ...(reduced.allOf as JSONSchema[] ?? []),
+        { anyOf: branches(either[0]) },
+        { anyOf: branches(either[1]) },
+      ];
+    }
+    return reduced as JSONSchema;
+  } finally {
+    active.delete(schema);
+  }
+}
+
+/**
+ * Helper for `viewStoredLinksAsHandles()`, which says whether `schema`
+ * declares a cell handle for a slot whose stored value is a link. A link is
+ * neither `undefined` nor `null`, so a branch of the slot's `anyOf` or `oneOf`
+ * that admits only those says nothing about it, and the slot declares a handle
+ * when its other branches do: one typed `Cell<T> | undefined` holds a handle as
+ * one typed `Cell<T>` does. The union is read where the slot's schema reaches
+ * it, through a `$ref` at its root as much as written in place, which is how a
+ * slot typed by a named alias of such a union arrives.
+ */
+function declaresHandleForLink(schema: JSONSchema): boolean {
+  if (ContextualFlowControl.declaredHandleKind(schema) !== undefined) {
+    return true;
+  }
+  if (!isObjectNotArray(schema)) return false;
+  const union = typeof schema.$ref === "string"
+    ? resolveCfcSchemaRefs(schema)
+    : schema;
+  if (!isObjectNotArray(union)) return false;
+  return (["anyOf", "oneOf"] as const).some((keyword) => {
+    const branches = union[keyword];
+    if (!Array.isArray(branches)) return false;
+    const linkable = branches.filter((branch) => !admitsOnlyAbsence(branch));
+    return linkable.length > 0 && linkable.length < branches.length &&
+      ContextualFlowControl.declaredHandleKind({
+          ...union,
+          [keyword]: linkable,
+        }) !== undefined;
+  });
+}
+
+/**
+ * Helper for `declaresHandleForLink()`, which says whether `branch` admits no
+ * value but `undefined` and `null`, by its `type` alone.
+ */
+function admitsOnlyAbsence(branch: unknown): boolean {
+  if (!isObjectNotArray(branch) || branch.asCell !== undefined) return false;
+  const types = Array.isArray(branch.type) ? branch.type : [branch.type];
+  return types.length > 0 &&
+    types.every((type) => type === "undefined" || type === "null");
+}
+
+/**
+ * Helper for `materializeStoredValueForValidation()`, which views
+ * `materialized`, read under `schema`, with its handle-typed stored links as
+ * handles, leaving the position `keep` names materialized. Fields resolve on
+ * access, so validation only reads the graph it inspects. A container off
+ * `keep` read under the same schema twice is the same view, so shared
+ * containers and cycles keep their identity for the validator's recursion
+ * guard.
+ */
+function viewStoredLinksAsHandles(
+  materialized: unknown,
+  schema: JSONSchema,
+  keep: readonly string[],
+  context: HandleViewContext,
+): unknown {
+  if (
+    typeof schema === "boolean" || !isCellResult(materialized) ||
+    isFabricInstanceOrView(materialized)
+  ) {
+    return materialized;
+  }
+  let bySchema: Map<JSONSchema, object> | undefined;
+  if (keep.length === 0) {
+    bySchema = context.views.get(materialized);
+    if (bySchema === undefined) {
+      bySchema = new Map();
+      context.views.set(materialized, bySchema);
+    }
+    const cached = bySchema.get(schema);
+    if (cached !== undefined) return cached;
+  }
+
+  const container = getCellOrThrow(materialized);
+  const view: object = Array.isArray(materialized)
+    ? new Array(materialized.length)
+    : {};
+  bySchema?.set(schema, view);
+  for (const key of Object.keys(materialized)) {
+    Object.defineProperty(view, key, {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        const childSchema = ContextualFlowControl.schemaAtPath(schema, [key]);
+        const kept = keep[0] === key;
+        const slot = container.key(key);
+        // Only the slot's own bytes are read here: a raw read resolves links
+        // on the way to the slot and leaves the one stored in it unfollowed.
+        const handle = !kept &&
+          declaresHandleForLink(childSchema) &&
+          isCellLink(slot.getRaw({ meta: ignoreReadForScheduling })) &&
+          reachedTopLevelFits(slot, childSchema, context.tx);
+        if (handle) context.handles.add(slot);
+        const child = handle ? slot : viewStoredLinksAsHandles(
+          (materialized as Record<string, unknown>)[key],
+          childSchema,
+          kept ? keep.slice(1) : [],
+          context,
+        );
+        Object.defineProperty(view, key, {
+          configurable: true,
+          enumerable: true,
+          writable: true,
+          value: child,
+        });
+        return child;
+      },
+    });
+  }
+  return view;
+}
 
 /** Per-validation caches for the unreadable-link view. */
 interface LinkOverlayContext {
@@ -302,17 +613,69 @@ export function storedArgumentValidationIssue(
   defaults: FabricValue,
   tx: IExtendedStorageTransaction,
 ): string | undefined {
+  return storedArgumentJudge(argumentCell, argumentSchema, defaults, tx)(
+    argumentSchema,
+    (argument) => argument,
+  );
+}
+
+/**
+ * Returns the mismatch of each of `slots`, top-level slots of a stored
+ * argument, against the schema `argumentSchema` gives that slot, keyed by
+ * slot. A slot that matches has no entry, and so does a slot the schema does
+ * not describe where it admits slots it does not name. Each slot is judged
+ * under the defaults, absence rules and deferral of unreadable links that
+ * `storedArgumentValidationIssue()` applies to the whole argument.
+ */
+export function storedArgumentSlotIssues(
+  argumentCell: Cell<unknown>,
+  argumentSchema: JSONSchema,
+  defaults: FabricValue,
+  tx: IExtendedStorageTransaction,
+  slots: Iterable<string>,
+): Map<string, string> {
+  const judge = storedArgumentJudge(argumentCell, argumentSchema, defaults, tx);
+  const issues = new Map<string, string>();
+  for (const slot of slots) {
+    const issue = judge(
+      ContextualFlowControl.schemaAtPath(argumentSchema, [slot]),
+      (argument) =>
+        isKeyableObjectNotArray(argument) ? argument[slot] : undefined,
+    );
+    if (issue !== undefined) issues.set(slot, issue);
+  }
+  return issues;
+}
+
+/**
+ * Helper for `storedArgumentValidationIssue()` and
+ * `storedArgumentSlotIssues()`, which materializes the stored argument once
+ * and returns a function judging the part `select` picks out of it against
+ * `schema`, resolving references against `argumentSchema`.
+ */
+function storedArgumentJudge(
+  argumentCell: Cell<unknown>,
+  argumentSchema: JSONSchema,
+  defaults: FabricValue,
+  tx: IExtendedStorageTransaction,
+): (
+  schema: JSONSchema,
+  select: (argument: unknown) => unknown,
+) => string | undefined {
   const argumentLink = argumentCell.getAsNormalizedFullLink();
-  const materializedArgument = argumentCell.asSchema(undefined).withTx(tx)
-    .get();
+  const stored = materializeStoredValueForValidation(
+    argumentCell,
+    argumentSchema,
+    tx,
+  );
   const validationArgument: unknown = mergeSchemaDefaults(
-    materializedArgument,
+    stored.value,
     defaults,
     argumentSchema,
-    { mergeMaterializedLinks: true },
+    { mergeMaterializedLinks: true, acceptOpaqueValue: stored.acceptsOpaque },
   );
   const validationOptions = {
-    acceptOpaqueValue: acceptsOpaqueCellOrUnresolvedLink,
+    acceptOpaqueValue: stored.acceptsOpaque,
     // An OPTIONAL key holding `undefined` carries no data, and a handler
     // mints one without meaning to: `comments.push({ author, ... })` with
     // no author in hand writes the key, and the codec stores that presence.
@@ -328,39 +691,43 @@ export function storedArgumentValidationIssue(
     // rejecting at a result write, while the caller can still see it.
     optionalUndefinedIsAbsent: true,
   };
-  let validationFailure = validateSchemaValue(
-    argumentSchema,
-    validationArgument,
-    argumentSchema,
-    validationOptions,
-  );
-  if (validationFailure !== undefined) {
-    // Judge only what this context can actually read. The materialization
-    // above resolves the staged doc's whole link graph through this
-    // transaction, and a link chain that dead-ends at a doc the local
-    // replica cannot serve materializes as `undefined` — indistinguishable
-    // from a stored mistake, though the stored bytes are fine and every
-    // OTHER context may read them. Validating that `undefined` bricks the
-    // piece permanently (same identity, same refusal — see
-    // `isStoredArgumentSchemaRefusal`), so such slots validate as opaque
-    // and their schema check is deferred to instantiation-time reactive
-    // reads, which sync what they need. Supplied and re-staged arguments
-    // alike: a caller vouches for the value it stages, but which link
-    // targets happen to be replicated HERE was never part of that value.
-    // The overlay only ever turns `undefined` into an accepted opaque, so
-    // running it on failure alone changes no verdict — it spares the
-    // happy path a second walk of the stored graph.
-    validationFailure = validateSchemaValue(
+  let overlaid: { value: unknown } | undefined;
+  return (schema, select) => {
+    const validationFailure = validateSchemaValue(
+      schema,
+      select(validationArgument),
       argumentSchema,
-      overlayUnreadableLinkPlaceholders(
+      validationOptions,
+    );
+    if (validationFailure === undefined) return undefined;
+    // Judge only what this context can actually read. The materialization
+    // above resolves the staged doc's link graph through this transaction,
+    // short of the links it holds as handles, and a link chain that dead-ends
+    // at a doc the local replica cannot serve materializes as `undefined` —
+    // indistinguishable from a stored mistake, though the stored bytes are
+    // fine and every OTHER context may read them. Validating that `undefined`
+    // bricks the piece permanently (same identity, same refusal — see
+    // `isStoredArgumentSchemaRefusal`), so such slots validate as opaque and
+    // their schema check is deferred to instantiation-time reactive reads,
+    // which sync what they need. Supplied and re-staged arguments alike: a
+    // caller vouches for the value it stages, but which link targets happen
+    // to be replicated HERE was never part of that value. The overlay only
+    // ever turns `undefined` into an accepted opaque, and leaves a handle as
+    // it is, so building it on a failure alone changes no verdict — it spares
+    // the happy path a second walk of the stored graph.
+    overlaid ??= {
+      value: overlayUnreadableLinkPlaceholders(
         tx,
         argumentLink,
         argumentCell.withTx(tx).getRaw({ meta: ignoreReadForScheduling }),
         validationArgument,
       ),
+    };
+    return validateSchemaValue(
+      schema,
+      select(overlaid.value),
       argumentSchema,
       validationOptions,
     );
-  }
-  return validationFailure;
+  };
 }

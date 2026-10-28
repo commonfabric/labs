@@ -46,6 +46,10 @@ import {
   BILLS_ANSWER_MISSING_BRACE,
   POMODORO_ANSWER_MISSING_BRACE,
 } from "../fixtures/research-malformed-answers.ts";
+import {
+  LUNCH_POLL_ANSWER_STATUS_AS_TYPE,
+  LUNCH_POLL_ANSWER_WRAPPED_IN_SCHEMA,
+} from "../fixtures/research-schema-shaped-answers.ts";
 
 const final = (value: object): HarnessModelTurnResult => ({
   assistant: { role: "assistant", content: JSON.stringify(value) },
@@ -273,6 +277,77 @@ describe("scoped research", () => {
         "research result was not valid JSON",
       );
       expect(trial.requests).toHaveLength(MAX_RESEARCH_MODEL_TURNS);
+    });
+  });
+
+  describe("a final answer shaped like the schema", () => {
+    const { type: status, ...rest } = JSON.parse(
+      LUNCH_POLL_ANSWER_STATUS_AS_TYPE,
+    );
+    const instance = JSON.stringify({ status, ...rest });
+
+    for (
+      const [name, answer] of [
+        ["status-as-type", LUNCH_POLL_ANSWER_STATUS_AS_TYPE],
+        ["wrapped-in-schema", LUNCH_POLL_ANSWER_WRAPPED_IN_SCHEMA],
+      ] as const
+    ) {
+      it(`admits the ${name} answer the model returns as an instance on one tools-withheld re-ask`, async () => {
+        const trial = run([
+          () => ({ assistant: { role: "assistant", content: answer } }),
+          (request) => {
+            expect(request.tools).toEqual([]);
+            const ask = request.transcript.at(-1)?.content ?? "";
+            expect(ask).toContain("Schema repair turn");
+            expect(ask).toContain(
+              "The validator reported: missing required property status",
+            );
+            return { assistant: { role: "assistant", content: instance } };
+          },
+        ]);
+        const reply = await trial.result;
+        expect(trial.requests).toHaveLength(2);
+        expect(reply.kit.status).toBe("incomplete");
+        expect(reply.kit.summary).toBe(rest.summary);
+      });
+    }
+
+    it("fails with the validator's complaint when the re-ask is still the schema's shape", async () => {
+      const trial = run([
+        () => ({
+          assistant: {
+            role: "assistant",
+            content: LUNCH_POLL_ANSWER_STATUS_AS_TYPE,
+          },
+        }),
+        () => ({
+          assistant: {
+            role: "assistant",
+            content: LUNCH_POLL_ANSWER_STATUS_AS_TYPE,
+          },
+        }),
+      ]);
+      let failure: unknown;
+      try {
+        await trial.result;
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(HarnessResearchError);
+      expect((failure as Error).message).toBe(
+        "missing required property status",
+      );
+      expect(trial.requests).toHaveLength(2);
+    });
+
+    it("asks for an instance of the schema rather than the schema", async () => {
+      const trial = run([(request) => {
+        expect(request.transcript[0].content).toContain(
+          "an instance of this schema, not the schema itself",
+        );
+        return final({ ...brief(), leads: [], questions: [] });
+      }]);
+      await trial.result;
     });
   });
 

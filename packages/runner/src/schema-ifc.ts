@@ -18,6 +18,7 @@ import {
   resolveCfcSchemaRefRoot,
 } from "./cfc/schema-refs.ts";
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import { internSchema } from "@commonfabric/data-model-schema";
 import { walkSchemaDocumentClosure } from "@commonfabric/data-model-schema/schema-closure";
 import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
 import {
@@ -70,6 +71,15 @@ export function schemaHasIfc(
   if (isTopLevel) {
     const cached = _hasIfcCache.get(schema);
     if (cached !== undefined) return cached;
+    // The verdict is a fact about what a schema holds, so a deep-frozen
+    // schema is judged as the interned instance of its content. Each
+    // document holding a link carries the link's schema as an object of its
+    // own, and judging each as itself resolves the references it holds
+    // again, each resolution building and hashing a schema.
+    if (isDeepFrozen(schema)) {
+      const interned = internSchema(schema);
+      if (interned !== schema) return schemaHasIfc(interned);
+    }
   }
   const context: SchemaHasIfcContext = { seenByRoot: new WeakMap() };
   if (seen.size > 0) {

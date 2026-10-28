@@ -9,7 +9,7 @@
  * Identity follows the scrabble idiom:
  * - `users` is a per-space directory of joined participants.
  * - Each viewer's `myName` is per-user; it is set once on join and treated as
- *   immutable thereafter. The join name/avatar come from the viewer's shared
+ *   immutable thereafter. The join name comes from the viewer's shared
  *   profile (`wish({ query: "#profile" })` — its built-in UI covers profile
  *   create/pick); programmatic callers can still pass an explicit name in the
  *   `joinAs` event.
@@ -38,7 +38,7 @@ import {
 export interface User {
   name: string;
 
-  /** Avatar URL or glyph, snapshotted from the joiner's shared profile. */
+  /** Avatar text a stored user may carry. Nothing writes it. */
   avatar?: string;
   color: string;
   joinedAt: number;
@@ -147,17 +147,15 @@ const getInitials = (name: string): string => {
   );
 };
 
-// `profileName`/`profileAvatar` arrive as plain strings resolved from the
-// viewer's shared profile (named `computed` values auto-unwrap as handler
-// state). An explicit `name` in the event (tests, headless drivers) overrides
-// the profile name — and then deliberately skips the profile avatar.
+// `profileName` arrives as a plain string resolved from the viewer's shared
+// profile (named `computed` values auto-unwrap as handler state). An explicit
+// `name` in the event (tests, headless drivers) overrides the profile name.
 const joinAs = handler<JoinEvent, {
   users: UsersCell;
   myName: NameCell;
   adminName: NameCell;
   profileName: string;
-  profileAvatar: string;
-}>(({ name }, { users, myName, adminName, profileName, profileAvatar }) => {
+}>(({ name }, { users, myName, adminName, profileName }) => {
   const override = trimmedName(name);
   const trimmed = override || trimmedName(profileName);
   if (!trimmed) return;
@@ -167,7 +165,6 @@ const joinAs = handler<JoinEvent, {
   if (existing.some((u) => u.name === trimmed)) return;
   const user: User = {
     name: trimmed,
-    avatar: override ? "" : (profileAvatar ?? "").trim(),
     color: colorForIndex(existing.length),
     joinedAt: Date.now(),
   };
@@ -389,15 +386,13 @@ export default pattern<CozyPollInput, CozyPollOutput>(
     // Resolve THIS viewer's shared profile. The `#profile` wish's built-in UI
     // covers the whole lifecycle: a create surface when the viewer has no
     // profile, a link when they have one, and a picker (with inline create)
-    // when they have several. The field targets give the snapshot strings.
+    // when they have several. `#profileName` gives the snapshot name.
     const profileWish = wish<{ name?: string; avatar?: string }>({
       query: "#profile",
     });
     const profileNameWish = wish<string>({ query: "#profileName" });
-    const profileAvatarWish = wish<string>({ query: "#profileAvatar" });
 
     const profileName = computed(() => profileNameWish.result ?? "");
-    const profileAvatar = computed(() => profileAvatarWish.result ?? "");
     const hasProfile = computed(() =>
       (profileNameWish.result ?? "").trim() !== ""
     );
@@ -410,7 +405,6 @@ export default pattern<CozyPollInput, CozyPollOutput>(
       myName,
       adminName,
       profileName,
-      profileAvatar,
     });
     const boundClaimHost = claimHost({ myName, adminName });
     const boundAddOption = addOption({

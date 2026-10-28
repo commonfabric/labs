@@ -29,6 +29,8 @@ a line for each new document to the index below.
 - [`view-scoped-client-replication.md`](view-scoped-client-replication.md) —
   visible renderer demand, server-observed input selection, and guarded local
   previews
+- [`document-release.md`](document-release.md) — when a runtime stops watching
+  a document nothing reads, what it drops, and how a later read loads it again
 
 - [`collaborative-fields.md`](collaborative-fields.md) — operation-based fields,
   CodeMirror's opt-in editor path, retained cursors and reset behavior, and
@@ -61,14 +63,20 @@ a line for each new document to the index below.
   how an authorization failure during storage sync reaches the caller as a typed
   error instead of a silent absent read or an endless wait
 - [`custom-space-roots.md`](custom-space-roots.md) — seal a custom
-  default-pattern reservation with the initial ACL.
+  default-pattern reservation with the initial ACL, or one leaving the root to
+  the space's creator, as `inSpace(..., { root: true })` does.
+- [`meeting-room-allocation.md`](meeting-room-allocation.md) — host-local atomic
+  selection of a canonical calendar meeting Loom, without granting membership.
+- [`space-kinds.md`](space-kinds.md) — the kind a space declares in its genesis
+  commit, as `inSpace(..., { spaceKind })` does: how it is sealed so that only
+  its creator states it, once; who can read it; the known kinds; and what a
+  kind does not vouch for
 - [`lazy-cell-materialization.md`](lazy-cell-materialization.md) — the
   schema-observing view a marked transaction hands back from a read, what it
   checks and when, and the rules that keep it agreeing with an eager read
-- [`data-uri-identifiers.md`](data-uri-identifiers.md) — the cell identifiers
-  that carry their own frozen value rather than naming a document in a space,
-  why the runtime keeps both a broad and a narrow test for one, and what follows
-  from there being nothing stored behind such an address
+- [`immutable-cell-identifiers.md`](immutable-cell-identifiers.md) — native
+  snapshot ownership, relative-link origins, portable value-carrying IDs, and
+  expansion at storage and transport boundaries
 
 ## Identity and people
 
@@ -97,7 +105,14 @@ a line for each new document to the index below.
 - [`space-access.md`](space-access.md) — what `spaceAccess(target)` tells a pattern
   about the access its principal holds in a space: where the level comes from,
   who the principal is, when the answer is `"none"` and when it is not known,
-  and how it stays current
+  and how it stays current; what `spaceMembers(target)` lists, the principals
+  the space's access list names; and what `spaceOf(target)` returns, the DID
+  of that space
+- [`private-inbox.md`](private-inbox.md) — the one inbox per identity where
+  others deliver offers: where it lives, who creates it, what access its space
+  grants, the offer envelope it shares with loom's share inbox, what `receive`
+  keeps, how the host's share intake vets offers and registers them in Home's
+  catalog, and what it does not keep private
 - [`space-access-changes.md`](space-access-changes.md) — how a handler grants
   and revokes access to a space with `grantSpaceAccess()` and
   `revokeSpaceAccess()`: what a grant exposes, who may change the list and
@@ -119,6 +134,18 @@ a line for each new document to the index below.
   mints an ingest channel for their own space without an operator: the space-ACL
   authorization model, why the two obvious designs are unsound, and the
   procedure for retiring channels when the trust conditions change
+- [`gmail-push-architecture.md`](gmail-push-architecture.md) — the end-to-end
+  path of a Gmail push notification, in diagrams: the servers and clients
+  involved, who runs each one, what each hop between them proves, and what
+  absorbs each failure
+- [`gmail-push-setup.md`](gmail-push-setup.md) — the Google Cloud resources,
+  permissions, and deployment settings Gmail push needs outside this
+  repository, as commands, for a deployment Google can reach and for one on a
+  private network
+- [`gmail-push-ingest.md`](gmail-push-ingest.md) — how a Gmail `users.watch`
+  notification, pushed by Cloud Pub/Sub, reaches the ingest channels bound to
+  its mailbox, what proves a caller may bind a mailbox, and what the syncer
+  still owns
 - [`gateway-request-provenance.md`](gateway-request-provenance.md) — how a
   request to the LLM gateway says which workload produced it, what a value is
   allowed to contain given that it reaches the provider, and why the machine

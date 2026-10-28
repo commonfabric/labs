@@ -22,6 +22,7 @@ export {
   type AgentRunRecord,
 } from "./builtins/agent.ts";
 export {
+  AGENT_INPUT_ACCESS_TOOLS,
   AGENT_INPUT_NAME_PATTERN,
   AGENT_RUN_STATES,
   AGENT_RUN_TERMINAL_STATES,
@@ -30,4 +31,5 @@ export {
   AgentRunRecordSchema,
   type AgentRunState,
   type AgentToolName,
+  withAgentInputAccessTools,
 } from "./builtins/agent-schemas.ts";

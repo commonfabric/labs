@@ -96,7 +96,7 @@ export default pattern((__cf_pattern_input) => {
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
-            "enum": ["join the others", "be first"]
+            "enum": ["be first", "join the others"]
         } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ users: {
                 length: users.key("length")
             } }), "join the others", "be first").for(["boundJoin", "label"], true)

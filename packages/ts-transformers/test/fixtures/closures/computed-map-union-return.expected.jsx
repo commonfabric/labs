@@ -105,7 +105,7 @@ const __cfLift_1 = __cfHelpers.lift<{
         }, {
             type: "null"
         }]
-} as const satisfies __cfHelpers.JSONSchema);
+} as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
 // FIXTURE: computed-map-union-return
 // Verifies: a computed returning a union type (string | null) with a nested .map() infers the correct output schema
 //   computed(() => { ...; return content }) → lift(schema, anyOf[string, null])({ messages })

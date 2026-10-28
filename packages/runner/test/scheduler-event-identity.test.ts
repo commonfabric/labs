@@ -10,6 +10,7 @@ import {
 } from "../src/scheduler/event-identity.ts";
 import {
   dropQueuedEvent,
+  EventHandlerRegistry,
   queueSchedulerEvent,
 } from "../src/scheduler/events.ts";
 import type { QueuedEvent } from "../src/scheduler/types.ts";
@@ -37,7 +38,12 @@ function eventKey(id: string): string {
 // A piece-start outcome for the `loadPieceForEvent` seam, carrying only what
 // these cases turn on: a started piece has its pattern graph installed.
 function pieceLoadVerdict(started: boolean): EnsurePieceVerdict {
-  return { started, graphIsInstalled: () => started, observedDocIds: [] };
+  return {
+    started,
+    graphIsInstalled: () => started,
+    observedDocIds: [],
+    observedDocs: [],
+  };
 }
 
 describe("scheduler event identity", () => {
@@ -206,12 +212,15 @@ describe("scheduler event identity", () => {
 
     queueSchedulerEvent({
       runtime: {} as Runtime,
-      eventHandlers: [[eventLink, handler]],
+      eventHandlers: new EventHandlerRegistry([[eventLink, handler]]),
       eventQueue,
       backgroundTasks: new Set(),
       queueExecution: () => {},
       recordLineageEvent: () => {},
       releaseLineageEvent: () => {},
+      pieceStartWaits: new Set<QueuedEvent>(),
+      handleError: () => {},
+      pieceStartWaitsEnded: () => false,
     }, {
       eventLink,
       event: { value: 1 },
@@ -287,14 +296,20 @@ describe("scheduler event identity", () => {
     } as unknown as IExtendedStorageTransaction;
 
     queueSchedulerEvent({
-      runtime: { edit: () => droppedTx } as unknown as Runtime,
-      eventHandlers: [],
+      runtime: {
+        edit: () => droppedTx,
+        experimental: {},
+      } as unknown as Runtime,
+      eventHandlers: new EventHandlerRegistry(),
       eventQueue,
       backgroundTasks,
       loadPieceForEvent: () => Promise.reject(new Error("start failed")),
       queueExecution: () => {},
       recordLineageEvent: () => {},
       releaseLineageEvent: () => {},
+      pieceStartWaits: new Set<QueuedEvent>(),
+      handleError: () => {},
+      pieceStartWaitsEnded: () => false,
     }, {
       eventLink,
       event: "payload",
@@ -322,14 +337,20 @@ describe("scheduler event identity", () => {
       status: () => ({ status: "error" }),
     } as unknown as IExtendedStorageTransaction;
     const state = {
-      runtime: { edit: () => droppedTx } as unknown as Runtime,
-      eventHandlers: [],
+      runtime: {
+        edit: () => droppedTx,
+        experimental: {},
+      } as unknown as Runtime,
+      eventHandlers: new EventHandlerRegistry(),
       eventQueue,
       backgroundTasks,
       loadPieceForEvent: () => pieceLoad.promise,
       queueExecution: () => {},
       recordLineageEvent: () => {},
       releaseLineageEvent: () => {},
+      pieceStartWaits: new Set<QueuedEvent>(),
+      handleError: () => {},
+      pieceStartWaitsEnded: () => false,
     };
 
     queueSchedulerEvent(state, {
@@ -384,20 +405,26 @@ describe("scheduler event identity", () => {
       const lt1Link: NormalizedFullLink = { ...eventLink, id: "of:lt1-stream" };
       const handler = () => {};
       const state = {
-        runtime: { edit: () => droppedTx } as unknown as Runtime,
+        runtime: {
+          edit: () => droppedTx,
+          experimental: {},
+        } as unknown as Runtime,
         // No handler for the HEAD's link — it takes the piece-load path;
         // the three later arrivals are all ready-queued.
-        eventHandlers: [
+        eventHandlers: new EventHandlerRegistry([
           [followerLink, handler],
           [crossSpaceLink, handler],
           [lt1Link, handler],
-        ] as [NormalizedFullLink, typeof handler][],
+        ]),
         eventQueue,
         backgroundTasks,
         loadPieceForEvent: loadFailure,
         queueExecution: () => {},
         recordLineageEvent: () => {},
         releaseLineageEvent: () => {},
+        pieceStartWaits: new Set<QueuedEvent>(),
+        handleError: () => {},
+        pieceStartWaitsEnded: () => false,
       };
       queueSchedulerEvent(state, {
         eventLink,

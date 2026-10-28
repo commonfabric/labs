@@ -38,7 +38,6 @@ import { excusedMeasurementName } from "../lane-measurement.ts";
 import {
   COVERAGE_COMMENT_LINES,
   EXCLUDED_FROM_COVERAGE_GATE,
-  LOCAL_COVERAGE_MAX_SETS,
   RENAME_SIMILARITY,
 } from "./policy.ts";
 
@@ -162,7 +161,7 @@ function input(partial: Partial<ReportInput> = {}): ReportInput {
     coverage: figures([]),
     coverageBefore: figures([]),
     touched: new Set(),
-    coverageGate: { reached: [], ran: true },
+    coverageGate: { reached: [], chosen: [] },
     day: "2026-09-07",
     ...partial,
   };
@@ -329,15 +328,26 @@ describe("report", () => {
     });
 
     it("separates each reason a run did not reach a test", () => {
-      const view = knows(["bakes"], {
+      const view = knows(["bakes", "slices", "proves"], {
         withheld: new Map([[key("kneads"), "flaky" as const]]),
+        heldWithUnit: new Set([key("proves")]),
+        unschedulable: new Set([key("slices")]),
         flakes: new Map([
           [key("kneads"), undefined],
           [key("bakes"), undefined],
+          [key("slices"), undefined],
+          [key("proves"), undefined],
         ]),
       });
       expect(selectionOf(view, key("kneads"))).toBe("withheld-flaky");
+      expect(selectionOf(view, key("proves"))).toBe("withheld-unit");
       expect(selectionOf(view, key("bakes"))).toBe("not-selected");
+      expect(selectionOf(view, key("slices"))).toBe("unschedulable");
+      const crowded = { ...view, crowded: true };
+      expect(selectionOf(crowded, key("bakes"))).toBe("crowded-out");
+      expect(selectionOf(crowded, key("slices"))).toBe("unschedulable");
+      expect(selectionOf(crowded, key("kneads"))).toBe("withheld-flaky");
+      expect(selectionOf(crowded, key("proves"))).toBe("withheld-unit");
     });
 
     // Saying the selector passed over a test needs a manifest that holds
@@ -367,16 +377,37 @@ describe("report", () => {
       expect(selectionOf(itself, key("kneads"))).toBe("skipped-there");
     });
 
-    // An identity the packing reached, and one the store has never seen,
-    // are both identities that run. A run with no record of either
-    // recorded less than it ran rather than running less than it should
-    // have, and saying there is no manifest would deny one there is.
+    // An identity the packing reached, and one the manifest does not hold
+    // whose unit it placed, are both identities that run. A run with no
+    // record of either recorded less than it ran rather than running less
+    // than it should have, and saying there is no manifest would deny one
+    // there is.
     it("separates a test that was to have run from one nothing knows", () => {
       const selected = knows(["kneads"], {
         selected: new Set([key("kneads")]),
       });
       expect(selectionOf(selected, key("kneads"))).toBe("unrecorded");
       expect(selectionOf(knows([]), key("kneads"))).toBe("unrecorded");
+      const placed = knows([], {
+        units: inOneUnit("kneads"),
+        placed: new Set(["workspace-unit\tbakery"]),
+      });
+      expect(selectionOf(placed, key("kneads"))).toBe("unrecorded");
+    });
+
+    // A test the manifest does not hold runs wherever its unit runs, so a
+    // unit the packing left out is the packing's decision about the test.
+    it("reports a test the manifest does not hold by what became of its unit", () => {
+      const passedOver = knows([], { units: inOneUnit("kneads") });
+      expect(selectionOf(passedOver, key("kneads"))).toBe("not-selected");
+      expect(selectionOf({ ...passedOver, crowded: true }, key("kneads")))
+        .toBe("crowded-out");
+      expect(
+        selectionOf(
+          { ...passedOver, unschedulable: new Set([key("kneads")]) },
+          key("kneads"),
+        ),
+      ).toBe("unschedulable");
     });
   });
 
@@ -463,7 +494,7 @@ describe("report", () => {
 
     // A test that both passed and failed at this commit is disagreeing
     // with itself, which is what the scorer calls flake evidence rather
-    // than a catch.
+    // than a new real test failure.
     it("says nothing about a test that disagreed with itself here", () => {
       expect(firstFailures(input({
         previous: run([["kneads", "pass"]]),
@@ -696,49 +727,35 @@ describe("report", () => {
   describe("measuredSetRises()", () => {
     const gated = "packages/memory";
     const excluded = [...EXCLUDED_FROM_COVERAGE_GATE.keys()][0]!;
-    /** The gate having run over exactly these sets. */
+    /** The plan for the change having chosen the gates of these sets. */
     const over = (...members: string[]) => ({
       reached: members.map((member) => `workspace-unit/${member}`),
-      ran: true,
+      chosen: members.map((member) => `workspace-unit/${member}`),
     });
-    const overTheCap = {
-      reached: Array.from(
-        { length: LOCAL_COVERAGE_MAX_SETS + 1 },
-        (_, index) => `workspace-unit/packages/gated-${index}`,
-      ),
-      ran: false,
-    };
+    /** The change having reached these sets, and its plan choosing none. */
+    const passedOver = (...members: string[]) => ({
+      reached: members.map((member) => `workspace-unit/${member}`),
+      chosen: [],
+    });
 
-    it("names the cap when the change reached more sets than it allows", () => {
+    it("names the plan when it did not choose the reached set's gate", () => {
       const rises = measuredSetRises(input({
         coverageBefore: ownTests([[gated, 10]]),
         coverage: ownTests([[gated, 14]]),
         touched: new Set([gated]),
-        coverageGate: overTheCap,
+        coverageGate: passedOver(gated),
       }));
-      expect(rises[0]?.route).toBe("over-the-cap");
-      expect(rises[0]?.touched).toBe(LOCAL_COVERAGE_MAX_SETS + 1);
+      expect(rises[0]?.route).toBe("not-chosen");
     });
 
-    // Two sets over one member count twice against the cap, because the
-    // cap is what the gate applies and the gate counts sets. Counting
-    // members here would say the gate ran when it did not.
-    it("counts a set rather than a member against the cap", () => {
+    it("says no plan can tell where none was resolved for the run", () => {
       const rises = measuredSetRises(input({
         coverageBefore: ownTests([[gated, 10]]),
         coverage: ownTests([[gated, 14]]),
         touched: new Set([gated]),
-        coverageGate: {
-          reached: [
-            `workspace-unit/${gated}`,
-            `memory-e2e/${gated}`,
-            `memory-browser/${gated}`,
-          ],
-          ran: false,
-        },
+        coverageGate: { reached: [`workspace-unit/${gated}`] },
       }));
-      expect(rises[0]?.route).toBe("over-the-cap");
-      expect(rises[0]?.touched).toBe(3);
+      expect(rises[0]?.route).toBe("unplanned");
     });
 
     it("names the exclusion list, with its reason", () => {
@@ -752,15 +769,16 @@ describe("report", () => {
       expect(rises[0]?.reason).toBe(EXCLUDED_FROM_COVERAGE_GATE.get(excluded));
     });
 
-    // A package the gate would never have measured is on the exclusion
-    // list whatever else the change touched, so the cap cannot be the
-    // route that let its rise through.
-    it("names the exclusion list even when the cap was also passed", () => {
+    it("names the exclusion list even where the plan passed over a gate", () => {
+      // A package the gate would never have measured is on the exclusion
+      // list whatever else the change touched, so the plan's choice cannot
+      // be the route that let its rise through.
+
       const rises = measuredSetRises(input({
         coverageBefore: ownTests([[excluded, 10]]),
         coverage: ownTests([[excluded, 14]]),
         touched: new Set([excluded]),
-        coverageGate: overTheCap,
+        coverageGate: passedOver(excluded),
       }));
       expect(rises[0]?.route).toBe("excluded");
     });
@@ -915,17 +933,17 @@ describe("report", () => {
 
   describe("renames()", () => {
     /**
-     * A view where one departing test has caught things, and every test
-     * a case names shares one invocation unit with it.
+     * A view where one departing test has had new real test failures, and
+     * every test a case names shares one invocation unit with it.
      */
-    const withCatches = (
+    const withNewRealTestFailures = (
       name: string,
-      catches: number,
+      newRealTestFailures: number,
       ...others: readonly string[]
     ): PullRequestView => ({
       ...unknownPullRequest(),
       manifest: true,
-      catches: new Map([[key(name), catches]]),
+      newRealTestFailures: new Map([[key(name), newRealTestFailures]]),
       units: inOneUnit(name, ...others),
     });
 
@@ -933,11 +951,11 @@ describe("report", () => {
       const suggestions = renames(input({
         previous: run([["kneads the dough", "pass"], ["proves", "pass"]]),
         current: run([["kneads the dougk", "pass"], ["proves", "pass"]]),
-        pullRequest: withCatches("kneads the dough", 4.5, "proves"),
+        pullRequest: withNewRealTestFailures("kneads the dough", 4.5, "proves"),
       }));
       expect(suggestions.length).toBe(1);
       expect(suggestions[0]!.to.n).toBe("kneads the dougk");
-      expect(suggestions[0]!.catches).toBe(4.5);
+      expect(suggestions[0]!.newRealTestFailures).toBe(4.5);
       expect(JSON.parse(suggestions[0]!.aliasLine)).toEqual({
         date: "2026-09-07",
         from: { k: "unit", s: "bakery", n: "kneads the dough" },
@@ -945,11 +963,11 @@ describe("report", () => {
       });
     });
 
-    it("offers nothing when the departing test caught nothing", () => {
+    it("offers nothing when the departing test had no new real test failure", () => {
       expect(renames(input({
         previous: run([["kneads the dough", "pass"], ["proves", "pass"]]),
         current: run([["kneads the dougk", "pass"], ["proves", "pass"]]),
-        pullRequest: withCatches("kneads the dough", 0, "proves"),
+        pullRequest: withNewRealTestFailures("kneads the dough", 0, "proves"),
       }))).toEqual([]);
     });
 
@@ -957,7 +975,7 @@ describe("report", () => {
       expect(renames(input({
         previous: run([["kneads the dough", "pass"], ["proves", "pass"]]),
         current: run([["lights the oven", "pass"], ["proves", "pass"]]),
-        pullRequest: withCatches("kneads the dough", 4, "proves"),
+        pullRequest: withNewRealTestFailures("kneads the dough", 4, "proves"),
       }))).toEqual([]);
     });
 
@@ -975,7 +993,7 @@ describe("report", () => {
           ["census > drops a unit the tree no longer had", "pass"],
           ["census > keeps a unit the tree no longer has", "pass"],
         ]),
-        pullRequest: withCatches(
+        pullRequest: withNewRealTestFailures(
           "census > drops a unit the tree no longer has",
           4,
         ),
@@ -987,7 +1005,7 @@ describe("report", () => {
         previous: run([["kneads the dough", "pass"], ["proves", "pass"]]),
         current: run([["kneads the dougk", "pass"], ["proves", "pass"]]),
         pullRequest: {
-          ...withCatches("kneads the dough", 4, "proves"),
+          ...withNewRealTestFailures("kneads the dough", 4, "proves"),
           flakes: new Map([[key("kneads the dougk"), undefined]]),
         },
       }))).toEqual([]);
@@ -1007,7 +1025,7 @@ describe("report", () => {
         pullRequest: {
           ...unknownPullRequest(),
           manifest: true,
-          catches: new Map([[gone, 4]]),
+          newRealTestFailures: new Map([[gone, 4]]),
           units: new Map([
             [gone, "workspace-unit\tbakery"],
             [arrived, "workspace-unit\tbakery"],
@@ -1031,7 +1049,7 @@ describe("report", () => {
         pullRequest: {
           ...unknownPullRequest(),
           manifest: true,
-          catches: new Map([
+          newRealTestFailures: new Map([
             [key("kneads the dough"), 4],
             [key("lights the oven"), 2],
           ]),
@@ -1061,7 +1079,7 @@ describe("report", () => {
         pullRequest: {
           ...unknownPullRequest(),
           manifest: true,
-          catches: new Map([[gone, 4]]),
+          newRealTestFailures: new Map([[gone, 4]]),
           units: new Map([[gone, "workspace-unit\toven"]]),
         },
       }))).toEqual([]);
@@ -1081,7 +1099,7 @@ describe("report", () => {
         pullRequest: {
           ...unknownPullRequest(),
           manifest: true,
-          catches: new Map([
+          newRealTestFailures: new Map([
             [key("kneads the dough"), 4],
             [key("kneads the dougx"), 3],
           ]),
@@ -1106,7 +1124,7 @@ describe("report", () => {
         pullRequest: {
           ...unknownPullRequest(),
           manifest: true,
-          catches: new Map([[key("kneads the dough"), 4]]),
+          newRealTestFailures: new Map([[key("kneads the dough"), 4]]),
           units: new Map([[key("kneads the dough"), "workspace-unit\tbakery"]]),
         },
       }))).toEqual([]);
@@ -1176,7 +1194,7 @@ describe("report", () => {
         ]),
         nonGating: new Map([[key("glazes"), { flakes: 7, runs: 900 }]]),
         pullRequest: knows(["proves", "bakes"], {
-          catches: new Map([[key("kneads the dough"), 6]]),
+          newRealTestFailures: new Map([[key("kneads the dough"), 6]]),
           flakes: new Map([
             [key("proves"), { flakes: 5, runs: 80 }],
             [key("bakes"), undefined],
@@ -1245,7 +1263,7 @@ describe("report", () => {
       expect(buildReport(everything())).toEqual(first);
     });
 
-    it("says the selector traded the coverage away, not that it was missed", () => {
+    it("says the lanes ran other tests, not that it was missed", () => {
       // It is not a judgement, because the system chose not to run the
       // test.
 
@@ -1257,9 +1275,58 @@ describe("report", () => {
         })),
         context,
       )!;
-      expect(body).toContain("Test selection traded that coverage away");
-      expect(body).toContain("nothing here was missed");
+      expect(body).toContain(
+        "filled the rest of their budget with other tests, and this was not " +
+          "one of them",
+      );
+      expect(body).not.toContain("no room");
+      expect(body).not.toMatch(/\bscore\b/);
       expect(body).not.toMatch(/\b(should have|failed to|forgot)\b/i);
+    });
+
+    it("says the mandatory tests left no room, where they took the budget", () => {
+      const body = renderReport(
+        buildReport(input({
+          previous: run([["proves", "pass"]]),
+          current: run([["proves", "fail"]]),
+          pullRequest: knows(["proves"], { crowded: true }),
+        })),
+        context,
+      )!;
+      expect(body).toContain("nothing about this test decided that");
+      expect(body).toContain("left no room in the lanes for anything else");
+      expect(body).not.toContain("other tests, and this was not one");
+    });
+
+    it("says a test was held back with its unit", () => {
+      const body = renderReport(
+        buildReport(input({
+          previous: run([["proves", "pass"]]),
+          current: run([["proves", "fail"]]),
+          pullRequest: knows(["proves"], {
+            heldWithUnit: new Set([key("proves")]),
+            crowded: true,
+          }),
+        })),
+        context,
+      )!;
+      expect(body).toContain("holds back another test in that unit");
+      expect(body).not.toContain("no room");
+    });
+
+    it("says no lane can hold a test the packing found too costly", () => {
+      const body = renderReport(
+        buildReport(input({
+          previous: run([["proves", "pass"]]),
+          current: run([["proves", "fail"]]),
+          pullRequest: knows(["proves"], {
+            unschedulable: new Set([key("proves")]),
+          }),
+        })),
+        context,
+      )!;
+      expect(body).toContain("no lane can hold it");
+      expect(body).not.toContain("other tests, and this was not one");
     });
 
     it("labels a test the store knows disagrees with itself", () => {
@@ -1459,7 +1526,7 @@ describe("report", () => {
         context,
       )!;
       expect(body).toContain("This pull request ran it, and it passed there");
-      expect(body).not.toContain("traded that coverage away");
+      expect(body).not.toContain("this was not one of them");
     });
 
     it("says so when the pull request's own run could not be read", () => {
@@ -1521,7 +1588,7 @@ describe("report", () => {
       expect(body).toContain("somewhere else in the repository");
     });
 
-    it("names the exclusion list's reason and the sets counted", () => {
+    it("names the exclusion list's reason and the gate the plan passed over", () => {
       const excluded = [...EXCLUDED_FROM_COVERAGE_GATE.keys()][0]!;
       const body = renderReport(
         buildReport(input({
@@ -1537,7 +1604,7 @@ describe("report", () => {
               "workspace-unit/packages/ui",
               "workspace-unit/packages/html",
             ],
-            ran: false,
+            chosen: ["workspace-unit/packages/ui"],
           },
           coverageBefore: ownTests([[excluded, 10], ["packages/memory", 4]]),
           coverage: ownTests([[excluded, 14], ["packages/memory", 9]]),
@@ -1546,7 +1613,7 @@ describe("report", () => {
       )!;
       expect(body).toContain("The list gives the reason:");
       expect(body).toContain(EXCLUDED_FROM_COVERAGE_GATE.get(excluded));
-      expect(body).toContain("The change reached 3 measured sets.");
+      expect(body).toContain("did not choose the set's coverage gate");
     });
 
     it("says the coverage note is not a failure", () => {

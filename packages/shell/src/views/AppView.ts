@@ -25,6 +25,7 @@ import { css, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 
 import { CellEventTarget, CellUpdateEvent } from "../lib/cell-event-target.ts";
+import { createViewSettled } from "../lib/debug-utils.ts";
 import { DebuggerController } from "../lib/debugger-controller.ts";
 import { GlobalShortcutsController } from "../lib/global-shortcuts-controller.ts";
 import { deliverOpenPath } from "../lib/open-path.ts";
@@ -346,17 +347,18 @@ export class XAppView extends BaseView {
   /**
    * The answer the view is SHOWING and the reference it answers: the
    * resolution whose piece is on screen, or whose refusal is the error on
-   * screen, under the address that reached it. Undefined before the first run
-   * of the selection reports; the answer within it is undefined where a run
-   * reached nothing to show, a load that could not finish among them.
+   * screen, or whose load's failure is the error on screen, under the address
+   * that reached it. Undefined before the first run of the selection reports;
+   * the answer within it is undefined where a run reached no answer at all,
+   * as a resolution that faulted does.
    *
    * One fact, not several about one thing. What was resolved, whether it was
    * applied, which piece it reached, and which answer is newest are all read
    * off this — so there is no second slot for one of them to disagree with,
    * and a re-resolution asks one question: is this what the view is showing?
    * A no is the whole of the work to do, whether the reference moved, a
-   * member arrived, a refusal changed, or a load failed and left the view on
-   * something else.
+   * member arrived, a refusal changed, or a resolution faulted and left the
+   * view on something else.
    *
    * Written only by {@link XAppView.#markShown}, and only from the answer the
    * writer itself resolved — never from whatever is current when it finishes,
@@ -388,6 +390,31 @@ export class XAppView extends BaseView {
   #namedAMember = false;
 
   /**
+   * The runtime this view has asked to bring the user's Home up, which it asks
+   * once, after the first piece shown under that runtime has settled, and the
+   * bring-up itself, from that decision until the worker has answered.
+   */
+  #homeBringUp: { rt: RuntimeInternals; done: Promise<void> } | undefined =
+    undefined;
+
+  /**
+   * The runtime and space this view last asked to have the user join the room
+   * shown, and the request itself, from that decision until the worker has
+   * answered. A piece shown in the same space under the same runtime asks
+   * nothing more.
+   */
+  #visitJoin:
+    | { rt: RuntimeInternals; space: DID; done: Promise<void> }
+    | undefined = undefined;
+
+  /**
+   * The runtime this view is listening to for `connectionrestored` and
+   * `spaceaccessrestored`: the view's runtime, from the update that brought
+   * it until the view leaves the document.
+   */
+  #recoveryListenerRt: RuntimeInternals | undefined = undefined;
+
+  /**
    * The revision the slug watch bumps to make the selection run again, which
    * a test reads to tell a reload from a resolution that changed nothing.
    */
@@ -399,6 +426,42 @@ export class XAppView extends BaseView {
         return outerThis._slugRevision;
       },
     };
+  }
+
+  /**
+   * The bring-up of the user's Home this view has started under its current
+   * runtime, which resolves, never rejecting, once the worker has answered it;
+   * `undefined` before the first piece under that runtime is on screen. It is
+   * started from the moment the view decides to bring Home up, ahead of the
+   * settle it waits for, so a caller waiting on it from then on waits for the
+   * whole of it.
+   */
+  get homeBringUp(): Promise<void> | undefined {
+    const bringUp = this.#homeBringUp;
+    return bringUp !== undefined && bringUp.rt === this.rt
+      ? bringUp.done
+      : undefined;
+  }
+
+  /**
+   * The join this view has asked for of the room it shows, under its current
+   * runtime, which resolves, never rejecting, once the worker has answered;
+   * `undefined` before a piece under that runtime is on screen.
+   */
+  get visitJoin(): Promise<void> | undefined {
+    const join = this.#visitJoin;
+    return join !== undefined && join.rt === this.rt ? join.done : undefined;
+  }
+
+  /**
+   * The work this view has started under its current runtime that the view
+   * is not settled without: the latest join of a visited room, which itself
+   * waits for Home's bring-up, or else the bring-up; `undefined` before a
+   * piece under that runtime is on screen. It is the same promise for as long
+   * as no other join is asked for.
+   */
+  get settling(): Promise<void> | undefined {
+    return this.visitJoin ?? this.homeBringUp;
   }
 
   #debuggerController = new DebuggerController(this);
@@ -543,11 +606,13 @@ export class XAppView extends BaseView {
           try {
             pattern = await rt.getPattern(space, pieceId, { scope });
           } catch (error) {
-            // Around the load alone. The run's outer catch also takes the
-            // refusal's own throw, and recording nothing there would undo
-            // the mark a refusal just made — leaving every poll to re-resolve
-            // an answer the view is already showing.
-            this.#markShown(reference, undefined, signal);
+            // Around the load alone, since the run's outer catch also takes
+            // the refusal's own throw. A load that fails leaves this answer's
+            // failure on screen, and that IS the view showing this answer:
+            // recorded as shown, a poll reaching the same answer is no news,
+            // and the failing piece is not fetched and started again on
+            // every tick. An answer that differs still reloads.
+            this.#markShown(reference, landed, signal);
             throw error;
           }
           // `landed` and not whatever is current: this run finished THIS
@@ -750,7 +815,8 @@ export class XAppView extends BaseView {
    * that same run's, for the same reason.
    *
    * Every outcome of a run is reported through here — the piece it loaded,
-   * the refusal it was given, and the load it could not finish. That is what
+   * the refusal it was given, the load it could not finish, and the
+   * resolution that faulted before it reached an answer. That is what
    * lets one comparison stand for all of them: an outcome that wrote nothing
    * would leave the answer before it standing as though it were still what
    * the view had settled on.
@@ -851,12 +917,13 @@ export class XAppView extends BaseView {
     // the reference beside it: a piece already on screen wants no reload
     // however the view came to be showing it. A difference covers every
     // reason the view could be behind — the reference moved, a member
-    // arrived, a refusal changed, a load failed and left the view on an error
-    // — because each of them is the same fact: what the view settled on is
-    // not this. That holds because every outcome of a run is recorded, a load
-    // that could not finish among them; an outcome that recorded nothing
-    // would leave the answer before it reading as settled, and the retry it
-    // needs would never be asked for.
+    // arrived, a refusal changed, a resolution faulted and left the view on an
+    // error — because each of them is the same fact: what the view settled on
+    // is not this. That holds because every outcome of a run is recorded; an
+    // outcome that recorded nothing would leave the answer before it reading
+    // as settled, and the reload it needs would never be asked for. A load
+    // that failed is recorded under the answer it was loading, so the same
+    // answer again is no news and the failure stands until the answer moves.
     const shown = this.#shownResolution?.answer;
     if (shown && slugResolutionKey(shown) === slugResolutionKey(landed)) return;
     this.#handleSlugCellUpdate(watch);
@@ -901,6 +968,71 @@ export class XAppView extends BaseView {
     this.pieceTitle = titleOf(event.detail) ?? "";
   };
 
+  /**
+   * Handler for the runtime's `connectionrestored`, which runs again each
+   * load whose failure the view is showing, and each load still in flight
+   * that goes on to fail. The runtime has dropped every failed load by then,
+   * and keeps none that was in flight, so the run reaches the worker, and a
+   * failure the lost connection caused can heal. A load the view shows as
+   * loaded is left alone, so a restored connection reloads nothing on
+   * screen, and one that fails again stays failed until the next restored
+   * connection.
+   */
+  #onConnectionRestored = (): void => {
+    this.#runAgainIfFailed(this._selectedPattern);
+    this.#runAgainIfFailed(this._spaceRootPattern);
+  };
+
+  /**
+   * Handler for the runtime's `spaceaccessrestored`, which does what
+   * {@link XAppView.#onConnectionRestored} does when the space that admitted
+   * the runtime's principal again is the one the view shows. The runtime
+   * drops that space's failed loads alone, so a run for any other space
+   * would reach only the failure it already has.
+   */
+  #onSpaceAccessRestored = (event: Event): void => {
+    const { space } = (event as CustomEvent<{ space: DID }>).detail;
+    if (space !== this.space) return;
+    this.#runAgainIfFailed(this._selectedPattern);
+    this.#runAgainIfFailed(this._spaceRootPattern);
+  };
+
+  /**
+   * Helper for the recovery handlers, which runs `task` again if it has
+   * failed, or once it fails if it is running. A run asked for in between,
+   * whichever way it ends, is the one this waits on, and a task already
+   * running again by then is left to it.
+   */
+  #runAgainIfFailed(task: Task<readonly unknown[], unknown>): void {
+    if (task.status === TaskStatus.ERROR) {
+      task.run();
+    } else if (task.status === TaskStatus.PENDING) {
+      task.taskComplete.catch(() => {
+        if (task.status === TaskStatus.ERROR) task.run();
+      });
+    }
+  }
+
+  /**
+   * Listens for `connectionrestored` and `spaceaccessrestored` on `rt` and on
+   * no other runtime, so a replaced runtime's recoveries run nothing here.
+   */
+  #listenForRecoveries(rt: RuntimeInternals | undefined): void {
+    const previous = this.#recoveryListenerRt;
+    if (rt === previous) return;
+    previous?.removeEventListener(
+      "connectionrestored",
+      this.#onConnectionRestored,
+    );
+    previous?.removeEventListener(
+      "spaceaccessrestored",
+      this.#onSpaceAccessRestored,
+    );
+    this.#recoveryListenerRt = rt;
+    rt?.addEventListener("connectionrestored", this.#onConnectionRestored);
+    rt?.addEventListener("spaceaccessrestored", this.#onSpaceAccessRestored);
+  }
+
   #replacePieceUrlWithSlug(view: typeof this.app.view, slug: string) {
     try {
       validateSlug(slug);
@@ -926,42 +1058,15 @@ export class XAppView extends BaseView {
     replaceNavigation(view);
   }
 
-  #isRecreatingSpaceRootPattern = false;
-
-  #handleRecreateSpaceRootPattern = async (e: Event) => {
-    const done = (e as CustomEvent).detail?.done as (() => void) | undefined;
-    if (!this.rt || !this.space) {
-      done?.();
-      return;
-    }
-    if (this.#isRecreatingSpaceRootPattern) return;
-    this.#isRecreatingSpaceRootPattern = true;
-    try {
-      await this.rt.recreateSpaceRootPattern(this.space);
-      this._spaceRootPattern.run();
-    } catch (err) {
-      console.error("[AppView] Failed to recreate pattern:", err);
-    } finally {
-      this.#isRecreatingSpaceRootPattern = false;
-      done?.();
-    }
-  };
-
   override connectedCallback() {
     super.connectedCallback();
-    this.addEventListener(
-      "recreate-space-root-pattern",
-      this.#handleRecreateSpaceRootPattern,
-    );
+    this.#listenForRecoveries(this.rt);
   }
 
   override disconnectedCallback() {
     super.disconnectedCallback();
-    this.removeEventListener(
-      "recreate-space-root-pattern",
-      this.#handleRecreateSpaceRootPattern,
-    );
     this.#stopSlugWatch();
+    this.#listenForRecoveries(undefined);
   }
 
   override updated(changedProperties: Map<string, unknown>) {
@@ -989,6 +1094,10 @@ export class XAppView extends BaseView {
       this.#debuggerController.setRuntime(this.rt);
     }
 
+    if (changedProperties.has("rt")) {
+      this.#listenForRecoveries(this.rt);
+    }
+
     // Update debugger visibility from app state
     if (changedProperties.has("app")) {
       this.#debuggerController.setVisibility(
@@ -1001,6 +1110,83 @@ export class XAppView extends BaseView {
       changedProperties.has("space")
     ) {
       this.#syncSlugSubscription();
+    }
+
+    // The first piece a runtime shows is the signal to bring Home up there,
+    // whatever view it is. A runtime replaced since then has its own first.
+    const rt = this.rt;
+    if (
+      rt !== undefined && rt !== this.#homeBringUp?.rt &&
+      this._patterns.status === TaskStatus.COMPLETE &&
+      this._patterns.value?.activePattern !== undefined
+    ) {
+      this.#homeBringUp = { rt, done: this.#bringUpHome(rt) };
+    }
+
+    // Each space a runtime shows a piece of, in turn, is one whose room the
+    // user may have joined by visiting it. The worker decides whether it is a
+    // room, and the user's chat manager whether that changes anything.
+    const space = this.space;
+    if (
+      rt !== undefined && space !== undefined &&
+      this._patterns.status === TaskStatus.COMPLETE &&
+      this._patterns.value?.activePattern !== undefined &&
+      (rt !== this.#visitJoin?.rt || space !== this.#visitJoin.space)
+    ) {
+      this.#visitJoin = { rt, space, done: this.#joinVisitedRoom(rt, space) };
+    }
+  }
+
+  /**
+   * Helper for `updated()`, which asks `rt`'s worker to bring the user's Home
+   * up once the view has settled, that is once the worker is idle and what it
+   * rendered has reached the page. Bringing Home up starts the worker's
+   * housekeeping over Home, the share intake among it, so an offer that
+   * reaches the user's inbox is taken up wherever the shell is open, and not
+   * only on Home. Waiting for the settle keeps Home's start off the path to
+   * the first piece on screen.
+   *
+   * Only a Home that already exists is brought up. The share intake reads
+   * the inboxes Home holds and registers offers in Home's catalog, so without
+   * Home it has nothing to do, and creating Home here would race whatever
+   * else creates it.
+   */
+  async #bringUpHome(rt: RuntimeInternals): Promise<void> {
+    try {
+      await createViewSettled(() => rt.runtime())();
+      if (rt.signal.aborted) return;
+      await rt.runtime().ensureHomePatternRunning({ existingOnly: true });
+    } catch (error) {
+      if (!rt.signal.aborted) {
+        console.error("[AppView] Failed to bring up Home:", error);
+      }
+    }
+  }
+
+  /**
+   * Helper for `updated()`, which asks `rt`'s worker to have the user join the
+   * room in `space`, a piece of which is on screen, once Home's bring-up has
+   * answered and the view has settled. The worker joins the user only to a
+   * FabriChat room they can write to, and does nothing for a user with no
+   * Home, so every space shown is asked about. Joining a room makes it one of
+   * the user's chats, and lists a forgotten one again: in this shell, visiting
+   * a room is joining it.
+   *
+   * A request the worker answers is done, whatever it decided, a refusal
+   * included. One that fails is forgotten, so that the next update showing
+   * the space asks again.
+   */
+  async #joinVisitedRoom(rt: RuntimeInternals, space: DID): Promise<void> {
+    try {
+      await this.#homeBringUp?.done;
+      await createViewSettled(() => rt.runtime())();
+      if (rt.signal.aborted) return;
+      await rt.runtime().joinVisitedRoom(space);
+    } catch (error) {
+      if (rt.signal.aborted) return;
+      console.error("[AppView] Failed to join the visited room:", error);
+      const join = this.#visitJoin;
+      if (join?.rt === rt && join.space === space) this.#visitJoin = undefined;
     }
   }
 
@@ -1151,6 +1337,13 @@ export class XAppView extends BaseView {
       ? { kind: "piece", error: this._selectedPattern.error }
       : undefined;
     const loadError = this.spaceLoadError ?? patternLoadError;
+    // The lookup returns no root both for a space that has none and when it
+    // had no runtime or space to ask with, and has no value while it is
+    // pending, so only a lookup completed against both says the space has none.
+    const spaceHasNoRoot = isViewingDefaultPattern &&
+      this.rt !== undefined && this.space !== undefined &&
+      this._spaceRootPattern.status === TaskStatus.COMPLETE &&
+      this._spaceRootPattern.value === undefined;
     const runtimeLoadError = loadError
       ? undefined
       : this.#getRuntimeLoadError();
@@ -1169,6 +1362,7 @@ export class XAppView extends BaseView {
         .spaceName="${"spaceName" in this.app.view
           ? this.app.view.spaceName
           : undefined}"
+        .spaceHasNoRoot="${spaceHasNoRoot}"
         .showShellPieceListView="${config.showShellPieceListView ?? false}"
         .showSidebar="${config.showSidebar ?? false}"
         .embedded="${embedded}"

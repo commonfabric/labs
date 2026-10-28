@@ -39,6 +39,7 @@ import {
   waveSettlementOf,
 } from "../executor/wave.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
+import { type RawBuiltinResult } from "../module.ts";
 import { getCellOrThrow } from "../query-result-proxy.ts";
 import {
   type Runtime,
@@ -55,7 +56,11 @@ import {
   AgentResultSchema,
   AgentRunRecordSchema,
 } from "./agent-schemas.ts";
-import { ownedCell, recordRuntimeOwnedStore } from "./runtime-owned-store.ts";
+import {
+  ownedCell,
+  ownedStoreLinks,
+  recordRuntimeOwnedStore,
+} from "./runtime-owned-store.ts";
 
 /** The sink every agent request is staged under. */
 export const AGENT_SINK = "agent";
@@ -286,11 +291,16 @@ export function agent(
   cause: any,
   parentCell: Cell<any>,
   runtime: Runtime,
-): Action {
+): RawBuiltinResult {
+  // The stores this node keeps, each keyed by its cause alone, so the
+  // action declares them when it is set up.
+  const stores = {
+    result: { agent: { result: cause } },
+  };
   const inputs = inputsCell.asSchema(AgentParamsSchema);
   const state: AgentNodeState = {};
 
-  return (tx: IExtendedStorageTransaction) => {
+  const action: Action = (tx: IExtendedStorageTransaction) => {
     tx.resetNarrowestReadScope();
     const params = inputs.withTx(tx).get() ?? {};
     const { task, resultSchema, maxConfidentiality, tools } = params;
@@ -312,7 +322,7 @@ export function agent(
         runtime,
         tx,
         parentCell,
-        { agent: { result: cause } },
+        stores.result,
         AgentResultSchema,
         outputScope,
       );
@@ -799,5 +809,9 @@ export function agent(
         },
       },
     );
+  };
+  return {
+    action,
+    storeWrites: ownedStoreLinks(runtime, parentCell, Object.values(stores)),
   };
 }

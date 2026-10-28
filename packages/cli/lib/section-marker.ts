@@ -15,7 +15,7 @@
  *
  * The decision, and the alternative of accepting it, are recorded under
  * "Alternatives, and why they are not the design" in
- * [CLI surface shape](../../../docs/plans/cli-surface-shape.md).
+ * [CLI surface shape](../../../docs/history/plans/cli-surface-shape.md).
  */
 
 import { ValidationError } from "@cliffy/command";

@@ -29,7 +29,7 @@ stores each module's text as one, and its records link to them.
 
 ## Last Updated
 
-2026-09-25
+2026-10-12
 
 ## Motivation
 
@@ -97,7 +97,8 @@ A schema document is a `cid:` document whose value is a JSON Schema:
 - **Write**: idempotent blind write (no read-before-write, per the
   `ensureSchemaDocument` precedent — a read-before-write turns concurrent
   installation of the same content into a false conflict), performed in the
-  same transaction as the write that references it.
+  same transaction as the write that references it, or for an event's
+  payload, in the event append's own commit.
 - **Per space**: a schema document must exist in every space that contains a
   reference to it, written there by whichever writer first references it in
   that space. Content addressing makes concurrent installs collide
@@ -238,7 +239,13 @@ keyword, the resource-scope keywords (`$id`, `$anchor`, `$dynamicAnchor`,
 `$recursiveRef`, whose scoping the rewrite cannot preserve), and an
 external
 ref whose document is not at hand — and a writer falls back to carrying
-such a schema inline, as today.
+such a schema inline, as today. A merged envelope never reaches the fallback
+on account of its definition map: the merge returns the document in
+canonical form, with one map at the root holding every definition the
+author named, at most one minted definition per meaning those do not carry,
+and nothing a merge minted that the document does not reach
+(`canonicalizeCfcSchemaDocument` in the runner's `cfc/schema-refs.ts`), so
+the hash an envelope is stamped with is of that form.
 
 An external ref is a `$ref` whose value is a `cid:` URI:
 
@@ -546,6 +553,27 @@ self-contained schema. Path narrowing, target queries, and derived Cell
 handles therefore do not require B to hold A's schema documents. A schema
 declared by a link inside B resolves in B when that next link is followed.
 
+An immutable document (`snapshot:` or portable `data:`) is stored in no
+space, and nothing writes it. A native snapshot retains its frozen value
+and relative-link origin; a portable identifier encodes its value. A link
+inside one keeps its schema in the form the value held it, and resolves
+the schema's `cid:` references through the same gates as a link inside a
+stored document. Where the closure is looked for depends on what minted
+the document:
+
+- A snapshot of a value read out of a stored document — an array element
+  read by value — is addressed in that document's space, and a reference
+  among its links' schemas resolves there: the write-side guarantee below
+  put the closure in that space, with the write that stored the link.
+- A document minted from a value no space has stored
+  (`Runtime.getImmutableCell()`) has no such write behind it, so no space
+  holds the closure a reference among its links' schemas names. The realm
+  registry does, since it minted the reference, and the traversal's loader
+  takes a document the registry holds from the registry for such a
+  document, without reading the space the document is addressed in. A
+  document the registry lacks is read from that space, as for a stored
+  document, and the gates decide the read.
+
 A schema document's value is space-free: content addressing makes the
 bytes identical wherever they are stored, so the realm-wide registry
 shares one verified object across spaces, and using a shared value can
@@ -557,8 +585,20 @@ documents available alongside their declarations:
   with a reference created the obligation, so it discharges it: the
   decomposed closure is written into the space that will hold the
   reference, in the same transaction as the reference itself. A
+  transaction stamps the reference itself on an inline link schema it
+  writes into an ordinary document, which would otherwise store and send
+  the closure in full. Three kinds of inline schema stay as written:
+  a trivial one, one that decomposition refuses, and one that takes no more
+  wire bytes than the reference that would replace it, a bare handle stamp
+  such as `{ asCell: ["stream"] }` among them; an immutable document is never
+  written, and a `cid:` document is not link-scanned. A
   transaction commits against one space's session, so the closure reaches
-  whichever server handles that space by construction. `decomposeSchema`
+  whichever server handles that space by construction. An event append is
+  committed outside any transaction, and carries the closure behind its
+  payload's link schemas in its own commit, less what the stream's space is
+  already known to hold; a payload's link may name a cell in any space, and
+  its schema documents are owed to the space holding the stream, as for any
+  other reference. `decomposeSchema`
   refuses to emit a reference whose closure the writer does not hold,
   and the commit boundary independently enforces the same obligation for
   raw commits that never went through it.

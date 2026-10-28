@@ -1,6 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { join } from "@std/path";
+import { fromFileUrl, join } from "@std/path";
 
 import { DEFAULT_HARNESS_CFC_ENFORCEMENT_MODE } from "../../src/config.ts";
 
@@ -11,16 +11,18 @@ import {
   consoleLaunchReport,
   DEPLOYMENT_PATTERN_INDEX_URL,
   DEPLOYMENT_SKILLS_REGISTRY_URL,
-  launchConsole,
   LAUNCHER_OWNED_VARIABLES,
   launchFailureMessage,
-  prepareConsoleLaunch,
-  readDockerRuntimes,
   readOptionalFile,
   readToolshedStoreDir,
   resolveConsoleLaunchPlan,
   WEAVER_PAIRING_PORT,
 } from "../../console/launch.ts";
+import {
+  launchConsole,
+  NAMES_RUNSC,
+  prepareConsoleLaunch,
+} from "../support/on-linux.ts";
 import type { ConsoleObservedLaunchHealth } from "../../console/health.ts";
 
 const PIECES_JSON = JSON.stringify({
@@ -31,15 +33,18 @@ const PIECES_JSON = JSON.stringify({
   },
 });
 
-const DOCKER_RUNTIMES = {
-  "runsc-cfc": {
-    path: "/host_mnt/store/runsc-cfc/runsc",
-    runtimeArgs: [
-      "--cfc",
-      "--cfc-result-dir=/host_mnt/store/runsc-cfc/sidecars/results",
-      "--cfc-invocation-context-dir=/host_mnt/store/runsc-cfc/sidecars/ctx",
-    ],
+/** A launch's sandbox: `runsc`, named with each of its settings. */
+const SANDBOX: ConsoleLaunchRecords["sandbox"] = {
+  selection: {
+    sandboxRuntimeKind: "runsc",
+    sandboxRootfs: "/store/images/kitchensink",
+    sandboxCfcPolicy: "/store/cfc-policy.json",
+    sandboxRunscBinary: "/store/bin/runsc",
+    sandboxRuntimeChoice: { runtime: "runsc", source: "environment" },
   },
+  binaryNamed: true,
+  rootfsNamed: true,
+  policyNamed: true,
 };
 
 const HANDLES_JSON_PATH = "/loom/instances/loom/sqlite-injection/handles.json";
@@ -53,7 +58,7 @@ const RECORDS: ConsoleLaunchRecords = {
       "file:///loom/instances/loom/toolshed-store/68239506e79d/",
     handlesJsonPath: HANDLES_JSON_PATH,
   },
-  dockerRuntimes: DOCKER_RUNTIMES,
+  sandbox: SANDBOX,
 };
 
 const OWNER = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
@@ -120,7 +125,7 @@ const NAMED_FABRIC = {
   store: "/checkout/packages/toolshed/cache/memory",
 };
 
-const NO_INSTANCE: ConsoleLaunchRecords = { dockerRuntimes: DOCKER_RUNTIMES };
+const NO_INSTANCE: ConsoleLaunchRecords = { sandbox: SANDBOX };
 
 const withPieces = (
   defaults: Record<string, unknown>,
@@ -261,17 +266,6 @@ describe("launch", () => {
       expect(plan.environment.MEMORY_DIR).toBe("/loom/store/memory/");
     });
 
-    it("returns the sidecar directories the registered runtime names, as host paths", () => {
-      const plan = resolveConsoleLaunchPlan(RECORDS, OPTIONS);
-
-      expect(plan.environment.CF_HARNESS_RUNSC_CFC_RESULT_DIR).toBe(
-        "/store/runsc-cfc/sidecars/results",
-      );
-      expect(plan.environment.CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR).toBe(
-        "/store/runsc-cfc/sidecars/ctx",
-      );
-    });
-
     it("returns the Weaver pairing port and a console directory naming it", () => {
       const plan = resolveConsoleLaunchPlan(RECORDS, OPTIONS);
 
@@ -366,14 +360,10 @@ describe("launch", () => {
       const plan = resolveConsoleLaunchPlan(RECORDS, {
         ...OPTIONS,
         consoleDir: "/consoles/branch",
-        cfcResultDir: "/elsewhere/results",
         posture: "none",
       });
 
       expect(plan.environment.CF_HARNESS_CONSOLE_DIR).toBe("/consoles/branch");
-      expect(plan.environment.CF_HARNESS_RUNSC_CFC_RESULT_DIR).toBe(
-        "/elsewhere/results",
-      );
       expect(plan.environment.CF_HARNESS_FABRIC_CFC_POSTURE).toBe("none");
     });
 
@@ -445,80 +435,6 @@ describe("launch", () => {
           instance: { ...RECORDS.instance!, toolshedStoreDir: "" },
         }, OPTIONS)
       ).toThrow("`--store`");
-    });
-
-    it("throws naming `--cfc-result-dir` when no runtime registration names it", () => {
-      const { dockerRuntimes: _omitted, ...withoutDocker } = RECORDS;
-
-      expect(() => resolveConsoleLaunchPlan(withoutDocker, OPTIONS)).toThrow(
-        "`--cfc-result-dir`",
-      );
-    });
-
-    it("throws carrying the reason the runtime table could not be read", () => {
-      const { dockerRuntimes: _omitted, ...withoutDocker } = RECORDS;
-
-      expect(() =>
-        resolveConsoleLaunchPlan({
-          ...withoutDocker,
-          dockerRuntimesUnreadable:
-            "`docker info` exited 1: daemon is not running",
-        }, OPTIONS)
-      ).toThrow("daemon is not running");
-    });
-
-    it("returns the sidecar directories a separate-token registration names", () => {
-      const plan = resolveConsoleLaunchPlan({
-        ...RECORDS,
-        dockerRuntimes: {
-          "runsc-cfc": {
-            runtimeArgs: [
-              "-cfc-result-dir",
-              "/store/results",
-              "--cfc-invocation-context-dir",
-              "/store/ctx",
-            ],
-          },
-        },
-      }, OPTIONS);
-
-      expect(plan.environment.CF_HARNESS_RUNSC_CFC_RESULT_DIR).toBe(
-        "/store/results",
-      );
-      expect(plan.environment.CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR)
-        .toBe("/store/ctx");
-    });
-
-    it("returns the last directory a registration names for a flag twice", () => {
-      const plan = resolveConsoleLaunchPlan({
-        ...RECORDS,
-        dockerRuntimes: {
-          "runsc-cfc": {
-            runtimeArgs: [
-              "--cfc-result-dir=/store/first",
-              "--cfc-invocation-context-dir=/store/ctx",
-              "--cfc-result-dir=/store/last",
-            ],
-          },
-        },
-      }, OPTIONS);
-
-      expect(plan.environment.CF_HARNESS_RUNSC_CFC_RESULT_DIR).toBe(
-        "/store/last",
-      );
-    });
-
-    it("throws naming `--cfc-invocation-context-dir` when the registration omits it", () => {
-      const records: ConsoleLaunchRecords = {
-        ...RECORDS,
-        dockerRuntimes: {
-          "runsc-cfc": { runtimeArgs: ["--cfc-result-dir=/store/results"] },
-        },
-      };
-
-      expect(() => resolveConsoleLaunchPlan(records, OPTIONS)).toThrow(
-        "`--cfc-invocation-context-dir`",
-      );
     });
 
     it("does not run skill scripts unless a launch says so", () => {
@@ -776,13 +692,14 @@ describe("launch", () => {
         .toThrow(/^(?!.*pieces\.json).*$/s);
     });
 
-    it("throws for a space named by DID, which composes no piece URL", () => {
-      expect(() =>
-        resolveConsoleLaunchPlan(NO_INSTANCE, {
-          ...NAMED_FABRIC,
-          space: "did:key:z6Mk",
-        })
-      ).toThrow("rather than a DID");
+    it("returns a plan naming the space DID a caller gives", () => {
+      const space = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+      const plan = resolveConsoleLaunchPlan(NO_INSTANCE, {
+        ...NAMED_FABRIC,
+        space,
+      });
+
+      expect(plan.environment.CF_HARNESS_FABRIC_SPACE).toBe(space);
     });
   });
 
@@ -801,7 +718,6 @@ describe("launch", () => {
       readTextFile: () => Promise.resolve(PIECES_JSON),
       readToolshedStoreDir: () =>
         Promise.resolve("file:///store/68239506e79d/memory/"),
-      readDockerRuntimes: () => Promise.resolve({ runtimes: DOCKER_RUNTIMES }),
       ...overrides,
     });
 
@@ -879,19 +795,6 @@ describe("launch", () => {
       ).rejects.toThrow("loom instance `ghost` has no");
     });
 
-    it("carries the reason `docker info` could not be read into the error", async () => {
-      await expect(
-        prepareConsoleLaunch(
-          NAMED_ARGS,
-          {},
-          io({
-            readDockerRuntimes: () =>
-              Promise.resolve({ unreadable: "daemon is not running" }),
-          }),
-        ),
-      ).rejects.toThrow("daemon is not running");
-    });
-
     /** The selection Loom hands a console on the native runtime. */
     const RUNSC_ENV = {
       CF_HARNESS_SANDBOX_RUNTIME: "runsc",
@@ -900,20 +803,13 @@ describe("launch", () => {
       CF_HARNESS_RUNSC_CFC_POLICY: "/store/policy.json",
     };
 
-    it("reads no Docker runtime table for a console on the runsc runtime", async () => {
-      let reads = 0;
+    it("prints the runsc settings the environment named, and exports no sidecar directory", async () => {
       const { plan } = await prepareConsoleLaunch(
         NAMED_ARGS,
         RUNSC_ENV,
-        io({
-          readDockerRuntimes: () => {
-            reads += 1;
-            return Promise.resolve({ unreadable: "Docker is not running" });
-          },
-        }),
+        io(),
       );
 
-      expect(reads).toBe(0);
       expect(Object.keys(plan.environment)).not.toContain(
         "CF_HARNESS_RUNSC_CFC_RESULT_DIR",
       );
@@ -1007,28 +903,8 @@ describe("launch", () => {
       }
     });
 
-    it("reads the Docker runtime table for a console the environment puts on Docker", async () => {
-      let reads = 0;
-      const { plan } = await prepareConsoleLaunch(
-        NAMED_ARGS,
-        { CF_HARNESS_SANDBOX_RUNTIME: "docker" },
-        io({
-          readDockerRuntimes: () => {
-            reads += 1;
-            return Promise.resolve({ runtimes: DOCKER_RUNTIMES });
-          },
-        }),
-      );
-
-      expect(reads).toBe(1);
-      expect(plan.environment.CF_HARNESS_RUNSC_CFC_RESULT_DIR).toBe(
-        "/store/runsc-cfc/sidecars/results",
-      );
-      expect(plan.resolved.map(({ name }) => name)).not.toContain("sandbox");
-    });
-
     for (const flag of ["--cfc-result-dir", "--cfc-invocation-context-dir"]) {
-      it(`throws naming \`${flag}\`, a sidecar flag a console on the runsc runtime has no use for`, async () => {
+      it(`throws naming \`${flag}\`, a flag the launcher does not take`, async () => {
         await expect(
           prepareConsoleLaunch(
             [...NAMED_ARGS, flag, "/elsewhere/sidecar"],
@@ -1062,11 +938,9 @@ describe("launch", () => {
               [...NAMED_ARGS, ...spelling],
               {},
               io({
-                readDockerRuntimes: () => {
+                readTextFile: () => {
                   reads += 1;
-                  return Promise.resolve({
-                    unreadable: "Docker is not running",
-                  });
+                  return Promise.resolve(undefined);
                 },
               }),
             ),
@@ -1104,7 +978,7 @@ describe("launch", () => {
           { CF_HARNESS_SANDBOX_RUNTIME: "podman" },
           io(),
         ),
-      ).rejects.toThrow("sandbox runtime must be one of docker, runsc");
+      ).rejects.toThrow("sandbox runtime must be runsc");
     });
 
     it("ranks an instance's record above what the shell exported", async () => {
@@ -1223,10 +1097,6 @@ describe("launch", () => {
           "https://index.example",
           "--skills-registry-url",
           "https://skills.example",
-          "--cfc-result-dir",
-          "/r",
-          "--cfc-invocation-context-dir",
-          "/c",
           "--fabric-cfc-posture",
           "none",
           "--fabric-cfc-flow-labels",
@@ -1245,9 +1115,6 @@ describe("launch", () => {
       expect(plan.environment.CF_HARNESS_SKILLS_REGISTRY_URL).toBe(
         "https://skills.example",
       );
-      expect(plan.environment.CF_HARNESS_RUNSC_CFC_RESULT_DIR).toBe("/r");
-      expect(plan.environment.CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR)
-        .toBe("/c");
       expect(plan.environment.CF_HARNESS_FABRIC_CFC_POSTURE).toBe("none");
       expect(plan.environment.CF_HARNESS_FABRIC_CFC_FLOW_LABELS).toBe(
         "observe",
@@ -1313,10 +1180,6 @@ describe("launch", () => {
           reads += 1;
           return Promise.resolve(PIECES_JSON);
         },
-        readDockerRuntimes: () => {
-          reads += 1;
-          return Promise.resolve({ runtimes: DOCKER_RUNTIMES });
-        },
       });
 
       await expect(
@@ -1338,10 +1201,6 @@ describe("launch", () => {
         readTextFile: () => {
           reads += 1;
           return Promise.resolve(PIECES_JSON);
-        },
-        readDockerRuntimes: () => {
-          reads += 1;
-          return Promise.resolve({ runtimes: DOCKER_RUNTIMES });
         },
       });
 
@@ -1404,9 +1263,8 @@ describe("launch", () => {
     });
 
     it("reads the machine itself when no readings are handed in", async () => {
-      // The default wiring: `docker info` is asked for real, and the launch
-      // still fails at the first value nothing supplies, whether or not this
-      // machine has Docker.
+      // The default wiring: the launch still fails at the first value nothing
+      // supplies.
 
       await expect(prepareConsoleLaunch([], {})).rejects.toThrow(
         "`--fabric-identity`",
@@ -1530,60 +1388,11 @@ describe("launch", () => {
     });
   });
 
-  describe("readDockerRuntimes()", () => {
-    it("returns the runtime table the command printed", async () => {
-      const bin = await fakeBinary(
-        `printf '${JSON.stringify(DOCKER_RUNTIMES)}'`,
-      );
-      try {
-        const read = await readDockerRuntimes(bin);
-
-        expect(read.runtimes).toEqual(DOCKER_RUNTIMES);
-        expect(read.unreadable).toBeUndefined();
-      } finally {
-        await Deno.remove(bin);
-      }
-    });
-
-    it("returns the exit status and stderr when the command fails", async () => {
-      const bin = await fakeBinary("echo 'daemon not running' >&2; exit 1");
-      try {
-        const read = await readDockerRuntimes(bin);
-
-        expect(read.runtimes).toBeUndefined();
-        expect(read.unreadable).toContain("exited 1");
-        expect(read.unreadable).toContain("daemon not running");
-      } finally {
-        await Deno.remove(bin);
-      }
-    });
-
-    it("returns a reason when the table does not parse", async () => {
-      const bin = await fakeBinary("printf 'not json'");
-      try {
-        const read = await readDockerRuntimes(bin);
-
-        expect(read.runtimes).toBeUndefined();
-        expect(read.unreadable).toContain("does not parse");
-      } finally {
-        await Deno.remove(bin);
-      }
-    });
-
-    it("returns a reason when the command cannot be run at all", async () => {
-      const read = await readDockerRuntimes("/nonexistent/docker");
-
-      expect(read.runtimes).toBeUndefined();
-      expect(read.unreadable).toContain("could not be run");
-    });
-  });
-
   describe("launchConsole()", () => {
     const io: ConsoleLaunchIo = {
       readTextFile: () => Promise.resolve(PIECES_JSON),
       readToolshedStoreDir: () =>
         Promise.resolve("file:///store/68239506e79d/memory/"),
-      readDockerRuntimes: () => Promise.resolve({ runtimes: DOCKER_RUNTIMES }),
     };
     const ARGS = [
       "--fabric-identity",
@@ -1639,10 +1448,6 @@ describe("launch", () => {
             readToolshedStoreDir: () => {
               reads += 1;
               return Promise.resolve("file:///store/68239506e79d/memory/");
-            },
-            readDockerRuntimes: () => {
-              reads += 1;
-              return Promise.resolve({ runtimes: DOCKER_RUNTIMES });
             },
           },
         );
@@ -1790,8 +1595,9 @@ describe("launch", () => {
       // what an operator who forgot one sees.
       const launcher = new URL("../../console/launch.ts", import.meta.url);
       const run = await new Deno.Command(Deno.execPath(), {
-        args: ["run", "-A", launcher.pathname],
+        args: ["run", "-A", fromFileUrl(launcher)],
         env: {
+          ...NAMES_RUNSC,
           CF_IDENTITY: "",
           CF_SPACE: "",
           CF_HARNESS_FABRIC_IDENTITY: "",

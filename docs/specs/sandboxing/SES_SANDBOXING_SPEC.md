@@ -2591,7 +2591,7 @@ await runner.start(resultCell);
 | Prototype pollution | SES-frozen intrinsics plus explicit freezing of forwarded host constructor/prototype pairs before installation |
 | Host authority through runtime cells | Cells keep their runtime and transaction private, are frozen, and are recognized by a private brand ([§5.3.3](#533-runtime-cells)) |
 | Closure-based data leakage | No surviving mutable module bindings; direct-function-only top-level forms plus function hardening |
-| State leakage via modules | Verified immutable top-level bindings, hardened shared runtime-module exports, write-once module exports, and dynamic imports rejected in v1 |
+| State leakage via modules | Verified immutable top-level bindings, hardened shared runtime-module exports, write-once module exports sealed when the module body returns, and dynamic imports rejected in v1 |
 | Resource exhaustion | Future: Add CPU/memory limits (not in this spec) |
 | Ambient network/time/random authority at module load | Narrow Compartment globals: no `fetch` or adjacent web request globals, no `Temporal`, `secureRandom`, or `randomUUID` |
 

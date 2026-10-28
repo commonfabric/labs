@@ -12,7 +12,9 @@
  * `styleObjectToCssString` is pinned across the cases where a plausible
  * implementation quietly does the wrong thing: a unitless property, a zero, a
  * vendor prefix, a custom property (which keeps its case and takes no unit),
- * and a `null` or `undefined` value, which drops rather than rendering.
+ * a `null` or `undefined` value, which drops rather than rendering, and the
+ * order of the declarations, which follows the keys and not the order the
+ * object lists them in.
  */
 
 import { describe, it } from "@std/testing/bdd";
@@ -60,7 +62,7 @@ describe("render-utils", () => {
 
     it("adds px to numeric values", () => {
       expect(styleObjectToCssString({ width: 100, marginTop: 10 })).toBe(
-        "width: 100px; margin-top: 10px",
+        "margin-top: 10px; width: 100px",
       );
     });
 
@@ -74,8 +76,8 @@ describe("render-utils", () => {
           flexGrow: 2,
         }),
       ).toBe(
-        "opacity: 0.5; z-index: 10; font-weight: 700; line-height: 1.5; " +
-          "flex-grow: 2",
+        "flex-grow: 2; font-weight: 700; line-height: 1.5; opacity: 0.5; " +
+          "z-index: 10",
       );
     });
 
@@ -93,8 +95,8 @@ describe("render-utils", () => {
           mozAppearance: "none",
         }),
       ).toBe(
-        "-webkit-transform: rotate(45deg); -webkit-box-shadow: 0 0 5px black; " +
-          "-moz-appearance: none",
+        "-webkit-transform: rotate(45deg); -moz-appearance: none; " +
+          "-webkit-box-shadow: 0 0 5px black",
       );
     });
 
@@ -116,7 +118,7 @@ describe("render-utils", () => {
           "--spacing": 16,
           "--Custom-Prop": "value",
         }),
-      ).toBe("--myColor: blue; --spacing: 16; --Custom-Prop: value");
+      ).toBe("--Custom-Prop: value; --myColor: blue; --spacing: 16");
     });
 
     it("passes complex values through unchanged", () => {
@@ -128,13 +130,44 @@ describe("render-utils", () => {
         }),
       ).toBe(
         "background: linear-gradient(to right, red, blue); " +
-          "transform: translateX(10px) rotate(45deg); " +
-          "grid-template-columns: repeat(3, 1fr)",
+          "grid-template-columns: repeat(3, 1fr); " +
+          "transform: translateX(10px) rotate(45deg)",
       );
     });
 
     it("produces the empty string for an empty object", () => {
       expect(styleObjectToCssString({})).toBe("");
+    });
+
+    it("returns the declarations in the UTF-8 order of their keys", () => {
+      expect(
+        styleObjectToCssString({
+          display: "none",
+          gap: "0.25rem",
+          alignItems: "center",
+        }),
+      ).toBe("align-items: center; display: none; gap: 0.25rem");
+    });
+
+    it("returns the same string for the same declarations inserted in another order", () => {
+      // A style object a runtime wrote holds its keys in the order the
+      // pattern's literal lists them, and the same object loaded from the
+      // store holds them in UTF-8 order. Both are one value.
+
+      const written = {
+        display: "none",
+        borderTop: "1px solid gray",
+        paddingTop: "0.75rem",
+      };
+      const loaded = {
+        borderTop: "1px solid gray",
+        display: "none",
+        paddingTop: "0.75rem",
+      };
+
+      expect(styleObjectToCssString(written)).toBe(
+        styleObjectToCssString(loaded),
+      );
     });
   });
 });

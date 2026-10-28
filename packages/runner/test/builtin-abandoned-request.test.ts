@@ -515,13 +515,10 @@ describe("a builtin whose staged request is abandoned", () => {
     // (`sink-inventory.ts`; `max-enforcement-posture.test.ts` pins the same
     // verdict for a hand-staged request).
     //
-    // Until the §8.12.5 route-2 widening one path was gated anyway, by
-    // accident: the transaction staging the request also wrote the builtin's
-    // own result store, that store declared nothing, and the writer-fit misfit
-    // refused the commit — on every such call, so an llm call over caveated
-    // content did not work at all under this posture. The store declares what
-    // flows into it now, so the request goes. This case is where that shows,
-    // and it flips to asserting the refusal when the boundary-scoped admission
+    // The transaction staging the request also writes the builtin's enrolled
+    // result store. Runtime ownership admits that write with its flow label
+    // in the derived component, so writer-fit supplies no sink gate. This
+    // case flips to asserting refusal when the boundary-scoped admission
     // mechanism `MAX_ENFORCEMENT_SINK_CEILINGS` describes lands.
 
     let bundleStorage: ReturnType<typeof StorageManager.emulate>;

@@ -1011,7 +1011,7 @@ export default pattern((state) => {
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
-            "enum": ["Yes", "No"]
+            "enum": ["No", "Yes"]
         } as const satisfies __cfHelpers.JSONSchema, __cfLift_20({ state: {
                 users: state.key("users"),
                 minAge: state.key("minAge")
@@ -1024,7 +1024,7 @@ export default pattern((state) => {
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
-            "enum": ["Yes", "No"]
+            "enum": ["No", "Yes"]
         } as const satisfies __cfHelpers.JSONSchema, __cfLift_21({ state: {
                 users: state.key("users")
             } }), "Yes", "No")}</p>
@@ -1047,7 +1047,7 @@ export default pattern((state) => {
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
-            "enum": ["Yes", "No"]
+            "enum": ["No", "Yes"]
         } as const satisfies __cfHelpers.JSONSchema, __cfLift_23({ state: {
                 text: state.key("text"),
                 threshold: state.key("threshold")

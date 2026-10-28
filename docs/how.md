@@ -335,7 +335,8 @@ gate above protects. Two switches govern this, and both are built:
 commit and sink gates, is pinned to `enforce` in the core preset, so the
 rule above is consulted there; the render ceiling, which mints that
 membership fact (`packages/runner/src/cfc/render-ceiling.ts`), is
-complete and ships as a browser toggle. The display boundary follows
+on by default in the browser shell, with a per-profile opt-out
+(`packages/shell/src/lib/render-ceiling.ts`). The display boundary follows
 the render ceiling rather than the dial: it consults the rule wherever
 the ceiling is on, reading the manifest the label pins from the space
 the label is stored in, so the owner and each verified reader of the
@@ -355,9 +356,12 @@ expect(message).toContain("at /out");
 
 The one seam that can widen a stored label requires a builtin identity;
 the same file shows pattern and handler code failing closed against it,
-with or without a verified identity of its own. That dial is off in the
-core preset and pinned to `enforce` in the `MAX_ENFORCEMENT_CFC_OPTIONS`
-bundle (`packages/runner/src/runtime-presets.ts`).
+with or without a verified identity of its own. `cfcDeclaredMonotonicity`
+defaults to `observe`, which reports a dropped clause without refusing
+it, because a per-principal `addIntegrity` mint names whichever principal
+is acting and so cannot be monotone yet; it is pinned to `enforce` in the
+`MAX_ENFORCEMENT_CFC_OPTIONS` bundle
+(`packages/runner/src/runtime-presets.ts`).
 
 A durable release — this value, to that person, until revoked — is a
 grant: a content-addressed record at a reserved address, written only
@@ -479,31 +483,32 @@ the transaction-level default, not this one.
 
 The flow-control layer is `packages/runner/src/cfc/`: about 50 modules
 and 26,000 lines, with about 150 test files beside them in
-`packages/runner/test`. Every dial it exposes is implemented; what
-differs between hosts is which are switched on. The browser shell — the
-product surface — runs label propagation at `persist`, so a value
-derived from labeled data is written with its derived label rather than
-laundering it away (`packages/lib-shell/src/runtime.ts`). Access control
-on spaces defaults to `enforce` on the production server
-(`packages/toolshed/env.ts`). The harness that dogfoods the runtime
-turns the whole `MAX_ENFORCEMENT_CFC_OPTIONS` bundle on by default
-(`packages/cf-harness/console/server.ts`), and its committed run ledgers
-record real refusals. A property suite runs on every pull request with
-labels persisted, because at the default rung "the properties below
-would pass by finding nothing"
-(`packages/cf-harness/test/cfc-properties/support/episode.ts`).
+`packages/runner/test`. Every dial it exposes is implemented, and every
+enforcement dial defaults to its strictest sound rung, in the one table the runtime
+resolves its dials through (`RUNTIME_CFC_DIAL_DEFAULTS` in
+`packages/runner/src/cfc/posture-report.ts`). Label propagation runs at
+`persist`, so a value derived from labeled data is written with its
+derived label rather than laundering it away; the write floor, trigger
+read gating, policy evaluation and label-metadata protection all
+enforce. A host can still dial an environment back by naming a lower
+rung. Access control on spaces defaults to `enforce` on the production
+server (`packages/toolshed/env.ts`). The harness that dogfoods the
+runtime turns the whole `MAX_ENFORCEMENT_CFC_OPTIONS` bundle on by
+default (`packages/cf-harness/console/server.ts`), adding the standard
+prompt-caveat policy, sink ceilings and an enforcing monotonicity gate,
+and its committed run ledgers record real refusals.
 
 ## What is not here yet
 
-The remaining work is mostly wiring: deciding which host turns which
-dial on, and turning it on without wedging the patterns already running.
-In the core preset, label propagation, policy evaluation, the write
-floor and the monotonicity gate are off, and the default sink ceiling is
-empty; the shell and the harness are ahead of it, as above. The render
-ceiling is a toggle rather than a default, and that boundary is held by
-the label and contract layer rather than by DOM sanitization, which has
-an open gap. `docs/development/EXPERIMENTAL_OPTIONS.md` carries every
-dial, its status, and where it is headed.
+The defaults are strict; what remains is the last rungs. The
+monotonicity gate observes rather than enforces until per-principal
+mints move to a derived component, and the default sink ceiling is
+empty, so the harness is ahead of the core here. The render ceiling is
+on by default but a browser profile can opt out of it, and that boundary
+is held by the label and contract layer rather than by DOM
+sanitization, which has an open gap.
+`docs/development/EXPERIMENTAL_OPTIONS.md` carries every dial, its
+status, and where it is headed.
 
 Attestation — what would let a machine prove which runtime it is running
 before your data arrives — is specified rather than built.

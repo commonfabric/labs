@@ -260,6 +260,14 @@ Deliberate extensions beyond the 2020-12 vocabulary:
   gets it.
 - `{ "type": "undefined" }` — preserved as an explicit union member (e.g.
   `string | undefined`) so optionality survives schema round-trips.
+- `{ "type": "integer" }` accepts a `bigint` as well as a whole `number`: a
+  `bigint` is an integer, and `"integer"` is a subtype of `"number"`, so a
+  `number` schema accepts one too. The schema generator types a TypeScript
+  `bigint` as `integer`, and a bigint literal type as the number of its
+  value, so a whole-number `enum` or `const` member matches the bigint of
+  that value; no other member matches across the two types. A
+  `FabricPrimitive` wrapping one, such as a `FabricEpochNsec`, is its own type
+  below, not an integer.
 - `FabricPrimitive` types — `"FabricBytes"`, `"FabricDurationDay"`,
   `"FabricDurationNsec"`, `"FabricEpochDay"`, `"FabricEpochNsec"`,
   `"FabricHash"`, `"FabricKeyPair"`, `"FabricRegExp"`, `"FabricUnavailable"` —
@@ -543,4 +551,13 @@ what the cursor declares about its type decides how:
 - An `allOf` is not read a child out of: a conjunction beside no `type`
   narrows to `false`. Traversal evaluates a conjunction whole, merging the
   keywords beside it into each part, which is where a property only a part
-  declares is reached.
+  declares is reached. A conjunction beside a declared `type` narrows through
+  the keywords beside it alone, and its parts are not consulted: under
+  `{ "type": "object", "properties": { "y": … }, "allOf": [{ "type": "object", "properties": { "x": { "type": "string" } } }] }`,
+  `x` narrows to `true`, where a read of the parent, which evaluates the part,
+  does not return an `x` holding a number. Both are limits of narrowing rather
+  than answers about the conjunction, and a caller meets each as the answer it
+  looks like: `Cell.key()` under the first carries `false` and selects a
+  property the parent reads, and under the second carries the wildcard and
+  reads a property the parent does not
+  ([The read entry](link-schema-precedence.md#the-read-entry)).

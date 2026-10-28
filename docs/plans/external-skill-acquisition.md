@@ -81,7 +81,7 @@ Stage 1 registers this metadata-only tool on the configured parent surface, as
 CT-2106 requires; a run with no public skill registry does not offer it.
 
 **Reuses.** `PatternIndexClient`'s shape for a typed client over a remote
-index (`packages/cf-harness/src/pattern-index/client.ts`); `HarnessFetch` from
+index (`packages/pattern-index/src/client.ts`); `HarnessFetch` from
 `contracts/http-fetch.ts` so the egress is substitutable and testable;
 `searchPatternsToolDescriptor`'s descriptor shape and its `effectClass:
 "read"`; the `SEARCH_PATTERNS_MAX_RESULTS` convention of capping hits and

@@ -180,6 +180,33 @@ describe("resolveSchema", () => {
       expect(narrowed.ifc).toEqual({ integrity: ["string-branch"] });
     });
 
+    it("selects a whole-number `const` branch for the `bigint` of that value", () => {
+      // The schema generator writes a bigint literal type as a number
+      // member, so a union over bigint literals is told apart by number
+      // members, and a stored bigint selects the member of its value.
+      const schema: JSONSchema = {
+        anyOf: [
+          { type: "integer", const: 1, ifc: { integrity: ["one"] } },
+          { type: "integer", const: 2, ifc: { integrity: ["two"] } },
+        ],
+      };
+
+      const narrowed = expectNontrivial(resolveSchemaForValue(schema, 2n));
+      expect(narrowed.ifc).toEqual({ integrity: ["two"] });
+    });
+
+    it("selects the `enum` branch holding the `bigint`'s value", () => {
+      const schema: JSONSchema = {
+        anyOf: [
+          { type: "integer", enum: [1, 2], ifc: { integrity: ["low"] } },
+          { type: "integer", enum: [3, 4], ifc: { integrity: ["high"] } },
+        ],
+      };
+
+      const narrowed = expectNontrivial(resolveSchemaForValue(schema, 2n));
+      expect(narrowed.ifc).toEqual({ integrity: ["low"] });
+    });
+
     it("narrows tuple (prefixItems) branches by slot values", () => {
       // CT-1895: a prefixItems-only branch matched ANY array (the matcher
       // fell through to true), so the wrong union branch could be selected

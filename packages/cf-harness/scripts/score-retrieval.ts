@@ -19,11 +19,12 @@
  * time someone publishes.
  */
 
-import { Identity } from "@commonfabric/identity";
+import { fromFileUrl } from "@std/path";
 import {
   PatternIndexClient,
   type PatternIndexListedPattern,
-} from "../src/pattern-index/client.ts";
+} from "@commonfabric/pattern-index/client";
+import { Identity } from "@commonfabric/identity";
 import {
   contentWords,
   descriptionOverlap,
@@ -157,7 +158,9 @@ export const main = async (
   const setPath = flag(
     args,
     "queries",
-    new URL("./pattern-index-retrieval-queries.json", import.meta.url).pathname,
+    fromFileUrl(
+      new URL("./pattern-index-retrieval-queries.json", import.meta.url),
+    ),
   );
   const outPath = flag(args, "out", "");
   const minHitAt5Text = flag(args, "min-hit-at-5", "0");

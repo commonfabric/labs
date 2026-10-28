@@ -31,10 +31,10 @@ cd packages/runner && deno run --allow-read --allow-write test/traverse-replay/r
 ```
 
 The recorder logs every `SchemaObjectTraverser.traverse()` call (address,
-selector, link, `traverseCells`, shared context/memo identity) and snapshots
-each doc read during traversal into the corpus. `CF_TRAVERSE_CAPTURE_MAX` caps
-recorded invocations (default 20k). Edit `meta` in the fixture JSON to give it a
-name/description before gzipping.
+selector, link, `traverseCells`, `inlineArrayItemsInPlace` when set, shared
+context/memo identity) and snapshots each doc read during traversal into the
+corpus. `CF_TRAVERSE_CAPTURE_MAX` caps recorded invocations (default 20k). Edit
+`meta` in the fixture JSON to give it a name/description before gzipping.
 
 Fidelity caveats (fine for benchmarking/regression): docs are captured
 first-wins, so mid-run writes replay with the earliest value; client invocations

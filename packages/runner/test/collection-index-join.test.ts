@@ -267,12 +267,18 @@ describe("collection-index-join", () => {
     >(result.getAsNormalizedFullLink());
     cleanup.defer(restored.key("joined").sink(() => {}));
     expect(await second.start(restored)).toBe(true);
+    // A resumed index holds its members' setup until their documents confirm,
+    // which `idle()` does not await; wait for storage, then drain the scheduler.
+    await second.idle();
+    await storages[1].synced();
     await second.idle();
     expect(restored.key("joined").get().map((row) => row.right?.title))
       .toEqual(["Right A", undefined]);
     const edit = second.edit();
     restored.withTx(edit).key("right").set([{ key: "B", title: "Right B" }]);
     expect((await edit.commit().settled).error).toBeUndefined();
+    await second.idle();
+    await storages[1].synced();
     await second.idle();
     expect(
       restored.key("joined").get().map((row) => ({

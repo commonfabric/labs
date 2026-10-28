@@ -12,9 +12,10 @@
 import { html, LitElement, nothing, type TemplateResult } from "lit";
 import {
   cancelTurn,
+  type ConsoleChatEventEnvelope,
   type ConsoleFlow,
-  type ConsoleRunSummary,
-  type HarnessChatEventEnvelope,
+  type ConsoleListedRun,
+  type ConsoleRunSource,
   listRuns,
   readRunFlow,
   startTask,
@@ -23,21 +24,26 @@ import { consolePath, pageMount } from "./mount.ts";
 import "./index-view.ts";
 import "./flow-view.ts";
 import "./run-view.ts";
+import type { ConsoleTurnResultPiece } from "../turn-result.ts";
 
 /** Which surface the shell is showing: the runs, or the pattern index. */
 type View = "console" | "index";
 
-/** The address a run named, raised above the timeline once it exists. */
-interface Piece {
-  slug?: string;
-  url: string;
-}
-
 /** A run and the `delegate_task` children it started. */
 interface RunNode {
-  run: ConsoleRunSummary;
+  run: ConsoleListedRun;
   children: RunNode[];
 }
+
+/**
+ * What a run row says about where a run came from, for a run this console did
+ * not make. The console's own runs carry no label: they are the ordinary case.
+ */
+const SOURCE_LABELS: Readonly<Record<ConsoleRunSource, string | undefined>> = {
+  console: undefined,
+  ask: "/ask",
+  agent: "agent()",
+};
 
 /**
  * The run list as a tree. A subagent run names its parent, so a child sits
@@ -45,7 +51,7 @@ interface RunNode {
  * where it would read as work someone asked for directly.
  */
 export const runTree = (
-  runs: readonly ConsoleRunSummary[],
+  runs: readonly ConsoleListedRun[],
 ): readonly RunNode[] => {
   const nodes = new Map<string, RunNode>(
     runs.map((run) => [run.runId, { run, children: [] }]),
@@ -70,6 +76,25 @@ export const runTree = (
   return roots;
 };
 
+/**
+ * The piece the page raises once a turn completes: the last one the turn
+ * named, or, when it named none, the one already shown.
+ */
+export const consolePieceAfterTurn = (
+  pieces: readonly ConsoleTurnResultPiece[],
+  shown: ConsoleTurnResultPiece | undefined,
+): ConsoleTurnResultPiece | undefined => pieces.at(-1) ?? shown;
+
+/** Selects a new console parent run to open while a turn is executing. */
+export const freshConsoleRun = (
+  runs: readonly ConsoleListedRun[],
+  beforeTurn: ReadonlySet<string>,
+): ConsoleListedRun | undefined =>
+  runs.find((run) =>
+    run.source === "console" && run.parentRunId === undefined &&
+    !beforeTurn.has(run.runId)
+  );
+
 export class ConsoleApp extends LitElement {
   static override properties = {
     sessionId: { attribute: false },
@@ -91,7 +116,7 @@ export class ConsoleApp extends LitElement {
   declare view: View;
   declare sessionId: string | undefined;
   declare turnId: string | undefined;
-  declare runs: readonly ConsoleRunSummary[];
+  declare runs: readonly ConsoleListedRun[];
   declare openRunId: string | undefined;
 
   /** The open run's conversation map, which the third column draws. */
@@ -116,7 +141,8 @@ export class ConsoleApp extends LitElement {
   /** The last thing the live stream reported, shown while a turn runs. */
   declare activity: string | undefined;
 
-  declare piece: Piece | undefined;
+  /** The last piece a turn named, raised above the timeline. */
+  declare piece: ConsoleTurnResultPiece | undefined;
   declare error: string | undefined;
 
   /** The last sequence rendered; every reconnect resumes from it. */
@@ -233,10 +259,9 @@ export class ConsoleApp extends LitElement {
   async #refresh(): Promise<void> {
     await this.#loadRuns();
     if (this.openRunId === undefined) {
-      // The turn's own run is whichever appeared after it started.
-      const fresh = this.runs.find((run) =>
-        run.parentRunId === undefined && !this.#runIdsBeforeTurn.has(run.runId)
-      );
+      // The turn's own run is whichever of this console's appeared after it
+      // started; an `/ask` or `agent()` run can appear in the meantime too.
+      const fresh = freshConsoleRun(this.runs, this.#runIdsBeforeTurn);
       if (fresh !== undefined) {
         this.openRunId = fresh.runId;
       }
@@ -269,7 +294,7 @@ export class ConsoleApp extends LitElement {
     });
   }
 
-  #onEvent(envelope: HarnessChatEventEnvelope): void {
+  #onEvent(envelope: ConsoleChatEventEnvelope): void {
     this.#lastSequence = envelope.sequence;
     const event = envelope.event;
     switch (event.kind) {
@@ -286,14 +311,10 @@ export class ConsoleApp extends LitElement {
         break;
       case "tool_completed":
         this.activity = `${event.tool.toolId} ${event.status}`;
-        if (
-          event.tool.toolId === "assign_slug" && event.status === "completed"
-        ) {
-          this.#showPiece(event.resultSummary);
-        }
         void this.#refresh();
         break;
       case "turn_completed":
+        this.piece = consolePieceAfterTurn(event.result.pieces, this.piece);
         this.state = "done";
         this.running = false;
         this.activity = undefined;
@@ -322,27 +343,6 @@ export class ConsoleApp extends LitElement {
       default:
         break;
     }
-  }
-
-  /**
-   * `assign_slug` reports the named address it registered. Its result is the
-   * tool message the model read, so the URL is read from there rather than
-   * composed here — a space configured by DID carries no URL at all.
-   */
-  #showPiece(summary: string | undefined): void {
-    let parsed: { url?: unknown; slug?: unknown };
-    try {
-      parsed = JSON.parse(summary ?? "");
-    } catch {
-      return;
-    }
-    if (typeof parsed?.url !== "string") {
-      return;
-    }
-    this.piece = {
-      url: parsed.url,
-      ...(typeof parsed.slug === "string" ? { slug: parsed.slug } : {}),
-    };
   }
 
   async #start(): Promise<void> {
@@ -430,6 +430,7 @@ export class ConsoleApp extends LitElement {
 
   #runRow(node: RunNode, depth: number): TemplateResult {
     const run = node.run;
+    const sourceLabel = SOURCE_LABELS[run.source];
     return html`
       <button
         class="run ${this.openRunId === run.runId ? "open" : ""}"
@@ -439,6 +440,9 @@ export class ConsoleApp extends LitElement {
       >
         <div class="run-title">${run.title ?? run.runId}</div>
         <div class="run-meta">
+          ${sourceLabel === undefined
+            ? nothing
+            : html`<span class="run-source">${sourceLabel}</span> ·`}
           <span
             class=${run.status === "failed"
               ? "bad"
@@ -450,9 +454,9 @@ export class ConsoleApp extends LitElement {
           </span>
           · ${run.toolCallCount}
           ${run.toolCallCount === 1 ? "call" : "calls"}
-          ${run.pieceUrls.length === 0
+          ${run.pieceSlugs.length === 0
             ? nothing
-            : html`· <span class="ok">${run.pieceUrls.length} piece</span>`}
+            : html`· <span class="ok">${run.pieceSlugs.length} piece</span>`}
           · ${new Date(run.updatedAt).toLocaleString()}
         </div>
       </button>
@@ -537,11 +541,7 @@ export class ConsoleApp extends LitElement {
             <a href=${this.piece.url} rel="noopener" target="_blank">
               Open your piece
             </a>
-            <div class="slug">
-              ${this.piece.slug === undefined
-                ? this.piece.url
-                : `${this.piece.slug} — ${this.piece.url}`}
-            </div>
+            <div class="slug">${this.piece.slug} — ${this.piece.url}</div>
           </div>
         `}
 

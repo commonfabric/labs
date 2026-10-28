@@ -1,4 +1,4 @@
-/** The space root's roster links each labeled profile once, and lists it. */
+/** The space root's roster links each profile once, and lists it. */
 import {
   action,
   assert,
@@ -24,22 +24,16 @@ type TestProfile = Confidential<
 export default pattern(() => {
   const subject = DefaultApp();
 
-  // Labeled, as a real profile is: the roster links only a document whose
-  // label the runtime holds.
+  // Labeled, as a real profile is.
   const member = Writable.of<TestProfile>({ name: "Member" });
   const other = Writable.of<TestProfile>({ name: "Other" });
-  const bare = Writable.of({ name: "Bare" });
 
   const join = action(() => subject.addParticipant.send({ profile: member }));
   const joinOther = action(() =>
     subject.addParticipant.send({ profile: other })
   );
-  const addBare = action(() => subject.addParticipant.send({ profile: bare }));
 
   return {
-    // The refused link of the bare document is reported as a CFC policy
-    // warning.
-    allowConsoleWarnings: true,
     [TESTS]: [
       { assertion: assert(() => subject.participants.length === 0) },
 
@@ -63,9 +57,6 @@ export default pattern(() => {
       },
 
       { action: join },
-      { assertion: assert(() => subject.participants.length === 1) },
-
-      { action: addBare },
       { assertion: assert(() => subject.participants.length === 1) },
 
       { action: joinOther },

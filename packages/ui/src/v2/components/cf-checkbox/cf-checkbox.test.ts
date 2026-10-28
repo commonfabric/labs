@@ -70,10 +70,6 @@ describe("CFCheckbox", () => {
     expect(element).toBeInstanceOf(CFCheckbox);
   });
 
-  it("should delegate focus into the shadow root", () => {
-    expect(CFCheckbox.shadowRootOptions.delegatesFocus).toBe(true);
-  });
-
   it("should not set attributes in constructor (custom element spec)", () => {
     // The custom element spec forbids setAttribute during construction.
     // Attributes are set in connectedCallback instead.

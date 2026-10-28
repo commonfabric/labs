@@ -10,6 +10,7 @@ import {
   DocumentPending,
 } from "../src/document-readiness.ts";
 import { Runtime } from "../src/runtime.ts";
+import type { Action } from "../src/scheduler.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 
 const user = await Identity.fromPassphrase("document readiness recovery");
@@ -135,4 +136,83 @@ describe("document-readiness", () => {
       }
     });
   }
+
+  describe("requireSettled()", () => {
+    /**
+     * A readiness object over an action whose re-arms land in `rearms`, and
+     * work that `start` begins at most once, counting its starts.
+     */
+    function settledFixture() {
+      const runtime = new Runtime({
+        apiUrl: new URL("https://example.invalid"),
+        storageManager: EmulatedStorageManager.emulate({ as: user }),
+      });
+      const cancels: (() => void)[] = [];
+      const readiness = createDocumentReadiness(
+        runtime,
+        (cancel) => cancels.push(cancel),
+      );
+      const action = (() => {}) as Action;
+      readiness.onActionRegistered(action);
+      const rearmed = defer<unknown>();
+      runtime.scheduler.invalidateAction = (target, options) => {
+        expect(target).toBe(action);
+        rearmed.resolve(options);
+      };
+      const work = defer<void>();
+      let starts = 0;
+      const start = () => {
+        starts++;
+        return work.promise;
+      };
+      return {
+        readiness,
+        work,
+        start,
+        rearmed: rearmed.promise,
+        starts: () => starts,
+        dispose: async () => {
+          cancels.forEach((cancel) => cancel());
+          await runtime.dispose();
+        },
+      };
+    }
+
+    it("throws `DocumentPending` until the work resolves, re-arms the action, then returns", async () => {
+      const fixture = settledFixture();
+      try {
+        expect(() => fixture.readiness.requireSettled("k", fixture.start))
+          .toThrow(DocumentPending);
+        expect(() => fixture.readiness.requireSettled("k", fixture.start))
+          .toThrow(DocumentPending);
+        expect(fixture.starts()).toBe(1);
+
+        fixture.work.resolve();
+        expect(await fixture.rearmed).toEqual({ retry: true });
+        expect(() => fixture.readiness.requireSettled("k", fixture.start))
+          .not.toThrow();
+        expect(fixture.starts()).toBe(1);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+
+    it("re-arms the action once the work rejects, then throws its reason on every call", async () => {
+      const fixture = settledFixture();
+      try {
+        expect(() => fixture.readiness.requireSettled("k", fixture.start))
+          .toThrow(DocumentPending);
+
+        fixture.work.reject(new Error("the work failed"));
+        expect(await fixture.rearmed).toEqual({ retry: true });
+        expect(() => fixture.readiness.requireSettled("k", fixture.start))
+          .toThrow("the work failed");
+        expect(() => fixture.readiness.requireSettled("k", fixture.start))
+          .toThrow("the work failed");
+        expect(fixture.starts()).toBe(1);
+      } finally {
+        await fixture.dispose();
+      }
+    });
+  });
 });

@@ -29,7 +29,7 @@ The status corrections in this register are bounded to the rows below:
 | OW30 | Stream sibling validation is fixed; the non-Stream counter/container observation remains unresolved. |
 | OW31 residual (vii) | Read-triggered remount is implemented; automatic replay of the entire watch set remains separate. |
 | OW41 | Partial: a demand pass over unchanged demand, with no warm key captured since the last pass, does no per-row work — the memory server keeps each session's share of the demand set and the SpaceServer reconciles only the keys whose rows changed and the newly captured warm keys (serving-loop.md §7, `demandKeysReconciled`). A session whose demand changes is still rebuilt and compared whole, so a pass after a change costs that session's closure; the first pass of a tenure and the pass after one whose reconcile threw partway reconcile every key. |
-| OW55 | Open: serving pattern-source trust, with root creation and wish sidecars among its consumers. |
+| OW55 | Closed: both runtimes' self-addressed requests are sent to `API_INTERNAL_URL` when set, else to `API_URL`, with every URL unchanged; a set origin must receive the server's own token-bearing probe before any runtime exists, or the server does not start. |
 | OW56 finding 2 | Closed: source following has one owner, the opener. ON upload and instantiate run on the serving runtime; source updates, other client creation paths, and compiled-byte trust remain separate OW56 work. |
 | OW58 | Closed: resolved-error notice commits release the drain guard. |
 | OW60 | Open: unresolved flag-ON client echoes are still skipped. |
@@ -3300,6 +3300,33 @@ Delta 2026-08-15 — Phase 6 independent-review fixes (same PR):
   source of contention, but not an unrecovered one-shot loss: deferred
   client starts catch up and dropped serving-instantiation contributions
   retry once under exact lifecycle guards (residual x).**
+- OW35 — the grant-scoped read's two gaps (protocol §2, RULED
+  2026-10-27). (a) REVOCATION of a standing read: the serving manager
+  asks about every actor again on word of the foreign space's
+  access-list change (`noteSpaceAclChanged`), so a revoked actor's
+  standing turns refused as soon as the probe answers and any run that
+  then reads the instance is withdrawn, and admission re-decides at the
+  next watch registration; but a watch the serving session already
+  holds on an admitted instance keeps delivering until the replica next
+  pulls it, a derivation that read the instance before the revocation
+  keeps its output until another input runs it again, and the memory
+  server's push pass re-keys lease-holder deliveries on CURRENT
+  holdership (`#currentLeaseHolderExemption`) and not on the named
+  actor's current grant. Owed: a per-pass grant re-check on keyed foreign instances, or
+  a retraction of them on the access-list commit, with a test that a
+  revoked actor's instance stops arriving at the serving replica
+  without a re-pull. (b) DEMAND: a granted read is a service-session
+  read and registers no identity-bearing demand in the foreign space,
+  so the instance it reads is as that space's own loop last derived it
+  for the actor; a derivation the actor nothing of theirs demands there
+  goes stale. Owed: a cross-space demand rule — a foreign read under a
+  carried actor counts as that actor's demand in the foreign space —
+  which touches the (d′) demand model and the memory server's demand
+  rows, with its own ruling. Trigger for both: the first pattern whose
+  correctness rests on a revocation taking effect without a re-pull, or
+  on a foreign per-actor derivation staying current with no demand of
+  the actor's own in that space; FabriChat's add-member candidates read
+  under the actor's open manager and are exposed to neither today.
 - OW34 — a CFC-serving POLICY item: served handler runs carry NO
   renderer-trusted event mark, so a per-user served handler's write to a
   UI-contract-gated (owner-protected) cell is refused by CFC at prepare
@@ -3696,6 +3723,9 @@ discharge OW28. The flip's changes and validation record follow:
   (`connectors/agents/host`) shares the same
   `experimentalOptionsForDeployedClient` + remoteClient seam and is
   covered at it (no dedicated lane exists for it — recorded).
+  (Note added 2026-10-06: that function is now `settingsForDeployedClient`
+  in `runner/src/deployment-meta.ts`, which reads the memory URL from the
+  same /api/meta request.)
 - The UNIFORM-posture reconciliation the swap needs: 4 runner
   integration files and the runtime-client integration host (worker
   declaration + `onArmStepSkip` guard) resolve env-else-default via
@@ -3763,7 +3793,7 @@ discharge OW28. The flip's changes and validation record follow:
   serverExecution !== true`) on events.md §4/N26's subsumption,
   which subsumes only the EXACTLY-ONCE role — the receipt's
   RESULT-CARRIAGE role (plainResultReceipts, verb contract WS-C/D —
-  `cf call`'s `.result`/`.receipt`) had no replacement sentence and
+  `cf piece call`'s `.result`/`.receipt`) had no replacement sentence and
   no serving-side writer. The ruling resolves the fork to a
   SERVING-SIDE receipt/result write, on the owner's stated model:
   "all handlers write result cells (even if the value is undefined),
@@ -3917,6 +3947,105 @@ created:
   direct and through the real and nested transaction wrappers, with
   authored and serving-runtime controls that still persist, and a pair
   covering the durable-read mark either side of the wait.
+
+Delta 2026-10-15 — a late echo is dropped before its commit is prepared:
+
+- speculation §4 step 2's sentence that a late echo's writes are
+  dropped before the run's commit is prepared ELABORATES the late-echo
+  rule; it adds no rule to §1's map. A run the rule finds jobless
+  writes nowhere, so the CFC boundary pass has nothing to guard, and
+  such a run can have read a space between its ancestor's retired echo
+  and the served write to that space: a profile's `setInbox` run in the
+  cascade of an inbox's creation linked the inbox's alias document,
+  whose metadata lives on the result document it names, and the pass
+  refused the link in the owner's runtime alone.
+- Instrument: `packages/runner/test/extended-storage-transaction.test.ts`
+  ("a seal destination that discards the transaction") — a write the
+  pass refuses, to a reserved CFC grant document, is handed to a
+  destination that discards it without the refusal;
+  `packages/runner/test/speculation-intent-listener.test.ts`
+  ("whether a run is discarded, asked before it seals") — a late
+  grandchild of a terminal intent is discarded, one of an outstanding
+  intent is not, and every speculative run is once the overlay closes.
+  End to end, `packages/patterns/integration/private-inbox-multi-runtime.test.ts`
+  ("replaces the refused inbox on a click on the refusal notice's
+  button …") holds the click-marked replacement to no refusal in the
+  owner's runtime or the serving loop.
+
+Delta 2026-10-27 — the grant-scoped read's resolution (protocol §2's
+grant-scoped read, RULED 2026-10-27; the read twin of §2b's write
+grant):
+
+- The interim that refused every foreign scoped read at both ends is
+  replaced by the grant: a serving runtime's read naming the carried
+  actor's instance in a foreign space is admitted when that space's own
+  access list grants the actor READ, as `Server.foreignReadAuthorityFor`
+  resolves it (the write probe's body, with READ for WRITE), and refused
+  otherwise — unnamed, ungranted, or in a space with no list. The
+  serving manager keeps the verdict per (space, actor), asks about every
+  actor again on `noteSpaceAclChanged` with the last verdict standing
+  meanwhile, and pulls a newly granted actor's refused reads again;
+  admission resolves the same grant for a named root in a space whose
+  lease the requester does not hold. → COVERED,
+  impl-gate, red-first. `memory/test/v2-server-acl.test.ts`
+  ("foreignReadAuthorityFor()": no store, no actor, READ or more in
+  every ACL mode, a missing list); `memory/test/v2-explicit-read.test.ts`
+  (the FP2 case now admits on alice's OWNER entry; a holder naming an
+  ungranted actor's instance, or one in a space with no list, is
+  refused); `runner/test/executor-cross-space.test.ts` ("admits a scoped
+  read naming an actor's own instance the space grants READ …": unnamed
+  refused, the actor's instance unresolved then admitted with one probe
+  per actor, an ungranted actor refused with the list's reason,
+  re-asked and admitted after the list changes, the F3 batch isolation
+  and the home scoped read unchanged; "a serving manager with no read
+  authority probe refuses every foreign scoped read …");
+  `runner/test/scheduler-event-refused-read.test.ts` (the standing and
+  the transaction's identity reach `refusedReadIn`). End to end,
+  `patterns/integration/fabrichat-join.test.ts` ("offers a group to
+  someone its owner adds from the room, through the owner's manager")
+  under the ON arm with web view-scoped replication: the room space's
+  server reads the viewer's per-user candidates in the viewer's home
+  space on the viewer's own grant.
+- The preflight parks on a read whose actor's grant is still being
+  asked for and dispatches once it is answered; a refusal settles the
+  load as an absence, never a failure, so a document only the preflight
+  reaches still does not stop dispatch (events §5) — pinned by the
+  existing "settles a served event whose declared argument reaches a
+  foreign scoped document without a budgeted connection deferral" case.
+  A run that reaches such a document in its body alone runs again once
+  the load settles, and a load that fails fails the event as the
+  preflight's park fails a head, the later same-space arrivals held
+  behind it (`runner/test/scheduler-event-unresolved-read.test.ts`).
+- OW17's owed leg (replica-level per-instance read keying) now has its
+  trigger: a foreign scoped instance producer exists. The exposure is
+  bounded to the admitted instances, each keyed by its `scope_key` on
+  the lease holder's wire (stage A), which is what the collapsed view
+  never saw.
+- OW35 opened: the two gaps this grant leaves, below.
+
+
+- speculation §4 step 2's sentence that the space an entry sealed into
+  is no part of the retirement's scope ELABORATES the step's own rule,
+  "retire overlay entries whose `origin` is `intent(e)`", and the
+  jobless-cascade clarification under it; it adds no rule to §1's map.
+  An entry is filed under the space its run wrote and the mark arrives
+  in the space the intent was fired in, so the two differ whenever a
+  handler sends to a stream in another space, as a sender's offer to a
+  private inbox does. The retirement walks every space's entries, an
+  intent's own echo in another space included, which can therefore go
+  before the served write to that space lands: the descendant's
+  one-wave flicker. The flicker count reads only an echo in the mark's
+  own space, since it compares seqs and a seq orders commits within one
+  space.
+- Instrument: `packages/runner/test/speculation-intent-listener.test.ts`
+  — the cases under "an echo sealed into a space other than its
+  intent's": a cascade child and a grandchild behind a write-less child
+  retire on the ancestor's mark, an intent's own echo retires in every
+  space it sealed into, another intent's cascade stands, and no echo in
+  another space counts as unarrived. End to end,
+  `packages/patterns/integration/private-inbox-multi-runtime.test.ts`
+  ("lets a sender read the offers back and find its own") holds the rows
+  a sender reads to be the documents the inbox's owner reads.
 
 Delta 2026-08-16 — fan-out stage A (OW17 leg 1: the instance-keyed
 serving replica + wire; the client arrival gate):
@@ -7264,17 +7393,36 @@ supply; OW29/OW32/OW34 closed):
     waits for retry readiness, and instantiates the still-current
     pattern once into the next wave. A stop/stopAll/dispose aborts that
     readiness and any named-document pull through the outer registration's
-    cancellation signal; a runtime cycle, pointer change, or newer node
-    group wins through exact guards. Under server execution, an immediate
-    stale-read refusal follows the same catch-up and one-shot reinstantiation
-    path: it is the commit-time form of losing the materialization race, not a
-    terminal graph failure. A second recoverable failure tears the exact
-    registration down rather than spinning. A whole-wave abort or abandon is
-    not retried in place. Non-stale refusals and promise rejections remain
-    terminal in every posture, and client/OFF retains terminal behavior for
-    stale reads: a graph whose setup writes never landed is a zombie unless
-    the serving side's materialization supplies the repair path. A refusal
-    that names only policy manifests is the exception in every posture: the
+    cancellation signal; a runtime cycle, a newer registration, or a newer
+    node group wins through exact guards. A pointer that moved during the
+    wait has a follow in flight, and the retry waits for it to settle
+    first: a retry staged sooner would re-stage a setup repair the start
+    owes over a pointer naming another pattern, which the repair refuses.
+    A follow that runs the incoming pattern wins as a newer node group. One
+    that keeps the running pattern installs no graph for it, so the retry
+    instantiates it. Every way a recovery ends is logged after its
+    `piece-start-commit-recovering`: `piece-start-commit-recovered` when
+    the retry's setup lands, `piece-start-commit-superseded` when something
+    else took the piece over, `piece-start-commit-abandoned`,
+    `piece-start-commit-failed`, or a further
+    `piece-start-commit-recovering` for another round. A recovery still
+    waiting for its catch-up has logged nothing further. A second drop tears
+    the exact registration down rather than spinning. In every posture, an
+    immediate stale read follows the same catch-up and reinstantiation path, whether
+    the server refuses it or the replica's own consistency check does because
+    another writer's change arrived between the read and the commit: it is
+    the commit-time form of losing a race to a concurrent write — under server
+    execution, the serving side's materialization — not a terminal graph
+    failure. The catch-up brings the conflicting documents into the
+    runtime's own replica, which is the view the retry reads. Each write
+    that lands while a retry is in flight costs a round, up to
+    `PIECE_RUN_START_MAX_RETRIES` rounds, a budget the rounds over absent
+    documents below share; once the rounds are spent the start reports the
+    loss and tears the exact registration down rather than spinning. A
+    whole-wave abort or abandon is not retried in place.
+    Non-stale refusals and promise rejections remain terminal in every
+    posture. A refusal that names only policy manifests takes a path of its
+    own in every posture: the
     instantiation installed a manifest another participant installed first,
     and a manifest never changes once present, so a catch-up that loads it
     repairs the commit with no serving side, and a catch-up that cannot load
@@ -7282,7 +7430,29 @@ supply; OW29/OW32/OW34 closed):
     piece's own documents is the stale read it would be without the
     manifest. The start loads the manifests its pattern names before it
     instantiates, so this retry answers only a manifest installed after
-    those loads. Explicit wave
+    those loads. A refusal whose every conflicting read claimed its
+    document absent — a confirmed read at seq 0, the basis a replica
+    records for a document it holds no revision of — takes another path of
+    its own in every posture. The start read documents the store holds
+    that its loads had not brought in, which is a document its pre-sync
+    never named or one it loaded before anything was written there, so a
+    catch-up that loads them repairs the commit with no serving side, and
+    a catch-up that cannot load one fails the start with the load's
+    reason. A retry can follow a link in a document the catch-up loaded
+    to one its loads never brought in, so the instantiation takes a round
+    per such layer, up to `PIECE_RUN_START_MAX_RETRIES` rounds, and each
+    round has to name a document no earlier round loaded; a refusal that
+    claims absent only documents an earlier round loaded is terminal. The
+    start's pre-sync is meant to name everything a start reads; these
+    rounds are what keep a document it misses from costing more than a
+    round trip per layer. A refusal that names any read at a later seq is
+    a stale read over a revision another writer moved past, and takes the
+    stale-read rounds above. With the flag off, a named piece's run
+    start, which runs in a transaction of its own, runs again for either
+    exception within its `PIECE_RUN_START_MAX_RETRIES` budget, and fails
+    with the load's reason when the catch-up cannot load a document it
+    named; with the flag on, the deferred start's catch-up-and-start takes
+    every stale read first. Explicit wave
     abandon is classified separately and warned without incrementing the
     serving runtime's structure-load-failure observer. A recoverable failure
     is warned on the same terms while its one retry is outstanding, and is
@@ -7299,7 +7469,19 @@ supply; OW29/OW32/OW34 closed):
     `cfc-policy-manifest-shared-install.test.ts`, by a second participant
     starting a piece whose per-user part carries the policy, together with a
     refusal over the piece's own documents beside the manifest staying
-    terminal. And OW46's
+    terminal. The absence exception is pinned in
+    `piece-start-unloaded-read.test.ts`, by a runtime whose loads never
+    bring in the document a nested instance's setup reads through a slot
+    its stored argument carries, with a catch-up that cannot load that
+    document failing the start with the load's reason; the flag-OFF
+    terminal companion refuses a read at seq 1. The rounds are pinned in
+    `executor-wave.test.ts`: one per layer of documents claimed absent, a
+    refusal repeating a document an earlier round loaded torn down, and
+    the rounds bounded. The named piece's run start is pinned in
+    `cfc-policy-manifest-shared-install.test.ts`, by a refusal claiming
+    absence that runs the start again, a catch-up that cannot load the
+    document failing the start with the load's reason, and a read at a
+    later seq that stays terminal. And OW46's
     `structure-load-stuck` counter is BLIND here: it fires 6× per run
     in BOTH arms and in the reds names only the HOST's space, because
     it counts deferred structure loads of DEMANDED roots and this
@@ -9536,22 +9718,111 @@ supply; OW29/OW32/OW34 closed):
     OQ-19's foreign-derived
     freshness mechanism remains its separate currentness design and is
     not part of this closure.
-  - **OW55 — OPEN: the serving runtimes' pattern-fetch trust surface.**
-    `packages/toolshed/index.ts` passes `new URL(env.API_URL)` into
-    `startServerExecutionHost`, which supplies the serving runtime's API URL.
-    The default is `http://localhost:8000`. Wish sidecars and space-root
-    creation resolve system program sources through this URL. Existing wish
-    sidecars also reconcile their origins when `openSidecarSurface` explicitly
-    opens them on the serving runtime. Tenure activation does not follow the
-    root's source or run a general source updater. Owed: a deliberate posture
-    that pins the serving source to self
-    when co-hosted, or verifies its identity against the local patterns route,
-    plus a local-reproduction runbook note requiring explicit API_URL and
-    MEMORY_URL when the default port is occupied. Root creation is within
-    this obligation. A configured URL alone does not establish local source
-    identity. The coverage audit does not claim a new cross-origin experiment.
-    Trigger: the serving pattern-source trust pass; close when the chosen
-    posture and its regression coverage land.
+  - **OW55 — CLOSED 2026-10-08: the serving runtimes' pattern-fetch trust
+    surface.** `packages/toolshed/index.ts` passes `new URL(env.API_URL)`
+    into `startServerExecutionHost`, which supplies the serving runtimes'
+    API URL, and `runtime-options.ts` passes the same as the webhook
+    runtime's `patternApiUrl`. The default is `http://localhost:8000`. Wish
+    sidecars and space-root creation resolve system program sources through
+    this URL; existing wish sidecars also reconcile their origins when
+    `openSidecarSurface` explicitly opens them on the serving runtime, and
+    tenure activation does not follow the root's source or run a general
+    source updater. On a deployment the URL is the public origin, so every
+    self fetch left through the public path and came back in: on rapids on
+    2026-10-08, with `API_URL=https://rapids.saga-castor.ts.net`, the
+    operator timed one pattern module fetch at 18 ms through the public
+    origin against 1.4 ms through nginx on `http://localhost:8080` (curl;
+    no report file), and a pattern load makes many such fetches.
+
+    The posture: a URL that names this deployment is `API_URL` everywhere,
+    and only the transport of a request addressed to it changes. The
+    serving runtimes' `apiUrl` is also `hostForSpace()`'s default, which
+    `builtins/agent.ts` records as an agent run's host, `runner.ts`'s
+    `normalizePieceSourceOrigin` writes into a piece's source history, and
+    the source reconciler and `cell-from-url.ts` compare source origins
+    against, so it stays the public origin; so does the webhook runtime's
+    `patternEnvironment.apiUrl`. A new optional `API_INTERNAL_URL`
+    (`packages/toolshed/env.ts`: `self`, an HTTP or HTTPS origin read by the
+    runner's `readHttpOrigin`, or unset; anything else refuses startup)
+    names this process's own listener. `self` resolves to `HOST` and `PORT`
+    at parse time, `127.0.0.1` for a wildcard or loopback bind, so the one
+    `.env` the 21 instances of a rapids or estuary host share names each
+    instance to itself. Set, `selfDirectedFetch`
+    (`lib/internal-api-origin.ts`) builds a `RuntimeFetch` that sends a
+    request addressed to `API_URL` to the internal origin with its path,
+    query, method, headers and body unchanged and leaves every other
+    request alone; `toolshedRuntimeOptions` passes it to the webhook
+    runtime through the `productionServer` preset's new `fetch`, and
+    `startRuntimes` passes it to the serving runtimes through
+    `startServerExecutionHost` and `servingRuntimeFactory`'s new `fetch`.
+    Every source load and network builtin reads `runtime.fetch`: the source
+    reconciler's system-source and advertised-identity fetches,
+    `ensure-space-root`'s resolver, the `fetch` builtin and, with this
+    change, the `fetchProgram` builtin's `HttpProgramResolver`. The LLM
+    client reads `API_URL` once at module load and keeps calling the public
+    origin; its calls take seconds and are out of this closure.
+
+    A configured URL alone does not establish local source identity, and
+    neither does an answer: another toolshed, or anything bound to the
+    address, can answer `/api/meta` with this deployment's public DID. Set,
+    the listener binds first behind `startupGate`, which answers 503 to
+    every request but `GET /api/meta` carrying a one-time token and records
+    that request's arrival; the server then sends that probe to the
+    internal origin, without following redirects, and
+    `verifyInternalApiOrigin` refuses unless the answer is 2xx and the gate
+    saw the probe arrive, naming what happened otherwise (no answer, with
+    the connection failure's cause; an error status; an answer that did not
+    come through this process). `admitInternalApiOrigin` then constructs
+    the runtimes, admits the listener and writes the readiness marker, in
+    that order, exits 1 on a refusal or a runtime construction failure, and
+    ends without a verdict when a shutdown aborted the probe. The gate
+    covers the public listener only; the Mode A private listener starts at
+    module import and could open routed sessions before the host exists
+    before this change too. Residual: a proxy that forwards the probe and
+    alters later responses is not detected; `self` names a port this
+    process has bound, where none can sit, and an explicit origin is the
+    operator's statement that none does. The local-reproduction note is in
+    `docs/development/LOCAL_DEV_SERVERS.md`: a toolshed started on another
+    port needs explicit `API_URL` and `MEMORY_URL`, or it fetches pattern
+    sources from and opens Memory on whatever holds the default port, which
+    was OW48's contamination. Root creation and wish sidecars are within
+    the pin, since they fetch through the serving runtimes' fetch.
+
+    Coverage: `packages/toolshed/env.test.ts` (unset and blank give no
+    origin; an origin is kept bare with `API_URL` unchanged; `self` resolves
+    for wildcard, `localhost`, `::`, an IPv4 and an IPv6 bind; a non-URL,
+    another scheme, a path, a query, credentials and `Self` refuse the
+    parse), `runtime-options.test.ts` (set, the options carry a fetch that
+    sends an `API_URL` request to the internal origin and another request
+    where addressed, while the storage base stays `MEMORY_URL` and the
+    pattern base stays `API_URL`; unset, no fetch),
+    `lib/internal-api-origin.test.ts` (the rewrite for a string, a URL and
+    a Request with method, headers and body kept, loopback and third-party
+    requests untouched, late binding of the platform fetch; the probe's
+    URL, headers and no-redirect posture; acceptance on arrival; refusal on
+    an answer without arrival, a connection failure with its cause, an
+    error status and a timeout; `describeError`; the gate holding every
+    request, token-less `/api/meta` included, until admitted and recording
+    the probe; the startup sequence's order, its exit on refusal, on a
+    throwing probe and on a runtime failure, and its silence during
+    shutdown), `packages/runner/test/space-host.test.ts` (`readHttpOrigin`),
+    `runtime-presets.test.ts` (`productionServer` passes `fetch`) and
+    `executor/serving-runtime-fetch.test.ts` (the factory hands each
+    serving runtime the fetch and leaves `apiUrl` public). Mutation checks:
+    the rewrite never rewriting, the verification ignoring arrival, the
+    gate passing any `GET /api/meta`, admission before the runtimes, and
+    `self` resolving to `localhost` each fail their tests. Live
+    (2026-10-08, this change's worktree): a toolshed with
+    `API_INTERNAL_URL` on an unbound port exits 1 ("did not answer: fetch
+    failed: ... Connection refused"), on a second toolshed exits 1 ("the
+    request did not reach this process"), and with `self` starts with the
+    runtimes constructed after the check. No cross-origin experiment beyond
+    those is claimed. Infra follow-up (commonfabric/infra): add
+    `"API_INTERNAL_URL":"self"` to `toolshed_env_overrides` in
+    `ansible/rapids-inventory.ini` and `ansible/estuary-inventory.ini`, and
+    name the variable in `ansible/README.md` beside `API_URL`; the
+    post-apply probe there treats a 5xx as retryable, so the 503 window is
+    tolerated.
   - **OW56 — PARTIALLY CLOSED — server-owned program materialization
     and compilation.** Under ON, the upload and instantiate lifecycle
     verbs compile and materialize on the serving runtime. `cf piece new`

@@ -15,6 +15,7 @@ import type {
   URI,
 } from "../src/storage/interface.ts";
 import {
+  ignoreReadForScheduling,
   internalVerifierRead,
   isInternalVerifierRead,
   stableInternalVerifierRead,
@@ -551,6 +552,41 @@ describe("v2-transaction", () => {
   });
 
   describe("write()", () => {
+    it("hashes no more containers to elide a larger equal copy of the stored value than a smaller one", async () => {
+      // The stored value and the copy share nothing, so a comparison that
+      // hashed the copy whole would hash a container per record of the map.
+
+      const containersHashedEliding = async (length: number) => {
+        const storage = StorageManager.emulate({ as: signer });
+        try {
+          const address = {
+            space,
+            id: `of:write-equal-copy-${length}` as URI,
+            type,
+          };
+          const seed = storage.edit();
+          expect(
+            seed.write({ ...address, path: [] }, { value: keyedMap(length) })
+              .ok,
+          ).toBeTruthy();
+          expect((await seed.commit().settled).ok).toBeTruthy();
+          const tx = storage.edit();
+          const before = getContainersHashedForTestingOnly();
+          expect(tx.write({ ...address, path: ["value"] }, keyedMap(length)).ok)
+            .toBeTruthy();
+          const hashed = getContainersHashedForTestingOnly() - before;
+          expect(tx.getReactivityLog?.().writes).toEqual([]);
+          return hashed;
+        } finally {
+          await storage.close();
+        }
+      };
+
+      expect(await containersHashedEliding(32)).toBe(
+        await containersHashedEliding(4),
+      );
+    });
+
     it("returns an `InvalidArrayLengthError` for an array `length` of `2 ** 32`, and leaves the array as it was", async () => {
       const storage = StorageManager.emulate({ as: signer });
       try {
@@ -1052,6 +1088,55 @@ describe("v2-transaction", () => {
       expect((await seed.commit().settled).ok).toBeTruthy();
       return { storage, address, tx: storage.edit() };
     };
+
+    it("keeps the log across a read under the sealed verifier metadata", async () => {
+      const { storage, address, tx } = await writerOverCommittedDocument(
+        "of:v2-transaction-log-ignored-read",
+      );
+      try {
+        expect(tx.write({ ...address, path: ["value", "b"] }, 2).ok)
+          .toBeTruthy();
+        const built = tx.getReactivityLog!();
+        expect(
+          tx.read({ ...address, path: ["value", "a"] }, {
+            meta: stableInternalVerifierRead,
+          }).ok,
+        ).toBeTruthy();
+        expect(tx.getReactivityLog!()).toBe(built);
+        expect(tx.read({ ...address, path: ["value", "a"] }).ok)
+          .toBeTruthy();
+        const after = tx.getReactivityLog!();
+        expect(after).not.toBe(built);
+        expect(after.reads.map(({ path }) => path)).toEqual([["value", "a"]]);
+      } finally {
+        tx.abort();
+        await storage.close();
+      }
+    });
+
+    it("lists a read whose unsealed metadata stops ignoring it after the read", async () => {
+      // Only the sealed verifier metadata is ignored for good. A read under
+      // any other metadata can come to count, so the log does not stand
+      // across it.
+
+      const { storage, address, tx } = await writerOverCommittedDocument(
+        "of:v2-transaction-log-unsealed-read",
+      );
+      try {
+        expect(tx.write({ ...address, path: ["value", "b"] }, 2).ok)
+          .toBeTruthy();
+        expect(tx.getReactivityLog!().reads).toEqual([]);
+        const meta = { ...ignoreReadForScheduling };
+        expect(tx.read({ ...address, path: ["value", "a"] }, { meta }).ok)
+          .toBeTruthy();
+        for (const key of Reflect.ownKeys(meta)) delete meta[key];
+        expect(tx.getReactivityLog!().reads.map(({ path }) => path))
+          .toEqual([["value", "a"]]);
+      } finally {
+        tx.abort();
+        await storage.close();
+      }
+    });
 
     it("returns a write made after the log was last built", async () => {
       const { storage, address, tx } = await writerOverCommittedDocument(

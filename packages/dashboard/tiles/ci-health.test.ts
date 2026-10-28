@@ -13,7 +13,13 @@ import {
   LOOM_REPO,
   REPO,
 } from "../config.ts";
+import { RunLists } from "../github-runs.ts";
 import { compactSpan } from "../lib.ts";
+import {
+  FakeRelay,
+  pushPayload,
+  workflowRunPayload,
+} from "../test/webhook-relay.ts";
 import { type Ctx, type Run, type RunSource, runSource, type TileView } from "../types.ts";
 import { type CiHealthTile, createCiHealth, SWEEP_TTL_MS } from "./ci-health.ts";
 
@@ -58,6 +64,9 @@ interface WorkflowSpec {
   // When the workflow's file last changed on the default branch. A file that
   // changed long before any of its runs leaves every verdict standing.
   fileChangedMinutesAgo?: number;
+  // How many of the newest runs a filtered list leaves out, the way GitHub's
+  // lagging index for filtered lists does.
+  laggingRuns?: number;
 }
 
 interface RunSpec {
@@ -65,10 +74,13 @@ interface RunSpec {
   event?: string;
   minutesAgo?: number;
   branch?: string;
-  startedJobs?: number; // jobs the attempt listing reports, for a cancelled run
+  stoppedJobs?: number; // jobs a runner stopped when the run was cancelled
+  stoppedBy?: string; // why, as their annotations say; TIMED_OUT unless given
+  jobs?: { conclusion: string; runner_name: string | null }[]; // its whole listing
   status?: string; // "completed" unless the run is still going
-  ranMinutes?: number; // how long a completed run went on before it ended
-  jobsStatus?: number; // the status its job-count read answers with
+  startedMinutesAgo?: number; // when its latest attempt started, if not when it was created
+  ranMinutes?: number; // how long a completed attempt went on before it ended
+  jobsStatus?: number; // the status its job-listing read answers with
   attempt?: number; // its latest attempt, 1 unless it was run again
 }
 
@@ -96,6 +108,13 @@ const loomCi = (runs: RunSpec[]): WorkflowSpec => ({
   runs,
 });
 const green: RunSpec[] = [{ conclusion: "success", minutesAgo: 30 }];
+
+// What GitHub annotates a job a runner was running with when the job runs past
+// its `timeout-minutes`, and when a concurrency group cancels it in favor of
+// a newer run.
+const TIMED_OUT = "The job has exceeded the maximum execution time of 1h10m0s";
+const REPLACED =
+  "Canceling since a higher priority waiting request for release-refs/heads/main exists";
 
 interface Wire {
   calls: string[];
@@ -128,7 +147,8 @@ async function withGitHub(
   const byFullName = new Map<string, RepoSpec>(
     repos.map((repo) => [`${ORG}/${repo.name}`, repo]),
   );
-  const startedJobsById = new Map<number, number>();
+  const jobsById = new Map<number, RunSpec["jobs"]>();
+  const annotationsById = new Map<number, { message: string }[]>();
   const jobsStatusById = new Map<number, number>();
   const pages = Math.max(1, Math.ceil(repos.length / 100));
 
@@ -143,6 +163,7 @@ async function withGitHub(
         full_name: `${ORG}/${repo.name}`,
         default_branch: repo.defaultBranch ?? "main",
         archived: repo.archived ?? false,
+        pushed_at: null,
       }));
       return Promise.resolve(Response.json(
         pages === 1 ? listed : listed.slice((page - 1) * 100, page * 100),
@@ -196,16 +217,35 @@ async function withGitHub(
     }
 
     const jobs = url.pathname.match(
-      /^\/repos\/(.+)\/actions\/runs\/(\d+)\/attempts\/1\/jobs$/,
+      /^\/repos\/(.+)\/actions\/runs\/(\d+)\/attempts\/\d+\/jobs$/,
     );
     if (jobs) {
       const failing = jobsStatusById.get(Number(jobs[2]));
       if (failing !== undefined) {
         return Promise.resolve(new Response("unavailable", { status: failing }));
       }
-      return Promise.resolve(Response.json({
-        total_count: startedJobsById.get(Number(jobs[2])) ?? 0,
+      // A job's id is its run's id times a hundred plus its place in the
+      // listing.
+      const listed = (jobsById.get(Number(jobs[2])) ?? []).map((job, index) => ({
+        id: Number(jobs[2]) * 100 + index,
+        ...job,
       }));
+      return Promise.resolve(Response.json({
+        total_count: listed.length,
+        jobs: listed,
+      }));
+    }
+
+    const annotations = url.pathname.match(
+      /^\/repos\/(.+)\/check-runs\/(\d+)\/annotations$/,
+    );
+    if (annotations) {
+      const job = Number(annotations[2]);
+      const listed = jobsById.get(Math.floor(job / 100))?.[job % 100];
+      if (listed === undefined) throw new Error(`unexpected request ${url}`);
+      return Promise.resolve(
+        Response.json(annotationsById.get(Math.floor(job / 100)) ?? []),
+      );
     }
 
     // A run's id is its workflow's id times a hundred plus its place among
@@ -216,14 +256,23 @@ async function withGitHub(
       const all = workflow.runs ?? [];
       const run = all[index];
       const id = workflowNumber * 100 + all.length - 1 - index;
-      startedJobsById.set(id, run.startedJobs ?? 0);
+      jobsById.set(
+        id,
+        run.jobs ??
+          Array.from({ length: run.stoppedJobs ?? 0 }, () => ({
+            conclusion: "cancelled",
+            runner_name: "GitHub Actions 1",
+          })),
+      );
+      annotationsById.set(id, [{ message: run.stoppedBy ?? TIMED_OUT }]);
       if (run.jobsStatus !== undefined) {
         jobsStatusById.set(id, run.jobsStatus);
       }
       const createdAgo = run.minutesAgo ?? 0;
+      const startedAgo = run.startedMinutesAgo ?? createdAgo;
       const completed = (run.status ?? "completed") === "completed";
       const endedAgo = completed
-        ? Math.max(0, createdAgo - (run.ranMinutes ?? 10))
+        ? Math.max(0, startedAgo - (run.ranMinutes ?? 10))
         : 0;
       return {
         id,
@@ -231,10 +280,11 @@ async function withGitHub(
         conclusion: completed ? run.conclusion : null,
         run_attempt: run.attempt ?? 1,
         event: run.event ?? "push",
+        head_branch: run.branch ?? "main",
         head_sha: "sha",
         display_title: workflow.name,
         created_at: new Date(T0 - createdAgo * 60_000).toISOString(),
-        run_started_at: new Date(T0 - createdAgo * 60_000).toISOString(),
+        run_started_at: new Date(T0 - startedAgo * 60_000).toISOString(),
         updated_at: new Date(T0 - endedAgo * 60_000).toISOString(),
         html_url: `https://github.com/${repo}/actions/runs/${id}`,
         head_commit: null,
@@ -266,18 +316,26 @@ async function withGitHub(
       const workflow = (repo.workflows ?? []).find((candidate) =>
         workflowId(runs[1], candidate.file) === Number(runs[2])
       )!;
+      // An unfiltered list carries every run, whatever it ran for. GitHub
+      // filters on a branch, a status, or a conclusion before it pages.
       const branch = url.searchParams.get("branch");
-      // GitHub filters on a status or a conclusion before it pages.
       const wanted = url.searchParams.get("status");
       const page = Number(url.searchParams.get("page") ?? 1);
       const perPage = Number(url.searchParams.get("per_page") ?? 30);
       return Promise.resolve(Response.json({
         workflow_runs: (workflow.runs ?? [])
           .map((run, index) => ({ run, index }))
-          .filter(({ run }) => (run.branch ?? "main") === branch)
+          .filter(({ run }) =>
+            branch === null || (run.branch ?? "main") === branch
+          )
           .filter(({ run }) =>
             wanted === null || (run.status ?? "completed") === wanted ||
             run.conclusion === wanted
+          )
+          .slice(
+            branch === null && wanted === null
+              ? 0
+              : workflow.laggingRuns ?? 0,
           )
           // A page holds as many runs as it was asked for, newest first.
           .slice((page - 1) * perPage, page * perPage)
@@ -306,10 +364,12 @@ const pond = (runs: RunSpec[]): RepoSpec => ({
   name: "pond",
   workflows: [{ name: "Nightly", file: "nightly.yml", runs }],
 });
+// The pages of pond's unfiltered run list read so far. Each reading also reads
+// the list filtered to the default branch, which these leave out.
 const pondPages = (wire: Wire) =>
   wire.calls.filter((call) =>
     call.startsWith(`/repos/${ORG}/pond/actions/workflows/`) &&
-    call.includes("/runs?")
+    call.includes("/runs?") && !call.includes("branch=")
   ).length;
 
 const standingOrg = (
@@ -422,11 +482,28 @@ Deno.test("ci: a conclusion that judges nothing falls through to the run before 
     {
       // A queued run a newer push replaced started no job and judged nothing.
       newest: [
-        { conclusion: "cancelled", minutesAgo: 5, startedJobs: 0 },
+        { conclusion: "cancelled", minutesAgo: 5, stoppedJobs: 0 },
         { conclusion: "success", minutesAgo: 65 },
       ],
       value: "passing",
       status: "good",
+    },
+    {
+      // A job a job-level concurrency group replaced while it was queued is
+      // listed with no runner, beside a job that ran and passed.
+      newest: [
+        {
+          conclusion: "cancelled",
+          minutesAgo: 5,
+          jobs: [
+            { conclusion: "cancelled", runner_name: "" },
+            { conclusion: "success", runner_name: "GitHub Actions 2" },
+          ],
+        },
+        { conclusion: "failure", minutesAgo: 65 },
+      ],
+      value: "loom failing",
+      status: "bad",
     },
     {
       newest: [
@@ -446,21 +523,26 @@ Deno.test("ci: a conclusion that judges nothing falls through to the run before 
     },
   ];
   for (const testCase of cases) {
-    await withGitHub(standingOrg(green, testCase.newest), async () => {
+    await withGitHub(standingOrg(green, testCase.newest), async (wire) => {
       const view = await collectSwept(createCiHealth());
       assertEquals(view.status, testCase.status);
       assertEquals(view.value, testCase.value);
+      // A cancelled run is judged by its job listing.
+      assertEquals(
+        wire.calls.some((call) => call.includes("/jobs")),
+        testCase.newest[0].conclusion === "cancelled",
+      );
     });
   }
 });
 
-Deno.test("ci: a cancelled run that ran jobs is a failure, not a run to pass over", async () => {
+Deno.test("ci: a cancelled run that stopped a job on a runner is a failure, not a run to pass over", async () => {
   await withGitHub(
     standingOrg(green, [
       // A job killed by its own `timeout-minutes` concludes cancelled with a
       // job listing behind it. Reading it as a non-verdict would leave the
       // older success showing and call a timed-out build passing.
-      { conclusion: "cancelled", minutesAgo: 20, startedJobs: 4 },
+      { conclusion: "cancelled", minutesAgo: 20, stoppedJobs: 4 },
       { conclusion: "success", minutesAgo: 200 },
     ]),
     async () => {
@@ -469,6 +551,28 @@ Deno.test("ci: a cancelled run that ran jobs is a failure, not a run to pass ove
       assertEquals(view.status, "bad");
       assertEquals(view.value, "loom failing");
       assertStringIncludes(view.extra ?? "", "cancelled · 20m ago");
+    },
+  );
+});
+
+Deno.test("ci: a cancelled run with a job that failed on a runner is a failure", async () => {
+  await withGitHub(
+    standingOrg(green, [
+      {
+        conclusion: "cancelled",
+        minutesAgo: 20,
+        jobs: [
+          { conclusion: "failure", runner_name: "GitHub Actions 1" },
+          { conclusion: "cancelled", runner_name: "" },
+        ],
+      },
+      { conclusion: "success", minutesAgo: 200 },
+    ]),
+    async () => {
+      const view = await collectSwept(createCiHealth());
+
+      assertEquals(view.status, "bad");
+      assertEquals(view.value, "loom failing");
     },
   );
 });
@@ -864,7 +968,7 @@ Deno.test("ci: a verdict found far back is not read again on the next collection
   });
 });
 
-Deno.test("ci: a job that could not be read reads its runs afresh", async () => {
+Deno.test("ci: a job that could not be read is judged again once its runs can be read", async () => {
   const runs: RunSpec[] = [
     ...Array.from({ length: 25 }, (_, index): RunSpec => ({
       conclusion: "skipped",
@@ -883,12 +987,12 @@ Deno.test("ci: a job that could not be read reads its runs afresh", async () => 
     assertEquals((await collectSwept(tile)).value, "1 unreadable");
     assertEquals(pondPages(wire), 3);
 
-    // Nothing settled survives the failed read, so the pass is found again
-    // the way the first sweep found it.
+    // The runs read before the failed read are still held, so the next sweep
+    // reads only the top of the list to reach them.
     delete nightly.runsStatus;
     wire.sweepAgain();
     assertEquals((await collectSwept(tile)).value, "passing");
-    assertEquals(pondPages(wire), 5);
+    assertEquals(pondPages(wire), 4);
   });
 });
 
@@ -1024,7 +1128,13 @@ Deno.test("ci: a run cancelled because a newer one replaced it judges nothing", 
   await withGitHub(
     standingOrg(green, [
       { conclusion: null, status: "in_progress", minutesAgo: 5 },
-      { conclusion: "cancelled", minutesAgo: 40, ranMinutes: 36, startedJobs: 1 },
+      {
+        conclusion: "cancelled",
+        minutesAgo: 40,
+        ranMinutes: 36,
+        stoppedJobs: 1,
+        stoppedBy: REPLACED,
+      },
       { conclusion: "success", minutesAgo: 6 * 24 * 60 },
     ]),
     async () => {
@@ -1036,12 +1146,13 @@ Deno.test("ci: a run cancelled because a newer one replaced it judges nothing", 
   );
 });
 
-Deno.test("ci: a run cancelled before any newer run began is still a failure", async () => {
-  // It timed out, or somebody stopped it, and the push after it came later.
+Deno.test("ci: a run that timed out while a newer one was going is still a failure", async () => {
+  // A newer run of a workflow that does not cancel in progress waits for the
+  // older one, which ran past its `timeout-minutes` in the meantime.
   await withGitHub(
     standingOrg(green, [
       { conclusion: null, status: "in_progress", minutesAgo: 5 },
-      { conclusion: "cancelled", minutesAgo: 60, ranMinutes: 35, startedJobs: 1 },
+      { conclusion: "cancelled", minutesAgo: 40, ranMinutes: 36, stoppedJobs: 1 },
       { conclusion: "success", minutesAgo: 6 * 24 * 60 },
     ]),
     async () => {
@@ -1051,6 +1162,40 @@ Deno.test("ci: a run cancelled before any newer run began is still a failure", a
       assertEquals(view.value, "loom failing");
     },
   );
+});
+
+Deno.test("ci: a rerun of an older run is judged by why its own jobs were cancelled", async () => {
+  // An older run was run again after a newer run was created. The rerun
+  // concludes cancelled, and the run listing gives it the older run's
+  // creation time, from before the newer run.
+  const cases = [
+    { stoppedBy: TIMED_OUT, status: "bad", value: "loom failing" },
+    { stoppedBy: REPLACED, status: "good", value: "passing" },
+  ];
+  for (const { stoppedBy, status, value } of cases) {
+    await withGitHub(
+      standingOrg(green, [
+        { conclusion: null, status: "in_progress", minutesAgo: 60 },
+        {
+          conclusion: "cancelled",
+          attempt: 2,
+          minutesAgo: 120,
+          startedMinutesAgo: 20,
+          ranMinutes: 15,
+          stoppedJobs: 1,
+          stoppedBy,
+        },
+        { conclusion: "success", minutesAgo: 6 * 24 * 60 },
+      ]),
+      async (wire) => {
+        const view = await collectSwept(createCiHealth());
+
+        assertEquals(view.status, status);
+        assertEquals(view.value, value);
+        assert(wire.calls.some((call) => call.includes("/attempts/2/jobs")));
+      },
+    );
+  }
 });
 
 Deno.test("ci: a run still going is not a verdict", async () => {
@@ -1098,6 +1243,31 @@ Deno.test("ci: the page links a job to its run in progress, and not to one queue
   );
 });
 
+Deno.test("ci: a pass that GitHub's lagging filtered list leaves out still decides the job", async () => {
+  // The list filtered to the default branch is weeks behind: its newest run
+  // is the failure the pass replaced.
+  await withGitHub(
+    standingOrg(green, green, [{
+      name: "pond",
+      workflows: [{
+        name: "Go",
+        file: "go.yml",
+        laggingRuns: 1,
+        runs: [
+          { conclusion: "success", minutesAgo: 7 * 24 * 60 },
+          { conclusion: "failure", minutesAgo: 19 * 24 * 60 },
+        ],
+      }],
+    }]),
+    async () => {
+      const view = await collectSwept(createCiHealth());
+
+      assertEquals(view.status, "good");
+      assertEquals(view.value, "passing");
+    },
+  );
+});
+
 Deno.test("ci: a fork's pull request from a branch named main does not crowd out the job's runs", async () => {
   // Twenty-five runs a pull request started fill more than the first page;
   // the job's own failure is behind them.
@@ -1114,11 +1284,11 @@ Deno.test("ci: a fork's pull request from a branch named main does not crowd out
       const view = await collectSwept(createCiHealth());
 
       assertEquals(view.value, "pond failing");
-      assertEquals(pondPages(wire), 2, "the second page holds the job's run");
+      assertEquals(pondPages(wire), 2, "a fuller page holds the job's run");
       assert(
         wire.calls.some((call) =>
           call.startsWith(`/repos/${ORG}/pond/actions/workflows/`) &&
-          call.endsWith("&page=2")
+          call.endsWith("per_page=100&page=1")
         ),
       );
     },
@@ -1234,7 +1404,7 @@ Deno.test("ci: a failure stands when its workflow's history makes no sense", asy
   }
 });
 
-Deno.test("ci: a cancelled run whose job count cannot be read is unreadable, not passed", async () => {
+Deno.test("ci: a cancelled run whose job listing cannot be read is unreadable, not passed", async () => {
   await withGitHub(
     standingOrg(green, [
       { conclusion: "cancelled", minutesAgo: 20, jobsStatus: 500 },
@@ -1250,12 +1420,12 @@ Deno.test("ci: a cancelled run whose job count cannot be read is unreadable, not
   );
 });
 
-Deno.test("ci: a repository that leaves the inventory takes its job counts with it", async () => {
-  // A cancelled run's job count is held across collections. Once its
-  // repository has left the inventory, the count held for it goes too, so
+Deno.test("ci: a repository that leaves the inventory takes its job listings with it", async () => {
+  // A cancelled run's job listing is held across collections. Once its
+  // repository has left the inventory, what is held for it goes too, so
   // the repository's return reads its runs afresh.
   const repos = standingOrg(green, [
-    { conclusion: "cancelled", minutesAgo: 20, startedJobs: 2 },
+    { conclusion: "cancelled", minutesAgo: 20, stoppedJobs: 2 },
   ]);
   const loom = repos[1];
   await withGitHub(repos, async (wire) => {
@@ -1290,7 +1460,7 @@ Deno.test("ci: a job with no run carrying a verdict is not counted as failing", 
       workflows: [{
         name: "Link check",
         file: "links.yml",
-        runs: [{ conclusion: "cancelled", minutesAgo: 10, startedJobs: 0 }],
+        runs: [{ conclusion: "cancelled", minutesAgo: 10, stoppedJobs: 0 }],
       }],
     }]),
     async (wire) => {
@@ -1593,4 +1763,126 @@ Deno.test("ci: a stale inventory is read again on the next collection", async ()
       2,
     );
   });
+});
+
+// A run of pond's nightly job, as the relay delivers it: `newer` places above
+// the runs the stand-in lists, which is where a run starting now lands.
+const pondRun = (newer: number, event = "push") =>
+  workflowRunPayload(
+    `${ORG}/pond`,
+    {
+      id: workflowId(`${ORG}/pond`, "nightly.yml") * 100 + newer,
+      event,
+      head_branch: "main",
+      head_sha: "sha",
+      status: "completed",
+      conclusion: "failure",
+      run_attempt: 1,
+      display_title: "Nightly",
+      created_at: new Date(T0).toISOString(),
+      run_started_at: new Date(T0).toISOString(),
+      updated_at: new Date(T0).toISOString(),
+      html_url: "",
+      head_commit: null,
+    },
+    ".github/workflows/nightly.yml",
+    workflowId(`${ORG}/pond`, "nightly.yml"),
+  );
+
+Deno.test("ci: a delivered run of a job the sweep reads starts a sweep at once", async () => {
+  const runs: RunSpec[] = [{ conclusion: "success", minutesAgo: 60 }];
+  await withGitHub(standingOrg(green, green, [pond(runs)]), async () => {
+    const relay = new FakeRelay();
+    await relay.open();
+    const tile = createCiHealth(
+      new RunLists(undefined, relay.webhooks),
+      relay.webhooks,
+    );
+    assertEquals((await collectSwept(tile)).status, "good");
+
+    runs.unshift({ conclusion: "failure", minutesAgo: 5 });
+    await relay.deliver("workflow_run", pondRun(1));
+    await tile.sweeping();
+
+    assertEquals((await tile.collect(ctx())).value, "pond failing");
+  });
+});
+
+Deno.test("ci: a delivered run for a pull request, or one not finished, starts no sweep", async () => {
+  await withGitHub(standingOrg(green, green, [pond(green)]), async (wire) => {
+    const relay = new FakeRelay();
+    await relay.open();
+    const tile = createCiHealth(
+      new RunLists(undefined, relay.webhooks),
+      relay.webhooks,
+    );
+    await collectSwept(tile);
+    const made = wire.calls.length;
+
+    await relay.deliver("workflow_run", pondRun(1, "pull_request"));
+    const queued = pondRun(2);
+    await relay.deliver("workflow_run", {
+      ...queued,
+      workflow_run: { ...queued.workflow_run, status: "in_progress" },
+    });
+    await tile.sweeping();
+
+    assertEquals(wire.calls.length, made);
+  });
+});
+
+Deno.test("ci: a sweep reads no runs the relay vouches for", async () => {
+  await withGitHub(standingOrg(green, green, [pond(green)]), async (wire) => {
+    const relay = new FakeRelay();
+    await relay.open();
+    const tile = createCiHealth(
+      new RunLists(undefined, relay.webhooks),
+      relay.webhooks,
+    );
+    await collectSwept(tile);
+    const read = pondPages(wire);
+
+    // The relay carries a delivery after the sweep's interval, so that its
+    // connection is still heard.
+    wire.sweepAgain();
+    await relay.deliver("ping", {});
+    await collectSwept(tile);
+
+    assertEquals(pondPages(wire), read);
+  });
+});
+
+Deno.test("ci: a failing build's workflow history is read again only once its repository's default branch is pushed to", async () => {
+  await withGitHub(
+    standingOrg([{ conclusion: "failure", minutesAgo: 30 }], green),
+    async (wire) => {
+      const histories = () =>
+        wire.calls.filter((call) => call.startsWith(`/repos/${REPO}/commits`))
+          .length;
+      const relay = new FakeRelay();
+      await relay.open();
+      const tile = createCiHealth(
+        new RunLists(undefined, relay.webhooks),
+        relay.webhooks,
+      );
+      await collectSwept(tile);
+      assertEquals(histories(), 1);
+
+      // Two sweep intervals stay inside the time the relay vouches for a
+      // read.
+      wire.sweepAgain();
+      await relay.deliver(
+        "push",
+        pushPayload(`${ORG}/elsewhere`, "refs/heads/main"),
+      );
+      await relay.deliver("push", pushPayload(REPO, "refs/heads/feature"));
+      await collectSwept(tile);
+      assertEquals(histories(), 1);
+
+      wire.sweepAgain();
+      await relay.deliver("push", pushPayload(REPO, "refs/heads/main"));
+      assertEquals((await collectSwept(tile)).value, "labs failing");
+      assertEquals(histories(), 2);
+    },
+  );
 });

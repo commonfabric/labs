@@ -1,6 +1,9 @@
 import { join } from "@std/path/join";
 
-import { PatternsRoute } from "@commonfabric/runner/patterns-route.deno";
+import {
+  PatternsRoute,
+  type PatternsRouteOptions,
+} from "@commonfabric/runner/patterns-route.deno";
 import { CONNECTOR_PATTERN_SOURCES } from "../../../connectors/pattern-sources.ts";
 
 /**
@@ -12,8 +15,12 @@ import { CONNECTOR_PATTERN_SOURCES } from "../../../connectors/pattern-sources.t
  * content identity folds in each module's authored path, and the worker names
  * modules by their URL pathname (HttpProgramResolver), so an answer that
  * differed from the runner's own would be one no runtime could adopt.
+ * `options` carries what the deployment says about all of it, its release
+ * time among them.
  */
-export function createPatternsRoute(): PatternsRoute {
+export function createPatternsRoute(
+  options: PatternsRouteOptions = {},
+): PatternsRoute {
   const repositoryRoot = join(
     import.meta.dirname || "",
     "..",
@@ -27,5 +34,6 @@ export function createPatternsRoute(): PatternsRoute {
       routePrefix: `${source.keyPrefix}/`,
       directory: join(repositoryRoot, source.directory),
     })),
+    options,
   );
 }

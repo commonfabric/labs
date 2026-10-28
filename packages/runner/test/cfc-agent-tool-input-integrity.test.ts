@@ -13,6 +13,7 @@ import { registerSchemaDocument } from "../src/schema-registry.ts";
 import { cfcLabelViewForCell } from "../src/cfc/label-view.ts";
 import type { CfcEnforcementMode } from "../src/cfc/types.ts";
 import { createLLMFriendlyLink } from "../src/link-types.ts";
+import type { Cell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
@@ -982,6 +983,817 @@ describe("CFC trusted agent: tool-input requiredIntegrity (Epic D2)", () => {
       await runtime.dispose();
       await storageManager.close();
     }
+  });
+});
+
+/**
+ * Runs `body` against the tool catalog of a pattern whose `sendRoute` tool
+ * declares `inputSchema`, with a call into `body` that reads the routes the
+ * tool has sent.
+ */
+const withTool = async <T>(
+  inputSchema: JSONSchema,
+  body: (tool: {
+    runtime: Runtime;
+    catalog: ReturnType<typeof llmToolExecutionHelpers.buildToolCatalog>;
+    sent: () => Promise<string[]>;
+  }) => Promise<T>,
+): Promise<T> => {
+  const storageManager = StorageManager.emulate({ as: signer });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+  });
+  const tx = runtime.edit();
+  const { commonfabric } = createTrustedBuilder(runtime);
+  const { pattern, handler, Writable } = commonfabric;
+  try {
+    const sendRoute = handler<{ route: string }, { sent: any }>(
+      inputSchema,
+      {
+        type: "object",
+        properties: {
+          sent: {
+            type: "array",
+            items: { type: "string" },
+            asCell: ["cell"],
+          },
+        },
+        required: ["sent"],
+      },
+      ({ route }, { sent }) => {
+        sent.push(route);
+      },
+    );
+    const resultSchema = {
+      type: "object",
+      properties: {
+        sent: { type: "array", items: { type: "string" } },
+        tools: true,
+      },
+      required: ["sent", "tools"],
+    } as const satisfies JSONSchema;
+    const testPattern = pattern(
+      () => {
+        const sent = Writable.of<string[]>([]);
+        return {
+          sent,
+          tools: {
+            sendRoute: {
+              description: "Send along a route.",
+              inputSchema,
+              handler: sendRoute({ sent }),
+            },
+          },
+        };
+      },
+      false,
+      resultSchema,
+    );
+    const resultCell = runtime.getCell(
+      space,
+      "agent-send-route",
+      resultSchema,
+      tx,
+    );
+    const result = runtime.run(tx, testPattern, {}, resultCell);
+    runtime.prepareTxForCommit(tx);
+    await tx.commit().settled;
+    await runtime.idle();
+
+    const catalog = llmToolExecutionHelpers.buildToolCatalog(
+      result.key("tools") as any,
+      false,
+    );
+    return await body({
+      runtime,
+      catalog,
+      sent: async () =>
+        ((await result.key("sent").pull()) as string[] | undefined) ?? [],
+    });
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
+};
+
+/**
+ * What the `sendRoute` tool declaring `inputSchema` commits after the model
+ * calls it with `input`, or with what `input` returns when it is a function of
+ * the tool's runtime: the routes it sent, or `[]` where the call was denied
+ * before the tool ran.
+ */
+const sentAfterCall = (
+  inputSchema: JSONSchema,
+  input:
+    | Record<string, unknown>
+    | ((runtime: Runtime) => Promise<Record<string, unknown>>),
+): Promise<string[]> =>
+  withTool(inputSchema, async ({ runtime, catalog, sent }) => {
+    await llmToolExecutionHelpers.executeToolCalls(runtime, space, catalog, [{
+      type: "tool-call",
+      toolCallId: "call-send-route",
+      toolName: "sendRoute",
+      input: typeof input === "function" ? await input(runtime) : input,
+    }] as any);
+    await runtime.idle();
+    return await sent();
+  });
+
+/**
+ * Commits `value` under `schema` to the cell `name`, written by the agent
+ * kernel builtin, and returns the reference the model passes for it. A
+ * function `value` is called with the cell, for a value that names it.
+ */
+const seedKernelCell = async (
+  runtime: Runtime,
+  name: string,
+  schema: JSONSchema,
+  value: unknown | ((cell: Cell<unknown>) => unknown),
+): Promise<{ "@link": string }> => {
+  const tx = runtime.edit();
+  setCfcImplementationIdentity(tx, {
+    kind: "builtin",
+    builtinId: "agent-kernel-demo",
+  });
+  const cell = runtime.getCell(space, name, schema, tx);
+  cell.set((typeof value === "function" ? value(cell) : value) as any);
+  tx.prepareCfc();
+  expect((await tx.commit().settled).ok).toBeDefined();
+  await runtime.idle();
+  return {
+    "@link": createLLMFriendlyLink(cell.getAsNormalizedFullLink(), space),
+  };
+};
+
+describe("CFC trusted agent: a floor declared as anything but a list", () => {
+  // A `requiredIntegrity` the specification types as a list (§8.8), declared
+  // as anything else, refuses the call wherever the input schema declares it,
+  // whatever the model supplied (§8.10.3), rather than read as no floor.
+
+  const { toolInputMalformedFloor } = llmToolExecutionHelpers;
+  const MALFORMED = { type: "string", ifc: { requiredIntegrity: {} } };
+
+  it("reports a field the model may leave out", () => {
+    expect(
+      toolInputMalformedFloor({
+        type: "object",
+        properties: { route: { type: "string" }, note: MALFORMED },
+      }, ""),
+    ).toContain('field "note" declares a requiredIntegrity that is not a list');
+  });
+
+  it("reports an array's items, whatever the array holds", () => {
+    expect(
+      toolInputMalformedFloor({
+        type: "object",
+        properties: { recipients: { type: "array", items: MALFORMED } },
+      }, ""),
+    ).toContain('field "recipients[]"');
+  });
+
+  it("reports a floor behind a local reference in a recursive group", () => {
+    expect(
+      toolInputMalformedFloor({
+        $ref: "#/$defs/Node",
+        $defs: {
+          Node: {
+            type: "object",
+            properties: { next: { $ref: "#/$defs/Node" }, tag: MALFORMED },
+          },
+        },
+      }, ""),
+    ).toContain('field "tag"');
+  });
+
+  it("reports a dictionary's values", () => {
+    expect(
+      toolInputMalformedFloor({
+        type: "object",
+        properties: {
+          notes: { type: "object", additionalProperties: MALFORMED },
+        },
+      }, ""),
+    ).toContain('field "notes.*"');
+  });
+
+  it("reports a floor beside a reference its branch has already followed", () => {
+    expect(
+      toolInputMalformedFloor({
+        $ref: "#/$defs/Node",
+        $defs: {
+          Node: {
+            type: "object",
+            properties: {
+              next: { $ref: "#/$defs/Node", ifc: { requiredIntegrity: {} } },
+            },
+          },
+        },
+      }, ""),
+    ).toContain('field "next"');
+  });
+
+  it("reports nothing where every floor is a list", () => {
+    expect(
+      toolInputMalformedFloor({
+        type: "object",
+        properties: {
+          note: { type: "string", ifc: { requiredIntegrity: [KERNEL_ATOM] } },
+        },
+      }, ""),
+    ).toBeUndefined();
+    expect(
+      toolInputMalformedFloor({
+        $ref: "#/$defs/Node",
+        $defs: {
+          Node: {
+            type: "object",
+            properties: {
+              next: { $ref: "#/$defs/Node" },
+              tag: {
+                type: "string",
+                ifc: { requiredIntegrity: [KERNEL_ATOM] },
+              },
+            },
+          },
+        },
+      }, ""),
+    ).toBeUndefined();
+  });
+
+  /** A tool input holding an optional tree of `Node`, defined by `node`. */
+  const withTree = (node: Record<string, unknown>) =>
+    ({
+      type: "object",
+      properties: {
+        route: { type: "string" },
+        tree: { $ref: "#/$defs/Node" },
+      },
+      required: ["route"],
+      $defs: { Node: node },
+    }) as unknown as JSONSchema;
+
+  it("denies a call that leaves the field out, without running the tool", async () => {
+    expect(
+      await sentAfterCall(
+        {
+          type: "object",
+          properties: { route: { type: "string" }, note: MALFORMED },
+          required: ["route"],
+        } as unknown as JSONSchema,
+        { route: "a" },
+      ),
+    ).toEqual([]);
+  });
+
+  it("denies a call whose malformed floor sits beside a recursive reference", async () => {
+    // The catalog's model-facing schema cuts the recursive `next` down to an
+    // open object, so the gate reads the schema the tool declares.
+
+    expect(
+      await sentAfterCall(
+        withTree({
+          type: "object",
+          properties: {
+            next: { $ref: "#/$defs/Node", ifc: { requiredIntegrity: {} } },
+          },
+        }),
+        { route: "a" },
+      ),
+    ).toEqual([]);
+  });
+
+  it("denies a literal under a floor reached through a recursive reference", async () => {
+    // The same cut drops a well-formed floor below the recursion, so a literal
+    // there passed the gate when it read the model-facing schema.
+
+    expect(
+      await sentAfterCall(
+        withTree({
+          type: "object",
+          properties: {
+            next: { $ref: "#/$defs/Node" },
+            recipient: {
+              type: "string",
+              ifc: { requiredIntegrity: [KERNEL_ATOM] },
+            },
+          },
+        }),
+        { route: "a", tree: { next: { recipient: "attacker@example.com" } } },
+      ),
+    ).toEqual([]);
+  });
+
+  it("keeps the declared schema out of the request's tools", async () => {
+    // A request serializes `llmTools` whole. A dormant definition holding a
+    // value JSON cannot hold reaches the declared schema the gate reads, and
+    // not the model-facing one.
+
+    const inputSchema = {
+      type: "object",
+      properties: { route: { type: "string" } },
+      required: ["route"],
+      $defs: { Unused: { type: "integer", default: 1n } },
+    } as unknown as JSONSchema;
+    await withTool(inputSchema, ({ catalog }) => {
+      expect(Object.keys(catalog.llmTools.sendRoute!).sort()).toEqual([
+        "description",
+        "inputSchema",
+      ]);
+      expect(() => JSON.stringify({ tools: catalog.llmTools })).not.toThrow();
+      expect(
+        (catalog.declaredInputSchemas?.get("sendRoute") as {
+          $defs?: unknown;
+        })?.$defs,
+      ).toBeDefined();
+      return Promise.resolve();
+    });
+  });
+
+  it("runs the tool where no floor is malformed or unmet", async () => {
+    expect(
+      await sentAfterCall(
+        withTree({
+          type: "object",
+          properties: {
+            next: { $ref: "#/$defs/Node" },
+            recipient: {
+              type: "string",
+              ifc: { requiredIntegrity: [KERNEL_ATOM] },
+            },
+          },
+        }),
+        { route: "a" },
+      ),
+    ).toEqual(["a"]);
+  });
+});
+
+describe("CFC trusted agent: floors on a dictionary's values", () => {
+  // A floor under `patternProperties` or `additionalProperties` gates each
+  // supplied entry it applies to, as JSON Schema 2020-12 applies those
+  // keywords: every pattern a key matches, and `additionalProperties` for a
+  // key neither `properties` nor a pattern names.
+
+  const FLOORED = { type: "string", ifc: { requiredIntegrity: [KERNEL_ATOM] } };
+
+  /** A tool input whose optional `notes` dictionary is `dictionary`. */
+  const withNotes = (dictionary: Record<string, unknown>) =>
+    ({
+      type: "object",
+      properties: {
+        route: { type: "string" },
+        notes: { type: "object", ...dictionary },
+      },
+      required: ["route"],
+    }) as unknown as JSONSchema;
+
+  it("denies a literal under a floor on `additionalProperties`", async () => {
+    expect(
+      await sentAfterCall(withNotes({ additionalProperties: FLOORED }), {
+        route: "a",
+        notes: { x: "attacker" },
+      }),
+    ).toEqual([]);
+  });
+
+  it("denies a literal under a floor on a pattern the key matches", async () => {
+    expect(
+      await sentAfterCall(
+        withNotes({ patternProperties: { "^to-": FLOORED } }),
+        { route: "a", notes: { "to-main": "attacker" } },
+      ),
+    ).toEqual([]);
+  });
+
+  it("denies a literal under a pattern's floor on a key `properties` names", async () => {
+    expect(
+      await sentAfterCall(
+        withNotes({
+          properties: { to: { type: "string" } },
+          patternProperties: { "^to$": FLOORED },
+        }),
+        { route: "a", notes: { to: "attacker" } },
+      ),
+    ).toEqual([]);
+  });
+
+  it("gates only the keys no pattern matches by `additionalProperties`", async () => {
+    const schema = withNotes({
+      patternProperties: { "^memo-": { type: "string" } },
+      additionalProperties: FLOORED,
+    });
+    expect(
+      await sentAfterCall(schema, { route: "a", notes: { "memo-1": "hi" } }),
+    ).toEqual(["a"]);
+    expect(
+      await sentAfterCall(schema, { route: "a", notes: { to: "attacker" } }),
+    ).toEqual([]);
+  });
+
+  it("leaves a key `properties` names to its own schema", async () => {
+    expect(
+      await sentAfterCall(
+        withNotes({
+          properties: { memo: { type: "string" } },
+          additionalProperties: FLOORED,
+        }),
+        { route: "a", notes: { memo: "hi" } },
+      ),
+    ).toEqual(["a"]);
+  });
+
+  it("denies a call whose pattern is not a valid regular expression", async () => {
+    // The keys an invalid pattern takes cannot be known, so neither can the
+    // keys left to the floor on `additionalProperties`.
+
+    expect(
+      await sentAfterCall(
+        withNotes({
+          patternProperties: { "(": { type: "string" } },
+          additionalProperties: FLOORED,
+        }),
+        { route: "a", notes: { x: "hi" } },
+      ),
+    ).toEqual([]);
+  });
+
+  it("runs the tool where an invalid pattern guards no floor", async () => {
+    expect(
+      await sentAfterCall(
+        withNotes({ patternProperties: { "(": { type: "string" } } }),
+        { route: "a", notes: { x: "hi" } },
+      ),
+    ).toEqual(["a"]);
+  });
+
+  it("runs the tool for an entry passed as a reference carrying the floor", async () => {
+    expect(
+      await sentAfterCall(
+        withNotes({ additionalProperties: FLOORED }),
+        async (runtime) => ({
+          route: "a",
+          notes: {
+            to: await seedKernelCell(
+              runtime,
+              "dictionary-kernel-recipient",
+              {
+                type: "string",
+                ifc: { integrity: [KERNEL_ATOM] },
+              } as const satisfies JSONSchema,
+              "alice@example.com",
+            ),
+          },
+        }),
+      ),
+    ).toEqual(["a"]);
+  });
+});
+
+describe("CFC trusted agent: floors beneath a reference", () => {
+  // A reference the model passes is walked into wherever a floor applies at or
+  // beneath it: each position beneath it is the referenced value's part there,
+  // with the labels stored for that part. A floor on a whole referenced value
+  // is met where every part of it carries one shared atom (§8.10.3).
+
+  const FLOORED = { type: "string", ifc: { requiredIntegrity: [KERNEL_ATOM] } };
+  const KERNEL_STRING = {
+    type: "string",
+    ifc: { integrity: [KERNEL_ATOM] },
+  } as const satisfies JSONSchema;
+  const PLAIN_STRING = { type: "string" } as const satisfies JSONSchema;
+
+  /** A tool input whose optional `field` is `schema`. */
+  const withField = (field: string, schema: Record<string, unknown>) =>
+    ({
+      type: "object",
+      properties: { route: { type: "string" }, [field]: schema },
+      required: ["route"],
+    }) as unknown as JSONSchema;
+
+  /** A mail object whose `recipient` and `nonce` are stored under the given schemas. */
+  const mailSchema = (
+    recipient: JSONSchema,
+    nonce: JSONSchema = PLAIN_STRING,
+    ifc?: Record<string, unknown>,
+  ) =>
+    ({
+      type: "object",
+      ...(ifc ? { ifc } : {}),
+      properties: { recipient, nonce },
+    }) as unknown as JSONSchema;
+
+  const MAIL = { recipient: "attacker@example.com", nonce: "n" };
+
+  /** The routes sent after the model passes `field` as a reference to `value` stored under `schema`. */
+  const sentPassing = (
+    inputSchema: JSONSchema,
+    field: string,
+    schema: JSONSchema,
+    value: unknown | ((cell: Cell<unknown>) => unknown),
+  ) =>
+    sentAfterCall(inputSchema, async (runtime) => ({
+      route: "a",
+      [field]: await seedKernelCell(
+        runtime,
+        `reference-${field}`,
+        schema,
+        value,
+      ),
+    }));
+
+  it("denies a reference whose field lacks the floor beneath it", async () => {
+    expect(
+      await sentPassing(
+        withField("mail", {
+          type: "object",
+          properties: { recipient: FLOORED },
+        }),
+        "mail",
+        mailSchema(PLAIN_STRING),
+        MAIL,
+      ),
+    ).toEqual([]);
+  });
+
+  it("runs the tool for a reference whose field carries the floor beneath it", async () => {
+    expect(
+      await sentPassing(
+        withField("mail", {
+          type: "object",
+          properties: { recipient: FLOORED },
+        }),
+        "mail",
+        mailSchema(KERNEL_STRING),
+        MAIL,
+      ),
+    ).toEqual(["a"]);
+  });
+
+  it("denies a reference to a dictionary whose entry lacks the floor on its values", async () => {
+    expect(
+      await sentPassing(
+        withField("notes", { type: "object", additionalProperties: FLOORED }),
+        "notes",
+        { type: "object", additionalProperties: PLAIN_STRING } as JSONSchema,
+        { to: "attacker@example.com" },
+      ),
+    ).toEqual([]);
+  });
+
+  it("denies a reference to an array whose element lacks the floor on its items", async () => {
+    expect(
+      await sentPassing(
+        withField("recipients", { type: "array", items: FLOORED }),
+        "recipients",
+        { type: "array", items: PLAIN_STRING } as JSONSchema,
+        ["attacker@example.com"],
+      ),
+    ).toEqual([]);
+  });
+
+  it("reads a field through a link the referenced value holds", async () => {
+    // The field's labels are the ones stored where the link leads.
+
+    const inputSchema = withField("mail", {
+      type: "object",
+      properties: { recipient: FLOORED },
+    });
+    const sentThrough = (target: JSONSchema) =>
+      sentAfterCall(inputSchema, async (runtime) => {
+        const recipient = llmToolExecutionHelpers.traverseAndCellify(
+          runtime,
+          space,
+          await seedKernelCell(
+            runtime,
+            "linked-recipient",
+            target,
+            "alice@example.com",
+          ),
+        );
+        return {
+          route: "a",
+          mail: await seedKernelCell(runtime, "linking-mail", {
+            type: "object",
+            properties: { recipient: { type: "string" } },
+          } as JSONSchema, { recipient }),
+        };
+      });
+    expect(await sentThrough(PLAIN_STRING)).toEqual([]);
+    expect(await sentThrough(KERNEL_STRING)).toEqual(["a"]);
+  });
+
+  it("denies a field whose link carries the floor but whose target does not", async () => {
+    // A label on the slot that holds a link endorses the reference, not the
+    // contents of its target (§3.7.2, §8.2.4).
+
+    expect(
+      await sentAfterCall(
+        withField("mail", {
+          type: "object",
+          properties: { recipient: FLOORED },
+        }),
+        async (runtime) => {
+          const recipient = llmToolExecutionHelpers.traverseAndCellify(
+            runtime,
+            space,
+            await seedKernelCell(
+              runtime,
+              "untrusted-recipient",
+              PLAIN_STRING,
+              "attacker@example.com",
+            ),
+          );
+          return {
+            route: "a",
+            mail: await seedKernelCell(
+              runtime,
+              "trusted-slot-mail",
+              mailSchema(KERNEL_STRING),
+              { recipient },
+            ),
+          };
+        },
+      ),
+    ).toEqual([]);
+  });
+
+  it("gates a referenced value that leads back to itself", async () => {
+    const inputSchema = {
+      type: "object",
+      properties: { route: { type: "string" }, tree: { $ref: "#/$defs/Node" } },
+      required: ["route"],
+      $defs: {
+        Node: {
+          type: "object",
+          properties: { next: { $ref: "#/$defs/Node" }, recipient: FLOORED },
+        },
+      },
+    } as unknown as JSONSchema;
+    const nodeSchema = (recipient: JSONSchema) =>
+      ({
+        type: "object",
+        properties: { recipient, next: {} },
+      }) as unknown as JSONSchema;
+    const selfLinked = (cell: Cell<unknown>) => ({
+      recipient: "alice@example.com",
+      next: cell,
+    });
+    expect(
+      await sentPassing(
+        inputSchema,
+        "tree",
+        nodeSchema(PLAIN_STRING),
+        selfLinked,
+      ),
+    ).toEqual([]);
+    expect(
+      await sentPassing(
+        inputSchema,
+        "tree",
+        nodeSchema(KERNEL_STRING),
+        selfLinked,
+      ),
+    ).toEqual(["a"]);
+  });
+
+  it("denies a value whose floor sits beside a schema reference the walk has met before", async () => {
+    // The same definition reached through a reference with a floor beside it
+    // is a different constraint, so meeting it again does not close the cycle.
+
+    expect(
+      await sentPassing(
+        {
+          type: "object",
+          properties: {
+            route: { type: "string" },
+            tree: { $ref: "#/$defs/Node" },
+          },
+          required: ["route"],
+          $defs: {
+            Node: {
+              type: "object",
+              properties: {
+                recipient: { type: "string" },
+                next: {
+                  $ref: "#/$defs/Node",
+                  ifc: { requiredIntegrity: [KERNEL_ATOM] },
+                },
+              },
+            },
+          },
+        } as unknown as JSONSchema,
+        "tree",
+        {
+          type: "object",
+          properties: { recipient: PLAIN_STRING, next: {} },
+        } as unknown as JSONSchema,
+        (cell: Cell<unknown>) => ({
+          recipient: "attacker@example.com",
+          next: cell,
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  describe("a floor on the whole referenced value", () => {
+    const inputSchema = withField("mail", {
+      type: "object",
+      ifc: { requiredIntegrity: [KERNEL_ATOM] },
+    });
+
+    it("denies a value only one field of which carries it", async () => {
+      expect(
+        await sentPassing(
+          inputSchema,
+          "mail",
+          mailSchema(PLAIN_STRING, KERNEL_STRING),
+          MAIL,
+        ),
+      ).toEqual([]);
+    });
+
+    it("denies a value whose only part leads back to it, labeled on that part alone", async () => {
+      // The value holds no leaf of its own, so it counts as one, and the label
+      // on its part covers only that part.
+
+      expect(
+        await sentPassing(
+          inputSchema,
+          "mail",
+          {
+            type: "object",
+            properties: { self: { ifc: { integrity: [KERNEL_ATOM] } } },
+          } as unknown as JSONSchema,
+          (cell: Cell<unknown>) => ({ self: cell }),
+        ),
+      ).toEqual([]);
+    });
+
+    it("denies a value one part of which is another scope's instance lacking it", async () => {
+      // A space-scoped and a user-scoped instance of one document share its
+      // id and path, and hold different values and labels.
+
+      expect(
+        await sentAfterCall(inputSchema, async (runtime) => {
+          const schema = {
+            type: "object",
+            properties: {
+              recipient: PLAIN_STRING,
+              nonce: KERNEL_STRING,
+              next: {},
+            },
+          } as unknown as JSONSchema;
+          const tx = runtime.edit();
+          setCfcImplementationIdentity(tx, {
+            kind: "builtin",
+            builtinId: "agent-kernel-demo",
+          });
+          const shared = runtime.getCell(space, "scoped-mail", schema, tx);
+          const user = runtime.getCellFromLink(
+            { ...shared.getAsNormalizedFullLink(), scope: "user" },
+            schema,
+            tx,
+          );
+          user.set({ recipient: "attacker@example.com" } as any);
+          shared.set({ nonce: "n", next: user } as any);
+          tx.prepareCfc();
+          expect((await tx.commit().settled).ok).toBeDefined();
+          await runtime.idle();
+          return {
+            route: "a",
+            mail: {
+              "@link": createLLMFriendlyLink(
+                shared.getAsNormalizedFullLink(),
+                space,
+              ),
+            },
+          };
+        }),
+      ).toEqual([]);
+    });
+
+    it("runs the tool for a value labeled as a whole", async () => {
+      expect(
+        await sentPassing(
+          inputSchema,
+          "mail",
+          mailSchema(PLAIN_STRING, PLAIN_STRING, { integrity: [KERNEL_ATOM] }),
+          MAIL,
+        ),
+      ).toEqual(["a"]);
+    });
+
+    it("runs the tool for a value every field of which carries it", async () => {
+      expect(
+        await sentPassing(
+          inputSchema,
+          "mail",
+          mailSchema(KERNEL_STRING, KERNEL_STRING),
+          MAIL,
+        ),
+      ).toEqual(["a"]);
+    });
   });
 });
 

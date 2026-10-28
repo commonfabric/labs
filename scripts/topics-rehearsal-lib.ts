@@ -21,7 +21,7 @@
 
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
-export const repoRoot = new URL("..", import.meta.url).pathname;
+export const repoRoot = new URL("..", import.meta.url);
 
 /** Run `cf` from the repository root and return stdout; throw on failure. */
 export async function cf(args: string[]): Promise<string> {

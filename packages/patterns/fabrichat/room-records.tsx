@@ -4,16 +4,31 @@
  * writers are one module because each record's write policy names the
  * handlers that may write it.
  *
- * Every stream that changes the room's record has a handler of its own, as
- * `FabriChatRoom.md` names them. `commitWindow` writes the sending session's
- * windows.
+ * A message is an object pushed onto the room's messages: a document of its
+ * own, labeled `authored-by` whoever last wrote it, and admitted only from the
+ * reviewed surface of the act that wrote it. Its reactions are a list of
+ * their own, which the message links, so reacting never rewrites the message.
+ * A reaction is an object pushed onto that list, labeled `authored-by` its
+ * reactor, and admitted only from the reaction surface, which also admits its
+ * removal. A message or a reaction is identified by its cell, and nothing is
+ * addressed by a key.
  *
- * A message is a record of its own in the room's messages, labeled
- * `authored-by` whoever last wrote it, and admitted only from the reviewed
- * surface of the act that wrote it. Its reactions are a list of their own,
- * which the message links, so reacting never rewrites the message. The
- * reaction handlers add to and remove from that list, and a deletion or an
- * obliteration clears it and drops the link.
+ * A message names the thread it joins by the thread's root, and the message
+ * it quotes, each by its own cell, so a thread is flat by what the room
+ * stores: a send that names a root naming a thread of its own, or a quote
+ * outside the thread it joins, is refused.
+ *
+ * Every stream that changes the room's record has a handler of its own, as
+ * `FabriChatRoom.md` names them. `commitSetTitle` writes the title a member
+ * last set, a record of its own beside the one the room's creator wrote, and
+ * `commitSetThreadTitle` the title of one of its threads, a record of its own
+ * for each thread, beside the thread's messages.
+ *
+ * A handler destructures its state and uses the cells inline, and a helper it
+ * shares takes each cell as an argument of its own, never the state or an
+ * object holding cells: that is what lets the pattern transformer shrink each
+ * handler's state to what its body uses, so the runtime reads and binds no
+ * more than that.
  */
 import {
   AuthoredByCurrentUser,
@@ -27,23 +42,26 @@ import {
   getEntityId,
   handler,
   spaceAccess,
+  spaceOf,
+  type Stream,
   type TrustedActionWrite,
   Writable,
-  type WriteAuthorizedBy,
   type WritePolicyAnyOf,
 } from "commonfabric";
+import type {
+  FileEntry,
+  FileRequestOutcome,
+  FileStoreOutput,
+} from "../fabrifile/schemas.tsx";
+import { profileKeyOf } from "../system/private-inbox.tsx";
+import { isSharedSpaceCatalog } from "../system/shared-space-catalog.ts";
 import {
-  chooseRecordedTime,
   isInMain,
   isSingleEmoji,
   type ShownIn,
-  threadView,
   type ViewItem,
-  type WindowAnchor,
-  windowCount,
-  windowSlice,
 } from "./logic.ts";
-import type { commitManager } from "./manager.tsx";
+import type { commitStart } from "./manager.tsx";
 import {
   type AboutRecord,
   CHAT_DELETE_ACTION,
@@ -54,22 +72,31 @@ import {
   CHAT_OBLITERATE_SURFACE,
   CHAT_REACT_ACTION,
   CHAT_REACT_SURFACE,
+  CHAT_RETITLE_ACTION,
+  CHAT_RETITLE_SURFACE,
+  CHAT_ROOM_OFFER_KIND,
   CHAT_SEND_ACTION,
   CHAT_SEND_SURFACE,
+  CHAT_START_ACTION,
+  CHAT_START_SURFACE,
   CHAT_UNREACT_ACTION,
+  type ChatContainer,
   type ChatDeletedBody,
-  type ChatMessageVersion,
   type ChatReaction,
-  type ChatRoomActivity,
   type ChatRoomKind,
+  type ChatRoomLink,
   type ChatRoomPolicy,
-  CLOCK_TICK_NSEC,
+  DEFAULT_MAX_ATTACHMENTS,
   durationNsec,
-  epochNsec,
   epochNsecFromMsec,
   nsecOf,
   type ProfileCell,
-  type WindowEvent,
+  type SetThreadTitleOutcome,
+  type SetThreadTitleRefusalCode,
+  type SetTitleOutcome,
+  type SetTitleRefusalCode,
+  type ThreadInfoRecord,
+  type TitleRecord,
 } from "./schemas.tsx";
 
 //
@@ -80,45 +107,51 @@ import {
 const NSEC_PER_SEC = 1_000_000_000n;
 
 /**
- * Every room's policy. Each setting is read by the handlers it governs, and
- * `about.policy` states it, so the two cannot disagree.
+ * The policy every room starts from, a group room's. `about.policy` states
+ * it, and the handlers read `deletionIsObliteration` and `maxAttachments`
+ * from it, so the two cannot disagree; `maxWindowCount` bounds
+ * `messages.latest`. The other settings are stated for the policy's shape,
+ * which a user's Home carries, and read by nothing. A room's
+ * `ownersMayObliterate` is `ownersMayObliterateIn()`'s.
  */
-export const FABRICHAT_POLICY: ChatRoomPolicy = {
+export const FABRICHAT_POLICY: Required<ChatRoomPolicy> = {
   ownersMayObliterate: true,
-  keepsHistory: true,
+  keepsHistory: false,
   deletionIsObliteration: false,
   proposedTimeMaxAgeNsec: durationNsec(600n * NSEC_PER_SEC),
   proposedTimeMaxLeadNsec: durationNsec(10n * NSEC_PER_SEC),
   recentActivityWindowNsec: durationNsec(600n * NSEC_PER_SEC),
   maxWindowCount: 100,
   maxOpenWindows: 50,
+  maxAttachments: DEFAULT_MAX_ATTACHMENTS,
 };
 
 /**
- * How long the room remembers a request it acted on: the greater of the
- * proposed-time window's total width and the activity window.
+ * The `ownersMayObliterate` a room of `kind` states in its policy, which
+ * decides which policy document `about.policy` links: `given`, where the room
+ * is configured, and otherwise yes for a group room and no for a direct room.
+ * The handlers are bound to the same value, so what the room enforces is what
+ * that document states.
  */
-const REQUEST_MEMORY_NSEC = [
-  FABRICHAT_POLICY.proposedTimeMaxAgeNsec.value +
-  FABRICHAT_POLICY.proposedTimeMaxLeadNsec.value,
-  FABRICHAT_POLICY.recentActivityWindowNsec.value,
-].reduce((a, b) => (a > b ? a : b));
-
-/** The time bounds `chooseRecordedTime()` holds a proposal to. */
-const TIME_BOUNDS = {
-  maxAgeNsec: FABRICHAT_POLICY.proposedTimeMaxAgeNsec.value,
-  maxLeadNsec: FABRICHAT_POLICY.proposedTimeMaxLeadNsec.value,
-  tickNsec: CLOCK_TICK_NSEC,
-};
+export const ownersMayObliterateIn = (
+  kind: ChatRoomKind,
+  given?: boolean,
+): boolean => given ?? kind !== "direct";
 
 //
 // Stored records
 //
 
 /**
- * A stored reaction: written by the reaction handlers, each from the reviewed
- * reaction surface with its own action, and labeled with its reactor; and
- * cleared by a deletion or an obliteration, from that act's own surface.
+ * A stored reaction: an object pushed onto its message's reaction list by
+ * `commitSendReaction`, from the reviewed reaction surface with its own
+ * action, and labeled `authored-by` its reactor. `commitDeleteReaction`
+ * removes it from the list, from the same surface, and a removal is a write
+ * to the element removed, so the policy names both. The policy is the
+ * element's, so it sits at the element's position in the list: a claim only
+ * beneath a link position does not govern replacing the link or pointing it
+ * elsewhere, so a policy moved down to a field would leave the list open to
+ * a forged element.
  */
 export type SentReaction = AuthoredByCurrentUser<
   WritePolicyAnyOf<ChatReaction, [
@@ -134,33 +167,58 @@ export type SentReaction = AuthoredByCurrentUser<
       typeof CHAT_UNREACT_ACTION,
       typeof CHAT_REACT_SURFACE
     >,
-    TrustedActionWrite<
-      unknown,
-      typeof commitDelete,
-      typeof CHAT_DELETE_ACTION,
-      typeof CHAT_DELETE_SURFACE
-    >,
-    TrustedActionWrite<
-      unknown,
-      typeof commitObliterate,
-      typeof CHAT_OBLITERATE_ACTION,
-      typeof CHAT_OBLITERATE_SURFACE
-    >,
   ]>
 >;
 
-/** One message's reactions, in no particular order. */
-export type ReactionList = SentReaction[] | Default<[]>;
+/** One message's reactions, in the order they were added. */
+export type ReactionsValue = SentReaction[] | Default<[]>;
 
-/** Every message's reaction list, each addressed by its message's key. */
-export type ReactionListsCell = Writable<ReactionList[] | Default<[]>>;
+/**
+ * The cell holding one message's reactions: a list of its own, which the
+ * message links, made by the send that made the message.
+ */
+export type ReactionsCell = Writable<ReactionsValue>;
 
-/** A stored reply: which message, and where the reply is shown. */
+/**
+ * What a reply reads of the message it replies to: the message without its
+ * reactions, and of the message's own reply only where that is shown.
+ */
+export interface RepliedMessage {
+  /** The profile the sender sent under; absent once obliterated. */
+  authorProfile?: ProfileCell;
+
+  /** The current text, or the marker of a deleted message. */
+  body: string | ChatDeletedBody;
+
+  /** The room's handler clock when it recorded the message. */
+  sentAt: FabricEpochNsec;
+
+  /**
+   * Where the message is shown, and the thread it joins, as a link that
+   * names the root and carries none of its schema; absent for a message that
+   * joins no thread and quotes nothing.
+   */
+  replyTo?: { shownIn: ShownIn; thread?: Cell<unknown> };
+}
+
+/**
+ * A stored reply: the thread a message joins, the message it quotes, and
+ * where it is shown, as `ChatReply` states. Each link names the message's own
+ * cell, read as `RepliedMessage`. The link carries no more of the message's
+ * schema than that, so a message's schema nests no message: a reply typed as
+ * the message it replies to would nest without end, the generator would cut
+ * the nesting at a depth that varies with the type a writer addresses the
+ * message by, and a write cut shallower than the stored schema would drop the
+ * policies stored below the cut and be refused.
+ */
 export interface StoredReply {
-  /** The message replied to, in the same room. */
-  message: Cell<MessageRecord>;
+  /** The root of the thread the message joins; absent for none. */
+  thread?: Cell<RepliedMessage>;
 
-  /** Where the reply is shown. */
+  /** The message this one answers; absent for a plain post. */
+  quotes?: Cell<RepliedMessage>;
+
+  /** Where the message is shown. */
   shownIn: ShownIn;
 }
 
@@ -172,34 +230,63 @@ export interface MessageRecord {
   /** The profile the sender sent under; absent once obliterated. */
   authorProfile?: ProfileCell;
 
-  /** The current text, or the marker of a deleted message. */
+  /**
+   * The current text, empty only where the message has attachments, or the
+   * marker of a deleted message.
+   */
   body: string | ChatDeletedBody;
 
-  /** When the room recorded the message's first version. */
+  /**
+   * The files sent with the message, as entries of its space's file store;
+   * absent for none, and once the message is deleted.
+   */
+  attachments?: Cell<FileEntry>[];
+
+  /** The handler clock when the room recorded the message. */
   sentAt: FabricEpochNsec;
 
-  /** When the room recorded the current version, if it isn't the first. */
+  /** The handler clock at the latest edit or deletion; absent until then. */
   editedAt?: FabricEpochNsec;
-
-  /** The versions before the current one, oldest first. */
-  earlierVersions: ChatMessageVersion[];
 
   /** What this message replies to, and where it is shown. */
   replyTo?: StoredReply;
 
   /** The message's reactions; absent once the message is deleted. */
-  reactions?: Writable<ReactionList>;
+  reactions?: ReactionsCell;
 }
 
 /**
- * A stored message: written only by the four message handlers, each from its
- * own reviewed surface, and labeled with whoever wrote its current version.
+ * A stored message: written only by the message handlers, each from its act's
+ * reviewed surface, and labeled with whoever wrote its current version. The
+ * four send handlers write from the send surface, and differ only in where a
+ * send's reply comes from. As with `SentReaction`, the policy is the
+ * element's and sits at its position in the list, which is what refuses a
+ * message replaced in place, a position pointed at another document, or an
+ * element pushed under someone else's profile.
  */
 export type SentMessage = AuthoredByCurrentUser<
   WritePolicyAnyOf<MessageRecord, [
     TrustedActionWrite<
       unknown,
       typeof commitSend,
+      typeof CHAT_SEND_ACTION,
+      typeof CHAT_SEND_SURFACE
+    >,
+    TrustedActionWrite<
+      unknown,
+      typeof commitComposerSend,
+      typeof CHAT_SEND_ACTION,
+      typeof CHAT_SEND_SURFACE
+    >,
+    TrustedActionWrite<
+      unknown,
+      typeof commitThreadSend,
+      typeof CHAT_SEND_ACTION,
+      typeof CHAT_SEND_SURFACE
+    >,
+    TrustedActionWrite<
+      unknown,
+      typeof commitReply,
       typeof CHAT_SEND_ACTION,
       typeof CHAT_SEND_SURFACE
     >,
@@ -233,148 +320,106 @@ export type MessagesCell = Writable<MessagesValue>;
 /** A link to one stored message. */
 export type MessageCell = Cell<MessageRecord>;
 
-/** A request the room has acted on, remembered until it expires. */
-export interface RequestMemo {
-  /** The request's key: its sender and its `requestId`. */
-  key: string;
-
-  /** When the room acted on it. */
-  at: FabricEpochNsec;
-}
+/**
+ * What a room created by a manager says about itself: written once, by the
+ * manager's `commitStart` as it creates the room, from a reviewed `ChatStart`
+ * on `ChatStartSurface`, and labeled `authored-by` the room's creator, which
+ * `principalOf(about, "authored-by")` reads. It has no default, which
+ * something other than its writer would write.
+ */
+export type StoredAbout = AuthoredByCurrentUser<
+  TrustedActionWrite<
+    AboutRecord,
+    typeof commitStart,
+    typeof CHAT_START_ACTION,
+    typeof CHAT_START_SURFACE
+  >
+>;
 
 /**
- * A remembered request, written by whichever handler acted on it. The tuple
- * is written out here, as `WritePolicyAnyOf` requires.
+ * A room's title as a member last set it: written only by `commitSetTitle`,
+ * from a reviewed `ChatRetitle` on `ChatRetitleSurface`, and labeled
+ * `authored-by` that member. The creator's `about` record keeps the title the
+ * room was created with, and its own label.
  */
-export type StoredRequestMemo = WritePolicyAnyOf<RequestMemo, [
-  WriteAuthorizedBy<unknown, typeof commitSend>,
-  WriteAuthorizedBy<unknown, typeof commitEdit>,
-  WriteAuthorizedBy<unknown, typeof commitDelete>,
-  WriteAuthorizedBy<unknown, typeof commitObliterate>,
-  WriteAuthorizedBy<unknown, typeof commitSendReaction>,
-  WriteAuthorizedBy<unknown, typeof commitDeleteReaction>,
-]>;
-
-/** The requests the room has acted on, each addressed by its key. */
-export type RequestsCell = Writable<StoredRequestMemo[] | Default<[]>>;
-
-/** A time the room has recorded something at. */
-export interface UsedTime {
-  /** The time. */
-  at: FabricEpochNsec;
-}
-
-/** A used time, written by whichever handler recorded something at it. */
-export type StoredUsedTime = WritePolicyAnyOf<UsedTime, [
-  WriteAuthorizedBy<unknown, typeof commitSend>,
-  WriteAuthorizedBy<unknown, typeof commitEdit>,
-  WriteAuthorizedBy<unknown, typeof commitDelete>,
-  WriteAuthorizedBy<unknown, typeof commitObliterate>,
-  WriteAuthorizedBy<unknown, typeof commitSendReaction>,
-  WriteAuthorizedBy<unknown, typeof commitDeleteReaction>,
-]>;
-
-/** The times the room has used, each addressed by its nanoseconds. */
-export type UsedTimesCell = Writable<StoredUsedTime[] | Default<[]>>;
+export type StoredTitle = AuthoredByCurrentUser<
+  TrustedActionWrite<
+    TitleRecord,
+    typeof commitSetTitle,
+    typeof CHAT_RETITLE_ACTION,
+    typeof CHAT_RETITLE_SURFACE
+  >
+>;
 
 /**
- * A stored activity entry: a document of its own, written once by the handler
- * whose act it records, and labeled `authored-by` the principal that handler
- * acts for. Its writers name no gesture, since entries record acts from every
- * surface; the label says whose act it was, not that they made a gesture.
+ * The room's title as a member last set it, kept as one keyed record,
+ * `TITLE_KEY`, absent until a member sets one. The list around it defaults to
+ * empty, so nothing but `commitSetTitle` ever writes the record.
  */
-export type SentActivity = AuthoredByCurrentUser<
-  WritePolicyAnyOf<ChatRoomActivity, [
-    WriteAuthorizedBy<unknown, typeof commitSend>,
-    WriteAuthorizedBy<unknown, typeof commitEdit>,
-    WriteAuthorizedBy<unknown, typeof commitDelete>,
-    WriteAuthorizedBy<unknown, typeof commitObliterate>,
-    WriteAuthorizedBy<unknown, typeof commitSendReaction>,
-    WriteAuthorizedBy<unknown, typeof commitDeleteReaction>,
+export type TitlesCell = Writable<StoredTitle[] | Default<[]>>;
+
+/** The key of the one record of the title a member set. */
+export const TITLE_KEY = "title";
+
+/**
+ * What a room keeps about one of its threads: written only by the handlers
+ * that set a thread's title, a send that starts the thread from the send
+ * surface and a retitle from `ChatRetitleSurface`, and labeled `authored-by`
+ * whoever last set it. A later schema can neither add a writer to the policy
+ * nor drop one, so it names every writer the record will have.
+ */
+export type StoredThreadInfo = AuthoredByCurrentUser<
+  WritePolicyAnyOf<ThreadInfoRecord, [
+    TrustedActionWrite<
+      unknown,
+      typeof commitSend,
+      typeof CHAT_SEND_ACTION,
+      typeof CHAT_SEND_SURFACE
+    >,
+    TrustedActionWrite<
+      unknown,
+      typeof commitThreadSend,
+      typeof CHAT_SEND_ACTION,
+      typeof CHAT_SEND_SURFACE
+    >,
+    TrustedActionWrite<
+      unknown,
+      typeof commitSetThreadTitle,
+      typeof CHAT_RETITLE_ACTION,
+      typeof CHAT_RETITLE_SURFACE
+    >,
   ]>
 >;
 
-/** The room's recent activity, in `seq` order. */
-export type ActivityCell = Writable<SentActivity[] | Default<[]>>;
-
-/** Where the room's activity numbering stands. */
-export interface ActivityCounters {
-  /** The `seq` the next entry takes. */
-  nextSeq: number;
-
-  /** The highest `seq` dropped for age; 0 for none. */
-  expiredThrough: number;
-}
-
-/** The empty activity numbering. */
-export const NO_ACTIVITY = {
-  nextSeq: 1,
-  expiredThrough: 0,
-} satisfies ActivityCounters;
-
-/** The activity numbering, written by whichever handler records an entry. */
-export type StoredActivityCounters = WritePolicyAnyOf<ActivityCounters, [
-  WriteAuthorizedBy<unknown, typeof commitSend>,
-  WriteAuthorizedBy<unknown, typeof commitEdit>,
-  WriteAuthorizedBy<unknown, typeof commitDelete>,
-  WriteAuthorizedBy<unknown, typeof commitObliterate>,
-  WriteAuthorizedBy<unknown, typeof commitSendReaction>,
-  WriteAuthorizedBy<unknown, typeof commitDeleteReaction>,
-]>;
+/**
+ * What the room keeps about each of its threads, one keyed record per
+ * thread, under `threadInfoKeyOf()` its root, absent until a member sets the
+ * thread's title. The list defaults to empty, so nothing but the handlers its
+ * records name ever writes it.
+ */
+export type ThreadInfoCell = Writable<StoredThreadInfo[] | Default<[]>>;
 
 /**
- * The room's activity numbering, kept as one keyed record, `NUMBERING_KEY`,
- * absent until the first entry. The list around it defaults to empty, so
- * nothing but the handlers its policy lists ever writes the record.
+ * The key of the record of the thread `root` roots, or `undefined` while
+ * `root` names no message: the root's entity.
  */
-export type ActivityCountersCell = Writable<
-  StoredActivityCounters[] | Default<[]>
->;
+export const threadInfoKeyOf = (root: Cell<unknown>): string | undefined =>
+  viewKeyOf(root);
 
-/** The key of the activity numbering's one record. */
-export const NUMBERING_KEY = "numbering";
-
-/** A run of consecutive messages from one view of a conversation. */
-export interface ChatMessageWindow {
-  /** The `openWindow` request that set the window as it is now. */
-  requestId: string;
-
-  /** For a thread's window, the thread's root; absent for the main one. */
-  root?: MessageCell;
-
-  /** The messages in the window, oldest first. */
-  messages: MessageCell[];
-
-  /** Whether the view has messages older than the window's first. */
-  hasOlder: boolean;
-
-  /** Whether the view has messages newer than the window's last. */
-  hasNewer: boolean;
-}
-
-/** A session's open windows, by the `windowId` its client chose. */
-export type ChatMessageWindows = Record<string, ChatMessageWindow>;
-
-/** A session's windows onto the messages, written only by `commitWindow`. */
-export type WindowsValue = WriteAuthorizedBy<
-  ChatMessageWindows,
-  typeof commitWindow
+/**
+ * The outcome of each of a sender's retitles, by its `requestId`: one
+ * instance per user, which no one else reads.
+ */
+export type TitleRequestsCell = Writable<
+  Record<string, SetTitleOutcome> | Default<Record<PropertyKey, never>>
 >;
 
 /**
- * The cell holding a session's windows, absent until the first opens: only
- * `commitWindow` writes it, so it has no default for anything else to write.
+ * The outcome of each of a sender's thread retitles, by its `requestId`: one
+ * cell for each sender, so that no one else's retitles are read or written.
  */
-export type WindowsCell = Writable<WindowsValue>;
-
-/**
- * What a room created by a manager says about itself: written once, by the
- * manager's `commitManager` as it creates the room, and labeled `authored-by`
- * the room's creator, which `principalOf(about, "authored-by")` reads. It has
- * no default, which something other than its writer would write.
- */
-export type StoredAbout = AuthoredByCurrentUser<
-  WriteAuthorizedBy<AboutRecord, typeof commitManager>
+export type ThreadTitleRequestsCell = Writable<
+  Record<string, SetThreadTitleOutcome> | Default<Record<PropertyKey, never>>
 >;
 
 //
@@ -387,202 +432,154 @@ export const entityKeyOf = (cell: unknown): string | undefined => {
   return ref === undefined ? undefined : entityRefToString(ref);
 };
 
-/** The handler clock's reading, in nanoseconds. */
-const clockNsec = (): bigint => nsecOf(epochNsecFromMsec(Date.now()));
-
-/** A request's key: its sender's principal, and its id. */
-const requestKeyOf = (sender: string, requestId: string): string =>
-  JSON.stringify([sender, requestId]);
-
-/** Whether the room has acted on the request `key` and still remembers it. */
-const actedOn = (requests: RequestsCell, key: string): boolean =>
-  requests.elementById(key).get() !== undefined;
+/** The handler clock's reading. */
+const now = (): FabricEpochNsec => epochNsecFromMsec(Date.now());
 
 /**
- * Removes every record recorded before `horizon` from `list`, a list of keyed
- * records, and clears each one: a keyed record outlives its place in the list,
- * and it is the record a lookup by key finds.
+ * A stored message as the views see it, keyed by its entity: the facts the
+ * room's derivations read of it, taken from the record once, so that none of
+ * them reads the record again. A derivation over the entries reads plain
+ * values, and follows a link only where it hands one on.
  */
-const forgetBefore = <T extends { at: FabricEpochNsec }>(
-  list: Writable<T[]>,
-  keyOf: (record: T) => string,
-  horizon: bigint,
-): void => {
-  ((list.get() ?? []) as T[])
-    .filter((record) => record !== undefined && nsecOf(record.at) < horizon)
-    .forEach((record) => {
-      const key = keyOf(record);
-      list.removeByValue(list.elementById(key));
-      const cleared: Writable<T | undefined> = list.elementById(key);
-      cleared.set(undefined);
-    });
-};
-
-/**
- * Records that the room acted on the request `key`, and forgets every request
- * older than the room's request memory.
- */
-const rememberRequest = (
-  requests: RequestsCell,
-  key: string,
-  clock: bigint,
-): void => {
-  forgetBefore(requests, (memo) => memo.key, clock - REQUEST_MEMORY_NSEC);
-  const memo = requests.elementById(key);
-  memo.set({ key, at: epochNsec(clock) });
-  requests.addUnique(memo);
-};
-
-/**
- * Chooses a recorded time as `chooseRecordedTime()` does, against the times
- * the room has used, and marks it used. `undefined` means the record is
- * refused.
- *
- * It also forgets every used time older than the request memory. A recorded
- * time is never older than the proposed-time window's lower bound, so no
- * runtime whose clock is within the window's lead of this one chooses a time
- * that old again.
- */
-const claimTime = (
-  usedTimes: UsedTimesCell,
-  clock: bigint,
-  proposed?: bigint,
-  after?: bigint,
-): FabricEpochNsec | undefined => {
-  forgetBefore(
-    usedTimes,
-    (used) => String(nsecOf(used.at)),
-    clock - REQUEST_MEMORY_NSEC,
-  );
-  const time = chooseRecordedTime(
-    {
-      proposed,
-      clock,
-      after,
-      isUsed: (t) => usedTimes.elementById(String(t)).get() !== undefined,
-    },
-    TIME_BOUNDS,
-  );
-  if (time === undefined) return undefined;
-  const at = epochNsec(time);
-  const used = usedTimes.elementById(String(time));
-  used.set({ at } as StoredUsedTime);
-  usedTimes.addUnique(used);
-  return at;
-};
-
-/**
- * Appends an activity entry recorded at `at`, and drops entries older than the
- * activity window. `dropFor` also drops every earlier entry about that
- * message. Each entry is a document of its own, so appending one never
- * rewrites another's. The act claims `at` before it writes anything, so an
- * act with no time left for its entry is refused rather than recorded without
- * one.
- */
-const appendActivity = (
-  activity: ActivityCell,
-  counters: ActivityCountersCell,
-  at: FabricEpochNsec,
-  clock: bigint,
-  requestId: string,
-  what: Cell<unknown>,
-  dropFor?: MessageCell,
-): void => {
-  const record = counters.elementById(NUMBERING_KEY);
-  const numbering = (record.get() ?? NO_ACTIVITY) as ActivityCounters;
-  const horizon = clock - FABRICHAT_POLICY.recentActivityWindowNsec.value;
-  const current = (activity.get() ?? []) as ChatRoomActivity[];
-  const expired = current.filter((entry) => nsecOf(entry.at) < horizon);
-  const expiredThrough = expired.reduce(
-    (highest, entry) => Math.max(highest, entry.seq),
-    numbering.expiredThrough,
-  );
-  const dropped = current.filter((entry) =>
-    nsecOf(entry.at) < horizon ||
-    (dropFor !== undefined && equals(entry.what, dropFor))
-  );
-  dropped.forEach((entry) => {
-    const key = String(entry.seq);
-    activity.removeByValue(activity.elementById(key));
-    const cleared: Writable<SentActivity | undefined> = activity.elementById(
-      key,
-    );
-    cleared.set(undefined);
-  });
-  const entry = activity.elementById(String(numbering.nextSeq));
-  entry.set({ seq: numbering.nextSeq, at, requestId, what } as SentActivity);
-  activity.addUnique(entry);
-  record.set({
-    nextSeq: numbering.nextSeq + 1,
-    expiredThrough,
-  } as StoredActivityCounters);
-  counters.addUnique(record);
-};
-
-/** A stored message as the views see it, keyed by its `sentAt`. */
 export interface MessageEntry extends ViewItem {
-  /** A link to the stored message. */
+  /**
+   * The stored message's own cell: the document that holds it, never its slot
+   * in the room's messages, so two entries name one message exactly when
+   * their links are equal.
+   */
   cell: MessageCell;
 
-  /** The stored message. */
-  record: MessageRecord;
+  /** Whether the message is shown in the main conversation. */
+  inMain: boolean;
+
+  /** Whether the message is live: neither deleted nor obliterated. */
+  live: boolean;
+
+  /**
+   * The key of the profile the sender sent under, as Home's `profileKeyOf()`
+   * names the link the message stores, which `sendInto()` writes resolved:
+   * the space of the profile's document and the entity it is, since an
+   * entity's id is minted from its cause and two spaces can hold documents of
+   * one id. Absent once obliterated. Two messages have the same author when
+   * their keys agree, and a reader is the author when their resolved
+   * profile's key is this one.
+   */
+  authorKey?: string;
 }
 
-/** The key a message has in the views: its `sentAt`, unique in the room. */
-const timeKeyOf = (time: FabricEpochNsec): string => String(nsecOf(time));
+/** The entries of a room's messages, and every author among them. */
+export interface MessageEntries {
+  /** Every stored message, in the order recorded. */
+  entries: MessageEntry[];
+
+  /**
+   * Every author, each once, in the order each first appears, by the link
+   * each message stores; an obliterated message names none.
+   */
+  authors: ProfileCell[];
+
+  /** Each stored message's record, by its entry's key. */
+  records: ReadonlyMap<string, MessageRecord>;
+
+  /**
+   * How many stored messages have a reply naming neither a thread nor a
+   * message they quote: what a room stored before a message named its thread
+   * and its quote apart, which no send stores now. Each is shown as a message
+   * in no thread where it was shown in the conversation, and not at all where
+   * it was shown only in a thread, whose root it no longer names.
+   */
+  legacyReplies: number;
+}
+
+/**
+ * The key the stored message `message` links has in the views: the entity of
+ * the document that holds it, or `undefined` while it links none. It resolves
+ * the link, and reads nothing of the message.
+ */
+export const viewKeyOf = (message: Cell<unknown>): string | undefined =>
+  entityKeyOf(message.resolveAsCell());
 
 /** A link to the stored message at `index` of `messages`. */
-const cellAt = (messages: MessagesCell, index: number): MessageCell => {
+const cellAt = (
+  messages: Cell<MessagesValue>,
+  index: number,
+): MessageCell => {
   const cell: MessageCell = messages.key(index);
   return cell;
 };
 
-/** Every stored message of `messages`, as a view item. */
-export const messageEntries = (messages: MessagesCell): MessageEntry[] =>
-  ((messages.get() ?? []) as MessageRecord[]).flatMap((record, index) => {
-    if (record?.sentAt === undefined) return [];
-    const target = record.replyTo?.message?.get();
-    return [{
-      key: timeKeyOf(record.sentAt),
-      sentAt: nsecOf(record.sentAt),
-      ...(record.replyTo === undefined || target?.sentAt === undefined ? {} : {
-        replyTo: {
-          key: timeKeyOf(target.sentAt),
-          shownIn: record.replyTo.shownIn,
-        },
-      }),
-      cell: cellAt(messages, index),
-      record,
-    }];
-  });
-
-/** The entry for the stored message `message` links, if it is in the room. */
-export const entryFor = (
-  entries: readonly MessageEntry[],
-  message: MessageCell | undefined,
-): MessageEntry | undefined => {
-  const target = message?.get();
-  if (target?.sentAt === undefined) return undefined;
-  const key = timeKeyOf(target.sentAt);
-  return entries.find((entry) =>
-    entry.key === key && equals(entry.cell, message)
+/**
+ * Every stored message of `messages`, as an entry, with the authors among
+ * them, in one walk of the list that reads each record once. It writes
+ * nothing, which its parameter declares by being a `Cell` where
+ * `MessagesCell` is a `Writable`: a computation that hands a cell to a
+ * helper of another module is scheduled as a writer of that cell when the
+ * helper's parameter is a `Writable`.
+ */
+export const messageEntries = (
+  messages: Cell<MessagesValue>,
+): MessageEntries => {
+  const authorKeys = new Set<string>();
+  const authors: ProfileCell[] = [];
+  const records = new Map<string, MessageRecord>();
+  let legacyReplies = 0;
+  const entries = ((messages.get() ?? []) as MessageRecord[]).flatMap(
+    (record, index): MessageEntry[] => {
+      if (record?.sentAt === undefined) return [];
+      const cell = cellAt(messages, index).resolveAsCell();
+      const key = entityKeyOf(cell);
+      if (key === undefined) return [];
+      records.set(key, record);
+      const reply = record.replyTo;
+      const thread = reply?.thread === undefined
+        ? undefined
+        : viewKeyOf(reply.thread);
+      const quotes = reply?.quotes === undefined
+        ? undefined
+        : viewKeyOf(reply.quotes);
+      const legacy = reply !== undefined && thread === undefined &&
+        quotes === undefined;
+      if (legacy) legacyReplies++;
+      const item: ViewItem = {
+        key,
+        sentAt: nsecOf(record.sentAt),
+        ...(reply === undefined || (legacy && reply.shownIn !== "thread")
+          ? {}
+          : {
+            replyTo: {
+              ...(thread === undefined ? {} : { thread }),
+              ...(quotes === undefined ? {} : { quotes }),
+              shownIn: reply.shownIn,
+            },
+          }),
+      };
+      const author = record.authorProfile;
+      const authorKey = author === undefined ? undefined : profileKeyOf(author);
+      if (author !== undefined && authorKey !== undefined) {
+        if (!authorKeys.has(authorKey)) {
+          authorKeys.add(authorKey);
+          authors.push(author);
+        }
+      }
+      return [{
+        ...item,
+        cell,
+        inMain: isInMain(item),
+        live: !isDeleted(record),
+        ...(authorKey === undefined ? {} : { authorKey }),
+      }];
+    },
   );
+  return { entries, authors, records, legacyReplies };
 };
 
-/** Oldest first, by `sentAt`. */
-export const compareEntries = (a: ViewItem, b: ViewItem): number =>
-  a.sentAt < b.sentAt ? -1 : a.sentAt > b.sentAt ? 1 : 0;
+/** What `messageRightsOf()` reads of a message: its author and its body. */
+export type RightsFacts = Pick<MessageRecord, "authorProfile" | "body">;
 
 /** Whether a message is deleted, by its sender or by obliteration. */
-export const isDeleted = (record: MessageRecord | undefined): boolean =>
-  record === undefined || typeof record.body !== "string";
-
-/** Whether `text` is a message body the room accepts. */
-const isValidBody = (text: unknown): text is string =>
-  typeof text === "string" && text.trim() !== "";
-
-/** The reply-shown-in values the room accepts. */
-const SHOWN_IN: readonly ShownIn[] = ["main", "thread", "both"];
+export const isDeleted = (
+  record: Pick<RepliedMessage, "body"> | undefined,
+): boolean => record === undefined || typeof record.body !== "string";
 
 /**
  * Whether the principal this code runs for holds OWNER in the room's space,
@@ -592,33 +589,97 @@ const SHOWN_IN: readonly ShownIn[] = ["main", "thread", "both"];
 export const isOwnerOf = (cell: Cell<unknown>): boolean =>
   spaceAccess(cell) === "OWNER";
 
+/** Whether `profile` is the profile `record`'s author sent it under. */
+const isAuthorOf = (
+  record: RightsFacts | undefined,
+  profile: ProfileCell | undefined,
+): boolean => {
+  const author = record?.authorProfile;
+  return author !== undefined && profile !== undefined &&
+    equals(author, profile);
+};
+
+/** What one person may do to one message. */
+export interface MessageRights {
+  /** Whether they may record a new version of it. */
+  canEdit: boolean;
+
+  /** Whether they may delete it. */
+  canDelete: boolean;
+
+  /** Whether they may obliterate it. */
+  canObliterate: boolean;
+}
+
+/** The rights of someone who may do nothing to a message. */
+export const NO_MESSAGE_RIGHTS: MessageRights = {
+  canEdit: false,
+  canDelete: false,
+  canObliterate: false,
+};
+
+/**
+ * What the person acting under `profile` may do to the message `record` in a
+ * room of `kind`, given whether they hold OWNER in the room's space and
+ * whether the room lets its OWNERs obliterate. Only the message's author may
+ * edit or delete it, and in a direct room they may obliterate it too. An OWNER
+ * may obliterate any message while `ownersMayObliterate` holds, and otherwise
+ * gains nothing over anyone else: never an edit or a deletion of someone
+ * else's message. A deleted message takes nothing further but obliteration,
+ * and an obliterated one, which names no author, takes nothing. The room's
+ * handlers admit an act by this, and the room's view and rendering offer one
+ * by it.
+ */
+export const messageRightsOf = (
+  record: RightsFacts | undefined,
+  profile: ProfileCell | undefined,
+  kind: ChatRoomKind,
+  isOwner: boolean,
+  ownersMayObliterate: boolean,
+): MessageRights =>
+  rightsOf(
+    isAuthorOf(record, profile),
+    !isDeleted(record),
+    record?.authorProfile !== undefined,
+    kind,
+    isOwner,
+    ownersMayObliterate,
+  );
+
+/**
+ * `messageRightsOf()`, from the facts it decides by: whether the person is the
+ * message's author, whether the message is live, and whether it still names
+ * an author. The room derives every message's rights from its entries this
+ * way, and reads two plain values of each entry rather than its record.
+ */
+export const rightsOf = (
+  isAuthor: boolean,
+  live: boolean,
+  hasAuthor: boolean,
+  kind: ChatRoomKind,
+  isOwner: boolean,
+  ownersMayObliterate: boolean,
+): MessageRights => ({
+  canEdit: live && isAuthor,
+  canDelete: live && isAuthor,
+  canObliterate: hasAuthor &&
+    ((isOwner && ownersMayObliterate) || (kind === "direct" && isAuthor)),
+});
+
 /**
  * Whether the viewer can send, edit, delete, and react in the room whose
  * messages are `messages`: their profile resolves, and the room's space grants
  * them WRITE or OWNER. A level not known yet (`undefined`) is not a grant.
+ * `messages` only names the room's space, and is a `Cell` for the reason
+ * `messageEntries()` gives.
  */
 export const canActIn = (
-  messages: MessagesCell,
+  messages: Cell<unknown>,
   myProfile: ProfileCell | undefined,
 ): boolean => {
   const level = spaceAccess(messages);
   return myProfile?.get() !== undefined &&
     (level === "WRITE" || level === "OWNER");
-};
-
-/** A `ChatWindowAnchor` as `windowSlice()` takes it, if it is well formed. */
-const anchorOf = (
-  from: WindowEvent["from"] | undefined,
-): WindowAnchor | undefined => {
-  if (from === undefined || from === null) return undefined;
-  if ("before" in from) {
-    return { before: from.before === "end" ? "end" : nsecOf(from.before) };
-  }
-  if ("after" in from) {
-    return { after: from.after === "start" ? "start" : nsecOf(from.after) };
-  }
-  if ("around" in from) return { around: nsecOf(from.around) };
-  return undefined;
 };
 
 //
@@ -628,20 +689,29 @@ const anchorOf = (
 /**
  * An event on one of the room's streams. Each stream's event carries the
  * fields its act needs. A rendered control sends the text it holds as
- * `target.value`, and no request id, which the room then mints.
+ * `target.value`.
  */
 export interface RoomStreamEvent {
-  /** Chosen by the sender, and unique among its requests. */
-  requestId?: string;
+  /** The text to send, or to record as a message's new version. */
+  body?: string;
 
-  /** The version to send or record. */
-  version?: ChatMessageVersion;
-
-  /** What a sent message replies to. */
+  /** The thread a sent message joins, and what it quotes. */
   replyTo?: StoredReply;
+
+  /**
+   * The title a sent message gives the thread it joins, which the thread
+   * takes when it has none yet.
+   */
+  threadTitle?: string;
+
+  /** The files a sent message attaches, as entries of its space's store. */
+  attachments?: Cell<FileEntry>[];
 
   /** The message acted on. */
   message?: MessageCell;
+
+  /** The reaction removed, one of the message's. */
+  reaction?: Cell<ChatReaction>;
 
   /** A single emoji. */
   emoji?: string;
@@ -650,16 +720,40 @@ export interface RoomStreamEvent {
   readonly target?: { readonly value?: string };
 }
 
-/** Where a rendered composer keeps the reply and the edit it is composing. */
+/** A file a composer is attaching: the request adding it to the store. */
+export interface ComposerAttachment {
+  /** The request's id, under which the store records its outcome. */
+  requestId: string;
+
+  /** The name the file had, which the request asked for. */
+  name: string;
+}
+
+/**
+ * Where a rendered composer keeps the reply, the edit and the attachments it
+ * is composing.
+ */
 export interface ComposerState {
   /** The message the next send replies to in the main conversation. */
   replyTo?: MessageCell;
 
+  /**
+   * The files the next send attaches, in the order they were picked, each as
+   * the request adding it to the space's store.
+   */
+  attaching?: ComposerAttachment[];
+
   /** The message being edited. */
   editing?: MessageCell;
 
-  /** The thread shown beside the conversation, by its root. */
-  thread?: MessageCell;
+  /**
+   * The thread shown beside the conversation, by its root, read as a message
+   * a reply names is.
+   */
+  thread?: Cell<RepliedMessage>;
+
+  /** The message of the open thread the next send there answers. */
+  threadQuotes?: MessageCell;
 }
 
 /** The cell holding a session's composer state. */
@@ -667,413 +761,1146 @@ export type ComposerCell = Writable<
   ComposerState | Default<Record<PropertyKey, never>>
 >;
 
-/** The acts on a message, each performed by a handler of its own. */
-type MessageAct = "send" | "edit" | "delete" | "obliterate";
+/** What a room asks of its viewer's manager's `joinRoom`: the room itself. */
+export interface JoinRoomRequest {
+  /** The root explicitly declaring a room held inside a container. */
+  container?: Cell<ChatContainer>;
 
-/**
- * The room's records, and a rendered control's bindings, as every handler
- * that changes the room is bound to them.
- */
-export interface RoomActState {
-  /** The viewer's profile, which holds no value until it resolves. */
-  myProfile: ProfileCell | undefined;
-
-  /** The room's kind. */
-  kind: ChatRoomKind;
-
-  /** The room's messages. */
-  messages: MessagesCell;
-
-  /** Every message's reaction list. */
-  reactionLists: ReactionListsCell;
-
-  /** The requests the room has acted on. */
-  requests: RequestsCell;
-
-  /** The times the room has recorded something at. */
-  usedTimes: UsedTimesCell;
-
-  /** The room's recent activity. */
-  activity: ActivityCell;
-
-  /** Where the activity's numbering stands. */
-  counters: ActivityCountersCell;
-
-  /** A rendered control's message: the one acted on, or replied to. */
-  message?: MessageCell;
-
-  /** Where a rendered control's reply is shown. */
-  shownIn?: ShownIn;
+  /** The room the viewer has joined. */
+  room: Cell<ChatRoomLink>;
 
   /**
-   * The session's composer state. Every binding passes it: an optional cell
-   * left unbound would read back as a handle into the binding itself.
+   * Whether the viewer joined the room by sending a message or a reaction, as
+   * `JoinedEvent` says.
+   */
+  messageAct?: boolean;
+}
+
+/** What a room's write tells `tellManagerJoined` of how the viewer joined. */
+export interface JoinedEvent {
+  /**
+   * Whether the write was a message or a reaction. One comes with every such
+   * write and none changes the room's title, so the manager leaves the title
+   * its catalog lists the room under as it is; any other join brings that
+   * title up to the room's.
+   */
+  messageAct?: boolean;
+}
+
+/**
+ * Whether `catalog` keeps the room in `space` as one of its user's chats; a
+ * catalog that doesn't read as one keeps none.
+ */
+export const listsRoomIn = (
+  catalog: unknown,
+  space: string | undefined,
+): boolean => {
+  if (!isSharedSpaceCatalog(catalog) || space === undefined) return false;
+  const entry = catalog.entries[space];
+  return entry?.kind === CHAT_ROOM_OFFER_KIND && entry.state === "saved";
+};
+
+/** What every message and reaction act is bound to. */
+export interface ActState {
+  /** The viewer's profile, which holds no value until it resolves. */
+  myProfile: ProfileCell | undefined;
+}
+
+/** What every send is bound to. */
+export interface SendState extends ActState {
+  /** The room's messages, which a send pushes its message onto. */
+  messages: MessagesCell;
+
+  /**
+   * Tells the viewer's manager the viewer has joined the room, as
+   * `tellManagerJoined` does, in an event of its own; absent where nothing is
+   * told. The act's own transaction reads nothing of the manager, which can
+   * carry a label the room's space doesn't admit.
+   */
+  joined?: Stream<JoinedEvent>;
+}
+
+/** What a rendered composer's send is bound to. */
+export interface ComposerSendState extends SendState {
+  /**
+   * The session's composer state, whose reply and attachments the send takes
+   * and ends.
    */
   composer: ComposerCell;
 
   /**
-   * For a rendered composer's send, which reply it takes from the composer:
-   * the main reply, or the open thread. Other sends take none from it.
+   * The space's file store, whose outcomes say which entry each attachment's
+   * request added; absent while the space keeps none.
    */
-  replyFrom?: "replyTo" | "thread";
+  store?: Cell<FileStoreOutput>;
+}
 
+/**
+ * What a send that may title the thread it joins is bound to, beside what
+ * every send is.
+ */
+export interface TitlingState {
+  /**
+   * What the room keeps about its threads, where a send that joins a thread
+   * with no title yet records the title it carries.
+   */
+  threadInfo: ThreadInfoCell;
+}
+
+/** What `commitSend` is bound to. */
+export interface EventSendState extends SendState, TitlingState {}
+
+/** What a rendered thread composer's send is bound to. */
+export interface ThreadSendState extends ComposerSendState, TitlingState {
+  /** Where the reply is shown. */
+  shownIn: ShownIn;
+}
+
+/** What a rendered message's reply control is bound to. */
+export interface ReplyState extends SendState {
+  /** The message replied to. */
+  message: MessageCell;
+
+  /** Where the reply is shown. */
+  shownIn: ShownIn;
+}
+
+/** What an act on one of the room's messages is bound to. */
+export interface MessageActState extends ActState {
+  /**
+   * One of the room's records, which names the room's space: an act takes a
+   * message of that space and no other, and reads nothing of the record.
+   */
+  room: Cell<unknown>;
+
+  /** A rendered control's message, the one acted on. */
+  message?: MessageCell;
+}
+
+/** What `commitEdit` is bound to. */
+export interface EditState extends MessageActState {
+  /** The session's composer state, whose edit an edit ends. */
+  composer: ComposerCell;
+}
+
+/** What `commitObliterate` is bound to. */
+export interface ObliterateState extends MessageActState {
+  /** The room's kind. */
+  kind: ChatRoomKind;
+
+  /**
+   * Whether the room lets an OWNER of its space obliterate any message;
+   * absent, it doesn't.
+   */
+  ownersMayObliterate?: boolean;
+}
+
+/** What `commitDeleteReaction` is bound to, and `commitSendReaction` too. */
+export interface ReactionState extends MessageActState {
   /** A rendered control's emoji. */
   emoji?: string;
+}
 
+/** What `commitDeleteReaction` is bound to. */
+export interface DeleteReactionState extends MessageActState {
+  /** A rendered tally's reaction of the viewer's, the one removed. */
+  reaction?: Cell<ChatReaction>;
+}
+
+/** What `commitSendReaction` is bound to. */
+export interface AddReactionState extends ReactionState {
   /** A rendered reaction picker's open state, closed by a reaction. */
   pickerOpen?: Writable<boolean>;
 
   /** Whether this binding closes `pickerOpen`, which only a picker binds. */
   closesPicker?: boolean;
+
+  /** Tells the viewer's manager the viewer has joined, as `SendState` says. */
+  joined?: Stream<JoinedEvent>;
+}
+
+/** The part of the viewer's manager `tellManagerJoined` reaches. */
+export interface JoiningManager {
+  /** Makes a room the viewer has joined one of their chats. */
+  joinRoom?: Stream<JoinRoomRequest>;
+}
+
+/** What `tellManagerJoined` is bound to. */
+export interface ManagerJoinState {
+  /**
+   * Whether the room is one a manager can take the viewer into: it names
+   * itself, and is standalone or its container's declared conversation.
+   * Absent, it isn't. It says nothing of the manager, so that what the room
+   * stores reads nothing of a manager that can carry a label the room's space
+   * doesn't admit.
+   */
+  canJoin?: boolean;
+
+  /** The container's declaration, for a room held inside another space. */
+  container?: Cell<ChatContainer>;
+
+  /**
+   * The viewer's manager; absent while the viewer has none, or theirs hasn't
+   * resolved.
+   */
+  manager?: JoiningManager;
+
+  /** The room itself, as the viewer's manager links it. */
+  self?: Cell<ChatRoomLink>;
 }
 
 /**
- * Performs one message act: send, edit, delete, or obliterate. Each act is
- * refused silently when the event breaks the rules `ChatRoomOutput` states for
- * its stream; otherwise it records the change, an activity entry, and the
- * request, all in one transaction.
+ * Tells the viewer's manager the viewer has joined the room. The manager's
+ * own event checks its private catalog, so catalog reads stay in the
+ * manager's event. For an already listed room it changes no membership, and
+ * brings the title its catalog lists the room under up to the room's, except
+ * for a join marked `messageAct`, which leaves the title as it is. A room's
+ * acts send it an event once they have recorded what the viewer wrote, saying
+ * whether that was a message or a reaction, which it passes on.
+ *
+ * The manager is read here, as a value, rather than by what the room stores:
+ * a stream bound to a manager that isn't there still reads as present, so
+ * only the manager's own value says whether it has a `joinRoom`, and this
+ * event writes nothing in the room's space.
  */
-const performMessageAct = (
-  op: MessageAct,
-  event: RoomStreamEvent,
-  state: RoomActState,
-): void => {
-  const {
-    myProfile,
-    kind,
-    messages,
-    reactionLists,
-    requests,
-    usedTimes,
-    activity,
-    counters,
-    composer,
-  } = state;
-  const profile = myProfile?.resolveAsCell();
-  if (profile?.get() === undefined) return;
-  const sender = currentPrincipal();
-  if (sender === undefined) return;
-  const requestId = event?.requestId ?? eventKey();
-  const requestKey = requestKeyOf(sender, requestId);
-  if (actedOn(requests, requestKey)) return;
-  const clock = clockNsec();
-  const entries = messageEntries(messages);
-  const typed = event?.target?.value;
-  const version: ChatMessageVersion | undefined = event?.version ??
-    (typeof typed === "string"
-      ? { body: typed.trim(), sentAt: epochNsec(clock) }
-      : undefined);
-
-  if (op === "send") {
-    if (version === undefined || !isValidBody(version.body)) return;
-    // A send arriving again after its memo has expired finds the message it
-    // made, and changes nothing.
-    if (messages.elementById(requestKey).get() !== undefined) {
-      rememberRequest(requests, requestKey, clock);
-      return;
-    }
-    const composing = composer.get();
-    const composed = state.replyFrom === "thread"
-      ? composing?.thread
-      : state.replyFrom === "replyTo"
-      ? composing?.replyTo
-      : undefined;
-    // A cleared link still reads back as a cell, holding nothing.
-    const fromComposer = composed?.get() === undefined ? undefined : composed;
-    const replyCell = (event?.replyTo?.message ?? state.message ?? fromComposer)
-      ?.resolveAsCell();
-    const shownIn = event?.replyTo?.shownIn ?? state.shownIn ?? "main";
-    const target = replyCell === undefined
-      ? undefined
-      : entryFor(entries, replyCell);
-    if (replyCell !== undefined) {
-      if (target === undefined || isDeleted(target.record)) return;
-      if (!SHOWN_IN.includes(shownIn)) return;
-      if (shownIn === "main" && !isInMain(target)) return;
-    }
-    const sentAt = claimTime(
-      usedTimes,
-      clock,
-      nsecOf(version.sentAt),
-      target?.sentAt,
-    );
-    if (sentAt === undefined) return;
-    const loggedAt = claimTime(usedTimes, clock);
-    if (loggedAt === undefined) return;
-    // The message and its reactions are addressed by the request that sent
-    // it, which names one message in every session.
-    const record = messages.elementById(requestKey);
-    // A message may link only a list that exists, so the list is written
-    // before the message links it.
-    const reactions = reactionLists.elementById(requestKey);
-    reactions.set([]);
-    record.set({
-      authorProfile: profile,
-      body: version.body,
-      sentAt,
-      earlierVersions: [],
-      ...(replyCell === undefined
-        ? {}
-        : { replyTo: { message: replyCell, shownIn } }),
-      reactions,
-    } as SentMessage);
-    messages.addUnique(record);
-    appendActivity(activity, counters, loggedAt, clock, requestId, record);
-    rememberRequest(requests, requestKey, clock);
-    if (state.replyFrom === "replyTo" && composing?.replyTo !== undefined) {
-      composer.key("replyTo").set(undefined);
-    }
-    return;
-  }
-
-  const target = (event?.message ?? state.message)?.resolveAsCell();
-  const entry = entryFor(entries, target);
-  if (target === undefined || entry === undefined) return;
-  const current = entry.record;
-  const isAuthor = current.authorProfile !== undefined &&
-    equals(current.authorProfile, profile);
-  const deletionObliterates = op === "delete" &&
-    FABRICHAT_POLICY.deletionIsObliteration;
-
-  if (op === "obliterate" || deletionObliterates) {
-    if (current.authorProfile === undefined) return;
-    const allowed = op === "delete" || kind === "direct"
-      ? isAuthor
-      : FABRICHAT_POLICY.ownersMayObliterate && isOwnerOf(messages);
-    if (!allowed) return;
-    if (op === "delete" && isDeleted(current)) return;
-    const editedAt = claimTime(usedTimes, clock);
-    if (editedAt === undefined) return;
-    const loggedAt = claimTime(usedTimes, clock);
-    if (loggedAt === undefined) return;
-    current.reactions?.set([]);
-    target.set({
-      body: { deleted: true },
-      sentAt: current.sentAt,
-      editedAt,
-      earlierVersions: [],
-      ...(current.replyTo === undefined ? {} : { replyTo: current.replyTo }),
-    } as SentMessage);
-    appendActivity(
-      activity,
-      counters,
-      loggedAt,
-      clock,
-      requestId,
-      target,
-      target,
-    );
-    rememberRequest(requests, requestKey, clock);
-    return;
-  }
-
-  if (!isAuthor || isDeleted(current)) return;
-  const kept: ChatMessageVersion[] = FABRICHAT_POLICY.keepsHistory
-    ? [...(current.earlierVersions ?? []), {
-      body: current.body as string,
-      sentAt: current.editedAt ?? current.sentAt,
-    }]
-    : [];
-
-  if (op === "delete") {
-    const editedAt = claimTime(usedTimes, clock);
-    if (editedAt === undefined) return;
-    const loggedAt = claimTime(usedTimes, clock);
-    if (loggedAt === undefined) return;
-    current.reactions?.set([]);
-    target.set({
-      authorProfile: current.authorProfile,
-      body: { deleted: true },
-      sentAt: current.sentAt,
-      editedAt,
-      earlierVersions: kept,
-      ...(current.replyTo === undefined ? {} : { replyTo: current.replyTo }),
-    } as SentMessage);
-    appendActivity(activity, counters, loggedAt, clock, requestId, target);
-    rememberRequest(requests, requestKey, clock);
-    return;
-  }
-
-  if (version === undefined || !isValidBody(version.body)) return;
-  const editedAt = claimTime(usedTimes, clock, nsecOf(version.sentAt));
-  if (editedAt === undefined) return;
-  const loggedAt = claimTime(usedTimes, clock);
-  if (loggedAt === undefined) return;
-  target.set({
-    authorProfile: current.authorProfile,
-    body: version.body,
-    sentAt: current.sentAt,
-    editedAt,
-    earlierVersions: kept,
-    ...(current.replyTo === undefined ? {} : { replyTo: current.replyTo }),
-    ...(current.reactions === undefined
-      ? {}
-      : { reactions: current.reactions }),
-  } as SentMessage);
-  appendActivity(activity, counters, loggedAt, clock, requestId, target);
-  rememberRequest(requests, requestKey, clock);
-  const editing = composer.get()?.editing;
-  if (editing !== undefined && equals(editing, target)) {
-    composer.key("editing").set(undefined);
-  }
-};
-
-/**
- * Adds or removes the sender's reaction to a message. Adding one already
- * there, or removing one that isn't, changes nothing. A reaction is kept at an
- * address within its message's list derived from its reactor and its emoji,
- * so one person's one reaction has a single address in every session.
- */
-const performReactionAct = (
-  op: "add" | "remove",
-  event: RoomStreamEvent,
-  state: RoomActState,
-): void => {
-  const { myProfile, messages, requests, usedTimes, activity, counters } =
-    state;
-  const profile = myProfile?.resolveAsCell();
-  if (profile?.get() === undefined) return;
-  const sender = currentPrincipal();
-  if (sender === undefined) return;
-  // A reaction's address derives from its reactor's profile.
-  const reactorKey = entityKeyOf(profile);
-  if (reactorKey === undefined) return;
-  const typed = event?.target?.value?.trim();
-  const emoji = event?.emoji ?? state.emoji ?? typed;
-  if (!isSingleEmoji(emoji)) return;
-  const requestId = event?.requestId ?? eventKey();
-  const requestKey = requestKeyOf(sender, requestId);
-  if (actedOn(requests, requestKey)) return;
-  const target = (event?.message ?? state.message)?.resolveAsCell();
-  const entry = entryFor(messageEntries(messages), target);
-  if (target === undefined || entry === undefined) return;
-  if (isDeleted(entry.record)) return;
-  const list = entry.record.reactions;
-  if (list === undefined) return;
-  const clock = clockNsec();
-  if (state.closesPicker === true) state.pickerOpen?.set(false);
-  const reactionKey = JSON.stringify([reactorKey, emoji]);
-  const mine = list.elementById(reactionKey);
-  const present = mine.get() !== undefined;
-  if (op === "add" && !present) {
-    const sentAt = claimTime(usedTimes, clock);
-    if (sentAt === undefined) return;
-    const loggedAt = claimTime(usedTimes, clock);
-    if (loggedAt === undefined) return;
-    mine.set({ reactorProfile: profile, emoji, sentAt } as SentReaction);
-    list.addUnique(mine);
-    appendActivity(activity, counters, loggedAt, clock, requestId, target);
-  }
-  if (op === "remove" && present) {
-    const loggedAt = claimTime(usedTimes, clock);
-    if (loggedAt === undefined) return;
-    list.removeByValue(mine);
-    // The record outlives its place in the list, and it is the record that
-    // says whether the reaction is there, so removing it clears it too.
-    const cleared: Writable<SentReaction | undefined> = list.elementById(
-      reactionKey,
-    );
-    cleared.set(undefined);
-    appendActivity(activity, counters, loggedAt, clock, requestId, target);
-  }
-  rememberRequest(requests, requestKey, clock);
-};
-
-/** Sends a message, from `ChatSendSurface`. */
-export const commitSend = handler<RoomStreamEvent, RoomActState>(
-  (event, state) => performMessageAct("send", event, state),
-);
-
-/** Edits the sender's message, from `ChatEditSurface`. */
-export const commitEdit = handler<RoomStreamEvent, RoomActState>(
-  (event, state) => performMessageAct("edit", event, state),
-);
-
-/** Deletes the sender's message, from `ChatDeleteSurface`. */
-export const commitDelete = handler<RoomStreamEvent, RoomActState>(
-  (event, state) => performMessageAct("delete", event, state),
-);
-
-/** Obliterates a message, from `ChatObliterateSurface`. */
-export const commitObliterate = handler<RoomStreamEvent, RoomActState>(
-  (event, state) => performMessageAct("obliterate", event, state),
-);
-
-/** Adds the sender's reaction, from `ChatReactSurface`. */
-export const commitSendReaction = handler<RoomStreamEvent, RoomActState>(
-  (event, state) => performReactionAct("add", event, state),
-);
-
-/** Removes the sender's reaction, from `ChatReactSurface`. */
-export const commitDeleteReaction = handler<RoomStreamEvent, RoomActState>(
-  (event, state) => performReactionAct("remove", event, state),
-);
-
-/** What `commitWindow` is bound to. */
-export interface WindowActState {
-  /** Whether the binding opens (or moves) a window, or closes one. */
-  op: "open" | "close";
-
-  /** The room's messages. */
-  messages: MessagesCell;
-
-  /** The session's windows. */
-  windows: WindowsCell;
-}
-
-/** A window request, whose thread root is one of the room's messages. */
-export interface RoomWindowEvent extends Omit<WindowEvent, "root"> {
-  /** The root of the thread to show; absent for the main conversation. */
-  root?: MessageCell;
-}
-
-/**
- * Opens, moves, or closes one of the sending session's windows onto the
- * messages. It changes nothing but that session's windows, so it keeps no
- * request memory: repeating a request sets or removes the same window again.
- */
-export const commitWindow = handler<RoomWindowEvent, WindowActState>(
-  (event, { op, messages, windows }) => {
-    const windowId = event?.windowId;
-    if (typeof windowId !== "string" || windowId === "") return;
-    const current = (windows.get() ?? {}) as ChatMessageWindows;
-    if (op === "close") {
-      if (!(windowId in current)) return;
-      windows.set(
-        Object.fromEntries(
-          Object.entries(current).filter(([id]) => id !== windowId),
-        ),
-      );
-      return;
-    }
-    const request = event;
-    if (
-      !(windowId in current) &&
-      Object.keys(current).length >= FABRICHAT_POLICY.maxOpenWindows
-    ) {
-      return;
-    }
-    const entries = messageEntries(messages);
-    const root = request.root?.resolveAsCell();
-    const rootEntry = root === undefined ? undefined : entryFor(entries, root);
-    if (root !== undefined && rootEntry === undefined) return;
-    const view = rootEntry === undefined
-      ? entries.filter(isInMain).sort(compareEntries)
-      : threadView(entries, rootEntry.key);
-    if (view === undefined) return;
-    const anchor = anchorOf(request.from);
-    if (anchor === undefined) return;
-    const count = windowCount(request.count, FABRICHAT_POLICY.maxWindowCount);
-    const slice = windowSlice(view, anchor, count);
-    if (slice === undefined) return;
-    windows.key(windowId).set({
-      requestId: request.requestId,
-      ...(root === undefined ? {} : { root }),
-      messages: view.slice(slice.start, slice.end).map((entry) =>
-        entry.cell.resolveAsCell()
-      ),
-      hasOlder: slice.hasOlder,
-      hasNewer: slice.hasNewer,
+export const tellManagerJoined = handler<JoinedEvent, ManagerJoinState>(
+  (event, { canJoin, container, manager, self }) => {
+    // The room decides first, so a room the viewer can't join reads nothing
+    // of the manager.
+    if (canJoin !== true || self === undefined) return;
+    const joinRoom = manager?.joinRoom;
+    if (joinRoom === undefined) return;
+    joinRoom.send({
+      room: self,
+      container,
+      ...(event?.messageAct === true ? { messageAct: true } : {}),
     });
   },
 );
+
+/**
+ * The profile `myProfile` resolves to, once it holds a value; `undefined`
+ * until it does.
+ */
+const resolvedProfile = (
+  myProfile: ProfileCell | undefined,
+): ProfileCell | undefined => {
+  const profile = myProfile?.resolveAsCell();
+  return profile?.get() === undefined ? undefined : profile;
+};
+
+/** The text an event sends: its `body`, or a rendered control's, trimmed. */
+const textOf = (event: RoomStreamEvent): string => {
+  const text = event?.body ?? event?.target?.value;
+  return typeof text === "string" ? text.trim() : "";
+};
+
+/** Whether `event` carries its text as a string, empty or not. */
+const hasTextIn = (event: RoomStreamEvent): boolean =>
+  typeof (event?.body ?? event?.target?.value) === "string";
+
+/**
+ * The emoji an event sends: its own, the one its control is bound to, or the
+ * text typed into a rendered control.
+ */
+const emojiOf = (event: RoomStreamEvent, bound: string | undefined): unknown =>
+  event?.emoji ?? bound ?? event?.target?.value?.trim();
+
+/**
+ * Whether `target` is one of the room's messages as far as an act on it, or
+ * a reply to it, goes: a message of the space `room`, any of the room's
+ * records, lives in. An act on a message elsewhere would apply this room's
+ * rules, its kind and its policy, to a message another room's rules govern,
+ * and a reply to one would have the room's views read a document of
+ * another space.
+ */
+const isInRoomOf = (room: Cell<unknown>, target: Cell<unknown>): boolean =>
+  spaceOf(target) === spaceOf(room);
+
+/** Why an act from a sender whose profile hasn't resolved is refused. */
+const NO_PROFILE = "Your profile hasn't loaded yet.";
+
+/** Why an act on, or a reply to, a message the room doesn't hold is refused. */
+const NOT_IN_ROOM = "That message isn't in this chat.";
+
+/** Why an act on a deleted message, other than its obliteration, is refused. */
+const DELETED = "That message was deleted.";
+
+/** Why a file is refused in a space that keeps no file store yet. */
+const NOWHERE_FOR_FILES = "This chat has nowhere to keep files yet.";
+
+/** Why a reply whose links don't fit where it is shown is refused. */
+const REPLY_SHAPE =
+  "A reply in a thread names the thread's root, and one in the conversation names the message it quotes.";
+
+/** Why a reply naming a message already in a thread as its root is refused. */
+const NOT_A_ROOT = "That message is in a thread, so it can't start one.";
+
+/** Why a reply in a thread quoting a message outside it is refused. */
+const QUOTE_OUTSIDE_THREAD =
+  "A reply in a thread can quote only a message of that thread.";
+
+/** Why a quote in the conversation cannot name a thread-only message. */
+const QUOTE_OUTSIDE_MAIN =
+  "A reply in the conversation can quote only a message shown there.";
+
+/** Why a thread's title with no text in it is refused. */
+const NO_THREAD_TITLE_TEXT = "A thread's title needs some text.";
+
+/** Whether `link` names a message: it is set, and its target holds one. */
+const namesMessage = (link: Cell<unknown> | undefined): boolean =>
+  link !== undefined && link.get() !== undefined;
+
+/**
+ * `reply` as the room stores it, each link resolved to the message's own
+ * cell, once the room has checked it: that its links fit where it is shown,
+ * that each names one of the room's messages, that its `thread` is in no
+ * thread itself, and that a `quotes` beside a `thread` is that thread's root
+ * or one of its messages.
+ *
+ * @throws If any of those doesn't hold.
+ */
+const checkedReply = (
+  messages: MessagesCell,
+  reply: StoredReply,
+): StoredReply => {
+  const root = namesMessage(reply.thread)
+    ? reply.thread?.resolveAsCell()
+    : undefined;
+  const quoted = namesMessage(reply.quotes)
+    ? reply.quotes?.resolveAsCell()
+    : undefined;
+  if (
+    root === undefined
+      ? quoted === undefined || reply.shownIn !== "main"
+      : reply.shownIn === "main"
+  ) {
+    throw new Error(REPLY_SHAPE);
+  }
+  for (const target of [root, quoted]) {
+    if (target !== undefined && !isInRoomOf(messages, target)) {
+      throw new Error(NOT_IN_ROOM);
+    }
+  }
+  if (root !== undefined && namesMessage(root.get()?.replyTo?.thread)) {
+    throw new Error(NOT_A_ROOT);
+  }
+  if (root !== undefined && quoted !== undefined && !equals(quoted, root)) {
+    const joined = quoted.get()?.replyTo?.thread;
+    if (!namesMessage(joined) || !equals(joined, root)) {
+      throw new Error(QUOTE_OUTSIDE_THREAD);
+    }
+  }
+  return {
+    ...(root === undefined ? {} : { thread: root }),
+    ...(quoted === undefined ? {} : { quotes: quoted }),
+    shownIn: reply.shownIn,
+  };
+};
+
+/**
+ * Checks a quote made by the room's own controls at send time. The quoted
+ * message must still be live and, for a main reply, shown in the conversation.
+ * A thread's root is checked only when it is itself being quoted.
+ *
+ * @throws If the quoted message is deleted or outside the main conversation.
+ */
+const checkComposedQuote = (
+  message: MessageCell,
+  shownIn: StoredReply["shownIn"],
+): void => {
+  const record = message.get();
+  if (isDeleted(record)) throw new Error(DELETED);
+  if (shownIn === "main" && record?.replyTo?.shownIn === "thread") {
+    throw new Error(QUOTE_OUTSIDE_MAIN);
+  }
+};
+
+/**
+ * The files `links` names, as the attachments of a message sent into the
+ * room: each an entry of the space `room`, any of the room's records, lives
+ * in, whose bytes are in that space's blob store too, and not removed, and no
+ * more of them than the room's policy allows. Each entry is read alone, so a
+ * send reads no more of the store than the files it attaches.
+ *
+ * @throws If there are more than the policy allows, or one names no entry, an
+ *   entry outside the room's space, one whose blob is in another space, or a
+ *   removed one.
+ */
+const attachmentsIn = (
+  room: Cell<unknown>,
+  links: readonly (Cell<FileEntry> | undefined)[] | undefined,
+): Cell<FileEntry>[] => {
+  if (links === undefined) return [];
+  const max = FABRICHAT_POLICY.maxAttachments;
+  if (links.length > max) {
+    throw new Error(`A message can have at most ${max} attachments.`);
+  }
+  return links.map((link) => {
+    const entry = link?.resolveAsCell();
+    if (entry === undefined || !isInRoomOf(room, entry)) {
+      throw new Error("That file isn't in this chat's space.");
+    }
+    const value = entry.get();
+    if (value === undefined) throw new Error("That file can't be found.");
+    if (value.blob?.space !== spaceOf(room)) {
+      throw new Error("That file's bytes aren't in this chat's space.");
+    }
+    if (value.removedAt !== undefined) {
+      throw new Error("That file was removed.");
+    }
+    return entry;
+  });
+};
+
+/**
+ * The message `link` names, as the target of an act: one of the room's
+ * messages, by `isInRoomOf()`.
+ *
+ * @throws If `link` names no message, or one outside the room's space.
+ */
+const messageInRoom = (
+  room: Cell<unknown>,
+  link: MessageCell | undefined,
+): MessageCell => {
+  const target = link?.resolveAsCell();
+  if (target === undefined || !isInRoomOf(room, target)) {
+    throw new Error(NOT_IN_ROOM);
+  }
+  return target;
+};
+
+/**
+ * Why `messageRightsOf()` refuses an obliteration, for a person to read: the
+ * room's `kind` and whether its OWNERs may obliterate decide who may.
+ */
+const obliterationRefusal = (
+  kind: ChatRoomKind,
+  ownersMayObliterate: boolean,
+): string =>
+  kind === "direct"
+    ? ownersMayObliterate
+      ? "Only an owner of this chat can remove someone else's message."
+      : "Only its author can remove a message in this chat."
+    : ownersMayObliterate
+    ? "Only an owner of this chat can remove a message."
+    : "Messages in this chat can't be removed.";
+
+/**
+ * Leaves a tombstone of the message at `target`: its time and what it replies
+ * to stay, its body becomes the deleted marker, its attachments and reactions
+ * go, and so does its author unless `keepsAuthor`. The whole message is
+ * written, where an edit writes its text alone, since only a write of the
+ * whole drops a key: a key written `undefined` is present, and an author's
+ * link so written reads as a handle to nothing rather than as no author.
+ */
+const leaveTombstone = (target: MessageCell, keepsAuthor: boolean): void => {
+  const current = target.get();
+  target.set({
+    ...(keepsAuthor && current.authorProfile !== undefined
+      ? { authorProfile: current.authorProfile }
+      : {}),
+    body: { deleted: true },
+    sentAt: current.sentAt,
+    editedAt: now(),
+    ...(current.replyTo === undefined ? {} : { replyTo: current.replyTo }),
+  } as SentMessage);
+};
+
+/**
+ * Pushes a send onto `messages`: the text `event` carries, attaching
+ * `attached`, from `myProfile`, joining the thread and quoting the message
+ * `reply` names, where it names any, with a reaction list of its own; then
+ * `joined` is told. A send that joins a thread with no title yet, carrying a
+ * `threadTitle`, gives the thread that title in `threadInfo`.
+ *
+ * Every handler here takes the event a rendered control of the room sends,
+ * and the controls offer only acts the viewer may take, so a handler checks
+ * what the element's write policy does not — whose message it is, and that
+ * a message acted on or replied to is one of the room's — and refuses
+ * anything else by throwing, with a reason a person can read, before it
+ * writes: the run fails and writes nothing, and a send that awaits its
+ * handling is rejected with the reason. An act that would change nothing,
+ * such as a reaction added twice, writes nothing and succeeds.
+ *
+ * @throws If the profile hasn't resolved, the send has neither text nor
+ *   attachments, its text isn't a string, `attachmentsIn()` refuses its
+ *   attachments, `checkedReply()` refuses `reply`, or the send carries a
+ *   `threadTitle` it can't record: it joins no thread, it comes from a
+ *   control that titles none, the title has no text, or the thread has a
+ *   title already.
+ */
+const sendInto = (
+  event: RoomStreamEvent,
+  attached: readonly (Cell<FileEntry> | undefined)[] | undefined,
+  myProfile: ProfileCell | undefined,
+  messages: MessagesCell,
+  reply: StoredReply | undefined,
+  joined: Stream<JoinedEvent> | undefined,
+  threadInfo?: ThreadInfoCell,
+): void => {
+  const profile = resolvedProfile(myProfile);
+  if (profile === undefined) throw new Error(NO_PROFILE);
+  const body = textOf(event);
+  const attachments = attachmentsIn(messages, attached);
+  if (body === "" && attachments.length === 0) {
+    throw new Error("This send has no text in `body`, and no attachments.");
+  }
+  if (!hasTextIn(event)) throw new Error("This send's `body` isn't text.");
+  const stored = reply === undefined
+    ? undefined
+    : checkedReply(messages, reply);
+  const titled = event?.threadTitle === undefined
+    ? undefined
+    : threadTitleRecord(stored?.thread, threadInfo, event.threadTitle);
+  if (titled !== undefined && titled.record.get() !== undefined) {
+    throw new Error("This thread has a title already; rename it instead.");
+  }
+  // A message may link only a list that exists, so the list is made before
+  // the message links it.
+  const reactions = new Writable<ReactionsValue>([] as ReactionsValue);
+  messages.push({
+    authorProfile: profile,
+    body,
+    ...(attachments.length === 0 ? {} : { attachments }),
+    sentAt: now(),
+    ...(stored === undefined ? {} : { replyTo: stored }),
+    reactions,
+  } as SentMessage);
+  if (titled !== undefined) {
+    titled.record.set(titled.value);
+    threadInfo?.addUnique(titled.record);
+  }
+  joined?.send({ messageAct: true });
+};
+
+/**
+ * The record of the thread `root` roots in `threadInfo`, and what setting its
+ * title to `title` stores there.
+ *
+ * @throws If `root` names no message, `threadInfo` is absent, as for a send
+ *   whose control doesn't title threads, or `title` is not a string with
+ *   some text in it.
+ */
+const threadTitleRecord = (
+  root: Cell<unknown> | undefined,
+  threadInfo: ThreadInfoCell | undefined,
+  title: unknown,
+): { record: Writable<StoredThreadInfo>; value: StoredThreadInfo } => {
+  const key = root === undefined ? undefined : threadInfoKeyOf(root);
+  if (root === undefined || key === undefined) {
+    throw new Error("Only a send in a thread can give the thread a title.");
+  }
+  if (threadInfo === undefined) {
+    throw new Error("This send can't give a thread a title.");
+  }
+  const text = typeof title === "string" ? title.trim() : "";
+  if (text === "") throw new Error(NO_THREAD_TITLE_TEXT);
+  return {
+    record: threadInfo.elementById(key),
+    value: { root: root.resolveAsCell(), title: text } as StoredThreadInfo,
+  };
+};
+
+/**
+ * Sends a message, from `ChatSendSurface`: the event's text, joining the
+ * thread and quoting the message the event's `replyTo` names, and titling a
+ * thread it starts with the event's `threadTitle`, where it carries those.
+ */
+export const commitSend = handler<RoomStreamEvent, EventSendState>(
+  (event, { myProfile, messages, threadInfo, joined }) => {
+    sendInto(
+      event,
+      event?.attachments,
+      myProfile,
+      messages,
+      event?.replyTo,
+      joined,
+      threadInfo,
+    );
+  },
+);
+
+/**
+ * The entries the composer's attachments added to `store`, in their order,
+ * leaving out any the store refused, which the composer shows as refused. A
+ * request's outcome is read by its id alone, so the send reads no more of
+ * the store's outcomes than its own.
+ *
+ * @throws If a request has no outcome yet, so that its file is still being
+ *   added, or the composer attaches files to a space with no store.
+ */
+const composedAttachments = (
+  attaching: readonly ComposerAttachment[],
+  store: Cell<FileStoreOutput> | undefined,
+): Cell<FileEntry>[] => {
+  if (attaching.length === 0) return [];
+  const requests = store?.resolveAsCell().key("requests");
+  if (requests === undefined) throw new Error(NOWHERE_FOR_FILES);
+  return attaching.flatMap(({ requestId }) => {
+    const outcome = requests.key(requestId).get() as
+      | FileRequestOutcome
+      | undefined;
+    if (outcome === undefined) {
+      throw new Error("A file is still being attached.");
+    }
+    return outcome.status === "done" ? [outcome.entry] : [];
+  });
+};
+
+/**
+ * Sends a rendered composer's text, from `ChatSendSurface`, replying in the
+ * main conversation to the message the composer holds, if any, and attaching
+ * the files the store added for it; then ends that reply, and those
+ * attachments.
+ */
+export const commitComposerSend = handler<RoomStreamEvent, ComposerSendState>(
+  (event, { myProfile, messages, composer, store, joined }) => {
+    // A cleared link still reads back as a cell, holding nothing.
+    const link = composer.get()?.replyTo;
+    const reply = link?.get() === undefined ? undefined : link;
+    if (reply !== undefined) checkComposedQuote(reply, "main");
+    const attaching = composer.get()?.attaching ?? [];
+    sendInto(
+      event,
+      composedAttachments(attaching, store),
+      myProfile,
+      messages,
+      reply === undefined ? undefined : { quotes: reply, shownIn: "main" },
+      joined,
+    );
+    if (reply !== undefined) composer.key("replyTo").set(undefined);
+    if (attaching.length > 0) composer.key("attaching").set(undefined);
+  },
+);
+
+/** One file `cf-file-input` reports it has stored in the blob store. */
+export interface UploadedFile {
+  /** The blob's id. */
+  id: string;
+
+  /** The name the file had. */
+  name: string;
+
+  /** The media type the blob was stored with. */
+  mediaType: string;
+
+  /** The size of the file, in bytes. */
+  size: number;
+}
+
+/** The `cf-change` event `cf-file-input` fires after storing files. */
+export interface UploadEvent {
+  detail?: { files?: UploadedFile[] };
+}
+
+/** What a composer's attach control is bound to, as it opens its picker. */
+export interface PrepareAttachState {
+  /** Creates the space's file store, unless it has one. */
+  ensureFileStore: Stream<void>;
+}
+
+/** What a composer's attach control is bound to, once files are stored. */
+export interface AttachState {
+  /** The session's composer state, whose attachments the control adds to. */
+  composer: ComposerCell;
+
+  /** The space's file store, which holds nothing while the space keeps none. */
+  store?: Cell<FileStoreOutput>;
+
+  /**
+   * Whether the space keeps a store: a link to none still reads as a cell,
+   * and reading the store itself to find out would read all of it.
+   */
+  hasStore: boolean;
+}
+
+/** What a composer's control removing an attachment is bound to. */
+export interface DropAttachmentState {
+  /** The session's composer state, whose attachment the control removes. */
+  composer: ComposerCell;
+
+  /** The request adding the attachment removed. */
+  requestId: string;
+}
+
+/**
+ * Makes sure the space has a file store before the person picks a file, by
+ * sending the room's `ensureFileStore`, which changes nothing where the space
+ * has one; `cf-file-input` fires it as it opens the file picker.
+ */
+export const prepareAttach = handler<unknown, PrepareAttachState>(
+  (_event, { ensureFileStore }) => {
+    ensureFileStore.send();
+  },
+);
+
+/**
+ * Adds each file `cf-file-input` reports it stored to the space's store,
+ * under the name it had or a free one, and to the composer's attachments as
+ * the request adding it. The store's outcome for each request says which
+ * entry it added, or why it refused, and the composer's send reads that. Each
+ * request is named by the event's key and the file's place in it, so every
+ * run of one event names the same requests, and the store adds each file once.
+ *
+ * @throws If the space has no store, or the files would make more
+ *   attachments than the room's policy allows.
+ */
+export const commitAttach = handler<UploadEvent, AttachState>(
+  (event, { composer, store, hasStore }) => {
+    const files = event?.detail?.files ?? [];
+    if (files.length === 0) return;
+    const target = hasStore === true ? store?.resolveAsCell() : undefined;
+    const space = target === undefined ? undefined : spaceOf(target);
+    if (target === undefined || space === undefined) {
+      throw new Error(NOWHERE_FOR_FILES);
+    }
+    const attaching = composer.get()?.attaching ?? [];
+    const max = FABRICHAT_POLICY.maxAttachments;
+    if (attaching.length + files.length > max) {
+      throw new Error(`A message can have at most ${max} attachments.`);
+    }
+    const key = eventKey();
+    const added = files.map((file, index) => {
+      const requestId = `attach-${key}-${index}`;
+      target.key("add").send({
+        requestId,
+        name: file.name,
+        mediaType: file.mediaType,
+        blob: { space, id: file.id },
+        size: file.size,
+        onConflict: "rename",
+      });
+      return { requestId, name: file.name };
+    });
+    composer.key("attaching").set([...attaching, ...added]);
+  },
+);
+
+/**
+ * Takes one file out of the composer's attachments. Its entry stays in the
+ * store, where the request put it.
+ */
+export const dropAttachment = handler<unknown, DropAttachmentState>(
+  (_event, { composer, requestId }) => {
+    const attaching = composer.get()?.attaching ?? [];
+    const kept = attaching.filter((file) => file.requestId !== requestId);
+    composer.key("attaching").set(kept.length === 0 ? undefined : kept);
+  },
+);
+
+/**
+ * Sends a rendered thread composer's text, from `ChatSendSurface`, into the
+ * open thread, quoting the message of the thread the composer holds, if any,
+ * and titling the thread with the event's `threadTitle` where it carries one
+ * and the thread has none; then ends that quote.
+ */
+export const commitThreadSend = handler<RoomStreamEvent, ThreadSendState>(
+  (event, { myProfile, messages, composer, shownIn, threadInfo, joined }) => {
+    // A cleared link still reads back as a cell, holding nothing.
+    const root = composer.get()?.thread;
+    const thread = root?.get() === undefined ? undefined : root;
+    const link = composer.get()?.threadQuotes;
+    const quotes = link?.get() === undefined ? undefined : link;
+    if (quotes !== undefined) checkComposedQuote(quotes, shownIn);
+    sendInto(
+      event,
+      undefined,
+      myProfile,
+      messages,
+      thread === undefined ? undefined : {
+        thread,
+        ...(quotes === undefined ? {} : { quotes }),
+        shownIn,
+      },
+      joined,
+      threadInfo,
+    );
+    if (quotes !== undefined) composer.key("threadQuotes").set(undefined);
+  },
+);
+
+/**
+ * Sends a rendered message's reply, from `ChatSendSurface`, quoting the
+ * message: in the conversation where the control is bound to show it only
+ * there, and otherwise in the thread the message is in, or the one it roots.
+ */
+export const commitReply = handler<RoomStreamEvent, ReplyState>(
+  (event, { myProfile, messages, message, shownIn, joined }) => {
+    checkComposedQuote(message, shownIn);
+    const own = message.get()?.replyTo?.thread;
+    const thread = own?.get() === undefined ? message : own;
+    sendInto(
+      event,
+      undefined,
+      myProfile,
+      messages,
+      shownIn === "main"
+        ? { quotes: message, shownIn }
+        : { thread, quotes: message, shownIn },
+      joined,
+    );
+  },
+);
+
+/**
+ * Records a new version of the sender's message, from `ChatEditSurface`: the
+ * event's text, in place of the current one, empty only where the message has
+ * attachments, which an edit leaves as they are. An edit of the message the
+ * session's composer is editing ends that edit.
+ */
+export const commitEdit = handler<RoomStreamEvent, EditState>(
+  (event, { myProfile, room, message, composer }) => {
+    const profile = resolvedProfile(myProfile);
+    if (profile === undefined) throw new Error(NO_PROFILE);
+    const target = messageInRoom(room, event?.message ?? message);
+    const current = target.get();
+    if (isDeleted(current)) throw new Error(DELETED);
+    if (!isAuthorOf(current, profile)) {
+      throw new Error("Only its author can edit a message.");
+    }
+    const body = textOf(event);
+    if (
+      !hasTextIn(event) ||
+      (body === "" && (current.attachments?.length ?? 0) === 0)
+    ) {
+      throw new Error("This edit has no text in `body`.");
+    }
+    target.key("body").set(body);
+    target.key("editedAt").set(now());
+    const editing = composer.get()?.editing;
+    if (editing !== undefined && equals(editing, target)) {
+      composer.key("editing").set(undefined);
+    }
+  },
+);
+
+/**
+ * Deletes the sender's message, from `ChatDeleteSurface`: what is left is a
+ * tombstone under its author, with no body and no reactions; or, where the
+ * room's policy makes deletion obliteration, under no author.
+ */
+export const commitDelete = handler<RoomStreamEvent, MessageActState>(
+  (event, { myProfile, room, message }) => {
+    const profile = resolvedProfile(myProfile);
+    if (profile === undefined) throw new Error(NO_PROFILE);
+    const target = messageInRoom(room, event?.message ?? message);
+    const current = target.get();
+    // Deleted already: there is nothing to delete.
+    if (isDeleted(current)) return;
+    if (!isAuthorOf(current, profile)) {
+      throw new Error("Only its author can delete a message.");
+    }
+    leaveTombstone(target, !FABRICHAT_POLICY.deletionIsObliteration);
+  },
+);
+
+/**
+ * Obliterates a message, from `ChatObliterateSurface`, where
+ * `messageRightsOf()` lets the sender: what is left is a tombstone under no
+ * author, labeled with whoever obliterated it.
+ */
+export const commitObliterate = handler<RoomStreamEvent, ObliterateState>(
+  (event, { myProfile, room, message, kind, ownersMayObliterate }) => {
+    const target = messageInRoom(room, event?.message ?? message);
+    const current = target.get();
+    // Obliterated already, its author gone: there is nothing to remove.
+    if (isDeleted(current) && current?.authorProfile === undefined) return;
+    const rights = messageRightsOf(
+      current,
+      resolvedProfile(myProfile),
+      kind,
+      isOwnerOf(target),
+      ownersMayObliterate === true,
+    );
+    if (!rights.canObliterate) {
+      throw new Error(
+        obliterationRefusal(kind, ownersMayObliterate === true),
+      );
+    }
+    leaveTombstone(target, false);
+  },
+);
+
+/**
+ * The reaction list of the message at `target`, as the cell the message
+ * links, or `undefined` where the message links none. It is addressed as a
+ * cell rather than read off the message's value: a client addresses a message
+ * through the room's public type, where the reactions read as values.
+ */
+const reactionsOf = (target: MessageCell): ReactionsCell | undefined =>
+  target.get()?.reactions === undefined
+    ? undefined
+    : target.key("reactions").resolveAsCell() as never;
+
+/**
+ * Adds the sender's reaction to a message, from `ChatReactSurface`: the
+ * event's emoji, the one its control is bound to, or the text typed in. A
+ * reaction the sender already has on the message with that emoji is not added
+ * again, and the act is done.
+ */
+export const commitSendReaction = handler<RoomStreamEvent, AddReactionState>(
+  (
+    event,
+    {
+      myProfile,
+      room,
+      message,
+      emoji: bound,
+      pickerOpen,
+      closesPicker,
+      joined,
+    },
+  ) => {
+    const profile = resolvedProfile(myProfile);
+    if (profile === undefined) throw new Error(NO_PROFILE);
+    const emoji = emojiOf(event, bound);
+    if (!isSingleEmoji(emoji)) throw new Error("A reaction is a single emoji.");
+    const target = messageInRoom(room, event?.message ?? message);
+    const list = reactionsOf(target);
+    // A send gives every message its reaction list, and a deletion takes it
+    // away, so a message without one is a deleted one.
+    if (isDeleted(target.get()) || list === undefined) {
+      throw new Error(DELETED);
+    }
+    if (closesPicker === true) pickerOpen?.set(false);
+    const reactions = (list.get() ?? []) as ChatReaction[];
+    const present = reactions.some((reaction) =>
+      reaction?.emoji === emoji && equals(reaction.reactorProfile, profile)
+    );
+    if (!present) {
+      list.push(
+        { reactorProfile: profile, emoji, sentAt: now() } as SentReaction,
+      );
+    }
+    joined?.send({ messageAct: true });
+  },
+);
+
+/**
+ * Removes the sender's reaction, from `ChatReactSurface`: the reaction the
+ * event or the binding names, by its cell, from the reactions of the message
+ * the event or the binding names. One no longer on the message removes
+ * nothing.
+ */
+export const commitDeleteReaction = handler<
+  RoomStreamEvent,
+  DeleteReactionState
+>(
+  (event, { myProfile, room, message, reaction }) => {
+    const profile = resolvedProfile(myProfile);
+    if (profile === undefined) throw new Error(NO_PROFILE);
+    const target = messageInRoom(room, event?.message ?? message);
+    const list = reactionsOf(target);
+    // A send gives every message its reaction list, and a deletion takes it
+    // away, so a message without one is a deleted one.
+    if (isDeleted(target.get()) || list === undefined) {
+      throw new Error(DELETED);
+    }
+    const removed = (event?.reaction ?? reaction)?.resolveAsCell();
+    if (removed === undefined) throw new Error("This names no reaction.");
+    const record = removed.get();
+    // One no longer there, which reads as none, removes nothing.
+    if (record === undefined) return;
+    if (!equals(record.reactorProfile, profile)) {
+      throw new Error("Only the person who reacted can remove a reaction.");
+    }
+    list.removeByValue(removed);
+  },
+);
+
+/**
+ * An event on the room's `setTitle`. A rendered control sends the text it
+ * holds as `target.value`, and no request id, which the room then mints.
+ */
+export interface SetTitleEvent {
+  /**
+   * Chosen by the sender, and unique among its retitles. The outcome is
+   * recorded under it, and sending the same event again with it changes
+   * nothing.
+   */
+  requestId?: string;
+
+  /** The new title. */
+  title?: string;
+
+  /** A rendered control's text. */
+  readonly target?: { readonly value?: string };
+}
+
+/** What `commitSetTitle` is bound to. */
+export interface SetTitleState {
+  /**
+   * The room's title as a member last set it; absent for a room whose title
+   * no member sets.
+   */
+  titles?: TitlesCell;
+
+  /**
+   * Whether the room is one a manager created in a space of its own. A
+   * space's own chat is shown by its space's name.
+   */
+  ownSpace: boolean;
+
+  /** The room's messages, which name the room's space. */
+  messages: MessagesCell;
+
+  /** The sender's retitles' outcomes. */
+  outcomes: TitleRequestsCell;
+
+  /**
+   * Why the session's latest retitle was refused, which the rendered control
+   * shows; empty once one takes effect.
+   */
+  refusal: Writable<string>;
+
+  /**
+   * Tells the viewer's manager the viewer has joined the room, as
+   * `tellManagerJoined` does, in an event of its own, which brings the title
+   * the manager's catalog lists the room under up to the new one; absent where
+   * nothing is told. The retitle's own transaction reads nothing of the
+   * manager.
+   */
+  joined?: Stream<JoinedEvent>;
+}
+
+/**
+ * Sets the room's title, which every member shares, from a trusted gesture on
+ * `ChatRetitleSurface`. Any member who can write in the room may, in a group
+ * room or a direct one. The outcome is recorded under the event's
+ * `requestId` in the sender's own outcomes, and a refusal leaves the title as
+ * it is. A retitle that takes effect then tells the sender's manager, as a
+ * write in the room does, so the catalog lists the room under the new title.
+ */
+export const commitSetTitle = handler<SetTitleEvent, SetTitleState>(
+  (event, { titles, ownSpace, messages, outcomes, refusal, joined }) => {
+    const requestId = event?.requestId ?? eventKey();
+    if (outcomes.key(requestId).get() !== undefined) return;
+    const refuse = (code: SetTitleRefusalCode, reason: string): void => {
+      outcomes.key(requestId).set({ status: "refused", reason, code });
+      refusal.set(reason);
+    };
+    if (!ownSpace || titles === undefined) {
+      refuse("fixed-title", "This chat is named by its space.");
+      return;
+    }
+    // A level not known yet is left to the space's own access list, which
+    // refuses the write where it doesn't admit it.
+    const level = spaceAccess(messages);
+    if (
+      currentPrincipal() === undefined || level === "none" || level === "READ"
+    ) {
+      refuse("not-member", "You can't write in this chat.");
+      return;
+    }
+    const proposed = event?.title ?? event?.target?.value;
+    const title = typeof proposed === "string" ? proposed.trim() : "";
+    if (title === "") {
+      refuse("invalid-title", "A chat's title needs some text.");
+      return;
+    }
+    const record = titles.elementById(TITLE_KEY);
+    record.set({ title } as StoredTitle);
+    titles.addUnique(record);
+    outcomes.key(requestId).set({ status: "done" });
+    refusal.set("");
+    joined?.send({});
+  },
+);
+
+/**
+ * An event on the room's `setThreadTitle`. A rendered control sends the text
+ * it holds as `target.value`, and no request id, which the room then mints,
+ * and no root, which the control's own binding names.
+ */
+export interface SetThreadTitleEvent {
+  /**
+   * Chosen by the sender, and unique among its thread retitles. The outcome
+   * is recorded under it, and sending the same event again with it changes
+   * nothing.
+   */
+  requestId?: string;
+
+  /** The root of the thread retitled. */
+  root?: MessageCell;
+
+  /** The new title. */
+  title?: string;
+
+  /** A rendered control's text. */
+  readonly target?: { readonly value?: string };
+}
+
+/** What `commitSetThreadTitle` is bound to. */
+export interface SetThreadTitleState {
+  /** What the room keeps about its threads. */
+  threadInfo: ThreadInfoCell;
+
+  /** The room's messages, which name the room's space. */
+  messages: MessagesCell;
+
+  /**
+   * The session's composer state, whose open thread a rendered control
+   * retitles. An event's `root` stands in its place.
+   */
+  composer?: ComposerCell;
+
+  /** The sender's thread retitles' outcomes. */
+  outcomes: ThreadTitleRequestsCell;
+
+  /**
+   * Why the session's latest thread retitle was refused, which the rendered
+   * control shows; empty once one takes effect.
+   */
+  refusal: Writable<string>;
+}
+
+/**
+ * Sets the title of one of the room's threads, which every member shares,
+ * from a trusted gesture on `ChatRetitleSurface`. Any member who can write in
+ * the room may, as `commitSetTitle` admits a retitle of the room. The thread
+ * is named by its root, a message of the room in no thread itself, which
+ * needn't hold a reply yet. The outcome is recorded under the event's
+ * `requestId` in the sender's own outcomes, and a refusal leaves the title as
+ * it is.
+ */
+export const commitSetThreadTitle = handler<
+  SetThreadTitleEvent,
+  SetThreadTitleState
+>((event, { threadInfo, messages, composer, outcomes, refusal }) => {
+  const requestId = event?.requestId ?? eventKey();
+  if (outcomes.key(requestId).get() !== undefined) return;
+  const refuse = (code: SetThreadTitleRefusalCode, reason: string): void => {
+    outcomes.key(requestId).set({ status: "refused", reason, code });
+    refusal.set(reason);
+  };
+  // A level not known yet is left to the space's own access list, which
+  // refuses the write where it doesn't admit it.
+  const level = spaceAccess(messages);
+  if (
+    currentPrincipal() === undefined || level === "none" || level === "READ"
+  ) {
+    refuse("not-member", "You can't write in this chat.");
+    return;
+  }
+  const named = event?.root ?? composer?.get()?.thread;
+  const target = namesMessage(named) ? named?.resolveAsCell() : undefined;
+  if (
+    target === undefined || !isInRoomOf(messages, target) ||
+    namesMessage(target.get()?.replyTo?.thread)
+  ) {
+    refuse("not-a-root", "That message can't start a thread here.");
+    return;
+  }
+  const proposed = event?.title ?? event?.target?.value;
+  const title = typeof proposed === "string" ? proposed.trim() : "";
+  if (title === "") {
+    refuse("invalid-title", NO_THREAD_TITLE_TEXT);
+    return;
+  }
+  const { record, value } = threadTitleRecord(target, threadInfo, title);
+  record.set(value);
+  threadInfo.addUnique(record);
+  outcomes.key(requestId).set({ status: "done" });
+  refusal.set("");
+});

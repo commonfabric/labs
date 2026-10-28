@@ -62,6 +62,20 @@ export interface HarnessModelAttemptDiagnostic {
   providerError?: HarnessProviderError;
 
   /**
+   * The `status` of the provider's terminal response, when a streamed
+   * exchange reached one. Beside `outputItemTypes`, it says what a turn that
+   * came back blank was made of: a `completed` response holding a message
+   * item, a reasoning item alone, or no item at all.
+   */
+  terminalStatus?: string;
+
+  /**
+   * The `type` of every output item of that terminal response, in order; the
+   * streamed items stand in where the terminal response echoes none.
+   */
+  outputItemTypes?: string[];
+
+  /**
    * Present when this attempt failed transiently and the client issued
    * another: what was transient, and the backoff before the next attempt.
    * Absent on the attempt that ended the exchange, however it ended.
@@ -69,7 +83,15 @@ export interface HarnessModelAttemptDiagnostic {
   retry?: HarnessModelAttemptRetry;
 }
 
-export interface HarnessModelTurnRequest {
+/** Optional host ceilings; bounded turns make exactly one provider attempt. */
+export interface HarnessModelLimits {
+  /** Final serialized request bytes; this is a byte bound, not a token estimate. */
+  maxInputBytes?: number;
+  /** Generated tokens, including hidden reasoning, enforced by the provider. */
+  maxOutputTokens?: number;
+}
+
+export interface HarnessModelTurnRequest extends HarnessModelLimits {
   model: string;
   transcript: readonly HarnessTranscriptMessage[];
   tools: readonly HarnessModelToolDescriptor[];
@@ -159,7 +181,14 @@ export const HARNESS_MODEL_USAGE_NUMERIC_FIELDS = [
 export interface HarnessModelTurnResult {
   assistant: HarnessAssistantTranscriptMessage;
   usage?: HarnessModelUsage;
+
+  /** Model identifier returned by the provider for this response. */
+  observedModel?: string;
 }
+
+/** Returns a nonempty provider-reported model identifier when present. */
+export const observedModelId = (value: unknown): string | undefined =>
+  typeof value === "string" && value.trim().length > 0 ? value : undefined;
 
 export interface HarnessModelCatalogEntry {
   id: string;

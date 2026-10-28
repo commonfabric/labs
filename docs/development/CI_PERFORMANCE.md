@@ -9,9 +9,11 @@ runs need changing, and which dial in `tasks/test-selection/policy.ts` to move.
 CI runs every test through lanes. `.github/workflows/deno.yml` names no suite.
 Each job of its `tests` matrix is a lane and runs `tasks/ci-lane.ts`, which
 reads the test topology, packs the work into lanes by what each test has cost
-before, and runs its own share. A pull request runs five lanes over a
-selection. A push to `main`, a pull request labelled `ci: full`, and the
-tomorrow's-order run run every test over as many lanes as the full run needs.
+before, and runs its own share. A job ahead of the lanes counts how many a run
+needs. A pull request runs the work its change makes mandatory and a target of
+tests chosen by score, which its labels can multiply, over as many lanes as
+those take. A push to `main`, a pull request labelled `ci: full`, and the
+tomorrow's-order run run every test over as many lanes as that takes.
 [The test-selection
 guide](test-selection.md#how-continuous-integration-runs-the-lanes) describes
 the jobs.
@@ -23,20 +25,22 @@ nothing edited. What governs a lane's wall time is a small set of dials in
 `tasks/test-selection/policy.ts`, which [every
 dial](test-selection.md#every-dial) lists with the reason to move each:
 
-- `LANES`, how many lanes a pull request takes.
+- `DISCRETIONARY_SECONDS`, the seconds of tests chosen by score a pull request
+  runs beside its mandatory work, which with that work decides how many lanes
+  it takes.
 - `LANE_BOUND_SECONDS` and `LANE_SAFETY_SECONDS`, which with the fixed
   prologue decide what a pull request's lane packs against.
 - `FULL_LANE_BOUND_SECONDS`, the same for a lane of the full run, which decides
   how many lanes the full run needs.
-- `FULL_LANES_MAX`, the most lanes the full run takes.
+- `LANES_MAX`, the most lanes any run takes.
 
 GitHub's Team plan allows the organization
 [60 parallel hosted runners](https://docs.github.com/en/actions/reference/limits#job-concurrency-limits-for-github-hosted-runners).
 That capacity is shared by every workflow and repository in the organization.
 Keep the first dependency-free wave of this workflow below half the limit so
 two overlapping runs do not queue behind one another and later jobs can start
-as soon as their dependencies finish. `FULL_LANES_MAX` holds the full run's
-lanes to the same half. `tasks/ci-workflow.test.ts` checks both.
+as soon as their dependencies finish. `LANES_MAX` holds every run's lanes to the
+same half. `tasks/ci-workflow.test.ts` checks both.
 
 ## Required Pull Request Checks
 
@@ -44,14 +48,14 @@ Configure merge protection to require `Status`. The GitHub web interface shows
 that check as `CI / Status`, joining the workflow's name to the job's name, but
 merge protection stores and matches the job's name on its own.
 
-`Status` runs on a pull request and on a push, after `plan-full` and `tests`.
+`Status` runs on a pull request and on a push, after `plan` and `tests`.
 It runs after failed and skipped dependencies, and not on a cancelled run. It
 fails unless every dependency succeeded or was skipped. It also fails unless
 `tests` succeeded, since a run whose lanes were skipped has not passed its
-tests. Its steps also hold the run's records to the topology and, on a pull
-request, hold the measured sets to their baselines; either can fail it. Do not
+tests. Its steps also hold the run's records to the topology and judge the
+coverage gates the run chose; on a pull request, either can fail it. Do not
 require the lanes themselves. Each lane's name, `Tests (N/M)`, carries a lane
-count, and the full run's count changes from run to run. A new kind of test is
+count, and the count changes from run to run. A new kind of test is
 a suite in the topology rather than a job, so `Status`'s `needs` list does not
 grow.
 
@@ -70,8 +74,10 @@ Revisit CI wall time when at least one of these holds across normal runs:
   bound `LANE_BOUND_SECONDS` states.
 - The lanes of one run finish far apart: the slowest more than 50% slower than
   the rest, and at least 30 seconds slower in absolute terms.
-- The full run takes `FULL_LANES_MAX` lanes and they still run past their
+- The full run takes `LANES_MAX` lanes and they still run past their
   budget.
+- `Plan the Run`, which every lane of every run waits for, takes more than a
+  minute.
 - Required checks take more than 8 minutes from first start to last completion.
 
 ## How To Respond
@@ -244,17 +250,38 @@ pattern compile byte cache. Each binary has an entry of its own because a lane
 builds only the ones it needs, and one entry holding both would keep whichever
 the first lane to save happened to build.
 
+A lane uses a binary it restores without asking what it was built from, so the
+binary cache key has to cover everything a binary is made from. It is a SHA-256
+of `git ls-files --stage` over `BINARY_SOURCES` in `tasks/build-binaries.ts`,
+which gives the mode, object id and path of each tracked file, and of the JSON
+of what `cachedBinaries()` in `tasks/ci-capabilities.ts` returns, which names
+each cached binary's build and the variables baked into it. A path a build reads
+belongs in `BINARY_SOURCES`, and `tasks/build-binaries.test.ts` fails on a path
+the build reads, or a module or asset a binary embeds, that the list does not
+cover. A lane builds a binary it caches with a cleared environment. Only
+`BUILD_HOST_VARIABLES` pass through from the lane, and none of them may reach a
+binary; a test in the same file loads the shell's configuration with those
+variables denied. Every other variable is unset unless `cachedBinaries()` sets
+it, and no lane build sets `COMMIT_SHA`, since a cached binary serves every
+commit with the same sources.
+
 ### The Pattern Compile Cache Key
 
 The lane jobs restore a pattern compile byte cache from `.ci-cache/compile` in
 one `actions/cache` step, keyed `cc-lane-<fingerprint>-tests-<lane>-<hash>` with
 the restore prefix `cc-lane-<fingerprint>-`, where the hash is a `hashFiles()`
 over `packages/patterns` and `packages/generated-patterns`. The fingerprint is
-the compiler-input fingerprint. The runtime's version axis is `cf/esm-compile/`
-followed by that same fingerprint, so a compiled document is stored under
-`compileCache:cf/esm-compile/<fingerprint>/<identity>`. A cache entry CI names
-by the fingerprint therefore holds bytes the compiler now running emitted, and
-an entry from any other compiler is one the lanes never ask for. The prefix lets
+the compiler-input fingerprint, which moves with every input that can change
+what the compiler emits. A cache entry CI names by it therefore holds bytes the
+compiler now running emitted, and an entry from any other compiler is one the
+lanes never ask for. (A shipped build's own version axis,
+`compileCache:cf/esm-compile/<version>/<identity>`, is coarser on purpose: it
+is a hash of what the compiler emits for a fixed corpus, baked in at build time,
+so it stays put across compiler changes that compile the corpus to the same
+documents. The lanes'
+test binaries take the input fingerprint instead, which costs no corpus
+compile; `CF_COMPILE_CACHE_VERSION` in `tasks/build-binaries.ts` is the
+switch.) The prefix lets
 a lane restore a cache another lane or an earlier commit saved. That costs only
 the restore time, because a compiled pattern is reused only where its source is
 unchanged. The hash of the pattern sources is what makes a
@@ -270,8 +297,9 @@ as its `fingerprint` output. The cache step then references that step's output.
 This is the shape [Cache Keys And Post-Job Saves](#cache-keys-and-post-job-saves)
 prescribes, and it buys two things here. The
 post-job save re-evaluates the key without walking the fingerprinted trees a
-second time. And the CI key and the runtime version become one value computed
-once, rather than two descriptions of one list of inputs that can drift apart.
+second time. And the CI key is the one value `tasks/compile-cache-key.ts`
+defines, computed once, rather than a second description of the same list of
+inputs that can drift from it.
 
 `COMPILE_FINGERPRINT_INPUTS` in
 `packages/runner/src/compilation-cache/compiler-fingerprint.deno.ts` is the list
@@ -308,6 +336,18 @@ headroom between the bounds is what the setup and upload steps around the work
 normally need. An individual step that hangs can therefore reach its step bound
 and report a failure before the outer job bound. The outer bound remains the
 final limit when several steps in one job consume unusual amounts of time.
+
+GitHub stops a step at its bound by sending SIGINT to the step's own process,
+then SIGTERM 7.5 seconds later, then killing it 2.5 seconds after that. The
+step's own process is its shell. A shell waiting on a command passes neither
+signal on, and SIGTERM ends the shell alone, so the command under it is left
+running into the job's later steps. What it prints from then on reaches no
+step's log, and what it writes races the steps that gather and upload it. The
+test lanes' step therefore runs the lane in place of the shell, and the lane
+passes the signals on to the tests it is running. It keeps the records of the
+tests that finished, records the batch it stopped as failed, and starts
+nothing more. "How continuous integration runs the lanes" in
+[test-selection.md](test-selection.md) says what a lane does then.
 
 The runner enforces the step bound, so the bound holds only while the runner is
 still responding. A job whose runner stops responding runs to the bound on the
@@ -349,8 +389,8 @@ step bound only stops a lane that hangs, so it sits above both, and
 of the same job definition and take the same bounds, so a pull-request lane that
 hangs is stopped only at the lane step's bound, although it is packed to finish
 in five minutes. A lane's mandatory work can exceed its budget, for example when
-a change forces a large measured set or the full run is capped at
-`FULL_LANES_MAX`. Such a lane runs long rather than being stopped with its later
+a test costing more than a whole budget is mandatory, or a run is capped at
+`LANES_MAX`. Such a lane runs long rather than being stopped with its later
 batches unrun and unmeasured, and its job log says how far its plan was
 projected past the budget. So moving either lane bound in `policy.ts` moves
 nothing in the workflow, unless it moves past the lane step's bound.

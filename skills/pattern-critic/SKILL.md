@@ -43,6 +43,16 @@ Warnings summary line, never Failed.
   `docs/common/patterns/multi-user-patterns.md#presenting-identity`
   (critique-guide category 16).
 
+- **Per-viewer work (multi-user):** under server execution a derivation that
+  reads the viewer's state runs once for each viewer, or for each session, by
+  what it read, and so does everything downstream of it. Flag a `computed` or
+  `lift` over shared data that also reads the viewer's profile, `#profile` wish
+  result, or "me" cell to mark what is the viewer's, when its result feeds
+  derivations over shared data or the view's shared parts: derive the shared
+  data from shared inputs and decide what is the viewer's at the leaf. See
+  `docs/common/patterns/multi-user-patterns.md#keep-the-viewer-out-of-shared-derivations`
+  (critique-guide category 10).
+
 - **Oversized cross-pattern contracts:** for every type describing linked,
   wished, registered, or otherwise external data — imported or declared inline —
   compare the declared shape with the fields and bindings the consumer actually
@@ -201,6 +211,21 @@ opened a thread in 320ms, five people with 6 rows on screen took 1.4-3.5s.
 `docs/history/development/performance/2026-09-11-person-inbox-click-cost.md`
 carries the measurements; `skills/perf-investigation/SKILL.md` is the route to
 take when a pattern is actually slow rather than merely shaped this way.
+
+The same question applies to a list a pattern maps: what one element's child
+reads. A child handed the whole list, usually because its handlers need it, can
+read it in a `computed()` with nothing in the code looking wrong, and then every
+child scans the list on load and again on any change to it.
+
+| Violation                                                                                                               | Fix                                                                                                                                                                                                                                                                                                               |
+| ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| a mapped child's `computed()` that reads the list it is an element of, directly or through a helper it hands the list   | Derive the fact for every element once in the mapping pattern, as a record keyed by element; pass the record as a `ReadonlyCell` and read `record.key(ownKey).get()` in the child, which reads and re-runs on that one entry at run time though the transformer declares the whole record for a key it cannot see |
+| a helper that only reads a cell, declared with a `Writable<T>` parameter or an alias of one, called from a `computed()` | Declare the parameter `Cell<T>` or `ReadonlyCell<T>`; a `materializerWriteInputPaths` entry in `--show-transformed` names a computation the scheduler treats as a writer                                                                                                                                          |
+| a whole value handed to an imported helper inside a `computed()` when the helper uses a few of its fields               | Project the fields before the call, so the emitted schema declares only those                                                                                                                                                                                                                                     |
+
+`skills/pattern-dev/SKILL.md` states the reasons, and
+`packages/patterns/fabrichat/room.tsx` with its `message-row.tsx` is the worked
+case.
 
 ### Visual Review Reminder
 

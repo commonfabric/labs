@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { deepFreeze } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -90,7 +91,7 @@ describe("firstResolvedOutputRedirect vs partialCause aliases", () => {
       tx,
     );
     const twin = getDerivedInternalCellLink(base, {
-      partialCause: { "$generated": 0 },
+      partialCause: deepFreeze({ "$generated": 0 }),
       scope: "space",
     });
     const binding = createSigilLinkFromParsedLink(twin, {
@@ -124,7 +125,7 @@ describe("firstResolvedOutputRedirect vs partialCause aliases", () => {
       tx,
     );
     const twin = getDerivedInternalCellLink(base, {
-      partialCause: { "$generated": 1 },
+      partialCause: deepFreeze({ "$generated": 1 }),
       scope: "user",
     });
     const binding = createSigilLinkFromParsedLink(twin, {
@@ -163,7 +164,7 @@ describe("firstResolvedOutputRedirect vs partialCause aliases", () => {
       tx,
     );
     const twin = getDerivedInternalCellLink(base, {
-      partialCause: { "$generated": 2 },
+      partialCause: deepFreeze({ "$generated": 2 }),
     });
     const found = firstResolvedOutputRedirect(
       rt,
@@ -195,7 +196,7 @@ describe("firstResolvedOutputRedirect vs partialCause aliases", () => {
       tx,
     );
     const twin = getDerivedInternalCellLink(base, {
-      partialCause: { "$generated": 3 },
+      partialCause: deepFreeze({ "$generated": 3 }),
     });
     const binding = [
       createSigilLinkFromParsedLink(twin, { overwrite: "redirect" }),

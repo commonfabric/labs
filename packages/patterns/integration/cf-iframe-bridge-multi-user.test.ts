@@ -6,6 +6,11 @@
  * the sandboxed guest and performed through its bridge. Sibling readouts then
  * expose what each runtime sees, covering the real guest port, cf-iframe cell
  * adapter, scoped storage, runtime-client IPC, and SQLite bridge together.
+ *
+ * The guests also join the presence room of the piece's space-scoped cell
+ * through the same bridge, and each reports the room as its sink delivers it,
+ * which covers the presence resource, the runtime's room, and the memory
+ * server's relay between three browsers.
  */
 
 import { debugStr } from "@commonfabric/data-model";
@@ -41,10 +46,14 @@ type BridgeCommand = {
     | "write"
     | "sqlite-insert"
     | "sqlite-query"
-    | "clear-database-rows";
+    | "clear-database-rows"
+    | "presence-join"
+    | "presence-publish"
+    | "presence-leave";
   resource?: "shared" | "user" | "session";
   database?: "database" | "userDatabase" | "sessionDatabase";
   value?: string;
+  name?: string;
 };
 
 type BridgeValues = {
@@ -69,6 +78,42 @@ type BridgeTestResult = {
   ok: boolean;
   value?: BridgeWireValue;
   error?: string;
+};
+
+/** One member of the presence room, as a guest reports it. */
+type BridgePresenceMember = {
+  /** Id the relay gave the member's membership. */
+  participantId: string;
+
+  /** Display name the member published. */
+  name: string;
+
+  /** The text of the member's `status` facet, or empty when it has none. */
+  status: string;
+};
+
+/** What a guest last reported of the presence room. */
+type BridgePresenceReport = {
+  /** Generation of the guest document that reported. */
+  generation: string;
+
+  /** The reporting guest's own membership; absent while it has not joined. */
+  participantId?: string;
+
+  /** Every other member that has published. */
+  participants: BridgePresenceMember[];
+
+  /** What ended the room, when it has ended. */
+  error?: string;
+};
+
+/** A joined guest's view of the presence room. */
+type BridgePresenceRoom = {
+  /** The guest's own membership. */
+  participantId: string;
+
+  /** Every other member that has published. */
+  participants: BridgePresenceMember[];
 };
 
 type BridgeResolvedIdentity = {
@@ -228,6 +273,7 @@ async function installBridgeTestHarness(page: Page): Promise<void> {
     type TestState = {
       results: Record<string, BridgeTestResult>;
       readyGeneration?: string;
+      presence?: BridgePresenceReport;
       revision: number;
     };
     const host = globalThis as typeof globalThis & {
@@ -246,6 +292,15 @@ async function installBridgeTestHarness(page: Page): Promise<void> {
         };
       } else if (event.data?.type === "cf-iframe-bridge-test-ready") {
         state.readyGeneration = event.data.generation;
+      } else if (event.data?.type === "cf-iframe-bridge-test-presence") {
+        state.presence = {
+          generation: event.data.generation,
+          ...(event.data.participantId !== undefined && {
+            participantId: event.data.participantId,
+          }),
+          participants: event.data.participants,
+          ...(event.data.error && { error: event.data.error }),
+        };
       } else {
         return;
       }
@@ -428,6 +483,74 @@ async function waitForBridgeRowsContaining(
   }
 }
 
+/**
+ * Waits until the guest in `page` reports itself joined to a presence room
+ * whose other members are exactly `expected`, by name and status, and returns
+ * the room as reported. The guest reports from its presence sink, so each
+ * check follows a delivery of the room.
+ */
+async function waitForPresenceRoom(
+  page: Page,
+  expected: readonly Pick<BridgePresenceMember, "name" | "status">[],
+): Promise<BridgePresenceRoom> {
+  const result = await waitForCondition(
+    page,
+    (probe, expectedMembers) => {
+      const host = globalThis as typeof globalThis & {
+        __cfIframeBridgeTest?: { presence?: BridgePresenceReport };
+      };
+      const report = host.__cfIframeBridgeTest?.presence;
+      if (report?.error) {
+        return { participantId: "", participants: [], error: report.error };
+      }
+      if (
+        report?.participantId !== undefined &&
+        report.participants.length === expectedMembers.length &&
+        expectedMembers.every((member) =>
+          report.participants.some((participant) =>
+            participant.name === member.name &&
+            participant.status === member.status
+          )
+        )
+      ) {
+        return {
+          participantId: report.participantId,
+          participants: report.participants,
+          error: "",
+        };
+      }
+      const error = probe.collect(".error-modal .error-content")[0];
+      return error
+        ? {
+          participantId: "",
+          participants: [],
+          error: probe.deepText(error).trim(),
+        }
+        : false;
+    },
+    {
+      args: [expected.map(({ name, status }) => ({ name, status }))],
+    },
+  );
+  if (!result || result.error) {
+    throw new Error(
+      `cf-iframe reported an error while waiting for presence members ` +
+        debugStr`$quote,long${expected}: ${result?.error ?? "unknown error"}`,
+    );
+  }
+  return {
+    participantId: result.participantId,
+    participants: result.participants,
+  };
+}
+
+/** Returns `members` ordered by name, which is unique within a test's room. */
+function byName(
+  members: readonly BridgePresenceMember[],
+): BridgePresenceMember[] {
+  return members.toSorted((a, b) => a.name.localeCompare(b.name));
+}
+
 describe("cf-iframe bridge with multiple users", () => {
   const aliceOneShell = new ShellIntegration({
     presentation: { id: "alice-one", label: "Alice · session 1" },
@@ -482,7 +605,13 @@ describe("cf-iframe bridge with multiple users", () => {
     await cc?.dispose();
   });
 
-  it("preserves `PerSpace`, `PerUser`, `PerSession`, and SQLite data at their declared boundaries", async () => {
+  /**
+   * Loads the piece in every session, signed in as that session's identity,
+   * and returns the pages with the generation of each one's connected guest.
+   */
+  const openPiece = async (): Promise<
+    { pages: Page[]; guestGenerations: string[] }
+  > => {
     const view = { spaceDid: cc.getSpace(), pieceId };
     const identities = [aliceIdentity, aliceIdentity, bobIdentity];
     const pages = shells.map((shell) => shell.page());
@@ -503,6 +632,11 @@ describe("cf-iframe bridge with multiple users", () => {
         )
       ),
     );
+    return { pages, guestGenerations };
+  };
+
+  it("preserves `PerSpace`, `PerUser`, `PerSession`, and SQLite data at their declared boundaries", async () => {
+    const { pages, guestGenerations } = await openPiece();
 
     expect((await aliceOneShell.state())?.identityDid).toBe(
       aliceIdentity.did(),
@@ -822,6 +956,113 @@ describe("cf-iframe bridge with multiple users", () => {
       databaseRows: durableDatabaseRows,
       userDatabaseRows: bobUserDatabaseRow,
       sessionDatabaseRows: "",
+    });
+  });
+
+  describe("presence room", () => {
+    // Each case loads the piece afresh, which ends whatever memberships its
+    // pages held, and publishes statuses no other case uses. A member the
+    // relay has yet to drop from an earlier case therefore never matches the
+    // members a case waits for.
+
+    const SESSION_NAMES = ["Alice one", "Alice two", "Bob"];
+
+    /**
+     * Joins every session's guest to the room and publishes its name with the
+     * status `<name> is <activity>`. Returns the members in session order,
+     * once each session lists exactly the other two.
+     */
+    const joinEverySession = async (
+      pages: readonly Page[],
+      activity: string,
+    ): Promise<BridgePresenceMember[]> => {
+      const published = SESSION_NAMES.map((name) => ({
+        name,
+        status: `${name} is ${activity}`,
+      }));
+      await Promise.all(pages.map(async (page, index) => {
+        await issueCommand(page, {
+          id: "presence-join",
+          operation: "presence-join",
+        });
+        await issueCommand(page, {
+          id: "presence-publish",
+          operation: "presence-publish",
+          name: published[index].name,
+          value: published[index].status,
+        });
+      }));
+      const rooms = await Promise.all(
+        pages.map((page, index) =>
+          waitForPresenceRoom(
+            page,
+            published.filter((_, other) => other !== index),
+          )
+        ),
+      );
+      const members = published.map((member, index) => ({
+        participantId: rooms[index].participantId,
+        ...member,
+      }));
+      rooms.forEach((room, index) => {
+        expect(byName(room.participants)).toEqual(
+          byName(members.filter((_, other) => other !== index)),
+        );
+      });
+      return members;
+    };
+
+    it("lists the other two sessions to each member, one participant per session", async () => {
+      const { pages } = await openPiece();
+
+      const members = await joinEverySession(pages, "reading");
+
+      expect(new Set(members.map((member) => member.participantId)).size)
+        .toBe(3);
+    });
+
+    it("delivers a member's replaced facet to the other members", async () => {
+      const { pages } = await openPiece();
+      const [aliceOne, aliceTwo, bob] = await joinEverySession(
+        pages,
+        "drafting",
+      );
+
+      const reviewing = { ...aliceTwo, status: "Alice two is reviewing" };
+      await issueCommand(pages[1], {
+        id: "presence-replace",
+        operation: "presence-publish",
+        value: reviewing.status,
+      });
+
+      const [aliceOneRoom, bobRoom] = await Promise.all([
+        waitForPresenceRoom(pages[0], [reviewing, bob]),
+        waitForPresenceRoom(pages[2], [aliceOne, reviewing]),
+      ]);
+      expect(byName(aliceOneRoom.participants)).toEqual([reviewing, bob]);
+      expect(byName(bobRoom.participants)).toEqual([aliceOne, reviewing]);
+    });
+
+    it("stops listing a member whose guest leaves the room or reloads", async () => {
+      const { pages, guestGenerations } = await openPiece();
+      const [aliceOne, aliceTwo] = await joinEverySession(pages, "leaving");
+
+      await issueCommand(pages[2], {
+        id: "presence-leave",
+        operation: "presence-leave",
+      });
+      const [aliceOneRoom, aliceTwoRoom] = await Promise.all([
+        waitForPresenceRoom(pages[0], [aliceTwo]),
+        waitForPresenceRoom(pages[1], [aliceOne]),
+      ]);
+      expect(aliceOneRoom.participants).toEqual([aliceTwo]);
+      expect(aliceTwoRoom.participants).toEqual([aliceOne]);
+
+      await clickCfButton(pages[1], "#bridge-reload");
+      await waitForGuestReload(pages[1], guestGenerations[1]);
+      expect((await waitForPresenceRoom(pages[0], [])).participants).toEqual(
+        [],
+      );
     });
   });
 });

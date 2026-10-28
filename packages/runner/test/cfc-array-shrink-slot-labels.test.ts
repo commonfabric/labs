@@ -119,16 +119,34 @@ describe("CFC: array shrink clears truncated slots' link labels", () => {
       type: "array",
       items: { asCell: ["cell"] },
     } as const;
+    // A slot stores the reference's own label and nothing of its target's
+    // (CFC §8.2, §8.12.8). Each element handle carries a schema declaring the
+    // element's atom, so the link written from it declares that atom as the
+    // reference's restriction and the slot has an entry to drop or keep.
+    const elementSchema = (atom: string) => ({
+      type: "object",
+      ifc: { confidentiality: [atom] },
+    } as const);
 
     const setup = runtime.edit();
-    const el0 = runtime.getCell(space, "shrink-el-0", undefined, setup);
-    const el1 = runtime.getCell(space, "shrink-el-1", undefined, setup);
+    const el0 = runtime.getCell(
+      space,
+      "shrink-el-0",
+      elementSchema("alice-secret"),
+      setup,
+    );
+    const el1 = runtime.getCell(
+      space,
+      "shrink-el-1",
+      elementSchema("bob-secret"),
+      setup,
+    );
     const listCell = runtime.getCell(space, "shrink-list", listSchema, setup);
     listCell.set([el0, el1]);
     expect((await setup.commit().settled).ok).toBeDefined();
 
     const listId = listCell.getAsNormalizedFullLink().id;
-    // Precondition: both slots carry their element's link label.
+    // Precondition: both slots carry the label their reference declares.
     expect(linkConfidentialityAt(listId, "0")).toEqual(["alice-secret"]);
     expect(linkConfidentialityAt(listId, "1")).toEqual(["bob-secret"]);
 
@@ -146,7 +164,12 @@ describe("CFC: array shrink clears truncated slots' link labels", () => {
     // Growth re-uses the slot: its label is the new occupant's alone, with
     // no residue of the departed member to re-import via followRef.
     const growTx = runtime.edit();
-    const el2 = runtime.getCell(space, "shrink-el-2", undefined, growTx);
+    const el2 = runtime.getCell(
+      space,
+      "shrink-el-2",
+      elementSchema("carol-secret"),
+      growTx,
+    );
     el2.get(); // a content read: carol joins the growing tx's flow join
     const lc2 = runtime.getCell(space, "shrink-list", listSchema, growTx);
     lc2.set([el0, el2]);

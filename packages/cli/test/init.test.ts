@@ -2,7 +2,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { exists } from "@std/fs/exists";
-import { cf, checkStderr } from "./utils.ts";
+import { argv, cf, checkStderr } from "./utils.ts";
 
 describe("cli init", () => {
   it("Initializes workspace", async () => {
@@ -14,7 +14,7 @@ describe("cli init", () => {
     expect(await exists(join(root, ".cf-docs"))).toEqual(false);
 
     try {
-      const { code, stdout, stderr } = await cf("init");
+      const { code, stdout, stderr } = await cf(argv`init`);
       checkStderr(stderr);
       expect(stdout.length).toBe(0);
       expect(code).toBe(0);

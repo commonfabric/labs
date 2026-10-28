@@ -5,7 +5,9 @@ import {
   CurrentPrincipal,
   Default,
   equals,
+  type FabricBytes,
   handler,
+  type HandlerFactory,
   ifElse,
   lift,
   NAME,
@@ -94,9 +96,21 @@ export type SetProfileNameEvent = {
 
 export type SetProfileAvatarEvent = {
   avatar?: string;
+  /** Removes the avatar. A host removing it says so outright. */
+  clear?: boolean;
   detail?: { message?: string };
   key?: string;
   target?: { value?: string };
+};
+
+/** The profile picture's bytes, sent directly as `picture` or carried as
+ * `detail.bytes` by the change event of `<cf-avatar-input>`. */
+export type SetProfilePictureEvent = {
+  picture?: FabricBytes;
+  detail?: { bytes?: FabricBytes };
+
+  /** Removes the picture. A host removing it says so outright. */
+  clear?: boolean;
 };
 
 export type SetProfileBioEvent = {
@@ -160,15 +174,15 @@ export type ShareInboxPiece = {
 
 /**
  * Where things shared with this profile's owner are delivered: a link to the
- * owner's share inbox piece — the piece whose `receive` stream other daemons
- * call, in the dedicated inbox space the owner's daemon minted (loom
- * `shares/inbox.py`; the design is loom's weaver-multiuser-sharing D8 and
- * share-inbox proposal). The link names the piece and its space together;
- * it carries no memory host because the inbox lives on the host the profile
- * pointing at it lives on, so a reader uses the host it read the profile
- * from. Public on purpose and no secret in it: the inbox space's ACL is the
- * gate, the link only says where to knock. Stored as the `link@1` sigil,
- * `{ "/": { "link@1": { id: "of:…", space: "did:key:…", path: [] } } }`,
+ * owner's share inbox piece, the piece whose `receive` stream senders call, in
+ * a space of its own. That is either the private inbox the owner's Home
+ * creates (`private-inbox.tsx`) or one the owner's loom daemon created; both
+ * take the same offer envelope. The link names the piece and its space
+ * together; it carries no memory host because the inbox lives on the host the
+ * profile pointing at it lives on, so a reader uses the host it read the
+ * profile from. Public on purpose and no secret in it: the link only says
+ * where to knock, and the inbox decides what it keeps. Stored as the `link@1`
+ * sigil, `{ "/": { "link@1": { id: "of:…", space: "did:key:…", path: [] } } }`,
  * the same form the profile's pinned-piece elements take; `piece` is absent
  * when the owner has no inbox.
  *
@@ -191,7 +205,86 @@ export type SetProfileInboxEvent = {
   // to the piece's value shape, so the handler is handed a value instead of
   // the link it stores.
   inbox?: Cell<ShareInboxPiece>;
+
+  /**
+   * What the profile is to point at for the write to happen. Left out, the
+   * pointer is set whatever it holds. Present and `undefined`, it is set only
+   * while the profile points at no inbox. A link, it is set only while the
+   * profile points at that inbox, by a comparison of links that reads only
+   * link shape: a link to an inbox holding nothing is a link, and names it.
+   * An event spelled `{ inbox, replacing: undefined }` is a conditional one.
+   */
+  // Spelled `Cell<…>` for the reason `inbox` is. The `| undefined` is what
+  // admits an explicit `undefined` as a value of the property, so that the
+  // handler is handed the property rather than an event without it.
+  replacing?: Cell<ShareInboxPiece> | undefined;
 };
+
+/**
+ * What pointing a profile at an inbox needs of it: its pointer and the stream
+ * that sets it.
+ */
+export type InboxPointable = {
+  // The pointer is a typed link. An inbox labels its offers confidential to
+  // its owner, and the link carries that label; read as an untyped link from
+  // another space, it joins that label into the reading run, and the run is
+  // refused. `private-inbox.pointer-type.test.ts` pins the type.
+  inbox?: ProfileInbox;
+  // Optional so that a handler binding a list of these as a value still runs
+  // over a stored profile of a vintage without the stream.
+  setInbox?: Stream<SetProfileInboxEvent>;
+};
+
+/**
+ * Points `profile` at the inbox `holder` holds, through the profile's own
+ * `setInbox`, when the profile points at no inbox. Does nothing when `holder`
+ * holds no inbox, or when the profile points at an inbox already, whichever
+ * inbox it is. Call it from a handler, with `profile` bound as a value of type
+ * {@link InboxPointable}, so that the pointer is read as a typed link.
+ *
+ * The read here and the `setInbox` it leads to are two transactions in two
+ * spaces, so the event carries `replacing: undefined` and `setInbox` checks
+ * the pointer again in the transaction that writes it: a pointer something
+ * else sets in between is kept.
+ */
+export function pointAtInboxIfUnset(
+  profile: InboxPointable | undefined,
+  holder: ProfileInbox | undefined,
+): void {
+  // The holder's link reaches the inbox through the cell that wrote it. A link
+  // written into a profile's labeled `inbox` takes its label from the document
+  // it names, and only the inbox's own result document carries the schema
+  // that label comes from, so the profile is given that document.
+  const inbox = holder?.piece?.resolveAsCell();
+  if (inbox === undefined || profile === undefined) return;
+  if (profile.inbox?.piece !== undefined) return;
+  profile.setInbox?.send({ inbox, replacing: undefined });
+}
+
+/**
+ * Points `profile` at the inbox `holder` holds, through the profile's own
+ * `setInbox`, when the profile points at `replaced`, by a comparison of links
+ * that reads only link shape. Does nothing when `holder` holds no inbox, or
+ * when the profile points at another inbox or at none. Call it as
+ * {@link pointAtInboxIfUnset} is called, and for `replaced`, a typed link.
+ *
+ * The event carries `replacing`, so `setInbox` checks the pointer again in the
+ * transaction that writes it, for the reason {@link pointAtInboxIfUnset}
+ * gives.
+ */
+export function pointAtInboxInPlaceOf(
+  profile: InboxPointable | undefined,
+  replaced: Cell<ShareInboxPiece>,
+  holder: ProfileInbox | undefined,
+): void {
+  // The profile is given the inbox's own result document, for the reason
+  // `pointAtInboxIfUnset()` gives it.
+  const inbox = holder?.piece?.resolveAsCell();
+  if (inbox === undefined || profile === undefined) return;
+  const pointer = profile.inbox?.piece;
+  if (pointer === undefined || !equals(pointer, replaced)) return;
+  profile.setInbox?.send({ inbox, replacing: replaced });
+}
 
 type VerifiedIdentityListWrite<Binding> = OwnerProtectedProfileWrite<
   VerifiedExternalIdentityCell[],
@@ -206,7 +299,15 @@ export type ProfileHomeOutput = {
   [NAME]: string;
   [UI]: VNode;
   name: OwnerProtectedProfileWrite<string, typeof setName>;
+  // Free text: a URL, a `data:` URL, or a glyph. Kept for the readers that
+  // read it; the profile shows `picture` in its place when it has one.
   avatar: OwnerProtectedProfileWrite<string, typeof setAvatar>;
+  // The profile picture: the bytes of a raster image in any format an `<img>`
+  // decodes, the format being sniffed from the bytes. Absent until someone
+  // sets one. The picture's own label names the principal who set it, so a
+  // reader showing it as the owner's face reads that label (`principalOf` on
+  // the field), not the profile's label at `picture`.
+  picture?: OwnerProtectedProfileWrite<FabricBytes, typeof setPicture>;
   // A short, human-authored free-text description of the profile owner
   // (CT-1648). Owner-protected like name/avatar; the canonical shared-profile
   // bio (distinct from Home's legacy `learned.summary`). Readable from the
@@ -254,6 +355,7 @@ export type ProfileHomeOutput = {
   // and never exist on a stored doc that predates them.
   setName: Stream<SetProfileNameEvent>;
   setAvatar: Stream<SetProfileAvatarEvent>;
+  setPicture: Stream<SetProfilePictureEvent>;
   setBio: Stream<SetProfileBioEvent>;
   setInbox: Stream<SetProfileInboxEvent>;
   addExternalLink: Stream<MutateExternalProfileLinksEvent>;
@@ -309,6 +411,7 @@ type PartialBy<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>;
 export type BackwardsCompatibleProfile = PartialBy<
   & Omit<ProfileHomeOutput, typeof UI>
   & { [UI]: unknown },
+  | "setPicture"
   | "setBio"
   | "setInbox"
   | "addExternalLink"
@@ -651,6 +754,14 @@ const mutateElements = handler<
   }
 });
 
+/**
+ * Whether `name` holds a control character. A profile's name is shown
+ * wherever the profile is, a terminal among those places, so a name holding
+ * one is refused rather than stored.
+ */
+export const nameHasControlCharacter = (name: string): boolean =>
+  /\p{Cc}/u.test(name);
+
 const setName = handler<SetProfileNameEvent, { name: Writable<string> }>(
   (event, state) => {
     if (event.key !== undefined && event.key !== "Enter") {
@@ -665,13 +776,22 @@ const setName = handler<SetProfileNameEvent, { name: Writable<string> }>(
     if (!name) {
       return;
     }
+    if (nameHasControlCharacter(name)) {
+      throw new Error("A profile name cannot contain control characters.");
+    }
     state.name.set(name);
   },
 );
 
+// An empty avatar is ignored rather than stored, as an empty name is (see
+// setName above); `clear: true` is how the avatar is removed.
 const setAvatar = handler<SetProfileAvatarEvent, { avatar: Writable<string> }>(
   (event, state) => {
     if (event.key !== undefined && event.key !== "Enter") {
+      return;
+    }
+    if (event.clear === true) {
+      state.avatar.set("");
       return;
     }
     const avatar = (event.avatar ?? event.detail?.message ??
@@ -681,6 +801,42 @@ const setAvatar = handler<SetProfileAvatarEvent, { avatar: Writable<string> }>(
       return;
     }
     state.avatar.set(avatar);
+  },
+);
+
+// The authorized writer for the `picture` field. An event without bytes is a
+// no-op, not a clear; `clear: true` is how the picture is removed.
+//
+// The picture's cell has no default, so setup writes nothing to it and its
+// document stores no policy of its own. The handler's state declares that the
+// value represents the principal who writes it, so each write labels the
+// picture with its writer: the owner's picture says it is the owner's, and a
+// picture anyone else sets says it is theirs. The profile's space lets anyone
+// write, so this does not keep anyone from replacing the picture; it keeps a
+// reader from taking someone else's picture for the owner's. The explicit
+// `HandlerFactory` type lets the state name the handler as its own writer.
+export type SetProfilePictureState = {
+  picture: Writable<
+    RepresentsCurrentUser<
+      WriteAuthorizedBy<FabricBytes | undefined, typeof setPicture>
+    >
+  >;
+};
+
+const setPicture: HandlerFactory<
+  SetProfilePictureEvent,
+  SetProfilePictureState
+> = handler<SetProfilePictureEvent, SetProfilePictureState>(
+  (event, state) => {
+    if (event.clear === true) {
+      state.picture.set(undefined);
+      return;
+    }
+    const picture = event.picture ?? event.detail?.bytes;
+    if (!picture?.length) {
+      return;
+    }
+    state.picture.set(picture);
   },
 );
 
@@ -708,10 +864,24 @@ const setBio = handler<
 // as sent, and an event without one clears the pointer (the owner retired
 // their inbox). No shape check here: the event's schema admits a cell link
 // and nothing else, and the runtime refuses an event that is not one.
+//
+// An event carrying `replacing` writes only while the pointer meets it: held
+// by nothing when `replacing` holds `undefined`, and held by the inbox it
+// names when it holds a link. The pointer is read here, in the transaction
+// that writes it, so a pointer another writer commits meanwhile makes this
+// commit stale, and the handler runs again over it. A sender's own check of
+// the pointer is a transaction of its own and guards nothing here.
 const setInbox = handler<
   SetProfileInboxEvent,
   { inbox: Writable<ProfileInbox> }
 >((event, state) => {
+  if ("replacing" in event) {
+    const held = state.inbox.get()?.piece;
+    const met = event.replacing === undefined
+      ? held === undefined
+      : held !== undefined && equals(held, event.replacing);
+    if (!met) return;
+  }
   state.inbox.set(event.inbox === undefined ? {} : { piece: event.inbox });
 });
 
@@ -861,6 +1031,9 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
     const avatar = new Writable<
       OwnerProtectedProfileWrite<string, typeof setAvatar>
     >("").for("avatar");
+    const picture = new Writable<
+      OwnerProtectedProfileWrite<FabricBytes | undefined, typeof setPicture>
+    >(undefined).for("picture");
     const bio = new Writable<
       OwnerProtectedProfileWrite<string, typeof setBio>
     >("").for("bio");
@@ -958,6 +1131,7 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
       [NAME]: displayName,
       name,
       avatar,
+      picture,
       bio,
       inbox,
       externalLinks,
@@ -965,6 +1139,7 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
       elements,
       setName: setName({ name }),
       setAvatar: setAvatar({ avatar }),
+      setPicture: setPicture({ picture }),
       setBio: setBio({ bio, draft: bioDraft }),
       setInbox: setInbox({ inbox }),
       addExternalLink: mutateExternalProfileLinks({
@@ -1153,13 +1328,16 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
                 </cf-vstack>
 
                 <cf-vstack gap="2">
-                  <label>Avatar</label>
-                  <span>{avatar}</span>
-                  <cf-message-input
+                  <label>Picture</label>
+                  <cf-avatar
+                    bytes={picture}
+                    src={avatar}
+                    name={name}
+                    size="xl"
+                  />
+                  <cf-avatar-input
                     data-ui-action={TRUSTED_PROFILE_EDIT_ACTION}
-                    placeholder="Avatar URL or text"
-                    appearance="rounded"
-                    oncf-send={setAvatar({ avatar })}
+                    oncf-change={setPicture({ picture })}
                   />
                 </cf-vstack>
 

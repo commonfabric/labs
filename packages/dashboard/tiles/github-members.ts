@@ -8,12 +8,14 @@ import { REPO } from "../config.ts";
 import type { Tile, TileView } from "../types.ts";
 import { dashboardCacheFile } from "../history-files.ts";
 import {
+  dashboardGitHubCredential,
   escapeHtml,
   friendlyError,
   github,
   multiSparkline,
   thin,
 } from "../lib.ts";
+import type { GitHubCredential } from "../github-auth.ts";
 import { themedChartSeries } from "../theme.ts";
 
 const MEMBERS_COLOR = "#58a6ff";
@@ -94,13 +96,13 @@ async function saveHistory(points: Point[], file: string): Promise<void> {
 export async function organizationUserIds(
   org: string,
   roster: "members" | "outside_collaborators",
-  token: string,
+  credential: GitHubCredential,
 ): Promise<Set<number>> {
   const ids = new Set<number>();
   for (let page = 1;; page++) {
     const batch = await github<unknown>(
       `orgs/${org}/${roster}?per_page=100&page=${page}`,
-      token,
+      credential,
     );
     if (!Array.isArray(batch) || !batch.every(isUser)) {
       const label = roster === "members"
@@ -119,8 +121,8 @@ export function createGithubMembers(): Tile {
     label: "github users",
     intervalMs: 3_600_000,
     async collect(ctx): Promise<TileView> {
-      const token = ctx.env("GH_TOKEN") ?? ctx.env("GITHUB_TOKEN");
-      if (!token) {
+      const credential = dashboardGitHubCredential(ctx);
+      if (!credential) {
         return {
           status: "unknown",
           value: "—",
@@ -138,8 +140,8 @@ export function createGithubMembers(): Tile {
       let collaboratorIds: Set<number>;
       try {
         [memberIds, collaboratorIds] = await Promise.all([
-          organizationUserIds(org, "members", token),
-          organizationUserIds(org, "outside_collaborators", token),
+          organizationUserIds(org, "members", credential),
+          organizationUserIds(org, "outside_collaborators", credential),
         ]);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

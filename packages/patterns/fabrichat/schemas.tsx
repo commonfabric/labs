@@ -8,15 +8,21 @@
  * the records a room stores, and `room.tsx` the room's own output types over
  * them.
  *
- * Every recorded time is a `FabricEpochNsec`, unique in its room. Times are
- * compared through `nsecOf()`.
+ * Every recorded time is a `FabricEpochNsec`, the handler clock's reading when
+ * the room made the record, which two records can share. Times are compared
+ * through `nsecOf()`.
  */
 import {
   type Cell,
+  type DID,
   equals,
   FabricDurationNsec,
   FabricEpochNsec,
+  isWellFormedDID,
 } from "commonfabric";
+import type { FileEntry } from "../fabrifile/schemas.tsx";
+import type { FileStoreRecord } from "../fabrifile/store.tsx";
+import type { ProfileInbox } from "../system/profile-home.tsx";
 
 //
 // Reviewed surfaces
@@ -64,19 +70,40 @@ export const CHAT_START_SURFACE = "ChatStartSurface";
 /** The reviewed action starting a conversation is, on `CHAT_START_SURFACE`. */
 export const CHAT_START_ACTION = "ChatStart";
 
+/** The reviewed surface a member is added to a room from. */
+export const CHAT_ADD_MEMBER_SURFACE = "ChatAddMemberSurface";
+
+/** The reviewed action adding a member is, on `CHAT_ADD_MEMBER_SURFACE`. */
+export const CHAT_ADD_MEMBER_ACTION = "ChatAddMember";
+
+/** The reviewed surface a room is retitled from. */
+export const CHAT_RETITLE_SURFACE = "ChatRetitleSurface";
+
+/** The reviewed action retitling a room is, on `CHAT_RETITLE_SURFACE`. */
+export const CHAT_RETITLE_ACTION = "ChatRetitle";
+
+//
+// Principals
+//
+
+/** A `did:key` whose key is base58btc multibase, as every principal's is. */
+const DID_KEY = /^did:key:z[1-9A-HJ-NP-Za-km-z]+$/;
+
+/**
+ * Whether `value` is a DID a principal can have: well formed, and, for a
+ * `did:key`, a base58btc key, so that a key a period or other punctuation
+ * follows is refused.
+ */
+export const isPrincipalDID = (value: unknown): value is DID =>
+  isWellFormedDID(value) &&
+  (!value.startsWith("did:key:") || DID_KEY.test(value));
+
 //
 // Times
 //
 
 /** Nanoseconds in one millisecond, the handler clock's unit. */
 export const NSEC_PER_MSEC = 1_000_000n;
-
-/**
- * Nanoseconds in one tick of the handler clock. A handler's clock reads to the
- * second, so a reading `t` stands for every time from `t` up to, but not
- * including, `t + CLOCK_TICK_NSEC`.
- */
-export const CLOCK_TICK_NSEC = 1_000_000_000n;
 
 /** The nanoseconds a recorded time holds. */
 export const nsecOf = (time: FabricEpochNsec): bigint => time.value;
@@ -116,21 +143,28 @@ export interface ChatProfile {
 /** A live link to a person's profile. */
 export type ProfileCell = Cell<ChatProfile>;
 
+/**
+ * The part of a person's profile a manager reads: what a room reads, and
+ * where to offer the person a room. Only a manager reads the inbox pointer,
+ * so the inbox's shape is part of no room's contract.
+ */
+export interface ChatManagerProfile extends ChatProfile {
+  /**
+   * Where the person's offers are delivered, as the profile types its pointer:
+   * a link naming nothing of the inbox but its name. An inbox labels its
+   * offers confidential to its owner, and a run reading the pointer as a link
+   * to more of the inbox, or untyped, takes that label on, which then refuses
+   * its sends.
+   */
+  inbox?: ProfileInbox;
+}
+
+/** A live link to a person's profile, as a manager reads it. */
+export type ManagerProfileCell = Cell<ChatManagerProfile>;
+
 //
 // Room records
 //
-
-/** One version of a message: its body, and when the room recorded it. */
-export interface ChatMessageVersion {
-  /** The version's text. */
-  body: string;
-
-  /**
-   * When the room recorded this version; in a send or an edit, the time the
-   * sender proposes.
-   */
-  sentAt: FabricEpochNsec;
-}
 
 /** The body of a deleted or obliterated message. */
 export interface ChatDeletedBody {
@@ -141,12 +175,40 @@ export interface ChatDeletedBody {
 /** Where a reply is shown. */
 export type ChatReplyShownIn = "main" | "thread" | "both";
 
-/** What a reply replies to, and where it is shown. */
-export interface ChatReply {
-  /** The message replied to, in the same room. */
-  message: Cell<ChatMessage>;
+/**
+ * The shape of `replyTo` a room reads and stores, named by the fields it
+ * holds beside `shownIn`. `thread-quotes`: a reply names the thread it joins
+ * as `thread` and the message it answers as `quotes` (see `ChatReply`). A room
+ * that takes another shape names it here with another value.
+ */
+export type ChatReplyShape = "thread-quotes";
 
-  /** Where the reply is shown. */
+/** The shape of `replyTo` this room reads and stores. */
+export const CHAT_REPLY_SHAPE: ChatReplyShape = "thread-quotes";
+
+/**
+ * Which thread a message joins, which message it quotes, and where it is
+ * shown. A plain post in a thread names its `thread` alone, a reply in a
+ * thread names both, and a reply in the main conversation names what it
+ * `quotes` alone, and is shown in `"main"`.
+ */
+export interface ChatReply {
+  /**
+   * The root of the thread the message joins, a message of the same room that
+   * is in no thread itself; absent for a message in no thread.
+   */
+  thread?: Cell<ChatMessage>;
+
+  /**
+   * The message this one answers, in the same room, and in `thread` where
+   * that is set; absent for a plain post.
+   */
+  quotes?: Cell<ChatMessage>;
+
+  /**
+   * Where the message is shown: `"thread"` or `"both"` for a message in a
+   * thread, and `"main"` for one in none.
+   */
   shownIn: ChatReplyShownIn;
 }
 
@@ -158,62 +220,90 @@ export interface ChatReaction {
   /** A single emoji. */
   emoji: string;
 
-  /** When the room recorded the reaction. Unique in the room. */
+  /** The room's handler clock when it recorded the reaction. */
   sentAt: FabricEpochNsec;
 }
 
-/** One message in a room, with its reactions and its edit history. */
+/** One message in a room, with its reactions. */
 export interface ChatMessage {
   /** The profile the sender sent under; absent once obliterated. */
   authorProfile?: ProfileCell;
 
-  /** The current text, or the marker of a deleted message. */
+  /**
+   * The current text, empty only where the message has attachments, or the
+   * marker of a deleted message.
+   */
   body: string | ChatDeletedBody;
 
-  /** When the room recorded the message's first version. Unique in the room. */
+  /**
+   * The files sent with the message, as entries of its space's file store, in
+   * the order they were sent; absent for none, and once the message is
+   * deleted.
+   */
+  attachments?: Cell<FileEntry>[];
+
+  /** The room's handler clock when it recorded the message. */
   sentAt: FabricEpochNsec;
 
   /**
-   * When the room recorded the current version, if it isn't the first: the
-   * latest edit or deletion. Unique in the room.
+   * The room's handler clock at the latest edit or deletion; absent until
+   * the message is first edited or deleted.
    */
   editedAt?: FabricEpochNsec;
 
-  /** The versions before the current one, oldest first. */
-  earlierVersions: ChatMessageVersion[];
-
-  /** What this message replies to, and where it is shown; absent for none. */
+  /**
+   * The thread this message joins, what it quotes, and where it is shown;
+   * absent for a message that joins no thread and quotes nothing.
+   */
   replyTo?: ChatReply;
 
-  /** Everyone's reactions to this message, in no particular order. */
-  reactions: ChatReaction[];
+  /**
+   * Everyone's reactions to this message, in the order they were added;
+   * absent once the message is deleted.
+   */
+  reactions?: ChatReaction[];
 }
 
-/** A room's policy, stated correctly, with every key present. */
+/**
+ * How many attachments a message may have, in a room whose policy doesn't
+ * say: what an absent `maxAttachments` means.
+ */
+export const DEFAULT_MAX_ATTACHMENTS = 10;
+
+/**
+ * A room's policy, stated correctly, with every key present but
+ * `maxAttachments`, which an earlier room's policy doesn't hold.
+ */
 export interface ChatRoomPolicy {
   /** Whether an OWNER may obliterate messages. */
   ownersMayObliterate: boolean;
 
-  /** Whether an edit or a plain deletion keeps the version it replaces. */
+  /** Stated for the policy's shape, and read by nothing: a message keeps no history. */
   keepsHistory: boolean;
 
   /** Whether a sender's deletion of their own message obliterates it. */
   deletionIsObliteration: boolean;
 
-  /** How far before the room's clock a proposed time is accepted, in ns. */
+  /** Stated for the policy's shape, and read by nothing: a sender proposes no time. */
   proposedTimeMaxAgeNsec: FabricDurationNsec;
 
-  /** How far after the room's clock a proposed time is accepted, in ns. */
+  /** Stated for the policy's shape, and read by nothing: a sender proposes no time. */
   proposedTimeMaxLeadNsec: FabricDurationNsec;
 
-  /** How long an entry stays in `recentActivity`, in ns. */
+  /** Stated for the policy's shape, and read by nothing: the room keeps no activity log. */
   recentActivityWindowNsec: FabricDurationNsec;
 
-  /** The most messages a message window holds. */
+  /** How many of the newest messages `messages.latest` holds. */
   maxWindowCount: number;
 
-  /** The most message windows a session can have open. */
+  /** Stated for the policy's shape, and read by nothing: the room offers no windows. */
   maxOpenWindows: number;
+
+  /**
+   * The most attachments a message may have; absent for
+   * `DEFAULT_MAX_ATTACHMENTS`.
+   */
+  maxAttachments?: number;
 }
 
 /** The kind of room: how it was created, not how many members it has. */
@@ -228,19 +318,45 @@ export interface AboutRecord {
   /** How the room was created. */
   kind: ChatRoomKind;
 
-  /** A group room's title. */
+  /** The title a group room was created with. */
   title?: string;
 
   /** When the room was created. */
   createdAt?: FabricEpochNsec;
 }
 
-/** What a room says about itself, set once when it is created. */
+/**
+ * A room's title as a member last set it, through `setTitle`. The room stores
+ * it labeled `authored-by` that member.
+ */
+export interface TitleRecord {
+  /** The title. */
+  title: string;
+}
+
+/**
+ * What a room keeps about one of its threads, beside the thread's messages:
+ * its title as a member last set it. The room stores it labeled
+ * `authored-by` that member.
+ */
+export interface ThreadInfoRecord {
+  /** The thread's root, by the root's own cell. */
+  root: Cell<unknown>;
+
+  /** The thread's title. */
+  title: string;
+}
+
+/** What a room says about itself. */
 export interface ChatRoomAbout {
   /** `"direct"` if created as a direct room; `"group"` otherwise. */
   kind: ChatRoomKind;
 
-  /** A group room's title. A direct room, and a space's own chat, have none. */
+  /**
+   * The room's title, which every member shares: the one a member last set,
+   * or else the one the room was created with. A direct room has none until a
+   * member sets one, and a space's own chat has none.
+   */
   title?: string;
 
   /** When the room was created; absent for a space's own chat. */
@@ -254,48 +370,6 @@ export interface ChatRoomAbout {
    * space's own chat, which no one created as a room.
    */
   record?: Cell<AboutRecord>;
-}
-
-/** One entry in a room's log of recent activity. */
-export interface ChatRoomActivity {
-  /** The entry's place in the room's activity: 1, 2, 3, … with no gaps. */
-  seq: number;
-
-  /** When the room recorded it. Unique in the room. */
-  at: FabricEpochNsec;
-
-  /** The `requestId` of the event it records. */
-  requestId: string;
-
-  /** The message the event changed or added. */
-  what: Cell<ChatMessage>;
-}
-
-/** Where a window of messages sits in its view. */
-export type ChatWindowAnchor =
-  | { before: FabricEpochNsec | "end" }
-  | { after: FabricEpochNsec | "start" }
-  | { around: FabricEpochNsec };
-
-/**
- * A request that opens, moves, or closes a window. Opening names where the
- * window sits and how many messages it holds; closing names only the window.
- */
-export interface WindowEvent {
-  /** Chosen by the client; shown in the window once an open is fulfilled. */
-  requestId: string;
-
-  /** The window to set or close, chosen by the client. */
-  windowId: string;
-
-  /** The root of the thread to show; absent for the main conversation. */
-  root?: Cell<ChatMessage>;
-
-  /** Where the window sits; required to open one. */
-  from?: ChatWindowAnchor;
-
-  /** The most messages to show, capped by the room's `maxWindowCount`. */
-  count?: number;
 }
 
 //
@@ -335,13 +409,22 @@ export const reactionTalliesOf = (
     [],
   );
   return emoji.map((each) => {
-    const onThis = ordered.filter((reaction) => reaction.emoji === each);
+    // One reactor counts once, however many of their reactions with this
+    // emoji the message holds.
+    const reactors = ordered.filter((reaction) => reaction.emoji === each)
+      .reduce<ProfileCell[]>(
+        (found, reaction) =>
+          found.some((known) => equals(known, reaction.reactorProfile))
+            ? found
+            : [...found, reaction.reactorProfile],
+        [],
+      );
     return {
       emoji: each,
-      count: onThis.length,
+      count: reactors.length,
       mine: viewer !== undefined &&
-        onThis.some((reaction) => equals(reaction.reactorProfile, viewer)),
-      reactors: onThis.map((reaction) => reaction.reactorProfile),
+        reactors.some((reactor) => equals(reactor, viewer)),
+      reactors,
     };
   });
 };
@@ -359,10 +442,12 @@ export const reactionTalliesOf = (
  * and the link's schema is part of every manager handler's declared reads.
  *
  * So the link carries what the room's space shares with every member and
- * costs little to read: what the room says about itself, and how many
- * messages it holds and when the newest was sent, which the room derives from
- * its messages alone. It leaves out the rest of the room's data face. A
- * room's `canSend` is decided per reader, from their own profile, and its
+ * costs little to read: what the room says about itself, how many messages it
+ * holds and when the newest was sent, which the room derives from its
+ * messages alone, and its roster, which the room stores. It leaves out the
+ * rest of the room's data face. Its `participants` lists every author beside
+ * those the roster holds, so deriving it reads every message. A room's
+ * `canSend` is decided per reader, from their own profile, and its
  * `messages.windows` are each session's own, so both reach documents of a
  * member's own, as the room's rendering does. Its `messages.latest` is
  * shared, but holds up to `maxWindowCount` messages and their reactions, which
@@ -383,6 +468,28 @@ export interface ChatRoomLink {
     /** The newest message's `sentAt`; absent while there are none. */
     newestAt?: FabricEpochNsec;
   };
+
+  /**
+   * The profiles of those who joined the room, in the order they joined, as a
+   * manager reads them: each a link, whose profile is read only through it.
+   */
+  roster?: ManagerProfileCell[];
+}
+
+/**
+ * A container's explicit declaration of the conversation it holds, and where
+ * it keeps the store of its space's files, which a room in its space that
+ * isn't its root uses as its own. It offers the record rather than a stream
+ * to create the store with: a stream declared here reads as present whether or
+ * not the container has one, and an event sent to one it lacks is dropped, so
+ * only a value can say whether the container keeps a store.
+ */
+export interface ChatContainer {
+  /** The declared conversation, wherever its room lives. */
+  chatRoom?: Cell<ChatRoomLink>;
+
+  /** Where the container keeps its space's file store. */
+  fileStoreRecord?: FileStoreRecord;
 }
 
 /** One room in a user's chat manager. */
@@ -396,8 +503,15 @@ export interface ChatIndexEntry {
   /** A direct room's other member, by principal. */
   counterpart?: string;
 
-  /** When this user created or accepted it. */
+  /** When first listed for this user, using catalog admission for discovery. */
   since: FabricEpochNsec;
+
+  /**
+   * The opaque revision supplied by `rooms` for its membership or discovery
+   * source. A request to forget uses that view's revision; direct mappings
+   * and act outcomes may omit it.
+   */
+  revision?: string;
 }
 
 /** The outcome of a manager request. */
@@ -410,16 +524,163 @@ export type ChatRequestOutcome =
     /** The request finished. */
     status: "done";
 
-    /** The entry it produced; absent for `forget`. */
+    /** The entry it produced; absent for `forget` and `offerRoom`. */
     entry?: ChatIndexEntry;
+
+    /** How `offerRoom` told the member of the room; absent for the others. */
+    delivery?: ChatOfferDelivery;
   }
   | {
     /** The request was refused. */
     status: "refused";
 
-    /** Why. */
+    /** Why, for a person to read. */
     reason: string;
+
+    /**
+     * Which refusal it is, for a client to act on, where a client has one to
+     * take; absent for the others.
+     */
+    code?: ChatRefusalCode;
   };
+
+/**
+ * A refusal a client can act on, which stays the same whatever its `reason`
+ * says. `space-own-chat`: `accept` or `joinRoom` named a container's chat
+ * without supplying the matching root `chatRoom` declaration it needs.
+ * `shared-inbox`: `createGroup` named profiles of two people that point at
+ * the same share inbox, so an offer meant for one would reach the other.
+ */
+export type ChatRefusalCode = "space-own-chat" | "shared-inbox";
+
+/**
+ * How a manager told a member of a room it offered them: `offered`, sent to
+ * at least one share inbox a profile of theirs points at, which says nothing
+ * of whether it arrived; `noticed`, queued as a notice for a client to
+ * deliver, since no profile of theirs it knows points at an inbox.
+ */
+export type ChatOfferDelivery = "offered" | "noticed";
+
+/**
+ * How an added member was told of the room: as their adder's manager told
+ * them, or `access-only`, not told at all, because the adder had no manager to
+ * tell them when they added them, or theirs refused to.
+ */
+export type AddMemberDelivery = ChatOfferDelivery | "access-only";
+
+/** The outcome of an add to a room's space, by its `requestId`. */
+export type AddMemberOutcome =
+  | {
+    /** The person was admitted, or held the access already. */
+    status: "done";
+
+    /**
+     * How they were told of the room; absent until the adder's manager has
+     * decided.
+     */
+    delivery?: AddMemberDelivery;
+
+    /**
+     * Why the adder's manager refused to tell them of the room, where it did,
+     * which makes `delivery` `access-only`.
+     */
+    deliveryRefusal?: string;
+  }
+  | {
+    /** The add was refused, and nothing was granted. */
+    status: "refused";
+
+    /** Why, for a person to read. */
+    reason: string;
+
+    /**
+     * Which refusal it is, for a client to act on, where a client has one to
+     * take; absent for the others.
+     */
+    code?: AddMemberRefusalCode;
+  };
+
+/**
+ * A refusal of an add a client can act on, which stays the same whatever its
+ * `reason` says. `direct-room`: the room is a direct room, whose space keeps
+ * its two members.
+ */
+export type AddMemberRefusalCode = "direct-room";
+
+/** The outcome of a retitle of a room, by its `requestId`. */
+export type SetTitleOutcome =
+  | {
+    /** The request set the room's title. */
+    status: "done";
+  }
+  | {
+    /** The retitle was refused, and the title is as it was. */
+    status: "refused";
+
+    /** Why, for a person to read. */
+    reason: string;
+
+    /** Which refusal it is, for a client to act on. */
+    code: SetTitleRefusalCode;
+  };
+
+/**
+ * Why a room refused a retitle, which stays the same whatever its `reason`
+ * says. `not-member`: the sender can't write in the room, or isn't signed in.
+ * `invalid-title`: the title is not a string with some text in it.
+ * `fixed-title`: the room's title is not one its members set, as for a
+ * space's own chat, which is shown by its space's name.
+ */
+export type SetTitleRefusalCode =
+  | "not-member"
+  | "invalid-title"
+  | "fixed-title";
+
+/** The outcome of a retitle of one of a room's threads, by its `requestId`. */
+export type SetThreadTitleOutcome =
+  | {
+    /** The request set the thread's title. */
+    status: "done";
+  }
+  | {
+    /** The retitle was refused, and the title is as it was. */
+    status: "refused";
+
+    /** Why, for a person to read. */
+    reason: string;
+
+    /** Which refusal it is, for a client to act on. */
+    code: SetThreadTitleRefusalCode;
+  };
+
+/**
+ * Why a room refused a thread's retitle, which stays the same whatever its
+ * `reason` says. `not-member`: the sender can't write in the room, or isn't
+ * signed in. `invalid-title`: the title is not a string with some text in
+ * it. `not-a-root`: the message named is not one of the room's messages that
+ * can root a thread.
+ */
+export type SetThreadTitleRefusalCode =
+  | "not-member"
+  | "invalid-title"
+  | "not-a-root";
+
+/**
+ * The `requestId` under which an add to the room in `space` asks the adder's
+ * manager to offer the room, given the add's own `requestId`, which the offer
+ * carries as its `id`. It names the room as well as the add, so adds to two
+ * rooms under one `requestId` neither share an outcome in the manager nor
+ * replace each other's offer in a share inbox.
+ */
+export const addMemberOfferId = (space: string, requestId: string): string =>
+  JSON.stringify(["addMember", space, requestId]);
+
+/**
+ * The `kind` of a room's own space, as the space declares it, and as an offer
+ * of the room to a member's share inbox and a user's shared-space catalog name
+ * it.
+ */
+export const CHAT_ROOM_OFFER_KIND = "fabrichat-room";
 
 /** A notice a manager's request produced, for a client to deliver. */
 export interface ChatManagerNotice {

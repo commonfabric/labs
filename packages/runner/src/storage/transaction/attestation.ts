@@ -17,6 +17,7 @@ import {
 import { LRUCache } from "@commonfabric/utils/cache";
 import { getLogger } from "@commonfabric/utils/logger";
 
+import { immutableSnapshot, isImmutableCellId } from "../../immutable-cell.ts";
 import type {
   IAttestation,
   IInvalidDataURIError,
@@ -257,13 +258,29 @@ export const resolve = (
 };
 
 /**
- * Loads an attestation from a data URI address. Parses the data URI content
- * and returns an attestation with the parsed value.
- * Results are cached to avoid redundant parsing of the same data URIs.
+ * Loads an immutable attestation. Native snapshots resolve from their live
+ * runtime store; portable data URIs are decoded and cached. Unavailable or
+ * invalid identifiers return an error result.
  */
 export const load = (
   address: Omit<IMemoryAddress, "path">,
 ): Result<IAttestation, IInvalidDataURIError | IUnsupportedMediaTypeError> => {
+  if (isImmutableCellId(address.id)) {
+    try {
+      return {
+        ok: {
+          address: { ...address, path: [] },
+          value: Object.freeze({ value: immutableSnapshot(address.id).value }),
+        },
+      };
+    } catch (error) {
+      return {
+        error: InvalidDataURIError(
+          `Unavailable immutable cell: ${(error as Error).message}`,
+        ),
+      };
+    }
+  }
   // Check cache first
   const cacheKey = address.id;
   const cached = dataURICache.get(cacheKey);

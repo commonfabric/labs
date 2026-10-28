@@ -9,10 +9,10 @@ import {
 import type { DID } from "@commonfabric/identity";
 import { BaseElement } from "../../core/base-element.ts";
 import {
+  AmbientThemeWatch,
   applyThemeToElement,
   type CFTheme,
-  cfThemeContext,
-  defaultTheme,
+  copyThemeProperties,
 } from "../theme-context.ts";
 import { runtimeContext, spaceContext } from "../../runtime-context.ts";
 import { uploadFile } from "../../utils/file-cell-storage.ts";
@@ -373,9 +373,12 @@ export class CFPromptInput extends BaseElement {
    */
   declare uploadAttachments: boolean;
 
-  @consume({ context: cfThemeContext, subscribe: true })
+  /**
+   * A theme given to this element directly, written over the theme it would
+   * otherwise inherit. Left unset, the element draws the ambient theme.
+   */
   @property({ attribute: false })
-  accessor theme: CFTheme = defaultTheme;
+  accessor theme: CFTheme | undefined = undefined;
 
   /**
    * The runtime, consumed so the component can upload attachment bytes itself
@@ -428,6 +431,11 @@ export class CFPromptInput extends BaseElement {
 
   constructor() {
     super();
+    new AmbientThemeWatch(this, () => {
+      if (this._mentionsOverlay) {
+        copyThemeProperties(this, this._mentionsOverlay);
+      }
+    });
     this.placeholder = "";
     this.buttonText = "Send";
     this.disabled = false;
@@ -482,7 +490,6 @@ export class CFPromptInput extends BaseElement {
     this._modelSelectElement = this.shadowRoot?.querySelector(
       ".model-select",
     ) as HTMLSelectElement;
-    this._updateThemeProperties();
     this._applyModelValueToDom();
   }
 
@@ -491,13 +498,9 @@ export class CFPromptInput extends BaseElement {
   ) {
     super.updated(changedProperties);
     if (changedProperties.has("theme")) {
-      this._updateThemeProperties();
-      // Update theme on overlay if it exists
+      applyThemeToElement(this, this.theme);
       if (this._mentionsOverlay) {
-        applyThemeToElement(
-          this._mentionsOverlay,
-          this.theme || defaultTheme,
-        );
+        copyThemeProperties(this, this._mentionsOverlay);
       }
     }
     if (changedProperties.has("mentionable")) {
@@ -522,11 +525,6 @@ export class CFPromptInput extends BaseElement {
     } else {
       this._unmountMentionsOverlay();
     }
-  }
-
-  private _updateThemeProperties() {
-    const currentTheme = this.theme || defaultTheme;
-    applyThemeToElement(this, currentTheme);
   }
 
   private async _handleSend(event?: Event) {
@@ -1301,7 +1299,7 @@ export class CFPromptInput extends BaseElement {
     el.dataset.cfPromptInputMentionsOverlay = "";
     document.body.appendChild(el);
     this._mentionsOverlay = el;
-    applyThemeToElement(el, this.theme ?? defaultTheme);
+    copyThemeProperties(this, el);
   }
 
   /**

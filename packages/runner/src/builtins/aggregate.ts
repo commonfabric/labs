@@ -45,7 +45,7 @@ import {
   trackListSetupRollback,
 } from "./list-element-rollback.ts";
 import { issueResultContainerSetup } from "./list-result-container.ts";
-import { ownedCell } from "./runtime-owned-store.ts";
+import { ownedCell, ownedStoreLinks } from "./runtime-owned-store.ts";
 import {
   cellIdentityKey,
   narrowestCellScope,
@@ -202,6 +202,10 @@ export function aggregate(
   outputBinding?: NormalizedFullLink,
   awaitSync?: boolean,
 ): RawBuiltinReturnType {
+  // The result store is keyed by the output spot alone, so the action
+  // declares it when it is set up.
+  const outputSpot = outputSpotFromBinding(outputBinding);
+  const resultCause = outputSpot && { aggregate: parent.entityId, outputSpot };
   const runs = new Map<string, ElementRun>();
   const setup: SetupRecord = { needsSetup: true };
   let result: Cell<unknown> | undefined;
@@ -269,15 +273,14 @@ export function aggregate(
         ...cells,
         ...(selectingElement ? elementCells : []),
       ]);
-      const outputSpot = outputSpotFromBinding(outputBinding);
-      if (!outputSpot) throw new Error("Aggregate requires an output binding");
+      if (!resultCause) throw new Error("Aggregate requires an output binding");
       if (!result || result.getAsNormalizedFullLink().scope !== scope) {
         const previous = result;
         result = ownedCell(
           runtime,
           tx,
           parent,
-          { aggregate: parent.entityId, outputSpot },
+          resultCause,
           undefined,
           scope,
         ).withTx();
@@ -415,5 +418,8 @@ export function aggregate(
       );
       releaseRemovedElements(runtime, runs, needed);
     },
+    storeWrites: resultCause
+      ? ownedStoreLinks(runtime, parent, [resultCause])
+      : [],
   };
 }

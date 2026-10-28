@@ -83,6 +83,20 @@ describe("v2-transaction", () => {
     expect(tx.committedSeq?.(otherSpace)).toBeUndefined();
   });
 
+  it("reports the seq by the time the commit's verdict resolves", async () => {
+    const tx = runtime.edit();
+    runtime.getCell(space, "seq at verdict", undefined, tx).set({
+      title: "verdict",
+    });
+    const receipt = tx.commit();
+
+    expect((await receipt.verdict).error).toBeUndefined();
+    const atVerdict = tx.committedSeq?.(space);
+    expect(atVerdict).toBeGreaterThan(0);
+    expect((await receipt.settled).error).toBeUndefined();
+    expect(tx.committedSeq?.(space)).toBe(atVerdict);
+  });
+
   it("reports no seq for a commit its space refused", async () => {
     const { replica } = storageManager.open(space);
     replica.commitNative = (() =>

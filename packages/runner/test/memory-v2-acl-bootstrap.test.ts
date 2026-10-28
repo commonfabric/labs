@@ -1,10 +1,14 @@
 import { expect } from "@std/expect";
 import { FabricLink } from "@commonfabric/data-model/fabric-instances";
-import { readGenesisRoot } from "@commonfabric/memory/v2/genesis-root";
+import {
+  readGenesisRoot,
+  readSpaceKind,
+} from "@commonfabric/memory/v2/genesis-root";
 import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import { toFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, Signer, URI } from "@commonfabric/memory/interface";
+import { encodeMemoryBoundary } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import {
@@ -21,6 +25,31 @@ import { Runtime } from "../src/runtime.ts";
 
 const TEST_AUDIENCE = "did:key:z6Mk-runner-acl-bootstrap-audience";
 
+/**
+ * A loopback to `server` whose send settles only once every frame the server
+ * sent while handling it has reached the client, as a send over a serving
+ * worker's port does: the server's thread answers the send after handling it,
+ * and the frames it sent meanwhile cross the port first.
+ */
+const portOrderedLoopback = (
+  server: MemoryV2Server.Server,
+): MemoryV2Client.Transport => {
+  const built: {
+    connection?: ReturnType<MemoryV2Server.Server["connect"]>;
+  } = {};
+  const transport = MemoryV2Client.queuedFrameTransport({
+    async receive(payload) {
+      await built.connection!.receive(payload);
+      await transport.delivered!();
+    },
+    close: () => built.connection?.close(),
+  });
+  built.connection = server.connect((message) =>
+    transport.deliver(encodeMemoryBoundary(message))
+  );
+  return transport;
+};
+
 class RecordingLoopbackSessionFactory implements SessionFactory {
   readonly supportsAclBootstrap = true;
   readonly principals: string[] = [];
@@ -32,8 +61,17 @@ class RecordingLoopbackSessionFactory implements SessionFactory {
 
   readonly #server: MemoryV2Server.Server;
 
-  constructor(server: MemoryV2Server.Server) {
+  readonly #transport: (
+    server: MemoryV2Server.Server,
+  ) => MemoryV2Client.Transport;
+
+  constructor(
+    server: MemoryV2Server.Server,
+    transport: (server: MemoryV2Server.Server) => MemoryV2Client.Transport =
+      MemoryV2Client.loopback,
+  ) {
     this.#server = server;
+    this.#transport = transport;
   }
 
   async create(
@@ -43,7 +81,7 @@ class RecordingLoopbackSessionFactory implements SessionFactory {
   ) {
     this.principals.push(signer?.did() ?? "<anonymous>");
     const client = await MemoryV2Client.connect({
-      transport: MemoryV2Client.loopback(this.#server),
+      transport: this.#transport(this.#server),
     });
     const session = await client.mount(
       space,
@@ -382,6 +420,77 @@ Deno.test("createSpace writes its ACL as the new space's first and only commit, 
   }
 });
 
+Deno.test("createSpace returns the space its genesis created when the creating session's revocation reaches the client before the send settles", async () => {
+  // An ACL that does not name the space's key revokes the creating session
+  // right after the genesis commit's verdict. Over this transport the verdict
+  // and then the revocation reach the client before the commit's send
+  // settles, as they do over a serving worker's port.
+  const user = await Identity.fromPassphrase("acl create port order user");
+  const server = createServer("runner-acl-create-port-order");
+  const manager = TestStorageManager.overServer(
+    { as: user },
+    new RecordingLoopbackSessionFactory(server, portOrderedLoopback),
+  );
+  try {
+    const space = await manager.createSpace({ [user.did()]: "OWNER" });
+    assertEquals(
+      (await server.readDocument(space, `of:${space}`))?.value,
+      { [user.did()]: "OWNER" },
+    );
+  } finally {
+    await manager.close();
+    await server.close();
+  }
+});
+
+Deno.test("createSpace releases the new space's key from a shared connection", async () => {
+  // A router counts every principal a shared connection authenticates; each
+  // creation's key would otherwise stay counted until the connection ends.
+  const user = await Identity.fromPassphrase("acl create release user");
+  const server = createServer("runner-acl-create-release");
+  const inner = new RecordingLoopbackSessionFactory(server);
+  const events: string[] = [];
+  let failRelease = false;
+  const factory: SessionFactory = {
+    supportsAclBootstrap: true,
+    async create(space, signer, requested) {
+      const { client, session } = await inner.create(space, signer, requested);
+      return {
+        client: {
+          get serverFlags() {
+            return client.serverFlags;
+          },
+          delivered: () => client.delivered(),
+          close: async () => {
+            events.push(`close ${space}`);
+            await client.close();
+          },
+          releasePrincipal: (principal: string) => {
+            events.push(`release ${principal}`);
+            return failRelease
+              ? Promise.reject(new Error("memory transport closed"))
+              : Promise.resolve();
+          },
+        },
+        session,
+      };
+    },
+  };
+  const manager = TestStorageManager.overServer({ as: user }, factory);
+  try {
+    const space = await manager.createSpace({ [user.did()]: "OWNER" });
+    assertEquals(events, [`close ${space}`, `release ${space}`]);
+    // The release is best effort: a failed one still returns the space its
+    // genesis created.
+    failRelease = true;
+    const second = await manager.createSpace({ [user.did()]: "OWNER" });
+    assertEquals(events.slice(2), [`close ${second}`, `release ${second}`]);
+  } finally {
+    await manager.close();
+    await server.close();
+  }
+});
+
 Deno.test("createSpace gives every space a new DID", async () => {
   const user = await Identity.fromPassphrase("acl create twice user");
   const server = createServer("runner-acl-create-twice");
@@ -507,9 +616,11 @@ Deno.test("createSpace reserves a custom root in the genesis commit, typed links
   });
   try {
     const space = await manager.createSpace({ [user.did()]: "OWNER" }, {
-      source: "system:loom/main.tsx",
-      cause: "root-link",
-      argument: { target: link },
+      root: {
+        source: "system:loom/main.tsx",
+        cause: "root-link",
+        argument: { target: link },
+      },
     });
     const stored = readGenesisRoot(await server.engineForSpace(space));
     assert(stored?.argument?.target instanceof FabricLink);
@@ -538,7 +649,7 @@ Deno.test("a mount that declares a root intent must match the space's reserved r
   try {
     const space = await manager.createSpace(
       { [user.did()]: "OWNER" },
-      genesisRoot,
+      { root: genesisRoot },
     );
     for (const intent of [undefined, genesisRoot]) {
       const opened = await factory.create(space, user, {
@@ -590,8 +701,7 @@ Deno.test("createSpace refuses a root on a host that does not advertise reservat
     await assertRejects(
       () =>
         manager.createSpace({ [user.did()]: "OWNER" }, {
-          source: "system:loom/main.tsx",
-          cause: "unsupported-root",
+          root: { source: "system:loom/main.tsx", cause: "unsupported-root" },
         }),
       Error,
       "Host does not support genesis root reservations",
@@ -601,6 +711,148 @@ Deno.test("createSpace refuses a root on a host that does not advertise reservat
     expect(selectDocHead(engine, { id: `of:${space}`, scopeKey: "space" }))
       .toBe(0);
     expect(readGenesisRoot(engine)).toBeUndefined();
+  } finally {
+    await manager.close();
+    await server.close();
+  }
+});
+
+Deno.test("createSpace declares a kind in the genesis commit, which spaceKind() reads back as a member and reads as absent from a space declaring none", async () => {
+  const user = await Identity.fromPassphrase("space kind manager");
+  const member = await Identity.fromPassphrase("space kind member");
+  const server = createServer("space-kind-genesis");
+  const factory = new RecordingLoopbackSessionFactory(server);
+  const manager = TestStorageManager.overServer({ as: user }, factory);
+  const reader = TestStorageManager.overServer(
+    { as: member },
+    new RecordingLoopbackSessionFactory(server),
+  );
+  try {
+    const acl = { [user.did()]: "OWNER", [member.did()]: "READ" } as const;
+    const kinded = await manager.createSpace(acl, {
+      spaceKind: "fabrichat-room",
+    });
+    const plain = await manager.createSpace(acl);
+    assertEquals(
+      readSpaceKind(await server.engineForSpace(kinded)),
+      "fabrichat-room",
+    );
+    assertEquals(factory.sessions[0].requested.spaceKind, "fabrichat-room");
+    assertEquals(await reader.spaceKind(kinded), "fabrichat-room");
+    assertEquals(await manager.spaceKind(kinded), "fabrichat-room");
+    assertEquals(await reader.spaceKind(plain), undefined);
+  } finally {
+    await reader.close();
+    await manager.close();
+    await server.close();
+  }
+});
+
+Deno.test("spaceKind() reads the kind of a space whose genesis commits after the reader first opened it, opening one session of its own to do so", async () => {
+  const member = await Identity.fromPassphrase("space kind early reader");
+  const server = createServer("space-kind-early-reader");
+  const factory = new RecordingLoopbackSessionFactory(server);
+  const reader = TestStorageManager.overServer({ as: member }, factory);
+  const key = await Identity.generate();
+  const space = key.did() as MemorySpace;
+  try {
+    assertEquals(await reader.spaceKind(space), undefined);
+    const { client, session } = await factory.create(space, key, {
+      spaceKind: "fabrichat-room",
+    });
+    try {
+      await session.transact({
+        spaceKind: "fabrichat-room",
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: `of:${space}`,
+          value: { value: { [member.did()]: "OWNER" } },
+        }],
+      });
+    } finally {
+      await client.close();
+    }
+    assertEquals(
+      readSpaceKind(await server.engineForSpace(space)),
+      "fabrichat-room",
+    );
+    const opened = factory.sessions.length;
+    assertEquals(await reader.spaceKind(space), "fabrichat-room");
+    assertEquals(factory.sessions.length, opened + 1);
+    assertEquals(await reader.spaceKind(space), "fabrichat-room");
+    assertEquals(factory.sessions.length, opened + 1);
+  } finally {
+    await reader.close();
+    await server.close();
+  }
+});
+
+Deno.test("spaceKind() throws for a space whose access list admits the reader to nothing", async () => {
+  const user = await Identity.fromPassphrase("space kind refusing owner");
+  const stranger = await Identity.fromPassphrase("space kind stranger");
+  const server = createServer("space-kind-refused");
+  const manager = TestStorageManager.overServer(
+    { as: user },
+    new RecordingLoopbackSessionFactory(server),
+  );
+  const reader = TestStorageManager.overServer(
+    { as: stranger },
+    new RecordingLoopbackSessionFactory(server),
+  );
+  try {
+    const space = await manager.createSpace({ [user.did()]: "OWNER" }, {
+      spaceKind: "fabrichat-room",
+    });
+    const error = await assertRejects(() => reader.spaceKind(space));
+    assertEquals((error as Error).name, "AuthorizationError");
+    expect((error as Error).message).toContain("lacks READ");
+  } finally {
+    await reader.close();
+    await manager.close();
+    await server.close();
+  }
+});
+
+Deno.test("createSpace refuses a kind on a host that does not advertise space kinds, and writes nothing; spaceKind() throws there", async () => {
+  const user = await Identity.fromPassphrase("unsupported space kind manager");
+  const server = createServer("unsupported-space-kind");
+  class UnadvertisedKindFactory extends RecordingLoopbackSessionFactory {
+    override async create(
+      space: MemorySpace,
+      signer?: Signer,
+      requested: MemoryV2Client.MountOptions = {},
+    ) {
+      const opened = await super.create(space, signer, requested);
+      Object.defineProperty(opened.client, "serverFlags", {
+        value: { ...opened.client.serverFlags, spaceKind: false },
+      });
+      return opened;
+    }
+  }
+  const factory = new UnadvertisedKindFactory(server);
+  const manager = TestStorageManager.overServer({ as: user }, factory);
+  try {
+    await assertRejects(
+      () =>
+        manager.createSpace({ [user.did()]: "OWNER" }, {
+          spaceKind: "fabrichat-room",
+        }),
+      Error,
+      "Host does not support declared space kinds",
+    );
+    const [refused] = factory.sessions.map((entry) => entry.space);
+    const engine = await server.engineForSpace(refused);
+    expect(selectDocHead(engine, { id: `of:${refused}`, scopeKey: "space" }))
+      .toBe(0);
+    expect(readSpaceKind(engine)).toBeUndefined();
+    const plain = await manager.createSpace({ [user.did()]: "OWNER" });
+    await assertRejects(
+      () => manager.spaceKind(plain),
+      Error,
+      "does not report a space's declared kind",
+    );
   } finally {
     await manager.close();
     await server.close();

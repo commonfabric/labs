@@ -4,6 +4,7 @@
  * removed by deleting its line.
  */
 
+import type { CiJobs } from "./ci-jobs-page.ts";
 import type { Tile } from "./types.ts";
 
 import { benchmark, keyBenchmarks } from "./tiles/benchmark.ts";
@@ -23,7 +24,7 @@ import { githubMembers } from "./tiles/github-members.ts";
 import { modelSpend } from "./tiles/model-spend.ts";
 import { prodErrors } from "./tiles/prod-errors.ts";
 import { prodUptime } from "./tiles/prod-uptime.ts";
-import { recentRuns } from "./tiles/recent-runs.ts";
+import { recentCommits } from "./tiles/recent-commits.ts";
 import { testFlakes } from "./tiles/test-flakes.ts";
 import { testSelection } from "./tiles/test-selection.ts";
 
@@ -54,5 +55,11 @@ export const TILES: Tile[] = [
   githubCiSpend,
   githubMembers,
 
-  recentRuns,
+  recentCommits,
 ];
+
+/**
+ * The ci tile's latest collection, which the repository pages list each
+ * repository's jobs from.
+ */
+export const latestCiJobs = (): CiJobs | undefined => ciHealth.jobs();

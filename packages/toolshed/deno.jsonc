@@ -15,6 +15,7 @@
     "@/": "./",
     "@db/sqlite": "jsr:@db/sqlite@0.13.0",
     "@node/async_hooks": "node:async_hooks",
+    "@panva/jose": "jsr:@panva/jose@^6.2.12",
     "ai": "npm:ai@^7.0.31",
     "@cmd-johnson/oauth2-client": "jsr:@cmd-johnson/oauth2-client@^2.0.0",
     "@ai-sdk/anthropic": "npm:@ai-sdk/anthropic@^4.0.16",

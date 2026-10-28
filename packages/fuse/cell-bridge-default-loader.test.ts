@@ -22,11 +22,16 @@ describe("CellBridge", () => {
         await Deno.writeFile(identityPath, await Identity.generatePkcs8());
         requested = [];
         realFetch = globalThis.fetch;
+        // A server without a meta route, whose health probe fails. A 404 is
+        // conclusive, so the meta document is requested once.
         globalThis.fetch = (input: string | URL | Request) => {
-          requested.push(
-            input instanceof Request ? input.url : input.toString(),
+          const url = input instanceof Request ? input.url : input.toString();
+          requested.push(url);
+          return Promise.resolve(
+            new Response(null, {
+              status: new URL(url).pathname === "/api/meta" ? 404 : 503,
+            }),
           );
-          return Promise.resolve(new Response(null, { status: 503 }));
         };
       });
 
@@ -41,11 +46,11 @@ describe("CellBridge", () => {
         await expect(bridge.connectSpace("home")).rejects.toThrow(
           'Could not connect to "http://toolshed.test/".',
         );
-        // The deployment's experimental posture first, because it decides
-        // how the runtime is constructed; then the health probe that decides
-        // whether to connect at all. The stub answers 503 to both, and a
-        // non-OK posture response is read as an absent posture, which is why
-        // the bridge goes on to the health probe and fails there.
+        // The deployment's experimental posture and memory URL first,
+        // because they decide how the runtime is constructed; then the health
+        // probe that decides whether to connect at all. The stub's 404 says
+        // the deployment publishes neither, which is why the bridge goes on
+        // to the health probe and fails there.
         expect(requested).toEqual([
           "http://toolshed.test/api/meta",
           "http://toolshed.test/_health",

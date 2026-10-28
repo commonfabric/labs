@@ -4,7 +4,10 @@ import {
   compactThresholdForBudget,
   OpenAICompatibleGatewayModelClient,
 } from "../src/model/openai-compatible-gateway.ts";
-import { toResponsesInput } from "../src/model/responses-protocol.ts";
+import {
+  continuationOutput,
+  toResponsesInput,
+} from "../src/model/responses-protocol.ts";
 import type { HarnessModelTurnRequest } from "../src/model/client.ts";
 import type { HarnessTranscriptMessage } from "../src/contracts/transcript.ts";
 
@@ -543,4 +546,18 @@ Deno.test("0 stays harmless on unsupported paths", async () => {
   }));
   assertEquals(result.assistant.content, "ok");
   assertEquals(captured[0].url, `${GATEWAY}/v1/chat/completions`);
+});
+
+Deno.test("continuationOutput replays nothing from a continuation of an unknown version or with no source model", () => {
+  for (
+    const state of [
+      { version: 3, sourceModel: "gpt-test", output: [] },
+      { version: 2, output: [] },
+    ]
+  ) {
+    assertEquals(
+      continuationOutput({ providerId: "openai", state }, "gpt-test", "openai"),
+      [],
+    );
+  }
 });

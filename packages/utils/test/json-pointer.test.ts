@@ -33,6 +33,12 @@ describe("json-pointer", () => {
       expect(decodeJsonPointer("~01")).toEqual(["~1"]);
     });
 
+    it("decodes a pointer with no escape to its split tokens", () => {
+      expect(decodeJsonPointer("#/$defs/name")).toEqual(["#", "$defs", "name"]);
+      expect(decodeJsonPointer("")).toEqual([""]);
+      expect(decodeJsonPointer("a//b")).toEqual(["a", "", "b"]);
+    });
+
     it("returns the tokens `encodeJsonPointer()` was given", () => {
       const tokens = ["", "#", "$defs", "a/b~c", ""];
       expect(decodeJsonPointer(encodeJsonPointer(tokens))).toEqual(tokens);

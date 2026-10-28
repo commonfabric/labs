@@ -48,35 +48,92 @@ const createNode = (): Node => ({
   descendants: [],
 });
 
+/**
+ * The entries an index is built over: every entry of the list, or those a
+ * predicate keeps. `key` names the predicate, so that two indexes built over
+ * one list under predicates of the same name share their trie; a predicate is
+ * therefore a pure function of the entry, and the same function under the
+ * same name everywhere.
+ */
+export type ConsumedLabelSelection = {
+  readonly key: string;
+  readonly keeps: (entry: LabelMapEntry) => boolean;
+};
+
+/**
+ * The tries built, by the entries list they were built over and the name of
+ * the selection. A list is indexed again by every transaction that reads the
+ * document, and a resolved label map is memoized by its stored value, so the
+ * same list arrives each time; the trie is pure data over it. An index never
+ * writes to its trie after building it, and the entries are treated as
+ * immutable from the first index over them, as the index's retention of
+ * their paths already requires.
+ */
+const builtRoots = new WeakMap<
+  readonly LabelMapEntry[],
+  Map<string | undefined, Node>
+>();
+
+/** Helper for `ConsumedLabelIndex`, which builds the trie over `entries`. */
+const buildRoot = (
+  entries: readonly LabelMapEntry[],
+  keeps: ((entry: LabelMapEntry) => boolean) | undefined,
+): Node => {
+  const root = createNode();
+  for (let ordinal = 0; ordinal < entries.length; ordinal++) {
+    const entry = entries[ordinal]!;
+    if (keeps !== undefined && !keeps(entry)) continue;
+    const path = canonicalizeLogicalPath(entry.path);
+    const indexed = { entry, path, ordinal };
+    let current = root;
+    current.descendants.push(indexed);
+    for (const segment of path) {
+      if (segment === "*") break;
+      let child = current.children.get(segment);
+      if (child === undefined) {
+        child = createNode();
+        current.children.set(segment, child);
+      }
+      current = child;
+      current.descendants.push(indexed);
+    }
+    if (path.includes("*")) current.wildcard.push(indexed);
+    else current.exact.push(indexed);
+  }
+  return root;
+};
+
 /** A collection-local snapshot of one validated label map. */
 export class ConsumedLabelIndex {
-  #root = createNode();
+  #root: Node;
   #onQuery: ((wildcard: boolean) => void) | undefined;
 
-  /** Constructs a snapshot over validated entries. */
+  /**
+   * Constructs a snapshot over validated entries, or over those `select`
+   * keeps. The trie is shared with every other index over the same list and
+   * selection; what is this index's own is `onQuery`.
+   */
   constructor(
     entries: readonly LabelMapEntry[],
-    options: { onQuery?: (wildcard: boolean) => void } = {},
+    options: {
+      onQuery?: (wildcard: boolean) => void;
+      select?: ConsumedLabelSelection;
+    } = {},
   ) {
     this.#onQuery = options.onQuery;
-    for (const [ordinal, entry] of entries.entries()) {
-      const path = canonicalizeLogicalPath(entry.path);
-      const indexed = { entry, path, ordinal };
-      let current = this.#root;
-      current.descendants.push(indexed);
-      for (const segment of path) {
-        if (segment === "*") break;
-        let child = current.children.get(segment);
-        if (child === undefined) {
-          child = createNode();
-          current.children.set(segment, child);
-        }
-        current = child;
-        current.descendants.push(indexed);
+    // No selection is its own slot, apart from every selection key.
+    const key = options.select?.key;
+    let roots = builtRoots.get(entries);
+    let root = roots?.get(key);
+    if (root === undefined) {
+      root = buildRoot(entries, options.select?.keeps);
+      if (roots === undefined) {
+        roots = new Map();
+        builtRoots.set(entries, roots);
       }
-      if (path.includes("*")) current.wildcard.push(indexed);
-      else current.exact.push(indexed);
+      roots.set(key, root);
     }
+    this.#root = root;
   }
 
   /**

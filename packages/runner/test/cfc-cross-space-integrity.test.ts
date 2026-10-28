@@ -5,7 +5,6 @@ import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
-import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -15,7 +14,7 @@ import {
 import type { JSONSchema } from "../src/builder/types.ts";
 import { type CfcConfClause, clausesEqual } from "../src/cfc/clause.ts";
 import { evaluateExchangeRules } from "../src/cfc/exchange-eval.ts";
-import { commitmentAwareEquals } from "../src/cfc/label-representation.ts";
+import { cfcLabelViewForDereference } from "../src/cfc/label-view-state.ts";
 import type { IFCLabel } from "../src/cfc/mod.ts";
 import {
   buildCfcPolicySnapshot,
@@ -118,20 +117,33 @@ const seedLabeledDoc = async (
   return docId;
 };
 
-// An address a `LinkReference` endorsement carries: the plaintext address, or
-// the digest marker standing in for it.
-type EndorsementAddress =
-  | { space: string; id: string; path: string[] }
-  | { digestOf: string };
-
-const isLinkReference = (atom: unknown): atom is {
-  type: string;
-  source: EndorsementAddress;
-  target: EndorsementAddress;
-} =>
-  isObjectOrArray(atom) &&
-  (atom as { type?: unknown }).type ===
-    "https://commonfabric.org/cfc/atom/LinkReference";
+/**
+ * The labels a read through the link at `slot` to `target` consumes: the
+ * slot's own label and restriction composed with the target's stored labels,
+ * flattened across every entry of the composed view.
+ */
+const dereferenceLabels = (
+  runtime: Runtime,
+  slot: { space: MemorySpace; id: string; path: string[] },
+  target: { space: MemorySpace; id: string; path: string[] },
+): { confidentiality: unknown[]; integrity: unknown[] } => {
+  const tx = runtime.edit();
+  try {
+    const entries = cfcLabelViewForDereference(
+      tx,
+      { ...slot, scope: "space" },
+      { ...target, scope: "space" },
+    )?.entries ?? [];
+    return {
+      confidentiality: entries.flatMap((entry) =>
+        entry.label.confidentiality ?? []
+      ),
+      integrity: entries.flatMap((entry) => entry.label.integrity ?? []),
+    };
+  } finally {
+    tx.abort();
+  }
+};
 
 describe("CFC cross-space integrity", () => {
   it("scenario 1a — a value created in a space gets integrity (declared)", async () => {
@@ -224,13 +236,15 @@ describe("CFC cross-space integrity", () => {
     }
   });
 
-  it("scenario 1c — a cross-space link retains the source integrity (+ endorsement)", async () => {
+  it("scenario 1c — a cross-space link reaches the source's labels and carries none of them", async () => {
     // Scenario 1 proper (reference / no-copy): space B holds a LINK to the
-    // labeled value in space A. Traversing the link yields the source integrity
-    // PRESERVED plus a runtime-minted `LinkReference` endorsement that records
-    // BOTH spaces (§3.7.2: integrity = target ∪ link-endorsement), and the
-    // source confidentiality carried across the boundary (§3.7.1). This is the
-    // mechanism that genuinely crosses spaces today.
+    // labeled value in space A. The slot persists the reference's own label
+    // and nothing of the source's (§8.2.5, §8.12.8); a reference written by
+    // an attempt that observed nothing, under no declaration, has no label
+    // of its own, so the slot stores no entry. Following the link composes
+    // the slot's restriction with the source's own labels where they are
+    // (§8.2.4): the integrity PRESERVED (§3.7.2) and the source
+    // confidentiality (§3.7.1).
 
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = makeRuntime(storageManager);
@@ -267,60 +281,57 @@ describe("CFC cross-space integrity", () => {
 
       const sinkId = parseLink(sink.getAsLink()).id!;
       const doc = readDoc(storageManager, spaceB, sinkId);
-      const entries = entriesFor(doc, ["ref"]);
-      expect(entries).toHaveLength(1);
-      const entry = entries[0];
-      expect(entry.origin).toBe("link");
-      // Source integrity preserved…
-      expect(entry.label.integrity).toContain("gps-reading");
-      // …plus the endorsement recording the edge from space A to space B.
-      // The endorsement addresses are commitment-classified fields, so
-      // `commitmentAwareEquals` reads the plaintext address and the digest
-      // marker standing in for it alike.
-      const linkRef = (entry.label.integrity ?? []).find(isLinkReference);
-      expect(linkRef).toBeDefined();
-      expect(
-        commitmentAwareEquals(linkRef!.source, {
-          space: spaceA,
-          id: srcId,
-          path: [],
-        }),
-      ).toBe(true);
-      expect(
-        commitmentAwareEquals(linkRef!.target, {
-          space: spaceB,
-          id: sinkId,
-          path: ["ref"],
-        }),
-      ).toBe(true);
-      // Source confidentiality carried across the space boundary.
-      expect(entry.label.confidentiality).toContain("space-a-secret");
+      // The slot stores nothing of the source's labels.
+      expect(entriesFor(doc, ["ref"])).toHaveLength(0);
+      const allLabels = (doc?.cfc?.labelMap?.entries ?? []).flatMap((e) => [
+        ...(e.label.integrity ?? []),
+        ...(e.label.confidentiality ?? []),
+      ]);
+      expect(allLabels).not.toContain("gps-reading");
+      expect(allLabels).not.toContain("space-a-secret");
+      // Following the link reaches the source's labels: integrity preserved
+      // and confidentiality consumed.
+      const followed = dereferenceLabels(runtime, {
+        space: spaceB,
+        id: sinkId,
+        path: ["ref"],
+      }, { space: spaceA, id: srcId, path: [] });
+      expect(followed.integrity).toContain("gps-reading");
+      expect(followed.confidentiality).toContain("space-a-secret");
     } finally {
       await runtime.dispose();
       await storageManager.close();
     }
   });
 
-  it("scenario 1d — exactCopyOf of a cross-space link carries integrity and verifies the copy", async () => {
+  it("scenario 1d — exactCopyOf of a cross-space link carries the reference's label and verifies the copy", async () => {
     // Verbatim copy across spaces, DONE RIGHT: carry the REFERENCE.
     // `exactCopyOf` compares two paths within one value tree — but a path may
     // HOLD a link into another space, and the label it copies is that path's
-    // (link-carried) label. So a field whose source is a cross-space link is
-    // (a) verified as an exact copy AND (b) carries the source's integrity
-    // across the boundary. This is the "verbatim copy retains integrity across
-    // spaces" scenario — the reference is the carrier, and exactCopyOf is the
-    // verified claim on top of it.
+    // own: the reference's restriction and endorsement, not the source's
+    // labels, which stay with the source and are reached through either
+    // reference. So a field whose source is a cross-space link is (a)
+    // verified as an exact copy of the reference AND (b) carries the
+    // endorsement across the boundary. This is the "verbatim copy retains
+    // integrity across spaces" scenario — the reference is the carrier, and
+    // exactCopyOf is the verified claim on top of it.
 
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = makeRuntime(storageManager);
     try {
-      await seedLabeledDoc(runtime, spaceA, "s1d-src", "37.77,-122.41", [{
-        path: [],
-        label: {
-          integrity: ["gps-reading"],
-          confidentiality: ["space-a-secret"],
-        },
-      }]);
+      const srcId = await seedLabeledDoc(
+        runtime,
+        spaceA,
+        "s1d-src",
+        "37.77,-122.41",
+        [{
+          path: [],
+          label: {
+            integrity: ["gps-reading"],
+            confidentiality: ["space-a-secret"],
+          },
+        }],
+      );
 
       const tx = runtime.edit();
       const src = runtime.getCell(spaceA, "s1d-src", undefined, tx);
@@ -352,10 +363,15 @@ describe("CFC cross-space integrity", () => {
       );
       const confirmedInt = entriesFor(doc, ["confirmed"])
         .flatMap((e) => e.label.integrity ?? []);
-      // The verified copy carries the source integrity across the boundary,
-      // including the cross-space endorsement.
-      expect(confirmedInt).toContain("gps-reading");
-      expect(confirmedInt.find(isLinkReference)).toBeDefined();
+      // The verified copy carries nothing of the source's own integrity;
+      // following it reaches the source's integrity where it is.
+      expect(confirmedInt).not.toContain("gps-reading");
+      const followed = dereferenceLabels(runtime, {
+        space: spaceB,
+        id: parseLink(sink.getAsLink()).id!,
+        path: ["confirmed"],
+      }, { space: spaceA, id: srcId, path: [] });
+      expect(followed.integrity).toContain("gps-reading");
     } finally {
       await runtime.dispose();
       await storageManager.close();
@@ -546,17 +562,18 @@ describe("CFC cross-space integrity", () => {
     }
   });
 
-  it("scenario 3b — a cross-space link to a sub-path carries only that subset's label", async () => {
+  it("scenario 3b — a cross-space link to a sub-path reaches only that subset's label", async () => {
     // Scenario 3 (reference variant): referencing only a SUBSET. A link to a
-    // sub-path of the source carries only that sub-path's label — the sibling
-    // field's label stays behind. This is the "solve the subset with
-    // references, at least partially" case.
+    // sub-path of the source reaches only that sub-path's label — the sibling
+    // field's label is not on the way. The slot itself carries none of it.
+    // This is the "solve the subset with references, at least partially"
+    // case.
 
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = makeRuntime(storageManager);
     try {
       // Source has DIFFERENT labels on two fields.
-      await seedLabeledDoc(
+      const srcId = await seedLabeledDoc(
         runtime,
         spaceA,
         "s3b-src",
@@ -584,42 +601,49 @@ describe("CFC cross-space integrity", () => {
       tx.prepareCfc();
       expect((await tx.commit().settled).error).toBeUndefined();
 
-      const doc = readDoc(
-        storageManager,
-        spaceB,
-        parseLink(sink.getAsLink()).id!,
-      );
-      const entries = entriesFor(doc, ["lat"]);
-      expect(entries).toHaveLength(1);
-      // The subset's own integrity crossed…
-      expect(entries[0].label.integrity).toContain("gps-reading");
-      // …and the sibling `secret`'s confidentiality did NOT leak in.
+      const sinkId = parseLink(sink.getAsLink()).id!;
+      const doc = readDoc(storageManager, spaceB, sinkId);
+      // The slot carries nothing of the source: no integrity, no sibling's
+      // confidentiality.
+      const allInt = (doc?.cfc?.labelMap?.entries ?? [])
+        .flatMap((e) => e.label.integrity ?? []);
+      expect(allInt).not.toContain("gps-reading");
       const allConf = (doc?.cfc?.labelMap?.entries ?? [])
         .flatMap((e) => e.label.confidentiality ?? []);
       expect(allConf).not.toContain("top-secret");
+      // Following the link reaches the subset's own integrity, and not the
+      // sibling `secret`'s confidentiality.
+      const followed = dereferenceLabels(runtime, {
+        space: spaceB,
+        id: sinkId,
+        path: ["lat"],
+      }, { space: spaceA, id: srcId, path: ["lat"] });
+      expect(followed.integrity).toContain("gps-reading");
+      expect(followed.confidentiality).not.toContain("top-secret");
     } finally {
       await runtime.dispose();
       await storageManager.close();
     }
   });
 
-  it("scenario 3d — a whole-object cross-space link carries undeclared sibling labels (no projection)", async () => {
+  it("scenario 3d — a whole-object cross-space link reaches undeclared sibling labels (no projection)", async () => {
     // Subset — the SUBTLE part. Source data carries MORE fields than the
     // destination schema declares:
     //   { foo: { bar, secret }, baz, secret }   vs   { foo: { bar }, baz }
     //
     // GOTCHA: linking the WHOLE object does NOT project it to the schema. The
-    // link carries the source's FULL labelMap — the undeclared `foo.secret` and
-    // top-level `secret` labels come across too. A narrower destination schema
-    // is a read-time VIEW, not a projection: it does not sanitize the
-    // reference. The secret fields stay confined by their OWN confidentiality
-    // labels (so this is safe, not a leak), but "only the right fields crossed"
-    // is FALSE here.
+    // link reaches the source's FULL label map — the undeclared `foo.secret`
+    // and top-level `secret` labels are on the way for a read through it. A
+    // narrower destination schema is a read-time VIEW, not a projection: it
+    // does not sanitize the reference. The secret fields stay confined by
+    // their OWN confidentiality labels (so this is safe, not a leak), but
+    // "only the right fields are reachable" is FALSE here. The slot itself
+    // stores none of those labels.
 
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = makeRuntime(storageManager);
     try {
-      await seedLabeledDoc(
+      const srcId = await seedLabeledDoc(
         runtime,
         spaceA,
         "s3d-src",
@@ -662,26 +686,31 @@ describe("CFC cross-space integrity", () => {
       tx.prepareCfc();
       expect((await tx.commit().settled).error).toBeUndefined();
 
-      const doc = readDoc(
-        storageManager,
-        spaceB,
-        parseLink(sink.getAsLink()).id!,
-      );
+      const sinkId = parseLink(sink.getAsLink()).id!;
+      const doc = readDoc(storageManager, spaceB, sinkId);
       const allConf = (doc?.cfc?.labelMap?.entries ?? [])
         .flatMap((e) => e.label.confidentiality ?? []);
-      // The undeclared secret fields' labels DID cross (the schema did not
-      // project them out).
-      expect(allConf).toContain("foo-secret");
-      expect(allConf).toContain("top-secret");
+      // The slot stores none of the source's labels…
+      expect(allConf).not.toContain("foo-secret");
+      expect(allConf).not.toContain("top-secret");
+      // …and following the link reaches the undeclared secret fields' labels
+      // all the same (the schema did not project them out).
+      const followed = dereferenceLabels(runtime, {
+        space: spaceB,
+        id: sinkId,
+        path: ["data"],
+      }, { space: spaceA, id: srcId, path: [] });
+      expect(followed.confidentiality).toContain("foo-secret");
+      expect(followed.confidentiality).toContain("top-secret");
     } finally {
       await runtime.dispose();
       await storageManager.close();
     }
   });
 
-  it("scenario 3e — per-field cross-space links copy exactly the chosen subset", async () => {
+  it("scenario 3e — per-field cross-space links reach exactly the chosen subset", async () => {
     // Subset — DONE RIGHT: link the specific sub-paths. Only the selected
-    // fields' labels cross; the undeclared `secret` fields are never
+    // fields' labels are reachable; the undeclared `secret` fields are never
     // referenced, so their labels (and values) stay entirely behind. This is
     // how you copy a genuine subset by reference, integrity-preserving and
     // leak-free.
@@ -689,7 +718,7 @@ describe("CFC cross-space integrity", () => {
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = makeRuntime(storageManager);
     try {
-      await seedLabeledDoc(
+      const srcId = await seedLabeledDoc(
         runtime,
         spaceA,
         "s3e-src",
@@ -725,21 +754,29 @@ describe("CFC cross-space integrity", () => {
       tx.prepareCfc();
       expect((await tx.commit().settled).error).toBeUndefined();
 
-      const doc = readDoc(
-        storageManager,
-        spaceB,
-        parseLink(sink.getAsLink()).id!,
-      );
+      const sinkId = parseLink(sink.getAsLink()).id!;
+      const doc = readDoc(storageManager, spaceB, sinkId);
       const allConf = (doc?.cfc?.labelMap?.entries ?? [])
         .flatMap((e) => e.label.confidentiality ?? []);
-      const allInt = (doc?.cfc?.labelMap?.entries ?? [])
-        .flatMap((e) => e.label.integrity ?? []);
-      // Chosen fields' integrity crossed…
-      expect(allInt).toContain("bar-ok");
-      expect(allInt).toContain("baz-ok");
-      // …and NEITHER secret's confidentiality did.
+      // The slots store none of the secrets' confidentiality…
       expect(allConf).not.toContain("foo-secret");
       expect(allConf).not.toContain("top-secret");
+      // …and following each link reaches the chosen field's integrity and
+      // neither secret.
+      const bar = dereferenceLabels(runtime, {
+        space: spaceB,
+        id: sinkId,
+        path: ["bar"],
+      }, { space: spaceA, id: srcId, path: ["foo", "bar"] });
+      expect(bar.integrity).toContain("bar-ok");
+      expect(bar.confidentiality).not.toContain("foo-secret");
+      const baz = dereferenceLabels(runtime, {
+        space: spaceB,
+        id: sinkId,
+        path: ["baz"],
+      }, { space: spaceA, id: srcId, path: ["baz"] });
+      expect(baz.integrity).toContain("baz-ok");
+      expect(baz.confidentiality).not.toContain("top-secret");
     } finally {
       await runtime.dispose();
       await storageManager.close();

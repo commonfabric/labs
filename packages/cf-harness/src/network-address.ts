@@ -1,7 +1,19 @@
 /**
  * Which network addresses are on the open internet: parsing an address
- * written as text, and judging it by the address a connection to it reaches.
+ * written as text, and judging it by the address a connection to it reaches
+ * and by the networks this device's interfaces are on.
  */
+
+import { debugStr } from "@commonfabric/data-model";
+
+/**
+ * A network one of this device's interfaces is on: the interface's address,
+ * four or sixteen bytes, and the length of the network's prefix.
+ */
+export interface LocalNetwork {
+  address: Uint8Array;
+  prefixLength: number;
+}
 
 /**
  * A host name as it is compared: lowercase, without the brackets around an
@@ -19,6 +31,18 @@ export const parseIpAddress = (text: string): Uint8Array | undefined =>
   parseIpv4Address(text) ?? parseIpv6Address(text);
 
 /**
+ * The address a connection to `address` reaches: the IPv4 address in the last
+ * four bytes of an IPv4-mapped IPv6 address or of one in the well-known NAT64
+ * prefix, and any other address itself.
+ */
+const reachedAddress = (address: Uint8Array): Uint8Array =>
+  address.length === 16 &&
+    (hasPrefix(address, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff], 96) ||
+      hasPrefix(address, [0x00, 0x64, 0xff, 0x9b], 96))
+    ? address.slice(12)
+    : address;
+
+/**
  * Whether `address`, four or sixteen bytes, is a unicast address on the open
  * internet: not this device, a private or shared network, a link-local,
  * multicast, documentation or reserved address. An IPv4-mapped IPv6 address,
@@ -29,6 +53,60 @@ export const isPublicAddress = (address: Uint8Array): boolean =>
   address.length === 4
     ? isGloballyRoutableIpv4(address)
     : address.length === 16 && isGloballyRoutableIpv6(address);
+
+/**
+ * The networks this device's interfaces are on at the moment of the call, as
+ * Deno reports them, which needs the `networkInterfaces` system permission.
+ * Throws when Deno reports an interface address that is not an address, or
+ * a prefix length that is not one for that address.
+ */
+export const interfaceNetworks = (): readonly LocalNetwork[] =>
+  Deno.networkInterfaces().map((entry) => {
+    const address = parseIpAddress(entry.address);
+    const prefixText = entry.cidr.split("/")[1] ?? "";
+    const prefixLength = Number(prefixText);
+    if (
+      address === undefined || !/^\d{1,3}$/.test(prefixText) ||
+      prefixLength > address.length * 8
+    ) {
+      throw new Error(
+        debugStr`Not an interface network: $quote${entry.address} $quote${entry.cidr}`,
+      );
+    }
+    return { address, prefixLength };
+  });
+
+/**
+ * Whether `address` is on the open internet: public (`isPublicAddress`), and
+ * not within any of `networks`, judged by the address a connection to it
+ * reaches. A public IPv6 prefix of a home network, or a public IPv4 subnet,
+ * is one of `networks` without being private.
+ */
+export const isOpenInternetAddress = (
+  address: Uint8Array,
+  networks: readonly LocalNetwork[],
+): boolean => {
+  const reached = reachedAddress(address);
+  return isPublicAddress(address) &&
+    !networks.some((network) => isWithin(reached, network));
+};
+
+/**
+ * Whether `address` is within `network`, an address of the same family. An
+ * IPv6 network is at least the /64 holding its address, the size of an IPv6
+ * subnet, so an address assigned alone, as DHCPv6 assigns one, still covers
+ * its neighbors. A prefix length of 0 covers the network's address alone
+ * rather than every address.
+ */
+const isWithin = (address: Uint8Array, network: LocalNetwork): boolean =>
+  address.length === network.address.length &&
+  hasPrefix(
+    address,
+    network.address,
+    address.length === 16
+      ? Math.min(network.prefixLength || 128, 64)
+      : network.prefixLength || 32,
+  );
 
 /**
  * Whether the first `bitLength` bits of `address` are those of `prefix`, whose
@@ -140,11 +218,9 @@ const parseIpv6Address = (value: string): Uint8Array | undefined => {
 };
 
 const isGloballyRoutableIpv6 = (bytes: Uint8Array): boolean => {
-  if (
-    hasPrefix(bytes, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff], 96) ||
-    hasPrefix(bytes, [0x00, 0x64, 0xff, 0x9b], 96)
-  ) {
-    return isGloballyRoutableIpv4(bytes.slice(12)); // IPv4-mapped, NAT64.
+  const reached = reachedAddress(bytes);
+  if (reached.length === 4) {
+    return isGloballyRoutableIpv4(reached); // IPv4-mapped, NAT64.
   }
   if (!hasPrefix(bytes, [0x20], 3)) {
     // Not global unicast: loopback, unspecified, unique local, link-local,

@@ -351,7 +351,7 @@ export default pattern((state) => {
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
-            "enum": ["Yes", "No"]
+            "enum": ["No", "Yes"]
         } as const satisfies __cfHelpers.JSONSchema, state.key("user", "active"), "Yes", "No")}</p>
 
         <h3>Nested Property Access</h3>
@@ -367,7 +367,7 @@ export default pattern((state) => {
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
-            "enum": ["On", "Off"]
+            "enum": ["Off", "On"]
         } as const satisfies __cfHelpers.JSONSchema, state.key("user", "profile", "settings", "notifications"), "On", "Off")}
         </p>
 
@@ -392,7 +392,7 @@ export default pattern((state) => {
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
-            "enum": ["Yes", "No"]
+            "enum": ["No", "Yes"]
         } as const satisfies __cfHelpers.JSONSchema, __cfLift_3({ state: {
                 user: {
                     profile: {
@@ -469,7 +469,7 @@ export default pattern((state) => {
         } as const satisfies __cfHelpers.JSONSchema, {
             type: "string"
         } as const satisfies __cfHelpers.JSONSchema, {
-            "enum": ["Yes", "No"]
+            "enum": ["No", "Yes"]
         } as const satisfies __cfHelpers.JSONSchema, __cfHelpers.when({
             type: "boolean"
         } as const satisfies __cfHelpers.JSONSchema, {

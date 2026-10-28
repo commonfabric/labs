@@ -5,6 +5,7 @@ import {
   computed,
   Default,
   equals,
+  type FabricBytes,
   handler,
   type JSONSchema,
   lift,
@@ -20,6 +21,7 @@ import {
   wish,
   Writable,
 } from "commonfabric";
+import { profileLook } from "../system/profile-look.ts";
 import type {} from "commonfabric/schema";
 
 import { isMemberName } from "../collection-naming/allocator.ts";
@@ -52,6 +54,10 @@ export interface TopicAuthor {
    * whose author kind is unknown. */
   kind: string;
   name: string;
+  /** The bytes of the author's profile picture, when they have one. */
+  picture?: FabricBytes;
+  /** Avatar text, snapshotted instead when the author's profile has no
+   * picture. */
   avatar?: string;
 }
 
@@ -296,7 +302,7 @@ export interface TopicComment {
 
   /** Set when the comment was retracted, and the retraction is the whole of
    * it — the record stays, carrying what it always said. A reader hides it;
-   * `commentCount` stops counting it; `lastActivityOf` keeps reading its
+   * `commentCount` stops counting it; `lastActivityAt` keeps counting its
    * `sentAt`, which is what stops a retraction moving a topic backwards in
    * the board's ordering. */
   removedAt?: number;
@@ -395,6 +401,17 @@ export interface TopicInput {
     TopicAuthor | Default<{ kind: "person"; name: "" }>
   >;
   titleUpdatedAt?: Writable<number | Default<0>>;
+
+  /** How many comments there are to read, retracted ones excluded. The verb
+   * that adds or retracts a comment keeps it in the same write, so the
+   * board's index reads it without running the topic. */
+  commentCount?: Writable<number | Default<0>>;
+
+  /** The newest of creation, the last body save, the last rename, and every
+   * comment's and link's stamps, edits and retractions included. The verb that
+   * makes a stamp keeps it in the same write, so the board's index reads it
+   * without running the topic. */
+  lastActivityAt?: Writable<number | Default<0>>;
 
   /** The board's mention universe — what the body editor autocompletes
    * over. Wired at creation to the board's mention index (one derived
@@ -998,12 +1015,12 @@ export const topicAuthorFromAgent = (
 /** Snapshot the canonical Profile fields used by browser mutations. */
 export const topicAuthorFromPerson = (
   profileName: string,
-  profileAvatar = "",
+  picture?: FabricBytes,
+  avatar?: string,
 ): TopicAuthor | undefined => {
   const name = (profileName ?? "").trim();
   if (!name) return undefined;
-  const avatar = (profileAvatar ?? "").trim();
-  return avatar ? { kind: "person", name, avatar } : { kind: "person", name };
+  return { kind: "person", name, ...profileLook(picture, avatar) };
 };
 
 /** Reject a mutation loudly. To a headless caller a silent early-return is
@@ -1090,6 +1107,17 @@ interface TopicUpgradeComment {
 
   /** Legacy storage key retained for version-zero inputs. */
   authorName?: unknown;
+
+  /** The stamps the activity step reads. */
+  sentAt?: number;
+  editedAt?: number;
+  removedAt?: number;
+}
+
+/** The stamps of a stored link the activity step reads. */
+interface TopicUpgradeLink {
+  addedAt?: number;
+  removedAt?: number;
 }
 
 /** Handles shared by ordered Topic upgrades and every durable mutation. */
@@ -1105,6 +1133,17 @@ interface TopicUpgradeState {
 
   /** Original comment identities, including the fixed legacy `authorName` key. */
   comments: Writable<TopicUpgradeComment[]>;
+
+  /** The kept count and activity time, which the activity step fills and every
+   * verb that adds, edits or retracts a record keeps. */
+  commentCount: Writable<number>;
+  lastActivityAt: Writable<number>;
+
+  /** The remaining sources the activity step reads. */
+  links: ReadonlyCell<TopicUpgradeLink[]>;
+  createdAt: ReadonlyCell<number>;
+  bodyUpdatedAt: ReadonlyCell<number>;
+  titleUpdatedAt: ReadonlyCell<number>;
 }
 
 /** Object schemas whose properties extend generated mutation contracts. */
@@ -1144,15 +1183,40 @@ const TOPIC_UPGRADE_SCHEMA = {
         properties: {
           author: TOPIC_COMMENT_AUTHOR_SCHEMA,
           authorName: { type: ["string", "unknown"] },
+          sentAt: { type: "number" },
+          editedAt: { type: "number" },
+          removedAt: { type: "number" },
         },
       },
     },
+    commentCount: toSchema<Writable<number>>(),
+    lastActivityAt: toSchema<Writable<number>>(),
+    links: {
+      type: "array",
+      asCell: ["readonly"],
+      items: {
+        type: "object",
+        properties: {
+          addedAt: { type: "number" },
+          removedAt: { type: "number" },
+        },
+      },
+    },
+    createdAt: { type: "number", asCell: ["readonly"] },
+    bodyUpdatedAt: { type: "number", asCell: ["readonly"] },
+    titleUpdatedAt: { type: "number", asCell: ["readonly"] },
   },
   required: [
     "topicStateVersion",
     "createdByName",
     "createdBy",
     "comments",
+    "commentCount",
+    "lastActivityAt",
+    "links",
+    "createdAt",
+    "bodyUpdatedAt",
+    "titleUpdatedAt",
   ],
 } as const;
 
@@ -1190,6 +1254,11 @@ const upgradeLegacyAuthors = (
   // can return undefined for both absent fields and unresolved links.
   const storedComments = comments.get();
   if (storedComments === undefined) return false;
+  // An empty array may be the input's default standing in for an array behind
+  // an unresolved link, which a handler's eager read cannot tell from an empty
+  // thread. The lift waits for the array (`upgradeTopicState`), so a handler
+  // leaves an empty thread's step to it.
+  if (fromHandler && storedComments.length === 0) return false;
   const commentAuthors = storedComments.map((_, index) => {
     const comment = comments.key(index);
     const author = comment.key("author").get();
@@ -1239,8 +1308,104 @@ const upgradeLegacyAuthors = (
   return true;
 };
 
+/**
+ * The count of comments there are to read and the newest stamp across the
+ * topic: creation, the last body save, the last rename, and every comment's and
+ * link's stamps. Every retracted and edited record still counts toward the
+ * stamp, and that is the point rather than an oversight: skipping a retracted
+ * record would let the answer move backwards when the newest comment is the one
+ * retracted, reordering the board under a reader. A retraction is itself
+ * activity, so its own stamp moves the clock forward.
+ */
+const activityOf = (
+  comments: readonly TopicUpgradeComment[],
+  links: readonly TopicUpgradeLink[],
+  createdAt: number,
+  bodyUpdatedAt: number,
+  titleUpdatedAt: number,
+): { commentCount: number; lastActivityAt: number } => {
+  let newest = Math.max(createdAt, bodyUpdatedAt, titleUpdatedAt);
+  for (const c of comments) {
+    newest = Math.max(newest, c.sentAt ?? 0, c.editedAt ?? 0, c.removedAt ?? 0);
+  }
+  // `addedAt` is optional on TopicLink: links written before it existed carry
+  // no timestamp and simply do not move the clock.
+  for (const l of links) {
+    newest = Math.max(newest, l.addedAt ?? 0, l.removedAt ?? 0);
+  }
+  return {
+    commentCount: comments.filter((c) => c.removedAt === undefined).length,
+    lastActivityAt: newest,
+  };
+};
+
+/**
+ * Upgrades version one to two by computing the kept count and activity time
+ * from the records they summarize. From then on the verbs keep both in the
+ * writes that change them (`noteActivity`).
+ *
+ * The computation is whole, so it also corrects anything a verb noted before
+ * this step ran. Only the lift completes it. Each stamp is read through its own
+ * key, which suspends the lift on an unresolved link, whereas reading the whole
+ * array drops such a stamp as though it were absent and would complete the
+ * step on a wrong count or time. A handler's eager reads cannot tell an
+ * unresolved link from an absent optional stamp, and most stamps are optional,
+ * so a handler always defers. The creation, body and title times are inputs
+ * with a default of zero, which an absent value reads as.
+ */
+const upgradeActivityScalars = (
+  input: TopicUpgradeState,
+  fromHandler: boolean,
+): boolean => {
+  if (fromHandler) return false;
+  const comments = (input.comments.get() ?? []).map((_, index) => {
+    const comment = input.comments.key(index);
+    return {
+      sentAt: comment.key("sentAt").get(),
+      editedAt: comment.key("editedAt").get(),
+      removedAt: comment.key("removedAt").get(),
+    };
+  });
+  const links = (input.links.get() ?? []).map((_, index) => {
+    const link = input.links.key(index);
+    return {
+      addedAt: link.key("addedAt").get(),
+      removedAt: link.key("removedAt").get(),
+    };
+  });
+  const { commentCount, lastActivityAt } = activityOf(
+    comments,
+    links,
+    input.createdAt.get() ?? 0,
+    input.bodyUpdatedAt.get() ?? 0,
+    input.titleUpdatedAt.get() ?? 0,
+  );
+  input.commentCount.set(commentCount);
+  input.lastActivityAt.set(lastActivityAt);
+  return true;
+};
+
+/**
+ * Keeps the count and activity time in the write that changes what they
+ * summarize: `at` is the stamp the write made, and `commentDelta` is +1 for an
+ * added comment, -1 for a retracted one and 0 otherwise. The activity time only
+ * moves forward, as the stamp it summarizes does.
+ */
+const noteActivity = (
+  state: TopicUpgradeState,
+  at: number,
+  commentDelta: -1 | 0 | 1 = 0,
+): void => {
+  if (at > (state.lastActivityAt.get() ?? 0)) state.lastActivityAt.set(at);
+  if (commentDelta !== 0) {
+    state.commentCount.set(
+      Math.max(0, (state.commentCount.get() ?? 0) + commentDelta),
+    );
+  }
+};
+
 /** Ordered, append-only steps; entry zero upgrades state version zero to one. */
-const TOPIC_STATE_UPGRADES = ["legacy-authors"] as const;
+const TOPIC_STATE_UPGRADES = ["legacy-authors", "activity-scalars"] as const;
 
 /** State version stamped by every current Topics board creation path. */
 export const TOPIC_STATE_VERSION = TOPIC_STATE_UPGRADES.length;
@@ -1254,6 +1419,8 @@ const runTopicUpgrade = (
   switch (step) {
     case "legacy-authors":
       return upgradeLegacyAuthors(state, fromHandler);
+    case "activity-scalars":
+      return upgradeActivityScalars(state, fromHandler);
   }
 };
 
@@ -1273,6 +1440,16 @@ const upgradeTopicState = (state: TopicUpgradeState, verb?: string): void => {
       rejectMutation(verb, `unsupported topic state version ${version}`);
     }
     return;
+  }
+  if (!fromHandler && version < TOPIC_STATE_VERSION) {
+    // Every step reads the comment and link records whole. A whole-array read
+    // takes the input's declared default, empty, while the array is behind a
+    // link that has not resolved, and a step would complete on that. A read
+    // through an element's key reaches into the document behind the link and
+    // suspends the lift until it resolves; on an array that is empty it reads
+    // `undefined` and costs nothing more.
+    state.comments.key(0).get();
+    state.links.key(0).get();
   }
   for (let index = version; index < TOPIC_STATE_VERSION; index++) {
     const step = TOPIC_STATE_UPGRADES[index];
@@ -1369,8 +1546,11 @@ type SubmitProfileCommentState = {
   /** Resolved canonical Profile name for attribution. */
   profileName: string;
 
-  /** Resolved canonical Profile avatar for attribution. */
-  profileAvatar: string;
+  /** Resolved canonical Profile picture for attribution. */
+  profilePicture?: FabricBytes;
+
+  /** Resolved canonical Profile avatar text, used when there is no picture. */
+  profileAvatar?: string;
 };
 
 /** Browser comment submit with Profile fields already resolved by the pattern.
@@ -1385,12 +1565,27 @@ export const submitProfileComment = handler<void, SubmitProfileCommentState>(
       upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
     },
   },
-  (_, { upgrade, comments, commentDraft, profileName, profileAvatar }) => {
+  (
+    _,
+    {
+      upgrade,
+      comments,
+      commentDraft,
+      profileName,
+      profilePicture,
+      profileAvatar,
+    },
+  ) => {
     const text = commentDraft.get();
-    const author = topicAuthorFromPerson(profileName, profileAvatar);
+    const author = topicAuthorFromPerson(
+      profileName,
+      profilePicture,
+      profileAvatar,
+    );
     if (!text.trim() || !author) return;
     upgradeTopicState(upgrade.get(), "submitProfileComment");
-    appendComment(comments, text, author);
+    const comment = appendComment(comments, text, author);
+    noteActivity(upgrade.get(), comment.sentAt, 1);
     commentDraft.set("");
   },
 );
@@ -1411,9 +1606,6 @@ type RetractProfileCommentState = {
 
   /** Resolved canonical Profile name for attribution. */
   profileName: string;
-
-  /** Resolved canonical Profile avatar for attribution. */
-  profileAvatar: string;
 };
 
 /** Browser comment retraction under the current Profile snapshot.
@@ -1439,14 +1631,16 @@ export const retractProfileComment = handler<void, RetractProfileCommentState>(
       upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
     },
   },
-  (_, { upgrade, comments, comment, profileName, profileAvatar }) => {
-    const author = topicAuthorFromPerson(profileName, profileAvatar);
+  (_, { upgrade, comments, comment, profileName }) => {
+    const author = topicAuthorFromPerson(profileName);
     if (!author) return;
     if (!comment || comment.get() === undefined) return;
     if (!isElementOf(comments, comment)) return;
     if (comment.get()?.removedAt !== undefined) return;
     upgradeTopicState(upgrade.get(), "retractProfileComment");
-    comment.key("removedAt").set(Date.now());
+    const removedAt = Date.now();
+    comment.key("removedAt").set(removedAt);
+    noteActivity(upgrade.get(), removedAt, -1);
     comment.key("removedBy").set(author);
   },
 );
@@ -1498,9 +1692,6 @@ type SaveProfileTitleState = {
 
   /** Resolved canonical Profile name for attribution. */
   profileName: string;
-
-  /** Resolved canonical Profile avatar for attribution. */
-  profileAvatar: string;
 };
 
 /** Browser title save under the current Profile snapshot. The header binds a
@@ -1527,14 +1718,20 @@ export const saveProfileTitle = handler<void, SaveProfileTitleState>(
       titleUpdatedBy,
       titleUpdatedAt,
       profileName,
-      profileAvatar,
     },
   ) => {
     const text = titleDraft.get();
-    const author = topicAuthorFromPerson(profileName, profileAvatar);
+    const author = topicAuthorFromPerson(profileName);
     if (!text.trim() || !author) return;
     upgradeTopicState(upgrade.get(), "saveProfileTitle");
-    persistTitle(title, titleUpdatedBy, titleUpdatedAt, text, author);
+    const saved = persistTitle(
+      title,
+      titleUpdatedBy,
+      titleUpdatedAt,
+      text,
+      author,
+    );
+    noteActivity(upgrade.get(), saved.titleUpdatedAt);
     editingTitle.set(false);
   },
 );
@@ -1572,9 +1769,6 @@ type SaveProfileBodyState = {
 
   /** Resolved canonical Profile name for attribution. */
   profileName: string;
-
-  /** Resolved canonical Profile avatar for attribution. */
-  profileAvatar: string;
 };
 
 /** Browser body save under the current Profile snapshot. */
@@ -1599,10 +1793,9 @@ export const saveProfileBody = handler<void, SaveProfileBodyState>(
       bodyUpdatedBy,
       bodyUpdatedAt,
       profileName,
-      profileAvatar,
     },
   ) => {
-    const author = topicAuthorFromPerson(profileName, profileAvatar);
+    const author = topicAuthorFromPerson(profileName);
     if (!author) return;
     upgradeTopicState(upgrade.get(), "saveProfileBody");
     // One whole-value set per explicit save keeps the conflict window small; a
@@ -1617,7 +1810,9 @@ export const saveProfileBody = handler<void, SaveProfileBodyState>(
     // a link rather than expanding the piece behind it.
     references.set(referencesDraft.get());
     bodyUpdatedBy.set(author);
-    bodyUpdatedAt.set(Date.now());
+    const savedAt = Date.now();
+    bodyUpdatedAt.set(savedAt);
+    noteActivity(upgrade.get(), savedAt);
     editingBody.set(false);
   },
 );
@@ -1673,9 +1868,6 @@ type RetractProfileLinkState = {
 
   /** Resolved canonical Profile name for attribution. */
   profileName: string;
-
-  /** Resolved canonical Profile avatar for attribution. */
-  profileAvatar: string;
 };
 
 /** Browser link retraction under the current Profile snapshot.
@@ -1693,14 +1885,16 @@ export const retractProfileLink = handler<void, RetractProfileLinkState>(
       upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
     },
   },
-  (_, { upgrade, links, link, profileName, profileAvatar }) => {
-    const author = topicAuthorFromPerson(profileName, profileAvatar);
+  (_, { upgrade, links, link, profileName }) => {
+    const author = topicAuthorFromPerson(profileName);
     if (!author) return;
     if (!link || link.get() === undefined) return;
     if (!isElementOf(links, link)) return;
     if (link.get()?.removedAt !== undefined) return;
     upgradeTopicState(upgrade.get(), "retractProfileLink");
-    link.key("removedAt").set(Date.now());
+    const removedAt = Date.now();
+    link.key("removedAt").set(removedAt);
+    noteActivity(upgrade.get(), removedAt);
     link.key("removedBy").set(author);
   },
 );
@@ -1724,9 +1918,6 @@ type SubmitProfileLinkState = {
 
   /** Resolved canonical Profile name for attribution. */
   profileName: string;
-
-  /** Resolved canonical Profile avatar for attribution. */
-  profileAvatar: string;
 };
 
 /** Browser link submit under the current Profile snapshot. */
@@ -1748,14 +1939,20 @@ export const submitProfileLink = handler<void, SubmitProfileLinkState>(
       linkLabelDraft,
       linkKindDraft,
       profileName,
-      profileAvatar,
     },
   ) => {
     const url = linkUrlDraft.get();
-    const author = topicAuthorFromPerson(profileName, profileAvatar);
+    const author = topicAuthorFromPerson(profileName);
     if (!url.trim() || !isSafeLinkUrl(url) || !author) return;
     upgradeTopicState(upgrade.get(), "submitProfileLink");
-    appendLink(links, url, linkKindDraft.get(), linkLabelDraft.get(), author);
+    const link = appendLink(
+      links,
+      url,
+      linkKindDraft.get(),
+      linkLabelDraft.get(),
+      author,
+    );
+    noteActivity(upgrade.get(), link.addedAt ?? 0);
     linkUrlDraft.set("");
     linkLabelDraft.set("");
     linkKindDraft.set("web");
@@ -1837,48 +2034,6 @@ const mentionsOf = lift((
   ].filter((destination) => destination !== undefined && destination !== null)
 );
 
-/** How many comments are there to read — retracted ones excluded, because the
- * board's card would otherwise promise more than the topic shows.
- *
- * A module-scope `lift` rather than a `computed()` in the pattern body, and
- * the difference is load-bearing: this value is in the board's demand, so it
- * is projected onto every stored topic including generations written before
- * retraction existed. The lift declares `removedAt` in its own parameter,
- * which is what makes the property visible to the read at all. */
-const presentCommentCountOf = lift((
-  { comments }: { comments: { removedAt?: number }[] },
-): number => comments.filter((c) => c.removedAt === undefined).length);
-
-/** Max of creation, the newest comment, the newest link, the last body save,
- * and the last rename — declared over just those five timestamp surfaces.
- *
- * Every retracted and edited record still counts here, and that is the point
- * rather than an oversight. This is a max over what the arrays hold, so
- * skipping a retracted record would let the answer move BACKWARDS when the
- * newest comment is the one retracted, reordering the board under a reader.
- * A stamped retraction cannot do that, and a retraction is itself activity,
- * so its own stamp moves the clock forward. */
-const lastActivityOf = lift((
-  { comments, links, createdAt, bodyUpdatedAt, titleUpdatedAt }: {
-    comments: { sentAt: number; editedAt?: number; removedAt?: number }[];
-    links: { addedAt?: number; removedAt?: number }[];
-    createdAt: number;
-    bodyUpdatedAt: number;
-    titleUpdatedAt: number;
-  },
-): number => {
-  let newest = Math.max(createdAt, bodyUpdatedAt, titleUpdatedAt);
-  for (const c of comments) {
-    newest = Math.max(newest, c.sentAt, c.editedAt ?? 0, c.removedAt ?? 0);
-  }
-  // `addedAt` is optional on TopicLink: links written before it existed carry
-  // no timestamp and simply do not move the clock.
-  for (const l of links) {
-    newest = Math.max(newest, l.addedAt ?? 0, l.removedAt ?? 0);
-  }
-  return newest;
-});
-
 /** The structured author, projected rather than returned as a dangling link to
  * an absent optional input path, so a sibling Topic's schema can validate the
  * piece. A topic with no author reads as the inert sentinel rather than as
@@ -1909,7 +2064,9 @@ const addCommentHandler = handler<
       rejectMutation("addComment", "agentName must be non-blank");
     if (!trimmed) rejectMutation("addComment", "body must be non-empty");
     upgradeTopicState(upgrade.get(), "addComment");
-    return { comment: appendComment(comments, trimmed, author) };
+    const comment = appendComment(comments, trimmed, author);
+    noteActivity(upgrade.get(), comment.sentAt, 1);
+    return { comment };
   },
 );
 
@@ -1936,7 +2093,9 @@ const addLinkHandler = handler<
       rejectMutation("addLink", "url must be http(s)");
     }
     upgradeTopicState(upgrade.get(), "addLink");
-    return { link: appendLink(links, trimmedUrl, kind, label, author) };
+    const link = appendLink(links, trimmedUrl, kind, label, author);
+    noteActivity(upgrade.get(), link.addedAt ?? 0);
+    return { link };
   },
 );
 
@@ -1977,6 +2136,7 @@ const removeCommentHandler = handler<
     // every surviving reference stays a reference.
     comment.key("removedAt").set(removedAt);
     comment.key("removedBy").set(author);
+    noteActivity(upgrade.get(), removedAt, -1);
     return { removedAt, removedBy: author };
   },
 );
@@ -2019,6 +2179,7 @@ const editCommentHandler = handler<
     const editedAt = Date.now();
     comment.key("body").set(trimmed);
     comment.key("editedAt").set(editedAt);
+    noteActivity(upgrade.get(), editedAt);
     return { body: trimmed, editedAt };
   },
 );
@@ -2074,6 +2235,7 @@ const removeLinkHandler = handler<
     upgradeTopicState(upgrade.get(), "removeLink");
     const removedAt = Date.now();
     target!.key("removedAt").set(removedAt);
+    noteActivity(upgrade.get(), removedAt);
     target!.key("removedBy").set(author);
     return {
       url: target!.get()?.url ?? named,
@@ -2109,6 +2271,7 @@ const setBodyHandler = handler<
     const bodyUpdatedAtValue = Date.now();
     bodyUpdatedBy.set(author);
     bodyUpdatedAt.set(bodyUpdatedAtValue);
+    noteActivity(upgrade.get(), bodyUpdatedAtValue);
     return {
       body: persisted,
       bodyUpdatedBy: author,
@@ -2140,13 +2303,15 @@ const setTitleHandler = handler<
       rejectMutation("setTitle", "agentName must be non-blank");
     if (!trimmed) rejectMutation("setTitle", "title must be non-empty");
     upgradeTopicState(upgrade.get(), "setTitle");
-    return persistTitle(
+    const saved = persistTitle(
       title,
       titleUpdatedBy,
       titleUpdatedAt,
       trimmed,
       author,
     );
+    noteActivity(upgrade.get(), saved.titleUpdatedAt);
+    return saved;
   },
 );
 
@@ -2268,6 +2433,8 @@ export default pattern<TopicInput, TopicOutput>(
       bodyUpdatedAt,
       titleUpdatedBy,
       titleUpdatedAt,
+      commentCount,
+      lastActivityAt,
       mentionable,
       references,
       mentioned,
@@ -2276,7 +2443,18 @@ export default pattern<TopicInput, TopicOutput>(
       [SELF]: self,
     },
   ) => {
-    const upgrade = { topicStateVersion, createdByName, createdBy, comments };
+    const upgrade = {
+      topicStateVersion,
+      createdByName,
+      createdBy,
+      comments,
+      commentCount,
+      lastActivityAt,
+      links,
+      createdAt,
+      bodyUpdatedAt,
+      titleUpdatedAt,
+    };
     migrateTopicState(upgrade);
 
     // Session-local UI state (new-tab test: none of this should carry over).
@@ -2294,8 +2472,10 @@ export default pattern<TopicInput, TopicOutput>(
     // Agent-facing streams below deliberately remain wish-free and accept the
     // agent's content-level signature in the same event as the mutation.
     // One wish, not three: `#profile` resolves the profile itself, and `name`
-    // and `avatar` are fields on it.
-    const profileWish = wish<{ name: string; avatar: string }>({
+    // and `picture` and `avatar` are fields on it.
+    const profileWish = wish<
+      { name: string; picture?: FabricBytes; avatar?: string }
+    >({
       query: "#profile",
     });
     // A wish resolves after setup, so each of these stays a derivation. Reading
@@ -2303,7 +2483,8 @@ export default pattern<TopicInput, TopicOutput>(
     // opened with: the composer's controls never enable, and a comment or edit
     // made through them carries blank attribution.
     const profileName = profileWish.result?.name ?? "";
-    const profileAvatar = profileWish.result?.avatar ?? "";
+    const profilePicture = profileWish.result?.picture;
+    const profileAvatar = profileWish.result?.avatar;
     const hasProfile = profileName.trim().length > 0;
     const createdByView = createdByOf({ createdBy });
 
@@ -2361,6 +2542,7 @@ export default pattern<TopicInput, TopicOutput>(
       comments,
       commentDraft,
       profileName,
+      profilePicture,
       profileAvatar,
     });
 
@@ -2377,7 +2559,6 @@ export default pattern<TopicInput, TopicOutput>(
       titleUpdatedBy,
       titleUpdatedAt,
       profileName,
-      profileAvatar,
     });
 
     // Nothing to undo: the draft is session-local, so leaving it behind IS
@@ -2405,7 +2586,6 @@ export default pattern<TopicInput, TopicOutput>(
       bodyUpdatedBy,
       bodyUpdatedAt,
       profileName,
-      profileAvatar,
     });
 
     // Nothing to undo: the prose and its mention map are both session drafts,
@@ -2421,7 +2601,6 @@ export default pattern<TopicInput, TopicOutput>(
       linkLabelDraft,
       linkKindDraft,
       profileName,
-      profileAvatar,
     });
 
     // --- Derived values ---
@@ -2432,21 +2611,7 @@ export default pattern<TopicInput, TopicOutput>(
     //
     // Each filtered view goes inside `computed()`: a method call on an opaque
     // pattern value is not lowerable on its own. The retraction rule is the
-    // same in all three — a stamped record is not there to read — and only
-    // `lastActivityAt` below is deliberately exempt from it.
-
-    // A count of what is there to read, so retracted comments are excluded —
-    // the board's card would otherwise promise more comments than the topic
-    // shows.
-    const commentCount = presentCommentCountOf({ comments });
-
-    const lastActivityAt = lastActivityOf({
-      comments,
-      links,
-      createdAt,
-      bodyUpdatedAt,
-      titleUpdatedAt,
-    });
+    // same in all three: a stamped record is not there to read.
 
     const commentsView = computed(() =>
       comments.get().filter((c) => c.removedAt === undefined).toSorted((a, b) =>
@@ -2675,7 +2840,6 @@ export default pattern<TopicInput, TopicOutput>(
                               links,
                               link,
                               profileName,
-                              profileAvatar,
                             })}
                           >
                             Retract
@@ -2737,6 +2901,7 @@ export default pattern<TopicInput, TopicOutput>(
                         >
                           <cf-hstack gap="2" align="center">
                             <cf-avatar
+                              bytes={comment.author?.picture}
                               src={comment.author?.avatar || ""}
                               name={topicAuthorLabel(comment.author)}
                               size="xs"
@@ -2774,7 +2939,6 @@ export default pattern<TopicInput, TopicOutput>(
                                 comments,
                                 comment,
                                 profileName,
-                                profileAvatar,
                               })}
                             >
                               Retract

@@ -42,6 +42,49 @@ export default pattern<{ head: Node<string> }>(() => ({}));`,
       .toHaveLength(1);
   });
 
+  it("reports the recursion limit for a CFC alias a pattern's result instantiates without end", async () => {
+    const diagnostics: TransformationDiagnostic[] = [];
+    await transformSource(
+      `import { Confidential, pattern } from "commonfabric";
+type Nest<T> = Confidential<{ v: T; ref: unknown; inner?: Nest<T[]> }, ["secret"]>;
+function nest(): Nest<string> { return { v: "", ref: 1 }; }
+export default pattern(() => ({ nested: nest() }));`,
+      {
+        types: COMMONFABRIC_TYPES,
+        typeCheck: true,
+        pipelineDiagnostics: diagnostics,
+      },
+    );
+
+    expect(diagnostics.map(({ type, severity }) => ({ type, severity })))
+      .toEqual([{ type: "cfc-schema:recursion-limit", severity: "error" }]);
+  });
+
+  it("refuses a writer a number index signature holds beside a string one whose values recur without end", async () => {
+    const diagnostics: TransformationDiagnostic[] = [];
+    await transformSource(
+      `import { Confidential, WriteAuthorizedBy, handler, pattern } from "commonfabric";
+const save = handler<void, {}>(() => ({}));
+type Nest<T> = Confidential<{ v: T; inner?: Nest<T[]> }, ["secret"]>;
+interface In {
+  [key: string]: Nest<string>;
+  [index: number]: WriteAuthorizedBy<Nest<string>, typeof save>;
+}
+export default pattern<In>(() => ({}));`,
+      {
+        types: COMMONFABRIC_TYPES,
+        typeCheck: true,
+        pipelineDiagnostics: diagnostics,
+      },
+    );
+
+    expect(
+      diagnostics.filter(({ type }) =>
+        type === "cfc-write-authorized-by:unread"
+      ).map(({ severity }) => severity),
+    ).toEqual(["error"]);
+  });
+
   for (const position of ["argument", "result"]) {
     for (const storedSource of [false, true]) {
       it(`rejects an indirect writer in a recursive ${position} from ${storedSource ? "stored" : "authored"} source`, async () => {

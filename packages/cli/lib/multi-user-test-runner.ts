@@ -27,9 +27,11 @@
  * Each participant runs in its own worker realm with its own identity
  * (`{ pattern, user: "alice" }` shares an identity for a second session of
  * the same user), all against one shared space on an in-process storage
- * server. The `setup` pattern instantiates the shared piece once; every
- * worker runs that same instance locally (like every browser tab does), so
- * per-user scoped state behaves like production.
+ * server. On the server-execution arm that server has a serving loop beside
+ * it, as a toolshed on that arm has, which runs the handlers the
+ * participants' events fire. The `setup` pattern instantiates the shared
+ * piece once; every worker runs that same instance locally (like every
+ * browser tab does), so per-user scoped state behaves like production.
  *
  * The shared space is created with an access list, which
  * {@link participantAccess} composes: the first participant's user is its
@@ -47,10 +49,14 @@
  * A marker is also a durable write in the shared space, which is what makes
  * the handshake a data barrier. Each participant announces into its own
  * marker document, committing after everything it has already committed;
- * crossing a marker waits for it to arrive in the awaiting participant's
- * replica. By then the server holds what the announcing participant wrote
- * first, so the reads that follow resolve against it. An assertion placed
- * after a marker is therefore read once, and a false value is a failure.
+ * on the server-execution arm it first waits for every event it fired to
+ * reach its served consequence, so what those handlers wrote is committed
+ * before the marker too, while an event a served handler fires on its own
+ * account is not waited for. Crossing a marker waits for it to arrive in the
+ * awaiting participant's replica. By then the server holds what the
+ * announcing participant wrote first, so the reads that follow resolve
+ * against it. An assertion placed after a marker is therefore read once, and
+ * a false value is a failure.
  */
 
 import type { SpaceAccessLevel } from "@commonfabric/api";
@@ -59,6 +65,7 @@ import { Identity, realmValueFromKeyPair } from "@commonfabric/identity";
 import { type ACL, isCapability } from "@commonfabric/memory/acl";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
+import { listenServingMemoryServer } from "@commonfabric/runner/executor/serving-memory-server.deno";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
@@ -74,6 +81,11 @@ import type {
   WorkerRequest,
   WorkerResponse,
 } from "./multi-user-test-worker.ts";
+import { patternTestExperimentalOptions } from "./pattern-test-experimental-options.ts";
+import {
+  type RuntimeErrorExpectation,
+  unmetRuntimeErrorExpectation,
+} from "./runtime-error-expectation.ts";
 
 export interface MultiUserParticipantSpec {
   name: string;
@@ -263,6 +275,7 @@ interface ParticipantState {
   assertionCount: number;
   lastActionName: string | null;
   allowRuntimeErrors: boolean;
+  expectRuntimeErrors: RuntimeErrorExpectation | undefined;
   expectNonIdempotent: boolean;
   allowConsoleErrors: boolean;
   allowConsoleWarnings: boolean;
@@ -313,11 +326,25 @@ export async function runMultiUserTestPattern(
   const nonIdempotent: string[] = [];
   let runResult: TestRunResult | undefined;
 
-  const server = StandaloneMemoryServer.start();
+  const experimental = patternTestExperimentalOptions(Deno.env.get);
+  let server: { readonly url: URL; close(): Promise<void> } | undefined;
   const participants: ParticipantState[] = [];
   const workers: ParticipantWorker[] = [];
 
   try {
+    // On the server-execution arm the storage server has a serving loop
+    // beside it, as a toolshed running that arm has, so the events the
+    // participants commit are served. Like the plain server, it is given no
+    // access list.
+    server = experimental.serverExecution
+      ? await listenServingMemoryServer({
+        apiUrl: new URL(import.meta.url),
+        experimental,
+        // On this thread whatever the environment selects for a toolshed,
+        // as the single-runtime runner's loop is.
+        worker: false,
+      })
+      : StandaloneMemoryServer.start();
     const identities = new Map<string, Identity>();
     for (const spec of meta.participants) {
       if (!identities.has(spec.user)) {
@@ -406,6 +433,7 @@ export async function runMultiUserTestPattern(
           assertionCount: 0,
           lastActionName: null,
           allowRuntimeErrors: init.allowRuntimeErrors,
+          expectRuntimeErrors: init.expectRuntimeErrors,
           expectNonIdempotent: init.expectNonIdempotent,
           allowConsoleErrors: init.allowConsoleErrors,
           allowConsoleWarnings: init.allowConsoleWarnings,
@@ -556,10 +584,11 @@ export async function runMultiUserTestPattern(
       }
     }
 
-    // Apply allowRuntimeErrors / expectNonIdempotent / allowConsoleErrors /
-    // allowConsoleWarnings PER participant — one participant opting out must
-    // not mask another participant's failures — so the aggregate result reports
-    // only unallowed entries with the flags left off.
+    // Apply allowRuntimeErrors / expectRuntimeErrors / expectNonIdempotent /
+    // allowConsoleErrors / allowConsoleWarnings PER participant — one
+    // participant opting out must not mask another participant's failures —
+    // so the aggregate result reports only unallowed entries with the flags
+    // left off.
     let anyExpectNonIdempotent = false;
     let expectedNonIdempotentDetected = false;
     const consoleErrors: string[] = [];
@@ -571,7 +600,25 @@ export async function runMultiUserTestPattern(
         consoleWarnings: string[];
         nonIdempotent: string[];
       };
-      if (!participant.allowRuntimeErrors) {
+      // An expectation tolerates the errors it counts and REQUIRES them, as
+      // in a single-user test (`unmetRuntimeErrorExpectation()`); one unmet
+      // fails as a result named for the participant.
+      const expected = participant.expectRuntimeErrors;
+      if (expected !== undefined) {
+        const unmet = unmetRuntimeErrorExpectation(
+          expected,
+          health.runtimeErrors,
+        );
+        if (unmet !== undefined) {
+          results.push({
+            name: `${participant.spec.name}: expectRuntimeErrors`,
+            passed: false,
+            afterAction: null,
+            error: `[${participant.spec.name}] ${unmet}`,
+            durationMs: 0,
+          });
+        }
+      } else if (!participant.allowRuntimeErrors) {
         for (const error of health.runtimeErrors) {
           runtimeErrors.push(`[${participant.spec.name}] ${error}`);
         }
@@ -658,7 +705,16 @@ export async function runMultiUserTestPattern(
       });
       await participant.worker.terminate();
     }
-    await server.close().catch(() => {});
+    // A server that fails to close may leave its serving loop running after
+    // this returns, so its failure is raised like a participant's.
+    await server?.close().catch((error: Error) => {
+      console.error(
+        `[cf test] closing the storage server failed for ${testPath}: ${
+          formatError(error)
+        }`,
+      );
+      teardownError ??= error;
+    });
     if (teardownError) {
       // A throw from `finally` replaces the pending result. Keep that result
       // visible, including step and runtime health failures, before raising.

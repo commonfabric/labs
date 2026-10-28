@@ -26,7 +26,6 @@
 import { Session } from "node:inspector";
 import { main } from "../../../packages/cli/mod.ts";
 import {
-  clearTimingMeasures,
   getLoggerCountsBreakdown,
   getLoggerFlagsBreakdown,
   getTimingStatsBreakdown,
@@ -90,6 +89,8 @@ async function finalize(code: number): Promise<void> {
     );
     const measures: { name: string; startTime: number; duration: number }[] =
       [];
+    // Read and left on the timeline: the process exits below, so nothing
+    // reads the entries again and nothing more is emitted against their budget.
     for (const entry of performance.getEntriesByType("measure")) {
       if (entry.name.startsWith(TIMING_MEASURE_PREFIX)) {
         measures.push({
@@ -105,7 +106,6 @@ async function finalize(code: number): Promise<void> {
         JSON.stringify(measures),
       );
     }
-    clearTimingMeasures();
     console.error(
       `[profile-cf] wall ${wall.toFixed(0)}ms, exit ${code}, ` +
         `measures ${measures.length}, wrote ${out}.*`,

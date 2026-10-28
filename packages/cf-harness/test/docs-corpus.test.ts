@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import {
   CFC_HARNESS_ATOM_CLASS,
+  citationOfSection,
   isOperatorProvisionedReferenceAtom,
   operatorProvisionedReferenceAtom,
 } from "../src/contracts/docs-corpus.ts";
@@ -30,6 +31,19 @@ const document = {
 };
 
 describe("docs-corpus", () => {
+  describe("citationOfSection()", () => {
+    it("returns the section's path and heading and none of its text", () => {
+      expect(citationOfSection({
+        path: "labs/docs/glazing.md",
+        heading: "Glazing",
+        documentTitle: "Pottery",
+        headingPath: ["Pottery", "Glazing"],
+        text: "Dip once.",
+        integrity: [],
+      })).toEqual({ path: "labs/docs/glazing.md", heading: "Glazing" });
+    });
+  });
+
   describe("splitMarkdownSections()", () => {
     it("returns one section per heading", () => {
       const sections = splitMarkdownSections(

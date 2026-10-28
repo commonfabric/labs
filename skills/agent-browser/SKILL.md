@@ -128,7 +128,7 @@ agent-browser open https://app.example.com/dashboard
 
 ### Common Fabric identity checks (host/interactive runs only)
 
-This recipe needs `--session`, `upload`, and `console`, which the cf-harness
+This recipe needs `--session`, `upload`, and `eval`, which the cf-harness
 profile does not allow — run it only in host or interactive sessions.
 
 For Common Fabric tests that touch `PerUser`, `PerSession`, favorites, drafts,
@@ -141,10 +141,11 @@ agent-browser --session cf-shared snapshot -i
 # Click Login, then Import CLI Key.
 agent-browser --session cf-shared upload @<choose-file-ref> "$CF_IDENTITY"
 agent-browser --session cf-shared click @<import-key-ref>
-agent-browser --session cf-shared console
+agent-browser --session cf-shared wait --fn "globalThis.app.state().identity"
+agent-browser --session cf-shared eval "globalThis.app.state().identity?.did()"
 ```
 
-The browser console should include `[Identity] User DID: ...`; compare it with:
+The last command prints the DID the page is signed in as; compare it with:
 
 ```bash
 deno run -A packages/cli/mod.ts id did "$CF_IDENTITY"

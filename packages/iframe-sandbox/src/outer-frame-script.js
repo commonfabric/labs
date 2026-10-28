@@ -22,6 +22,9 @@ const HOST_WINDOW = globalThis.parent;
  */
 let inner = null;
 
+/** @type {import('./presentation.ts').IframePresentation | null} */
+let presentation = null;
+
 globalThis.addEventListener("message", onMessage);
 globalThis.addEventListener("error", onOuterError);
 
@@ -46,7 +49,14 @@ function onMessage(e) {
   }
 
   if (e.data && e.data.type === "load-document") {
+    presentation = e.data.presentation ?? null;
     loadDocument(e.data.data);
+  } else if (e.data && e.data.type === "presentation") {
+    presentation = e.data.data;
+    inner?.contentWindow?.postMessage({
+      type: "presentation",
+      data: presentation,
+    }, "*");
   }
 }
 
@@ -71,7 +81,7 @@ function loadDocument(html) {
     "allow-popups allow-popups-to-escape-sandbox allow-scripts allow-modals",
   );
   inner.addEventListener("load", onInnerLoad);
-  inner.srcdoc = html;
+  inner.srcdoc = presentedDocument(html, presentation);
   document.body.appendChild(inner);
 }
 
@@ -79,8 +89,14 @@ function loadDocument(html) {
  * Handles the guest frame's document having loaded. The host takes this as
  * its cue to hand the new document a port: a fresh document is a fresh realm,
  * and the port the previous one held died with it.
+ * @param {Event} event
  */
-function onInnerLoad() {
+function onInnerLoad(event) {
+  if (!inner || event.currentTarget !== inner) return;
+  inner.contentWindow?.postMessage(
+    { type: "presentation", data: presentation },
+    "*",
+  );
   toHost({ type: "load" });
 }
 
@@ -136,4 +152,99 @@ function hostOrigin() {
  */
 function toHost(data) {
   HOST_WINDOW.postMessage(data, HOST_ORIGIN);
+}
+
+/**
+ * Installs presentation in the guest realm and accepts updates from its parent.
+ * Serialized into each guest's head, before the guest's own scripts and styles.
+ * @param {import('./presentation.ts').IframePresentation | null} initial
+ * @param {[string, string][]} authoredAttributes
+ */
+function guestPresentation(initial, authoredAttributes) {
+  const root = document.documentElement;
+  for (const [name, value] of authoredAttributes) {
+    root.setAttribute(name, value);
+  }
+  const sheet = document.createElement("style");
+  /** @type {HTMLLinkElement[]} */
+  const links = [];
+  /** @type {Map<string, string | null>} */
+  const attributes = new Map();
+  /** @type {string | undefined} */
+  let signature;
+
+  /**
+   * Replaces the host's presentation, restoring attributes it releases.
+   * @param {import("./presentation.ts").IframePresentation | null} value
+   */
+  function apply(value) {
+    const next = JSON.stringify(value);
+    if (signature === next) return;
+    signature = next;
+    for (const [name, previous] of attributes) {
+      if (previous === null) root.removeAttribute(name);
+      else root.setAttribute(name, previous);
+    }
+    attributes.clear();
+    sheet.remove();
+    for (const link of links) link.remove();
+    links.length = 0;
+    if (value !== null) {
+      for (const [name, text] of Object.entries(value.attributes)) {
+        attributes.set(name, root.getAttribute(name));
+        root.setAttribute(name, text);
+      }
+      sheet.textContent = value.css;
+      document.head.prepend(sheet);
+      for (const href of value.stylesheets) {
+        const link = document.createElement("link");
+        link.rel = "stylesheet";
+        link.href = href;
+        document.head.insertBefore(link, sheet);
+        links.push(link);
+      }
+    }
+    document.dispatchEvent(new Event("common-iframe-presentation"));
+  }
+
+  globalThis.addEventListener("message", (event) => {
+    if (event.source !== parent || event.data?.type !== "presentation") return;
+    apply(event.data.data);
+  });
+  apply(initial);
+}
+
+/**
+ * Returns a guest document with its presentation receiver in the head.
+ * @param {string} html
+ * @param {import('./presentation.ts').IframePresentation | null} presentation
+ */
+function presentedDocument(html, presentation) {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  // The parser supplies document metadata only. Serializing its tree would
+  // change noscript content because DOMParser parses with scripting disabled.
+  const attributes = Array.from(
+    doc.documentElement.attributes,
+    ({ name, value }) => [name, value],
+  );
+  const payload = JSON.stringify([presentation, attributes]).replaceAll(
+    "<",
+    "\\u003c",
+  );
+  const bootstrap = `(${guestPresentation.toString()})(...${payload});`;
+  // Activate every authored head policy before the bootstrap can insert a
+  // stylesheet or start a fetch. Meta CSP does not cover preceding content.
+  const policies = Array.from(doc.head.querySelectorAll("meta[http-equiv]"))
+    .filter((meta) =>
+      meta.getAttribute("http-equiv")?.toLowerCase() ===
+        "content-security-policy"
+    )
+    .map((meta) => meta.outerHTML)
+    .join("");
+  const doctype = doc.doctype
+    ? new XMLSerializer().serializeToString(doc.doctype)
+    : "";
+  // A leading script creates the head; the original html/head tags merge into
+  // that document. Keep the original markup so the guest's parser owns it.
+  return doctype + policies + "<script>" + bootstrap + "</scr" + "ipt>" + html;
 }

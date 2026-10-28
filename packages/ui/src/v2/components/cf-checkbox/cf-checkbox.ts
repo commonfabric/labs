@@ -1,6 +1,6 @@
 import { booleanSchema } from "@commonfabric/runner/schemas";
 import { type CellHandle } from "@commonfabric/runtime-client";
-import { css, html, LitElement } from "lit";
+import { css, html } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 
 import { BaseElement } from "../../core/base-element.ts";
@@ -32,11 +32,6 @@ import { createFormFieldController } from "../../core/form-field-controller.ts";
  */
 
 export class CFCheckbox extends BaseElement {
-  static override shadowRootOptions = {
-    ...LitElement.shadowRootOptions,
-    delegatesFocus: true,
-  };
-
   static override styles = css`
     :host {
       display: inline-flex;
@@ -47,11 +42,11 @@ export class CFCheckbox extends BaseElement {
       line-height: 1.5;
 
       /* Default color values if not provided */
-      --background: #ffffff;
-      --foreground: #0f172a;
-      --primary: #0f172a;
-      --primary-foreground: #f8fafc;
-      --border: #e2e8f0;
+      --background: var(--cf-theme-color-surface, #ffffff);
+      --foreground: var(--cf-theme-color-text, #0f172a);
+      --primary: var(--cf-theme-color-primary, #0f172a);
+      --primary-foreground: var(--cf-theme-color-primary-foreground, #f8fafc);
+      --border: var(--cf-theme-color-border, #e2e8f0);
       --ring: #94a3b8;
     }
 
@@ -60,11 +55,11 @@ export class CFCheckbox extends BaseElement {
       opacity: 0.5;
     }
 
-    :host:focus {
+    :host(:focus) {
       outline: none;
     }
 
-    :host:focus-visible .checkbox {
+    :host(:focus-visible) .checkbox {
       outline: 2px solid transparent;
       outline-offset: 2px;
       box-shadow:
@@ -304,15 +299,7 @@ export class CFCheckbox extends BaseElement {
         .join(" ");
 
       return html`
-        <!-- The host carries role="checkbox" and tabindex for accessibility.
-          delegatesFocus: true routes focus here, so aria-hidden must NOT be
-          set on this div — browsers refuse to apply aria-hidden on focused
-          elements. The host ARIA attributes are the a11y surface. -->
-        <div
-          class="${classString}"
-          part="checkbox"
-          tabindex="-1"
-        >
+        <div class="${classString}" part="checkbox">
           <span class="checkmark" part="checkmark"></span>
         </div>
         <slot></slot>

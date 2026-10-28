@@ -1,6 +1,7 @@
 import type { IMemorySpaceAddress } from "../storage/interface.ts";
+import { endLocalReadValidationStretch } from "../storage/local-read-policy.ts";
 import type { FanOutNodeState } from "./fan-out.ts";
-import type { Action } from "./types.ts";
+import type { Action, ReactivityLog } from "./types.ts";
 
 export type NodeKind = "computation" | "effect";
 export type NodeStatus = "never-ran" | "clean" | "invalid" | "unavailable";
@@ -20,6 +21,27 @@ export interface SchedulerGateState {
 
   /** Backoff passes charged to the current idle-wait episode. */
   convergenceHoldPasses: number;
+
+  /**
+   * Remote-echo breaker backoff
+   * (docs/plans/scheduler-remote-echo-breaker.md): the instant a re-run
+   * deferred by a tripped echo loop becomes eligible. Separate from
+   * `backoffUntil` so clearing the convergence backoff never lifts it and so
+   * the idle probe (`isConvergenceBackoffDeferred` reads `backoffUntil`
+   * alone) treats a deferred echo re-run like a throttle window — a freshness
+   * bound that does not hold `idle()` open.
+   */
+  echoBackoffUntil?: number;
+}
+
+/**
+ * Whether `gate` holds convergence-backoff state: a deadline, a streak or
+ * hold passes charged. The remote-echo backoff is a separate gate and is not
+ * part of it.
+ */
+export function holdsBackoffState(gate: SchedulerGateState): boolean {
+  return gate.backoffUntil !== undefined || gate.backoffStreak > 0 ||
+    gate.convergenceHoldPasses > 0;
 }
 
 export interface SchedulerNode {
@@ -47,6 +69,12 @@ export interface SchedulerNode {
 
   /** Bound source whose server proof justifies this initial clean state. */
   adoptedViewIdentity?: string;
+
+  /**
+   * The wake dependencies that proof installed, which a later proof of the
+   * same adoption is compared against.
+   */
+  adoptedViewDependencies?: ReactivityLog;
 
   /** Releases the residency wake of a parked local computation. */
   cancelLocalReadWake?: () => void;
@@ -93,9 +121,25 @@ export class NodeRegistry {
   #invalidNodes = new Set<Action>();
 
   /**
+   * Active nodes whose gate holds convergence-backoff state
+   * (`holdsBackoffState()`). The pass-end clearing and the idle-episode reset
+   * walk this set instead of every registered node, since on a large graph a
+   * handful of nodes hold backoff while thousands never do. Every writer of
+   * that state calls `noteBackoff()` after writing it, and
+   * `SchedulerGates.clearBackoff()` calls `forgetBackoff()` after clearing
+   * it; like `#invalidNodes`, membership also tracks active membership, so a
+   * removed node drops out and a reactivated one re-enters iff its preserved
+   * gate still holds the state.
+   */
+  #backedOffNodes = new Set<SchedulerNode>();
+
+  /**
    * Source of monotonic registration ordinals (see `SchedulerNode.ordinal`).
    */
   #nextOrdinal = 0;
+
+  /** Advances each time a node joins or leaves the active set. */
+  #membership = 0;
 
   readonly effects: ReadonlySet<Action> = this.#activeEffects;
   readonly computations: ReadonlySet<Action> = this.#activeComputations;
@@ -112,6 +156,24 @@ export class NodeRegistry {
    * the serving posture and on every client. Refcounts (per demanded
    * entity) live in the facade. */
   readonly demandedWriters = new Set<Action>();
+
+  /** How many nodes are registered and active, of either kind. */
+  get activeCount(): number {
+    return this.#all.size;
+  }
+
+  /** How many active nodes are `invalid` or `never-ran`. */
+  get invalidCount(): number {
+    return this.#invalidNodes.size;
+  }
+
+  /**
+   * A count that advances each time a node joins or leaves the active set, so
+   * that an index over active nodes can tell whether it still describes them.
+   */
+  get membership(): number {
+    return this.#membership;
+  }
 
   isDemandedWriter(action: Action): boolean {
     return this.demandedWriters.has(action);
@@ -168,17 +230,22 @@ export class NodeRegistry {
   remove(action: Action): SchedulerNode | undefined {
     const record = this.#records.get(action);
     if (!record) return undefined;
+    // A removed node is no current producer, which a validation made before
+    // may have counted on.
+    endLocalReadValidationStretch();
     record.registrationToken = {};
     delete record.hasCommittedResult;
     delete record.gate.retryOwed;
     delete record.pendingWaveRun;
     record.adoptedViewIdentity = undefined;
+    record.adoptedViewDependencies = undefined;
     record.cancelLocalReadWake?.();
     record.cancelLocalReadWake = undefined;
-    this.#all.delete(record);
+    if (this.#all.delete(record)) this.#membership++;
     this.#activeEffects.delete(action);
     this.#activeComputations.delete(action);
     this.#invalidNodes.delete(action);
+    this.#backedOffNodes.delete(record);
     // Drop the child from its parent's index. The index holds actions
     // strongly, so a child left in it is retained by the parent — along with
     // the frame of the child's last run, that run's storage transaction, and
@@ -217,7 +284,13 @@ export class NodeRegistry {
   setStatus(action: Action, status: NodeStatus): void {
     const record = this.#records.get(action);
     if (!record) return;
-    if (status !== "clean") record.adoptedViewIdentity = undefined;
+    if (status !== "clean") {
+      // A node that is not clean is no current producer, which a validation
+      // made before may have counted on.
+      endLocalReadValidationStretch();
+      record.adoptedViewIdentity = undefined;
+      record.adoptedViewDependencies = undefined;
+    }
     record.status = status;
     this.#syncInvalidIndex(record);
   }
@@ -228,6 +301,21 @@ export class NodeRegistry {
    */
   getInvalidNodes(): ReadonlySet<Action> {
     return this.#invalidNodes;
+  }
+
+  /** Active nodes whose gate holds convergence-backoff state. */
+  getBackedOffNodes(): ReadonlySet<SchedulerNode> {
+    return this.#backedOffNodes;
+  }
+
+  /** Indexes `record` after a write of convergence-backoff state to its gate. */
+  noteBackoff(record: SchedulerNode): void {
+    if (this.#all.has(record)) this.#backedOffNodes.add(record);
+  }
+
+  /** Drops `record` from the index after its backoff state is cleared. */
+  forgetBackoff(record: SchedulerNode): void {
+    this.#backedOffNodes.delete(record);
   }
 
   #syncInvalidIndex(record: SchedulerNode): void {
@@ -353,7 +441,10 @@ export class NodeRegistry {
   }
 
   #activate(record: SchedulerNode): void {
-    if (!this.#all.has(record)) record.registrationToken = {};
+    if (!this.#all.has(record)) {
+      record.registrationToken = {};
+      this.#membership++;
+    }
     this.#all.add(record);
     if (record.kind === "effect") {
       this.#activeEffects.add(record.action);
@@ -365,5 +456,6 @@ export class NodeRegistry {
     // A freshly registered node is born `never-ran`; a reactivated record
     // re-enters the index iff its (preserved) status still qualifies.
     this.#syncInvalidIndex(record);
+    if (holdsBackoffState(record.gate)) this.#backedOffNodes.add(record);
   }
 }

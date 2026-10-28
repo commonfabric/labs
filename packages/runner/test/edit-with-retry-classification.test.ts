@@ -432,7 +432,15 @@ Deno.test("a server ProtocolError reaches editWithRetry by name, once", async ()
 // the retry path to clear `#sessionHandle`, the second assertion is what will
 // fail — and that is the signal to move `SessionError` back into the allow-list
 // in storage/rejection.ts.
-class SessionErrorSessionFactory implements SessionFactory {
+//
+// The factory stands in for the server's refusal of a commit on a still-live
+// connection: once armed, every `transact` rejects with the error the client
+// builds from a wire response error (memory/v2/client.ts: an `Error` carrying
+// the server's message, named as the server named it). From there the
+// rejection travels the real path: SpaceReplica's push catch ->
+// `toRejectedError` (which preserves the name) -> `finalizeRejection` ->
+// editWithRetry's classification.
+class WireRefusalSessionFactory implements SessionFactory {
   readonly supportsAclBootstrap = true;
 
   /** Mounts created — how many times a session was (re)opened. */
@@ -445,8 +453,14 @@ class SessionErrorSessionFactory implements SessionFactory {
 
   readonly #server: MemoryV2Server.Server;
 
-  constructor(server: MemoryV2Server.Server) {
+  readonly #refusal: { name: string; message: string };
+
+  constructor(
+    server: MemoryV2Server.Server,
+    refusal: { name: string; message: string },
+  ) {
     this.#server = server;
+    this.#refusal = refusal;
   }
 
   arm(): void {
@@ -481,15 +495,9 @@ class SessionErrorSessionFactory implements SessionFactory {
         return realTransact(commit as Parameters<typeof realTransact>[0]);
       }
       this.commits++;
-      // Verbatim what memory/v2/server.ts `transact` returns for a session the
-      // registry no longer holds — the ACL de-authorization sweep
-      // (`#revokeDeauthorizedSessions`) and a takeover both produce it on a
-      // still-live connection. It travels the real rejection path from here:
-      // SpaceReplica's push catch -> `toRejectedError` (which preserves the
-      // name) -> `finalizeRejection` -> editWithRetry's classification.
       return Promise.reject(
-        Object.assign(new Error("Unknown session for space"), {
-          name: "SessionError",
+        Object.assign(new Error(this.#refusal.message), {
+          name: this.#refusal.name,
         }),
       );
     };
@@ -507,7 +515,14 @@ Deno.test("a SessionError commits once and does not remount the session", async 
     acl: { mode: "enforce" },
     subscriptionRefreshDelayMs: 0,
   });
-  const factory = new SessionErrorSessionFactory(server);
+  // Verbatim what memory/v2/server.ts `transact` returns for a session the
+  // registry no longer holds — the ACL de-authorization sweep
+  // (`#revokeDeauthorizedSessions`) and a takeover both produce it on a
+  // still-live connection.
+  const factory = new WireRefusalSessionFactory(server, {
+    name: "SessionError",
+    message: "Unknown session for space",
+  });
   const storageManager = TestStorageManager.overServer({ as: user }, factory);
   const space = await storageManager.createSpace({ [user.did()]: "OWNER" });
   const runtime = new Runtime({
@@ -540,6 +555,60 @@ Deno.test("a SessionError commits once and does not remount the session", async 
     // never opened a new session, so a second attempt would have re-sent over
     // the same refused handle.
     assertEquals(factory.sessions, sessionsAfterMount);
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+    await server.close();
+  }
+});
+
+Deno.test("a MessageTooLargeError reaches editWithRetry by name, once", async () => {
+  const user = await Identity.fromPassphrase("message-too-large user");
+
+  const server = new MemoryV2Server.Server({
+    store: new URL("memory://message-too-large-retry"),
+    authorizeSessionOpen: authorizeLoopbackSessionOpen,
+    sessionOpenAuth: { audience: TEST_AUDIENCE },
+    acl: { mode: "enforce" },
+    subscriptionRefreshDelayMs: 0,
+  });
+  // Verbatim what memory/v2/server.ts returns for a frame standing for more
+  // slots than `MAX_UNTRUSTED_MESSAGE_SLOTS` admits. The real refusal needs a
+  // commit of a million slots to provoke; what this test holds is the
+  // runner's half, that the name survives normalization and is classified
+  // terminal, so the oversized commit is not sent again unchanged.
+  const factory = new WireRefusalSessionFactory(server, {
+    name: "MessageTooLargeError",
+    message: "Memory message stands for more than 1000000 array slots " +
+      "and record members",
+  });
+  const storageManager = TestStorageManager.overServer({ as: user }, factory);
+  const space = await storageManager.createSpace({ [user.did()]: "OWNER" });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+  });
+
+  try {
+    const sync = await storageManager.open(space).sync(`of:${space}` as URI);
+    assert(!sync.error, sync.error?.message);
+    factory.arm();
+
+    const address: IMemorySpaceAddress = {
+      space,
+      id: "of:message-too-large-doc" as URI,
+      type: "application/json",
+      path: [],
+    };
+    const result = await runtime.editWithRetry((tx) => {
+      tx.writeOrThrow(address, { value: 1 } as unknown as FabricValue);
+    });
+
+    assert(result.error, "the commit must be rejected");
+    // The name the server chose, not a flattened TransactionError.
+    assertEquals(result.error.name, "MessageTooLargeError");
+    // One attempt: the same writes re-sent stand for the same slots.
+    assertEquals(factory.commits, 1);
   } finally {
     await runtime.dispose();
     await storageManager.close();

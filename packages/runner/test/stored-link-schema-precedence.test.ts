@@ -593,4 +593,85 @@ describe("stored-link-schema-precedence", () => {
       expect(glaze).toEqual("maple");
     });
   });
+
+  describe("a linked property whose target is absent", () => {
+    // The hop combines the stored schema into the property's selector, so the
+    // stored default is the nearest declaration for the value at the target.
+    // A read within the container and a read by the property's own path both
+    // stand it in for the absent value, and it overrides the reader's own
+    // property default as it does at every crossing.
+
+    type Counter = { count: number };
+
+    const counterSchema = {
+      type: "object",
+      properties: { count: { type: "number" } },
+    } as const satisfies JSONSchema;
+
+    const storedCountSchema = {
+      type: "number",
+      default: 0,
+    } as const satisfies JSONSchema;
+
+    /** A holder whose `count` links to an unset field of another document. */
+    const holderOverAbsentCount = (readerSchema: JSONSchema): Cell<Counter> => {
+      const target = runtime.getCell(space, `target-${seq}`, undefined, tx);
+      target.setRaw({});
+      const holder = runtime.getCell<Counter>(
+        space,
+        `counter-${seq}`,
+        readerSchema,
+        tx,
+      );
+      holder.setRaw(
+        {
+          count: linkCarrying(target.key("count"), storedCountSchema),
+        } as never,
+      );
+      return holder;
+    };
+
+    it("inherits the stored default when read within its object", () => {
+      expect(holderOverAbsentCount(counterSchema).get().count).toBe(0);
+    });
+
+    it("inherits the stored default over the reader's own property default", () => {
+      const holder = holderOverAbsentCount({
+        type: "object",
+        properties: { count: { type: "number", default: 7 } },
+      });
+      expect(holder.get().count).toBe(0);
+    });
+
+    it("inherits the stored default when read by the property's own path", () => {
+      expect(holderOverAbsentCount(counterSchema).key("count").get()).toBe(0);
+    });
+
+    it("inherits a stored default declared behind a content-addressed reference", () => {
+      // A link a cell emits spells its schema as a content-addressed
+      // reference rather than inline.
+      const target = runtime.getCell<Partial<Counter>>(
+        space,
+        `target-${seq}-cid`,
+        {
+          type: "object",
+          properties: { count: { type: "number", default: 0 } },
+        },
+        tx,
+      );
+      target.setRaw({});
+      const holder = runtime.getCell<Counter>(
+        space,
+        `counter-${seq}-cid`,
+        counterSchema,
+        tx,
+      );
+      holder.setRaw(
+        {
+          count: target.key("count").getAsLink({ includeSchema: true }),
+        } as never,
+      );
+      expect(holder.get().count).toBe(0);
+    });
+  });
 });

@@ -20,6 +20,7 @@
  * reads it.
  */
 
+import { fromFileUrl } from "@std/path";
 import { parse as parseYaml } from "@std/yaml";
 import {
   CALIBRATION_FILE,
@@ -31,7 +32,7 @@ const JOB = "benchmarks";
 const REPORT_CHECK = "tasks/check-bench-report.ts";
 const REPORT = "bench-results/results.json";
 
-const repoRoot = (): string => new URL("../", import.meta.url).pathname;
+const repoRoot = (): string => fromFileUrl(new URL("../", import.meta.url));
 
 /** The files the dashboard names, each once, in the order it names them. */
 export function namedBenchmarkFiles(): readonly string[] {

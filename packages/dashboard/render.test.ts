@@ -82,6 +82,37 @@ Deno.test("renderTile: an http href is an anchor that opens a new tab; a local o
   );
 });
 
+Deno.test("renderTile: a link tile whose chart holds links links its text alone", () => {
+  const html = renderTile("labs ci trust", view({
+    value: "99.0%",
+    href: "/repos?name=labs",
+    hint: "repository ↗",
+    extra: `<div class="cells"><a class="cell" href="https://github.com/o/r/actions/runs/1"></a></div>`,
+  }));
+  // The tile's link closes before the chart opens, so the chart's link is not
+  // inside another.
+  assertEquals(
+    html,
+    `<div class="tile good link" data-tile-label="labs ci trust"><a class="tile-head" href="/repos?name=labs" aria-description="repository ↗" title="repository ↗"><div class="texture"></div><p class="lbl"><span class="dot green"></span> labs ci trust<span class="spacer"></span><span class="drill" title="repository ↗" aria-hidden="true">↗</span></p><p class="big good">99.0%</p></a><div class="cells"><a class="cell" href="https://github.com/o/r/actions/runs/1"></a></div></div>`,
+  );
+
+  const external = renderTile("labs ci trust", view({
+    href: "https://github.com/o/r",
+    extra: `<a class="cell" href="/x"></a>`,
+  }));
+  assertStringIncludes(
+    external,
+    `<a class="tile-head" href="https://github.com/o/r" target="_blank" rel="noopener">`,
+  );
+  // A chart without links stays inside the tile's link.
+  const plain = renderTile("labs ci duration", view({
+    href: "/bench",
+    extra: `<svg viewBox="0 0 1 1"></svg>`,
+  }));
+  assert(plain.startsWith(`<a class="tile good link"`), plain);
+  assert(!plain.includes("tile-head"), plain);
+});
+
 Deno.test("renderTile: wide adds the class the shell lays out below the grid", () => {
   assertStringIncludes(
     renderTile("labs ci", view(), true),
@@ -208,6 +239,18 @@ Deno.test("renderTile: the body order is label, headline, sub, chart", () => {
   assert(at(`class="lbl"`) < at(`class="big`), "label first");
   assert(at(`class="big`) < at(`class="sub"`), "headline above the sub line");
   assert(at(`class="sub"`) < at("<svg>"), "the chart is last");
+});
+
+Deno.test("shell: the foot of the page links to the repository pages, before the theme switch", () => {
+  const html = shell("", "", 0, 30_000, TEST_VERSION, "good");
+  assertStringIncludes(
+    html,
+    `<div class="foot"><a class="pill" href="/repos">▤ Repositories</a><button class="theme-toggle"`,
+  );
+  assert(
+    html.indexOf(`id="dashboard-wide"`) < html.indexOf(`class="foot"`),
+    "the foot comes after the tiles",
+  );
 });
 
 Deno.test("shell: the grid and the wide tiles land in their own slots", () => {

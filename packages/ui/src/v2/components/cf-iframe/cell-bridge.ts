@@ -9,6 +9,8 @@ import {
   type BridgeResource,
   createFabricBridge,
   type FabricBridge,
+  IPC,
+  presenceResource,
 } from "@commonfabric/iframe-sandbox";
 import type { FabricValue } from "@commonfabric/data-model";
 import {
@@ -20,14 +22,19 @@ import {
 import type { JSONSchema } from "@commonfabric/runner/shared";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
+import { presenceFailureCategory } from "../../core/presence-failure.ts";
 import { valueForDisplay } from "../../core/value-for-display.ts";
 
-/** Capability kind assigned to a named context child. */
+/**
+ * Capability kind assigned to a named context child. `presence` grants the
+ * presence room of the child's resolved field, and none of the child's data.
+ */
 export type CellContextResourceKind =
   | "cell"
   | "readonly"
   | "stream"
-  | "sqlite";
+  | "sqlite"
+  | "presence";
 
 function cellKind(schema: JSONSchema | undefined): string | undefined {
   if (!schema || typeof schema !== "object" || !Array.isArray(schema.asCell)) {
@@ -216,6 +223,33 @@ function bridgeCell(
   };
 }
 
+/**
+ * Returns what a guest is told of `cause`, the failure of a presence room.
+ * A relay's refusal is about the guest's own publication or join, so its
+ * message is passed on; any other cause is named by category alone.
+ */
+function presenceBridgeFailure(cause: unknown): IPC.BridgeError {
+  switch (presenceFailureCategory(cause)) {
+    case "configuration":
+      return {
+        code: IPC.BRIDGE_PRESENCE_UNSUPPORTED,
+        message: "The host has no presence relay to join.",
+      };
+    case "protocol":
+      return {
+        code: IPC.BRIDGE_PRESENCE_REFUSED,
+        message: cause instanceof Error
+          ? cause.message
+          : "The presence relay refused the room.",
+      };
+    case "connection":
+      return {
+        code: IPC.BRIDGE_PRESENCE_DISCONNECTED,
+        message: "The host lost the presence room.",
+      };
+  }
+}
+
 function cellResource(
   cell: CellHandle<unknown>,
   schema: JSONSchema | undefined,
@@ -285,13 +319,26 @@ function cellResource(
     };
   }
 
+  // A room is granted by the embedder's explicit kind alone: a schema that
+  // declared one would let whoever wrote the schema announce the user.
+  if (kindHint === "presence") {
+    return presenceResource({
+      join: () => cell.runtime().joinPresenceRoom(cell),
+      failure: presenceBridgeFailure,
+    }, metadata);
+  }
+
   if (kind === "stream") {
     return {
       kind: "stream",
       ...metadata,
       methods: {
+        // Waits for the handler's run, so a guest that reads after `send()`
+        // resolves reads what the handler wrote, and hears of a refused run.
         send: async (value) => {
-          await cell.sendStrict(value as ClientCellValue);
+          await cell.sendStrict(value as ClientCellValue, {
+            awaitHandling: true,
+          });
         },
       },
     };

@@ -180,6 +180,14 @@ installFakeClock({
     // file stays on the real clock; it waits on the gate and on
     // runtime.idle(), never on a bare delay for its verdict.
     "wish-sidecar-duplicate-launch",
+    // The shared-connection cases reach a standalone memory server over a real
+    // websocket, so each round trip waits on real I/O, which auto-advance
+    // reads as an idle loop. Each such wait jumps logical time to the memory
+    // client's next lease renewal, 58 minutes out, which outlives the server's
+    // 5-minute connection challenge: a `connection.auth` in flight across the
+    // jump is refused as expired. The cases wait on round trips, never on a
+    // delay.
+    "storage-admission-notice",
   ],
 });
 

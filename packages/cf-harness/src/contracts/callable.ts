@@ -1,6 +1,7 @@
 /**
  * The shape a model reads one callable thing in, whoever owns it: a command a
- * host admits (`list_commands`), and in time a verb a held piece declares. A
+ * host admits (`list_commands`), and a verb a held piece declares, which
+ * `describe_handle` lists and `call_verb` sends an event to. A
  * Loom manifest row and a `cf piece describe` verb both reduce to it — a name,
  * a title or description, an input schema — so the model reads one format
  * whatever the source, and a source's own facts (a command's targeting, a

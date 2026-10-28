@@ -261,11 +261,11 @@ export default pattern<Input<Box<number>>>(({ c }) => ({
       );
       expect((capture!.properties as Record<string, unknown>).c).toEqual({
         anyOf: [
-          { type: "object", properties: {} },
           {
             type: "object",
             properties: { value: { type: ["number", "undefined"] } },
           },
+          { type: "object", properties: {} },
         ],
         default: {},
         asCell: ["readonly"],
@@ -293,8 +293,8 @@ export default pattern<Input>(({ v }) => ({
         properties: {
           v: {
             anyOf: [
-              { type: "object", properties: {} },
               { $ref: "#/$defs/Shape" },
+              { type: "object", properties: {} },
             ],
             default: {},
           },
@@ -347,12 +347,12 @@ export default pattern<Input<Box<number>>>(({ c }) => ({
         anyOf: [
           {
             type: "object",
-            properties: { value: { type: "number", enum: [0] } },
+            properties: { value: { type: "number" } },
             required: ["value"],
           },
           {
             type: "object",
-            properties: { value: { type: "number" } },
+            properties: { value: { type: "number", enum: [0] } },
             required: ["value"],
           },
         ],

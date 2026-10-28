@@ -212,6 +212,66 @@ const outcomesOf = (h: ReturnType<typeof harness>) =>
 
 describe("coordinator", () => {
   describe("a typed command", () => {
+    it("retains an automatic mutation in discovery and settles it as the agent", async () => {
+      const style: HarnessCommandCatalogEntry = {
+        command: "loom.set-style",
+        summary: "Change a loom's style",
+        scope: "loom",
+        executes: "loom",
+        effect: "mutation",
+        approval: "automatic",
+        inputSchema: { type: "object" },
+      };
+      const h = harness({
+        calls: [
+          { actions: [catalog] },
+          {
+            actions: [{
+              kind: "invoke_command",
+              invocation: {
+                command: style.command,
+                args: { clear: true, request_id: "style-1" },
+                approval: "automatic",
+              },
+            }],
+          },
+        ],
+      });
+      await h.start();
+      await h.delivered(requestFor("id-1"));
+      expect(
+        (await h.answer({
+          sessionId: "s",
+          actionId: "id-1",
+          settlement: { status: "executed", catalog: { entries: [style] } },
+        })).ok,
+      ).toBe(true);
+      await h.delivered(requestFor("id-2"));
+      const body = settle("resolve-executed-success", "id-2");
+      if (
+        body.settlement.status !== "executed" || !("outcome" in body.settlement)
+      ) {
+        throw new Error("Expected an executed command fixture");
+      }
+      body.settlement.outcome.id = style.command;
+      body.settlement.outcome.body = {
+        ...body.settlement.outcome.body!,
+        id: style.command,
+      };
+      body.settlement.outcome.bodyBytes = harnessCommandJsonBytes(
+        body.settlement.outcome.body!,
+      );
+      expect((await h.answer(body)).ok).toBe(true);
+      await h.callsDone;
+      expect(outcomesOf(h)[0]).toMatchObject({
+        settlement: { catalog: { entries: [style] } },
+      });
+      expect(h.resolved()[1]).toMatchObject({
+        settlement: { attribution: { approval: "automatic", actor: "agent" } },
+      });
+      await h.finish();
+    });
+
     it("keeps an in-process answer's body out of the model when its provenance cannot be derived", async () => {
       const requested = Promise.withResolvers<void>();
       const events: Event[] = [];

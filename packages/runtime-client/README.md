@@ -27,7 +27,18 @@ holding nothing for a document it has not loaded as well, so the connection
 delivers none, and a pull, which waits for the loads its read starts, is how a
 subscriber that was given a value learns that the cell now holds nothing. A
 `sync()` waits for no loads, and one that finds nothing leaves a value the
-handle holds in place, telling no subscriber.
+handle holds in place, telling no subscriber. A handle that hears of a dropped
+update no longer counts the label it holds as the worker's current read. If any
+of its subscribers asked for labels, every subscriber of the handle is called
+again with what it holds, told that its label is not current (`CellDelivery`).
+The worker's next update with a label makes it current again, and those
+subscribers are told so even when the update brings back the value and label the
+handle held.
+
+A subscription's read that finds the value and label the worker last sent for it
+sends nothing: a change elsewhere in what the read depends on, which runs the
+read again, is no change to what the host holds. The first value admitted after
+a refusal is always sent.
 
 ## Refused reads
 
@@ -39,11 +50,11 @@ refusal carries nothing of the cell, and is never an empty value, so a read the
 host could not make never reads as a cell that holds nothing.
 
 A handle holds a refusal in place of a value. `refusal` and `lastRead()` report
-it; `get()` throws `CellReadRefusedError`; `sync()`, `pull()` and `initialize()`
-reject with it. A subscriber hears each refusal through the `onRefused` option
-of `subscribe()`, which runs at once for a handle already refused, and its value
-callback never receives one. The next admitted value, or a value the host
-writes, ends the refusal.
+it; `get()` throws `CellReadRefusedError`; `sync()`, `pull()`, `initialize()`
+and `update()` reject with it. A subscriber hears each refusal through the
+`onRefused` option of `subscribe()`, which runs at once for a handle already
+refused, and its value callback never receives one. The next admitted value, or
+a value the host writes, ends the refusal.
 
 The worker builds its gate with no display ceiling, so it refuses no read.
 
@@ -53,6 +64,21 @@ rendered, carrying no cell value, a reference, a trusted operation, or ungated.
 The answers of the channels marked as decided carry a mark only the gate gives
 them, and a type-level check holds the tables to it, so a new channel fails to
 type-check until it says how it stands.
+
+## The order of a cell's operations
+
+A cell's reads and writes through one runtime client run in the order they were
+asked for, through whichever handle on the cell and path: `sync()`, `pull()`,
+`set()`, `setStrict()`, `push()`, `initialize()`, `send()`, `sendStrict()`,
+`sendReviewed()` and `update()` share one queue, and each request goes to the
+worker once the one before it has been answered. `set()` shows its value at once
+and sends it in its turn. `update(updater)` computes a write in its turn, from
+the value the operations queued before it left, or else what its handle holds,
+reading the cell first where the handle holds nothing. A write asked for after
+it lands after it. A write another handle made that has already settled counts
+only once its update reaches this handle, so an update can compute from a value
+that write has since replaced. Its write is a blind overwrite, as `set()`'s is,
+not an atomic read-modify-write; `push()` appends as the worker merges.
 
 ## Observing authorship
 
@@ -66,6 +92,23 @@ label as read, and the author claim. `onState` is not called until both labels
 have loaded, so a verdict never passes through `unknown` on its way to
 `verified`, and is called again after each later read of either label.
 `observeAuthorship()` returns a function that ends the observation.
+
+The observation reads each cell no further than its verdict needs. An author
+handle is read under `AUTHOR_CLAIM_SCHEMA`, the fields a claim is read from,
+whatever schema it was bound with. A value handle whose schema declares nothing
+(no schema, `true`, `{}`, or annotations alone, its own or the ancestor's it was
+keyed from, and none of the runtime's own keywords `ifc`, `asCell`, `asStream`
+or `scope`) is read under `VALUE_LABEL_SCHEMA`: a primitive as it is, a record
+as one holding none of its fields, a list as references to its elements, each
+element's target read at its root and nothing below it. Its label is the one the
+handle as bound reads, since such a schema declares nothing about following
+links. Any other value handle is read as it is bound.
+
+Each label is read from the subscription's update when the update says its label
+is the worker's current read (`CellDelivery`), and from the worker otherwise. An
+update holding nothing, which the connection drops, leaves the label a handle
+holds behind the worker's; the handle says so, to its own subscribers and to a
+handle seeded from it, and the observation then asks the worker.
 
 A label counts as loaded once a read of it has finished with nothing left to
 wait for. When the cell a handle resolves to reads as having no label, the
@@ -86,7 +129,14 @@ age, affected spaces, transaction state and known local/store sequence numbers.
 Per-space snapshots include the existing session ID, replica catch-up marker,
 unsettled sequences, conflict repairs and accepted writes waiting for coverage.
 These identifiers can be correlated with memory-server traces without exporting
-cell values or credentials. Reading the snapshot starts no storage I/O.
+cell values or credentials. Each per-space snapshot also carries the space's
+`sizes`: its share of the storage counts that `getLoggerCounts().sizes.storage`
+adds across every open space, such as documents, subscriptions and watched
+documents. Reading the snapshot starts no storage I/O. `getLoggerCounts().sizes`
+goes further in two directions: `storage.bySpace` ranks the open spaces by the
+approximate size of their documents, measured across reads within a budget, and
+`ipc` counts what each of the worker's ports has carried and how many it holds
+(`null` for a processor with no client registry behind it, as a test's is).
 
 The pending count measures promise registrations, not distinct writes. A write
 and its scheduler disposition can both appear. Lists contain at most 64 entries;
@@ -119,6 +169,39 @@ the handle, and the room once its last handle is gone.
 A server that does not advertise `presenceV1` makes the join reject; nothing is
 sent to it.
 
+## Sending events
+
+`CellHandle.send()` sends an event to the stream a handle names and logs a
+refusal; `sendStrict()` rejects with it. Either resolves once the runtime has
+taken the event, which says nothing of its handling: a write the stream's
+handler makes that the runtime refuses, such as one whose UI contract the event
+does not satisfy, resolves `sendStrict()` all the same.
+`sendStrict(event, { awaitHandling: true })` waits for the handler's run as
+well, and rejects with the reason when that run's commit is refused, when it
+throws, and when the event is dropped or refused admission. A run that finishes
+without an error resolves it, whether or not it wrote anything; a handler that
+turns an event down throws, which fails its run and rejects the send. Under
+server execution the run it waits for is the served one, whose outcome reaches
+the worker as the consequence the serving loop recorded for the event.
+
+`CellHandle.sendReviewed(event, { surface, action })` sends a reviewed action
+from a control the host draws itself, bound to one trusted surface and one
+action. The worker stamps the event with `native` provenance for them, replacing
+any `provenance` the payload carries, and marks it renderer-trusted, so a write
+gated on that surface and action commits as it would for a reviewed gesture on
+the pattern's rendered surface. It always waits for the handler's run, as
+`sendStrict()` does with `awaitHandling`, and rejects with the reason on the
+same refusals. The event is a trusted gesture, as a DOM event on the pattern's
+rendered surface is, so it meets what `grantSpaceAccess()` and
+`revokeSpaceAccess()` require of a handler's event; the change they stage is
+still held to every other check.
+[Host embedding, §11](../../docs/features/host-embedding.md#11-policy-record-native-reviewed-acts-count-as-trusted-gestures)
+records the principle that a native reviewed act counts wherever a trusted
+gesture does. `sendReviewed()` mints trusted events, so it is for the host's own
+code alone;
+[host embedding, §10](../../docs/features/host-embedding.md#10-native-reviewed-controls)
+says what it owes in exchange.
+
 ## Refused event admission
 
 The `eventintentoutcome` event reports a refused event admission to every
@@ -137,13 +220,47 @@ attention details.
 `RuntimeClient.retrySpaceAccess(space)` asks the memory server once more for a
 space it refused the runtime, and resolves once the server has decided. It is
 for a host with word that the runtime's principal was granted access, such as a
-notice naming the space: the runtime never asks again on its own, since the
-refusal turns on an access list it cannot read. The retry goes through the
-memory server's ordinary session admission, so it can admit only what that
-admission would. An admission clears the refusal, tells the render boundaries
-and every `spaceAccess(target)` computation that read it, and repeats the loads
-the refusal failed. A refusal leaves the space refused, and the call resolves
-all the same; any other failure rejects it. A space the runtime has not opened
-is left alone.
+notice naming the space. The runtime asks again on its own only when the memory
+server tells it, with `session/admissible`, that a grant may admit it, since the
+refusal otherwise turns on an access list it cannot read; a routed connection,
+and a connection the runtime closed on its first refusal of a space, hear no
+such word. The retry goes through the memory server's ordinary session
+admission, so it can admit only what that admission would. An admission clears
+the refusal, tells the render boundaries and every `spaceAccess(target)`
+computation that read it, and repeats the loads the refusal failed. A refusal
+leaves the space refused, and the call resolves all the same; any other failure
+rejects it. A space the runtime has not opened is left alone. A call made while
+a retry of the same space is in flight shares that retry rather than asking
+again, and so does the Retry button the renderer puts on a refused space's
+"Access unavailable" placeholder, which reaches the same retry from inside the
+worker; its placeholder reads "Retrying…" while any retry of its space is in
+flight. The shell calls it when the person navigates into a space
+`spaceaccesslost` named, and when the page regains focus or becomes visible.
 [`docs/features/space-access.md`](../../docs/features/space-access.md) says how
 the answer is kept current.
+
+## Recovering failed loads
+
+Two events say that a load which failed may now succeed, and nothing else says
+when to ask again, so they are the events for a host to retry on.
+
+The `connectionrestored` event reports that one of the worker's connections to a
+memory server came back after it was lost: the reconnect has finished its
+handshake and restored the sessions it could. A session a retriable access
+denial holds restores on its own later, and is not waited for. The event carries
+nothing, and it is sent once per restored connection, so a worker holding a
+connection per space sends it once for each one that comes back. The first
+connection to a server is not a restored one, and neither is a reconnect attempt
+that fails.
+
+The `spaceaccessrestored` event reports that a space which refused the runtime's
+principal, as `spaceaccesslost` reported, has admitted it again. It carries the
+`space`. It is sent for every admission, whoever asked for the retry that
+decided it: the runtime itself, on the memory server's `session/admissible`; the
+renderer's Retry button on a refused space's placeholder; or a host through
+`retrySpaceAccess()`.
+
+`RuntimeInternals` in `@commonfabric/lib-shell` drops the loads it remembers as
+failed, every space's on `connectionrestored` and the one space's on
+`spaceaccessrestored`, and then dispatches an event of the same name. The shell
+runs again each load whose failure a view of that space is showing.

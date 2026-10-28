@@ -32,6 +32,7 @@ import {
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { fromDID } from "../util.ts";
 import { MEMORY_PROTOCOL, type SessionOpenChallenge } from "../v2.ts";
+import { type ClientInfo, parseClientInfo } from "./client-info.ts";
 
 /**
  * Build an `AuthorizationError`. Pass `retriable: true` for the anti-replay
@@ -55,33 +56,54 @@ export const authorizationError = (
 const sameSessionDescriptor = (
   left: FabricPlainObject,
   right: {
+    client?: ClientInfo;
     sessionId?: string;
     seenSeq?: number;
     sessionToken?: string;
+    resumeKey?: string;
+    resumeAttempt?: number;
     actingAs?: string;
     genesisRoot?: FabricValue;
+    spaceKind?: string;
   },
 ): boolean =>
+  valueEqual(
+    parseClientInfo(left.client) ?? undefined,
+    right.client,
+  ) &&
   (typeof left.sessionId === "string" ? left.sessionId : undefined) ===
     right.sessionId &&
   (typeof left.seenSeq === "number" ? left.seenSeq : undefined) ===
     right.seenSeq &&
   (typeof left.sessionToken === "string" ? left.sessionToken : undefined) ===
     right.sessionToken &&
+  // The key that lets a resume present the token before the latest one, so
+  // it cannot be injected in transit either.
+  (typeof left.resumeKey === "string" ? left.resumeKey : undefined) ===
+    right.resumeKey &&
+  (typeof left.resumeAttempt === "number" ? left.resumeAttempt : undefined) ===
+    right.resumeAttempt &&
   // The delegated READ binding (OW31) is part of the signed descriptor:
   // a message-level marker that disagrees with the signed one is a
   // mismatch, so the binding cannot be injected or stripped in transit.
   (typeof left.actingAs === "string" ? left.actingAs : undefined) ===
     right.actingAs &&
-  valueEqual(left.genesisRoot, right.genesisRoot);
+  valueEqual(left.genesisRoot, right.genesisRoot) &&
+  // Compared as signed, so a signed kind the message does not carry, of any
+  // form, is a mismatch rather than read as no kind.
+  left.spaceKind === right.spaceKind;
 
 export type SessionOpenMessage = {
   space: string;
   session: {
+    client?: ClientInfo;
     sessionId?: string;
     seenSeq?: number;
     sessionToken?: string;
+    resumeKey?: string;
+    resumeAttempt?: number;
     genesisRoot?: FabricValue;
+    spaceKind?: string;
   };
   invocation?: FabricPlainObject;
   authorization?: FabricValue;

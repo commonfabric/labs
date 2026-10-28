@@ -109,6 +109,19 @@ A read consumes the join of every entry whose class is in its consumed set:
 | `linkResolutionProbe` / slot-pointer read (no deref) | `followRef` | which reference sits here — **stops being excluded**; consumes the link-origin entry's `followRef` class |
 | dereference (follow a ref to its target) | the dereference trace pair it already is | unchanged; target read classified at the target path |
 
+Runtime-minted concrete existence entries resolve independently from current
+value entries (§4.6.3, §8.12.8). Each retains its own most-specific applicable
+entry, and an observation consuming both joins them. A public child existence
+entry therefore cannot hide a confidential ancestor value; a public child
+value cannot hide confidential ancestor existence. Wildcard membership
+entries also retain their independent resolution. Declared and legacy covering
+entries keep their existing component resolution.
+
+Returning a primitive through a query-result proxy consumes its value, even
+when constructing that view first probes its shape. This applies to JavaScript
+primitives as well as Fabric primitives. A shape-only storage observation
+continues to consume only its shape classes.
+
 The load-bearing change is the third row: the `followRef` observation, today
 dropped from the flow join, becomes a consumed class carrying the link entry's
 label — closing SC-8.
@@ -297,9 +310,9 @@ normative from C1 on:
   hereditary integrity meet quantifies over the transformation's *content*
   inputs; standalone probes rarely resolve any label, and admitting them
   would empty the weakest-link meet on virtually every transaction,
-  silently ending TransformedBy / PolicyCertified propagation. Pointer
-  integrity evidence stays on the link entry (the LinkReference chain).
-  The probe of a followed slot leaves its input witnesses to the followed
+  silently ending TransformedBy / PolicyCertified propagation. A pointer
+  carries no integrity evidence of its own (§15.4, the retired
+  `LinkReference`). The probe of a followed slot leaves its input witnesses to the followed
   reference's own location, which resolves them over the value stamps at the
   slot, and which counts whenever the slot's label is confidential
   (`cfc-transformed-by-input-witnesses.md`).
@@ -312,24 +325,22 @@ machinery marker (`machineryRead`) is one the RUNTIME issued while wiring an
 operation up or plumbing a result, and no pattern or handler code runs inside
 a marked scope. §4.6.3's reference-identity row is about a read the
 computation made and then did something with; what a wiring probe does with
-the reference it finds is write that same reference into another slot, and
-the link write carries the source document's label to that slot as an
-`origin:"link"` entry. The pointer's protection therefore arrives pointwise
-at the destination without the flow stamp, and joining it into the stamp as
-well spreads it over every other path the wiring transaction wrote.
+the reference it finds is write that same reference into another slot. A reader
+that follows the reference from there consumes the labels of what it reaches
+at the document that stores them (spec §8.2.4), so the protection of the
+referenced content does not ride on the wiring transaction's flow stamp, and
+joining the probed slot's label into that stamp would only spread it over
+every other path the wiring transaction wrote.
 `forEachFlowObservation` skips a marked probe alongside a trace-covered one,
 so such a read consumes nothing; a marked read that materializes content is
 unaffected and keeps consuming its ordinary labels.
 
-The measurement that forced this: at the strict dials with server execution
-on, `packages/patterns/integration/cfc-render-policy-demo.test.ts` lost each
-sub-piece's entire user interface to the §8.10.6 display ceiling. The
-transaction that wired the two sub-patterns up probed the sigil interior of
-the document holding the confidential health cell's reference, consumed the
-`origin:"link"` entry there, and the §8.12.5 route-2 declaration then wrote
-that clause at the ROOT of four documents at once — the sub-piece result
-projections among them, so the ceiling denied their `$UI` whole. Four such
-declarations per failing run before the skip, none after.
+A wiring transaction that consumed the `origin: "link"` entry of a
+confidential reference would carry that clause into every result projection
+it rewrote. A derived stamp at a sub-piece result's root covers its `$UI`, so
+§8.10.6's display ceiling would deny the whole interface. Excluding the
+runtime's reference-only wiring probes prevents that propagation; content
+reads remain labeled.
 
 The list coordinators are the case this could have under-tainted. `map`,
 `filter` and `flatMap` mark the presence probe and the slot-identity diffs
@@ -337,17 +348,21 @@ over their prior slots, and each of the three then differs in what it reads
 outside that scope. `filter` reads every predicate result there, and `flatMap`
 reads every child result there, so membership and content in those two still
 depend on reads that taint. `map` reads no element value anywhere: it
-republishes references, so the link-origin entry at each output slot is the
-whole of an element's protection in its output.
+republishes references, so what protects an element in its output is the
+element's own label, at the element.
 
-That entry is what makes the exclusion sound, and it does not come from any
-read. `list.set(members)` writes a link per member, and the link write mints
-the source document's own label at the slot the link lands in, so a reader
-reaching an element through the container consumes it there.
+That is what makes the exclusion sound, and it does not come from any read.
+`list.set(members)` writes a link per member, and the slot the link lands in
+stores the reference's own label and nothing of the member's (spec §8.12.8),
+so a reader reaching an element through the container dereferences the slot
+and consumes the element's label where it is stored.
 `cfc-template-population.test.ts` measures that over a labeled element, beside
 the case that measures the marked probe adding nothing on top;
 `cfc-reference-identity-reads.test.ts` measures the same route for a wiring
-read that carries one reference onward.
+read that carries one reference onward, and that after an unmarked probe at the
+same position, which adds the holder's pointer label to the writing attempt's
+join, the slot still stores nothing of the source and the dereference still
+reaches the source's label.
 
 ## 7. Observation ceiling (LLM path) and render
 
@@ -374,12 +389,25 @@ instead of the flow join:
   everything that resolves at the slot, whatever its class, wildcard
   templates included (spec §18.6.2 `referenceLabel`), as one class-less entry
   at the view's root. That holds for `resolveAsCell()`, a lazy read's hop, a
-  query-result proxy, and every link an eager schema read crosses. A rebase
-  keeps a class-less ancestor entry, so every position reached through the
-  link carries them, as spec §4.6.3 and §8.2.4 require, where the slot's own
-  `followRef` entry is dropped below the target. An eager schema read carries
-  nothing else from the slot. The other paths also keep the slot's own
-  entries, integrity included, and the labels stored below the slot.
+  query-result proxy, and every link an eager schema read crosses. Eager
+  materialization also journals the pointer observation and its dereference
+  trace at each crossing. The transaction's flow join therefore consumes the
+  reference restrictions even when the returned primitive carries no label
+  view. A rebase keeps a class-less ancestor entry, so every position reached
+  through the link carries them, as spec §4.6.3 and §8.2.4 require, where the
+  slot's own `followRef` entry is dropped below the target. No path carries anything
+  else from the slot: the handle's view is confidentiality alone, since the
+  slot's integrity endorses the selection the slot holds and not a copy of
+  the handle (spec §3.7.2), and the labels of the document the handle names
+  are read from that document when the handle is followed
+  (`cfcAcquisitionViewForDereferenceTraces` in `cfc/label-view-state.ts`). A
+  slot stores nothing below itself: a link write persists the reference's own
+  label at the slot (spec §8.12.8), and the labels of what the link reaches
+  are read at the target. A cell's stored label view (`cfcLabelViewForCell`
+  and its fail-closed forms) reads them there too: it follows the links the
+  cell's path lands on or crosses, and joins the labels its own document
+  stores at the path with the reference restrictions of each slot followed in
+  another document and the labels of the document holding the value.
 
 That precision win is what pays for the epic on the LLM/agent surface.
 

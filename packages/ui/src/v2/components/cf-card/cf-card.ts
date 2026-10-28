@@ -1,5 +1,6 @@
-import { css, html } from "lit";
+import { css, html, unsafeCSS } from "lit";
 import { BaseElement } from "../../core/base-element.ts";
+import { surfaceRecipesCSS } from "../../styles/variables.ts";
 
 /**
  * CFCard - Content container with support for header, content, and footer sections
@@ -26,6 +27,7 @@ import { BaseElement } from "../../core/base-element.ts";
 export class CFCard extends BaseElement {
   static override styles = css`
     :host {
+      ${unsafeCSS(surfaceRecipesCSS)};
       --cf-card-border-radius: var(
         --cf-surface-plain-border-radius,
         var(--cf-theme-border-radius, 0.5rem)
@@ -44,7 +46,10 @@ export class CFCard extends BaseElement {
       --cf-card-spacing-tight: var(--cf-theme-spacing-tight, 0.25rem);
       --cf-card-spacing-loose: var(--cf-card-padding, 1rem);
       --cf-card-color-border: var(--cf-theme-color-border, hsl(0, 0%, 89%));
-      --cf-card-color-surface: var(--cf-theme-color-surface, hsl(0, 0%, 100%));
+      --cf-card-color-surface: var(
+        --cf-surface-plain-background,
+        var(--cf-theme-color-surface, hsl(0, 0%, 100%))
+      );
       --cf-card-color-text: var(--cf-theme-color-text, hsl(0, 0%, 9%));
       --cf-card-color-hover-surface: var(
         --cf-theme-color-surface-hover,
@@ -58,10 +63,7 @@ export class CFCard extends BaseElement {
         --cf-theme-color-text-muted,
         hsl(0, 0%, 45%)
       );
-      --cf-card-surface-background: var(
-        --cf-surface-plain-background,
-        var(--cf-card-color-surface, hsl(0, 0%, 100%))
-      );
+      --cf-card-surface-background: var(--cf-card-color-surface);
       --cf-card-background: var(--cf-card-surface-background);
       --cf-card-backdrop-blur: 0px;
 

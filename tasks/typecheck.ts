@@ -23,6 +23,7 @@ import { readWorkspaceMembers } from "./workspace-tests.ts";
 const DIRS = [
   ".claude/scripts",
   "docs",
+  "packages/agent-runner",
   "packages/api",
   "packages/cf-harness",
   "packages/cli",
@@ -62,7 +63,9 @@ const DIRS = [
   "packages/patterns/system",
   "packages/patterns/test",
   "packages/patterns/tools",
+  "packages/patterns/topics/tools",
   "packages/patterns/weekly-calendar",
+  "packages/pattern-index",
   "packages/piece",
   "packages/pure-json",
   "packages/runner",
@@ -194,6 +197,15 @@ export const UNCHECKED_TREES: readonly UncheckedTree[] = [
     because: "the transformer's fixture corpus, exempt for the reason the " +
       "generator's is: inputs and expected outputs that are data for the " +
       "tests beside them, not modules the repository builds.",
+  },
+  {
+    tree: "packages/runner/test/fixtures/compile-cache-corpus",
+    because: "the compile-cache version's corpus: frozen copies of pattern " +
+      "sources that a build compiles through the runtime harness, under " +
+      "the classic-`h` JSX runtime patterns compile under, to hash what the " +
+      "compiler emits. They are data for that build step rather than " +
+      "modules the repository builds, and they stand as they were copied " +
+      "rather than as the tree now authors them.",
   },
   {
     tree: "packages/static/assets/types",
@@ -372,7 +384,7 @@ interface GraphModule {
  * graph is read from the working tree alone, and a module Deno cannot parse
  * contributes no imports of its own.
  */
-function localImporters(
+export function localImporters(
   root: string,
   files: readonly string[],
 ): Map<string, string[]> {

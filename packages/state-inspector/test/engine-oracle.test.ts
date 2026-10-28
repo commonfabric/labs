@@ -10,6 +10,7 @@
 // See docs/specs/memory-v2/09-invariants.md, INV-1.
 
 import { assertEquals, assertThrows } from "@std/assert";
+import { toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
 import {
   applyCommit,
@@ -30,7 +31,7 @@ const CAROL = { sessionId: "s-carol", principal: "did:key:zCarol" };
 // Seq 1: seed doc. Seq 2: Bob's valid read-modify-write of the title.
 const seedContendedStore = async () => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
-  const engine = await open({ url: new URL(`file://${path}`) });
+  const engine = await open({ url: toFileUrl(path) });
 
   applyCommit(engine, {
     ...ALICE,

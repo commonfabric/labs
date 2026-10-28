@@ -122,6 +122,8 @@ describe("CFC runtime stats", () => {
       stagedReferenceCacheHits: 0,
       flowTemplateEntriesMinted: 0,
       flowTemplateContainers: 0,
+      inputReadViewsBuilt: 0,
+      inputReadViewsReused: 0,
       cfcPreparedTx: 0,
       cfcPrepareRejects: 0,
       cfcDigestInvalidations: 0,
@@ -271,6 +273,9 @@ describe("CFC runtime stats", () => {
       stagedReferenceCacheHits: 0,
       flowTemplateEntriesMinted: 0,
       flowTemplateContainers: 0,
+      // One view built per prepared transaction's single target.
+      inputReadViewsBuilt: 3,
+      inputReadViewsReused: 0,
       cfcPreparedTx: 3,
       cfcPrepareRejects: 1,
       cfcDigestInvalidations: 1,

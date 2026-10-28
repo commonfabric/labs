@@ -6,6 +6,7 @@
 // binding a cell to any other column throws (enforced by the write builtin),
 // and a non-cell bound to a link column throws here.
 
+import { portableSnapshotId } from "../../data-uri.ts";
 import type { JSONSchema } from "../../builder/types.ts";
 import type { Runtime } from "../../runtime.ts";
 import type { Cell } from "../../cell.ts";
@@ -39,7 +40,7 @@ export function encodeCfLinkValue(value: unknown): string {
       "_cf_link columns store cell references only; got a non-cell value",
     );
   }
-  return encodeCellToSigilString(cell);
+  return encodeCellToSigilString(cell, portableSnapshotId);
 }
 
 /**

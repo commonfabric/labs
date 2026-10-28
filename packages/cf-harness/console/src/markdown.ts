@@ -37,7 +37,7 @@ const MAX_FOUND_CHARS = 120;
  * `found` as one line the reader can see all of: each control character, line
  * or paragraph separator, and direction mark spelled as an escape.
  */
-const visibleFound = (found: string): string =>
+export const visibleFound = (found: string): string =>
   found.replace(
     /[\p{Cc}\p{Zl}\p{Zp}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu,
     (character) =>
@@ -46,12 +46,12 @@ const visibleFound = (found: string): string =>
         : `\\u{${(character.codePointAt(0) ?? 0).toString(16).toUpperCase()}}`,
   );
 
-/** `text` cut to {@link MAX_FOUND_CHARS} characters. */
-const cutFound = (text: string): string => {
+/** `text` cut to `limit` characters, never inside one. */
+export const cutFound = (text: string, limit = MAX_FOUND_CHARS): string => {
   const characters = Array.from(text);
-  return characters.length <= MAX_FOUND_CHARS
+  return characters.length <= limit
     ? text
-    : `${characters.slice(0, MAX_FOUND_CHARS).join("")}…`;
+    : `${characters.slice(0, limit).join("")}…`;
 };
 
 /**
@@ -80,22 +80,43 @@ const foundChip = (found: string): TemplateResult => {
 };
 
 /**
+ * `text` split at each token `pattern` matches: the text between tokens
+ * through `plain`, and each token through `marked`, or left in the text where
+ * `marked` returns `undefined`.
+ */
+export const splitAtTokens = <T>(
+  text: string,
+  pattern: RegExp,
+  plain: (text: string) => T,
+  marked: (token: string) => T | undefined,
+): T[] => {
+  const parts: T[] = [];
+  let from = 0;
+  for (const match of text.matchAll(new RegExp(pattern))) {
+    const part = marked(match[0]);
+    if (part === undefined) continue;
+    parts.push(plain(text.slice(from, match.index)), part);
+    from = match.index + match[0].length;
+  }
+  parts.push(plain(text.slice(from)));
+  return parts;
+};
+
+/**
  * `text`, with each return referent the context reveals shown as the string
  * it stands for, marked as something an agent found rather than something the
  * answer's author wrote.
  */
-const revealing = (text: string, context: Context): unknown[] => {
-  const parts: unknown[] = [];
-  let from = 0;
-  for (const match of text.matchAll(new RegExp(REFERENT_TOKEN_PATTERN))) {
-    if (!Object.hasOwn(context.revealed, match[0])) continue;
-    parts.push(text.slice(from, match.index));
-    parts.push(foundChip(context.revealed[match[0]]));
-    from = match.index + match[0].length;
-  }
-  parts.push(text.slice(from));
-  return parts;
-};
+const revealing = (text: string, context: Context): unknown[] =>
+  splitAtTokens<unknown>(
+    text,
+    REFERENT_TOKEN_PATTERN,
+    (plain) => plain,
+    (token) =>
+      Object.hasOwn(context.revealed, token)
+        ? foundChip(context.revealed[token])
+        : undefined,
+  );
 
 /**
  * Plain `text`, with each return referent `revealed` names shown as the

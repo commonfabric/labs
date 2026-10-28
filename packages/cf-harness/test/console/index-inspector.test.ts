@@ -1,3 +1,8 @@
+import type {
+  PatternIndexEvent,
+  PatternIndexListedPattern,
+  PatternIndexSearchResult,
+} from "@commonfabric/pattern-index/client";
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
@@ -9,11 +14,6 @@ import {
   searchRequestOf,
   truncateId,
 } from "../../console/index-inspector.ts";
-import type {
-  PatternIndexEvent,
-  PatternIndexListedPattern,
-  PatternIndexSearchResult,
-} from "../../src/pattern-index/client.ts";
 
 const pattern = (
   patternId: string,

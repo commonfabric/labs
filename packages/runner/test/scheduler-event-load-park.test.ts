@@ -8,6 +8,7 @@ import type {
   MemorySpace,
 } from "../src/storage/interface.ts";
 import { ReplicaLoadFailureError } from "../src/storage/interface.ts";
+import { transactionFailureMessage } from "../src/storage/transaction-errors.ts";
 import { toMemorySpaceAddress } from "../src/link-utils.ts";
 import type { RuntimeTelemetryEvent } from "../src/telemetry.ts";
 import {
@@ -23,6 +24,9 @@ type TransactError = {
   permanentEvidence?: true;
   aclRevision?: number;
 };
+
+/** The address the storage manager reports a pending load under. */
+type MemoryAddress = { space: string; scope: string; id: string };
 
 function rejectNextTransact(
   runtime: SchedulerTestRuntime["runtime"],
@@ -128,6 +132,55 @@ describe("event dispatch parks on in-flight closure loads", () => {
       return original(keys);
     };
     return observed.promise;
+  }
+
+  // Reports one load of each of `docs` as in flight, at generation 1, to
+  // every preflight. `parked` resolves once a park waits on any of them, and
+  // each load settles only through its own `fail()`.
+  function holdLoadsInFlight(
+    ...docs: { getAsNormalizedFullLink(): MemoryAddress }[]
+  ): {
+    parked: Promise<void>;
+    loads: { key: string; fail(reason: unknown): void }[];
+  } {
+    const parked = Promise.withResolvers<void>();
+    const held = docs.map((doc) => {
+      const link = doc.getAsNormalizedFullLink();
+      return {
+        address: { space: link.space, scope: link.scope, id: link.id },
+        key: `${link.space}/${link.scope}/${link.id}`,
+        load: Promise.withResolvers<void>(),
+      };
+    });
+    const manager = env.runtime.storageManager as unknown as {
+      pendingLoadAddresses(): readonly MemoryAddress[];
+      pendingLoadGeneration(key: string): number | undefined;
+      loadsSettled(keys: readonly string[]): Promise<void>;
+    };
+    manager.pendingLoadAddresses = () => held.map((each) => each.address);
+    manager.pendingLoadGeneration = (candidate) =>
+      held.some((each) => each.key === candidate) ? 1 : undefined;
+    manager.loadsSettled = (keys) => {
+      parked.resolve();
+      return Promise.all(
+        held.filter((each) => keys.includes(each.key)).map((each) =>
+          each.load.promise
+        ),
+      ).then(() => {});
+    };
+    return {
+      parked: parked.promise,
+      loads: held.map((each) => ({ key: each.key, fail: each.load.reject })),
+    };
+  }
+
+  /** An `authorization`-class failure of the load of the document at `key`. */
+  function authorizationFailure(key: string): ReplicaLoadFailureError {
+    return new ReplicaLoadFailureError({
+      failureClass: "authorization",
+      permanentEvidence: false,
+      recoveryEpoch: `load-key:${key}`,
+    }, new Error("memory session revoked: unauthorized"));
   }
 
   it("parks the head event until the closure's load completes, then dispatches once", async () => {
@@ -307,11 +360,151 @@ describe("event dispatch parks on in-flight closure loads", () => {
     expect(callbackRuns).toBe(1);
   });
 
+  it("dispatches once when a required load fails authorization, as it does with no load in flight", async () => {
+    // The principal lost `READ` on a document the closure reads. Waiting
+    // cannot make it readable, and with no load in flight the handler runs
+    // and reads it as absent, so a load that happens to be in flight when the
+    // event reaches the head must not decide the event differently.
+
+    const { runtime, tx } = env;
+    const coldDoc = runtime.getCell<string>(
+      space,
+      "load-park-authorization-cold",
+      undefined,
+    );
+    const eventCell = runtime.getCell<number>(
+      space,
+      "load-park-authorization-event",
+      undefined,
+    );
+    await tx.commit().settled;
+    env.tx = runtime.edit();
+
+    let handlerRuns = 0;
+    let seen: string | undefined = "unread";
+    let callbackRuns = 0;
+    let callbackStatus: string | undefined;
+    const handler: EventHandler = (handlerTx) => {
+      handlerRuns++;
+      seen = coldDoc.withTx(handlerTx).get();
+    };
+    runtime.scheduler.addEventHandler(
+      handler,
+      eventCell.getAsNormalizedFullLink(),
+      (depTx) => coldDoc.withTx(depTx).get(),
+    );
+
+    const { parked, loads: [load] } = holdLoadsInFlight(coldDoc);
+
+    runtime.scheduler.queueEvent(
+      eventCell.getAsNormalizedFullLink(),
+      1,
+      true,
+      (commitTx) => {
+        callbackRuns++;
+        callbackStatus = commitTx.status().status;
+      },
+    );
+    await parked;
+    expect(handlerRuns).toBe(0);
+
+    load.fail(authorizationFailure(load.key));
+    await runtime.idle();
+    expect(handlerRuns).toBe(1);
+    expect(seen).toBeUndefined();
+    expect(callbackRuns).toBe(1);
+    expect(callbackStatus).toBe("done");
+    await runtime.idle();
+    expect(handlerRuns).toBe(1);
+    expect(callbackRuns).toBe(1);
+  });
+
+  it("drops once when one required load fails authorization and another fails otherwise", async () => {
+    // The authorization failure arrives first. The other document may yet
+    // hold what the closure reads, so the event drops as it does for any
+    // failure but an authorization one, and the drop names that other
+    // failure: the authorization one alone would not have dropped it.
+
+    const { runtime, tx } = env;
+    const unreadableDoc = runtime.getCell<string>(
+      space,
+      "load-park-mixed-unreadable",
+      undefined,
+    );
+    const unreachableDoc = runtime.getCell<string>(
+      space,
+      "load-park-mixed-unreachable",
+      undefined,
+    );
+    const eventCell = runtime.getCell<number>(
+      space,
+      "load-park-mixed-event",
+      undefined,
+    );
+    await tx.commit().settled;
+    env.tx = runtime.edit();
+
+    let handlerRuns = 0;
+    let callbackRuns = 0;
+    let callbackStatus: string | undefined;
+    let callbackReason: string | undefined;
+    const handler: EventHandler = () => {
+      handlerRuns++;
+    };
+    runtime.scheduler.addEventHandler(
+      handler,
+      eventCell.getAsNormalizedFullLink(),
+      (depTx) => [
+        unreadableDoc.withTx(depTx).get(),
+        unreachableDoc.withTx(depTx).get(),
+      ],
+    );
+    const { parked, loads: [unreadable, unreachable] } = holdLoadsInFlight(
+      unreadableDoc,
+      unreachableDoc,
+    );
+
+    runtime.scheduler.queueEvent(
+      eventCell.getAsNormalizedFullLink(),
+      1,
+      true,
+      (commitTx) => {
+        callbackRuns++;
+        const status = commitTx.status();
+        callbackStatus = status.status;
+        callbackReason = status.status === "error"
+          ? transactionFailureMessage(status.error)
+          : undefined;
+      },
+    );
+    await parked;
+    expect(handlerRuns).toBe(0);
+
+    unreadable.fail(authorizationFailure(unreadable.key));
+    unreachable.fail(
+      new ReplicaLoadFailureError({
+        failureClass: "connection",
+        permanentEvidence: false,
+        recoveryEpoch: `load-key:${unreachable.key}`,
+      }, new Error("memory client closed")),
+    );
+    await runtime.idle();
+    expect(handlerRuns).toBe(0);
+    expect(callbackRuns).toBe(1);
+    expect(callbackStatus).toBe("error");
+    expect(callbackReason).toContain("memory client closed");
+    expect(callbackReason).not.toContain("unauthorized");
+    expect(callbackReason).toContain(unreachable.key);
+    await runtime.idle();
+    expect(callbackRuns).toBe(1);
+  });
+
   it("a SERVED event's load-park failure reaches the drain as a load-park DEFERRAL, not a drop", async () => {
     // The SERVED counterpart of the test above, and the reason the two
     // arms differ (verification-coverage.md's OW45 residue member): a
     // client event has no durable entry, so its load-park failure has
-    // nowhere to be re-delivered from and keeps the terminal drop. A
+    // nowhere to be re-delivered from and keeps the terminal drop, an
+    // `authorization`-class failure aside (tested above). A
     // SERVED event's entry IS durable, so the same failure must reach the
     // drain as a DEFERRAL — no consequence sealed, the entry left pending
     // for a later drain. events.md §5's T3 predicate is "no runnable
@@ -412,6 +605,178 @@ describe("event dispatch parks on in-flight closure loads", () => {
     }]);
     await runtime.idle();
     expect(outcomes.length, "settled exactly once").toBe(1);
+  });
+
+  it("defers a SERVED event whose required load fails authorization, as for any other failure class", async () => {
+    // Only a client event, which has no durable entry to re-drain, dispatches
+    // past an `authorization`-class failure. A served event's entry stays
+    // pending for a later drain, as the test above pins for a revoked
+    // session.
+
+    const { runtime, tx } = env;
+    const coldDoc = runtime.getCell<string>(
+      space,
+      "load-park-served-authorization-cold",
+      undefined,
+    );
+    const eventCell = runtime.getCell<number>(
+      space,
+      "load-park-served-authorization-event",
+      undefined,
+    );
+    await tx.commit().settled;
+    env.tx = runtime.edit();
+
+    let handlerRuns = 0;
+    const handler: EventHandler = () => {
+      handlerRuns++;
+    };
+    runtime.scheduler.addEventHandler(
+      handler,
+      eventCell.getAsNormalizedFullLink(),
+      (depTx) => coldDoc.withTx(depTx).get(),
+    );
+    const { parked, loads: [load] } = holdLoadsInFlight(coldDoc);
+
+    const outcomes: unknown[] = [];
+    runtime.scheduler.queueEvent(
+      eventCell.getAsNormalizedFullLink(),
+      1,
+      true,
+      undefined,
+      false,
+      {
+        served: {
+          streamEntry: { sidecarId: "of:stream-events:pin", index: 0, seq: 1 },
+          onFailure: (outcome) => outcomes.push(outcome),
+        },
+      },
+    );
+    await parked;
+    expect(handlerRuns).toBe(0);
+
+    load.fail(authorizationFailure(load.key));
+    await runtime.idle();
+    expect(handlerRuns).toBe(0);
+    expect(outcomes).toEqual([{
+      kind: "deferred",
+      cause: "load-park",
+      role: "failed-head",
+      failure: {
+        failureClass: "authorization",
+        permanentEvidence: false,
+        recoveryEpoch: `load-key:${load.key}`,
+      },
+    }]);
+  });
+
+  it("drops once when a required load rejects with no reason", async () => {
+    // A rejection that carries no error is still a failed load, not an
+    // authorization one, so the client event drops rather than dispatching
+    // past it.
+
+    const { runtime, tx } = env;
+    const coldDoc = runtime.getCell<string>(
+      space,
+      "load-park-reasonless-cold",
+      undefined,
+    );
+    const eventCell = runtime.getCell<number>(
+      space,
+      "load-park-reasonless-event",
+      undefined,
+    );
+    await tx.commit().settled;
+    env.tx = runtime.edit();
+
+    let handlerRuns = 0;
+    let callbackRuns = 0;
+    let callbackStatus: string | undefined;
+    const handler: EventHandler = () => {
+      handlerRuns++;
+    };
+    runtime.scheduler.addEventHandler(
+      handler,
+      eventCell.getAsNormalizedFullLink(),
+      (depTx) => coldDoc.withTx(depTx).get(),
+    );
+    const { parked, loads: [load] } = holdLoadsInFlight(coldDoc);
+
+    runtime.scheduler.queueEvent(
+      eventCell.getAsNormalizedFullLink(),
+      1,
+      true,
+      (commitTx) => {
+        callbackRuns++;
+        callbackStatus = commitTx.status().status;
+      },
+    );
+    await parked;
+    expect(handlerRuns).toBe(0);
+
+    load.fail(undefined);
+    await runtime.idle();
+    expect(handlerRuns).toBe(0);
+    expect(callbackRuns).toBe(1);
+    expect(callbackStatus).toBe("error");
+  });
+
+  it("defers a SERVED event whose required load rejects with no reason", async () => {
+    const { runtime, tx } = env;
+    const coldDoc = runtime.getCell<string>(
+      space,
+      "load-park-served-reasonless-cold",
+      undefined,
+    );
+    const eventCell = runtime.getCell<number>(
+      space,
+      "load-park-served-reasonless-event",
+      undefined,
+    );
+    await tx.commit().settled;
+    env.tx = runtime.edit();
+
+    let handlerRuns = 0;
+    const handler: EventHandler = () => {
+      handlerRuns++;
+    };
+    runtime.scheduler.addEventHandler(
+      handler,
+      eventCell.getAsNormalizedFullLink(),
+      (depTx) => coldDoc.withTx(depTx).get(),
+    );
+    const { parked, loads: [load] } = holdLoadsInFlight(coldDoc);
+
+    const outcomes: unknown[] = [];
+    runtime.scheduler.queueEvent(
+      eventCell.getAsNormalizedFullLink(),
+      1,
+      true,
+      undefined,
+      false,
+      {
+        served: {
+          streamEntry: { sidecarId: "of:stream-events:pin", index: 0, seq: 1 },
+          onFailure: (outcome) => outcomes.push(outcome),
+        },
+      },
+    );
+    await parked;
+    expect(handlerRuns).toBe(0);
+
+    load.fail(undefined);
+    await runtime.idle();
+    expect(handlerRuns).toBe(0);
+    expect(outcomes).toEqual([{
+      kind: "deferred",
+      cause: "load-park",
+      role: "failed-head",
+      failure: {
+        failureClass: "unknown",
+        recoveryEpoch: "untyped",
+        permanentEvidence: false,
+      },
+    }]);
   });
 
   it("the barrier's exclusions: the same-space durable sibling defers, while another space's entry and a streamEntry-less LT1 copy are left alone", async () => {

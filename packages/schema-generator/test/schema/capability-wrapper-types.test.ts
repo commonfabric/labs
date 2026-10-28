@@ -215,6 +215,75 @@ describe("Schema: Capability wrapper types", () => {
     });
   });
 
+  describe("array item hints over a union holding an empty-array default", () => {
+    /** The schema of `X.items`, hinted to hold no item schema. */
+    async function hinted(itemsType: string): Promise<Record<string, any>> {
+      const code = `
+      interface X {
+        items: ${itemsType};
+      }
+    `;
+      const { checker, sourceFile } = await createTestProgram(code);
+      const symbol = checker.getSymbolsInScope(
+        sourceFile,
+        ts.SymbolFlags.Interface,
+      ).find((candidate) => candidate.name === "X");
+      if (!symbol) throw new Error("Interface X not found");
+      const schemaHints = new WeakMap<ts.Node, { items?: unknown }>();
+      schemaHints.set(findInterfaceMemberTypeNode(sourceFile, "X", "items"), {
+        items: false,
+      });
+      const result = asObjectSchema(
+        new SchemaGenerator().generateSchema(
+          checker.getDeclaredTypeOfSymbol(symbol),
+          checker,
+          undefined,
+          undefined,
+          schemaHints,
+        ),
+      );
+      return result.properties?.items as Record<string, any>;
+    }
+
+    it("reads the element's wrapper from the union's one array member", async () => {
+      for (
+        const itemsType of [
+          "Writable<ComparableCell<{ name: string }>[] | Default<[]>>",
+          "Writable<Array<ComparableCell<{ name: string }>> | Default<[]>>",
+          // The `never[]` arm an expanded empty-array default leaves holds no
+          // element, and is skipped.
+          "Writable<never[] | ComparableCell<{ name: string }>[] | Default<[]>>",
+        ]
+      ) {
+        expect((await hinted(itemsType)).items).toEqual({
+          type: "unknown",
+          asCell: ["comparable"],
+        });
+      }
+    });
+
+    it("gives the element no wrapper where the union holds more than one array member", async () => {
+      expect(
+        (await hinted(
+          "Writable<ComparableCell<{ name: string }>[] | ReadonlyCell<number>[] | Default<[]>>",
+        )).items,
+      ).toEqual({ type: "unknown" });
+    });
+
+    it("gives no wrapper where the type holds no array", async () => {
+      for (
+        const itemsType of [
+          "Writable<string | Default<[]>>",
+          "Writable<string>",
+        ]
+      ) {
+        expect(JSON.stringify(await hinted(itemsType))).not.toContain(
+          "comparable",
+        );
+      }
+    });
+  });
+
   it("uses semantic wrapper kind when a non-synthetic type node disagrees", async () => {
     const code = `
       interface X {

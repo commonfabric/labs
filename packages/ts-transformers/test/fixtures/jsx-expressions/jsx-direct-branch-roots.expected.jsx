@@ -95,7 +95,7 @@ export default pattern((state) => ({
     } as const satisfies __cfHelpers.JSONSchema, {
         "enum": ["B", "C"]
     } as const satisfies __cfHelpers.JSONSchema, {
-        "enum": ["B", "C", "A"]
+        "enum": ["A", "B", "C"]
     } as const satisfies __cfHelpers.JSONSchema, state.key("primary"), "A", __cfHelpers.ifElse({
         type: "boolean"
     } as const satisfies __cfHelpers.JSONSchema, {

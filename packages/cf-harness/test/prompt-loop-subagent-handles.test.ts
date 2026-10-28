@@ -28,9 +28,14 @@ import {
   PATTERN_AUTHORING_GUIDANCE,
   PATTERN_COMPOSITION_GUIDANCE,
 } from "../src/pattern-authoring.ts";
+import {
+  PATTERN_SOURCE_GUIDANCE,
+  RUN_PATTERN_GUIDANCE,
+} from "../src/tool-guidance.ts";
 import { CAPABILITY_PROBE_SENTINEL } from "../src/diagnostics.ts";
 import {
   createHarnessHandleTable,
+  markHandleDescribed,
   mintAddressHandle,
   mintReferentHandle,
   resolveReferentToken,
@@ -46,10 +51,6 @@ import {
   type HarnessResearchRunSummary,
 } from "../src/contracts/research.ts";
 import type { HarnessRunState } from "../src/run-state.ts";
-import {
-  DEFAULT_SUBAGENT_MAX_MODEL_TURNS,
-  PATTERN_AUTHOR_SUBAGENT_MAX_MODEL_TURNS,
-} from "../src/contracts/subagent.ts";
 import type { HarnessHandleTable } from "../src/contracts/handle-table.ts";
 import { createPatternSkillsFixture } from "./support/pattern-skills-fixture.ts";
 import {
@@ -111,7 +112,7 @@ class FakeSandboxRuntime implements SandboxRuntime {
 
   describe(): SandboxRuntimeDescription {
     return {
-      kind: "docker-runsc-cfc",
+      kind: "runsc-cfc",
       defaultWorkingDirectory: this.defaultWorkingDirectory(),
       cfc: { runtimeRequested: true, workspaceMountPath: "/workspace" },
     };
@@ -510,6 +511,25 @@ describe("prompt-loop cross-agent address handles", () => {
     expect(child?.referents?.map((entry) => entry.token)).toEqual([
       first.token,
     ]);
+  });
+
+  it("hands a child a delegated handle undescribed, whatever the parent described", async () => {
+    // read_value admits a handle once the run reading it has looked at its
+    // shape, so a child looks for itself before it reads.
+    const runId = "run-subagent-described-handles";
+    const minted = await mintAddressHandle(
+      createHarnessHandleTable(runId),
+      "of:fid1:described-handle-test",
+    );
+    const parent = markHandleDescribed(minted.table, minted.token);
+
+    const child = seedSubagentHandleTable(parent, `${runId}.subagent.1`, {
+      goal: `Read ${minted.token}.`,
+      profile: "pattern-author",
+    });
+
+    expect(child?.entries.map((entry) => entry.token)).toEqual([minted.token]);
+    expect(child?.entries[0].described).toBeUndefined();
   });
 
   it("adopts referents discovered by a child and preserves seeded identities", async () => {
@@ -1393,6 +1413,8 @@ describe("prompt-loop cross-agent address handles", () => {
     );
     expect(childSystemPrompt).toContain(REVISION_VERIFICATION_GUIDANCE);
     expect(childSystemPrompt).toContain(PATTERN_AUTHORING_GUIDANCE);
+    // The query and import rules the run_pattern descriptor no longer states.
+    expect(childSystemPrompt).toContain(PATTERN_SOURCE_GUIDANCE);
     expect(childSystemPrompt).not.toContain(PATTERN_COMPOSITION_GUIDANCE);
     // The deliverable is a reference to something that ran, and source is
     // refused rather than merely discouraged: an encoding is still source.
@@ -1412,6 +1434,37 @@ describe("prompt-loop cross-agent address handles", () => {
     expect(childSystemPrompt).not.toContain(
       "Never return a computed(), lift, or other derived wrapper",
     );
+  });
+
+  it("tells a `default` child holding run_pattern how to write and read a pattern", async () => {
+    const requestBodies: unknown[] = [];
+    const loop = new CfHarnessPromptLoop({
+      apiKey: "test-key",
+      engine: new CfHarnessEngine({
+        sandboxRuntime: new FakeSandboxRuntime(),
+        runId: "run-subagent-default-run-pattern-prompt",
+        model: "gpt-5.4",
+        fabricSessionFactory: () =>
+          Promise.reject(new Error("unexpected fabric session")),
+      }),
+      allowedSubagentProfiles: ["default"],
+      fetchFn: scriptedFetch([
+        delegateCallTurn("call-delegate-default", { goal: "Count the rows." }),
+        finalTurn("Child done."),
+        finalTurn("Parent done."),
+      ], requestBodies),
+    });
+
+    await loop.runPrompt({
+      prompt: "Delegate the count.",
+      promptSlotBinding: directPromptSlotBinding,
+    });
+
+    expect(chatViewOfRequest(requestBodies[1]).tools).toContain("run_pattern");
+    const childSystemPrompt =
+      chatViewOfRequest(requestBodies[1]).messages[0]!.content ?? "";
+    expect(childSystemPrompt).toContain("Subagent profile: default");
+    expect(childSystemPrompt).toContain(RUN_PATTERN_GUIDANCE);
   });
 
   for (const enabled of [true, false]) {
@@ -1495,39 +1548,6 @@ describe("prompt-loop cross-agent address handles", () => {
       "Current user goal:\nTrack attendance with the existing pieces.",
     );
     expect(childUserPrompt).not.toContain("Use the described mail input.");
-  });
-
-  it("runs a `pattern-author` child on the profile's own turn budget rather than the run default", async () => {
-    const loop = new CfHarnessPromptLoop({
-      apiKey: "test-key",
-      engine: new CfHarnessEngine({
-        sandboxRuntime: new FakeSandboxRuntime(),
-        runId: "run-subagent-pattern-author-budget",
-        model: "gpt-5.4",
-      }),
-      allowedSubagentProfiles: ["pattern-author"],
-      fetchFn: scriptedFetch([
-        delegateCallTurn("call-delegate", {
-          goal: "Author a pattern.",
-          profile: "pattern-author",
-        }),
-        finalTurn(JSON.stringify({ ok: false, reason: "No fabric session." })),
-        finalTurn("Parent done."),
-      ]),
-    });
-
-    const result = await loop.runPrompt({
-      prompt: "Delegate the authoring.",
-      promptSlotBinding: directPromptSlotBinding,
-    });
-
-    const runRef = result.runState.subagentRuns?.[0];
-    expect(runRef?.manifest.maxModelTurns).toBe(
-      PATTERN_AUTHOR_SUBAGENT_MAX_MODEL_TURNS,
-    );
-    expect(runRef?.manifest.maxModelTurns).not.toBe(
-      DEFAULT_SUBAGENT_MAX_MODEL_TURNS,
-    );
   });
 
   it("returns the failure branch from a `pattern-author` child that cannot succeed, distinguishable from success by shape", async () => {

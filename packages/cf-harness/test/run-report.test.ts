@@ -189,3 +189,29 @@ Deno.test("run reports preserve aggregate and per-turn model usage", () => {
   assertEquals(report.promptCacheMode, "explicit");
   assertEquals(report.cacheAffinity, "custom");
 });
+
+Deno.test("run reports end the timeline with the run's terminal reason and drop undated entries", () => {
+  const report = createHarnessRunReport({
+    runState: {
+      runId: "ended-state",
+      status: "failed",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:02.000Z",
+      endedAt: "2026-01-01T00:00:02.000Z",
+      terminalReason: "setup_error",
+      cfcEnforcementMode: "disabled",
+      policyEvents: [],
+      policyDecisions: [],
+      toolOutputs: [],
+    },
+    model: "ended-model",
+    modelTurns: 0,
+    toolActivity: [],
+    timeline: [{ kind: "transcript_message", at: "" }],
+  });
+
+  assertEquals(
+    report.timeline.map((entry) => [entry.kind, entry.terminalReason]),
+    [["run_started", undefined], ["run_finished", "setup_error"]],
+  );
+});

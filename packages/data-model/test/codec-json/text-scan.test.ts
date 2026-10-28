@@ -1,7 +1,11 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { rootScalarOf, writesMoreMembersThan } from "@/codec-json/text-scan.ts";
+import {
+  membersWritten,
+  rootScalarOf,
+  writesMoreMembersThan,
+} from "@/codec-json/text-scan.ts";
 
 describe("text-scan", () => {
   describe("writesMoreMembersThan()", () => {
@@ -55,6 +59,15 @@ describe("text-scan", () => {
     it("returns `false` at the limit and `true` one below it", () => {
       expect(writesMoreMembersThan("[1, 2, 3]", 3)).toBe(false);
       expect(writesMoreMembersThan("[1, 2, 3]", 2)).toBe(true);
+    });
+  });
+
+  describe("membersWritten()", () => {
+    it("returns the count a parse would build, and stops one past a limit", () => {
+      const text = '{"a": 1, "b": [2, 3], "c": {}}';
+      expect(membersWritten(text)).toBe(countBuilt(JSON.parse(text)));
+      expect(membersWritten(text, 2)).toBe(3);
+      expect(membersWritten("[" + "0,".repeat(1_000_000), 10)).toBe(11);
     });
   });
 

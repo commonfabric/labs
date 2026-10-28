@@ -21,13 +21,24 @@ a room to anyone its space doesn't admit.
 - **All of the person's rooms** are the manager's `rooms`.
 - **The conversation with one person** is `openDirect` with that person's
   principal. A client MUST use it, and MUST NOT create a direct room any other
-  way. It is what keeps one person's conversation from splitting.
+  way. It is what keeps one person's conversation from splitting. A client
+  SHOULD name the person's profile too, when it can resolve one: the room is
+  then offered to them, a room it finds included, when that room was offered
+  them nothing.
 - **The conversations a container shows** are the adapters the container holds,
   each linking to a placement of one room, plus the container's own chat when it
-  is a shared space that has one.
-- **The people a client offers** when starting a conversation from a shared
+  is a social space that has one. A client that wants a `loom` root's own chat
+  sends the root's `ensureChatRoom`, which creates the room unless the root
+  names one, and reads it from `chatRoom`. A client MUST NOT create that room
+  itself: a piece created at the top level of the space is registered through
+  the root's `addPiece`, which shows it as a panel.
+- **The people a client offers** when starting a conversation from a social
   space are that space's participants, as claims, until it offers a member set
-  (see [shared spaces](README.md#shared-spaces)).
+  (see [social spaces](README.md#social-spaces)). When starting a group from
+  the person's chats, they are the manager's `people`, the profiles of those
+  the person shares a room with, by the principal each attests. A client names
+  each person picked there by profile, in `createGroup`'s `profiles`, so the
+  manager offers them the room.
 - **A notice** says the person has been admitted to a room. Its claim of who
   sent it is unauthenticated. Before sending `accept` for a direct room, a
   client MUST read the principal the room's `about.record` is labeled
@@ -38,6 +49,12 @@ a room to anyone its space doesn't admit.
   created the room from the same label. Whether to add the room to their list is
   the person's decision, so a client SHOULD accept only after showing them who
   created the room, and what it is.
+- **An offer** of a room needs nothing from a client. The person's host vets
+  it, registers the room in their Home's catalog, and accepts it on their
+  behalf, with `keepArchived`, so the room is in their `rooms`, and a direct
+  room is in their `direct` unless that already holds a room with its creator.
+  Either way their later `openDirect` with the creator finds the room `direct`
+  holds (see [`ChatManagerOutput`](ChatManagerOutput.md#offers)).
 
 ## Showing a room
 
@@ -45,9 +62,10 @@ A client that draws natively reads a placement's `chat` group, which the adapter
 a container holds re-exports, or a room's `room` group for a room shown outside
 any container, and drives the manager through its `chats` group. It reads a
 room's newest messages from its `messages`
-([`ChatMessageList`](ChatMessageList.md)), and the rest a window at a time,
-through windows it opens there, and never asks for the whole conversation at
-once. Both are in `[VIEWS]` (see [views a host draws
+([`ChatMessageList`](ChatMessageList.md)), and the rest from the room's stored
+messages themselves, each a cell, each naming the thread it joins in its
+`replyTo` (see [reading the rest](ChatMessageList.md#reading-the-rest)). Both are in `[VIEWS]`
+(see [views a host draws
 itself](../../common/components/COMPONENTS.md#views-a-host-draws-itself)). A
 client that renders VDOM shows the adapter's `[UI]`.
 
@@ -62,31 +80,58 @@ A client that draws natively MUST:
   change, so a changed name shows on everything the person sent. A profile that
   can't be read shows as a neutral placeholder (see
   [`ChatProfile.md`](ChatProfile.md#when-a-profile-cant-be-read)).
+- **Show the room's title as the room holds it**, from `about.title`, read when
+  drawn and redrawn when it changes, since any member can change it. A direct
+  room with no title is shown by its other member.
 - **Identify people by their profile links**, compared with `equals()`, and
-  never by display name.
+  never by display name. The reader's own is the room's `viewer.profile`, the
+  same link a message the reader sent holds as its `authorProfile`.
 - **Show members from the room's space.** A room's `participants` are its
   space's participants, as claims, plus its authors. None of them is proof that
-  someone can read the room.
+  someone can read the room. To name each of them, and to tell which one is the
+  reader, as when titling a direct room with the other person's name, a client
+  reads the room's `participantEntries`, which pairs each participant's profile
+  with the principal it attests. It is best effort and derived for each reader:
+  an entry whose profile the reader can't read holds no principal, and it is
+  not an access list.
 - **Offer any single emoji as a reaction** (see
   [`ChatReaction`](ChatReaction.md)), and show any that others have used, even
   ones the client wouldn't offer itself.
-- **Follow the room through `recentActivity`** (see
-  [`ChatRoomActivity`](ChatRoomActivity.md)) rather than by comparing the
-  messages with what it had. It catches up by `seq`, from the highest one it has
-  seen, and reopens its windows when the room's `recentActivityExpiredThrough`
-  shows it has missed entries (see [catching
-  up](ChatRoomActivity.md#catching-up)).
-- **Use each message's entity as its id**, or its `sentAt`, which is unique in
-  its room.
+- **Follow the room through its messages**: `messages.latest` and
+  `messages.count`, which stay current as messages arrive.
+- **Use each message's cell as its identity**, and never its `sentAt`, which
+  is not unique (see [times](ChatMessage.md#times)). Every field of the room
+  that names a message holds the link to that message's own cell, never to its
+  place in the room's messages, so two such links name the same message
+  exactly when they are equal, whether a client compares them as links or with
+  `equals()`.
 - **Show edits and deletions.** A client shows a deleted message as deleted,
-  never with text from its history, and marks a message with `editedAt` as
-  edited. Whether it shows `earlierVersions` is its choice.
+  and marks a message with `editedAt` as edited. A message keeps no earlier
+  text.
 - **Show obliterated messages as removed**, by whoever the tombstone is labeled
   with, and drop anything the client had kept of the message: its text, its
-  sender, its history, and its reactions.
+  sender, its attachments, and its reactions.
+- **Show attachments through their entries.** A client reads each attachment's
+  name, media type and blob through its link, under the reader's own access,
+  shows an entry removed from its store as removed, and fetches and shows the
+  bytes as FabriFile's clients do (see [showing a
+  file](../fabrifile/clients.md#showing-a-file)).
+- **Send a reply in the shape the room takes**, which its `replyShape` names
+  (see [`ChatRoomOutput`](ChatRoomOutput.md)). A client that sends to rooms
+  whose view offers no `replyShape` as well sends both shapes in one
+  `replyTo`: `thread` and `quotes`, and beside them `message`, holding the
+  message it `quotes` or, for a plain post in a thread, the `thread`'s root.
+  Each room stores the fields it reads and drops the others.
 - **Show replies where they say they are shown**: the main conversation and each
   thread, derived from `replyTo` as [`ChatReply`](ChatReply.md#the-two-views)
-  states, with flat threads.
+  states, with flat threads, each message showing the message it `quotes`. A
+  `"both"` message in the main conversation is shown as a message of its thread,
+  which a reader can open from it. A thread's title, reply count, latest reply
+  time and newest messages are the room's `messages.threads` (see
+  [`ChatThreadSummary`](ChatThreadSummary.md)).
+- **Say how many messages lost what they replied to**, while the room's
+  `messages.legacyReplies` isn't 0 (see
+  [`ChatReply`](ChatReply.md#a-reply-naming-neither)).
 - **Show a room it can't read as unreadable**, and nothing more (see
   [`FabriChatPlacement.md`](FabriChatPlacement.md#viewers-who-arent-members)).
 
@@ -108,40 +153,65 @@ gesture on the reviewed surface its policy names:
 | add a reaction | room | `sendReaction` | `ChatReactSurface` |
 | remove a reaction | room | `deleteReaction` | `ChatReactSurface` |
 | start a conversation | manager | `openDirect`, `createGroup` | `ChatStartSurface` |
+| add a member | room | `addMember` | `ChatAddMemberSurface` |
+| retitle a room | room | `setTitle` | `ChatRetitleSurface` |
+
+Which of editing, deleting, and obliterating the room takes on each message,
+from the reader, is in the room's `messageRights`, decided by the same rules the
+room admits those acts by. A client reads it there rather than deciding for
+itself, since the room refuses any other.
+
+A client that draws natively sends `addMember` through
+[the sanctioned issuing path](#the-sanctioned-issuing-path) on
+`ChatAddMemberSurface`, as it sends the acts above. It finds the stream in
+`[VIEWS]`, beside `canAdd`, which says whether the reader may add anyone, false
+in a direct room, and `addRequests`, where each add's outcome is recorded under
+its `requestId` (see
+[`ChatRoomOutput`](ChatRoomOutput.md#addmemberrequestid-string-target--value-string--profile-cellchatprofile)).
+An add that is done carries `delivery` once it is known how the person added
+was told of the room, and until then it is still being delivered: every add
+that is done gets one. Where it is `access-only`, nobody told them, and the
+client asks the adder to send them the room's link. A client offers people to add from its
+user's manager's `people`, and names a person picked there by their profile as
+well as their address, so the manager offers the room through that profile.
+To leave the people already in the room out of its add control, it reads the
+room's `participantPrincipals`, the principals the room's `participantEntries`
+hold. It is a best-effort set to leave out, not an access list: someone who
+has been added but has never joined isn't among them, and neither is a
+participant whose profile the reader can't read.
+
+A client that draws natively retitles a room the same way: it sends `setTitle`
+through the sanctioned issuing path on `ChatRetitleSurface`, finds it in
+`[VIEWS]` beside `titleRequests`, where each retitle's outcome is recorded under
+its `requestId`, and checks that the title has some text in it before sending
+(see
+[`ChatRoomOutput`](ChatRoomOutput.md#settitlerequestid-string-title-string)).
+Any member who can write in the room may retitle it, in a group room or a
+direct one, but not a space's own chat, which is shown by its space's name.
 
 A client sends to the room's own streams, never through a placement or an
 adapter.
 
-A room refuses a bad event silently, so a client MUST check each event against
-its stream's rules before sending it: a non-empty body, a reply whose target is
-in the same room and allowed for its `shownIn`, a single emoji (see
-[`ChatRoomOutput`](ChatRoomOutput.md#streams)). A client uses the room's
-`canSend` to tell the person when they can't send at all. A client mints a fresh
-`requestId` for each request, such as a random 128-bit value: it is what keeps
-two messages with the same text apart, and what lets the room ignore an event
-its runtime happens to deliver twice. It proposes a version's `sentAt` from its
-own clock when the person sends or edits.
+A room refuses a message act outside its stream's rules, and a send that
+awaits its handling is rejected with the room's reason. A client MUST still
+check each event against those rules before sending it: a
+non-empty body, or one or more attachments, entries of the store of the room's
+space and no more of them than the room's `maxAttachments`, a reply whose
+links fit its `shownIn`, whose `thread` is a message of the room in no thread,
+and whose `quotes` is a message of the room, not deleted, in its `thread` where
+it names one, a single emoji (see
+[`ChatRoomOutput`](ChatRoomOutput.md#streams)), and it offers an act only
+where `messageRights` and `canSend` allow it.
 
 A client never sends an event again on its own. It can't re-issue a trusted
 gesture from its code (rule 2 below), so an event it sent again would be
 refused, and getting an event to the room is its runtime's job: a runtime
-re-submits an event it can't tell was appended, with its trusted mark, and runs
-an appended event until the run completes.
-
-A send can go unacknowledged: the room's `recentActivity` holds no entry with
-the send's `requestId`, labeled with the sender (see
-[`ChatRoomActivity`](ChatRoomActivity.md)). An entry that does match links, as
-its `what`, the message the send produced. While the send's proposal is within
-the room's `proposedTimeMaxAgeNsec`, its runtime may still be delivering it.
-Once the proposal is older than that, the room would refuse it, so, unless the
-client has missed entries (see [catching up](ChatRoomActivity.md#catching-up)),
-it SHOULD show the message as not sent and offer the person an explicit retry. A
-retry is the person pressing Send again: a new gesture, sent as a new request,
-with a fresh `requestId` and a fresh proposal, and showing exactly what it
-sends, as rule 3 requires. The retry is the person's decision because it can
-duplicate the message, if the first send did arrive and the client never saw it.
-The same holds for an edit. A client that has missed entries can't tell whether
-the send arrived, and says so, rather than calling it not sent.
+re-submits an event it can't tell was appended, with its trusted mark and the
+same event id, which the room's runtime deduplicates, and runs an appended
+event once. A client sees a send take effect when the message appears in the
+room's `messages`, and sees it refused when the send is rejected, the room's
+reason with it. Nothing else is owed, and a client offers no retry of its
+own, since a person who sends again sends another message.
 
 A client that resumes an interrupted `createGroup` MUST resend it with its
 original `requestId`, and SHOULD do the same for `openDirect` (see
@@ -184,27 +254,36 @@ MUST behave as a trustworthy renderer:
 A client that can't meet all six MUST NOT issue trusted gestures. It can still
 read and show conversations, and it can host the room's `[UI]` for writing.
 
-### Prerequisite: a sanctioned issuing path
+### The sanctioned issuing path
 
-A native client needs a sanctioned way to hand the runtime a gesture it vouches
-for. The host embedding record already names this as the right posture: "a
-sanctioned headless issuance path, **not** a weakening of the in-runtime
-surface-origin defense". No such path exists yet. The runtime client's generic
-`cell:send` doesn't mark an event, and the in-repository precedents that do mark
-one (`packages/cli/lib/trusted-action-event.ts`, the pattern test runner's
-`trustedUi` steps) are not for embedding hosts. The path this design needs:
+A native client hands the runtime a gesture it vouches for through the
+sanctioned issuing path that [host
+embedding](../../features/host-embedding.md#10-native-reviewed-controls), §10,
+describes. A host running the runtime in its own process binds each control to
+its stream with `bindNativeUiControl()` from `@commonfabric/runner/native-ui`,
+naming the surface and action from the table above once, when it binds the
+control. The function that returns sends the control's payload with `native`
+provenance for that surface and action, carrying the renderer-trust mark. A
+host whose runtime runs in a worker sends the same act with
+`CellHandle.sendReviewed(event, { surface, action })`, which waits for the
+handler's run, and rejects with the reason when its write is refused. Either
+way, the runtime checks the surface and action against the write's policy as
+it checks a rendered gesture's provenance, and the mark reaches a served
+handler the way a rendered gesture's does. The generic `cell:send` marks
+nothing, and pattern code can reach neither path.
 
-- It is available only to the host, never to pattern code that the runtime runs.
-- It takes the surface and action with the event, and the runtime checks them
-  against the write's policy as it checks a rendered gesture's provenance.
-- It carries the mark to wherever the handler runs, as `rendererTrusted` already
-  does between runtimes.
+A native reviewed act counts wherever a trusted gesture does ([host
+embedding](../../features/host-embedding.md#11-policy-record-native-reviewed-acts-count-as-trusted-gestures),
+§11), a change to a space's access list included. So adding a member works the
+same way: `addMember` admits someone with `grantSpaceAccess()`, which admits a
+native reviewed act as it admits a gesture on the room's rendered add control.
 
 ## Delivering notices
 
 Until a pattern can deliver to a principal it shares no space with, delivering a
 notice is the client's job. A client finds the notices waiting in its user's
-manager and reports each one once it's delivered (see
+manager's `outgoingNotices`, which lists none whose recipient is already on the
+room's roster, and reports each one once it's delivered (see
 [`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). A client MUST
 deliver only the notice: which room, and who sent it. It MUST NOT deliver any of
 the room's contents.

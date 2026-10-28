@@ -59,6 +59,12 @@ describe("scheduler rejection taxonomy", () => {
       .toBe(true);
   });
 
+  it("classifies the server's oversized-message refusal as terminal", () => {
+    // The refusal is decided by what the frame stands for, so the same
+    // writes sent again are refused again.
+    expect(isTerminalRejection({ name: "MessageTooLargeError" })).toBe(true);
+  });
+
   it("does not classify retryable/transient rejections as terminal", () => {
     // A stale-read conflict CAN converge on retry; a generic transient error
     // keeps its bounded retry budget — neither is terminal.

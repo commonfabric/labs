@@ -1362,7 +1362,7 @@ client's only computational commit (spec §3.6).
 
 | milestone | derivations: run by / committed by | handlers: run by / the client commits | effects performed by | scoped state (user/session instances) | client posture |
 | --- | --- | --- | --- | --- | --- |
-| OFF baseline (the OFF arm of every phase until Phase 7) | every client runtime / the clients | the firing client / the handler's writes, as today | the client running the node (cross-tab mutex arbitrates — runtime-mapping.md N44) | cardinality 1 per runtime: each client derives ONLY its own instance, keyed by scope NAME (scopes.md §7 M2) — sound because the identity is the runtime's own | today, byte-for-byte; any OFF-arm diff is a phase-gate failure (testing.md §2). Commits carry a `class`, and every client commit is `authored` — `derived` is never claimed off the flag (protocol.md §1) |
+| OFF baseline (the OFF arm of every phase until Phase 7) | every client runtime / the clients | the firing client / the handler's writes, as today | the client running the node (cross-tab mutex arbitrates — runtime-mapping.md N44) | cardinality 1 per runtime: each client derives ONLY its own instance, keyed by scope NAME (scopes.md §7 M2) — sound because the identity is the runtime's own | client execution with all scopes synchronized by default; opt-in `localSessionDocuments` keeps session documents local, and mixed transactions retain rollback semantics. Every client commit is `authored` (protocol.md §1; EXPERIMENTAL_OPTIONS.md defines the OFF posture) |
 | Phase 1 stages A–G (flag OFF throughout) | as OFF baseline — the serving loop lands dark | as OFF baseline | as OFF baseline | as OFF baseline; stage E re-keys the vocabulary per instance WITHOUT changing OFF-arm behavior (at cardinality 1 the instance dimension is derivable from the session) | unchanged; a local ON flip CAS-storms against still-deriving clients — expected, local-only, never shipped (L14) |
 | Phase 2 ON — server derives, client does not (first ON milestone; L14) | SpaceServer / SpaceServer, derived-class under lease; the client runs the same graph as overlay speculation only | the firing client, authoritatively / its handler writes, still authored-class (F10 — protocol.md §1) | server only (stage G outbox); the client reads effectful nodes through to last committed results | SpaceServer derives EVERY demanded instance: per-instance run identity (M1, stage F), per-instance keys (M2, stage E), per-`scope_key` push filtering (M4, stage F) — all three MUST be in before this gate | loses exactly one right — committing derivations (by construction); still commits UI-binding writes and handler writes; receives only its own applicable `scope_key`s (protocol.md §3) |
 | Phase 3 ON — events down (D-v2-1) | unchanged | SpaceServer, reacting to the event commit / ONLY the event append; the local run is speculative echo, and the client handler-write commit path DELETES (events.md §7 — F10's interim ends) | unchanged | handler consequences land in the ACTING principal's instances, resolved from the server-stamped `firedAt` (scopes.md §5, protocol.md §2) | commits nothing but intent: event appends + UI-binding writes; echo via overlay |
@@ -1874,15 +1874,17 @@ Tasks:
       judges foreign rows against their own co-hosted engines
       (serving-loop.md §6 step 2, pinned at the helper —
       `selectForeignStaleInstances`).
-      Foreign SCOPED reads are FAIL-CLOSED refused at both ends — the
-      RULED 2026-08-13 delegated-scoped-read precondition: the
-      grant-scoped read design landed in protocol.md §2 (carried actor
-      + grant; resolution refuses, never envelope fallback), its
-      fail-closed interim is the producer-side provider refusal + the
-      admission-side unnamed-scoped refusal, and the read row gained
-      FP2's cross-engine widening + the per-process full-DR1-holder
+      Foreign SCOPED reads are admitted on the reading actor's own READ
+      grant in the target space's access list, the actor's entry or an
+      `ANYONE` entry granting READ or more, and refused otherwise —
+      protocol.md §2's grant-scoped read (RULED 2026-10-27): the
+      serving manager's gate asks `Server.foreignReadAuthorityFor`
+      before a named read leaves it, admission resolves the same grant
+      for a named root in a space whose lease the requester does not
+      hold and refuses an unnamed one, and the read row keeps FP2's
+      cross-engine widening + the per-process full-DR1-holder
       sharpening (`v2-explicit-read.test.ts`'s Phase-5 arms,
-      red-first).
+      `executor-cross-space.test.ts`'s grant-scoped read cases).
 - [ ] Per-reader clearance enforced where the read is served (sqlite row
       admissibility, CFC labels). (The per-reader memo/materialization
       machinery is builtins.md §2's landed base; cross-space label
@@ -2149,7 +2151,7 @@ Tasks:
       under ON, because receipts went unwritten under the flag by
       events.md §4/N26's exactly-once subsumption, which replaced only
       that role and left the receipt's result-carriage
-      (plainResultReceipts; `cf call`'s `.result`) with no substitute.
+      (plainResultReceipts; `cf piece call`'s `.result`) with no substitute.
       The owner RULED it 2026-08-29 — "yes, Serving-side receipt/result
       write, as that is indeed what i said before" — and the PR's
       result-carriage commit (its fourth) builds it: the served handler

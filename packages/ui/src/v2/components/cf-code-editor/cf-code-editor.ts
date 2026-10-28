@@ -93,7 +93,17 @@ import {
   MentionableArraySchema,
   MentionableSchema,
 } from "../../core/mentionable.ts";
+import {
+  type PresenceFailureCategory,
+  presenceFailureCategory,
+} from "../../core/presence-failure.ts";
 import { runtimeContext, spaceContext } from "../../runtime-context.ts";
+import {
+  type CFTheme,
+  cfThemeContext,
+  defaultTheme,
+  resolveColorScheme,
+} from "../theme-context.ts";
 import { type StoredFile, uploadFile } from "../../utils/file-cell-storage.ts";
 import { mentionIdFromCellId } from "../../utils/mention-id.ts";
 import {
@@ -138,8 +148,6 @@ import {
   CARET_FACET,
   caretFacetOf,
   participantFromRecord,
-  type PresenceFailureCategory,
-  presenceFailureCategory,
 } from "./presence-facets.ts";
 
 /** A unique noteId, so notes created from a mention do not collide. */
@@ -277,7 +285,10 @@ function readUnlessRefused(cell: { get(): unknown }): unknown {
  *   (e.g. "700px", "50rem"). Default: undefined
  * @attr {number} tabSize - Tab size (spaces shown for a tab, default: 2)
  * @attr {boolean} tabIndent - Indent on Tab key (default: true)
- * @attr {"light"|"dark"} theme - Editor theme mode; "dark" enables oneDark.
+ * @attr {"light"|"dark"} theme - "dark" paints the editor with oneDark's own
+ *   palette. "light", the default, paints it with the `--cf-theme-*` tokens and
+ *   follows the nearest `<cf-theme>`'s color scheme, light or dark; wrap the
+ *   editor in its own `<cf-theme>` to give it a different scheme from the page.
  * @attr {"code"|"prose"} mode - Editor mode; "prose" enables markdown prose editing.
  * @attr {CellHandle<string>} pattern - Optional pattern piece used for backlink context.
  * @attr {boolean} collaborative - Use Memory's operation protocol for concurrent editing.
@@ -401,6 +412,19 @@ export class CFCodeEditor extends BaseElement {
   @consume({ context: spaceContext, subscribe: true })
   @property({ attribute: false })
   accessor contextSpace: DID | undefined = undefined;
+
+  /**
+   * The nearest `<cf-theme>`'s theme. Its color scheme tells CodeMirror
+   * whether it sits on a dark page, so the caret, selection, tooltips and
+   * panels CodeMirror draws itself stay legible on the surface the
+   * `--cf-theme-*` tokens paint. With no `<cf-theme>` above, the tokens are
+   * whatever a host sets by CSS, else their light values, and this stays
+   * light either way: with the editor's `theme` not `"dark"`, CodeMirror's own
+   * chrome is light on a dark host that does not use `<cf-theme>`.
+   */
+  @consume({ context: cfThemeContext, subscribe: true })
+  @property({ attribute: false })
+  accessor ambientTheme: CFTheme = { ...defaultTheme, colorScheme: "light" };
 
   private _editorView: EditorView | undefined;
   private _lang = new Compartment();
@@ -1915,11 +1939,10 @@ export class CFCodeEditor extends BaseElement {
 
   private _updateEditorFromCellValue(): void {
     if (!this._editorView) return;
-    // While an operation field is active, its integrated stream is the editor
-    // authority. The ordinary Cell subscription still updates the bound value,
-    // but feeding that materialized echo back into CodeMirror would discard its
-    // unconfirmed local OT state.
-    if (this._collaboration?.active) return;
+    // The controller owns the view through the handoff to the ordinary Cell.
+    // Its confirmed operations can arrive ahead of that Cell's materialized
+    // echo, including while the stopped controller awaits a fresh Cell read.
+    if (this._collaboration !== undefined) return;
 
     const newValue = this.getValue();
     // Guard against undefined - can happen when cell isn't bound yet
@@ -2082,9 +2105,14 @@ export class CFCodeEditor extends BaseElement {
       });
       try {
         await previous.stop();
+        if (generation !== this._collaborationGeneration) return;
+        if (!this.collaborative) {
+          // Refresh the materialized channel before it takes over from the
+          // confirmed operation stream. Keep the view read-only until it lands.
+          await this._cellController.getCell()?.pull();
+        }
       } catch (cause) {
         if (generation !== this._collaborationGeneration) return;
-        previous.dispose();
         if (this._collaboration === previous) {
           this._collaboration = undefined;
         }
@@ -2168,13 +2196,13 @@ export class CFCodeEditor extends BaseElement {
 
     try {
       await controller.start();
+      // A superseded controller belongs to whatever superseded this setup: a
+      // later setup or the element's cleanup stops it, which confirms any
+      // edit it accepted once its first snapshot was installed.
       if (
         generation !== this._collaborationGeneration ||
         this._collaboration !== controller
-      ) {
-        controller.dispose();
-        return;
-      }
+      ) return;
       this._observeCollaboration(controller);
       view.dispatch({
         effects: this._readonly.reconfigure(
@@ -2189,12 +2217,14 @@ export class CFCodeEditor extends BaseElement {
         this._collaboration !== controller
       ) return;
       controller.dispose();
+      this._collaboration = undefined;
       const error = cause instanceof Error ? cause : new Error(String(cause));
       this._collaborationFailed = true;
       this._cleanupPresence();
       view.dispatch({
         effects: this._readonly.reconfigure(EditorState.readOnly.of(true)),
       });
+      this._updateEditorFromCellValue();
       this.emit("cf-error", { error, message: error.message });
     }
   }
@@ -2680,7 +2710,9 @@ export class CFCodeEditor extends BaseElement {
       this._editorView.dispatch({
         effects: this._readonly.reconfigure(
           EditorState.readOnly.of(
-            this.readonly || this._collaborationFailed,
+            this.readonly || this._collaborationFailed ||
+              (this._collaboration !== undefined &&
+                !this._collaboration.active),
           ),
         ),
       });
@@ -2756,11 +2788,12 @@ export class CFCodeEditor extends BaseElement {
     }
 
     // Update theme plugin
-    if (changedProperties.has("theme") && this._editorView) {
+    if (
+      (changedProperties.has("theme") ||
+        changedProperties.has("ambientTheme")) && this._editorView
+    ) {
       this._editorView.dispatch({
-        effects: this._themeComp.reconfigure(
-          this.theme === "dark" ? oneDark : [],
-        ),
+        effects: this._themeComp.reconfigure(this._themeExtension()),
       });
     }
 
@@ -2977,6 +3010,17 @@ export class CFCodeEditor extends BaseElement {
     ];
   }
 
+  /**
+   * oneDark when `theme` asks for it; otherwise CodeMirror's own light or
+   * dark base, picked by the ambient color scheme.
+   */
+  private _themeExtension(): Extension {
+    if (this.theme === "dark") return oneDark;
+    return EditorView.darkTheme.of(
+      resolveColorScheme(this.ambientTheme.colorScheme) === "dark",
+    );
+  }
+
   private _getModeExtension(): Extension {
     if (this.mode !== "prose") return [];
 
@@ -3056,8 +3100,8 @@ export class CFCodeEditor extends BaseElement {
             : [] as unknown as Extension;
         })(),
       ),
-      // Theme (dark -> oneDark)
-      this._themeComp.of(this.theme === "dark" ? oneDark : []),
+      // Theme (dark -> oneDark, else the ambient color scheme)
+      this._themeComp.of(this._themeExtension()),
       // Prose/code mode extensions
       this._modeComp.of(this._getModeExtension()),
       this._proseMarkdownComp.of(

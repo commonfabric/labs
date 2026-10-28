@@ -18,6 +18,11 @@
     // browser-hosted importers of "./ops" never load it.
     "./ops/bulk-local": "./src/ops/bulk-local.deno.ts",
     "./ops/bulk-retarget": "./src/ops/bulk-retarget.deno.ts",
-    "./schema-compatibility": "./src/schema-compatibility.ts"
+    "./declared-fields": "./src/declared-fields.ts",
+    "./refusal": "./src/refusal.ts",
+    "./schema-compatibility": "./src/schema-compatibility.ts",
+    "./verb-call": "./src/verb-call.ts",
+    "./verb-input": "./src/verb-input.ts",
+    "./verb-listing": "./src/verb-listing.ts"
   }
 }

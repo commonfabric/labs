@@ -217,6 +217,27 @@ its own, so a seed derived from it re-runs partway through the run and takes
 the pattern's state with it. See
 [Seeding Stored State](../workflows/pattern-testing.md#seeding-stored-state).
 
+## A Sub-Pattern Instance Is Known by Its Position
+
+A sub-pattern instance that no result key or `.for()` names, such as an inline
+`{ItemCard({ item })}`, is known by its position: the builder numbers such
+instances in the order it walks the pattern's inputs and then its result, `[UI]`
+tree included, and an instance's state belongs to its number. A sub-pattern
+added ahead of others moves each later one onto the number, and so the state, of
+the one before it. An update that does this to a deployed piece's own pattern is
+refused before its setup commits anything, wherever the piece's children show
+they have moved: the piece keeps its state and the pattern it ran before, and it
+does not start in a new session until it is pointed back at a pattern that is
+not refused. The check leaves out an instance that is its space's root, and one
+placed in a space of its own with `.inSpace()` that is managed there
+independently, so an update is not refused on account of either. Nor is a
+sub-pattern's own update checked when its parent's update brings it, nor a
+pattern a `computed` returns in place of another, so their instances can still
+move onto each other's state. Add a sub-pattern after every existing one in that
+order, or name it with a result key, so that it takes a number nothing held.
+Where an instance's own source also changed in the same update, the refusal
+cannot tell that it moved, and the instances can run on each other's state.
+
 ## See Also
 
 - [Pattern Primitives](./primitives.md) — the contract for embedding reusable

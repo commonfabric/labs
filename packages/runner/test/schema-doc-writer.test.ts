@@ -69,10 +69,7 @@ describe("schema-doc-writer", () => {
       path: [],
       schema,
     };
-    return createSigilLinkFromParsedLink(link, {
-      baseSpace: space,
-      includeSchema: true,
-    });
+    return createSigilLinkFromParsedLink(link, { includeSchema: true });
   };
 
   const payloadSchema = (sigil: unknown) =>
@@ -652,18 +649,21 @@ describe("schema-doc-writer", () => {
     expect((await tx.commit().settled).ok).toBeDefined();
   });
 
-  it("leaves inline-vintage links readable with the flag on", async () => {
-    // A hand-built inline link (the stored vintage) written under the flag:
-    // nothing on the read path consults the flag, so it reads as always.
+  it("stamps a reference on an inline link schema it writes, and delivers its closure", async () => {
+    // A value carrying an inline link schema — one copied out of a `data:`
+    // document, say — is stored in the reference form every created link
+    // carries, with the closure in the same commit, so a reader resolves it
+    // as it resolves any other reference.
+    const schema: JSONSchemaObj = {
+      type: "object",
+      properties: { vintageMarker: { type: "string" } },
+    };
     const inlineSigil = {
       "/": {
         "link@1": {
           id: "of:vintage-target",
           path: [],
-          schema: {
-            type: "object",
-            properties: { vintageMarker: { type: "string" } },
-          },
+          schema,
         },
       },
     };
@@ -688,16 +688,20 @@ describe("schema-doc-writer", () => {
       get: (uri: URI) => { value?: { vintage?: unknown } } | undefined;
     }).get("of:vintage-root" as URI);
     expect(stored).toBeDefined();
-    // The stored link is still the inline vintage: the schema rides in
-    // place, exactly as written — no reference was stamped on it, and no
-    // sync-frame rewrite replaced it.
     const storedSchema = payloadSchema(stored!.value?.vintage) as
       | JSONSchemaObj
       | undefined;
-    expect(storedSchema).toEqual({
-      type: "object",
-      properties: { vintageMarker: { type: "string" } },
+    const hash = internSchemaAsTaggedHashString(schema);
+    expect(storedSchema).toEqual({ $ref: `cid:${hash}` });
+    const closure = await provider.sync(`cid:${hash}` as URI, {
+      path: [],
+      schema: false,
     });
-    expect(storedSchema?.$ref).toBeUndefined();
+    expect(closure.error).toBeUndefined();
+    expect(
+      (provider as unknown as { get: (uri: URI) => unknown }).get(
+        `cid:${hash}` as URI,
+      ),
+    ).toBeDefined();
   });
 });

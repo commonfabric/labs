@@ -261,18 +261,6 @@ export default pattern((__cf_pattern_input) => {
                                 properties: {
                                     kind: {
                                         type: "string",
-                                        "enum": ["value"]
-                                    },
-                                    value: {
-                                        type: "string"
-                                    }
-                                },
-                                required: ["kind", "value"]
-                            }, {
-                                type: "object",
-                                properties: {
-                                    kind: {
-                                        type: "string",
                                         "enum": ["cell"]
                                     },
                                     cell: {
@@ -281,6 +269,18 @@ export default pattern((__cf_pattern_input) => {
                                     }
                                 },
                                 required: ["kind", "cell"]
+                            }, {
+                                type: "object",
+                                properties: {
+                                    kind: {
+                                        type: "string",
+                                        "enum": ["value"]
+                                    },
+                                    value: {
+                                        type: "string"
+                                    }
+                                },
+                                required: ["kind", "value"]
                             }]
                     }
                 },

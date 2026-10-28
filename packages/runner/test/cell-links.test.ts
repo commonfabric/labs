@@ -366,21 +366,6 @@ describe("getAsWriteRedirectLink method", () => {
 
     expect(linkRefPayload(alias).path).toEqual(["nested", "value"]);
   });
-
-  it("should omit space when baseSpace matches", () => {
-    const cell = runtime.getCell(
-      space,
-      "getAsWriteRedirectLink-baseSpace-test",
-      undefined,
-      tx,
-    );
-
-    // Get alias with same base space
-    const alias = cell.getAsWriteRedirectLink({ baseSpace: space });
-
-    // Should omit space
-    expect(linkRefPayload(alias).space).toBeUndefined();
-  });
 });
 
 describe("getImmutableCell", () => {

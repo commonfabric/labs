@@ -19,14 +19,17 @@ for one space, each with the principal its own open was authorized as.
 
 What ties a connection to a space is the runner. `RemoteSessionFactory`
 (`packages/runner/src/storage/v2-remote-session.ts`) works one of two ways,
-chosen by the `sharedMemoryConnection` flag:
+chosen by the `sharedMemoryConnection` flag (the toolshed's own runtime is the
+exception: it always dials one connection per space, see [routed Mode
+A](routed-mode-a.md) step 4):
 
 - **One connection per space**, the default. Each space gets a
   `WebSocketTransport` and a `Client` of its own, dialed at an address that
-  names the space in its `space` query parameter, and its `session.open` is
-  signed. Ending the session closes the connection. This is what a deployment
-  that routes a connection to a toolshed by the space its address names
-  requires.
+  names the space in its `space` query parameter. Authentication follows
+  the server's capabilities: `connection.auth` when advertised, otherwise
+  a signed `session.open`. Ending the session closes the connection. This is
+  what a deployment that routes a connection to a toolshed by the space its
+  address names requires.
 - **One connection per host**, under the flag. The factory dials one
   connection per storage address, with no space in it, and mounts the session
   of every space on that host on it. Each key the manager acts as authenticates
@@ -246,7 +249,7 @@ vectors are part of the phase 4 wire change.
 The toolshed verifies the client signature and signed fields itself. The
 invocation uses integral Unix seconds for `iat` and `exp`. At most 120 seconds
 of positive client clock skew is allowed against the attested receipt time;
-`exp` is no later than one hour after either `iat` or receipt, and a statement
+`exp` is no later than 600 s after either `iat` or receipt, and a statement
 presented at or after `exp` is refused. A challenge received at or after its
 expiry, or a proof for a different deployment, router, context, or link epoch,
 is refused. Clock skew cannot extend the challenge or lease past its recorded
@@ -260,7 +263,7 @@ from one router is refused on every other router's link.
 
 A statement's signed `exp` bounds both the window in which it may first reach a
 toolshed and the backend lease it creates. Forwarding it later never starts a
-new one-hour lease. The client renews before `exp` with a new challenge and
+new ten-minute lease. The client renews before `exp` with a new challenge and
 signature for the same context. A permanent refusal of renewal revokes the
 routed context and its sessions; a transient failure leaves authority only
 until the existing `exp`, when the toolshed closes or revokes its sessions.
@@ -353,15 +356,18 @@ sessions only after its transport closes.
 The router opens an upstream connection to a toolshed the first time the
 client names a space that toolshed owns.
 
-- `hello`: the router answers the client itself, advertising the flags that
-  every toolshed it routes to supports, and sends the client's own negotiated
-  flags upstream, unchanged, in the `hello` of each upstream connection. The
-  toolshed admits sessions by what that `hello` declares, so what it admits
-  is the client, not the router: a client without `stableExpressionResultIds`
-  is refused upstream exactly as it would be directly. A router that cannot
-  forward a client's flags exactly refuses the client. The router stage
-  requires the client's `connectionAuth` and routed-auth support; older clients
-  using signed `session.open` are not routed under this contract.
+- `hello`: the router advertises its frozen startup intersection of compatible
+  toolshed capabilities. Private `router.hello` carries the original client
+  flags unchanged in `memoryFlags` and their intersection with that public
+  snapshot in `negotiatedMemoryFlags`. The link agent signs both canonical
+  hashes in `rdb1`; the toolshed validates the exact selected descriptor and
+  uses it for the backend Memory `hello`. `router.ready` must acknowledge
+  `routerEncodingNegotiation: true` and echo that descriptor exactly. See
+  [the binding contract](routed-mode-a.md#canonical-binary-records) for field
+  order and rejection before ticket consumption or backend replacement. The
+  toolshed still refuses a client without `stableExpressionResultIds`. The
+  router stage requires the client's `connectionAuth` and routed-auth support;
+  older clients using signed `session.open` are not routed under this contract.
 - Authentication metadata: the client pins the router audience and deployment
   identifier from the router's `hello.ok`. With `connectionAuth`, it ignores
   the toolshed's `sessionOpen` metadata in a forwarded `session.open` response
@@ -380,7 +386,9 @@ client names a space that toolshed owns.
   client authenticated, forwarded as section 5.1 describes.
 - Request ids are unique within one client connection, so they pass through
   unchanged, and every server push names its session.
-- Compression is negotiated separately on each hop.
+- Encoding capabilities, including compression and sync tables, cannot exceed
+  the signed selection from the public handshake. Endpoint upgrades cannot
+  enable an unadvertised capability until the router restarts.
 - Ordering and back pressure are what they are today: each upstream connection
   serves one client.
 - Before `session/detached` exists, the router closes the client connection
@@ -408,7 +416,8 @@ The minimum constraints for that review are:
   collide across clients. The toolshed scopes each request ID by client ID;
   the multiplexer does not rewrite payloads.
 - **Per-connection flags move to the session.** `stableExpressionResultIds`
-  admission and the `syncSchemaTableV2` encoding are negotiated per connection.
+  admission and the `syncSchemaTableV2` and `syncLabelTableV1` encodings are
+  negotiated per connection.
   Clients of different builds share one upstream connection, so their
   negotiated flags move into each client's `session.open` admission state.
 - **Detach on client loss.** A client that disconnects from the router no
@@ -487,12 +496,18 @@ on a router link, never by a session.
 | 1 | Server: `connection.auth`, `connection.challenge`, `connection.release`, unsigned `session.open` naming a principal, per-space turns, `session.close`, presence membership per session | done |
 | 2 | Client: authentication per key, concurrent mounts, parallel restore, `session.close` on release | done |
 | 3 | Runner: one pooled client per host, session release in place of client close, behind `sharedMemoryConnection` | done |
-| 4 | Routed-auth negotiation and client signing context, the router link, forwarded statements and evidence, `connection/challenge`, the space field in the binary envelope | proposed |
-| 5 | Mode A router, link tickets, and space directory | proposed |
+| 4 | Routed-auth negotiation and client signing context, the router link, forwarded statements and evidence, `connection/challenge`, the space field in the binary envelope | implemented; public deployment gated |
+| 5 | Mode A router, link tickets, and space directory | implemented; public deployment gated |
 | 6 | `session/detached` for restoring one session without closing the client connection | proposed |
 
-The flag stays off in a deployment that routes a connection by the space its
-address names, until phase 5 gives it a router.
+The flag can stay off while Memory WebSockets move from the HTTP placement
+router to the Mode A router. Routed-capable clients and toolsheds must be
+installed first. Dedicated connections keep `?space=<DID>`, negotiate routed
+`connection.auth`, and can use only that space. After that path passes
+acceptance, enabling the flag uses the space-free URL and shares one socket
+across spaces. The URL parameter grants no space authority; directory admission,
+client signature verification, ownership, session bindings and ACLs apply in
+both topologies.
 
 ## 8. Open questions
 

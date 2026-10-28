@@ -20,7 +20,7 @@ import {
   IS_DEEP_FROZEN,
 } from "./fabric-bases/BaseFabricInstance.ts";
 import { BaseFabricPrimitive } from "./fabric-bases/BaseFabricPrimitive.ts";
-import { isValidFabricValue } from "@/types/validation.ts";
+import { isValidFabricValueWithCache } from "./types/validation.ts";
 
 /** Cache of confirmed deep-frozen objects. */
 const deepFrozenCache = new WeakSet<object>();
@@ -96,6 +96,14 @@ function isNecessarilyOrKnownDeepFrozen(value: unknown): boolean {
  * Handles circular references and sparse arrays.
  */
 export function isDeepFrozen(value: unknown): boolean {
+  return isDeepFrozenWithCache(value);
+}
+
+/** Memoizes failures only for the duration of a read-only conversion. */
+function isDeepFrozenWithCache(
+  value: unknown,
+  notDeepFrozen?: WeakSet<object>,
+): boolean {
   // Fast leaf paths first, so a primitive or already-cached value returns
   // without allocating the cycle-tracking set or the recursion closure below.
   if (isNecessarilyOrKnownDeepFrozen(value)) {
@@ -104,10 +112,13 @@ export function isDeepFrozen(value: unknown): boolean {
     return false;
   }
 
+  if (notDeepFrozen?.has(value as object)) return false;
+
   // We have non-leaf structure to walk. Allocate the cycle-tracking set and
   // build the recursion callback ONCE here, reusing the same closure at every
   // layer rather than allocating an equivalent `(v) => …` per descent.
   const inProgress = new Set<object>();
+  const confirmed = new Set<object>();
   const check = (value: unknown): boolean => {
     if (isNecessarilyOrKnownDeepFrozen(value)) {
       return true;
@@ -116,11 +127,12 @@ export function isDeepFrozen(value: unknown): boolean {
     }
 
     const obj = value as object;
+    if (notDeepFrozen?.has(obj)) return false;
 
     // If we're already checking `obj` higher in the recursion, treat it as
     // frozen for the rest of this check: it only ends up marked actually
     // deep-frozen if the outer check confirms.
-    if (inProgress.has(obj)) return true;
+    if (inProgress.has(obj) || confirmed.has(obj)) return true;
     inProgress.add(obj);
 
     let result = true;
@@ -158,12 +170,20 @@ export function isDeepFrozen(value: unknown): boolean {
 
     inProgress.delete(obj);
     if (result) {
-      addToDeepFrozenCache(obj);
+      confirmed.add(obj);
+    } else {
+      notDeepFrozen?.add(obj);
     }
     return result;
   };
 
-  return check(value);
+  const result = check(value);
+  // A cycle member depends on its ancestors' proofs. Publish those proofs
+  // together only after the entire reachable graph succeeds.
+  if (result) {
+    for (const object of confirmed) addToDeepFrozenCache(object);
+  }
+  return result;
 }
 
 /**
@@ -250,8 +270,10 @@ export function deepFreeze<T>(value: T): T {
       }
     } else {
       const o = value as Record<string, unknown>;
-      for (const key of Object.keys(o)) {
-        freeze(o[key]);
+      // `for...in` reads the keys off the object's own enumeration cache,
+      // where `Object.keys()` would copy them into an array per object.
+      for (const key in o) {
+        if (Object.hasOwn(o, key)) freeze(o[key]);
       }
     }
 
@@ -273,6 +295,18 @@ export function deepFreeze<T>(value: T): T {
 export function isValidDeepFrozenFabricValue(
   value: unknown,
 ): value is FabricValue {
+  return isValidDeepFrozenFabricValueWithCaches(value);
+}
+
+/**
+ * Checks frozen Fabric membership with operation-local failure caches. Callers
+ * must discard both caches before any input mutation.
+ */
+export function isValidDeepFrozenFabricValueWithCaches(
+  value: unknown,
+  notDeepFrozen?: WeakSet<object>,
+  invalidValues?: WeakSet<object>,
+): value is FabricValue {
   if (
     isObjectOrArray(value) &&
     deepFrozenFabricValueCache.has(value)
@@ -288,7 +322,8 @@ export function isValidDeepFrozenFabricValue(
   // hands this function at every level of its own recursion -- costs one
   // `Object.isFrozen()` call rather than a full membership walk of its
   // subtree.
-  const result = isDeepFrozen(value) && isValidFabricValue(value);
+  const result = isDeepFrozenWithCache(value, notDeepFrozen) &&
+    isValidFabricValueWithCache(value, invalidValues);
 
   if (result && isObjectOrArray(value)) {
     deepFrozenFabricValueCache.add(value);

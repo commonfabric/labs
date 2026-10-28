@@ -19,6 +19,7 @@ import {
   $onCellUpdate,
   CellHandle,
   type CellRef,
+  type PresenceRoomHandle,
   RequestType,
   type RuntimeClient,
 } from "@commonfabric/runtime-client";
@@ -217,6 +218,50 @@ describe("cf-iframe cell bridge", () => {
     ).toMatchObject({
       cell: { id: "of:context", path: ["items"] },
       values: [{ title: "B" }],
+    });
+  });
+
+  it("subscribes a keyed path of a resource with the resource's schema for the worker to narrow", () => {
+    const subscriptions: CellRef[] = [];
+    const stateSchema = {
+      type: "object",
+      properties: {
+        shapes: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: { x: { type: "number" }, y: { type: "number" } },
+          },
+        },
+      },
+    } as const;
+    const runtime = runtimeStub({
+      [$conn]: () => ({
+        request: () => Promise.resolve({}),
+        subscribe: (cell: CellHandle<unknown>) => {
+          subscriptions.push(cell.ref());
+          return Promise.resolve();
+        },
+        unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
+        signal: { aborted: false },
+      }),
+    });
+    const context = new CellHandle(runtime, {
+      ...ref,
+      schema: {
+        type: "object",
+        properties: { state: stateSchema },
+      },
+    }, { value: { state: { shapes: [] } } });
+    const state = createCellContextBridge(context).resources.state.cell!;
+
+    const cancel = state.key!("shapes").sink!(() => {}, () => {});
+    cancel();
+
+    expect(subscriptions.at(-1)).toMatchObject({
+      path: ["state", "shapes"],
+      keyedFrom: { depth: 1, schema: stateSchema },
     });
   });
 
@@ -627,6 +672,196 @@ describe("cf-iframe cell bridge", () => {
         type === RequestType.CellPull && cell.path.length > 0
       ),
     ).toBe(false);
+  });
+
+  describe("a context name of kind `presence`", () => {
+    // The context holds one field, `cursors`, which resolves to the cell
+    // `of:canvas`. `join` stands in for the runtime's presence rooms.
+    const presenceContext = (
+      join: (cell: CellHandle<unknown>) => Promise<PresenceRoomHandle>,
+    ): CellHandle<Record<string, unknown>> => {
+      const runtime = runtimeStub({
+        joinPresenceRoom: join,
+        [$conn]: () => ({
+          request: (request: { type: RequestType; cell: CellRef }) => {
+            if (request.type === RequestType.CellGet) {
+              return Promise.resolve({ value: { cursors: { shapes: [] } } });
+            }
+            if (request.type === RequestType.CellResolveAsCell) {
+              return Promise.resolve({
+                cell: {
+                  ...request.cell,
+                  id: request.cell.path.length === 0
+                    ? "of:resolved-context"
+                    : "of:canvas",
+                  path: [],
+                  schema: request.cell.path.length === 0
+                    ? { type: "object", properties: { cursors: true } }
+                    : true,
+                },
+              });
+            }
+            return Promise.resolve({});
+          },
+          subscribe: () => Promise.resolve(),
+          unsubscribe: () => Promise.resolve(),
+          peersOf: () => [],
+          signal: { aborted: false },
+        }),
+      });
+      return new CellHandle<Record<string, unknown>>(runtime, {
+        ...ref,
+        schema: true,
+      });
+    };
+
+    const room = (
+      overrides: Partial<PresenceRoomHandle> = {},
+    ): PresenceRoomHandle => ({
+      participantId: "self",
+      room: "room",
+      participants: [],
+      setName: () => {},
+      setFacet: () => {},
+      clearFacet: () => {},
+      setFocused: () => {},
+      subscribe: () => () => {},
+      leave: () => Promise.resolve(),
+      ...overrides,
+    });
+
+    it("grants the room of the resolved cell's field, and none of the cell's data", async () => {
+      const joined: CellRef[] = [];
+      const published: unknown[][] = [];
+      const context = presenceContext((cell) => {
+        joined.push(cell.ref());
+        return Promise.resolve(room({
+          participants: [{
+            participantId: "ada",
+            principal: "did:key:ada",
+            revision: 3,
+            name: "Ada",
+            facets: { pointer: { x: 1, y: 2 } },
+          }],
+          setName: (name) => void published.push(["setName", name]),
+          setFacet: (facet, value) =>
+            void published.push(["setFacet", facet, value]),
+        }));
+      });
+
+      const bridge = await resolveCellContextBridge(context, {
+        cursors: "presence",
+      });
+      const cursors = bridge.resources.cursors;
+      expect(cursors.kind).toBe("presence");
+      expect(cursors.cell).toBeUndefined();
+      expect(joined).toEqual([]);
+
+      const snapshot = Promise.withResolvers<unknown>();
+      const cancel = cursors.sink!(
+        (value) => snapshot.resolve(value),
+        () => {},
+      );
+      await expect(snapshot.promise).resolves.toEqual({
+        kind: "snapshot",
+        participantId: "self",
+        participants: [{
+          participantId: "ada",
+          name: "Ada",
+          facets: { pointer: { x: 1, y: 2 } },
+        }],
+      });
+      expect(joined.map(({ id, path }) => ({ id, path }))).toEqual([
+        { id: "of:canvas", path: [] },
+      ]);
+
+      cursors.methods!.setName("Grace");
+      cursors.methods!.setFacet({ facet: "pointer", value: { x: 3, y: 4 } });
+      expect(published).toEqual([
+        ["setName", "Grace"],
+        ["setFacet", "pointer", { x: 3, y: 4 }],
+      ]);
+      cancel();
+    });
+
+    it("grants a cell, not a room, for a schema that declares `presence` with no kind given", () => {
+      let joins = 0;
+      const runtime = runtimeStub({
+        joinPresenceRoom: () => {
+          joins++;
+          return Promise.reject(new Error("unreachable"));
+        },
+        [$conn]: () => ({
+          request: () => Promise.resolve({}),
+          subscribe: () => Promise.resolve(),
+          unsubscribe: () => Promise.resolve(),
+          peersOf: () => [],
+          signal: { aborted: false },
+        }),
+      });
+      // A stored schema is data, and nothing holds one to the cell kinds the
+      // builder's types allow.
+      const stored: unknown = {
+        type: "object",
+        properties: {
+          cursors: { type: "object", asCell: ["presence"] },
+        },
+      };
+      const context = new CellHandle<Record<string, unknown>>(runtime, {
+        ...ref,
+        schema: stored as CellRef["schema"],
+      }, { value: { cursors: {} } });
+
+      const cursors = createCellContextBridge(context).resources.cursors;
+
+      expect(cursors.kind).toBe("cell");
+      expect(cursors.sink).toBeUndefined();
+      expect(joins).toBe(0);
+    });
+
+    it("tells a guest a relay's refusal in the relay's words, and any other failure by category alone", async () => {
+      const failures = [
+        [
+          Object.assign(new Error("Presence record exceeds 8192 bytes"), {
+            name: "PresenceError",
+          }),
+          {
+            code: "presence-refused",
+            message: "Presence record exceeds 8192 bytes",
+          },
+        ],
+        [
+          Object.assign(new Error("memory server does not support presence"), {
+            name: "ProtocolError",
+          }),
+          {
+            code: "presence-unsupported",
+            message: "The host has no presence relay to join.",
+          },
+        ],
+        [
+          new Error("memory session did:key:secret closed"),
+          {
+            code: "presence-disconnected",
+            message: "The host lost the presence room.",
+          },
+        ],
+      ] as const;
+
+      for (const [cause, told] of failures) {
+        const context = presenceContext(() => Promise.reject(cause));
+        const bridge = await resolveCellContextBridge(context, {
+          cursors: "presence",
+        });
+        const failed = Promise.withResolvers<unknown>();
+        const cancel = bridge.resources.cursors.sink!(
+          () => {},
+          (error) => failed.resolve(error),
+        );
+        await expect(failed.promise).resolves.toEqual(told);
+        cancel();
+      }
+    });
   });
 
   it("reports a cell write the runtime refuses", async () => {
@@ -1050,6 +1285,47 @@ describe("cf-iframe cell bridge", () => {
     });
   });
 
+  it("sends a stream event that waits for the handler's run", async () => {
+    const requests: unknown[] = [];
+    const runtime = runtimeStub({
+      [$conn]: () => ({
+        request: (request: unknown) => {
+          requests.push(request);
+          return Promise.resolve({});
+        },
+        subscribe: () => Promise.resolve(),
+        unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
+        signal: { aborted: false },
+      }),
+    });
+    const context = new CellHandle(runtime, ref, {
+      value: {
+        count: 1,
+        database: { id: "db-1" },
+      },
+    });
+
+    const events = createCellContextBridge(context).resources.events;
+    await events.methods!.send({ type: "refresh" });
+
+    expect(requests).toEqual([{
+      type: RequestType.CellSend,
+      cell: {
+        ...ref,
+        path: ["events"],
+        schema: {
+          type: "object",
+          asCell: ["stream"],
+          description: "Application events",
+        },
+      },
+      event: { type: "refresh" },
+      awaitCommit: true,
+      awaitHandling: true,
+    }]);
+  });
+
   it("reports a stream event the runtime refuses", async () => {
     const runtime = runtimeStub({
       [$conn]: () => ({
@@ -1111,7 +1387,7 @@ describe("cf-iframe cell bridge", () => {
     const database = createCellContextBridge(context).resources.database;
     expect(database.kind).toBe("sqlite");
     let invalidations = 0;
-    const unsubscribe = database.sink!(() => invalidations++);
+    const unsubscribe = database.sink!(() => invalidations++, () => {});
     expect(subscribed?.ref().schema).toEqual({
       type: "object",
       additionalProperties: true,

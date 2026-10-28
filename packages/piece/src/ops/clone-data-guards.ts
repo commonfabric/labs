@@ -6,6 +6,7 @@
 
 import {
   type Cell,
+  hasInlineCellScheme,
   type IExtendedStorageTransaction,
 } from "@commonfabric/runner";
 import { cfcLabelViewForCellFailClosed } from "@commonfabric/runner/cfc";
@@ -93,7 +94,7 @@ export function pinCloneSnapshotCells(
   >();
   for (const cell of cells) {
     const link = cell.getAsNormalizedFullLink();
-    if (link.id.startsWith("data:")) continue;
+    if (hasInlineCellScheme(link.id)) continue;
     linksByEntity.set(cloneEntityKey(cell), link);
   }
   const links = [...linksByEntity.values()];

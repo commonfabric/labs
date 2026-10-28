@@ -6,6 +6,7 @@
  *     [fixture-name] [rounds]
  */
 
+import { fromFileUrl } from "@std/path";
 import { loadFixture, replayFixture } from "./replay.ts";
 
 const name = Deno.args[0] ?? "notebook-test";
@@ -17,7 +18,7 @@ const onlyInvocation = Deno.args[2] !== undefined
   : undefined;
 
 const fixture = await loadFixture(
-  new URL(`./fixtures/${name}.json.gz`, import.meta.url).pathname,
+  fromFileUrl(new URL(`./fixtures/${name}.json.gz`, import.meta.url)),
 );
 if (onlyInvocation !== undefined) {
   fixture.invocations = [fixture.invocations[onlyInvocation]];

@@ -19,7 +19,6 @@ import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,
   type PieceAddress,
-  resolveServerExecution,
 } from "./multi-runtime-harness.ts";
 
 const PROGRAM_PATH = join(
@@ -32,9 +31,6 @@ const ROOT_PATH = join(import.meta.dirname!, "..");
 
 /** The gesture a room's `grant` stream requires, as a members surface gives. */
 const CHANGE_ACCESS = { surface: "MembersSurface", action: "ChangeAccess" };
-
-/** Whether this run's harness serves handlers from a serving loop. */
-const SERVER_EXECUTION = resolveServerExecution();
 
 describe("space access across runtimes", () => {
   let harness: MultiRuntimeHarness;
@@ -71,7 +67,10 @@ describe("space access across runtimes", () => {
 
   /**
    * Has the owner grant the guest access to `room`, after checking that the
-   * guest is refused before the grant.
+   * guest is refused before the grant. The guest's runtime retains that
+   * refusal; with one connection per space the refused open closed the
+   * connection the server's `session/admissible` hint would ride, so it
+   * retries the space as its shell's Retry would.
    */
   async function grantGuest(room: PieceAddress): Promise<void> {
     await expect(guest.read(["title"], { piece: room })).rejects.toThrow(
@@ -84,6 +83,7 @@ describe("space access across runtimes", () => {
       { piece: room },
     );
     await harness.settle();
+    await guest.retrySpaceAccess(room.space);
   }
 
   it("throws on a non-member's read of a room in its own space", async () => {
@@ -94,11 +94,14 @@ describe("space access across runtimes", () => {
     await expect(guest.read(["title"], { piece: room })).rejects.toThrow(
       `lacks READ on space ${room.space}`,
     );
+    // Opening it again asks admission once more, and the unchanged ACL still
+    // refuses the guest.
+    await expect(guest.read(["title"], { piece: room })).rejects.toThrow(
+      `lacks READ on space ${room.space}`,
+    );
   });
 
-  it("returns a room to a member its owner granted", {
-    ignore: SERVER_EXECUTION,
-  }, async () => {
+  it("returns a room to a member its owner granted", async () => {
     const room = await createRoom("Granted");
     await grantGuest(room);
 
@@ -111,9 +114,7 @@ describe("space access across runtimes", () => {
     ]);
   });
 
-  it("throws on a read of a room after its owner revokes the reader", {
-    ignore: SERVER_EXECUTION,
-  }, async () => {
+  it("throws on a read of a room after its owner revokes the reader", async () => {
     // The guest's runtime already holds the room when the revoke lands, so
     // the read that follows has data to return and nothing of its own that
     // fails.
@@ -134,19 +135,5 @@ describe("space access across runtimes", () => {
     await expect(guest.read(["title"], { piece: room })).rejects.toThrow(
       "memory session revoked: unauthorized",
     );
-  });
-
-  it("drops a served grant's handler writes", {
-    ignore: !SERVER_EXECUTION,
-  }, async () => {
-    // `grantSpaceAccess()` throws on a serving runtime, and the throw drops
-    // the rest of the handler's run.
-    // TODO(danfuzz): Remove this case, and the other posture's `ignore`, once
-    // a served handler can change an access list.
-
-    const room = await createRoom("Served");
-    await grantGuest(room);
-
-    expect(await owner.read(["members"], { piece: room })).toEqual([]);
   });
 });

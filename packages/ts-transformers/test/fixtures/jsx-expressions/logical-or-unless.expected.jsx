@@ -67,12 +67,12 @@ export default pattern((_state) => {
             anyOf: [{
                     type: "number"
                 }, {
-                    $ref: "https://commonfabric.org/schemas/vnode.json"
+                    type: "object",
+                    properties: {}
                 }, {
                     $ref: "#/$defs/UIRenderable"
                 }, {
-                    type: "object",
-                    properties: {}
+                    $ref: "https://commonfabric.org/schemas/vnode.json"
                 }],
             $defs: {
                 UIRenderable: {

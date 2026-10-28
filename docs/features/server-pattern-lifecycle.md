@@ -41,13 +41,29 @@ closure the space already holds. A body naming both or neither fails validation.
 | verb          | body                                                                                                                     | receipt                                                                                                                                          |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `upload`      | `program`                                                                                                                | `{ pattern }` — the pointer the space now holds the program under                                                                                |
-| `instantiate` | `program` or `pattern`; optional `argument`, `repository`, `slug`, `force`, `register`, `start`, `requestKey`            | `{ pieceId, pattern, slug?, requestKey, registration: { status, error?, attempt?, terminal? } }`                                                 |
+| `instantiate` | `program` or `pattern`; optional `argument`, `repository`, `slug`, `force`, `register`, `start`, `requestKey`            | `{ pieceId, pattern, slug?, requestKey, registration: { status, error?, attempt?, terminal? }, timings? }`                                                 |
 | `setsrc`      | `piece`; `program` or `pattern`; optional `repository`, `dangerouslyAllowIncompatibleSchema`, `expectedPattern`, `start` | `{ pieceId, pattern, revisionId, seq, detachedOrigin }` — the accepted setup transaction's receipt, `seq` its position in the space's commit log |
 
 Once creation commits, a preparation or completion refusal returns the created
 receipt with failed registration and its retained request key. It makes no new
 authorized-write or terminal-delivery claim; the caller retries that same key
 after authority recovers.
+
+The `instantiate` receipt's `timings` lists, in the order they happened, the
+steps the serving side timed, each as `{ phase, ms }` in whole milliseconds. For
+every served verb the creation ran — `instantiate`, then `registration-prepare`
+and `registration-finish` when it registers — it records the writer check
+(`<verb>.authorize`), the serving side's session (`<verb>.session`), the wait
+for a cycle of the serving loop to take the verb (`<verb>.queue`), the verb's
+own run (`<verb>.run`), the wave commit after it (`<verb>.commit`), and the
+durability read (`<verb>.confirm`). `registration.delivery` is the wait for the
+registration event to take effect. The request's trace span carries the same
+durations as `cf.lifecycle.<phase>_ms` attributes, together with the request
+key as `cf.request_key` — the receipt's, which the server generates when the
+caller sends none, or for a refusal the caller's own — so a creation a caller
+reports by its key can be found among the traces. If a verb fails, its completed
+phases still reach the request span; phases never reached are absent. The
+failure keeps its refusal code and response status across the worker port.
 
 A refusal is a JSON body `{ error, code }`. `code` is stable and is what a
 client branches on; `error` is prose for a person.
@@ -249,7 +265,10 @@ handled, printing the retry key and created piece when available.
 `cf piece new --request-key <key>` resumes an uncertain creation or incomplete
 registration. The request is awaited without a wall-clock bound, since a
 creation the server is still committing lands whether or not the client waits;
-the bound the client keeps is on its own start.
+the bound the client keeps is on its own start. With `CF_CLI_TRACE_TIMINGS=1`,
+the command reports each step of the creation as a `newPiece.create.<step>`
+phase line, and each of the receipt's `timings` as
+`newPiece.create.server.<phase>`.
 
 `cf piece setsrc` resolves the program the same way and sends it with the
 piece's id; the receipt is the accepted setup transaction's. What the command
@@ -257,8 +276,10 @@ then does in its own process is what a client-side update does after its commit:
 it starts the piece it holds, which under the flag runs the graph as speculation
 while the serving loop serves the derived values, and reports that refresh's
 outcome beside the receipt — a failed refresh is a non-zero exit over a durable
-commit. A piece addressed at a scope keeps the client-side path, since the verb
-takes the piece's id alone.
+commit. The start waits for the commit of the started graph's setup writes,
+since a refused one retires the graph in the command's process, whatever the
+serving loop goes on serving; that refusal is a failed refresh too. A piece addressed at a scope keeps the
+client-side path, since the verb takes the piece's id alone.
 
 Another client of the piece controller, the browser shell, keeps the client-side
 shape. Moving it is its own change; the served operations and the route are what
@@ -280,6 +301,11 @@ it moves onto.
   opened afterwards; for `setsrc`, the successor's authority over the
   predecessor registered on the serving runtime and stored in the closure a
   later runtime reads.
+- `packages/piece/test/ops/pieces-controller.test.ts` — `startPiece()` given
+  `awaitSetupCommit` rejects when storage refuses the start's setup commit,
+  and a plain `startPiece()` resolves over the same refusal;
+  `packages/cli/test/piece.test.ts` checks that a served `setsrc` refreshes
+  the piece through that option.
 - `packages/toolshed/routes/pattern-lifecycle/` — the writer check against a
   real ACL document, the status each refusal maps to, and the middleware order
   in front of the handler.

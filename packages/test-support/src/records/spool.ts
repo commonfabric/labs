@@ -226,7 +226,7 @@ export async function readSpool(dir: string): Promise<SpoolContents> {
       if (line.length === 0) continue;
       const record = parseRecordLine(line);
       if (record === undefined) {
-        warnings.push(`dropped an unparsable line in ${name}`);
+        warnings.push(`dropped a line no reader accepts in ${name}`);
         continue;
       }
       records.push(record);

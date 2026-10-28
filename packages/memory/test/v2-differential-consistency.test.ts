@@ -42,6 +42,7 @@ import {
   emptyHistory,
   naiveAdmit,
   naiveApply,
+  naiveIdentityLayerBasis,
   naivePathsOverlap,
   naiveRecord,
   toNaiveOps,
@@ -450,14 +451,18 @@ const runSchedule = async (seed: number): Promise<ScheduleStats> => {
       // Own-session writes are skipped only when the read's array NAMES
       // them (the layers whose inclusion in the reader's view the array
       // attests); an own write the array does not name — out-of-order or
-      // omitted — counts like a foreign one. Legacy reads (no basisSeq)
-      // stay uncheckable here; their deviation is recorded against INV-1
-      // in 09-invariants.md.
+      // omitted — counts like a foreign one. A named layer accepted as an
+      // identity for the document moves the interval's start to its seq
+      // where the reader's view through it is the one the identity was
+      // proved against, as 09-invariants.md records under INV-1. Legacy reads
+      // (no basisSeq) stay uncheckable here; their deviation is recorded
+      // against INV-1 in 09-invariants.md.
       for (const rd of record.commit.reads.pending) {
         if (rd.basisSeq === undefined) continue;
         const named = Array.isArray(rd.localSeq) ? rd.localSeq : [rd.localSeq];
+        const from = naiveIdentityLayerBasis(history, record.sessionId, rd);
         for (const other of accepted) {
-          if (other.seq <= rd.basisSeq || other.seq >= record.seq) continue;
+          if (other.seq <= from || other.seq >= record.seq) continue;
           if (
             other.sessionId === record.sessionId &&
             named.includes(other.commit.localSeq)

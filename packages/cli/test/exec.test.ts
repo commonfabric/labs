@@ -2,11 +2,9 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { dirname, join } from "@std/path";
 import type { JSONSchema } from "@commonfabric/api";
-import {
-  CF_RUNTIME_ERROR_LOG,
-  undeclaredVerbFieldError,
-} from "../lib/callable.ts";
+import { CF_RUNTIME_ERROR_LOG } from "../lib/callable.ts";
 import { PieceController, PiecesController } from "@commonfabric/piece/ops";
+import { undeclaredVerbFieldError } from "@commonfabric/piece/verb-input";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import {
   type ExecCommandSpec,
@@ -25,7 +23,7 @@ import {
 import { writeMountState } from "../lib/fuse.ts";
 import type { SpaceConfig } from "../lib/piece.ts";
 import { externalizeSchema } from "../../runner/src/link-utils.ts";
-import { cf, relevantStderr, sendThroughStandIn } from "./utils.ts";
+import { argv, cf, relevantStderr, sendThroughStandIn } from "./utils.ts";
 import { createTransactionCommitReceipt } from "../../runner/src/storage/commit-receipt.ts";
 
 function makeSpec(
@@ -2015,7 +2013,7 @@ describe("exec command user-facing errors", () => {
 
   it("prints readable errors without a raw stack trace", async () => {
     const missingPath = join(tmpDir, "missing.handler");
-    const { code, stdout, stderr } = await cf(`exec ${missingPath}`);
+    const { code, stdout, stderr } = await cf(argv`exec ${missingPath}`);
 
     expect(code).toBe(1);
     expect(stdout).toEqual([]);

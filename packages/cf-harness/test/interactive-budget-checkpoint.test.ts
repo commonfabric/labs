@@ -1,4 +1,5 @@
 import { expect } from "@std/expect";
+import { join, toFileUrl } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 import { createToolOutputId } from "../src/contracts/tool-result.ts";
 import {
@@ -17,7 +18,7 @@ describe("Interactive budget checkpoints", () => {
     it(`restores only balanced research after ${completed} tool results and a provider failure`, async () => {
       const dir = await Deno.makeTempDir();
       let store = await openSqliteHarnessChatSessionStore({
-        url: new URL(`file://${dir}/chat.sqlite3`),
+        url: toFileUrl(join(dir, "chat.sqlite3")),
       });
       try {
         const service = new HarnessInteractiveChatService({
@@ -80,7 +81,7 @@ describe("Interactive budget checkpoints", () => {
         ).toBe("failed");
         store.close();
         store = await openSqliteHarnessChatSessionStore({
-          url: new URL(`file://${dir}/chat.sqlite3`),
+          url: toFileUrl(join(dir, "chat.sqlite3")),
         });
         let resumed: readonly HarnessTranscriptMessage[] = [];
         let confidentiality: readonly unknown[] = [];

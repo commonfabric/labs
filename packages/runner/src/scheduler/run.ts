@@ -17,14 +17,17 @@ import type {
   IMemorySpaceAddress,
 } from "../storage/interface.ts";
 import {
+  endLocalReadValidationStretch,
   localReadsReady,
   releaseLocalReadBasis,
   requireLocalReadCondition,
   usesLocalReads,
   validateLocalReadBasis,
+  validateLocalReadBasisForCommit,
 } from "../storage/local-read-policy.ts";
 import {
   isConflictRejection,
+  isPermanentAuthorizationRefusal,
   isPermanentRejection,
   isStorageTransactionInconsistent,
   isTerminalRejection,
@@ -35,6 +38,7 @@ import type {
   SchedulerActionInfo,
 } from "../telemetry.ts";
 import { reportDroppedCfcRejectedWrite } from "./cfc-rejection-report.ts";
+import type { EchoRun } from "./echo-breaker.ts";
 import {
   MAX_ACTION_RUN_TRACE_HISTORY,
   MAX_RETRIES_FOR_REACTIVE,
@@ -49,6 +53,7 @@ import {
   getSchedulerActionName,
   toActionRunTraceAddress,
 } from "./diagnostics.ts";
+import { refusedReadIn } from "./events.ts";
 import {
   dirtyFanOutKey,
   type FanOutInstance,
@@ -204,6 +209,15 @@ export function watchReactiveActionCommit(state: {
   readonly action: Action;
   readonly tx: IExtendedStorageTransaction;
   readonly log: ReactivityLog;
+
+  /**
+   * Whether the run's transaction was withdrawn before the commit for what it
+   * read: a document its runtime refuses by construction, or a scoped
+   * instance not yet produced. A retry cannot fare better; the run's reads
+   * are what run it again.
+   */
+  readonly withdrawn?: boolean;
+
   readonly retries: WeakMap<Action, number>;
   readonly offBudgetRetries: WeakMap<Action, number>;
   readonly pending: Set<Action>;
@@ -241,6 +255,13 @@ export function watchReactiveActionCommit(state: {
       return;
     }
 
+    if (state.withdrawn === true) {
+      state.retries.delete(state.action);
+      state.offBudgetRetries.delete(state.action);
+      abandonAction(state, error);
+      return;
+    }
+
     logger.info(
       "schedule-run-error",
       "Error committing transaction",
@@ -248,11 +269,24 @@ export function watchReactiveActionCommit(state: {
     );
 
     // Permanent (precondition) and terminal (deterministic commit-rule refusal)
-    // rejections end the retry sequence even when its registration is retired.
-    // A later input-triggered run gets a fresh budget for transient failures.
-    // A terminal refusal is a verdict on the action's output and reaches the
-    // error channel (§7.6); a permanent lost idempotency race stays quiet.
-    if (isPermanentRejection(error) || isTerminalRejection(error)) {
+    // rejections end the retry sequence even when its registration is retired,
+    // and so does a refusal for lack of a grant of a write the replica
+    // reverted. A later input-triggered run gets a fresh budget for transient
+    // failures. A terminal refusal is a verdict on the action's output and
+    // reaches the error channel (§7.6); a permanent lost idempotency race
+    // stays quiet, and so does a grant refusal, which is a verdict on the
+    // principal rather than on what it computed: the replica reports the
+    // refused write, and the run comes back when an input it did not write
+    // changes. A grant refusal of a transaction marked `derivedWrites` is one
+    // the replica kept as a local fold (03-commit-model.md §3.8.3), and it
+    // takes the bounded retry below: the re-run reads what was kept, has
+    // nothing to write, and re-creates what the list coordinators' rollback
+    // undid when the commit was refused.
+    if (
+      isPermanentRejection(error) || isTerminalRejection(error) ||
+      (isPermanentAuthorizationRefusal(error) &&
+        state.tx.tx.derivedWrites !== true)
+    ) {
       state.retries.delete(state.action);
       state.offBudgetRetries.delete(state.action);
       if (isTerminalRejection(error)) {
@@ -535,6 +569,30 @@ export interface SchedulerActionRunState {
   readonly queueExecution: () => void;
   readonly setExecutingAction: (action: Action, actionId: string) => void;
   readonly clearExecutingAction: () => void;
+
+  /**
+   * Captures a reactive run for the remote-echo breaker
+   * (docs/plans/scheduler-remote-echo-breaker.md §1), or returns `undefined`
+   * for a run nothing triggered. Called at commit kickoff, while the
+   * transaction's write details are still staged; a committed transaction no
+   * longer exposes them.
+   */
+  readonly captureRemoteEcho: (
+    tx: IExtendedStorageTransaction,
+    log: ReactivityLog,
+    invalidCauses: readonly IMemorySpaceAddress[] | undefined,
+  ) => EchoRun | undefined;
+
+  /**
+   * Classifies a successful reactive commit's run, captured at kickoff, and
+   * feeds it to the remote-echo breaker, which applies its verdict to the
+   * action's gate.
+   */
+  readonly observeRemoteEcho: (
+    action: Action,
+    actionId: string,
+    run: EchoRun,
+  ) => void;
 }
 
 export async function runSchedulerAction(
@@ -656,7 +714,10 @@ export async function runSchedulerAction(
     (tx.tx as { debugActionId?: string }).debugActionId = actionId;
     tx.tx.sourceAction = action;
     tx.tx.validateReactiveReads = true;
-    tx.tx.derivedWrites = true;
+    // The mark's one effect is the local fold of a write the space refuses
+    // (`IStorageTransaction.derivedWrites`), so the flag gating the fold
+    // decides whether the run carries it.
+    tx.tx.derivedWrites = state.runtime.experimental.localFold === true;
     // Server-execution v2 stage F (serving-loop.md §3d): a serving
     // runtime's installed stamper attaches the wave run context here —
     // the reactive-action choke point — so every scheduler-driven
@@ -1175,14 +1236,59 @@ function finalizeReactiveActionCommit(
   // outbox, before the async flush clears it): does this commit have
   // asynchronous post-commit work that `settled()` must wait on?
   let hasPostCommitEffects = false;
+  // The remote-echo breaker's view of this run, captured at kickoff while the
+  // transaction's write details are still staged — a committed transaction
+  // no longer exposes them — and classified once the commit has succeeded.
+  let echoRun: EchoRun | undefined;
+  // A served run that read a document this runtime does not admit read an
+  // absence that is not the document's state, so what it derived from that
+  // absence is no value of the derivation, and committing it would overwrite
+  // the instance a runtime that can read the document derives. Its writes are
+  // withdrawn rather than sealed. A refused read is refused the same way every
+  // time until the target's access list changes, so the run is not retried: it
+  // runs again when another of its inputs changes, and withdraws again while
+  // it still reads the document. A read whose actor's grant is still being
+  // asked for is withdrawn the same way; the read stays subscribed, so the
+  // run runs again when the admitted instance lands. Only a serving manager
+  // stands anywhere but admitted, so on any other runtime the transaction is
+  // not inspected at all.
+  //
+  // A served run that read a scoped instance the serving loop has not
+  // produced yet (`unproducedScopedInstance`) is withdrawn the same way, for
+  // the same reason: the absence it read is not that instance's state. Its
+  // read of the instance stays subscribed, so it runs again once the instance
+  // is produced.
+  const refused = state.runtime.storageManager.servingHomeSpace === undefined
+    ? undefined
+    : refusedReadIn(state.runtime.storageManager, args.tx.tx);
+  const unproduced = args.tx.tx.unproducedScopedInstance;
+  if (args.tx.status().status === "ready") {
+    if (refused !== undefined) {
+      args.tx.abort(
+        new Error(
+          refused.standing === "refused"
+            ? `served derivation read a refused document: ${refused.document}`
+            : "served derivation read a foreign scoped instance whose " +
+              `actor's grant is unresolved: ${refused.document}`,
+        ),
+      );
+    } else if (unproduced !== undefined) {
+      args.tx.abort(
+        new Error(
+          `served derivation read a scoped instance not yet produced: ${unproduced}`,
+        ),
+      );
+    }
+  }
   const commitPromise = startReactiveActionCommit({
     runtime: state.runtime,
     tx: args.tx,
   }, {
     beforeCommit: () => {
       log = txToReactivityLog(args.tx);
-      if (validateLocalReadBasis(args.tx) !== undefined) return;
+      if (validateLocalReadBasisForCommit(args.tx) !== undefined) return;
       warnOnWriteSurfaceViolations(state, args, log);
+      echoRun = state.captureRemoteEcho(args.tx, log, args.invalidCauses);
       hasPostCommitEffects = args.tx.hasPendingPostCommitEffects();
       if (args.fanOutRun !== undefined) {
         // The DISCOVERY half of stage B's ratchet (design §B3): the run's
@@ -1203,6 +1309,10 @@ function finalizeReactiveActionCommit(
       }
     },
   });
+  // The commit's own validations stood on the one just before it. A commit
+  // that handed nothing over can still have changed what that one proved,
+  // through its commit callbacks for one, so the check below makes its own.
+  endLocalReadValidationStretch();
   if (parkUnavailableRun(state, args)) return;
   if (!log) {
     throw new Error("scheduler action commit did not build a reactivity log");
@@ -1251,6 +1361,7 @@ function finalizeReactiveActionCommit(
     action: args.action,
     tx: args.tx,
     log: committedLog,
+    withdrawn: refused !== undefined || unproduced !== undefined,
     retries: state.retries,
     offBudgetRetries: state.offBudgetRetries,
     pending: state.pending,
@@ -1258,6 +1369,9 @@ function finalizeReactiveActionCommit(
     onSuccess: () => {
       if (args.succeeded && owner !== undefined) {
         owner.hasCommittedResult = true;
+      }
+      if (echoRun !== undefined) {
+        state.observeRemoteEcho(args.action, args.actionId, echoRun);
       }
       state.runtime.scheduler.noteViewActionCurrent(args.action);
     },

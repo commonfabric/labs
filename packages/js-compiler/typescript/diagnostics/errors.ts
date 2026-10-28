@@ -44,6 +44,46 @@ export interface ErrorDetails {
 }
 
 /**
+ * The authored text behind a compiler input, and how far its lines sit from
+ * the compiler input's. A caller that adds lines to a source before compiling
+ * it supplies these, so that a diagnostic names the line the author wrote and
+ * its frame quotes the author's text.
+ */
+export interface AuthoredSource {
+  readonly contents: string;
+  /** Added to a line of the compiler input to give the authored line. */
+  readonly lineOffset: number;
+}
+
+/** The authored source behind a compiler input, looked up by file name. */
+export type AuthoredSourceLookup = (
+  fileName: string,
+) => AuthoredSource | undefined;
+
+/**
+ * A line of a compiler input as the author sees it, with the text to quote
+ * around it. Only a line the shift carries over unchanged maps: a line the
+ * caller added, or one whose text it rewrote, keeps the compiler input's line
+ * and text, so a column always points into the text quoted with it.
+ */
+export function authoredLocation(
+  fileName: string,
+  line: number,
+  compilerSource: string,
+  lookup: AuthoredSourceLookup | undefined,
+): { line: number; source: string } {
+  const authored = lookup?.(fileName);
+  if (authored === undefined) return { line, source: compilerSource };
+  const authoredLine = line + authored.lineOffset;
+  const authoredText = authored.contents.split("\n")[authoredLine - 1];
+  const compilerText = compilerSource.split("\n")[line - 1];
+  if (authoredText === undefined || authoredText !== compilerText) {
+    return { line, source: compilerSource };
+  }
+  return { line: authoredLine, source: authored.contents };
+}
+
+/**
  * Represents a diagnostic from the Common Fabric transformer pipeline.
  * This mirrors TransformationDiagnostic from @commonfabric/ts-transformers.
  */
@@ -71,6 +111,7 @@ export class CompilationError {
   constructor(
     { diagnostic, source }: ErrorDetails,
     messageTransformer?: DiagnosticMessageTransformer,
+    authoredSource?: AuthoredSourceLookup,
   ) {
     const { file, start } = diagnostic;
     const { message, type } = this.#parseMessage(
@@ -88,8 +129,17 @@ export class CompilationError {
     if (file && start !== undefined) {
       const result = file.getLineAndCharacterOfPosition(start);
       // TypeScript uses 0-based positions
-      this.line = result.line + 1;
+      const location = authoredLocation(
+        file.fileName,
+        result.line + 1,
+        source ?? file.text,
+        authoredSource,
+      );
+      this.line = location.line;
       this.column = result.character + 1;
+      if (source !== undefined || authoredSource !== undefined) {
+        this.source = location.source;
+      }
     }
   }
 
@@ -152,9 +202,10 @@ export class CompilerError extends Error {
   constructor(
     errorDetails: ErrorDetails[],
     messageTransformer?: DiagnosticMessageTransformer,
+    authoredSource?: AuthoredSourceLookup,
   ) {
     const errors = errorDetails.map((d) =>
-      new CompilationError(d, messageTransformer)
+      new CompilationError(d, messageTransformer, authoredSource)
     );
     const message = errors.map((error) => error.displayInline()).join("\n");
     super(message);
@@ -181,14 +232,21 @@ export class CompilerError extends Error {
 export function formatTransformerDiagnostic(
   diagnostic: TransformerDiagnosticInfo,
   source: string,
+  authoredSource?: AuthoredSourceLookup,
 ): string {
   const prefix = diagnostic.severity === "error" ? "error" : "warning";
+  const location = authoredLocation(
+    diagnostic.fileName,
+    diagnostic.line,
+    source,
+    authoredSource,
+  );
   const header =
-    `${diagnostic.fileName}:${diagnostic.line}:${diagnostic.column} - ${prefix}: ${diagnostic.message}`;
+    `${diagnostic.fileName}:${location.line}:${diagnostic.column} - ${prefix}: ${diagnostic.message}`;
 
   const inline = renderInline({
-    source,
-    line: diagnostic.line,
+    source: location.source,
+    line: location.line,
     column: diagnostic.column,
     contextLines: 2,
   });
@@ -197,7 +255,9 @@ export function formatTransformerDiagnostic(
 }
 
 /**
- * Error thrown when the transformer pipeline reports errors.
+ * Error thrown when the transformer pipeline reports errors. Its message names
+ * authored lines where an {@link AuthoredSourceLookup} is supplied, while
+ * `diagnostics` keep the compiler input's coordinates.
  */
 export class TransformerError extends Error {
   override name = "TransformerError";
@@ -206,10 +266,11 @@ export class TransformerError extends Error {
   constructor(
     diagnostics: TransformerDiagnosticInfo[],
     sources: Map<string, string>,
+    authoredSource?: AuthoredSourceLookup,
   ) {
     const messages = diagnostics.map((d) => {
       const source = sources.get(d.fileName) ?? "";
-      return formatTransformerDiagnostic(d, source);
+      return formatTransformerDiagnostic(d, source, authoredSource);
     });
     super(messages.join("\n\n"));
     this.diagnostics = diagnostics;

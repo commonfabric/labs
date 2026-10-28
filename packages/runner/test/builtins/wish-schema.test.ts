@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { wishStateSchemaForResult } from "../../src/builtins/wish-schema.ts";
-import type { JSONSchema } from "../../src/builder/types.ts";
+import { type JSONSchema, UI } from "../../src/builder/types.ts";
 
 const stateProperties = (schema: JSONSchema | undefined) => {
   if (typeof schema !== "object") throw new Error("Expected wish state schema");
@@ -39,6 +39,13 @@ describe("wish state schema", () => {
     expect(properties.result).toEqual({
       anyOf: [{ type: "undefined" }, { asCell: ["cell"] }],
     });
+  });
+
+  it("declares the view as an opaque handle with no value shape", () => {
+    const properties = stateProperties(
+      wishStateSchemaForResult({ type: "object" }),
+    );
+    expect(properties[UI]).toEqual({ type: "unknown", asCell: ["opaque"] });
   });
 
   it("moves state scope to the container without losing referenced definitions", () => {

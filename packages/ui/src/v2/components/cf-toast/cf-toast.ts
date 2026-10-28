@@ -1,6 +1,7 @@
-import { css, html, nothing } from "lit";
+import { css, html, nothing, unsafeCSS } from "lit";
 import { BaseElement } from "../../core/base-element.ts";
 import type { StatusIntent } from "../theme-context.ts";
+import { surfaceRecipesCSS } from "../../styles/variables.ts";
 
 /**
  * CFToast - Floating ephemeral notification component
@@ -31,6 +32,7 @@ export class CFToast extends BaseElement {
   // deno-fmt-ignore
   static override styles = css`
     :host {
+      ${unsafeCSS(surfaceRecipesCSS)};
       --cf-toast-border-radius: var(
         --cf-surface-transient-border-radius,
         var(--cf-theme-border-radius, 0.5rem)

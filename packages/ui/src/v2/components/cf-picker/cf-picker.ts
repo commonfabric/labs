@@ -1,8 +1,9 @@
 import { numberSchema, pieceListSchema } from "@commonfabric/runner/schemas";
 import { type CellHandle, isCellHandle } from "@commonfabric/runtime-client";
-import { css, html, nothing, PropertyValues } from "lit";
+import { css, html, PropertyValues } from "lit";
 
 import { BaseElement } from "../../core/base-element.ts";
+import { valueForDisplay } from "../../core/value-for-display.ts";
 import {
   createArrayCellController,
   createCellController,
@@ -22,8 +23,10 @@ import "../cf-render/index.ts";
  * @attr {boolean} disabled - Whether the picker is disabled
  * @attr {string} min-height - Optional minimum height for the picker area
  *
- * @prop {CellHandle<any[]> | any[]} items - Array of Cells with [UI] to render (CellHandle or plain array); with none, the picker shows nothing
+ * @prop {CellHandle<any[]> | any[]} items - Array of Cells with [UI] to render (CellHandle or plain array); with none, the picker shows only its children
  * @prop {CellHandle<number>} selectedIndex - Two-way bound cell for current selection index
+ *
+ * @slot - Shown only while there are no `items`, which is where a view puts the access placeholder while a space the list is read from is out of reach
  *
  * @fires cf-change - Fired when selection changes: { index, value, items }
  * @fires cf-confirm - Fired when Enter/Space pressed to confirm selection: { index, value }
@@ -221,6 +224,10 @@ export class CFPicker extends BaseElement {
 
   private _indexCellController = createCellController<number>(this, {
     timing: { strategy: "immediate" },
+    // A cell holding nothing selects the first item, so a pick of it moves
+    // nothing.
+    getValue: (value) =>
+      (isCellHandle<number>(value) ? valueForDisplay(value) : value) ?? 0,
     onChange: (newIndex) => {
       this.emit("cf-change", {
         index: newIndex,
@@ -303,8 +310,10 @@ export class CFPicker extends BaseElement {
 
   override render() {
     // A view's render policy withholds an `items` binding the viewer may not
-    // see, and then no items arrive, which is not an empty list.
-    if (this.items === undefined) return nothing;
+    // see, and then no items arrive, which is not an empty list. What shows
+    // then is the element's own children: the access placeholder the view
+    // puts there while the list's space is out of reach, or nothing.
+    if (this.items === undefined) return html`<slot></slot>`;
     const items = this._getItems();
     const hasMultipleItems = items.length > 1;
     const currentIndex = items.length
@@ -415,14 +424,18 @@ export class CFPicker extends BaseElement {
     });
   }
 
+  /**
+   * Moves the selection to `index`. Whether that changes it is decided in
+   * its turn among the cell's writes, not against the index shown, which a
+   * step still waiting its turn may yet move.
+   */
   private _selectIndex(index: number): void {
     const len = this._getItems().length;
-    if (index < 0 || index >= len || index === this._currentIndex) {
-      return;
-    }
-    this._indexCellController.setValue(index);
-    this._updateAriaAttributes();
-    this.requestUpdate();
+    if (index < 0 || index >= len) return;
+    void this._indexCellController.updateValue(() => index).then(() => {
+      this._updateAriaAttributes();
+      this.requestUpdate();
+    });
   }
 
   //

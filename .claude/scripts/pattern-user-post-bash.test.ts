@@ -66,22 +66,6 @@ describe("pattern-user-post-bash", () => {
       expect(suggestion).not.toContain("Test pattern deployed");
     });
 
-    it("warns when a custom home pattern omits attached tests", () => {
-      expect(
-        suggestionForPatternUserCommand(
-          "cf space set-home --identity key main.tsx",
-        ),
-      ).toContain("No tests were attached");
-    });
-
-    it("does not require tests when resetting the home pattern", () => {
-      expect(
-        suggestionForPatternUserCommand(
-          "cf space set-home --identity key --reset",
-        ),
-      ).toBe("");
-    });
-
     it("checks every deployment in a compound command", () => {
       const suggestion = suggestionForPatternUserCommand(
         "cf piece setsrc a.tsx --test a.test.tsx --piece A; " +
@@ -305,14 +289,6 @@ describe("pattern-user-post-bash", () => {
       expect(suggestion).toContain("No tests were attached");
     });
 
-    it("does not let a reset exempt another custom home deployment", () => {
-      expect(
-        suggestionForPatternUserCommand(
-          "cf space set-home --reset; cf space set-home main.tsx",
-        ),
-      ).toContain("No tests were attached");
-    });
-
     it("allows a test pattern to be the executable diagnostic entry", () => {
       for (
         const command of [
@@ -365,24 +341,13 @@ describe("pattern-user-post-bash", () => {
       }
     });
 
-    it("advises on both spellings of a command that moved", () => {
-      // `set-home` moved to `cf space` and answers under `cf piece` until its
-      // removal date, so the guidance follows the command rather than the
-      // spelling a caller reached it by.
-      for (const noun of ["space", "piece"]) {
-        expect(
-          suggestionForPatternUserCommand(`cf ${noun} set-home main.tsx`),
-          noun,
-        ).toContain("verify the custom home pattern");
-      }
-    });
-
     it("still ignores a bare cf whose next word carries no guidance", () => {
       // The widened match must not swallow every `cf` invocation, and must not
       // claim a verb this hook has nothing to say about.
       expect(suggestionForPatternUserCommand("cf test")).toBe("");
       expect(suggestionForPatternUserCommand("cf wish '#topic'")).toBe("");
       expect(suggestionForPatternUserCommand("cf cell get --piece ID title")).toBe("");
+      expect(suggestionForPatternUserCommand("cf set --piece ID title")).toBe("");
     });
 
     it("returns no suggestion for unrelated commands", () => {

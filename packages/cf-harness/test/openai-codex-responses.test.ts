@@ -10,6 +10,7 @@ import {
   OpenAICodexResponsesClient,
 } from "../src/model/openai-codex-responses.ts";
 import type { OpenAICodexOAuthCredential } from "../src/auth/types.ts";
+import type { HarnessModelAttemptDiagnostic } from "../src/model/client.ts";
 import { HarnessControlError } from "../src/control-errors.ts";
 import { createHarnessImageAttachment } from "../src/image-attachments.ts";
 
@@ -443,6 +444,52 @@ Deno.test("Codex Responses client recovers streamed output items when store:fals
   assertEquals(result.assistant.content, "on it");
   assertEquals(result.assistant.toolCalls?.[0]?.id, "call_1");
   assertEquals(result.assistant.toolCalls?.[0]?.function.name, "bash");
+});
+
+Deno.test("Codex Responses records the terminal status and streamed item types in the attempt", async () => {
+  // A blank turn: the provider completes with a reasoning item and an empty
+  // message, which normalizes to no words and no tool call.
+  const attempts: HarnessModelAttemptDiagnostic[] = [];
+  const client = new OpenAICodexResponsesClient({
+    transportRetries: 0,
+    credentialResolver: { resolve: () => Promise.resolve(credential) },
+    fetchFn: () =>
+      Promise.resolve(sse(
+        {
+          type: "response.output_item.done",
+          item: { type: "reasoning", id: "rs_1", summary: [] },
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "message",
+            id: "msg_1",
+            role: "assistant",
+            content: [{ type: "output_text", text: "" }],
+          },
+        },
+        {
+          type: "response.completed",
+          response: { id: "resp_blank", status: "completed", output: [] },
+        },
+      )),
+  });
+
+  const result = await client.complete({
+    model: "gpt-5.4",
+    transcript: [{ role: "user", content: "answer" }],
+    tools: [],
+    nativeModelToolIds: [],
+    runId: "run-blank",
+    onAttempt: (attempt) => {
+      attempts.push(attempt);
+    },
+  });
+
+  assertEquals(result.assistant.content, "");
+  assertEquals(attempts.length, 1);
+  assertEquals(attempts[0].terminalStatus, "completed");
+  assertEquals(attempts[0].outputItemTypes, ["reasoning", "message"]);
 });
 
 Deno.test("Codex Responses client recovers streamed output items when the terminal output is null", async () => {

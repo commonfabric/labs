@@ -1,3 +1,5 @@
+import { isEnvelopeStabilityReason } from "../cfc/envelope-stability-reason.ts";
+
 /**
  * Permanent rejections are the commit-time precondition failures the engine
  * reports as `PreconditionFailedError` (spec scheduler-v2 §7.6): a failed
@@ -12,6 +14,33 @@ export function isPermanentRejection(
   error: { name?: string } | undefined | null,
 ): boolean {
   return error?.name === "PreconditionFailedError";
+}
+
+/**
+ * The space refused the commit because the principal lacks the grant the
+ * write needs: an `AuthorizationError` the memory server marked with
+ * `permanentEvidence`, beside the ACL revision (`aclRevision`) it decided
+ * the refusal by. No re-run can supply a grant, so the same write is refused
+ * again while that revision stands, and a reactive run takes no retry on
+ * one; it runs again when an input it did not write changes. An
+ * `AuthorizationError` without that evidence is not one of these, and keeps
+ * the bounded retry: a name off the wire is not durable evidence, and one
+ * the server marked `retriable` is a denial a fresh handshake heals.
+ */
+export function isPermanentAuthorizationRefusal(
+  error:
+    | {
+      name?: string;
+      permanentEvidence?: unknown;
+      aclRevision?: unknown;
+      retriable?: unknown;
+    }
+    | undefined
+    | null,
+): boolean {
+  return error?.name === "AuthorizationError" &&
+    error.permanentEvidence === true &&
+    typeof error.aclRevision === "number" && error.retriable !== true;
 }
 
 /**
@@ -51,11 +80,20 @@ export function isPermanentRejection(
  *   reaching commit unprepared — is a fail-closed backstop rather than a
  *   shape the commit path produces, because `commit()` prepares a relevant
  *   transaction itself (`docs/specs/cfc-commit-preparation.md`).
+ * - `MessageTooLargeError` (server-side, wire): the server refused the
+ *   frame before evaluating it, for standing for more array slots and
+ *   record members than it admits from an untrusted sender
+ *   (memory/v2/server.ts, `MAX_UNTRUSTED_MESSAGE_SLOTS`). The same writes
+ *   re-sent stand for the same slots, so a retry is refused identically.
+ *   As with `RowLabelCommitError`, the server serializes the class name
+ *   unchanged and the runner keeps it through normalization
+ *   (storage/v2.ts `toRejectedError`).
  */
 const TERMINAL_REJECTION_NAMES: ReadonlySet<string> = new Set([
   "RowLabelCommitError",
   "SpeculativeBasisError",
   "CfcCommitRefusalError",
+  "MessageTooLargeError",
 ]);
 
 /**
@@ -77,6 +115,33 @@ export function isTerminalRejection(
   error: { name?: string } | undefined | null,
 ): boolean {
   return error?.name !== undefined && TERMINAL_REJECTION_NAMES.has(error.name);
+}
+
+/**
+ * The store refused the commit for standing for more than it admits in one
+ * message. The size grows with what the write carries, so the same write is
+ * refused again while that and the store's limit stay as they are.
+ */
+export function isOversizedRejection(
+  error: { name?: string } | undefined | null,
+): boolean {
+  return error?.name === "MessageTooLargeError";
+}
+
+/**
+ * The CFC boundary refused the commit as a verdict because its schema changes
+ * or weakens a claim a stored envelope fixes (`cfc/envelope-stability-reason.ts`),
+ * and for nothing else. The stored envelope and the write's schema decide it,
+ * and no grant moves either, so the same write is refused again while both
+ * stay as they are. Read off the refusal's `reasons`, where prepare puts the
+ * class at the front of each reason it records for one.
+ */
+export function isEnvelopeStabilityRefusal(
+  error: { name?: string; reasons?: readonly string[] } | undefined | null,
+): boolean {
+  const reasons = error?.reasons ?? [];
+  return error?.name === "CfcCommitRefusalError" && reasons.length > 0 &&
+    reasons.every(isEnvelopeStabilityReason);
 }
 
 /**

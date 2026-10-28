@@ -39,7 +39,12 @@ function schemaAsCell(schema: unknown): JSONSchema {
   return { asCell: ["cell"] };
 }
 
-/** Wraps the requested resource schema in the wish output contract. */
+/**
+ * Wraps the requested resource schema in the wish output contract: `result`
+ * and `candidates` under the requested schema, `error` as written, and `[UI]`
+ * as a handle to the view the wish shows, which declares nothing about the
+ * view itself.
+ */
 export function wishStateSchemaForResult(
   schema: unknown,
 ): JSONSchema | undefined {
@@ -77,7 +82,14 @@ export function wishStateSchemaForResult(
         items: candidateSchema,
       },
       error: true,
-      [UI]: true,
+      // An opaque handle with no value shape, which a read under this schema
+      // hands on without following, and which a pre-sync of the state does
+      // not load the target of. Every reader of a wish reads its state under
+      // this schema, and most use `result` alone: a value shape declared here
+      // is one each of them follows into the found piece's view, loading it.
+      // A reader that shows the view reads it through the handle, under a
+      // schema of its own.
+      [UI]: { type: "unknown", asCell: ["opaque"] },
     },
     required: ["result", "candidates"],
   });

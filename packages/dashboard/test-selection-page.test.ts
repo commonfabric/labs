@@ -309,20 +309,54 @@ describe("test-selection-page", () => {
     });
 
     it("counts the tests each lane holds", () => {
+      const [a, b, c] = ["a", "b", "c"].map((n) =>
+        sampleEntry({ k: "unit", s: "memory", n })
+      );
       const page = pageHtml(
         sampleManifest({
+          entries: [a, b, c],
           lanes: [{
             lane: 1,
             projectedSeconds: 10,
             batches: [
-              { suite: "workspace-unit", identities: ["a", "b"] },
-              { suite: "workspace-browser", identities: ["c"] },
+              {
+                suite: "workspace-unit",
+                identities: [a, b].map((entry) => JSON.stringify(entry.test)),
+              },
+              {
+                suite: "workspace-browser",
+                identities: [JSON.stringify(c.test)],
+              },
             ],
           }],
         }),
         NOW,
       );
       expect(page).toContain("3 tests");
+    });
+
+    it("sums up the selection in test time and in tests", () => {
+      const a = sampleEntry({ k: "unit", s: "memory", n: "a" }, { cost: 90 });
+      const b = sampleEntry({ k: "unit", s: "memory", n: "b" }, { cost: 3510 });
+      const page = pageHtml(
+        sampleManifest({
+          entries: [a, b],
+          lanes: [{
+            lane: 1,
+            projectedSeconds: 90,
+            batches: [{ suite: a.suite, identities: [JSON.stringify(a.test)] }],
+          }],
+          runs: 223,
+        }),
+        NOW,
+      );
+      const summary = page.match(/<dl class="summary">.*?<\/dl>/s)?.[0];
+      expect(summary).toContain("<dt>selected</dt><dd>2.5%</dd>");
+      expect(summary).toContain("<dt>test time</dt><dd>1m 30s of 1h 00m</dd>");
+      expect(summary).toContain("<dt>tests</dt><dd>1 of 2</dd>");
+      // The count of runs the publisher read for this manifest is not a
+      // figure about the selection, and the summary leaves it out.
+      expect(summary).not.toContain("223");
     });
 
     it("says how long ago the manifest was generated", () => {

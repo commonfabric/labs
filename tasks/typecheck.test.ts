@@ -737,7 +737,6 @@ describe("main()", () => {
     // Zero when every group passed and one when any did not, rather
     // than exiting from inside itself, so what it decides can be
     // asserted.
-    const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
     const log = console.log;
     const err = console.error;
     console.log = () => {};
@@ -746,7 +745,7 @@ describe("main()", () => {
     console.error = () => {};
     try {
       expect(
-        await main(["--scope=leb128"], root, {
+        await main(["--scope=leb128"], REPO_ROOT, {
           check: (scope) =>
             Promise.resolve({
               scope,
@@ -758,7 +757,7 @@ describe("main()", () => {
         }),
       ).toBe(0);
       expect(
-        await main(["--scope=leb128"], root, {
+        await main(["--scope=leb128"], REPO_ROOT, {
           check: (scope) =>
             Promise.resolve({
               scope,

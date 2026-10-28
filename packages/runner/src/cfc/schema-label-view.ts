@@ -1,10 +1,15 @@
 import type { JSONSchema } from "@commonfabric/api";
+import { isDeepFrozen } from "@commonfabric/data-model";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import {
   forEachSubschema,
   isSubschema,
 } from "@commonfabric/data-model-schema/schema-walk";
 import { ContextualFlowControl } from "../cfc.ts";
+import {
+  externalResolutionMissCount,
+  onSchemaRegistryClear,
+} from "../schema-registry.ts";
 import {
   cfcSchemaResolvedRoot,
   resolveCfcSchemaRefRoot,
@@ -34,22 +39,75 @@ interface IfcSchemaVisit {
   parent?: IfcSchemaVisit;
 }
 
+// The entries of each deep-frozen schema document, by the document. The
+// entries embed resolved content, so a registry clear swaps the cache.
+let documentEntries = new WeakMap<object, readonly CfcSchemaEntry[]>();
+onSchemaRegistryClear(() => {
+  documentEntries = new WeakMap();
+});
+
 /**
- * Return every `ifc` declaration in a schema at its logical value path.
+ * Return every `ifc` declaration in a schema document at its logical value
+ * path.
  *
  * Compound schemas contribute at their current path. Array items and
  * record-only additional properties use a wildcard path. Tuple entries use
  * their concrete index. Negated schemas do not describe labels on real data.
  * A declaration reached through an `anyOf` or `oneOf` branch is marked
  * `conditional`.
+ *
+ * The entries are a function of the document and of the schema documents
+ * its external references name, so a deep-frozen document's are walked once
+ * and kept by its identity, frozen. A walk during which a `cid:` resolution
+ * missed is not kept: the document it lacked can arrive later, and its
+ * declarations with it. A mutable document is walked on every call.
  */
 export const cfcSchemaEntries = (
   schema: JSONSchema,
-  path: readonly string[] = [],
-  entries: CfcSchemaEntry[] = [],
-  root: JSONSchema = schema,
-  active?: IfcSchemaVisit,
-  conditional = false,
+): readonly CfcSchemaEntry[] => {
+  if (!isObjectOrArray(schema) || !isDeepFrozen(schema)) {
+    return collectCfcSchemaEntries(schema, [], [], schema, undefined, false);
+  }
+  const kept = documentEntries.get(schema);
+  if (kept !== undefined) return kept;
+  const missesBefore = externalResolutionMissCount();
+  const entries = collectCfcSchemaEntries(
+    schema,
+    [],
+    [],
+    schema,
+    undefined,
+    false,
+  );
+  if (externalResolutionMissCount() !== missesBefore) return entries;
+  // Every caller shares the kept entries, so what this walk made of each is
+  // frozen: a caller that changed one would change it for the rest.
+  for (const entry of entries) {
+    Object.freeze(entry.path);
+    Object.freeze(entry.label.integrity);
+    Object.freeze(entry.label.confidentiality);
+    Object.freeze(entry.label);
+    Object.freeze(entry);
+  }
+  Object.freeze(entries);
+  documentEntries.set(schema, entries);
+  return entries;
+};
+
+/**
+ * Helper for `cfcSchemaEntries()`, which appends to `entries` the
+ * declarations of `schema`, a schema at `path` in the document `root`.
+ * `active` is the chain of schemas being walked, which ends a walk around a
+ * reference cycle, and `conditional` says whether the walk has passed
+ * through an `anyOf` or `oneOf` branch.
+ */
+const collectCfcSchemaEntries = (
+  schema: JSONSchema,
+  path: readonly string[],
+  entries: CfcSchemaEntry[],
+  root: JSONSchema,
+  active: IfcSchemaVisit | undefined,
+  conditional: boolean,
 ): CfcSchemaEntry[] => {
   if (!isSubschema(schema) || typeof schema === "boolean") {
     return entries;
@@ -101,7 +159,7 @@ export const cfcSchemaEntries = (
     childPath: readonly string[],
     childConditional = conditional,
   ) =>
-    cfcSchemaEntries(
+    collectCfcSchemaEntries(
       child,
       childPath,
       entries,

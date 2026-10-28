@@ -12,9 +12,9 @@ import {
 } from "commonfabric";
 import type {
   BackwardsCompatibleProfile,
-  SetProfileAvatarEvent,
   SetProfileBioEvent,
   SetProfileNameEvent,
+  SetProfilePictureEvent,
 } from "./profile-home.tsx";
 
 /**
@@ -43,15 +43,15 @@ import type {
  *
  * Editing is amend-in-place: prefilled draft cells (seeded from the current
  * values when the viewer enters edit mode) write back through the profile's
- * EXPORTED owner-protected streams (`setName` / `setAvatar` / `setBio`) on the
+ * EXPORTED owner-protected streams (`setName` / `setPicture` / `setBio`) on the
  * wish `result`. Cross-pattern stream dispatch is the sanctioned path; this
- * pattern owns NO copy of name/avatar/bio beyond those transient drafts.
+ * pattern owns NO copy of name/picture/bio beyond those transient drafts.
  * CT-1828's empty-string guards make an accidental empty submit safe, and the
  * UI additionally avoids sending empty names.
  */
 
 // The wish `result` for `#profile` is the profile-home pattern's output: it
-// carries the readable `name`/`avatar`/`bio` fields AND the exported
+// carries the readable `name`/`picture`/`bio` fields AND the exported
 // owner-protected write streams we amend through.
 type ProfileResult = BackwardsCompatibleProfile;
 
@@ -68,15 +68,12 @@ const startEditing = handler<
   {
     editing: Writable<boolean>;
     nameDraft: Writable<string>;
-    avatarDraft: Writable<string>;
     bioDraft: Writable<string>;
     currentName?: string;
-    currentAvatar?: string;
     currentBio?: string;
   }
 >((_event, state) => {
   state.nameDraft.set(trimmed(state.currentName));
-  state.avatarDraft.set(trimmed(state.currentAvatar));
   state.bioDraft.set(trimmed(state.currentBio));
   state.editing.set(true);
 });
@@ -102,20 +99,21 @@ const saveName = handler<
   state.setName?.send({ name });
 });
 
-const saveAvatar = handler<
-  void,
-  { draft: Writable<string>; setAvatar?: Stream<SetProfileAvatarEvent> }
->((_event, state) => {
-  const avatar = trimmed(state.draft.get());
-  if (!avatar) return;
-  state.setAvatar?.send({ avatar });
+/** Amend the picture with the image `<cf-avatar-input>` hands on. */
+const savePicture = handler<
+  SetProfilePictureEvent,
+  { setPicture?: Stream<SetProfilePictureEvent> }
+>((event, state) => {
+  const picture = event.detail?.bytes;
+  if (!picture?.length) return;
+  state.setPicture?.send({ picture });
 });
 
 const saveBio = handler<
   void,
   { draft: Writable<string>; setBio?: Stream<SetProfileBioEvent> }
 >((_event, state) => {
-  // Bio is deliberately clearable (unlike name/avatar), so an empty draft is a
+  // Bio is deliberately clearable (unlike name/picture), so an empty draft is a
   // valid amend. CT-1828's guards keep this safe upstream.
   state.setBio?.send({ bio: trimmed(state.draft.get()) });
 });
@@ -142,7 +140,6 @@ export default pattern<ProfileEmbedInput, ProfileEmbedOutput>(() => {
   // truth — seeded from the live values on entering edit mode, cleared/written
   // through the exported streams on save.
   const nameDraft = new Writable("").for("nameDraft");
-  const avatarDraft = new Writable("").for("avatarDraft");
   const bioDraft = new Writable("").for("bioDraft");
   // View toggle: presentation by default, amend form when the owner opts in.
   const editing = new Writable<boolean>(false).for("editing");
@@ -222,10 +219,8 @@ export default pattern<ProfileEmbedInput, ProfileEmbedOutput>(() => {
                   onClick={startEditing({
                     editing,
                     nameDraft,
-                    avatarDraft,
                     bioDraft,
                     currentName: profileWish.result?.name,
-                    currentAvatar: profileWish.result?.avatar,
                     currentBio: profileWish.result?.bio,
                   })}
                 >
@@ -260,22 +255,12 @@ export default pattern<ProfileEmbedInput, ProfileEmbedOutput>(() => {
               </cf-vstack>
 
               <cf-vstack gap="2">
-                <label>Avatar</label>
-                <cf-input
-                  $value={avatarDraft}
-                  placeholder="Avatar URL or text"
+                <label>Picture</label>
+                <cf-avatar-input
+                  oncf-change={savePicture({
+                    setPicture: profileWish.result?.setPicture,
+                  })}
                 />
-                <cf-hstack>
-                  <cf-button
-                    size="sm"
-                    onClick={saveAvatar({
-                      draft: avatarDraft,
-                      setAvatar: profileWish.result?.setAvatar,
-                    })}
-                  >
-                    Save avatar
-                  </cf-button>
-                </cf-hstack>
               </cf-vstack>
 
               <cf-vstack gap="2">

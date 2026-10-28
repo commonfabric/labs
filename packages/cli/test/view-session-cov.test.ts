@@ -491,7 +491,7 @@ Deno.test("session: overlay letter shortcuts match the help text", () => {
   press(s, "Q");
   assertEquals(s.quit, true, "uppercase Q requested quit");
 
-  for (const pageUp of ["b", "B"]) {
+  for (const pageUp of ["b", "B", "pageup", "ctrl-b"]) {
     const paging = makeSession(60, 8);
     press(paging, "?", "space");
     const afterPageDown = paging.view().overlay!.scroll;
@@ -642,8 +642,9 @@ Deno.test("session: paging, half-paging and home/end via the keymap", () => {
   press(s, "space"); // page down
   const afterPage = s.view().top;
   assert(afterPage > 0, "space paged down");
-  press(s, "b"); // page up
-  assert(s.view().top < afterPage, "b paged up");
+  press(s, "pageup");
+  assert(s.view().top < afterPage, "pageup paged up");
+  press(s, "space");
   press(s, "ctrl-d"); // half down
   const halfDown = s.view().top;
   assert(halfDown > 0);

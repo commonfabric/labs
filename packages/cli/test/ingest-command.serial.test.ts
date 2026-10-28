@@ -16,6 +16,7 @@ import { Identity } from "@commonfabric/identity";
 import { decode } from "@commonfabric/utils/encoding";
 import { ingest } from "../commands/ingest.ts";
 import { resolveSpaceDid } from "../lib/ingest-channels.ts";
+import { linkRefPayloadToString } from "@commonfabric/runner/shared";
 import { stripAnsi, withEnv } from "./utils.ts";
 
 const API_URL = "http://ingest-command-test.invalid:9999";
@@ -29,6 +30,10 @@ let keyPath: string;
 
 interface RecordedRequest {
   verb: string;
+
+  /** The space the request was addressed to, if its path named one. */
+  space?: string;
+
   body: Record<string, unknown>;
 }
 
@@ -44,9 +49,11 @@ async function withStubbedFetch<T>(
   const calls: RecordedRequest[] = [];
   globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(typeof input === "string" ? input : input.toString());
-    const verb = url.pathname.split("/").at(-1)!;
+    const segments = url.pathname.split("/");
+    const verb = segments.at(-1)!;
     calls.push({
       verb,
+      ...(segments[2] === "spaces" ? { space: segments[3] } : {}),
       body: JSON.parse(typeof init?.body === "string" ? init.body : "{}"),
     });
     return Promise.resolve(
@@ -105,7 +112,7 @@ async function expectValidationError(
 
 const minted = {
   id: "chan-1",
-  url: `${API_URL}/api/ingest/chan-1`,
+  url: `${API_URL}/api/spaces/${SPACE_DID}/ingest/chan-1`,
   space: SPACE_DID,
   causePrefix: "ingest/phone-1",
   installId: "phone-1",
@@ -120,7 +127,7 @@ function channel(overrides: Record<string, unknown>) {
     space: SPACE_DID,
     causePrefix: "ingest/phone-1",
     installId: "phone-1",
-    sink: "journal",
+    kind: "device",
     createdAt: "2026-08-01T00:00:00.000Z",
     enabled: true,
     lastSeenAt: null,
@@ -213,14 +220,18 @@ describe("cf ingest mint", () => {
 
     expect(calls.length).toBe(1);
     expect(calls[0].verb).toBe("mint");
-    // A NAME on the command line reaches the server as a resolved DID.
-    expect(calls[0].body.space).toBe(
+    // A NAME on the command line reaches the server as a resolved DID, in
+    // the path the request is addressed to.
+    expect(calls[0].space).toBe(
       await resolveSpaceDid(keyPath, "ingest-command-space"),
     );
+    expect(calls[0].body.space).toBeUndefined();
     expect(calls[0].body.installId).toBe("phone-1");
     expect(calls[0].body.causePrefix).toBe("ingest/phone-1");
     expect(calls[0].body.name).toBe("Phone");
     expect(calls[0].body.ttlDays).toBe(30);
+    expect(calls[0].body.target).toBeUndefined();
+    expect(calls[0].body.gmail).toBeUndefined();
     // A fresh idempotency key is minted per invocation, not left to the caller.
     expect(typeof calls[0].body.requestId).toBe("string");
     expect((calls[0].body.requestId as string).length).toBeGreaterThan(0);
@@ -228,7 +239,9 @@ describe("cf ingest mint", () => {
     expect(output).toContain("Ingest channel minted.");
     expect(output).toContain("id:          chan-1");
     expect(output).toContain("installId:   phone-1");
-    expect(output).toContain(`URL:         ${API_URL}/api/ingest/chan-1`);
+    expect(output).toContain(
+      `URL:         ${API_URL}/api/spaces/${SPACE_DID}/ingest/chan-1`,
+    );
     expect(output).toContain("expires:     2026-09-03T00:00:00.000Z");
     expect(output).toContain("token (shown once");
     expect(output).toContain("Authorization: Bearer <token>");
@@ -252,13 +265,206 @@ describe("cf ingest mint", () => {
     ], { mint: minted });
 
     // A did:key --space is forwarded verbatim — no derivation in the way.
-    expect(calls[0].body.space).toBe(SPACE_DID);
+    expect(calls[0].space).toBe(SPACE_DID);
     expect(calls[0].body.causePrefix).toBeUndefined();
     expect(output).toContain("Ingest channel minted.");
     // The VALUE, not the label: the label prints unconditionally, so asserting
     // it alone would pass just as happily against a server that dropped the
     // field entirely.
     expect(output).toContain("expires:     2026-11-02T00:00:00.000Z");
+  });
+
+  const TARGET_ID = "of:fid1:ZgAt8nM5zwgK9yvy9vmtO9vDgOP8XlXpncidUbNc2lg";
+  const gmailMinted = {
+    id: "chan-1",
+    space: SPACE_DID,
+    target: { space: SPACE_DID, id: TARGET_ID, path: ["inbox"] },
+    installId: "gmail-1",
+    expiresAt: "2026-11-02T00:00:00.000Z",
+  };
+
+  it("prints the target and a complete re-mint hint, and no URL or token, for an unbound gmail channel", async () => {
+    const { output } = await run([
+      "mint",
+      "--identity",
+      keyPath,
+      "--api-url",
+      API_URL,
+      "--space",
+      SPACE_DID,
+      "--install-id",
+      "gmail-1",
+    ], { mint: gmailMinted });
+
+    expect(output).toContain("Ingest channel minted.");
+    expect(output).toContain(`target:      //${SPACE_DID}/${TARGET_ID}/inbox`);
+    // The hint repeats what the server minted, not what the command line said.
+    expect(output).toContain(
+      `ingest mint --space ${SPACE_DID} --install-id gmail-1 --target ` +
+        `//${SPACE_DID}/${TARGET_ID}/inbox`,
+    );
+    expect(output).not.toContain("URL:");
+    expect(output).not.toContain("causePrefix:");
+    expect(output).not.toContain("token (shown once");
+    expect(output).not.toContain("tok-secret");
+  });
+
+  it("sends the target as a link and the access token as the mailbox proof, and prints the bound mailbox", async () => {
+    const { output, calls } = await run([
+      "mint",
+      "--identity",
+      keyPath,
+      "--api-url",
+      API_URL,
+      "--space",
+      SPACE_DID,
+      "--install-id",
+      "gmail-1",
+      "--target",
+      `/${TARGET_ID}/inbox`,
+      "--gmail-access-token",
+      "ya29.token",
+    ], { mint: { ...gmailMinted, emailAddress: "alice@example.com" } });
+
+    expect(calls[0].body.gmail).toEqual({ accessToken: "ya29.token" });
+    expect(calls[0].body.target).toBe(
+      linkRefPayloadToString({
+        id: TARGET_ID,
+        space: SPACE_DID,
+        path: ["inbox"],
+      }),
+    );
+    expect(output).toContain("mailbox:     alice@example.com");
+    expect(output).toContain("users.watch");
+    expect(output).not.toContain("token (shown once");
+  });
+
+  it("reads the proof from `CF_GMAIL_ID_TOKEN`", async () => {
+    await withEnv("CF_GMAIL_ID_TOKEN", "eyJ.from-env", async () => {
+      const { calls } = await run([
+        "mint",
+        "--identity",
+        keyPath,
+        "--api-url",
+        API_URL,
+        "--space",
+        SPACE_DID,
+        "--install-id",
+        "gmail-1",
+        "--target",
+        `/${TARGET_ID}`,
+      ], { mint: gmailMinted });
+
+      expect(calls[0].body.gmail).toEqual({ idToken: "eyJ.from-env" });
+      expect(calls[0].body.target).toBe(
+        linkRefPayloadToString({ id: TARGET_ID, space: SPACE_DID, path: [] }),
+      );
+    });
+  });
+
+  it("resolves a space name inside the target against the channel's space", async () => {
+    const { calls } = await run([
+      "mint",
+      "--identity",
+      keyPath,
+      "--api-url",
+      API_URL,
+      "--space",
+      "ingest-command-space",
+      "--install-id",
+      "gmail-1",
+      "--target",
+      `//ingest-command-space/${TARGET_ID}`,
+      "--gmail-access-token",
+      "a",
+    ], { mint: gmailMinted });
+
+    const space = await resolveSpaceDid(keyPath, "ingest-command-space");
+    expect(calls[0].body.target).toBe(
+      linkRefPayloadToString({ id: TARGET_ID, space, path: [] }),
+    );
+  });
+
+  it("rejects a target that names a piece slug rather than a document", async () => {
+    await expectValidationError(
+      [
+        "mint",
+        "--identity",
+        keyPath,
+        "--api-url",
+        API_URL,
+        "--space",
+        SPACE_DID,
+        "--install-id",
+        "gmail-1",
+        "--target",
+        "/my-piece/inbox",
+        "--gmail-access-token",
+        "a",
+      ],
+      '"my-piece" is a piece slug',
+    );
+  });
+
+  it("rejects a target in another space, and one carrying a member", async () => {
+    const other = "did:key:z6MkIngestCommandOtherSpaceAAAAAAAAAAAAAAAAAAAA";
+    await expectValidationError(
+      [
+        "mint",
+        "--identity",
+        keyPath,
+        "--api-url",
+        API_URL,
+        "--space",
+        SPACE_DID,
+        "--install-id",
+        "gmail-1",
+        "--target",
+        `//${other}/${TARGET_ID}`,
+        "--gmail-access-token",
+        "a",
+      ],
+      `--target is in ${other}, not in the channel's space ${SPACE_DID}.`,
+    );
+    await expectValidationError(
+      [
+        "mint",
+        "--identity",
+        keyPath,
+        "--api-url",
+        API_URL,
+        "--space",
+        SPACE_DID,
+        "--install-id",
+        "gmail-1",
+        "--target",
+        `/${TARGET_ID}#result`,
+        "--gmail-access-token",
+        "a",
+      ],
+      "--target names a cell by its document and path",
+    );
+  });
+
+  it("rejects both proofs at once", async () => {
+    await expectValidationError(
+      [
+        "mint",
+        "--identity",
+        keyPath,
+        "--api-url",
+        API_URL,
+        "--space",
+        SPACE_DID,
+        "--install-id",
+        "gmail-1",
+        "--gmail-access-token",
+        "a",
+        "--gmail-id-token",
+        "b",
+      ],
+      "Give one of --gmail-access-token and --gmail-id-token, not both.",
+    );
   });
 
   it("says so loudly when a mint response carries no expiry", async () => {
@@ -291,7 +497,8 @@ describe("cf ingest ls", () => {
       { list: { channels: [] } },
     );
     expect(calls[0].verb).toBe("list");
-    // No --space means no filter is sent at all.
+    // No --space means the request names no space at all.
+    expect(calls[0].space).toBeUndefined();
     expect(calls[0].body).toEqual({});
     expect(output).toContain("No ingest channels found.");
   });
@@ -346,7 +553,7 @@ describe("cf ingest ls", () => {
       ],
       { list: { channels: [] } },
     );
-    expect(calls[0].body.space).toBe(
+    expect(calls[0].space).toBe(
       await resolveSpaceDid(keyPath, "ingest-command-space"),
     );
   });
@@ -363,17 +570,48 @@ describe("cf ingest rotate", () => {
       API_URL,
       "--ttl-days",
       "7",
-    ], { rotate: { ...minted, token: "tok-rotated" } });
+    ], {
+      list: { channels: [channel({})] },
+      rotate: { ...minted, token: "tok-rotated" },
+    });
 
-    expect(calls[0].verb).toBe("rotate");
-    expect(calls[0].body.id).toBe("chan-1");
-    expect(calls[0].body.ttlDays).toBe(7);
-    expect(typeof calls[0].body.requestId).toBe("string");
+    // The channel's space is looked up first, since the rotate is addressed
+    // to it.
+    expect(calls.map((c) => c.verb)).toEqual(["list", "rotate"]);
+    expect(calls[1].space).toBe(SPACE_DID);
+    expect(calls[1].body.id).toBe("chan-1");
+    expect(calls[1].body.ttlDays).toBe(7);
+    expect(typeof calls[1].body.requestId).toBe("string");
 
     expect(output).toContain("The previous token stopped working.");
     expect(output).toContain("re-pair this device");
     expect(output).toContain("Ingest channel rotated.");
     expect(output).toContain("tok-rotated");
+  });
+
+  it("sends the rotate straight to the space `--space` names", async () => {
+    const { calls } = await run([
+      "rotate",
+      "chan-1",
+      "--identity",
+      keyPath,
+      "--api-url",
+      API_URL,
+      "--space",
+      OTHER_DID,
+    ], { rotate: { ...minted, token: "tok-rotated" } });
+
+    expect(calls.map((c) => c.verb)).toEqual(["rotate"]);
+    expect(calls[0].space).toBe(OTHER_DID);
+  });
+
+  it("throws for an id that is not among the caller's channels when no space is named", async () => {
+    await expect(
+      run(
+        ["rotate", "chan-missing", "--identity", keyPath, "--api-url", API_URL],
+        { list: { channels: [channel({})] } },
+      ),
+    ).rejects.toThrow("No ingest channel chan-missing");
   });
 });
 
@@ -393,6 +631,9 @@ describe("cf ingest revoke", () => {
 
     // Read before write: revoke names the generation the caller looked at.
     expect(calls.map((c) => c.verb)).toEqual(["list", "revoke"]);
+    // The revoke is addressed to the space the listing said the channel
+    // writes into.
+    expect(calls[1].space).toBe(SPACE_DID);
     expect(calls[1].body.id).toBe("chan-1");
     expect(calls[1].body.expectedRevision).toBe(7);
     // Plus a fresh idempotency key, spent server-side in the same transaction
@@ -425,7 +666,8 @@ describe("cf ingest revoke", () => {
     });
 
     expect(calls[0].verb).toBe("list");
-    expect(calls[0].body.space).toBe(SPACE_DID);
+    expect(calls[0].space).toBe(SPACE_DID);
+    expect(calls[1].space).toBe(SPACE_DID);
     expect(calls[1].body.expectedRevision).toBe(3);
   });
 

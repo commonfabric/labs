@@ -46,6 +46,7 @@ const spaceSigner = await Identity.fromPassphrase(
 const space = spaceSigner.did();
 const federatedSpace = "did:key:z6MkInitializationDataReachFederated" as DID;
 const apiUrl = "http://initialization-data-reach.test/";
+const memoryUrl = "http://router.initialization-data-reach.test/";
 const federatedHost = "http://federated.initialization-data-reach.test/";
 
 /**
@@ -54,7 +55,9 @@ const federatedHost = "http://federated.initialization-data-reach.test/";
  * rather than as what was sent.
  */
 const SENT = {
+  clientBuild: { application: "shell", gitSha: "a".repeat(40) },
   apiUrl,
+  memoryUrl,
   spaceHostMap: { [federatedSpace]: federatedHost },
   identity: signer.keyPair,
   spaceDid: space,
@@ -62,11 +65,13 @@ const SENT = {
     agentBuiltin: false,
     webViewScopedReplication: true,
     contentAddressedSchemas: false,
+    localSessionDocuments: true,
   },
   cfcEnforcementMode: "enforce-strict",
   cfcFlowLabels: "persist",
   cfcReadMaxConfidentiality: [cfcAtom.user(signer.did())],
   cfcReadOnExceed: "skip",
+  preferredProfileSpace: federatedSpace,
   cfcTrustConfig: {
     statements: [{
       concrete: {
@@ -125,9 +130,18 @@ type FieldReach = {
 };
 
 const REACH = {
+  clientBuild: {
+    reads: (o) => o.storage.clientBuild,
+    expected: SENT.clientBuild,
+  },
   apiUrl: {
     reads: (o) => o.runtime.apiUrl.href,
     expected: apiUrl,
+  },
+  memoryUrl: {
+    // Storage's default host, which is the only thing it moves.
+    reads: (o) => o.storage.memoryHost.href,
+    expected: memoryUrl,
   },
   spaceHostMap: {
     reads: (o) => o.runtime.spaceHostMap,
@@ -142,17 +156,19 @@ const REACH = {
     expected: space,
   },
   experimental: {
-    // Read back as a pair, so the case turns on the record arriving with its
+    // Read back the fields, so the case turns on the record arriving with its
     // contents rather than on one key of it.
     reads: (o) => ({
       agentBuiltin: o.runtime.experimental.agentBuiltin,
       webViewScopedReplication: o.runtime.experimental.webViewScopedReplication,
       contentAddressedSchemas: o.runtime.experimental.contentAddressedSchemas,
+      localSessionDocuments: o.runtime.experimental.localSessionDocuments,
     }),
     expected: {
       agentBuiltin: false,
       webViewScopedReplication: true,
       contentAddressedSchemas: false,
+      localSessionDocuments: true,
     },
   },
   cfcEnforcementMode: {
@@ -170,6 +186,10 @@ const REACH = {
   cfcReadOnExceed: {
     reads: (o) => o.runtime.cfcReadOnExceed,
     expected: "skip",
+  },
+  preferredProfileSpace: {
+    reads: (o) => o.runtime.preferredProfileSpace,
+    expected: federatedSpace,
   },
   cfcTrustConfig: {
     // The runtime's own validated copy, so the case turns on the statement

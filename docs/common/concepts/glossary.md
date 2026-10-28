@@ -19,6 +19,14 @@ A security model combining information flow control with contextual integrity;
 enforces policies on how data is used, attached to schemas and validated both
 statically and dynamically.
 
+## CFS (Common Fabric Service)
+
+The headless backend that the Weaver app talks to, kept in the
+`commonfabric/loom` repository. It runs against a pinned tag of this
+repository, and some features here, such as the
+[shared-space catalog](../../features/shared-space-catalog.md), have CFS as a
+caller.
+
 ## Piece
 
 Piece is a [pattern] invocation binding set of [cell]s as inputs and set of
@@ -66,6 +74,56 @@ permissions via [UCAN]s and [ACL]s.
 Space can be queried and updated using [memory protocol], which describes state
 in terms of
 [entity document](../../development/runtime-glossary.md#entity-document)s.
+
+## Social space
+
+A [space] with more than one member or participant. A space says who those are
+in two ways:
+
+- **Its access list** admits principals to read or write. A pattern asks for
+  its own principal's level there with `spaceAccess()`, and, for a principal
+  the list admits, lists the principals it names with `spaceMembers()`.
+- **Its participants** are the profiles its root lists, as the system default
+  app does in `participants`, each added by someone joining the space. Any
+  participant can add any profile, so an entry is a claim, not a grant of
+  access.
+
+FabriChat rooms are the main example. A room is the chat of a social space and
+keeps no access list of its own: who is in the conversation is who is in the
+space ([FabriChat](../../specs/fabrichat/README.md)). A room can be the chat of
+any social space, such as a container that shows chats among other things. A
+standalone room, one that is not the chat of some other social space, has a
+space of its own: the chat manager creates each room it starts as the root of a
+new space, which declares itself a `fabrichat-room` and whose access list
+admits the members named at its creation. The room lists that space's
+participants itself. That space is a social space in its own right once it has
+more than one member, as a direct room's space has from its creation; a group
+room can start with its creator alone.
+
+The term is "social space", never "shared space". "Share" already names other
+things here, none of them about how many people a space has: the share inbox
+where a principal receives offers, share links, and a user's shared profiles.
+Home's shared-space catalog
+([`shared-space-catalog.md`](../../features/shared-space-catalog.md)) is the
+collection of social spaces a person keeps; an entry in it grants no access.
+
+## Space kind
+
+What kind of [space] a space declares itself to be, such as `fabrichat-room`
+for a standalone FabriChat room's space. Its creator states it once, in the
+space's genesis commit beside its access list: a pattern with
+`inSpace(name, { spaceKind })`, and host code with
+`Runtime.createSpace({ spaceKind })`. Nothing changes it afterward. It is a fact
+about the space, not a list of what the space holds: a social space that hosts
+a chat among other things declares its own kind
+([`space-kinds.md`](../../features/space-kinds.md)).
+
+## DID (Decentralized Identifier)
+
+An identifier of the form `did:<method>:<id>`, from the W3C DID Core
+specification. Spaces and users are named by [did:key] DIDs, derived from a
+keypair, so whoever holds the private key controls the identity. Some services
+and CFC principals are named by `did:web` DIDs instead.
 
 ## [did:key]
 
@@ -146,6 +204,16 @@ The minimal set of components that must be trusted to enforce security. This
 includes rendering infrastructure (e.g. web components), and excludes
 user-authored patterns, which are sandboxed.
 
+## SES (Secure ECMAScript)
+
+A hardened JavaScript environment from the Endo project. Pattern code runs in
+SES compartments, which limit the ambient authority it can reach, and the
+runtime verifies and hardens each pattern's module-scope definitions when it
+loads them. The [SES sandboxing specification](../../specs/sandboxing/SES_SANDBOXING_SPEC.md)
+describes the design, and the
+[SES authoring limits](../ai/pattern-development-guide.md#ses-authoring-limits-and-escape-hatches)
+describe what it means for a pattern author.
+
 ## UCAN (User Controlled Authorization Network)
 
 A capability-based auth system that allows delegating access rights using signed
@@ -167,9 +235,11 @@ and pending tiers) are documented in the
 [piece]: #piece
 [acl]: #acl-access-control-list
 [cfc]: #cfc-contextual-flow-control
+[cfs]: #cfs-common-fabric-service
 [cts]: #cts-common-fabric-typescript
 [crdt]: #crdt-conflict-free-replicated-data-type
 [deno]: #deno
+[did]: #did-decentralized-identifier
 [did:key]: #didkey
 [event-handler]: #event-handler
 [llm]: #llm-large-language-model
@@ -177,6 +247,7 @@ and pending tiers) are documented in the
 [reactive-framework]: #reactive-framework
 [pattern]: #pattern
 [safe-rendering]: #safe-rendering
+[ses]: #ses-secure-ecmascript
 [space]: #space
 [tcb]: #tcb-trusted-computing-base
 [ucan]: #ucan-user-controlled-authorization-network

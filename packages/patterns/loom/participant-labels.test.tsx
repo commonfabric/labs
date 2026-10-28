@@ -1,4 +1,7 @@
-/** The roster links only a labeled profile, the first entry included. */
+/**
+ * The roster links each document it is given once, the first entry included,
+ * whether or not the runtime holds a label for it.
+ */
 import {
   action,
   assert,
@@ -16,8 +19,9 @@ type TestProfile = Confidential<
 >;
 
 export default pattern(() => {
-  // A bare document carries no label, so the runtime cannot say whose
-  // profile it is, and the roster refuses to link it.
+  // A bare document carries no label, so it names no principal. The roster
+  // holds claims, and links it as it links a labeled profile: a consumer
+  // keeps the entries whose profile names a principal with access.
   const bare = Writable.of({ name: "Bare" });
   const member = Writable.of<TestProfile>({ name: "Member" });
 
@@ -41,24 +45,30 @@ export default pattern(() => {
   );
 
   return {
-    // Each refused link is reported as a CFC policy warning.
-    allowConsoleWarnings: true,
     [TESTS]: [
       { action: addBareFirst },
-      { assertion: assert(() => empty.participants.length === 0) },
-      { action: joinEmpty },
       {
         assertion: assert(() =>
           empty.participants.length === 1 &&
-          empty.participants[0].equals(member)
+          empty.participants[0].equals(bare)
         ),
       },
+      { action: joinEmpty },
+      {
+        assertion: assert(() =>
+          empty.participants.length === 2 &&
+          empty.participants[1].equals(member)
+        ),
+      },
+      { action: addBareFirst },
+      { assertion: assert(() => empty.participants.length === 2) },
       { action: joinListed },
       { action: addBareLater },
       {
         assertion: assert(() =>
-          listed.participants.length === 1 &&
-          listed.participants[0].equals(member)
+          listed.participants.length === 2 &&
+          listed.participants[0].equals(member) &&
+          listed.participants[1].equals(bare)
         ),
       },
     ],

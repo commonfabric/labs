@@ -7,6 +7,11 @@ export {
 } from "./deep-freeze.ts";
 
 export * from "./interface.ts";
+export {
+  estimateFabricValueSize,
+  forEachFabricContainerValue,
+} from "./value-traverse.ts";
+export { assertAcyclicFabricValue } from "./value-acyclic.ts";
 
 export {
   convertibleJsFromFabricValue,

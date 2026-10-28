@@ -432,8 +432,11 @@ describe("committed-write backpressure", () => {
         // the write did not land.
         expect(piece.invocations()).toBe(1);
         expect(piece.total()).toBe(0);
-        // A fast-fail drop is not a terminal convergence error.
-        expect(terminalErrors).toHaveLength(0);
+        // A fast-fail drop is reported as a refused commit, not as a
+        // terminal convergence error.
+        expect(terminalErrors.map((error) => error.name)).toEqual([
+          "EventCommitRefusedError",
+        ]);
       } finally {
         injector.restore();
       }

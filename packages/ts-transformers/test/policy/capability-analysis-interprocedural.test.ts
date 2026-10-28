@@ -136,6 +136,99 @@ Deno.test(
 );
 
 Deno.test(
+  "interprocedural helper keeps the reads and writes of a parameter it also hands to an unknown callee",
+  () => {
+    // `audit` has no body to analyze, so the helper's parameter is a
+    // wildcard. The caller still learns that the helper reads and writes it.
+    const input = getPaths(
+      analyze(`${CELL}
+        type ReadCell<T> = Cell<T> & { get(): T };
+        declare function audit(value: unknown): void;
+        const helper = (v: ReadCell<number>) => {
+          const current = v.get();
+          audit(current);
+          v.set(current + 1);
+        };
+        const fn = (input: ReadCell<number>) => { helper(input); };`),
+      "input",
+    );
+
+    assertEquals(input.wildcard, true);
+    assertEquals(input.capability, "writable");
+    assert(input.readPaths.includes(""));
+    assert(input.writePaths.includes(""));
+  },
+);
+
+Deno.test(
+  "interprocedural helper analyzed with nested callbacks charges what its closures do",
+  () => {
+    // A caller that sees into its own nested callbacks sees into the
+    // helper's: `body` is read, and `note` written, only inside closures the
+    // helper declares.
+    const { program, sourceFile } = createProgram(`${CELL}
+      type ReadCell<T> = Cell<T> & { get(): T };
+      const helper = (
+        message: ReadCell<{ body: string; sentAt: number }>,
+        note: ReadCell<string>,
+      ) => {
+        const body = () => message.get().body;
+        const mark = () => note.set("seen");
+        mark();
+        return String(message.get().sentAt) + body();
+      };
+      const fn = (input: {
+        message: ReadCell<{ body: string; sentAt: number }>;
+        note: ReadCell<string>;
+      }) => helper(input.message, input.note);`);
+    const summary = analyzeFunctionCapabilities(findArrow(sourceFile, "fn"), {
+      checker: program.getTypeChecker(),
+      interprocedural: true,
+      includeNestedCallbacks: true,
+    });
+    const input = getPaths(summary, "input");
+
+    assert(input.readPaths.includes("message.body"));
+    assert(input.readPaths.includes("message.sentAt"));
+    assert(input.writePaths.includes("note"));
+  },
+);
+
+Deno.test(
+  "interprocedural wildcard on a member argument keeps that member whole and its siblings narrow",
+  () => {
+    // The helper's unknown access reaches only `input.count`, so `input` is
+    // not wildcarded: `count` is kept whole and written, and `label` narrows
+    // to the member the body reads.
+    const summary = analyze(`${CELL}
+      type ReadCell<T> = Cell<T> & { get(): T };
+      declare function audit(value: unknown): void;
+      const helper = (v: ReadCell<number>) => {
+        const current = v.get();
+        audit(current);
+        v.set(current + 1);
+      };
+      const fn = (
+        input: { count: ReadCell<number>; label: { text: string; color: string } },
+      ) => {
+        helper(input.count);
+        return input.label.text;
+      };`);
+    const input = getPaths(summary, "input");
+    const param = summary.params.find((entry) => entry.name === "input")!;
+
+    assertEquals(input.wildcard, false);
+    assert(input.writePaths.includes("count"));
+    assert(input.readPaths.includes("label.text"));
+    assertEquals(input.readPaths.includes("label"), false);
+    assert(
+      (param.fullShapePaths ?? []).some((path) => path.join(".") === "count"),
+    );
+    assertEquals(param.hasUnverifiedCellUse, true);
+  },
+);
+
+Deno.test(
   "interprocedural helper that reads a parameter field propagates the read path",
   () => {
     const input = getPaths(
@@ -469,3 +562,86 @@ const fn = (input: Cell<{ items: Record<string, { n: number }> }>, k: string) =>
   // which must fail closed on either flag.
   assertEquals(input!.wildcard, true);
 });
+
+Deno.test(
+  "a value leaving for a callee with no summary ends identity use beneath it",
+  () => {
+    // `record` has no body to summarize, so it may read the whole list it is
+    // handed, elements included. The elements compared with `equals()` are
+    // then not compared alone; `flag`, compared and never handed on, still is.
+    const input = getPaths(
+      analyze(`${CELL}
+        interface ReadonlyArray<T> { some(p: (v: T) => boolean): boolean; }
+        declare function record(value: unknown): void;
+        const fn = (
+          input: { list: readonly Cell<number>[]; flag: Cell<number> },
+          other: Cell<number>,
+        ) => {
+          if (input.flag.equals(other)) return;
+          if (input.list.some((item) => item.equals(other))) return;
+          record(input.list);
+        };`),
+      "input",
+    );
+
+    assertEquals(input.identityPaths, ["flag"]);
+  },
+);
+
+Deno.test(
+  "a callee's escape ends the caller's identity use beneath it",
+  () => {
+    // `pass` hands `holder.list` to a callee with no summary. Its summary says
+    // so, and the caller, which compares the list's elements and passes the
+    // holder to `pass`, no longer uses those elements for identity alone.
+    const input = getPaths(
+      analyze(`${CELL}
+        interface ReadonlyArray<T> { some(p: (v: T) => boolean): boolean; }
+        declare function record(value: unknown): void;
+        const pass = (holder: { list: readonly Cell<number>[] }) => {
+          record(holder.list);
+        };
+        const fn = (
+          input: { list: readonly Cell<number>[] },
+          other: Cell<number>,
+        ) => {
+          if (input.list.some((item) => item.equals(other))) return;
+          pass(input);
+        };`),
+      "input",
+    );
+
+    assertEquals(input.identityPaths, []);
+  },
+);
+
+for (
+  const [form, call] of [
+    ["the fallback of a member", "record(input.list ?? []);"],
+    ["the fallback of the root", "record(input ?? spare);"],
+  ]
+) {
+  Deno.test(
+    `${form} leaving for a callee with no summary ends identity use beneath it`,
+    () => {
+      // Each form hands `record` a value it may read the whole of, the
+      // compared elements included, without naming `input.list` directly.
+      const input = getPaths(
+        analyze(`${CELL}
+          interface ReadonlyArray<T> { some(p: (v: T) => boolean): boolean; }
+          declare function record(value: unknown): void;
+          const fn = (
+            input: { list: readonly Cell<number>[] },
+            other: Cell<number>,
+            spare: { list: readonly Cell<number>[] },
+          ) => {
+            if (input.list.some((item) => item.equals(other))) return;
+            ${call}
+          };`),
+        "input",
+      );
+
+      assertEquals(input.identityPaths, []);
+    },
+  );
+}

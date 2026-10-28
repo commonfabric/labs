@@ -218,7 +218,7 @@ describe("stream-data outbox mechanism", () => {
     const setupResult = await setupTx.commit().settled;
     expect(setupResult.ok).toBeDefined();
 
-    const action = rawStreamData(
+    const { action } = rawStreamData(
       inputsCell,
       () => {},
       () => {},
@@ -277,7 +277,7 @@ describe("stream-data outbox mechanism", () => {
     const setupResult = await setupTx.commit().settled;
     expect(setupResult.ok).toBeDefined();
 
-    const action = rawStreamData(
+    const { action } = rawStreamData(
       inputsCell,
       () => {},
       () => {},

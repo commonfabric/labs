@@ -162,6 +162,10 @@ describe("principalOf()", () => {
       () => principalOf(target, kind),
     );
 
+  /** Calls `principalsOf()` for `represents-principal` in a handler frame. */
+  const principalsIn = (tx: IExtendedStorageTransaction, target: unknown) =>
+    inFrame(tx, "handler", () => principalsOf(target, "represents-principal"));
+
   /** Returns the id of the document `cause` names in the test's space. */
   const idOf = (cause: string): URI =>
     runtime.getCell(space, cause).getAsNormalizedFullLink().id;
@@ -349,14 +353,16 @@ describe("principalOf()", () => {
     });
 
     it("returns `undefined` for a label attesting two principals", async () => {
+      // No name is written, so every top-level field counts.
+
       const profile = await seed("profile", [
         claimsAt(["name"], claim("represents-principal", alice.did())),
         claimsAt(["bio"], claim("represents-principal", bob.did())),
-      ]);
+      ], { bio: "hello" });
       expect(callIn(edit(), profile, "represents-principal")).toBeUndefined();
     });
 
-    it("returns `undefined` for a label holding a claim in any form but the one a runtime mints", async () => {
+    it("skips a claim in any form but an object of the kind with a `did:` subject, which refuses nothing", async () => {
       const forms = [
         `represents-principal:${bob.did()}`,
         { kind: "represents-principal", subject: ` ${bob.did()}` },
@@ -368,21 +374,46 @@ describe("principalOf()", () => {
           claimsAt([], claim("represents-principal", bob.did())),
           claimsAt(["name"], form),
         ]);
-        expect(callIn(edit(), profile, "represents-principal"))
-          .toBeUndefined();
+        expect(callIn(edit(), profile, "represents-principal")).toBe(bob.did());
       }
     });
 
-    it("returns `undefined` for a claim below the top-level fields, or one a link carries", async () => {
+    it("returns the principal a deeper or link-carried claim names, for a value whose own fields name no one", async () => {
+      // A value with no written name is read from every entry it stores,
+      // deeper ones and ones a link carried included. Its `name` here is not
+      // a string, so nothing is written to it.
+
       const deep = await seed("deep", [
         claimsAt(["name", "first"], claim("represents-principal", bob.did())),
       ], { name: { first: "Bob" } });
       const carried = await seed("carried", [{
-        ...claimsAt(["name"], claim("represents-principal", bob.did())),
+        ...claimsAt(["friend"], claim("represents-principal", bob.did())),
         observes: "followRef",
-      }]);
-      expect(callIn(edit(), deep, "represents-principal")).toBeUndefined();
-      expect(callIn(edit(), carried, "represents-principal")).toBeUndefined();
+      }], { friend: "linked" });
+      expect(callIn(edit(), deep, "represents-principal")).toBe(bob.did());
+      expect(callIn(edit(), carried, "represents-principal")).toBe(bob.did());
+    });
+
+    it("returns `undefined` for a value with no written name whose own field and a deeper claim name different principals", async () => {
+      const profile = await seed("profile", [
+        claimsAt(["bio"], claim("represents-principal", bob.did())),
+        claimsAt(
+          ["elements", "0", "cell"],
+          claim("represents-principal", alice.did()),
+        ),
+      ], { bio: "hello" });
+      expect(callIn(edit(), profile, "represents-principal")).toBeUndefined();
+    });
+
+    it("returns the principal a link carried onto a written name names", async () => {
+      const profile = await seed("profile", [
+        {
+          ...claimsAt(["name"], claim("represents-principal", bob.did())),
+          observes: "followRef",
+        },
+        claimsAt(["bio"], claim("represents-principal", alice.did())),
+      ], { name: "Bob", bio: "hello" });
+      expect(callIn(edit(), profile, "represents-principal")).toBe(bob.did());
     });
 
     it("throws for a label stored in a form this build cannot read", async () => {
@@ -417,6 +448,129 @@ describe("principalOf()", () => {
     it("returns `undefined` for a `target` passed as `undefined`", () => {
       expect(callIn(edit(), undefined, "represents-principal"))
         .toBeUndefined();
+    });
+  });
+
+  describe("a profile's written name", () => {
+    // A profile whose owner wrote a name says whose it is on the root and that
+    // field alone. Its other fields, still at their defaults, can carry the
+    // principal of whichever runtime set them up: here alice's, beside or in
+    // place of bob's.
+
+    /** The label of bob's profile, its defaults also stamped by alice. */
+    const stamped = (): SeedEntry[] => [
+      claimsAt(["name"], claim("represents-principal", bob.did())),
+      claimsAt(
+        ["avatar"],
+        claim("represents-principal", bob.did()),
+        claim("represents-principal", alice.did()),
+      ),
+      claimsAt(
+        ["bio"],
+        claim("represents-principal", bob.did()),
+        claim("represents-principal", alice.did()),
+      ),
+      claimsAt(["inbox"], claim("represents-principal", alice.did())),
+    ];
+
+    it("returns the owner of a stamped profile whose owner wrote a name", async () => {
+      const profile = await seed("profile", stamped(), { name: "Bob" });
+      expect(callIn(edit(), profile, "represents-principal")).toBe(bob.did());
+      expect(principalsIn(edit(), profile)).toEqual([bob.did()]);
+    });
+
+    it("returns `undefined` for a stamped profile whose name is unwritten", async () => {
+      // The control for the case above: the same label, with nothing written
+      // to the name.
+
+      for (
+        const [cause, value] of [
+          ["absent", {}],
+          ["empty", { name: "" }],
+          ["blank", { name: "  " }],
+        ] as const
+      ) {
+        const profile = await seed(cause, stamped(), value);
+        expect(callIn(edit(), profile, "represents-principal"))
+          .toBeUndefined();
+        expect(principalsIn(edit(), profile)).toEqual([
+          bob.did(),
+          alice.did(),
+        ]);
+      }
+    });
+
+    it("returns the principal a written name attests, though another field attests only someone else", async () => {
+      const profile = await seed("profile", [
+        claimsAt(["name"], claim("represents-principal", bob.did())),
+        claimsAt(["bio"], claim("represents-principal", alice.did())),
+      ], { name: "Bob", bio: "hello" });
+      expect(callIn(edit(), profile, "represents-principal")).toBe(bob.did());
+    });
+
+    it("returns the principal the root and a written name agree on", async () => {
+      const profile = await seed("profile", [
+        claimsAt([], claim("represents-principal", bob.did())),
+        claimsAt(["name"], claim("represents-principal", bob.did())),
+        claimsAt(["bio"], claim("represents-principal", alice.did())),
+      ], { name: "Bob" });
+      expect(callIn(edit(), profile, "represents-principal")).toBe(bob.did());
+    });
+
+    it("returns `undefined` for a written name whose own label attests two principals", async () => {
+      const profile = await seed("profile", [
+        claimsAt(
+          ["name"],
+          claim("represents-principal", bob.did()),
+          claim("represents-principal", alice.did()),
+        ),
+        claimsAt(["bio"], claim("represents-principal", bob.did())),
+      ], { name: "Bob" });
+      expect(callIn(edit(), profile, "represents-principal")).toBeUndefined();
+    });
+
+    it("returns `undefined` for an unwritten name carrying another runtime's principal alone, the owner's being elsewhere", async () => {
+      const profile = await seed("profile", [
+        claimsAt(["name"], claim("represents-principal", alice.did())),
+        claimsAt(["avatar"], claim("represents-principal", bob.did())),
+        claimsAt(["bio"], claim("represents-principal", bob.did())),
+      ], { name: "" });
+      expect(callIn(edit(), profile, "represents-principal")).toBeUndefined();
+    });
+
+    it("returns the one principal a profile with no written name attests across its fields", async () => {
+      const profile = await seed("profile", [
+        claimsAt(["name"], claim("represents-principal", bob.did())),
+        claimsAt(["bio"], claim("represents-principal", bob.did())),
+      ], { name: "" });
+      expect(callIn(edit(), profile, "represents-principal")).toBe(bob.did());
+    });
+
+    it("returns the name a link holds, followed to where it leads", async () => {
+      const name = runtime.getCell<string>(space, "linked name");
+      const tx = runtime.edit();
+      name.withTx(tx).set("Bob");
+      expect((await tx.commit().settled).error).toBeUndefined();
+      const profile = await seed("profile", stamped(), {
+        name: name.getAsLink(),
+      });
+      expect(callIn(edit(), profile, "represents-principal")).toBe(bob.did());
+    });
+
+    it("skips a string-form claim on another field, whether or not the name is written", async () => {
+      const profile = await seed("profile", [
+        claimsAt(["name"], claim("represents-principal", bob.did())),
+        claimsAt(["bio"], `represents-principal:${alice.did()}`),
+      ], { name: "Bob" });
+      expect(callIn(edit(), profile, "represents-principal")).toBe(bob.did());
+      expect(principalsIn(edit(), profile)).toEqual([bob.did()]);
+    });
+
+    it("returns an `authored-by` claim on any field, whether or not the name is written", async () => {
+      const record = await seed("record", [
+        claimsAt(["bio"], claim("authored-by", bob.did())),
+      ], { name: "Bob", bio: "hello" });
+      expect(callIn(edit(), record, "authored-by")).toBe(bob.did());
     });
   });
 
@@ -465,7 +619,7 @@ describe("principalOf()", () => {
   });
 
   describe("what it reads", () => {
-    it("reads the label, and not the value, through the calling code's transaction", async () => {
+    it("reads the label, and of the value only its `name`, through the calling code's transaction", async () => {
       const profile = await seed("profile", [
         claimsAt([], claim("represents-principal", bob.did())),
       ]);
@@ -481,14 +635,29 @@ describe("principalOf()", () => {
         expect(reads).toContainEqual(
           expect.objectContaining({ path: ["cfc"] }),
         );
-        // Resolving the cell probes whether its value is a link, and reads
-        // nothing else of the value.
+        // Resolving the cell, and its `name`, probes whether each is a link.
+        // Beyond that only the name is read, to see whether it was written.
         expect(
           reads.filter((read) =>
             read.path[0] === "value" && !isLinkResolutionProbe(read.meta)
-          ),
-        ).toEqual([]);
+          ).map((read) => read.path),
+        ).toEqual([["value", "name"]]);
       }
+    });
+
+    it("reads nothing of the value for an `authored-by` claim", async () => {
+      const record = await seed("record", [
+        claimsAt([], claim("authored-by", bob.did())),
+      ]);
+      const id = idOf("record");
+      const tx = edit();
+      expect(callIn(tx, record, "authored-by")).toBe(bob.did());
+      expect(
+        [...tx.getReadActivities!()].filter((read) =>
+          read.id === id && read.path[0] === "value" &&
+          !isLinkResolutionProbe(read.meta)
+        ),
+      ).toEqual([]);
     });
 
     it("runs a `lift()` that called it again when the label alone changes", async () => {
@@ -574,6 +743,68 @@ describe("principalOf()", () => {
       }
     });
 
+    it("runs a `lift()` that called it again when the name is written", async () => {
+      // The profile's fields name two principals, so it names neither until
+      // the name its owner writes says whose it is. The name lives in a
+      // document of its own, as a profile's does, which the profile links.
+
+      const name = runtime.getCell<string>(space, "lift name");
+      const blank = runtime.edit();
+      name.withTx(blank).set("");
+      expect((await blank.commit().settled).error).toBeUndefined();
+      await seed("profile", [
+        claimsAt(["name"], claim("represents-principal", bob.did())),
+        claimsAt(["avatar"], claim("represents-principal", alice.did())),
+      ], { name: name.getAsLink() });
+      const argumentSchema = {
+        type: "object",
+        properties: { target: { type: "unknown", asCell: ["cell"] } },
+      } as const satisfies JSONSchema;
+      const { lift, pattern: trustedPattern } =
+        createTrustedBuilder(runtime).commonfabric;
+      const principal = lift(
+        (input: { target?: unknown }) =>
+          principalOf(input.target as Cell<unknown>, "represents-principal") ??
+            "none",
+        argumentSchema,
+        { type: "string" },
+      );
+      const probe = trustedPattern(
+        ({ target }) => ({ principal: principal({ target }) }),
+        argumentSchema,
+        { type: "object", properties: { principal: { type: "string" } } },
+      );
+      const tx = runtime.edit();
+      const result = runtime.run(
+        tx,
+        probe,
+        { target: runtime.getCell(space, "profile") },
+        runtime.getCell(space, "principal-of-name-lift", undefined, tx),
+      ) as Cell<{ principal?: string }>;
+      expect((await tx.commit().settled).error).toBeUndefined();
+      const cancel = result.sink(() => {});
+      try {
+        await waitForCellValue(
+          runtime,
+          result.key("principal"),
+          (value) => value === "none",
+          { stuckLabel: "the lift to return no principal" },
+        );
+
+        const write = runtime.edit();
+        name.withTx(write).set("Bob");
+        expect((await write.commit().settled).error).toBeUndefined();
+        await waitForCellValue(
+          runtime,
+          result.key("principal"),
+          (value) => value === bob.did(),
+          { stuckLabel: "the lift to follow the written name to bob's DID" },
+        );
+      } finally {
+        cancel();
+      }
+    });
+
     it("records no label-metadata observation, since a claim's subject is public", async () => {
       const profile = await seed("profile", [
         claimsAt([], claim("represents-principal", bob.did())),
@@ -581,6 +812,77 @@ describe("principalOf()", () => {
       const tx = edit();
       expect(callIn(tx, profile, "represents-principal")).toBe(bob.did());
       expect(tx.getCfcState().labelMetadataObservations).toEqual([]);
+    });
+  });
+
+  describe("a load in flight", () => {
+    /**
+     * Makes the storage manager report a load in flight for every document,
+     * which is the state a first read of a document leaves while the load it
+     * started has not landed.
+     */
+    const loading = () => {
+      Object.assign(storage, { pendingLoadGeneration: () => 1 });
+    };
+
+    it("withdraws the handler that reads its label while its load is in flight", () => {
+      loading();
+      const tx = edit();
+      const target = runtime.getCell(space, "still-loading");
+      expect(callIn(tx, target, "represents-principal")).toBeUndefined();
+      expect(tx.dispatchedHandlerNotRun?.reason).toContain(
+        target.getAsNormalizedFullLink().id,
+      );
+    });
+
+    it("withdraws the handler that reads the label of a scoped document loading for the identity its transaction demands", () => {
+      // Only Bob's instance of the document is loading. The runtime acts for
+      // Alice, and the transaction demands Bob, as a served run demands its
+      // actor.
+
+      Object.assign(storage, {
+        pendingLoadGeneration: (key: string) =>
+          key.includes(encodeURIComponent(bob.did())) ? 1 : undefined,
+      });
+      const tx = edit();
+      tx.tx.scopeKeyIdentity = { principal: bob.did() };
+      const target = runtime.getCell(
+        space,
+        "still-loading-for-bob",
+        undefined,
+        undefined,
+        "user",
+      );
+      expect(callIn(tx, target, "represents-principal")).toBeUndefined();
+      expect(tx.dispatchedHandlerNotRun?.reason).toContain(
+        target.getAsNormalizedFullLink().id,
+      );
+    });
+
+    it("leaves a reactive computation that reads its label while its load is in flight to run", () => {
+      loading();
+      const tx = edit();
+      const target = runtime.getCell(space, "still-loading");
+      expect(callIn(tx, target, "represents-principal", "lift"))
+        .toBeUndefined();
+      expect(tx.dispatchedHandlerNotRun).toBeUndefined();
+    });
+
+    it("leaves the handler that reads its label to run, returning `undefined`, when no load is in flight", () => {
+      const tx = edit();
+      const target = runtime.getCell(space, "never-written");
+      expect(callIn(tx, target, "represents-principal")).toBeUndefined();
+      expect(tx.dispatchedHandlerNotRun).toBeUndefined();
+    });
+
+    it("leaves the handler that reads the label of a document it holds to run, while a load is in flight", async () => {
+      const profile = await seed("profile", [
+        claimsAt([], claim("represents-principal", bob.did())),
+      ]);
+      loading();
+      const tx = edit();
+      expect(callIn(tx, profile, "represents-principal")).toBe(bob.did());
+      expect(tx.dispatchedHandlerNotRun).toBeUndefined();
     });
   });
 
@@ -684,6 +986,116 @@ describe("principalOf()", () => {
       expect(() => callIn(edit(), { name: "Bob" }, "authored-by")).toThrow(
         "takes a cell as its target",
       );
+    });
+  });
+
+  describe('with `label` of `"written"`', () => {
+    /** Calls `principalOf(target, kind, options)` in a handler frame. */
+    const callAt = (target: unknown, kind: unknown, options: unknown) =>
+      inFrame(edit(), "handler", () => principalOf(target, kind, options));
+
+    /**
+     * Stores a document under `cause` whose `by` field links a profile that
+     * attests bob, with a label map of `entries`, and returns its cell.
+     */
+    const holding = async (cause: string, entries: SeedEntry[]) => {
+      const profile = await seed("profile", [
+        claimsAt([], claim("represents-principal", bob.did())),
+      ]);
+      return await seed(cause, entries, {
+        by: profile.getAsLink(),
+        title: "Held",
+      });
+    };
+
+    /** The copy of the linked profile's claim a link carries at `by`. */
+    const carried: SeedEntry = {
+      path: ["by"],
+      label: { integrity: [claim("represents-principal", bob.did())] },
+      origin: "link",
+    };
+
+    it("returns the DID attested on a field holding a link, where the default returns the linked document's", async () => {
+      const holder = await holding("holder", [
+        claimsAt(["by"], claim("represents-principal", alice.did())),
+        carried,
+      ]);
+      const field = holder.key("by");
+      expect(callIn(edit(), field, "represents-principal")).toBe(bob.did());
+      expect(callAt(field, "represents-principal", { label: "resolved" }))
+        .toBe(bob.did());
+      expect(callAt(field, "represents-principal", { label: "written" }))
+        .toBe(alice.did());
+      expect(
+        inFrame(
+          edit(),
+          "handler",
+          () =>
+            principalsOf(field, "represents-principal", { label: "written" }),
+        ),
+      ).toEqual([alice.did()]);
+    });
+
+    it("does not count the claim a link carries from the document it leads to", async () => {
+      const holder = await holding("holder", [carried]);
+      const field = holder.key("by");
+      expect(callAt(field, "represents-principal", { label: "written" }))
+        .toBeUndefined();
+      expect(
+        inFrame(
+          edit(),
+          "handler",
+          () =>
+            principalsOf(field, "represents-principal", { label: "written" }),
+        ),
+      ).toEqual([]);
+    });
+
+    it("follows the links on the way to the field", async () => {
+      const holder = await holding("holder", [
+        claimsAt(["by"], claim("represents-principal", alice.did())),
+      ]);
+      const via = runtime.getCell<{ by: unknown }>(space, "via");
+      const tx = runtime.edit();
+      via.withTx(tx).set(holder as never);
+      expect((await tx.commit().settled).error).toBeUndefined();
+
+      expect(
+        callAt(via.key("by"), "represents-principal", { label: "written" }),
+      ).toBe(alice.did());
+    });
+
+    it("follows a redirect stored in the field, as a write to it would", async () => {
+      const profile = await seed("profile", [
+        claimsAt([], claim("represents-principal", bob.did())),
+      ]);
+      const holder = await seed("redirecting", [
+        claimsAt(["by"], claim("represents-principal", alice.did())),
+      ], { by: profile.getAsWriteRedirectLink() });
+      expect(
+        callAt(holder.key("by"), "represents-principal", { label: "written" }),
+      ).toBe(bob.did());
+    });
+
+    it("reads a field holding no link as the default does", async () => {
+      const record = await seed("record", [
+        claimsAt(["name"], claim("authored-by", bob.did())),
+      ]);
+      const field = record.key("name" as never);
+      expect(callAt(field, "authored-by", { label: "written" })).toBe(
+        bob.did(),
+      );
+      expect(callIn(edit(), field, "authored-by")).toBe(bob.did());
+    });
+
+    it("throws for `options` in another form", async () => {
+      const profile = await seed("profile", [
+        claimsAt([], claim("represents-principal", bob.did())),
+      ]);
+      for (const options of [null, "no", [], { label: "field" }]) {
+        expect(() => callAt(profile, "represents-principal", options))
+          .toThrow('takes `options` of `{ label?: "written" | "resolved" }`');
+      }
     });
   });
 

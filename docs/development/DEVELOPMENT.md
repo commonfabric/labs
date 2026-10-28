@@ -363,7 +363,10 @@ different answer:
   touches a `#` member of a receiver that is not a real instance, so the test
   wants rewriting to build one.
 - **A helper that uses no instance state.** Make it `static #` behind the
-  static getter, or a module-level function the test imports.
+  static getter, or a module-level function the test imports. A test in
+  another package imports such a function through the package's
+  `./for-testing-only` entry, which § Offering test-only code to other packages
+  describes.
 
 ### Comments
 
@@ -434,8 +437,34 @@ come up.
   what the verb selects for. And `meet` is the lattice operation the Contextual
   Flow Control code is built on, a technical term with test files named after it,
   where a stray prose use costs a search.
+- **`social space`**, not `shared space`, for a space with more than one member
+  or participant, as [the glossary](../common/concepts/glossary.md#social-space)
+  defines it. `share` already names other things here — the share inbox where a
+  principal receives offers, share links, a user's shared profiles — and none of
+  them is about how many people a space has. As with spelling, an identifier
+  named for shared spaces, `sharedSpaceCatalog` among them, keeps its name:
+  changing it is a rename, not a word-choice fix.
 
 ## Code Design & Principles
+
+### General principles
+
+- Prefer general solutions to special cases, and less code to more. A refactor
+  aims to reduce the total amount of code, not counting new documentation and
+  tests.
+- Design formats and protocols without version numbers. Build a format or
+  protocol so that a reader handles data from older and newer writers alike,
+  rather than marking each change with a version.
+- A function given input that violates its contract throws. It does not
+  discard the input.
+- When code you are changing has a limitation, fix it rather than documenting
+  it as a known limitation.
+- Do not rely on a prompt to keep an operation safe. People approve prompts
+  without reading them, and an attacker can make a dangerous operation look
+  safe. Enforce the boundary in code. A confirmation is still right where the
+  person's decision is the input, such as consent to release their own data in
+  CFC declassification, or where it guards against a mistake, such as deleting
+  a document.
 
 ### Error Handling
 
@@ -453,6 +482,12 @@ come up.
 
 - Export types explicitly using `export type { ... }`.
 - Prefer strong typing with interfaces or types instead of `any`.
+- Do not use a type assertion (`as T`, `as unknown as T`, or a detour through
+  `any`) to make types line up; change the APIs so that they line up. A test
+  stand-in may be asserted where it is passed in, as "Making a private member
+  reachable from a test" describes. A value that arrives untyped at a
+  serialization boundary is validated, as "Validating a value that arrived
+  through a decode" describes, not asserted.
 - Update package-level README.md files.
 
 ### Async only when you await
@@ -516,6 +551,30 @@ For import-map placement and dependency boundaries, follow
   dependencies, external or otherwise.
 - Clean separation of public and private facing interfaces: only export what's
   needed.
+
+### Offering test-only code to other packages
+
+What a package offers only to other packages' tests — examples of its values, a
+fake, an internal step or count its public surface cannot reach dependably —
+goes behind an export-map entry named `./for-testing-only`, pointing at
+`src/for-testing-only.ts` or at a `src/for-testing-only/` directory's
+`index.ts`. `packages/data-model` is the worked example. This is the
+package-level counterpart of a class's `accessForTestingOnly` getter
+(§ Classes).
+
+- No barrel re-exports it and no other entry reaches it, so the package's
+  ordinary use loads none of it.
+- Each value it exports carries a `ForTestingOnly` suffix, or
+  `_FOR_TESTING_ONLY` for an upper-case constant, so the name says what it is
+  wherever it is used. A type keeps its own name.
+- An internal stays out of every barrel and is re-exported here under a
+  suffixed name, whose doc comment says why a test of the public surface cannot
+  reach it.
+- Only tests and benchmarks import it, as `tasks/test-files.ts` defines them.
+  No gate checks this; review does.
+
+Such code belongs beside what it depends on. In `packages/test-support` it
+would make that package import the package it serves.
 
 ### Avoid Ambiguous Types
 
@@ -924,16 +983,12 @@ async function main() {
 }
 ```
 
-Sometimes a low-level try/catch is appropriate, of course:
-
-- `getData()` could have its own try/catch to e.g. retry on failure, throwing
-  after 3 failed attempts.
-- Exposing a `isFeatureSupported(): boolean` function that based on if some
-  other function throws, determines if "feature" is supported. If we can handle
-  both scenarios and translate the error into a boolean (e.g. are all of the
-  ED25519 features we need supported natively for this platform? if not use a
-  polyfill), then this is not a fatal error, and we explicitly do not want to
-  throw and handle it elsewhere.
+A low-level try/catch is appropriate where the error is an answer rather than a
+failure. An `isFeatureSupported(): boolean` function, for example, can call
+something that throws when a feature is missing and translate the error into
+`false` (are all of the ED25519 features we need supported natively on this
+platform? if not, use a polyfill). Neither outcome is fatal, so the error is
+not thrown on to be handled elsewhere.
 
 ### Avoid Singletons
 
@@ -1025,7 +1080,15 @@ that has to stay, such as one in a test that shows the overflow, sits under a
 - Run all tests using `deno task test` (NOT `deno test`). It is not a
   substitute for `deno task check`: every package's tests run under
   `--no-check`.
-- To run a single test file use `deno test --no-check path/to/test.ts`.
+- To run one test, `cd` into its package and run
+  `deno task test --filter "test name"`.
+  [Running one test by name](TESTING.md#running-one-test-by-name) describes
+  which name the pattern has to match. A bare
+  `deno test --no-check path/to/test.ts` drops the `--preload` and
+  permissions that the package's `deno-test` task passes. In
+  `packages/runner`, for example, the preload installs the global fake
+  `clock`, and without it a test that calls `clock.settle()` fails with
+  `ReferenceError: clock is not defined`.
 - To test a specific package, `cd` into the package directory and run
   `deno task test`.
 

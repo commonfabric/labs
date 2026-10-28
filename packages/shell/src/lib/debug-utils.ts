@@ -35,15 +35,28 @@ import { createVDomDebugHelpers, viewSettled } from "@commonfabric/html/debug";
  * function resolves once the rendered view is interactive — the worker is idle
  * and the resulting vdom and Lit updates have drained. getRt is read on each
  * call so the helper tracks runtime replacement; with no runtime the idle step
- * is skipped.
+ * is skipped. `getPending`, when given, names work the shell has started that
+ * the view is not settled without, such as the bring-up of the user's Home
+ * or the join of a room the user visits, and each pass waits for it ahead of
+ * the worker's idle. It answers with the
+ * same promise for as long as the same work is pending. Work it comes to name
+ * after a pass read it, while the worker was idling, is waited for by a
+ * settle of its own.
  */
 export function createViewSettled(
   getRt: () => RuntimeClient | undefined,
+  getPending?: () => Promise<void> | undefined,
 ): () => Promise<void> {
-  return () =>
-    viewSettled(async () => {
-      await getRt()?.idle();
-    });
+  return async () => {
+    let awaited: Promise<void> | undefined;
+    do {
+      await viewSettled(async () => {
+        awaited = getPending?.();
+        await awaited;
+        await getRt()?.idle();
+      });
+    } while (getPending?.() !== awaited);
+  };
 }
 
 /** The commonfabric console globals exposed for the active runtime. */
@@ -64,17 +77,19 @@ type CommonfabricGlobal = { commonfabric?: CommonfabricDebugState };
 /**
  * Install the per-runtime commonfabric console globals — rt, viewSettled, vdom,
  * detectNonIdempotent, and the cell debug utilities — for the active runtime.
+ * `getPending` is handed to `viewSettled`, as `createViewSettled()` says.
  */
 export function exposeCommonfabricGlobals(
   global: CommonfabricGlobal,
   runtime: RuntimeClient,
   getRuntime: () => RuntimeClient | undefined,
   getSpace: () => DID | undefined,
+  getPending?: () => Promise<void> | undefined,
 ): void {
   global.commonfabric ??= {};
   const cf = global.commonfabric;
   cf.rt = runtime;
-  cf.viewSettled = createViewSettled(getRuntime);
+  cf.viewSettled = createViewSettled(getRuntime, getPending);
   cf.vdom = createVDomDebugHelpers();
   cf.detectNonIdempotent = async (durationMs = 5000) => {
     const result = await runtime.detectNonIdempotent(durationMs);

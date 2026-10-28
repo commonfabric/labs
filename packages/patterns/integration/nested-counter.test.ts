@@ -124,19 +124,17 @@ describe("nested counter integration test", () => {
     await showPiece();
     await settleView(page);
 
-    // The text below counts up from this value, so the test writes it rather
-    // than reading whatever the counter happens to hold. The write follows the
-    // navigation: one that precedes it is refused on the server-execution arm
-    // for naming this process's own speculation.
-    await piece.result.set(0, ["value"]);
-    await waitForCounter(page, "Counter is the 0th number");
+    // Use a value no other test supplies, so observing it proves this write
+    // reached the open view before the click changes it.
+    await piece.result.set(10, ["value"]);
+    await waitForCounter(page, "Counter is the 10th number");
 
     // Click increment button (second button - first is decrement)
     await clickNthCfButton(page, "[data-cf-button]", 1);
 
     // Wait for the piece result to reflect the increment.
-    await awaitResultValue(1);
-    await waitForCounter(page, "Counter is the 1st number");
+    await awaitResultValue(11);
+    await waitForCounter(page, "Counter is the 11th number");
   });
 
   it("should update counter value via direct operations and verify UI", async () => {

@@ -42,6 +42,31 @@ export const styles = css`
       --cf-theme-color-error-foreground,
       #ffffff
     );
+    --cf-button-color-accent: var(--cf-theme-color-accent, #fc856d);
+    --cf-button-color-primary-pressed: var(
+      --cf-theme-color-primary-pressed,
+      color-mix(in srgb, var(--cf-button-color-primary) 85%, black)
+    );
+    --cf-button-color-primary-subtle: var(
+      --cf-theme-color-primary-subtle,
+      color-mix(in srgb, var(--cf-button-color-primary) 10%, transparent)
+    );
+    --cf-button-color-accent-pressed: var(
+      --cf-theme-color-accent-pressed,
+      color-mix(in srgb, var(--cf-button-color-accent) 85%, black)
+    );
+    --cf-button-color-accent-subtle: var(
+      --cf-theme-color-accent-subtle,
+      color-mix(in srgb, var(--cf-button-color-accent) 10%, transparent)
+    );
+    --cf-button-color-danger-pressed: var(
+      --cf-theme-color-danger-pressed,
+      color-mix(in srgb, var(--cf-button-color-error) 85%, black)
+    );
+    --cf-button-color-danger-subtle: var(
+      --cf-theme-color-danger-subtle,
+      color-mix(in srgb, var(--cf-button-color-error) 10%, transparent)
+    );
     --cf-button-color-border: var(
       --cf-theme-color-border,
       var(--cf-colors-gray-300, #d5d7dd)
@@ -178,36 +203,36 @@ export const styles = css`
   }
 
   :host([color="primary"]) .button.solid {
-    background-color: var(--cf-theme-color-primary);
+    background-color: var(--cf-button-color-primary);
     color: var(--cf-theme-color-primary-foreground, #fff);
-    border-color: var(--cf-theme-color-primary);
+    border-color: var(--cf-button-color-primary);
   }
 
   :host([color="primary"]:not([disabled])) .button.solid:hover {
-    background-color: var(--cf-theme-color-primary-pressed);
-    border-color: var(--cf-theme-color-primary-pressed);
+    background-color: var(--cf-button-color-primary-pressed);
+    border-color: var(--cf-button-color-primary-pressed);
   }
 
   :host([color="accent"]) .button.solid {
-    background-color: var(--cf-theme-color-accent);
+    background-color: var(--cf-button-color-accent);
     color: var(--cf-theme-color-accent-foreground, #fff);
-    border-color: var(--cf-theme-color-accent);
+    border-color: var(--cf-button-color-accent);
   }
 
   :host([color="accent"]:not([disabled])) .button.solid:hover {
-    background-color: var(--cf-theme-color-accent-pressed);
-    border-color: var(--cf-theme-color-accent-pressed);
+    background-color: var(--cf-button-color-accent-pressed);
+    border-color: var(--cf-button-color-accent-pressed);
   }
 
   :host([color="danger"]) .button.solid {
-    background-color: var(--cf-theme-color-error);
+    background-color: var(--cf-button-color-error);
     color: var(--cf-theme-color-error-foreground, #fff);
-    border-color: var(--cf-theme-color-error);
+    border-color: var(--cf-button-color-error);
   }
 
   :host([color="danger"]:not([disabled])) .button.solid:hover {
-    background-color: var(--cf-theme-color-danger-pressed);
-    border-color: var(--cf-theme-color-danger-pressed);
+    background-color: var(--cf-button-color-danger-pressed);
+    border-color: var(--cf-button-color-danger-pressed);
   }
 
   /*
@@ -228,30 +253,30 @@ export const styles = css`
   }
 
   :host([color="primary"]) .button.outline {
-    color: var(--cf-theme-color-primary);
-    border-color: var(--cf-theme-color-primary);
+    color: var(--cf-button-color-primary);
+    border-color: var(--cf-button-color-primary);
   }
 
   :host([color="primary"]:not([disabled])) .button.outline:hover {
-    background-color: var(--cf-theme-color-primary-subtle);
+    background-color: var(--cf-button-color-primary-subtle);
   }
 
   :host([color="accent"]) .button.outline {
-    color: var(--cf-theme-color-accent);
-    border-color: var(--cf-theme-color-accent);
+    color: var(--cf-button-color-accent);
+    border-color: var(--cf-button-color-accent);
   }
 
   :host([color="accent"]:not([disabled])) .button.outline:hover {
-    background-color: var(--cf-theme-color-accent-subtle);
+    background-color: var(--cf-button-color-accent-subtle);
   }
 
   :host([color="danger"]) .button.outline {
-    color: var(--cf-theme-color-error);
-    border-color: var(--cf-theme-color-error);
+    color: var(--cf-button-color-error);
+    border-color: var(--cf-button-color-error);
   }
 
   :host([color="danger"]:not([disabled])) .button.outline:hover {
-    background-color: var(--cf-theme-color-danger-subtle);
+    background-color: var(--cf-button-color-danger-subtle);
   }
 
   /*
@@ -273,27 +298,27 @@ export const styles = css`
   }
 
   :host([color="primary"]) .button.ghost {
-    color: var(--cf-theme-color-primary);
+    color: var(--cf-button-color-primary);
   }
 
   :host([color="primary"]:not([disabled])) .button.ghost:hover {
-    background-color: var(--cf-theme-color-primary-subtle);
+    background-color: var(--cf-button-color-primary-subtle);
   }
 
   :host([color="accent"]) .button.ghost {
-    color: var(--cf-theme-color-accent);
+    color: var(--cf-button-color-accent);
   }
 
   :host([color="accent"]:not([disabled])) .button.ghost:hover {
-    background-color: var(--cf-theme-color-accent-subtle);
+    background-color: var(--cf-button-color-accent-subtle);
   }
 
   :host([color="danger"]) .button.ghost {
-    color: var(--cf-theme-color-error);
+    color: var(--cf-button-color-error);
   }
 
   :host([color="danger"]:not([disabled])) .button.ghost:hover {
-    background-color: var(--cf-theme-color-danger-subtle);
+    background-color: var(--cf-button-color-danger-subtle);
   }
 
   :host([size="icon"]) .button.ghost {

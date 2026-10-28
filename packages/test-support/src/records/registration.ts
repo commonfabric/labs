@@ -14,12 +14,13 @@
  * as skipped instead of vanishing.
  */
 
-import { dirname, fromFileUrl, join, relative, resolve } from "@std/path";
+import { fromFileUrl, join, relative } from "@std/path";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import {
   type Environment,
   readEnv,
   recordsDir,
+  repositoryRelativePath,
   repositoryRoot,
 } from "./paths.ts";
 
@@ -62,6 +63,24 @@ export const MACHINERY_MODULE_SUFFIXES: readonly string[] = [
 export const NAME_SEPARATOR = " > ";
 
 /**
+ * The names of every test enclosing the test a name identifies, outermost
+ * first: `"a > b > c"` is inside `"a"` and `"a > b"`. Each separator is a
+ * place the name may be cut, overlapping ones included, so a step of a
+ * test named `"a >"`, which reports as `"a > > b"`, is inside `"a >"`.
+ */
+export function enclosingNames(name: string): string[] {
+  const names: string[] = [];
+  for (
+    let at = name.indexOf(NAME_SEPARATOR);
+    at >= 0;
+    at = name.indexOf(NAME_SEPARATOR, at + 1)
+  ) {
+    names.push(name.slice(0, at));
+  }
+  return names;
+}
+
+/**
  * A name map as it travels: where the test process ran, and a registered
  * name against the repository-relative file it came from. The names are
  * what `Deno.test` was called with, and, for a file written with
@@ -81,12 +100,22 @@ export interface NameMap {
 
   /** Each registered name against the file it came from. */
   names: Record<string, string>;
+
+  /**
+   * Present where an `error` or `unhandledrejection` event reached the
+   * process while its module was loading, before any of its hooks or tests
+   * began. Any of them can stop a module part way through
+   * loading, so the names may stop short of what their file holds. They
+   * still say which file each name came from.
+   */
+  interrupted?: true;
 }
 
 /** A name map as it comes back off disk, its values still unread. */
 interface ParsedNameMap {
   dir?: string;
   names: Record<string, unknown>;
+  interrupted?: true;
 }
 
 /** One map off disk, or undefined for anything that is not one. */
@@ -94,7 +123,11 @@ function asNameMap(parsed: unknown): ParsedNameMap | undefined {
   if (!isObjectNotArray(parsed)) {
     return undefined;
   }
-  const { dir, names } = parsed as { dir?: unknown; names?: unknown };
+  const { dir, names, interrupted } = parsed as {
+    dir?: unknown;
+    names?: unknown;
+    interrupted?: unknown;
+  };
   // An array is an object, and its entries are index keys against the
   // values, so names written as one would register a test named "0".
   if (!isObjectNotArray(names)) {
@@ -103,6 +136,7 @@ function asNameMap(parsed: unknown): ParsedNameMap | undefined {
   return {
     ...(typeof dir === "string" ? { dir } : {}),
     names: names as Record<string, unknown>,
+    ...(interrupted === true ? { interrupted } : {}),
   };
 }
 
@@ -127,15 +161,6 @@ export function runDirectory(): string | undefined {
 export type SkipList = Record<string, string[]>;
 
 /**
- * The repository root enclosing a file, found by climbing to the
- * directory holding `.git`. Undefined outside any repository, and
- * undefined when the climb is not permitted to read the filesystem.
- */
-export function repositoryRootOf(path: string): string | undefined {
-  return repositoryRoot(dirname(resolve(path)));
-}
-
-/**
  * The repository-relative path of the file a `file:` URL names. Undefined
  * for a URL naming no file, for a file inside no repository, and where
  * finding the repository is not permitted to read the filesystem.
@@ -147,10 +172,7 @@ export function repositoryPathOf(url: string): string | undefined {
   } catch {
     return undefined;
   }
-  const root = repositoryRootOf(path);
-  return root === undefined
-    ? undefined
-    : relative(root, path).replaceAll("\\", "/");
+  return repositoryRelativePath(path);
 }
 
 /** The test file this process runs, resolved once. */
@@ -186,17 +208,11 @@ export function fileForName(
   name: string,
   names: ReadonlyMap<string, string>,
 ): string | undefined {
-  const exact = names.get(name);
-  if (exact !== undefined) return exact;
-  let best: string | undefined;
-  let bestLength = -1;
-  for (const [registered, file] of names) {
-    if (registered.length <= bestLength) continue;
-    if (!name.startsWith(registered + NAME_SEPARATOR)) continue;
-    best = file;
-    bestLength = registered.length;
+  for (const registered of [...enclosingNames(name), name].reverse()) {
+    const file = names.get(registered);
+    if (file !== undefined) return file;
   }
-  return best;
+  return undefined;
 }
 
 /** Whether an entry of a map is one a read scoped to `ranIn` takes. */
@@ -233,6 +249,63 @@ export async function readNameMaps(
   const ranIn = options.ranIn?.replace(/\/$/, "");
   const names = new Map<string, string>();
   const ambiguous = new Set<string>();
+  for (const map of await nameMapsIn(spool)) {
+    for (const [name, file] of Object.entries(map.names)) {
+      if (typeof file !== "string" || file.length === 0) continue;
+      if (!inScope(map.dir, file, ranIn)) continue;
+      const known = names.get(name);
+      if (known === undefined) {
+        names.set(name, file);
+        continue;
+      }
+      if (known !== file) ambiguous.add(name);
+    }
+  }
+  for (const name of ambiguous) names.delete(name);
+  return names;
+}
+
+/**
+ * The names each test file registered, by repository-relative file, from the
+ * name maps a spool holds. A test process writes a file's names as the
+ * file's module registers them, so a file named here is one whose process
+ * got that far. A file a map marked as interrupted names is left out: an
+ * error that reached its process may have stopped its module part way
+ * through loading, after some of its tests had registered. A module whose
+ * loading never finishes, or that calls `Deno.exit`, leaves its map
+ * unmarked, but none of its file's tests run, and its file records nothing.
+ * So the names under a file are every name it registered: each `Deno.test`,
+ * and each leaf's whole chain where the bdd re-export recorded leaves. A
+ * file whose process registered nothing is not named, and nothing here says
+ * what it holds.
+ *
+ * A name two files both registered stays under each of them. Which file
+ * holds a test is not the question this answers, so nothing is ambiguous.
+ */
+export async function readRegistrations(
+  spool: string,
+): Promise<Map<string, Set<string>>> {
+  const registered = new Map<string, Set<string>>();
+  const interrupted = new Set<string>();
+  for (const map of await nameMapsIn(spool)) {
+    for (const [name, file] of Object.entries(map.names)) {
+      if (typeof file !== "string" || file.length === 0) continue;
+      if (map.interrupted) interrupted.add(file);
+      const names = registered.get(file);
+      if (names === undefined) registered.set(file, new Set([name]));
+      else names.add(name);
+    }
+  }
+  for (const file of interrupted) registered.delete(file);
+  return registered;
+}
+
+/**
+ * Every name map a spool holds, in the order of their names. One that
+ * cannot be read or is not a map is left out: a name map is metadata, and
+ * its absence costs what its reader would have learned from it.
+ */
+async function nameMapsIn(spool: string): Promise<ParsedNameMap[]> {
   let entries: string[] = [];
   try {
     for await (const entry of Deno.readDir(spool)) {
@@ -247,6 +320,7 @@ export async function readNameMaps(
     entries = [];
   }
   entries.sort();
+  const maps: ParsedNameMap[] = [];
   for (const entry of entries) {
     let parsed: unknown;
     try {
@@ -255,20 +329,9 @@ export async function readNameMaps(
       continue;
     }
     const map = asNameMap(parsed);
-    if (map === undefined) continue;
-    for (const [name, file] of Object.entries(map.names)) {
-      if (typeof file !== "string" || file.length === 0) continue;
-      if (!inScope(map.dir, file, ranIn)) continue;
-      const known = names.get(name);
-      if (known === undefined) {
-        names.set(name, file);
-        continue;
-      }
-      if (known !== file) ambiguous.add(name);
-    }
+    if (map !== undefined) maps.push(map);
   }
-  for (const name of ambiguous) names.delete(name);
-  return names;
+  return maps;
 }
 
 /** Serializes a skip list for the file the environment points at. */
@@ -304,13 +367,36 @@ export function parseSkipList(text: string): SkipList | undefined {
 /** What one test process captured, and what it was told not to run. */
 export interface RegistrationCapture {
   /** The file each registered name came from, repository-relative. */
-  names: Map<string, string>;
+  readonly names: ReadonlyMap<string, string>;
+
+  /**
+   * Notes that `name` was registered from `file`, and writes it into the
+   * spool once the code registering it has run, before any test does. A
+   * test run that is interrupted ends without unloading, and the names
+   * its report needs are in the spool already.
+   */
+  attribute(name: string, file: string): void;
 
   /** Whether a name registered from a file is on the skip list. */
   skipped(file: string | undefined, name: string): boolean;
 
-  /** Writes the captured name map into the spool. */
+  /** Writes the names noted since the last write into the spool. */
   flush(): void;
+
+  /**
+   * Notes that the module registering the tests has settled, having
+   * finished loading or stopped, and that the file's hooks and tests are
+   * about to run.
+   */
+  begin(): void;
+
+  /**
+   * Notes that an `error` or `unhandledrejection` event reached the
+   * process before `begin`, while the module was loading, and writes every
+   * name noted so far into the spool again in a map that says so. Every
+   * later write says so too. After `begin`, nothing is noted.
+   */
+  interrupt(): void;
 }
 
 let installed: RegistrationCapture | undefined;
@@ -330,9 +416,10 @@ export function activeCapture(): RegistrationCapture | undefined {
 
 /**
  * Wraps `Deno.test` so that every registration is attributed to its file
- * and checked against the skip list, and arranges for the captured map to
- * reach the spool when the process unloads. Returns undefined when there
- * was nothing to do and `Deno.test` was left alone.
+ * and checked against the skip list, and arranges for the captured names
+ * to reach the spool as they are registered and when the process unloads.
+ * Returns undefined when there was nothing to do and `Deno.test` was left
+ * alone.
  *
  * Called from a `--preload` module, so it runs before any test module and
  * needs nothing from the test files. Installing twice is a no-op: a
@@ -376,6 +463,17 @@ export function installRegistrationCapture(
     ...(spool === undefined ? {} : { spool }),
   });
   Reflect.set(Deno, "test", built.registrar);
+  // Deno runs a file's `beforeAll` hooks once its module has settled,
+  // having finished loading or stopped, before any other hook or test of
+  // the file, and this one was registered first. A registrar another
+  // preload put in place may carry no hooks; nothing then notes that the
+  // module settled, and an error at any point marks the file's names.
+  built.registrar.beforeAll?.(() => built.capture.begin());
+  globalThis.addEventListener("error", () => built.capture.interrupt());
+  globalThis.addEventListener(
+    "unhandledrejection",
+    () => built.capture.interrupt(),
+  );
   globalThis.addEventListener("unload", () => built.capture.flush());
   installed = built.capture;
   return built.capture;
@@ -405,8 +503,9 @@ export interface CaptureOptions {
 
   /**
    * The repository-relative directory the map says it was written in, as
-   * it stood when the capture was built. `flush` runs at process unload,
-   * by which time a test may have changed the working directory.
+   * it stood when the capture was built. `flush` runs as each test file
+   * registers its tests, by which time a test of an earlier file may have
+   * changed the working directory.
    */
   dir?: string;
 }
@@ -425,18 +524,35 @@ export function buildCapture(
 } {
   const { dir, skips, spool } = options;
   const names = new Map<string, string>();
+  // What the next write carries. Each write is a map of its own, and a
+  // reader merges every map the spool holds.
+  let unwritten = new Map<string, string>();
+  let writing = false;
+  let interrupted = false;
+  let begun = false;
 
   const capture: RegistrationCapture = {
     names,
+    attribute: (name, file) => {
+      names.set(name, file);
+      unwritten.set(name, file);
+      if (writing) return;
+      writing = true;
+      queueMicrotask(() => {
+        writing = false;
+        capture.flush();
+      });
+    },
     skipped: (file, name) => {
       if (skips === undefined || file === undefined) return false;
       return skips[file]?.includes(name) ?? false;
     },
     flush: () => {
-      if (spool === undefined || names.size === 0) return;
+      if (spool === undefined || unwritten.size === 0) return;
       const map: NameMap = {
         ...(dir === undefined ? {} : { dir }),
-        names: Object.fromEntries(names),
+        names: Object.fromEntries(unwritten),
+        ...(interrupted ? { interrupted: true } : {}),
       };
       try {
         Deno.mkdirSync(spool, { recursive: true });
@@ -451,9 +567,22 @@ export function buildCapture(
           ),
           JSON.stringify(map),
         );
+        unwritten = new Map();
       } catch (error) {
+        // The names stay unwritten, and the next write carries them.
         console.warn(`test records: cannot write a name map: ${error}`);
       }
+    },
+    begin: () => {
+      begun = true;
+    },
+    interrupt: () => {
+      if (interrupted || begun) return;
+      interrupted = true;
+      // The maps written already do not carry the mark, so every name
+      // noted so far is written again under it.
+      unwritten = new Map(names);
+      capture.flush();
     },
   };
 
@@ -473,7 +602,7 @@ export function buildCapture(
       return;
     }
     const file = runningFile();
-    if (file !== undefined) names.set(definition.name, file);
+    if (file !== undefined) capture.attribute(definition.name, file);
     if (capture.skipped(file, definition.name)) {
       through({ ...definition, ...extra, ignore: true });
       return;

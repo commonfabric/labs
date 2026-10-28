@@ -97,12 +97,18 @@ export const withheldSummary = (step: ConsoleStep): string =>
       ].join("; ") || "model omissions"
     } · ${step.withheld.locations.length}`;
 
-/** What the full tool artifact records beside the model-facing result. */
-export const withheldView = (step: ConsoleStep): TemplateResult => {
+/**
+ * What the full tool artifact records beside the model-facing result, under
+ * `summary`, which says by default what omission rules applied.
+ */
+export const withheldView = (
+  step: ConsoleStep,
+  summary = withheldSummary(step),
+): TemplateResult => {
   if (step.withheld.status === "unrecorded") {
     return html`
       <details class="pane withheld-pane">
-        <summary>${withheldSummary(step)}</summary>
+        <summary>${summary}</summary>
         <p class="empty">
           No omission record exists for this tool result. Legacy runs cannot be
           reconstructed honestly from the model-facing transcript alone.
@@ -113,7 +119,7 @@ export const withheldView = (step: ConsoleStep): TemplateResult => {
   if (step.withheld.status === "record-unreadable") {
     return html`
       <details class="pane withheld-pane">
-        <summary>${withheldSummary(step)}</summary>
+        <summary>${summary}</summary>
         <p class="empty">
           The omission record exists but is unreadable or does not match the
           current contract. This result cannot be reconstructed honestly.
@@ -124,7 +130,7 @@ export const withheldView = (step: ConsoleStep): TemplateResult => {
   if (step.withheld.status === "record-entry-missing") {
     return html`
       <details class="pane withheld-pane">
-        <summary>${withheldSummary(step)}</summary>
+        <summary>${summary}</summary>
         <p class="empty">
           The omission record exists but has no entry for this tool result.
           Which omission rules applied cannot be determined.
@@ -135,7 +141,7 @@ export const withheldView = (step: ConsoleStep): TemplateResult => {
   if (step.withheld.locations.length === 0) {
     return html`
       <details class="pane withheld-pane">
-        <summary>${withheldSummary(step)}</summary>
+        <summary>${summary}</summary>
         <p class="empty">No omission rule applied to this result.</p>
       </details>
     `;
@@ -145,7 +151,7 @@ export const withheldView = (step: ConsoleStep): TemplateResult => {
     : step.outputText;
   return html`
     <details class="pane withheld-pane">
-      <summary>${withheldSummary(step)}</summary>
+      <summary>${summary}</summary>
       ${modelResult === undefined ? nothing : html`
         <p class="pane-note">Model received: ${truncate(modelResult, 200)}</p>
       `}
@@ -171,20 +177,30 @@ export const withheldView = (step: ConsoleStep): TemplateResult => {
   `;
 };
 
+/**
+ * The labels CFC computed for one call's inputs. Taint and the prompt slot's
+ * influence are separate views of the same inputs; both are listed, one row
+ * per entry, each on its own axis.
+ */
+const stepLabelEntries = (step: ConsoleStep) => [
+  ...step.invocation?.cfcInputLabels?.entries ?? [],
+  ...step.invocation?.promptSlotInfluenceLabels?.entries ?? [],
+];
+
+/**
+ * Whether CFC recorded anything about one call: a decision, an event, or
+ * labels on its inputs.
+ */
+export const stepCfcRecorded = (step: ConsoleStep): boolean =>
+  step.policy !== undefined || step.policyEvents.length > 0 ||
+  stepLabelEntries(step).length > 0;
+
 /** What CFC decided about one call, and any event it raised. */
 export const stepPolicyView = (
   step: ConsoleStep,
 ): TemplateResult | typeof nothing => {
-  // Taint and the prompt slot's influence are separate views of the same
-  // inputs; both are listed, one row per entry, each on its own axis.
-  const labelEntries = [
-    ...step.invocation?.cfcInputLabels?.entries ?? [],
-    ...step.invocation?.promptSlotInfluenceLabels?.entries ?? [],
-  ];
-  if (
-    step.policy === undefined && step.policyEvents.length === 0 &&
-    labelEntries.length === 0
-  ) {
+  const labelEntries = stepLabelEntries(step);
+  if (!stepCfcRecorded(step)) {
     return nothing;
   }
   return html`

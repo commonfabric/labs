@@ -128,6 +128,11 @@ jobs:
               ;;
           esac
 
+      # The labels record which workflow run published the image, and from
+      # which commit. They live in the image config, which the digest covers,
+      # so moving a tag cannot change them. The infra repository's
+      # k8s/scripts/verify-image-provenance.sh reads them back and checks them
+      # against GitHub before the digest is deployed.
       - name: 🏗️ Build and push dashboard image
         id: build
         if: ${{ steps.existing.outputs.exists != 'true' }}
@@ -142,6 +147,15 @@ jobs:
           tags: |
             ${{ env.IMAGE }}:${{ github.sha }}
             ${{ env.IMAGE }}:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            dev.commontools.provenance.repository=${{ github.repository }}
+            dev.commontools.provenance.ref=${{ github.ref }}
+            dev.commontools.provenance.event=${{ github.event_name }}
+            dev.commontools.provenance.workflow-ref=${{ github.workflow_ref }}
+            dev.commontools.provenance.run-id=${{ github.run_id }}
+            dev.commontools.provenance.run-attempt=${{ github.run_attempt }}
 
       - name: 🚀 Promote existing image to latest
         if: ${{ steps.existing.outputs.exists == 'true' }}

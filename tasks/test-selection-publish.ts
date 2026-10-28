@@ -6,22 +6,33 @@
  *
  *   deno run -A tasks/test-selection-publish.ts [--days N] [--bootstrap]
  *     [--out <dir>] [--dry-run] [--concurrency N]
+ *   deno run -A tasks/test-selection-publish.ts --create <dir>
+ *
+ * `--create <dir>` creates the manifest and the aggregate a
+ * `--dry-run --out <dir>` run wrote, and reads nothing else. The fold
+ * needs no credential, so it can finish, however long it takes, before
+ * the credential for creating is obtained.
  *
  * A run folds what the newest aggregate it can read does not already
- * hold, which in the steady state is about two thousand objects. A cold
- * start has no aggregate to read and cannot fold three weeks of raw
- * history in one job either, so `--bootstrap` is the one-off that starts
- * from an empty one over a wider window, run by hand.
+ * hold, from the last day that aggregate read. A cold start has no
+ * aggregate to read, so `--bootstrap` starts from nothing over a wider
+ * window, run by hand. It refuses over a store holding an aggregate any
+ * publisher can read. Its new real test failures accumulate over
+ * unbounded history, and no window of records rebuilds them.
  *
- * A store with no aggregate under the area at all is the whole of what
- * asks for it. Nothing that happens to a stored aggregate does: the area
- * they are written under is named rather than numbered and does not
- * move, a body written in a shape under this publisher's is read
- * forward, and one this publisher cannot read is passed over for the
- * newest one behind it that it can. A bootstrap in any of those cases
- * would publish from an empty aggregate and throw away the catches the
- * stored ones hold, which accumulate over unbounded history and which no
- * window of records rebuilds.
+ * A store with no aggregate under the area at all is what asks for it.
+ * Nothing that happens to a stored aggregate does: the area they are
+ * written under is named rather than numbered and does not move, a body
+ * written in a shape under this publisher's is read forward, and one this
+ * publisher cannot read is passed over for the newest one behind it that
+ * it can.
+ *
+ * A stored aggregate whose new real test failures were credited under
+ * rules other than these (see `NEW_REAL_TEST_FAILURE_RULE`) is the one an
+ * ordinary run does not fold onto. It folds every day that aggregate's
+ * history holds again instead, into an empty one, since a new real test
+ * failure is held as a count that cannot be judged again by itself, and
+ * every record behind it is still in the store.
  *
  * That is the whole of what the flag does. What to read is `inputChoice`
  * asked of each source and date the window covers, and both modes ask it
@@ -61,10 +72,13 @@ import {
   type AggregateState,
   buildManifest,
   CI_SOURCE,
+  coldStart,
   dayOf,
   departed,
   emptyAggregate,
+  firstDay,
   Fold,
+  lastReadDay,
   locateSurfaces,
   parseAggregate,
   partitionOf,
@@ -74,10 +88,13 @@ import {
 import {
   capabilitiesBySuite,
   loadTopology,
-  unitProcesses,
   wholeUnits,
 } from "./test-topology.ts";
 import { baselinesOf, mergeBaselines } from "./test-selection/baselines.ts";
+import {
+  daysBetween,
+  NEW_REAL_TEST_FAILURE_RULE,
+} from "./test-selection/score.ts";
 import { measuredCostLines } from "./test-selection/coverage.ts";
 import type { Suite } from "./test-topology/suite.ts";
 import {
@@ -95,14 +112,15 @@ import {
   declaredSchema,
   type Manifest,
   MANIFEST_SCHEMA_VERSION,
+  parseManifest,
   serializeManifest,
   writtenAhead,
 } from "./test-selection/manifest.ts";
 import { costliestUnschedulable, plan } from "./test-selection/plan.ts";
+import { gatesOf } from "./test-selection/census.ts";
 import {
   COST_WINDOW_DAYS,
   LANE_BUDGET_SECONDS,
-  LANES,
 } from "./test-selection/policy.ts";
 
 /**
@@ -130,7 +148,7 @@ export interface StoreAccess {
    * yet. In the steady state the incremental path never reaches such a
    * day, because compaction waits a week for late arrivals and that path
    * reads two days, so in practice this answers a bootstrap and a run
-   * catching up after an outage or a widened window.
+   * catching up after an outage.
    *
    * A rollup is a read optimization rather than the record of its day —
    * an object arriving after its shard is written stays in the raw area
@@ -148,14 +166,20 @@ export interface StoreAccess {
 }
 
 /** The store as it really is. */
-export function liveStore(bucket: string): StoreAccess {
+export function liveStore(
+  bucket: string,
+  fetchImpl: typeof fetch = fetch,
+): StoreAccess {
   return {
     list: (prefix) => listObjects({ bucket, prefix }),
     read: (objectName) => readObject({ bucket, objectName }),
     readText: async (objectName) => {
-      const response = await fetch(objectUrl(bucket, objectName));
+      const response = await fetchImpl(objectUrl(bucket, objectName), {
+        headers: { "accept-encoding": "identity" },
+      });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      // Transcoded on the way out, so this is already the JSON.
+      // Let Cloud Storage decode the stored gzip object: Deno 2.9.8 fails
+      // to read the complete large aggregate with automatic decompression.
       return await response.text();
     },
     create: async (name, body) => {
@@ -194,14 +218,18 @@ const PARTIAL_WINDOW =
 /** How many objects are fetched at once. */
 const DEFAULT_CONCURRENCY = 24;
 
-/** Days the incremental path looks back over for unfolded objects. */
+/**
+ * The shortest window the incremental path reads, and how far back it
+ * passes over a stored state it cannot read. It reads from the last day
+ * its aggregate read where that reaches further.
+ */
 const DEFAULT_DAYS = 2;
 
 /** Days a bootstrap reads, when no window was asked for. */
 const BOOTSTRAP_DAYS = 60;
 
-/** Objects read and folded before the next batch is fetched. */
-const CHUNK = 200;
+/** Raw objects read before the next batch is fetched. */
+export const CHUNK = 200;
 
 /**
  * Rollup shards read and spooled before the next batch is fetched.
@@ -216,6 +244,8 @@ export interface Options {
   dryRun: boolean;
   out?: string;
   concurrency: number;
+  /** A directory a `--dry-run --out` run wrote, to create from. */
+  create?: string;
 }
 
 export function parseArgs(args: readonly string[]): Options | undefined {
@@ -257,10 +287,19 @@ export function parseArgs(args: readonly string[]): Options | undefined {
         options.out = out;
         break;
       }
+      case "--create": {
+        const create = args[++i];
+        if (create === undefined) return undefined;
+        options.create = create;
+        break;
+      }
       default:
         return undefined;
     }
   }
+  // Creating reads nothing but the directory, so every other flag
+  // alongside it is one it would ignore.
+  if (options.create !== undefined && args.length !== 2) return undefined;
   return options;
 }
 
@@ -296,39 +335,21 @@ async function mapConcurrent<T, R>(
 }
 
 /**
- * Every submission object of the days each area was asked for. A
- * continuous-integration object's day is a path segment, so its day is a
- * prefix and one listing per day is exact. A local object's path puts the
- * reporting person ahead of the day, so that area is listed once and
- * filtered.
- *
- * The two areas are asked for different days because the rule answers
- * differently for them. A continuous-integration day whose rollup is
- * folded owes nothing more; no local day is ever in that position, since
- * rollups cover the continuous-integration area alone.
+ * Every local submission object of the days given. A local object's path
+ * puts the reporting person ahead of the day, so that area is listed once
+ * and filtered.
  */
-async function listSubmissions(
+async function listLocal(
   store: StoreAccess,
-  ciDays: readonly string[],
-  localDays: readonly string[],
+  days: readonly string[],
 ): Promise<string[]> {
-  const wanted = new Set(localDays);
+  const wanted = new Set(days);
   const names: string[] = [];
-  // A listing that fails is not an empty day. Folding what did list and
-  // publishing from it would score every identity in the missing day as
-  // though it had not run, and the manifest saying so would become the
-  // one every lane obeys. The run ends instead, and the previous manifest
-  // stays newest.
-  for (const day of ciDays) {
-    const listed = await store.list(`${ciSubmissionsPrefix()}/v1/${day}/`);
-    for (const name of listed) names.push(name);
-  }
-  const local = `${storePrefix()}/submissions/local/`;
-  for (const name of await store.list(local)) {
+  for (const name of await store.list(`${storePrefix()}/submissions/local/`)) {
     const day = partitionOf(name);
     if (day.length > 0 && wanted.has(day)) names.push(name);
   }
-  return [...new Set(names)].sort(byDayThenName);
+  return names;
 }
 
 /** What one source and date still owes the aggregate. */
@@ -368,20 +389,6 @@ export function inputChoice(
   return "rollup";
 }
 
-/**
- * Orders submission objects the way the fold needs them: by the day they
- * were recorded, then by name. Sorting by name alone would put every
- * local object after every continuous-integration one, because their
- * areas sort that way, and the fold's backward-looking rules would then
- * judge a workstation's failure against a state from days later. Within
- * one day the order between the two areas is arbitrary, which is as fine
- * a grain as the per-day counters have anyway.
- */
-export function byDayThenName(left: string, right: string): number {
-  const day = partitionOf(left).localeCompare(partitionOf(right));
-  return day !== 0 ? day : left.localeCompare(right);
-}
-
 /** One state object a run could not read, and what stopped it. */
 interface PassedOver {
   /** The object's name, so a reader can go and look at it. */
@@ -410,23 +417,36 @@ type AggregateRead =
   | { state: AggregateState; name: string; passedOver: readonly PassedOver[] }
   /** The area holds no state at all, so this would be a first run. */
   | { absent: true }
-  /** Nothing to fold onto, with the lines saying what stopped it. */
-  | { failed: readonly string[] };
+  /** The store did not answer, with the line saying what it was asked. */
+  | { unreachable: string }
+  /**
+   * Every state looked at was one this cannot read. `cutOffAt` is the
+   * first day the run reads, given where the day bound is what stopped
+   * the walk and absent where the walk ran out of states.
+   */
+  | { unreadable: readonly PassedOver[]; cutOffAt?: string };
 
 /**
  * Reads the aggregate to fold onto, which is the newest state object
  * this publisher can read.
  *
- * The three outcomes are kept apart because folding into an empty
- * aggregate while a real one exists is the worst thing this program can
- * do. `catches` accumulates over unbounded history and is the whole of
- * what makes a test worth running, and the state object is where that
- * history lives. A run that lost it and carried on would publish a
- * manifest scoring every test at the floor, and because it succeeded that
- * manifest would become the one every lane obeys. Failing is the designed
- * outcome — the previous manifest stays newest and selection decays
- * slowly — so an unreadable state is told apart from an absent one rather
- * than both becoming an empty one.
+ * The outcomes are kept apart because folding into an empty aggregate while a
+ * real one exists is the worst thing this program can do. `catches` accumulates
+ * over unbounded history and is the whole of what makes a test worth running,
+ * and the state object is where that history lives. A run that lost it and
+ * carried on would publish a manifest scoring every test at the floor, and
+ * because it succeeded that manifest would become the one every lane obeys.
+ * Failing is the designed outcome — the previous manifest stays newest and
+ * selection decays slowly — so an unreadable state is told apart from an absent
+ * one rather than both becoming an empty one.
+ *
+ * A run starts from an empty aggregate while a state exists in two cases.
+ * An incremental run folds every day of a state's history into one when
+ * the state's new real test failures were credited under other rules (see
+ * `NEW_REAL_TEST_FAILURE_RULE`), which reads every record those came from,
+ * so none of them is lost. A bootstrap starts from one where this publisher
+ * can read no state and none is written in a shape from further ahead,
+ * which a publisher at that shape would read.
  *
  * Passing over a state this publisher cannot read is what keeps one from
  * stopping it for good. Nothing but the publisher creates a state, and it
@@ -442,23 +462,24 @@ type AggregateRead =
  * the store, and the state it then wrote would supersede the one it
  * skipped for good.
  *
- * `from` is the first day this run reads, and it bounds how far back a
- * state may be passed over. What a passed-over state folded and the one
- * behind it did not comes back from the records, so the walk reaches
- * back over the days this run reads and no further. That bound is the
- * one this run can state rather than an exact account of the gap: the
- * runs that wrote the passed-over states read windows of their own,
- * reaching a day earlier than their own day for as many days as their
- * window held, and a record that arrived for one of those earlier days
- * after the state behind it was written is outside what this run reads.
- * A run that passes over says which state it passed over and which it
- * folded onto, rather than reporting the gap as closed. The newest state
- * is read whatever day it carries, since taking it is not a choice
- * between two aggregates.
+ * `from` is the first day of the window an incremental run was asked for, and
+ * it bounds how far back a state may be passed over; the run then reads further
+ * back where the state it folds onto last read a day before that. A bootstrap
+ * gives none, since a state of any day it can read is one it refuses over. What
+ * a passed-over state folded and the one behind it did not comes back from the
+ * records, so the walk reaches back over the days this run reads and no
+ * further. That bound is the one this run can state rather than an exact
+ * account of the gap: the runs that wrote the passed-over states read windows
+ * of their own, reaching a day earlier than their own day for as many days as
+ * their window held, and a record that arrived for one of those earlier days
+ * after the state behind it was written is outside what this run reads. A run
+ * that passes over says which state it passed over and which it folded onto,
+ * rather than reporting the gap as closed. The newest state is read whatever
+ * day it carries, since taking it is not a choice between two aggregates.
  */
 async function readAggregate(
   store: StoreAccess,
-  from: string,
+  from: string | undefined,
 ): Promise<AggregateRead> {
   const prefix = statePrefix();
   let names: string[];
@@ -467,7 +488,7 @@ async function readAggregate(
     // bare prefix matches a longer sibling too.
     names = await store.list(`${prefix}/`);
   } catch (error) {
-    return { failed: [`listing ${prefix} failed: ${error}`] };
+    return { unreachable: `listing ${prefix} failed: ${error}` };
   }
   // Newest first, which for these names is by the day they carry and
   // then by the identifier the run that created them drew. An object
@@ -479,7 +500,7 @@ async function readAggregate(
   const passedOver: PassedOver[] = [];
   let cutOff = false;
   for (const [index, name] of states.entries()) {
-    if (index > 0 && stateDayOf(name)! < from) {
+    if (index > 0 && from !== undefined && stateDayOf(name)! < from) {
       cutOff = true;
       break;
     }
@@ -487,7 +508,7 @@ async function readAggregate(
     try {
       text = await store.readText(name);
     } catch (error) {
-      return { failed: [`reading ${name} failed: ${error}`] };
+      return { unreachable: `reading ${name} failed: ${error}` };
     }
     // Parsed here rather than inside each reader, so that one body is
     // parsed once however many questions are asked of it.
@@ -502,7 +523,10 @@ async function readAggregate(
     const ahead = writtenAhead(body) ? declaredSchema(body) : undefined;
     passedOver.push({ name, ...(ahead === undefined ? {} : { ahead }) });
   }
-  return { failed: refusal(passedOver, cutOff ? from : undefined) };
+  return {
+    unreadable: passedOver,
+    ...(cutOff && from !== undefined ? { cutOffAt: from } : {}),
+  };
 }
 
 /**
@@ -539,10 +563,9 @@ function refusal(
     );
   }
   lines.push(
-    `do not bootstrap before establishing that no stored state reads at ` +
-      `all: it starts from an empty aggregate, and the catches the stored ` +
-      `states hold accumulate over unbounded history and are not in the ` +
-      `records any window reads`,
+    `a bootstrap reads every stored state, of any day, and refuses where ` +
+      `one reads or one is written in a shape from further ahead; it ` +
+      `starts from nothing only where none is either`,
   );
   return lines;
 }
@@ -559,8 +582,7 @@ function refusal(
  * without them would hold none of them, and neither would any manifest
  * after it. Where the store answers that it holds no manifest this
  * publisher can read, there is nothing to follow: the baselines start
- * empty, and the ones in objects earlier runs folded come back only from
- * a `--bootstrap`, which folds the window again.
+ * empty, and the ones in objects earlier runs folded do not come back.
  */
 export async function livePrevious(
   now: Date,
@@ -574,6 +596,105 @@ export async function livePrevious(
     throw new Error(`reading the previous manifest failed: ${previous.absent}`);
   }
   return previous.manifest;
+}
+
+/**
+ * The aggregate a run folds into, with the name of the stored state it
+ * came from, or undefined where the run must stop, having said why.
+ *
+ * An incremental run folds onto the newest state it can read and stops
+ * where there is none. A bootstrap is the run for a store holding no
+ * aggregate any publisher can read: it starts from nothing, and refuses
+ * over a store holding one, since a run folding onto that aggregate
+ * keeps every new real test failure it holds and starting from nothing
+ * keeps none. A state written in a shape from further ahead is history a
+ * publisher can read once it is deployed, so a bootstrap stops at one of
+ * those too.
+ */
+async function aggregateToFold(
+  store: StoreAccess,
+  options: Options,
+  partitions: readonly string[],
+  today: string,
+): Promise<{ aggregate: AggregateState; name?: string } | undefined> {
+  // The first day this run reads, written the way a state object's name
+  // writes a day, which is how far back an incremental run may pass a
+  // state over.
+  const from = partitions[0]!.replaceAll("/", "-");
+  const read = await readAggregate(
+    store,
+    options.bootstrap ? undefined : from,
+  );
+  if ("unreachable" in read) {
+    console.warn(`test selection: ${read.unreachable}`);
+    console.warn(
+      "test selection: refusing to publish without reading the stored " +
+        "aggregates. The previous manifest is still the newest one.",
+    );
+    return undefined;
+  }
+  if ("state" in read && options.bootstrap) {
+    // An incremental run reads the newest state whatever its day, and
+    // passes over a later one only inside its window.
+    const reach = daysBetween(stateDayOf(read.name)!, today) + 1;
+    const widen = read.passedOver.length > 0 && reach > DEFAULT_DAYS;
+    console.warn(
+      `test selection: ${read.name} is an aggregate this publisher can ` +
+        `read, and a bootstrap would throw away every new real test ` +
+        `failure it holds. Run without --bootstrap to fold onto it` +
+        (widen ? `, with --days ${reach} to reach it.` : "."),
+    );
+    return undefined;
+  }
+  if ("unreadable" in read) {
+    const ahead = read.unreadable.some(({ ahead }) => ahead !== undefined);
+    if (!options.bootstrap || ahead) {
+      for (const line of refusal(read.unreadable, read.cutOffAt)) {
+        console.warn(`test selection: ${line}`);
+      }
+      console.warn(
+        "test selection: refusing to publish from an empty aggregate, " +
+          "which would score every test at the floor. The previous " +
+          "manifest is still the newest one.",
+      );
+      return undefined;
+    }
+  }
+  if ("absent" in read && !options.bootstrap) {
+    console.warn(
+      "test selection: no aggregate exists yet. A first run reads the " +
+        "whole window and is asked for deliberately, with --bootstrap.",
+    );
+    return undefined;
+  }
+  if (!("state" in read)) {
+    for (const entry of "unreadable" in read ? read.unreadable : []) {
+      console.log(
+        `test selection: passing over ${entry.name}: ${faultOf(entry)}`,
+      );
+    }
+    console.log(
+      "absent" in read
+        ? "test selection: the store holds no aggregate, so this bootstrap " +
+          "starts from nothing"
+        : "test selection: no stored aggregate can be read by any " +
+          "publisher, so this bootstrap starts from nothing",
+    );
+    return { aggregate: coldStart(partitions[0]!, today) };
+  }
+  for (const entry of read.passedOver) {
+    console.log(
+      `test selection: passing over ${entry.name}: ${faultOf(entry)}`,
+    );
+  }
+  if (read.passedOver.length > 0) {
+    console.log(
+      `test selection: folding onto ${read.name}, the newest aggregate ` +
+        `this publisher can read. What the states above it folded from ` +
+        `days this run does not read is not counted.`,
+    );
+  }
+  return { aggregate: read.state, name: read.name };
 }
 
 /**
@@ -603,14 +724,17 @@ export async function publish(
   if (options === undefined) {
     console.error(
       "usage: test-selection-publish.ts [--days N] [--bootstrap] " +
-        "[--out <dir>] [--dry-run] [--concurrency N]",
+        "[--out <dir>] [--dry-run] [--concurrency N] | --create <dir>",
     );
     return 2;
+  }
+  if (options.create !== undefined) {
+    return await createFrom(options.create, store);
   }
 
   const startedAt = now;
   const today = startedAt.toISOString().slice(0, 10);
-  const partitions = dayPartitions(startedAt, options.days);
+  const asked = dayPartitions(startedAt, options.days);
   let previous: Manifest | undefined;
   try {
     previous = await previousManifest(startedAt);
@@ -623,48 +747,50 @@ export async function publish(
     );
     return 1;
   }
-  let aggregate: AggregateState;
-  if (options.bootstrap) {
-    aggregate = emptyAggregate(today);
-  } else {
-    // The first day this run reads, written the way a state object's name
-    // writes a day, which is how far back a state may be passed over.
-    const read = await readAggregate(
-      store,
-      partitions[0]!.replaceAll("/", "-"),
+  const chosen = await aggregateToFold(store, options, asked, today);
+  if (chosen === undefined) return 1;
+  let aggregate = chosen.aggregate;
+  // An incremental run reads from the last day its aggregate read, however
+  // far back that is, so that a stopped publisher catches up on its own
+  // and no day is left unread behind the days it folds. That day is read
+  // again because the run that read it read it before it was over; what
+  // that run folded is passed over.
+  let from = lastReadDay(aggregate);
+  if (
+    !options.bootstrap && aggregate.catchRule !== NEW_REAL_TEST_FAILURE_RULE
+  ) {
+    // Its new real test failures were credited under other rules and are
+    // held as counts, which cannot be judged again by themselves. Every
+    // record behind them is still in the store, so all of them are folded
+    // again into an empty aggregate.
+    const since = firstDay(aggregate) ?? today;
+    console.log(
+      `test selection: ${chosen.name} credited its new real test failures ` +
+        `under other rules, so this run folds every day from ${since} again`,
     );
-    if ("failed" in read) {
-      for (const line of read.failed) console.warn(`test selection: ${line}`);
-      console.warn(
-        "test selection: refusing to publish from an empty aggregate, " +
-          "which would score every test at the floor. The previous " +
-          "manifest is still the newest one.",
-      );
-      return 1;
-    }
-    if ("absent" in read) {
-      console.warn(
-        "test selection: no aggregate exists yet. A first run reads the " +
-          "whole window and is asked for deliberately, with --bootstrap.",
-      );
-      return 1;
-    }
-    for (const entry of read.passedOver) {
-      console.log(
-        `test selection: passing over ${entry.name}: ${faultOf(entry)}`,
-      );
-    }
-    if (read.passedOver.length > 0) {
-      console.log(
-        `test selection: folding onto ${read.name}, the newest aggregate ` +
-          `this publisher can read. What the states above it folded from ` +
-          `days this run does not read is not counted.`,
-      );
-    }
-    aggregate = read.state;
+    from = since.replaceAll("-", "/");
+    aggregate = emptyAggregate(today);
+  }
+  const partitions = options.bootstrap || from >= asked[0]!
+    ? asked
+    : dayPartitions(
+      startedAt,
+      daysBetween(from.replaceAll("/", "-"), today) + 1,
+    );
+  if (partitions !== asked && aggregate === chosen.aggregate) {
+    console.log(
+      `test selection: reading from ${from}, the last day the aggregate ` +
+        `read`,
+    );
   }
   const resolver = await loadAliasResolver();
   const fold = new Fold(aggregate, resolver, today);
+  if (fold.resolved > 0) {
+    console.log(
+      `test selection: moved the history of ${fold.resolved} identities ` +
+        `to the names the alias file gives them`,
+    );
+  }
   const runs = new Set<string>();
   const found: { attempt: number; baseline: CoverageBaseline }[] = [];
   let commit = "unknown";
@@ -687,30 +813,27 @@ export async function publish(
   // one the store is asked about — and it is asked only where the answer
   // could be a rollup, so a run over days it has already read raw asks
   // nothing.
-  const rollups = new Map<string, readonly string[]>();
-  const ciDays: string[] = [];
-  for (const date of partitions) {
-    const settled = fold.settled(CI_SOURCE, date);
-    const foldedRaw = fold.hasRaw(CI_SOURCE, date);
-    const shards = settled || foldedRaw
-      ? undefined
-      : await store.rollupShards(date);
-    switch (
-      inputChoice({ settled, foldedRaw, rollup: shards !== undefined })
-    ) {
-      case "rollup":
-        rollups.set(date, shards!);
-        break;
-      case "raw":
-        ciDays.push(date);
-        break;
-      case "settled":
-        break;
-    }
+  // Every day of the window for the local area: no local pair is ever
+  // settled, so the rule answers `raw` for each of them.
+  let local: string[];
+  try {
+    local = await listLocal(store, partitions);
+  } catch (error) {
+    console.warn(`test selection: listing the submissions failed: ${error}`);
+    console.warn(PARTIAL_WINDOW);
+    return 1;
   }
 
-  /** Reads and consumes each batch before fetching the next shards. */
-  async function* readRollup(shards: readonly string[], concurrency: number) {
+  const concurrency = options.concurrency;
+
+  /**
+   * Reads a day's rollup, consuming each batch before fetching the next
+   * shards, and then the day's local submissions.
+   */
+  async function* readRollup(
+    shards: readonly string[],
+    locals: readonly string[],
+  ) {
     for (let at = 0; at < shards.length; at += SHARD_CHUNK) {
       const reports = await mapConcurrent(
         shards.slice(at, at + SHARD_CHUNK),
@@ -722,89 +845,148 @@ export async function publish(
         yield report;
       }
     }
+    const reports = await mapConcurrent(
+      locals,
+      concurrency,
+      (objectName) => store.read(objectName),
+    );
+    for (const report of reports) {
+      noteReport(report);
+      yield report;
+    }
   }
 
-  let settled = 0;
-  for (const [date, shards] of rollups) {
-    try {
-      await fold.addUnordered(readRollup(shards, options.concurrency));
-    } catch (error) {
-      console.warn(
-        `test selection: reading the rollup of ${date} failed: ${error}`,
+  /**
+   * Reads a day's raw objects a chunk at a time, consuming each before
+   * fetching the next. A day holds thousands of objects, each holding
+   * hundreds of executions, and holding them all would be bounded by the
+   * number of runs rather than by the number of tests.
+   */
+  async function* readRaw(names: readonly string[]) {
+    for (let at = 0; at < names.length; at += CHUNK) {
+      const reports = await mapConcurrent(
+        names.slice(at, at + CHUNK),
+        concurrency,
+        // A read that fails is not an object with no records, so it is
+        // not swallowed: the same partial-history argument as the
+        // listing.
+        (objectName) => store.read(objectName),
       );
-      // A failure that left part of the day in the fold is the one this
-      // cannot read its way out of: reading the day again, by any route,
-      // would count that part twice.
-      if (!fold.intact) {
-        console.warn(PARTIAL_WINDOW);
-        return 1;
+      for (const report of reports) {
+        noteReport(report);
+        yield report;
       }
-      // Ending the run here would end every later one the same way: the
-      // store holds create and nothing else, so a shard that will not
-      // read stays where it is, and the day is never recorded as folded.
-      // The day's raw objects are all still there, so it is read the long
-      // way instead. The pair is left open rather than settled, so later
-      // runs read the day the same way.
-      console.warn(
-        `test selection: reading ${date} from its raw objects instead, ` +
-          `as a day with no rollup is read`,
-      );
-      ciDays.push(date);
-      continue;
     }
-    fold.markSettled(CI_SOURCE, date);
-    settled++;
   }
-  if (rollups.size > 0) {
+
+  // The window is folded one day at a time, oldest first, whichever way each
+  // day is read. The rules that decide whether a failure is a new real test
+  // failure look a day or two either side of it, and back at what the default
+  // branch last said, so a day folded after a later one would be judged against
+  // what happened after it.
+  //
+  // How each day is read is settled for the whole window before any of it
+  // is folded, so a rollup the compactor writes while this run is folding
+  // is left for a later run rather than taken part way through.
+  const choices: Array<{
+    date: string;
+    choice: InputChoice;
+    shards?: readonly string[];
+  }> = [];
+  for (const date of partitions) {
+    const settled = fold.settled(CI_SOURCE, date);
+    const foldedRaw = fold.hasRaw(CI_SOURCE, date);
+    const shards = settled || foldedRaw
+      ? undefined
+      : await store.rollupShards(date);
+    const choice = inputChoice({
+      settled,
+      foldedRaw,
+      rollup: shards !== undefined,
+    });
+    choices.push({ date, choice, ...(shards === undefined ? {} : { shards }) });
+  }
+  let rollupDays = 0;
+  let fromRollups = 0;
+  for (const { date, choice, shards } of choices) {
+    const locals = local.filter((name) => partitionOf(name) === date);
+    if (choice === "rollup" && shards !== undefined) {
+      rollupDays++;
+      try {
+        // The day's local submissions go into the same batch, which the
+        // fold replays in time order.
+        await fold.addUnordered(readRollup(shards, locals));
+        fold.markSettled(CI_SOURCE, date);
+        fromRollups++;
+        continue;
+      } catch (error) {
+        console.warn(
+          `test selection: reading the rollup of ${date} failed: ${error}`,
+        );
+        // A failure that left part of the day in the fold is the one this
+        // cannot read its way out of: reading the day again, by any
+        // route, would count that part twice.
+        if (!fold.intact) {
+          console.warn(PARTIAL_WINDOW);
+          return 1;
+        }
+        // Ending the run here would end every later one the same way:
+        // the store holds create and nothing else, so a shard that will
+        // not read stays where it is, and the day is never recorded as
+        // folded. The day's raw objects are all still there, so it is
+        // read the long way instead. The pair is left open rather than
+        // settled, so later runs read the day the same way.
+        console.warn(
+          `test selection: reading ${date} from its raw objects instead, ` +
+            `as a day with no rollup is read`,
+        );
+      }
+    }
+
+    let names: string[];
+    try {
+      // A listing that fails is not an empty day. Folding what did list
+      // and publishing from it would score every identity in the missing
+      // day as though it had not run, and the manifest saying so would
+      // become the one every lane obeys. The run ends instead, and the
+      // previous manifest stays newest.
+      names = choice === "settled"
+        ? locals
+        : (await store.list(`${ciSubmissionsPrefix()}/v1/${date}/`))
+          .concat(locals);
+    } catch (error) {
+      console.warn(`test selection: listing the submissions failed: ${error}`);
+      console.warn(PARTIAL_WINDOW);
+      return 1;
+    }
+    const fresh = [...new Set(names)]
+      .filter((name) => !fold.knows(name))
+      .sort();
+    // Folded as one batch, which the fold replays in time order as it does
+    // a rollup's day, since the names sort by area before time.
+    try {
+      await fold.addUnordered(readRaw(fresh));
+    } catch (error) {
+      console.warn(`test selection: reading a submission failed: ${error}`);
+      console.warn(PARTIAL_WINDOW);
+      return 1;
+    }
+    if (fresh.length > 0) {
+      console.log(
+        `test selection: folded ${fresh.length} object(s) of ${date}`,
+      );
+    }
+  }
+  if (rollupDays > 0) {
     console.log(
-      `test selection: folded ${settled} of ${rollups.size} day(s) from ` +
+      `test selection: folded ${fromRollups} of ${rollupDays} day(s) from ` +
         `their rollups`,
     );
   }
-
-  let listed: string[];
-  try {
-    // Every day of the window for the local area: no local pair is ever
-    // settled, so the rule answers `raw` for each of them.
-    listed = await listSubmissions(store, ciDays, partitions);
-  } catch (error) {
-    console.warn(`test selection: listing the submissions failed: ${error}`);
-    console.warn(PARTIAL_WINDOW);
-    return 1;
-  }
-  const fresh = listed.filter((name) => !fold.knows(name));
-  console.log(
-    `test selection: ${listed.length} object(s) under ${ciDays.length} ` +
-      `open day(s), ${fresh.length} not yet folded`,
-  );
-
-  // Read and fold in chunks rather than all at once. A bootstrap reads
-  // tens of thousands of objects, each holding hundreds of executions,
-  // and holding them all would be bounded by the number of runs rather
-  // than by the number of tests.
-  try {
-    for (let at = 0; at < fresh.length; at += CHUNK) {
-      const chunk = fresh.slice(at, at + CHUNK);
-      const reports = await mapConcurrent(
-        chunk,
-        options.concurrency,
-        // A read that fails is not an object with no records, so it is not
-        // swallowed: the same partial-history argument as the listing.
-        (objectName) => store.read(objectName),
-      );
-      for (const report of reports) noteReport(report);
-      fold.add(reports);
-      console.log(
-        `test selection: folded ${at + chunk.length} of ${fresh.length} ` +
-          `object(s)`,
-      );
-    }
-  } catch (error) {
-    console.warn(`test selection: reading a submission failed: ${error}`);
-    console.warn(PARTIAL_WINDOW);
-    return 1;
-  }
-  const folded = fold.finish();
+  const folded = fold.finish({
+    from: partitions[0]!,
+    through: partitions.at(-1)!,
+  });
 
   // The topology is what says where an identity runs. Its suite
   // identifiers and units are what a lane looks a suite up by and what
@@ -840,7 +1022,7 @@ export async function publish(
     // capability, starting a runner, or loading a module, and a lane
     // packed to its budget runs past the bound it is packed to finish
     // inside.
-    calibration: calibrate(observed),
+    calibration: calibrate(observed, folded.aggregate.hooks),
   });
   // What the coverage gate compares a pull request against. The full run on
   // `main` writes the counts as measurements, which the fold passes over,
@@ -863,13 +1045,14 @@ export async function publish(
     }))
   );
   const capabilities = capabilitiesBySuite(suites);
-  const processes = unitProcesses(suites);
   const reference = plan({
     manifest,
     mandatory: new Map(),
     capabilities,
     wholeUnits: wholeUnits(suites),
-    processes,
+    // The gates of no change, so that none is packed as a lane's work and
+    // none is chosen.
+    gates: gatesOf(suites, manifest.entries, manifest.entries, new Set()),
   });
   // What the packer refused, from the packer, carrying the cost the bound
   // was compared against rather than a raw one that leaves out every
@@ -893,7 +1076,6 @@ export async function publish(
     manifest,
     previous,
     capabilities,
-    processes,
     observations: observed,
   });
 
@@ -923,9 +1105,37 @@ export async function publish(
     console.log(`test selection: wrote ${options.out}/manifest.json`);
   }
   if (options.dryRun) return 0;
+  return await create(store, manifest, JSON.stringify(folded.aggregate));
+}
 
-  const token = store.token();
-  if (token === undefined) {
+/**
+ * Creates the manifest and the aggregate a `--dry-run --out` run wrote
+ * to a directory. Both are read back and checked before anything is
+ * created, so a directory holding anything else creates nothing.
+ */
+async function createFrom(dir: string, store: StoreAccess): Promise<number> {
+  const manifest = parseManifest(
+    await Deno.readTextFile(join(dir, "manifest.json")),
+  );
+  const state = await Deno.readTextFile(join(dir, "state.json"));
+  if (manifest === undefined || parseAggregate(state) === undefined) {
+    console.error(
+      `test selection: ${dir} does not hold a manifest and an aggregate ` +
+        "this publisher wrote, so nothing was created. The previous " +
+        "manifest is still the newest one.",
+    );
+    return 1;
+  }
+  return await create(store, manifest, state);
+}
+
+/** Creates one manifest and the aggregate it was built from. */
+async function create(
+  store: StoreAccess,
+  manifest: Manifest,
+  state: string,
+): Promise<number> {
+  if (store.token() === undefined) {
     console.warn(
       "test selection: no write credential, so nothing was created. The " +
         "previous manifest is still the newest one.",
@@ -941,8 +1151,8 @@ export async function publish(
   await store.create(name, await manifestBody(manifest));
   console.log(`test selection: created ${name}`);
   await store.create(
-    stateObjectName(today, id),
-    await gzipText(JSON.stringify(folded.aggregate)),
+    stateObjectName(manifest.generatedAt.slice(0, 10), id),
+    await gzipText(state),
   );
   return 0;
 }
@@ -1109,7 +1319,8 @@ function summarize(
   if (times.length > 0) {
     const spread = maxOf(times) - minOf(times);
     console.log(
-      `test selection: ${LANES} lanes, spread ${duration(spread)}`,
+      `test selection: ${reference.lanes.length} lanes, spread ` +
+        duration(spread),
     );
   }
   const selected = reference.lanes.reduce(

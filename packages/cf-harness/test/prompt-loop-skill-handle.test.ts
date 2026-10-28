@@ -61,7 +61,7 @@ const SKILL_TEXT = [
 class FakeSandboxRuntime implements SandboxRuntime {
   describe(): SandboxRuntimeDescription {
     return {
-      kind: "docker-runsc-cfc",
+      kind: "runsc-cfc",
       defaultWorkingDirectory: "/workspace",
       cfc: { runtimeRequested: true, workspaceMountPath: "/workspace" },
     };

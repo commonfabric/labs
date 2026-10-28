@@ -47,6 +47,8 @@ type MockRuntimeClientEvents = {
   navigaterequest: [{ cell: { id(): string; space(): DID } }];
   error: [unknown];
   telemetry: [unknown];
+  connectionrestored: [];
+  spaceaccessrestored: [{ space: DID }];
 };
 
 class MockRuntimeClient {
@@ -163,6 +165,12 @@ class MockRuntimeClient {
   /** When set, the next `getPiece` rejects rather than answering. */
   failNextGetPiece = false;
 
+  /** When set, every `getPiece` rejects rather than answering. */
+  failEveryGetPiece = false;
+
+  /** When set, the next `getPiece` returns this, which the test settles. */
+  nextGetPiece: Promise<{ id: () => string }> | undefined = undefined;
+
   getPiece(
     pieceId: string,
     space: DID,
@@ -170,6 +178,14 @@ class MockRuntimeClient {
     scope?: string,
   ): Promise<{ id: () => string }> {
     this.getPieceCalls.push({ pieceId, runIt, space, scope });
+    const next = this.nextGetPiece;
+    if (next) {
+      this.nextGetPiece = undefined;
+      return next;
+    }
+    if (this.failEveryGetPiece) {
+      return Promise.reject(new Error("the piece will never load"));
+    }
     if (this.failNextGetPiece) {
       this.failNextGetPiece = false;
       return Promise.reject(new Error("the socket went away"));
@@ -350,45 +366,7 @@ describe("RuntimeInternals", () => {
       }
     });
 
-    it("caches a recreated root as started", async () => {
-      const client = new MockRuntimeClient();
-      const recreated = { id: "recreated-root" };
-      const starts: Array<boolean | undefined> = [];
-      client.getSpaceRootPattern = (
-        space: DID,
-        options?: { start?: boolean },
-      ) => {
-        client.spaceRootCalls.push(space);
-        starts.push(options?.start);
-        return Promise.resolve({ id: "fetched-root" } as never);
-      };
-      (client as unknown as {
-        recreateSpaceRootPattern: (space: DID) => Promise<unknown>;
-      }).recreateSpaceRootPattern = () => Promise.resolve(recreated);
-      const runtime = new RuntimeInternals(client as any);
-      const space = "did:key:z6Mk-root-recreate" as DID;
-
-      try {
-        await runtime.getSpaceRootPattern(space, { start: false });
-        expect(starts).toEqual([false]);
-
-        // Recreating replaces whatever was cached, and what it caches IS
-        // started — so neither kind of caller refetches afterwards.
-        await expect(runtime.recreateSpaceRootPattern(space)).resolves.toBe(
-          recreated,
-        );
-        await expect(runtime.getSpaceRootPattern(space)).resolves.toBe(
-          recreated,
-        );
-        await expect(runtime.getSpaceRootPattern(space, { start: false }))
-          .resolves.toBe(recreated);
-        expect(starts).toEqual([false]);
-      } finally {
-        await runtime.dispose();
-      }
-    });
-
-    it("retries a root-pattern lookup after rejection", async () => {
+    it("rejects a failed lookup's later requests with its error, asking the worker once", async () => {
       const client = new MockRuntimeClient();
       const runtime = new RuntimeInternals(client as any);
       const space = "did:key:z6Mk-root-retry" as DID;
@@ -399,6 +377,31 @@ describe("RuntimeInternals", () => {
         );
         await expect(runtime.getSpaceRootPattern(space)).rejects.toThrow(
           "no root pattern in mock",
+        );
+        await expect(runtime.getSpaceRootPattern(space, { start: false }))
+          .rejects.toThrow("no root pattern in mock");
+        expect(client.spaceRootCalls).toEqual([space]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("asks again after a lookup returns no root", async () => {
+      const client = new MockRuntimeClient();
+      const rootPattern = { id: "root-pattern" };
+      const answers = [undefined, rootPattern];
+      client.getSpaceRootPattern = (space: DID) => {
+        client.spaceRootCalls.push(space);
+        return Promise.resolve(answers.shift() as never);
+      };
+      const runtime = new RuntimeInternals(client as any);
+      const space = "did:key:z6Mk-root-absent" as DID;
+
+      try {
+        await expect(runtime.getSpaceRootPattern(space)).resolves
+          .toBeUndefined();
+        await expect(runtime.getSpaceRootPattern(space)).resolves.toBe(
+          rootPattern,
         );
         expect(client.spaceRootCalls).toEqual([space, space]);
       } finally {
@@ -679,10 +682,10 @@ describe("RuntimeInternals", () => {
     }
   });
 
-  it("leaves no empty levels behind when a load fails", async () => {
+  it("leaves no empty levels behind when a failed load is invalidated", async () => {
     // A nested cache holds a level per address component, so evicting only
     // the piece leaves the scope and the space it sat in — and a run of
-    // failed lookups is a run of those, held for the runtime's lifetime.
+    // invalidated lookups is a run of those, held for the runtime's lifetime.
     const space = "did:key:z6Mk-lib-shell-cache-levels" as DID;
     const client = new MockRuntimeClient();
     client.failNextGetPiece = true;
@@ -690,10 +693,378 @@ describe("RuntimeInternals", () => {
 
     try {
       await expect(runtime.getPattern(space, "fid1:gone")).rejects.toThrow();
+      runtime.invalidatePattern(space, "fid1:gone");
       expect(runtime.accessForTestingOnly.patternCacheSize).toBe(0);
     } finally {
       await runtime.dispose();
     }
+  });
+
+  it("rejects a failed load's later requests with its error, asking the worker once", async () => {
+    // Only the first load fails, so a second trip to the worker would
+    // succeed: a request that resolves here is one that asked again.
+    const space = "did:key:z6Mk-lib-shell-failed-load" as DID;
+    const client = new MockRuntimeClient();
+    client.failNextGetPiece = true;
+    const runtime = new RuntimeInternals(client as any);
+
+    try {
+      await expect(runtime.getPattern(space, "fid1:broken")).rejects.toThrow(
+        "the socket went away",
+      );
+      await expect(runtime.getPattern(space, "fid1:broken")).rejects.toThrow(
+        "the socket went away",
+      );
+      await expect(
+        runtime.getPattern(space, "fid1:broken", { start: false }),
+      ).rejects.toThrow("the socket went away");
+      expect(client.getPieceCalls).toEqual([
+        { pieceId: "fid1:broken", runIt: true, space, scope: "space" },
+      ]);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("rejects a starting request after a non-starting load of the piece failed, asking the worker once", async () => {
+    // Only the first load fails, so the starting request that would upgrade a
+    // non-starting entry resolves if it asks the worker again.
+    const space = "did:key:z6Mk-lib-shell-failed-upgrade" as DID;
+    const client = new MockRuntimeClient();
+    client.failNextGetPiece = true;
+    const runtime = new RuntimeInternals(client as any);
+
+    try {
+      await expect(
+        runtime.getPattern(space, "fid1:broken", { start: false }),
+      ).rejects.toThrow("the socket went away");
+      await expect(runtime.getPattern(space, "fid1:broken")).rejects.toThrow(
+        "the socket went away",
+      );
+      expect(client.getPieceCalls).toEqual([
+        { pieceId: "fid1:broken", runIt: false, space, scope: "space" },
+      ]);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("loads a failed piece again once it is refreshed", async () => {
+    const space = "did:key:z6Mk-lib-shell-failed-refresh" as DID;
+    const client = new MockRuntimeClient();
+    client.failNextGetPiece = true;
+    const runtime = new RuntimeInternals(client as any);
+
+    try {
+      await expect(runtime.getPattern(space, "fid1:broken")).rejects.toThrow();
+
+      const piece = await runtime.refreshPattern(space, "fid1:broken");
+
+      expect(piece.id()).toBe("fid1:broken");
+      expect(client.getPieceCalls).toHaveLength(2);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("loads a failed piece again once it is invalidated", async () => {
+    const space = "did:key:z6Mk-lib-shell-failed-invalidate" as DID;
+    const client = new MockRuntimeClient();
+    client.failNextGetPiece = true;
+    const runtime = new RuntimeInternals(client as any);
+
+    try {
+      await expect(runtime.getPattern(space, "fid1:broken")).rejects.toThrow();
+
+      runtime.invalidatePattern(space, "fid1:broken");
+      const piece = await runtime.getPattern(space, "fid1:broken");
+
+      expect(piece.id()).toBe("fid1:broken");
+      expect(client.getPieceCalls).toHaveLength(2);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  describe("on a restored connection", () => {
+    it("loads a piece whose load failed again, and succeeds", async () => {
+      // Only the first load fails, as one the lost connection cut short
+      // does, so the load after the restored connection resolves.
+      const space = "did:key:z6Mk-lib-shell-restored-heal" as DID;
+      const client = new MockRuntimeClient();
+      client.failNextGetPiece = true;
+      const runtime = new RuntimeInternals(client as any);
+
+      try {
+        await expect(runtime.getPattern(space, "fid1:cut-off")).rejects
+          .toThrow("the socket went away");
+        await expect(runtime.getPattern(space, "fid1:cut-off")).rejects
+          .toThrow("the socket went away");
+        expect(client.getPieceCalls).toHaveLength(1);
+
+        client.emit("connectionrestored");
+        const piece = await runtime.getPattern(space, "fid1:cut-off");
+
+        expect(piece.id()).toBe("fid1:cut-off");
+        expect(client.getPieceCalls).toHaveLength(2);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("asks the worker for a piece that keeps failing once per restored connection", async () => {
+      const space = "did:key:z6Mk-lib-shell-restored-permanent" as DID;
+      const client = new MockRuntimeClient();
+      client.failEveryGetPiece = true;
+      const runtime = new RuntimeInternals(client as any);
+      const askThrice = async () => {
+        for (let ask = 0; ask < 3; ask++) {
+          await expect(runtime.getPattern(space, "fid1:broken")).rejects
+            .toThrow("the piece will never load");
+        }
+      };
+
+      try {
+        await askThrice();
+        expect(client.getPieceCalls).toHaveLength(1);
+
+        client.emit("connectionrestored");
+        await askThrice();
+        expect(client.getPieceCalls).toHaveLength(2);
+
+        client.emit("connectionrestored");
+        await askThrice();
+        expect(client.getPieceCalls).toHaveLength(3);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("asks the worker nothing for a piece that loaded", async () => {
+      const space = "did:key:z6Mk-lib-shell-restored-loaded" as DID;
+      const client = new MockRuntimeClient();
+      const runtime = new RuntimeInternals(client as any);
+
+      try {
+        const loaded = await runtime.getPattern(space, "fid1:fine");
+
+        client.emit("connectionrestored");
+
+        expect(await runtime.getPattern(space, "fid1:fine")).toBe(loaded);
+        expect(client.getPieceCalls).toHaveLength(1);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("loads a piece whose load was in flight when the connection was restored again, once that load fails", async () => {
+      // The load fails after the restoration, as one the lost connection
+      // broke can, once the requests it went on to make were answered.
+      const space = "did:key:z6Mk-lib-shell-restored-in-flight" as DID;
+      const client = new MockRuntimeClient();
+      const held = Promise.withResolvers<{ id: () => string }>();
+      client.nextGetPiece = held.promise;
+      const runtime = new RuntimeInternals(client as any);
+
+      try {
+        const first = runtime.getPattern(space, "fid1:in-flight");
+        client.emit("connectionrestored");
+        held.reject(new Error("the socket went away"));
+        await expect(first).rejects.toThrow("the socket went away");
+
+        const piece = await runtime.getPattern(space, "fid1:in-flight");
+
+        expect(piece.id()).toBe("fid1:in-flight");
+        expect(client.getPieceCalls).toHaveLength(2);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("looks up a space root whose lookup failed again", async () => {
+      const space = "did:key:z6Mk-lib-shell-restored-root" as DID;
+      const client = new MockRuntimeClient();
+      const runtime = new RuntimeInternals(client as any);
+
+      try {
+        await expect(runtime.getSpaceRootPattern(space)).rejects.toThrow(
+          "no root pattern in mock",
+        );
+
+        client.emit("connectionrestored");
+        await expect(runtime.getSpaceRootPattern(space)).rejects.toThrow(
+          "no root pattern in mock",
+        );
+
+        expect(client.spaceRootCalls).toEqual([space, space]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("lets a `connectionrestored` listener asking again reach the worker", async () => {
+      // A listener asks again from inside the event, as a view showing the
+      // failure does, so it reaches the worker only if the failure was
+      // dropped before the event went out.
+      const space = "did:key:z6Mk-lib-shell-restored-event" as DID;
+      const client = new MockRuntimeClient();
+      client.failNextGetPiece = true;
+      const runtime = new RuntimeInternals(client as any);
+      const asked: Promise<{ id(): string }>[] = [];
+      runtime.addEventListener("connectionrestored", () => {
+        asked.push(runtime.getPattern(space, "fid1:cut-off"));
+      });
+
+      try {
+        await expect(runtime.getPattern(space, "fid1:cut-off")).rejects
+          .toThrow("the socket went away");
+
+        client.emit("connectionrestored");
+
+        expect(asked).toHaveLength(1);
+        expect((await asked[0]).id()).toBe("fid1:cut-off");
+        expect(client.getPieceCalls).toHaveLength(2);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+  });
+
+  describe("on a space admitting the runtime's principal again", () => {
+    // `failNextGetPiece` stands in for the refusal: only the first load
+    // fails, so a load the space's admission lets through resolves.
+
+    it("loads a piece whose load the space refused again, and succeeds", async () => {
+      const space = "did:key:z6Mk-lib-shell-granted-piece" as DID;
+      const client = new MockRuntimeClient();
+      client.failNextGetPiece = true;
+      const runtime = new RuntimeInternals(client as any);
+
+      try {
+        await expect(runtime.getPattern(space, "fid1:refused")).rejects
+          .toThrow("the socket went away");
+        await expect(runtime.getPattern(space, "fid1:refused")).rejects
+          .toThrow("the socket went away");
+        expect(client.getPieceCalls).toHaveLength(1);
+
+        client.emit("spaceaccessrestored", { space });
+        const piece = await runtime.getPattern(space, "fid1:refused");
+
+        expect(piece.id()).toBe("fid1:refused");
+        expect(client.getPieceCalls).toHaveLength(2);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("looks up a space root the space refused again, and succeeds", async () => {
+      const space = "did:key:z6Mk-lib-shell-granted-root" as DID;
+      const client = new MockRuntimeClient();
+      const root = { id: () => "root" };
+      const answers: Promise<never>[] = [
+        Promise.reject(new Error("access denied")),
+        Promise.resolve(root as never),
+      ];
+      client.getSpaceRootPattern = (asked: DID) => {
+        client.spaceRootCalls.push(asked);
+        return answers.shift()!;
+      };
+      const runtime = new RuntimeInternals(client as any);
+
+      try {
+        await expect(runtime.getSpaceRootPattern(space)).rejects.toThrow(
+          "access denied",
+        );
+        await expect(runtime.getSpaceRootPattern(space)).rejects.toThrow(
+          "access denied",
+        );
+        expect(client.spaceRootCalls).toEqual([space]);
+
+        client.emit("spaceaccessrestored", { space });
+
+        expect(await runtime.getSpaceRootPattern(space)).toBe(root);
+        expect(client.spaceRootCalls).toEqual([space, space]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("keeps the failed loads of every other space", async () => {
+      const granted = "did:key:z6Mk-lib-shell-granted-this" as DID;
+      const other = "did:key:z6Mk-lib-shell-granted-other" as DID;
+      const client = new MockRuntimeClient();
+      client.failEveryGetPiece = true;
+      const runtime = new RuntimeInternals(client as any);
+
+      try {
+        await expect(runtime.getPattern(other, "fid1:refused")).rejects
+          .toThrow("the piece will never load");
+        await expect(runtime.getSpaceRootPattern(other)).rejects.toThrow(
+          "no root pattern in mock",
+        );
+
+        client.emit("spaceaccessrestored", { space: granted });
+        await expect(runtime.getPattern(other, "fid1:refused")).rejects
+          .toThrow("the piece will never load");
+        await expect(runtime.getSpaceRootPattern(other)).rejects.toThrow(
+          "no root pattern in mock",
+        );
+
+        expect(client.getPieceCalls).toHaveLength(1);
+        expect(client.spaceRootCalls).toEqual([other]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("loads a piece whose load was in flight when the space admitted the principal again, once that load fails", async () => {
+      const space = "did:key:z6Mk-lib-shell-granted-in-flight" as DID;
+      const client = new MockRuntimeClient();
+      const held = Promise.withResolvers<{ id: () => string }>();
+      client.nextGetPiece = held.promise;
+      const runtime = new RuntimeInternals(client as any);
+
+      try {
+        const first = runtime.getPattern(space, "fid1:in-flight");
+        client.emit("spaceaccessrestored", { space });
+        held.reject(new Error("access denied"));
+        await expect(first).rejects.toThrow("access denied");
+
+        const piece = await runtime.getPattern(space, "fid1:in-flight");
+
+        expect(piece.id()).toBe("fid1:in-flight");
+        expect(client.getPieceCalls).toHaveLength(2);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("dispatches `spaceaccessrestored` naming the space, once a listener asking again reaches the worker", async () => {
+      const space = "did:key:z6Mk-lib-shell-granted-event" as DID;
+      const client = new MockRuntimeClient();
+      client.failNextGetPiece = true;
+      const runtime = new RuntimeInternals(client as any);
+      const asked: { space: DID; load: Promise<{ id(): string }> }[] = [];
+      runtime.addEventListener("spaceaccessrestored", (event) => {
+        const { detail } = event as CustomEvent<{ space: DID }>;
+        asked.push({
+          space: detail.space,
+          load: runtime.getPattern(space, "fid1:refused"),
+        });
+      });
+
+      try {
+        await expect(runtime.getPattern(space, "fid1:refused")).rejects
+          .toThrow("the socket went away");
+
+        client.emit("spaceaccessrestored", { space });
+
+        expect(asked.map((entry) => entry.space)).toEqual([space]);
+        expect((await asked[0].load).id()).toBe("fid1:refused");
+      } finally {
+        await runtime.dispose();
+      }
+    });
   });
 
   it("guards removePiece after dispose", async () => {
@@ -870,6 +1241,7 @@ describe("RuntimeInternals", () => {
       session,
       apiUrl: new URL("http://shell.test/"),
       experimental,
+      clientBuild: { application: "shell", gitSha: "c".repeat(40) },
       // The two dials the assertions below read back, stated rather than
       // left to the host default.
       cfcEnforcementMode: "enforce-explicit",
@@ -886,8 +1258,22 @@ describe("RuntimeInternals", () => {
       id: `principal:${session.as.did()}`,
       actingPrincipal: session.as.did(),
     });
+    expect(options.clientBuild).toEqual({
+      application: "shell",
+      gitSha: "c".repeat(40),
+    });
     expect(options.spaceDid).toBe(session.space);
     expect(options.experimental).toBe(experimental);
+    // A host that names no memory URL sends none, so Memory opens on
+    // `apiUrl`; one that names one has it carried to the worker.
+    expect(options.memoryUrl).toBeUndefined();
+    expect(
+      createRuntimeClientOptions({
+        session,
+        apiUrl: new URL("http://shell.test/"),
+        memoryUrl: new URL("http://router.shell.test/"),
+      }).memoryUrl?.href,
+    ).toBe("http://router.shell.test/");
     // A page that names no outer frame has none, and one that names one has
     // that one.
     expect(options.iframeOuterFrameUrl).toBeUndefined();
@@ -1125,6 +1511,7 @@ describe("RuntimeInternals", () => {
     // create() aborts without a real runtime.
 
     type CapturedInitData = {
+      memoryUrl?: string;
       forwardWorkerConsole?: boolean;
       concurrentWatchRefresh?: boolean;
       awaitHealth?: boolean;
@@ -1236,6 +1623,20 @@ describe("RuntimeInternals", () => {
           initRequests[0].data.trustSnapshot!.actingPrincipal as DID,
         ),
       );
+    });
+
+    it("includes the memory URL in the Initialize request, and none when the host names none", async () => {
+      const routed = refusingWorker();
+      await createAgainst(routed.StubWorker, {
+        memoryUrl: new URL("http://router.shell.test/"),
+      });
+      expect(routed.initRequests[0].data.memoryUrl).toBe(
+        "http://router.shell.test/",
+      );
+
+      const direct = refusingWorker();
+      await createAgainst(direct.StubWorker);
+      expect(direct.initRequests[0].data.memoryUrl).toBeUndefined();
     });
 
     it("terminates the worker it spawned when the worker refuses Initialize", async () => {

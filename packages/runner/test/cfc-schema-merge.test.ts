@@ -8,13 +8,141 @@ import {
   mergeCfcSchemaEnvelopes,
 } from "../src/cfc/schema-merge.ts";
 import {
+  canonicalizeCfcSchemaDocument,
+  resolveCfcSchemaRefs,
+} from "../src/cfc/schema-refs.ts";
+import { validateSchemaDefinition } from "../src/cfc/schema-sanitization.ts";
+import {
   storedCfcEnvelopeMergeIssue,
   storedSchemaCoversCandidateEnvelope,
 } from "../src/cfc/prepare.ts";
 import { cfcSchemaEntries } from "../src/cfc/schema-label-view.ts";
+import {
+  acquireSchemaRegistryLease,
+  registerSchemaDocument,
+} from "../src/schema-registry.ts";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 
 describe("mergeCfcSchemaEnvelopes", () => {
+  describe("a recursion meeting itself", () => {
+    // A tree whose node names itself for its children, with a claim on each
+    // node's label. Two documents spelling that definition differently meet
+    // it again one level down, where the merge refers to the merged
+    // definition of the pair rather than to either side's own.
+
+    const tree = (labelClaim: unknown): JSONSchemaObj =>
+      ({
+        type: "object",
+        properties: { root: { $ref: "#/$defs/Node" } },
+        $defs: {
+          Node: {
+            type: "object",
+            properties: {
+              label: { type: "string", ifc: labelClaim },
+              children: { type: "array", items: { $ref: "#/$defs/Node" } },
+            },
+          },
+        },
+      }) as unknown as JSONSchemaObj;
+    const writer = (moduleIdentity?: string, path = ["pin"]) => ({
+      writeAuthorizedBy: {
+        __ctWriterIdentityOf: {
+          file: "/main.tsx",
+          path,
+          ...(moduleIdentity === undefined ? {} : { moduleIdentity }),
+        },
+      },
+    });
+    const resolved = (schema: JSONSchema, node: JSONSchema): JSONSchemaObj => {
+      const object = node as JSONSchemaObj;
+      return typeof object.$ref === "string"
+        ? resolveCfcSchemaRefs(object, schema) as JSONSchemaObj
+        : object;
+    };
+    /** The merged node at `path` (`*` for items), its references followed. */
+    const at = (schema: JSONSchema, path: readonly string[]): JSONSchemaObj =>
+      path.reduce(
+        (node, segment) =>
+          resolved(
+            schema,
+            (segment === "*"
+              ? node.items
+              : (node.properties as Record<string, JSONSchema>)[segment])!,
+          ),
+        resolved(schema, schema),
+      );
+    const stampAt = (schema: JSONSchema, path: readonly string[]) =>
+      ((at(schema, path).ifc as ReturnType<typeof writer>).writeAuthorizedBy
+        .__ctWriterIdentityOf as { moduleIdentity?: string }).moduleIdentity;
+
+    it("keeps the stored stamp at every level beneath the recurrence", () => {
+      const merged = mergeCfcSchemaEnvelopes(
+        tree(writer("m1")),
+        tree(writer("m2")),
+      );
+      expect(stampAt(merged, ["root", "label"])).toBe("m1");
+      expect(stampAt(merged, ["root", "children", "*", "label"])).toBe("m1");
+      expect(
+        stampAt(merged, ["root", "children", "*", "children", "*", "label"]),
+      ).toBe("m1");
+    });
+
+    it("holds both sides' claims at every level beneath the recurrence", () => {
+      const merged = mergeCfcSchemaEnvelopes(
+        tree(writer()),
+        tree({ requiredIntegrity: ["reviewed"] }),
+      );
+      const deep = at(merged, [
+        "root",
+        "children",
+        "*",
+        "children",
+        "*",
+        "label",
+      ]).ifc as Record<string, unknown>;
+      expect(deep.writeAuthorizedBy).toEqual(writer().writeAuthorizedBy);
+      expect(deep.requiredIntegrity).toEqual(["reviewed"]);
+    });
+
+    it("merges the same candidate into its own result unchanged", () => {
+      // The merged document names the pair's merged definition where the
+      // stored one wrote the recursion out, so merging the candidate again
+      // meets the same pair at the same place and writes nothing further out.
+
+      const candidate = tree(writer("m2"));
+      const merged = mergeCfcSchemaEnvelopes(tree(writer("m1")), candidate);
+      expect(mergeCfcSchemaEnvelopes(merged, candidate)).toEqual(merged);
+    });
+
+    it("throws for two references that do not resolve rather than minting a definition from them", () => {
+      // Where the policies differ, every reference is resolved before the
+      // merge, so a pair naming nothing never reaches the merge of two
+      // bodies.
+
+      const unresolved = (name: string): JSONSchemaObj => ({
+        type: "object",
+        properties: { pin: { $ref: `#/$defs/${name}` } },
+        $defs: { Other: { type: "string", ifc: writer() } },
+      });
+      expect(() =>
+        mergeCfcSchemaEnvelopes(
+          unresolved("Missing"),
+          unresolved("AlsoMissing"),
+        )
+      ).toThrow(/requires resolved schemas/);
+    });
+
+    it("throws for a definition that changes the stored writer inside the recursion", () => {
+      expect(() =>
+        mergeCfcSchemaEnvelopes(
+          tree(writer()),
+          tree(writer(undefined, ["other"])),
+        )
+      ).toThrow(/writeAuthorizedBy/);
+    });
+  });
+
   describe("observes through a merge", () => {
     // C5: `observes` is a scalar consumption class, not a set-like claim.
     // Agreement keeps the class through a merge; any disagreement (including
@@ -841,9 +969,9 @@ describe("mergeCfcSchemaEnvelopes", () => {
     } as const;
 
     const merged = mergeCfcSchemaEnvelopes(stored, candidate) as JSONSchemaObj;
-    const pin = merged.properties?.pin as JSONSchemaObj;
-    expect(pin.$ref).toBeUndefined();
-    expect(pin.ifc).toEqual({
+    const entries = cfcSchemaEntries(merged);
+    expect(entries.map((entry) => entry.path)).toEqual([["pin"]]);
+    expect((entries[0].schema as JSONSchemaObj).ifc).toEqual({
       uiContract: { helper: "UiAction", action: "PinNote" },
     });
   });
@@ -2111,5 +2239,730 @@ describe("cfcSchemaPoliciesEqual", () => {
       properties: { list: { ...inline.properties.list, ifc: undefined } },
     } as unknown as JSONSchemaObj;
     expect(cfcSchemaPoliciesEqual(inline, dropped)).toBe(false);
+  });
+
+  describe("over definitions", () => {
+    // `inline` with `list` named by reference into the root's definition
+    // map, which also holds `extra`, a definition nothing references.
+    const referenced = (listClaim: unknown, extraClaim: unknown) =>
+      ({
+        type: "object",
+        properties: { list: { $ref: "#/$defs/List" } },
+        $defs: {
+          List: { ...inline.properties.list, ifc: listClaim },
+          Extra: { type: "string", ifc: extraClaim },
+        },
+      }) as unknown as JSONSchemaObj;
+
+    it("compares a claim reached through a reference equal to the same claim inline", () => {
+      expect(cfcSchemaPoliciesEqual(inline, referenced(CLAIM, CLAIM))).toBe(
+        true,
+      );
+    });
+
+    it("compares two documents equal where only a definition no reference reaches differs", () => {
+      expect(
+        cfcSchemaPoliciesEqual(
+          referenced(CLAIM, CLAIM),
+          referenced(CLAIM, { writeAuthorizedBy: ["other"] }),
+        ),
+      ).toBe(true);
+    });
+
+    it("tells apart a changed claim in a definition a reference reaches", () => {
+      expect(
+        cfcSchemaPoliciesEqual(
+          referenced(CLAIM, CLAIM),
+          referenced({ writeAuthorizedBy: ["other"] }, CLAIM),
+        ),
+      ).toBe(false);
+      expect(
+        cfcSchemaPoliciesEqual(inline, referenced(undefined, CLAIM)),
+      ).toBe(false);
+    });
+
+    it("tells apart a changed claim in a referenced body beside a claim at the reference", () => {
+      const sited = (bodyClaim: unknown) =>
+        ({
+          type: "object",
+          properties: { list: { $ref: "#/$defs/List", ifc: CLAIM } },
+          $defs: {
+            List: {
+              ...inline.properties.list,
+              ifc: { confidentiality: bodyClaim },
+            },
+          },
+        }) as unknown as JSONSchemaObj;
+      expect(cfcSchemaPoliciesEqual(sited(["one"]), sited(["one"]))).toBe(
+        true,
+      );
+      expect(cfcSchemaPoliciesEqual(sited(["one"]), sited(["two"]))).toBe(
+        false,
+      );
+    });
+  });
+
+  describe("over recursive definitions", () => {
+    // A tree whose node names itself for its children, with a claim on each
+    // node's label; and two definitions naming each other the same way.
+    const tree = (labelClaim: unknown) =>
+      ({
+        type: "object",
+        properties: { root: { $ref: "#/$defs/Node" } },
+        $defs: {
+          Node: {
+            type: "object",
+            properties: {
+              label: { type: "string", ifc: labelClaim },
+              children: { type: "array", items: { $ref: "#/$defs/Node" } },
+            },
+          },
+        },
+      }) as unknown as JSONSchemaObj;
+    const mutual = (bClaim: unknown) =>
+      ({
+        type: "object",
+        properties: { root: { $ref: "#/$defs/A" } },
+        $defs: {
+          A: {
+            type: "object",
+            ifc: CLAIM,
+            properties: { next: { $ref: "#/$defs/B" } },
+          },
+          B: {
+            type: "object",
+            ifc: bClaim,
+            properties: { next: { $ref: "#/$defs/A" } },
+          },
+        },
+      }) as unknown as JSONSchemaObj;
+
+    it("compares a self-referencing definition equal to itself, and tells apart a changed claim inside it", () => {
+      expect(cfcSchemaPoliciesEqual(tree(CLAIM), tree(CLAIM))).toBe(true);
+      expect(
+        cfcSchemaPoliciesEqual(
+          tree(CLAIM),
+          tree({ writeAuthorizedBy: ["other"] }),
+        ),
+      ).toBe(false);
+    });
+
+    it("compares two definitions naming each other equal to themselves, and tells apart a changed claim in either", () => {
+      expect(cfcSchemaPoliciesEqual(mutual(CLAIM), mutual(CLAIM))).toBe(true);
+      expect(
+        cfcSchemaPoliciesEqual(
+          mutual(CLAIM),
+          mutual({ writeAuthorizedBy: ["other"] }),
+        ),
+      ).toBe(false);
+    });
+
+    it("compares a self-referencing definition reached through a `cid:` document equal to the same definition spelled locally, and tells apart a changed claim", () => {
+      // A member of a registered schema document that names itself is read
+      // back with that reference spelled as a `cid:` reference into the same
+      // document, so the walk recurses across `cid:` references.
+      const release = acquireSchemaRegistryLease();
+      try {
+        const external = (labelClaim: unknown) => {
+          const { $defs } = tree(labelClaim);
+          const group = { $defs } as unknown as JSONSchemaObj;
+          const hash = internSchemaAsTaggedHashString(group);
+          registerSchemaDocument(hash, group);
+          return {
+            type: "object",
+            properties: { root: { $ref: `cid:${hash}#/$defs/Node` } },
+          } as unknown as JSONSchemaObj;
+        };
+        // Compared with the same tree spelled locally, so that the `cid:`
+        // reference counts only by what it names.
+        expect(cfcSchemaPoliciesEqual(external(CLAIM), tree(CLAIM))).toBe(true);
+        expect(
+          cfcSchemaPoliciesEqual(
+            external(CLAIM),
+            tree({ writeAuthorizedBy: ["other"] }),
+          ),
+        ).toBe(false);
+      } finally {
+        release();
+      }
+    });
+  });
+
+  describe("with positions left out", () => {
+    // `inline` with a claim beneath each item of `list`, which differs
+    // between the two documents.
+    const beneath = (claim: unknown) =>
+      ({
+        type: "object",
+        properties: {
+          list: {
+            ...inline.properties.list,
+            items: {
+              type: "object",
+              properties: { n: { type: "number", ifc: claim } },
+            },
+          },
+        },
+      }) as unknown as JSONSchemaObj;
+    const left = beneath(CLAIM);
+    const right = beneath({ writeAuthorizedBy: ["other"] });
+
+    it("compares two documents equal where they differ only beneath a position left out", () => {
+      expect(cfcSchemaPoliciesEqual(left, right)).toBe(false);
+      expect(
+        cfcSchemaPoliciesEqual(
+          left,
+          right,
+          (path) => path.length > 2 && path[0] === "list" && path[1] === "*",
+        ),
+      ).toBe(true);
+    });
+
+    it("tells apart a changed claim at a position not left out", () => {
+      expect(
+        cfcSchemaPoliciesEqual(
+          left,
+          right,
+          (path) => path.length > 0 && path[0] === "other",
+        ),
+      ).toBe(false);
+    });
+  });
+});
+
+describe("canonicalizeCfcSchemaDocument", () => {
+  // A definition reused from several places, with a policy on it, so that a
+  // candidate whose policy differs sends the merge through the resolving
+  // path that attaches the document's map to each expanded body.
+  const envelope = (round: number): JSONSchemaObj => ({
+    type: "object",
+    properties: {
+      main: { $ref: "#/$defs/Profile" },
+      recent: { type: "array", items: { $ref: "#/$defs/Profile" } },
+    },
+    $defs: {
+      Profile: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          // Strengthened each round, so each candidate's policy differs
+          // from the stored one and the merge takes the resolving path.
+          secret: {
+            type: "string",
+            ifc: {
+              confidentiality: Array.from(
+                { length: round + 1 },
+                (_, index) => `c${index}`,
+              ),
+            },
+          },
+        },
+      },
+    },
+  });
+  const countDefs = (schema: unknown): number => {
+    let count = 0;
+    const walk = (value: unknown): void => {
+      if (Array.isArray(value)) {
+        value.forEach(walk);
+        return;
+      }
+      if (value === null || typeof value !== "object") return;
+      for (const [key, member] of Object.entries(value)) {
+        if (key === "$defs" && member && typeof member === "object") {
+          count += Object.keys(member).length;
+        }
+        walk(member);
+      }
+    };
+    walk(schema);
+    return count;
+  };
+  const nestedMaps = (schema: unknown): number => {
+    let count = 0;
+    const walk = (value: unknown, atRoot: boolean): void => {
+      if (Array.isArray(value)) {
+        value.forEach((member) => walk(member, false));
+        return;
+      }
+      if (value === null || typeof value !== "object") return;
+      for (const [key, member] of Object.entries(value)) {
+        if (key === "$defs" && !atRoot) count++;
+        walk(member, false);
+      }
+    };
+    walk(schema, true);
+    return count;
+  };
+
+  it("keeps a repeatedly merged envelope's definition map bounded", () => {
+    let merged: JSONSchema = envelope(0);
+    const sizes: number[] = [];
+    for (let round = 1; round <= 12; round++) {
+      merged = mergeCfcSchemaEnvelopes(merged, envelope(round));
+      sizes.push(JSON.stringify(merged).length);
+    }
+    // From the 6th merge to the 12th the document grows only by the six
+    // tags the label gained (under 100 chars); left unpruned, each merge
+    // adds a renamed copy of the candidate's definition that nothing
+    // references, about 200 chars a round.
+    expect(sizes[11] - sizes[5]).toBeLessThan(100);
+    expect(nestedMaps(merged)).toBe(0);
+    // At most one definition per distinct meaning that is still reachable.
+    expect(countDefs(merged)).toBeLessThanOrEqual(1);
+  });
+
+  it("folds content-identical definitions onto one name and rewrites refs", () => {
+    const canonical = canonicalizeCfcSchemaDocument({
+      type: "object",
+      properties: {
+        a: { $ref: "#/$defs/Entry" },
+        b: { $ref: "#/$defs/__cfc_hoisted_0_Entry" },
+        c: { $ref: "#/$defs/Other", $defs: { Entry: { type: "string" } } },
+      },
+      $defs: {
+        Entry: { type: "string" },
+        __cfc_hoisted_0_Entry: { type: "string" },
+        __cfc_hoisted_1_Other: { type: "null" },
+        Other: { type: "number" },
+        // Authored and unreferenced: kept, with what it refers to.
+        Unused: { type: "array", items: { $ref: "#/$defs/Spare" } },
+        Spare: { type: "boolean" },
+      },
+    }) as JSONSchemaObj;
+    expect(canonical.$defs).toEqual({
+      Entry: { type: "string" },
+      Other: { type: "number" },
+      Spare: { type: "boolean" },
+      Unused: { type: "array", items: { $ref: "#/$defs/Spare" } },
+    });
+    expect(canonical.properties).toEqual({
+      a: { $ref: "#/$defs/Entry" },
+      b: { $ref: "#/$defs/Entry" },
+      c: { $ref: "#/$defs/Other" },
+    });
+  });
+
+  it("folds a minted copy of a self-referential definition onto the original", () => {
+    const canonical = canonicalizeCfcSchemaDocument({
+      type: "object",
+      properties: {
+        a: { $ref: "#/$defs/Node" },
+        b: { $ref: "#/$defs/__cfc_hoisted_3_Node" },
+      },
+      $defs: {
+        Node: {
+          type: "object",
+          properties: { next: { $ref: "#/$defs/Node" } },
+        },
+        __cfc_hoisted_3_Node: {
+          type: "object",
+          properties: { next: { $ref: "#/$defs/__cfc_hoisted_3_Node" } },
+        },
+      },
+    }) as JSONSchemaObj;
+    expect(canonical.$defs).toEqual({
+      Node: { type: "object", properties: { next: { $ref: "#/$defs/Node" } } },
+    });
+    expect(canonical.properties).toEqual({
+      a: { $ref: "#/$defs/Node" },
+      b: { $ref: "#/$defs/Node" },
+    });
+  });
+
+  it("never folds two authored definitions onto each other", () => {
+    const canonical = canonicalizeCfcSchemaDocument({
+      type: "object",
+      properties: { a: { $ref: "#/$defs/Tag" }, b: { $ref: "#/$defs/Label" } },
+      $defs: {
+        Tag: { type: "string" },
+        Label: { type: "string" },
+        __cfc_hoisted_0_Tag: { type: "string" },
+      },
+    }) as JSONSchemaObj;
+    expect(canonical.$defs).toEqual({
+      Label: { type: "string" },
+      Tag: { type: "string" },
+    });
+    expect(canonical.properties).toEqual({
+      a: { $ref: "#/$defs/Tag" },
+      b: { $ref: "#/$defs/Label" },
+    });
+  });
+
+  // Deno disables the legacy `__proto__` setter, so an assignment into `{}`
+  // keeps the name as an own property here and the failure this guards
+  // against shows only under `deno test --unsafe-proto`, which restores
+  // browser semantics; the file passes under both.
+  it("keeps a definition named __proto__", () => {
+    const definition = {
+      type: "string",
+      ifc: { confidentiality: ["secret"] },
+    } as const;
+    const schema: JSONSchemaObj = {
+      type: "object",
+      properties: { a: { $ref: "#/$defs/__proto__" } },
+      $defs: Object.fromEntries([["__proto__", definition]]),
+    };
+    const canonical = canonicalizeCfcSchemaDocument(schema) as JSONSchemaObj;
+    expect(Object.hasOwn(canonical.$defs!, "__proto__")).toBe(true);
+    expect(Object.entries(canonical.$defs!)).toEqual([
+      ["__proto__", definition],
+    ]);
+    const merged = mergeCfcSchemaEnvelopes(schema, schema) as JSONSchemaObj;
+    expect(Object.hasOwn(merged.$defs ?? {}, "__proto__")).toBe(true);
+  });
+
+  it("prunes a retained authored definition below the root", () => {
+    const canonical = canonicalizeCfcSchemaDocument({
+      type: "object",
+      properties: { a: { type: "string" } },
+      $defs: {
+        Unused: {
+          type: "object",
+          properties: { x: { type: "number", $defs: { Stale: true } } },
+          $defs: { AlsoStale: { type: "null" } },
+        },
+      },
+    }) as JSONSchemaObj;
+    expect(canonical.$defs).toEqual({
+      Unused: { type: "object", properties: { x: { type: "number" } } },
+    });
+  });
+
+  it("reads a literal $ref inside policy or default data as data, not as a ref", () => {
+    // Two definitions that differ only in a literal atom carrying a `$ref`
+    // member, and a minted copy of the definition the atoms name: folding
+    // must leave the atoms as they are, so the two stay distinct and the
+    // policies of a document merged with itself are unchanged.
+    const schema: JSONSchemaObj = {
+      type: "object",
+      properties: {
+        a: { $ref: "#/$defs/A" },
+        b: { $ref: "#/$defs/B" },
+        c: { $ref: "#/$defs/__cfc_hoisted_0_X" },
+        d: { $ref: "#/$defs/X", default: { $ref: "#/$defs/Y" } },
+      },
+      $defs: {
+        A: {
+          type: "string",
+          ifc: {
+            confidentiality: [
+              { type: "https://example.com/Reader", $ref: "#/$defs/X" },
+            ],
+          },
+        },
+        B: {
+          type: "string",
+          ifc: {
+            confidentiality: [
+              { type: "https://example.com/Reader", $ref: "#/$defs/Y" },
+            ],
+          },
+        },
+        X: { type: "string" },
+        Y: { type: "string" },
+        __cfc_hoisted_0_X: { type: "string" },
+      },
+    };
+    const canonical = canonicalizeCfcSchemaDocument(schema) as JSONSchemaObj;
+    const defs = canonical.$defs as Record<string, JSONSchemaObj>;
+    expect(Object.keys(defs).toSorted()).toEqual(["A", "B", "X", "Y"]);
+    expect(defs.A.ifc).toEqual((schema.$defs!.A as JSONSchemaObj).ifc);
+    expect(defs.B.ifc).toEqual((schema.$defs!.B as JSONSchemaObj).ifc);
+    expect((canonical.properties as Record<string, JSONSchemaObj>).d).toEqual({
+      $ref: "#/$defs/X",
+      default: { $ref: "#/$defs/Y" },
+    });
+    expect(
+      cfcSchemaPoliciesEqual(schema, mergeCfcSchemaEnvelopes(schema, schema)),
+    )
+      .toBe(true);
+  });
+
+  it("keeps definitions apart whose Fabric-valued defaults differ", () => {
+    const canonical = canonicalizeCfcSchemaDocument({
+      type: "object",
+      properties: {
+        a: { $ref: "#/$defs/Bytes" },
+        b: { $ref: "#/$defs/__cfc_hoisted_0_Bytes" },
+      },
+      $defs: {
+        Bytes: {
+          type: "object",
+          default: new FabricBytes(new Uint8Array([1, 2])),
+        },
+        __cfc_hoisted_0_Bytes: {
+          type: "object",
+          default: new FabricBytes(new Uint8Array([3])),
+        },
+      },
+    } as unknown as JSONSchemaObj) as JSONSchemaObj;
+    expect(Object.keys(canonical.$defs!).toSorted()).toEqual([
+      "Bytes",
+      "__cfc_hoisted_0_Bytes",
+    ]);
+    expect((canonical.properties as Record<string, JSONSchemaObj>).b).toEqual({
+      $ref: "#/$defs/__cfc_hoisted_0_Bytes",
+    });
+  });
+
+  it("is a fixpoint: canonicalizing a canonical document changes nothing", () => {
+    const canonical = canonicalizeCfcSchemaDocument({
+      type: "object",
+      properties: {
+        a: { $ref: "#/$defs/Node" },
+        b: { $ref: "#/$defs/__cfc_hoisted_3_Node" },
+        c: { $ref: "#/$defs/Other", $defs: { Other: { type: "number" } } },
+      },
+      $defs: {
+        Node: {
+          type: "object",
+          properties: { next: { $ref: "#/$defs/Node" } },
+        },
+        __cfc_hoisted_3_Node: {
+          type: "object",
+          properties: { next: { $ref: "#/$defs/__cfc_hoisted_3_Node" } },
+        },
+        Other: { type: "number" },
+        Spare: { type: "boolean" },
+      },
+    });
+    expect(canonicalizeCfcSchemaDocument(canonical)).toEqual(canonical);
+  });
+
+  it("brings a stored document of the earlier shape down to its definitions in one merge", () => {
+    // The shape a stored envelope took on before merges left documents in
+    // canonical form: the root map holding the definitions under their own
+    // names and under many minted names, each minted copy referring to its
+    // own kind, and bodies carrying the whole root map.
+    const copies = 30;
+    const base = (suffix: string): Record<string, JSONSchema> => ({
+      [`A${suffix}`]: {
+        type: "object",
+        properties: {
+          s: { type: "string", ifc: { confidentiality: ["c"] } },
+          link: { $ref: `#/$defs/B${suffix}` },
+        },
+      },
+      [`B${suffix}`]: {
+        type: "object",
+        properties: {
+          n: { type: "number" },
+          deeper: { $ref: `#/$defs/C${suffix}` },
+        },
+      },
+      [`C${suffix}`]: {
+        type: "object",
+        properties: { z: { type: "boolean" } },
+      },
+    });
+    const rootMap: Record<string, JSONSchema> = { ...base("") };
+    for (let index = 0; index < copies; index++) {
+      for (const [name, definition] of Object.entries(base(`-${index}`))) {
+        const kind = name[0];
+        rootMap[`__cfc_hoisted_${index}_${kind}`] = JSON.parse(
+          JSON.stringify(definition).replaceAll(
+            `#/$defs/${kind === "A" ? "B" : "C"}-${index}`,
+            `#/$defs/__cfc_hoisted_${index}_${kind === "A" ? "B" : "C"}`,
+          ),
+        );
+      }
+    }
+    const resolvedBody = (ref: string): JSONSchemaObj => ({
+      type: "object",
+      properties: { s: { type: "string" }, link: { $ref: ref } },
+      $defs: rootMap,
+    });
+    const stored: JSONSchemaObj = {
+      type: "object",
+      properties: {
+        a: resolvedBody("#/$defs/__cfc_hoisted_7_B"),
+        b: resolvedBody("#/$defs/__cfc_hoisted_12_B"),
+        c: { $ref: "#/$defs/A" },
+      },
+      $defs: rootMap,
+    };
+    const candidate: JSONSchemaObj = {
+      type: "object",
+      properties: {
+        a: {
+          type: "object",
+          properties: { s: { type: "string" }, link: { $ref: "#/$defs/B" } },
+        },
+        b: {
+          type: "object",
+          properties: { s: { type: "string" }, link: { $ref: "#/$defs/B" } },
+        },
+        c: { $ref: "#/$defs/A" },
+      },
+      $defs: base(""),
+    };
+    const merged = mergeCfcSchemaEnvelopes(stored, candidate) as JSONSchemaObj;
+    expect(Object.keys(merged.$defs ?? {}).toSorted()).toEqual(["A", "B", "C"]);
+    expect(JSON.stringify(merged).includes("__cfc_hoisted")).toBe(false);
+    expect(nestedMaps(merged)).toBe(0);
+    expect(JSON.stringify(merged).length).toBeLessThan(
+      JSON.stringify(candidate).length * 2,
+    );
+    expect(JSON.stringify(stored).length).toBeGreaterThan(
+      JSON.stringify(merged).length * 50,
+    );
+  });
+
+  it("never reads an unresolved ref as a class while comparing definitions", () => {
+    // `N` refers to a definition that does not exist and whose name is the
+    // text a class could be spelled as; `M` refers to a definition that does.
+    // The two mean different things and must stay apart.
+    const canonical = canonicalizeCfcSchemaDocument({
+      type: "object",
+      properties: {
+        m: { $ref: "#/$defs/__cfc_hoisted_0_M" },
+        n: { $ref: "#/$defs/__cfc_hoisted_1_N" },
+      },
+      $defs: {
+        A: { type: "string" },
+        __cfc_hoisted_0_M: {
+          type: "object",
+          properties: { x: { $ref: "#/$defs/A" } },
+        },
+        __cfc_hoisted_1_N: {
+          type: "object",
+          properties: { x: { $ref: "#/$defs/class 0" } },
+        },
+      },
+    }) as JSONSchemaObj;
+    expect(Object.keys(canonical.$defs!).toSorted()).toEqual([
+      "A",
+      "__cfc_hoisted_0_M",
+      "__cfc_hoisted_1_N",
+    ]);
+    expect((canonical.properties as Record<string, JSONSchemaObj>).n).toEqual({
+      $ref: "#/$defs/__cfc_hoisted_1_N",
+    });
+  });
+
+  it("folds only once the partition is stable, whatever inert maps the definitions carry", () => {
+    // Minted C, D and F; B and F look alike until the C/D distinction has
+    // propagated to them, and the inert maps the bodies carry (in this
+    // order) must not take part in the comparison.
+    const schema: JSONSchemaObj = {
+      type: "object",
+      properties: { value: { $ref: "#/$defs/__cfc_hoisted_3_F" } },
+      $defs: {
+        A: {},
+        B: {
+          type: "object",
+          ifc: { confidentiality: [] },
+          properties: { next: { $ref: "#/$defs/__cfc_hoisted_1_D" } },
+          $defs: { B: { type: "number" }, A: { type: "string" } },
+        },
+        __cfc_hoisted_0_C: {
+          type: "object",
+          ifc: { confidentiality: [{ type: "https://example.com/Secret" }] },
+          properties: { next: { $ref: "#/$defs/__cfc_hoisted_1_D" } },
+          $defs: { A: { type: "string" } },
+        },
+        __cfc_hoisted_1_D: {
+          type: "object",
+          ifc: { confidentiality: [{ type: "https://example.com/Secret" }] },
+          properties: { next: { $ref: "#/$defs/B" } },
+          $defs: { A: { type: "string" } },
+        },
+        __cfc_hoisted_3_F: {
+          type: "object",
+          ifc: { confidentiality: [] },
+          properties: { next: { $ref: "#/$defs/__cfc_hoisted_0_C" } },
+          $defs: { A: { type: "string" }, B: { type: "number" } },
+        },
+      },
+    };
+    expect(validateSchemaDefinition(schema)).toBeUndefined();
+    const canonical = canonicalizeCfcSchemaDocument(schema);
+    expect(cfcSchemaPoliciesEqual(schema, canonical)).toBe(true);
+    const merged = mergeCfcSchemaEnvelopes(schema, schema);
+    expect(validateSchemaDefinition(merged)).toBeUndefined();
+    expect(cfcSchemaPoliciesEqual(schema, merged)).toBe(true);
+  });
+
+  it("keeps an unresolved reference unresolved through the merge", () => {
+    const schema: JSONSchemaObj = {
+      type: "object",
+      properties: { bad: { $ref: "#/$defs/__cfc_hoisted_0_C" } },
+      $defs: {
+        A: { type: "string" },
+        B: { $ref: "#/$defs/A" },
+        __cfc_hoisted_0_C: { $ref: "#/$defs/class 0" },
+      },
+    };
+    expect(validateSchemaDefinition(schema)).toContain("cannot resolve");
+    expect(validateSchemaDefinition(mergeCfcSchemaEnvelopes(schema, schema)))
+      .toContain("cannot resolve");
+  });
+
+  it("drops a nested map, which is inert under the root's whatever it holds", () => {
+    const canonical = canonicalizeCfcSchemaDocument({
+      type: "object",
+      properties: {
+        a: { $ref: "#/$defs/Entry", $defs: { Entry: { type: "number" } } },
+      },
+      $defs: { Entry: { type: "string" } },
+    }) as JSONSchemaObj;
+    expect(canonical).toEqual({
+      type: "object",
+      properties: { a: { $ref: "#/$defs/Entry" } },
+      $defs: { Entry: { type: "string" } },
+    });
+  });
+});
+
+describe("mergeCfcSchemaEnvelopes with definitions that refer to each other", () => {
+  // Three definitions in a chain, the first carrying a policy: a candidate
+  // whose policy differs is resolved before the merge, so its bodies arrive
+  // carrying its own definition map, and the hoist renames the candidate's
+  // names. The map a body carries is renamed with it, so the merged document
+  // canonicalizes to the three definitions it has, however often it merges.
+  const envelope = (round: number): JSONSchemaObj => ({
+    type: "object",
+    properties: {
+      a: { $ref: "#/$defs/A" },
+      b: { $ref: "#/$defs/B" },
+      c: { $ref: "#/$defs/C" },
+    },
+    $defs: {
+      A: {
+        type: "object",
+        properties: {
+          s: {
+            type: "string",
+            ifc: {
+              confidentiality: Array.from(
+                { length: round + 1 },
+                (_, index) => `c${index}`,
+              ),
+            },
+          },
+          link: { $ref: "#/$defs/B" },
+        },
+      },
+      B: {
+        type: "object",
+        properties: { n: { type: "number" }, deeper: { $ref: "#/$defs/C" } },
+      },
+      C: { type: "object", properties: { z: { type: "boolean" } } },
+    },
+  });
+
+  it("keeps the map a resolved body carries consistent with the root map", () => {
+    let merged: JSONSchema = envelope(0);
+    const sizes: number[] = [];
+    for (let round = 1; round <= 6; round++) {
+      merged = mergeCfcSchemaEnvelopes(merged, envelope(round));
+      sizes.push(JSON.stringify(merged).length);
+    }
+    const root = merged as JSONSchemaObj;
+    expect(Object.keys(root.$defs ?? {}).toSorted()).toEqual(["A", "B", "C"]);
+    expect(JSON.stringify(merged).includes("__cfc_hoisted")).toBe(false);
+    expect(sizes[5] - sizes[2]).toBeLessThan(40);
   });
 });

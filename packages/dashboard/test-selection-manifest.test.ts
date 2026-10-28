@@ -3,6 +3,7 @@ import {
   assertExists,
   assertRejects,
   assertStringIncludes,
+  assertThrows,
 } from "@std/assert";
 import {
   MANIFEST_SCHEMA_VERSION,
@@ -12,12 +13,16 @@ import {
 } from "@commonfabric/test-support/records";
 
 import {
+  corpusSeconds,
   FLAKE_WINDOW_FALLBACK_DAYS,
   generatedAtOf,
   LANE_BUDGET_FALLBACK_SECONDS,
   laneBudgetOf,
   ManifestSchemaError,
   newestManifest,
+  selectedSeconds,
+  selectedShare,
+  shareLabel,
   TEST_SELECTION_PREFIX,
 } from "./test-selection-manifest.ts";
 import { manifestPrefix } from "../../tasks/test-selection/store.ts";
@@ -85,6 +90,26 @@ Deno.test("newestManifest reports a body that is not a manifest", async () => {
       }),
     Error,
     "not a manifest",
+  );
+});
+
+Deno.test("newestManifest reports a manifest whose lane names a test outside its corpus", async () => {
+  const stray = JSON.stringify({ k: "unit", s: "x", n: "y" });
+  const manifest = sampleManifest({
+    lanes: [{
+      lane: 1,
+      projectedSeconds: 1,
+      batches: [{ suite: "memory", identities: [stray] }],
+    }],
+  });
+  const name = `${PREFIX}/manifest-2026-08-20T04:00:00.000Z-b.json.gz`;
+  await assertRejects(
+    () =>
+      newestManifest({
+        fetchImpl: storeOf({ [name]: serializeManifest(manifest) }),
+      }),
+    Error,
+    `manifest ${name}: lane 1 names ${stray}, which the corpus lacks`,
   );
 });
 
@@ -380,9 +405,10 @@ Deno.test("the flake tile counts what selection held back, and points at them", 
   assertEquals(view.hint, "flakes ↗");
 });
 
-Deno.test("the selection tile says what share of the corpus would run", async () => {
-  const entry = sampleEntry({ k: "unit", s: "memory", n: "a" }, { cost: 3 });
-  const other = sampleEntry({ k: "unit", s: "memory", n: "b" }, { cost: 1 });
+Deno.test("the selection tile says what share of the corpus's test time would run", async () => {
+  // One test of two, and a quarter of the time.
+  const entry = sampleEntry({ k: "unit", s: "memory", n: "a" }, { cost: 1800 });
+  const other = sampleEntry({ k: "unit", s: "memory", n: "b" }, { cost: 5400 });
   const manifest = sampleManifest({
     entries: [entry, other],
     lanes: [{
@@ -399,10 +425,58 @@ Deno.test("the selection tile says what share of the corpus would run", async ()
     now: () => Date.parse("2026-08-20T05:00:00.000Z"),
   }).collect(CTX);
   assertEquals(view.status, "good");
-  assertEquals(view.value, "50%");
-  assertEquals(view.sub, "1 of 2 tests");
+  assertEquals(view.value, "25%");
+  assertEquals(view.sub, "30m 00s of 2h 00m test time");
   assertEquals(view.href, "/test-selection");
   assertEquals(view.hint, "lanes ↗");
+});
+
+Deno.test("the selected time counts each identity a lane names at its own cost", () => {
+  const a = sampleEntry({ k: "unit", s: "memory", n: "a" }, { cost: 2 });
+  const b = sampleEntry({ k: "unit", s: "memory", n: "b" }, { cost: 3 });
+  const c = sampleEntry({ k: "unit", s: "memory", n: "c" }, { cost: 5 });
+  const lanes = (...identities: string[][]) =>
+    identities.map((names, index) => ({
+      lane: index + 1,
+      projectedSeconds: 10,
+      batches: [{ suite: a.suite, identities: names }],
+    }));
+  const manifest = sampleManifest({
+    entries: [a, b, c],
+    lanes: lanes([JSON.stringify(a.test)], [JSON.stringify(c.test)]),
+  });
+  assertEquals(corpusSeconds(manifest), 10);
+  assertEquals(selectedSeconds(manifest), 7);
+  assertEquals(selectedShare(7, 10), 70);
+
+  const stray = JSON.stringify({ k: "unit", s: "x", n: "y" });
+  assertThrows(
+    () =>
+      selectedSeconds(
+        sampleManifest({ entries: [a], lanes: lanes([], [stray]) }),
+      ),
+    Error,
+    `lane 2 names ${stray}, which the corpus lacks`,
+  );
+});
+
+Deno.test("a share under ten percent keeps a decimal place", () => {
+  assertEquals(shareLabel(294, 10_000), "2.9%");
+  assertEquals(shareLabel(0, 1), "0.0%");
+  assertEquals(shareLabel(996, 10_000), "10%");
+  assertEquals(shareLabel(254, 1_000), "25%");
+  assertEquals(shareLabel(0, 0), "—");
+});
+
+Deno.test("the selection tile is unknown for a corpus with no test time", async () => {
+  const free = sampleEntry({ k: "unit", s: "memory", n: "a" }, { cost: 0 });
+  const view = await makeTestSelection({
+    source: reading(sampleManifest({ entries: [free] })),
+    now: () => Date.parse("2026-08-20T05:00:00.000Z"),
+  }).collect(CTX);
+  assertEquals(view.status, "unknown");
+  assertEquals(view.value, "—");
+  assertEquals(view.sub, "selection manifest has no test time");
 });
 
 Deno.test("the selection tile goes amber once the manifest has gone stale", async () => {
@@ -413,8 +487,8 @@ Deno.test("the selection tile goes amber once the manifest has gone stale", asyn
   assertEquals(view.status, "warn");
   assertEquals(view.aside, '<span class="hfacet" title="28h old">28h old</span>');
   // Staleness reports itself in the badge, so it leaves the sub line to
-  // the counts rather than taking it.
-  assertEquals(view.sub, "0 of 1 tests");
+  // the test time rather than taking it.
+  assertEquals(view.sub, "0s of 0s test time");
 });
 
 Deno.test("the lane budget comes from the manifest that named it", () => {
@@ -468,7 +542,7 @@ Deno.test("the selection tile goes amber while a test is too long for any lane",
   assertEquals(view.status, "warn");
   // The share is still the headline; what the tile turned amber for takes
   // the line under it.
-  assertEquals(view.value, "50%");
+  assertEquals(view.value, "0.1%");
   assertEquals(view.sub, "1 test too long for any lane");
   assertEquals(view.href, TEST_SELECTION_PATH);
   assertEquals(view.hint, "lanes ↗");

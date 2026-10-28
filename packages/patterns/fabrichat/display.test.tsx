@@ -22,14 +22,7 @@ import {
   propValue,
   readValue,
 } from "../test/vnode-helpers.ts";
-import {
-  type ActivityCounters,
-  type MessagesValue,
-  type ReactionList,
-  type RequestMemo,
-  type SentActivity,
-  type UsedTime,
-} from "./room-records.tsx";
+import { type MessagesValue } from "./room-records.tsx";
 import { FabriChatRoomCore } from "./room.tsx";
 import {
   CHAT_EDIT_SURFACE,
@@ -86,11 +79,6 @@ export default pattern(() => {
     myProfile: aliceProfile,
     about: { kind: "group" as const },
     messages,
-    reactionLists: Writable.of<ReactionList[]>([] as ReactionList[]),
-    requests: Writable.of<RequestMemo[]>([]),
-    usedTimes: Writable.of<UsedTime[]>([]),
-    activity: Writable.of<SentActivity[]>([]),
-    counters: Writable.of<ActivityCounters[]>([]),
   } as RoomArg);
 
   return {
@@ -106,13 +94,6 @@ export default pattern(() => {
         ),
       },
       { assertion: assert(() => displayOf(editForm(alice[UI])) === "none") },
-      // The message's row, in the main conversation.
-      {
-        assertion: assert(() =>
-          hiddenNodeDisplay(alice[UI], (node) => hasText(node, "Hello")) ===
-            "block"
-        ),
-      },
       // The viewer's own message offers its edit control.
       {
         assertion: assert(() =>

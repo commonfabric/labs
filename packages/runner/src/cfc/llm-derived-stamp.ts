@@ -60,8 +60,8 @@ const mergeLlmDerivedIntoNode = (
  * ID-anchored array item — and the child write descends through
  * `ContextualFlowControl.getSchemaAtPath`, which carries ancestor
  * confidentiality but not `ifc.addIntegrity`. Stamping every node keeps the
- * mark on whichever document the model bytes land in, so `walkIfcSchema`
- * mints the `LlmDerived` entry on a split child too. The shared walker's
+ * mark on whichever document the model bytes land in, so `cfcSchemaEntries`
+ * finds the `LlmDerived` declaration on a split child too. The shared walker's
  * whole vocabulary is stamped, including keywords the generators do not emit:
  * this runs once per model result, and completeness here costs nothing
  * noticeable while preserving provenance if more keywords become

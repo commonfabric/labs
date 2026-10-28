@@ -35,6 +35,10 @@ import {
   VALUE_TAGS,
 } from "@/types";
 import { deepFreeze, isValidDeepFrozenFabricValue } from "./deep-freeze.ts";
+import {
+  BaseFabricInstance,
+  DEEP_CLONE_CORE,
+} from "./fabric-bases/BaseFabricInstance.ts";
 import { toDebugKindString } from "@/value-debug";
 
 /** Options for `cloneIfNecessary()`. */
@@ -262,7 +266,22 @@ export function cloneHelper(
       if (canReturnAsIs(value)) {
         return value;
       } else if (deep) {
-        return (value as FabricInstance).deepClone(frozen);
+        const instance = value as FabricInstance;
+        if (!BaseFabricInstance.isInstance(instance)) {
+          throw new TypeError(
+            "Fabric instances must implement the clone protocol",
+          );
+        }
+        seen = trackForCircularity(instance, seen);
+        try {
+          const copy = instance[DEEP_CLONE_CORE](
+            frozen,
+            (child) => cloneHelper(child, frozen, true, force, seen),
+          );
+          return frozen ? deepFreeze(copy) : copy;
+        } finally {
+          seen.delete(instance);
+        }
       } else {
         return (value as FabricInstance).shallowClone(frozen);
       }

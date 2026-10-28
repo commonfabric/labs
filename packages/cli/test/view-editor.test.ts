@@ -7,7 +7,13 @@
  */
 
 import { assert, assertEquals } from "@std/assert";
-import { parseDocument, promptText } from "./view-helpers.ts";
+import {
+  cellOf,
+  drawnRows,
+  mouseKey,
+  parseDocument,
+  promptText,
+} from "./view-helpers.ts";
 import { highlightDocument } from "../lib/view/languages/typescript/parse.ts";
 import { Session } from "../lib/view/session.ts";
 import type { Key } from "../lib/view/keys.ts";
@@ -421,6 +427,88 @@ Deno.test("editor: activating a button captures the pushed frame for its press",
   assertEquals(s.view().message, "Cancelled", "and the button's action ran");
   press(s, "s"); // any following key clears the pending press
   assertEquals(s.pendingPush, null, "the next key drops the pending press");
+});
+
+/**
+ * Returns a session showing the save prompt over an unsaved edit, with the cell
+ * its Discard label starts at.
+ */
+function savePromptWithDiscard() {
+  const { src, saved } = memSource();
+  const s = editSession("abc\n", src);
+  press(s, "e");
+  type(s, "Z");
+  press(s, "escape", "q");
+  return { s, saved, discard: cellOf(drawnRows(s), "Discard") };
+}
+
+Deno.test("editor: a mouse press pushes a dialog button and its release activates it", () => {
+  const { s, saved, discard } = savePromptWithDiscard();
+
+  s.handleKey(mouseKey(true, discard));
+  assert(!s.quit, "the press alone does not activate the button");
+  assertEquals(s.view().dialog?.pushed, 1, "Discard is held pushed");
+  assertEquals(s.view().dialog?.focus, 1, "and focused");
+  assertEquals(
+    cellOf(drawnRows(s), "Discard"),
+    { x: discard.x + 1, y: discard.y },
+    "it is drawn one column right, as pressed",
+  );
+
+  s.handleKey(mouseKey(false, discard));
+  assert(s.quit, "the release over it discards and quits");
+  assertEquals(saved(), null, "Discard was activated, not Save");
+  assertEquals(s.pendingPush?.view.dialog?.pushed, 1, "its press is played");
+});
+
+Deno.test("editor: releasing the mouse off the pressed button lets go of it", () => {
+  const { s, discard } = savePromptWithDiscard();
+  const cancel = cellOf(drawnRows(s), "Cancel");
+
+  s.handleKey(mouseKey(true, discard));
+  s.handleKey(mouseKey(false, cancel));
+  assert(!s.quit, "Discard was not activated");
+  assert(promptText(s.view()).includes("Save changes"), "the prompt is up");
+  assertEquals(s.view().message, "", "Cancel was not activated either");
+  assertEquals(s.view().dialog?.pushed, -1, "nothing is drawn pushed");
+});
+
+Deno.test("editor: a key between the press and the release lets go of the button", () => {
+  const { s, discard } = savePromptWithDiscard();
+
+  s.handleKey(mouseKey(true, discard));
+  press(s, "y"); // not one of the prompt's buttons
+  assertEquals(s.view().dialog?.pushed, -1, "the key let go of Discard");
+  s.handleKey(mouseKey(false, discard));
+  assert(!s.quit, "the release activated nothing");
+  assert(promptText(s.view()).includes("Save changes"), "the prompt is up");
+});
+
+Deno.test("editor: a click away from a dialog's buttons does nothing", () => {
+  const { s, discard } = savePromptWithDiscard();
+  const title = cellOf(drawnRows(s), "Save Changes");
+
+  for (const at of [title, { x: discard.x, y: discard.y + 1 }]) {
+    s.handleKey(mouseKey(true, at));
+    assertEquals(s.view().dialog?.pushed, -1, "nothing is pushed");
+    assertEquals(s.view().dialog?.focus, 0, "Save keeps the focus");
+    s.handleKey(mouseKey(false, at));
+    assert(!s.quit, "nothing was activated");
+    assert(promptText(s.view()).includes("Save changes"), "the prompt is up");
+  }
+});
+
+Deno.test("editor: a click with no prompt up leaves the edit as it was", () => {
+  const { src } = memSource();
+  const s = editSession("abc\n", src);
+  press(s, "e", "right");
+  const before = drawnRows(s);
+
+  s.handleKey(mouseKey(true, { x: 0, y: 0 }));
+  s.handleKey(mouseKey(false, { x: 0, y: 0 }));
+
+  assertEquals(s.view().cursor, { line: 0, col: 1 }, "the cursor stays put");
+  assertEquals(drawnRows(s), before, "and nothing else changed on screen");
 });
 
 Deno.test("editor: quitting dirty, d discards and quits", () => {

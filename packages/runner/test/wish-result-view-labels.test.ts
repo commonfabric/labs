@@ -18,6 +18,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedProfileOwner,
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
@@ -250,6 +251,7 @@ describe("wish-result-view-labels", () => {
         title: "pinned",
       })),
     });
+    seedProfileOwner(tx, profile.getAsNormalizedFullLink(), owner.did());
     expect((await tx.commit().settled).error).toBeUndefined();
     const homeTx = runtime.edit();
     const homeDefault = runtime.getCell(
@@ -374,9 +376,20 @@ describe("wish-result-view-labels", () => {
     consumedBy((tx) => cell.withTx(tx).getRaw({ lastNode: "value" }))
       .confidentiality;
 
+  /**
+   * The view the wish shows, under `schema`. The wish state holds its view as
+   * an opaque handle, so a read that goes inside the view starts from what the
+   * handle resolves to and names the shape it reads, as a renderer does.
+   */
+  const viewThrough = (
+    result: Cell<unknown>,
+    schema: JSONSchema = vnodeSchema,
+  ): Cell<unknown> =>
+    result.key("found").key(UI).resolveAsCell().asSchema(schema);
+
   /** The view the wish shows: the place it resolves to, and its node's name. */
   const shownView = (result: Cell<unknown>) => {
-    const view = result.key("found").key(UI);
+    const view = viewThrough(result);
     const { id, path } = view.resolveAsCell().getAsNormalizedFullLink();
     return { id, path, name: view.key("name").get() };
   };
@@ -548,7 +561,7 @@ describe("wish-result-view-labels", () => {
             .get()
         );
       const viaResult = sealedThrough((tx) => found(tx).key("result").key(UI));
-      const viaWishView = sealedThrough((tx) => found(tx).key(UI));
+      const viaWishView = sealedThrough((tx) => viewThrough(result.withTx(tx)));
 
       for (const read of [viaResult, viaWishView]) {
         expect(read.value).toBe("sealed content");
@@ -727,7 +740,7 @@ describe("wish-result-view-labels", () => {
       await pin(piece, "#outer");
 
       const result = await runWish("#outer", "outer-finder");
-      const view = result.key("found").key(UI);
+      const view = viewThrough(result, pieceSchema);
 
       expect(view.key("title").get()).toBe("Picker");
       expect(view.key(UI).key("name").get()).toBe("div");

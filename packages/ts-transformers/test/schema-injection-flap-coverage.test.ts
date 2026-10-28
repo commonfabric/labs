@@ -115,13 +115,14 @@ export default pattern<{ primary: Cell<number>; secondary: Cell<number> }>(
 );
 
 Deno.test(
-  "a parenthesized scope-wrapper type on a lift object return is unwrapped into a scope marker",
+  "a parenthesized scope-wrapper type on an inferred lift object return declares no scope",
   async () => {
     // The lift callback returns `{ v }` where `v` is declared with the
     // parenthesized type `(PerSpace<number>)`. Building the object-literal return
-    // schema reads that declared type node and unwraps the parentheses before
-    // testing for a scope wrapper. Once unwrapped, `PerSpace` is recognized and
-    // the emitted property schema carries `scope: "space"`.
+    // schema reads that declared type node, unwrapping the parentheses to find
+    // the scope wrapper. The result type is inferred, with no return type its
+    // author wrote, so its schema declares no scope: the runtime stores the
+    // result at the narrowest scope the callback reads.
     const source = `/// <cts-enable />
 import { Cell, pattern, lift, PerSpace, UI, VNode } from "commonfabric";
 interface Input { seed: Cell<number>; }
@@ -136,20 +137,11 @@ export default pattern<Input, Output>(({ seed }) => {
 });`;
     const output = parseModule(await t(source));
 
-    // The lift's result schema encodes `v` as a space-scoped number, which only
-    // happens if the parenthesized type node was unwrapped and the scope wrapper
-    // recognized.
     const resultSchemas = callSchemas(output, "lift");
-    const scoped = resultSchemas.find((schema) => {
-      const v = (schema.properties as Obj | undefined)?.v as Obj | undefined;
-      return v?.scope === "space";
-    });
-    assert(
-      scoped,
-      "expected a lift result schema with v marked scope: space",
+    const withV = resultSchemas.find((schema) =>
+      (schema.properties as Obj | undefined)?.v !== undefined
     );
-    const v = (scoped!.properties as Obj).v as Obj;
-    assertEquals(v.type, "number");
-    assertEquals(v.scope, "space");
+    assert(withV, "expected a lift result schema with a `v` property");
+    assertEquals((withV!.properties as Obj).v, { type: "number" });
   },
 );

@@ -16,10 +16,13 @@ import { HARNESS_BROWSER_ACCESS_LEASE_TYPE } from "../src/contracts/browser-acce
 import { CFC_PROMPT_SLOT_BOUND_ATOM_TYPE } from "../src/contracts/prompt-slot.ts";
 import { DEFAULT_PARENT_TOOL_IDS } from "../src/contracts/tool-descriptor.ts";
 import { HarnessControlError } from "../src/control-errors.ts";
+import { parseHostMountSpecs } from "../src/host-mounts.ts";
 import {
-  parseHostMountSpecs,
+  LINUX_HOME,
+  NAMES_RUNSC,
   resolveInteractiveProvisioning,
-} from "../src/host-mounts.ts";
+  runHarnessInteractiveChatStdioCli,
+} from "./support/on-linux.ts";
 import {
   HarnessInteractiveChatService,
   type HarnessInteractivePromptLoopFactory,
@@ -30,11 +33,14 @@ import {
   parseHarnessInteractiveChatStdioCliOptions,
   runHarnessInteractiveChatNdjsonTransport,
   runHarnessInteractiveChatStdio,
-  runHarnessInteractiveChatStdioCli,
   type RunHarnessInteractiveChatStdioOptions,
 } from "../src/interactive-chat-stdio.ts";
 import type { HarnessClientActionRequester } from "../src/client-actions/coordinator.ts";
 import type { HarnessPromptLoopResult } from "../src/prompt-loop.ts";
+import type {
+  SandboxRuntimeChoice,
+  SandboxRuntimeSelection,
+} from "../src/sandbox/runtime-selection.ts";
 import {
   HARNESS_SUPPORTED_CLIENT_FEATURES,
   harnessClientProtocolEcho,
@@ -101,6 +107,7 @@ const runStdioCli = async (
       fromFileUrl(new URL("../src/interactive-chat-stdio.ts", import.meta.url)),
       ...args,
     ],
+    env: NAMES_RUNSC,
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
@@ -205,6 +212,7 @@ Deno.test("interactive NDJSON transport emits events and responses", async () =>
 });
 
 Deno.test("interactive NDJSON transport waits for active turns before close after write failure", async () => {
+  const ready = Promise.withResolvers<void>();
   let loopFinished = false;
   let resolveLoop: (() => void) | undefined;
   let closeBeforeLoopFinished = false;
@@ -214,6 +222,7 @@ Deno.test("interactive NDJSON transport waits for active turns before close afte
       runTranscript: async (options) => {
         await new Promise<void>((resolve) => {
           resolveLoop = resolve;
+          ready.resolve();
         });
         loopFinished = true;
         const finalMessage = {
@@ -267,9 +276,10 @@ Deno.test("interactive NDJSON transport waits for active turns before close afte
         closeService: () => {
           closeBeforeLoopFinished = !loopFinished;
         },
-        writeLine: (line) => {
+        writeLine: async (line) => {
           const envelope = JSON.parse(line) as Record<string, unknown>;
           if (envelope.requestId === "req-start-turn") {
+            await ready.promise;
             resolveLoop?.();
             throw new Error("simulated stdout failure");
           }
@@ -1727,11 +1737,40 @@ Deno.test("a typo in a host-mount field is refused, not silently defaulted", asy
   }
 });
 
-Deno.test("no provisioning flags leaves the run options untouched", async () => {
+/**
+ * The selection Linux defaults to where nothing names a runtime: the native
+ * runtime, taken whole from the store under the home this file's entrypoints
+ * are given.
+ */
+const linuxDefault = (): SandboxRuntimeSelection => {
+  const store = join(LINUX_HOME, ".local", "share", "runsc-cfc");
+  return {
+    sandboxRuntimeKind: "runsc",
+    sandboxRootfs: join(store, "images", "kitchensink"),
+    sandboxCfcPolicy: join(store, "cfc-policy.json"),
+    sandboxRunscBinary: join(store, "bin", "runsc"),
+    sandboxRunscNetworkHelper: join(LINUX_HOME, "bin", "pasta"),
+    sandboxRunscUnshare: join(LINUX_HOME, "bin", "unshare"),
+    sandboxRunscSetpriv: join(LINUX_HOME, "bin", "setpriv"),
+    sandboxRuntimeChoice: {
+      runtime: "runsc",
+      source: "default",
+      platform: "linux",
+      nativeStore: store,
+    },
+  };
+};
+
+Deno.test("no provisioning flags hand on nothing but the sandbox runtime selection", async () => {
   // The other half of the standalone-entrypoint contract: adding these flags
   // must not change what happens when nobody passes them, or every existing
-  // embedder gets a behaviour change for free.
-  assertEquals(await resolveInteractiveProvisioning({}, Deno.cwd(), {}), {});
+  // embedder gets a behavior change for free. The one thing handed on is the
+  // runtime Linux defaults to, from the store under the home.
+  const defaulted = linuxDefault();
+  assertEquals(
+    await resolveInteractiveProvisioning({}, Deno.cwd(), {}),
+    defaulted,
+  );
 
   const seen: RunHarnessInteractiveChatStdioOptions[] = [];
   await runHarnessInteractiveChatStdioCli(
@@ -1743,14 +1782,14 @@ Deno.test("no provisioning flags leaves the run options untouched", async () => 
     },
   );
   assertEquals(seen.length, 1);
-  assertEquals(seen[0].basePromptLoopOptions, undefined);
+  assertEquals(seen[0].basePromptLoopOptions, defaulted);
   assertEquals(seen[0].maxInMemoryEvents, 8);
 });
 
 Deno.test("resolveInteractiveProvisioning carries a turn budget without mounts", async () => {
   assertEquals(
     await resolveInteractiveProvisioning({ maxModelTurns: 32 }, Deno.cwd(), {}),
-    { maxModelTurns: 32 },
+    { maxModelTurns: 32, ...linuxDefault() },
   );
 });
 
@@ -1826,6 +1865,7 @@ Deno.test("interactive stdio refuses a session database another live process hol
   ];
   const first = new Deno.Command(Deno.execPath(), {
     args,
+    env: NAMES_RUNSC,
     stdin: "piped",
     stdout: "piped",
     stderr: "piped",
@@ -1856,6 +1896,7 @@ Deno.test("interactive stdio refuses a session database another live process hol
     reader.releaseLock();
     second = await new Deno.Command(Deno.execPath(), {
       args,
+      env: NAMES_RUNSC,
       stdin: "null",
       stdout: "piped",
       stderr: "piped",
@@ -2013,6 +2054,10 @@ Deno.test("interactive stdio writes one refusal line to its error output for a h
 Deno.test("resolveInteractiveProvisioning selects the sandbox runtime the environment names", async () => {
   // Same derivation as the batch CLI, so a chat session and a batch run
   // launched from one environment execute in the same sandbox.
+  const namedRunsc: SandboxRuntimeChoice = {
+    runtime: "runsc",
+    source: "environment",
+  };
   assertEquals(
     await resolveInteractiveProvisioning({}, Deno.cwd(), {
       CF_HARNESS_SANDBOX_RUNTIME: "runsc",
@@ -2027,6 +2072,7 @@ Deno.test("resolveInteractiveProvisioning selects the sandbox runtime the enviro
       sandboxCfcPolicy: "/p",
       sandboxRunscBinary: "/b",
       sandboxRunscNetworkMode: "host",
+      sandboxRuntimeChoice: namedRunsc,
     },
   );
   await assertRejects(
@@ -2055,7 +2101,7 @@ Deno.test("resolveInteractiveProvisioning selects the sandbox runtime the enviro
         HOME: home,
         CF_HARNESS_SANDBOX_RUNTIME: "runsc",
       }),
-      { sandboxRuntimeKind: "runsc" },
+      { sandboxRuntimeKind: "runsc", sandboxRuntimeChoice: namedRunsc },
     );
     await Deno.mkdir(join(home, ".local", "share", "runsc-cfc"), {
       recursive: true,
@@ -2066,7 +2112,11 @@ Deno.test("resolveInteractiveProvisioning selects the sandbox runtime the enviro
         HOME: home,
         CF_HARNESS_SANDBOX_RUNTIME: "runsc",
       }),
-      { sandboxRuntimeKind: "runsc", sandboxCfcPolicy: policy },
+      {
+        sandboxRuntimeKind: "runsc",
+        sandboxCfcPolicy: policy,
+        sandboxRuntimeChoice: namedRunsc,
+      },
     );
   } finally {
     await Deno.remove(home, { recursive: true });
@@ -2269,6 +2319,7 @@ Deno.test("interactive NDJSON transport echoes its client protocol on an accepte
       "client_actions",
       "typed_commands",
       "starts_run",
+      "automatic_mutations",
     ],
   );
 });

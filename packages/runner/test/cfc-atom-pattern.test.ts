@@ -496,5 +496,21 @@ describe("CFC atom patterns", () => {
       expect(atomPropagationClass({ kind: "authored-by" }))
         .toBe("value-bound");
     });
+
+    it("returns value-bound for TransformedBy and UserSurfaceInput and provenance for PromptSlotBound", () => {
+      // §15.4 registers `TransformedBy` value-bound and `PromptSlotBound`
+      // provenance; §15.6 gives `UserSurfaceInput` a value-bound default.
+      // `Builtin` is asserted in cfc-flow-integrity.test.ts.
+      for (
+        const type of [
+          CFC_ATOM_TYPE.TransformedBy,
+          CFC_ATOM_TYPE.UserSurfaceInput,
+        ]
+      ) {
+        expect(atomPropagationClass({ type })).toBe("value-bound");
+      }
+      expect(atomPropagationClass({ type: CFC_ATOM_TYPE.PromptSlotBound }))
+        .toBe("provenance");
+    });
   });
 });

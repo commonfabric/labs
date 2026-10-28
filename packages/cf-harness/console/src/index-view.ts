@@ -10,6 +10,12 @@
  * what it shows, and source is read through the CLI.
  */
 
+import type {
+  PatternIndexEvent,
+  PatternIndexListedPattern,
+  PatternIndexPattern,
+  PatternIndexSearchResult,
+} from "@commonfabric/pattern-index/client";
 import { html, LitElement, nothing, type TemplateResult } from "lit";
 import {
   eventBadges,
@@ -20,12 +26,6 @@ import {
   searchRequestOf,
   truncateId,
 } from "../index-inspector.ts";
-import type {
-  PatternIndexEvent,
-  PatternIndexListedPattern,
-  PatternIndexPattern,
-  PatternIndexSearchResult,
-} from "../../src/pattern-index/client.ts";
 import {
   listIndexEvents,
   listIndexPatterns,

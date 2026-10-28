@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
+import type { SchemaHint } from "../src/interface.ts";
 import { SchemaGenerator } from "../src/schema-generator.ts";
 import {
   createTestProgram,
@@ -834,6 +835,9 @@ type CalculatorRequest = {
       const stringOrUnknown = {
         anyOf: [{ type: "string" }, { type: "unknown" }],
       };
+      const unknownOrString = {
+        anyOf: [{ type: "unknown" }, { type: "string" }],
+      };
       expect(
         await schemaOf(
           alias(
@@ -857,7 +861,7 @@ type CalculatorRequest = {
         ),
       ).toEqual({
         type: "object",
-        properties: { x: stringOrUnknown },
+        properties: { x: unknownOrString },
         required: ["x"],
       });
       expect(
@@ -870,7 +874,7 @@ type CalculatorRequest = {
         ),
       ).toEqual({
         type: "object",
-        properties: { x: { type: "unknown" }, y: stringOrUnknown },
+        properties: { x: { type: "unknown" }, y: unknownOrString },
         required: ["y"],
       });
       expect(
@@ -2052,11 +2056,18 @@ type CalculatorRequest = {
           ]),
         ),
       ).toEqual(unsupported("index signature on constituent"));
+      // An index signature merges beside the members, which keep the types
+      // their own declarations give them.
       expect(
         await schemaOf(
           f.createIntersectionTypeNode([alias("Foo"), alias("Rec")]),
         ),
-      ).toEqual(unsupported("index signature on constituent"));
+      ).toEqual({
+        type: "object",
+        properties: { x: { type: "unknown" }, y: { type: "string" } },
+        required: ["x", "y"],
+        additionalProperties: { type: "string" },
+      });
       // `unknown` is the identity: what is left stands as it is.
       expect(
         await schemaOf(
@@ -2099,7 +2110,6 @@ type CalculatorRequest = {
         ),
       ).toEqual({
         anyOf: [
-          fooAndBar,
           {
             type: "object",
             properties: {
@@ -2109,6 +2119,7 @@ type CalculatorRequest = {
             },
             required: ["x", "y", "w"],
           },
+          fooAndBar,
         ],
       });
       expect(
@@ -2429,13 +2440,13 @@ type CalculatorRequest = {
         anyOf: [
           {
             type: "object",
-            properties: { x: { type: "unknown" }, y: { type: "string" } },
-            required: ["x", "y"],
+            properties: { z: { type: "number" } },
+            required: ["z"],
           },
           {
             type: "object",
-            properties: { z: { type: "number" } },
-            required: ["z"],
+            properties: { x: { type: "unknown" }, y: { type: "string" } },
+            required: ["x", "y"],
           },
         ],
       });
@@ -3784,6 +3795,39 @@ type CalculatorRequest = {
       expect(schema.required).toEqual(["0"]);
     });
 
+    it("preserves an empty-string property name", async () => {
+      const generator = new SchemaGenerator();
+      const { checker } = await getTypeFromCode(
+        "type Dummy = unknown;",
+        "Dummy",
+      );
+      const typeNode = ts.factory.createTypeLiteralNode([
+        ts.factory.createPropertySignature(
+          undefined,
+          ts.factory.createStringLiteral(""),
+          undefined,
+          ts.factory.createKeywordTypeNode(ts.SyntaxKind.StringKeyword),
+        ),
+        ts.factory.createPropertySignature(
+          undefined,
+          ts.factory.createIdentifier("other"),
+          undefined,
+          ts.factory.createKeywordTypeNode(ts.SyntaxKind.NumberKeyword),
+        ),
+      ]);
+
+      const schema = generator.generateSchemaFromSyntheticTypeNode(
+        typeNode,
+        checker,
+      );
+
+      expect(schema).toEqual({
+        type: "object",
+        properties: { "": { type: "string" }, other: { type: "number" } },
+        required: ["", "other"],
+      });
+    });
+
     it("preserves explicit double-underscore property names", async () => {
       const generator = new SchemaGenerator();
       const { checker } = await getTypeFromCode(
@@ -4057,6 +4101,162 @@ namespace Local {
       expect(schema.properties).toEqual({ name: { type: "string" } });
       expect(schema.required).toEqual(["name"]);
       expect(schema.additionalProperties).toEqual({ type: "number" });
+    });
+
+    /** A synthetic `{ [k: <key>]: <value> }`. */
+    const indexedLiteral = (
+      key:
+        | ts.SyntaxKind.StringKeyword
+        | ts.SyntaxKind.NumberKeyword
+        | ts.TypeNode,
+      value: ts.TypeNode,
+    ) =>
+      ts.factory.createTypeLiteralNode([
+        ts.factory.createIndexSignature(
+          undefined,
+          [ts.factory.createParameterDeclaration(
+            undefined,
+            undefined,
+            ts.factory.createIdentifier("k"),
+            undefined,
+            typeof key === "number"
+              ? ts.factory.createKeywordTypeNode(key)
+              : key,
+          )],
+          value,
+        ),
+      ]);
+    const numberNode = () =>
+      ts.factory.createKeywordTypeNode(ts.SyntaxKind.NumberKeyword);
+    const unsupportedKeys = {
+      type: "object",
+      additionalProperties: true,
+      $comment:
+        "Unsupported intersection pattern: index signatures on different keys",
+    };
+
+    it("returns the fallback for synthetic index signatures on different keys", async () => {
+      // A numeric index signature's schema reads as a string one's, so the
+      // keys each applies to are recorded where the literal is read.
+
+      const { checker } = await getTypeFromCode(
+        "type Dummy = unknown;",
+        "Dummy",
+      );
+      const typeNode = ts.factory.createIntersectionTypeNode([
+        indexedLiteral(ts.SyntaxKind.StringKeyword, numberNode()),
+        indexedLiteral(ts.SyntaxKind.NumberKeyword, numberNode()),
+      ]);
+
+      expect(
+        new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+          typeNode,
+          checker,
+        ),
+      ).toEqual(unsupportedKeys);
+    });
+
+    it("returns the fallback for a synthetic index signature on unrecorded keys beside another", async () => {
+      // Nothing records which keys a template-literal index signature applies
+      // to, so it merges with no other.
+
+      const { checker } = await getTypeFromCode(
+        "type Dummy = unknown;",
+        "Dummy",
+      );
+      const prefixed = ts.factory.createTemplateLiteralType(
+        ts.factory.createTemplateHead("foo-"),
+        [ts.factory.createTemplateLiteralTypeSpan(
+          ts.factory.createKeywordTypeNode(ts.SyntaxKind.StringKeyword),
+          ts.factory.createTemplateTail(""),
+        )],
+      );
+      const typeNode = ts.factory.createIntersectionTypeNode([
+        indexedLiteral(prefixed, numberNode()),
+        indexedLiteral(
+          ts.SyntaxKind.StringKeyword,
+          ts.factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword),
+        ),
+      ]);
+
+      expect(
+        new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+          typeNode,
+          checker,
+        ),
+      ).toEqual({
+        type: "object",
+        additionalProperties: true,
+        $comment:
+          "Unsupported intersection pattern: index signature on unrecorded keys",
+      });
+    });
+
+    it("keeps both arms of a synthetic union of index signatures on different keys", async () => {
+      // The two arms' schemas are equal, so the union folds to one; the fold
+      // is recorded, and an intersection reads each arm.
+
+      const { checker } = await getTypeFromCode(
+        "type Dummy = unknown;",
+        "Dummy",
+      );
+      const typeNode = ts.factory.createIntersectionTypeNode([
+        ts.factory.createParenthesizedType(
+          ts.factory.createUnionTypeNode([
+            indexedLiteral(ts.SyntaxKind.StringKeyword, numberNode()),
+            indexedLiteral(ts.SyntaxKind.NumberKeyword, numberNode()),
+          ]),
+        ),
+        indexedLiteral(
+          ts.SyntaxKind.StringKeyword,
+          ts.factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword),
+        ),
+      ]);
+
+      expect(
+        new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+          typeNode,
+          checker,
+        ),
+      ).toEqual({
+        anyOf: [
+          unsupportedKeys,
+          {
+            type: "object",
+            properties: {},
+            additionalProperties: { type: "number" },
+          },
+        ],
+      });
+    });
+
+    it("returns the fallback for merged synthetic numeric index signatures beside a string one", async () => {
+      const { checker } = await getTypeFromCode(
+        "type Dummy = unknown;",
+        "Dummy",
+      );
+      const numbered = ts.factory.createParenthesizedType(
+        ts.factory.createIntersectionTypeNode([
+          indexedLiteral(ts.SyntaxKind.NumberKeyword, numberNode()),
+          indexedLiteral(
+            ts.SyntaxKind.NumberKeyword,
+            ts.factory.createLiteralTypeNode(
+              ts.factory.createNumericLiteral(1),
+            ),
+          ),
+        ]),
+      );
+      const typeNode = ts.factory.createIntersectionTypeNode([
+        numbered,
+        indexedLiteral(ts.SyntaxKind.StringKeyword, numberNode()),
+      ]);
+
+      expect(
+        new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+          typeNode,
+          checker,
+        ),
+      ).toEqual(unsupportedKeys);
     });
   });
 
@@ -4578,6 +4778,7 @@ interface HasImage {
           | null
           | undefined;
         count: number;
+        list: Confidential<string, readonly [PolicyOf<unknown>]>[];
       };
       interface Members {
         annotated: Confidential<string, readonly [PolicyOf<typeof rules>]>;
@@ -4589,13 +4790,21 @@ interface HasImage {
       }
     `;
 
-    /** `Root`'s member `name`, generated with `hint` on its node. */
+    /**
+     * `Root`'s member `name`, generated with `hint` on its node, or on the node
+     * `hinted` picks out of it. With `printed`, the member's node is read as a
+     * print of its type.
+     */
     const fieldSchema = async (
       hint: (
         members: Map<string, ts.PropertySignature>,
         checker: ts.TypeChecker,
       ) => object,
       name = "field",
+      { printed = false, hinted = (field: ts.TypeNode) => field }: {
+        printed?: boolean;
+        hinted?: (field: ts.TypeNode) => ts.TypeNode;
+      } = {},
     ) => {
       const { checker, sourceFile } = await createTestProgram(PROGRAM);
       let rootNode: ts.TypeLiteralNode | undefined;
@@ -4618,12 +4827,18 @@ interface HasImage {
         checker.getTypeFromTypeNode(rootNode!),
         checker,
         rootNode,
-        undefined,
-        new WeakMap([[field, hint(members, checker)]]),
+        printed
+          ? {
+            printedFrom: (node) =>
+              node === field ? checker.getTypeFromTypeNode(field) : undefined,
+          }
+          : undefined,
+        new WeakMap([[hinted(field), hint(members, checker)]]),
       ) as { properties: Record<string, Record<string, unknown>> };
       return schema.properties[name] as {
         ifc?: Record<string, unknown>;
         anyOf?: { ifc?: Record<string, unknown> }[];
+        items?: { ifc?: Record<string, unknown> };
       };
     };
 
@@ -4638,6 +4853,21 @@ interface HasImage {
       }));
 
       expect(schema.ifc?.confidentiality).toMatchObject([MODULE_POLICY]);
+    });
+
+    it("reads a printed array's element as the annotation its element node is spelled by", async () => {
+      // A print is read by its type, not as a node; its element node is
+      // reached from the print, and the hint recorded there spells the element.
+      const schema = await fieldSchema(
+        (members) => ({ spelledBy: members.get("annotated")!.type }),
+        "list",
+        {
+          printed: true,
+          hinted: (field) => (field as ts.ArrayTypeNode).elementType,
+        },
+      );
+
+      expect(schema.items?.ifc?.confidentiality).toMatchObject([MODULE_POLICY]);
     });
 
     it("applies the hints of a node read as its annotation", async () => {
@@ -4696,6 +4926,55 @@ interface HasImage {
       }), "count");
 
       expect(schema).toEqual({ type: "number" });
+    });
+
+    it("applies the hints of a printed root read as its annotation", async () => {
+      // The print stands for `Root`'s `field`, and carries every hint a
+      // caller may record on a result: the spelling, a value it narrows, and
+      // a UI contract.
+      const { checker, sourceFile } = await createTestProgram(PROGRAM);
+      const members = new Map<string, ts.PropertySignature>();
+      let field: ts.Type | undefined;
+      ts.forEachChild(sourceFile, (node) => {
+        if (ts.isTypeAliasDeclaration(node) && node.name.text === "Root") {
+          field = checker.getTypeFromTypeNode(
+            (node.type as ts.TypeLiteralNode).members.filter(
+              ts.isPropertySignature,
+            ).find((member) => (member.name as ts.Identifier).text === "field")!
+              .type!,
+          );
+        } else if (
+          ts.isInterfaceDeclaration(node) && node.name.text === "Members"
+        ) {
+          for (const member of node.members.filter(ts.isPropertySignature)) {
+            members.set((member.name as ts.Identifier).text, member);
+          }
+        }
+      });
+      const printed = ts.factory.createKeywordTypeNode(
+        ts.SyntaxKind.UnknownKeyword,
+      );
+      const labeled = members.get("labeled")!;
+
+      const schema = new SchemaGenerator().generateSchema(
+        field!,
+        checker,
+        printed,
+        { printedFrom: (node) => node === printed ? field : undefined },
+        new WeakMap<ts.Node, SchemaHint>([[printed, {
+          spelledBy: members.get("annotated")!.type!,
+          narrowedFrom: {
+            type: checker.getTypeFromTypeNode(labeled.type!),
+            typeNode: labeled.type!,
+          },
+          cfcUiContract: { helper: "UiAction", action: "Go" },
+        }]]),
+      ) as { ifc?: Record<string, unknown> };
+
+      expect(schema.ifc).toMatchObject({
+        confidentiality: [MODULE_POLICY, "x"],
+        uiContract: { helper: "UiAction", action: "Go" },
+      });
     });
   });
 

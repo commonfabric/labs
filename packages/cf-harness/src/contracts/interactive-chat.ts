@@ -26,6 +26,7 @@ import {
 } from "./subagent.ts";
 import type { HarnessTaskOutcome } from "./task-outcome.ts";
 import type { HarnessModelUsage } from "../model/client.ts";
+import type { SandboxRuntimeKind } from "../sandbox/types.ts";
 
 export const HARNESS_CHAT_PROTOCOL_VERSION = 1 as const;
 export const HARNESS_CHAT_REQUEST_TYPE = "cf-harness.chat.request" as const;
@@ -424,6 +425,18 @@ export interface HarnessChatSessionStatus {
   model?: string;
   loomLocalHostBinding?: LoomLocalHostBinding;
   artifactRoot?: string;
+
+  /**
+   * The sandbox runtime the session is bound to: that of the host it started
+   * on, or, for a session stored before hosts recorded one, of the host that
+   * ran its first turn since. A session goes on only on that runtime, which
+   * keeps what its turns labelled. Absent until then for such a session.
+   * Stored sessions may record `docker`, written by an older cf-harness that
+   * had the Docker driver; this build reads them and refuses to go on with
+   * them.
+   */
+  sandboxRuntime?: SandboxRuntimeKind | "docker";
+
   capabilities: HarnessChatCapabilities;
   policy: HarnessChatPolicy;
   browserAccess?: HarnessChatBrowserAccessLease;
@@ -641,6 +654,8 @@ export interface CreateHarnessChatSessionStatusOptions {
   model?: string;
   loomLocalHostBinding?: LoomLocalHostBinding;
   artifactRoot?: string;
+  /** A session is created on a runtime this build runs, never on `docker`. */
+  sandboxRuntime?: SandboxRuntimeKind;
   capabilities?: Partial<HarnessChatCapabilities>;
   policy?: HarnessChatPolicy;
   browserAccess?: HarnessChatBrowserAccessLease;
@@ -668,6 +683,9 @@ export const createHarnessChatSessionStatus = (
       : {}),
     ...(options.artifactRoot !== undefined
       ? { artifactRoot: options.artifactRoot }
+      : {}),
+    ...(options.sandboxRuntime !== undefined
+      ? { sandboxRuntime: options.sandboxRuntime }
       : {}),
     capabilities: resolveHarnessChatCapabilities(options.capabilities),
     policy: options.policy ?? DEFAULT_HARNESS_CHAT_POLICY,

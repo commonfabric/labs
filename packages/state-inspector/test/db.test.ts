@@ -29,6 +29,11 @@ CREATE TABLE snapshot (
   branch TEXT NOT NULL DEFAULT '', id TEXT NOT NULL, seq INTEGER NOT NULL,
   value JSON NOT NULL, PRIMARY KEY (branch, id, seq)
 );
+-- and the head table of the same era: no scope_key, and no op either
+CREATE TABLE head (
+  branch TEXT NOT NULL, id TEXT NOT NULL, seq INTEGER NOT NULL,
+  op_index INTEGER NOT NULL, PRIMARY KEY (branch, id)
+);
 `;
 
 function seed(path: string) {
@@ -140,6 +145,41 @@ Deno.test("statements: a read after close is refused with an error", async () =>
       "is closed",
     );
     space.close();
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("scope_key shim: the head table is shimmed, with op only where it exists", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const dbPath = `${dir}/legacy.sqlite`;
+    const raw = new Database(dbPath, { create: true });
+    raw.exec(LEGACY_SCHEMA);
+    raw.exec(
+      `INSERT INTO "commit" (seq, session_id, local_seq, original, resolution) VALUES (1, 's', 1, '{}', '{}');
+       INSERT INTO revision (id, seq, op_index, op, data, commit_seq) VALUES ('of:x', 1, 0, 'set', '{"value":1}', 1);
+       INSERT INTO head (branch, id, seq, op_index) VALUES ('', 'of:x', 1, 0);`,
+    );
+    raw.close();
+    const space = openSpace(dbPath);
+    try {
+      // A join by instance on both sides, as the compaction planner issues.
+      const row = space.get<{ scope_key: string; op: string }>(
+        `SELECT h.scope_key, r.op FROM head h
+         JOIN revision r ON r.branch = h.branch AND r.id = h.id
+           AND r.scope_key = h.scope_key AND r.seq = h.seq AND r.op_index = h.op_index`,
+      );
+      assertEquals(row, { scope_key: "space", op: "set" });
+      // The view does not invent a column the table never had.
+      assertThrows(
+        () => space.get(`SELECT op FROM head`),
+        Error,
+        "no such column",
+      );
+    } finally {
+      space.close();
+    }
   } finally {
     await Deno.remove(dir, { recursive: true });
   }

@@ -103,9 +103,14 @@ logger.timeEnd("cell", "get");
 // Direct measurement
 logger.time(startTimestamp, "ipc", "CellGet");
 
+// Either form with a detail naming this one measurement: it reaches the
+// slowest measurements the key keeps and the emitted measure, not the key
+logger.timeDetailed("the cell's id", startTimestamp, "ipc", "CellGet");
+
 // Read stats
 logger.getTimeStats("cell/get");
-// { count, min, max, average, p50, p95, lastTime, cdf, ... }
+// { count, min, max, average, p50, p95, lastTime, slowest, cdf, ... }
+// `slowest` holds the longest few, each with when it ended and its detail
 
 logger.timeStats; // all timing stats for this logger
 ```
@@ -171,3 +176,10 @@ All are importable from `@commonfabric/utils/logger` and also registered on
 `globalThis.commonfabric` for browser console access. See
 [debugging/console-commands](../development/debugging/console-commands.md) for interactive
 usage.
+
+`setLoggerCountObserver()`, importable only, sets the process's one function
+told of every call a logger counts, with the logger's module name, the message
+key and the level. The module name is `undefined` for the unnamed global
+`log`, which no registry entry holds. The function runs inside the logging
+call, so it can read the caller's async context, which is how `cf test` tells
+a co-hosted serving loop's counts apart from its test's.

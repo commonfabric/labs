@@ -8,6 +8,8 @@ import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import { utf8Compare } from "@commonfabric/utils/utf8";
 
+import { matchesOnlyValueBoundClaims } from "./atom-classes.ts";
+
 import {
   type AtomPattern,
   type AtomPatternBindings,
@@ -208,7 +210,51 @@ export type ExchangeEvalContext = {
    * whole evaluation closed when the label selects a module policy.
    */
   readonly modulePolicyResolver?: CfcModulePolicyResolver;
+
+  /**
+   * Restricts evaluation to the rules this admits, snapshot and module
+   * policy rules alike; every rule is evaluated when it is absent.
+   */
+  readonly admitsRule?: (rule: ExchangeRule) => boolean;
 };
+
+/**
+ * Whether `rule` is value-intrinsic (spec §5.3): applied at each observation,
+ * on the evidence bound to the value observed there. It has no boundary
+ * guard, the form a sink or path restriction takes here, and no
+ * `policyState` guard, and it is guarded by integrity evidence alone, every
+ * pattern of which names a concrete atom family whose claims are bound to the
+ * exact current value. A concept guard does not qualify, since whether
+ * evidence satisfies a concept depends on the acting principal's trust
+ * closure, and neither does a family the registry classes hereditary or
+ * provenance, such as `HasRole`, which the runtime mints for an access.
+ */
+export const isValueIntrinsicExchangeRule = (rule: ExchangeRule): boolean => {
+  const guards = rule.preCondition;
+  if ((guards?.boundary?.length ?? 0) > 0) return false;
+  if (guards?.policyState !== undefined) return false;
+  const integrity = guards?.integrity ?? [];
+  return integrity.length > 0 &&
+    integrity.every((pattern) =>
+      !isAtomVarPlaceholder(pattern) && conceptGuard(pattern) === undefined &&
+      matchesOnlyValueBoundClaims(pattern)
+    );
+};
+
+/**
+ * Which exchange rules one evaluation runs: the value-intrinsic rules, as at
+ * one location an access consumed, or every other rule, as over the join of
+ * its locations (`access-integrity.ts`).
+ */
+export type ExchangeRuleKind = "value-intrinsic" | "not-value-intrinsic";
+
+/** The rules of `kind`, as an evaluation's `admitsRule` takes them. */
+export const admitsRulesOfKind = (
+  kind: ExchangeRuleKind,
+): (rule: ExchangeRule) => boolean =>
+  kind === "value-intrinsic"
+    ? isValueIntrinsicExchangeRule
+    : (rule) => !isValueIntrinsicExchangeRule(rule);
 
 export type ModulePolicyResolutionFailure = {
   readonly reference: unknown;
@@ -826,6 +872,7 @@ export const evaluateExchangeRules = (
       for (
         const rule of [...record.rules].sort((a, b) => utf8Compare(a.id, b.id))
       ) {
+        if (ctx.admitsRule?.(rule) === false) continue;
         rules.push({
           recordId: record.id,
           rule,
@@ -845,9 +892,11 @@ export const evaluateExchangeRules = (
         (a, b) => utf8Compare(a.id, b.id),
       )
     ) {
+      const bound = bindModuleRule(rule, policy.reference);
+      if (ctx.admitsRule?.(bound) === false) continue;
       rules.push({
         recordId: policy.recordId,
-        rule: bindModuleRule(rule, policy.reference),
+        rule: bound,
         homeClauses: (confidentiality: readonly CfcConfClause[]) =>
           modulePolicyRefHomeClauses(policy.reference, confidentiality),
       });

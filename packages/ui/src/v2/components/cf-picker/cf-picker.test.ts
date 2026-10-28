@@ -5,7 +5,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { spy } from "@std/testing/mock";
-import { nothing } from "lit";
 
 import { renderInProcess } from "@commonfabric/html/in-process";
 import { MockDoc } from "@commonfabric/html/mock-doc";
@@ -89,14 +88,16 @@ describe("CFPicker", () => {
     expect(element.minHeight).toBe("300px");
   });
 
-  it("shows nothing while no items are bound, and its empty state for an empty list", () => {
+  it("shows only its children while no items are bound, and its empty state for an empty list", () => {
     // A view's render policy withholds an `items` binding the viewer may not
-    // see, and then no items arrive.
+    // see, and then no items arrive. The view puts the access placeholder in
+    // the picker's children while the list's space is out of reach.
     const element = new CFPicker();
-    expect(element.render()).toBe(nothing);
+    expect(templateText(element.render())).toBe("<slot></slot>");
     element.items = [];
     element.willUpdate(new Map([["items", undefined]]));
     expect(templateText(element.render())).toContain("No items");
+    expect(templateText(element.render())).not.toContain("<slot>");
   });
 
   it("reads its items as its component read contract says it does", () => {
@@ -246,6 +247,7 @@ describe("CFPicker stepping", () => {
     willUpdate(changedProperties: Map<string, unknown>): void;
     _selectNext(): void;
     _selectPrevious(): void;
+    _selectIndex(index: number): void;
   };
 
   /** A picker of three items whose selection is `selectedIndex`. */
@@ -290,6 +292,64 @@ describe("CFPicker stepping", () => {
     element._selectPrevious();
 
     expect(writesSent(selectedIndex)).toEqual([]);
+  });
+
+  it("lands a step, then a pick made while the step waits on the worker, in that order", async () => {
+    const selectedIndex = createMockCellHandle<number>();
+    const answer = holdReads(selectedIndex);
+    const element = pickerAt(selectedIndex);
+
+    element._selectNext();
+    element._selectIndex(2);
+    answer({ value: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(writesSent(selectedIndex).map((write) => write.value)).toEqual([
+      1,
+      2,
+    ]);
+  });
+
+  it("writes a pick of the index shown while a step waits on the worker", async () => {
+    // The step will move the selection on from the shown 0, so picking 0 is
+    // a move of its own.
+    const selectedIndex = createMockCellHandle<number>();
+    const answer = holdReads(selectedIndex);
+    const element = pickerAt(selectedIndex);
+
+    element._selectNext();
+    element._selectIndex(0);
+    answer({ value: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(writesSent(selectedIndex).map((write) => write.value)).toEqual([
+      1,
+      0,
+    ]);
+  });
+
+  it("writes nothing for a pick of the index the cell holds", async () => {
+    const selectedIndex = createMockCellHandle(0);
+    const element = pickerAt(selectedIndex);
+
+    element._selectIndex(0);
+    element._selectIndex(1);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(writesSent(selectedIndex).map((write) => write.value)).toEqual([1]);
+  });
+
+  it("writes nothing for a pick of the first item on a cell holding nothing", async () => {
+    // Nothing selected shows the first item.
+    const selectedIndex = createMockCellHandle<number>();
+    const element = pickerAt(selectedIndex);
+
+    element._selectIndex(0);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    element._selectIndex(1);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(writesSent(selectedIndex).map((write) => write.value)).toEqual([1]);
   });
 
   it("writes nothing while the worker refuses the selection's read", () => {

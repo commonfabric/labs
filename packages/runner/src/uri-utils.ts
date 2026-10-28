@@ -3,7 +3,6 @@ import {
   entityRefToString,
   isEntityRef,
 } from "@commonfabric/data-model/cell-rep";
-import { hasDataUriScheme } from "@commonfabric/data-model/codec-data-uri";
 import { FabricHash } from "@commonfabric/data-model/fabric-primitives";
 
 import {
@@ -13,6 +12,7 @@ import {
   uriSchemeForEntityKind,
 } from "./entity-kind.ts";
 import type { URI } from "./sigil-types.ts";
+import { hasInlineCellScheme } from "./immutable-cell.ts";
 
 /**
  * Convert an entity ID to URI format. The scheme carries the entity kind:
@@ -45,7 +45,7 @@ export function toURI(value: unknown, kind?: EntityKind): URI {
       }
       // TODO(seefeld): Remove this once we want to support any URI, ideally
       // once there are no bare ids anymore
-      if (!hasEntityUriScheme(value) && !hasDataUriScheme(value)) {
+      if (!hasEntityUriScheme(value) && !hasInlineCellScheme(value)) {
         throw new Error(`Invalid URI: ${value}`);
       }
       return value as URI;
@@ -72,7 +72,7 @@ export function fromURI(uri: URI | string): string {
     return uri;
   } else if (entityScheme !== undefined) {
     return uri.slice(entityScheme.length);
-  } else if (hasDataUriScheme(uri)) {
+  } else if (hasInlineCellScheme(uri)) {
     return hashOf(uri).toString();
   } else {
     // TODO(seefeld): Remove this once we want to support any URI

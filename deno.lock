@@ -16,6 +16,8 @@
     "jsr:@deno/loader@~0.3.10": "0.3.14",
     "jsr:@denosaurs/plug@1": "1.1.0",
     "jsr:@denosaurs/plug@^1.1.0": "1.1.0",
+    "jsr:@panva/jose@6.2.12": "6.2.12",
+    "jsr:@panva/jose@^6.2.12": "6.2.12",
     "jsr:@std/assert@1": "1.0.19",
     "jsr:@std/assert@1.0.19": "1.0.19",
     "jsr:@std/assert@^1.0.19": "1.0.19",
@@ -113,6 +115,7 @@
     "npm:@resvg/resvg-js@2.6.2": "2.6.2",
     "npm:@scalar/hono-api-reference@~0.11.11": "0.11.11_hono@4.12.31",
     "npm:@scure/bip39@^2.2.0": "2.2.0",
+    "npm:@tree-sitter-grammars/tree-sitter-hcl@1.2.0": "1.2.0",
     "npm:@tree-sitter-grammars/tree-sitter-toml@0.7.0": "0.7.0",
     "npm:@types/d3-array@^3.2.2": "3.2.2",
     "npm:@types/d3-scale@^4.0.9": "4.0.9",
@@ -257,6 +260,9 @@
         "jsr:@std/fs@1",
         "jsr:@std/path@1"
       ]
+    },
+    "@panva/jose@6.2.12": {
+      "integrity": "45dd3888cff0c45dbd91ca5279f7fd4324227042d19df91504aa2c0678b3edcc"
     },
     "@std/assert@1.0.19": {
       "integrity": "eaada96ee120cb980bc47e040f82814d786fe8162ecc53c91d8df60b8755991e",
@@ -1274,6 +1280,14 @@
     },
     "@standard-schema/spec@1.1.0": {
       "integrity": "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="
+    },
+    "@tree-sitter-grammars/tree-sitter-hcl@1.2.0": {
+      "integrity": "sha512-2bVnOojkkdMLevp0G4v3ksbNoOQFc/Pt9GAdWX4i3aykVyI+CkktE1hsF/XAeUQFjwgGrVZnEyeCll5oD7Ibfg==",
+      "dependencies": [
+        "node-addon-api",
+        "node-gyp-build"
+      ],
+      "scripts": true
     },
     "@tree-sitter-grammars/tree-sitter-toml@0.7.0": {
       "integrity": "sha512-873Kl518Qm5ghbWadISY41rwFjee0v+2bU4twwvAw2VAJcWwj2vBo3F3hOCXfbqHaFiqc4qh6eLhkMl2YZJS0g==",
@@ -2863,6 +2877,11 @@
       "npm:zod@^4.4.3"
     ],
     "members": {
+      "packages/agent-runner": {
+        "dependencies": [
+          "jsr:@db/sqlite@0.13.0"
+        ]
+      },
       "packages/api": {
         "dependencies": [
           "npm:typescript@6.0.3"
@@ -2883,6 +2902,7 @@
           "jsr:@std/fmt@~1.0.2",
           "npm:@binclusive/tree-sitter-kotlin-wasm@0.1.0",
           "npm:@binclusive/tree-sitter-swift-wasm@0.1.0",
+          "npm:@tree-sitter-grammars/tree-sitter-hcl@1.2.0",
           "npm:@tree-sitter-grammars/tree-sitter-toml@0.7.0",
           "npm:entities@8",
           "npm:marked@^18.0.6",
@@ -3011,6 +3031,7 @@
         "dependencies": [
           "jsr:@cmd-johnson/oauth2-client@2",
           "jsr:@db/sqlite@0.13.0",
+          "jsr:@panva/jose@^6.2.12",
           "jsr:@std/cli@^1.0.32",
           "npm:@ai-sdk/anthropic@^4.0.16",
           "npm:@ai-sdk/google-vertex@^5.0.22",

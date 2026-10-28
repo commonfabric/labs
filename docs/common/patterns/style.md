@@ -7,6 +7,13 @@ Use this page when you are in a UI polish or UI design pass and need to make a
 pattern feel intentional, distinctive, and coherent rather than merely
 functional.
 
+A pattern inherits the theme of the host it runs in: the host, or a `cf-theme`
+around the pattern, puts one look in effect, and every `cf-*` component inside
+draws it. A pattern may tint that theme with a nested `cf-theme` carrying only
+what it changes, such as `{ accentColor }`, and inherits the rest. It never
+declares a full theme, and never writes out a color or a font anywhere but in
+that tint.
+
 ## Why This System Works This Way
 
 Common Fabric UI is designed for composition across opaque subtrees.
@@ -44,8 +51,10 @@ Before writing JSX, decide these things explicitly:
    etc.
 3. **Memorable hook**: What is the one thing someone should remember about this
    interface?
-4. **Constraint strategy**: How will you get there using `cf-*` components,
-   local fonts, and public styling hooks?
+4. **Constraint strategy**: How will you get there with `cf-*` components and
+   public styling hooks over the host's theme? What the pattern changes in that
+   theme is a tint: a nested `cf-theme` naming only what differs, never a full
+   theme of its own.
 
 Do not settle into a generic default app shell. Commit to a direction and make
 the UI clearly about that direction.
@@ -78,6 +87,9 @@ several controls should share the treatment.
 
 ## Theme-First Workflow
 
+This is host and story authoring, where a full theme is declared; a pattern
+inside a host tints, see the opening.
+
 When polishing a non-trivial UI, default to this workflow:
 
 1. Define a `theme` object first.
@@ -98,35 +110,17 @@ available, prefer it over scattered one-off overrides.
 
 ## `cf-theme` Usage
 
-`cf-theme` merges a partial theme object with the default Common Fabric theme
-and applies CSS custom properties to a subtree.
+`cf-theme` merges a partial theme object over the theme of the `cf-theme`
+around it, or over the default Common Fabric theme when there is none, and
+applies CSS custom properties to a subtree. A nested `cf-theme` sets only the
+properties its partial changes; the rest inherit.
+
+A pattern tints the theme it runs in, naming only what it changes:
 
 ```tsx
 const theme = {
-  fontFamily: "'Georgia', 'Times New Roman', serif",
-  borderRadius: "1rem",
-  density: "comfortable" as const,
-  colorScheme: "light" as const,
-  animationSpeed: "normal" as const,
-  colors: {
-    primary: "#8b4513",
-    primaryForeground: "#fff8f0",
-    background: "#fff8f0",
-    surface: "#fff0e0",
-    surfaceHover: "#ffe4cc",
-    text: "#2c1810",
-    textMuted: "#8b7355",
-    border: "#e8d5c0",
-    borderMuted: "#f0e6d8",
-    accent: "#c84c09",
-    accentForeground: "#fff8f0",
-    success: "#4a7c59",
-    successForeground: "#ffffff",
-    error: "#a03020",
-    errorForeground: "#ffffff",
-    warning: "#b8860b",
-    warningForeground: "#ffffff",
-  },
+  accentColor: "#c84c09",
+  fontFace: "'Georgia', 'Times New Roman', serif",
 };
 
 <cf-theme theme={theme}>
@@ -138,6 +132,9 @@ const theme = {
   </cf-screen>
 </cf-theme>;
 ```
+
+A host or a story declares a full theme (every color, `colorScheme`,
+`density`) the same way, with a complete object in place of the tint.
 
 ## Full-Height Layout Rule
 
@@ -296,6 +293,9 @@ not use them as a substitute for defining an overall theme.
 
 ## Aesthetic Guidance
 
+This is host and story authoring, where a full theme is declared; a pattern
+inside a host tints, see the opening.
+
 ### Typography
 
 - Prefer distinctive local font stacks or deliberate pairings.
@@ -329,6 +329,9 @@ not use them as a substitute for defining an overall theme.
   discipline; minimalism still needs character.
 
 ## Working Examples
+
+This is host and story authoring, where a full theme is declared; a pattern
+inside a host tints, see the opening.
 
 Use these as concrete references for theme-forward UI composition:
 

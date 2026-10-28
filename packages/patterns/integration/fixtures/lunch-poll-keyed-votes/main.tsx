@@ -58,6 +58,14 @@ export interface KeyedVoteProbeInput {
 
   /** The poll's vote list, held here so the probe can address its elements. */
   votes?: PerSpace<Vote[] | Default<[]>>;
+
+  /**
+   * Show the poll's own view in place of this probe's one-line one, so a
+   * client that renders this piece derives what a browser showing the poll
+   * derives. Off, the probe's clients do no view work, which is what a test
+   * of the vote write alone wants.
+   */
+  renderPoll?: Default<boolean, false>;
 }
 
 export interface ClaimEvent {
@@ -127,12 +135,12 @@ const probeVote = handler<ProbeVoteEvent, {
 });
 
 export default pattern<KeyedVoteProbeInput, KeyedVoteProbeOutput>(
-  ({ profiles, votes }) => {
+  ({ profiles, votes, renderPoll }) => {
     const poll = LunchPoll({ votes });
     const probed = Writable.of<ProbedVote | null>(null);
     return {
       [NAME]: "Lunch poll keyed-vote probe",
-      [UI]: <div>lunch poll keyed-vote probe</div>,
+      [UI]: renderPoll ? poll[UI] : <div>lunch poll keyed-vote probe</div>,
       claim: claim({ profiles, overrideViewer: poll.overrideViewer }),
       probeVote: probeVote({ profiles, votes, probedVote: probed }),
       joinAs: poll.joinAs,

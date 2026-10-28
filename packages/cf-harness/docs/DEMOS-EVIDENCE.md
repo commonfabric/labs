@@ -151,13 +151,13 @@ Read these off the console's launch printout and `GET /api/health/detail`. Loom
 writes the printout to `packages/cf-harness/local-dev-console.log` under the
 labs checkout it vendors.
 
-| Check          | Expected                                                                                                                             |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Console health | `GET <console>/api/health` returns `ok: true`, and `fabricApiUrl` names **your** toolshed. Necessary, **not sufficient** — see below |
-| Model          | a connected provider; `model.auth` reads connected                                                                                   |
-| Sandbox        | `sandbox.docker` responding and `sandbox.runtime` `runsc-cfc registered`                                                             |
-| Index          | `index.reachable` responding **and** `index.enrolled` console identity enrolled                                                      |
-| Posture        | **not on this route** — read it from your toolshed, below                                                                            |
+| Check          | Expected                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Console health | `GET <console>/api/health` returns `ok: true`, and `fabricApiUrl` names **your** toolshed. Necessary, **not sufficient** — see below                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Model          | a connected provider; `model.auth` reads connected                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Sandbox        | `sandbox.runsc` `executable` and `sandbox.rootfs` `present` (path checks, not a working `runsc`), `sandbox.runtime` `direct runsc driver, CFC policy configured` (not `CFC policy unreadable` or `malformed`), and on macOS `sandbox.vm` `running` or `idle; starts on first use`; on Linux its default network needs `pasta` and `setpriv` on `PATH`, `unshare` too for root, and for a user that is not root a host that allows unprivileged user namespaces (each refusal names what is missing, or the `sysctl -w` that allows them); a `none` or `host` network needs none of them |
+| Index          | `index.reachable` responding **and** `index.enrolled` console identity enrolled                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Posture        | **not on this route** — read it from your toolshed, below                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 
 **A healthy signal from this console means very little, and its absence is
 announced by nothing.** Two ways it fails: the health route answers while the
@@ -1288,11 +1288,11 @@ logic, and that is what the ids in demo 4's prompt used to stand in for.
 **A correction published under a different identity does not displace what it
 corrects, and starts below it.** Successor substitution redirects discovery only
 along a chain whose generations share an owner
-(`src/pattern-index/successors.ts`). A correction whose predecessor was seeded
-by another identity declares `priorPatternId`, so the chain is stated, and the
-rule deliberately declines to follow it across the ownership boundary. Ranking
-then decides, and it favours the older entry, which is classified `proven` where
-the correction is `unproven`.
+(`packages/pattern-index/src/successors.ts`). A correction whose predecessor was
+seeded by another identity declares `priorPatternId`, so the chain is stated,
+and the rule deliberately declines to follow it across the ownership boundary.
+Ranking then decides, and it favours the older entry, which is classified
+`proven` where the correction is `unproven`.
 
 Retraction does not resolve that: it is the owner's to perform, and the older
 entry is not ours. What resolves it is index curation — hiding the superseded

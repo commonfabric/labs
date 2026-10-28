@@ -130,13 +130,25 @@ export class CFCFCAuthorship extends BaseElement {
       }
 
       .authorship.verified .badge {
-        border-color: var(--cf-authorship-verified-border, hsl(155, 48%, 58%));
-        background: var(--cf-authorship-verified-bg, hsl(151, 58%, 95%));
+        border-color: var(
+          --cf-authorship-verified-border,
+          var(--cf-theme-color-success, hsl(155, 48%, 58%))
+        );
+        background: var(
+          --cf-authorship-verified-bg,
+          var(--cf-theme-color-status-success-subtle, hsl(151, 58%, 95%))
+        );
       }
 
       .authorship.unverified .badge {
-        border-color: var(--cf-authorship-unverified-border, hsl(24, 82%, 64%));
-        background: var(--cf-authorship-unverified-bg, hsl(34, 100%, 96%));
+        border-color: var(
+          --cf-authorship-unverified-border,
+          var(--cf-theme-color-warning, hsl(24, 82%, 64%))
+        );
+        background: var(
+          --cf-authorship-unverified-bg,
+          var(--cf-theme-color-status-warning-subtle, hsl(34, 100%, 96%))
+        );
       }
 
       .authorship.unknown .badge {
@@ -160,8 +172,14 @@ export class CFCFCAuthorship extends BaseElement {
       }
 
       .avatar {
-        color: var(--cf-authorship-avatar-text, hsl(155, 65%, 16%));
-        background: var(--cf-authorship-avatar-bg, hsl(155, 55%, 84%));
+        color: var(
+          --cf-authorship-avatar-text,
+          var(--cf-theme-color-text, hsl(155, 65%, 16%))
+        );
+        background: var(
+          --cf-authorship-avatar-bg,
+          var(--cf-theme-color-success-light, hsl(155, 55%, 84%))
+        );
         font-weight: 700;
         letter-spacing: 0.02em;
       }
@@ -334,6 +352,8 @@ export class CFCFCAuthorship extends BaseElement {
   protected override willUpdate(changedProperties: Map<PropertyKey, unknown>) {
     super.willUpdate(changedProperties);
     if (!sameSources(this.#sources, this.#currentSources)) this.#observe();
+    // On the host, so a page's stylesheet can select on what the badge shows.
+    this.dataset.state = this.authorshipState;
   }
 
   /** What an observation started now would watch and decide by. */

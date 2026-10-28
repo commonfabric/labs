@@ -17,6 +17,7 @@ import type {
   PresenceRecord,
 } from "@commonfabric/memory/v2";
 import type { PresenceEvent } from "@commonfabric/memory/v2/client";
+import type { JoinVisitDecision } from "@commonfabric/piece/ops";
 import { NameSchema } from "@commonfabric/runner/schemas";
 import type {
   ActionRunTraceEntry,
@@ -57,6 +58,7 @@ import {
   EventNeedsAttentionNotification,
   InitializationData,
   type LoggerCountsData,
+  type LoggerCountsResponse,
   type LoggerFlagsData,
   type LoggerMetadata,
   type LoggerTimingData,
@@ -78,6 +80,7 @@ import {
   type SnapshotShareAudienceRef,
   type SnapshotSharePreview,
   type SpaceAccessLostNotification,
+  type SpaceAccessRestoredNotification,
   type SpaceAclCapability,
   type SpaceAclView,
   TelemetryNotification,
@@ -86,6 +89,7 @@ import {
 import { assertNoKeyMaterial } from "./shared/key-material.ts";
 import {
   type EveryFieldOf,
+  normalizeMemoryUrl,
   normalizeOrigin,
   normalizeSpaceHostMap,
 } from "./shared/security-context.ts";
@@ -109,9 +113,16 @@ export interface RuntimeClientPageSettings {
 
 export interface RuntimeClientOptions
   extends
-    Omit<InitializationData, "apiUrl" | "identity">,
+    Omit<InitializationData, "apiUrl" | "memoryUrl" | "identity">,
     RuntimeClientPageSettings {
   apiUrl: URL;
+
+  /**
+   * The default storage host, where it is not `apiUrl`
+   * ({@link InitializationData.memoryUrl}).
+   */
+  memoryUrl?: URL;
+
   identity: Identity;
 }
 
@@ -138,11 +149,14 @@ export interface RuntimeClientOptions
 export interface RuntimeAttachOptions extends
   Omit<
     RuntimeSecurityContext,
-    "apiUrl" | "spaceHostMap" | "identity"
+    "apiUrl" | "memoryUrl" | "spaceHostMap" | "identity"
   >,
   RuntimeClientPageSettings {
   /** The backend this client believes the runtime reads from. */
   apiUrl: URL;
+
+  /** The default storage host this client believes the runtime opens. */
+  memoryUrl?: URL;
 
   /** The per-space hosts this client believes the runtime resolves against. */
   spaceHostMap?: Record<string, string>;
@@ -156,6 +170,21 @@ export type RuntimeClientEvents = {
   navigaterequest: [{ cell: CellHandle }];
   error: [ErrorNotification];
   spaceaccesslost: [{ space: DID }];
+
+  /**
+   * A space that refused the runtime principal admitted it again. A load the
+   * refusal failed may succeed if asked again, and this is the word to ask
+   * on for that space.
+   */
+  spaceaccessrestored: [{ space: DID }];
+
+  /**
+   * A connection of the worker's to a memory server came back after it was
+   * lost. A load that failed while it was down may succeed if asked again,
+   * and this is the word to ask on: nothing else says when.
+   */
+  connectionrestored: [];
+
   telemetry: [RuntimeTelemetryMarkerResult];
   pendingwriteschange: [{ pending: boolean }];
   eventneedsattention: [EventAttentionNotice];
@@ -185,6 +214,7 @@ export function attachOptionsFrom(
 ): RuntimeAttachOptions {
   return {
     apiUrl: options.apiUrl,
+    memoryUrl: options.memoryUrl,
     spaceHostMap: options.spaceHostMap,
     identity: options.identity.did(),
     spaceDid: options.spaceDid,
@@ -193,6 +223,7 @@ export function attachOptionsFrom(
     cfcFlowLabels: options.cfcFlowLabels,
     cfcReadMaxConfidentiality: options.cfcReadMaxConfidentiality,
     cfcReadOnExceed: options.cfcReadOnExceed,
+    preferredProfileSpace: options.preferredProfileSpace,
     cfcTrustConfig: options.cfcTrustConfig,
     renderDeclassificationPolicy: options.renderDeclassificationPolicy,
     renderConfidentialityCeiling: options.renderConfidentialityCeiling,
@@ -419,6 +450,8 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     this.#conn.on("navigaterequest", this.#onNavigateRequest);
     this.#conn.on("error", this.#onError);
     this.#conn.on("spaceaccesslost", this.#onSpaceAccessLost);
+    this.#conn.on("spaceaccessrestored", this.#onSpaceAccessRestored);
+    this.#conn.on("connectionrestored", this.#onConnectionRestored);
     this.#conn.on("eventintentoutcome", this.#onEventIntentOutcome);
     this.#conn.on("telemetry", this.#onTelemetry);
     this.#conn.on("pendingwriteschange", this.#onPendingWritesChange);
@@ -829,6 +862,10 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       // that agreeing on a backend does not depend on agreeing on how to spell
       // one.
       apiUrl: normalizeOrigin(options.apiUrl.toString()),
+      memoryUrl: normalizeMemoryUrl(
+        options.memoryUrl?.toString(),
+        options.apiUrl.toString(),
+      ),
       spaceHostMap: normalizeSpaceHostMap(options.spaceHostMap),
       spaceDid: options.spaceDid,
       experimental: options.experimental,
@@ -836,6 +873,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       cfcFlowLabels: options.cfcFlowLabels,
       cfcReadMaxConfidentiality: options.cfcReadMaxConfidentiality,
       cfcReadOnExceed: options.cfcReadOnExceed,
+      preferredProfileSpace: options.preferredProfileSpace,
       cfcTrustConfig: options.cfcTrustConfig,
       renderDeclassificationPolicy: options.renderDeclassificationPolicy,
       renderConfidentialityCeiling: options.renderConfidentialityCeiling,
@@ -864,7 +902,9 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     // field added to that type is a type error here until this literal names
     // it. `initialize()` checks the values.
     const data = {
+      clientBuild: options.clientBuild,
       apiUrl: options.apiUrl.toString(),
+      memoryUrl: options.memoryUrl?.toString(),
       spaceHostMap: options.spaceHostMap,
       identity: options.identity.keyPair,
       spaceDid: options.spaceDid,
@@ -873,6 +913,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       cfcFlowLabels: options.cfcFlowLabels,
       cfcReadMaxConfidentiality: options.cfcReadMaxConfidentiality,
       cfcReadOnExceed: options.cfcReadOnExceed,
+      preferredProfileSpace: options.preferredProfileSpace,
       cfcTrustConfig: options.cfcTrustConfig,
       renderDeclassificationPolicy: options.renderDeclassificationPolicy,
       renderConfidentialityCeiling: options.renderConfidentialityCeiling,
@@ -925,15 +966,53 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
 
   /**
    * Ensure the home space's default pattern is running and return a CellHandle to it.
-   * This starts the pattern if needed and waits for it to be ready.
+   * This starts the pattern if needed and waits for it to be ready, creating
+   * Home where it has no root. Bringing Home up also starts the worker's
+   * once-per-worker housekeeping over Home, as `getSpaceRootPattern()` says,
+   * without waiting for it.
+   *
+   * With `existingOnly` true, Home is brought up only where it already
+   * exists, its root recording the pattern it runs. Where it does not, as
+   * while another writer is still creating it, nothing is created or started,
+   * and this returns `undefined`.
    */
-  async ensureHomePatternRunning(): Promise<CellHandle<unknown>> {
+  ensureHomePatternRunning(): Promise<CellHandle<unknown>>;
+  ensureHomePatternRunning(
+    options: { existingOnly?: boolean },
+  ): Promise<CellHandle<unknown> | undefined>;
+  async ensureHomePatternRunning(
+    options: { existingOnly?: boolean } = {},
+  ): Promise<CellHandle<unknown> | undefined> {
     const response = await this.#conn.request<
       RequestType.EnsureHomePatternRunning
     >({
       type: RequestType.EnsureHomePatternRunning,
+      ...(options.existingOnly ? { existingOnly: true } : {}),
     });
+    if (response.cell === undefined) {
+      if (options.existingOnly) return undefined;
+      throw new Error("Home's root is missing from the worker's response.");
+    }
     return new CellHandle(this, response.cell);
+  }
+
+  /**
+   * Tells the user's chat manager that the user has joined the FabriChat room
+   * declared by `space`: the writable standalone root or the writable
+   * container root's explicit `chatRoom`. The manager makes the room
+   * one of the user's chats, lists a forgotten one again, and records nothing
+   * for one their chats list already. Home is never created for it.
+   *
+   * Resolves with what was decided, once any event is sent, which is before
+   * the manager has handled it: `sent`, `no-chat-manager`, or the reason
+   * vetting refused the space; `undefined` where the user has no Home.
+   */
+  async joinVisitedRoom(space: DID): Promise<JoinVisitDecision | undefined> {
+    const response = await this.#conn.request<RequestType.JoinVisitedRoom>({
+      type: RequestType.JoinVisitedRoom,
+      space,
+    });
+    return response.decision;
   }
 
   /**
@@ -1040,17 +1119,27 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   // connection.
 
   /**
-   * The space's root pattern.
+   * The space's root pattern, or `undefined` when the space has none.
    *
    * `start` defaults to true, which is what a view that renders the root
    * needs. Pass false to read what the root exported without running it —
    * far cheaper on a space whose root reaches a large piece, and enough for
    * a caller that only wants an exported sub-page or listing.
+   *
+   * Opening a space with `start` true creates its root when it has none and
+   * this runtime's identity owns the space. Reading with `start` false never
+   * creates one, and neither does any other principal's open.
+   *
+   * Opening the root of this runtime's identity's own Home with `start` true
+   * also starts the worker's once-per-worker housekeeping over Home, as
+   * `ensureHomePatternRunning()` and `createSpace()` do: the adoption of
+   * legacy space entries, the private inbox ensure and the share intake. It
+   * returns without waiting for any of them.
    */
   async getSpaceRootPattern(
     space: DID,
     options: { start?: boolean } = {},
-  ): Promise<PieceHandle<NameSchema>> {
+  ): Promise<PieceHandle<NameSchema> | undefined> {
     const response = await this.#conn.request<
       RequestType.GetSpaceRootPattern
     >({
@@ -1058,6 +1147,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       space,
       ...(options.start === undefined ? {} : { start: options.start }),
     });
+    if (response.piece === undefined) return undefined;
     return new PieceHandle<NameSchema>(this, response.piece);
   }
 
@@ -1073,18 +1163,6 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       ...(label === undefined ? {} : { label }),
     });
     return response.space;
-  }
-
-  async recreateSpaceRootPattern(
-    space: DID,
-  ): Promise<PieceHandle<NameSchema>> {
-    const response = await this.#conn.request<
-      RequestType.RecreateSpaceRootPattern
-    >({
-      type: RequestType.RecreateSpaceRootPattern,
-      space,
-    });
-    return new PieceHandle<NameSchema>(this, response.piece);
   }
 
   async getPiece<T = unknown>(
@@ -1367,8 +1445,12 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
    * return the reason along with a refusal. `known-different-host` carries the
    * host the space is routed to. `default-route-in-use` is about this session alone:
    * the space issued a stateful operation through the default host, and a
-   * runtime created later can still take the hint. Callers must not mount the
-   * space under this hint unless `accepted` is true.
+   * runtime created later can still take the hint. Under a memory URL a hint
+   * naming another deployment's origin is decided once the runtime has read
+   * where that deployment serves Memory, which this request waits for;
+   * `foreign-host-unread` says that could not be learned, and holds for the
+   * runtime's lifetime. Callers must not mount the space under this hint
+   * unless `accepted` is true.
    */
   async registerSpaceHostDetailed(
     space: DID,
@@ -1389,10 +1471,13 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
    * runtime's session there, and resolves once the server has decided. An
    * admission runs again every computation whose `spaceAccess(target)`
    * answer turned on the refusal, and repeats the loads the refusal failed; a
-   * refusal leaves the space refused. It is for a host with word that the
-   * runtime's principal was granted access, such as a notice naming the
-   * space, and does nothing for a space the runtime has not opened. It
-   * rejects on any failure other than a refusal.
+   * refusal leaves the space refused. It is for a host with reason to think
+   * the verdict changed, such as a notice naming the space or a person
+   * returning to a view of it, and does nothing for a space the runtime has
+   * not opened. A call made while a retry of the same space is in flight,
+   * whether this client's or a rendered retry control's, shares that retry
+   * rather than asking again, and a rendered retry control shows it in
+   * flight either way. It rejects on any failure other than a refusal.
    */
   async retrySpaceAccess(space: DID): Promise<void> {
     await this.#conn.request<RequestType.RetrySpaceAccess>({
@@ -1464,6 +1549,8 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     timing: LoggerTimingData;
     flags: LoggerFlagsData;
     cfc: Record<string, number>;
+    compileCache: Record<string, number>;
+    sizes: LoggerCountsResponse["sizes"];
   }> {
     const res = await this.#conn.request<RequestType.GetLoggerCounts>({
       type: RequestType.GetLoggerCounts,
@@ -1474,6 +1561,8 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       timing: res.timing,
       flags: res.flags,
       cfc: res.cfc,
+      compileCache: res.compileCache,
+      sizes: res.sizes,
     };
   }
 
@@ -1691,12 +1780,14 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   /**
    * Uploads a blob to the given space. `body` is given as a view or as a whole
    * buffer, and is copied into the immutable value that crosses, so the caller
-   * may keep using it.
+   * may keep using it. `name`, when given, is the name of the file the bytes
+   * came from, which the stored blob keeps (see `UploadBlobRequest`).
    */
   async uploadBlob(options: {
     space: DID;
     contentType: string;
     body: Uint8Array | ArrayBufferLike;
+    name?: string;
     suffix?: string;
   }): Promise<UploadBlobResponse> {
     return await this.#conn.request<RequestType.UploadBlob>({
@@ -1704,8 +1795,27 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       space: options.space,
       contentType: options.contentType,
       body: new FabricBytes(options.body),
+      name: options.name,
       suffix: options.suffix,
     });
+  }
+
+  /**
+   * Returns the URL the host of `options.space` serves the blob `options.id`
+   * at: the URL `uploadBlob()` returns for a blob it stores, without the file
+   * suffix it appends. With `options.download`, the URL is one to save the
+   * blob from, which its host serves as an attachment.
+   */
+  async blobUrl(
+    options: { space: DID; id: string; download?: boolean },
+  ): Promise<string> {
+    const response = await this.#conn.request<RequestType.BlobUrl>({
+      type: RequestType.BlobUrl,
+      space: options.space,
+      id: options.id,
+      ...(options.download === true ? { download: true } : {}),
+    });
+    return response.url;
   }
 
   async detectNonIdempotent(
@@ -1753,6 +1863,16 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
 
   #onSpaceAccessLost = ({ space }: SpaceAccessLostNotification): void => {
     this.emit("spaceaccesslost", { space });
+  };
+
+  #onSpaceAccessRestored = (
+    { space }: SpaceAccessRestoredNotification,
+  ): void => {
+    this.emit("spaceaccessrestored", { space });
+  };
+
+  #onConnectionRestored = (): void => {
+    this.emit("connectionrestored");
   };
 
   #onTelemetry = (data: TelemetryNotification): void => {

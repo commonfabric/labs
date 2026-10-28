@@ -408,7 +408,7 @@ describe("CFC envelope version guard", () => {
     }
   });
 
-  it("keeps a link-write from an uninterpretable source CFC-relevant and refuses it", async () => {
+  it("accepts a link to an uninterpretable source, which a read through it meets", async () => {
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
@@ -429,13 +429,14 @@ describe("CFC envelope version guard", () => {
         undefined,
         tx,
       );
-      // The link write's source-relevance probe cannot interpret the
-      // stored envelope; fail closed means the write records as
-      // CFC-relevant and prepare meets the same unreadable envelope.
+      // A link write persists the reference's own label and reads nothing of
+      // the source's envelope, so the unreadable envelope does not refuse
+      // the write; it refuses a read through the link, which the dereference
+      // label view case below holds to.
       target.key("ref").set(source.getAsLink() as never);
       tx.prepareCfc();
       const result = await tx.commit().settled;
-      expect(result.error?.message).toContain("not one this build interprets");
+      expect(result.error).toBeUndefined();
     } finally {
       await runtime.dispose();
       await storageManager.close();

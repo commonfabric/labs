@@ -6,6 +6,7 @@
  */
 
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { normalize } from "@std/path/posix";
@@ -26,6 +27,7 @@ import type {
   SandboxShellRequest,
 } from "../src/sandbox/types.ts";
 import { establishHarnessSessionContext } from "../src/session-assembly.ts";
+import { INERT_RUNSC } from "./support/inert-runsc.ts";
 
 const SPACE_DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
 const FOREIGN_REF = `/@did:key:z6MkforeignSpaceForRunLifecycleTest/of:fid1:${
@@ -58,7 +60,7 @@ const mediated = (stdout: string): CfcSandboxResult => ({
 class FakeSandboxRuntime implements SandboxRuntime {
   describe(): SandboxRuntimeDescription {
     return {
-      kind: "docker-runsc-cfc",
+      kind: "runsc-cfc",
       defaultWorkingDirectory: this.defaultWorkingDirectory(),
       cfc: { runtimeRequested: true, workspaceMountPath: "/workspace" },
     };
@@ -531,6 +533,7 @@ describe("run-lifecycle", () => {
       ref: string,
     ): CfHarnessEngine =>
       new CfHarnessEngine({
+        ...INERT_RUNSC,
         artifactRoot,
         runId,
         workspaceHostPath: "/host/project",
@@ -590,6 +593,28 @@ describe("run-lifecycle", () => {
         expect(state.endedAt).toBeDefined();
         expect(state.primaryFailure?.detail).toContain("targets another space");
         expect(state.inputCells).toBeUndefined();
+      });
+    });
+
+    it("rethrows the setup failure when recording it fails too", async () => {
+      await withArtifactRoot(async (artifactRoot) => {
+        const engine = engineWithInputCell(
+          artifactRoot,
+          "run-setup-record-fails",
+          FOREIGN_REF,
+        );
+        using _failRun = stub(
+          engine,
+          "failRun",
+          () => Promise.reject(new Error("could not record the failure")),
+        );
+
+        await expect(
+          establishHarnessSessionContext({
+            engine,
+            config: { skillNames: [] },
+          }),
+        ).rejects.toThrow("targets another space");
       });
     });
   });

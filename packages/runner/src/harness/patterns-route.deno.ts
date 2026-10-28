@@ -5,8 +5,9 @@
  * {@link PATTERNS_ROUTE_PREFIX} from the host serving its space — the source
  * itself, or, with `?identity`, the content identity of the program that
  * source is the entry of: its authored import closure, that of each source
- * root the request names, and the data files those closures read. This is
- * what answers.
+ * root the request names, and the data files those closures read — with, where
+ * the deployment states one, the time it released what it serves, which orders
+ * two such identities (`pattern-release-time.ts`). This is what answers.
  *
  * Both halves of that exchange belong to the runner. The route prefix is part
  * of a pattern's content identity, because a compiled module is named by its
@@ -34,6 +35,10 @@ import { LRUCache } from "@commonfabric/utils/cache";
 import { decode, decodeDataFile } from "@commonfabric/utils/encoding";
 import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
 
+import {
+  formatReleaseTime,
+  RELEASED_AT_HEADER,
+} from "../pattern-release-time.ts";
 import { PATTERNS_ROUTE_PREFIX } from "../pattern-source-scheme.ts";
 import { resolveEntryIdentity } from "./entry-identity.ts";
 
@@ -63,10 +68,21 @@ export interface PatternFileRequest {
   ifNoneMatch?: string | null;
 }
 
+/** What a deployment says about the patterns it serves as a whole. */
+export interface PatternsRouteOptions {
+  /**
+   * When the deployment released what it serves, in milliseconds since the
+   * epoch (`pattern-release-time.ts`). Sent beside every identity the route
+   * advertises; absent, the route advertises identities alone.
+   */
+  readonly releasedAt?: number;
+}
+
 /** The route over one set of directories, and everything it answers. */
 export class PatternsRoute {
   #baseUrl: URL;
   #extraSources: Array<{ routePrefix: string; baseUrl: URL }>;
+  #releasedAt: number | undefined;
 
   /**
    * Each requested program's content identity. Pattern files are fixed for
@@ -85,12 +101,14 @@ export class PatternsRoute {
   constructor(
     root: string,
     extraSources: readonly PatternSourceDirectory[] = [],
+    options: PatternsRouteOptions = {},
   ) {
     this.#baseUrl = directoryUrl(root);
     this.#extraSources = extraSources.map((source) => ({
       routePrefix: source.routePrefix,
       baseUrl: directoryUrl(source.directory),
     }));
+    this.#releasedAt = options.releasedAt;
   }
 
   /**
@@ -221,11 +239,18 @@ export class PatternsRoute {
 
       if (options.identity) {
         const identity = await this.identity(filename, options.sourceRoots);
+        const releasedAt = this.#releasedAt;
+        // The release time is part of the answer, so it is part of the
+        // validator: revalidating after a redeploy of unchanged source gets a
+        // 200 carrying the new time rather than a 304 over a cached one.
         return patternResponse(
           identity,
           "text/plain; charset=utf-8",
-          `"${identity}"`,
+          releasedAt === undefined
+            ? `"${identity}"`
+            : `"${identity}.${releasedAt}"`,
           ifNoneMatch,
+          releasedAt,
         );
       }
 
@@ -274,18 +299,26 @@ export class PatternsRoute {
   }
 }
 
-/** Headers shared by source and `?identity` responses. */
+/**
+ * Headers shared by source and `?identity` responses, with the deployment's
+ * release time when `releasedAt` is given. Both validator and release time are
+ * exposed, so a runtime served from another origin can read them.
+ */
 export function patternResponseHeaders(
   contentType: string,
   etag: string,
+  releasedAt?: number,
 ): Record<string, string> {
   return {
     "Content-Type": contentType,
     ...createCacheHeaders(etag),
+    ...(releasedAt === undefined
+      ? {}
+      : { [RELEASED_AT_HEADER]: formatReleaseTime(releasedAt) }),
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
-    "Access-Control-Expose-Headers": "ETag",
+    "Access-Control-Expose-Headers": `ETag, ${RELEASED_AT_HEADER}`,
   };
 }
 
@@ -321,8 +354,9 @@ function patternResponse(
   contentType: string,
   etag: string,
   ifNoneMatch: string | null,
+  releasedAt?: number,
 ): Response {
-  const headers = patternResponseHeaders(contentType, etag);
+  const headers = patternResponseHeaders(contentType, etag, releasedAt);
   if (compareETags(etag, ifNoneMatch)) {
     return new Response(null, { status: 304, headers });
   }

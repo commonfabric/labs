@@ -10,8 +10,10 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 import type { CfcConfClause } from "./clause.ts";
 import { clauseAlternatives } from "./clause.ts";
 import {
+  admitsRulesOfKind,
   type CfcGrantResolver,
   evaluateExchangeRules,
+  type ExchangeRuleKind,
 } from "./exchange-eval.ts";
 import {
   buildCfcPolicySnapshot,
@@ -240,6 +242,13 @@ export type RenderLabelInput = {
    * a label that selects a module policy stays sealed.
    */
   readonly spaces?: () => readonly string[];
+
+  /**
+   * The kind of rule evaluated, when not every rule: the value-intrinsic
+   * rules for one location the render read, on that location's own evidence,
+   * or the others over the join of its locations (`access-integrity.ts`).
+   */
+  readonly rules?: ExchangeRuleKind;
 };
 
 /**
@@ -312,6 +321,9 @@ export const createRenderConfidentialityResolver = (
           ? undefined
           : (reference) =>
             modulePolicyResolver(reference, spaces ??= label.spaces?.() ?? []),
+        ...(label.rules === undefined
+          ? {}
+          : { admitsRule: admitsRulesOfKind(label.rules) }),
       },
     );
     return (result.exhausted

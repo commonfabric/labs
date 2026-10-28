@@ -8,7 +8,7 @@ import { PiecesController } from "@commonfabric/piece/ops";
 import { entityIdFrom, Runtime, slugIdForSpace } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
-import { parseCfHarnessCliArgs } from "../../src/cli.ts";
+import { parseCfHarnessCliArgs } from "../support/on-linux.ts";
 import { PATTERN_AUTHOR_SUBAGENT_ALLOWED_TOOL_IDS } from "../../src/contracts/subagent.ts";
 import {
   parentToolIdsForBacking,
@@ -30,7 +30,7 @@ import {
 
 const sandbox: SandboxRuntime = {
   describe: () => ({
-    kind: "docker-runsc-cfc",
+    kind: "runsc-cfc",
     defaultWorkingDirectory: "/workspace",
     cfc: { runtimeRequested: true, workspaceMountPath: "/workspace" },
   }),
@@ -197,19 +197,30 @@ describe("resolve-piece", () => {
     expect(JSON.stringify(output)).not.toContain("private storage failure");
   });
 
-  it("refuses a qualified address when the session has no space name to check", async () => {
+  it("resolves a qualified address spelling the space by its DID or by the name it was opened by", async () => {
+    for (
+      const slug of [
+        `pattern:${pieces.getSpace()}/recent-emails`,
+        `pattern:${spaceName}/recent-emails`,
+      ]
+    ) {
+      expect((await engine.invokeBuiltinTool("resolve_piece", { slug })).output)
+        .toMatchObject({ status: "ok", resultRef: `/of:${pieceId}` });
+    }
+  });
+
+  it("refuses a qualified address by name when the session's space has no name", async () => {
     using _name = stub(pieces, "getSpaceName", () => undefined);
+    expect(
+      (await engine.invokeBuiltinTool("resolve_piece", {
+        slug: `pattern:${pieces.getSpace()}/recent-emails`,
+      })).output,
+    ).toMatchObject({ status: "ok", resultRef: `/of:${pieceId}` });
     const { output } = await engine.invokeBuiltinTool("resolve_piece", {
       slug: `pattern:${spaceName}/recent-emails`,
     });
-    expect(output).toMatchObject({ status: "error", code: "unavailable" });
+    expect(output).toMatchObject({ status: "error", code: "foreign-space" });
     expect(output).not.toHaveProperty("resultRef");
-    expect(
-      (await engine.invokeBuiltinTool("resolve_piece", {
-        slug: "recent-emails",
-      })).output,
-    )
-      .toMatchObject({ status: "ok", resultRef: `/of:${pieceId}` });
   });
 
   it("refuses a non-string slug from an untyped caller", async () => {

@@ -73,6 +73,7 @@ describe("collectConsumedLabel()", () => {
         confidentiality: [modulePolicy],
         integrity: [{ type: "verified" }],
       },
+      locations: [],
       labeledSpaces: [address.space],
       sources: [{ atom: modulePolicy, read: address, labelPath: [] }],
     } satisfies CfcExternalContentObservation;

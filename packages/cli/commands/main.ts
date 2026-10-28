@@ -20,7 +20,7 @@ import { init } from "./init.ts";
 import { inspect } from "./inspect.ts";
 import { invocationSession } from "./invocation-session.ts";
 import { cell } from "./cell.ts";
-import { piece, pieceDataCommand } from "./piece.ts";
+import { piece } from "./piece.ts";
 import { profile } from "./profile.ts";
 import { space } from "./space.ts";
 import { sh } from "./sh.ts";
@@ -45,13 +45,11 @@ function envStatus(): string {
     // a space and do not read this, so a blanket "no need to pass --space"
     // would be wrong exactly where a caller is most surprised to be asked.
     //
-    // `space` is named by subcommand for the same reason, and by the one
-    // subcommand rather than by two: `recreate-root` resolves the target space
-    // and refuses without one, while `clone`, `verify`, `reset` and
-    // `fingerprint` each name their target themselves, and `set-home` acts on
-    // the identity's own home space — it declares the option through the
-    // shared target flags and never reads it. Declaring is not consuming,
-    // which is the way an entry here goes wrong without going missing.
+    // `space` is named by subcommand for the same reason: `recreate-root`
+    // resolves the target space and refuses without one, while `clone`,
+    // `verify`, `reset` and `fingerprint` each name their target themselves.
+    // Declaring the option is not consuming it, which is the way an entry
+    // here goes wrong without going missing.
     lines.push(
       `  CF_SPACE    = ${space} (set, no need to pass --space on cell, ` +
         `piece, wish, acl, deps, space recreate-root)`,
@@ -212,23 +210,4 @@ export const main = new Command()
   .command("invocation-session", invocationSession)
   .command("sh", sh)
   .command("test", createTestCommand({ recordResults: true }))
-  .command("wish", wish)
-  // The superseded top-level spellings of the data commands. Each is the one
-  // definition its blessed mount uses, reached under the noun it acts on --
-  // `cf cell get`, `cf cell set`, `cf piece call` -- and kept here, hidden,
-  // so a caller who learned the top-level spelling still works.
-  // @ts-ignore for the above type issue
-  .command(
-    "get",
-    pieceDataCommand("get", { replacedBy: "cell get" }).hidden(),
-  )
-  // @ts-ignore for the above type issue
-  .command(
-    "set",
-    pieceDataCommand("set", { replacedBy: "cell set" }).hidden(),
-  )
-  // @ts-ignore for the above type issue
-  .command(
-    "call",
-    pieceDataCommand("call", { replacedBy: "piece call" }).hidden(),
-  );
+  .command("wish", wish);

@@ -1,3 +1,7 @@
+import {
+  getLogger,
+  getLoggerCountsBreakdown,
+} from "@commonfabric/utils/logger";
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { CFSubmitInput } from "./index.ts";
@@ -46,6 +50,10 @@ function clickEvent(via: ClickVia): Event & { stopped: boolean } {
   };
   return event as unknown as Event & { stopped: boolean };
 }
+
+/** How many drops the `cf-submit-input` logger has counted. */
+const droppedCount = (): number =>
+  getLoggerCountsBreakdown()["cf-submit-input"]?.dropped?.debug ?? 0;
 
 // Lets a pending setTimeout(0) callback run.
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -168,6 +176,37 @@ describe("CFSubmitInput", () => {
       expect(event.stopped).toBe(true);
       await tick();
       expect(el.value).toBe("   ");
+    });
+
+    it("counts an empty submit it drops, and logs it once its logger is enabled", () => {
+      const el = new CFSubmitInput();
+      el.inputId = "fabrichat-message";
+      el.value = "";
+      const event = clickEvent("button");
+      const logger = getLogger("cf-submit-input");
+      const wasDisabled = logger.disabled;
+      const logged: unknown[][] = [];
+      const originalDebug = console.debug;
+      console.debug = (...args: unknown[]) => {
+        logged.push(args);
+      };
+      const before = droppedCount();
+      try {
+        logger.disabled = false;
+        internals(el)._onClick(event);
+      } finally {
+        console.debug = originalDebug;
+        logger.disabled = wasDisabled;
+      }
+
+      expect(event.stopped).toBe(true);
+      expect(internals(el)._submitting).toBe(false);
+      expect(droppedCount()).toBe(before + 1);
+      expect(logged.map((args) => args.join(" "))).toEqual([
+        expect.stringContaining(
+          "dropped cf-submit-input dropped an empty submit (#fabrichat-message)",
+        ),
+      ]);
     });
 
     it("stops an empty Enter-driven submit reaching the host", () => {

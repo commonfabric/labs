@@ -6,6 +6,7 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { CellScope, JSONSchema } from "../builder/types.ts";
 import type { Metadata } from "../storage/interface.ts";
+import type { ConsumedLocation } from "./access-integrity.ts";
 import type { CfcConfClause } from "./clause.ts";
 import type {
   CfcLabelView,
@@ -39,17 +40,35 @@ export const CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION =
 // node's cause; the per-event documents a builtin mints inside one
 // transaction; and the documents anchoring splits out of a value written into
 // any of those. `target` is that document; `sources` is the document the
-// runtime derived it from. The prepare gate reads it for the §8.12.5 route-2
-// declaration described in `docs/specs/cfc-enforcement-matrix.md` §4, and
+// runtime derived it from. The prepare gate reads it for the §8.12.5
+// runtime-owned-store admission described in
+// `docs/specs/cfc-enforcement-matrix.md` §4, and
 // takes it only where `target` names a whole document AND the input was
 // recorded under {@link runtimeWritePolicyAuthorization}.
 //
 // The marker names the store for one transaction. A store written outside the
-// transaction that minted it is enrolled beside it
-// (`IExtendedStorageTransaction.enrollRuntimeOwnedStore`), which lasts for the
-// runtime's life.
+// transaction that minted it can be enrolled beside it
+// (`IExtendedStorageTransaction.enrollRuntimeOwnedStore`) until its piece
+// stops.
+// Enrolled stores keep misfits solely in derived stamps; transaction-only
+// generic markers retain declarations for later authored clients.
 export const CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE =
   "runtime.owned-store";
+
+/**
+ * A piece's argument and derived internal documents, minted from its cause,
+ * and the result document setup establishes as belonging to that piece.
+ * Eligible misfits stay in derived labels under the proposed §8.12.5 rule:
+ * https://github.com/commonfabric/specs/pull/78
+ *
+ * The authenticated, whole-document, same-space checks match
+ * `runtime.owned-store`. The claim lasts only for the recording transaction;
+ * it grants no lifetime enrollment. Anchoring carries generic ownership to
+ * children through `runtime.owned-store`, whose misfits remain declared; the
+ * setup claim selecting derived-only persistence does not propagate.
+ */
+export const CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE =
+  "runtime.piece-setup-store";
 
 // A store no pattern declares a policy on: a document the runtime mints to hold
 // its own bookkeeping, at an id whose shape says nothing about who mints it.
@@ -76,7 +95,7 @@ export const CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE =
 // this claim needs: the measurement runs over documents the transaction taking
 // it wrote, so the transaction that asks is the transaction that recorded it.
 // {@link CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE} carries an enrollment
-// beside it because route 2 answers for stores a later transaction writes.
+// beside it because ownership admits writes in later transactions.
 //
 // Skipping the ceiling is not releasing the value. The write stays a flow stamp
 // target, so the join lands on it as the `derived` component, a later read of
@@ -408,12 +427,30 @@ export type StoredCfcMetadata =
     version: 1;
     schemaHash: string;
     labelMap: { version: 1; entries: Array<LabelMapEntry> };
+    stampPlacement?: CfcStampPlacement;
   }
   | {
     version: 2;
     schemaHash: string;
     labelMap: { version: 1; entries: Array<StoredLabelMapEntry> };
+    stampPlacement?: CfcStampPlacement;
   };
+
+/**
+ * What an envelope says of where its writers' stamps sit. `"committed"`
+ * says that every stamp naming a writer at a slot that holds a reference
+ * was persisted beside the reference its attempt placed: the runtime that
+ * wrote it re-derives an attempt's labels against the committed placement
+ * (CFC §8.10.2.2), and carried no stamp over from an envelope that did not
+ * say the same. An envelope without the member says nothing of it, and a
+ * stamp at a reference slot in one is no input witness (§18.7).
+ *
+ * It is a member beside the ones the version defines, and not a version of
+ * its own, so that a reader that does not know it still reads the envelope,
+ * and a writer that does not know it drops it with the envelope it rewrites
+ * (`docs/specs/cfc-stored-envelope.md`).
+ */
+export type CfcStampPlacement = "committed";
 
 /**
  * `schemaHash` names the envelope's ROOT schema document. The root may be
@@ -448,6 +485,9 @@ export type CfcMetadata = {
      */
     documentEntries?: Array<LabelMapEntry>;
   };
+
+  /** See {@link CfcStampPlacement}. Absent where the envelope says nothing. */
+  stampPlacement?: CfcStampPlacement;
 };
 
 export type EntityDocumentWithCfc = {
@@ -846,13 +886,22 @@ export type CfcAssertedValueRoot = {
  * A content observation made outside durable Fabric storage and admitted by
  * the runtime through a prepared, aborted write transaction. Both labels are
  * canonical runtime products: `flow` carries the effective content label whose
- * hereditary integrity the final flow fold meets, while `consumed` carries the
- * egress guard pool.
+ * hereditary integrity the final flow fold meets, while `consumed` carries
+ * what the content's reads consumed, and `locations` the locations they
+ * consumed it at, which the release gates evaluate exchange rules over.
  */
 export type CfcExternalContentObservation = {
   readonly source: CfcAddress;
   readonly flow: IFCLabel;
   readonly consumed: IFCLabel;
+
+  /**
+   * The labeled locations the content's reads consumed, which the release
+   * gates evaluate exchange rules over (`access-integrity.ts`). A clause of
+   * `consumed` no location holds is evaluated as read, with no evidence.
+   */
+  readonly locations: readonly ConsumedLocation[];
+
   readonly labeledSpaces: readonly MemorySpace[];
   readonly sources: readonly {
     readonly atom: CfcConfClause;
@@ -895,6 +944,14 @@ export type PostCommitSideEffect = {
   abandon?(error: unknown): void;
 };
 
+/**
+ * Where a transaction's boundary verification stands. `prepared` holds the
+ * activity the verification ran over as `input`, frozen, and `digest` is the
+ * digest of that input. `invalidated` keeps the digest of the preparation it
+ * invalidated, when there was one. A transaction computes a digest when one
+ * is first read, so reading `digest` canonicalizes and hashes the input and
+ * copying a state reads it.
+ */
 export type CfcPrepareState =
   | { status: "unprepared" }
   | { status: "prepared"; digest: string; input: PreparedDigestInput }
@@ -1160,6 +1217,17 @@ export type CfcTxState = {
   // closed). Config identity is covered by TrustSnapshot.revision, not a
   // separate digest input.
   trustConfig?: CfcTrustConfig;
+  // The serving runtime's own identity, set once by the Runtime at tx
+  // creation on the serving posture and absent everywhere else. A trust
+  // snapshot naming it is the runtime's ambient one, which no
+  // current-principal claim or owner binding may resolve to unless a run is
+  // stamped as acting for that identity.
+  servingIdentity?: string;
+  // The client runtime's own identity, set once by the Runtime at tx creation
+  // off the serving posture and absent on it: the principal its storage
+  // session authenticates as, which the memory server keys every `user` and
+  // `session` instance the client writes by.
+  clientIdentity?: string;
   // Addresses of writes to a document's ["cfc"] label-map path made OUTSIDE the
   // runtime's privileged persistence scope (audit S18). The runtime's own label
   // writes in prepareBoundaryCommit run privileged and never land here; anything
@@ -1206,4 +1274,6 @@ export type CfcPreparationWork =
   | "stagedReferenceDerivations"
   | "stagedReferenceCacheHits"
   | "flowTemplateEntriesMinted"
-  | "flowTemplateContainers";
+  | "flowTemplateContainers"
+  | "inputReadViewsBuilt"
+  | "inputReadViewsReused";

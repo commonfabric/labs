@@ -28,7 +28,7 @@ export async function resolveProgram(
       continue;
     }
     const current = sources.get(currentName)!;
-    const specifiers = getImports(current, target);
+    const specifiers = scanSource(current, target, false).imports;
     for (const specifier of specifiers) {
       // Refused here rather than resolved: past this point the `..` segments
       // are clamped away and every later error names a path that appears in
@@ -99,11 +99,45 @@ function isUnresolvedModuleOk(
 // existing compile-path importers.
 export { resolveImportSpecifier } from "../specifier.ts";
 import {
-  assertDataFileInsideProgramRoot,
   assertImportInsideProgramRoot as assertInsideRoot,
-  resolveDataFilePath,
+  resolveDeclaredDataFile,
   resolveImportSpecifier as resolveSpecifier,
 } from "../specifier.ts";
+
+/**
+ * What a module declares it depends on, read out of its source by
+ * {@link scanModuleDeclarations}: the modules it imports and the data files it
+ * reads.
+ *
+ * Both lists hold what the source writes, unresolved, so that a caller can
+ * resolve them against whichever name it holds the module by. The scan reads
+ * that name only to tell what kind of file the module is, which turns on its
+ * base name alone, so one result holds for the module under every name with
+ * that base name.
+ */
+export interface ModuleDeclarations {
+  /** Every module specifier, as {@link collectImportSpecifiers} returns them. */
+  readonly imports: readonly string[];
+
+  /**
+   * The path each `dataFile()` call names, as written. These are the calls
+   * {@link collectDataFileNames} finds, before it resolves them.
+   */
+  readonly dataFiles: readonly string[];
+}
+
+/**
+ * Returns the modules `source` imports and the data files it reads, from one
+ * parse. {@link collectImportSpecifiers} and {@link collectDataFileNames} each
+ * return one half of this and parse to do it, so a caller needing both halves,
+ * or needing one under several names, scans here and resolves from the result.
+ */
+export function scanModuleDeclarations(
+  source: Source,
+  target: ts.ScriptTarget,
+): ModuleDeclarations {
+  return scanSource(source, target, true);
+}
 
 /**
  * Collect every import/`export … from` specifier referenced by a source file,
@@ -123,7 +157,7 @@ export function collectImportSpecifiers(
   source: Source,
   target: ts.ScriptTarget,
 ): string[] {
-  return getImports(source, target, { includeImportTypeNodes: true });
+  return scanSource(source, target, true).imports;
 }
 
 /** The module an authored pattern takes the runtime's own names from. */
@@ -154,12 +188,99 @@ export function collectDataFileNames(
   source: Source,
   target: ts.ScriptTarget,
 ): string[] {
+  // Every form recognized below names the reader as the contiguous characters
+  // `dataFile`, in an identifier or in a string literal, unless an escape
+  // breaks them up, and every escape starts with a backslash. A source holding
+  // neither declares nothing, and is not parsed.
+  if (
+    !source.contents.includes(DATA_FILE_READER) &&
+    !source.contents.includes("\\")
+  ) {
+    return [];
+  }
+  return scanSource(source, target, true).dataFiles.map((path) =>
+    resolveDeclaredDataFile(path, source)
+  );
+}
+
+/**
+ * Helper for the scans above, which parses `source` once and collects both the
+ * module specifiers it names and the paths its `dataFile()` calls name.
+ *
+ * An inline import-type reference, `import("./mod").Foo`, counts as an import
+ * only when `includeImportTypeNodes` is set. It is load-bearing for schema
+ * generation but is not a module-graph edge for resolution, so only the
+ * identity scan opts in.
+ */
+function scanSource(
+  source: Source,
+  target: ts.ScriptTarget,
+  includeImportTypeNodes: boolean,
+): { imports: string[]; dataFiles: string[] } {
   const sourceFile = ts.createSourceFile(
     source.name,
     source.contents,
     target,
     true,
   );
+  const readers = dataFileReaders(sourceFile);
+
+  const imports: string[] = [];
+  const dataFiles: string[] = [];
+
+  function visit(node: ts.Node) {
+    // Handle import declarations: import { foo } from 'module'
+    // We intentionally skip dynamic imports and require statements. Unsupported.
+    if (ts.isImportDeclaration(node)) {
+      const moduleSpecifier = node.moduleSpecifier;
+      if (ts.isStringLiteral(moduleSpecifier)) {
+        imports.push(moduleSpecifier.text);
+      }
+    }
+    // `export * from "specifier";`
+    if (ts.isExportDeclaration(node)) {
+      const moduleSpecifier = node.moduleSpecifier;
+      if (moduleSpecifier && ts.isStringLiteral(moduleSpecifier)) {
+        imports.push(moduleSpecifier.text);
+      }
+    }
+    // Inline import-type references in type position: `import("./mod").Foo`.
+    if (includeImportTypeNodes && ts.isImportTypeNode(node)) {
+      const argument = node.argument;
+      if (
+        ts.isLiteralTypeNode(argument) && ts.isStringLiteral(argument.literal)
+      ) {
+        imports.push(argument.literal.text);
+      }
+    }
+    if (readers !== undefined && ts.isCallExpression(node)) {
+      const path = dataFileReadPath(node, readers);
+      if (path !== undefined) dataFiles.push(path);
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return { imports: [...new Set(imports)], dataFiles };
+}
+
+/** The local names a module binds the runtime's `dataFile` to. */
+interface DataFileReaders {
+  /** Names bound to `dataFile` itself, by a plain or a renaming import. */
+  readonly direct: ReadonlySet<string>;
+
+  /** Names bound to the runtime module as a namespace. */
+  readonly namespaces: ReadonlySet<string>;
+}
+
+/**
+ * Helper for `scanSource()`, which returns the names the imports of
+ * `sourceFile` bind the runtime's `dataFile` to, or `undefined` when they bind
+ * it to none. A type-only import binds no value, and so binds nothing here.
+ */
+function dataFileReaders(
+  sourceFile: ts.SourceFile,
+): DataFileReaders | undefined {
   const direct = new Set<string>();
   const namespaces = new Set<string>();
   for (const statement of sourceFile.statements) {
@@ -182,36 +303,34 @@ export function collectDataFileNames(
       if (imported === DATA_FILE_READER) direct.add(element.name.text);
     }
   }
-  if (direct.size === 0 && namespaces.size === 0) return [];
+  return direct.size === 0 && namespaces.size === 0
+    ? undefined
+    : { direct, namespaces };
+}
 
-  const names: string[] = [];
-  function visit(node: ts.Node) {
-    if (ts.isCallExpression(node)) {
-      const callee = node.expression;
-      const read = ts.isIdentifier(callee) && direct.has(callee.text)
-        ? callee
-        : ts.isPropertyAccessExpression(callee) &&
-            ts.isIdentifier(callee.expression) &&
-            namespaces.has(callee.expression.text) &&
-            callee.name.text === DATA_FILE_READER
-        ? callee.expression
-        : undefined;
-      const argument = node.arguments[0];
-      if (
-        read !== undefined && argument !== undefined &&
-        ts.isStringLiteral(argument) && !isShadowed(read)
-      ) {
-        // Refused before resolving, as an escaping import is: past the join
-        // the climbing segments are clamped away and the name no longer
-        // appears in any source file.
-        assertDataFileInsideProgramRoot(argument.text, source);
-        names.push(resolveDataFilePath(argument.text, source.name));
-      }
-    }
-    ts.forEachChild(node, visit);
-  }
-  visit(sourceFile);
-  return names;
+/**
+ * Helper for `scanSource()`, which returns the path `call` reads when it calls
+ * the runtime's `dataFile` through one of `readers` with a string literal, and
+ * `undefined` for any other call.
+ */
+function dataFileReadPath(
+  call: ts.CallExpression,
+  readers: DataFileReaders,
+): string | undefined {
+  const callee = call.expression;
+  const read = ts.isIdentifier(callee) && readers.direct.has(callee.text)
+    ? callee
+    : ts.isPropertyAccessExpression(callee) &&
+        ts.isIdentifier(callee.expression) &&
+        readers.namespaces.has(callee.expression.text) &&
+        callee.name.text === DATA_FILE_READER
+    ? callee.expression
+    : undefined;
+  const argument = call.arguments[0];
+  return read !== undefined && argument !== undefined &&
+      ts.isStringLiteral(argument) && !isShadowed(read)
+    ? argument.text
+    : undefined;
 }
 
 /**
@@ -287,52 +406,4 @@ function patternBinds(binding: ts.BindingName, name: string): boolean {
   return binding.elements.some((element) =>
     ts.isBindingElement(element) && patternBinds(element.name, name)
   );
-}
-
-function getImports(
-  source: Source,
-  target: ts.ScriptTarget,
-  options: { includeImportTypeNodes?: boolean } = {},
-): string[] {
-  const sourceFile = ts.createSourceFile(
-    source.name,
-    source.contents,
-    target,
-    true,
-  );
-
-  const imports: string[] = [];
-
-  function visit(node: ts.Node) {
-    // Handle import declarations: import { foo } from 'module'
-    // We intentionally skip dynamic imports and require statements. Unsupported.
-    if (ts.isImportDeclaration(node)) {
-      const moduleSpecifier = node.moduleSpecifier;
-      if (ts.isStringLiteral(moduleSpecifier)) {
-        imports.push(moduleSpecifier.text);
-      }
-    }
-    // `export * from "specifier";`
-    if (ts.isExportDeclaration(node)) {
-      const moduleSpecifier = node.moduleSpecifier;
-      if (moduleSpecifier && ts.isStringLiteral(moduleSpecifier)) {
-        imports.push(moduleSpecifier.text);
-      }
-    }
-    // Inline import-type references in type position: `import("./mod").Foo`.
-    // These are load-bearing for schema generation but are not module-graph
-    // edges for resolution, so only the identity collector opts in.
-    if (options.includeImportTypeNodes && ts.isImportTypeNode(node)) {
-      const argument = node.argument;
-      if (
-        ts.isLiteralTypeNode(argument) && ts.isStringLiteral(argument.literal)
-      ) {
-        imports.push(argument.literal.text);
-      }
-    }
-    ts.forEachChild(node, visit);
-  }
-
-  visit(sourceFile);
-  return [...new Set(imports)];
 }

@@ -384,8 +384,9 @@ const LINK_GRAPH: LinkGraphBounds = {
 
 /**
  * The cells one document links to, each at the path inside the document it
- * sits at, the paths whose links were not followed, and whether the walk ran
- * out before the end of the value.
+ * sits at, the path of every link naming a document, the paths whose links
+ * were not followed, and whether the walk ran out before the end of the
+ * value.
  *
  * The walk descends through the objects and arrays of the value — an array
  * index is a path segment like any other — and stops at each link it meets.
@@ -409,16 +410,19 @@ const linkedCellsOf = (
   bounds: LinkWalkBounds,
 ): {
   linked: LinkedCell[];
+  linkPaths: (readonly string[])[];
   unreadPaths: HarnessCellLabelUnreadPath[];
   truncation?: HarnessCellLabelTruncationReason;
 } => {
   const linked: LinkedCell[] = [];
+  const linkPaths: (readonly string[])[] = [];
   const unreadPaths: HarnessCellLabelUnreadPath[] = [];
   const walk = linksWithPaths(document?.value, bounds);
   for (const { link, at } of walk.links) {
     if (link.id === undefined) {
       continue;
     }
+    linkPaths.push(at);
     const reason = unreadReasonOf(link.space, space);
     if (reason === undefined) {
       linked.push({ path: at, id: link.id, into: link.path ?? [] });
@@ -431,6 +435,7 @@ const linkedCellsOf = (
   }
   return {
     linked,
+    linkPaths,
     unreadPaths,
     ...(walk.budgetExhausted
       ? { truncation: "node-budget-exhausted" as const }
@@ -442,6 +447,13 @@ const linkedCellsOf = (
 interface GraphStep {
   entries: HarnessCellLabelEntry[];
   linked: LinkedCell[];
+
+  /**
+   * The path of every link the walk found, followed or not, each under the
+   * path that reached the document holding it.
+   */
+  linkPaths: (readonly string[])[];
+
   unreadPaths: HarnessCellLabelUnreadPath[];
   truncation?: HarnessCellLabelTruncationReason;
 }
@@ -467,6 +479,11 @@ interface GraphStep {
  * on the chain that reached it contributes that document's labels at the path
  * it sits at, and is not descended into, so the walk unfolds each loop once
  * rather than to the hop bound.
+ *
+ * The path of every link found on the way is returned too, whether the link
+ * was followed, left unread, or led to a document holding no label. A
+ * reference leaves an entry only where it carries a label of its own, so a
+ * link to a cell holding no label appears nowhere else in what this returns.
  */
 const walkLinkedLabels = (
   read: (id: string) => Record<string, FabricValue> | undefined,
@@ -477,6 +494,7 @@ const walkLinkedLabels = (
 ): GraphStep => {
   const own = linkedCellsOf(root.document, space, bounds);
   const entries: HarnessCellLabelEntry[] = [];
+  const linkPaths = [...own.linkPaths];
   const unreadPaths = [...own.unreadPaths];
   let truncation = own.truncation;
   // Each queued cell carries the chain of ids that reached it, which is what
@@ -529,6 +547,12 @@ const walkLinkedLabels = (
       }
       const step = linkedCellsOf(document, space, bounds);
       truncation ??= step.truncation;
+      for (const inside of step.linkPaths) {
+        const at = throughLink(through, inside);
+        if (at !== undefined) {
+          linkPaths.push(at);
+        }
+      }
       for (const unread of step.unreadPaths) {
         const at = throughLink(through, unread.path);
         if (at !== undefined) {
@@ -561,6 +585,7 @@ const walkLinkedLabels = (
   return {
     entries,
     linked,
+    linkPaths,
     unreadPaths,
     ...(truncation !== undefined ? { truncation } : {}),
   };
@@ -593,8 +618,15 @@ export interface SpaceLabelReader {
    * back as an `unreadPaths` entry at the path that held it — as does a path
    * lying deeper in the value than the walk descends, and a link lying
    * further out than it follows links.
+   *
+   * `linkPaths` holds the path of every link the walk found, followed or
+   * not, so a link to a cell the space holds no label for is on record too.
+   * It is empty for a cell that went unread.
    */
-  read(address: CellAddress): StoredCellLabels & { linked: LinkedCell[] };
+  read(address: CellAddress): StoredCellLabels & {
+    linked: LinkedCell[];
+    linkPaths: (readonly string[])[];
+  };
 
   close(): void;
 }
@@ -647,7 +679,7 @@ export const openSpaceLabelReader = async (
     read: (address) => {
       const unread = unreadReasonOf(address.space, did);
       if (unread !== undefined) {
-        return { entries: [], linked: [], unread };
+        return { entries: [], linked: [], linkPaths: [], unread };
       }
       // The named scope, then the base scope it inherits from: a reference
       // carries a scope kind rather than a principal, so a scoped one
@@ -657,20 +689,26 @@ export const openSpaceLabelReader = async (
         .map((scope) => reconstructOutcome(opened, { id: address.id, scope }))
         .find((candidate) => candidate.status === "present");
       if (outcome === undefined || outcome.status !== "present") {
-        return { entries: [], linked: [], unread: "no-document" };
+        return {
+          entries: [],
+          linked: [],
+          linkPaths: [],
+          unread: "no-document",
+        };
       }
       const readSpaceDocument = (id: string) => {
         const target = reconstructOutcome(opened, { id, scope: "space" });
         return target.status === "present" ? target.document : undefined;
       };
       const own = labelsOf(outcome.document, readSpaceDocument);
-      const { entries, linked, unreadPaths, truncation } = walkLinkedLabels(
-        readSpaceDocument,
-        { id: address.id, document: outcome.document },
-        did,
-        bounds,
-        graph,
-      );
+      const { entries, linked, linkPaths, unreadPaths, truncation } =
+        walkLinkedLabels(
+          readSpaceDocument,
+          { id: address.id, document: outcome.document },
+          did,
+          bounds,
+          graph,
+        );
       if (truncation !== undefined) {
         // Said out loud as well as recorded. Both budgets are what make a
         // restored graph with a cycle in it finite, so a cell that reaches
@@ -690,6 +728,7 @@ export const openSpaceLabelReader = async (
         ...own,
         entries: [...own.entries, ...entries],
         linked,
+        linkPaths,
         ...(allUnreadPaths.length > 0 ? { unreadPaths: allUnreadPaths } : {}),
         ...(truncation !== undefined ? { truncation } : {}),
       };
@@ -737,6 +776,10 @@ export interface SpaceLabelSnapshotRequest {
  * enumerating what it had left — so it marks the whole cell truncated
  * instead. Every other failure lands on the snapshot as a whole, so a reader
  * can tell "no labels" from "not read".
+ *
+ * A cell that was read also lists the path of every link the walk found in
+ * it. A link to a cell the space holds no label for leaves no entry at its
+ * path or beneath it, and the list is what keeps it from reading as no link.
  */
 export const readSpaceCellLabels = async (
   request: SpaceLabelSnapshotRequest,
@@ -800,6 +843,7 @@ export const readSpaceCellLabels = async (
         ...(read.truncation !== undefined
           ? { truncationReason: read.truncation }
           : {}),
+        ...(read.unread === undefined ? { linkPaths: read.linkPaths } : {}),
         entries: read.entries,
       });
     }

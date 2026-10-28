@@ -77,6 +77,16 @@ export const NO_CANDIDATES = new Map<string, string>([
   ["acl set:capability", "a capability string, composed rather than chosen"],
   ["piece search:query", "a search query"],
   ["profile create:name", "a display name the caller is coining"],
+  ["profile rename:name", "the same"],
+  // A profile's space DID: the profiles are the caller's own, listed by
+  // `cf profile list`, and reading them takes a connection completion never
+  // opens.
+  ["profile rename:space", "a profile space DID, from `cf profile list`"],
+  ["profile restore:space", "the same"],
+  ["profile attest-name:space", "the same"],
+  ["profile retire:space", "the same"],
+  ["profile set-picture:space", "the same"],
+  ["profile get-picture:space", "the same"],
   [
     "piece follow:origin",
     "a source origin the caller names, such as a `system:` ref",
@@ -86,7 +96,6 @@ export const NO_CANDIDATES = new Map<string, string>([
   // docs/plans/cli-completion-coverage.md builds the candidates and is what
   // will route them here.
   ["piece call:tail", "the callable's own vocabulary"],
-  ["call:tail", "the same, under the superseded spelling"],
   ["exec:tail", "the same"],
 ]);
 
@@ -104,10 +113,32 @@ export const NO_CANDIDATES = new Map<string, string>([
  */
 export const NO_OPTION_CANDIDATES = new Map<string, string>([
   [
+    "profile attest-name:expect",
+    "the receipt from the owner-reviewed inspection",
+  ],
+  [
     "profile repair-name-protection:expect",
     "the receipt from the owner-reviewed inspection",
   ],
+  [
+    "profile repair-root:expect",
+    "the receipt from the operator-reviewed inspection",
+  ],
+  [
+    "piece follow:expect",
+    "the pattern the caller inspected the piece running",
+  ],
+  [
+    "piece follow:expect-revision",
+    "the revision head the caller inspected, or none",
+  ],
   ["piece new:request-key", "an opaque caller retry key"],
+  [
+    "ingest mint:gmail-access-token",
+    "a secret; a candidate list is the wrong place",
+  ],
+  ["ingest mint:gmail-id-token", "the same"],
+  ["ingest mint:target", "a cell reference the caller chooses"],
   ["space invite create:ttl", "an admission lifetime in seconds"],
   ["space invite create:max-uses", "a distinct identity count"],
   ["space invite create:shell", "a caller-selected shell origin"],
@@ -120,6 +151,7 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
     "a secret input path or stdin marker, supplied explicitly",
   ],
   // Numbers, durations and bounds. Nothing enumerates a count.
+  ["space compact:verify-sample", "an every-nth stride over the documents"],
   ["limit", "a row count"],
   ["depth", "a graph depth"],
   ["seq", "a revision sequence number"],
@@ -142,6 +174,10 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
     "how many local jobs one runner runs at once; a count",
   ],
   ["submission-after-seq", "a revision sequence number"],
+  ["before-seq", "a revision sequence number"],
+  ["before", "a timestamp"],
+  ["keep-last", "a row count"],
+  ["keep-payloads", "a duration"],
   // Identifiers the caller brings from outside, or coins.
   ["did", "a DID, pasted from elsewhere"],
   ["as", "a DID whose view to approximate, pasted from elsewhere"],
@@ -218,8 +254,6 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
   // Item 6 of docs/plans/cli-completion-coverage.md is what builds it.
   ["piece call:select", "the verb's own result shape"],
   ["piece call:schema", "the same"],
-  ["call:select", "the same, under the superseded spelling"],
-  ["call:schema", "the same"],
   ["exec:select", "the same"],
   ["exec:schema", "the same"],
   // `wish` projects what its query resolved to, and resolving a wish commits a

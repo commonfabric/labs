@@ -3,6 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE, type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
+import { linkProbeSubPath } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import { maxOf } from "@commonfabric/utils/math";
 
@@ -26,10 +27,12 @@ import {
   retainedInputWitnesses,
 } from "../src/cfc/input-witness.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
+import { createSigilLinkFromParsedLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
+import { linkResolutionProbe } from "../src/storage/reactivity-log.ts";
 
 // An endorsed transformer's output is released by an exchange rule guarded on
 // the `TransformedBy` atom the runtime mints for it. Naming only the code that
@@ -269,6 +272,41 @@ const commitStances = (runtime: Runtime, output = "committed") =>
     votes: ["approve", "reject"],
   }));
 
+/**
+ * `writer` writing the room's stances as a list into the existing document
+ * `cause`, the way the diff writes a list where a value of another kind
+ * stood: the list empty, then each member at its slot.
+ */
+const commitListInPlace = async (
+  runtime: Runtime,
+  members: readonly string[],
+  writer: ImplementationIdentity = COMMIT,
+  cause = "committed",
+): Promise<void> => {
+  const tx = runtime.edit();
+  setCfcImplementationIdentity(tx, writer);
+  for (const note of ["alice-note", "bob-note"]) {
+    runtime.getCell(space, note, undefined, tx).getRaw();
+  }
+  const id = runtime.getCell(space, cause, undefined, tx)
+    .getAsNormalizedFullLink().id;
+  tx.writeOrThrow({ space, scope: "space", id, path: ["value"] }, []);
+  members.forEach((member, index) =>
+    tx.writeOrThrow(
+      { space, scope: "space", id, path: ["value", String(index)] },
+      member,
+    )
+  );
+  tx.prepareCfc();
+  expect((await tx.commit().settled).error).toBeUndefined();
+};
+
+/** A list of stances, read through its schema. */
+const STANCES = {
+  type: "array",
+  items: { type: "string" },
+} as const satisfies JSONSchema;
+
 /** The laundering step: bit 0 of Alice's note as a one-vote ballot. */
 const bitOfAlicesNote = (runtime: Runtime, output = "crafted") =>
   transform(runtime, ATTACKER, ["alice-note"], output, ([alice]) => ({
@@ -302,6 +340,89 @@ describe("TransformedBy input witnesses", () => {
           identity: TALLY,
           inputWitness: { type: CFC_ATOM_TYPE.TransformedBy, identity: COMMIT },
         });
+      });
+    });
+
+    it("names the writer of a list whose link probe triggered the run", async () => {
+      // A run scheduled by a change to a link probe's path reads the slot
+      // the probe asked about, not the sub-path a link exposes its form at,
+      // whose segments no `*` template matches. The list is read through
+      // its schema, one shallow read per node, as compiled code reads it.
+
+      await withRuntime(IDENTITY_GUARD, async ({ runtime }) => {
+        await seedRoom(runtime);
+        await seedPublic(runtime, "committed", "pending");
+        await commitListInPlace(runtime, ["approve", "reject"]);
+        await transform(
+          runtime,
+          TALLY,
+          [],
+          "ballot",
+          () => "1",
+          [],
+          (tx) => {
+            const list = runtime.getCell(space, "committed", STANCES, tx);
+            list.get();
+            tx.addCfcTriggerReads([{
+              space,
+              id: list.getAsNormalizedFullLink().id,
+              type: "application/json",
+              path: ["value", ...linkProbeSubPath()],
+            }]);
+          },
+        );
+
+        expect(storedIntegrity(runtime, "ballot")).toContainEqual({
+          type: CFC_ATOM_TYPE.TransformedBy,
+          identity: TALLY,
+          inputWitness: { type: CFC_ATOM_TYPE.TransformedBy, identity: COMMIT },
+        });
+      });
+    });
+
+    it("mints no witness when a list other code wrote triggered the run", async () => {
+      // The slot a link probe asked about is still an input when the trigger
+      // is read there: its membership stamp names the writer that filled it.
+
+      await withRuntime(IDENTITY_GUARD, async ({ runtime }) => {
+        await seedRoom(runtime);
+        await commitStances(runtime);
+        await seedPublic(runtime, "crafted-list", "pending");
+        await commitListInPlace(
+          runtime,
+          ["approve", "reject"],
+          ATTACKER,
+          "crafted-list",
+        );
+        await transform(
+          runtime,
+          TALLY,
+          ["committed"],
+          "ballot",
+          tally,
+          [],
+          (tx) => {
+            const id = runtime.getCell(space, "crafted-list", undefined, tx)
+              .getAsNormalizedFullLink().id;
+            tx.addCfcTriggerReads([{
+              space,
+              id,
+              type: "application/json",
+              path: ["value", ...linkProbeSubPath()],
+            }]);
+          },
+        );
+
+        const integrity = storedIntegrity(runtime, "ballot");
+        expect(integrity).toContainEqual({
+          type: CFC_ATOM_TYPE.TransformedBy,
+          identity: TALLY,
+        });
+        expect(
+          integrity.some((atom) =>
+            (atom as { inputWitness?: unknown }).inputWitness !== undefined
+          ),
+        ).toBe(false);
       });
     });
 
@@ -1269,6 +1390,196 @@ describe("TransformedBy input witnesses", () => {
 
         expect(witnessesOf(runtime, "control")).toEqual([tb(COMMIT)]);
         expect(witnessesOf(runtime, "ballot")).toEqual([]);
+      });
+    });
+
+    describe("a probe of a member slot", () => {
+      // Compiled code probes each member slot for a reference before it
+      // reads the member. A probe that finds a value there observes that
+      // value, so it is resolved as a shallow read of the slot.
+
+      const QUEUE_SCHEMA = {
+        type: "object",
+        properties: {
+          votes: {
+            type: "array",
+            items: { type: "string", ifc: { confidentiality: [ROOM] } },
+          },
+        },
+      } as const satisfies JSONSchema;
+      const stamped = (
+        key: string,
+        writer: ImplementationIdentity,
+      ): LabelMapEntry => ({
+        path: [key],
+        origin: "derived",
+        observes: "value",
+        label: { confidentiality: [ROOM], integrity: [tb(writer)] },
+      });
+
+      it("refuses a probe of a slot another writer put a value in", async () => {
+        // A probe asks which reference sits at a slot. At a slot holding a
+        // value it finds that value, whose writer the slot's value stamp
+        // records, as a shallow read of the slot would.
+
+        await withRuntime(IDENTITY_GUARD, async ({ runtime }) => {
+          await seedRoom(runtime);
+          await commitStances(runtime);
+          const template: LabelMapEntry = {
+            path: ["*"],
+            origin: "structure",
+            observes: "followRef",
+            label: { confidentiality: [ROOM], integrity: [tb(COMMIT)] },
+          };
+          await seedLabeled(runtime, "slots-control", ["approve"], [
+            template,
+            stamped("0", COMMIT),
+          ]);
+          await seedLabeled(runtime, "slots", ["approve"], [
+            template,
+            stamped("0", ATTACKER),
+          ]);
+          const probe =
+            (cause: string) => (tx: IExtendedStorageTransaction) => {
+              const id = runtime.getCell(space, cause, undefined, tx)
+                .getAsNormalizedFullLink().id;
+              tx.read({
+                space,
+                scope: "space",
+                id,
+                type: "application/json",
+                path: ["value", "0", ...linkProbeSubPath()],
+              }, { meta: linkResolutionProbe });
+            };
+          await transform(
+            runtime,
+            TALLY,
+            ["committed"],
+            "control",
+            tally,
+            [],
+            probe("slots-control"),
+          );
+          await transform(
+            runtime,
+            TALLY,
+            ["committed"],
+            "ballot",
+            tally,
+            [],
+            probe("slots"),
+          );
+
+          expect(witnessesOf(runtime, "control")).toEqual([tb(COMMIT)]);
+          expect(witnessesOf(runtime, "ballot")).toEqual([]);
+        });
+      });
+
+      it("refuses a probe of a slot holding a reference, whatever the slot's value stamp names", async () => {
+        // A pointer is labeled by the link write that put it at the slot,
+        // which carries no `TransformedBy`, so the probe keeps its own
+        // entries.
+
+        await withRuntime(IDENTITY_GUARD, async ({ runtime }) => {
+          await seedRoom(runtime);
+          await commitStances(runtime);
+          const reference = createSigilLinkFromParsedLink(
+            runtime.getCell(space, "committed").getAsNormalizedFullLink(),
+          );
+          await seedLabeled(runtime, "slots-reference", [reference], [
+            {
+              path: ["*"],
+              origin: "structure",
+              observes: "followRef",
+              label: { confidentiality: [ROOM], integrity: [tb(COMMIT)] },
+            },
+            stamped("0", COMMIT),
+          ]);
+          await transform(
+            runtime,
+            TALLY,
+            ["committed"],
+            "ballot",
+            tally,
+            [],
+            (tx) => {
+              const id =
+                runtime.getCell(space, "slots-reference", undefined, tx)
+                  .getAsNormalizedFullLink().id;
+              tx.read({
+                space,
+                scope: "space",
+                id,
+                type: "application/json",
+                path: ["value", "0", ...linkProbeSubPath()],
+              }, { meta: linkResolutionProbe });
+            },
+          );
+
+          expect(witnessesOf(runtime, "ballot")).toEqual([]);
+        });
+      });
+
+      it("refuses a probe of a slot the reader then wrote", async () => {
+        // What the slot holds at prepare is not what the probe found, so the
+        // probe keeps its own entries.
+
+        await withRuntime(IDENTITY_GUARD, async ({ runtime }) => {
+          await seedRoom(runtime);
+          await commitStances(runtime);
+          const entries: LabelMapEntry[] = [
+            {
+              path: ["votes", "*"],
+              origin: "structure",
+              observes: "followRef",
+              label: { confidentiality: [ROOM], integrity: [tb(COMMIT)] },
+            },
+            { ...stamped("0", COMMIT), path: ["votes", "0"] },
+          ];
+          const value = { votes: ["approve"] };
+          await seedLabeled(runtime, "probed-control", value, entries);
+          await seedLabeled(runtime, "probed", value, entries);
+          const probe = (cause: string, write: boolean) =>
+          (
+            tx: IExtendedStorageTransaction,
+          ) => {
+            const id = runtime.getCell(space, cause, undefined, tx)
+              .getAsNormalizedFullLink().id;
+            tx.read({
+              space,
+              scope: "space",
+              id,
+              type: "application/json",
+              path: ["value", "votes", "0", ...linkProbeSubPath()],
+            }, { meta: linkResolutionProbe });
+            if (write) {
+              runtime.getCell(space, cause, QUEUE_SCHEMA, tx).set({
+                votes: ["reject"],
+              });
+            }
+          };
+          await transform(
+            runtime,
+            TALLY,
+            ["committed"],
+            "control",
+            tally,
+            [],
+            probe("probed-control", false),
+          );
+          await transform(
+            runtime,
+            TALLY,
+            ["committed"],
+            "ballot",
+            tally,
+            [],
+            probe("probed", true),
+          );
+
+          expect(witnessesOf(runtime, "control")).toEqual([tb(COMMIT)]);
+          expect(witnessesOf(runtime, "ballot")).toEqual([]);
+        });
       });
     });
 

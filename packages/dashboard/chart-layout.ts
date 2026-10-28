@@ -49,5 +49,7 @@ export function tileContentRules(
   .cell{aspect-ratio:1;border-radius:1px}
   ${statusDotRules()}
   .swatch{display:inline-block;width:8px;height:8px;border-radius:2px;vertical-align:middle}
-  a.tile.link{display:block;text-decoration:none;color:inherit;cursor:pointer;transition:border-color .12s}`;
+  a.tile.link{display:block;text-decoration:none;color:inherit;cursor:pointer}
+  .tile.link{transition:border-color .12s}
+  a.tile-head{display:block;text-decoration:none;color:inherit}`;
 }

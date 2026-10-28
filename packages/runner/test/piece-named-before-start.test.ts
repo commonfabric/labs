@@ -19,14 +19,24 @@ import {
   parseLink,
 } from "../src/link-utils.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
+import { engineReadThrough } from "../src/executor/engine-read-through.ts";
+import { stampWaveRunContext } from "../src/executor/wave.ts";
 import { entityKey } from "../src/scheduler/keys.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
-import type { CommitError } from "../src/storage/interface.ts";
+import type {
+  CommitError,
+  IExtendedStorageTransaction,
+  URI,
+} from "../src/storage/interface.ts";
+import { setCfcTrustSnapshot } from "../src/storage/extended-storage-transaction.ts";
 import { type ErrorWithContext, Runtime } from "../src/runtime.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 
 const signer = await Identity.fromPassphrase("piece named before start");
+const requester = await Identity.fromPassphrase(
+  "piece named before start requester",
+);
 const space = signer.did();
 
 // A host whose list maps each item onto a card carrying a handler. The
@@ -83,6 +93,19 @@ const FILES = [
 const HOST_PROGRAM: RuntimeProgram = { main: "/main.tsx", files: FILES };
 const CARD_PROGRAM: RuntimeProgram = { main: "/card.tsx", files: FILES };
 const CARD_V2_PROGRAM: RuntimeProgram = { main: "/card-v2.tsx", files: FILES };
+// A card owning a cell per session, which no default seeds.
+const SESSION_CARD_SRC = [
+  "import { pattern, computed, type PerSession } from 'commonfabric';",
+  "export default pattern<{ item: { seed: string } }, { label: string; seen: PerSession<string> }>(({ item }) => {",
+  "  const label = computed(() => `card-${item.seed}`);",
+  "  const seen = computed((): PerSession<string> => `seen-${item.seed}`);",
+  "  return { label, seen };",
+  "});",
+].join("\n");
+const SESSION_CARD_PROGRAM: RuntimeProgram = {
+  main: "/session-card.tsx",
+  files: [{ name: "/session-card.tsx", contents: SESSION_CARD_SRC }],
+};
 const RESULT_CAUSE = "piece named before start host";
 const CARDS_SCHEMA = {
   type: "array",
@@ -105,7 +128,7 @@ const ITEMS_SCHEMA = {
   items: { type: "object", properties: { seed: { type: "string" } } },
 } as const;
 // One card per case, each cold on the replica that runs it.
-const CARD_COUNT = 11;
+const CARD_COUNT = 16;
 
 type EventCommitMarker = {
   type: "scheduler.event.commit";
@@ -513,6 +536,114 @@ describe("piece-named-before-start", () => {
     expect(errors.get(b)!.map((error) => error.message)).toEqual([]);
   });
 
+  it("runs a piece without holding it when its argument links to a derived cell nothing has computed", async () => {
+    const { cardB, itemB, argumentId, key } = locateCard(11);
+    await nameLinkChain(argumentId, 4);
+    await itemB.sync();
+    for (const descriptor of cardPattern.derivedInternalCells ?? []) {
+      await getDerivedInternalCell(cardB, descriptor).sync();
+    }
+    await quiesce(b);
+    // A derived cell whose producer has not run, handed down as part of the
+    // argument, the way a parent's computed value reaches a child it
+    // instantiates before its own computations run. Nothing asks the store
+    // for it: its producer materializes it, here or elsewhere.
+    const derived = b.getCellFromEntityId<string>(
+      space,
+      "computed:piece-named-before-start-derived",
+    );
+    expect(replicaB.getDocument(derived.getAsNormalizedFullLink().id))
+      .toBeUndefined();
+    let held = false;
+    waitForDeferredStart(b, "runner.deferred-start.pending", key).then(() => {
+      held = true;
+    });
+    const runTx = b.edit();
+    b.runner.run(runTx, cardPattern, { item: itemB, hint: derived }, cardB);
+    b.prepareTxForCommit(runTx);
+    expect((await runTx.commit().settled).error).toBeUndefined();
+    await quiesce(b);
+    expect(held).toBe(false);
+    expect(await bump(cardB)).toBe(1);
+    expect(errors.get(b)!.map((error) => error.message)).toEqual([]);
+  });
+
+  it("runs a piece without holding it when its argument links to a stream of another piece", async () => {
+    const { cardB, itemB, argumentId, key } = locateCard(12);
+    await nameLinkChain(argumentId, 4);
+    await itemB.sync();
+    for (const descriptor of cardPattern.derivedInternalCells ?? []) {
+      await getDerivedInternalCell(cardB, descriptor).sync();
+    }
+    await quiesce(b);
+    // A stream some other piece owns, handed down for this one to send to.
+    // Its document holds no value a run reads, and a send to it is an event
+    // the store appends; nothing asks the store for its record.
+    const stream = b.getCellFromEntityId<unknown>(
+      space,
+      "of:piece-named-before-start-foreign-stream",
+      [],
+      { type: "object", asCell: ["stream"] },
+    );
+    expect(replicaB.getDocument(stream.getAsNormalizedFullLink().id))
+      .toBeUndefined();
+    let held = false;
+    waitForDeferredStart(b, "runner.deferred-start.pending", key).then(() => {
+      held = true;
+    });
+    const runTx = b.edit();
+    b.runner.run(runTx, cardPattern, { item: itemB, hint: stream }, cardB);
+    b.prepareTxForCommit(runTx);
+    expect((await runTx.commit().settled).error).toBeUndefined();
+    await quiesce(b);
+    expect(held).toBe(false);
+    expect(await bump(cardB)).toBe(1);
+    expect(errors.get(b)!.map((error) => error.message)).toEqual([]);
+  });
+
+  it("runs a piece without holding it when a document its argument links to holds a link to an absent one", async () => {
+    const { cardB, itemB, argumentId, key } = locateCard(13);
+    await nameLinkChain(argumentId, 4);
+    await itemB.sync();
+    for (const descriptor of cardPattern.derivedInternalCells ?? []) {
+      await getDerivedInternalCell(cardB, descriptor).sync();
+    }
+    // A local document, handed down in the argument, whose content links to
+    // a document nothing has written. The run reads through the link
+    // reactively if its body reaches it; the gate probes the documents the
+    // argument links to and the redirect chains they form, not the contents
+    // of every document on the way.
+    const inner = b.getCellFromEntityId<{ n: number }>(
+      space,
+      "of:piece-named-before-start-inner",
+    );
+    const holder = b.getCellFromEntityId<{ inner: unknown }>(
+      space,
+      "of:piece-named-before-start-holder",
+    );
+    const holderTx = b.edit();
+    holder.withTx(holderTx).set({ inner });
+    b.prepareTxForCommit(holderTx);
+    expect((await holderTx.commit().settled).error).toBeUndefined();
+    await quiesce(b);
+    expect(replicaB.getDocument(holder.getAsNormalizedFullLink().id))
+      .toBeDefined();
+    expect(replicaB.getDocument(inner.getAsNormalizedFullLink().id))
+      .toBeUndefined();
+    let held = false;
+    waitForDeferredStart(b, "runner.deferred-start.pending", key).then(() => {
+      held = true;
+    });
+    const runTx = b.edit();
+    b.runner.run(runTx, cardPattern, { item: itemB, hint: holder }, cardB);
+    b.prepareTxForCommit(runTx);
+    expect((await runTx.commit().settled).error).toBeUndefined();
+    await quiesce(b);
+    expect(held).toBe(false);
+    expect(await bump(cardB)).toBe(1);
+    expect(errors.get(b)!.map((error) => error.message)).toEqual([]);
+  });
+
   it("holds a second run of the same piece while its name-sync is in flight", async () => {
     const { cardB, itemB, key } = locateCard(3);
     let syncs = 0;
@@ -617,6 +748,36 @@ describe("piece-named-before-start", () => {
     expect((await settled).outcome).toBe("installed");
     await quiesce(b);
     expect(b.runner.cancels.has(key)).toBe(false);
+  });
+
+  it("hands the named run's start the trust snapshot of the transaction that asked for the run", async () => {
+    const { cardB, itemB, key } = locateCard(14);
+    // B stamps its runs the way a serving loop does, so the start runs under
+    // a run context: a start that initializes on its parent's behalf then
+    // takes its parent's trust, not the runtime's own.
+    const stamped: IExtendedStorageTransaction[] = [];
+    b.stampServerRun = (tx, info) => {
+      stamped.push(tx);
+      stampWaveRunContext(tx, { actionId: info.actionId, kind: info.kind });
+    };
+    const asked = b.trustSnapshotForPrincipal(requester.did());
+
+    const settled = waitForDeferredStart(
+      b,
+      "runner.deferred-start.settled",
+      key,
+    );
+    const runTx = b.edit();
+    setCfcTrustSnapshot(runTx, asked);
+    b.runner.run(runTx, cardPattern, { item: itemB }, cardB);
+    b.prepareTxForCommit(runTx);
+    expect((await runTx.commit().settled).error).toBeUndefined();
+    expect((await settled).outcome).toBe("installed");
+
+    const starts = stamped.filter((tx) => tx !== runTx);
+    expect(starts.length).toBe(1);
+    expect(starts[0].getCfcState().attributedInitialization).toBe(true);
+    expect(starts[0].getCfcState().trustSnapshot).toBe(asked);
   });
 
   it("runs a piece under a pattern it was upgraded to elsewhere after an earlier landing", async () => {
@@ -802,7 +963,7 @@ describe("piece-named-before-start", () => {
     expect(spent[0].parts[1]).toMatchObject({
       resultCell: cardB.getAsNormalizedFullLink().id,
       budget: 1,
-      stage: "a document the caller's argument links to",
+      stage: "a document the argument links to",
     });
     // Landed: a later run under the same pattern is not held, and spends no
     // probes to find that out.
@@ -813,6 +974,159 @@ describe("piece-named-before-start", () => {
     await runCard(cardB, itemB);
     await quiesce(b);
     expect(heldAgain).toBe(false);
+    expect(await bump(cardB)).toBe(1);
+    expect(errors.get(b)!.map((error) => error.message)).toEqual([]);
+  });
+
+  it("starts a piece apart from the caller's transaction, naming nothing, when the store reported holding nothing at its session's instance of a cell it owns", async () => {
+    // Set up on a replica of its own, as a serving runtime's first session
+    // sets up a card the others run.
+    const managerB = managers.at(-1)!;
+    const a = replica();
+    const setupTx = a.edit();
+    const cardPatternA = await a.patternManager.compilePattern(
+      SESSION_CARD_PROGRAM,
+      { space, tx: setupTx },
+    ) as Pattern;
+    const itemA = a.getCell<{ seed: string }>(
+      space,
+      "piece named before start session item",
+      undefined,
+      setupTx,
+    );
+    itemA.set({ seed: "s" });
+    const cardA = a.getCell<Record<string, unknown>>(
+      space,
+      "piece named before start session card",
+      undefined,
+      setupTx,
+    );
+    a.run(setupTx, cardPatternA, { item: itemA }, cardA);
+    a.prepareTxForCommit(setupTx);
+    expect((await setupTx.commit().settled).error).toBeUndefined();
+    await cardA.pull();
+    await quiesce(a);
+    await a.patternManager.flushCompileCacheWrites();
+    await a.storageManager.synced();
+    await a.dispose({ closeStorage: false });
+    runtimes.splice(runtimes.indexOf(a), 1);
+
+    // B holds everything the card's run reads but its own session's instance
+    // of `seen`, which no session has written, and reads the store directly,
+    // which reports holding nothing there.
+    const cardPatternB = await b.patternManager.compilePattern(
+      SESSION_CARD_PROGRAM,
+      { space },
+    ) as Pattern;
+    const cardB = b.getCell<Record<string, unknown>>(
+      space,
+      "piece named before start session card",
+    );
+    const itemB = b.getCell<{ seed: string }>(
+      space,
+      "piece named before start session item",
+    );
+    await cardB.sync();
+    await itemB.sync();
+    const argumentId = linkTargetId(
+      replicaB.getDocument(
+        cardB.getAsNormalizedFullLink().id,
+      )?.argument,
+    )!;
+    await nameLinkChain(argumentId, 2);
+    managerB.installStoreReadThrough(
+      space,
+      engineReadThrough(await server.engineForSpace(space)),
+    );
+    for (const descriptor of cardPatternB.derivedInternalCells ?? []) {
+      await getDerivedInternalCell(cardB, descriptor).sync();
+    }
+    await quiesce(b);
+    const seen = cardPatternB.derivedInternalCells!.find((descriptor) =>
+      descriptor.partialCause === "seen"
+    )!;
+    expect(seen.scope).toBe("session");
+    expect(replicaB.getDocument(getDerivedInternalCellLink(cardB, seen).id))
+      .toBeUndefined();
+
+    // A served derivation that set the card up in its own transaction would
+    // read that instance before the serving loop produced it, and be
+    // withdrawn until it is, which only this start would do. So the start
+    // runs once the run's own transaction is done, and asks the store for
+    // nothing more.
+    let nameSyncs = 0;
+    b.runner.accessForTestingOnly.dependencySyncer = (
+      resultCell,
+      pattern,
+      inputs,
+      sync,
+    ) => {
+      nameSyncs += 1;
+      return sync(resultCell, pattern, inputs);
+    };
+    const key = entityKey(cardB.getAsNormalizedFullLink(), b.scopeKeyIdentity);
+    let startedApart = false;
+    waitForDeferredStart(b, "runner.deferred-start.pending", key).then(() => {
+      startedApart = true;
+    });
+    const runTx = b.edit();
+    b.runner.run(runTx, cardPatternB, { item: itemB }, cardB);
+    b.prepareTxForCommit(runTx);
+    expect((await runTx.commit().settled).error).toBeUndefined();
+    await quiesce(b);
+    expect(startedApart).toBe(true);
+    expect(nameSyncs).toBe(0);
+    await cardB.pull();
+    expect(cardB.key("seen").get()).toBe("seen-s");
+    expect(errors.get(b)!.map((error) => error.message)).toEqual([]);
+  });
+
+  it("walks the argument the store holds once asked for it again, and holds the run for a document that argument links to and nothing examined", async () => {
+    const { cardB, argumentId, key } = locateCard(15);
+    // The document the card's stored argument links to, which nothing on B
+    // has read.
+    const read = engineReadThrough(await server.engineForSpace(space));
+    const stored = read({ id: argumentId as URI, scopeKey: "space" });
+    const hopId = linkTargetId(
+      (stored?.doc as { value?: { item?: unknown } } | undefined)?.value?.item,
+    );
+    expect(hopId).toBeDefined();
+    expect(replicaB.getDocument(hopId!)).toBeUndefined();
+    // B reads the store directly from here. Its first read of the argument
+    // finds nothing there, as a read the feed has yet to catch up with does,
+    // and the store gives no answer for the linked document until the gate
+    // has decided, as a lease holder's read-through gives none while its
+    // lease is unconfirmed.
+    let argumentReads = 0;
+    let answering = false;
+    managers.at(-1)!.installStoreReadThrough(space, (address) => {
+      if (address.id === argumentId && argumentReads++ === 0) {
+        return {
+          branch: "",
+          id: address.id,
+          scope: "space",
+          scopeKey: address.scopeKey,
+          seq: 0,
+          deleted: true as const,
+        };
+      }
+      if (address.id === hopId && !answering) return undefined;
+      return read(address);
+    });
+    let held = false;
+    waitForDeferredStart(b, "runner.deferred-start.pending", key).then(() => {
+      held = true;
+    });
+    // Run with no argument of the caller's, as a child reached by its result
+    // alone is, so the stored argument is all the gate walks.
+    const runTx = b.edit();
+    b.runner.run(runTx, cardPattern, undefined, cardB);
+    answering = true;
+    b.prepareTxForCommit(runTx);
+    expect((await runTx.commit().settled).error).toBeUndefined();
+    await quiesce(b);
+    expect(argumentReads).toBe(2);
+    expect(held).toBe(true);
     expect(await bump(cardB)).toBe(1);
     expect(errors.get(b)!.map((error) => error.message)).toEqual([]);
   });

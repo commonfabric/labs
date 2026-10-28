@@ -8,6 +8,7 @@ import {
   CrossStageState,
   TransformationContext,
 } from "../src/core/mod.ts";
+import type { TransformationDiagnostic } from "../src/mod.ts";
 import {
   applyCapabilityDefaultsToTypeNode,
   applyShrinkAndWrap,
@@ -15,12 +16,13 @@ import {
   isCellLikeTypeNode,
   isSqliteTypeNode,
   isStreamTypeNode,
-  overlayContractCapabilities,
   preservedWrapperFor,
   printTypeNode,
   wrapTypeNodeWithCapability,
 } from "../src/transformers/type-shrinking.ts";
-import { collect, parseModule } from "./transformed-ast.ts";
+import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
+import { callSchemas, collect, parseModule } from "./transformed-ast.ts";
+import { transformFiles } from "./utils.ts";
 
 //
 // Structural inspection of printed type nodes.
@@ -228,31 +230,109 @@ function createParamSummary(
   };
 }
 
-describe("overlayContractCapabilities()", () => {
-  it("returns a reference to an alias whose type holds no cell as written", () => {
-    const { sourceFile, checker } = createProgram(`
-      type Profile = { name: string };
-      type Event = { x: Profile };
-    `);
-    const alias = findTypeAlias(sourceFile, "Event");
-
-    const result = overlayContractCapabilities(
-      alias.type,
-      checker.getTypeAtLocation(alias.type),
-      createParamSummary({
-        capability: "readonly",
-        readPaths: [["x", "name"]],
-      }),
-      checker,
-      ts.factory,
-      sourceFile,
-    );
-
-    expect(result).toBe(alias.type);
-  });
-});
-
 describe("applyShrinkAndWrap()", () => {
+  describe("a member named by the empty string", () => {
+    // A path through the member `""` narrows the shape and the cell it reaches
+    // as a path through any other name does, and is held to the type as any
+    // other path is.
+
+    /**
+     * The input schema of the one `lift()` in a module holding `source`, and
+     * the types of the diagnostics compiling it reports.
+     */
+    async function liftInput(
+      source: string,
+    ): Promise<{ schema: unknown; reported: string[] }> {
+      const diagnostics: TransformationDiagnostic[] = [];
+      const files = await transformFiles({
+        "/main.tsx": `/// <cts-enable />
+import { Default, equals, lift, pattern, Writable } from "commonfabric";
+${source}
+export default pattern<{ v: any }>(({ v }) => ({ m: l(v) }));`,
+      }, { types: COMMONFABRIC_TYPES, pipelineDiagnostics: diagnostics });
+      return {
+        schema: callSchemas(parseModule(files["/main.tsx"]!), "lift")[0],
+        reported: diagnostics.map(({ type }) => type),
+      };
+    }
+
+    const onlyEmpty = (value: Record<string, unknown>) => ({
+      type: "object",
+      properties: { "": value },
+      required: [""],
+    });
+    for (
+      const [shape, source, expected] of [
+        [
+          "an object",
+          'const l = lift((r: { "": string; other: number }) => r[""].length);',
+          onlyEmpty({ type: "string" }),
+        ],
+        [
+          "a nested object",
+          'const l = lift((r: { inner: { "": string; other: number } }) => r.inner[""].length);',
+          {
+            type: "object",
+            properties: { inner: onlyEmpty({ type: "string" }) },
+            required: ["inner"],
+          },
+        ],
+        [
+          "an array's element",
+          'const l = lift((r: { "": string; other: number }[]) => r[0]![""].length);',
+          { type: "array", items: onlyEmpty({ type: "string" }) },
+        ],
+        [
+          "an object, keeping its default",
+          'const l = lift((r: { "": Default<string, "x">; other: number }) => r[""].length);',
+          onlyEmpty({ type: "string", default: "x" }),
+        ],
+      ] as const
+    ) {
+      it(`keeps only the member a read through it names in ${shape}`, async () => {
+        const { schema, reported } = await liftInput(source);
+
+        expect(schema).toEqual(expected);
+        expect(reported).toEqual([]);
+      });
+    }
+
+    it("gives the cell under it the capability its read earns", async () => {
+      const { schema } = await liftInput(
+        'const l = lift((r: { "": Writable<number>; other: Writable<number> }) => r[""].get());',
+      );
+
+      expect(schema).toEqual(
+        onlyEmpty({ type: "number", asCell: ["readonly"] }),
+      );
+    });
+
+    it("gives the cell under it the comparable capability where it is only compared", async () => {
+      const { schema } = await liftInput(
+        'const l = lift((r: { "": Writable<number>; other: Writable<number> }) => equals(r[""], r[""]));',
+      );
+
+      expect(schema).toEqual(
+        onlyEmpty({ type: "unknown", asCell: ["comparable"] }),
+      );
+    });
+
+    for (
+      const [shape, parameter] of [
+        ["an object", "{ other: number }"],
+        ["an array", "number[]"],
+      ] as const
+    ) {
+      it(`reports a read through it that ${shape} does not hold`, async () => {
+        const { reported } = await liftInput(
+          `const l = lift((r: ${parameter}) => (r as any)[""].length);`,
+        );
+
+        expect(reported).toContain("schema:path-not-in-type");
+      });
+    }
+  });
+
   it("records a node printed for a value read whole as printed from its type", () => {
     // A synthetic base node sends the shrink to the value's type, and a value
     // read whole is that type's print.
@@ -1031,6 +1111,7 @@ Deno.test("applyShrinkAndWrap descends identity paths through named interface re
 
   const result = applyShrinkAndWrap(
     createParamSummary({
+      readPaths: [["inner", "drop"], ["other"]],
       identityPaths: [["inner", "keep"]],
       identityCellPaths: [["inner", "keep"]],
     }),
@@ -1045,7 +1126,7 @@ Deno.test("applyShrinkAndWrap descends identity paths through named interface re
   const { props: members } = shrunkProps(result, sourceFile);
   // The reference resolves to declared members, recurses into `inner`, and
   // wraps the `keep` leaf. Identity-path application transforms the targeted
-  // leaf in place and leaves the surrounding structure intact.
+  // leaf in place and leaves the members the summary reads intact.
   assertEquals(members.get("keep")?.type, "__cfHelpers.OpaqueCell<unknown>");
   assertEquals(members.get("drop")?.type, "number");
   assertEquals(members.get("other")?.type, "string");
@@ -1066,6 +1147,7 @@ Deno.test("applyShrinkAndWrap rebuilds inline literals when a nested identity le
 
   const result = applyShrinkAndWrap(
     createParamSummary({
+      readPaths: [["inner", "drop"], ["other"]],
       identityPaths: [["inner", "keep"]],
       identityCellPaths: [["inner", "keep"]],
     }),
@@ -1095,6 +1177,7 @@ Deno.test("applyShrinkAndWrap returns an inline literal unchanged when a nested 
 
   const result = applyShrinkAndWrap(
     createParamSummary({
+      readPaths: [["a", "x"], ["b"]],
       identityPaths: [["a", "missing"]],
     }),
     alias.type,
@@ -1110,6 +1193,40 @@ Deno.test("applyShrinkAndWrap returns an inline literal unchanged when a nested 
   assertEquals(members.get("x")?.type, "string");
   assertEquals(members.get("b")?.type, "string");
   assertEquals(hasQualifiedRef(node, "__cfHelpers", "OpaqueCell"), false);
+});
+
+Deno.test("applyShrinkAndWrap prunes members no path reaches when every path is an identity path", () => {
+  const { sourceFile, checker } = createProgram(`
+    declare namespace __cfHelpers {
+      export type OpaqueCell<T> = { readonly opaque?: T };
+    }
+    type Input = {
+      inner: { keep: string; drop: number };
+      other: string;
+    };
+  `);
+  const alias = findTypeAlias(sourceFile, "Input");
+  const baseType = checker.getTypeAtLocation(alias.type);
+
+  const result = applyShrinkAndWrap(
+    createParamSummary({
+      identityPaths: [["inner", "keep"]],
+      identityCellPaths: [["inner", "keep"]],
+    }),
+    alias.type,
+    baseType,
+    false,
+    checker,
+    sourceFile,
+    ts.factory,
+  );
+
+  const { props: members } = shrunkProps(result, sourceFile);
+  // Only `inner.keep` is used, and only for its identity: it is narrowed, and
+  // the members no path reaches are pruned as any shrink prunes them.
+  assertEquals(members.get("keep")?.type, "__cfHelpers.OpaqueCell<unknown>");
+  assertEquals(members.has("drop"), false);
+  assertEquals(members.has("other"), false);
 });
 
 Deno.test("applyShrinkAndWrap leaves array elements untouched when an identity item path does not resolve", () => {
@@ -1152,6 +1269,7 @@ Deno.test("applyShrinkAndWrap descends identity item paths through readonly arra
 
   const result = applyShrinkAndWrap(
     createParamSummary({
+      readPaths: [["0", "drop"]],
       identityPaths: [["0", "keep"]],
       identityCellPaths: [["0", "keep"]],
     }),

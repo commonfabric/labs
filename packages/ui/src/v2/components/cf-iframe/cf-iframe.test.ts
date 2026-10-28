@@ -46,6 +46,61 @@ describe("CFIframe", () => {
     ]);
   });
 
+  it("forwards an explicit presentation and clears it without changing the source", () => {
+    const element = new CFIframe();
+    element.src = "<p>stateful guest</p>";
+    const presentation = {
+      css: ":root { --example-ink: green; }",
+      attributes: { "data-skin": "explicit" },
+      stylesheets: [],
+    };
+    expect(element.presentation).toBeUndefined();
+    expect(templateValues(element)[3]).toBeNull();
+    element.presentation = presentation;
+    expect(element.presentation).toBe(presentation);
+    expect(templateValues(element)[3]).toBe(presentation);
+    element.presentation = null;
+    expect(templateValues(element)[3]).toBeNull();
+    element.presentation = undefined;
+    expect(element.presentation).toBeUndefined();
+    expect(templateValues(element)[3]).toBeNull();
+    expect(templateValues(element)[1]).toBe("<p>stateful guest</p>");
+  });
+
+  it("reports a non-Error context failure and clears it on replacement", async () => {
+    const runtime = {
+      [$conn]: () => ({ request: () => Promise.reject("context refused") }),
+    } as unknown as RuntimeClient;
+    const element = new CFIframe();
+    element.src = "<p>recovered guest</p>";
+    element.context = new CellHandle(runtime, {
+      id: "of:context" as CellRef["id"],
+      space: "did:key:test" as CellRef["space"],
+      scope: "space",
+      path: [],
+      schema: { type: "object", properties: {} },
+    });
+    const failed = Promise.withResolvers<void>();
+    element.requestUpdate = () => failed.resolve();
+    internals(element).willUpdate(contextChange());
+    expect(templateValues(element)[1]).toBe("");
+    await failed.promise;
+    expect(element._errorDetails).toEqual({
+      description: "context refused",
+      source: "cf-iframe context",
+      lineno: 0,
+      colno: 0,
+      stacktrace: "context refused",
+    });
+
+    element.context = { count: 2 };
+    internals(element).willUpdate(contextChange());
+    expect(element._errorDetails).toBeNull();
+    const [bridge, source] = templateValues(element) as [FabricBridge, string];
+    expect(bridge.resources.count.cell!.get()).toBe(2);
+    expect(source).toBe("<p>recovered guest</p>");
+  });
+
   it("uses a plain context as local cell resources", () => {
     const element = new CFIframe();
     const context = { count: 1 };

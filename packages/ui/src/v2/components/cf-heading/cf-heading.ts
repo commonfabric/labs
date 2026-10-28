@@ -1,14 +1,8 @@
-import { consume } from "@lit/context";
 import { css, html } from "lit";
 import { property } from "lit/decorators.js";
 
 import { BaseElement } from "../../core/base-element.ts";
-import {
-  applyThemeToElement,
-  type CFTheme,
-  cfThemeContext,
-  defaultTheme,
-} from "../theme-context.ts";
+import { applyThemeToElement, type CFTheme } from "../theme-context.ts";
 
 /**
  * CFHeading – Theme-compliant heading that replaces h1–h6.
@@ -26,9 +20,12 @@ export class CFHeading extends BaseElement {
     noMargin: { type: Boolean, reflect: true, attribute: "no-margin" },
   };
 
-  @consume({ context: cfThemeContext, subscribe: true })
+  /**
+   * A theme given to this element directly, written over the theme it would
+   * otherwise inherit. Left unset, the element draws the ambient theme.
+   */
   @property({ attribute: false })
-  accessor theme: CFTheme = defaultTheme;
+  accessor theme: CFTheme | undefined = undefined;
 
   declare level: number;
   declare noMargin: boolean;
@@ -96,13 +93,9 @@ export class CFHeading extends BaseElement {
     `,
   ];
 
-  override firstUpdated() {
-    applyThemeToElement(this, this.theme ?? defaultTheme);
-  }
-
   override updated(changed: Map<string | number | symbol, unknown>) {
     if (changed.has("theme")) {
-      applyThemeToElement(this, this.theme ?? defaultTheme);
+      applyThemeToElement(this, this.theme);
     }
   }
 

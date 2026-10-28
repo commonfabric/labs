@@ -5,6 +5,7 @@ import type { CfcConfClause } from "@commonfabric/runner/cfc";
 
 import type { RuntimeSecurityContext } from "@/protocol/mod.ts";
 import {
+  normalizeMemoryUrl,
   normalizeOrigin,
   normalizeSpaceHostMap,
   securityContextDifferences,
@@ -21,6 +22,7 @@ describe("securityContextDifferences()", () => {
     identity: signerDid,
     spaceDid: signerDid,
     apiUrl: "http://runtime.test/",
+    memoryUrl: "http://router.test/",
     spaceHostMap: { [signerDid]: "http://memory.test/" },
     cfcEnforcementMode: "enforce-strict",
     cfcFlowLabels: "persist",
@@ -85,6 +87,25 @@ describe("securityContextDifferences()", () => {
         running,
       ),
     ).toEqual(["apiUrl"]);
+  });
+
+  it("names the memory URL when it differs", () => {
+    expect(
+      securityContextDifferences(
+        { ...running, memoryUrl: "http://other-router.test/" },
+        running,
+      ),
+    ).toEqual(["memoryUrl"]);
+  });
+
+  it("names the memory URL when only the runtime has one", () => {
+    // The document believes Memory is on the backend, and the runtime opens
+    // it on the router: the reads would go somewhere the document does not
+    // know about.
+    const { memoryUrl: _dropped, ...asserted } = running;
+    expect(securityContextDifferences(asserted, running)).toEqual([
+      "memoryUrl",
+    ]);
   });
 
   it("names the per-space host map when it differs", () => {
@@ -287,6 +308,51 @@ describe("normalizeSpaceHostMap()", () => {
   });
 });
 
+describe("normalizeMemoryUrl()", () => {
+  const apiUrl = "http://backend.test/";
+
+  it("returns `undefined` for an absent memory URL", () => {
+    expect(normalizeMemoryUrl(undefined, apiUrl)).toBeUndefined();
+  });
+
+  it("returns `undefined` for an empty memory URL, which names none", () => {
+    expect(normalizeMemoryUrl("", apiUrl)).toBeUndefined();
+  });
+
+  it("returns `undefined` for the backend's own origin, written another way", () => {
+    // Memory on the backend, named explicitly, is the posture of naming none.
+    expect(normalizeMemoryUrl("http://backend.test:80", apiUrl))
+      .toBeUndefined();
+  });
+
+  it("returns `undefined` for the backend's origin when the backend has a path", () => {
+    // Routing compares origins, so a path on the API URL does not make its
+    // host another one; the recorded posture follows the same rule.
+    expect(
+      normalizeMemoryUrl("http://backend.test", "http://backend.test/base/"),
+    )
+      .toBeUndefined();
+  });
+
+  it("returns a non-HTTP URL as it stands, even one wrapping the backend's origin", () => {
+    // A `blob:` URL reports the origin of the URL it wraps, but it is no
+    // spelling of "Memory at the backend", which routing would refuse.
+    expect(normalizeMemoryUrl("blob:http://backend.test/x", apiUrl)).toBe(
+      "blob:http://backend.test/x",
+    );
+  });
+
+  it("returns one spelling for a host of its own", () => {
+    expect(normalizeMemoryUrl("http://router.test", apiUrl)).toBe(
+      "http://router.test/",
+    );
+  });
+
+  it("leaves a value no URL can parse as it stands", () => {
+    expect(normalizeMemoryUrl("router.test", apiUrl)).toBe("router.test");
+  });
+});
+
 describe("a context normalized on both sides", () => {
   // The spurious refusal this exists to prevent: one document builds its
   // context from a `URL` and the other from the string an initialization
@@ -304,6 +370,27 @@ describe("a context normalized on both sides", () => {
       apiUrl: normalizeOrigin("http://backend.test"),
     };
     expect(securityContextDifferences(asserted, running)).toEqual([]);
+  });
+
+  it("agrees when one side names the backend as its memory URL and the other names none", () => {
+    const base: RuntimeSecurityContext = {
+      identity: signerDid,
+      spaceDid: signerDid,
+      apiUrl: normalizeOrigin("http://backend.test"),
+    };
+    expect(securityContextDifferences(
+      {
+        ...base,
+        memoryUrl: normalizeMemoryUrl(
+          new URL("http://backend.test").toString(),
+          "http://backend.test",
+        ),
+      },
+      {
+        ...base,
+        memoryUrl: normalizeMemoryUrl(undefined, "http://backend.test"),
+      },
+    )).toEqual([]);
   });
 
   it("agrees when one side carries no host map and the other an empty one", () => {

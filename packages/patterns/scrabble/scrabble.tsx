@@ -3,7 +3,7 @@
  *
  * Shared board, bag, scoreboard, and event log are scoped to the space. Each
  * user's name, rack, and unsubmitted board tiles are scoped per user. The
- * viewer's name and avatar come from their shared profile
+ * viewer's name and profile come from their shared profile
  * (`wish({ query: "#profile" })`): the wish's built-in UI lets them pick an
  * existing profile or create a new one, and joining snapshots the resolved
  * values into the shared player roster.
@@ -46,7 +46,8 @@ export type ScrabbleProfileCell = Cell<{ name?: string; avatar?: string }>;
 export interface Player {
   name: string;
 
-  /** Avatar URL or glyph, snapshotted from the joiner's shared profile. */
+  /** Avatar text a stored player may carry. Nothing writes it; the scoreboard
+   * shows it for a player with no profile. */
   avatar?: string;
 
   /**
@@ -603,7 +604,6 @@ function returnedLetters(tiles: readonly PlacedTile[]): Letter[] {
 
 function joinPlayerByName(
   nameInput: string | undefined,
-  avatar: string,
   profile: ScrabbleProfileCell | undefined,
   myName: NameCell,
   rack: RackCell,
@@ -657,7 +657,6 @@ function joinPlayerByName(
   const drawn = drawTilesFromBag(currentBag, currentIndex, 7);
   const player: Player = {
     name,
-    avatar: (avatar ?? "").trim(),
     ...(profile ? { profile } : {}),
     color: getRandomColor(existingPlayers.length),
     score: 0,
@@ -679,15 +678,14 @@ function joinPlayerByName(
   return true;
 }
 
-// Join with the viewer's resolved profile. `name`/`avatar` arrive as plain
-// strings (named `computed` values auto-unwrap as handler state); `profile` is
+// Join with the viewer's resolved profile. `name` arrives as a plain string
+// (named `computed` values auto-unwrap as handler state); `profile` is
 // the viewer's live profile cell, stored on the Player so the scoreboard
 // renders their identity first-class.
 const joinGameHandler = handler<
   void,
   {
     name: string;
-    avatar: string;
     profile: ScrabbleProfileCell | undefined;
     myName: NameCell;
     rack: RackCell;
@@ -703,7 +701,6 @@ const joinGameHandler = handler<
   _event,
   {
     name,
-    avatar,
     profile,
     myName,
     rack,
@@ -718,7 +715,6 @@ const joinGameHandler = handler<
 ) => {
   joinPlayerByName(
     name,
-    avatar,
     profile,
     myName,
     rack,
@@ -751,7 +747,6 @@ const joinWithNameHandler = handler<
 ) => {
   joinPlayerByName(
     name,
-    "",
     undefined, // headless name-only join (test seam) has no profile cell
     myName,
     rack,
@@ -1142,15 +1137,13 @@ const ScrabbleGame = pattern<GameInput, GameOutput>(
     // Resolve THIS viewer's shared profile. The `#profile` wish's built-in UI
     // covers the whole lifecycle: a create surface when the viewer has no
     // profile, a link when they have one, and a picker (with inline create)
-    // when they have several. The field targets give the snapshot strings.
+    // when they have several. `#profileName` gives the snapshot name.
     const profileWish = wish<{ name?: string; avatar?: string }>({
       query: "#profile",
     });
     const profileNameWish = wish<string>({ query: "#profileName" });
-    const profileAvatarWish = wish<string>({ query: "#profileAvatar" });
 
     const profileName = computed(() => profileNameWish.result ?? "");
-    const profileAvatar = computed(() => profileAvatarWish.result ?? "");
     const hasProfile = computed(() =>
       (profileNameWish.result ?? "").trim() !== ""
     );
@@ -1173,7 +1166,6 @@ const ScrabbleGame = pattern<GameInput, GameOutput>(
     );
     const joinGame = joinGameHandler({
       name: profileName,
-      avatar: profileAvatar,
       profile: profileWish.result,
       myName,
       rack,

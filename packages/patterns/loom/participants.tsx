@@ -39,7 +39,7 @@ export type ParticipantRosterCell = Writable<
 >;
 
 /** The roster's profiles, in the order they were added. */
-export const participantEntries = (
+export const rosterProfiles = (
   roster: { get(): ParticipantRoster | Record<PropertyKey, never> | undefined },
 ): ParticipantProfile[] =>
   Array.from((roster.get() as ParticipantRoster | undefined)?.items ?? []);

@@ -137,7 +137,10 @@ Waits split into two groups with different primitives.
 - `awaitViewSettled(page)` resolves once the worker has settled reactively, the
   resulting vdom batch has crossed to the main thread and been applied, and Lit
   has finished its update cycle. This is the "is the control interactive yet"
-  signal.
+  signal. It also waits for the bring-up of the user's Home that the shell
+  starts once a page's first piece is on screen, and the runtime's `idle()`
+  waits for the housekeeping that bring-up starts in the worker, so a settled
+  page has neither still running.
 - The higher-level wrappers in
   `packages/patterns/integration/cfc-browser-helpers.ts` compose the two
   primitives above for common waits and interactions. Each of them settles and
@@ -596,6 +599,11 @@ that document's sink in the awaiting worker.
 
 By the time the marker arrives, the server holds what the announcing participant
 wrote before it, so the reads that follow resolve against a server that has it.
+On the server-execution arm what a participant's handlers write is the serving
+loop's, and the participant announces only once every event it fired has its
+consequence back at its own runtime, so that holds for those writes too; an
+event a served handler fires on its own account is no participant's, and is not
+covered.
 Two mechanisms deliver it and both are ordered behind the marker. A document
 already in the awaiting replica's watch set arrives in a fan-out frame the
 server computes by diffing current storage, so a frame carrying the marker
@@ -821,19 +829,30 @@ window — and the wait itself idles the loop, which is what fires the timer. A
 fetches nothing, so what it returns after another replica's write is what the
 fan-out has delivered so far.
 
-One file stays on the real clock, listed with its reason in the runner preload's
-`realClockFiles` list. It is a resume test that holds the per-element documents
-in its transport so the coordinator reconciles while they are absent, which is
-the state it exists to observe. A commit carrying a read of a withheld document
-is rejected as stale, and the catch-up the rejection waits on cannot arrive
-while the hold is on, so the retry cycle repeats until the test releases it.
-Real time paces that cycle; auto-advance fires each round's timer as soon as it
-is armed, and the loop allocates until the process runs out of heap. A hold that
-spans a reconcile therefore needs the real clock; a shorter one, that no retry
-outlives, does not. The test itself waits on transport edges, never on a delay.
+The files that stay on the real clock are listed, each with its reason, in the
+runner preload's `realClockFiles` list. One is a resume test that holds the
+per-element documents in its transport so the coordinator reconciles while they
+are absent, which is the state it exists to observe. A commit carrying a read of
+a withheld document is rejected as stale, and the catch-up the rejection waits
+on cannot arrive while the hold is on, so the retry cycle repeats until the test
+releases it. Real time paces that cycle; auto-advance fires each round's timer
+as soon as it is armed, and the loop allocates until the process runs out of
+heap. A hold that spans a reconcile therefore needs the real clock; a shorter
+one, that no retry outlives, does not. The test itself waits on transport edges,
+never on a delay.
 [The rationale
 document](waiting-in-tests-rationale.md#the-runner-clock-retired-exemptions-and-converted-waits)
 works that retry loop through in full.
+
+A suite whose round trips cross a real socket, such as a standalone memory
+server reached over a websocket, belongs on that list too. The pump cannot see
+I/O in flight, so a wait on a reply reads as an idle loop, and logical time
+jumps to the earliest pending production timer. Over an authenticated
+connection that timer is the memory client's lease renewal, 58 minutes out.
+The server reads the same clock and gives a challenge five minutes, so a
+`connection.auth` in flight across the jump answers a challenge that has
+expired. The shared-connection cases of the storage admission-notice suite are
+that shape.
 
 Other entries have been retired from that list as the deadlines and test
 designs behind them were fixed. [The rationale
@@ -1007,7 +1026,7 @@ that: the wait returns, the assertions run, and the case is green.
 Test selection is what makes this more than a redundant line. A case running
 after a sibling inherits the sibling's effect, so an early-satisfiable wait
 costs it nothing; the same case selected alone
-([the selection plan](../plans/pull-request-test-selection.md)) has only its
+([test selection](../specs/test-selection.md)) has only its
 hooks behind it, and the wait is then the whole of what stands between the
 case and a state nothing produced. So the shape is most dangerous exactly
 where an independence check would have to catch it, and that check cannot:

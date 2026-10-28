@@ -169,10 +169,12 @@
  * would otherwise return stale pre-mutation verdicts after a registry write.
  *
  * schemaHints and the nodeLinks fields (capabilitySummary, schemaInjected,
- * patternResultAnchor, printedFrom) are accessed through record/lookup/mark/is
- * methods (recordSchemaHint/lookupSchemaHint, recordCapabilitySummary/
- * lookupCapabilitySummary, markSchemaInjected/isSchemaInjected,
+ * patternResultAnchor, definesDocument, printedFrom) are accessed through
+ * record/lookup/mark/is methods (recordSchemaHint/lookupSchemaHint,
+ * recordCapabilitySummary/lookupCapabilitySummary,
+ * markSchemaInjected/isSchemaInjected,
  * recordPatternResultSchemaCall/lookupPatternResultSchemaAnchor,
+ * markDocumentSchemaCall/isDocumentSchemaCall,
  * recordPrintedFrom/printedFrom) but do not invalidate caches (no analysis
  * cache depends on them). typeRegistry is still mutated via direct .set() at call
  * sites; same caveat applies. If you add a cache that depends on any of these,
@@ -253,6 +255,7 @@ export {
   PATTERN_COVERAGE_GLOBAL,
   Transformer,
 } from "./transformers.ts";
+export type { AuthoredSourceRewrite } from "./cf-helpers.ts";
 export {
   CF_HELPERS_IDENTIFIER,
   CFHelpers,

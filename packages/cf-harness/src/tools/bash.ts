@@ -40,7 +40,7 @@ import type { HarnessToolDefinition } from "./types.ts";
 // Only host-safe, self-authored detail is echoed: the model's own `cwd` string
 // (already in the transcript) and the numeric timeout — never the raw
 // exception text, which can carry host paths or runtime config, and never the
-// resolved sandbox path. Genuinely fatal failures (docker spawn/infra, CFC
+// resolved sandbox path. Genuinely fatal failures (runsc spawn/infra, CFC
 // transport, persistence, invariants) are left to throw and stay run-fatal.
 export const BASH_CWD_OUTSIDE_SANDBOX_PREFIX = "cwd is outside the sandbox";
 export const BASH_CWD_OUTSIDE_SANDBOX_EXIT_CODE = 1;
@@ -113,8 +113,8 @@ const bashInputSchema = {
 } satisfies JSONSchema;
 
 /**
- * The descriptor for a run whose sandbox has no sessions, which is the
- * Docker runtime and so the default. It takes no `session`: offering one
+ * The descriptor for a run whose sandbox has no sessions, or whose mode
+ * allows none. It takes no `session`: offering one
  * would change the tool manifest of every run that cannot use it, and invite
  * a call that can only be refused.
  */
@@ -427,7 +427,7 @@ export const bashTool: HarnessToolDefinition<BashToolInput, BashToolOutput> = {
           sessionRefusalForReason(error.reason),
         );
       }
-      // Anything else from runShell — docker spawn/infra, CFC transport — is not
+      // Anything else from runShell — runsc spawn/infra, CFC transport — is not
       // something the model can fix. Let it propagate and stay run-fatal.
       throw error;
     }

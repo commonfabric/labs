@@ -1,6 +1,7 @@
-import { css, html } from "lit";
+import { css, html, unsafeCSS } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { BaseElement } from "../../core/base-element.ts";
+import { pillGeometryCSS } from "../../styles/variables.ts";
 
 /**
  * CFTags - A tags component that renders tags as pills with add/remove functionality
@@ -36,6 +37,7 @@ export class CFTags extends BaseElement {
     BaseElement.baseStyles,
     css`
       :host {
+        ${unsafeCSS(pillGeometryCSS)};
         display: block;
         width: 100%;
 

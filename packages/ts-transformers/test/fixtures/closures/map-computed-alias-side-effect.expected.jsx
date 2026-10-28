@@ -11,9 +11,9 @@ import { pattern, UI } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
-let keyCounter = 0;
 function nextKey() {
-    return `value-${keyCounter++}`;
+    console.log("key requested");
+    return "value";
 }
 __cfHardenFn(nextKey);
 interface State {
@@ -77,7 +77,7 @@ const __cfPattern_1 = __cfHelpers.pattern(__cf_pattern_input => {
 // Verifies: computed property key with side effects is hoisted and used via a lift-applied computation
 //   { [nextKey()]: amount } → __cf_amount_key = nextKey(); lift(...)(...element[__cf_amount_key])
 //   .map(fn) → .mapWithPattern(pattern(...), {})
-// Context: nextKey() has side effects (keyCounter++), so the key expression is evaluated once and cached
+// Context: nextKey() has a side effect (it logs), so the key expression is evaluated once and cached
 export default pattern((state) => {
     return {
         [UI]: (<div>

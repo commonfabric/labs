@@ -21,6 +21,7 @@ export const propertiesLanguage: Language = {
     filenamePatterns: [],
     aliases: ["java-properties"],
     interpreters: [],
+    signatures: [],
     sharedExtensions: [],
   },
 

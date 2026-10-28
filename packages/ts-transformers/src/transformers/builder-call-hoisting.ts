@@ -140,8 +140,9 @@ const LIFT_BUILDER: HoistableBuilderSpec = {
   resolveHoistable: (call, context) => {
     // The lift-applied shape is `__cfHelpers.lift(...)(captures)`: an applied
     // call whose callee is itself the inner `lift(...)` call. detectCallKind
-    // is the single source of truth for recognizing it (it guards against
-    // over-application chains like `lift(cb)(x)(y)`).
+    // is the single source of truth for recognizing it, and it does not
+    // recognize an over-applied `lift(cb)(x)(y)`, whose callee is what the
+    // factory returned.
     if (detectCallKind(call, context.checker)?.kind !== "lift-applied") {
       return undefined;
     }

@@ -81,7 +81,7 @@ Deno.test("the client worker's code-reachable module set holds no server-only mo
   const repoRoot = new URL("../", import.meta.url);
   const command = new Deno.Command(Deno.execPath(), {
     args: ["info", "--no-lock", "--json", WORKER_ENTRY],
-    cwd: repoRoot.pathname,
+    cwd: repoRoot,
     stdout: "piped",
     stderr: "piped",
   });

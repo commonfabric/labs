@@ -32,6 +32,9 @@ state graphs exactly the ones the earlier runs certified, to the digit.
 | `PendingStacks_ChannelFiltered.cfg` | `filtered` | `confirmed` | `channel` | **All invariants hold** (39,967,453 distinct states, ~90s) — the overlap-filtered narrowing composed with delayed delivery, so the two live refinement directions are certified together rather than only separately. |
 | `PendingStacks_Identity.cfg` | `fullstack` | `confirmed` | `atomic`, `IdentityMode = "elide"`, `Values = {"a", "b"}` | **All invariants hold** — `ContentCoherence`, `ElidedUnchanged`, `CascadeTotality`, `MonotonicResolution` — at 304,439,185 distinct states, `MaxTotal = 4`, ~14 min. Certifies the identity-commit acceptance of §3.6.1: a commit refused for staleness and proved to change no path's content, judged from the content its reader saw (its confirmed basis plus the values its own named layers wrote), is accepted with its writes elided, and no commit that wrote anything is ever admitted on an observation whose content differs from durable history — including a commit built on top of an elided layer. |
 | `PendingStacks_IdentityWriterForm.cfg` | `fullstack` | `confirmed` | `atomic`, `IdentityMode = "elide"`, `Values = {"a", "b"}` | **ReadCoherenceOfWrites violated** at depth 8, within seconds — the same run as the row above held to the writer-set form of INV-1 over the commits that wrote something. The trace: a foreign commit writes `p1 = a`; the reader's own stale `p1 = a` is elided at the next seq; the reader integrates the foreign write, keeps its elided layer on the stack, and its next commit observes `p1` through that layer — contributors `{1, 2}` where durable history holds `{1}`, the same content either way. Kept as the witness that the content form is the statement under elision, not a weakening. |
+| `PendingStacks_ChannelIntended.cfg` | `fullstack` | `confirmed` | `channel`, `ViewMode = "intended"` | **ReadCoherence violated** at depth 7, within seconds. A positional op shown as the result its writer computed, for every own layer whatever it read: a layer that read nothing is accepted as it stands, and a build over it, observing the contributors that layer saw rather than the foreign write integrated since, is accepted having missed that write. The regression witness for the review finding on #8698: `displayedPatches` applied to a blind splice, and a dependent transaction committing a count the store contradicts. |
+| `PendingStacks_ChannelIntendedRead.cfg` | `fullstack` | `confirmed` | `channel`, `ViewMode = "intendedRead"` | **All invariants hold**, `AcceptedVersusDropped` included, at 53,340,301 distinct states, `MaxTotal = 4`, ~9 min. The computed result stands in only for a layer whose commit read the path: a foreign write to the path then gets that layer refused and every build that named it refused with it, so what the substitution hides never reaches an accepted observation, and a layer that read nothing replays as the server applies it. The count exceeds the Channel row's because a layer now records what it saw. |
+| `PendingStacks_ChannelIdentityIntendedRead.cfg` | `fullstack` | `confirmed` | `channel`, `IdentityMode = "elide"`, `Values = {"a", "b"}`, `ViewMode = "intendedRead"` | **All invariants hold**, `ContentCoherence`, `ElidedUnchanged` and `AcceptedVersusDropped` included, at 200,739,625 distinct states, `MaxTotal = 4` with single-path writes, ~22 min. The read-conditioned substitution under the identity exemption: a layer whose read a foreign write of the same value made stale is elided, and a build over it observes the layer as a contributor where durable history holds the foreign write, which the content form of INV-1 states and the writer-set form does not. |
 | `PendingStacks_ChannelIdentity.cfg` | `fullstack` | `confirmed` | `channel`, `IdentityMode = "elide"`, `Values = {"a", "b"}` | **All invariants hold**, `AcceptedVersusDropped` included, at 169,592,041 distinct states, `MaxTotal = 4` with single-path writes (`WriteChoices <- SingletonWrites`, the Filtered5 bound), ~9 min. The identity acceptance composed with delayed delivery: an elided layer's accept is processed by `Deliver`, stands on the stack through the parking window, and is named by builds there without a durable write behind it. With multi-path writes this config passes 680M distinct states in half an hour without finishing, which is why the bound is narrowed rather than the depth. |
 
 Read the violation together with the catalog: the maxdep counterexample is an
@@ -64,17 +67,19 @@ Repaired result certifies the rule, not the whole pipeline:
 - **Canonical dependency arrays.** `Build` records the layers of the
   CURRENT stack — under channel delivery that set can be sparse relative
   to session history (processed rejections are gone from `pend`), but it
-  always names every layer the view sat on, so the model's session-wide
-  scan exclusion coincides with the shipped declared-set exclusion on
-  every reachable state. What the model therefore does NOT exercise is
-  the declared-set scan's VALIDATION role (§3.6.3): a buggy client
-  omitting a live layer whose write is durably integrated. That
-  enforcement is checked by the engine unit tests
+  always names every layer the view sat on. The pending-read scan
+  excludes the reader's own layers the read NAMES, the shipped
+  declared-set form (§3.6.3); because every build names its full stack,
+  that set is the reader's whole session on every reachable state, and
+  the counts in the table are the same under either form. What the model
+  therefore does NOT exercise is the declared-set scan's VALIDATION role:
+  a buggy client omitting a live layer whose write is durably integrated.
+  That enforcement is checked by the engine unit tests
   (`packages/memory/test/v2-sparse-pending-dependencies.test.ts`) and the
-  differential harness's sparse mutation; a `SkipLayers` build choice
-  paired with a named-set `InvalidatedBy` — a violation witness under
-  session-wide exclusion, a pass under named-set — is the natural
-  refinement if omission ever becomes more than a hardening concern.
+  differential harness's sparse mutation; a `SkipLayers` build choice —
+  a violation witness under session-wide exclusion, a pass under the
+  declared-set form the model now scans with — is the natural refinement
+  if omission ever becomes more than a hardening concern.
 
 ## Running
 
@@ -164,6 +169,30 @@ or missed contributor directly.
   for admission logic, but it does NOT check the matcher's own
   refinements — that is the differential harness's job
   (`packages/memory/test/v2-differential-consistency.test.ts`).
+- **The client's view is a mode.** `ViewMode = "replay"` is the view every
+  earlier row certifies: a build observes the confirmed contributors it has
+  integrated plus its own pending layers, which is the server's own
+  reconstruction of a reader's view. `"intended"` and `"intendedRead"` are
+  the client showing a positional op as the result its writer computed
+  (`03-commit-model.md` §3.3.3): a layer records the contributors it saw at
+  each path it writes, and a build over such a layer observes those, so a
+  foreign write to the path integrated since is hidden from it, while the
+  read record still declares the current basis. The model has no positional
+  ops, but it does not need them for this: what the substitution changes
+  is which contributors a build observes, and `ReadCoherence` is exactly
+  the statement that the observed set is the durable one. The dial is what
+  separates the two forms: `"intended"` hides for every own layer and fails,
+  `"intendedRead"` hides only for a layer whose commit read the path, which
+  a foreign write to the path gets refused or elided, and holds. A rule
+  that showed confirmed state for a layer as soon as a delivered value
+  proved its read stale would be a further setting here. Its soundness
+  condition is not in this model's reach: `Integrate` delivers one log
+  entry to a replica whose other documents are current, whereas the
+  implementation also reads a single document through to head with the
+  rest of the replica behind it, and a view switched on that arrival
+  re-runs over a state no point in history held (`03-commit-model.md`
+  §3.3.3). Modeling it means a delivery that advances one document past
+  the replica's integrated prefix.
 - **Appends-only values.** The value of a path is the set of accepted writes
   to it. This makes observations mergeable (a reader through a stack observes
   base + every contributing layer, exactly the mergeable-collection-writes
@@ -184,7 +213,11 @@ or missed contributor directly.
   write. What the alphabet does not model is a commit's ordered sequence
   of operations on one document: a commit here is one write of one value
   per path, which is the engine's per-document rule with the sequence
-  collapsed to its final effect. The replay of an arbitrary sequence, and
+  collapsed to its final effect. Nor does it model a positional op, so the
+  proof's second condition, idempotence on the stored document, is the
+  same membership test as the first here; the shipped rule waives it for a
+  session whose replica drops elided layers (`elidedVerdicts`), which the
+  model already matches. The replay of an arbitrary sequence, and
   what a patch can do to a document beyond adding a value, is the engine
   unit tests' and the differential harness's to check.
 - **Verdict delivery is a mode.** `atomic` fuses the server's verdict with
@@ -232,7 +265,10 @@ a live session (`SpaceReplica.reset()` on route replacement, `AllowReset`), the
 session can EXPIRE while disconnected (a re-establishing reconnect instead of a
 resume), and the watch union can SHRINK — a lossy `Unwatch` whose removal frame
 the client may fail to absorb, down to the zero-watch union, so a reconnect can
-face a declared holding the union no longer covers (union growth is not
+face a declared holding the union no longer covers. The union is what the
+watches reach, so `Unwatch` stands both for a watch removed and for a refresh
+whose re-walk no longer reaches a document (`04-protocol.md` §4.6.3), whose
+removal frame is lossy the same way (union growth is not
 modeled: a grown union's never-held documents are ordinary deliveries,
 indistinguishable from initial delivery). `Mode` selects the diff base:
 `memory` is the server's own memory on resume and nothing on re-establishment
@@ -286,8 +322,9 @@ outside both models.
 ## Changing the models
 
 Per the change discipline in `09-invariants.md`: if a change introduces a new
-dependency-recording shape, staleness basis, or acceptance rule, add it as a
-`DepMode` / `BasisMode` / `IdentityMode` variant plus a config, and record
+dependency-recording shape, staleness basis, acceptance rule, or rule for
+what a client shows for a pending layer, add it as a `DepMode` /
+`BasisMode` / `IdentityMode` / `ViewMode` variant plus a config, and record
 the expected/observed result in the table above. The delivery model has the same obligation on its own axes:
 a change to the reconnect diff base, to what a declaration may claim or how
 the server reads one, or to removal semantics (union shrink, the zero-watch

@@ -178,12 +178,10 @@ separate fields:
   place be checked again?"; `source.ref` answers "which exact bytes are
   running?"
 
-`cf piece new`, `cf piece setsrc`, and custom `cf space set-home` accept
-`--repository <locator>` alongside `--root`. `new` and custom `set-home` stamp
-the locator on the new piece. `setsrc` replaces it when the flag is present and
-preserves the existing locator when the flag is omitted. `set-home --reset`
-rejects the flag because the system pattern was not deployed from the caller's
-repository. No Git remote or revision is inferred automatically.
+`cf piece new` and `cf piece setsrc` accept `--repository <locator>` alongside
+`--root`. `new` stamps the locator on the new piece. `setsrc` replaces it when
+the flag is present and preserves the existing locator when the flag is
+omitted. No Git remote or revision is inferred automatically.
 
 The same three local deployment commands accept a repeatable
 `--test <path>` flag. When `--root` is omitted, the CLI uses the common
@@ -196,8 +194,7 @@ execute it. Repeat the complete set of `--test` flags on every `setsrc` because
 each update defines a complete source revision.
 The source-document cache retains the test roots through its synthetic
 retention links. Source recovery and `cf piece getsrc` therefore return the
-executable source and its attached tests together. `set-home --reset` rejects
-`--test` because a reset deploys no local source package.
+executable source and its attached tests together.
 
 Attached test entry points participate in the deployed source revision's
 identity without becoming runtime imports. Changing, adding, or removing a test
@@ -230,14 +227,17 @@ as `/data/cities.json`.
 
 Attached data files participate in the deployed source revision's identity, on
 the same footing as attached test entry points and through the same kind of
-identity-only edge from the entry module. Changing, adding, or removing a data
-file therefore creates a distinct revision even when the executable source is
-unchanged, and each revision stays independently recoverable with its own
-bytes. Source recovery and `cf piece getsrc` return the executable source, its
-attached tests, and its data files together, and report which files are data.
+identity-only edge. The edge leaves from the module whose `dataFile()` call
+names the file, so a sub-pattern that reads its own data carries that data in
+its own identity and reaches it when loaded by that identity. The edge for a
+file no module names, such as one read by a computed path, leaves from the
+entry module. Changing, adding, or removing a data file therefore creates a
+distinct revision even when the executable source is unchanged, and each
+revision stays independently recoverable with its own bytes. Source recovery
+and `cf piece getsrc` return the executable source, its attached tests, and
+its data files together, and report which files are data.
 Repeat the complete set of `--datafile` flags on every `setsrc` because each
-update defines a complete source revision. `set-home --reset` rejects
-`--datafile` because a reset deploys no local source package.
+update defines a complete source revision.
 
 A pattern reads an attached data file with `dataFile(path)` from
 `commonfabric`. The path resolves against the module that reads it, as an
@@ -791,13 +791,19 @@ reason for a refusal: `known-different-host`, with the host a seed or an
 accepted hint already fixed; `default-route-in-use`, when the space issued a
 stateful operation through the default host: that route stays fixed for the
 session, and the refusal says nothing against the offered host;
-`no-remote-resolution`, from storage that resolves no per-space host; and
-`unspecified`, from storage that gives a verdict alone. A host that is not valid
-throws from both methods. These routes contain only an HTTP or HTTPS origin. The
-home-space site table hydrates durable hints into a new runtime. A foreign-host
-connection is an ordinary authenticated memory session. These mechanisms remain
-interim. This design depends only on the property that a space's cells are
-readable wherever the space lives, not on the current map or site-table shape.
+`no-remote-resolution`, from storage that resolves no per-space host;
+`foreign-host-unresolved`, `foreign-host-unread` and `foreign-host-limit`, from
+a runtime whose deployment publishes a memory URL and that has not yet read,
+could not read, or keeps too many origins to read where the hinted deployment
+serves Memory; and `unspecified`, from storage that gives a verdict alone.
+`resolveSpaceHost` reads that first (`/api/meta` on the hinted origin, once per
+origin) and then applies the same rules, so a caller that can wait never sees
+`foreign-host-unresolved`. A host that is not valid throws from all three
+methods. These routes contain only an HTTP or HTTPS origin. The home-space site
+table hydrates durable hints into a new runtime. A foreign-host connection is an
+ordinary authenticated memory session. These mechanisms remain interim. This
+design depends only on the property that a space's cells are readable wherever
+the space lives, not on the current map or site-table shape.
 
 Once a route is in effect, a `cf://host/space/ref` reference resolves exactly
 like a local one. Slug chase, piece metadata, and `pattern:<identity>` source

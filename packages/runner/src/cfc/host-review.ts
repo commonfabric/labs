@@ -1,6 +1,6 @@
 /**
- * What the trusted host's reviewed operations share: the snapshot copy, the
- * custody seal, and the reviewed intent each inspect what they will show,
+ * What the trusted host's reviewed operations share: the snapshot copy and the
+ * custody seal each inspect what they will show,
  * hand the host a preview, and write only if what they read still holds when
  * a trusted gesture commits. This module holds the pieces of that pattern
  * that do not depend on what is reviewed: recording a review's reads and
@@ -101,6 +101,39 @@ export const hasExactKeys = (
   keys.every((key) => Object.hasOwn(value, key));
 
 /**
+ * Whether one confidentiality alternative stands for the actor alone. Each
+ * shape is matched on its exact key set, so an atom carrying any further
+ * field (a `hash` binding a named policy, a `scope`) is never the actor's.
+ */
+export const isActorOwnedAlternative = (
+  atom: unknown,
+  actor: string,
+): boolean => {
+  if (typeof atom === "string") return atom === actor;
+  if (!isObjectNotArray(atom)) return false;
+  switch (atom.type) {
+    case CFC_ATOM_TYPE.User:
+      return hasExactKeys(atom, ["type", "subject"]) &&
+        atom.subject === actor;
+    case CFC_ATOM_TYPE.Context:
+      return hasExactKeys(atom, ["type", "name", "subject"]) &&
+        typeof atom.name === "string" && atom.subject === actor;
+    case CFC_ATOM_TYPE.Resource:
+      return hasExactKeys(atom, ["type", "class", "subject"]) &&
+        typeof atom.class === "string" && atom.subject === actor;
+    // The actor's home space is the space named by the actor's own DID. Its
+    // access list is the actor's to write, so what it admits is the actor's
+    // decision, as with a clause naming the actor.
+    case CFC_ATOM_TYPE.Space:
+      return hasExactKeys(atom, ["type", "id"]) && atom.id === actor;
+    case CFC_ATOM_TYPE.PersonalSpace:
+      return hasExactKeys(atom, ["type", "owner"]) && atom.owner === actor;
+    default:
+      return false;
+  }
+};
+
+/**
  * `value` as JSON text with every object's keys in UTF-8 order, so that equal
  * values have equal text. Stored as one string, a value is a leaf: no write
  * below it can alter part of it, and a reader compares it byte for byte.
@@ -149,6 +182,38 @@ export const isTrustedGestureOn = (event: unknown, surface: string): boolean =>
   isObjectNotArray(event.provenance) &&
   isObjectNotArray(event.provenance.ui) &&
   event.provenance.ui.pattern === surface;
+
+/** The provenance a trusted gesture on a host surface carries. */
+export type HostGestureProvenance = {
+  /**
+   * Always `native`: host code, not the renderer, attests the gesture, as it
+   * does for a control it draws itself.
+   */
+  origin: "native";
+
+  /** Always `true`: the event came from a trusted surface. */
+  trusted: true;
+
+  /** The host surface the gesture was made on. */
+  ui: {
+    /** The surface, which `isTrustedGestureOn()` compares to its own. */
+    pattern: string;
+  };
+};
+
+/**
+ * Builds the provenance of a trusted gesture on the host surface `surface`,
+ * which `isTrustedGestureOn()` accepts for that surface. It returns a fresh
+ * object on each call. The event it goes on is accepted only once it also
+ * carries the renderer-trust mark, which `markRendererTrustedEvent()` applies.
+ */
+export const hostGestureProvenance = (
+  surface: string,
+): HostGestureProvenance => ({
+  origin: "native",
+  trusted: true,
+  ui: { pattern: surface },
+});
 
 /**
  * Whether atom pattern `pattern` holds a `{ var }` placeholder anywhere, or a

@@ -96,13 +96,15 @@ describe("scoped-conflict-retry", () => {
         output.getAsNormalizedFullLink().id,
       );
       expect(rejected.error.conflict.scope).toBe("user");
+      // The refusal's own repair already holds the store's copy of the
+      // output the commit created; the scoped recovery pull keeps it.
       expect(
         readerStorage.open(space).replica.getDocument(
           output.getAsNormalizedFullLink().id,
           "user",
         ),
       )
-        .toBeUndefined();
+        .toEqual({ value: "previous user value" });
       await reader.awaitCommitRetryReadiness(rejected.error);
       expect(
         readerStorage.open(space).replica.getDocument(

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { spy, stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 import {
   clearTimingMeasures,
@@ -16,6 +17,7 @@ import {
   resetAllTimingStats,
   resetTimingMeasureBudget,
   setGlobalLogFloor,
+  setLoggerCountObserver,
   setTimingMeasuresEnabled,
   TIMING_MEASURE_PREFIX,
 } from "../src/logger.ts";
@@ -810,6 +812,40 @@ describe("logger", () => {
     });
   });
 
+  describe("count baselines", () => {
+    it("reports every count as a delta once a baseline is set", () => {
+      const logger = getLogger("count-baseline-test");
+      logger.info("before", () => ["before"]);
+      logger.warn("before", () => ["before"]);
+
+      logger.resetCountBaseline();
+      logger.warn("after", () => ["after"]);
+      logger.error("after", () => ["after"]);
+
+      expect(logger.getCountDeltas()).toEqual({
+        debug: 0,
+        info: 0,
+        warn: 1,
+        error: 1,
+        total: 2,
+      });
+    });
+
+    it("reports the counts themselves while no baseline is set", () => {
+      const logger = getLogger("count-no-baseline-test");
+      logger.debug("one", () => ["one"]);
+      logger.info("two", () => ["two"]);
+
+      expect(logger.getCountDeltas()).toEqual({
+        debug: 1,
+        info: 1,
+        warn: 0,
+        error: 0,
+        total: 2,
+      });
+    });
+  });
+
   describe("resetAllLoggerCounts()", () => {
     it("returns every logger's counts to `0`", () => {
       const logger1 = getLogger("reset-all-test-1");
@@ -866,6 +902,45 @@ describe("logger", () => {
       // Counts should work normally after reset
       captureConsole("log", () => logger.info("test-key", "test"));
       expect(logger.counts.info).toBe(1);
+    });
+  });
+
+  describe("setLoggerCountObserver()", () => {
+    afterEach(() => setLoggerCountObserver(undefined));
+
+    it("reports each counted call with its logger, key and level, disabled or not", () => {
+      const counted: string[] = [];
+      setLoggerCountObserver((moduleName, key, level) => {
+        counted.push(`${moduleName}/${key}/${level}`);
+      });
+      const logger = getLogger("count-observer-test", { enabled: false });
+
+      logger.debug("a", "x");
+      logger.warn("b", "x");
+      logger.error("a", "x");
+
+      expect(counted).toStrictEqual([
+        "count-observer-test/a/debug",
+        "count-observer-test/b/warn",
+        "count-observer-test/a/error",
+      ]);
+    });
+
+    it("reports nothing once given `undefined`", () => {
+      const counted: string[] = [];
+      setLoggerCountObserver((_moduleName, key) => {
+        counted.push(key);
+      });
+      const logger = getLogger("count-observer-removal-test", {
+        enabled: false,
+      });
+
+      logger.warn("before", "x");
+      setLoggerCountObserver(undefined);
+      logger.warn("after", "x");
+
+      expect(counted).toStrictEqual(["before"]);
+      expect(logger.countsByKey["after"]?.warn).toBe(1);
     });
   });
 
@@ -1624,6 +1699,130 @@ describe("logger", () => {
       });
     });
 
+    describe("slowest measurements", () => {
+      it("keeps the longest five, longest first, with their details", () => {
+        const logger = getLogger("timing-test-slowest");
+
+        for (const elapsed of [30, 10, 50, 20, 60, 40, 5]) {
+          logger.timeDetailed(`run-${elapsed}`, 0, elapsed, "op");
+        }
+
+        const slowest = logger.getTimeStats("op")?.slowest ?? [];
+        expect(slowest.map((entry) => entry.elapsed)).toEqual([
+          60,
+          50,
+          40,
+          30,
+          20,
+        ]);
+        expect(slowest.map((entry) => entry.detail)).toEqual([
+          "run-60",
+          "run-50",
+          "run-40",
+          "run-30",
+          "run-20",
+        ]);
+      });
+
+      it("records when each of the slowest ended on both clocks", () => {
+        const logger = getLogger("timing-test-slowest-when");
+        const beforeNow = performance.now();
+        const beforeEpoch = Date.now();
+
+        logger.time(0, 25, "op");
+
+        const [entry] = logger.getTimeStats("op")?.slowest ?? [];
+        expect(entry?.at).toBeGreaterThanOrEqual(beforeNow);
+        expect(entry?.at).toBe(logger.getTimeStats("op")?.lastTimestamp);
+        expect(entry?.epochMs).toBeGreaterThanOrEqual(beforeEpoch);
+        expect(entry?.detail).toBeUndefined();
+      });
+
+      it("builds a detail only for a measurement among the slowest", () => {
+        const logger = getLogger("timing-test-slowest-lazy");
+        let built = 0;
+        const detail = () => {
+          built++;
+          return "built";
+        };
+
+        for (let i = 0; i < 5; i++) logger.timeDetailed(detail, 0, 100, "op");
+        expect(built).toBe(5);
+
+        logger.timeDetailed(detail, 0, 1, "op");
+        expect(built).toBe(5);
+
+        logger.timeDetailed(detail, 0, 200, "op");
+        expect(built).toBe(6);
+        expect(logger.getTimeStats("op")?.slowest[0]?.elapsed).toBe(200);
+      });
+
+      it("keeps a measurement whose detail builder throws, unnamed", () => {
+        const logger = getLogger("timing-test-slowest-throws");
+
+        logger.timeDetailed(
+          () => {
+            throw new Error("no name today");
+          },
+          0,
+          40,
+          "op",
+        );
+
+        const stats = logger.getTimeStats("op");
+        expect(stats?.count).toBe(1);
+        expect(stats?.max).toBe(40);
+        expect(stats?.slowest).toEqual([
+          expect.objectContaining({ elapsed: 40 }),
+        ]);
+        expect(stats?.slowest[0]?.detail).toBeUndefined();
+      });
+
+      it("builds a detail once when both the slowest and the timeline keep it", () => {
+        setTimingMeasuresEnabled(true);
+        try {
+          const logger = getLogger("timing-test-slowest-once");
+          let built = 0;
+
+          logger.timeDetailed(
+            () => {
+              built++;
+              return "once";
+            },
+            0,
+            30,
+            "op",
+          );
+
+          expect(built).toBe(1);
+          expect(logger.getTimeStats("op")?.slowest[0]?.detail).toBe("once");
+        } finally {
+          setTimingMeasuresEnabled(false);
+        }
+      });
+
+      it("names a timer's span through `timeEndDetailed()` too", () => {
+        const logger = getLogger("timing-test-slowest-timer");
+
+        logger.timeStart("phase");
+        logger.timeEndDetailed("the-one", "phase");
+
+        expect(logger.getTimeStats("phase")?.slowest[0]?.detail).toBe(
+          "the-one",
+        );
+      });
+
+      it("reports none for a key with no measurements", () => {
+        const logger = getLogger("timing-test-slowest-empty");
+
+        logger.time(0, 10, "op");
+        logger.resetTimeStats();
+        logger.time(0, 10, "op");
+
+        expect(logger.getTimeStats("op")?.slowest).toHaveLength(1);
+      });
+    });
+
     describe("resetTimeStats()", () => {
       it("clears every recorded timing", () => {
         const logger = getLogger("timing-test-reset");
@@ -2105,6 +2304,155 @@ describe("logger", () => {
       performance.clearMeasures("someone-elses-measure");
     });
 
+    it("calls `performance.clearMeasures()` once to drain any number of spans", () => {
+      // Every span has a name of its own, and a host that keeps its timeline
+      // as a list reads all of it to remove one name. A removal per span
+      // therefore costs the square of the span count, which the number of
+      // calls shows without anything being timed.
+
+      setTimingMeasuresEnabled(true);
+      const logger = getLogger("measure-drain-calls");
+      for (let i = 0; i < 20; i++) {
+        logger.timeStart("phase", "drain-calls");
+        logger.timeEnd("phase", "drain-calls");
+      }
+      expect(getTimingMeasuresState().emitted).toBe(20);
+
+      using clear = spy(performance, "clearMeasures");
+      clearTimingMeasures();
+      expect(clear.calls.length).toBe(1);
+      expect(
+        measureNames().some((n) => n.startsWith(TIMING_MEASURE_PREFIX)),
+      ).toBe(false);
+    });
+
+    describe("beside a measure the host recorded", () => {
+      const HOST_MEASURE = "host/phase";
+      const BACKWARDS_MEASURE = "host/backwards";
+      const REFUSED_MEASURE = "host/refused";
+      const LATER_MEASURE = "host/later";
+
+      const measuresNamed = (name: string) =>
+        performance.getEntriesByName(name, "measure").map((entry) => ({
+          startTime: entry.startTime,
+          duration: entry.duration,
+          detail: "detail" in entry ? entry.detail : undefined,
+        }));
+
+      const emitOneSpan = (name: string) => {
+        setTimingMeasuresEnabled(true);
+        const logger = getLogger(name);
+        logger.timeStart("phase", name);
+        logger.timeEnd("phase", name);
+        expect(getTimingMeasuresState().emitted).toBe(1);
+      };
+
+      beforeEach(() => {
+        performance.measure(HOST_MEASURE, {
+          start: 100,
+          end: 350,
+          detail: { phase: "host" },
+        });
+      });
+
+      afterEach(() => {
+        for (
+          const name of [
+            HOST_MEASURE,
+            BACKWARDS_MEASURE,
+            REFUSED_MEASURE,
+            LATER_MEASURE,
+          ]
+        ) {
+          performance.clearMeasures(name);
+        }
+      });
+
+      it("calls `performance.clearMeasures()` once to drain any number of spans", () => {
+        setTimingMeasuresEnabled(true);
+        const logger = getLogger("measure-drain-calls-beside-host");
+        for (let i = 0; i < 20; i++) {
+          logger.timeStart("phase", "drain-calls-beside-host");
+          logger.timeEnd("phase", "drain-calls-beside-host");
+        }
+        expect(getTimingMeasuresState().emitted).toBe(20);
+
+        using clear = spy(performance, "clearMeasures");
+        clearTimingMeasures();
+        expect(clear.calls.length).toBe(1);
+        expect(
+          measureNames().some((n) => n.startsWith(TIMING_MEASURE_PREFIX)),
+        ).toBe(false);
+      });
+
+      it("keeps that measure's start, duration, and detail", () => {
+        emitOneSpan("measure-keep-host");
+
+        clearTimingMeasures();
+        expect(measuresNamed(HOST_MEASURE)).toEqual([
+          { startTime: 100, duration: 250, detail: { phase: "host" } },
+        ]);
+      });
+
+      it("keeps a measure that ends before it starts, and the one recorded after it", () => {
+        // A host admits a measure whose end precedes its start, and refuses
+        // the negative duration that measure then reports when it is handed
+        // back as a duration.
+
+        performance.measure(BACKWARDS_MEASURE, { start: 100, end: 50 });
+        performance.measure(LATER_MEASURE, { start: 400, end: 425 });
+        emitOneSpan("measure-keep-backwards");
+
+        clearTimingMeasures();
+        expect(measuresNamed(BACKWARDS_MEASURE)).toEqual([
+          { startTime: 100, duration: -50, detail: null },
+        ]);
+        expect(measuresNamed(LATER_MEASURE)).toEqual([
+          { startTime: 400, duration: 25, detail: null },
+        ]);
+      });
+
+      it("drops only the measure the host refuses to record again", () => {
+        performance.measure(REFUSED_MEASURE, { start: 200, end: 210 });
+        performance.measure(LATER_MEASURE, { start: 400, end: 425 });
+        emitOneSpan("measure-refused-host");
+
+        const realMeasure = performance.measure;
+        using _refusal = stub(performance, "measure", (...args) => {
+          if (args[0] === REFUSED_MEASURE) throw new TypeError("refused");
+          return realMeasure.apply(performance, args);
+        });
+        clearTimingMeasures();
+        expect(measuresNamed(HOST_MEASURE)).toEqual([
+          { startTime: 100, duration: 250, detail: { phase: "host" } },
+        ]);
+        expect(measuresNamed(REFUSED_MEASURE)).toEqual([]);
+        expect(measuresNamed(LATER_MEASURE)).toEqual([
+          { startTime: 400, duration: 25, detail: null },
+        ]);
+      });
+
+      it("leaves that measure's entry in place when it has no spans to drain", () => {
+        // A drain with nothing of its own to remove has no reason to touch a
+        // timeline it shares, so the host's entry is the same object after it.
+
+        expect(
+          measureNames().some((n) => n.startsWith(TIMING_MEASURE_PREFIX)),
+        ).toBe(false);
+        const [before] = performance.getEntriesByName(HOST_MEASURE, "measure");
+        expect(before).toBeDefined();
+
+        using clear = spy(performance, "clearMeasures");
+        using measure = spy(performance, "measure");
+        clearTimingMeasures();
+        expect(clear.calls.length).toBe(0);
+        expect(measure.calls.length).toBe(0);
+        expect(performance.getEntriesByName(HOST_MEASURE, "measure")[0]).toBe(
+          before,
+        );
+      });
+    });
+
     it("emits again after something else clears the timeline", () => {
       setTimingMeasuresEnabled(true, { cap: 2 });
       const logger = getLogger("measure-external-clear");
@@ -2265,6 +2613,9 @@ describe("logger", () => {
     it("does not build a detail that will not be emitted", () => {
       setTimingMeasuresEnabled(false);
       const logger = getLogger("measure-detail-lazy");
+      // Five long spans fill the key's slowest entries, so the short spans
+      // below are kept nowhere but the timeline.
+      for (let i = 0; i < 5; i++) logger.time(0, 1_000_000, "phase", "lazy");
       let built = 0;
       logger.timeStart("phase", "lazy");
       logger.timeEndDetailed(
@@ -2278,7 +2629,7 @@ describe("logger", () => {
       // Emission is off on every production run, and a caller whose detail
       // costs anything to produce must not pay for it there.
       expect(built).toBe(0);
-      expect(logger.getTimeStats("phase", "lazy")?.count).toBe(1);
+      expect(logger.getTimeStats("phase", "lazy")?.count).toBe(6);
 
       setTimingMeasuresEnabled(true);
       logger.timeStart("phase", "lazy");
@@ -2294,8 +2645,11 @@ describe("logger", () => {
     });
 
     it("stops building details once the cap has stopped emission", () => {
-      setTimingMeasuresEnabled(true, { cap: 2 });
       const logger = getLogger("measure-detail-capped");
+      // Five long spans fill the key's slowest entries, so the short spans
+      // below are kept nowhere but the timeline.
+      for (let i = 0; i < 5; i++) logger.time(0, 1_000_000, "phase", "capped");
+      setTimingMeasuresEnabled(true, { cap: 2 });
       let built = 0;
       for (let i = 0; i < 6; i++) {
         logger.timeStart("phase", "capped");
@@ -2312,7 +2666,7 @@ describe("logger", () => {
       // cap nothing reaches the timeline, so nothing should be built for it —
       // and that is the longest run, where it would cost the most.
       expect(built).toBe(2);
-      expect(logger.getTimeStats("phase", "capped")?.count).toBe(6);
+      expect(logger.getTimeStats("phase", "capped")?.count).toBe(11);
     });
 
     it("reports no detail for a span that was not named", () => {

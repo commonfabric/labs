@@ -113,6 +113,71 @@ describe("custodyIngest", () => {
     expect(markType(marks[0])).toBe(CFC_ATOM_TYPE.ExternalIngest);
   });
 
+  describe("replaceIfNewer()", () => {
+    const newer = (current: { seq: number }, next: { seq: number }) =>
+      next.seq > current.seq;
+
+    it("fills an empty cell, replaces a superseded value, and mints the mark", async () => {
+      const cell = runtime.getCell<{ seq: number }>(space, "latest-cell");
+      const id = cell.getAsNormalizedFullLink().id;
+
+      expect(
+        await custodyIngest.replaceIfNewer(
+          cell,
+          { seq: 1 },
+          () => false,
+          channel,
+        ),
+      ).toBe(true);
+      expect(
+        await custodyIngest.replaceIfNewer(
+          cell,
+          { seq: 2 },
+          (current) => newer(current, { seq: 2 }),
+          channel,
+        ),
+      ).toBe(true);
+
+      expect(cell.get()).toEqual({ seq: 2 });
+      const marks = ingestMarks(id);
+      expect(marks.length).toBe(1);
+      expect(markType(marks[0])).toBe(CFC_ATOM_TYPE.ExternalIngest);
+    });
+
+    it("writes nothing, mints nothing, and wakes no subscriber for a value that does not supersede", async () => {
+      const cell = runtime.getCell<{ seq: number }>(space, "latest-cell");
+      const id = cell.getAsNormalizedFullLink().id;
+      await custodyIngest.replaceIfNewer(
+        cell,
+        { seq: 2 },
+        () => false,
+        channel,
+      );
+      await runtime.idle();
+      const marksBefore = ingestMarks(id);
+      let fired = 0;
+      const stop = cell.sink(() => {
+        fired++;
+      });
+      await runtime.idle();
+      const firedOnSubscribe = fired;
+
+      const written = await custodyIngest.replaceIfNewer(
+        cell,
+        { seq: 1 },
+        (current) => newer(current, { seq: 1 }),
+        channel,
+      );
+      await runtime.idle();
+      stop();
+
+      expect(written).toBe(false);
+      expect(cell.get()).toEqual({ seq: 2 });
+      expect(ingestMarks(id)).toEqual(marksBefore);
+      expect(fired).toBe(firedOnSubscribe);
+    });
+  });
+
   it("durableUpdate read-modify-writes atomically WITHOUT a mark", async () => {
     const cell = runtime.getCell<{ items: number[] }>(space, "remove-cell");
     const id = cell.getAsNormalizedFullLink().id;

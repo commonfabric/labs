@@ -16,9 +16,8 @@ import {
  * address these take has never been piece-specific: it names a cell, which is
  * why the option that carries it is spelled `--cell`.
  *
- * Each subcommand attaches the target options itself rather than inheriting
- * them from this noun, because one definition of each is mounted twice while
- * the superseded spelling is still answered.
+ * Each subcommand's definition attaches the target options itself, so this
+ * noun declares none.
  */
 // deno-lint-ignore no-explicit-any
 export const cell: Command<any> = new Command()
@@ -40,9 +39,9 @@ arguments cell instead of the result.`),
   })
   .default("help")
   /* cell get */
-  .command("get", pieceDataCommand("get", { spelling: "cell get" }))
+  .command("get", pieceDataCommand("get"))
   /* cell set */
-  .command("set", pieceDataCommand("set", { spelling: "cell set" }))
+  .command("set", pieceDataCommand("set"))
   /* cell get-label */
   .command("get-label", buildGetLabelCommand("cell get-label"))
   /* cell set-label */

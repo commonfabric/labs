@@ -11,6 +11,8 @@ import {
   ruleInputFields,
   validateRowLabelSpec,
 } from "@commonfabric/memory/sqlite/row-label";
+import { piecePatternPointer } from "@commonfabric/piece/ops";
+import { pieceVerbs } from "@commonfabric/piece/verb-call";
 import { type Cell, readResultSchemaMeta } from "@commonfabric/runner";
 import {
   type CfcLabelView,
@@ -25,6 +27,7 @@ import {
   type DisclosedCfcLabel,
   disclosedCfcLabels,
 } from "../cfc-label-disclosure.ts";
+import type { HarnessCallableDescriptor } from "../contracts/callable.ts";
 import type { HarnessHandleTable } from "../contracts/handle-table.ts";
 import {
   type HarnessResearchCfcProjection,
@@ -77,6 +80,15 @@ export interface DescribeHandleToolOutput {
    * it costs nothing and reveals no value.
    */
   path?: string[];
+
+  /**
+   * The verbs of a referent that is a piece: each one's name, what it is for,
+   * the event it takes and the result it returns, which is what `call_verb`
+   * sends to. Unlike {@link schema} these are not reduced to structure: they
+   * carry the pattern author's descriptions. Absent for anything but a piece
+   * itself, and for a piece whose pattern could not be read.
+   */
+  verbs?: HarnessCallableDescriptor[];
 
   /**
    * The CFC labels the referent carries, one per labelled path within it.
@@ -317,6 +329,12 @@ export type DescribeHandleLabel = DisclosedCfcLabel;
  * is conditional on there being no declared schema, so a referent that states
  * its own shape is never opened.
  *
+ * A referent that is a piece also reports its verbs, read from the compiled
+ * pattern the piece is pinned to by the listing `cf piece verbs` reads — what
+ * `call_verb` can send to, each with the event it takes and the result it
+ * returns. Those cross with their author's descriptions rather than reduced
+ * to structure, the one disclosure here that does; `pieceVerbsOf` says why.
+ *
  * A run with no fabric session still answers from its own table, so shape
  * stays inspectable in every run that has handles at all.
  *
@@ -335,7 +353,7 @@ export const describeHandleToolDescriptor: HarnessToolDescriptor = {
   toolId: "describe_handle",
   title: "Describe Handle",
   description:
-    "Report the shape of a general handle's referent and the CFC labels it carries: its recorded schema, path and label atom types, never its data — a research handle, whose content is the run's own findings, is the one referent whose content it returns. A held non-cell referent returns its kind and provenance under `referent`, with `hasSchema: false`. A referent that is a SQLite database reports its tables instead of a schema, under `database`: the columns of each table with their types, the distinct labels those columns carry, and under `fill` how many rows each table holds and how many of them are non-NULL in each column. Read `fill` before writing a query: a column whose count is 0 is NULL on every row of this database, so filtering on it returns nothing, and a table reporting `unread` was not counted rather than empty. A table reporting `rowLabelReads` carries a per-row label rule over those columns, and a query over it must select every one of them by its own name — an alias does not stand in for the column — or the read is refused and the refusal arrives on the result's `error` rather than as rows; `rowLabelReadsIncomplete` means the named columns are not the whole of what the rule needs — it reads a column this reply does not name, or it is declared in a shape that cannot be read — so such a query is refused whatever it selects. Read such a referent with `db.query` over the handle rather than as a value. A research handle — the cfh:v: token a research call returned — returns what that research found under `research`: its kit, the patterns it confirmed, and the handles it described, each marked `unavailable` when this run does not hold its token; read it before researching the same question again. A capability-restricted handle returns a named refusal. Use it to check that a reference is the kind of thing a step expects, and what handling it demands, before passing it on.",
+    "Report a handle's referent's shape and CFC labels, never its data except a research handle's findings: a cell's recorded schema and path, a piece's verbs, a SQLite database's tables and fill, or another held referent's kind and provenance.",
   effectClass: "read",
   inputSchema: {
     type: "object",
@@ -358,6 +376,20 @@ export const describeHandleToolDescriptor: HarnessToolDescriptor = {
       hasSchema: { type: "boolean" },
       schema: {},
       path: { type: "array", items: { type: "string" } },
+      verbs: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+            description: { type: "string" },
+            inputSchema: {},
+            outputSchema: {},
+          },
+          required: ["name", "inputSchema"],
+          additionalProperties: false,
+        },
+      },
       labels: {
         type: "array",
         items: {
@@ -745,12 +777,58 @@ const databaseOf = (
 
 /** What the session can state about `ref`: its declared shape, and its labels. */
 interface DescribedReferent {
+  /** Why the session could not read the referent's space, when it could not. */
+  denied?: string;
   schema?: JSONSchema;
+  verbs?: HarnessCallableDescriptor[];
   labels?: DescribeHandleLabel[];
   database?: DescribeHandleDatabase;
   cfcLabel?: IFCLabel;
   cfcLabelAvailable?: boolean;
 }
+
+/**
+ * The verbs of the piece whose result document is `root`, as the pattern
+ * declares them, or nothing when `root` is not a piece or its pattern cannot
+ * be read. A failure costs the reply its verbs and nothing else, the way a
+ * schema the session cannot state is reported as absent.
+ *
+ * SHORTCUT (2026-10-12): each verb's schemas and doc comment cross as the
+ * pattern's author wrote them — descriptions, defaults and enumerations
+ * included — where every other schema this tool discloses is reduced to
+ * structure. A model cannot call a verb well without the author's account of
+ * it, and that account is author text in model context: a prompt-injection
+ * surface the reduction otherwise closes, and one no bound on property names
+ * limits here. To harden, route the verbs through the CFC release check with
+ * the pattern's own label, and disclose what that admits.
+ */
+const pieceVerbsOf = async (
+  session: HarnessFabricSession,
+  root: Cell<unknown>,
+): Promise<HarnessCallableDescriptor[] | undefined> => {
+  if (piecePatternPointer(session.pieces.runtime, root) === undefined) {
+    return undefined;
+  }
+  try {
+    return (await pieceVerbs(session.pieces.runtime, root)).map((verb) => ({
+      name: verb.name,
+      ...(verb.description !== undefined
+        ? { description: verb.description }
+        : {}),
+      inputSchema: verb.inputSchema as HarnessCallableDescriptor[
+        "inputSchema"
+      ],
+      ...(verb.outputSchema !== undefined
+        ? {
+          outputSchema: verb
+            .outputSchema as HarnessCallableDescriptor["outputSchema"],
+        }
+        : {}),
+    }));
+  } catch {
+    return undefined;
+  }
+};
 
 /**
  * What `ref` DECLARES in the session's fabric, or nothing when the session
@@ -789,6 +867,12 @@ const describeInFabric = async (
       schema: undefined,
     });
     await root.sync();
+    // A space this session may not read serves its documents as empty, which
+    // would read as a referent declaring nothing. The denial is the answer.
+    const denied = pieces.runtime.storageManager.authorizationError?.(
+      link.space,
+    );
+    if (denied !== undefined) return { denied: denied.message };
     // The labels are the synced document's own metadata, narrowed to the
     // referent's path by the view, so they cost no read beyond the one the
     // shape already needed.
@@ -806,10 +890,14 @@ const describeInFabric = async (
       link.path,
       documentSchema,
     );
+    const verbs = link.path.length === 0
+      ? await pieceVerbsOf(session, root)
+      : undefined;
     if (declared !== undefined) {
       return {
         labels,
         schema: declared,
+        ...(verbs !== undefined ? { verbs } : {}),
         cfcLabel,
         cfcLabelAvailable,
       };
@@ -818,7 +906,12 @@ const describeInFabric = async (
     // contract can still be stated, and a database handle states one there.
     const { database, ref: db } = databaseOf(referent);
     if (database === undefined || db === undefined) {
-      return { labels, cfcLabel, cfcLabelAvailable };
+      return {
+        labels,
+        ...(verbs !== undefined ? { verbs } : {}),
+        cfcLabel,
+        cfcLabelAvailable,
+      };
     }
     // The counts are read after the contract rather than with it, so a
     // database that discloses its tables still discloses them when nothing
@@ -978,6 +1071,19 @@ const invokeDescribeHandle = async (
       // which is what a run without one does anyway.
     }
   }
+  if (described.denied !== undefined) {
+    return {
+      output: {
+        outputId,
+        token: entry.token,
+        known: true,
+        hasSchema: false,
+        error:
+          `describe_handle cannot read the space this handle's referent is in: ${described.denied}`,
+      },
+      cfcLabelAvailable: false,
+    };
+  }
   const schema = described.schema ??
     (entry.schemaSource === "harness" ? entry.schema : undefined);
   // Structure only: whatever the source, the reported schema is rebuilt
@@ -991,6 +1097,7 @@ const invokeDescribeHandle = async (
       hasSchema: disclosed !== undefined,
       ...(disclosed !== undefined ? { schema: disclosed } : {}),
       ...(path !== undefined ? { path } : {}),
+      ...(described.verbs !== undefined ? { verbs: described.verbs } : {}),
       ...(described.labels !== undefined ? { labels: described.labels } : {}),
       ...(described.database !== undefined
         ? { database: described.database }

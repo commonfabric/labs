@@ -6,6 +6,8 @@ export type {
   SourceMap,
 } from "./interface.ts";
 export {
+  type AuthoredSource,
+  type AuthoredSourceLookup,
   type BeforeTransformersResult,
   CompilationError,
   type CompilationErrorType,
@@ -21,7 +23,9 @@ export {
 export {
   collectDataFileNames,
   collectImportSpecifiers,
+  type ModuleDeclarations,
   resolveImportSpecifier,
+  scanModuleDeclarations,
 } from "./typescript/resolver.ts";
 export { assertImportInsideProgramRoot } from "./specifier.ts";
 export {

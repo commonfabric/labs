@@ -443,6 +443,26 @@ export interface Classification {
   paths: string[];
   valueShape: ValueShape;
   lineage: Lineage;
+  /** The record `cf space compact` leaves beside `value` on the space's ACL
+   * document (docs/plans/compact-space.md, "What a user sees"): how many
+   * runs, and the newest seq any hollowed or deleted row had. Present only
+   * where the member is well-formed. */
+  compaction?: { runs: number; lastCommitSeq: number };
+}
+
+/** The ACL document's compaction record, read as data. */
+function compactionRecordOf(
+  doc: EntityDocument,
+): Classification["compaction"] | undefined {
+  const record = doc.compaction;
+  if (
+    !isObjectNotArray(record) || !Array.isArray(record.runs) ||
+    typeof record.lastCommitSeq !== "number" ||
+    !Number.isFinite(record.lastCommitSeq)
+  ) {
+    return undefined;
+  }
+  return { runs: record.runs.length, lastCommitSeq: record.lastCommitSeq };
 }
 
 /**
@@ -586,14 +606,20 @@ export function classifyDocument(
     };
   }
   if ("value" in doc) {
+    const compaction = compactionRecordOf(doc);
     return {
       kind: "free-cell",
       regime: "n/a",
       owned,
-      label: summarize(value),
+      label: compaction === undefined
+        ? summarize(value)
+        : `${summarize(value)} · compacted ${compaction.runs} run${
+          compaction.runs === 1 ? "" : "s"
+        }, history through seq ${compaction.lastCommitSeq} archived`,
       paths,
       valueShape,
       lineage,
+      ...(compaction === undefined ? {} : { compaction }),
     };
   }
   return {

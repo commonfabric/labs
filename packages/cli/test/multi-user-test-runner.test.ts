@@ -16,7 +16,11 @@
  * barrier's discriminating coverage is the pattern-test corpus, where removing
  * it fails seven assertions across `topics`, `lobby`, and `cfc-group-chat-demo`.
  *
- * Also here: the CFC enforcement mode a run names reaches every participant.
+ * Also here: a participant's `expectRuntimeErrors` requires its own runtime
+ * errors, exactly where it names a count or their messages, and tolerates only
+ * those, so one participant's expectation never covers another's errors.
+ *
+ * And: the CFC enforcement mode a run names reaches every participant.
  * Each participant builds its own runtime in its own worker, so a mode the
  * orchestrator holds and does not forward leaves every one of them on the
  * preset's rung while the run reads as though it named one.
@@ -439,6 +443,57 @@ describe(
       expect(failed).toBeGreaterThan(0);
       expect(results[0].error).toContain("Deadlock");
       expect(results[0].error).toContain(`bob awaits "never-announced"`);
+    });
+
+    describe("a participant's `expectRuntimeErrors`", () => {
+      it("passes a run where each participant raises the runtime errors it expects", async () => {
+        const { failed, results } = await runTests(
+          fixture("expected-runtime-errors.test.tsx"),
+          { root: FIXTURES },
+        );
+        expect(failed).toBe(0);
+        expect(results[0].runtimeErrors).toEqual([]);
+      });
+
+      it("fails once for each participant whose expectation goes unmet, naming it", async () => {
+        const { failed, results } = await runTests(
+          fixture("unmet-runtime-errors.test.tsx"),
+          { root: FIXTURES },
+        );
+        expect(failed).toBe(3);
+        expect(results[0].results.map((result) => result.error)).toEqual([
+          "[alice] expected 2 runtime error(s), saw 1",
+          "[bob] expected some runtime error(s), saw 0",
+          "[carol] expected 1 runtime error(s), saw 1; " +
+          `none contains "Carol's action is allowed"; ` +
+          "unexpected: Error: Carol's action is refused",
+        ]);
+        expect(results[0].runtimeErrors).toEqual([]);
+      });
+
+      it("fails on a runtime error from a participant that expects none, beside one that expects its own", async () => {
+        const { failed, results } = await runTests(
+          fixture("unexpected-runtime-error.test.tsx"),
+          { root: FIXTURES },
+        );
+        expect(failed).toBe(1);
+        expect(results[0].runtimeErrors).toHaveLength(1);
+        expect(results[0].runtimeErrors[0]).toContain(
+          "[bob] Error: Bob's action is refused",
+        );
+      });
+
+      it("fails a run where a participant's expectation is malformed, naming the value", async () => {
+        const { failed, results } = await runTests(
+          fixture("malformed-runtime-errors.test.tsx"),
+          { root: FIXTURES },
+        );
+        expect(failed).toBe(1);
+        expect(results[0].error).toContain(
+          "`expectRuntimeErrors` is `true`, a positive whole count, or a non-empty list of strings, not",
+        );
+        expect(results[0].error).toContain("1.5");
+      });
     });
 
     describe("the shared space's access list", () => {

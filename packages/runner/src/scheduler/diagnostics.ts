@@ -251,6 +251,7 @@ export function handleSchedulerError(
   },
   error: Error,
   action: unknown,
+  eventId?: string,
 ): void {
   const { pieceId, spellId, patternId, space } = getPieceMetadataFromFrame(
     (error as Error & { frame?: Frame }).frame,
@@ -273,6 +274,7 @@ export function handleSchedulerError(
   if (spellId) errorWithContext.spellId = spellId;
   if (patternId) errorWithContext.patternId = patternId;
   if (space) errorWithContext.space = space as MemorySpace;
+  if (eventId !== undefined) errorWithContext.eventId = eventId;
 
   for (const handler of state.errorHandlers) {
     try {

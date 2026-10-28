@@ -206,8 +206,11 @@ a **link to that profile cell** in the shared entry and render every participant
 with a live, visitable `<cf-profile-badge $profile={p.profile} />` — cross-space
 reads resolve for any authorized viewer (CT-1667/1687), so the badge stays
 current, carries the verified-identity seal, and links to each contributor's
-profile. Snapshotting the `#profileName` / `#profileAvatar` strings instead is
-the self-containment fallback (renders with remote profile spaces offline). See
+profile. Snapshotting the `#profileName` value and the `#profilePicture` bytes
+(or, for a profile with no picture, the `#profileAvatar` text) instead is the
+self-containment fallback (renders with remote profile spaces offline);
+`profileLook()` in `packages/patterns/system/profile-look.ts` picks which to
+copy. See
 the [shared-profile roster guide](../../specs/shared-profile-rosters.md);
 canonical live-link demo:
 `packages/patterns/profile-roster-live-demo.tsx`; worked examples:
@@ -217,8 +220,13 @@ canonical live-link demo:
 `packages/patterns/lunch-poll/main.tsx`.
 
 **`<cf-profile-badge>` is the one idiomatic way to render an identity** — avatar +
-name + the runtime-attested generative seal (a DID-derived aura ring + cursor
-glint; there is no shield icon), navigable to the person's profile. Prefer it
+name + the runtime-attested generative seal (an aura ring derived from the
+owner's DID and, for a profile, the profile's space, + cursor glint; there is no
+shield icon), navigable to the person's profile. Verification attests the
+principal; the seal tells their profiles apart, so two profiles of one person
+look like two people. A document that carries the person's claim without being
+a profile, such as a room's record of them, wears the person's seal alone, the
+same in every space. Prefer it
 anywhere an identity appears (rosters, message authors, "playing as",
 scoreboards); inline a name into a string only as an explicit fallback. Four
 variants, all carrying the same seal (CT-1761):
@@ -275,9 +283,9 @@ user's home space):
 // Shown inside a pattern body.
 const profileWish = wish({ query: "#profile" });            // the viewer's profile CELL
 const profileNameWish = wish<string>({ query: "#profileName" });
-const profileAvatarWish = wish<string>({ query: "#profileAvatar" });
+const profilePictureWish = wish<FabricBytes>({ query: "#profilePicture" });
 const myName = computed(() => (profileNameWish.result ?? "").trim());
-const myAvatar = computed(() => (profileAvatarWish.result ?? "").trim());
+const myPicture = computed(() => profilePictureWish.result); // image bytes, or undefined
 const hasProfile = computed(() => (profileNameWish.result ?? "").trim() !== "");
 ```
 
@@ -298,7 +306,7 @@ The viewer is whoever the runtime says they are; `#profile` is how you read it.
 `cf-profile-badge` renders **any** participant, not just the viewer: bind the live
 profile cell you stored for them on join. Cross-space profile reads resolve for
 every authorized viewer (CT-1667/1687), so each badge stays current and carries the
-verified seal. Fall back to `<cf-avatar src={p.avatar} name={p.name} />` only when
+verified seal. Fall back to `<cf-avatar bytes={p.picture} src={p.avatar} name={p.name} />` only when
 you deliberately hold just a snapshot — a self-contained piece, or a participant
 whose remote profile space is offline.
 
@@ -314,7 +322,8 @@ whose remote profile space is offline.
 
 There is no "list everyone's profiles" primitive. Each viewer contributes their
 own identity on join: push their live `#profile` **cell** into the shared
-`PerSpace` roster (plus a `{ displayName, avatar }` snapshot for the offline
+`PerSpace` roster (plus a `{ displayName, ...profileLook(picture, avatar) }`
+snapshot for the offline
 fallback), and keep a `PerUser` pointer that is a **cell reference** to their own
 entry (see [Shared Directories And "Me"](#shared-directories-and-me)). Decide "is
 this me?" with `equals()` on the stored profile cell (or the entry reference) —
@@ -324,7 +333,8 @@ never by comparing the mutable, non-unique display name. The live demo
 ### Ownership and authorship
 
 "Who created this / who wrote this" is identity too. For display, snapshot the
-actor's `{ displayName, avatar }`. For an *attested* claim the user cannot forge,
+actor's name and `profileLook(picture, avatar)`: the picture, or the avatar
+text for a profile with no picture. For an *attested* claim the user cannot forge,
 use the CFC wrappers `AuthoredByCurrentUser<T>` / `RepresentsCurrentUser<T>` and
 render with `cf-cfc-authorship`. Read-only display works today; note that
 owner-protected profile *writes* are currently constrained (see CT-1665).
@@ -407,7 +417,10 @@ const inviteBaker = handler<
   { baker: Writable<{ name: string }> },
   { invited: Writable<DID[]> }
 >(({ baker }, { invited }) => {
-  const principal = principalOf(baker, "represents-principal");
+  // Whose own profile `baker` is, by the rule every reader of a person's
+  // profiles applies, which `principalOf(baker, "represents-principal")`
+  // alone does not decide.
+  const principal = profileOwnerOf(baker);
   if (principal === undefined || principal === currentPrincipal()) return;
   invited.push(principal);
 });
@@ -417,7 +430,8 @@ const inviteBaker = handler<
   form only the runtime writes. A pattern cannot write that form for anyone but
   the user it runs for, so a DID it returns is one that user's runtime put
   there. `undefined` means no verified single principal: refuse whatever needs
-  one. A label that cannot be read throws rather than returning `undefined`.
+  one. A label the caller cannot observe, such as one in a space it cannot
+  read, also returns `undefined`, as a missing one does.
 - It reads the label, and no contents of the value beyond the link pointers
   needed to reach it. Call it in a handler, including on a cell the event
   names, or in a `computed()` or `lift()`, where it updates when the label
@@ -430,6 +444,27 @@ const inviteBaker = handler<
 - `principalsOf(target, kind)` returns every principal the label attests: `[]`
   for none, several for a contested one. Read it where a value nobody attests
   is fine but one someone else attests is not.
+- `profileOwnerOf(profile)` returns the person whose own profile `profile` is,
+  by the rule Home and `#profile` apply ("Profile" in
+  [`HOME_SPACE.md`](../conventions/HOME_SPACE.md)), or `undefined`. Read it,
+  not `principalOf(profile, "represents-principal")`, to ask whether a profile
+  is someone's, since it also refuses a profile whose name is borrowed from
+  another document.
+- `resultOwnerOf(cell, field)` names the pattern whose result owns the
+  document `cell` is in, as `space/id`, when that result's own `field` is that
+  document, or `undefined` otherwise and for a document no pattern's setup
+  derived. A handler that decides by several cells of one pattern, as a guard
+  over Home's lists does, checks each by the field it must be, so that a
+  binding of another pattern's cells, or of the right pattern's cells in the
+  wrong places, is refused; a pattern cannot forge the answer. Without
+  `field` it says only whose the document is, which is not enough for that.
+- A field that links a document has its own label, separate from the linked
+  document's. `principalOf(field, kind, { label: "written" })` reads the
+  field's claim of `kind`, such as who wrote the link, while the default reads
+  the linked document's claim of `kind`.
+- `spaceAccessOf(target, principal)` returns another principal's level, so a
+  handler can tell whether the principal a label names is still a member.
+  It narrows no computation to per-user scope, as `spaceAccess(target)` does.
 
 [`principal-of.md`](../../features/principal-of.md) has the details.
 
@@ -698,6 +733,39 @@ regardless, and a rule a pattern enforces only by consulting
 that must be refused, use a write policy as described above.
 [`space-access.md`](../../features/space-access.md) has the details.
 
+### A space's members
+
+`spaceMembers(target)` returns the principals the access list of `target`'s
+space names: `principals` maps each one's DID to its level, `"OWNER"`,
+`"WRITE"`, or `"READ"`. The list's `"*"` entry names nobody, so it makes no one
+a member; it is reported apart, as `anyone`, the level it grants whoever the
+list does not name.
+
+```tsx
+// Shown inside a pattern body.
+const board = new Writable.perSpace<string[]>([]);
+const memberCount = computed(() => {
+  const members = spaceMembers(board);
+  return members === undefined
+    ? undefined
+    : Object.keys(members.principals).length;
+});
+```
+
+Only a viewer the access list grants access gets the list, whether through
+their own entry or through `"*"`. Anyone else gets `undefined`, which also
+means "not known yet", as it does for `spaceAccess(target)`; the result is never
+an empty list. Call it where `spaceAccess(target)` can be called. In a
+computation the value is the viewer's own, and updates when the access list
+changes.
+
+It lists principals, not people. To show each member by the profile they joined
+with, match the space's roster against it with `principalOf()` (see
+[Build the roster by join](#build-the-roster-by-join)), and show a member with
+no matching profile by their DID.
+[`space-access.md`](../../features/space-access.md#a-spaces-members) has the
+details.
+
 ### Granting and revoking access to a space
 
 `grantSpaceAccess(target, principal, level)` sets `principal`'s entry in the
@@ -723,14 +791,15 @@ const addMember = handler<
 ```
 
 Both calls work only in a handler whose event is a trusted gesture, a person's
-action on a rendered surface; anywhere else, or for an event without one, they
-throw. The person who sent the event must hold `OWNER` in the space, which
-may not be their own Home space, and `principal` must be a DID other than
-theirs, the space's own, and `"*"`. A change that would leave the space with
-no concrete `OWNER` is refused. Every refusal throws. A throw the handler lets
-escape drops its whole transaction, so its other writes are dropped too; the
-call throws before staging anything, so a handler that catches the throw has
-changed nothing for that call.
+action on a rendered surface or on a native host's reviewed control
+([host embedding, §11](../../features/host-embedding.md#11-policy-record-native-reviewed-acts-count-as-trusted-gestures));
+anywhere else, or for an event without one, they throw. The person who sent the
+event must hold `OWNER` in the space, which may not be their own Home space,
+and `principal` must be a DID other than theirs, the space's own, and `"*"`. A
+change that would leave the space with no concrete `OWNER` is refused. Every
+refusal throws. A throw the handler lets escape drops its whole transaction, so
+its other writes are dropped too; the call throws before staging anything, so a
+handler that catches the throw has changed nothing for that call.
 
 Granting a level someone already holds, or revoking an entry that is not
 there, does nothing, so a handler that runs again for the same event is safe.
@@ -738,8 +807,45 @@ The change to the access list commits on its own, just before the handler's
 other writes, so if those fail the change still stands; the handler running
 again for the same event repairs that.
 
-Both calls throw on a serving runtime for now.
+Both calls work in a handler the serving loop runs as in one a client runs.
+There the change commits when the serving loop commits the handler's run, still
+ahead of the handler's other writes. A refusal the call itself cannot see fails
+the whole run when the run seals, as a throw the handler lets escape does. A
+run the serving loop withdraws before that commit changes nothing, and its
+event runs again; that is also what a change to the list made after the run
+sealed leads to. A client's speculative echo of a served handler changes
+nothing either: the served run makes the change.
 [`space-access-changes.md`](../../features/space-access-changes.md) has the
+details.
+
+### Naming a space
+
+`spaceOf(target)` returns the DID of the space `target`'s value lives in: the
+pattern's own space for a cell there, or a new one for a child a handler just
+created with `inSpace()`. Write it into data that has to name a space, such as
+an invitation, and have the reader check it with `isWellFormedDID()`.
+
+```tsx
+// Shown at module scope.
+const Bakery = pattern<{ name: string }>(({ name }) => ({ name }));
+
+const openBakery = handler<
+  { baker: DID },
+  { invitations: Writable<{ space: DID; baker: DID }[]> }
+>(({ baker }, { invitations }) => {
+  const bakery = Bakery.inSpace(undefined, {
+    grants: { [baker]: "WRITE" as const },
+  })({ name: "Cruller Corner" });
+  const space = spaceOf(bakery);
+  if (space !== undefined) invitations.push({ space, baker });
+});
+```
+
+Call it where `spaceAccess(target)` can be called. It returns `undefined` for
+a `target` of `undefined`, and throughout a run that names a space `inSpace()`
+has not resolved yet: the runtime creates the space once that run ends,
+discards what it wrote, and runs it again, and that next run gets the DID.
+[`space-access.md`](../../features/space-access.md#the-spaces-own-did) has the
 details.
 
 ## Mapping Shared Lists
@@ -758,6 +864,51 @@ const roomButtons = conversation.rooms.map((room) => (
 
 For editable nested objects, pass a writable item reference and use `.key(...)`
 inside the child pattern or handler.
+
+## Per-Viewer Work
+
+Under server execution one runtime derives for every viewer. A computed that
+reads user-scoped state, such as the viewer's profile, runs once for each user
+who demands it, one that reads session-scoped state runs once for each such
+session, and so does everything downstream of either
+([cell scopes](../../specs/server-side-execution/scopes.md), §2). Two sessions
+of one user share that user's instance and have separate session instances. The
+runtime learns what a node reads by running it, so nothing in the source says
+which derivations fan out, and a client runtime, which derives only its own
+viewer's instances, shows none of the cost.
+
+### Keep the viewer out of shared derivations
+
+A tally of shared votes that also marks which entry is the viewer's turns the
+tally, the ranking over it, and every card that reads the ranking into
+per-viewer work: five copies of each for five users. Derive shared data from
+shared inputs alone, and decide what is the viewer's at the leaf, from one small
+per-viewer value:
+
+```tsx
+// Shown for illustration only.
+// `board.entries` reads nothing of the viewer; `me` is their profile cell.
+{board.entries.map((entry) => {
+  const outline = computed(() =>
+    entry.owner !== undefined && equals(entry.owner, me)
+      ? "2px solid currentColor"
+      : "none"
+  );
+  return <span style={{ outline }}>{entry.title}</span>;
+})}
+```
+
+The lunch poll's self ring (`packages/patterns/lunch-poll/main.tsx`) takes this
+shape over rows a `computed()` produced, reading the viewer's per-user profile,
+and its pattern test checks that the ring lands on the viewer's own swatch and
+no other. A per-session read in the same place can fail to resolve; see
+[per-session reads in mapped computations](../../development/debugging/gotchas/persession-read-in-mapped-computed.md),
+which also says what does.
+
+The shared derivations then run once per change, and only the comparison at the
+leaf runs per viewer. The same holds for any "is this me", "my entry", or "can
+I" read: carry the identity-free data through the shared derivations and apply
+the viewer's identity where it is displayed or acted on.
 
 ## Concurrent Edits Without Clobbering
 
@@ -880,6 +1031,8 @@ See:
 - Every participant is rendered with `cf-profile-badge` bound to their profile cell
   (`cf-avatar` + snapshot only as an offline fallback), never a bare name string.
 - The current viewer is resolved via `#profile`, not a self-typed name field.
+- Derivations over shared data read no viewer state; what is the viewer's is
+  decided at the leaf.
 - Rosters are built by join (each viewer contributes their live profile cell); "me"
   is a cell reference, not a name.
 - Authorization is modeled with CFC/IFC policy, not scopes.

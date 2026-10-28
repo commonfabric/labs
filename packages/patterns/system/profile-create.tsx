@@ -3,8 +3,12 @@ import {
   Cfc,
   equals,
   handler,
+  linksOf,
   NAME,
   pattern,
+  profileOwnerOf,
+  resultOwnerOf,
+  spaceOf,
   Stream,
   UI,
   type VNode,
@@ -13,7 +17,10 @@ import {
 } from "commonfabric";
 import ProfileHome, {
   type BackwardsCompatibleProfile,
-  type ProfileHomeOutput,
+  type InboxPointable,
+  nameHasControlCharacter,
+  pointAtInboxIfUnset,
+  type ProfileInbox,
   type SetProfileNameEvent,
 } from "./profile-home.tsx";
 
@@ -26,27 +33,12 @@ export const TRUSTED_PROFILE_PICKER_SURFACE = "ProfilePickerSurface";
 export const TRUSTED_PROFILE_SET_DEFAULT_ACTION = "SetDefaultProfile";
 export const TRUSTED_PROFILE_SET_MRU_ACTION = "SetMruProfile";
 
-// Read a profile link (or list of links) as cell REFERENCES (`asCell`), not
-// inlined values. A plain `.get()` deep-resolves each element and collapses the
-// whole read to `undefined` when any element links into a space not yet loaded
-// in this context (e.g. a freshly-created profile living in its own `inSpace`
-// space). Item type is `unknown` to keep the sync shallow (links only). Mirrors
-// wish.ts `profileLinkListSchema`; identity comparisons use `equals` on the
-// resulting link cells, which never deep-resolves.
-//
-// These are functions (not const object literals) so the schema object is built
-// per call inside the function body — module-top-level mutable data is rejected
-// under SES (`__cf_data()`); a function returning a fresh literal is not.
-// deno-lint-ignore no-explicit-any
-export const profileLinkListSchema = (): any => ({
-  type: "array",
-  items: { type: "unknown", asCell: ["cell"] },
-});
-// deno-lint-ignore no-explicit-any
-export const profileLinkSchema = (): any => ({
-  type: "unknown",
-  asCell: ["cell"],
-});
+/**
+ * A link to a profile, as Home's lists hold one: read as the cell it names,
+ * never as the profile's value, so that reading a list loads no profile and a
+ * profile whose space has not loaded here still counts.
+ */
+export type ProfileLink = Cell<BackwardsCompatibleProfile>;
 
 export type CreateProfileEvent = {
   detail?: { message?: string };
@@ -55,15 +47,27 @@ export type CreateProfileEvent = {
   target?: { value?: string };
 };
 
-export type SeedProfileNameEvent = { name?: string; index?: number };
-
-// What the seed step needs of each profile in the list: the stored name (to
-// write only where none is stored yet) and the stream it writes through.
-// `setName` stays optional here so a stored profile of a vintage without it
-// can never keep this handler from running for the profiles created after.
-type SeedProfileTarget = {
+/**
+ * The seed step's event: the name typed at creation, and the profile that
+ * creation made.
+ */
+export type SeedProfileNameEvent = {
   name: string;
-  setName?: Stream<SetProfileNameEvent>;
+  // A value, not a `Cell<…>`: the create sends a link, which the runner
+  // resolves before the body runs (see `seedProfileName`).
+  profile: SeedProfileTarget;
+};
+
+/**
+ * What the seed step needs of the profile it seeds: the stored name (to write
+ * only where none is stored yet) and the stream it writes through, and what
+ * pointing the profile at Home's private inbox needs. The profile is the one
+ * just created, so it is current-vintage by construction and carries
+ * `setName`.
+ */
+export type SeedProfileTarget = InboxPointable & {
+  name: string;
+  setName: Stream<SetProfileNameEvent>;
 };
 
 // Stores the creation name in the new profile's `name` cell, through
@@ -78,39 +82,40 @@ type SeedProfileTarget = {
 // handler instantiates is materialized after the handler body returns (the
 // runner runs the frame's reactives as a result pattern), so inside the body
 // its streams do not exist yet and a send there reaches nothing. This event
-// is queued behind the create in the same runtime and runs once the create
-// has committed. The profile is addressed by position: the create handler
-// reads the list's length before its push and sends it here as `index`.
-// Position rather than the profile's display name, because the profile's
-// lifts may not have run in this runtime by the time this step does (CI's
-// slower lanes reached it first and a name match failed silently), and the
-// argument is not on the result (re-exporting it changes the stored-profile
-// schema every embedder carries, which the pattern-update gate refuses). The
-// read of the list in the create handler keeps the append in the conflict
-// set, so another device's create landing first conflicts and re-runs the
-// create — re-deriving the index — instead of merging under it.
+// is queued behind the create in the same runtime. It names the new profile
+// by its link, and reads no list: a read of Home's `profiles` here can run
+// before the create's append is visible to it, and find no entry for the
+// profile.
 //
-// The list is bound as a VALUE, not a link: the runner resolves a handler's
-// argument against this schema before the body runs, and a profile whose
-// docs the replica has not loaded yet reads as undefined — the runner then
-// withdraws the dispatch and runs it again once the loads land (scheduler
-// events.ts, the cold-argument arm). Reading the new profile in the body
-// instead — through its link, right after the cross-space commit — raced
-// that load: the send found no stream and reached nothing. Only a profile
-// whose stored `name` is still empty is written: a re-delivery of this
-// event, or the same profile seeded elsewhere, is left alone.
+// The profile rides the event as a link and is bound as a VALUE: before the
+// body runs, the runner loads the documents the handler's argument reaches
+// through the event (the handler's `presyncInputs`) and resolves the
+// argument against this schema. An event whose profile does not resolve
+// reaches the body as `undefined`, and the step fails rather than leave the
+// name unstored. Only a profile whose stored `name` is still empty is
+// written: a re-delivery of this event, or the same profile seeded
+// elsewhere, is left alone.
 export const seedProfileName = handler<
   SeedProfileNameEvent,
-  {
-    profiles: SeedProfileTarget[];
+  { privateInbox?: ProfileInbox }
+>((event, { privateInbox }) => {
+  if (event === undefined) {
+    throw new Error(
+      "Cannot seed a profile's name: the event lacks a name or a profile, " +
+        "or its profile does not resolve.",
+    );
   }
->((event, { profiles }) => {
-  const name = (event.name ?? "").trim();
-  const index = event.index;
-  if (!name || typeof index !== "number") return;
-  const target = profiles[index];
-  if (target === undefined || target.setName === undefined) return;
-  if ((target.name ?? "") !== "") return;
+  const name = event.name.trim();
+  if (!name) {
+    throw new Error("Cannot seed a profile's name with an empty name.");
+  }
+  const target = event.profile;
+  if (target.name !== "") return;
+  // The profile is pointed at Home's private inbox here, after its create has
+  // committed, for the same reason its name is stored here. Home's own pointing
+  // step runs once per runtime worker, so a profile created later would
+  // otherwise wait for the next worker.
+  pointAtInboxIfUnset(target, privateInbox);
   target.setName.send({ name });
 });
 
@@ -133,7 +138,10 @@ export const seedProfileName = handler<
 // at the least, so the space grants anyone WRITE. What keeps a visitor from
 // changing the profile's data is the owner protection on its fields
 // (profile-home.tsx), not the space's access list; its view state is per
-// session. Existing profiles keep their already-baked concrete DID link.
+// session. The profile is the space's root (`root: true`), reserved in the
+// space's genesis commit, so a host holding only the space's DID reaches the
+// profile through the space's root. Existing profiles keep their
+// already-baked concrete DID link.
 export const submitProfileCreation = handler<
   CreateProfileEvent,
   {
@@ -154,32 +162,20 @@ export const submitProfileCreation = handler<
   // in the DOM after submit, with no durable write to clobber.
   const name = (event.name ?? event.detail?.message ?? event.target?.value ??
     "").trim();
+  if (nameHasControlCharacter(name)) {
+    throw new Error("A profile name cannot contain control characters.");
+  }
   if (name) {
-    // Where the push lands; the seed step below addresses the profile by it.
-    // Read as link cells (see `profileLinkListSchema`): a deep read collapses
-    // to undefined when any entry lives in a space this runtime has not
-    // loaded, which every freshly created profile's does; the link read does
-    // not. NOT bound as a value the runner would resolve first: a home whose
-    // list doc this replica has not loaded reads as undefined there, and the
-    // create then never runs ("did not run in 10 dispatches", measured in the
-    // shell for a fresh user). The bound: a list doc that is unloaded here
-    // reads as empty, the index is 0, and the seed step — which writes only
-    // where no name is stored — skips rather than miswrites; the profile then
-    // shows `initialName` until a name is saved.
-    const index = ((profiles as any).asSchema(profileLinkListSchema()).get() ??
-      []).length as number;
-    profiles.push(
-      ProfileHome.inSpace(undefined, { grants: { "*": "WRITE" } })({
-        initialName: name,
-        // The freshly created profile is current-vintage by construction — it
-        // carries every stream and field, so the strict producer type is the
-        // honest cast here (BackwardsCompatibleProfile is for stored docs of
-        // unknown vintage).
-      }) as ProfileHomeOutput,
-    );
+    const profile = ProfileHome.inSpace(undefined, {
+      grants: { "*": "WRITE" },
+      root: true,
+    })({
+      initialName: name,
+    });
+    profiles.push(profile);
     // Queued behind this create; stores the name once the profile is live
     // (see `seedProfileName`).
-    seedName.send({ name, index });
+    seedName.send({ name, profile });
   }
 });
 
@@ -198,18 +194,23 @@ export type DefaultProfileSlot = { profile?: BackwardsCompatibleProfile };
 export const setDefaultProfile = handler<
   unknown,
   {
-    defaultProfile: Writable<DefaultProfileSlot>;
+    // Absent for a home without the slot, whose picker offers no "Set
+    // default"; an event sent there all the same is refused.
+    defaultProfile?: Writable<DefaultProfileSlot>;
     // Take the profile as a LINK cell, not a resolved value: the handler only
     // needs the link to write into defaultProfile, and a link argument doesn't
     // require the profile's cross-space values to be loaded at event time —
     // resolving the full value here would fail required-field validation
     // ("stream action argument is undefined … not running") whenever the
     // profile's space hasn't materialized locally yet.
-    profile: Cell<BackwardsCompatibleProfile>;
+    profile: ProfileLink;
   }
 >((_, { defaultProfile, profile }) => {
+  if (defaultProfile === undefined) {
+    throw new Error("Cannot set a default: this home has no default slot.");
+  }
   if (profile) {
-    defaultProfile.key("profile").set(profile as any);
+    defaultProfile.key("profile").set(profile);
   }
 });
 
@@ -218,20 +219,247 @@ export const setDefaultProfile = handler<
 export const setMruProfile = handler<
   unknown,
   {
-    mru: Writable<BackwardsCompatibleProfile[]>;
+    // Read and written as the links it holds, whatever profiles they name.
+    mru: Writable<unknown[]>;
     // Link cell, not a resolved value — same event-time-validation reason as
     // setDefaultProfile above.
-    profile: Cell<BackwardsCompatibleProfile>;
+    profile: ProfileLink;
   }
 >((_, { mru, profile }) => {
   if (!profile) return;
-  // Read existing entries as link cells (not inlined values) so an entry that
-  // links into an unloaded space doesn't collapse the whole read to `undefined`
-  // and silently wipe MRU history. Dedup by link identity via `equals`.
-  const current = ((mru as any).asSchema(profileLinkListSchema()).get() ??
-    []) as BackwardsCompatibleProfile[];
-  const filtered = current.filter((entry) => !equals(entry, profile));
-  mru.set([profile, ...filtered] as any);
+  // The entries are read as the links they are (`linksOf()`), not inlined
+  // values, so an entry that links into an unloaded space doesn't collapse
+  // the whole read to `undefined` and silently wipe MRU history. Dedup by link
+  // identity via `equals`.
+  const filtered = (linksOf(mru) ?? []).filter((entry) =>
+    !equals(entry, profile)
+  );
+  mru.set([profile, ...filtered]);
+});
+
+/**
+ * The profile a retire or a restore acts on, as a link. A picker row binds
+ * its own profile to the handler instead; Home's streams take it from the
+ * event.
+ */
+export type ProfileRetirementEvent = {
+  profile?: ProfileLink;
+};
+
+/**
+ * The space of the profile a home's default names: the link under `profile`
+ * in its slot `defaultProfile`, or, while that slot names none,
+ * `legacyDefaultProfileSpace`, the space of a default chosen before the slot
+ * (Home's `legacyDefaultProfileSpace`). A link into `homeSpace` names none,
+ * and so does a home with neither.
+ */
+export const defaultProfileSpace = (
+  defaultProfile: Cell<DefaultProfileSlot> | undefined,
+  legacyDefaultProfileSpace: Cell<string | undefined> | undefined,
+  homeSpace: string | undefined,
+): string | undefined => {
+  const named = (space: string | undefined) =>
+    space !== homeSpace ? space : undefined;
+  // The space of the profile the slot's link names, or the slot's own, Home's,
+  // while it holds none.
+  return named(spaceOf(defaultProfile?.key("profile"))) ??
+    named(legacyDefaultProfileSpace?.get());
+};
+
+/**
+ * Whether the profile `link` names is one of the user's own, `owner` being
+ * the user's DID: `profileOwnerOf()` names them, by the rule the runner's
+ * `profileOwnership()` applies to `#profile`. A profile whose document is
+ * absent carries no label, so it is no one's.
+ */
+export const isOwnProfile = <T,>(
+  link: Cell<T> | undefined,
+  owner: string | undefined,
+) => owner !== undefined && profileOwnerOf(link) === owner;
+
+/**
+ * The spaces of the profiles in `profiles` that are the user's own
+ * (`isOwnProfile()`), retired or not, in list order, `homeSpace` being the
+ * user's DID; a link into `homeSpace` names none. It is called from a handler
+ * or a reactive computation, since it reads labels.
+ */
+export const ownProfileSpaces = <T,>(
+  profiles: Cell<T[]>,
+  homeSpace: string | undefined,
+): string[] =>
+  (linksOf(profiles) ?? [])
+    .filter((link) => isOwnProfile(link, homeSpace))
+    .map((link): string | undefined => spaceOf(link))
+    .filter((space): space is string =>
+      space !== undefined && space !== homeSpace
+    );
+
+/** Home's profile lists, as `liveProfileSpaces()` reads them. */
+export type ProfileLists = {
+  /** Home's `profiles` list. */
+  profiles: Cell<BackwardsCompatibleProfile[]>;
+
+  /** Home's default profile slot, `DefaultProfileSlot`, if bound. */
+  defaultProfile?: Cell<DefaultProfileSlot>;
+
+  /**
+   * The space of a default a home chose before `defaultProfile`, Home's
+   * `legacyDefaultProfileSpace`, if bound.
+   */
+  legacyDefaultProfileSpace?: Cell<string | undefined>;
+
+  /** Home's `mru` list. */
+  mru: Cell<unknown[]>;
+
+  /** Home's `retiredProfiles` list, if bound. */
+  retiredProfiles?: Cell<unknown[]>;
+};
+
+/**
+ * The spaces of the user's live profiles, the ones in `profiles` that are
+ * the user's own (`isOwnProfile()`) and that are not in
+ * `retiredProfiles`, in the order `#profile` returns them for a runtime that
+ * names no preferred profile: the default first, unless it is retired, then
+ * by rank in `mru`, then in list order. The first is the profile `#profile`
+ * returns. Profiles are compared by their own space, and a link into
+ * `homeSpace`, the user's DID, names none. This is the order the runner's
+ * `orderProfileCandidates()` decides `#profile` by, which pattern code cannot
+ * import. It is called from a handler or a reactive computation, since it
+ * reads labels.
+ */
+export const liveProfileSpaces = (
+  lists: ProfileLists,
+  homeSpace: string | undefined,
+): string[] => {
+  const spaces = (
+    list: Cell<unknown[]> | undefined,
+  ): (string | undefined)[] =>
+    (linksOf(list) ?? []).map((link) => spaceOf(link));
+  const retired = new Set(spaces(lists.retiredProfiles));
+  const live = ownProfileSpaces(lists.profiles, homeSpace).filter((space) =>
+    !retired.has(space)
+  );
+  const preferred = defaultProfileSpace(
+    lists.defaultProfile,
+    lists.legacyDefaultProfileSpace,
+    homeSpace,
+  );
+  const mru = spaces(lists.mru);
+  const rank = (space: string): number => {
+    if (space === preferred) return -1;
+    const index = mru.indexOf(space);
+    return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+  };
+  // `sort()` is stable, so profiles of equal rank keep their list order.
+  return live.sort((a, b) => rank(a) - rank(b));
+};
+
+// Retires one of the user's profiles, with `retired` set, or restores one,
+// without it: Home's `retireProfile` and `restoreProfile` streams are its two
+// bindings, and it is the one writer of Home's `retiredProfiles` list.
+//
+// Retiring appends the profile's link to the list. A retired profile is not
+// one of the user's profiles: `#profile` never answers with it and leaves it
+// out of its candidates, and the picker lists it only among the removed
+// profiles it can restore. Its link stays in `profiles`, and its space and
+// data stay on the host, so a link to it held elsewhere still shows it, and
+// restoring makes it one of the user's profiles again. A profile already
+// retired, compared by its own space as `#profile` compares profiles, is left
+// as it is.
+//
+// Any pattern that reaches Home's streams can send a retirement, as it can a
+// profile's rename, so retiring refuses a profile that is not one of the
+// user's live profiles, those `profiles` lists that are the user's own
+// (`ownProfileSpaces()`) and not retired, which keeps the list from holding
+// anything else. It also refuses the profile `#profile` returns for a
+// runtime that names no preferred profile, the first of
+// `liveProfileSpaces()`: retiring it would quietly move `#profile` to another
+// profile. That is the default when one is set, and otherwise the most
+// recently used live profile, or the first listed. The person sets another
+// profile as the default first. The last live profile is always that
+// profile, so it is never retired. The guard decides by the lists and slots
+// the handler is bound to, so it refuses a binding missing any of them, and
+// one where any is not the field of that name of the result that owns the
+// retired list (`resultOwnerOf()`), as each of Home's is.
+//
+// Restoring removes every link in the list into the space of the profile the
+// row binds or the event names, whatever it names, so that a link the list
+// came to hold some other way can be cleared. A profile that is not retired
+// is left as it is.
+export const setProfileRetired = handler<
+  ProfileRetirementEvent,
+  {
+    profiles: Writable<BackwardsCompatibleProfile[]>;
+    mru: Writable<BackwardsCompatibleProfile[]>;
+    // Written, so read and written as the links it holds, whatever profiles
+    // they name.
+    retiredProfiles: Writable<unknown[]>;
+    defaultProfile?: Writable<DefaultProfileSlot>;
+    legacyDefaultProfileSpace?: Cell<string | undefined>;
+    profile?: ProfileLink;
+    retired: boolean;
+  }
+>((event, state) => {
+  const target = state.profile ?? event.profile;
+  const space = spaceOf(target);
+  if (target === undefined || space === undefined) {
+    throw new Error(
+      `Cannot ${state.retired ? "retire" : "restore"} a profile: the event ` +
+        "names no profile.",
+    );
+  }
+  const { retiredProfiles } = state;
+  const retired = linksOf(retiredProfiles) ?? [];
+  if (!state.retired) {
+    const kept = retired.filter((entry) => spaceOf(entry) !== space);
+    if (kept.length !== retired.length) retiredProfiles.set(kept);
+    return;
+  }
+  const { profiles, mru, defaultProfile, legacyDefaultProfileSpace } = state;
+  // Each list must be the field of its name of the one result that owns the
+  // retired list, which names no owner for a slot left unbound.
+  const owners = new Set([
+    resultOwnerOf(profiles, "profiles"),
+    resultOwnerOf(mru, "mru"),
+    resultOwnerOf(retiredProfiles, "retiredProfiles"),
+    resultOwnerOf(defaultProfile, "defaultProfile"),
+    resultOwnerOf(legacyDefaultProfileSpace, "legacyDefaultProfileSpace"),
+  ]);
+  if (owners.size !== 1 || owners.has(undefined)) {
+    throw new Error(
+      "Cannot retire a profile: the lists this handler was bound to are " +
+        "not one Home's own.",
+    );
+  }
+  const live = liveProfileSpaces(
+    {
+      profiles,
+      defaultProfile,
+      legacyDefaultProfileSpace,
+      mru,
+      retiredProfiles,
+    },
+    spaceOf(retiredProfiles),
+  );
+  if (retired.some((entry) => spaceOf(entry) === space)) return;
+  if (!live.includes(space)) {
+    throw new Error(
+      "Cannot retire a profile that is not one of the profiles this home " +
+        "lists as the user's own.",
+    );
+  }
+  if (live[0] === space) {
+    throw new Error(
+      live.length === 1
+        ? "Cannot retire the user's only profile."
+        : "Cannot retire the profile `#profile` returns: set another " +
+          "profile as the default first.",
+    );
+  }
+  // The list links the profile's own document, which carries the labels a
+  // link into the protected list is checked against, rather than whatever
+  // link the event or the row holds on the way to it.
+  retiredProfiles.set([...retired, target.resolveAsCell()]);
 });
 
 // A single owner-protected link to a profile pattern in its own space, created
@@ -308,6 +536,38 @@ export type TrustedProfileMru = Cfc<
   { addIntegrity: ["profile-link"] }
 >;
 
+// The home `retiredProfiles` list. The container and each element are
+// written by `setProfileRetired` and no other handler: the element policy
+// gates adding or replacing a link, and the container policy gates the
+// structural changes (truncation / removal / reorder) the element policy
+// misses, for the reason `TrustedProfileList` gives. It asks for no gesture,
+// so any pattern that reaches Home's streams can retire or restore a profile
+// by sending their events, as it can rename one; what the policies rule out
+// is a write by anything else.
+export type TrustedRetiredProfileList = Cfc<
+  WriteAuthorizedBy<
+    Cfc<
+      WriteAuthorizedBy<
+        Cell<BackwardsCompatibleProfile>,
+        typeof setProfileRetired
+      >,
+      { addIntegrity: ["profile-link"] }
+    >[],
+    typeof setProfileRetired
+  >,
+  { addIntegrity: ["profile-link"] }
+>;
+
+// Home's earlier default: a link at the root of a cell of its own, the shape a
+// home held its default in before the `defaultProfile` slot, and the default
+// while the slot holds none. Nothing writes it now. Its write contract names
+// `setDefaultProfile`, which writes the slot instead, so that nothing else can
+// replace the earlier default either.
+export type TrustedLegacyDefaultProfile = WriteAuthorizedBy<
+  BackwardsCompatibleProfile,
+  typeof setDefaultProfile
+>;
+
 export type ProfileCreateInput = {
   profiles: Writable<BackwardsCompatibleProfile[]>;
   inputId?: string;
@@ -322,6 +582,13 @@ export type ProfileCreateInput = {
   // time exactly as before — so a prefilled value is a head start on typing,
   // never a shortcut around the gesture.
   defaultName?: string;
+
+  /**
+   * Home's private inbox, if the embedder has it, held as a profile holds its
+   * pointer. Each profile this creates is pointed at it, unless the profile
+   * points at an inbox already.
+   */
+  privateInbox?: ProfileInbox;
 };
 
 export type ProfileCreateOutput = {
@@ -331,10 +598,10 @@ export type ProfileCreateOutput = {
 };
 
 export default pattern<ProfileCreateInput, ProfileCreateOutput>(
-  ({ profiles, inputId, defaultName }) => {
-    const seedName = seedProfileName({ profiles: profiles as any });
+  ({ profiles, inputId, defaultName, privateInbox }) => {
+    const seedName = seedProfileName({ privateInbox });
     const createProfile = submitProfileCreation({
-      profiles: profiles as any,
+      profiles,
       seedName,
     });
     return {

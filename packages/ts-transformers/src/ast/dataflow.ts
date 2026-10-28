@@ -14,7 +14,7 @@ import {
   unwrapTransparentWrapperOnce,
 } from "../utils/expression.ts";
 import { isSafeIdentifierText } from "../utils/identifiers.ts";
-import { getCommonFabricKeyName } from "../utils/reactive-keys.ts";
+import { hasStaticKeyType } from "../utils/reactive-keys.ts";
 import {
   detectCallKind,
   isReactiveValueExpression,
@@ -568,24 +568,14 @@ export function createDataFlowAnalyzer(
     };
   };
 
-  // Helper: Check if an element access expression has a static (literal) index
+  // Helper: Check if an element access expression has a static key: a
+  // literal, a well-known Common Fabric key (`NAME`), or an expression of a
+  // single literal type (`hasStaticKeyType()`). Such an access is a path
+  // read the pattern body lowers in place, `row[NAME]` as `row.key(...)` and
+  // `input[SELF]` as the pattern's own result.
   const isStaticElementAccess = (
     expression: ts.ElementAccessExpression,
-  ): boolean => {
-    const argumentExpression = expression.argumentExpression;
-    return argumentExpression !== undefined &&
-      ts.isExpression(argumentExpression) &&
-      (ts.isLiteralExpression(argumentExpression) ||
-        ts.isNoSubstitutionTemplateLiteral(argumentExpression));
-  };
-
-  // Helper: Check if an element access expression is keyed by `SELF`. On a
-  // pattern's input, `input[SELF]` names the pattern's own result, which the
-  // pattern body reads in place as it reads a destructured `[SELF]` binding.
-  const isSelfElementAccess = (
-    expression: ts.ElementAccessExpression,
-  ): boolean =>
-    getCommonFabricKeyName(expression.argumentExpression, checker) === "SELF";
+  ): boolean => hasStaticKeyType(expression.argumentExpression, checker);
 
   const isStructuralOpaqueTargetExpression = (
     expression: ts.Expression,
@@ -1042,10 +1032,10 @@ export function createDataFlowAnalyzer(
         ? analyzeExpression(argumentExpression, scope, context)
         : emptyAnalysis();
 
-      const isStaticIndex = isStaticElementAccess(expression) ||
-        isSelfElementAccess(expression);
-
-      if (isStaticIndex) {
+      // A key read from a reactive value is not fixed by its type alone: the
+      // lowered read would hand `.key()` the reactive value itself, so that
+      // access stays a computation over the key.
+      if (isStaticElementAccess(expression) && !argument.containsReactive) {
         const result = mergeAnalyses(target, argument);
         return result;
       }

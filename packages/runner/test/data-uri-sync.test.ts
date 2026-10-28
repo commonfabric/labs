@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { hashStringOf } from "@commonfabric/data-model";
+import { valueFromDataUri } from "@commonfabric/data-model/codec-data-uri";
 import { Identity } from "@commonfabric/identity";
 import { resolveScopeKey } from "@commonfabric/memory/v2";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -7,6 +9,7 @@ import { Runtime } from "../src/runtime.ts";
 import type { Cell } from "../src/cell.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { dataUriFromValueWithResolvedLinks } from "../src/data-uri.ts";
+import { parseLink } from "../src/link-utils.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
 import { dataURISyncKey } from "../src/storage/v2.ts";
 
@@ -590,6 +593,44 @@ describe("data URI sync", () => {
     }
   });
 
+  it("does not sync the document a declared-stream link names", async () => {
+    // A stream's document holds no value a read uses, so a link the reader's
+    // schema declares a stream names nothing to load; a handle at the same
+    // link is loaded as any other.
+    const linkedCell = runtime.getCell(space, "stream-target", undefined, tx);
+    linkedCell.set({ name: "Ada" });
+    const linkedId = linkedCell.getAsNormalizedFullLink().id;
+    const dataCell = runtime.getImmutableCell(
+      space,
+      { send: linkedCell.getAsLink() },
+      undefined,
+      tx,
+    );
+    const provider = storageManager.open(space);
+    const originalSync = provider.sync.bind(provider);
+    const synced: string[] = [];
+    provider.sync = (id: any, selector?: any, scope?: any) => {
+      synced.push(id);
+      return originalSync(id, selector, scope);
+    };
+    const event = {
+      type: "object",
+      properties: { name: { type: "string" } },
+    } as const;
+
+    await dataCell.asSchema({
+      type: "object",
+      properties: { send: { ...event, asCell: ["stream"] } },
+    }).sync();
+    expect(synced).not.toContain(linkedId);
+
+    await dataCell.asSchema({
+      type: "object",
+      properties: { send: { ...event, asCell: ["cell"] } },
+    }).sync();
+    expect(synced).toContain(linkedId);
+  });
+
   it("syncs a linked cell under the reader's schema, not the link's", async () => {
     const linkedCell = runtime.getCell(
       space,
@@ -634,6 +675,56 @@ describe("data URI sync", () => {
 
     expect(schemasByTarget.get(linkedId)).toEqual(narrow);
   });
+
+  it("syncs a linked cell under its reference-form schema narrowed to the rest of the path", async () => {
+    const extra = {
+      type: "object",
+      properties: { big: { type: "boolean" } },
+    } as const;
+    const linkedCell = runtime.getCell(
+      space,
+      "linked-target-under-narrowed-reference",
+      { type: "object", properties: { extra } },
+      tx,
+    );
+    linkedCell.set({ extra: { big: true } });
+    const linkedId = linkedCell.getAsNormalizedFullLink().id;
+
+    // The inner document holds the link, and the outer one a link into the
+    // inner one whose path continues past it.
+    const inner = dataUriFromValueWithResolvedLinks({
+      ref: linkedCell.getAsLink({ includeSchema: true }),
+    });
+    expect(
+      (parseLink(valueFromDataUri(inner).ref)!.schema as { $ref?: string })
+        .$ref,
+    ).toMatch(/^cid:/);
+    const outerId = dataUriFromValueWithResolvedLinks({
+      via: {
+        "/": { [LINK_V1_TAG]: { id: inner, space, path: ["ref", "extra"] } },
+      },
+    });
+    const outer = runtime.getCellFromLink(
+      { space, id: outerId, path: [] },
+      undefined,
+      tx,
+    );
+
+    const provider = storageManager.open(space);
+    const originalSync = provider.sync.bind(provider);
+    const selectorsByTarget = new Map<string, unknown>();
+    provider.sync = (id: any, selector?: any, scope?: any) => {
+      selectorsByTarget.set(id, selector);
+      return originalSync(id, selector, scope);
+    };
+
+    await outer.sync();
+
+    expect(selectorsByTarget.get(linkedId)).toEqual({
+      path: ["extra"],
+      schema: extra,
+    });
+  });
 });
 
 describe("data URI sync memo key", () => {
@@ -670,5 +761,10 @@ describe("data URI sync memo key", () => {
   it("gives one identity one key", () => {
     expect(dataURISyncKey({ ...identity, path: ["a", "b"] }))
       .toBe(dataURISyncKey({ ...identity, path: ["a", "b"] }));
+  });
+
+  it("gives the same key for an id and for its hash handed in", () => {
+    expect(dataURISyncKey({ ...identity, idHash: hashStringOf(identity.id) }))
+      .toBe(dataURISyncKey(identity));
   });
 });

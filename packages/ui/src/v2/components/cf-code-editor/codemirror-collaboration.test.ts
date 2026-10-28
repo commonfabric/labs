@@ -718,11 +718,13 @@ describe("CodeMirror operation collaboration", () => {
 
   it("fails closed when an apply rejects and refuses to drop pending edits", async () => {
     let cancellations = 0;
+    let closes = 0;
     const { controller, view, errors } = controllerHarness({
       initial: inactiveSnapshot("abc"),
       followup: inactiveSnapshot("abc"),
       apply: () => Promise.reject("apply failed"),
       cancel: () => cancellations++,
+      close: () => closes++,
     });
 
     await controller.start();
@@ -732,6 +734,8 @@ describe("CodeMirror operation collaboration", () => {
     expect(errors[0]?.message).toBe("apply failed");
     expect(cancellations).toBe(1);
     await expect(controller.stop()).rejects.toThrow("local edits pending");
+    expect(closes).toBe(1);
+    expect(controller.active).toBe(false);
   });
 
   it("fails closed when an apply response advertises another codec", async () => {

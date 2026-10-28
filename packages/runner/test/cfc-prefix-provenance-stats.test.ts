@@ -20,6 +20,7 @@ import {
 } from "../src/cfc/mod.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import { internalVerifierRead } from "../src/storage/reactivity-log.ts";
 import type {
   IExtendedStorageTransaction,
   IReadActivity,
@@ -315,6 +316,61 @@ describe("CFC prefix-provenance precision counters (Stage 0, doc §6)", () => {
         reasons.filter((reason) => reason.includes("requiredIntegrity failed")),
       )
         .toHaveLength(1);
+    } finally {
+      await runtime.dispose({ closeStorage: false });
+      await storageManager.close();
+    }
+  });
+
+  it("rechecks each read's classification for each target", async () => {
+    // A read the first target's check classed as the verifier's own is
+    // reclassified, its metadata changed in place, before the second
+    // target's check. The record keeps its place in the list, so only a
+    // check that reads its metadata again sees that it is now an input.
+
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = makeRuntime({ storageManager });
+    try {
+      await seedLabeledDoc(runtime, "reclassified-source", "source", {
+        integrity: [OTHER_ATOM],
+      });
+      const tx = runtime.edit();
+      const source = runtime.getCell(
+        signer.did(),
+        "reclassified-source",
+        undefined,
+        tx,
+      );
+      source.get();
+      const sourceId = source.getAsNormalizedFullLink().id;
+      const meta = { ...internalVerifierRead };
+      for (const read of tx.getReadActivities!()) {
+        if (read.id === sourceId) read.meta = meta;
+      }
+      for (const name of ["reclassified-first", "reclassified-second"]) {
+        runtime.getCell(signer.did(), name, SINK_SCHEMA, tx).set({ out: name });
+      }
+      let passes = 0;
+      const view = new Proxy(tx, {
+        get(target, prop) {
+          if (prop === "getPotentiallyExternalReadActivities") {
+            return () => {
+              passes++;
+              if (passes === 2) {
+                for (const key of Reflect.ownKeys(meta)) delete meta[key];
+              }
+              return target.getPotentiallyExternalReadActivities?.();
+            };
+          }
+          const member = Reflect.get(target, prop, target);
+          return typeof member === "function" ? member.bind(target) : member;
+        },
+      });
+      const reasons = prepareBoundaryCommit(view);
+      expect(passes).toBe(2);
+      expect(
+        reasons.filter((reason) => reason.includes("requiredIntegrity failed")),
+      ).toHaveLength(1);
     } finally {
       await runtime.dispose({ closeStorage: false });
       await storageManager.close();

@@ -8,10 +8,14 @@ import type { Server } from "@commonfabric/memory/v2/server";
 import { toMemorySpaceAddress } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { Action, EventHandler } from "../src/scheduler/types.ts";
-import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type {
+  IExtendedStorageTransaction,
+  URI,
+} from "../src/storage/interface.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import {
   assertLocalReadAvailable,
+  endLocalReadValidationStretch,
   localReadFailure,
   localReadsReady,
   LocalReadUnavailable,
@@ -20,6 +24,7 @@ import {
   restrictToLocalReads,
   usesLocalReads,
   validateLocalReadBasis,
+  validateLocalReadBasisForCommit,
 } from "../src/storage/local-read-policy.ts";
 
 const signer = await Identity.fromPassphrase("local read policy");
@@ -42,7 +47,28 @@ describe("local-read-policy", () => {
     await storage.close();
   });
 
-  it("shares one checker within validation and renews it for later state", () => {
+  /**
+   * Installs a store read-through over a map of document values, and returns
+   * the map and the space's replica, which reads through it on a miss.
+   */
+  const storeReadThrough = () => {
+    const store = new Map<string, { seq: number; value: string }>();
+    storage.installStoreReadThrough(space, ({ id, scopeKey }) => {
+      const entry = store.get(id);
+      return {
+        branch: "",
+        id,
+        scope: "space",
+        scopeKey,
+        ...(entry === undefined
+          ? { seq: 0, deleted: true as const }
+          : { seq: entry.seq, doc: { value: entry.value } }),
+      };
+    });
+    return { store, replica: storage.open(space).replica };
+  };
+
+  it("shares one checker across reads and makes one for each validation pass", () => {
     const tx = runtime.edit();
     let allowed = true;
     let generation = 0;
@@ -64,15 +90,211 @@ describe("local-read-policy", () => {
           path: ["value"],
         }, () => true);
       }
-      expect(checked).toEqual([1, 2]);
+      expect(checked).toEqual([1, 1]);
       expect(validateLocalReadBasis(tx)).toBeUndefined();
-      expect(checked).toEqual([1, 2, 3, 3]);
+      expect(checked).toEqual([1, 1, 2, 2]);
       allowed = false;
       expect(validateLocalReadBasis(tx)).toBeInstanceOf(LocalReadUnavailable);
-      expect(checked.at(-1)).toBe(4);
+      expect(checked.at(-1)).toBe(3);
       allowed = true;
       expect(localReadsReady(tx)).toBe(true);
-      expect(checked.slice(-2)).toEqual([5, 5]);
+      expect(checked.slice(-2)).toEqual([4, 4]);
+    } finally {
+      tx.abort();
+    }
+  });
+
+  it("makes no checker for a validation after a passing pre-commit one until a read, a condition, a commit or a microtask ends their stretch", async () => {
+    const tx = runtime.edit();
+    let checkers = 0;
+    restrictToLocalReads(tx.tx, () => {
+      checkers++;
+      return () => true;
+    });
+    const read = (id: "of:first" | "of:second") =>
+      assertLocalReadAvailable(tx.tx, {
+        space,
+        id,
+        type: "application/json",
+        path: ["value"],
+      }, () => true);
+    try {
+      read("of:first");
+      expect(validateLocalReadBasis(tx)).toBeUndefined();
+      expect(validateLocalReadBasis(tx)).toBeUndefined();
+      expect(checkers).toBe(3);
+      expect(validateLocalReadBasisForCommit(tx)).toBeUndefined();
+      expect(validateLocalReadBasis(tx)).toBeUndefined();
+      expect(checkers).toBe(4);
+      read("of:second");
+      expect(validateLocalReadBasis(tx)).toBeUndefined();
+      expect(checkers).toBe(5);
+      expect(validateLocalReadBasisForCommit(tx)).toBeUndefined();
+      requireLocalReadCondition(
+        tx.tx,
+        toMemorySpaceAddress(
+          runtime.getCell(space, "condition", undefined)
+            .getAsNormalizedFullLink(),
+        ),
+        () => true,
+      );
+      expect(validateLocalReadBasis(tx)).toBeUndefined();
+      expect(checkers).toBe(7);
+      expect(validateLocalReadBasisForCommit(tx)).toBeUndefined();
+      endLocalReadValidationStretch();
+      expect(validateLocalReadBasis(tx)).toBeUndefined();
+      expect(checkers).toBe(9);
+      expect(validateLocalReadBasisForCommit(tx)).toBeUndefined();
+      await Promise.resolve();
+      expect(validateLocalReadBasis(tx)).toBeUndefined();
+      expect(checkers).toBe(11);
+    } finally {
+      tx.abort();
+    }
+  });
+
+  it("checks a transaction again when a frame lands between its pre-commit validation and the next", () => {
+    // What a frame brings can differ from what the passing validation's
+    // checker saw, so a replica's application of one ends the stretch the
+    // commit's own validations would otherwise stand on.
+
+    const { store, replica } = storeReadThrough();
+    const id = "of:frame-basis" as URI;
+    store.set(id, { seq: 1, value: "before" });
+    expect(replica.getDocument(id)?.value).toBe("before");
+    const tx = runtime.edit();
+    restrictToLocalReads(tx.tx, () => {
+      const seen = replica.getDocument(id)?.value;
+      return () => seen === "before";
+    });
+    try {
+      assertLocalReadAvailable(tx.tx, {
+        space,
+        id,
+        type: "application/json",
+        path: ["value"],
+      }, () => true);
+      expect(validateLocalReadBasisForCommit(tx)).toBeUndefined();
+      store.set(id, { seq: 2, value: "after" });
+      expect(storage.integrateStoreWrites(space, [{ id, scopeKey: "space" }]))
+        .toBe(1);
+      expect(validateLocalReadBasis(tx)).toBeInstanceOf(LocalReadUnavailable);
+    } finally {
+      tx.abort();
+    }
+  });
+
+  it("checks a transaction again when its pre-commit validation applied a frame itself", () => {
+    // A pass that applies a frame, as a read-through can on a replica miss,
+    // ends the stretch it began in, so what it checked before the frame
+    // leaves nothing for the next validation to stand on.
+
+    const { store, replica } = storeReadThrough();
+    const id = "of:pass-frame-basis" as URI;
+    store.set(id, { seq: 1, value: "before" });
+    expect(replica.getDocument(id)?.value).toBe("before");
+    const tx = runtime.edit();
+    let checkers = 0;
+    restrictToLocalReads(tx.tx, () => {
+      checkers++;
+      const seen = replica.getDocument(id)?.value;
+      // The pre-commit pass's checker, the second one made, applies a frame
+      // once it has read.
+      if (checkers === 2) {
+        store.set(id, { seq: 2, value: "after" });
+        storage.integrateStoreWrites(space, [{ id, scopeKey: "space" }]);
+      }
+      return () => seen === "before";
+    });
+    try {
+      assertLocalReadAvailable(tx.tx, {
+        space,
+        id,
+        type: "application/json",
+        path: ["value"],
+      }, () => true);
+      expect(validateLocalReadBasisForCommit(tx)).toBeUndefined();
+      expect(validateLocalReadBasis(tx)).toBeInstanceOf(LocalReadUnavailable);
+      expect(checkers).toBe(3);
+    } finally {
+      tx.abort();
+    }
+  });
+
+  it("checks a transaction again once its commit hands the writes to the replica", async () => {
+    // The storage transaction is committed directly, so nothing between the
+    // pre-commit validation and the hand-off reads more, and only the
+    // hand-off itself can end the stretch.
+
+    const address = {
+      space,
+      id: "of:handed-over" as URI,
+      type: "application/json" as const,
+      path: [],
+    };
+    const tx = runtime.edit();
+    let checkers = 0;
+    restrictToLocalReads(tx.tx, () => {
+      checkers++;
+      return () => true;
+    });
+    expect(tx.tx.write(address, { value: 1 }).error).toBeUndefined();
+    expect(validateLocalReadBasisForCommit(tx)).toBeUndefined();
+    const beforeCommit = checkers;
+    const committed = tx.tx.commit();
+    expect(checkers).toBe(beforeCommit);
+    expect(validateLocalReadBasis(tx)).toBeUndefined();
+    expect(checkers).toBe(beforeCommit + 1);
+    expect((await committed.settled).error).toBeUndefined();
+  });
+
+  it("checks a transaction again when a producer leaves the scheduler between its pre-commit validation and the next", async () => {
+    // A producer's currency is scheduler state, which no frame or commit
+    // changes, so the registry ends the stretch when it removes a node.
+
+    const producer: Action = () => {};
+    const cancel = runtime.scheduler.subscribe(producer, { isEffect: true });
+    const tx = runtime.edit();
+    restrictToLocalReads(
+      tx.tx,
+      () => () => runtime.scheduler.isEffect(producer),
+    );
+    try {
+      assertLocalReadAvailable(tx.tx, {
+        space,
+        id: "of:produced",
+        type: "application/json",
+        path: ["value"],
+      }, () => true);
+      expect(validateLocalReadBasisForCommit(tx)).toBeUndefined();
+      cancel();
+      expect(validateLocalReadBasis(tx)).toBeInstanceOf(LocalReadUnavailable);
+    } finally {
+      tx.abort();
+      cancel();
+      await runtime.idle();
+    }
+  });
+
+  it("fails validation for a read its shared checker let through before the state changed", () => {
+    const tx = runtime.edit();
+    let allowed = true;
+    restrictToLocalReads(tx.tx, () => {
+      const snapshot = allowed;
+      return () => snapshot;
+    });
+    const read = (id: "of:first" | "of:second") =>
+      assertLocalReadAvailable(tx.tx, {
+        space,
+        id,
+        type: "application/json",
+        path: ["value"],
+      }, () => true);
+    try {
+      read("of:first");
+      allowed = false;
+      read("of:second");
+      expect(validateLocalReadBasis(tx)).toBeInstanceOf(LocalReadUnavailable);
     } finally {
       tx.abort();
     }

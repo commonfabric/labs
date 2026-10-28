@@ -391,10 +391,10 @@ describe("input-cells", () => {
       );
     });
 
-    it("throws for a qualified address when the session's space has no name", async () => {
-      // The resolution knows one space. A name this side cannot check is a
-      // space it cannot honour — answering with this space's same-slug
-      // piece would hand back a cell nobody asked for.
+    it("throws for an address naming a space by name when the session's space has none", async () => {
+      // The resolution knows one space, and a space with no name is not the
+      // one a name names: answering with this space's same-slug piece would
+      // hand back a cell nobody asked for.
       let asked = false;
       await expect(mintInputCellHandles(
         undefined,
@@ -407,8 +407,49 @@ describe("input-cells", () => {
             return Promise.resolve(PIECE_ID);
           },
         },
-      )).rejects.toThrow("has no name to check that against");
+      )).rejects.toThrow(
+        "only pieces in the session's own space can be attached",
+      );
       expect(asked).toBe(false);
+    });
+
+    it("resolves an address naming the session's space by its DID, whether or not the space has a name", async () => {
+      for (const spaceName of [undefined, "my-space"]) {
+        const resolved: string[] = [];
+        const { inputCells } = await mintInputCellHandles(
+          undefined,
+          "run-1",
+          [{ name: "pattern_1", ref: `pattern:${SPACE_DID}/reading-list` }],
+          SPACE_DID,
+          {
+            spaceName,
+            resolvePiece: (slug) => {
+              resolved.push(slug);
+              return Promise.resolve(PIECE_ID);
+            },
+          },
+        );
+        expect(resolved).toEqual(["reading-list"]);
+        expect(inputCells[0].ref).toContain(PIECE_ID);
+      }
+    });
+
+    it("throws for an address naming another space's DID", async () => {
+      await expect(mintInputCellHandles(
+        undefined,
+        "run-1",
+        [{
+          name: "pattern_1",
+          ref: "pattern:did:key:z6MkOtherSpace/reading-list",
+        }],
+        SPACE_DID,
+        {
+          spaceName: "my-space",
+          resolvePiece: () => Promise.resolve(PIECE_ID),
+        },
+      )).rejects.toThrow(
+        "only pieces in the session's own space can be attached",
+      );
     });
 
     it("resolves a bare slug when the session's space has no name", async () => {

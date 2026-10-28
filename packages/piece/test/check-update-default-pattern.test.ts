@@ -1,20 +1,25 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
+  attestedPrincipalsAt,
+  type Cell,
   getMetaLink,
   getPatternIdentityRef,
   getPatternSetupIdentityRef,
   getPatternSource,
   getPieceSourceRevisions,
+  inSpaceRootCause,
   parseLink,
   resolveEntryIdentity,
   resolveSystemPatternSource,
   resultSchemaMetaSpelling,
   Runtime,
   setPatternSource,
+  spaceRootPatternConfig,
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { CFC_SCHEMA_MIGRATION_INCOMPATIBLE_REASON } from "@commonfabric/runner/cfc/migration-reason";
+import type { FabricValue } from "@commonfabric/data-model";
 import { createSession, Identity } from "@commonfabric/identity";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import { FabricLink } from "@commonfabric/data-model/fabric-instances";
@@ -28,6 +33,7 @@ import {
   readPieceSourceState,
   reconcilePieceSource,
 } from "../src/ops/piece-origin.ts";
+import { installCustomRoot } from "./install-custom-root.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import { getLogger } from "@commonfabric/utils/logger";
 
@@ -184,6 +190,8 @@ function identityForSource(
 
 interface StubControls {
   setSource(source: string): void;
+  /** Sends `releasedAt` beside every system identity, or no time when unset. */
+  setReleasedAt(releasedAt: string | undefined): void;
   setCustomSource(source: string | null): void;
   setIdentitySource(source: string): void;
   setIdentityResponse(body: string, status?: number): void;
@@ -203,6 +211,7 @@ function installFetchStub(): StubControls {
   // Served at CUSTOM_APP_URL when set; null keeps the path unserved (404).
   let customSource: string | null = null;
   let identitySource: string | undefined;
+  let releasedAt: string | undefined;
   const imports: Record<string, string> = {};
   const identityImports: Record<string, string> = {};
   let identityResponse: { body: string; status: number } | undefined;
@@ -248,7 +257,14 @@ function installFetchStub(): StubControls {
             { ...imports, ...identityImports },
             url.pathname,
           ),
-          { headers: { "content-type": "text/plain" } },
+          {
+            headers: {
+              "content-type": "text/plain",
+              ...(releasedAt === undefined
+                ? {}
+                : { "CF-Released-At": releasedAt }),
+            },
+          },
         );
       }
       sourceFetchCount++;
@@ -284,6 +300,7 @@ function installFetchStub(): StubControls {
 
   return {
     setSource: (s) => (source = s),
+    setReleasedAt: (r) => (releasedAt = r),
     setCustomSource: (s) => (customSource = s),
     setIdentitySource: (s) => (identitySource = s),
     setIdentityResponse: (body, status = 200) => {
@@ -376,6 +393,28 @@ describe("opening a space root", () => {
     const after = getPatternIdentityRef(piece.getCell())?.identity;
     expect(after).toBe(before);
     expect(after).toBe(await identityForSource(SOURCE_V1));
+  });
+
+  it("starts an existing root on the pattern it holds without asking its origin, given `reconcile: false`", async () => {
+    await setup();
+    const created = await controller.ensureDefaultPattern();
+    const idV1 = getPatternIdentityRef(created.getCell())?.identity;
+    stub.setSource(SOURCE_V2);
+    const identityFetches = stub.identityFetches();
+    const sourceFetches = stub.sourceFetches();
+
+    const kept = await controller.ensureDefaultPattern({ reconcile: false });
+    await runtime.sourceReconciler.idle();
+
+    expect(getPatternIdentityRef(kept.getCell())?.identity).toBe(idV1);
+    expect(stub.identityFetches()).toBe(identityFetches);
+    expect(stub.sourceFetches()).toBe(sourceFetches);
+
+    // The same root, opened with the default, follows its origin.
+    const followed = await controller.ensureDefaultPattern();
+    expect(getPatternIdentityRef(followed.getCell())?.identity).toBe(
+      await identityForSource(SOURCE_V2),
+    );
   });
 
   it("stops an update when disposal follows the current-pattern probe", async () => {
@@ -809,6 +848,419 @@ describe("opening a space root", () => {
     expect(getPatternIdentityRef(updated.getCell())?.symbol).toBe("default");
   });
 
+  it("rolls an unloadable stale root forward to its system source even given `reconcile: false`", async () => {
+    await setup();
+    const piece = await controller.ensureDefaultPattern();
+    const root = piece.getCell();
+    const rootLinkBefore = JSON.stringify(root.getAsLink());
+    const staleIdentity = await identityForSource(
+      patternSource("unloadable-stale-root"),
+    );
+    await controller.stopPiece(root);
+    const { error } = await runtime.editWithRetry((tx) => {
+      root.withTx(tx).setMetaRaw(
+        "patternIdentity",
+        { identity: staleIdentity, symbol: "removed-export" },
+        rawMetaWriteAuthorization,
+      );
+    });
+    expect(error).toBeUndefined();
+    stub.setSource(SOURCE_V2);
+
+    const updated = await controller.ensureDefaultPattern({ reconcile: false });
+    await runtime.idle();
+
+    expect(JSON.stringify(updated.getCell().getAsLink())).toBe(rootLinkBefore);
+    expect(getPatternIdentityRef(updated.getCell())?.identity).toBe(
+      await identityForSource(SOURCE_V2),
+    );
+    expect(getPatternIdentityRef(updated.getCell())?.symbol).toBe("default");
+  });
+
+  // Records on `root` what a runtime that adopted `to` over `from` writes:
+  // the two revisions, with `to`'s release time when one is given, and the
+  // pointer naming `to`, with the setup marker too unless `stageSetup` is
+  // false.
+  async function recordAdoption(
+    root: Cell<unknown>,
+    from: string,
+    to: string,
+    toReleasedAt?: string,
+    stageSetup = true,
+  ) {
+    const { error } = await runtime.editWithRetry((tx) => {
+      const candidate = root.withTx(tx);
+      const space = root.getAsNormalizedFullLink().space;
+      const sourceOf = (identity: string) =>
+        runtime.getCell(space, `pattern:${identity}`, undefined, tx)
+          .getAsLink();
+      const timestamp = Date.now();
+      const history = (candidate.getMetaRaw("pieceSourceHistory") ??
+        []) as FabricValue[];
+      const origin = getPatternSource(root)!;
+      candidate.setMetaRaw("pieceSourceHistory", [
+        ...history,
+        {
+          revisionId: `baseline-${from}`,
+          timestamp,
+          pattern: { identity: from, symbol: "default" },
+          source: sourceOf(from),
+          origin,
+          operation: "baseline",
+        },
+        {
+          revisionId: `update-${to}`,
+          timestamp,
+          pattern: { identity: to, symbol: "default" },
+          source: sourceOf(to),
+          origin,
+          operation: "origin-update",
+          ...(toReleasedAt === undefined
+            ? {}
+            : { releasedAt: Date.parse(toReleasedAt) }),
+        },
+      ], rawMetaWriteAuthorization);
+      const metas = stageSetup
+        ? ["patternIdentity", "patternSetupIdentity"] as const
+        : ["patternIdentity"] as const;
+      for (const meta of metas) {
+        candidate.setMetaRaw(
+          meta,
+          { identity: to, symbol: "default" },
+          rawMetaWriteAuthorization,
+        );
+      }
+    });
+    expect(error).toBeUndefined();
+  }
+
+  // A root running the official V1 that a newer runtime moved to a release
+  // this runtime cannot load, recorded at `pinnedAt`, with the host serving
+  // V1 at `officialAt`.
+  async function rootAheadOfThisRuntime(
+    pinnedAt: string | undefined,
+    officialAt: string | undefined,
+  ) {
+    await setup();
+    stub.setReleasedAt(officialAt);
+    const piece = await controller.ensureDefaultPattern();
+    const root = piece.getCell();
+    const officialV1 = await identityForSource(SOURCE_V1);
+    expect(getPatternIdentityRef(root)?.identity).toBe(officialV1);
+    const pinned = await identityForSource(
+      patternSource("release-this-runtime-cannot-load"),
+    );
+    await controller.stopPiece(root);
+    await recordAdoption(root, officialV1, pinned, pinnedAt);
+    return { officialV1, pinned };
+  }
+
+  it("keeps a root on a release the history records moving to while its host still serves the earlier one", async () => {
+    // A runtime older than the root's release cannot load it, and the host it
+    // reaches is one a deploy has not yet restarted, still serving the
+    // release the root moved from. The reconciler keeps the root's release;
+    // the root then fails to start here, and the repair must not swap it back
+    // to the earlier official source, which every runtime that can load the
+    // later release would move forward again.
+
+    const { pinned } = await rootAheadOfThisRuntime(
+      "2026-10-16T15:03:00Z",
+      "2026-10-16T14:03:00Z",
+    );
+
+    let thrown: unknown;
+    await controller.ensureDefaultPattern().catch((error) => (thrown = error));
+    await runtime.idle();
+
+    expect(String(thrown)).toContain("would move the root back");
+    const after = (await controller.getDefaultPattern(false))!;
+    expect(getPatternIdentityRef(after)?.identity).toBe(pinned);
+  });
+
+  it("keeps the root on that release when the registry opens it", async () => {
+    // The registry opens the root without following its origin first, so
+    // only the repair's own check stands between it and the earlier release.
+
+    const { pinned } = await rootAheadOfThisRuntime(
+      "2026-10-16T15:03:00Z",
+      "2026-10-16T14:03:00Z",
+    );
+
+    await controller.getPieceRegistry().catch(() => undefined);
+    await runtime.idle();
+
+    const after = (await controller.getDefaultPattern(false))!;
+    expect(getPatternIdentityRef(after)?.identity).toBe(pinned);
+  });
+
+  it("keeps the root when its host's identity route answers with an error", async () => {
+    // The heal cannot read when the official source was released, and an
+    // offer with no time is earlier than a pinned release that has one.
+
+    const { pinned } = await rootAheadOfThisRuntime(
+      "2026-10-16T15:03:00Z",
+      "2026-10-16T14:03:00Z",
+    );
+    stub.setIdentityResponse("unavailable", 503);
+
+    let thrown: unknown;
+    await controller.ensureDefaultPattern().catch((error) => (thrown = error));
+    await runtime.idle();
+
+    expect(String(thrown)).toContain("would move the root back");
+    const after = (await controller.getDefaultPattern(false))!;
+    expect(getPatternIdentityRef(after)?.identity).toBe(pinned);
+  });
+
+  it("keeps the root when its host's identity route cannot be reached", async () => {
+    const { pinned } = await rootAheadOfThisRuntime(
+      "2026-10-16T15:03:00Z",
+      "2026-10-16T14:03:00Z",
+    );
+    stub.failIdentity(true);
+
+    let thrown: unknown;
+    await controller.ensureDefaultPattern().catch((error) => (thrown = error));
+    await runtime.idle();
+
+    expect(String(thrown)).toContain("would move the root back");
+    const after = (await controller.getDefaultPattern(false))!;
+    expect(getPatternIdentityRef(after)?.identity).toBe(pinned);
+  });
+
+  it("keeps the root when its release is confirmed later while the heal prepares", async () => {
+    // The pinned release records no time, so before the swap nothing orders
+    // the official source against it. Another runtime then confirms it at a
+    // later release than the official one, and the swap's own transaction
+    // reads that order and declines.
+
+    const { pinned } = await rootAheadOfThisRuntime(
+      undefined,
+      "2026-10-16T14:03:00Z",
+    );
+    const root = (await controller.getDefaultPattern(false))!;
+    const manager = runtime.patternManager;
+    const original = manager.getPatternSourceProgramByIdentity.bind(manager);
+    let confirmed = false;
+    manager.getPatternSourceProgramByIdentity = (async (
+      ...args: Parameters<typeof original>
+    ) => {
+      if (!confirmed && args[0] === pinned) {
+        confirmed = true;
+        const { error } = await runtime.editWithRetry((tx) => {
+          const candidate = root.withTx(tx);
+          const history = candidate.getMetaRaw(
+            "pieceSourceHistory",
+          ) as FabricValue[];
+          const latest = history.at(-1) as Record<string, FabricValue>;
+          candidate.setMetaRaw("pieceSourceHistory", [
+            ...history.slice(0, -1),
+            { ...latest, releasedAt: Date.parse("2026-10-16T15:03:00Z") },
+          ], rawMetaWriteAuthorization);
+        });
+        expect(error).toBeUndefined();
+      }
+      return await original(...args);
+    }) as typeof manager.getPatternSourceProgramByIdentity;
+    try {
+      await controller.getDefaultPattern({ reconcile: false, start: true })
+        .catch(() => undefined);
+    } finally {
+      manager.getPatternSourceProgramByIdentity = original;
+    }
+    await runtime.idle();
+
+    expect(confirmed).toBe(true);
+    const after = (await controller.getDefaultPattern(false))!;
+    expect(getPatternIdentityRef(after)?.identity).toBe(pinned);
+  });
+
+  it("rolls a root its history records no move to forward to an earlier official source", async () => {
+    // Nothing says any runtime loaded the pinned release from the official
+    // source, so this root may be dead rather than ahead, and the repair is
+    // its rescue, as the reconciler takes an earlier release the history
+    // records no move from.
+
+    await setup();
+    stub.setReleasedAt("2026-10-16T14:03:00Z");
+    const piece = await controller.ensureDefaultPattern();
+    const root = piece.getCell();
+    const officialV1 = await identityForSource(SOURCE_V1);
+    const pinned = await identityForSource(
+      patternSource("release-no-runtime-recorded-moving-to"),
+    );
+    await controller.stopPiece(root);
+    const { error } = await runtime.editWithRetry((tx) => {
+      const candidate = root.withTx(tx);
+      const space = root.getAsNormalizedFullLink().space;
+      candidate.setMetaRaw("pieceSourceHistory", [{
+        revisionId: "update-without-recorded-predecessor",
+        timestamp: Date.now(),
+        pattern: { identity: pinned, symbol: "default" },
+        source: runtime.getCell(space, `pattern:${pinned}`, undefined, tx)
+          .getAsLink(),
+        origin: getPatternSource(root)!,
+        operation: "origin-update",
+        releasedAt: Date.parse("2026-10-16T15:03:00Z"),
+      }], rawMetaWriteAuthorization);
+      for (const meta of ["patternIdentity", "patternSetupIdentity"] as const) {
+        candidate.setMetaRaw(
+          meta,
+          { identity: pinned, symbol: "default" },
+          rawMetaWriteAuthorization,
+        );
+      }
+    });
+    expect(error).toBeUndefined();
+
+    // Opened without following its origin, so the repair alone decides.
+    await controller.getDefaultPattern({ reconcile: false, start: true });
+    await runtime.idle();
+
+    const after = (await controller.getDefaultPattern(false))!;
+    expect(getPatternIdentityRef(after)?.identity).toBe(officialV1);
+  });
+
+  it("keeps the root on that release when a later revision kept it in place without its release time", async () => {
+    // A runtime that does not carry the running source's release time onto a
+    // revision leaving that source in place writes the revision without one,
+    // and clears the record. The revision that adopted the source still
+    // records its time.
+
+    const { pinned } = await rootAheadOfThisRuntime(
+      "2026-10-16T15:03:00Z",
+      "2026-10-16T14:03:00Z",
+    );
+    const root = (await controller.getDefaultPattern(false))!;
+    const { error } = await runtime.editWithRetry((tx) => {
+      const candidate = root.withTx(tx);
+      const history = candidate.getMetaRaw("pieceSourceHistory") as Record<
+        string,
+        FabricValue
+      >[];
+      const { releasedAt: _carried, ...adopted } = history.at(-1)!;
+      candidate.setMetaRaw("pieceSourceHistory", [
+        ...history,
+        {
+          ...adopted,
+          revisionId: `repoint-${pinned}`,
+          timestamp: Date.now(),
+          operation: "repoint",
+        },
+      ], rawMetaWriteAuthorization);
+      candidate.setMetaRaw(
+        "pieceReconciliation",
+        undefined,
+        rawMetaWriteAuthorization,
+      );
+    });
+    expect(error).toBeUndefined();
+    const kept = getPieceSourceRevisions(
+      (await controller.getDefaultPattern(false))!,
+    ).at(-1);
+    expect(kept).toMatchObject({
+      pattern: { identity: pinned },
+      operation: "repoint",
+    });
+    expect(kept?.releasedAt).toBeUndefined();
+
+    // Opened without following its origin, so the repair alone decides.
+    await controller.getDefaultPattern({ reconcile: false, start: true })
+      .catch(() => undefined);
+    await runtime.idle();
+
+    const after = (await controller.getDefaultPattern(false))!;
+    expect(getPatternIdentityRef(after)?.identity).toBe(pinned);
+  });
+
+  it("rolls the root back to the source its history records moving from when its host offers it at a later release", async () => {
+    // A deploy that rolls back states a later release time, which orders the
+    // earlier source after the one the root holds.
+
+    const { officialV1 } = await rootAheadOfThisRuntime(
+      "2026-10-16T15:03:00Z",
+      "2026-10-16T16:03:00Z",
+    );
+
+    // Opened without following its origin, so the repair alone decides.
+    await controller.getDefaultPattern({ reconcile: false, start: true });
+    await runtime.idle();
+
+    const after = (await controller.getDefaultPattern(false))!;
+    expect(getPatternIdentityRef(after)?.identity).toBe(officialV1);
+    // The healing revision records the release it took.
+    expect(getPieceSourceRevisions(after).at(-1)?.releasedAt).toBe(
+      Date.parse("2026-10-16T16:03:00Z"),
+    );
+  });
+
+  it("rolls the root back to the source its history records moving from when no release time orders the two", async () => {
+    // With no release times a host still serving the earlier source and a
+    // rollback to it look alike, and only the rollback leaves no runtime that
+    // can start the later one, so the repair takes the official source.
+
+    const { officialV1 } = await rootAheadOfThisRuntime(undefined, undefined);
+
+    // Opened without following its origin, so the repair alone decides.
+    await controller.getDefaultPattern({ reconcile: false, start: true });
+    await runtime.idle();
+
+    const after = (await controller.getDefaultPattern(false))!;
+    expect(getPatternIdentityRef(after)?.identity).toBe(officialV1);
+  });
+
+  it("follows a custom origin when the pattern a root holds cannot load, given `reconcile: false`", async () => {
+    await setup();
+    // A root born from the custom app Home config names for new space roots.
+    const homeSpaceCell = runtime.getHomeSpaceCell();
+    await homeSpaceCell.sync();
+    const homeRoot = runtime.getCell(
+      runtime.userIdentityDID,
+      "home-root-config",
+    );
+    const { error: configError } = await runtime.editWithRetry((tx) => {
+      homeRoot.withTx(tx).set({ defaultAppUrl: CUSTOM_APP_URL });
+      // deno-lint-ignore no-explicit-any
+      (homeSpaceCell.withTx(tx) as any).key("defaultPattern").set(homeRoot);
+    });
+    expect(configError).toBeUndefined();
+    await runtime.idle();
+    stub.setCustomSource(patternSource("custom-v1"));
+    await controller.recreateDefaultPattern();
+    const root = (await controller.getDefaultPattern(false))!;
+    expect(getPatternSource(root)).toBe(CUSTOM_APP_SOURCE);
+    const rootLinkBefore = JSON.stringify(root.getAsLink());
+
+    // Its pinned pattern can no longer load, and its origin serves a newer one.
+    const staleIdentity = await identityForSource(
+      patternSource("unloadable-custom-root"),
+    );
+    await controller.stopPiece(root);
+    const { error } = await runtime.editWithRetry((tx) => {
+      root.withTx(tx).setMetaRaw(
+        "patternIdentity",
+        { identity: staleIdentity, symbol: "default" },
+        rawMetaWriteAuthorization,
+      );
+    });
+    expect(error).toBeUndefined();
+    const customV2 = patternSource("custom-v2");
+    stub.setCustomSource(customV2);
+
+    const recovered = await controller.ensureDefaultPattern({
+      reconcile: false,
+    });
+    await runtime.idle();
+
+    expect(JSON.stringify(recovered.getCell().getAsLink())).toBe(
+      rootLinkBefore,
+    );
+    expect(getPatternSource(recovered.getCell())).toBe(CUSTOM_APP_SOURCE);
+    expect(getPatternIdentityRef(recovered.getCell())?.identity).toBe(
+      await identityForSource(customV2, {}, CUSTOM_APP_URL),
+    );
+  });
+
   it("heals a legacy keyless default root without recording the keyless identity as displaced", async () => {
     await setup();
     const piece = await controller.ensureDefaultPattern();
@@ -1090,6 +1542,206 @@ describe("opening a space root", () => {
       restore();
     }
     expect(getPatternIdentityRef(root)).toEqual(staleRef);
+  });
+
+  /**
+   * Stops `root`, makes its start fail along `path`, and opens the space the
+   * way that path does: `open` (`getDefaultPattern(true)`) and `ensure` with
+   * the root's pattern unloadable, and `cfc` on ensure with the root pinned,
+   * without its setup, to a pattern whose setup repair CFC migration rejects.
+   * Returns what the open threw, if anything, the root's pattern identity
+   * before the open and after it, and how many repairs were rejected.
+   */
+  const failRootStart = async (
+    root: Cell<unknown>,
+    path: "open" | "ensure" | "cfc",
+  ) => {
+    await controller.stopPiece(root);
+    let before = getPatternIdentityRef(root)!;
+    let open: () => Promise<unknown>;
+    let restore: () => void;
+    let repairsRejected = 0;
+    if (path === "cfc") {
+      const pinned = await runtime.patternManager.compilePattern({
+        main: "/pinned.tsx",
+        files: [{ name: "/pinned.tsx", contents: SOURCE_V2 }],
+      }, { space: controller.getSpace() });
+      before = runtime.patternManager.getArtifactEntryRef(pinned)!;
+      const { error } = await runtime.editWithRetry((tx) => {
+        root.withTx(tx).setMetaRaw("patternIdentity", {
+          identity: before.identity,
+          symbol: before.symbol,
+        }, rawMetaWriteAuthorization);
+      });
+      expect(error).toBeUndefined();
+      const rt = runtime as unknown as {
+        runSynced: (...args: unknown[]) => Promise<unknown>;
+      };
+      const realRunSynced = rt.runSynced.bind(runtime);
+      rt.runSynced = (...args: unknown[]) => {
+        const opts = args[3] as
+          | { expectedPatternIdentity?: { identity?: string } }
+          | undefined;
+        if (opts?.expectedPatternIdentity?.identity === before.identity) {
+          repairsRejected++;
+          return Promise.reject(
+            new Error(
+              "CFC enforcement rejected commit: relevant transaction was not " +
+                `prepared: ${CFC_SCHEMA_MIGRATION_INCOMPATIBLE_REASON}: ` +
+                "required field marker needs a default to preserve old documents",
+            ),
+          );
+        }
+        return realRunSynced(...args);
+      };
+      restore = () => {
+        rt.runSynced = realRunSynced;
+      };
+      open = () => controller.ensureDefaultPattern();
+    } else {
+      restore = shadowLoadProbe(before.identity, "undefined");
+      open = path === "open"
+        ? () => controller.getDefaultPattern(true)
+        : () => controller.ensureDefaultPattern();
+    }
+    let error: unknown;
+    try {
+      await open();
+    } catch (thrown) {
+      error = thrown;
+    } finally {
+      restore();
+    }
+    await runtime.idle();
+    const after = getPatternIdentityRef(
+      (await controller.getDefaultPattern(false))!,
+    );
+    return { error, before, after, repairsRejected };
+  };
+
+  describe("a root an `inSpace()` call placed", () => {
+    // A root at the address the space's genesis reserves for an `inSpace()`
+    // root was placed by its creator's pattern, and records no origin. The
+    // space's system root is no replacement for it, so each heal that would
+    // roll a root forward to that system root leaves this one as it is and
+    // surfaces the failure.
+
+    /** Installs `contents` as the root, at the reserved address. */
+    const installInSpaceRoot = async (contents: string) => {
+      const root = await installCustomRoot(runtime, controller, {
+        main: "/in-space-root.tsx",
+        files: [{ name: "/in-space-root.tsx", contents }],
+      }, { cause: inSpaceRootCause(controller.getSpace()) });
+      expect(root.equalLinks(runtime.getCell(
+        controller.getSpace(),
+        inSpaceRootCause(controller.getSpace()),
+      ))).toBe(true);
+      expect(getPatternSource(root)).toBeUndefined();
+      return root;
+    };
+
+    it("rethrows a start failure on open when its pattern cannot load", async () => {
+      await setup();
+      const { error, before, after } = await failRootStart(
+        await installInSpaceRoot(SOURCE_V1),
+        "open",
+      );
+      expect(String(error)).toContain("Could not load pattern");
+      expect(after).toEqual(before);
+    });
+
+    it("rethrows a start failure on ensure when its pattern cannot load", async () => {
+      await setup();
+      const { error, before, after } = await failRootStart(
+        await installInSpaceRoot(SOURCE_V1),
+        "ensure",
+      );
+      expect(String(error)).toContain("Could not load pattern");
+      expect(after).toEqual(before);
+    });
+
+    it("rethrows a start failure on ensure when CFC migration rejects its setup repair", async () => {
+      await setup();
+      expect(runtime.cfcEnforcementMode).not.toBe("disabled");
+      const { error, before, after, repairsRejected } = await failRootStart(
+        await installInSpaceRoot(SOURCE_V1),
+        "cfc",
+      );
+      expect(error).toBeDefined();
+      expect(repairsRejected).toBe(1);
+      expect(after).toEqual({
+        identity: before.identity,
+        symbol: before.symbol,
+      });
+    });
+  });
+
+  describe("a root whose label says it represents a principal", () => {
+    // A profile linked as its space's root at an address of its own, as the
+    // store-wide repair links one, records no origin either. Its label says
+    // whom it represents, and that is what keeps it from being rolled forward
+    // to the space's system root. A root of the same shape that represents
+    // nobody, as a `DefaultPieceList` an open of the space created does, is
+    // still rolled forward.
+
+    const profileSource = Deno.readTextFileSync(
+      new URL("../../patterns/system/profile-home.tsx", import.meta.url),
+    );
+
+    /** Installs a profile as the root, at an address of its own. */
+    const installProfileRoot = async () => {
+      const root = await installCustomRoot(runtime, controller, {
+        main: "/profile-home.tsx",
+        files: [{ name: "/profile-home.tsx", contents: profileSource }],
+      }, { cause: "a profile linked as its space's root" });
+      expect(getPatternSource(root)).toBeUndefined();
+      const tx = runtime.edit();
+      try {
+        expect(attestedPrincipalsAt(
+          runtime,
+          tx,
+          root.getAsNormalizedFullLink(),
+          "represents-principal",
+        )).toEqual([signer.did()]);
+      } finally {
+        tx.abort();
+      }
+      return root;
+    };
+
+    /** Installs a sourceless root at the address the space-root ensure uses. */
+    const installJunkRoot = () =>
+      installCustomRoot(runtime, controller, {
+        main: "/junk-root.tsx",
+        files: [{ name: "/junk-root.tsx", contents: SOURCE_V1 }],
+      }, { cause: spaceRootPatternConfig(false).cause });
+
+    for (const path of ["open", "ensure", "cfc"] as const) {
+      describe(`when its start fails on ${path}`, () => {
+        it("keeps a profile root's pattern and surfaces the failure", async () => {
+          await setup();
+          const { error, before, after } = await failRootStart(
+            await installProfileRoot(),
+            path,
+          );
+          expect(error).toBeDefined();
+          expect(after).toEqual({
+            identity: before.identity,
+            symbol: before.symbol,
+          });
+        });
+
+        it("rolls a root that represents nobody forward to the system root", async () => {
+          await setup();
+          const { error, before, after } = await failRootStart(
+            await installJunkRoot(),
+            path,
+          );
+          expect(error).toBeUndefined();
+          expect(after?.identity).not.toBe(before.identity);
+        });
+      });
+    }
   });
 
   it("rethrows a start failure whose pinned pattern still loads", async () => {
@@ -1613,11 +2265,9 @@ describe("opening a space root", () => {
 
   it("reports a custom home root with no origin as detached", async () => {
     await setupHome();
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     const before = getPatternIdentityRef(root);
@@ -1706,11 +2356,9 @@ describe("opening a space root", () => {
 
   it("replaces an unloadable stale sourceless home root", async () => {
     await setupHome();
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     const staleRef = getPatternIdentityRef(root)!;
@@ -1754,11 +2402,9 @@ describe("opening a space root", () => {
     // home.tsx is handler-rich.
 
     await setupHome();
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     const staleRef = getPatternIdentityRef(root)!;
@@ -1828,11 +2474,9 @@ describe("opening a space root", () => {
     // internal cells were never materialized on the reused doc.
 
     await setupHome();
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     const staleRef = getPatternIdentityRef(root)!;
@@ -1876,11 +2520,9 @@ describe("opening a space root", () => {
     // healed at cold start itself.
 
     await setupHome();
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     await controller.stopPiece(root);
@@ -1915,14 +2557,65 @@ describe("opening a space root", () => {
     expect(afterEvent.key("count").get()).toBe(1);
   });
 
+  it("ensure repairs a root with no setup marker whose manifest misses a handler's stream", async () => {
+    // A root that records no origin is not re-staged before its start, and a
+    // stored setup naming no pattern is not refused as stale, so its start is
+    // what repairs a manifest that misses one of its pattern's cells.
+    await setup();
+    const root = await installCustomRoot(runtime, controller, {
+      main: "/custom-root.tsx",
+      files: [{ name: "/custom-root.tsx", contents: SOURCE_V1 }],
+    });
+    await controller.stopPiece(root);
+    const handlerPattern = await runtime.patternManager.compilePattern({
+      main: "/custom-root.tsx",
+      files: [{ name: "/custom-root.tsx", contents: SOURCE_V3_HANDLER }],
+    }, { space: controller.getSpace() });
+    const handlerRef = runtime.patternManager.getArtifactEntryRef(
+      handlerPattern,
+    )!;
+    const { error } = await runtime.editWithRetry((tx) => {
+      root.withTx(tx).setMetaRaw("patternIdentity", {
+        identity: handlerRef.identity,
+        symbol: handlerRef.symbol,
+      }, rawMetaWriteAuthorization);
+      root.withTx(tx).setMetaRaw(
+        "patternSetupIdentity",
+        undefined,
+        rawMetaWriteAuthorization,
+      );
+    });
+    expect(error).toBeUndefined();
+    const manifestOf = (cell: unknown) =>
+      (cell as { getMetaRaw: (key: string) => unknown }).getMetaRaw(
+        "internal",
+      );
+    const manifest = manifestOf(root);
+
+    await controller.ensureDefaultPattern();
+    await runtime.idle();
+
+    const after = (await controller.getDefaultPattern(false))!;
+    expect(getPatternIdentityRef(after)?.identity).toBe(handlerRef.identity);
+    // The repair added the stream `bump` registers on.
+    expect(manifestOf(after)).not.toEqual(manifest);
+    // It validated no stored argument, so it records no setup: the marker
+    // still names no pattern. The controller's re-stage, which does validate
+    // the argument, is decided by that marker and not by the manifest.
+    expect(getPatternSetupIdentityRef(after)).toBeUndefined();
+    (after.key("bump") as unknown as { send: (e: unknown) => void }).send({});
+    await runtime.idle();
+    await (after as unknown as { pull: () => Promise<unknown> }).pull();
+    const afterEvent = (await controller.getDefaultPattern(false))!;
+    expect(afterEvent.key("count").get()).toBe(1);
+  });
+
   it("swaps in a pattern whose argument adds an owner-protected defaulted field", async () => {
     await setupHome();
     expect(runtime.cfcEnforcementMode).not.toBe("disabled");
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     const staleRef = getPatternIdentityRef(root)!;
@@ -1988,11 +2681,9 @@ describe("opening a space root", () => {
     expect(runtime.cfcEnforcementMode).not.toBe("disabled");
 
     // 1. Age the doc: materialize a favorites-less vintage.
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     await controller.stopPiece(root);
@@ -2127,11 +2818,9 @@ describe("opening a space root", () => {
   const pinOldRequiredHome = async () => {
     await setupHome();
     expect(runtime.cfcEnforcementMode).not.toBe("disabled");
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     await controller.stopPiece(root);
@@ -2196,6 +2885,39 @@ describe("opening a space root", () => {
       rt.runSynced = real;
     };
   };
+
+  it("rolls a root whose pinned pattern loads but cannot migrate back to an earlier official source its history records moving from", async () => {
+    // This runtime loads the pinned pattern, so it is not behind it: the
+    // pinned pattern's setup cannot take the root's document, and the repair
+    // is the only way the space opens. The history and release order that
+    // keep a root this runtime cannot load do not apply.
+
+    const { root, oldRef, officialId } = await pinOldRequiredHome();
+    stub.setReleasedAt("2026-10-16T13:03:00Z");
+    // The setup marker stays on the version `pinOldRequiredHome()` left, so
+    // the start is refused and the setup repair runs.
+    await recordAdoption(
+      root,
+      officialId,
+      oldRef.identity,
+      "2026-10-16T14:03:00Z",
+      false,
+    );
+    const restore = patchRunSynced((opts) =>
+      opts?.expectedPatternIdentity?.identity === oldRef.identity
+        ? Promise.reject(new Error(MIGRATION_REJECTION))
+        : "real"
+    );
+    try {
+      await controller.ensureDefaultPattern({ reconcile: false });
+    } finally {
+      restore();
+    }
+    await runtime.idle();
+
+    const after = (await controller.getDefaultPattern(false))!;
+    expect(getPatternIdentityRef(after)?.identity).toBe(officialId);
+  });
 
   it("fails clearly when a root loses its source state during repair", async () => {
     const { oldRef } = await pinOldRequiredHome();
@@ -2444,11 +3166,9 @@ describe("opening a space root", () => {
     // only the identity matches.
 
     await setupHome();
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     await controller.stopPiece(root);
@@ -2497,11 +3217,9 @@ describe("opening a space root", () => {
     // identity alone treated this as already-official and left it unhealable.
 
     await setupHome();
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     await controller.stopPiece(root);
@@ -2672,11 +3390,9 @@ describe("opening a space root", () => {
     // without also asserting the argument contract.
 
     await setupHome();
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     await controller.stopPiece(root);
@@ -2742,11 +3458,9 @@ describe("opening a space root", () => {
     // outcome, and each guard must surface the ORIGINAL start error.
 
     await setupHome();
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     await controller.stopPiece(root);
@@ -2802,11 +3516,9 @@ describe("opening a space root", () => {
     // ref-undefined guard must surface the original start failure.
 
     await setupHome();
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     await controller.stopPiece(root);
@@ -2881,11 +3593,9 @@ describe("opening a space root", () => {
     // ambiguous sourceless root. Fail closed, mutate nothing.
 
     await setupHome();
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     const staleRef = getPatternIdentityRef(root)!;
@@ -2917,11 +3627,9 @@ describe("opening a space root", () => {
     // replaced.
 
     await setupHome({ cfcEnforcementMode: "disabled" });
-    await controller.recreateDefaultPattern({
-      customProgram: {
-        main: "/custom-home.tsx",
-        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
-      },
+    await installCustomRoot(runtime, controller, {
+      main: "/custom-home.tsx",
+      files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
     });
     const root = (await controller.getDefaultPattern(false))!;
     const staleRef = getPatternIdentityRef(root)!;
@@ -3090,14 +3798,6 @@ describe("opening a space root", () => {
       expect(getPatternIdentityRef(updated)?.identity).toBe(
         await identityForSource(customV2, {}, CUSTOM_APP_URL),
       );
-    });
-
-    it("stamps a recreated home root with home.tsx", async () => {
-      await setupHome();
-
-      await controller.recreateDefaultPattern();
-      const root = (await controller.getDefaultPattern(false))!;
-      expect(getPatternSource(root)).toBe(HOME_PATTERN_SOURCE);
     });
   });
 });

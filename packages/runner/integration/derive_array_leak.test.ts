@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-net --allow-env --allow-read --allow-run
+#!/usr/bin/env -S deno run --allow-net --allow-env --allow-read
 
 /**
  * Integration test to reproduce memory leak when using derive() with array.map()
@@ -33,54 +33,21 @@ console.log("Derive Array Leak Test");
 console.log(`Connecting to: ${API_URL}`);
 console.log(`Will increment ${INCREMENTS_PER_CLICK} times in one click`);
 
-// Helper to get server process memory (portable across Linux and macOS)
+// The resident memory of the Toolshed this test talks to, as that server
+// reports it.
 async function getServerMemoryMB(): Promise<number> {
-  // Try to find toolshed process - it could be either:
-  // 1. Compiled binary: "toolshed" (in CI)
-  // 2. Deno script: "deno run --unstable-otel" (local dev)
-  let pid: string | undefined;
-
-  // First try compiled binary (CI)
-  const pgrepBinary = new Deno.Command("pgrep", {
-    args: ["-f", "toolshed"],
-    stdout: "piped",
-  });
-  const { stdout: binaryOut, code: binaryCode } = await pgrepBinary.output();
-
-  if (binaryCode === 0 && binaryOut && binaryOut.length > 0) {
-    const pids = new TextDecoder().decode(binaryOut).trim().split("\n");
-    // Find the toolshed process (not grep itself)
-    pid = pids.find((p) => p && p.trim() !== "");
-  }
-
-  // If not found, try Deno script (local dev)
-  if (!pid) {
-    const pgrepDeno = new Deno.Command("pgrep", {
-      args: ["-f", "deno run --unstable-otel"],
-      stdout: "piped",
-    });
-    const { stdout: denoOut, code: denoCode } = await pgrepDeno.output();
-
-    if (denoCode === 0 && denoOut && denoOut.length > 0) {
-      pid = new TextDecoder().decode(denoOut).trim().split("\n")[0];
-    }
-  }
-
-  if (!pid || pid.trim() === "") {
+  const url = new URL("api/health/stats", API_URL);
+  const response = await fetch(url);
+  if (!response.ok) {
     throw new Error(
-      "Could not find toolshed server process. Make sure the server is running.",
+      `${url} answered ${response.status}: ${await response.text()}`,
     );
   }
-
-  // Then get RSS using portable ps -o format (works on Linux, macOS, BSD)
-  const psProcess = new Deno.Command("ps", {
-    args: ["-p", pid, "-o", "rss="],
-    stdout: "piped",
-  });
-  const { stdout: psOut } = await psProcess.output();
-  const rssKB = parseInt(new TextDecoder().decode(psOut).trim());
-
-  return rssKB / 1024; // Convert KB to MB
+  const rss = (await response.json()).processMemory?.rss;
+  if (typeof rss !== "number") {
+    throw new Error(`${url} reported no processMemory.rss`);
+  }
+  return rss / (1024 * 1024);
 }
 
 // Main test function

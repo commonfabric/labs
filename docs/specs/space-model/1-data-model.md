@@ -77,12 +77,20 @@ authoritative statement of these rules.
 
 #### `undefined`
 
-`undefined` has special semantics depending on context:
+`undefined` is a first-class `FabricValue`, and an encoding records it
+wherever it appears, in the tagged form `Undefined@1` (see
+`space-model-formal-spec/3-json-encoding.md` Section 3):
 
-- **Top-level**: Indicates deletion (remove the stored value)
-- **Object property**: Treated as absent (property is omitted)
+- **Top-level**: Writing `undefined` as a cell's value deletes the stored
+  value. That is the application layer's reading of the value, not a property
+  of the encoding
+- **Object property**: Stored as `undefined`, and remains distinguishable from
+  an absent property
 - **Array element**: Stored as `undefined`, and remains distinguishable from
   both a hole and a `null`
+
+See `space-model-formal-spec/1-fabric-values.md` Section 1.3 for the
+authoritative statement.
 
 #### Non-Fabric Types
 
@@ -833,13 +841,12 @@ Use cases for `/quote`:
   still be interpreted normally
 - `/quote`: You want the entire subtree treated as literal JSON data
 
-**Encoder dispatch (recommended best practice).** When the encoder must wrap
-a plain object with `/`-prefixed keys, both forms are valid wire output, but
-the recommended choice is `/quote` when the entire subtree is fully literal
-(no descendants need encoding) and `/object` otherwise. The wire form is
-unambiguous either way — a conforming encoder may emit `/object` in any
-case, and **a conforming decoder must accept both forms**. See Section 6 of
-the formal spec for the precise dispatch rule and motivation.
+**Encoder dispatch.** When the encoder must wrap a plain object with
+`/`-prefixed keys, it must emit `/quote` when the entire subtree is fully
+literal (no descendants need encoding) and `/object` otherwise, so that each
+value has one text. The rule binds the encoder alone: **a conforming decoder
+must accept both forms**. See Section 6 of the formal spec for the precise
+dispatch rule and motivation.
 
 #### Reservation Rule
 

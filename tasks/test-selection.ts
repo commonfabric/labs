@@ -35,10 +35,8 @@ import {
 import { maxOf } from "@commonfabric/utils/math";
 import {
   DIALS,
-  dialValue,
   EXCLUDED_FROM_COVERAGE_GATE,
   LANE_BUDGET_SECONDS,
-  LANES,
 } from "./test-selection/policy.ts";
 import { fetchManifest } from "./test-selection/store.ts";
 import {
@@ -48,21 +46,23 @@ import {
   lanePlan,
   resolveManifest,
 } from "./ci-lane.ts";
-import {
-  capabilitiesBySuite,
-  loadTopology,
-  unitProcesses,
-} from "./test-topology.ts";
+import { capabilitiesBySuite, loadTopology } from "./test-topology.ts";
 import { type Suite, unavailableUnits } from "./test-topology/suite.ts";
+import { measuredCostLines } from "./test-selection/coverage.ts";
 import {
-  measuredCostLines,
+  coverageGateIdentity,
   measuredSetName,
   type MeasuredSetRef,
   measuredSets,
-} from "./test-selection/coverage.ts";
+} from "./test-topology/coverage-gates.ts";
 import type { Manifest } from "./test-selection/manifest.ts";
 import { calibrationHealth, healthLines } from "./test-selection/health.ts";
-import { crowdingLine, unholdableSuites } from "./test-selection/plan.ts";
+import { nearestBaseline, nearestOnBranch } from "./coverage-gate.ts";
+import {
+  crowdingLine,
+  placedOnlyMandatory,
+  unholdableSuites,
+} from "./test-selection/plan.ts";
 import { readWorkspaceMembers } from "./workspace-tests.ts";
 
 const USAGE = `usage: test-selection <mode>
@@ -97,7 +97,7 @@ export function laneArgument(
   const at = args.indexOf("--lane");
   if (at < 0) return undefined;
   const lane = Number(args[at + 1]);
-  if (!Number.isInteger(lane) || lane < 1 || lane > LANES) return "invalid";
+  if (!Number.isInteger(lane) || lane < 1) return "invalid";
   return lane;
 }
 
@@ -145,7 +145,7 @@ export function dialLines(): string[] {
   const width = maxOf(DIALS.map((dial) => dial.name.length));
   for (const dial of DIALS) {
     lines.push(
-      `${pad(dial.name, width)}  ${dialValue(dial)} ${dial.unit} ` +
+      `${pad(dial.name, width)}  ${dial.value} ${dial.unit} ` +
         `(${dial.setBy})`,
     );
     lines.push(`${" ".repeat(width)}  ${dial.why}`);
@@ -159,17 +159,20 @@ export function dialLines(): string[] {
 }
 
 /**
- * Each measured set and its baseline, then every workspace member that
- * carries no set and the reason it does not.
+ * Each measured set, its baseline and its gate's score, then every
+ * workspace member that carries no set and the reason it does not.
  *
  * The two halves answer the two questions somebody brings here: what am I
- * being compared against, and why is my package not gated.
+ * being compared against, and why is my package not gated. The baseline
+ * is the one the coverage gate takes, chosen by `nearest` from the
+ * commits the manifest holds one at.
  */
-export function coverageLines(
+export async function coverageLines(
   manifest: Manifest | undefined,
   sets: readonly MeasuredSetRef[],
   members: readonly string[],
-): string[] {
+  nearest: (commits: readonly string[]) => Promise<string | undefined>,
+): Promise<string[]> {
   const names = sets.map(measuredSetName);
   const ungated = members.filter((member) =>
     !sets.some((ref) => ref.set.member === member)
@@ -178,21 +181,33 @@ export function coverageLines(
     1,
     maxOf([...names, ...ungated].map((name) => name.length)),
   );
-  const baselines = new Map(
-    (manifest?.coverageBaselines ?? []).map((
-      base,
-    ) => [`${base.suite}/${base.member}`, base]),
+  const entries = new Map(
+    (manifest?.entries ?? []).map((entry) => [
+      testIdentityKey(entry.test),
+      entry,
+    ]),
   );
-  const lines = sets.map((ref, index) => {
-    const name = names[index]!;
-    const baseline = baselines.get(name);
+  const lines: string[] = [];
+  for (const [index, ref] of sets.entries()) {
+    const baseline = await nearestBaseline(
+      manifest?.coverageBaselines ?? [],
+      ref.suite,
+      ref.set.member,
+      nearest,
+    );
     const against = baseline === undefined
       ? "no baseline yet"
       : `${baseline.uncoveredLines} uncovered lines at ${baseline.commit}`;
     const units = ref.set.units.length;
-    return `${pad(name, width)}  ${units} ${units === 1 ? "unit" : "units"}, ` +
-      `against ${against}`;
-  });
+    const gate = entries.get(testIdentityKey(coverageGateIdentity(ref)));
+    const scored = gate === undefined
+      ? "its gate has no record yet"
+      : `its gate scores ${gate.score.toFixed(3)}`;
+    lines.push(
+      `${pad(names[index]!, width)}  ${units} ` +
+        `${units === 1 ? "unit" : "units"}, against ${against}; ${scored}`,
+    );
+  }
   for (const member of ungated) {
     const excluded = EXCLUDED_FROM_COVERAGE_GATE.get(member);
     lines.push(
@@ -243,8 +258,14 @@ export interface PlanVerdict {
   /** How many times it would run, which a pass may have trimmed. */
   repeats?: number;
 
+  /** Set when its unit runs whole and holds a withheld test. */
+  heldWithUnit?: boolean;
+
   /** Set when no lane can hold it, whatever the budget. */
   unschedulable?: boolean;
+
+  /** Set when the plan places nothing beyond its mandatory tests. */
+  crowded?: boolean;
 
   /**
    * What a lane running nothing else would pay for it: its corrected own
@@ -273,18 +294,22 @@ export function explainLines(
       "  test just added, one just renamed, and one whose records never",
       "  say which unit it is in all run until a run on `main` records",
       "  them. Nothing runs a test the tree no longer holds, and nothing",
-      "  runs one whose unit a configuration declares unavailable.",
+      "  runs one whose unit a configuration declares unavailable. A",
+      "  coverage gate is the exception: no lane runs one, and one no",
+      "  manifest knows is offered at the floor of the score until the",
+      "  default branch records it.",
     ];
   }
   const lines = [
     `${key}`,
     `  suite ${entry.suite}, in ${entry.unit}`,
     `  score ${entry.score.toFixed(3)}, costing ${duration(entry.cost)}`,
-    `  ${entry.inputs.catches.toFixed(1)} weighted catches, across ` +
-    `${entry.inputs.sources} sources`,
+    `  ${entry.inputs.catches.toFixed(1)} weighted new real test failures, ` +
+    `across ${entry.inputs.sources} sources`,
     entry.inputs.lastCatch === undefined
-      ? "  it has never caught anything"
-      : `  the most recent catch was on ${entry.inputs.lastCatch}`,
+      ? "  it has never had a new real test failure"
+      : `  the most recent new real test failure was on ` +
+        `${entry.inputs.lastCatch}`,
     `  churn ${entry.inputs.churn.toFixed(4)}, flake rate ` +
     `${entry.flakeRate.toFixed(4)}`,
   ];
@@ -325,10 +350,19 @@ export function explainLines(
   // packing, and only the packing knows it.
   if (verdict.selected) {
     lines.push("  this commit's manifest selects it");
+  } else if (verdict.heldWithUnit) {
+    lines.push(
+      "  held back with its unit: the unit runs whole and holds a test too " +
+        "flaky to judge a change by, so a pull request runs it only where " +
+        "that unit is one that must run",
+    );
   } else if (!verdict.unschedulable && held === undefined) {
     lines.push(
-      "  this commit's manifest does not reach it: the budget runs out " +
-        "first, on tests worth more per second",
+      verdict.crowded
+        ? "  this commit's manifest does not reach it: the tests that must " +
+          "run leave no room in the lanes for anything else"
+        : "  this commit's manifest does not reach it: the lanes fill what " +
+          "the tests that must run leave of their budget with other tests",
     );
   }
   return lines;
@@ -381,6 +415,12 @@ export function planLines(
       lines.push(`    ${count} by ${reason}`);
     }
   }
+  for (const gate of laid.gates) {
+    lines.push(
+      `gate ${testIdentityKey(gate.entry.test)} by ${gate.reason}, run in ` +
+        `whatever lanes hold what it judges`,
+    );
+  }
   if (laid.overBudgetSeconds > 0) {
     lines.push(
       `the mandatory set alone puts a lane ` +
@@ -400,7 +440,9 @@ export function planLines(
         `${duration(entry.cost)}, past a lane's whole budget`,
     );
   }
-  lines.push(`${LANES} lanes, ${duration(LANE_BUDGET_SECONDS)} of work each`);
+  lines.push(
+    `${laid.lanes.length} lanes, ${duration(LANE_BUDGET_SECONDS)} of work each`,
+  );
   return lines;
 }
 
@@ -414,11 +456,21 @@ export function verdictFor(
   test: TestIdentity,
 ): PlanVerdict & { corpus: Manifest } {
   const { laid } = planned;
-  const corpus = planned.seen.manifest;
+  // A gate is no lane's work, so the corpus the lanes were packed from does
+  // not hold it, and it is added back for the identity being explained.
+  const corpus: Manifest = {
+    ...planned.seen.manifest,
+    entries: [
+      ...planned.seen.manifest.entries,
+      ...planned.seen.gates.map((gate) => gate.entry),
+    ],
+  };
   const key = testIdentityKey(test);
-  const taken = laid.lanes.flatMap((lane) => lane.selections).find((
-    selection,
-  ) => testIdentityKey(selection.entry.test) === key);
+  const taken = [
+    ...laid.lanes.flatMap((lane) => lane.selections),
+    ...laid.gates,
+  ]
+    .find((selection) => testIdentityKey(selection.entry.test) === key);
   // The corpus travels with the verdict so that whatever explains this
   // identity explains it against the same set the verdict came from. A
   // reader given the published manifest instead would be told there is
@@ -429,6 +481,10 @@ export function verdictFor(
     corpus,
   };
   if (taken !== undefined) verdict.repeats = taken.repeats;
+  if (placedOnlyMandatory(laid)) verdict.crowded = true;
+  if (laid.heldWithUnit.some((held) => testIdentityKey(held) === key)) {
+    verdict.heldWithUnit = true;
+  }
   const refused = laid.unschedulable.find((entry) =>
     testIdentityKey(entry.test) === key
   );
@@ -455,7 +511,10 @@ export interface Verification {
  * treats as unknown and therefore mandatory, so a manifest missing many
  * of them is a run that selects nothing and tests everything. That is
  * what this fails on, and it is the check to run before anything depends
- * on selection working.
+ * on selection working. A coverage gate the manifest holds nothing for is
+ * no lane's work and is not mandatory: it is offered at the floor of the
+ * score until a run records it, and this fails on that too, since a gate
+ * the default branch never records never earns its place.
  *
  * A manifest entry naming a suite or unit the tree no longer holds is
  * work no lane can be asked to do, and the packer drops it silently. It
@@ -479,9 +538,16 @@ export function verifyLines(
     for (const unit of suite.units) {
       if (unavailable.has(unit)) continue;
       enumerated.add(`${suite.id}\t${unit}`);
-      if (!held.has(`${suite.id}\t${unit}`)) {
-        missing.push(`${suite.id}: ${unit}`);
-      }
+      if (held.has(`${suite.id}\t${unit}`)) continue;
+      // A gate is no lane's work, so a gate nothing has recorded is not run
+      // as unknown; it waits at the floor of the score for its first record.
+      missing.push(
+        suite.judges === undefined
+          ? `no identity for ${suite.id}: ${unit}, so every lane runs it as ` +
+            `unknown`
+          : `no record of the gate ${suite.id}: ${unit}, so a change is ` +
+            `offered it at the floor of the score`,
+      );
     }
   }
   const stale = [...held].filter((key) => !enumerated.has(key)).sort();
@@ -491,9 +557,7 @@ export function verifyLines(
     `${enumerated.size} units enumerated, ${manifest.entries.length} ` +
     `identities in the manifest`,
   ];
-  for (const unit of missing.sort()) {
-    lines.push(`  no identity for ${unit}, so every lane runs it as unknown`);
-  }
+  for (const line of missing.sort()) lines.push(`  ${line}`);
   for (const key of stale) {
     const [suite, unit] = key.split("\t") as [string, string];
     lines.push(
@@ -525,6 +589,11 @@ export interface Sources {
 
   /** The suites, read from the working tree at `root`. */
   topology(root: string): Promise<readonly Suite[]>;
+
+  /** Which of a set of commits the checkout at `root` holds most recently. */
+  nearest(
+    root: string,
+  ): (commits: readonly string[]) => Promise<string | undefined>;
 }
 
 const LIVE: Sources = {
@@ -532,6 +601,7 @@ const LIVE: Sources = {
   members: gatedMembers,
   aliases: loadAliasResolver,
   topology: loadTopology,
+  nearest: nearestOnBranch,
 };
 
 /**
@@ -567,7 +637,6 @@ async function commitPlan(
 ): Promise<LanePlan | undefined> {
   const options: LaneOptions = {
     lane: 1,
-    of: LANES,
     full: false,
     dryRun: true,
     laneCount: false,
@@ -619,7 +688,12 @@ export async function dispatch(
       const topology = await sources.topology(root);
       const sets = measuredSets(topology);
       for (
-        const line of coverageLines(manifest, sets, await sources.members())
+        const line of await coverageLines(
+          manifest,
+          sets,
+          await sources.members(),
+          sources.nearest(root),
+        )
       ) {
         console.log(line);
       }
@@ -661,7 +735,7 @@ export async function dispatch(
       // Silently filtering every lane would exit zero having printed
       // nothing, which reads as "this lane runs no tests".
       if (laneNumber === "invalid") {
-        fail(`--lane takes a whole number from 1 to ${LANES}`);
+        fail("--lane takes a whole number from 1");
       }
       if (args.includes("--verify")) {
         const manifest = await commitManifest(root, at, sources);
@@ -675,6 +749,10 @@ export async function dispatch(
       }
       const planned = await commitPlan(root, at, sources);
       if (planned === undefined) return 1;
+      const lanes = planned.laid.lanes.length;
+      if (laneNumber !== undefined && laneNumber > lanes) {
+        fail(`--lane names lane ${laneNumber}, and this plan has ${lanes}`);
+      }
       for (const line of planLines(planned, laneNumber)) console.log(line);
       return 0;
     }
@@ -709,7 +787,6 @@ export async function dispatch(
           manifest,
           previous: before.manifest,
           capabilities: capabilitiesBySuite(topology),
-          processes: unitProcesses(topology),
           observations: { charges: [], lanes: [] },
         });
       }

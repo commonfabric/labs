@@ -114,6 +114,11 @@ fields directly. Removing the last member deletes the bucket and its occupied
 key; an existing lookup can observe subsequent reinsertion. A confirmed absent
 source or selector collection clears membership and releases member children.
 Restoring both collections rebuilds membership from their current occurrences.
+The coordinator also observes assignment membership. If a late maintenance write
+restores an occurrence that the source no longer contains, it removes that
+occurrence again without requiring another source edit. It observes assignment
+keys rather than bucket or element contents, so moving a retained member between
+buckets remains independent of source reconciliation.
 
 Maintenance children declare materializer write envelopes covering possible
 bucket destinations. This keeps a source assigned to B demanded when only A is
@@ -139,8 +144,9 @@ selector and reads the concrete maintenance slots it needs; setting up one membe
 does not materialize every bucket through its input schema. Selector reads remain
 reactive, including omitted keys.
 
-Membership reconciliation scans source occurrence identities. `groupBy` writes
-one member entry and uses a cached occurrence order to locate its published
+Membership reconciliation scans source occurrence identities and stored
+assignments when source membership or assignment membership changes. `groupBy`
+writes one member entry and uses a cached occurrence order to locate its published
 slot. Unchanged slots retain their original source links. Copying the order and
 result arrays still requires O(M) work for a bucket with M members. A missing
 order cache or published group is rebuilt from durable membership with

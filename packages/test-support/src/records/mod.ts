@@ -2,7 +2,7 @@ export {
   buildObjectBody,
   ciObjectName,
   datePartition,
-  isMainPush,
+  isMainRun,
   isSeed,
   localObjectName,
   objectNameSlug,
@@ -11,6 +11,7 @@ export {
   RECORD_SCHEMA_VERSION,
   serializeContextLine,
   serializeRecordLine,
+  shippedArtifact,
   testIdentityKey,
   testIdentityOfKey,
 } from "./schema.ts";
@@ -78,6 +79,7 @@ export {
   activeCapture,
   asDefinition,
   buildCapture,
+  enclosingNames,
   fileForName,
   installRegistrationCapture,
   NAME_MAP_PREFIX,
@@ -85,18 +87,14 @@ export {
   NAME_SEPARATOR,
   parseSkipList,
   readNameMaps,
+  readRegistrations,
   repositoryPathOf,
-  repositoryRootOf,
   serializeSkipList,
   SKIP_LIST_VARIABLE,
 } from "./registration.ts";
 export type { NameMap, RegistrationCapture, SkipList } from "./registration.ts";
-export {
-  BEGAN_PREFIX,
-  BEGAN_SUFFIX,
-  markUnitsBegan,
-  unitsBegan,
-} from "./began.ts";
+export type { WholeRun } from "./whole-run.ts";
+export { markWholeRun, readWholeRuns } from "./whole-run.ts";
 export {
   preloadArgument,
   preloadModulePath,
@@ -104,15 +102,18 @@ export {
 } from "./preload-path.ts";
 export type { RecordingPaths } from "./preload-path.ts";
 export {
-  dropContainerCases,
   ingestJUnit,
   isRelativeSourcePath,
   JUnitParseError,
   parseJUnit,
+  readJUnit,
+  recordedCases,
 } from "./junit.ts";
 export type { IngestJUnitOptions, JUnitCase } from "./junit.ts";
 export {
+  importRsaSigningKey,
   METADATA_TOKEN_URL,
+  rs256Jwt,
   saAssertion,
   tokenFromKey,
   tokenFromMetadata,
@@ -165,7 +166,6 @@ export type {
   Manifest,
   ManifestEntry,
   PreviousSuiteHealth,
-  ProcessFit,
   ScoreInputs,
   SuiteFit,
   SuiteHealth,

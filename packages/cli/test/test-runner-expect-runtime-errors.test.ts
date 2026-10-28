@@ -1,8 +1,9 @@
 /**
  * Integration-level guard for expectRuntimeErrors semantics: the flag REQUIRES
- * runtime errors (exact count when numeric) rather than merely tolerating
- * them, so a thrown rejection quietly reverting to a silent return fails the
- * suite that depends on it.
+ * runtime errors (exact count when numeric, and each named message when a
+ * list) rather than merely tolerating them, so a thrown rejection quietly
+ * reverting to a silent return, or giving another error, fails the suite that
+ * depends on it.
  *
  * Mirrors the design of test-runner-console-capture.test.ts.
  */
@@ -51,6 +52,37 @@ describe(
       );
       expect(passed).toBe(1);
       expect(failed).toBe(1);
+    });
+
+    it("passes when each listed message is one fired error's, in any order", async () => {
+      const { passed, failed } = await runTests(
+        fixture("expected-messages.test.tsx"),
+        { root: FIXTURES },
+      );
+      expect(passed).toBe(1);
+      expect(failed).toBe(0);
+    });
+
+    it("fails when a fired error is not the one a listed message names", async () => {
+      const { passed, failed } = await runTests(
+        fixture("expected-messages-mismatch.test.tsx"),
+        { root: FIXTURES },
+      );
+      expect(passed).toBe(1);
+      expect(failed).toBe(1);
+    });
+
+    it("fails a run whose expectation is malformed, naming the value", async () => {
+      const { passed, failed, results } = await runTests(
+        fixture("expected-malformed.test.tsx"),
+        { root: FIXTURES },
+      );
+      expect(passed).toBe(0);
+      expect(failed).toBe(1);
+      expect(results[0].error).toContain(
+        "`expectRuntimeErrors` is `true`, a positive whole count, or a non-empty list of strings, not",
+      );
+      expect(results[0].error).toContain("1.5");
     });
   },
 );

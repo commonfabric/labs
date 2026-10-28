@@ -1,4 +1,3 @@
-import { consume } from "@lit/context";
 import { css, html } from "lit";
 import { property } from "lit/decorators.js";
 
@@ -17,12 +16,7 @@ import type {
 } from "@commonfabric/api";
 import { type CellHandle, isCellHandle } from "@commonfabric/runtime-client";
 
-import {
-  applyThemeToElement,
-  type CFTheme,
-  cfThemeContext,
-  defaultTheme,
-} from "../theme-context.ts";
+import { applyThemeToElement, type CFTheme } from "../theme-context.ts";
 
 /**
  * CFChatMessage - Chat message component with markdown support
@@ -257,9 +251,12 @@ export class CFChatMessage extends BaseElement {
   @property({ type: Boolean, reflect: true })
   accessor compact: boolean | undefined = undefined;
 
-  @consume({ context: cfThemeContext, subscribe: true })
+  /**
+   * A theme given to this element directly, written over the theme it would
+   * otherwise inherit. Left unset, the element draws the ambient theme.
+   */
   @property({ attribute: false })
-  accessor theme: CFTheme = defaultTheme;
+  accessor theme: CFTheme | undefined = undefined;
 
   constructor() {
     super();
@@ -363,28 +360,13 @@ export class CFChatMessage extends BaseElement {
     `;
   }
 
-  override firstUpdated(
-    changedProperties: Map<string | number | symbol, unknown>,
-  ) {
-    super.firstUpdated(changedProperties);
-    // Set initial theme properties if theme is available
-    if (this.theme) {
-      this._updateThemeProperties();
-    }
-  }
-
   override updated(changedProperties: Map<string | number | symbol, unknown>) {
     super.updated(changedProperties);
 
     // Update CSS custom properties when theme changes
-    if (changedProperties.has("theme") && this.theme) {
-      this._updateThemeProperties();
+    if (changedProperties.has("theme")) {
+      applyThemeToElement(this, this.theme);
     }
-  }
-
-  private _updateThemeProperties() {
-    if (!this.theme) return;
-    applyThemeToElement(this, this.theme);
   }
 
   override render() {

@@ -11,6 +11,7 @@ import type {
 } from "@commonfabric/data-model/fabric-primitives";
 import type { DID } from "@commonfabric/identity";
 import { type Program } from "@commonfabric/js-compiler/interface";
+import type { JoinVisitDecision } from "@commonfabric/piece/ops";
 import type {
   ApplyOpResolution,
   DeliveryAttention,
@@ -20,7 +21,8 @@ import type {
   PresenceFacets,
   PresenceRecord,
 } from "@commonfabric/memory/v2";
-import type { MetaField } from "@commonfabric/runner";
+import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
+import type { MetaField, RuntimeSizes } from "@commonfabric/runner";
 import type {
   CfcConfClause,
   CfcTrustConfigInput,
@@ -66,6 +68,15 @@ export type CellRef = NormalizedFullLink & {
    * this ref asked for one.
    */
   cfcLabelView?: CfcLabelView;
+  /**
+   * The schema of the ancestor this cell was keyed from, on a ref that has no
+   * schema of its own. `schema` describes the cell at `path.slice(0, depth)`,
+   * and the worker reads this cell as that ancestor's `key()` along the rest
+   * of the path, under the schema the runtime narrows to there. The main
+   * thread holds no schema narrowing of its own, which is why the ancestor's
+   * schema crosses rather than the child's.
+   */
+  keyedFrom?: { depth: number; schema: JSONSchema };
 };
 
 /** A piece as this connection names it, by the cell that holds it. */
@@ -155,9 +166,20 @@ export enum RequestType {
   /**
    * Sends an event to a cell in a transaction of its own. Local visibility
    * lands with the commit; remote confirmation is not waited for, so that a
-   * slow server cannot block cell IPC.
+   * slow server cannot block cell IPC, unless the request waits for the
+   * event's handling, which under server execution is the served run.
    */
   CellSend = "cell:send",
+
+  /**
+   * Sends a reviewed action from a control the host draws itself, as
+   * {@link CellSend} sends an event, except that the worker stamps the event
+   * with `native` provenance for the request's surface and action and marks
+   * it renderer-trusted, so that it satisfies a write's UI contract for that
+   * surface and action. Waits for the event's handling, and rejects with the
+   * reason when the event, or the run of the stream's handler, is refused.
+   */
+  CellSendReviewed = "cell:send-reviewed",
 
   /**
    * Starts notifying the client of a cell's changes, optionally including its
@@ -261,6 +283,13 @@ export enum RequestType {
    * directly would skip that repair, and nothing else performs it.
    */
   EnsureHomePatternRunning = "runtime:ensureHomePatternRunning",
+
+  /**
+   * Tells the user's chat manager that the user has joined the FabriChat room
+   * whose space the request names, once the space passes vetting, answering
+   * with what was decided. Home is never created for it.
+   */
+  JoinVisitedRoom = "runtime:joinVisitedRoom",
 
   /**
    * Waits for reactive quiescence *and* for every issued commit to be durable.
@@ -430,6 +459,11 @@ export enum RequestType {
    * otherwise failing as a confusing server 404.
    */
   UploadBlob = "runtime:uploadBlob",
+  /**
+   * Returns the URL the named space's host serves a blob at, so a host can
+   * show or offer a blob it holds a reference to.
+   */
+  BlobUrl = "runtime:blobUrl",
 
   // Piece operations (main -> worker)
 
@@ -437,9 +471,6 @@ export enum RequestType {
    * Answers with a space's root pattern, creating it if the space has none.
    */
   GetSpaceRootPattern = "pattern:getSpaceRoot",
-
-  /** Replaces a space's root pattern with a freshly created one. */
-  RecreateSpaceRootPattern = "pattern:recreateSpaceRoot",
 
   /**
    * Creates a piece in a space from a URL or a program, optionally running it
@@ -568,6 +599,18 @@ export enum NotificationType {
   /** Reports authoritative loss of the runtime principal's access to a space. */
   SpaceAccessLost = "callback:space-access-lost",
 
+  /**
+   * Reports that a space which refused the runtime principal has admitted it
+   * again, so a load that the refusal failed may succeed if asked again.
+   */
+  SpaceAccessRestored = "callback:space-access-restored",
+
+  /**
+   * Reports that a connection to a memory server came back after it was
+   * lost, so a load that failed while it was down may succeed if asked again.
+   */
+  ConnectionRestored = "callback:connection-restored",
+
   /** Carries one telemetry marker, sent only while telemetry is enabled. */
   Telemetry = "callback:telemetry",
 
@@ -661,6 +704,9 @@ export type IPCClientMessage = {
  * only by its message.
  */
 export enum RuntimeErrorCode {
+  /** The memory server requires replacing this runtime before it can mount. */
+  ClientUpdateRequired = "client-update-required",
+
   /**
    * The worker could not load its compiler stack, so nothing it was asked to
    * compile can run. Distinguished because the client's remedy is a reload
@@ -772,17 +818,38 @@ export type BaseRequest = {
  */
 export type InitializationData = {
   /**
-   * The backend server, and the default host for any space `spaceHostMap`
-   * does not list.
+   * Application name and loaded labs commit reported by the embedder. When
+   * absent, the runtime reports `runtime-client` with an unknown Git SHA.
+   */
+  clientBuild?: ClientBuild;
+
+  /**
+   * The backend server. It serves the HTTP APIs, patterns, LLM requests and
+   * the health check, and is the default storage host when `memoryUrl` is
+   * absent.
    */
   apiUrl: string;
 
   /**
+   * The default storage host, as an HTTP or HTTPS origin: where the Memory
+   * WebSocket opens for any space `spaceHostMap` does not list. A deployment
+   * whose Memory service has its own hostname, such as a memory router,
+   * publishes it (the toolshed's `MEMORY_PUBLIC_URL`), and the shell passes
+   * on what its page or its API URL's `/api/meta` says. Absent, the default
+   * storage host is `apiUrl`, byte-identical to the single-host behavior.
+   * Only Memory moves: everything else stays on `apiUrl`, and while it is set
+   * a host hint cannot move a space's Memory off it
+   * (`Runtime.registerSpaceHostDetailed`). Fixed for the connection's
+   * lifetime.
+   */
+  memoryUrl?: string;
+
+  /**
    * Per-space storage hosts, by space DID, as HTTP or HTTPS origins. A listed
-   * space resolves against its own host instead of `apiUrl`; an absent map or
-   * an absent entry falls back to `apiUrl`, byte-identical to the single-host
-   * behavior. A plain record, since no function crosses the worker boundary.
-   * Fixed for the connection's lifetime.
+   * space resolves against its own host instead of the default storage host
+   * (`memoryUrl`, else `apiUrl`); an absent map or an absent entry falls back
+   * to that host. A plain record, since no function crosses the worker
+   * boundary. Fixed for the connection's lifetime.
    */
   spaceHostMap?: Record<string, string>;
 
@@ -826,6 +893,12 @@ export type InitializationData = {
      * answer.
      */
     serverExecution?: boolean;
+
+    /**
+     * Keep session documents local when server execution is disabled.
+     * Defaults to off.
+     */
+    localSessionDocuments?: boolean;
 
     /** Global default for server-selected view replication. */
     viewScopedReplication?: boolean;
@@ -900,6 +973,14 @@ export type InitializationData = {
    * which is `fail`.
    */
   cfcReadOnExceed?: "fail" | "skip";
+
+  /**
+   * The space of the profile the worker's runtime answers `#profile` with,
+   * among the user's profiles (`RuntimeOptions.preferredProfileSpace`): the
+   * one a host keeping a profile per identity it presents acts as. Absent
+   * answers as the home orders them.
+   */
+  preferredProfileSpace?: DID;
 
   /**
    * The deployment trust configuration the worker's runtime evaluates concept
@@ -1028,12 +1109,13 @@ export type InitializeRequest = BaseRequest & {
  * Every other field is the initialization field of the same name, so what an
  * attach asserts and what initialization declared compare directly.
  *
- * `apiUrl` and `spaceHostMap` are here as posture rather than as routing: a
- * document believing it reads from a different backend than the runtime does
- * is as wrong about what it is joined to as one believing a different
- * enforcement mode, and the reads would silently go to the runtime's hosts.
- * Both are normalized before they are stored or asserted, so two spellings of
- * one origin are one posture.
+ * `apiUrl`, `memoryUrl` and `spaceHostMap` are here as posture rather than as
+ * routing: a document believing it reads from a different backend than the
+ * runtime does is as wrong about what it is joined to as one believing a
+ * different enforcement mode, and the reads would silently go to the runtime's
+ * hosts. All three are normalized before they are stored or asserted, so two
+ * spellings of one origin are one posture, and a `memoryUrl` naming
+ * `apiUrl`'s own origin is the same posture as none.
  *
  * **Every field here holds plain JSON-shaped values only.** They are compared
  * with `deepEqual`, except `cfcTrustConfig`, which is compared by the digest
@@ -1051,6 +1133,7 @@ export type RuntimeSecurityContext =
   & Pick<
     InitializationData,
     | "apiUrl"
+    | "memoryUrl"
     | "spaceHostMap"
     | "spaceDid"
     | "experimental"
@@ -1058,6 +1141,7 @@ export type RuntimeSecurityContext =
     | "cfcFlowLabels"
     | "cfcReadMaxConfidentiality"
     | "cfcReadOnExceed"
+    | "preferredProfileSpace"
     | "cfcTrustConfig"
     | "renderDeclassificationPolicy"
     | "renderConfidentialityCeiling"
@@ -1208,6 +1292,37 @@ export type CellSendRequest = BaseRequest & {
 
   /** Wait for commit confirmation and return a refusal to the caller. */
   awaitCommit?: boolean;
+
+  /**
+   * Wait for the event's handling as well as its commit, and return its
+   * refusal, such as a write the handler made that the runtime refused, to
+   * the caller.
+   */
+  awaitHandling?: boolean;
+};
+
+/**
+ * The {@link RequestType.CellSendReviewed} request. `event` is the payload
+ * the host's control displayed; the worker replaces any `provenance` field it
+ * carries.
+ */
+export type CellSendReviewedRequest = BaseRequest & {
+  type: RequestType.CellSendReviewed;
+
+  /** The stream to send to. */
+  cell: CellRef;
+
+  /** The payload, a record whose fields the sent event holds. */
+  event: FabricValue;
+
+  /**
+   * The trusted surface the host's control is bound to, matched against a UI
+   * contract's `trustedPattern` and `requiredEventIntegrity`.
+   */
+  surface: string;
+
+  /** The action the control takes, matched against a contract's `action`. */
+  action: string;
 };
 
 /**
@@ -1369,6 +1484,13 @@ export type CustodySealPreview = {
 
   /** The actor's `Context` and `Resource` sources the value draws on. */
   sources: CfcAtom[];
+
+  /**
+   * The people the value was drawn from data shared with, such as a
+   * conversation: one sorted group per distinct set of people a clause names
+   * beside the actor.
+   */
+  heldWith: DID[][];
 
   /**
    * Whether every release rule of the room's policy requires the seal's input
@@ -1804,12 +1926,25 @@ export type GetHomeSpaceCellRequest = BaseRequest & {
   type: RequestType.GetHomeSpaceCell;
 };
 
-/**
- * The {@link RequestType.EnsureHomePatternRunning} request, which carries no
- * payload.
- */
+/** The {@link RequestType.EnsureHomePatternRunning} request. */
 export type EnsureHomePatternRunningRequest = BaseRequest & {
   type: RequestType.EnsureHomePatternRunning;
+
+  /**
+   * Whether to bring Home up only where it already exists: where Home's root
+   * records the pattern it runs. Where it does not, the request creates
+   * nothing and starts nothing. Defaults to `false`, which creates Home where
+   * it has no root.
+   */
+  existingOnly?: boolean;
+};
+
+/** The {@link RequestType.JoinVisitedRoom} request. */
+export type JoinVisitedRoomRequest = BaseRequest & {
+  type: RequestType.JoinVisitedRoom;
+
+  /** The visited space declaring a room through its kind or root. */
+  space: DID;
 };
 
 /** The {@link RequestType.Idle} request, which carries no payload. */
@@ -2278,10 +2413,44 @@ export type UploadBlobRequest = BaseRequest & {
   body: FabricBytes;
 
   /**
-   * The extension the stored blob is served under, defaulting to `bin`.
-   * A leading dot is stripped.
+   * The name of the file the bytes came from, if they have one. The stored blob
+   * keeps it, hashed into the blob's id with the media type and the bytes, and
+   * a download of the blob is offered under it.
+   */
+  name?: string;
+
+  /**
+   * The extension the stored blob is served under. A leading dot is stripped.
+   * With none, the store chooses one: the extension of `name`, or else one for
+   * the media type, or else `bin`.
    */
   suffix?: string;
+};
+
+/**
+ * The {@link RequestType.BlobUrl} request: a blob, named by its space and its
+ * id there.
+ */
+export type BlobUrlRequest = BaseRequest & {
+  type: RequestType.BlobUrl;
+
+  /** The space whose blob store holds the blob. */
+  space: DID;
+
+  /** The blob's id, `fid1:` and the hash of its record. */
+  id: string;
+
+  /**
+   * Whether the URL is one to save the blob from: its host then serves it as
+   * an attachment, which a browser saves from any origin, rather than shows.
+   */
+  download?: boolean;
+};
+
+/** Where a blob is served from. */
+export type BlobUrlResponse = {
+  /** The absolute URL the blob's space's host serves it at. */
+  url: string;
 };
 
 /** The stored blob's id, and the URL it is served from. */
@@ -2389,6 +2558,34 @@ export type CDFPoint = {
 };
 
 /**
+ * One of the slowest measurements of a timed operation. Mirrors the shape
+ * `@commonfabric/utils/logger` uses.
+ */
+export type SlowTiming = {
+  /**
+   * How long it took, in milliseconds.
+   */
+  elapsed: number;
+
+  /**
+   * When it ended, on the worker's `performance.now()` clock.
+   */
+  at: number;
+
+  /**
+   * When it ended, in milliseconds since the epoch.
+   */
+  epochMs: number;
+
+  /**
+   * What the worker named this one measurement with, when it named it: the
+   * label its caller chose, such as the cell a resume loaded or the action a
+   * run executed.
+   */
+  detail?: string;
+};
+
+/**
  * What one timed operation's samples add up to. Two distributions are kept:
  * `cdf` over every sample since the worker started, and `cdfSinceBaseline`
  * over those since the last baseline reset, which is `null` until one has
@@ -2439,6 +2636,11 @@ export type TimingStats = {
    * When that measurement was taken.
    */
   lastTimestamp: number;
+
+  /**
+   * The slowest measurements, longest first, at most five of them.
+   */
+  slowest: SlowTiming[];
 
   /**
    * The distribution over every sample since the worker started.
@@ -2544,20 +2746,13 @@ export type GetSpaceRootPatternRequest = BaseRequest & {
    * A caller that only reads what the root exported passes false. Starting
    * a root materializes everything its result reaches, which on a space
    * whose root reaches a large piece is the dominant cost of opening
-   * anything; a stored export costs a read. Either way an absent root is
-   * still created, since a space needs one before it can have exports.
+   * anything; a stored export costs a read.
+   *
+   * A space with no root gets one only when this is true and the requesting
+   * identity owns the space. Otherwise the response names no piece, and
+   * nothing is written.
    */
   start?: boolean;
-};
-
-/** The {@link RequestType.RecreateSpaceRootPattern} request. */
-export type RecreateSpaceRootPatternRequest = BaseRequest & {
-  type: RequestType.RecreateSpaceRootPattern;
-
-  /**
-   * The space whose root pattern to replace.
-   */
-  space: DID;
 };
 
 /**
@@ -3263,6 +3458,7 @@ export type IPCClientRequest =
   | CellSetRequest
   | CellPushRequest
   | CellSendRequest
+  | CellSendReviewedRequest
   | CellSubscribeRequest
   | CellUnsubscribeRequest
   | CellResolveAsCellRequest
@@ -3291,6 +3487,7 @@ export type IPCClientRequest =
   | GetCellRequest
   | GetHomeSpaceCellRequest
   | EnsureHomePatternRunningRequest
+  | JoinVisitedRoomRequest
   | ListEventAttentionRequest
   | ResolveEventAttentionRequest
   | GetGraphSnapshotRequest
@@ -3317,7 +3514,6 @@ export type IPCClientRequest =
   | FlushCompileCacheWritesRequest
   | PieceCreateRequest
   | GetSpaceRootPatternRequest
-  | RecreateSpaceRootPatternRequest
   | PieceGetRequest
   | PieceGetSlugRequest
   | SlugResolveRequest
@@ -3343,7 +3539,8 @@ export type IPCClientRequest =
   | DetectNonIdempotentRequest
   | GetPatternSourcesRequest
   | SetBreakpointsRequest
-  | UploadBlobRequest;
+  | UploadBlobRequest
+  | BlobUrlRequest;
 
 /**
  * The requests naming a piece by id, read off {@link IPCClientRequest} rather
@@ -3555,6 +3752,27 @@ export type CellResponse = {
 };
 
 /**
+ * A reference to the user's Home, which a request that brings Home up only
+ * where it exists lacks where it does not.
+ */
+export type HomePatternResponse = {
+  /**
+   * Home's root, absent where the request brought nothing up.
+   */
+  cell?: CellRef;
+};
+
+/**
+ * What a {@link RequestType.JoinVisitedRoom} request came to, absent where the
+ * user has no Home: `sent` to the chat manager, `no-chat-manager` for a Home
+ * whose chat manager has no `joinRoom`, or the reason vetting refused the
+ * space or its declared chat.
+ */
+export type JoinVisitedRoomResponse = {
+  decision?: JoinVisitDecision;
+};
+
+/**
  * A cell's display label. `undefined` means the cell carries none, which is
  * distinct from the request having failed.
  */
@@ -3571,6 +3789,14 @@ export type PieceResponse = {
    * The piece in question.
    */
   piece: PieceRef;
+};
+
+/** A reference to a space's root, which a space with no root lacks. */
+export type SpaceRootPatternResponse = {
+  /**
+   * The space's root, absent when the space has none.
+   */
+  piece?: PieceRef;
 };
 
 /**
@@ -3659,8 +3885,10 @@ export type GraphSnapshotResponse = {
 
 /**
  * Everything the logger diagnostics read returns: counts, per-logger
- * metadata, timings, and active flags, gathered in one round trip because a
- * client comparing them wants them from the same moment.
+ * metadata, timings, active flags, the runtime's CFC counters, the pattern
+ * manager's compile-cache counters, and the sizes of the runtime's live
+ * structures, gathered in one round trip because a client comparing them
+ * wants them from the same moment.
  */
 export type LoggerCountsResponse = {
   /**
@@ -3695,6 +3923,102 @@ export type LoggerCountsResponse = {
    * no index signature does not satisfy, and every counter there is a number.
    */
   cfc: Record<string, number>;
+
+  /**
+   * The pattern manager's compile-cache counters: `hits`, `misses` and
+   * `byIdentityHits`, as `PatternManager.getCompileCacheStats()` reports
+   * them. A capture reading them beside the `compile-cache` timing rows can
+   * tell a worker that recompiled once from one that never hits.
+   */
+  compileCache: Record<string, number>;
+
+  /**
+   * How large the runtime's live structures are at this moment, and what its
+   * channels have carried: the scheduler's tables, storage's documents and
+   * subscriptions with each space's share and the approximate size of its
+   * documents, the compiled code caches, the worker's own subscription and
+   * mount tables, and the traffic of the memory connections and the worker's
+   * ports. The counts are each a collection's own; the sizes are estimates
+   * that say so where they are declared. `storage` is `null`, not zeros, for
+   * a storage manager that reports no sizes, and its per-space view names
+   * the largest spaces up to a cap with the rest added together under
+   * `bySpaceOmitted`, as `StorageSizes` says.
+   */
+  sizes: RuntimeSizes & { worker: WorkerSizes; ipc: WorkerIpcSizes | null };
+};
+
+/**
+ * What one of the worker's outbound channels has carried: every message is
+ * counted, and one in `IPC_SAMPLE_STRIDE` of them is measured, so the bytes
+ * are an estimate from a sample rather than a sum.
+ */
+export type IpcChannelSizes = {
+  /** Messages handed to the channel's `postMessage`. */
+  messages: number;
+
+  /** Messages measured, the first of the channel and every stride after. */
+  sampledMessages: number;
+
+  /**
+   * The approximate JSON length of the measured messages' encodings, in
+   * UTF-16 code units, as `approximateJsonSize()` measures one: a stand-in
+   * for what structured clone copied, which the clone's own per-object
+   * overhead puts above it and text outside ASCII puts below its UTF-8 size.
+   */
+  sampledBytes: number;
+
+  /**
+   * `sampledBytes` scaled from the measured messages to all of them. A
+   * channel whose messages vary widely in size is estimated loosely while
+   * its sample is small; `messages` and `sampledMessages` say how small.
+   */
+  approxBytes: number;
+};
+
+/**
+ * What the worker's ports have carried and how many it holds, for a read
+ * that attributes serialization traffic to the port it crossed.
+ */
+export type WorkerIpcSizes = {
+  /**
+   * The `MessagePort`s of attached clients the worker holds now, and how
+   * many it has closed. The owner speaks over the worker's own global, which
+   * is not a port and is in neither count.
+   */
+  openPorts: { open: number; closed: number };
+
+  /** Each outbound channel's traffic since the worker started. */
+  bytesSerialized: {
+    /** The worker's own global, over which the owner is reached. */
+    owner: IpcChannelSizes;
+
+    /** Each attached client's port, by client id. */
+    clients: Record<string, IpcChannelSizes>;
+
+    /** The ports of clients that have departed, added together. */
+    departedClients: IpcChannelSizes;
+  };
+};
+
+/** Sizes of the tables the worker keeps on its clients' behalf. */
+export type WorkerSizes = {
+  /** Cell subscriptions, one per client per cell. */
+  cellSubscriptions: number;
+
+  /** Operation subscriptions. */
+  operationSubscriptions: number;
+
+  /** Operation sessions open. */
+  operationSessions: number;
+
+  /** Presence room memberships. */
+  presenceMemberships: number;
+
+  /** VDOM mounts. */
+  vdomMounts: number;
+
+  /** Spaces with a pieces controller. */
+  spaces: number;
 };
 
 /** The worker's pattern coverage, where this worker collects any. */
@@ -3803,48 +4127,79 @@ export type SpaceAccessLostNotification = {
 };
 
 /**
- * An error with no request to fail -- a renderer error, or one a pattern
- * raised between requests. Every field but `message` is context that the
- * raising site may or may not have had.
+ * The runtime principal admitted again to one space that had refused it, as
+ * a retry of the space's access decides: one the memory server's
+ * `session/admissible` notice started, or one a client asked for.
  */
-export type ErrorNotification = {
-  type: NotificationType.ErrorReport;
-
-  /**
-   * What went wrong.
-   */
-  message: string;
-
-  /**
-   * Names the kind of failure where one is named.
-   */
-  code?: RuntimeErrorCode;
-
-  /**
-   * The piece it happened in, where that is known.
-   */
-  pieceId?: string;
-
-  /**
-   * The space it happened in, where that is known.
-   */
-  space?: string;
-
-  /**
-   * The pattern it happened in, where that is known.
-   */
-  patternId?: string;
-
-  /**
-   * The spell it happened in, where that is known.
-   */
-  spellId?: string;
-
-  /**
-   * The stack as raised, where one survived.
-   */
-  stackTrace?: string;
+export type SpaceAccessRestoredNotification = {
+  type: NotificationType.SpaceAccessRestored;
+  space: DID;
 };
+
+/**
+ * A connection of the worker's to a memory server, back after it was lost.
+ * It names no space: a load reads from more than the space it asks about, so
+ * which connection it failed on is not something a client could match.
+ */
+export type ConnectionRestoredNotification = {
+  type: NotificationType.ConnectionRestored;
+};
+
+/**
+ * An error with no request to fail -- a renderer error, or one a pattern
+ * raised between requests. Update-required reports include write uncertainty;
+ * other context is included when the raising site has it.
+ */
+export type ErrorNotification =
+  & {
+    type: NotificationType.ErrorReport;
+
+    /**
+     * What went wrong.
+     */
+    message: string;
+
+    /**
+     * The piece it happened in, where that is known.
+     */
+    pieceId?: string;
+
+    /**
+     * The space it happened in, where that is known.
+     */
+    space?: string;
+
+    /**
+     * The pattern it happened in, where that is known.
+     */
+    patternId?: string;
+
+    /**
+     * The spell it happened in, where that is known.
+     */
+    spellId?: string;
+
+    /**
+     * The stack as raised, where one survived.
+     */
+    stackTrace?: string;
+  }
+  & (
+    | {
+      /** Runtime replacement is required. */
+      code: RuntimeErrorCode.ClientUpdateRequired;
+
+      /** Writes were unconfirmed at refusal or attempted afterward. */
+      unconfirmedWrites: boolean;
+    }
+    | {
+      /** Names another kind of failure where one is named. */
+      code?: Exclude<RuntimeErrorCode, RuntimeErrorCode.ClientUpdateRequired>;
+
+      /** Write uncertainty belongs to update-required reports. */
+      unconfirmedWrites?: never;
+    }
+  );
 
 /** One telemetry marker. Sent only while telemetry is enabled. */
 export type TelemetryNotification = {
@@ -4043,6 +4398,8 @@ export type RemoteResponse =
   | CellValueResponse
   | CellGetResponse
   | CellResponse
+  | HomePatternResponse
+  | JoinVisitedRoomResponse
   | CfcLabelViewResponse
   | CellFieldsResponse
   | SnapshotSharePreview
@@ -4061,6 +4418,7 @@ export type RemoteResponse =
   | TriggerTraceResponse
   | WriteStackTraceResponse
   | PieceResponse
+  | SpaceRootPatternResponse
   | SlugReferenceResponse
   | PieceSourceResponse
   | PieceSourceRevisionResponse
@@ -4072,6 +4430,7 @@ export type RemoteResponse =
   | DetectNonIdempotentResponse
   | PatternSourcesResponse
   | UploadBlobResponse
+  | BlobUrlResponse
   | OperationCapabilitiesResponse
   | OperationFieldResponse
   | OperationApplyResponse
@@ -4090,6 +4449,8 @@ export type IPCRemoteNotification =
   | ErrorNotification
   | EventIntentOutcomeNotification
   | SpaceAccessLostNotification
+  | SpaceAccessRestoredNotification
+  | ConnectionRestoredNotification
   | TelemetryNotification
   | VDomBatchNotification
   | PendingWritesNotification
@@ -4131,7 +4492,11 @@ export type Commands = {
   };
   [RequestType.EnsureHomePatternRunning]: {
     request: EnsureHomePatternRunningRequest;
-    response: CellResponse;
+    response: HomePatternResponse;
+  };
+  [RequestType.JoinVisitedRoom]: {
+    request: JoinVisitedRoomRequest;
+    response: JoinVisitedRoomResponse;
   };
   [RequestType.Idle]: {
     request: IdleRequest;
@@ -4252,6 +4617,10 @@ export type Commands = {
   };
   [RequestType.CellSend]: {
     request: CellSendRequest;
+    response: EmptyResponse;
+  };
+  [RequestType.CellSendReviewed]: {
+    request: CellSendReviewedRequest;
     response: EmptyResponse;
   };
   [RequestType.CellSubscribe]: {
@@ -4441,11 +4810,7 @@ export type Commands = {
   };
   [RequestType.GetSpaceRootPattern]: {
     request: GetSpaceRootPatternRequest;
-    response: PieceResponse;
-  };
-  [RequestType.RecreateSpaceRootPattern]: {
-    request: RecreateSpaceRootPatternRequest;
-    response: PieceResponse;
+    response: SpaceRootPatternResponse;
   };
   // Diagnosis requests
   [RequestType.DetectNonIdempotent]: {
@@ -4463,6 +4828,10 @@ export type Commands = {
   [RequestType.UploadBlob]: {
     request: UploadBlobRequest;
     response: UploadBlobResponse;
+  };
+  [RequestType.BlobUrl]: {
+    request: BlobUrlRequest;
+    response: BlobUrlResponse;
   };
   // VDOM requests
   [RequestType.VDomMount]: {

@@ -49,6 +49,7 @@ import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
+import { immutableCellsFor, pinImmutableCell } from "./immutable-cell.ts";
 import { readStatsActive, recordProxyAccess } from "./read-stats.ts";
 import { toCell } from "./back-to-cell.ts";
 import { type Cell, createCell } from "./cell.ts";
@@ -57,7 +58,7 @@ import {
   type CfcLabelView,
   rebaseCfcLabelView,
 } from "./cfc/label-view-state.ts";
-import { dataUriFromValueWithResolvedLinks } from "./data-uri.ts";
+
 import { declareStreamSchema, type NormalizedFullLink } from "./link-utils.ts";
 import { type Runtime } from "./runtime.ts";
 import {
@@ -316,6 +317,7 @@ export function materializeSchemaView(
   synced: boolean,
   isRoot: boolean,
 ): unknown {
+  pinImmutableCell(link, link.id);
   const mismatch = (reason: string): undefined => {
     // Register the read that failed before doing anything else. A refusal has
     // to leave behind the dependency that re-triggers the reader when the data
@@ -776,7 +778,7 @@ function createArrayView(
     // `toCell` on `xs[0]` would otherwise hand back a link to INDEX 0 of this
     // array: write that anywhere and it names whatever lands there next rather
     // than this element. Eager traversal rebases the same elements onto a
-    // `data:` URI, and the value is already in hand here, so the identity
+    // snapshot URI, and the value is already in hand here, so the identity
     // costs no read. An element that is itself a link already carries its own
     // identity, and an `asCell` item is a handle whose link is the point of
     // it; `arrayItemUsesValueIdentity` is the one predicate both paths apply.
@@ -793,7 +795,7 @@ function createArrayView(
         tx,
         {
           ...slotLink,
-          id: dataUriFromValueWithResolvedLinks(item, slotLink),
+          id: immutableCellsFor(runtime).createElement(item, slotLink).id,
           path: [],
         },
         [key],

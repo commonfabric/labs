@@ -3,17 +3,25 @@ import * as HttpStatusCodes from "stoker/http-status-codes";
 import { z } from "zod";
 import { MAX_TTL_DAYS } from "./ingest-channels.utils.ts";
 
-// The CONTROL plane for ingest channels: mint, list, rotate, revoke.
+// The CONTROL plane for ingest channels: mint, list, rotate, and revoke. A
+// mint may carry a proof of a Gmail mailbox, which binds the channel to it.
 //
-// Mounted at its own prefix, deliberately NOT under `/api/ingest/*`:
-//   1. `/api/ingest/*` carries `cors({ origin: "*", allowMethods: ["POST"] })`.
+// A verb that acts on one space carries that space in its path, under
+// `/api/spaces/:space/`, so that whatever dispatches requests by space can
+// send it to the deployment holding that space without reading the body. The
+// one verb that names no space, the caller's own list, sits at
+// `/api/ingest-channels/list`.
+//
+// Both prefixes are deliberately NOT under the data plane's `/api/ingest/*` or
+// `/api/spaces/:space/ingest/*`:
+//   1. Those carry `cors({ origin: "*", allowMethods: ["POST"] })`.
 //      Inheriting that would make this a credentialed cross-origin POST surface,
 //      against a written invariant of the first-party auth spec ("the protected
 //      routes do not expose wildcard CORS").
 //   2. `POST /api/ingest/channels` would collide with `POST /api/ingest/:id`.
 //   3. Data plane and control plane should not share middleware.
-// Keep the two prefixes separate LITERAL strings — a future `/api/ingest*`
-// would silently merge them again.
+// Keep the `ingest` and `ingest-channels` path segments separate LITERAL
+// strings — a future `ingest*` pattern would silently merge them again.
 //
 // EVERY verb is POST, including list and revoke. Not aesthetics: the in-runtime
 // signer is a hardcoded POST-only path allowlist
@@ -23,27 +31,46 @@ import { MAX_TTL_DAYS } from "./ingest-channels.utils.ts";
 
 const tags = ["Ingest Channels"];
 
-export const BASE = "/api/ingest-channels";
+/** The prefix of every verb that acts on one space, named in the path. */
+export const SPACE_BASE = "/api/spaces/:space/ingest-channels";
 
-const spaceField = z.string().describe(
-  "The did:key of the space to write into. You must hold an explicit OWNER " +
-    "grant on its ACL.",
-);
+/** The prefix of the one verb that names no space: the caller's own list. */
+export const CALLER_BASE = "/api/ingest-channels";
+
+const spaceParams = z.object({
+  space: z.string().describe(
+    "The did:key of the space the channel writes into. You must hold an " +
+      "explicit OWNER grant on its ACL.",
+  ),
+});
 
 // An idempotency key; see `claimMintRequest` for why a credential-minting route
 // needs one when request proofs have no replay cache.
 const requestIdField = z.string().describe(
   "A caller-generated random id. Replaying a request with an id already used " +
-    "returns 409 and no secret.",
+    "returns 409, and changes nothing and returns no secret.",
 );
+
+const cellTarget = z.object({
+  space: z.string(),
+  id: z.string(),
+  path: z.array(z.string()),
+}).describe("The parts of the link to the cell a gmail channel writes.");
 
 const channelSummary = z.object({
   id: z.string(),
   name: z.string(),
   space: z.string(),
-  causePrefix: z.string(),
+  causePrefix: z.string().optional().describe(
+    "A device channel's cause prefix.",
+  ),
+  target: cellTarget.optional(),
   installId: z.string(),
-  sink: z.literal("journal"),
+  kind: z.enum(["device", "gmail"]).describe(
+    "`device`: a device POSTs records with the token into journal cells " +
+      "under the cause prefix. `gmail`: toolshed writes each Gmail push " +
+      "notification for the bound mailbox into the target cell.",
+  ),
   createdAt: z.string(),
   enabled: z.boolean(),
   owner: z.string().optional(),
@@ -70,7 +97,9 @@ const commonResponses = {
   // over the deployment's whole space inventory.
   [HttpStatusCodes.FORBIDDEN]: {
     ...jsonError,
-    description: "Not an owner of that space, or no such space",
+    description:
+      "Not an owner of that space, no such space, or no such channel " +
+      "writing into it",
   },
   [HttpStatusCodes.CONFLICT]: {
     ...jsonError,
@@ -101,34 +130,78 @@ const commonResponses = {
   },
 } as const;
 
-/** The token is returned ONCE, here and on rotate, and never stored in clear. */
+/**
+ * The token is returned ONCE, here and on rotate, and never stored in clear.
+ * A gmail channel, which no device POSTs to, carries no URL and no token.
+ */
 const mintResult = z.object({
   id: z.string(),
-  url: z.string(),
+  url: z.string().optional().describe(
+    "Where a device POSTs records. Absent for a gmail channel.",
+  ),
   space: z.string(),
-  causePrefix: z.string(),
+  causePrefix: z.string().optional().describe(
+    "A device channel's cause prefix.",
+  ),
+  target: cellTarget.optional(),
   installId: z.string(),
   expiresAt: z.string().optional(),
-  token: z.string().describe("Shown once. Hand it to the device."),
+  token: z.string().optional().describe(
+    "Shown once. Hand it to the device. Absent for a gmail channel.",
+  ),
+  emailAddress: z.string().optional().describe(
+    "The mailbox the channel is bound to, when the mint carried a proof.",
+  ),
 });
 
+const gmailProof = z.union([
+  z.object({
+    accessToken: z.string().min(1).max(4096).describe(
+      "A Google access token that reads the mailbox. Used for one profile " +
+        "lookup and not stored.",
+    ),
+  }).strict(),
+  z.object({
+    idToken: z.string().min(1).max(4096).describe(
+      "A Google ID token naming the mailbox, for one of the OAuth client " +
+        "ids this deployment accepts. Grants nothing, and is the proof to " +
+        "prefer.",
+    ),
+  }).strict(),
+]).describe(
+  "Binds the channel to the Gmail mailbox the proof is for, in this mint: " +
+    "one of the two tokens, never both. Comes with `target`, the cell the " +
+    "notifications are written to.",
+);
+
 export const mint = createRoute({
-  path: `${BASE}/mint`,
+  path: `${SPACE_BASE}/mint`,
   method: "post",
   tags,
   request: {
+    params: spaceParams,
     body: {
       content: {
         "application/json": {
           schema: z.object({
-            space: spaceField,
             installId: z.string().describe(
               "Stable per-device id. Also the cross-repo join key and the " +
                 "provenance mark's audience.",
             ),
-            causePrefix: z.string().optional(),
+            causePrefix: z.string().optional().describe(
+              "A device channel's cell-cause prefix, `location` unless " +
+                "named. Not for a gmail channel, which names a `target`.",
+            ),
             name: z.string().optional(),
             ttlDays: z.number().int().positive().max(MAX_TTL_DAYS).optional(),
+            target: z.string().optional().describe(
+              "The cell a gmail channel writes, as a serialized cell link " +
+                '(`fcl1:{"id":"of:…","space":"did:key:…",' +
+                '"path":[…]}`) into the space the mint is addressed to. ' +
+                "Comes with `gmail`; the two make the channel a gmail " +
+                "channel, and without them it is a device channel.",
+            ),
+            gmail: gmailProof.optional(),
             requestId: requestIdField,
           }),
         },
@@ -138,53 +211,86 @@ export const mint = createRoute({
   responses: {
     [HttpStatusCodes.OK]: {
       content: { "application/json": { schema: mintResult } },
-      description: "Channel minted (or its token rotated in place)",
+      description:
+        "Channel minted (or its token rotated in place), and bound to the " +
+        "mailbox when a proof was given",
     },
     ...commonResponses,
+    [HttpStatusCodes.BAD_REQUEST]: {
+      ...jsonError,
+      description:
+        "Invalid input, a mailbox proof without a target cell or on a " +
+        "device channel, a proof Google did not accept, or one this " +
+        "deployment does not accept",
+    },
+    [HttpStatusCodes.CONFLICT]: {
+      ...jsonError,
+      description:
+        "Replayed requestId, a channel registered to another owner or " +
+        "writing another cause prefix or target cell, this deployment " +
+        "cannot write to the space, or the channel was minted but the " +
+        "mailbox is at its channel limit",
+    },
+    [HttpStatusCodes.BAD_GATEWAY]: {
+      ...jsonError,
+      description: "Storage failure, or Google could not be reached",
+    },
   },
+});
+
+const listResponses = (description: string) => ({
+  [HttpStatusCodes.OK]: {
+    content: {
+      "application/json": {
+        schema: z.object({ channels: z.array(channelSummary) }),
+      },
+    },
+    description,
+  },
+  ...commonResponses,
 });
 
 export const list = createRoute({
-  path: `${BASE}/list`,
+  path: `${SPACE_BASE}/list`,
   method: "post",
   tags,
   request: {
+    params: spaceParams,
+    body: { content: { "application/json": { schema: z.object({}) } } },
+  },
+  responses: listResponses(
+    "EVERY channel targeting the space, whoever minted it, including revoked " +
+      "ones, which is how a space's current owner discovers a channel minted " +
+      "by someone whose access has since been removed, and the only place a " +
+      "revoked channel's `revision` can be read. Requires owning the space. " +
+      "Never includes secretHash.",
+  ),
+});
+
+export const listOwn = createRoute({
+  path: `${CALLER_BASE}/list`,
+  method: "post",
+  tags,
+  request: {
+    // Strict, so that a caller sending `space` here, where it would be
+    // dropped and the wrong list returned, is told instead.
     body: {
-      content: {
-        "application/json": {
-          schema: z.object({
-            space: z.string().optional().describe("Filter to one space."),
-          }),
-        },
-      },
+      content: { "application/json": { schema: z.object({}).strict() } },
     },
   },
-  responses: {
-    [HttpStatusCodes.OK]: {
-      content: {
-        "application/json": {
-          schema: z.object({ channels: z.array(channelSummary) }),
-        },
-      },
-      description:
-        "Without `space`: the channels this caller minted, live ones only — " +
-        "the owner index is pruned on revoke because its length is the " +
-        "live-channel cap. With `space`: EVERY channel targeting that space " +
-        "whoever minted it, including revoked ones, which is how a space's " +
-        "current owner discovers a channel minted by someone whose access has " +
-        "since been removed, and the only place a revoked channel's " +
-        "`revision` can be read. Requires owning the space. Never includes " +
-        "secretHash.",
-    },
-    ...commonResponses,
-  },
+  responses: listResponses(
+    "The channels this caller minted, in whichever spaces, live ones only — " +
+      "the owner index is pruned on revoke because its length is the " +
+      "live-channel cap. Never includes secretHash.",
+  ),
 });
 
 export const rotate = createRoute({
-  path: `${BASE}/rotate`,
+  path: `${SPACE_BASE}/rotate`,
   method: "post",
   tags,
   request: {
+    params: spaceParams,
     body: {
       content: {
         "application/json": {
@@ -207,10 +313,11 @@ export const rotate = createRoute({
 });
 
 export const revoke = createRoute({
-  path: `${BASE}/revoke`,
+  path: `${SPACE_BASE}/revoke`,
   method: "post",
   tags,
   request: {
+    params: spaceParams,
     body: {
       content: {
         "application/json": {
@@ -264,5 +371,6 @@ export const revoke = createRoute({
 
 export type MintRoute = typeof mint;
 export type ListRoute = typeof list;
+export type ListOwnRoute = typeof listOwn;
 export type RotateRoute = typeof rotate;
 export type RevokeRoute = typeof revoke;

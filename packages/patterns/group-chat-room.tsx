@@ -2,6 +2,7 @@ import {
   type Cell,
   computed,
   Default,
+  type FabricBytes,
   handler,
   ifElse,
   ImageData,
@@ -16,7 +17,7 @@ import {
  * Group Chat Room Pattern v9
  *
  * Features:
- * 1. Avatars come from each user's shared profile (snapshotted on join in the
+ * 1. Pictures come from each user's shared profile (snapshotted on join in the
  *    lobby) and render via cf-avatar
  * 2. Camera icon sends images to chat
  * 3. Emoji reactions on messages with hover UI
@@ -54,7 +55,11 @@ export interface User {
   name: string;
   joinedAt: number;
 
-  /** Avatar URL or glyph, snapshotted from the joiner's shared profile. */
+  /** Picture bytes, snapshotted from the joiner's shared profile. */
+  picture?: FabricBytes;
+
+  /** Avatar text, snapshotted instead when the joiner's profile has no
+   * picture. */
   avatar?: string;
 
   /**
@@ -245,6 +250,7 @@ export default pattern<RoomInput, RoomOutput>(
       return (users.get() || []).find((user: User) => user.name === resolved);
     });
 
+    const myPicture = computed(() => myUser?.picture);
     const myAvatar = computed(() => myUser?.avatar || "");
 
     return {
@@ -311,6 +317,7 @@ export default pattern<RoomInput, RoomOutput>(
                         }}
                       >
                         <cf-avatar
+                          bytes={user.picture}
                           src={user.avatar}
                           name={user.name}
                           size="xs"
@@ -352,13 +359,15 @@ export default pattern<RoomInput, RoomOutput>(
                     const isImageMessage = computed(() =>
                       msg && msg.type === "image"
                     );
-                    const authorAvatar = computed(() => {
-                      if (!msg) return "";
-                      const user = (users.get() || []).find((usr: User) =>
-                        usr && usr.name === msg.author
-                      );
-                      return user?.avatar || "";
-                    });
+                    const author = computed(() =>
+                      msg
+                        ? (users.get() || []).find((usr: User) =>
+                          usr && usr.name === msg.author
+                        )
+                        : undefined
+                    );
+                    const authorPicture = computed(() => author?.picture);
+                    const authorAvatar = computed(() => author?.avatar || "");
                     const isFirstInAuthorBlock = computed(() => {
                       if (!msg) return true;
                       const msgArray = (messages.get() || []).filter((
@@ -444,6 +453,7 @@ export default pattern<RoomInput, RoomOutput>(
                               ifElse(
                                 shouldShowAvatar,
                                 <cf-avatar
+                                  bytes={authorPicture}
                                   src={authorAvatar}
                                   name={msg.author}
                                   size="sm"
@@ -667,10 +677,11 @@ export default pattern<RoomInput, RoomOutput>(
                     }}
                   >
                     {
-                      /* Profile avatar (snapshotted from the shared profile
+                      /* Profile picture (snapshotted from the shared profile
                         when the user joined in the lobby) */
                     }
                     <cf-avatar
+                      bytes={myPicture}
                       src={myAvatar}
                       name={myNameResolved}
                       size="md"

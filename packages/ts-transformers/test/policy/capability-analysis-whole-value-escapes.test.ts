@@ -50,6 +50,10 @@ function sameRow(row: Source): Source {
 }
 const idOf = (row: Source): string => row.id;
 const idVia = (row: Source): string => idOf(row);
+const findRow = (index: Index): Source | undefined =>
+  index.sources.find((s) => s?.id === "a");
+const findRowAsserted = (index: Index): Source =>
+  index.sources.find((s) => s?.id === "a")!;
 
 declare class Box {
   constructor(row: Source | undefined);
@@ -312,6 +316,24 @@ describe("capability-analysis-whole-value-escapes", () => {
       const schema = await liftInputSchema(
         "index.sources.flatMap((s) => s?.id ? [sameRow(s)] : []).map((s) => `${s.id}:${s.driver}`)",
         "string[]",
+      );
+      expect(elementPropertyNames(schema)).toEqual(WHOLE);
+    });
+
+    it("keeps every element property when a helper returns the element a lookup finds", async () => {
+      // The found element goes straight back into the caller's body, which
+      // reads it by members the helper never sees.
+      const schema = await liftInputSchema(
+        `findRow(index)?.driver ?? ""`,
+        "string",
+      );
+      expect(elementPropertyNames(schema)).toEqual(WHOLE);
+    });
+
+    it("keeps every element property when a helper returns the element a non-null-asserted lookup finds", async () => {
+      const schema = await liftInputSchema(
+        "findRowAsserted(index).driver",
+        "string",
       );
       expect(elementPropertyNames(schema)).toEqual(WHOLE);
     });

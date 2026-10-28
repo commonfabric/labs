@@ -165,6 +165,7 @@ Work through these steps in order. At each step:
 Fresh spaces require authentication. You will see "Register" and "Login" buttons on the landing page.
 
 - Click **Register** to create a new identity
+- Click **Use Passphrase** on the "Register with" screen
 - Click **Generate Passphrase** on the next screen
 - Click **I've Saved It - Continue** to complete registration
 

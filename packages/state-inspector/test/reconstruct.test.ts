@@ -370,3 +370,38 @@ Deno.test("a malformed boundary is not laundered by a later valid one", async (t
     await Deno.remove(dir, { recursive: true });
   }
 });
+
+Deno.test("getValueAt reports a document that holds no value", async () => {
+  // A stored document is a tree of top-level paths, and `value` is only one
+  // of them: a document holding, say, only `source` exists, and has no path
+  // under `value` to select.
+  const dir = await Deno.makeTempDir({ prefix: "state-inspector-no-value-" });
+  const dbPath = `${dir}/space.sqlite`;
+  try {
+    const db = new Database(dbPath, { create: true });
+    db.exec(`
+CREATE TABLE "commit" (seq INTEGER NOT NULL PRIMARY KEY, branch TEXT NOT NULL DEFAULT '',
+  session_id TEXT NOT NULL, local_seq INTEGER NOT NULL, original JSON NOT NULL,
+  resolution JSON NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')));
+CREATE TABLE revision (branch TEXT NOT NULL DEFAULT '', id TEXT NOT NULL,
+  scope_key TEXT NOT NULL DEFAULT 'space', seq INTEGER NOT NULL, op_index INTEGER NOT NULL,
+  op TEXT NOT NULL, data JSON, commit_seq INTEGER NOT NULL,
+  PRIMARY KEY (branch, id, scope_key, seq, op_index));
+INSERT INTO "commit" (seq, session_id, local_seq, original, resolution) VALUES (1, 's', 1, '{}', '{}');
+INSERT INTO revision (id, seq, op_index, op, data, commit_seq)
+  VALUES ('of:sourced', 1, 0, 'set', '{"source":{"/":{"link@1":{"id":"of:origin","path":[]}}}}', 1);`);
+    db.close();
+    const space = openSpace(dbPath);
+    try {
+      const result = getValueAt(space, { id: "of:sourced" }, ["anything"]);
+      assertEquals(result.exists, true);
+      assertEquals(result.pathExists, false);
+      assertEquals(result.value, undefined);
+      assert(result.document !== undefined && "source" in result.document);
+    } finally {
+      space.close();
+    }
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});

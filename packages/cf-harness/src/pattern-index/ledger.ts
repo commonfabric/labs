@@ -1,8 +1,8 @@
 import type {
-  HarnessPatternIndexClientFactory,
   PatternIndexEventType,
   PatternIndexPublishRequest,
-} from "./client.ts";
+} from "@commonfabric/pattern-index/client";
+import type { HarnessPatternIndexClientFactory } from "./factory.ts";
 import { PATTERN_DISCOVERABILITY_REASONS } from "./publish-render-gate.ts";
 
 /**

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { normalize } from "@std/path/posix";
+import { PatternIndexClient } from "@commonfabric/pattern-index/client";
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import {
@@ -24,7 +25,6 @@ import {
   createFabricInstantiationRecorder,
   type FabricInstantiationRecord,
 } from "../src/fabric-instantiations.ts";
-import { PatternIndexClient } from "../src/pattern-index/client.ts";
 import {
   MAX_COMPOSED_PATTERNS,
   patternIndexDependencies,
@@ -168,7 +168,7 @@ const INDEXED_PATTERN = {
 class FakeSandboxRuntime implements SandboxRuntime {
   describe(): SandboxRuntimeDescription {
     return {
-      kind: "docker-runsc-cfc",
+      kind: "runsc-cfc",
       defaultWorkingDirectory: this.defaultWorkingDirectory(),
       cfc: { runtimeRequested: true, workspaceMountPath: "/workspace" },
     };
@@ -721,6 +721,20 @@ describe("run-pattern over the pattern index", () => {
       expect(output.status).toBe("error");
       expect(output.message).toContain("pat-missing");
       expect(output.message).toContain("404");
+    });
+
+    it("returns an error naming the pattern when the index answers without its program", async () => {
+      const { program: _program, ...withoutProgram } = INDEXED_PATTERN;
+      const index = stubIndex({ "pat-doubler": withoutProgram });
+      const result = await createEngine(index).invokeBuiltinTool(
+        "run_pattern",
+        { patternId: "pat-doubler" },
+      );
+      const output = result.output as RunPatternToolErrorOutput;
+      expect(output.status).toBe("error");
+      expect(output.message).toContain(
+        'the pattern index returned no program for "pat-doubler"',
+      );
     });
 
     it("withholds the failure text when an indexed pattern fails while starting", async () => {

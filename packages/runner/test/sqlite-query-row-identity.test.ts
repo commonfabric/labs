@@ -71,10 +71,24 @@ describe("sqlite-query-row-identity", () => {
     written = [];
     const connect = server.connect.bind(server);
     server.connect = (send) => {
-      const connection = connect(send);
+      // The recorder expands commit tables under this connection's handshake.
+      let clientCommitLabelTable = false;
+      let commitLabelTableV1 = false;
+      const connection = connect((message) => {
+        if (message.type === "hello.ok") {
+          commitLabelTableV1 = clientCommitLabelTable &&
+            message.flags.commitLabelTableV1 === true;
+        }
+        send(message);
+      });
       const receive = connection.receive.bind(connection);
       connection.receive = (payload: string) => {
-        const message = MemoryV2Server.parseClientMessage(payload);
+        const message = MemoryV2Server.parseClientMessage(payload, {
+          commitLabelTableV1,
+        });
+        if (message?.type === "hello") {
+          clientCommitLabelTable = message.flags.commitLabelTableV1 === true;
+        }
         if (message?.type === "transact") {
           for (const operation of message.commit.operations) {
             if ("id" in operation) {

@@ -9,7 +9,6 @@ import {
 import {
   collectReports,
   main,
-  markedSets,
   measuredSetFigures,
   parseReportArgs,
   report,
@@ -17,6 +16,7 @@ import {
   repositoryFigures,
   summarize,
 } from "./coverage-report.ts";
+import { markedSets } from "./coverage-gate.ts";
 import {
   coverageMetricForGroup,
   measuredSetCoverageMetric,
@@ -36,10 +36,12 @@ import { loadTopology } from "./test-topology.ts";
 import {
   measuredSetDirectory,
   measuredSets,
-} from "./test-selection/coverage.ts";
+} from "./test-topology/coverage-gates.ts";
 
 /** The repository the measured-set tests read the workspace from. */
-const REPOSITORY = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+const REPOSITORY = path.dirname(
+  path.dirname(path.fromFileUrl(import.meta.url)),
+);
 
 /** The workspace member those tests write a set report for. */
 const MEMBER = "packages/leb128";

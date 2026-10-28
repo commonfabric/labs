@@ -1,6 +1,12 @@
 import * as Path from "@std/path";
 
 import { z } from "zod";
+import { parseReleaseTime } from "@commonfabric/runner/pattern-release-time";
+import {
+  isLoopbackHostname,
+  readHttpOrigin,
+  readMemoryUrl,
+} from "@commonfabric/runner/space-host";
 
 // Parse CLI args for --port (needed because deno --watch doesn't pass env vars)
 function parseCliArgs(): Record<string, string> {
@@ -39,6 +45,35 @@ function boolFlag() {
     v === "true" || v === "1"
   );
 }
+
+/**
+ * The origin `API_INTERNAL_URL=self` names: this process's own listener,
+ * `HOST` and `PORT` as a loopback or literal address. A wildcard or loopback
+ * bind is reached on the loopback literal of its family, since `localhost`
+ * may resolve to the other one; any other address is itself.
+ */
+function selfApiOrigin(host: string, port: number): string {
+  const bare = host.replace(/^\[|\]$/g, "");
+  const name = bare === "0.0.0.0" || bare === "localhost" ||
+      /^127(?:\.\d{1,3}){3}$/.test(bare)
+    ? "127.0.0.1"
+    : bare === "::" || bare === "::1"
+    ? "[::1]"
+    : bare.includes(":")
+    ? `[${bare}]`
+    : bare;
+  return `http://${name}:${port}`;
+}
+
+/**
+ * How far `TOOLSHED_RELEASED_AT` may run ahead of this host's clock: the
+ * allowance for skew between the host that deploys and the hosts that run. A
+ * deploy states the time it happens and starts its instances after it, so a
+ * time further ahead is a clock or a typo. Every piece that adopted a release
+ * stamped with it would read every correct release after it as earlier, and
+ * stay where it is until a deploy stated a later time still.
+ */
+const RELEASED_AT_CLOCK_SKEW_MS = 5 * 60_000;
 
 // NOTE: This is where we define the environment variable types and defaults.
 // Exported so the parsing rules (e.g. OTEL_ENABLED) can be unit-tested without
@@ -119,6 +154,13 @@ export const EnvSchema = z.object({
   //  - DB_PATH is an optional absolute path to a single SQLite database file
   //    holding every space (single-file mode - takes precedence over MEMORY_DIR)
   //  - MEMORY_URL is used by toolshed to connect to memory endpoint
+  //  - MEMORY_PUBLIC_URL is where this deployment's clients open Memory, for a
+  //    deployment that puts a memory router in front of its toolsheds. It is
+  //    published on /api/meta and in the shell page. MEMORY_URL is this
+  //    server's own, host-internal address and is never published. Empty:
+  //    clients open Memory on the API host. A value that is not an HTTP or
+  //    HTTPS origin refuses startup, and an http:// one that is not loopback
+  //    is warned about, since an https page cannot open its socket.
   //
 
   MEMORY_DIR: z.string().default(
@@ -129,6 +171,28 @@ export const EnvSchema = z.object({
     { message: "DB_PATH must be an absolute path" },
   ).optional(),
   MEMORY_URL: z.string().default("http://localhost:8000"),
+  MEMORY_PUBLIC_URL: z.string().default("").transform((value, ctx) => {
+    const read = readMemoryUrl(value);
+    if ("refused" in read) {
+      ctx.addIssue({
+        code: "custom",
+        message: `MEMORY_PUBLIC_URL must be an HTTP or HTTPS origin: ` +
+          `${read.refused}`,
+      });
+      return z.NEVER;
+    }
+    const memoryUrl = read.memoryUrl;
+    if (
+      memoryUrl?.protocol === "http:" &&
+      !isLoopbackHostname(memoryUrl.hostname)
+    ) {
+      console.warn(
+        `MEMORY_PUBLIC_URL ${memoryUrl.origin} is http://: a shell served ` +
+          `over https cannot open its Memory socket.`,
+      );
+    }
+    return memoryUrl?.origin;
+  }),
 
   GOOGLE_CLIENT_ID: z.string().default(""),
   GOOGLE_CLIENT_SECRET: z.string().default(""),
@@ -213,8 +277,46 @@ export const EnvSchema = z.object({
   // Strict parse (see boolFlag); previously z.coerce.boolean() turned "false" into true.
   PLAID_SYNC_ALL_TRANSACTIONS: boolFlag(),
 
-  // URL of the toolshed API, for self-referring requests
+  // The toolshed's public origin: the one clients dial, the audience every
+  // signed invite and inbox request is checked against, the base of the
+  // webhook and ingest URLs it returns, sandbox CF_API_URL when
+  // SANDBOX_TOOLSHED_URL is unset, and what this process's runtimes record
+  // as a space's host and address their own pattern-source, compile and API
+  // requests to. API_INTERNAL_URL changes where those requests are sent, not
+  // what they are addressed to.
   API_URL: z.string().default("http://localhost:8000"),
+
+  // Where this process's own runtimes send the requests they address to
+  // API_URL: pattern-source loads, compiles and HTTP API calls from the
+  // serving runtimes and the webhook runtime. Unset, they go to API_URL,
+  // which on a deployment leaves through the public path (tailscale serve,
+  // nginx) and comes back in, once per fetch of a pattern load's many.
+  // `self` is this process's own listener, HOST and PORT (so each instance
+  // of a multi-instance host names itself from one shared .env); an HTTP or
+  // HTTPS origin is a specific listener of this same process, such as a
+  // private address it is bound to. It decides whose bytes this server
+  // compiles, so at startup the server sends a probe carrying a one-time
+  // token to the origin's /api/meta and refuses to run unless that request
+  // arrives at its own listener. Only the transport changes: API_URL stays
+  // what is recorded, compared and published (/api/meta, invite audiences,
+  // webhook and ingest URLs), and the LLM client keeps calling API_URL
+  // (docs/specs/server-side-execution/verification-coverage.md, OW55).
+  // Anything but `self`, an origin or unset refuses startup.
+  API_INTERNAL_URL: z.string().default("").transform((value, ctx) => {
+    const source = value.trim();
+    if (source === "") return undefined;
+    if (source === "self") return "self" as const;
+    const read = readHttpOrigin(source, "API_INTERNAL_URL");
+    if ("refused" in read) {
+      ctx.addIssue({
+        code: "custom",
+        message: `API_INTERNAL_URL must be "self" or an HTTP or HTTPS ` +
+          `origin: ${read.refused}`,
+      });
+      return z.NEVER;
+    }
+    return read.origin.origin;
+  }),
 
   // DEPRECATED: Identity signer passphrase for storage authentication
   IDENTITY_PASSPHRASE: z.string().default("implicit trust"),
@@ -227,6 +329,11 @@ export const EnvSchema = z.object({
   // ACL state and fresh-space genesis violations still block. `enforce` also
   // denies access shortfalls. See packages/memory/v2/server.ts.
   MEMORY_ACL_MODE: z.enum(["off", "observe", "enforce"]).default("enforce"),
+  // Client retirement is disabled; reject settings that would enable it.
+  MEMORY_MINIMUM_CLIENT_GENERATION: z.literal("0", {
+    error:
+      "Client retirement is disabled; leave `MEMORY_MINIMUM_CLIENT_GENERATION` unset or set it to `0`",
+  }).default("0").transform(() => 0 as const),
   // A tracked private Mode A policy file. Empty leaves the endpoint disabled.
   MEMORY_ROUTER_CONFIG_FILE: z.string().default(""),
 
@@ -256,17 +363,28 @@ export const EnvSchema = z.object({
   // so a fresh value per request yields a fresh bucket and the limit vanishes.
   RATE_LIMIT_TRUST_FORWARDED_FOR: boolFlag(),
 
-  // Mounts the self-serve ingest-channel control plane
-  // (POST /api/ingest-channels/*). OFF by default and deliberately so.
-  //
-  // Minting issues a durable, operator-backed append capability into a user's
-  // space, and it is only as trustworthy as the claim "this DID owns that
-  // space". A legacy named space's key derives from a public passphrase, so
-  // anyone who could reach a deployment could have granted themselves OWNER on
-  // one, and such a grant outlives the random keys new spaces get. On a
-  // deployment others could reach, review the space ACLs before turning this
-  // on; see docs/features/self-serve-ingest-channels.md.
-  INGEST_SELF_SERVE_ENABLED: boolFlag(),
+  // The space this deployment keeps its ingest registry in: channel
+  // registrations, their indexes, and Gmail mailbox bindings. Empty means the
+  // space named by this deployment's own identity. A space named here must
+  // exist already, with an access list naming this deployment's identity as
+  // OWNER and nobody else. Pointing it somewhere new on a deployment that has
+  // channels leaves them behind, since nothing reads the registry it left.
+  INGEST_SERVICE_SPACE: z.string().default(""),
+
+  // Gmail push ingest: POST /api/spaces/:space/ingest-push/gmail, which Cloud
+  // Pub/Sub calls with each Gmail `users.watch` notification, and the mailbox
+  // proof a mint on the ingest-channel control plane may carry. On only when
+  // a service account is set. The service accounts,
+  // comma-separated, are the ones a push token may be signed for. The
+  // audience is the one the push subscriptions are configured to put on
+  // their OIDC tokens; unset, it is the DID of the space the ingest registry
+  // is kept in. See docs/features/gmail-push-ingest.md.
+  INGEST_GMAIL_PUSH_AUDIENCE: z.string().default(""),
+  INGEST_GMAIL_PUSH_SERVICE_ACCOUNTS: z.string().default(""),
+  // The OAuth client ids, comma-separated, whose Google ID tokens a mint may
+  // present as proof of a mailbox, in place of an access token. Unset, only
+  // an access token proves a mailbox.
+  INGEST_GMAIL_OAUTH_CLIENT_IDS: z.string().default(""),
 
   // Comma-separated DIDs with implicit OWNER on every space (e.g. the
   // background service operator identity).
@@ -308,6 +426,33 @@ export const EnvSchema = z.object({
   // Source-run build metadata fallback for /api/meta, mirroring the gitSha a
   // compiled binary reads from its baked COMPILED file.
   COMMIT_SHA: z.string().optional(),
+  // When this deployment released what it serves, as an RFC 3339 date-time
+  // (`@commonfabric/runner/pattern-release-time`), read as milliseconds since
+  // the epoch. Set at deploy time to the time of that deploy. The patterns
+  // route sends it beside every identity it advertises, which is what keeps a
+  // piece from being moved to an earlier release of a system pattern. Empty:
+  // identities go out alone, and nothing orders them.
+  TOOLSHED_RELEASED_AT: z.string().default("").transform((value, ctx) => {
+    if (value === "") return undefined;
+    const releasedAt = parseReleaseTime(value);
+    if (releasedAt === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        message: "TOOLSHED_RELEASED_AT must be an RFC 3339 date-time with an " +
+          `offset, such as 2026-10-16T14:03:00Z: \`${value}\``,
+      });
+      return z.NEVER;
+    }
+    if (releasedAt > Date.now() + RELEASED_AT_CLOCK_SKEW_MS) {
+      ctx.addIssue({
+        code: "custom",
+        message: "TOOLSHED_RELEASED_AT is more than five minutes ahead of " +
+          `this host's clock, which no deploy that has happened is: \`${value}\``,
+      });
+      return z.NEVER;
+    }
+    return releasedAt;
+  }),
 
   //
   // Sandbox Service
@@ -322,7 +467,14 @@ export const EnvSchema = z.object({
   // URL that sandboxes should use to reach the toolshed API (injected as
   // CF_API_URL into every sandbox exec). Defaults to API_URL if not set.
   SANDBOX_TOOLSHED_URL: z.string().optional(),
-});
+}).transform((parsed) => ({
+  ...parsed,
+  // Resolved here, where HOST and PORT (the `--port=` override included) are
+  // known, so every reader sees a concrete origin or nothing.
+  API_INTERNAL_URL: parsed.API_INTERNAL_URL === "self"
+    ? selfApiOrigin(parsed.HOST, parsed.PORT)
+    : parsed.API_INTERNAL_URL,
+}));
 
 export type env = z.infer<typeof EnvSchema>;
 

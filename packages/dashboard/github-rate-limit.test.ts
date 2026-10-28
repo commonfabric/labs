@@ -12,6 +12,7 @@ import {
   type GitHubRateLimitLedgerLock,
 } from "./github-rate-limit.ts";
 import { dashboardCacheFile } from "./history-files.ts";
+import { staticGitHubCredential } from "./github-auth.ts";
 import {
   friendlyError,
   github,
@@ -1078,20 +1079,20 @@ Deno.test("ordinary dashboard GitHub requests stay outside the ledger while the 
     assertEquals(
       await performanceGithub<{ performance: boolean }>(
         "repos/o/performance-first",
-        token,
+        staticGitHubCredential(token),
       ),
       { performance: true },
     );
     const ledgerBeforeOrdinary = await Deno.readTextFile(ledgerFile);
     assertEquals(
-      await github<{ ordinary: boolean }>("repos/o/ordinary", token),
+      await github<{ ordinary: boolean }>("repos/o/ordinary", staticGitHubCredential(token)),
       { ordinary: true },
     );
     assertEquals(await Deno.readTextFile(ledgerFile), ledgerBeforeOrdinary);
     assertEquals(
       await performanceGithub<{ performance: boolean }>(
         "repos/o/performance",
-        token,
+        staticGitHubCredential(token),
       ),
       { performance: true },
     );
@@ -1124,7 +1125,7 @@ Deno.test("performance GitHub requests stop after the rate probe reaches 80%", a
 
   try {
     const error = await assertRejects(
-      () => performanceGithub("repos/o/r", token),
+      () => performanceGithub("repos/o/r", staticGitHubCredential(token)),
       GitHubRateLimitBudgetError,
     );
     assertStringIncludes(
@@ -1159,12 +1160,12 @@ Deno.test("performance GitHub requests can consume the request that reaches 80%"
 
   try {
     assertEquals(
-      await performanceGithub<{ ok: boolean }>("repos/o/r", token),
+      await performanceGithub<{ ok: boolean }>("repos/o/r", staticGitHubCredential(token)),
       { ok: true },
     );
     assertEquals(calls, ["/rate_limit", "/repos/o/r"]);
     await assertRejects(
-      () => performanceGithub("repos/o/r", token),
+      () => performanceGithub("repos/o/r", staticGitHubCredential(token)),
       GitHubRateLimitBudgetError,
     );
   } finally {
@@ -1192,7 +1193,7 @@ Deno.test("performance GitHub requests report unusable rate-limit responses", as
       globalThis.fetch = (() =>
         Promise.resolve(response.clone())) as typeof fetch;
       const error = await assertRejects(
-        () => performanceGithub("repos/o/r", token),
+        () => performanceGithub("repos/o/r", staticGitHubCredential(token)),
         GitHubRateLimitBudgetError,
         "rate limit status could not be read",
       );
@@ -1226,7 +1227,7 @@ Deno.test("an unusable rate-limit response does not wait for body cleanup", asyn
     globalThis.fetch = (() => Promise.resolve(response)) as typeof fetch;
     const token = `rate-probe-cleanup-${crypto.randomUUID()}`;
     await assertRejects(
-      () => performanceGithub("repos/o/r", token),
+      () => performanceGithub("repos/o/r", staticGitHubCredential(token)),
       GitHubRateLimitBudgetError,
       "rate limit status could not be read",
     );
@@ -1258,13 +1259,13 @@ Deno.test("GitHub download helpers return response bodies without JSON decoding"
   try {
     assertEquals(
       new TextDecoder().decode(
-        (await githubDownload("repos/o/archive", token)).body,
+        (await githubDownload("repos/o/archive", staticGitHubCredential(token))).body,
       ),
       "archive",
     );
     assertEquals(
       new TextDecoder().decode(
-        (await performanceGithubDownload("repos/o/archive", token)).body,
+        (await performanceGithubDownload("repos/o/archive", staticGitHubCredential(token))).body,
       ),
       "archive",
     );

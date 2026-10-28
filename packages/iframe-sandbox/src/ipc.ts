@@ -1,7 +1,9 @@
 // Types used by the `common-iframe-sandbox` IPC.
 
-import type { FabricValue } from "@commonfabric/data-model";
+import type { FabricPlainObject, FabricValue } from "@commonfabric/data-model";
 import { isObjectOrArray } from "@commonfabric/utils/types";
+
+import type { IframePresentation } from "./presentation.ts";
 
 // Diagram of the messages between the Host environment, the intermediary outer
 // frame, and the guest in the inner frame.
@@ -15,6 +17,7 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 //         ├─────LOAD-DOCUMENT────►│                        │
 //         │                       ├────────srcdoc─────────►│
 //         │◄─────────LOAD─────────┤                        │
+//         ├─────PRESENTATION─────►├─────PRESENTATION───────►│
 //         │                       │                        │
 //         ├──────────────────ORDERED──────────────────────►│
 //         ├──────────────────PORT (transferred)───────────►│
@@ -28,10 +31,10 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 //
 // The host and the guest hold the two ends of a `MessagePort` and every
 // capability request, response, and event crosses on it. The outer frame
-// carries the CSP and loads documents; it relays nothing that protocol says.
+// carries the CSP, loads documents, and forwards host presentation snapshots
+// to the guest. Capability traffic crosses the port directly.
 //
-// The one thing it does pass along is whatever the guest posts to it, which it
-// forwards without reading. A guest has a port for everything it means to say,
+// The outer frame also forwards whatever the guest posts to it without reading. A guest has a port for everything it means to say,
 // so a message arriving by that route is about the port itself: an alarm from
 // a guest that could not use it, a request from a guest that has none, or the
 // flush marker below. It is not a second way to talk.
@@ -96,12 +99,18 @@ export function flushNonce(): string {
 export enum IPCHostMessageType {
   // Host instructing the outer frame to load a new document.
   LoadDocument = "load-document",
+  /** Host presentation changes within the current guest document. */
+  Presentation = "presentation",
 }
 
 /** A message from the host to the outer frame. */
 export type IPCHostMessage = {
   type: IPCHostMessageType.LoadDocument;
   data: string;
+  presentation?: IframePresentation | null;
+} | {
+  type: IPCHostMessageType.Presentation;
+  data: IframePresentation | null;
 };
 
 export enum IPCGuestMessageType {
@@ -187,9 +196,53 @@ export type BridgeError = {
  */
 export const BRIDGE_READ_REFUSED = "read-refused";
 
+/**
+ * The code of the bridge error a `presence` resource's sink fails with when
+ * the host has no presence relay to join. Joining again finds the same host.
+ */
+export const BRIDGE_PRESENCE_UNSUPPORTED = "presence-unsupported";
+
+/**
+ * The code of the bridge error a `presence` resource's sink fails with when
+ * the relay refused the join or a publication, such as a record past the
+ * relay's size bound. The error's message is the relay's.
+ */
+export const BRIDGE_PRESENCE_REFUSED = "presence-refused";
+
+/**
+ * The code of the bridge error a `presence` resource's sink fails with when
+ * the host lost the room for any other reason.
+ */
+export const BRIDGE_PRESENCE_DISCONNECTED = "presence-disconnected";
+
+/** One member of a presence room, at its latest record. */
+export type BridgePresenceParticipant = {
+  /** Relay-assigned id of the membership; a member that rejoins has another. */
+  participantId: string;
+
+  /** Display name the member published. */
+  name: string;
+
+  /** What the member published, by facet name. A peer wrote every value. */
+  facets: Record<string, FabricPlainObject>;
+};
+
+/** One delivery of a `presence` resource's sink. */
+export type BridgePresenceEvent =
+  /** The room as it stands, on joining it and on each rejoin. */
+  | {
+    kind: "snapshot";
+    participantId: string;
+    participants: BridgePresenceParticipant[];
+  }
+  /** A member's first record, or the one replacing its last. */
+  | { kind: "upsert"; participant: BridgePresenceParticipant }
+  /** A member gone. */
+  | { kind: "remove"; participantId: string };
+
 export type BridgeResourceDescriptor = {
   name: string;
-  kind: "cell" | "stream" | "sqlite" | "service";
+  kind: "cell" | "stream" | "sqlite" | "service" | "presence";
   operations: string[];
   methods: string[];
   schema?: FabricValue;

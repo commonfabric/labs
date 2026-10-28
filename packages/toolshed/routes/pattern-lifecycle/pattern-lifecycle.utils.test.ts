@@ -6,7 +6,11 @@ import type { MemorySpace } from "@commonfabric/memory/interface";
 import type { EntityDocument } from "@commonfabric/memory/v2";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { entityIdFrom, isStream, Runtime } from "@commonfabric/runner";
-import { PiecesController } from "@commonfabric/piece/ops";
+import {
+  PiecesController,
+  servedLifecycleRunner,
+  type ServedLifecycleVerbRunner,
+} from "@commonfabric/piece/ops";
 import { ExecutorHost } from "@commonfabric/runner/executor/host";
 import { LoopbackStorageManager } from "@commonfabric/runner/executor/loopback-storage";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
@@ -141,8 +145,7 @@ describe("pattern-lifecycle verbs (transport half)", () => {
         hostsSpace: () => true,
         aclMode: "enforce",
       },
-      host: () => host,
-      serviceIdentity: operator,
+      host: () => host && servedLifecycleRunner(host, operator),
       append: (entry) => server.commitDelegatedAppend(entry),
       readDocument: (space, id) => server.readDocument(space, id),
       watchAdmittedCommits: (watcher) => server.watchAdmittedCommits(watcher),
@@ -192,7 +195,7 @@ describe("pattern-lifecycle verbs (transport half)", () => {
         readAcl: async (target) =>
           (await server.readDocument(target, `of:${target}`))?.value,
       },
-      host: () => host,
+      host: () => host && servedLifecycleRunner(host, operator),
       append: (entry) => server.commitDelegatedAppend(entry),
       readDocument: (space, id) => server.readDocument(space, id),
       watchAdmittedCommits: (watcher) => server.watchAdmittedCommits(watcher),
@@ -247,7 +250,10 @@ export default pattern(() => {
       expect(created.registration.error).toBeUndefined();
       expect(created.registration).toMatchObject({ status: "handled" });
       const repeated = ok(await processInstantiate(deps, bob.did(), request));
-      expect(repeated).toEqual(created);
+      // Each request times its own steps; the receipt itself is durable.
+      const { timings: _createdTimings, ...createdReceipt } = created;
+      const { timings: _repeatedTimings, ...repeatedReceipt } = repeated;
+      expect(repeatedReceipt).toEqual(createdReceipt);
       expect((await owner.getRegisteredPieces()).map((piece) => piece.id))
         .toEqual([created.pieceId]);
       // The requesting writer, neither the space's owner nor the process.
@@ -559,6 +565,58 @@ export default pattern(() => {
     expect(retry.requestKey).toBe("creation-retry");
   });
 
+  it("returns the time each served step took and marks the request span with it", async () => {
+    const attributes = new Map<string, unknown>();
+    const requestSpan: NonNullable<LifecycleDeps["requestSpan"]> = {
+      setAttribute(key, value) {
+        attributes.set(key, value);
+        return this;
+      },
+    };
+    const created = ok(
+      await processInstantiate({ ...deps, requestSpan }, alice.did(), {
+        space,
+        program: PROGRAM,
+        requestKey: "timed-creation",
+        register: false,
+      }),
+    );
+    expect(created.timings.map((timing) => timing.phase)).toEqual([
+      "instantiate.authorize",
+      "instantiate.session",
+      "instantiate.queue",
+      "instantiate.run",
+      "instantiate.commit",
+      "instantiate.confirm",
+    ]);
+    for (const { ms } of created.timings) {
+      expect(Number.isInteger(ms) && ms >= 0).toBe(true);
+    }
+    expect(attributes.get("cf.request_key")).toBe("timed-creation");
+    expect(attributes.get("cf.lifecycle.instantiate.run_ms")).toBe(
+      created.timings.find((timing) => timing.phase === "instantiate.run")?.ms,
+    );
+  });
+
+  it("marks the request span with the key the server generated when the caller sent none", async () => {
+    const attributes = new Map<string, unknown>();
+    const requestSpan: NonNullable<LifecycleDeps["requestSpan"]> = {
+      setAttribute(key, value) {
+        attributes.set(key, value);
+        return this;
+      },
+    };
+    const created = ok(
+      await processInstantiate({ ...deps, requestSpan }, alice.did(), {
+        space,
+        program: PROGRAM,
+        register: false,
+      }),
+    );
+    expect(created.requestKey).toMatch(/\S/);
+    expect(attributes.get("cf.request_key")).toBe(created.requestKey);
+  });
+
   it("instantiates for an owner and for a writer, and uploads the pattern they share", async () => {
     const created = ok(
       await processInstantiate(deps, alice.did(), {
@@ -664,8 +722,15 @@ export default pattern(() => {
   });
 
   it("maps a compile failure to 422", async () => {
+    const attributes = new Map<string, unknown>();
+    const requestSpan: NonNullable<LifecycleDeps["requestSpan"]> = {
+      setAttribute(key, value) {
+        attributes.set(key, value);
+        return this;
+      },
+    };
     const broken = refused(
-      await processInstantiate(deps, alice.did(), {
+      await processInstantiate({ ...deps, requestSpan }, alice.did(), {
         space,
         program: {
           main: "/main.tsx",
@@ -675,12 +740,16 @@ export default pattern(() => {
     );
     expect(broken.status).toBe(422);
     expect(broken.code).toBe("compile-failed");
+    expect(attributes.get("cf.lifecycle.instantiate.run_ms")).toEqual(
+      expect.any(Number),
+    );
+    expect(attributes.has("cf.lifecycle.instantiate.confirm_ms")).toBe(false);
   });
 
   it("answers 500 with its own code when the verb fails for a reason it does not name", async () => {
-    const failing = {
+    const failing: ServedLifecycleVerbRunner = {
       runLifecycleVerb: () => Promise.reject(new Error("the loop fell over")),
-    } as unknown as ExecutorHost;
+    };
     const seen = refused(
       await processUpload(
         { ...deps, host: () => failing },

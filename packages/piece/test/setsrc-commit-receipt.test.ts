@@ -5,11 +5,18 @@ import { createSession, Identity } from "@commonfabric/identity";
 import {
   getPatternIdentityRef,
   getPieceSourceRevisions,
+  parseLink,
   Runtime,
   type RuntimeProgram,
 } from "@commonfabric/runner";
+import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
+import {
+  commitRefusal,
+  interceptPieceStartCommit,
+} from "../../runner/test/support/intercept-piece-start-commit.ts";
 import { watchMetaReads } from "../../runner/test/support/watch-meta-reads.ts";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 
@@ -35,6 +42,41 @@ function markedProgram(marker: string): RuntimeProgram {
     }],
   };
 }
+
+// A parent whose one child, from a module of its own, holds two writables of
+// one description in its view.
+const WITH_STATEFUL_CHILD: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [
+    {
+      name: "/main.tsx",
+      contents: [
+        "import { pattern, UI } from 'commonfabric';",
+        "import { Inner } from './inner.tsx';",
+        "export default pattern<Record<string, never>>(() => {",
+        "  const child = Inner({});",
+        "  return { [UI]: <div>{child}</div> };",
+        "});",
+        "",
+      ].join("\n"),
+    },
+    {
+      name: "/inner.tsx",
+      contents: [
+        "import { pattern, UI, Writable } from 'commonfabric';",
+        "export const Inner = pattern<Record<string, never>>(() => ({",
+        "  [UI]: (",
+        "    <div>",
+        "      <span>{new Writable('x')}</span>",
+        "      <span>{new Writable('y')}</span>",
+        "    </div>",
+        "  ),",
+        "}));",
+        "",
+      ].join("\n"),
+    },
+  ],
+};
 
 describe("setsrc commit receipt", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate>;
@@ -199,6 +241,101 @@ describe("setsrc commit receipt", () => {
       pieces.syncPattern = originalSyncPattern;
       runtime.runSyncedWithCommit = originalRunSyncedWithCommit;
       unwatch();
+      console.warn = originalWarn;
+    }
+  });
+
+  it("returns a failed refresh when storage refuses the started piece's setup commit", async () => {
+    // A runtime that has not started the piece, which is the one
+    // `cf piece setsrc` runs in, starts it once the update commits, and that
+    // start commits the graph's setup writes on a transaction of its own.
+    // Storage refusing it leaves the source update durable and the piece
+    // running nowhere, so the receipt says the refresh failed, and why.
+
+    const piece = await pieces.create(markedProgram("v1"), {
+      input: {},
+      start: false,
+    });
+    const refusal = commitRefusal("injected refusal of the start commit");
+    const intercepted = interceptPieceStartCommit(runtime, { refusal });
+    const failures: string[] = [];
+    runtime.pieceStartCommitFailureObserver = ({ actionId }) => {
+      failures.push(actionId);
+    };
+    const originalWarn = console.warn;
+    console.warn = () => {};
+
+    try {
+      const receipt = await piece.setPattern(markedProgram("v2"));
+      await runtime.runner.idlePieceInstantiationSettlements();
+
+      // The refused transaction is the start's own, as the runner reports it.
+      expect(failures).toEqual([
+        `piece-instantiate/${piece.getCell().sourceURI}`,
+      ]);
+      expect(receipt.status).toBe("committed");
+      expect(getPatternIdentityRef(piece.getCell())).toEqual(receipt.ref);
+      expect(receipt.refresh).toEqual({
+        status: "failed",
+        warning: `piece-start commit ${failures[0]} failed, so the started ` +
+          `graph's setup writes did not land: ${refusal.message}`,
+      });
+    } finally {
+      intercepted.restore();
+      runtime.pieceStartCommitFailureObserver = undefined;
+      console.warn = originalWarn;
+    }
+  });
+
+  it("returns a failed refresh naming the child when the update's start is refused for that child's moved state", async () => {
+    // The child's record says another build numbered three of its two
+    // writables' description, so the start the update makes after its
+    // commit refuses the child, and with it the piece. The update stays
+    // durable; the receipt says the refresh failed, and why.
+    const piece = await pieces.create(WITH_STATEFUL_CHILD, { input: {} });
+    await runtime.idle();
+    const parent = piece.getCell();
+    runtime.runner.stop(parent);
+    // The parent's one manifest entry is the child's spot, whose value links
+    // to the child, and the child's record names its writables' description.
+    const manifest = parent.getMetaRaw("internal");
+    const entry = Array.isArray(manifest) ? manifest[0] : undefined;
+    const spot = runtime.getCellFromLink(
+      parseLink(isObjectNotArray(entry) ? entry.link : undefined, parent)!,
+    );
+    const child = runtime.getCellFromLink(parseLink(spot.getRaw(), spot)!);
+    const own = child.getMetaRaw("patternSetupBuild");
+    const state = isObjectNotArray(own) && Array.isArray(own.state)
+      ? own.state
+      : [];
+    const description = Array.isArray(state[0]) ? state[0][1] : undefined;
+    expect(typeof description).toBe("string");
+    const tx = runtime.edit();
+    child.withTx(tx).setMetaRaw(
+      "patternSetupBuild",
+      {
+        ...(isObjectNotArray(own) ? own : {}),
+        cells: "a record of another build",
+        state: [[0, description], [1, description], [2, description]],
+      },
+      rawMetaWriteAuthorization,
+    );
+    expect((await tx.commit().settled).error).toBeUndefined();
+    const originalWarn = console.warn;
+    console.warn = () => {};
+
+    try {
+      const receipt = await piece.setPattern(WITH_STATEFUL_CHILD);
+      await runtime.idle();
+
+      expect(receipt.status).toBe("committed");
+      const refresh = receipt.refresh;
+      expect(refresh?.status).toBe("failed");
+      const warning = refresh?.status === "failed" ? refresh.warning : "";
+      expect(warning).toContain(child.sourceURI);
+      expect(warning).toContain("numbers its cells holding state differently");
+      expect(runtime.runner.isRunning(parent)).toBe(false);
+    } finally {
       console.warn = originalWarn;
     }
   });

@@ -27,8 +27,8 @@
  *    that is not built alongside its server follows the deployment or runs
  *    its own value — type-gated the same way, because a `cf` binary silently
  *    disagreeing with the server it talks to is the same drift one release
- *    further out. {@link experimentalOptionsForDeployedClient} is what such
- *    a client calls instead of {@link experimentalOptionsFromEnv}.
+ *    further out. `settingsForDeployedClient` (`deployment-meta.ts`) is what
+ *    such a client calls instead of {@link experimentalOptionsFromEnv}.
  * 4. Every preset composes the same {@link coreOptions}, so the invariant
  *    posture (today: the CFC dials) is written once. The conformance test
  *    (`runner/test/runtime-presets.test.ts`) pins each preset's full output
@@ -55,8 +55,7 @@
  * |                            | `serverExecution` to the first-party default     |
  * |                            | constant; the single-process presets keep the    |
  * |                            | constructor default (OFF). A deployed CLIENT     |
- * |                            | passes what                                      |
- * |                            | `experimentalOptionsForDeployedClient` resolved  |
+ * |                            | passes what `settingsForDeployedClient` resolved |
  * |                            | from the server it talks to (Gate 3)             |
  * | cfcEnforcementMode         | core-pinned `"enforce-strict"`; overridable in   |
  * |                            | patternTest/unitTest (per-test laxer mode) and   |
@@ -93,6 +92,9 @@
  * |                            | the serving runtime reads under it per run       |
  * | cfcReadOnExceed            | core-default (`fail`); delta on the same two,    |
  * |                            | beside the ceiling it qualifies                  |
+ * | preferredProfileSpace      | core-default (none — the home's order); delta on |
+ * |                            | browserWorker (the host acting as one of the     |
+ * |                            | user's profiles says which)                      |
  * | patternEnvironment         | pinned from apiUrl in productionServer /         |
  * |                            | remoteClient / browserWorker (patterns fetch     |
  * |                            | against the real deployment, not the builder's   |
@@ -101,7 +103,8 @@
  * | fetch                      | real everywhere; patternTest delta (mock)        |
  * | errorHandlers              | delta (collectors/telemetry), per preset         |
  * | consoleHandler             | delta (productionServer, browserWorker)          |
- * | clientClass                | pinned to `"web"` by browserWorker; unset       |
+ * | clientClass                | pinned to `"web"` by browserWorker; remoteClient |
+ * |                            | delta for a client modeling a browser tab; unset |
  * |                            | elsewhere                                        |
  * | navigateCallback           | delta (patternTest, remoteClient, browserWorker) |
  * | pieceCreatedCallback       | delta (browserWorker only)                       |
@@ -121,6 +124,9 @@
  * | trustSnapshotProvider      | delta (remoteClient, browserWorker)              |
  * | spaceHostMap               | delta (browserWorker only — federation routing   |
  * |                            | is decided by the shell host)                    |
+ * | memoryUrl                  | delta (remoteClient, browserWorker) — from the   |
+ * |                            | `memoryHost` param, the host the caller opened   |
+ * |                            | its storage manager on                           |
  * | commitBackpressure         | core-default; unitTest delta (scheduler tests    |
  * |                            | shrink the backoff window)                       |
  * | debug                      | core-default everywhere                          |
@@ -174,7 +180,7 @@ import type {
   RuntimeOptions,
 } from "./runtime.ts";
 import type { CommitBackpressurePolicy } from "./scheduler/backpressure.ts";
-import type { IStorageManager } from "./storage/interface.ts";
+import type { IStorageManager, MemorySpace } from "./storage/interface.ts";
 import type { RuntimeTelemetry } from "./telemetry.ts";
 
 //
@@ -192,6 +198,7 @@ import type { RuntimeTelemetry } from "./telemetry.ts";
 export const RUNTIME_OPTION_KEYS = [
   "apiUrl",
   "spaceHostMap",
+  "memoryUrl",
   "storageManager",
   "consoleHandler",
   "errorHandlers",
@@ -217,6 +224,7 @@ export const RUNTIME_OPTION_KEYS = [
   "cfcSinkMaxConfidentiality",
   "cfcReadMaxConfidentiality",
   "cfcReadOnExceed",
+  "preferredProfileSpace",
   "trustSnapshotProvider",
   "hideInternalStackFrames",
   "commitBackpressure",
@@ -239,12 +247,10 @@ const _unclassifiedOptions: never[] = [] as MissingOptionKeys[];
 export {
   ADOPT_SERVER_FLAGS_ENV,
   adoptServerExperimentalOptions,
-  type DeployedClientExperimentalParams,
   type EnvReader,
   EXPERIMENTAL_ENV_VARS,
   EXPERIMENTAL_FLAG_AUTHORITY,
   type ExperimentalFlagAuthority,
-  experimentalOptionsForDeployedClient,
   experimentalOptionsFromEnv,
   parseFlagValue,
   parseServerExperimentalOptions,
@@ -279,16 +285,11 @@ export type CfcPosture = "max-enforcement";
  * sink's absence from a ceiling list. Building the mechanism that retires the
  * gap is planned in `docs/plans/cfc-llm-sink-admission.md`.
  *
- * Until the §8.12.5 route-2 widening, one path was gated anyway, by accident:
- * a pattern calling `llm(...)` staged its request in the transaction that also
- * wrote the builtin's own result store, that store declared nothing, and the
- * writer-fit misfit refused the commit. It fired on every such call, so under
- * this posture an llm call over caveated content did not work at all — the
- * opposite of what the rationale above says the sink is for. The store now
- * declares what flows into it, so the ungoverned statement holds of the
- * builtin path too. `max-enforcement-posture.test.ts` pins the hand-staged
- * request and `builtin-abandoned-request.test.ts` the builtin one; both flip
- * to asserting the refusal when the admission mechanism lands.
+ * The builtin's runtime-owned result store admits the write and records
+ * its flow label in the derived component, so it supplies no sink admission
+ * gate. `max-enforcement-posture.test.ts` pins the hand-staged request and
+ * `builtin-abandoned-request.test.ts` the builtin one; both flip to asserting
+ * refusal when the admission mechanism lands.
  */
 export const MAX_ENFORCEMENT_SINK_GOVERNANCE: SinkGovernanceRegistry = Object
   .freeze({
@@ -469,7 +470,9 @@ interface CoreParams {
  * `unitTest`) deliberately do NOT apply it: an emulated-storage runtime
  * has no serving host, so it runs the derive-and-commit model (the
  * ambient baseline, OFF) by construction — see
- * `docs/development/EXPERIMENTAL_OPTIONS.md`.
+ * `docs/development/EXPERIMENTAL_OPTIONS.md`. A harness that hosts a
+ * serving loop beside its own storage when the posture is ON applies this
+ * itself, and passes the result to the preset it builds with.
  *
  * Exported for the deployed-topology test clients that construct a bare
  * `Runtime` against a lane's toolshed (the runner integration tests, the
@@ -482,7 +485,7 @@ interface CoreParams {
  */
 export function withServerExecutionDefault(
   experimental: ExperimentalOptions,
-): ExperimentalOptions {
+): ExperimentalOptions & { serverExecution: boolean } {
   return {
     ...experimental,
     serverExecution: experimental.serverExecution ??
@@ -524,12 +527,27 @@ export interface ProductionServerPresetParams extends CoreParams {
    */
   patternApiUrl?: URL;
 
+  /**
+   * The outbound `fetch` this runtime's network builtins and source loads
+   * use. Toolshed passes one that sends requests addressed to its public
+   * origin to its own listener instead (`API_INTERNAL_URL`); unset, the
+   * platform fetch.
+   */
+  fetch?: RuntimeFetch;
+
   consoleHandler?: ConsoleHandler;
   errorHandlers?: ErrorHandler[];
   telemetry?: RuntimeTelemetry;
 }
 
 export interface RemoteClientPresetParams extends CoreParams {
+  /**
+   * The host `storageManager` was opened on, as `settingsForDeployedClient`
+   * gives it: the deployment's memory URL, or `apiUrl`. It becomes
+   * `RuntimeOptions.memoryUrl`, which reads `apiUrl`'s origin as none.
+   */
+  memoryHost?: URL;
+
   errorHandlers?: ErrorHandler[];
   navigateCallback?: NavigateCallback;
 
@@ -579,6 +597,14 @@ export interface RemoteClientPresetParams extends CoreParams {
 
   /** The read ceiling's fallback `onExceed`, beside the ceiling it qualifies. */
   cfcReadOnExceed?: CfcReadOnExceed;
+
+  /**
+   * The client class the runtime declares. A remote client is unclassed; one
+   * standing in for a browser tab, as the pattern integration harness's
+   * sessions do, declares `"web"`, and then follows the web client's flags,
+   * view-scoped replication among them, exactly as the browser worker does.
+   */
+  clientClass?: "web";
 }
 
 export interface PatternTestPresetParams extends CoreParams {
@@ -606,6 +632,13 @@ export interface BrowserWorkerPresetParams extends CoreParams {
   /** Map from space DIDs to HTTP or HTTPS origins selected by the shell host. */
   spaceHostMap?: Record<string, string>;
 
+  /**
+   * The host `storageManager` was opened on, from `InitializationData`: its
+   * memory URL, or `apiUrl`. It becomes `RuntimeOptions.memoryUrl`, which
+   * reads `apiUrl`'s origin as none.
+   */
+  memoryHost?: URL;
+
   /** Host-controlled rollout dial, from `InitializationData`. */
   cfcEnforcementMode?: CfcEnforcementMode;
 
@@ -624,6 +657,12 @@ export interface BrowserWorkerPresetParams extends CoreParams {
 
   /** The read ceiling's fallback `onExceed`, from the same source. */
   cfcReadOnExceed?: CfcReadOnExceed;
+
+  /**
+   * The profile `#profile` answers with
+   * (`RuntimeOptions.preferredProfileSpace`), from `InitializationData`.
+   */
+  preferredProfileSpace?: MemorySpace;
 
   /**
    * The deployment trust configuration, from `InitializationData`: the host
@@ -689,6 +728,7 @@ export const runtimePresets = {
         experimental: withServerExecutionDefault(params.experimental),
       }),
       patternEnvironment: { apiUrl: params.patternApiUrl ?? params.apiUrl },
+      ...(params.fetch !== undefined ? { fetch: params.fetch } : {}),
       ...(params.consoleHandler !== undefined
         ? { consoleHandler: params.consoleHandler }
         : {}),
@@ -713,6 +753,9 @@ export const runtimePresets = {
         experimental: withServerExecutionDefault(params.experimental),
       }),
       patternEnvironment: { apiUrl: params.apiUrl },
+      ...(params.memoryHost !== undefined
+        ? { memoryUrl: params.memoryHost }
+        : {}),
       ...(params.cfcEnforcementMode !== undefined
         ? { cfcEnforcementMode: params.cfcEnforcementMode }
         : {}),
@@ -723,6 +766,9 @@ export const runtimePresets = {
         ? { cfcWriteFloor: params.cfcWriteFloor }
         : {}),
       ...readCeilingOptions(params),
+      ...(params.clientClass !== undefined
+        ? { clientClass: params.clientClass }
+        : {}),
       ...(params.errorHandlers !== undefined
         ? { errorHandlers: params.errorHandlers }
         : {}),
@@ -788,7 +834,8 @@ export const runtimePresets = {
    * In-browser worker runtime behind the shell (runtime-client's
    * RuntimeProcessor). Everything host-decided arrives as data from
    * `InitializationData` — experimental flags are the shell's build-time
-   * defines, the CFC dials are host-controlled rollout.
+   * defines with its deployment's adopted where none pins them, the CFC
+   * dials are host-controlled rollout.
    */
   browserWorker(params: BrowserWorkerPresetParams): RuntimeOptions {
     return {
@@ -798,6 +845,9 @@ export const runtimePresets = {
       ...(params.spaceHostMap !== undefined
         ? { spaceHostMap: params.spaceHostMap }
         : {}),
+      ...(params.memoryHost !== undefined
+        ? { memoryUrl: params.memoryHost }
+        : {}),
       ...(params.cfcEnforcementMode !== undefined
         ? { cfcEnforcementMode: params.cfcEnforcementMode }
         : {}),
@@ -805,6 +855,9 @@ export const runtimePresets = {
         ? { cfcFlowLabels: params.cfcFlowLabels }
         : {}),
       ...readCeilingOptions(params),
+      ...(params.preferredProfileSpace !== undefined
+        ? { preferredProfileSpace: params.preferredProfileSpace }
+        : {}),
       ...(params.cfcTrustConfig !== undefined
         ? { cfcTrustConfig: params.cfcTrustConfig }
         : {}),

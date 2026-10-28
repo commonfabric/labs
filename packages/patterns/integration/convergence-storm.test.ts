@@ -6,11 +6,12 @@
  * scope-generic link, so another session resolved the link into its own empty
  * user partition.
  *
- * If that scoped field is required, its absent target correctly makes the
- * element and containing array fail schema validation. Callers that want the
- * remaining message fields while the target is unavailable must declare the
- * field optional. The minimal cases pin that distinction, plus the PerSpace
- * control where every reader resolves the same target.
+ * A required scoped field whose absent target declares a default reads as that
+ * default, so the message remains visible without exposing the sender's private
+ * profile. Without a default, an absent required target makes the element and
+ * containing array fail schema validation (`traverse-required-links.test.ts`).
+ * The minimal cases cover defaulted and optional PerUser links, plus the
+ * PerSpace control where every reader resolves the same target.
  *
  * The storm fixture uses the optional declaration and checks observer
  * convergence under sustained writes. The independent B3 writer-integration
@@ -18,6 +19,7 @@
  */
 
 import { assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { debugStr } from "@commonfabric/data-model";
@@ -75,7 +77,12 @@ const ROOT_PATH = join(import.meta.dirname!, "..");
 const fixture = (name: string): string =>
   join(import.meta.dirname!, "fixtures", name, "main.tsx");
 
-type Msg = { author: string; body: string; n: number };
+type Msg = {
+  author: string;
+  body: string;
+  n: number;
+  authorProfile?: { name?: string };
+};
 
 async function messages(session: MultiRuntimeSession): Promise<Msg[]> {
   return ((await session.read(["messages"])) as Msg[] | undefined) ?? [];
@@ -96,6 +103,7 @@ function minimalCase(
   title: string,
   fixtureName: string,
   observerBodies: string[],
+  observerProfile?: { name: string },
 ) {
   describe(title, () => {
     let harness: MultiRuntimeHarness;
@@ -117,6 +125,11 @@ function minimalCase(
     });
 
     it("applies the element schema for a second session", async () => {
+      if (observerProfile !== undefined) {
+        expect(await alice.set(["profile"], { name: "Alice" })).toEqual({
+          ok: true,
+        });
+      }
       await alice.send("post", { author: "alice", body: "alice-0", n: 0 });
       await harness.settle(5);
 
@@ -132,16 +145,22 @@ function minimalCase(
         observerBodies,
         debugStr`observer sees $quote,long${observerView}`,
       );
+      if (observerProfile !== undefined) {
+        expect(aliceView[0].authorProfile).toEqual({ name: "Alice" });
+        expect(observerView[0].authorProfile).toEqual(observerProfile);
+      }
     });
   });
 }
 
-// A required PerUser-cell link resolves to an absent target for the observer.
-// The property does not match, so neither does its element or containing array.
+// A required PerUser-cell link resolves to the observer's own partition. Its
+// declared default keeps the message visible while the author's profile stays
+// private.
 minimalCase(
   "required PerUser-cell link in elements",
   "convergence-chat-noderived",
-  [],
+  ["alice-0"],
+  { name: "" },
 );
 
 // Control — B1 sidestepped: the linked cell is PerSpace, so every session
@@ -152,8 +171,8 @@ minimalCase(
   ["alice-0"],
 );
 
-// An optional field may be omitted when its PerUser target is unavailable, so
-// the remaining message object and array still match.
+// An optional field also keeps the remaining message object and array valid
+// when its PerUser target is unavailable.
 minimalCase(
   "control: optional PerUser-cell link in elements",
   "convergence-chat-optlink",

@@ -56,8 +56,8 @@ any length reaches it intact. `initialize(defaultValue)` atomically stores the
 default only while the cell has no backing value and returns the value that won.
 A readable schema fallback does not count as stored, so calling `initialize()`
 after `pull()` safely materializes it before a child write. The resource kinds
-are `cell`, `stream`, `sqlite`, and `service`. Named methods let an application
-expose a narrow service without expanding the cell protocol.
+are `cell`, `stream`, `sqlite`, `service`, and `presence`. Named methods let an
+application expose a narrow service without expanding the cell protocol.
 
 The higher-level `cf-iframe` component accepts the same `bridge` property. Its
 `context` convenience property turns top-level Fabric cells into cell resources,
@@ -74,10 +74,38 @@ intentionally opaque at the renderer boundary:
 />;
 ```
 
-`resourceKinds` is a narrow manifest of `cell`, `readonly`, `stream`, or
-`sqlite` kinds. It does not grant access to another cell: each name must still
-be present in the bound context, and the bridge resolves that cell's concrete
-scope before the guest loads.
+`resourceKinds` is a narrow manifest of `cell`, `readonly`, `stream`, `sqlite`,
+or `presence` kinds. It does not grant access to another cell: each name must
+still be present in the bound context, and the bridge resolves that cell's
+concrete scope before the guest loads. A name marked `presence` grants the
+presence room of that cell's field and none of the cell's data; see
+[Presence](#presence).
+
+## Guest presentation
+
+A host can set `.presentation` to `{ css, attributes, stylesheets }` on
+`common-iframe-sandbox`. `css` is a stylesheet string, `attributes` maps root
+`data-*` attributes to strings, and `stylesheets` lists external stylesheet
+URLs. The guest's Content Security Policy governs stylesheet and font loads.
+Head meta policies are activated before presentation is installed; a policy that
+refuses the inline bootstrap prevents both initial presentation and live
+updates.
+
+Presentation is installed before the guest's scripts run. Replacing it updates
+the current document without reloading its source or capability bridge. Setting
+it to `null` removes the host's sheets and restores the root attributes it
+replaced. Guest-authored styles remain in place and follow the host's sheets in
+cascade order. The guest document emits `common-iframe-presentation` after each
+applied change. A new guest receives the latest presentation.
+
+`cf-iframe` accepts the same property. With `undefined` (the default), it
+subscribes to the nearest `iframePresentationContext` provider, whose context
+key is `cf-iframe-presentation`. An explicit object overrides the inherited
+value; `null` opts out. Contexts are per DOM subtree, including across shadow
+roots, so separate hosts can supply different presentations.
+
+The transport assigns no meaning to a stylesheet's variable names or data
+attributes. It grants no additional network or host capabilities.
 
 ## Guest API
 
@@ -254,6 +282,138 @@ runs without a skip in both the default and server-execution ON pattern suites.
 It exercises `PerSpace`, `PerUser`, and `PerSession` cells and SQLite databases
 across two sessions for one identity, a second identity, and a guest reload.
 
+## Streams
+
+A `stream` resource carries events from the guest to a handler the host runs,
+such as a pattern's verb. The guest sends through `fabric.stream(name)`, which
+calls the resource's `send` method:
+
+```ts
+const addItem = fabric.stream<{ id: string; text: string }>("addItem");
+
+await addItem.send({ id: crypto.randomUUID(), text: "Milk" });
+```
+
+`cf-iframe`'s `context` adapter sends the event to the stream cell and waits for
+the handler's run: `send()` resolves once that run has committed, and rejects
+with the reason when the runtime refuses the event or the run, including an
+error the handler throws. It resolves with no value, so a verb's declared result
+does not reach the guest; the guest reads the effect through a cell. The event
+is not a trusted gesture, since guest code sent it rather than a control the
+host draws. The guest sends the event only once every cell operation it made
+before the send has settled, so the handler reads what they wrote, and the host
+handles the send in the same queue as the guest's cell operations, so a `pull()`
+made after it reads what the handler wrote.
+
+`packages/patterns/integration/iframe-verb-list.test.ts` drives a guest that
+adds to a pattern's list only through the pattern's verb, in a browser.
+
+## Presence
+
+A presence room carries what its members are doing right now: a pointer, a
+selection, a drag in flight, a player's position. Nothing in it is stored. Each
+member holds one record, a display name and up to eight named facets, and the
+record is gone the moment the member leaves. The memory server relays the
+records and never reads a facet
+([`collaborative-fields.md`](../../docs/features/collaborative-fields.md),
+"Ephemeral co-presence").
+
+A host grants a room as a `presence` resource. `presenceResource()` builds one
+from a function that joins the room and a function that says what a guest is
+told when the join is refused or the room fails, under the code that fits the
+cause:
+
+```ts
+import {
+  createFabricBridge,
+  IPC,
+  presenceResource,
+} from "@commonfabric/iframe-sandbox";
+
+const bridge = createFabricBridge({
+  cursors: presenceResource({
+    join: () => runtime.joinPresenceRoom(canvasCell),
+    failure: (cause) =>
+      !(cause instanceof Error)
+        ? { code: IPC.BRIDGE_PRESENCE_DISCONNECTED, message: "Lost the room." }
+        : cause.name === "PresenceError"
+        ? { code: IPC.BRIDGE_PRESENCE_REFUSED, message: cause.message }
+        : cause.message.includes("does not support presence")
+        ? { code: IPC.BRIDGE_PRESENCE_UNSUPPORTED, message: "No relay." }
+        : { code: IPC.BRIDGE_PRESENCE_DISCONNECTED, message: "Lost the room." },
+  }),
+});
+```
+
+`cf-iframe` does this for a context name whose `resourceKinds` entry is
+`presence`: the room is the one the runtime derives from that cell's resolved
+field, so every guest bound to the same field shares it, and a guest bound to a
+user- or session-scoped field shares it only within that user or session.
+
+The guest joins by listening, and publishes its own record:
+
+```ts
+import { connectFabric } from "@commonfabric/iframe-sandbox/guest";
+
+const fabric = connectFabric();
+const cursors = fabric.presence("cursors");
+
+const leave = cursors.join((event) => {
+  switch (event.kind) {
+    case "snapshot": // The room as it stands; `event.participantId` is ours.
+    case "upsert": // `event.participant` published its first or next record.
+    case "remove": // `event.participantId` left.
+      render(cursors.participants);
+      break;
+    case "failure": // The room ended; `event.error.code` says why.
+      render([]);
+  }
+});
+
+await cursors.setName("Ada");
+canvas.addEventListener("pointermove", (event) => {
+  void cursors.setFacet("pointer", { x: event.offsetX, y: event.offsetY });
+});
+canvas.addEventListener("pointerleave", () => {
+  void cursors.clearFacet("pointer");
+});
+```
+
+`.participants` is every other member's latest record, as
+`{ participantId, name, facets }`, and `.participantId` is the guest's own
+membership. A `participantId` names a membership rather than a person: it
+changes when a member reconnects, and two tabs of one user are two participants.
+A record does not carry the DID of the member that published it.
+
+A room is latest-state, not a message stream. A publish replaces the member's
+record, and the host sends at most one publication per animation frame, so a
+peer hears the latest value of a facet and not every value. A page that is not
+being drawn, such as a background tab, publishes nothing until it is shown.
+State that must be agreed on, or that must survive, belongs in a cell.
+
+A facet's contents are whatever a peer's guest wrote. Check their shape before
+using them, as for any value a stranger supplied.
+
+The relay bounds a record: a name of at most 80 code points, eight facets, a
+facet name of lowercase letters, digits, and hyphens starting with a letter and
+at most 32 characters long, and 8 KiB for the record as encoded. A room holds
+128 members. A publication past a bound ends the guest's room with a `failure`
+whose code is `presence-refused` and whose message is the relay's, and a join of
+a full room fails the same way; the members already there stay as they are. The
+other codes are `presence-unsupported`, for a host with no relay, and
+`presence-disconnected`, for a room the host lost. Nothing follows a `failure`;
+a guest that still wants the room calls `join()` again. A guest whose host
+grants no resource of that name hears a `failure` with the code
+`resource-not-found`.
+
+The publishing methods reject while the guest has not joined, and the room
+publishes nothing for a member with no name.
+
+The host handles the requests of a `presence` resource in the order they arrive,
+and apart from the order the session's other operations wait in. A status update
+therefore does not wait for an earlier write's commit to be confirmed, and does
+not hold up a later one.
+
 ## Protocol
 
 Each loaded document owns a fresh capability session over a `MessagePort`.
@@ -308,6 +468,10 @@ own frame from accumulating them.
 - The remaining window `postMessage()` lifecycle, port handoff, and alarm
   traffic uses source-window checks but not origin-bound messages; audit that
   path before treating this as a hardened security boundary.
+- A `presence` resource lets the guest announce the user in a room, under a name
+  the guest chooses, to everyone with access to the space, and read what the
+  guests of other members publish there. Grant one only to a guest that should
+  do both.
 - Allowed script CDNs and their logging services can exfiltrate data.
 - Links opened with `target="_blank"`, `document.baseURI`, and browser
   fingerprinting capabilities can reveal information outside the bridge.

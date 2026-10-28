@@ -16,7 +16,7 @@ import {
   encodeJsonPointer,
 } from "@commonfabric/utils/json-pointer";
 import { isObjectNotArray } from "@commonfabric/utils/types";
-import { anySchema, walkSchema } from "./schema-walk.ts";
+import { forEachSchema } from "./schema-walk.ts";
 
 /**
  * The URI scheme prefix of a content-addressed schema document reference,
@@ -98,12 +98,11 @@ export function containsExternalSchemaRef(
   if (!isObjectNotArray(schema)) return false;
   const cached = externalRefPresenceCache.get(schema);
   if (cached !== undefined) return cached;
-  const result = anySchema(
+  const result = forEachSchema(
     schema,
     (node) =>
-      isObjectNotArray(node.schema) &&
-      typeof node.schema.$ref === "string" &&
-      isExternalSchemaRef(node.schema.$ref),
+      isObjectNotArray(node) && typeof node.$ref === "string" &&
+      isExternalSchemaRef(node.$ref),
     { includeDefs: true, includeUnused: true },
   );
   if (isDeepFrozen(schema)) externalRefPresenceCache.set(schema, result);
@@ -125,13 +124,11 @@ export function collectExternalSchemaRefHashes(
   const cached = externalRefHashCache.get(schema);
   if (cached !== undefined) return cached;
   const hashes = new Set<string>();
-  walkSchema(
+  forEachSchema(
     schema,
     (node) => {
-      if (
-        isObjectNotArray(node.schema) && typeof node.schema.$ref === "string"
-      ) {
-        const parsed = parseExternalSchemaRef(node.schema.$ref);
+      if (isObjectNotArray(node) && typeof node.$ref === "string") {
+        const parsed = parseExternalSchemaRef(node.$ref);
         if (parsed !== undefined) hashes.add(parsed.taggedHash);
       }
     },
@@ -255,12 +252,11 @@ function isCidPrefixedRef(ref: string): boolean {
  * the grammar exists to keep out.
  */
 function containsCidPrefixedRef(schema: JSONSchemaObj): boolean {
-  return anySchema(
+  return forEachSchema(
     schema,
     (node) =>
-      isObjectNotArray(node.schema) &&
-      typeof node.schema.$ref === "string" &&
-      isCidPrefixedRef(node.schema.$ref),
+      isObjectNotArray(node) && typeof node.$ref === "string" &&
+      isCidPrefixedRef(node.$ref),
     { includeDefs: true, includeUnused: true },
   );
 }

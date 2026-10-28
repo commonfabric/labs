@@ -1,6 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { join } from "@std/path";
+import { fromFileUrl, join } from "@std/path";
 import {
   commitMoment,
   daySeed,
@@ -65,7 +65,7 @@ async function probeCommitMoment(
   options: { allowRun: boolean; path?: string },
 ): Promise<{ success: boolean; stdout: string; stderr: string }> {
   const module = new URL("./shuffle.ts", import.meta.url).href;
-  const root = new URL("../../..", import.meta.url).pathname;
+  const root = fromFileUrl(new URL("../../..", import.meta.url));
   const child = new Deno.Command(Deno.execPath(), {
     args: [
       "run",

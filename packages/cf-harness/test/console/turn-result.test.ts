@@ -6,6 +6,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 
 import { readConsoleTurnResult } from "../../console/turn-result.ts";
 import {
@@ -13,6 +14,30 @@ import {
   mintReferentHandle,
 } from "../../src/handle-table.ts";
 import type { HarnessTranscriptMessage } from "../../src/contracts/transcript.ts";
+import { persistAssignSlugOutputs } from "../support/assign-slug-outputs.ts";
+import { urlToAppView } from "@commonfabric/navigation";
+import { pieceUrl } from "../../src/piece-url.ts";
+
+/** A space created with a random key, which only its DID addresses. */
+const SPACE = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+
+/** What a successful `assign_slug` call in `SPACE` returns. */
+const namedOutput = (slug: string) => ({
+  status: "ok",
+  slug,
+  space: SPACE,
+  url: pieceUrl("http://localhost:8000", SPACE, slug)!,
+});
+
+/** The artifact path the run recorded for the output a tool message reports. */
+const recordedPath = async (
+  artifactRoot: string,
+  turnId: string,
+  index: number,
+): Promise<string> =>
+  JSON.parse(
+    await Deno.readTextFile(join(artifactRoot, turnId, "transcript.json")),
+  )[index].resultRef.artifactPath;
 
 const writeTranscript = async (
   artifactRoot: string,
@@ -24,7 +49,9 @@ const writeTranscript = async (
   await Deno.mkdir(runRoot, { recursive: true });
   await Deno.writeTextFile(
     join(runRoot, "transcript.json"),
-    JSON.stringify(transcript),
+    JSON.stringify(
+      await persistAssignSlugOutputs(artifactRoot, turnId, transcript),
+    ),
   );
   await Deno.writeTextFile(
     join(runRoot, "run-report.json"),
@@ -453,7 +480,7 @@ describe("console/turn-result", () => {
     }
   });
 
-  it("returns successful `assign_slug` values exactly as the model received them", async () => {
+  it("returns the slug, URL, and space a successful `assign_slug` call persisted", async () => {
     const artifactRoot = await Deno.makeTempDir({
       prefix: "cf-harness-console-result-",
     });
@@ -464,34 +491,42 @@ describe("console/turn-result", () => {
           role: "tool",
           toolCallId: "call-1",
           toolName: "assign_slug",
-          content: JSON.stringify({
-            outputId: "run:assign_slug:1",
-            status: "ok",
-            slug: "reading-list",
-            url: "http://localhost:8000/console-test/reading-list",
-          }),
+          content: JSON.stringify(namedOutput("reading-list")),
         },
         { role: "assistant", content: "Your reading list is ready." },
       ]);
 
-      await expect(readConsoleTurnResult({
+      const result = await readConsoleTurnResult({
         sessionId: "session",
         continuable: true,
         artifactRoot,
         turnId: "turn-with-piece",
-        spaceName: "console-test",
-      })).resolves.toEqual({
+        spaceName: SPACE,
+      });
+      expect(result).toEqual({
         outcome: "completed",
         sessionId: "session",
         continuable: true,
         looms: [],
         pieces: [{
           slug: "reading-list",
-          url: "http://localhost:8000/console-test/reading-list",
+          url: `http://localhost:8000/${SPACE}/reading-list`,
+          space: SPACE,
         }],
-        spaceName: "console-test",
+        spaceName: SPACE,
         finalText: "Your reading list is ready.",
       });
+      // The shell reads the address back as this piece in this space.
+      expect(urlToAppView(new URL(result!.pieces[0].url))).toEqual({
+        spaceDid: SPACE,
+        pieceSlug: "reading-list",
+      });
+      // The transcript the model read holds neither the URL nor the DID.
+      const shown = await Deno.readTextFile(
+        join(artifactRoot, "turn-with-piece", "transcript.json"),
+      );
+      expect(shown).not.toContain("http://localhost:8000");
+      expect(shown).not.toContain(`"${SPACE}"`);
     } finally {
       await Deno.remove(artifactRoot, { recursive: true });
     }
@@ -575,6 +610,50 @@ describe("console/turn-result", () => {
       expect(result?.revealed).toEqual({
         [token]: "https://shop.example/item/7",
       });
+    } finally {
+      await Deno.remove(artifactRoot, { recursive: true });
+    }
+  });
+
+  it("returns no string for a return referent whose label does not fit the console's display", async () => {
+    const artifactRoot = await Deno.makeTempDir({
+      prefix: "cf-harness-console-result-",
+    });
+    try {
+      const { table, token } = await mintReferentHandle(
+        createHarnessHandleTable("turn-with-unfit-referent"),
+        {
+          kind: "return",
+          source: "delegate_task:child",
+          value: "https://shop.example/item/7",
+          label: {
+            confidentiality: [{
+              type: CFC_ATOM_TYPE.Expires,
+              timestamp: 9,
+            }],
+          },
+          labelSource: "child",
+        },
+      );
+      await writeTranscript(artifactRoot, "turn-with-unfit-referent", [
+        { role: "user", content: "find the item" },
+        { role: "assistant", content: `Found it at ${token}.` },
+      ]);
+      await Deno.writeTextFile(
+        join(artifactRoot, "turn-with-unfit-referent", "run-state.json"),
+        JSON.stringify({ handleTable: table }),
+      );
+
+      const result = await readConsoleTurnResult({
+        sessionId: "session",
+        continuable: true,
+        artifactRoot,
+        turnId: "turn-with-unfit-referent",
+        spaceName: "console-test",
+      });
+
+      expect(result?.finalText).toBe(`Found it at ${token}.`);
+      expect(result?.revealed).toBeUndefined();
     } finally {
       await Deno.remove(artifactRoot, { recursive: true });
     }
@@ -798,6 +877,89 @@ describe("console/turn-result", () => {
         turnId,
         spaceName: "console-test",
       })).resolves.toBeUndefined();
+    } finally {
+      await Deno.remove(artifactRoot, { recursive: true });
+    }
+  });
+
+  it("returns no result when a successful call's persisted output does not read back", async () => {
+    const artifactRoot = await Deno.makeTempDir({
+      prefix: "cf-harness-console-result-",
+    });
+    try {
+      const turnId = "turn-with-a-lost-output";
+      const named = (toolCallId: string, slug: string) => ({
+        role: "tool" as const,
+        toolCallId,
+        toolName: "assign_slug",
+        content: JSON.stringify(namedOutput(slug)),
+      });
+      await writeTranscript(artifactRoot, turnId, [
+        { role: "user", content: "build two lists" },
+        named("call-1", "reading-list"),
+        named("call-2", "watch-list"),
+        { role: "assistant", content: "Both lists are ready." },
+      ]);
+      const read = () =>
+        readConsoleTurnResult({
+          sessionId: "session",
+          continuable: true,
+          artifactRoot,
+          turnId,
+          spaceName: SPACE,
+        });
+      expect((await read())?.pieces.map((piece) => piece.slug)).toEqual([
+        "reading-list",
+        "watch-list",
+      ]);
+
+      // A piece the model was told it named, and the person cannot open, is
+      // not a completed result.
+      const lost = await recordedPath(artifactRoot, turnId, 1);
+      await Deno.writeTextFile(
+        lost,
+        JSON.stringify({ ...namedOutput("reading-list"), url: 7 }),
+      );
+      await expect(read()).resolves.toBeUndefined();
+      await Deno.remove(lost);
+      await expect(read()).resolves.toBeUndefined();
+    } finally {
+      await Deno.remove(artifactRoot, { recursive: true });
+    }
+  });
+
+  it("finds a persisted output whose recorded path uses the other platform's separator", async () => {
+    const artifactRoot = await Deno.makeTempDir({
+      prefix: "cf-harness-console-result-",
+    });
+    try {
+      const turnId = "turn-recorded-on-windows";
+      await writeTranscript(artifactRoot, turnId, [
+        { role: "user", content: "build a reading list" },
+        {
+          role: "tool",
+          toolCallId: "call-1",
+          toolName: "assign_slug",
+          content: JSON.stringify(namedOutput("reading-list")),
+        },
+        { role: "assistant", content: "Your reading list is ready." },
+      ]);
+      const transcriptPath = join(artifactRoot, turnId, "transcript.json");
+      const transcript = JSON.parse(await Deno.readTextFile(transcriptPath));
+      const fileName = transcript[1].resultRef.artifactPath.split("/").at(-1);
+      transcript[1].resultRef.artifactPath =
+        `C:\\runs\\${turnId}\\tool-outputs\\${fileName}`;
+      await Deno.writeTextFile(transcriptPath, JSON.stringify(transcript));
+
+      expect(
+        (await readConsoleTurnResult({
+          sessionId: "session",
+          continuable: true,
+          artifactRoot,
+          turnId,
+          spaceName: SPACE,
+        }))?.pieces.map((piece) => piece.slug),
+      ).toEqual(["reading-list"]);
     } finally {
       await Deno.remove(artifactRoot, { recursive: true });
     }

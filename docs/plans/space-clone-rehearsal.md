@@ -79,11 +79,14 @@ unbounded data migration, and it degrades exactly the fidelity the rehearsal
 exists to buy.
 
 **What would survive a re-key.** Entity ids are content-addressed from
-`{source, cause}` and do **not** include the space DID (`createRef` in
-`packages/runner/src/create-ref.ts`), so the document graph is space-agnostic.
-Same-space links elide the `space` field entirely when it matches the base
-(the base/baseSpace elision in `packages/runner/src/link-utils.ts`). On those two dimensions a re-key
-is a no-op.
+`{source, cause}`, and `createRef` (`packages/runner/src/create-ref.ts`) adds
+no space DID of its own, so every stored document keeps its id. A cause can
+hold a link that names its space, though, so an id derived again after a re-key
+can differ from the one stored. Links are another matter. Only a link written relative to a base document
+elides a `space` that matches the base's (the `base` elision in
+`packages/runner/src/link-utils.ts`); the links a pattern binds into a child's
+argument name their space outright, so a re-key would have to rewrite each of
+them.
 
 **What would break.**
 

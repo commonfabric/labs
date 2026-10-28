@@ -19,7 +19,10 @@ import {
   type FabricValue,
   hashStringOf,
 } from "@commonfabric/data-model";
-import { hasDataUriScheme } from "@commonfabric/data-model/codec-data-uri";
+import {
+  dataUriFromValueWithResolvedLinks,
+  portableSnapshotLinks,
+} from "../../src/data-uri.ts";
 
 import { ExtendedStorageTransaction } from "../../src/storage/extended-storage-transaction.ts";
 import type {
@@ -46,6 +49,11 @@ import {
   type TraversalContext,
 } from "../../src/traverse.ts";
 import { readMaybeGzippedText } from "./gzip.ts";
+import {
+  hasInlineCellScheme,
+  immutableSnapshot,
+  isImmutableCellId,
+} from "../../src/immutable-cell.ts";
 
 export type ReplayInvocationOracle = {
   ok: boolean;
@@ -172,7 +180,7 @@ export class FixtureObjectManager implements ObjectStorageManager {
   }
 
   load(address: BaseMemoryAddress): IAttestation | null {
-    if (hasDataUriScheme(address.id)) {
+    if (hasInlineCellScheme(address.id)) {
       // Use the canonical data-URI attestation loader so replay matches live
       // semantics (decoded JSON rooted at path [], LRU-cached).
       const { ok } = loadDataURI(address);
@@ -203,6 +211,22 @@ function wrapTxWithReadLog(
   tx: IExtendedStorageTransaction,
   log: Set<string>,
 ): IExtendedStorageTransaction {
+  const comparisonIds = new Map<string, string>();
+  const comparisonId = (id: IMemorySpaceAddress["id"]): string => {
+    if (!isImmutableCellId(id)) return id;
+    let portable = comparisonIds.get(id);
+    if (portable === undefined) {
+      const { value, origin } = immutableSnapshot(id);
+      // Read-set identity follows the fixture's minting policy. Portable
+      // export additionally closes schemas and would change existing oracles.
+      portable = dataUriFromValueWithResolvedLinks(
+        value,
+        origin === undefined ? undefined : { ...origin, path: [] },
+      );
+      comparisonIds.set(id, portable);
+    }
+    return portable;
+  };
   const recordRead = (
     address: IMemorySpaceAddress,
     options: IReadOptions | undefined,
@@ -212,9 +236,9 @@ function wrapTxWithReadLog(
       trackReadWithoutLoad ? "t" : ""
     }${options?.meta !== undefined ? "m" : ""}`;
     log.add(
-      `${address.space}|${address.scope ?? "space"}|${compactId(address.id)}|${
-        JSON.stringify(address.path)
-      }|${flags}`,
+      `${address.space}|${address.scope ?? "space"}|${
+        compactId(comparisonId(address.id))
+      }|${JSON.stringify(address.path)}|${flags}`,
     );
   };
 
@@ -255,13 +279,18 @@ const REPLAY_SCOPE_IDENTITY = {
   sessionId: "replay-session",
 };
 
-function makeContext(traverseCells: boolean): TraversalContext {
-  return createTraversalContext(
+function makeContext(
+  traverseCells: boolean,
+  inlineArrayItemsInPlace: boolean,
+): TraversalContext {
+  const context = createTraversalContext(
     new CompoundCycleTracker(),
     new MapSetStringToPathSelectors(true),
     REPLAY_SCOPE_IDENTITY,
     traverseCells,
   );
+  context.inlineArrayItemsInPlace = inlineArrayItemsInPlace;
+  return context;
 }
 
 export function replayFixture(
@@ -314,7 +343,10 @@ export function replayFixture(
     invocationIndex++;
     let context = contexts.get(invocation.context);
     if (context === undefined) {
-      context = makeContext(invocation.traverseCells);
+      context = makeContext(
+        invocation.traverseCells,
+        invocation.inlineArrayItemsInPlace === true,
+      );
       contexts.set(invocation.context, context);
     }
     contextUses.set(
@@ -388,7 +420,9 @@ export function replayFixture(
       invocationOracles.push({
         ok: rv.error === undefined,
         ...(rv.error !== undefined && { code: rv.error.code }),
-        hash: rv.ok === undefined ? "undefined" : truncatedHash(rv.ok),
+        hash: rv.ok === undefined
+          ? "undefined"
+          : truncatedHash(portableSnapshotLinks(rv.ok)),
       });
     }
   }

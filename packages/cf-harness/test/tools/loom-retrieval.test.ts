@@ -154,7 +154,7 @@ const ok = (output: LoomRetrievalToolOutput) => {
 /** Sandbox fixture which never starts a process. */
 const sandbox: SandboxRuntime = {
   describe: () => ({
-    kind: "docker-runsc-cfc",
+    kind: "runsc-cfc",
     defaultWorkingDirectory: "/workspace",
     cfc: { runtimeRequested: true, workspaceMountPath: "/workspace" },
   }),

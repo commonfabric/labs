@@ -1,8 +1,10 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
+import { deepFreeze, isDeepFrozen } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 
+import { isAliasBinding } from "../src/alias-binding.ts";
 import { lift } from "../src/builder/module.ts";
 import { resolvedSchema } from "./schema-ref-helpers.ts";
 import { pattern, popFrame, pushFrame } from "../src/builder/pattern.ts";
@@ -13,9 +15,11 @@ import {
   isModule,
   isPattern,
   type JSONSchema,
+  type JSONSchemaObj,
   type Module,
   type Pattern,
 } from "../src/builder/types.ts";
+import { ContextualFlowControl } from "../src/cfc.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 
@@ -118,6 +122,20 @@ describe("pattern", () => {
     });
   });
 
+  it("deep-freezes its manifest of derived internal cells, partial causes included", () => {
+    const increment = lift((x: number) => x + 1);
+    const double = lift((x: number) => x * 2);
+    const testPattern = pattern<{ x: number }>(({ x }) => {
+      const intermediate = increment(x);
+      return { doubled: double(intermediate) };
+    });
+
+    const manifest = testPattern.derivedInternalCells!;
+    expect(manifest[0].partialCause).toEqual({ $generated: 0 });
+    expect(Object.isFrozen(manifest[0].partialCause)).toBe(true);
+    expect(isDeepFrozen(manifest)).toBe(true);
+  });
+
   it("uniquifies repeated stable internal paths with schemas", () => {
     const isPositive = lift(
       (value: number) => value > 0,
@@ -182,12 +200,26 @@ describe("pattern", () => {
     ).toThrow("is reserved");
   });
 
+  it("rejects a reserved $instance key in user-supplied causes at build time", () => {
+    const isPositive = lift((value: number) => value > 0);
+
+    // A user cause carrying `$instance` would mimic a named sub-pattern
+    // instance's cause — the build throws at the `.for()` call.
+    expect(() =>
+      pattern(() => {
+        const sneaky = (isPositive(1) as any).for({ $instance: "child" });
+        return { sneaky };
+      })
+    ).toThrow('top-level key "$instance" is reserved');
+  });
+
   it("accepts record causes without a top-level $generated key", () => {
     const isPositive = lift((value: number) => value > 0);
 
     const testPattern = pattern(() => {
       // Nested `$generated` can't collide with the flat generated causes, and
-      // only `$generated` is reserved — other `$`-keys stay legal.
+      // only `$generated` and `$instance` are reserved — other `$`-keys stay
+      // legal.
       const nested = (isPositive(1) as any).for({ outer: { $generated: 0 } });
       const sigilish = (isPositive(2) as any).for({ $kind: "stream" });
       return { nested, sigilish };
@@ -623,5 +655,190 @@ describe("pattern", () => {
       false,
     );
     expect(isPattern(neverPattern)).toBe(true);
+  });
+
+  describe("schemas", () => {
+    // `schemaAtPath()` keeps a narrowing only for a deep-frozen schema, and
+    // binding a pattern's nodes narrows its argument schema at every slot,
+    // so a pattern holds its schemas deep-frozen from the time it is built.
+
+    // A fresh mutable tree per call, as a compiled pattern's schema literal
+    // is. The reference into `$defs` makes a narrowing carry the definitions
+    // it reaches, so an uncached one builds a new object.
+    const itemsArgumentSchema = () =>
+      ({
+        type: "object",
+        properties: {
+          item: { $ref: "#/$defs/Item" },
+          count: { type: "number", asCell: ["cell"] },
+        },
+        required: ["item", "count"],
+        $defs: {
+          Item: { type: "object", properties: { title: { type: "string" } } },
+        },
+      }) as JSONSchema;
+
+    const countResultSchema = () =>
+      ({
+        type: "object",
+        properties: { doubled: { type: "number" } },
+      }) as JSONSchema;
+
+    const double = lift<number>((x) => x * 2);
+
+    const buildItemsPattern = (
+      argumentSchema: JSONSchema = itemsArgumentSchema(),
+      resultSchema: JSONSchema = countResultSchema(),
+    ) =>
+      pattern<{ count: number }, { doubled: number }>(
+        ({ count }) => ({ doubled: double(count) }),
+        argumentSchema,
+        resultSchema,
+      );
+
+    it("holds a deep-frozen argument schema and result schema", () => {
+      const built = buildItemsPattern();
+      expect(isDeepFrozen(built.argumentSchema)).toBe(true);
+      expect(isDeepFrozen(built.resultSchema)).toBe(true);
+      expect(built.argumentSchema).toEqual(itemsArgumentSchema());
+      expect(built.resultSchema).toEqual(countResultSchema());
+    });
+
+    it("holds deep-frozen schemas given deep-frozen ones", () => {
+      const built = buildItemsPattern(
+        deepFreeze(itemsArgumentSchema()),
+        deepFreeze(countResultSchema()),
+      );
+      expect(isDeepFrozen(built.argumentSchema)).toBe(true);
+      expect(isDeepFrozen(built.resultSchema)).toBe(true);
+      expect(built.argumentSchema).toEqual(itemsArgumentSchema());
+      expect(built.resultSchema).toEqual(countResultSchema());
+    });
+
+    it("holds schemas of its own, given the schemas another pattern was given", () => {
+      // `createRef()` hashes an object it reaches twice in one cause as
+      // `null`, so two patterns sharing a schema object would derive other
+      // ids from a graph holding both than two patterns holding equal ones.
+      const argumentSchema = deepFreeze(itemsArgumentSchema());
+      const resultSchema = deepFreeze(countResultSchema());
+      const first = buildItemsPattern(argumentSchema, resultSchema);
+      const second = buildItemsPattern(argumentSchema, resultSchema);
+      expect(second.argumentSchema).toEqual(first.argumentSchema);
+      expect(second.argumentSchema).not.toBe(first.argumentSchema);
+      expect(second.resultSchema).toEqual(first.resultSchema);
+      expect(second.resultSchema).not.toBe(first.resultSchema);
+    });
+
+    it("narrows its argument schema to the same object on every call", () => {
+      const built = buildItemsPattern();
+      const first = ContextualFlowControl.schemaAtPath(
+        built.argumentSchema,
+        ["item"],
+      );
+      expect(first).toEqual({
+        $ref: "#/$defs/Item",
+        $defs: {
+          Item: { type: "object", properties: { title: { type: "string" } } },
+        },
+      });
+      expect(
+        ContextualFlowControl.schemaAtPath(built.argumentSchema, ["item"]),
+      ).toBe(first);
+    });
+
+    it("holds deep-frozen copies of a nested pattern's schemas in the node that instantiates it", () => {
+      // Copies, for the reason a pattern's schemas are its own: the graph
+      // and the pattern nested in it must not share a schema object.
+      const inner = buildItemsPattern();
+      const outer = pattern<{ count: number }, { doubled: number }>(
+        ({ count }) => {
+          const nested = inner({ count });
+          return { doubled: nested.doubled };
+        },
+        itemsArgumentSchema(),
+        countResultSchema(),
+      );
+      const patternNodes = outer.nodes.filter((node) =>
+        isModule(node.module) && node.module.type === "pattern"
+      );
+      expect(patternNodes).toHaveLength(1);
+      const nested = (patternNodes[0].module as Module).implementation;
+      expect(isPattern(nested)).toBe(true);
+      const { argumentSchema, resultSchema } = nested as Pattern;
+      expect(argumentSchema).toEqual(inner.argumentSchema);
+      expect(argumentSchema).not.toBe(inner.argumentSchema);
+      expect(resultSchema).toEqual(inner.resultSchema);
+      expect(resultSchema).not.toBe(inner.resultSchema);
+      expect(isDeepFrozen(argumentSchema)).toBe(true);
+      expect(isDeepFrozen(resultSchema)).toBe(true);
+    });
+
+    describe("an argument alias's schema", () => {
+      // Under the content-addressed flag, which is on by default, a binding
+      // carries a reference to its schema's documents. `createRef()` hashes
+      // an object it reaches twice in one cause as `null`, so where the
+      // schema stays inline, every position holds an object of its own.
+
+      const title = lift<{ title: string }, string>((item) => item.title);
+
+      const titlesResultSchema = (): JSONSchema => ({
+        type: "object",
+        properties: { a: { type: "string" }, b: { type: "string" } },
+      });
+
+      /** The schemas of the aliases binding the argument's `item`. */
+      const itemAliasSchemas = (built: Pattern): (JSONSchema | undefined)[] =>
+        built.nodes.flatMap((node) => {
+          const inputs = node.inputs;
+          return isAliasBinding(inputs) && inputs.$alias.cell === "argument" &&
+              inputs.$alias.path.length === 1 &&
+              inputs.$alias.path[0] === "item"
+            ? [inputs.$alias.schema]
+            : [];
+        });
+
+      it("is one reference object at every position that binds the same cell", () => {
+        const built = pattern<
+          { item: { title: string }; count: number },
+          { a: string; b: string }
+        >(
+          ({ item }) => ({ a: title(item), b: title(item) }),
+          itemsArgumentSchema(),
+          titlesResultSchema(),
+        );
+        const schemas = itemAliasSchemas(built);
+        expect(schemas).toHaveLength(2);
+        expect((schemas[0] as JSONSchemaObj).$ref).toMatch(/^cid:/);
+        expect(schemas[1]).toBe(schemas[0]);
+      });
+
+      it("is an object of its own at each position where decomposition refuses", () => {
+        // A `definitions` keyword is one decomposition refuses, so the
+        // schema stays inline.
+        const argumentSchema: JSONSchema = {
+          type: "object",
+          properties: {
+            item: {
+              type: "object",
+              definitions: { Title: { type: "string" } },
+              properties: { title: { type: "string" } },
+            },
+          },
+        };
+        const built = pattern<
+          { item: { title: string } },
+          { a: string; b: string }
+        >(
+          ({ item }) => ({ a: title(item), b: title(item) }),
+          argumentSchema,
+          titlesResultSchema(),
+        );
+        const schemas = itemAliasSchemas(built);
+        expect(schemas).toHaveLength(2);
+        expect(schemas[0]).toEqual(argumentSchema.properties!.item);
+        expect(schemas[1]).toEqual(schemas[0]);
+        expect(schemas[1]).not.toBe(schemas[0]);
+      });
+    });
   });
 });

@@ -8,6 +8,8 @@
  * activity is unavailable.
  */
 
+import type { RunLists } from "./github-runs.ts";
+
 export type Status = "good" | "warn" | "bad" | "unknown";
 
 // A render-ready snapshot produced by a tile's collect().
@@ -20,7 +22,10 @@ export interface TileView {
   duration?: number; // a span in ms; rendered (humanSpan) in the chart's bottom-left corner
   alignChartBottom?: boolean; // keep the chart at the tile bottom when its grid row grows taller
   aside?: string; // trusted inline html minor header facet (e.g. an MTD or "running" badge)
-  href?: string; // if set, the whole tile becomes a link (external opens a new tab)
+  // If set, the tile becomes a link (external opens a new tab): the whole
+  // tile, or all of it but `extra` when `extra` holds links of its own.
+  // `value` and `aside` then hold no links.
+  href?: string;
   hint?: string; // drill arrow tooltip and accessible link description
 }
 
@@ -51,6 +56,11 @@ export interface Tile {
   // latest-view state on the server and its markup in the browser.
   label: string;
 
+  // The repository the tile reports on, as "owner/name", when it reports on
+  // one alone. That repository's page shows the tile's view among its
+  // measures (repo-page.ts).
+  repo?: string;
+
   intervalMs: number; // how often collect() runs, per source when runSources is set
   wide?: boolean; // render full-width below the grid, including before collection
   // Keep the last completed status and values while ignoring intermediate views.
@@ -69,12 +79,12 @@ export interface Tile {
   routes?: Route[]; // optional drill-down routes this tile owns
 }
 
-// Shared, memoized data sources handed to every collect().
+// Shared data sources handed to every collect().
 export interface Ctx {
-  runs(): Promise<Run[]>; // labs deno.yml runs on main (shared across CI tiles, memoized)
-  // The runs of any source, memoized per source so several tiles reading the
-  // same one share one fetch (loom's CI tiles, and the combined recent-runs
-  // stream).
+  runs(): Promise<Run[]>; // labs deno.yml runs on main (shared across CI tiles)
+  // The runs of any source. A tile collected from run-source snapshots reads
+  // the snapshot the scheduler fetched once for the source and shares with
+  // every tile reading it (loom's CI tiles, and the recent commits tile).
   runsFor(source: RunSource): Promise<Run[]>;
   // For a tile collected from run-source snapshots: why the snapshot of that
   // source is missing or out of date, or undefined when it is current.
@@ -84,11 +94,29 @@ export interface Ctx {
   // data of its own has arrived since its last collection. Each ask brings
   // one more collection, so a tile asks only when such data arrives.
   collectAgain?(): void;
+  /**
+   * The run lists this context reads runs through, which a tile reading runs
+   * of its own reads through as well.
+   */
+  runLists?: RunLists;
   env(key: string): string | undefined;
+}
+
+/**
+ * That a repository's green branch is at a run's commit, or was at it: the
+ * branch CI moves to the newest commit of main whose tests passed.
+ */
+export interface GreenMark {
+  /** The branch's name, such as `main-green`. */
+  readonly branch: string;
+
+  /** Whether the branch is at the commit now. */
+  readonly current: boolean;
 }
 
 export interface Run {
   repo?: string; // the "owner/name" the run was fetched for (tagged by the fetcher)
+  green?: GreenMark; // set by the fetcher when the repo's green branch is or was at the commit
   id: number;
   status: string;
   conclusion: string | null;

@@ -10,7 +10,6 @@ import {
   resetModernCellRepConfig,
   setModernCellRepConfig,
 } from "@commonfabric/data-model/cell-rep";
-import { dataUriFromValue } from "@commonfabric/data-model/codec-data-uri";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { legacySpaceDid } from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
@@ -52,6 +51,7 @@ import type {
   Schema,
 } from "./builder/types.ts";
 import { registerBuiltins } from "./builtins/index.ts";
+import type { Cancel } from "./cancel.ts";
 import {
   type Cell,
   createCell,
@@ -106,8 +106,11 @@ import {
   runtimeWritePolicyAuthorization,
   runtimeWritePolicyAuthorized,
 } from "./cfc/types.ts";
+import { isRendererTrustedEvent } from "./cfc/ui-contract.ts";
 import { collectConsumedLabel, deriveFlowJoin } from "./cfc/prepare.ts";
 import { createRef, EntityId } from "./create-ref.ts";
+import { memoryHostForForeignOrigin } from "./deployment-meta.ts";
+import { DerivedInternalCellIds } from "./derived-internal-cell-ids.ts";
 import {
   type DelegatedCarriage,
   waveRunActorOf,
@@ -116,11 +119,16 @@ import {
 import type { ConsoleMethod } from "./harness/console.ts";
 import { Engine } from "./harness/index.ts";
 import type { CompiledModuleArtifact } from "./harness/types.ts";
+import {
+  immutableCellsFor,
+  liveImmutableSnapshotCount,
+  liveImmutableSnapshotsBySpace,
+  ownImmutableCells,
+} from "./immutable-cell.ts";
 import type { ConsoleMessage } from "./interface.ts";
 import { addressKey } from "./link-types.ts";
 import {
   CellLink,
-  inlineExternalSchemaRefsInValue,
   isCellLink,
   isNormalizedFullLink,
   isSigilLink,
@@ -128,6 +136,10 @@ import {
   NormalizedLink,
   parseLink,
 } from "./link-utils.ts";
+import {
+  ModuleDelegationRegistry,
+  type ModuleDelegationSnapshot,
+} from "./module-delegations.ts";
 import { ModuleRegistry } from "./module.ts";
 import type { PatternCoverageCollector } from "./pattern-coverage.ts";
 import {
@@ -141,6 +153,7 @@ import {
   setReaderSchemaPrecedenceConfig,
 } from "./reader-schema-precedence-config.ts";
 import {
+  inSpaceRootCause,
   type PieceSourceTransition,
   Runner,
   type RunnerRunOptions,
@@ -149,12 +162,18 @@ import {
   type RunSyncedWithCommitOptions,
 } from "./runner.ts";
 import { brandRuntime } from "./runtime-brand.ts";
+import {
+  boundedCounts,
+  CfcRejectionTally,
+  type RuntimeSizes,
+} from "./runtime-sizes.ts";
 import { Action, Scheduler } from "./scheduler.ts";
 import {
   type CommitBackpressurePolicy,
   resolveCommitBackpressure,
 } from "./scheduler/backpressure.ts";
 import { entityKey, entityNameKey } from "./scheduler/keys.ts";
+import { InSpaceTargetUnresolved } from "./scheduler/retry-immediately.ts";
 import {
   getContentAddressedSchemasConfig,
   setContentAddressedSchemasConfig,
@@ -163,7 +182,9 @@ import { isCellScope, normalizeCellScope, scopeRank } from "./scope.ts";
 import { SourceReconciler } from "./source-reconciler.ts";
 import { SpaceAccessWatch } from "./space-access-watch.ts";
 import {
+  namesApiOrigin,
   normalizeSpaceHost,
+  parseMemoryUrl,
   type SpaceHostRegistration,
   SpaceHostValidationError,
 } from "./space-host.ts";
@@ -256,6 +277,12 @@ const uiCellWriteLogger = getLogger("runtime.ui-cell-write", {
   level: "error",
 });
 
+// Release passes that failed; see `Runtime.#requestDocumentRelease()`.
+const documentReleaseLogger = getLogger("runtime.document-release", {
+  enabled: true,
+  level: "warn",
+});
+
 export type { IExtendedStorageTransaction, MemorySpace };
 
 export interface ConsoleHandlerOutput {
@@ -274,6 +301,13 @@ export type ErrorWithContext = Error & {
   space: MemorySpace;
   patternId: string;
   spellId: string | undefined;
+
+  /**
+   * The event whose handling failed, when the error is an event handler's.
+   * On the server-execution arm the same id names the event's intent
+   * outcome.
+   */
+  eventId?: string;
 };
 
 export type ErrorHandler = (error: ErrorWithContext) => void;
@@ -342,7 +376,7 @@ export interface ExperimentalOptions {
    * reader that touches data the schema no longer describes refuses, and the
    * run is disposed of as an argument that did not resolve. On by default; pass
    * `false` as a temporary rollback override. See
-   * `docs/plans/lazy-cell-materialization.md`.
+   * `docs/history/plans/lazy-cell-materialization.md`.
    */
   lazyMaterialization?: boolean | undefined;
 
@@ -370,6 +404,13 @@ export interface ExperimentalOptions {
   serverExecution?: boolean | undefined;
 
   /**
+   * Keep session documents in the owning client's replica when server
+   * execution is disabled. Defaults to off. Shared reads still require
+   * server validation, including transactions whose writes are all local.
+   */
+  localSessionDocuments?: boolean | undefined;
+
+  /**
    * The `agent` builtin (`docs/common/capabilities/agent.md`): a pattern's
    * request for an agent run, staged as a sink request and handed to a
    * runner through an `AgentRun` record. When false, the builtin settles
@@ -388,13 +429,41 @@ export interface ExperimentalOptions {
    * The memory sessions of every space on one host share one connection,
    * which each key authenticates on once
    * (`docs/specs/memory-v2/connection-multiplexing.md`). When false, each
-   * space has a connection of its own, named in the connection's address,
-   * and every `session.open` is signed. A memory server under this flag
-   * verifies `connection.auth` and advertises `connectionAuth`. Defaults to
-   * off: a deployment that routes a connection by the space its address
-   * names cannot serve a connection that carries several.
+   * space has a connection of its own, named in the connection's address.
+   * Authentication follows the server's capabilities in either topology:
+   * `connection.auth` when advertised, otherwise a signed `session.open`.
+   * A memory server under this flag verifies `connection.auth` and advertises
+   * `connectionAuth`; a routed server advertises it independently of this
+   * flag. Defaults to off.
    */
   sharedMemoryConnection?: boolean | undefined;
+
+  /**
+   * A reactive computation's write that the space refuses for lack of a
+   * grant is kept as a local fold over the document's confirmed value
+   * (`docs/specs/memory-v2/03-commit-model.md` §3.8.3), where the write sits
+   * directly on the confirmed value it was made over, so that the re-run the
+   * refusal causes reads what the principal computed and settles; a write
+   * over anything else reverts. When false, such a write is reverted like
+   * any other rejection, a refusal the server marks with permanent evidence
+   * takes no retry, and the computation runs again only when an input it did
+   * not write changes. Defaults to off.
+   */
+  localFold?: boolean | undefined;
+
+  /**
+   * Compile a pattern factory call bound to a `const` as a named sub-pattern
+   * instance, whose identity is the binding's name rather than its position
+   * among its parent's anonymous roots
+   * (`docs/specs/computed-cell-identity.md`, "Sub-pattern instance identity").
+   * Defaults to off, which compiles every instance positionally. Turning it on
+   * moves every deployed `const`-bound child from its positional identity to a
+   * named one, where it starts fresh unless something carries the deployed
+   * child over, and needs every runtime that opens the same space to run the
+   * same naming mode first, so no environment variable reaches it
+   * (`docs/development/EXPERIMENTAL_OPTIONS.md#instancenames`).
+   */
+  instanceNames?: boolean | undefined;
 }
 
 /**
@@ -411,9 +480,10 @@ export interface ExperimentalOptions {
  * same in every program that contains it), so a hit always returns the bytes the
  * identity addresses.
  *
- * The runtime defines only this interface. The implementation, and its
- * persistence, live in test code, so the cache is instantiated only from tests
- * and never in production.
+ * The runtime defines only this interface. The implementation and its
+ * persistence live in `@commonfabric/test-support`, and a runtime holds one
+ * only where something installs it: the test harnesses, a `cf` run, and a
+ * toolshed's serving host, whose per-space runtimes share one.
  */
 export interface ModuleByteCache {
   /**
@@ -581,6 +651,32 @@ export type ServerRunDemanderResolver = (
   pieceRootIds: readonly string[],
 ) => readonly ScopeKeyIdentity[];
 
+/**
+ * How many other deployments' origins a runtime resolves the memory host of
+ * ({@link Runtime.resolveSpaceHost}), reads in flight included. A site table
+ * names an origin per space, so a table listing more distinct origins than a
+ * person's spaces plausibly live on is bounded here rather than read in full.
+ */
+export const FOREIGN_HOST_LIMIT = 64;
+
+/**
+ * What a runtime knows about where another deployment's origin serves Memory
+ * ({@link Runtime.resolveSpaceHost}): a read in flight, which `settled`
+ * resolves after the entry has been replaced by its outcome; the memory host
+ * it published or, publishing none, its own origin; or that the memory host
+ * could not be learned.
+ */
+type ForeignHostEntry =
+  | { state: "resolving"; settled: Promise<void> }
+  | { state: "resolved"; memoryHost: URL }
+  | { state: "unread" };
+
+/**
+ * Which of storage's two hint methods a registration asks first: a verdict
+ * (`registerSpaceHost`) or a reasoned one (`registerSpaceHostDetailed`).
+ */
+type StorageHintForm = "verdict" | "detailed";
+
 export interface RuntimeOptions {
   apiUrl: URL;
 
@@ -592,6 +688,24 @@ export interface RuntimeOptions {
    * one. Fixed for the runtime's lifetime.
    */
   spaceHostMap?: Record<string, string>;
+
+  /**
+   * Optional memory URL, for a deployed client whose deployment publishes
+   * one, such as a memory router's: the HTTP or HTTPS origin `storageManager`
+   * was opened on (StorageManager Options.memoryHost). The `remoteClient` and
+   * `browserWorker` presets set it from the host their caller opened storage
+   * on. While it is set, a host hint naming another deployment's origin
+   * opens that space's Memory where THAT deployment serves it, read from its
+   * own meta document (see {@link Runtime.resolveSpaceHost}), and a hint
+   * naming this deployment is the default route. Absent, empty, or naming
+   * `apiUrl`'s own origin, there is none. Fixed for the runtime's lifetime.
+   *
+   * It is an input of its own because a storage manager does not report the
+   * host it was opened on, and because a server's own runtime opens storage
+   * on its host-internal Memory address and passes none: hints there follow
+   * storage's rules.
+   */
+  memoryUrl?: URL;
 
   storageManager: IStorageManager;
   consoleHandler?: ConsoleHandler;
@@ -804,6 +918,23 @@ export interface RuntimeOptions {
   cfcReadOnExceed?: CfcReadOnExceed;
 
   /**
+   * The space of the profile `#profile` answers with, among the user's
+   * profiles, for a runtime that acts as one of them (a host keeping one
+   * profile per identity it presents, as the Weaver does with its facets).
+   * When the home does not list that profile, or retired it, `#profile`
+   * fails rather than answer as another profile. The home's own default and
+   * most-recently-used profiles are unchanged. Nothing in the runtime reads
+   * this but `#profile`'s answer, and through `#profile` it reaches every
+   * pattern that reads `#profile`. FabriChat's chat manager is one of them:
+   * there is one per Home, and it keys direct rooms by the counterpart's
+   * principal alone, so two profiles of one person would share a direct room
+   * with the same counterpart, which shows the counterpart that the two are
+   * one person. A host therefore runs the chat manager as one profile, the
+   * default, until the manager keeps its state per profile.
+   */
+  preferredProfileSpace?: MemorySpace;
+
+  /**
    * Deployment policy records for the exchange-rule evaluator (Epic B2a,
    * spec §4.3). Validated, digested, and deep-frozen into a `PolicySnapshot`
    * at construction — malformed records throw at boot (fail-closed config,
@@ -916,6 +1047,21 @@ export interface CfcRuntimeStats {
   /** Containers receiving child templates from flow persistence. */
   flowTemplateContainers: number;
 
+  /**
+   * Input-requirement verifications for which a boundary pass copied the
+   * transaction's reads. A written target takes one verification per schema
+   * that applies to it, so this counts verifications, not targets. It counts
+   * the copy of the reads alone: resolving the stored envelopes again after a
+   * write retires one is not counted.
+   */
+  inputReadViewsBuilt: number;
+
+  /**
+   * Input-requirement verifications that reused the copy of the reads a
+   * boundary pass already held.
+   */
+  inputReadViewsReused: number;
+
   cfcPreparedTx: number;
   cfcPrepareRejects: number;
   cfcDigestInvalidations: number;
@@ -970,6 +1116,8 @@ const initialCfcRuntimeStats = (): CfcRuntimeStats => ({
   stagedReferenceCacheHits: 0,
   flowTemplateEntriesMinted: 0,
   flowTemplateContainers: 0,
+  inputReadViewsBuilt: 0,
+  inputReadViewsReused: 0,
   cfcPreparedTx: 0,
   cfcPrepareRejects: 0,
   cfcDigestInvalidations: 0,
@@ -1036,22 +1184,43 @@ const inSpaceAllocationSchema = {
 } as const satisfies JSONSchema;
 
 /**
+ * What a `PatternFactory.inSpace(name)` target asks of the space it creates:
+ * the grants beside its owner, whether its genesis reserves the space's root,
+ * and the kind its genesis declares.
+ */
+export interface InSpaceCreationRequest {
+  /** Access the created space grants beyond its owner. */
+  grants?: ACL;
+
+  /**
+   * Whether the genesis commit reserves the root at the address
+   * {@link inSpaceRootCause} derives in the created space.
+   */
+  root?: boolean;
+
+  /** The kind the genesis commit declares. */
+  spaceKind?: string;
+}
+
+/**
  * The key under which a space created for the `inSpace` name `name` of the
  * space `space` is remembered: the name, together with the owner and the
- * grants the space was created with, so that only a request for the same
- * access-control document finds it. Grants are keyed in principal order.
+ * request the space was created with, so that only a request for the same
+ * genesis commit finds it. Grants are keyed in principal order.
  */
 const inSpaceCreationKey = (
   space: MemorySpace,
   name: string,
   owner: DID,
-  grants: ACL = {},
+  { grants = {}, root = false, spaceKind }: InSpaceCreationRequest,
 ): string =>
   JSON.stringify([
     space,
     name,
     owner,
     Object.entries(grants).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0),
+    root,
+    spaceKind ?? null,
   ]);
 
 export interface SpaceCellContents {
@@ -1196,8 +1365,15 @@ export type CommitRetryPullFailure = {
  */
 export class Runtime {
   #tearingDownWrites = false;
+
+  /** The release pass waiting for the scheduler to go idle, if any. */
+  #documentRelease: Promise<void> | undefined;
+
+  /** Undoes what `#installDocumentRelease()` registered. */
+  readonly #documentReleaseCancels: Cancel[] = [];
   readonly #writeTeardown = new AbortController();
   readonly #transactions = new WeakSet<IExtendedStorageTransaction>();
+  readonly #derivedInternalCellIds = new DerivedInternalCellIds();
 
   readonly id: string;
   readonly scheduler: Scheduler;
@@ -1229,6 +1405,9 @@ export class Runtime {
 
   /** See `RuntimeOptions.cfcReadOnExceed`; `undefined` leaves `fail` in force. */
   readonly cfcReadOnExceed: CfcReadOnExceed | undefined;
+
+  /** See `RuntimeOptions.preferredProfileSpace`. */
+  readonly preferredProfileSpace: MemorySpace | undefined;
 
   /** Frozen deployment policy snapshot; undefined = no policies configured. */
   readonly cfcPolicySnapshot: PolicySnapshot | undefined;
@@ -1268,6 +1447,12 @@ export class Runtime {
   readonly spaceHostMap?: Record<string, string>;
 
   /**
+   * The memory URL Memory opens on, when it is not `apiUrl`
+   * ({@link RuntimeOptions.memoryUrl}).
+   */
+  readonly memoryUrl?: URL;
+
+  /**
    * Outbound `fetch` used by network builtins (e.g. `fetchJson`). Defaults to
    * the host `globalThis.fetch`; a test harness can inject a mock via
    * `RuntimeOptions.fetch`.
@@ -1276,6 +1461,13 @@ export class Runtime {
 
   /** Runtime-learned host hints (site table); see registerSpaceHost. */
   #dynamicHosts = new Map<string, string>();
+
+  /**
+   * Where each other deployment a host hint has named serves Memory, by
+   * origin, for the runtime's lifetime; see {@link resolveSpaceHost}. Holds
+   * at most {@link FOREIGN_HOST_LIMIT} origins, reads in flight included.
+   */
+  #foreignHosts = new Map<string, ForeignHostEntry>();
 
   /**
    * The transaction seal destination (`serving-loop.md` §3d): installed only on
@@ -1381,6 +1573,11 @@ export class Runtime {
     return this.storageManager.scopeKeyIdentity();
   }
 
+  /** The ids of the derived internal cells this runtime's pieces own. */
+  get derivedInternalCellIds(): DerivedInternalCellIds {
+    return this.#derivedInternalCellIds;
+  }
+
   /**
    * Fires once this runtime stops minting write work, at the point in
    * `dispose()` where retries would otherwise re-run against a storage that
@@ -1417,6 +1614,11 @@ export class Runtime {
   #queues = new Map<string, AsyncSemaphoreQueue>();
   #writeDebugContext = new WriteDebugContextStorage<string>();
   #cfcStats: CfcRuntimeStats = initialCfcRuntimeStats();
+  readonly #cfcRejections = new CfcRejectionTally();
+
+  /** `editWithRetry()` calls whose commit was rejected and that are waiting
+   * to attempt again. */
+  #retryingEdits = 0;
 
   /**
    * The hooks every transaction `edit()` opens reports its CFC work through.
@@ -1432,41 +1634,28 @@ export class Runtime {
   readonly #policyManifestSpaces = new Map<string, Set<MemorySpace>>();
 
   /**
-   * Attesting space → successor module identity → direct predecessor identities
-   * whose writer authority it inherits. Entries come only from verified source
-   * closures or integrity-valid compiled closures in that same space.
-   * Transactions receive a transitive, immutable snapshot at creation so an
-   * in-flight authorization decision cannot change when another module loads,
-   * and authorization in one space can never borrow another space's delegation
-   * metadata.
+   * The writer-authority delegations this runtime has learned from verified
+   * source closures and integrity-valid compiled closures, by attesting
+   * space. `edit()` hands every transaction the registry's published
+   * transitive snapshot, so an in-flight authorization decision cannot
+   * change when another module loads, and authorization in one space can
+   * never borrow another space's delegation metadata.
    */
-  readonly #moduleDelegations = new Map<
-    MemorySpace,
-    Map<string, Set<string>>
-  >();
+  readonly #moduleDelegations = new ModuleDelegationRegistry();
 
+  /**
+   * Records that, in `space`, each successor identity in `delegations`
+   * inherits the writer authority of its predecessors. A registration that
+   * adds nothing leaves the published snapshot as it was; one that adds a
+   * delegation publishes a new snapshot, which the transactions created from
+   * then on receive, and leaves every transaction already open with the one
+   * it was created with.
+   */
   registerModuleDelegations(
     space: MemorySpace,
     delegations: ReadonlyMap<string, ReadonlySet<string>>,
   ): void {
-    if (typeof space !== "string" || space.length === 0) return;
-    const spaceDelegations = this.#moduleDelegations.get(space) ?? new Map();
-    for (const [identity, predecessors] of delegations) {
-      if (typeof identity !== "string" || identity.length === 0) continue;
-      const merged = spaceDelegations.get(identity) ?? new Set<string>();
-      for (const predecessor of predecessors) {
-        if (
-          typeof predecessor === "string" && predecessor.length > 0 &&
-          predecessor !== identity
-        ) {
-          merged.add(predecessor);
-        }
-      }
-      if (merged.size > 0) spaceDelegations.set(identity, merged);
-    }
-    if (spaceDelegations.size > 0) {
-      this.#moduleDelegations.set(space, spaceDelegations);
-    }
+    this.#moduleDelegations.register(space, delegations);
   }
 
   /**
@@ -1479,69 +1668,25 @@ export class Runtime {
     identity: string,
     predecessor: string,
   ): boolean {
-    const spaceDelegations = this.#moduleDelegations.get(space);
-    if (spaceDelegations === undefined) return false;
-    const visited = new Set<string>();
-    const pending = [...(spaceDelegations.get(identity) ?? [])];
-    while (pending.length > 0) {
-      const next = pending.pop()!;
-      if (next === predecessor) return true;
-      if (visited.has(next)) continue;
-      visited.add(next);
-      for (const ancestor of spaceDelegations.get(next) ?? []) {
-        pending.push(ancestor);
-      }
-    }
-    return false;
+    return this.#moduleDelegations.grants(space, identity, predecessor);
   }
 
-  #moduleDelegationSnapshot(sourceUpdate?: PreparedSourceUpdate): Map<
-    MemorySpace,
-    ReadonlyMap<string, readonly string[]>
-  > {
-    const snapshot = new Map<
-      MemorySpace,
-      ReadonlyMap<string, readonly string[]>
-    >();
-    const delegations = new Map(this.#moduleDelegations);
-    if (sourceUpdate !== undefined) {
-      const proposal = this.patternManager.sourceUpdateDelegations(
-        sourceUpdate,
-      );
-      const combined = new Map(delegations.get(proposal.space));
-      for (const [identity, predecessors] of proposal.delegations) {
-        combined.set(
-          identity,
-          new Set([
-            ...(combined.get(identity) ?? []),
-            ...predecessors,
-          ]),
-        );
-      }
-      delegations.set(proposal.space, combined);
-    }
-    for (const [space, spaceDelegations] of delegations) {
-      const spaceSnapshot = new Map<string, readonly string[]>();
-      for (const identity of spaceDelegations.keys()) {
-        const inherited = new Set<string>();
-        const pending = [...(spaceDelegations.get(identity) ?? [])];
-        while (pending.length > 0) {
-          const predecessor = pending.pop()!;
-          if (predecessor === identity || inherited.has(predecessor)) continue;
-          inherited.add(predecessor);
-          for (const ancestor of spaceDelegations.get(predecessor) ?? []) {
-            pending.push(ancestor);
-          }
-        }
-        if (inherited.size > 0) {
-          spaceSnapshot.set(identity, [...inherited].sort());
-        }
-      }
-      if (spaceSnapshot.size > 0) {
-        snapshot.set(space, spaceSnapshot);
-      }
-    }
-    return snapshot;
+  /**
+   * Helper for `edit()`, which picks the delegation snapshot a transaction
+   * is pinned to: the published one, or, for a transaction staging the
+   * source update `sourceUpdate`, that update's proposed delegations layered
+   * over it for the update's space alone, so the transaction can authorize
+   * the successor's writes before the update commits.
+   */
+  #moduleDelegationSnapshot(
+    sourceUpdate: PreparedSourceUpdate | undefined,
+  ): ModuleDelegationSnapshot {
+    if (sourceUpdate === undefined) return this.#moduleDelegations.snapshot;
+    const proposal = this.patternManager.sourceUpdateDelegations(sourceUpdate);
+    return this.#moduleDelegations.snapshotWith(
+      proposal.space,
+      proposal.delegations,
+    );
   }
 
   registerCfcPolicyManifests(
@@ -1752,6 +1897,7 @@ export class Runtime {
   }
 
   constructor(options: RuntimeOptions) {
+    ownImmutableCells(this);
     brandRuntime(this);
 
     // Validate-then-apply: option combinations are refused BEFORE any
@@ -1807,11 +1953,17 @@ export class Runtime {
 
     // These flags are consumed from this Runtime instance. Normalize their
     // local defaults after override logging so an omitted option does not
-    // appear as an explicit `true` override.
+    // appear as an explicit override.
     this.experimental.computedCellIds ??= true;
     this.experimental.plainResultReceipts ??= true;
     this.experimental.lazyMaterialization ??= true;
     this.experimental.agentBuiltin ??= true;
+    this.experimental.localFold ??= false;
+    // TODO(danfuzz): Turn this on only once a deployed parent's positional
+    // children are carried over to their names, and a runtime whose naming
+    // mode differs from a space's data is kept away from that space.
+    this.experimental.instanceNames ??= false;
+    this.experimental.localSessionDocuments ??= false;
 
     // Propagate experimental flags to their ambient control points, then read
     // back the effective state so `experimental.*` reflects what is actually in
@@ -1877,6 +2029,7 @@ export class Runtime {
 
       this.id = options.storageManager.id;
       this.apiUrl = new URL(options.apiUrl);
+      this.memoryUrl = parseMemoryUrl(options.memoryUrl, this.apiUrl);
       // Validate eagerly, mirroring the storage layer's resolver: a
       // malformed host should fail at configuration time naming the
       // space, not mid-builtin as a bare Invalid URL.
@@ -1919,6 +2072,10 @@ export class Runtime {
       });
 
       this.storageManager = options.storageManager;
+      this.storageManager.setLocalSessionDocuments?.(
+        this.experimental.localSessionDocuments === true &&
+          this.experimental.serverExecution !== true,
+      );
       // Hand the storage layer the telemetry bus so it can emit the
       // storage.push/pull markers (duck-typed: only the v2 StorageManager
       // implements it; emulated/test managers simply don't have the method).
@@ -2014,6 +2171,7 @@ export class Runtime {
       }
       this.cfcReadMaxConfidentiality = readCeiling.maxConfidentiality;
       this.cfcReadOnExceed = readCeiling.onExceed;
+      this.preferredProfileSpace = options.preferredProfileSpace;
       // Validates + digests + deep-freezes; throws on malformed records so a
       // config error surfaces at boot, not as a silently inert rule (same
       // eager-validation posture as the spaceHostMap URLs above).
@@ -2025,6 +2183,8 @@ export class Runtime {
         options.consoleHandler,
         options.errorHandlers,
       );
+
+      this.#installDocumentRelease();
 
       // Register built-in modules with runtime injection
       registerBuiltins(this);
@@ -2084,6 +2244,7 @@ export class Runtime {
       this.#defaultFrame = pushRuntimeDefaultFrame(this);
     } catch (error) {
       this.#releaseServerExecutionEnabler();
+      immutableCellsFor(this).dispose();
       throw error;
     }
   }
@@ -2167,11 +2328,25 @@ export class Runtime {
    * SWALLOWED and the piece silently ran against stale setup. The
    * SpaceServer installs the observer at activation and counts the
    * failure into §7's `structureLoadFailures` (a demanded-structure
-   * load that failed, asynchronously); the runner's loud error log
-   * rides the same reporting call in every arm.
+   * load that failed, asynchronously), or a refusal of a piece whose
+   * state moved into `structureLoadRefused`. The runner logs a failure
+   * loudly in the same reporting call, and a refusal where it decides
+   * it.
    */
   pieceStartCommitFailureObserver:
-    | ((failure: { actionId: string; error: unknown }) => void)
+    | ((failure: {
+      /** The commit's action identity, which names the piece. */
+      actionId: string;
+
+      /** What cut the commit short. */
+      error: unknown;
+
+      /**
+       * Present, and `true`, where the start refused a piece whose state
+       * moved (`PieceStateMovedError`) rather than failing to load it.
+       */
+      refused?: true;
+    }) => void)
     | undefined;
 
   /**
@@ -2384,6 +2559,7 @@ export class Runtime {
       // Exception-safe: a rejecting teardown step must not leak the
       // process-global enabler (the reset would then never fire).
       this.#releaseServerExecutionEnabler();
+      immutableCellsFor(this).dispose();
     }
 
     // Clear the current runtime reference
@@ -2391,7 +2567,15 @@ export class Runtime {
   }
 
   async #disposeInner(closeStorage: boolean): Promise<void> {
+    for (const cancel of this.#documentReleaseCancels.splice(0)) cancel();
     this.#viewReplication?.dispose();
+    // Before either drain below, each of which waits for the scheduler to go
+    // idle: a queued event waiting for its piece to become startable waits on
+    // another participant's commit, not on work of this runtime's own, and one
+    // waiting for its piece's pattern change can wait on a load that only
+    // `stopAll()` below would release.
+    this.scheduler.endPieceStartWaits();
+    this.scheduler.endPatternChangeWaits();
     try {
       // A kept store keeps RECORDING, so this path drains what could still write
       // into it. In-flight async builtin work is that shape: a fetch / llm call or
@@ -2568,6 +2752,7 @@ export class Runtime {
     const wrapped = new ExtendedStorageTransaction(
       tx,
       this.#cfcInstrumentation,
+      immutableCellsFor(this),
     );
     wrapped.setCfcEnforcementMode(this.cfcEnforcementMode);
     wrapped.setCfcFlowLabelsMode(this.cfcFlowLabels);
@@ -2581,6 +2766,12 @@ export class Runtime {
     wrapped.setCfcSinkMaxConfidentiality(this.cfcSinkMaxConfidentiality);
     wrapped.setCfcPolicySnapshot(this.cfcPolicySnapshot);
     wrapped.setCfcTrustConfig(this.cfcTrustConfig);
+    wrapped.setCfcServingIdentity(
+      this.servingPosture ? this.userIdentityDID : undefined,
+    );
+    wrapped.setCfcClientIdentity(
+      this.servingPosture ? undefined : this.userIdentityDID,
+    );
     wrapped.setCfcModuleDelegations(
       this.#moduleDelegationSnapshot(options.sourceUpdate),
     );
@@ -2664,6 +2855,9 @@ export class Runtime {
           refusals: [...refusal.refusals],
           terminal: refusal.terminal,
         });
+      },
+      onCommitRejected: (reasons) => {
+        this.#cfcRejections.add(reasons);
       },
       onDigestInvalidation: () => {
         this.#cfcStats.cfcDigestInvalidations += 1;
@@ -2767,6 +2961,21 @@ export class Runtime {
       subscriber,
     ) ??
       (() => undefined);
+  }
+
+  /**
+   * Tracks an event this runtime fired until its terminal consequence
+   * arrives, installing the flag-ON client overlay if the fire is the first
+   * thing this runtime does, so that `waitForIntentQuiescence` counts the
+   * event whether or not a speculative edit came before it. Does nothing in
+   * the OFF arm and on a serving runtime, where no overlay exists.
+   */
+  trackEventIntent(
+    space: MemorySpace,
+    sidecarId: string,
+    eventId: string,
+  ): void {
+    this.#speculationDestination()?.trackIntent(space, sidecarId, eventId);
   }
 
   /** The client-effect channel of a flag-ON non-serving runtime
@@ -2966,6 +3175,65 @@ export class Runtime {
   #missingDocLoadKicks = new Set<string>();
 
   /**
+   * Lets the storage manager release the documents nothing reads (see
+   * `releaseUnreadDocuments()`): it asks the scheduler whether an action
+   * reads a document, and forgets a load kicked for a document it drops, so
+   * that a later read of it kicks the load again.
+   */
+  #installDocumentRelease(): void {
+    const manager = this.storageManager;
+    const cancels = [
+      manager.addDocumentReader?.((address) =>
+        this.scheduler.readsEntity(
+          entityKey(
+            { ...address, scope: normalizeCellScope(address.scope) },
+            this.scopeKeyIdentity,
+          ),
+        )
+      ),
+      manager.subscribeDocumentsDropped?.((space, addresses) => {
+        for (const address of addresses) {
+          this.#missingDocLoadKicks.delete(
+            `${space}\0${
+              address.scopeKey ??
+                resolveScopeKey(address.scope, this.scopeKeyIdentity)
+            }\0${address.id}`,
+          );
+        }
+      }),
+    ];
+    for (const cancel of cancels) {
+      if (cancel !== undefined) this.#documentReleaseCancels.push(cancel);
+    }
+  }
+
+  /**
+   * Releases the documents nothing reads, once the scheduler is next idle
+   * (`IStorageManager.releaseUnreadDocuments()`), and resolves when that
+   * pass has run. Stopping a piece asks for one. A host asks for one when
+   * something that read documents through this runtime has gone, such as a
+   * client whose subscriptions it cancelled. Calls made while a pass waits
+   * for the scheduler share it.
+   */
+  releaseUnreadDocuments(): Promise<void> {
+    this.#documentRelease ??= (async () => {
+      try {
+        await this.scheduler.idle();
+      } finally {
+        // A request made from here on asks for a pass of its own.
+        this.#documentRelease = undefined;
+      }
+      await this.storageManager.releaseUnreadDocuments?.();
+    })().catch((error) => {
+      documentReleaseLogger.warn("release-failed", () => [
+        "releasing the documents nothing reads failed:",
+        error,
+      ]);
+    });
+    return this.#documentRelease;
+  }
+
+  /**
    * Asynchronously load a link target that a read found absent from the
    * local replica. Cross-space targets (CT-1667): per-space server queries
    * cannot follow links across space boundaries, so the client must fetch
@@ -2978,7 +3246,8 @@ export class Runtime {
    * `storageManager.synced()` and `Cell.pull()`'s convergence loop can await
    * it; the absent doc is a tracked read, so the reader re-runs on arrival.
    * Deduped per (space, id): the kicked sync leaves a live subscription
-   * behind, so repeat kicks add nothing.
+   * behind, so repeat kicks add nothing until the storage manager drops the
+   * document, which forgets the kick.
    */
   ensureLinkedDocLoaded(
     link: NormalizedFullLink,
@@ -3036,6 +3305,35 @@ export class Runtime {
 
   resetCfcStats(): void {
     this.#cfcStats = initialCfcRuntimeStats();
+  }
+
+  /**
+   * The sizes of the structures this runtime holds live, most read from the
+   * structure's own count and the per-space views from one bounded pass
+   * each, so the read is safe at any moment; `runtime-sizes.ts` says what
+   * each pass costs. A tracked collection that keeps growing shows up here,
+   * and the space whose documents or snapshots grow with it; growth in a
+   * structure not counted here does not. The storage figure is `null` for a
+   * storage manager that reports no sizes.
+   */
+  getSizes(): RuntimeSizes {
+    return {
+      scheduler: this.scheduler.getSizes(),
+      storage: this.storageManager.getSizes?.() ?? null,
+      patterns: this.patternManager.getSizes(),
+      runtime: {
+        immutableSnapshots: liveImmutableSnapshotCount(),
+        pendingAsyncWork: this.#pendingAsyncWork.size,
+        retryingEdits: this.#retryingEdits,
+        modules: this.moduleRegistry.size,
+        policyManifests: this.#policyManifests.size,
+        moduleDelegations: this.#moduleDelegations.getSizes(),
+        immutableSnapshotsBySpace: boundedCounts(
+          liveImmutableSnapshotsBySpace(),
+        ),
+      },
+      cfcRejectionsByReason: this.#cfcRejections.snapshot(),
+    };
   }
 
   getWriteDebugContext(): string | undefined {
@@ -3212,10 +3510,12 @@ export class Runtime {
         if (error) {
           if (signal.aborted) return stoppedResult();
           if (maxRetries > 0 && isRetryableCommitRejection(error)) {
-            await this.awaitCommitRetryReadiness(
-              error,
-              signal,
-            );
+            this.#retryingEdits += 1;
+            try {
+              await this.awaitCommitRetryReadiness(error, signal);
+            } finally {
+              this.#retryingEdits -= 1;
+            }
             if (signal.aborted) return stoppedResult();
             return this.editWithRetry<T>(fn, maxRetries - 1, options);
           } else {
@@ -3827,6 +4127,7 @@ export class Runtime {
           confidentiality: [...consumed.confidentiality],
           integrity: [...consumed.integrity],
         },
+        locations: consumed.locations(),
         labeledSpaces: [...(flow.labeledSpaces ?? [])],
         sources: consumed.sources.map((entry) => ({
           atom: entry.atom,
@@ -4118,7 +4419,7 @@ export class Runtime {
 
   /**
    * Makes a read-only cell whose content is `data`, carried entirely in the
-   * cell's own `data:` URI id; there is no document in a space to fetch.
+   * runtime's snapshot store behind a compact URI; there is no stored document to fetch.
    *
    * **Contract note:** `data` is an arbitrary value, deliberately NOT limited
    * to `FabricValue`. Callers pass, among other things, `Cell` objects (wish
@@ -4160,46 +4461,48 @@ export class Runtime {
     tx?: IExtendedStorageTransaction,
     cfcLabelView?: CfcLabelView,
   ): Cell<any> {
-    // Not `dataUriFromValueWithResolvedLinks()`: its link-rewriting walk is
-    // unwanted here (this data is immutable as given).
-    //
-    // Builder artifacts become their encodable form and cells become sigil
-    // links HERE rather than at each caller. Neither has a fabric
-    // representation, so both have to go before the value reaches
-    // `fabricFromConvertibleJsValue()`. This is the designed intake, and the
-    // callers are many: raw and JavaScript node inputs, wish candidates, schema
-    // defaults. Covering them one at a time was tried and is whack-a-mole --
-    // each site that is missed fails as a rejection at the conversion, or worse
-    // as a cleanup error that masks it.
-    //
-    // One walk covers both. A cell is a leaf to it -- what stands in for a cell
-    // is the link it names, not a container to descend into -- and an
-    // artifact's encodable form is walked in turn, so a cell inside one is
-    // reached as well.
-    // Links serialized into a `data:` document carry their schemas inline
-    // (see inlineExternalSchemaRefsInValue): the document is its id, so a
-    // content-addressed reference inside it has no carrying write to install
-    // its closure.
-    const asDataURI = dataUriFromValue(
-      inlineExternalSchemaRefsInValue(
-        fabricFromConvertibleJsValue(
-          flattenBuilderArtifacts(data, { replaceOther: cellAsLink }),
-        ),
+    // Builder artifacts and cells enter through their encodable forms. Frozen
+    // Fabric input remains shared. A link's schema stays in the form the
+    // caller held it: a reference among them names a closure the registry
+    // holds, and a reader of the snapshot resolves it there
+    // (`mintedFromUnstoredValue`). Renderer trust is identity-based
+    // authority, so a marked event is copied before it becomes ordinary
+    // immutable data.
+    const store = immutableCellsFor(this);
+    const readerSchema = internCellLinkSchema(schema);
+    const snapshot = store.create(
+      fabricFromConvertibleJsValue(
+        flattenBuilderArtifacts(data, {
+          isLeaf: isRendererTrustedEvent,
+          replaceOther: (value) =>
+            isRendererTrustedEvent(value)
+              ? deepFreeze(cloneIfNecessary(
+                fabricFromConvertibleJsValue(
+                  flattenBuilderArtifacts(value, {
+                    replaceOther: cellAsLink,
+                  }),
+                ),
+                { frozen: false },
+              ))
+              : cellAsLink(value),
+        }),
       ),
     );
-    return createCell(
+    const cell = createCell(
       this,
       {
         space,
         path: [],
-        id: asDataURI,
-        schema: internCellLinkSchema(schema),
+        id: snapshot.id,
+        schema: readerSchema,
       },
       tx,
       false,
       undefined,
       cfcLabelView,
     );
+    store.retainSchema(readerSchema);
+    return cell;
   }
 
   /**
@@ -4289,21 +4592,28 @@ export class Runtime {
 
   /**
    * Creates a space and returns its DID. The space's key is generated from
-   * random data, signs one genesis commit whose access-control document makes
-   * `owner` its only OWNER alongside `grants`, and is dropped once that commit
-   * is confirmed. The DID is returned only after that confirmation.
+   * random data, signs one genesis commit whose access-control document holds
+   * `grants` and makes `owner` an OWNER whatever `grants` names it, and is
+   * dropped once that commit is confirmed. The DID is returned only after that
+   * confirmation.
    *
    * `owner` defaults to the identity this runtime acts as. A serving runtime
    * acts as a service, and a space it creates on a user's behalf must be
    * owned by that user, so a serving runtime requires `owner`. `root`
-   * reserves the space's root pattern in the same commit; see
-   * `IStorageManager.createSpace`.
+   * reserves the space's root pattern in the same commit, either as given or
+   * as derived from the new space's DID, and `spaceKind` declares the space's
+   * kind there; see `IStorageManager.createSpace`.
    *
    * @throws If the storage manager cannot create spaces, if the memory server
    *   refuses the genesis commit, or if a serving runtime supplies no owner.
    */
   async createSpace(
-    options: { owner?: DID; grants?: ACL; root?: GenesisRoot } = {},
+    options: {
+      owner?: DID;
+      grants?: ACL;
+      root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+      spaceKind?: string;
+    } = {},
   ): Promise<MemorySpace> {
     if (this.servingPosture && options.owner === undefined) {
       throw new Error(
@@ -4315,10 +4625,29 @@ export class Runtime {
       throw new Error("This storage manager cannot create spaces");
     }
     const owner = options.owner ?? this.userIdentityDID;
+    const { root, spaceKind } = options;
     return await this.storageManager.createSpace(
       { ...options.grants, [owner]: "OWNER" },
-      options.root,
+      {
+        ...(root === undefined ? {} : { root }),
+        ...(spaceKind === undefined ? {} : { spaceKind }),
+      },
     );
+  }
+
+  /**
+   * The kind `space` declares in its genesis commit, or `undefined` when it
+   * declares none; see `docs/features/space-kinds.md`. The kind is read as
+   * the identity this runtime acts as, so the space must admit that identity.
+   *
+   * @throws If the storage manager cannot read a space's kind, if the space
+   *   cannot be opened, or if the memory server does not report kinds.
+   */
+  async spaceKind(space: MemorySpace): Promise<string | undefined> {
+    if (this.storageManager.spaceKind === undefined) {
+      throw new Error("This storage manager cannot read a space's kind");
+    }
+    return await this.storageManager.spaceKind(space);
   }
 
   /**
@@ -4404,9 +4733,9 @@ export class Runtime {
    * {@link resolveInSpaceName} created a space for the same request, that DID
    * is the answer and the record is written in `tx`: the record then commits
    * in the same commit as the writes that refer to the space, or not at all.
-   * The request is `grants` and the owner {@link actingPrincipalFor} gives
-   * `tx`, so the space a run records was created with the access-control
-   * document that run asked for. `tx` reads the absent record, so a
+   * The request is `request` and the owner {@link actingPrincipalFor} gives
+   * `tx`, so the space a run records was created with the genesis commit that
+   * run asked for. `tx` reads the absent record, so a
    * concurrent writer of the same record makes this commit conflict, and the
    * run that follows reads the record it wrote.
    *
@@ -4414,19 +4743,23 @@ export class Runtime {
    * space while it constructs the graph. On `undefined` the caller records the
    * name as pending, and the runner resolves it with
    * {@link resolveInSpaceName} before running the handler or action again.
+   * Under server execution a client leaves a name with no record unresolved
+   * instead: a handler's speculative echo withdraws rather than running again,
+   * and a reactive action runs again only a bounded number of times (see
+   * {@link InSpaceTargetUnresolved}).
    */
   resolveInSpaceNameSync(
     space: MemorySpace,
     name: string,
     tx: IExtendedStorageTransaction,
-    grants?: ACL,
+    request: InSpaceCreationRequest = {},
   ): MemorySpace | undefined {
     const record = this.#inSpaceAllocationCell(space, name, tx);
     const recorded = record.get()?.did;
     if (isDID(recorded)) return recorded;
     const owner = this.actingPrincipalFor(tx);
     const created = owner === undefined ? undefined : this.#inSpaceCreated.get(
-      inSpaceCreationKey(space, name, owner, grants),
+      inSpaceCreationKey(space, name, owner, request),
     );
     if (created !== undefined) record.set({ did: created });
     return created;
@@ -4438,31 +4771,42 @@ export class Runtime {
    * same request.
    *
    * The calling space's allocation record decides when it exists. Otherwise
-   * this creates a space owned by `options.owner` with `options.grants`, whose
-   * DID the next run making the same request records. A record naming a DID
-   * that has no history is reported rather than replaced: the record is
-   * immutable, and replacing the space it names would move whatever the
-   * name's writers expect to find.
+   * a runtime that creates spaces for names creates one owned by
+   * `options.owner` with `options.grants`, whose DID the next run making the
+   * same request records. Under server execution only the serving runtime
+   * creates them: the run a client makes of the same handler is a
+   * speculative echo of the serving runtime's, and a space it created would
+   * be one no record ever names, so a client leaves a name with no record
+   * unresolved, and throws {@link InSpaceTargetUnresolved}. With
+   * `options.root`, the space's genesis commit reserves its root at the
+   * address {@link inSpaceRootCause} derives there, for the run that records
+   * it to place there, and with `options.spaceKind` it declares the space's
+   * kind. A record naming an existing space is the answer whatever the
+   * request, so a space created before a request named a kind keeps the kind
+   * it was created
+   * with.
+   * A record naming a DID that has no history is reported rather than
+   * replaced: the record is immutable, and replacing the space it names would
+   * move whatever the name's writers expect to find.
    *
    * The record is written after the space is created, and only one of the
    * runs racing to write it commits. The space another run created is then
-   * named by nothing, and holds nothing but its access-control document,
-   * which names its owner.
+   * named by nothing, and holds nothing but its genesis commit: its
+   * access-control document, which names its owner, and with
+   * `options.root` its root reservation, which nothing places a root for.
    *
+   * @throws {InSpaceTargetUnresolved} Under server execution, on a client,
+   *   if no record names the space.
    * @throws If the record names a DID that is not a space, if loading what
    *   decides that fails, or if creating a space fails.
    */
   async resolveInSpaceName(
     space: MemorySpace,
     name: string,
-    options: { owner?: DID; grants?: ACL } = {},
+    options: InSpaceCreationRequest & { owner?: DID } = {},
   ): Promise<MemorySpace> {
-    const creationKey = inSpaceCreationKey(
-      space,
-      name,
-      options.owner ?? this.userIdentityDID,
-      options.grants,
-    );
+    const { owner = this.userIdentityDID, ...request } = options;
+    const creationKey = inSpaceCreationKey(space, name, owner, request);
     const inFlight = this.#inSpaceResolutions.get(creationKey);
     if (inFlight !== undefined) return await inFlight;
     const resolution = (async (): Promise<MemorySpace> => {
@@ -4478,8 +4822,17 @@ export class Runtime {
         }
         return recorded;
       }
+      if (this.experimental.serverExecution === true && !this.servingPosture) {
+        throw new InSpaceTargetUnresolved([name]);
+      }
+      const { root, ...access } = options;
       const created = this.#inSpaceCreated.get(creationKey) ??
-        await this.createSpace(options);
+        await this.createSpace({
+          ...access,
+          ...(root
+            ? { root: (created) => ({ cause: inSpaceRootCause(created) }) }
+            : {}),
+        });
       this.#inSpaceCreated.set(creationKey, created);
       return created;
     })();
@@ -4600,11 +4953,22 @@ export class Runtime {
   }
 
   /**
+   * Starts a piece and waits for the commit of the setup writes of the graph
+   * it instantiates, rejecting when that commit failed; see
+   * `Runner.startWithCommit()`.
+   */
+  startWithCommit<T = any>(resultCell: Cell<T>): Promise<boolean> {
+    return this.runner.startWithCommit(resultCell);
+  }
+
+  /**
    * The host explicitly known to serve a space, if any: the seed map
    * wins, then runtime-learned hints (site table). Undefined means
    * "no per-space fact" — callers choose their own default (storage
-   * and hostForSpace use apiUrl; LLM/fetch keep their module-level
-   * defaults, which may deliberately differ from apiUrl).
+   * uses the host it was opened on, which for a deployed client is
+   * `memoryUrl` where one is set and apiUrl otherwise; hostForSpace uses
+   * apiUrl; LLM/fetch keep their module-level defaults, which may
+   * deliberately differ from apiUrl).
    */
   mappedHostFor(space: MemorySpace): string | undefined {
     return this.spaceHostMap?.[space] ?? this.#dynamicHosts.get(space);
@@ -4622,57 +4986,247 @@ export class Runtime {
 
   /**
    * Records a runtime-learned HTTP or HTTPS origin for a space (the v0
-   * site-table flow). Storage decides first. A seed or an accepted late hint
-   * fixes the route for the session. A default-host provider stays provisional
-   * while it is read-only. The first hint can replace it and replay its reads.
-   * Compute routing follows when storage accepts the hint. Returns whether
-   * storage accepted or confirmed the hint.
+   * site-table flow). Without a memory URL, storage decides first. A seed or
+   * an accepted late hint fixes the route for the session. A default-host
+   * provider stays provisional while it is read-only. The first hint can
+   * replace it and replay its reads. Compute routing follows when storage
+   * accepts the hint. Returns whether storage accepted or confirmed the hint.
+   *
+   * While a memory URL is set, the runtime decides an unseeded space's hint
+   * first, as {@link registerSpaceHostDetailed} describes. A hint naming
+   * another deployment's origin can be registered here only once
+   * {@link resolveSpaceHost} has read where that origin serves Memory;
+   * before that it returns `false`.
    */
   registerSpaceHost(space: MemorySpace, host: string): boolean {
-    const normalized = this.#normalizedSpaceHost(space, host);
-    const storage = this.storageManager;
-    const accept = storage.registerSpaceHost !== undefined
-      ? storage.registerSpaceHost(space, normalized)
-      : storage.registerSpaceHostDetailed?.(space, normalized).accepted;
-    if (accept === undefined) return false; // manager has no remote resolution
-    if (accept) this.#dynamicHosts.set(space, normalized);
-    return accept;
+    const route = this.#normalizedSpaceHost(space, host);
+    return (this.#routedHintVerdict(space, route, "verdict") ??
+      this.#registerWithStorage(space, route, route, "verdict")).accepted;
   }
 
   /**
    * Records a host hint under the rules of {@link registerSpaceHost}, and
-   * says why when storage refuses it. A storage manager that gives only a
-   * verdict has its refusal reported as `unspecified`, and one that takes no
-   * hints at all as `no-remote-resolution`.
+   * says why when it is refused. A storage manager that gives only a verdict
+   * has its refusal reported as `unspecified`, and one that takes no hints at
+   * all as `no-remote-resolution`.
+   *
+   * While a memory URL is set, the runtime decides an unseeded space's hint
+   * before storage sees it, since Memory is not where the hint's HTTP work
+   * is. A seeded space keeps the seed's rules, since the seed is the
+   * embedder's own configuration. Otherwise:
+   *
+   * - A hint naming `apiUrl`'s origin, or the memory URL's, names this
+   *   deployment, whose Memory is the memory URL: the default route. It is
+   *   accepted without being recorded, so neither spelling can move a space
+   *   off the memory URL or on to the API host, and it retires no route the
+   *   space already has.
+   * - A hint naming any other origin, a foreign origin, is decided once the
+   *   runtime knows where that origin serves Memory
+   *   ({@link resolveSpaceHost}). An origin that publishes this runtime's
+   *   memory URL is a sibling toolshed of this deployment behind the same
+   *   router: the space's Memory takes the default route, and the hinted
+   *   origin is recorded as the space's compute host ({@link hostForSpace}).
+   *   Any other memory host is another deployment's: storage is offered it,
+   *   and when storage accepts, the space's HTTP work is routed to the
+   *   hinted origin. A route recorded either way is fixed: a later hint
+   *   naming another foreign origin is refused as `known-different-host`.
+   *   A hint whose origin has not been resolved is refused as
+   *   `foreign-host-unresolved`, one whose memory host could not be learned
+   *   as `foreign-host-unread`, and one past the origins the runtime keeps
+   *   as `foreign-host-limit`.
    */
   registerSpaceHostDetailed(
     space: MemorySpace,
     host: string,
   ): SpaceHostRegistration {
-    const normalized = this.#normalizedSpaceHost(space, host);
+    const route = this.#normalizedSpaceHost(space, host);
+    return this.#routedHintVerdict(space, route, "detailed") ??
+      this.#registerWithStorage(space, route, route, "detailed");
+  }
+
+  /**
+   * Records a host hint under the rules of {@link registerSpaceHostDetailed},
+   * first reading where the hinted origin serves Memory when that is another
+   * deployment under a memory URL. The read is `${origin}/api/meta`, as a
+   * deployed client reads its own deployment's (`deployment-meta.ts`): a
+   * published `memoryUrl` is where that space's Memory opens; a deployment
+   * that publishes none serves Memory on its origin, as every deployment did
+   * before memory URLs. Each origin is read once for the runtime's lifetime,
+   * whatever the outcome, and hints that arrive while the read is in flight
+   * share it; a read that fails leaves the origin `foreign-host-unread`, and
+   * is warned about once, naming the origin, since the origin is read once.
+   * The runtime keeps {@link FOREIGN_HOST_LIMIT} origins; a hint naming one
+   * more is refused as `foreign-host-limit` without a read. Every other hint
+   * is decided as the synchronous form decides it, without waiting.
+   */
+  async resolveSpaceHost(
+    space: MemorySpace,
+    host: string,
+  ): Promise<SpaceHostRegistration> {
+    const route = this.#normalizedSpaceHost(space, host);
+    if (this.#isForeignHint(space, route)) {
+      const entry = this.#foreignHosts.get(route.origin) ??
+        this.#readForeignHost(route);
+      if (entry?.state === "resolving") await entry.settled;
+    }
+    return this.registerSpaceHostDetailed(space, host);
+  }
+
+  /**
+   * Whether the runtime, rather than storage, decides `route` for `space`
+   * and must first learn where `route` serves Memory: there is a memory URL,
+   * the seed map does not list the space, and the route names neither
+   * `apiUrl`'s origin nor the memory URL's.
+   */
+  #isForeignHint(space: MemorySpace, route: URL): boolean {
+    return this.memoryUrl !== undefined &&
+      this.spaceHostMap?.[space] === undefined &&
+      !namesApiOrigin(route, this.apiUrl) &&
+      route.origin !== this.memoryUrl.origin;
+  }
+
+  /**
+   * The verdict on a hint while a memory URL is set, or `undefined` when
+   * storage decides: there is no memory URL, or the seed map lists the space.
+   * See {@link registerSpaceHostDetailed}.
+   */
+  #routedHintVerdict(
+    space: MemorySpace,
+    route: URL,
+    form: StorageHintForm,
+  ): SpaceHostRegistration | undefined {
+    if (this.memoryUrl === undefined) return undefined;
+    if (this.spaceHostMap?.[space] !== undefined) return undefined;
+    if (!this.#isForeignHint(space, route)) return { accepted: true };
+    const entry = this.#foreignHosts.get(route.origin);
+    if (entry === undefined) {
+      return this.#foreignHosts.size >= FOREIGN_HOST_LIMIT
+        ? { accepted: false, reason: "foreign-host-limit" }
+        : { accepted: false, reason: "foreign-host-unresolved" };
+    }
+    switch (entry.state) {
+      case "resolving":
+        return { accepted: false, reason: "foreign-host-unresolved" };
+      case "unread":
+        return { accepted: false, reason: "foreign-host-unread" };
+      case "resolved": {
+        // A route the runtime already recorded for the space is fixed, as a
+        // route storage accepted is: a hint naming the same origin confirms
+        // it and one naming another is refused. Checked here because the
+        // sibling case below never reaches storage, whose own rule
+        // (`known-different-host`) would otherwise decide only the hints
+        // it was told about.
+        const existing = this.#dynamicHosts.get(space);
+        if (existing !== undefined && existing !== route.toString()) {
+          return {
+            accepted: false,
+            reason: "known-different-host",
+            existingHost: existing,
+          };
+        }
+        // An origin whose Memory is this runtime's memory URL is a sibling
+        // toolshed of this deployment behind the same router. The space's
+        // Memory is where this runtime already opens Memory, so storage is
+        // not told and the space takes the default route there; the hinted
+        // origin is recorded as the space's compute host, so its LLM, blob
+        // and fetch work goes to the toolshed that serves the space, and
+        // `healthCheck` probes it, as for any other accepted hint.
+        if (entry.memoryHost.origin === this.memoryUrl.origin) {
+          this.#dynamicHosts.set(space, route.toString());
+          return { accepted: true };
+        }
+        return this.#registerWithStorage(space, route, entry.memoryHost, form);
+      }
+    }
+  }
+
+  /**
+   * Offers storage `memoryRoute` for `space`, and when storage accepts or
+   * confirms it, routes the space's HTTP work to `route`. The two are the same
+   * origin except for a hint naming another deployment that publishes a
+   * memory URL, whose Memory opens there while its HTTP work stays on the
+   * hinted origin. `form` says which of storage's two methods is asked first:
+   * {@link registerSpaceHost} asks for a verdict and
+   * {@link registerSpaceHostDetailed} for a reason, each falling back to the
+   * other method where storage implements only that one.
+   */
+  #registerWithStorage(
+    space: MemorySpace,
+    route: URL,
+    memoryRoute: URL,
+    form: StorageHintForm,
+  ): SpaceHostRegistration {
+    const normalized = memoryRoute.toString();
     const storage = this.storageManager;
     let registration: SpaceHostRegistration;
-    if (storage.registerSpaceHostDetailed !== undefined) {
-      registration = storage.registerSpaceHostDetailed(space, normalized);
-    } else if (storage.registerSpaceHost !== undefined) {
+    if (
+      storage.registerSpaceHost !== undefined &&
+      (form === "verdict" || storage.registerSpaceHostDetailed === undefined)
+    ) {
       registration = storage.registerSpaceHost(space, normalized)
         ? { accepted: true }
         : { accepted: false, reason: "unspecified" };
+    } else if (storage.registerSpaceHostDetailed !== undefined) {
+      registration = storage.registerSpaceHostDetailed(space, normalized);
     } else {
       registration = { accepted: false, reason: "no-remote-resolution" };
     }
-    if (registration.accepted) this.#dynamicHosts.set(space, normalized);
+    if (registration.accepted) this.#dynamicHosts.set(space, route.toString());
     return registration;
   }
 
   /**
-   * Returns the normalized origin of `host`. A host that is not an HTTP or
-   * HTTPS origin throws an error naming `space`, with the validation error as
-   * its cause.
+   * Starts reading where `route`'s deployment serves Memory, and records the
+   * read as in flight, then as its outcome, for the runtime's lifetime
+   * ({@link resolveSpaceHost}). Returns `undefined`, recording nothing, when
+   * the runtime already keeps {@link FOREIGN_HOST_LIMIT} origins. The read is
+   * cancelled when the runtime is disposed, and that cancellation is recorded
+   * as unread without a warning: nothing of the runtime is left to route.
    */
-  #normalizedSpaceHost(space: MemorySpace, host: string): string {
+  #readForeignHost(route: URL): ForeignHostEntry | undefined {
+    if (this.#foreignHosts.size >= FOREIGN_HOST_LIMIT) return undefined;
+    const origin = route.origin;
+    const settled = memoryHostForForeignOrigin({
+      apiUrl: route,
+      signal: this.#writeTeardown.signal,
+      fetch: (input, init) => this.fetch(input, init),
+    }).then(
+      (outcome) => {
+        if ("memoryHost" in outcome) {
+          this.#foreignHosts.set(origin, {
+            state: "resolved",
+            memoryHost: outcome.memoryHost,
+          });
+          return;
+        }
+        this.#foreignHosts.set(origin, { state: "unread" });
+        // Once per origin, because an origin is read once: the entry below
+        // is recorded before any other hint can start a read, and is never
+        // dropped.
+        console.warn(
+          `[runtime] Where ${origin} serves Memory could not be learned: ` +
+            `${outcome.reason}. Spaces hinted to it stay on no route in ` +
+            `this runtime, since Memory here is routed through ` +
+            `${this.memoryUrl} and that is not where ${origin} keeps its ` +
+            `spaces.`,
+        );
+      },
+      () => {
+        this.#foreignHosts.set(origin, { state: "unread" });
+      },
+    );
+    const entry: ForeignHostEntry = { state: "resolving", settled };
+    this.#foreignHosts.set(origin, entry);
+    return entry;
+  }
+
+  /**
+   * Returns `host` parsed as an HTTP or HTTPS origin. A host that is not one
+   * throws an error naming `space`, with the validation error as its cause.
+   */
+  #normalizedSpaceHost(space: MemorySpace, host: string): URL {
     try {
-      return normalizeSpaceHost(host).toString();
+      return normalizeSpaceHost(host);
     } catch (cause) {
       if (!(cause instanceof SpaceHostValidationError)) throw cause;
       throw new Error(

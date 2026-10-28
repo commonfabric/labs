@@ -13,6 +13,7 @@ import {
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { DID } from "@commonfabric/identity";
 import { type CfcCellLinkRefPayload } from "@commonfabric/runner/cfc";
+import type { NativeUiControl } from "@commonfabric/runner/native-ui";
 import {
   cfcLabelViewsEqual,
   rebaseCfcLabelView,
@@ -49,10 +50,29 @@ import { cellRefToIdentityKey } from "./shared/utils.ts";
 // Enable via: globalThis.commonfabric.logger["cell-handle"].disabled = false
 const logger = getLogger("cell-handle", { enabled: false });
 
+/** A read's answer, and whether no update to the cell overtook it. */
+interface ReadAnswer<T> {
+  /** What the read found: the value, or the refusal standing for it. */
+  read: CellAnswer<T>;
+  /** The worker's raw answer, which other handles on the cell take. */
+  response: CellValueResponse;
+  /** Whether no update to the cell reached any handle on it meanwhile. */
+  authoritative: boolean;
+}
+
+/**
+ * The operations on one cell, in the order they reach the worker, and the
+ * value the latest of them left. Handles that read the cell under different
+ * schemas share one queue, so their writes stay in order, but not that value:
+ * it is a reading under the schema of `view`, and a handle reading under
+ * another takes it as no value.
+ */
 interface CellOperationQueue {
   tail: Promise<void> | undefined;
   hasValue: boolean;
   value: unknown;
+  // `viewKey()` of the handle whose operation left `value`.
+  view: string | undefined;
   // Changes when any equivalent handle receives an authoritative update.
   authoritativeGeneration: number;
 }
@@ -69,6 +89,13 @@ const operationQueues = new WeakMap<
 let writeClock = 0;
 
 export const $onCellUpdate = Symbol("$onCellUpdate");
+
+/**
+ * Tells a handle the worker delivered an update of its cell that the
+ * connection dropped: a value of `undefined`, which the handle cannot tell
+ * from a document not yet loaded, so it keeps the value it holds.
+ */
+export const $onCellUpdateDropped = Symbol("$onCellUpdateDropped");
 
 /**
  * Delivers to a handle a subscription update the worker refused, which
@@ -95,6 +122,23 @@ type CellAnswer<T> =
   | { readonly value: T | undefined }
   | { readonly refused: CellReadRefusal };
 
+/** What a subscriber is told about the delivery its value callback is for. */
+export type CellDelivery = {
+  /**
+   * Whether the `cfcLabel` handed to the callback is the label the worker
+   * read with the value: it is for a delivery the worker made with its label,
+   * and is not for a value-only delivery or a local write, which carry the
+   * label the handle last received, nor once the handle has left the cell's
+   * subscription and joined it again, until the worker delivers a label. Nor
+   * is it once the worker has sent an update the connection dropped, one
+   * holding nothing, since the handle then holds a value and label the worker
+   * has read past; a handle delivering labels tells its subscribers so with
+   * what it holds, and tells them again when the worker's next labeled update
+   * makes it current, whatever that update holds.
+   */
+  readonly cfcLabelCurrent: boolean;
+};
+
 /** How a subscriber to a handle hears what the handle holds of its cell. */
 export type CellSubscribeOptions = {
   /** Whether to hear the cell's display label with each value. */
@@ -111,6 +155,20 @@ export type CellSubscribeOptions = {
    * value it was given, which the worker may now refuse.
    */
   onRefused: (refusal: CellReadRefusal) => void;
+};
+
+/** How a strict send of an event waits on it. */
+export type CellSendOptions = {
+  /**
+   * Whether to wait for the event's handling as well: the outcome of the run
+   * of the stream's handler, which under server execution is the consequence
+   * the served run recorded. The send then rejects, with the reason, when
+   * that run's commit is refused, as it is for a write whose UI contract the
+   * event does not satisfy, and when the run throws or the event is dropped
+   * or refused admission. A run that finishes without an error resolves it,
+   * whether or not it wrote anything.
+   */
+  awaitHandling?: boolean;
 };
 
 /**
@@ -164,6 +222,17 @@ export class CellHandle<T = unknown> {
   #value: T | undefined;
   #cfcLabel: CfcLabelView | undefined;
 
+  /**
+   * Whether `#value` and `#cfcLabel` are the worker's latest read of the
+   * cell, the label being the one it read with that value: set by a delivery
+   * that carried a label, and cleared by a value that arrived without one, by
+   * a local write, by a refusal, by an update the connection dropped, and
+   * when the handle leaves the cell's subscription, as its last subscriber
+   * leaving and an upgrade to labels do, since it then stops hearing of the
+   * label.
+   */
+  #cfcLabelCurrent = false;
+
   /** The refusal of this handle's last read, while it stands. */
   #refusal: CellReadRefusal | undefined;
 
@@ -175,14 +244,19 @@ export class CellHandle<T = unknown> {
 
   /**
    * Whether any subscriber asked for the CFC label. Sticky: once a label-aware
-   * subscription exists on this handle, label changes also fire its callbacks.
+   * subscription exists on this handle, label changes, and changes in whether
+   * the label is current, also fire its callbacks.
    */
   #wantsCfcLabel = false;
 
   #callbacks = new Map<
     number,
     {
-      onValue: (value: Readonly<T>, cfcLabel: CfcLabelView | undefined) => void;
+      onValue: (
+        value: Readonly<T>,
+        cfcLabel: CfcLabelView | undefined,
+        delivery: CellDelivery,
+      ) => void;
       /** Runs the cleanup the subscriber's last value callback returned. */
       clear: () => void;
       onRefused: (refusal: CellReadRefusal) => void;
@@ -190,6 +264,8 @@ export class CellHandle<T = unknown> {
   >();
   #nextCallbackId = 0;
   #schemaWarned = false;
+  // `#viewKey()`, memoized.
+  #view: string | undefined;
   #updateGeneration = 0;
 
   /**
@@ -228,7 +304,7 @@ export class CellHandle<T = unknown> {
    * globalThis.commonfabric.logger["cell-handle"].disabled = false
    */
   #requireSchema(method: string): void {
-    if (!this.#ref.schema && !this.#schemaWarned) {
+    if (!this.#ref.schema && !this.#ref.keyedFrom && !this.#schemaWarned) {
       this.#schemaWarned = true;
       // Use callback for lazy evaluation - stack trace only generated if logging is enabled
       logger.warn(`no-schema-${method}`, () => {
@@ -343,10 +419,137 @@ export class CellHandle<T = unknown> {
         updateGeneration === this.#updateGeneration &&
         authoritativeGeneration === queue.authoritativeGeneration
       ) {
-        queue.value = snapshot;
-        queue.hasValue = true;
+        this.#holdInQueue(queue, snapshot);
       }
     });
+  }
+
+  /**
+   * Writes the value `updater` makes of the cell's current one, in the order
+   * of the cell's operations through this runtime client: `updater` runs
+   * once the reads and writes asked for before this call, through any handle
+   * on the same cell and path, have run, and the ones asked for after it
+   * wait for its write. A handle reached through `key()` names another path,
+   * with an order of its own.
+   *
+   * `updater` is handed the value those operations left, what this handle
+   * holds where they left none, or, where it holds nothing yet, what a read
+   * from the worker finds, `undefined` for a cell that holds nothing. A write
+   * another handle made, and that has settled since, counts once its update
+   * reaches this handle. `updater` runs before `update()` returns when
+   * nothing waits and the handle holds a value. Returning the current value
+   * writes nothing.
+   *
+   * What it returns is shown when it runs, unless a write asked for through
+   * this handle after this call shows its own, and is sent as {@link set}
+   * sends a value: a blind last-write-wins overwrite, whose refusal by the
+   * runtime is logged. It is not an atomic read-modify-write: a writer
+   * elsewhere can change the cell between the read and the write, and the
+   * write replaces that change. Appending to a list is {@link push}, which
+   * the worker merges.
+   *
+   * Not the pattern API's `Cell.update()`, which merges a partial value.
+   *
+   * Settles once the worker has taken the write, or once `updater` writes
+   * nothing. Rejects, writing nothing, while this handle's read is refused
+   * ({@link refusal}), when the read it makes is refused, and when `updater`
+   * throws.
+   */
+  update(updater: (current: Readonly<T> | undefined) => T): Promise<void> {
+    this.#requireSchema("update");
+    const refused = this.#writeRefusal();
+    if (refused !== undefined) return Promise.reject(refused);
+    // Taken now, as a write's, so that neither an older read's answer nor this
+    // update's own shows over a write asked for after this call.
+    const writeGeneration = this.#writeGeneration = ++writeClock;
+    const startedAt = writeClock;
+    return this.#enqueueOperation(async (queue) => {
+      let current = this.#base(queue, writeGeneration);
+      if (current === undefined) {
+        const request: CellPullRequest = {
+          type: RequestType.CellPull,
+          cell: this.ref(),
+          awaitDurability: false,
+        };
+        const updateGeneration = this.#updateGeneration;
+        const answer = await this.#ask(queue, request, updateGeneration);
+        const found = this.#takeAnswer(
+          request,
+          answer,
+          writeGeneration,
+          updateGeneration,
+          startedAt,
+        );
+        // A refusal or an update that reached the cell while the read was
+        // on its way is newer than what the read found.
+        current = this.#base(queue, writeGeneration) ?? { value: found };
+      }
+      let next: T;
+      try {
+        next = updater(current.value as Readonly<T> | undefined);
+      } catch (error) {
+        this.#showPassedOver(current.value, writeGeneration);
+        throw error;
+      }
+      if (valuesOrCellsEqual(next, current.value)) {
+        this.#showPassedOver(current.value, writeGeneration);
+        return;
+      }
+      const serialized = this.#serializeWrite(next);
+      const snapshot = applyValue(
+        CellHandle.#serialize(next as ClientCellValue, "sigil"),
+        next,
+        this,
+      ) as T;
+      if (writeGeneration === this.#writeGeneration) {
+        this.#publishWrite(snapshot);
+      }
+      const updateGeneration = this.#updateGeneration;
+      const authoritativeGeneration = queue.authoritativeGeneration;
+      await this.#sendWrite(serialized);
+      if (
+        updateGeneration === this.#updateGeneration &&
+        authoritativeGeneration === queue.authoritativeGeneration
+      ) {
+        this.#holdInQueue(queue, snapshot);
+      }
+    });
+  }
+
+  /**
+   * Helper for {@link update}, which finds the value an update in `queue`'s
+   * turn computes from without asking the worker: the one the operations
+   * before it left, or what this handle holds, where no write asked for
+   * since `writeGeneration` replaced it. `undefined` where neither holds one,
+   * and the worker must be asked.
+   *
+   * @throws {CellReadRefusedError} While this handle's read is refused.
+   */
+  #base(
+    queue: CellOperationQueue,
+    writeGeneration: number,
+  ): { value: unknown } | undefined {
+    const refused = this.#writeRefusal();
+    if (refused !== undefined) throw refused;
+    const queued = this.#queuedValue(queue);
+    if (queued !== undefined) return queued;
+    if (!this.#unread && writeGeneration === this.#writeGeneration) {
+      return { value: this.#value };
+    }
+    return undefined;
+  }
+
+  /**
+   * Helper for {@link update}, which shows `value`, what an update that
+   * writes nothing computed from, where it is the latest this handle has
+   * been asked for: taking the generation, the update kept an older read's
+   * answer from showing it.
+   */
+  #showPassedOver(value: unknown, writeGeneration: number): void {
+    if (writeGeneration !== this.#writeGeneration) return;
+    if (this.#unread || !valuesOrCellsEqual(value, this.#value)) {
+      this.#publishWrite(value as T);
+    }
   }
 
   /**
@@ -385,8 +588,7 @@ export class CellHandle<T = unknown> {
         updateGeneration === this.#updateGeneration &&
         authoritativeGeneration === queue.authoritativeGeneration
       ) {
-        queue.value = snapshot;
-        queue.hasValue = true;
+        this.#holdInQueue(queue, snapshot);
       }
     });
   }
@@ -394,10 +596,11 @@ export class CellHandle<T = unknown> {
   /**
    * Atomically stores `value` only if the cell has no backing value, then
    * returns the value selected by that transaction. A readable schema fallback
-   * does not count as stored. The runtime-wide commit barrier settles before
-   * choosing the default, so unrelated pending writes can delay initialization.
-   * Concurrent initializers converge on one winner instead of replacing it
-   * with a blind write.
+   * does not count as stored. An existing value can return after producer and
+   * load readiness when its read dependencies have no pending local writes.
+   * Otherwise demand remains active through the runtime-wide commit barrier
+   * before choosing a value or storing the default. Concurrent initializers
+   * converge on one winner instead of replacing it with a blind write.
    *
    * It goes through a handle whose read is refused: it stores nothing over a
    * value the cell holds, and `value` is the caller's default, computed from
@@ -475,14 +678,23 @@ export class CellHandle<T = unknown> {
         tail: undefined,
         hasValue: false,
         value: undefined,
+        view: undefined,
         authoritativeGeneration: 0,
       };
       queues.set(key, queue);
     }
     const previous = queue.tail;
-    const result = previous
-      ? previous.then(() => operation(queue))
-      : operation(queue);
+    // With nothing ahead of it, the operation starts at once, but only after
+    // it holds the queue: an operation asked for while it runs, as a
+    // subscriber its publication reaches may ask for one, waits behind it.
+    let result: Promise<R>;
+    let started: PromiseWithResolvers<R> | undefined;
+    if (previous) {
+      result = previous.then(() => operation(queue));
+    } else {
+      started = Promise.withResolvers<R>();
+      result = started.promise;
+    }
     const tail = result.then(() => {}, () => {});
     queue.tail = tail;
     void tail.then(() => {
@@ -491,6 +703,15 @@ export class CellHandle<T = unknown> {
         if (queues.size === 0) operationQueues.delete(this.#rt);
       }
     });
+    if (started) {
+      try {
+        started.resolve(operation(queue));
+      } catch (error) {
+        // Thrown at once, as before the queue was held; the queue goes on.
+        started.reject(error);
+        throw error;
+      }
+    }
     return result;
   }
 
@@ -570,10 +791,14 @@ export class CellHandle<T = unknown> {
     this.#value = value;
     this.#refusal = undefined;
     this.#unread = false;
+    // A local update carries the label the handle last received, which the
+    // worker did not read with this value.
+    this.#cfcLabelCurrent = false;
     for (const { onValue } of this.#callbacks.values()) {
       try {
-        // A local update does not change the label; carry the current one.
-        onValue(value as Readonly<T>, this.#cfcLabel);
+        onValue(value as Readonly<T>, this.#cfcLabel, {
+          cfcLabelCurrent: false,
+        });
       } catch (error) {
         console.error("[CellHandle] Callback error:", error);
       }
@@ -587,6 +812,7 @@ export class CellHandle<T = unknown> {
   #refuse(refusal: CellReadRefusal): void {
     this.#value = undefined;
     this.#cfcLabel = undefined;
+    this.#cfcLabelCurrent = false;
     this.#refusal = refusal;
     this.#unread = false;
     for (const { clear, onRefused } of this.#callbacks.values()) {
@@ -606,18 +832,77 @@ export class CellHandle<T = unknown> {
     await this.#enqueueOperation(() => this.#send(serialized));
   }
 
-  /** Send a stream event and reject when the runtime refuses it. */
-  async sendStrict(event: T): Promise<void> {
+  /**
+   * Sends `event` to the stream this handle names, and rejects when the
+   * runtime refuses to take it. Resolving confirms only that the event was
+   * delivered to the runtime, on its way to the stream's handler: a write the
+   * handler makes that the runtime refuses, such as one whose UI contract the
+   * event does not satisfy, does not reject it. `options.awaitHandling` waits
+   * for the handling too, and rejects on its refusal.
+   */
+  async sendStrict(event: T, options?: CellSendOptions): Promise<void> {
     const serialized = CellHandle.serialize(event as ClientCellValue);
-    await this.#enqueueOperation(() => this.#send(serialized, true));
+    await this.#enqueueOperation(() =>
+      this.#send(serialized, true, options?.awaitHandling === true)
+    );
   }
 
-  #send(event: FabricValue, propagateFailure = false): Promise<void> {
+  /**
+   * Sends `event` to the stream this handle names as the action `control`
+   * names, taken on a control the host draws itself, bound to that trusted
+   * surface and action. The runtime stamps the event with `native`
+   * provenance for them, replacing any `provenance` field `event` carries,
+   * and marks it renderer-trusted, so that it satisfies the UI contract of a
+   * write gated on that surface and action, such as a `TrustedActionWrite`,
+   * as a reviewed gesture on the pattern's rendered surface does. It is a
+   * trusted gesture, as that gesture is, so it meets what `grantSpaceAccess()`
+   * and `revokeSpaceAccess()` require of a handler's event. The write, and any
+   * change to an access list, is held to every other check.
+   *
+   * It resolves once the run of the stream's handler has committed, which
+   * under server execution is the consequence the served run recorded, and
+   * rejects with the reason when the runtime refuses the event, when that
+   * run's commit is refused, as it is for a write whose UI contract the event
+   * does not satisfy, and when the run throws or the event is dropped or
+   * refused admission. A run that finishes without an error resolves it,
+   * whether or not it wrote anything; a handler that turns an event down
+   * throws, which fails its run and rejects the send. The surface and action are read once, here.
+   *
+   * This mints trusted events. The host calls it only from the control's
+   * real user-input path, with exactly the values the control displayed and
+   * the surface and action from the control's own definition, never from an
+   * event or a payload; and it keeps it, and the connection carrying it, out
+   * of reach of pattern code, loaded content, automation and agent
+   * interfaces, URL handlers, and restored state.
+   *
+   * @throws If `event` is not a record, or `control` names a blank surface or
+   *   action.
+   */
+  async sendReviewed(event: T, control: NativeUiControl): Promise<void> {
+    const serialized = CellHandle.serialize(event as ClientCellValue);
+    const { surface, action } = control;
+    await this.#enqueueOperation(() =>
+      this.#conn.request<RequestType.CellSendReviewed>({
+        type: RequestType.CellSendReviewed,
+        cell: this.ref(),
+        event: serialized,
+        surface,
+        action,
+      })
+    );
+  }
+
+  #send(
+    event: FabricValue,
+    propagateFailure = false,
+    awaitHandling = false,
+  ): Promise<void> {
     const request = this.#conn.request<RequestType.CellSend>({
       type: RequestType.CellSend,
       cell: this.ref(),
       event,
       ...(propagateFailure && { awaitCommit: true }),
+      ...(awaitHandling && { awaitHandling: true }),
     });
     if (propagateFailure) return request;
     return request.catch((error) => {
@@ -636,6 +921,11 @@ export class CellHandle<T = unknown> {
    * refusal: the child names a read of its own, which the worker decides on
    * its own, and may admit where it refuses the whole, so the child is
    * unread until that read answers, as it is when this handle is.
+   *
+   * The child is read under the schema the worker narrows this handle's
+   * schema to at the key, as the runtime's own `Cell.key()` is, and under
+   * none when neither this handle nor an ancestor it was keyed from has one.
+   * Its `ref().schema` stays unset: the narrowing happens in the worker.
    */
   key<K extends keyof T>(valueKey: K): CellHandle<T[K]> {
     const childRef = this.#extendPath(String(valueKey));
@@ -731,14 +1021,14 @@ export class CellHandle<T = unknown> {
       const refusedSince = this.#writeRefusal();
       if (refusedSince !== undefined) return Promise.reject(refusedSince);
       const authoritativeGeneration = queue.authoritativeGeneration;
-      const current = (queue.hasValue ? queue.value : fallback) as unknown[];
+      const queued = this.#queuedValue(queue);
+      const current = (queued ? queued.value : fallback) as unknown[];
       if (!Array.isArray(current)) {
         throw new Error("push() can only be used on array cells");
       }
       const value = [...current, ...snapshots];
       const updateGeneration = this.#updateGeneration;
-      queue.value = value;
-      queue.hasValue = true;
+      this.#holdInQueue(queue, value);
       if (writeGeneration === this.#writeGeneration) {
         this.#publishWrite(value as unknown as T);
       }
@@ -750,8 +1040,7 @@ export class CellHandle<T = unknown> {
           // Keep the restored base explicit in the shared queue. A later
           // append may have captured this append's optimistic publication as
           // its private fallback before the refusal arrived.
-          queue.hasValue = true;
-          queue.value = current;
+          this.#holdInQueue(queue, current);
           if (writeGeneration === this.#writeGeneration) {
             this.#publishWrite(current as unknown as T);
           }
@@ -782,6 +1071,14 @@ export class CellHandle<T = unknown> {
     return this.#cfcLabel;
   }
 
+  /**
+   * Whether {@link cfcLabel} is the label the worker read with the value the
+   * handle holds, as {@link CellDelivery} tells a subscriber.
+   */
+  get cfcLabelCurrent(): boolean {
+    return this.#cfcLabelCurrent;
+  }
+
   /** Whether this handle subscribed asking for reactive CFC-label delivery. */
   get wantsCfcLabel(): boolean {
     return this.#wantsCfcLabel;
@@ -801,9 +1098,14 @@ export class CellHandle<T = unknown> {
    * worker sends one for a document it has not loaded too), so a handle on a
    * cell that holds nothing stays unread until a read answers it. After that,
    * `callback` is called whenever the value changes, and `onRefused` with
-   * each refusal. The callback's return value, if a Cancel function, is
-   * called before the next value, when a refusal drops the value it was
-   * given, and when the subscription is cancelled.
+   * each refusal. Once any subscriber has asked for the label, every
+   * subscriber of the handle is called again with the value it holds when the
+   * label changes, and when the label stops or starts being current, as an
+   * update the connection dropped and the worker's next labeled update make
+   * it ({@link CellDelivery}). The
+   * callback's return value, if a Cancel function, is called before the next
+   * value, when a refusal drops the value it was given, and when the
+   * subscription is cancelled.
    *
    * A change reaches `callback` through an update, or through what a read
    * finds, whether this handle made it or another on the same cell under the
@@ -818,6 +1120,7 @@ export class CellHandle<T = unknown> {
     callback: (
       value: T | undefined,
       cfcLabel?: CfcLabelView | undefined,
+      delivery?: CellDelivery,
     ) => Cancel | undefined | void,
     options: CellSubscribeOptions,
   ): Cancel {
@@ -857,10 +1160,11 @@ export class CellHandle<T = unknown> {
     const wrappedCallback = (
       value: T | undefined,
       cfcLabel: CfcLabelView | undefined,
+      delivery: CellDelivery,
     ) => {
       clear();
       try {
-        cleanup = callback(value, cfcLabel);
+        cleanup = callback(value, cfcLabel, delivery);
       } catch (error) {
         console.error("[CellHandle] Callback error:", error);
       }
@@ -871,6 +1175,10 @@ export class CellHandle<T = unknown> {
     // The subscriber added here hears what the handle holds once, below.
     if (upgradeToCfcLabel) {
       // Tear down the label-less backend sub, then re-open it label-aware.
+      // Off the cell's subscription in between, the handle hears of no
+      // change, so the label it holds is current only once the worker
+      // delivers one again, as when its last subscriber leaves.
+      this.#cfcLabelCurrent = false;
       void this.#conn.unsubscribe(this).finally(() => {
         this.#conn.subscribe(this);
       });
@@ -894,7 +1202,9 @@ export class CellHandle<T = unknown> {
     // Call immediately with what the handle holds, as Cell does: the value,
     // even when it is undefined, or the refusal standing in its place.
     if (this.#refusal === undefined) {
-      wrappedCallback(this.#value, this.#cfcLabel);
+      wrappedCallback(this.#value, this.#cfcLabel, {
+        cfcLabelCurrent: this.#cfcLabelCurrent,
+      });
     } else {
       this.#callbacks.get(callbackId)?.onRefused(this.#refusal);
     }
@@ -903,6 +1213,10 @@ export class CellHandle<T = unknown> {
       clear();
       this.#callbacks.delete(callbackId);
       if (this.#callbacks.size === 0) {
+        // Off the cell's subscription, the handle hears of no label change,
+        // so the one it holds is current only until the worker delivers
+        // another.
+        this.#cfcLabelCurrent = false;
         this.#conn.unsubscribe(this);
       }
     };
@@ -963,19 +1277,51 @@ export class CellHandle<T = unknown> {
     const writeGeneration = this.#writeGeneration;
     const updateGeneration = this.#updateGeneration;
     const startedAt = writeClock;
-    const { read, response, authoritative } = await this.#enqueueOperation(
-      async (queue) => {
-        const authoritativeGeneration = queue.authoritativeGeneration;
-        const response = await this.#conn.request<
-          RequestType.CellGet | RequestType.CellPull
-        >(request);
-        const read = this.#readOf(response);
-        const authoritative = updateGeneration === this.#updateGeneration &&
-          authoritativeGeneration === queue.authoritativeGeneration;
-        if (authoritative) this.#recordInQueue(queue, read);
-        return { read, response, authoritative };
-      },
+    const answer = await this.#enqueueOperation((queue) =>
+      this.#ask(queue, request, updateGeneration)
     );
+    return this.#takeAnswer(
+      request,
+      answer,
+      writeGeneration,
+      updateGeneration,
+      startedAt,
+    );
+  }
+
+  /**
+   * Helper for {@link #read} and {@link update}, which asks the worker with
+   * `request` in the turn `queue` gives it, and records an answer no update
+   * has overtaken as the base the queue's later operations start from.
+   */
+  async #ask(
+    queue: CellOperationQueue,
+    request: CellGetRequest | CellPullRequest,
+    updateGeneration: number,
+  ): Promise<ReadAnswer<T>> {
+    const authoritativeGeneration = queue.authoritativeGeneration;
+    const response = await this.#conn.request<
+      RequestType.CellGet | RequestType.CellPull
+    >(request);
+    const read = this.#readOf(response);
+    const authoritative = updateGeneration === this.#updateGeneration &&
+      authoritativeGeneration === queue.authoritativeGeneration;
+    if (authoritative) this.#recordInQueue(queue, read);
+    return { read, response, authoritative };
+  }
+
+  /**
+   * Helper for {@link #read} and {@link update}, which takes `answer`, the
+   * worker's answer to `request`, as {@link #read} describes: what it finds
+   * reaches subscribers where nothing newer has, and a refusal rejects.
+   */
+  #takeAnswer(
+    request: CellGetRequest | CellPullRequest,
+    { read, response, authoritative }: ReadAnswer<T>,
+    writeGeneration: number,
+    updateGeneration: number,
+    startedAt: number,
+  ): Readonly<T> | undefined {
     const latest = writeGeneration === this.#writeGeneration &&
       updateGeneration === this.#updateGeneration &&
       authoritative;
@@ -1036,8 +1382,40 @@ export class CellHandle<T = unknown> {
    * or none for a refusal, which holds nothing of the cell.
    */
   #recordInQueue(queue: CellOperationQueue, read: CellAnswer<T>): void {
-    queue.value = "refused" in read ? undefined : read.value;
-    queue.hasValue = !("refused" in read);
+    if ("refused" in read) {
+      queue.value = undefined;
+      queue.hasValue = false;
+    } else {
+      this.#holdInQueue(queue, read.value);
+    }
+  }
+
+  /**
+   * Records `value` as what this handle's operation left in `queue`, as read
+   * under this handle's schema.
+   */
+  #holdInQueue(queue: CellOperationQueue, value: unknown): void {
+    queue.value = value;
+    queue.hasValue = true;
+    queue.view = this.#viewKey();
+  }
+
+  /**
+   * The value the operations before this one left in `queue`, where they
+   * left one read under this handle's schema; `undefined` otherwise.
+   */
+  #queuedValue(queue: CellOperationQueue): { value: unknown } | undefined {
+    return queue.hasValue && queue.view === this.#viewKey()
+      ? { value: queue.value }
+      : undefined;
+  }
+
+  /** What decides the shape a read through this handle returns. */
+  #viewKey(): string {
+    return this.#view ??= JSON.stringify({
+      schema: this.#ref.schema,
+      keyedFrom: this.#ref.keyedFrom,
+    });
   }
 
   /**
@@ -1157,7 +1535,7 @@ export class CellHandle<T = unknown> {
    * this handle's, or nothing yet. Its first read of its own replaces it.
    */
   asSchema<U = unknown>(schema: JSONSchema): CellHandle<U> {
-    const { schema: _schema, ...rest } = this.#ref;
+    const { schema: _schema, keyedFrom: _keyedFrom, ...rest } = this.#ref;
     const newCell = new CellHandle(this.#rt, {
       ...rest,
       schema,
@@ -1169,12 +1547,17 @@ export class CellHandle<T = unknown> {
   }
 
   #extendPath(key: string): CellRef {
+    // The child's schema is the worker's to narrow, so the child carries the
+    // nearest ancestor schema instead of one of its own.
+    const keyedFrom = this.#ref.schema !== undefined
+      ? { depth: this.#ref.path.length, schema: this.#ref.schema }
+      : this.#ref.keyedFrom;
     return {
       id: this.#ref.id,
       space: this.#ref.space,
       scope: this.#ref.scope,
       path: [...this.#ref.path, key],
-      // Child schema is unknown, so we don't include it
+      ...(keyedFrom !== undefined && { keyedFrom }),
       ...(this.#ref.cfcLabelView !== undefined && {
         cfcLabelView: rebaseCfcLabelView(this.#ref.cfcLabelView, [key]),
       }),
@@ -1237,12 +1620,32 @@ export class CellHandle<T = unknown> {
   }
 
   /**
+   * Handles an update of the cell the connection dropped. The handle keeps
+   * the value and label it holds, but the worker has read the cell since, so
+   * the label is no longer the one the worker read with the cell's value. A
+   * handle delivering labels hands its subscribers what it holds again,
+   * saying so: one that took the label as the worker's read, as
+   * `observeAuthorship()` does, would otherwise hear nothing more, since no
+   * later update need come.
+   */
+  [$onCellUpdateDropped](): void {
+    if (!this.#cfcLabelCurrent) return;
+    this.#cfcLabelCurrent = false;
+    if (!this.#wantsCfcLabel) return;
+    for (const { onValue } of this.#callbacks.values()) {
+      onValue(this.#value as Readonly<T>, this.#cfcLabel, {
+        cfcLabelCurrent: false,
+      });
+    }
+  }
+
+  /**
    * Handles an update of the cell from the backend, whose raw value may
    * contain `CellRef`s.
    */
   [$onCellUpdate](
     value: unknown,
-    labelUpdate?: { cfcLabel: CfcLabelView | undefined },
+    labelUpdate?: { cfcLabel: CfcLabelView | undefined; current: boolean },
   ): void {
     this.#updateGeneration++;
     // A value admitted after a refusal, or the first delivered to a handle
@@ -1261,23 +1664,38 @@ export class CellHandle<T = unknown> {
     );
     if (queue) {
       queue.authoritativeGeneration++;
-      queue.value = applied;
-      queue.hasValue = true;
+      this.#holdInQueue(queue, applied);
     }
     const valueChanged = !valuesOrCellsEqual(applied, this.#value);
-    // A label-only change (value identical) still fires label-aware subscribers.
-    // `labelUpdate` is present only on notifications that carried a label, so a
-    // value-only notification never spuriously churns the label.
+    // A label-only change (value identical) still fires label-aware
+    // subscribers, and so does a change in whether the label is current alone,
+    // as when the worker brings back the value and label a dropped update left
+    // stale. `labelUpdate` is present only on notifications that carried a
+    // label, so a value-only notification never spuriously churns the label.
     const labelChanged = labelUpdate !== undefined && this.#wantsCfcLabel &&
-      !cfcLabelViewsEqual(labelUpdate.cfcLabel, this.#cfcLabel);
+      (!cfcLabelViewsEqual(labelUpdate.cfcLabel, this.#cfcLabel) ||
+        labelUpdate.current !== this.#cfcLabelCurrent);
+    // The label the handle holds follows every update that carries one,
+    // whether or not a subscriber hears of it: a handle whose subscribers
+    // never asked for labels still seeds a later handle on the cell with the
+    // label it holds, and says how current it is.
+    if (labelUpdate !== undefined) {
+      this.#cfcLabel = labelUpdate.cfcLabel;
+      this.#cfcLabelCurrent = labelUpdate.current;
+    } else if (valueChanged) {
+      // The value moved on without its label, which the worker read with an
+      // earlier one.
+      this.#cfcLabelCurrent = false;
+    }
     if (!valueChanged && !labelChanged && !isNews) {
       return;
     }
 
     if (valueChanged) this.#value = applied;
-    if (labelUpdate !== undefined) this.#cfcLabel = labelUpdate.cfcLabel;
     for (const { onValue } of this.#callbacks.values()) {
-      onValue(this.#value as Readonly<T>, this.#cfcLabel);
+      onValue(this.#value as Readonly<T>, this.#cfcLabel, {
+        cfcLabelCurrent: this.#cfcLabelCurrent,
+      });
     }
   }
 

@@ -18,6 +18,7 @@ Contents:
 - [Writable array element types](#writable-array-element-types)
 - [Nested Writable types](#nested-writable-types)
 - [Handler state typed any unwraps Writables](#handler-state-typed-any-unwraps-writables)
+- [Style object declaration order](#style-object-declaration-order)
 - [Performance quick tips](#performance-quick-tips)
 
 ## .get() is not a function
@@ -332,6 +333,37 @@ fields are writable references and resolves everything to plain values.
 
 **Fix:** Give handler state a precise type. If the handler mutates, name the
 field `Writable<T>` (or `Cell<T>` for links); `any` never preserves cell-ness.
+
+## Style object declaration order
+
+**Symptom:** Two declarations of a `style={{ ... }}` object set the same
+property, and the one listed last is not the one that takes effect. With
+`{ borderTop: "2px solid", borderColor: "red" }` the top border comes out in
+the text color.
+
+**Why:** A style object's declarations are written to the `style` attribute in
+the UTF-8 order of their keys, not in the order the object lists them. Stored
+data keeps no order for an object's keys, so the renderer has none to follow.
+CSS lets the later of two declarations of one property win, so the winner is
+the one whose key sorts later, wherever the object lists it. Here
+`border-top` is written after `border-color` and resets the color, and listing
+`borderColor` first instead changes nothing.
+
+**Fix:** Write the style so that the result does not depend on which
+declaration comes last.
+
+```tsx
+// Shown for illustration only.
+// ❌ `border-top` is written after `border-color`, and resets the color
+<div style={{ borderTop: "2px solid", borderColor: "red" }} />
+
+// ✅ One declaration carries the whole value
+<div style={{ borderTop: "2px solid red" }} />
+```
+
+A shorthand whose name is a prefix of its longhand, as `padding` is of
+`paddingTop`, is written first, so the longhand still applies. A `style` given
+as a string is written as it is.
 
 ## Performance quick tips
 

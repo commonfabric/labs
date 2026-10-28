@@ -18,9 +18,10 @@ array operations; when that computation is invalidated, its loop runs again.
 | Repeatedly select one member by key        | `keyBy(selector).lookup(key)`                                 | Duplicate keys choose the smallest occurrence identity in UTF-8 order; this is not a uniqueness check or latest-write rule.                              |
 | Count, numeric summary, or extremal member | `count`, `sum`, `min`, `max`, `minBy`, `maxBy`                | Named aggregates maintain results with defined numeric and identity contracts. Membership changes can still require broad reconciliation.                |
 
-Reactive `map`, `filter`, and `flatMap` callbacks receive the element, its
-reactive index, and the source array. Captured reactive values remain inputs to
-the callback. Reading a shared collection inside every callback can make a
+Reactive `map`, `filter`, and `flatMap` callbacks receive the element and, when
+the callback's parameter list names them, its reactive index and the source
+array; a parameter the callback leaves out is not passed. Captured reactive
+values remain inputs to the callback. Reading a shared collection inside every callback can make a
 change invalidate every member's computation; per-member callbacks alone do not
 remove repeated scans.
 

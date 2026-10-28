@@ -259,8 +259,10 @@ hop and the rebuild must design it deliberately:
 Exactly two states, one flag: `EXPERIMENTAL_SERVER_EXECUTION`
 (RuntimeOptions key `serverExecution`), named deliberately unlike
 v1's `SERVER_PRIMARY_EXECUTION` so the archived docs never alias it.
-OFF is today's behavior byte-for-byte; ON is
-the full v2 posture. **No shippable intermediate states** — partial flag
+OFF runs derivations and handlers on the client. Documents of all scopes
+synchronize by default; the opt-in `localSessionDocuments` flag keeps session
+documents in that client's replica. ON is the full v2 posture, including session
+document synchronization for server execution. **No shippable intermediate states** — partial flag
 combinations exist only as debugging affordances during bring-up, and the
 v1 dial set (eight interlocking dials) is the cautionary tale. Both halves
 of any coupled behavior (e.g. "client suppresses egress" and "server

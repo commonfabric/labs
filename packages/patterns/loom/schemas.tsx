@@ -1,14 +1,23 @@
 /** Public linked-cell contract of a shared Loom. */
+
 import type {
+  Cell,
   Default,
+  JSONValue,
   NAME,
   PerSession,
   PerSpace,
+  PerUser,
   Stream,
   UI,
   VNode,
   Writable,
 } from "commonfabric";
+import type { FileStoreOutput } from "../fabrifile/schemas.tsx";
+import type {
+  FileStoreRecord,
+  FileStoreRecordCell,
+} from "../fabrifile/store.tsx";
 import type { PanelAdderDid, PanelAdderProfile } from "./admission.tsx";
 import type {
   ParticipantProfile,
@@ -57,9 +66,9 @@ export interface PublishedDocument {
  * the label entry the panel declares there names the same principal when the
  * root wrote it. Of the root's handlers only `admitPanel` writes either, and
  * once it has written a panel no other handler may. An occurrence it creates
- * records `addedByProfile` when its event names a profile, and otherwise
- * `addedBy` when the event acted for a principal, so a run that acts for no
- * one records neither. An occurrence a caller made may hold an
+ * records `addedByProfile` when its event names a profile of its actor's own,
+ * and otherwise `addedBy` when the event acted for a principal, so a run that
+ * acts for no one records neither. An occurrence a caller made may hold an
  * `addedBy` the root never wrote: the value is its writer's claim, and a label
  * entry there names the writer, not the principal the value names. A panel
  * with neither names no adder.
@@ -93,14 +102,132 @@ export interface Presentation {
   focusedPanel?: Writable<Panel>;
 }
 
+/**
+ * A chat room as the Loom links it: its name, and nothing of its conversation,
+ * so a reader of the Loom loads none of the room's messages. A client opens
+ * the room through the link, under its own access.
+ */
+export interface LinkedChatRoom {
+  [NAME]?: string;
+}
+
+/**
+ * Where the Loom keeps its chat room: a link to a room piece in the Loom's own
+ * space, in `room`, absent while the Loom names none.
+ */
+export interface ChatRoomRecord {
+  room?: Writable<LinkedChatRoom>;
+}
+
+/**
+ * The shared chat-room cell; a Loom naming no room holds `{}`. It holds a
+ * record rather than the link itself because a handler's cell for a field
+ * holding a link writes through the link, so replacing the link there would
+ * write into the room it names.
+ */
+export type ChatRoomCell = Writable<
+  ChatRoomRecord | Default<Record<PropertyKey, never>>
+>;
+
+/** Caller-computed portable keys for one iCalendar occurrence. */
+export interface PortableMeetingIdentity {
+  /** The UID and typed original-slot hash contract. */
+  scheme: "ical-uid-slot";
+
+  /** Canonical lowercase SHA-256 item key. */
+  item_key: string;
+
+  /** Canonical lowercase SHA-256 occurrence key. */
+  occurrence_key: string;
+
+  [field: string]: JSONValue;
+}
+
+/** The meeting occurrence associated with this Loom, absent while unbound. */
+export interface MeetingAssociation {
+  /** Immutable lowercase 64-character hexadecimal legacy meeting key. */
+  key?: string;
+
+  /** Portable occurrence evidence supplied by an authorized caller. */
+  portableIdentity?: PortableMeetingIdentity;
+
+  [field: string]: unknown;
+}
+
+/** Shared durable meeting association, initialized empty. */
+export type MeetingAssociationCell = Writable<
+  MeetingAssociation | Default<Record<PropertyKey, never>>
+>;
+
+/** The outcome of one binding request; a conflict names the stored key. */
+export type BindMeetingResult =
+  | { status: "bound"; key: string }
+  | { status: "already-bound"; key: string }
+  | { status: "conflict"; key: string }
+  | { status: "invalid-key" }
+  | { status: "invalid-state" };
+
+/** A meeting key and an optional cell receiving this request's outcome. */
+export interface BindMeetingRequest {
+  key: string;
+
+  /** Raw portable identity evidence that bindMeeting validates. */
+  portableIdentity?: JSONValue;
+
+  reply?: Writable<BindMeetingResult>;
+}
+
+/** Confirmed portable appearance shared by every participant; null clears it. */
+export type LoomStyle = {
+  /** Catalog identifier interpreted by the viewer. */
+  id: string;
+
+  /** Explicit rendering mode, or the catalog's native mode. */
+  mode: "native" | "light" | "dark";
+} | null;
+
 /** Shared state supplied when a Loom is instantiated. */
 export interface LoomInput {
   title?: PerSpace<Writable<string | Default<"Shared Loom">>>;
+
+  /** Confirmed appearance; transient previews stay in the viewer. */
+  style?: PerSpace<Writable<LoomStyle | Default<null>>>;
+
   panels?: PerSpace<Writable<Writable<Panel>[] | Default<[]>>>;
   presentation?: PerSpace<
     Writable<Presentation | Default<{ stagedPanels: [] }>>
   >;
   participants?: PerSpace<ParticipantRosterCell>;
+  chatRoom?: PerSpace<ChatRoomCell>;
+
+  /** The Loom's space's file store, absent until it is first needed. */
+  fileStore?: PerSpace<FileStoreRecordCell>;
+
+  meeting?: PerSpace<MeetingAssociationCell>;
+  hiddenPanels?: PerUser<Writable<Writable<Panel>[] | Default<[]>>>;
+  privatePanels?: PerUser<Writable<PrivatePanel[] | Default<[]>>>;
+}
+
+/** The room `setChatRoom` names as the Loom's chat. Omission clears it. */
+export interface ChatRoomChoice {
+  room?: Writable<LinkedChatRoom>;
+}
+
+/** A panel and the title it shows in place of its target's; `""` clears it. */
+export interface PanelTitle {
+  panel: Writable<Panel>;
+  titleOverride: string;
+}
+
+/** Where a URL or piece panel points: a URL, or a piece by its complete link. */
+export type PanelTarget =
+  | { kind: "url"; url: string }
+  | { kind: "piece"; piece: Writable<unknown> };
+
+/** A URL or piece panel, and the target `retargetPanel` points it at. */
+export interface PanelRetarget {
+  panel: Writable<Panel>;
+  target: PanelTarget;
 }
 
 /** An occurrence and its optional insertion anchor. Omission appends. */
@@ -110,8 +237,21 @@ export interface PanelPosition {
 }
 
 /**
- * The profile under which the person adding a panel acts. Without one, the
- * root records the principal the event acted for; an event never names it.
+ * One of a viewer's private panels: an occurrence in a space other than the
+ * Loom's, and the shared occurrence it shows just ahead of. Without `before`,
+ * or while `before` is not shown to the viewer, it shows after every shared
+ * one.
+ */
+export interface PrivatePanel {
+  panel: Writable<Panel>;
+  before?: Writable<Panel>;
+}
+
+/**
+ * The profile under which the person adding a panel acts, which is one of
+ * their own: the root refuses a profile whose label does not attest the
+ * principal the event acts for. Without one, the root records that principal;
+ * an event never names it.
  */
 export interface PanelAdder {
   as?: ParticipantProfile;
@@ -145,6 +285,13 @@ export interface LoomOutput {
   [NAME]: string;
   [UI]: VNode;
   title: string;
+
+  /** Confirmed appearance for all participants. */
+  style: LoomStyle;
+
+  /** Replaces the complete style and mode atomically; null clears it. */
+  setStyle: Stream<{ style: LoomStyle }>;
+
   viewerState: PerSession<Writable<ViewerState>>;
   panels: Writable<Panel>[];
   presentation: Presentation;
@@ -158,4 +305,33 @@ export interface LoomOutput {
   setPresentation: Stream<Presentation>;
   participants: ParticipantProfile[];
   addParticipant: Stream<{ profile: ParticipantProfile }>;
+  chatRoom?: Writable<LinkedChatRoom>;
+  setChatRoom: Stream<ChatRoomChoice>;
+  ensureChatRoom: Stream<void>;
+
+  /** The Loom's space's file store, absent until `ensureFileStore` names one. */
+  fileStore?: Cell<FileStoreOutput>;
+
+  /** Names a new store as the Loom's space's, unless it names one already. */
+  ensureFileStore: Stream<void>;
+
+  /**
+   * Where the Loom keeps its space's file store, which its chat room, as a
+   * FabriChat container's, names a store in too.
+   */
+  fileStoreRecord: Cell<FileStoreRecord>;
+
+  meeting: MeetingAssociation;
+  bindMeeting: Stream<BindMeetingRequest>;
+  retitleLoom: Stream<{ title: string }>;
+  retitlePanel: Stream<PanelTitle>;
+  retargetPanel: Stream<PanelRetarget>;
+  hiddenPanels: PerUser<Writable<Writable<Panel>[]>>;
+  privatePanels: PerUser<Writable<PrivatePanel[]>>;
+  viewerPanels: Writable<Panel>[];
+  hidePanel: Stream<{ panel: Writable<Panel> }>;
+  unhidePanel: Stream<{ panel: Writable<Panel> }>;
+  addPrivatePanel: Stream<PanelPosition>;
+  removePrivatePanel: Stream<{ panel: Writable<Panel> }>;
+  movePrivatePanel: Stream<PanelPosition>;
 }

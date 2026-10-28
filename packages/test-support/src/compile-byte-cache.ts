@@ -2,10 +2,12 @@ import { dirname } from "@std/path";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 // The compiled-module-byte cache, in full. The runtime defines only the
-// `ModuleByteCache` interface it consults during a compile; this test-side
-// module owns the implementation and its disk persistence, and is the only
-// place an instance is created. So the cache is, by construction, a single
-// feature that exists only when tests install it — never in production.
+// `ModuleByteCache` interface it consults during a compile; this module owns
+// the implementation and its disk persistence. A runtime holds one only where
+// something installs it: the test harnesses and `cf` through
+// `createCompileByteCache`, and a toolshed's serving host, whose per-space
+// runtimes share one `ProcessModuleByteCache` so a space's root pattern is
+// transformed and emitted once per process rather than once per space.
 //
 // `createCompileByteCache` returns the instance to inject into test runtimes.
 // The in-memory cache is always created for cross-runtime reuse within the
@@ -23,6 +25,7 @@ export interface SerializedModuleBytes {
   patternCoverageSpans?: CachedPatternCoverageSpan[];
   builderSourceSites?: CachedBuilderSourceSitesV1;
   policyManifests?: readonly unknown[];
+  importSpecs?: readonly string[];
 }
 
 export interface CachedBuilderSourceSitesV1 {
@@ -49,6 +52,9 @@ export interface CompiledModuleArtifact {
   patternCoverageSpans?: CachedPatternCoverageSpan[];
   builderSourceSites?: CachedBuilderSourceSitesV1;
   policyManifests?: readonly unknown[];
+
+  /** Specifiers of the `require()` calls in `js`, as the runner lists them. */
+  importSpecs?: readonly string[];
 }
 
 export interface ModuleByteCache {
@@ -71,7 +77,8 @@ const cacheFiles = new WeakMap<ProcessModuleByteCache, string>();
  * the module's content identity scoped by the compiled-set `runtimeVersion`. The
  * emitted bytes are a deterministic function of that key, so a hit always returns
  * the bytes the identity addresses. Holds emitted JS only, never live pattern
- * instances. A byte cap bounds the total retained JS and evicts oldest-first.
+ * instances. A byte cap bounds the total retained artifacts, source maps and
+ * the other companions included, and evicts oldest-first.
  */
 export class ProcessModuleByteCache implements ModuleByteCache {
   /**
@@ -95,10 +102,17 @@ export class ProcessModuleByteCache implements ModuleByteCache {
     return `${runtimeVersion}\0${identity}`;
   }
 
+  /**
+   * What an artifact counts toward the cap: the emitted JavaScript and every
+   * retained companion, measured as serialized text. The compiler hands over
+   * a parsed source map, which weighs as much as the text it parsed from.
+   */
   static #sizeOf(artifact: CompiledModuleArtifact): number {
     let size = artifact.js.length;
     if (typeof artifact.sourceMap === "string") {
       size += artifact.sourceMap.length;
+    } else if (artifact.sourceMap !== undefined) {
+      size += JSON.stringify(artifact.sourceMap).length;
     }
     if (artifact.patternCoverageSpans !== undefined) {
       size += JSON.stringify(artifact.patternCoverageSpans).length;
@@ -108,6 +122,9 @@ export class ProcessModuleByteCache implements ModuleByteCache {
     }
     if (artifact.policyManifests !== undefined) {
       size += JSON.stringify(artifact.policyManifests).length;
+    }
+    if (artifact.importSpecs !== undefined) {
+      size += JSON.stringify(artifact.importSpecs).length;
     }
     return size;
   }
@@ -210,6 +227,9 @@ export class ProcessModuleByteCache implements ModuleByteCache {
       if (artifact.policyManifests !== undefined) {
         serialized.policyManifests = artifact.policyManifests;
       }
+      if (artifact.importSpecs !== undefined) {
+        serialized.importSpecs = artifact.importSpecs;
+      }
       out.push(serialized);
     }
     return out;
@@ -241,6 +261,11 @@ export class ProcessModuleByteCache implements ModuleByteCache {
         e.policyManifests !== undefined &&
         !Array.isArray(e.policyManifests)
       ) continue;
+      if (
+        e.importSpecs !== undefined &&
+        !(Array.isArray(e.importSpecs) &&
+          e.importSpecs.every((spec) => typeof spec === "string"))
+      ) continue;
       const artifact: CompiledModuleArtifact = { js: e.js };
       if (e.sourceMap !== undefined) artifact.sourceMap = e.sourceMap;
       if (patternCoverageSpans !== undefined) {
@@ -251,6 +276,9 @@ export class ProcessModuleByteCache implements ModuleByteCache {
       }
       if (e.policyManifests !== undefined) {
         artifact.policyManifests = [...e.policyManifests];
+      }
+      if (e.importSpecs !== undefined) {
+        artifact.importSpecs = [...e.importSpecs];
       }
       this.#insert(
         e.key,
@@ -287,6 +315,9 @@ function artifactFromModule(
   }
   if (module.policyManifests !== undefined) {
     artifact.policyManifests = [...module.policyManifests];
+  }
+  if (module.importSpecs !== undefined) {
+    artifact.importSpecs = [...module.importSpecs];
   }
   return artifact;
 }

@@ -114,6 +114,7 @@ describe("test-records-relay", () => {
       );
       expect(context.commit).toBe("b".repeat(40));
       expect(context.ci?.job).toBe("Test (3/8)");
+      expect(context.ci?.runAttempt).toBe(2);
       expect(context.ci?.shard).toBe("3/8");
       expect(context.ci?.headCommit).toBe("a".repeat(40));
       expect(context.branch).toBe("feature-branch");
@@ -137,21 +138,6 @@ describe("test-records-relay", () => {
         "test-records-check",
       );
       expect(Object.hasOwn(unseeded, "shuffleSeed")).toBe(false);
-    });
-
-    it("takes the producing attempt from the artifact name suffix", () => {
-      const context = composeCiContext(
-        runFactsOfPayload(PAYLOAD),
-        {},
-        "test-records-check-a1",
-      );
-      expect(context.ci?.runAttempt).toBe(1);
-      const unsuffixed = composeCiContext(
-        runFactsOfPayload(PAYLOAD),
-        {},
-        "test-records-check",
-      );
-      expect(unsuffixed.ci?.runAttempt).toBe(2);
     });
 
     it("falls back to the artifact name when job.json is missing", () => {
@@ -189,7 +175,7 @@ describe("test-records-relay", () => {
     });
 
     it("ships one deterministic object per artifact directory", async () => {
-      const artifact = join(dir, "test-records-check");
+      const artifact = join(dir, "test-records-check-a2");
       await Deno.mkdir(artifact);
       await Deno.writeTextFile(
         join(artifact, "job.json"),
@@ -233,7 +219,7 @@ describe("test-records-relay", () => {
       );
       expect(bodyText).toContain(
         '"name":"labs/test-records/submissions/ci/v1/2026/08/17/' +
-          'run-987654-test-records-check.ndjson"',
+          'run-987654-test-records-check-a2.ndjson"',
       );
       // The gzip payload sits between the second blank line and the final
       // boundary; find both in bytes, since character indexes drift on
@@ -268,10 +254,61 @@ describe("test-records-relay", () => {
       expect(JSON.parse(lines[1]!).test.n).toBe("check-docs");
     });
 
-    it("returns the names of artifacts whose create failed", async () => {
-      await Deno.mkdir(join(dir, "test-records-bad"));
+    it("ships only its own attempt's artifacts, named by that attempt's start", async () => {
+      for (
+        const name of [
+          "test-records-check-a1",
+          "test-records-check-a2",
+          "test-records-check-a12",
+        ]
+      ) {
+        await Deno.mkdir(join(dir, name));
+        await Deno.writeTextFile(join(dir, name, "records.ndjson"), "");
+      }
+      const names: string[] = [];
+      const failed = await relayArtifacts({
+        artifactsDir: dir,
+        run: runFactsOfPayload(PAYLOAD),
+        bucket: "b",
+        prefix: "p",
+        token: "t",
+        fetch: ((_input: URL | RequestInfo, init?: RequestInit) => {
+          const body = new TextDecoder("utf-8", { fatal: false }).decode(
+            init?.body as Uint8Array,
+          );
+          names.push(body.match(/"name":"([^"]+)"/)![1]!);
+          return Promise.resolve(new Response("{}", { status: 200 }));
+        }) as typeof fetch,
+      });
+      expect(failed).toEqual([]);
+      expect(names).toEqual([
+        "p/v1/2026/08/17/run-987654-test-records-check-a2.ndjson",
+      ]);
+    });
+
+    it("fails an artifact whose name carries no attempt", async () => {
+      await Deno.mkdir(join(dir, "test-records-check"));
       await Deno.writeTextFile(
-        join(dir, "test-records-bad", "records.ndjson"),
+        join(dir, "test-records-check", "records.ndjson"),
+        "",
+      );
+      const failed = await relayArtifacts({
+        artifactsDir: dir,
+        run: runFactsOfPayload(PAYLOAD),
+        bucket: "b",
+        prefix: "p",
+        token: "t",
+        fetch: (() => {
+          throw new Error("nothing must ship");
+        }) as unknown as typeof fetch,
+      });
+      expect(failed).toEqual(["test-records-check"]);
+    });
+
+    it("returns the names of artifacts whose create failed", async () => {
+      await Deno.mkdir(join(dir, "test-records-bad-a2"));
+      await Deno.writeTextFile(
+        join(dir, "test-records-bad-a2", "records.ndjson"),
         "",
       );
       const failed = await relayArtifacts({
@@ -285,11 +322,11 @@ describe("test-records-relay", () => {
             new Response("denied", { status: 403 }),
           )) as typeof fetch,
       });
-      expect(failed).toEqual(["test-records-bad"]);
+      expect(failed).toEqual(["test-records-bad-a2"]);
     });
 
     it("fails an artifact with no records file rather than ship it empty", async () => {
-      await Deno.mkdir(join(dir, "test-records-truncated"));
+      await Deno.mkdir(join(dir, "test-records-truncated-a2"));
       let fetched = 0;
       const failed = await relayArtifacts({
         artifactsDir: dir,
@@ -302,14 +339,14 @@ describe("test-records-relay", () => {
           return Promise.resolve(new Response("{}", { status: 200 }));
         }) as typeof fetch,
       });
-      expect(failed).toEqual(["test-records-truncated"]);
+      expect(failed).toEqual(["test-records-truncated-a2"]);
       expect(fetched).toBe(0);
     });
 
     it("treats an existing object as shipped", async () => {
-      await Deno.mkdir(join(dir, "test-records-dup"));
+      await Deno.mkdir(join(dir, "test-records-dup-a2"));
       await Deno.writeTextFile(
-        join(dir, "test-records-dup", "records.ndjson"),
+        join(dir, "test-records-dup-a2", "records.ndjson"),
         "",
       );
       const failed = await relayArtifacts({
@@ -372,11 +409,11 @@ describe("test-records-relay", () => {
 
     it("ships a same-repository run and returns zero", async () => {
       const artifacts = join(dir, "artifacts");
-      await Deno.mkdir(join(artifacts, "test-records-check"), {
+      await Deno.mkdir(join(artifacts, "test-records-check-a2"), {
         recursive: true,
       });
       await Deno.writeTextFile(
-        join(artifacts, "test-records-check", "records.ndjson"),
+        join(artifacts, "test-records-check-a2", "records.ndjson"),
         "",
       );
       let created = 0;
@@ -414,7 +451,7 @@ describe("test-records-relay", () => {
 
     it("returns one when an artifact fails to ship", async () => {
       const artifacts = join(dir, "artifacts");
-      await Deno.mkdir(join(artifacts, "test-records-truncated"), {
+      await Deno.mkdir(join(artifacts, "test-records-truncated-a2"), {
         recursive: true,
       });
       const code = await runRelay({

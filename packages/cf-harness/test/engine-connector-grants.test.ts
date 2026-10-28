@@ -12,6 +12,7 @@ import { CfHarnessEngine } from "../src/engine.ts";
 import type { HarnessFabricSession } from "../src/fabric-session.ts";
 import { resolveHandleToken } from "../src/handle-table.ts";
 import { wellKnownGrantsContextMessage } from "../src/well-known-grants.ts";
+import { INERT_RUNSC } from "./support/inert-runsc.ts";
 
 const SPACE_DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
 const REGISTRY_ID = `of:fid1:${"A".repeat(43)}`;
@@ -55,6 +56,7 @@ const engineWith = (
   connectorGrants: readonly typeof MAIL_GRANT[],
 ): CfHarnessEngine =>
   new CfHarnessEngine({
+    ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
     fabricSession: {
       apiUrl: "https://toolshed.example/",
@@ -137,6 +139,7 @@ describe("engine-connector-grants", () => {
       }));
 
       const resumed = new CfHarnessEngine({
+        ...INERT_RUNSC,
         workspaceHostPath: "/host/project",
         fabricSession: {
           apiUrl: "https://toolshed.example/",

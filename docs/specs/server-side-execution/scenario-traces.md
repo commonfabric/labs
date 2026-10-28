@@ -671,15 +671,20 @@ these.
   counter was missing from §7's stats shape — FIXED with this fold.)
 - Q2: non-re-derivable writes REBASE AND RETRY with field-level
   merge; the watermark advance and its consequences move TOGETHER,
-  never separately. [serving-loop §3d; events §4]
+  never separately. An event-handler contribution with a stale
+  recorded read requeues WHOLE ahead of the rebase, the later entries
+  of its stream in the wave requeue with it, and the re-drain waits on
+  the replica taking the commit that staled the read. [serving-loop
+  §3d, PROPOSED 2026-10-23; events §2, §5]
 - Q3: semantic rebase conflict ⇒ REQUEUE (ran, raced) — distinct
   from DROP (cannot run at all) — distinct again from the
   superseded-WRITE drop. [serving-loop §3d; events §5]
 - Q4: whole-wave CAS failure FORBIDDEN (livelock). [serving-loop §3d]
 - Q5: on budget exhaustion W advances only to the input head the
   settle's PREFIX COVERAGE proved (a completed frame barrier over the
-  head, then an idle scheduler with no re-armed root pending, clamped
-  by the shadow, event-visibility and re-armed-root floors); with no proof the commit
+  head, then an idle scheduler, clamped by the shadow, event-visibility
+  and re-armed-root floors; a re-armed root's retry starts at that
+  barrier, on either side of T_flush); with no proof the commit
   carries `derivedThrough` = current W; continuation waves carry the
   cascade. [serving-loop §3]
 

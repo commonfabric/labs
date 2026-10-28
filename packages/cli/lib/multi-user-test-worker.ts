@@ -47,7 +47,7 @@ import {
   type ConsoleHandler,
   ConsoleMethod,
   type Engine,
-  experimentalOptionsFromEnv,
+  type ErrorWithContext,
   type Pattern,
   PatternCoverageCollector,
   patternCoverageOutputPath,
@@ -72,6 +72,17 @@ import {
 } from "./console-capture.ts";
 import { materializeTestVDOM, mountTestVDOM } from "./materialize-test-vdom.ts";
 import { waitForMarkerCommit } from "./multi-user-marker-commit.ts";
+import { patternTestExperimentalOptions } from "./pattern-test-experimental-options.ts";
+import {
+  collectServedErrors,
+  type EventError,
+  servedRuntimeErrors,
+} from "./served-errors.ts";
+import {
+  type RuntimeErrorExpectation,
+  runtimeErrorExpectation,
+} from "./runtime-error-expectation.ts";
+import { servedConsequences, settleServed } from "./served-settle.ts";
 import { buildActionEvent } from "./trusted-action-event.ts";
 
 export interface WorkerRequest {
@@ -112,6 +123,14 @@ export interface StepMeta {
 export interface ParticipantInitResult {
   steps: StepMeta[];
   allowRuntimeErrors: boolean;
+
+  /**
+   * The runtime errors this participant requires, as
+   * `runtimeErrorExpectation()` reads them, or `undefined` for none. As in a
+   * single-user test, an expectation tolerates the errors it counts.
+   */
+  expectRuntimeErrors: RuntimeErrorExpectation | undefined;
+
   expectNonIdempotent: boolean;
   allowConsoleErrors: boolean;
   allowConsoleWarnings: boolean;
@@ -161,7 +180,10 @@ let stepCells: Cell<unknown>[] = [];
 let patternCoverage: PatternCoverageCollector | undefined;
 let patternCoveragePath: string | undefined;
 let patternCoverageRoot: string | undefined;
-const runtimeErrors: string[] = [];
+const runtimeErrors: ErrorWithContext[] = [];
+
+/** Errors of served runs of this runtime's events; see `served-errors.ts`. */
+let servedErrors: EventError[] = [];
 
 /** Channel 1: console.error calls captured via the harness console event. */
 const consoleErrors: string[] = [];
@@ -184,13 +206,23 @@ function rt(): Runtime {
   return runtime;
 }
 
+/**
+ * Settles the runtime and its storage, until a round finds nothing to do,
+ * and on the server-execution arm until every event this runtime fired has
+ * its served consequence back here; see `served-settle.ts`.
+ */
 async function settle(maxIterations = 20): Promise<void> {
-  for (let i = 0; i < maxIterations; i++) {
-    const start = performance.now();
-    await rt().idle();
-    await storageManager!.synced();
-    if (performance.now() - start < SETTLE_FAST_MS) return;
-  }
+  await settleServed(rt(), async () => {
+    for (let i = 0; i < maxIterations; i++) {
+      const start = performance.now();
+      await rt().idle();
+      await servedConsequences(rt());
+      await storageManager!.synced();
+      // What the sync delivered may have scheduled work of its own.
+      await rt().idle();
+      if (performance.now() - start < SETTLE_FAST_MS) return;
+    }
+  });
 }
 
 function markersCellFor(participant: string): Cell<Record<string, boolean>> {
@@ -348,6 +380,9 @@ const handlers: Record<
         }, not off, observe, or persist`,
       );
     }
+    // The orchestrator resolves the same environment the same way, and hosts
+    // the serving loop this runtime's arm needs.
+    const experimental = patternTestExperimentalOptions(Deno.env.get);
     const identity = await Identity.fromKeyPair(
       keyPairFromRealmValue(
         args.identity as RealmEncodedValue,
@@ -383,14 +418,14 @@ const handlers: Record<
       : undefined;
     patternCoverageRoot = typeof args.root === "string" ? args.root : undefined;
     // `runtimePresets.patternTest` carries the shared first-party posture
-    // (CT-1814) and the same env-honored experimental flags as the
-    // single-user runner (this worker previously ignored EXPERIMENTAL_*, so
-    // the two harness modes could run under different flags).
+    // (CT-1814), and `experimental` comes from the function the single-user
+    // runner resolves its flags with, so the two harness modes run under the
+    // same flags.
     runtime = new Runtime(runtimePresets.patternTest({
       apiUrl: new URL(import.meta.url),
       storageManager: storageManager as never,
-      experimental: experimentalOptionsFromEnv(Deno.env.get),
-      errorHandlers: [(error: Error) => runtimeErrors.push(String(error))],
+      experimental,
+      errorHandlers: [(error) => runtimeErrors.push(error)],
       moduleByteCache: getDefaultModuleByteCache(),
       // The collector is the runtime's, which makes every compile an
       // instrumented one and names the instrumented variant wherever the
@@ -403,6 +438,9 @@ const handlers: Record<
         ? { cfcEnforcementMode: requestedMode }
         : {}),
     }));
+    if (experimental.serverExecution) {
+      servedErrors = collectServedErrors(runtime);
+    }
     if (args.noIdempotencyCheck !== true) runtime.enableIdempotencyCheck();
     if (args.cfcDenials === true) {
       // This worker runs one participant for its whole life, so nothing stops
@@ -572,6 +610,9 @@ const handlers: Record<
       allowRuntimeErrors:
         await (resultCell.key("allowRuntimeErrors") as Cell<unknown>)
           .pull() === true,
+      expectRuntimeErrors: runtimeErrorExpectation(
+        await (resultCell.key("expectRuntimeErrors") as Cell<unknown>).pull(),
+      ),
       expectNonIdempotent:
         await (resultCell.key("expectNonIdempotent") as Cell<unknown>)
           .pull() === true,
@@ -666,7 +707,8 @@ const handlers: Record<
     );
     return Promise.resolve({
       runtimeErrors: [
-        ...runtimeErrors,
+        ...runtimeErrors.map((error) => String(error)),
+        ...servedRuntimeErrors(servedErrors, runtimeErrors),
         ...continuousUiErrors.map((error) =>
           `[continuous $UI] ${String(error)}`
         ),

@@ -81,7 +81,7 @@ Both carry the canonical reference string, so the address a caller reads is one
 `--piece` already accepts. The CLI's dispatch gate now accepts it as a verb
 argument too, converting it against the declared contract — which is what makes
 the capability compose, and is the property
-[CLI surface shape](cli-surface-shape.md) already states for commands. The
+[CLI surface shape](../history/plans/cli-surface-shape.md) already states for commands. The
 callers that still cannot pass one in are the webhook and ingest paths, which
 reach the same handler through no gate at all.
 
@@ -183,7 +183,7 @@ link *values*. That is a considered position on exactly this question, taken in
 the layer most careful about what a caller may submit.
 
 **The CLI gate is the same validator, aligned since #5880.**
-`verbInputSchemaError` (`packages/cli/lib/callable.ts`) calls the identical
+`verbInputSchemaError` (`packages/piece/src/verb-input.ts`) calls the identical
 `validateSchemaValue` and now passes `acceptOpaqueValue`, so a link envelope
 passes it opaquely — and one gate earlier, the emitted address is converted
 into that envelope against the declared contract. Its purpose is unchanged:

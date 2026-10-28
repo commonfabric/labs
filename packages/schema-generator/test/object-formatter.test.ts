@@ -210,4 +210,48 @@ interface SchemaRoot {
       "Opens the legacy composer.",
     );
   });
+  describe("a member of an object literal read from its type", () => {
+    // A callback's inferred result is read so. Its member is read at the
+    // annotation of the binding it holds, where every `typeof` that annotation
+    // names is a `PolicyOf`'s rules.
+    const SOURCE = `
+type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
+type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+type WriteAuthorizedBy<T, B> = Cfc<T, { writeAuthorizedBy: B }>;
+type PolicyOf<Binding> = { readonly __ct_cfc_policy_of__?: Binding };
+declare const rules: { name: string };
+declare function save(): void;
+declare const labelled: Confidential<string, [PolicyOf<typeof rules>]>;
+declare const written: WriteAuthorizedBy<string, typeof save>;
+const result = { labelled, parenthesized: (labelled), written };
+type SchemaRoot = typeof result;
+`;
+
+    const memberSchemas = async () => {
+      const { type, checker } = await getTypeFromCode(SOURCE, "SchemaRoot");
+      return asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker),
+      ).properties as Record<string, { ifc?: Record<string, unknown> }>;
+    };
+
+    const POLICY = {
+      confidentiality: [{
+        policyRefKind: "module",
+        __ctPolicyIdentityOf: { path: ["rules"] },
+      }],
+    };
+
+    it("reads the policy a binding's annotation names", async () => {
+      expect((await memberSchemas()).labelled?.ifc).toMatchObject(POLICY);
+    });
+
+    it("reads the policy of a binding read inside parentheses", async () => {
+      expect((await memberSchemas()).parenthesized?.ifc).toMatchObject(POLICY);
+    });
+
+    it("reads a binding whose annotation names a writer from its type", async () => {
+      expect((await memberSchemas()).written?.ifc?.writeAuthorizedBy)
+        .toBeUndefined();
+    });
+  });
 });

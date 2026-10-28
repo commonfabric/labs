@@ -44,6 +44,9 @@ describe("SES security regressions", () => {
   });
 
   it("rejects top-level mutable state before evaluation", async () => {
+    // The compiler refuses the binding before the module verifier sees the
+    // compiled body.
+
     const program: RuntimeProgram = {
       main: "/main.ts",
       files: [
@@ -61,7 +64,7 @@ describe("SES security regressions", () => {
     };
 
     await expect(engine.compileToRecordGraph(program)).rejects.toThrow(
-      "Top-level mutable bindings are not allowed in SES mode",
+      "`let` declarations are not allowed at module scope",
     );
   });
 

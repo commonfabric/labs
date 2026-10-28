@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
+import type { PatternIndexPublishRequest } from "@commonfabric/pattern-index/client";
 import { Identity } from "@commonfabric/identity";
 import {
   experimentalOptionsFromEnv,
@@ -9,7 +10,6 @@ import {
 } from "@commonfabric/runner";
 import { StorageManager } from "../../runner/src/storage/cache.deno.ts";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
-import type { PatternIndexPublishRequest } from "../src/pattern-index/client.ts";
 import {
   compileAtom,
   defaultSeedIo,

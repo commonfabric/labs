@@ -22,8 +22,8 @@ const childSource = [
   "",
 ].join("\n");
 
-// A parent instantiating the child twice over: as a node of its own graph,
-// and from a handler, in a space of the child's own.
+// A parent instantiating the child as a node of its own graph, and from a
+// handler, in a space of the child's own or in the parent's.
 const parentSource = [
   "import { handler, navigateTo, pattern, Writable } from 'commonfabric';",
   "import Child from './child.tsx';",
@@ -31,6 +31,14 @@ const parentSource = [
   "const spawn = handler<unknown, { spawned: Writable<unknown[]> }>(",
   "  (_, { spawned }) => {",
   "    spawned.push(Child.inSpace()({}));",
+  "  },",
+  ");",
+  "",
+  "// The same spawn, into the parent's own space, as a Loom makes its chat",
+  "// room.",
+  "const spawnHere = handler<unknown, { spawned: Writable<unknown[]> }>(",
+  "  (_, { spawned }) => {",
+  "    spawned.push(Child({}));",
   "  },",
   ");",
   "",
@@ -51,6 +59,7 @@ const parentSource = [
   "    nested, spawned,",
   "    spawn: spawn({ spawned }),",
   "    spawnAndGo: spawnAndGo({ spawned }),",
+  "    spawnHere: spawnHere({ spawned }),",
   "  };",
   "});",
   "",
@@ -91,7 +100,7 @@ describe("a child's origin", () => {
   async function childOrigins(
     dir: string,
     origin: string | undefined,
-    verb: "spawn" | "spawnAndGo" = "spawn",
+    verb: "spawn" | "spawnAndGo" | "spawnHere" = "spawn",
   ): Promise<{ nested: string | undefined; spawned: string | undefined }> {
     storageManager = StorageManager.emulate({ as: signer });
     runtime = new Runtime({
@@ -131,7 +140,9 @@ describe("a child's origin", () => {
     const [spawnedLink] = run.key("spawned").asSchema(linkListSchema)
       // deno-lint-ignore no-explicit-any
       .get() as any[];
-    expect(spawnedLink.getAsNormalizedFullLink().space).not.toBe(space);
+    expect(spawnedLink.getAsNormalizedFullLink().space === space).toBe(
+      verb === "spawnHere",
+    );
     // Provenance belongs to the resolved child; inspecting it requires a
     // readable projection rather than the list's opaque reference schema.
     const spawnedHandle = runtime.getCellFromLink(
@@ -158,6 +169,14 @@ describe("a child's origin", () => {
   it("is claimed as well for a child whose handler result the runtime starts after the commit", async () => {
     const dir = `${PATTERNS_ROUTE_PREFIX}system/`;
     expect(await childOrigins(dir, PARENT_ORIGIN, "spawnAndGo")).toEqual({
+      nested: undefined,
+      spawned: "system:system/child.tsx",
+    });
+  });
+
+  it("is claimed as well for a child a handler makes in the parent's space", async () => {
+    const dir = `${PATTERNS_ROUTE_PREFIX}system/`;
+    expect(await childOrigins(dir, PARENT_ORIGIN, "spawnHere")).toEqual({
       nested: undefined,
       spawned: "system:system/child.tsx",
     });

@@ -28,6 +28,21 @@ space < user < session
 
 `space` is the broadest scope. `session` is the narrowest scope.
 
+When a runtime enables `localSessionDocuments` with server execution disabled,
+its own session instance lives in its local replica. Reads of that instance
+register no remote watches, and its values and read dependencies are omitted
+from outgoing commits. Explicitly named foreign session instances retain server
+reads and admission; coverage checks do not treat an unloaded foreign instance
+as locally absent. Local writes still notify reactive readers. A transaction
+that also writes space or
+user state settles its session writes with that transaction's server verdict.
+Later session writes wait for earlier pending writes to finish applying locally.
+Origin preconditions naming local-only commits are checked against their local
+outcomes; dependent writes are rejected when their origin fails.
+With the flag off (the default), session documents synchronize with the server.
+Server execution always synchronizes them so the serving runtime can read and
+derive them.
+
 Scope is not part of cause computation. Cause-derived ids remain the same across
 scopes. Scope is an addressing dimension layered over the id.
 
@@ -582,9 +597,20 @@ cell's scope is not changed. This is the explicit path by which data can move
 from narrower scopes to wider scopes. The scope system itself permits this
 write; CFC/IFC policy may still record or restrict the flow separately.
 
-Transactions must track the narrowest scoped document read during a
-computation so the runtime can decide whether the output value must be replaced
-with a scoped link.
+Transactions must track the narrowest scope read during a computation so the
+runtime can decide whether the output value must be replaced with a scoped
+link. A read narrows that scope by the address it lands on, and a read that
+follows a link from a position declared narrower than the link's own scope
+narrows it to the declared scope whether or not an instance at that scope
+exists. The declaration is what every reader of the same documents shares: a
+reader holding an instance at the declared scope and one that does not must
+place the computation's output the same way, or each replaces the other's
+output and neither converges.
+
+A broad output location that already holds a link to its own narrower-scoped
+instance keeps that link. A computation whose reads did not narrow that far
+writes behind the link, into its own instance at the stored scope, rather than
+over it.
 
 ## Built-In Default Scope Rules
 

@@ -1,11 +1,13 @@
 import type {
+  FabricExecValue,
   InSpaceGrants,
   InSpaceOptions,
-  JSONSchemaObj,
 } from "@commonfabric/api";
 import {
   debugStr,
+  deepFreeze,
   hashStringOf,
+  isDeepFrozen,
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
@@ -19,8 +21,12 @@ import {
   UNUSED_SINGLE_SUBSCHEMA_KEYS,
 } from "@commonfabric/data-model-schema/schema-walk";
 import { isDID } from "@commonfabric/identity/did";
+import {
+  isSpaceKind,
+  SPACE_KIND_MAX_LENGTH,
+} from "@commonfabric/memory/v2/space-kind";
 
-import { type AliasBinding } from "../alias-binding.ts";
+import { type AliasBinding, isAliasBinding } from "../alias-binding.ts";
 import {
   exportCell,
   isCell,
@@ -36,6 +42,8 @@ import {
   externalizeSchema,
   getStableInternalPathSegment,
   KeepAsCell,
+  sanitizeAndFreezeSchemaForLinks,
+  sanitizeAndInternSchemaForLinks,
   sanitizeSchemaForLinks,
 } from "../link-utils.ts";
 import {
@@ -55,6 +63,7 @@ import {
   SUBPATTERN_ARGUMENT_BUILTIN_REFS,
 } from "./builtin-replayability.ts";
 import { closureCaptureErrorMessage } from "./closure-capture-diagnostic.ts";
+import { instanceNameOf, instancePartialCause } from "./instance-name.ts";
 import {
   pushOntoFrameStack,
   pushOntoRootFrameStack,
@@ -72,7 +81,7 @@ import {
   patternToEncodableForm,
   withAliasBindings,
 } from "./to-encodable-form.ts";
-import { traverseValue } from "./traverse-utils.ts";
+import { traverseValue, visitValue } from "./traverse-utils.ts";
 import {
   type CellScope,
   type DerivedInternalCellDescriptor,
@@ -80,6 +89,7 @@ import {
   type Frame,
   type ICell,
   isModule,
+  isPattern,
   isReactive,
   JSONObject,
   type JSONSchema,
@@ -242,31 +252,40 @@ export function patternFromFrame<T, R>(
   );
 }
 
+/** The top-level record keys no user-supplied cause may carry. */
+const RESERVED_CAUSE_KEYS = ["$generated", "$instance"] as const;
+
 /**
- * Reject user-supplied causes carrying a top-level `$generated` record key.
+ * Rejects a user-supplied cause carrying a top-level `$generated` or
+ * `$instance` record key.
  *
- * That key marks the causes the pattern builder mints itself
- * (`{ $generated: N }`, plus `$kind` on streams and `name` on duplicate-name
- * wraps): a user cause like `Cell.for({ $generated: 0 })` would deliberately
- * mimic that namespace, and keeping the namespaces disjoint is what lets the
- * partial-cause assignment in `factoryFromPattern` skip collision checks for
- * generated causes entirely. `$generated` alone suffices — every builder-minted
- * cause carries it, so a cause without it can never hash-equal one (`$kind`
- * and other sigil-looking keys stay usable). Only the top level matters —
- * causes collide as whole records under the canonical value hash, and every
- * builder-minted cause is a flat record, so a `$generated` nested deeper can
- * never equal one.
+ * Those keys mark the causes the pattern builder mints itself: `$generated`
+ * the anonymous ones (`{ $generated: N }`, plus `$kind` on streams and `name`
+ * on duplicate-name wraps), and `$instance` that of a named sub-pattern
+ * instance (`{ $instance: name }`). A user cause like
+ * `Cell.for({ $generated: 0 })` or `Cell.for({ $instance: "child" })` would
+ * deliberately mimic one of them, and keeping the namespaces disjoint is what
+ * lets the partial-cause assignment in `factoryFromPattern` skip collision
+ * checks for builder-minted causes entirely. The two keys suffice — every
+ * builder-minted cause carries one of them, so a cause carrying neither can
+ * never hash-equal one (`$kind` and other sigil-looking keys stay usable).
+ * Only the top level matters — causes collide as whole records under the
+ * canonical value hash, and every builder-minted cause is a flat record, so a
+ * reserved key nested deeper can never equal one.
  *
  * Enforced at the single intake point (`Cell.for`, the only writer of
  * `_causeContainer.cause`) and re-asserted at the assignment site that relies
  * on it.
  */
 export function assertNoReservedCauseKeys(cause: unknown): void {
-  if (isObjectOrArray(cause) && "$generated" in cause) {
-    throw new Error(
-      debugStr`Cannot use cause $quote${cause}: top-level key "$generated" is reserved\n` +
-        `help: "$generated" marks system-generated cell causes; rename the key`,
-    );
+  if (!isObjectOrArray(cause)) return;
+  for (const key of RESERVED_CAUSE_KEYS) {
+    if (key in cause) {
+      throw new Error(
+        debugStr`Cannot use cause $quote${cause}: top-level key "${key}" is reserved\n` +
+          `help: "${key}" marks causes the pattern builder mints; rename the key`,
+      );
+    }
   }
 }
 
@@ -385,9 +404,10 @@ function factoryFromPattern<T, R>(
   // Canonical keys of the NAMED causes already assigned. Only named causes need
   // collision handling: `.for()` rejects reserved keys at intake
   // (`assertNoReservedCauseKeys`), so no user-supplied cause carries
-  // `$generated` — which makes every cause minted by
-  // `nextAnonymousPartialCause` (per-build-unique counter) and every
-  // `{name, $generated}` disambiguation wrap collision-free by construction:
+  // `$generated` or `$instance` — which makes every cause minted by
+  // `nextAnonymousPartialCause` (per-build-unique counter), every
+  // `{name, $generated}` disambiguation wrap, and every instance cause (an
+  // instance name given to exactly one root) collision-free by construction:
   // no check, no set entry. A candidate name's collision test is an O(1) `Set`
   // lookup on `hashStringOf` — the canonical value hash, which is exactly
   // `deepEqual`'s comparison on the JSON values causes are made of: records
@@ -400,6 +420,29 @@ function factoryFromPattern<T, R>(
     const generated = { $generated: anonymousPartialCauseCount++ };
     return isStream ? { ...generated, $kind: "stream" } : generated;
   };
+  // A stream root never takes an instance name, so a name given to one does
+  // not keep another root from taking it.
+  const isNameableInternalRoot = (cell: ICell<unknown>): boolean => {
+    const { path, name, external, kind } = exportCell(cell);
+    return !external && path.length === 0 && name === undefined &&
+      kind !== "stream" && cellNameForCell(cell) === undefined;
+  };
+  // An instance name given to more than one root names none of them: each
+  // stays positional, as it would be with no name at all.
+  const instanceRootsByName = new Map<string, Set<OpaqueCell<any>>>();
+  allCells.forEach((cell) => {
+    if (!isNameableInternalRoot(cell)) return;
+    const top = exportCell(cell).cell;
+    const instanceName = instanceNameOf(top);
+    if (instanceName === undefined) return;
+    const roots = instanceRootsByName.get(instanceName) ?? new Set();
+    roots.add(top);
+    instanceRootsByName.set(instanceName, roots);
+  });
+  // The positional cause each named instance takes the place of. It still
+  // consumes its number, so every other anonymous root keeps the number it
+  // has without instance names.
+  const legacyPartialCauses = new Map<OpaqueCell<any>, JSONValue>();
   allCells.forEach((cell) => {
     const { cell: top, path, kind, name, external } = exportCell(cell);
     if (
@@ -413,6 +456,14 @@ function factoryFromPattern<T, R>(
     let partialCause: JSONValue;
     if (name === undefined) {
       partialCause = nextAnonymousPartialCause(isStream);
+      const instanceName = instanceNameOf(top);
+      if (
+        !isStream && instanceName !== undefined &&
+        instanceRootsByName.get(instanceName)?.size === 1
+      ) {
+        legacyPartialCauses.set(top, partialCause);
+        partialCause = instancePartialCause(instanceName);
+      }
     } else {
       // `.for()` already rejected reserved keys; re-assert at the assignment
       // site because the no-collision-check reasoning above relies on it (a
@@ -504,8 +555,10 @@ function factoryFromPattern<T, R>(
         ? declareStreamSchema(schema)
         : schema;
       derivedInternalPartialCausesByRoot.set(top, partialCause);
+      const legacyPartialCause = legacyPartialCauses.get(top);
       derivedInternalCells.push({
         partialCause,
+        ...(legacyPartialCause !== undefined && { legacyPartialCause }),
         ...(scope !== undefined &&
           (scope !== "space" || schemaCellScope(schema) !== undefined) &&
           { scope }),
@@ -513,6 +566,34 @@ function factoryFromPattern<T, R>(
       });
     }
   });
+  // The binding's schema position emits like a link's: a reference under
+  // the flag, keeping FabricValue-bearing schema content (defaults) out of
+  // the otherwise plain binding record; inline otherwise, and inline
+  // whenever decomposition refuses or the schema is a bare boolean. The
+  // reference is minted from the canonical strip of a deep-frozen schema,
+  // which the strip memoizes by identity and decomposition by the strip's,
+  // so a cell bound at many positions decomposes its schema once; a mutable
+  // schema is stripped as it is rather than frozen in place. An inline
+  // schema is a strip of its own per position, the refused decomposition's
+  // included: `createRef()` hashes an object it reaches twice in one cause
+  // as `null`, so two positions sharing one object would derive other ids.
+  const externalizeAlias = getContentAddressedSchemasConfig();
+  const aliasSchemaFor = (
+    schema: JSONSchema | undefined,
+  ): JSONSchema | undefined => {
+    if (schema === undefined || typeof schema === "boolean") return schema;
+    if (externalizeAlias && isDeepFrozen(schema)) {
+      const canonical = sanitizeAndInternSchemaForLinks(schema, KeepAsCell.All);
+      if (typeof canonical === "object") {
+        const externalized = externalizeSchema(canonical);
+        if (externalized !== canonical) return externalized;
+      }
+    }
+    const own = sanitizeSchemaForLinks(schema, KeepAsCell.All);
+    return externalizeAlias && typeof own === "object"
+      ? externalizeSchema(own)
+      : own;
+  };
   const resolveCellAlias: CellAliasResolver = (
     cell, // opaque cell that we found
     serializationPath, // path where we encountered the cell
@@ -538,18 +619,7 @@ function factoryFromPattern<T, R>(
       }
     }
 
-    const rawSanitizedSchema = cellReference.schema !== undefined
-      ? sanitizeSchemaForLinks(cellReference.schema, KeepAsCell.All)
-      : undefined;
-    // The binding's schema position emits like a link's: a reference under
-    // the flag, keeping FabricValue-bearing schema content (defaults) out
-    // of the otherwise plain binding record; inline otherwise, and inline
-    // whenever decomposition refuses or the schema is a bare boolean.
-    const sanitizedSchema = rawSanitizedSchema !== undefined &&
-        typeof rawSanitizedSchema === "object" &&
-        getContentAddressedSchemasConfig()
-      ? externalizeSchema(rawSanitizedSchema as JSONSchemaObj)
-      : rawSanitizedSchema;
+    const sanitizedSchema = aliasSchemaFor(cellReference.schema);
     const partialCause = derivedInternalPartialCausesByRoot.get(top);
     if (partialCause !== undefined) {
       if (!deepEqual(partialCause, cellReference.partialCause)) {
@@ -635,8 +705,17 @@ function factoryFromPattern<T, R>(
   });
 
   const pattern: Pattern & toEncodableForm & toJSON = {
-    argumentSchema: sanitizeSchemaForLinks(argumentSchema, KeepAsCell.All),
-    resultSchema: sanitizeSchemaForLinks(resultSchema, KeepAsCell.OnlyStream),
+    // Deep-frozen, each with a root of its own. Binding a node narrows the
+    // argument schema at every slot it binds, and `schemaAtPath()` keeps a
+    // narrowing only for a deep-frozen schema.
+    argumentSchema: sanitizeAndFreezeSchemaForLinks(
+      argumentSchema,
+      KeepAsCell.All,
+    ),
+    resultSchema: sanitizeAndFreezeSchemaForLinks(
+      resultSchema,
+      KeepAsCell.OnlyStream,
+    ),
     ...(derivedInternalCells.length > 0 ? { derivedInternalCells } : {}),
     result,
     nodes: serializedNodes,
@@ -646,12 +725,25 @@ function factoryFromPattern<T, R>(
     // What `JSON.stringify(SomePattern)` returns, which pattern source uses.
     toJSON: () => patternToEncodableForm(patternFactory),
   };
+  freezePartialCauses(pattern);
 
   const makePatternFactory = (
     defaultScope?: CellScope,
     defaultSpace?: string | unknown,
-    spaceGrants?: InSpaceGrants,
+    spaceRequest?: InSpaceRequest,
   ): PatternFactory<T, R> => {
+    if (spaceRequest?.root) {
+      // The runner places a result at the reserved root address only in the
+      // space scope; any other scope would put it somewhere else.
+      const resultScope = schemaCellScope(pattern.resultSchema) ??
+        defaultScope;
+      if (resultScope !== undefined && resultScope !== "space") {
+        throw new Error(
+          "inSpace() makes a pattern the root of a space only when its " +
+            `result is space-scoped, and this one is \`${resultScope}\`-scoped`,
+        );
+      }
+    }
     const factory = Object.assign(
       (inputs: FactoryInput<T>): Reactive<R> => {
         const module: Module & toEncodableForm & toJSON = {
@@ -669,12 +761,13 @@ function factoryFromPattern<T, R>(
         if (defaultSpace !== undefined) {
           const targetSpace = resolveInSpaceTargetSpace(
             defaultSpace,
-            spaceGrants,
+            spaceRequest,
             frame,
           );
           if (targetSpace !== undefined) {
             setCellUnlinkedSpace(outputs, targetSpace);
             module.targetSpace = targetSpace;
+            if (spaceRequest?.root) module.targetSpaceRoot = true;
           }
         }
         const node: NodeRef = {
@@ -708,29 +801,62 @@ function factoryFromPattern<T, R>(
     // lets an `inSpace(...)` child piece carry `patternIdentity` meta and have
     // its closures replicated into its own space (CT-1687).
     factory.asScope = (scope: CellScope) => {
-      const derived = makePatternFactory(scope, defaultSpace, spaceGrants);
+      const derived = makePatternFactory(scope, defaultSpace, spaceRequest);
       noteDerivedCopy(derived, factory);
       return derived;
     };
     factory.inSpace = (space?: string | unknown, options?: InSpaceOptions) => {
-      // Pattern code is not trusted to keep to the type: a created space's
-      // only owner is the identity the run acts for.
-      for (
-        const [principal, capability] of Object.entries(options?.grants ?? {})
-      ) {
-        if (capability !== "READ" && capability !== "WRITE") {
+      // Pattern code is not trusted to keep to the type, nor to leave the
+      // grants alone once they are checked, so what is checked and kept is a
+      // copy. `*` is refused OWNER because a space anyone owns is anyone's to
+      // take from the identity the run acts for.
+      const grants: InSpaceGrants | undefined = options?.grants === undefined
+        ? undefined
+        : { ...options.grants };
+      for (const [principal, capability] of Object.entries(grants ?? {})) {
+        if (
+          capability !== "READ" && capability !== "WRITE" &&
+          capability !== "OWNER"
+        ) {
           throw new Error(
-            `inSpace() grants READ or WRITE only, not ${
-              JSON.stringify(capability)
-            } to ${JSON.stringify(principal)}`,
+            debugStr`inSpace() grants READ, WRITE, or OWNER only, not ` +
+              debugStr`$quote${capability} to $quote${principal}`,
+          );
+        }
+        if (capability === "OWNER" && !isDID(principal)) {
+          throw new Error(
+            debugStr`inSpace() grants OWNER only to a principal DID, not ` +
+              debugStr`to $quote${principal}`,
           );
         }
       }
-      const derived = makePatternFactory(
-        defaultScope,
-        space ?? "",
-        options?.grants,
-      );
+      if (options?.root && (isDID(space) || isCell(space))) {
+        throw new Error(
+          "inSpace() makes a pattern the root only of a space it creates, " +
+            "and a DID or a cell names a space that exists",
+        );
+      }
+      const spaceKind = options?.spaceKind;
+      if (spaceKind !== undefined) {
+        if (isDID(space) || isCell(space)) {
+          throw new Error(
+            "inSpace() declares the kind only of a space it creates, and a " +
+              "DID or a cell names a space that exists",
+          );
+        }
+        if (!isSpaceKind(spaceKind)) {
+          throw new Error(
+            debugStr`inSpace() declares a space kind of lowercase words ` +
+              debugStr`joined by hyphens, at most ${SPACE_KIND_MAX_LENGTH} ` +
+              debugStr`characters, not $quote${spaceKind}`,
+          );
+        }
+      }
+      const derived = makePatternFactory(defaultScope, space ?? "", {
+        ...(grants !== undefined ? { grants } : {}),
+        ...(options?.root ? { root: true } : {}),
+        ...(spaceKind !== undefined ? { spaceKind } : {}),
+      });
       noteDerivedCopy(derived, factory);
       return derived;
     };
@@ -881,7 +1007,7 @@ function assignComputedCellKinds(
 ): void {
   const collectCellRoots = (value: unknown): Set<OpaqueCell<any>> => {
     const roots = new Set<OpaqueCell<any>>();
-    traverseValue(value as FactoryInput<unknown>, (item) => {
+    visitValue(value as FactoryInput<unknown>, (item) => {
       if (isCellResultForDereferencing(item)) item = getCellOrThrow(item);
       if (isCell(item)) roots.add(exportCell(item).cell);
       return item;
@@ -1122,6 +1248,23 @@ function assignComputedCellKinds(
 }
 
 /**
+ * What an `inSpace(...)` call asks of a space it creates, as the call checks
+ * and copies it from its options: the grants beside the space's owner,
+ * whether the space's genesis commit reserves its root, and the kind that
+ * commit declares.
+ */
+type InSpaceRequest = {
+  /** Access the created space grants beyond its owner. */
+  grants?: InSpaceGrants;
+
+  /** Whether the pattern's result is the root of the space. */
+  root?: true;
+
+  /** The kind the space's genesis commit declares. */
+  spaceKind?: string;
+};
+
+/**
  * Resolves a `PatternFactory.inSpace(...)` target to a concrete space DID at
  * graph-construction time.
  *
@@ -1129,12 +1272,12 @@ function assignComputedCellKinds(
  * - A named string (or the anonymous case below) names a space as the frame's
  *   space calls it, and resolves through that space's allocation record (see
  *   `Runtime.resolveInSpaceNameSync`). When the name has not been resolved,
- *   it is recorded on the frame as pending, with `grants`, and `undefined` is
- *   returned; the runner resolves pending names after the run and re-runs the
- *   handler or action (RetryImmediately), at which point the target resolves
- *   synchronously. The first call to name a space in a run is the one whose
- *   grants create it: a later call naming it reads the record that call
- *   writes, as it would read the record of an earlier run.
+ *   it is recorded on the frame as pending, with `request`, and `undefined`
+ *   is returned; the runner resolves pending names after the run and re-runs
+ *   the handler or action (RetryImmediately), at which point the target
+ *   resolves synchronously. The first call to name a space in a run is the
+ *   one whose request creates it: a later call naming it reads the record
+ *   that call writes, as it would read the record of an earlier run.
  * - The anonymous case (`inSpace()` / empty string) derives a stable per-call
  *   name by hashing the frame's cause together with a per-frame counter, so each
  *   call site gets its own space that survives re-runs — mirroring how cell ids
@@ -1142,7 +1285,7 @@ function assignComputedCellKinds(
  */
 function resolveInSpaceTargetSpace(
   space: unknown,
-  grants: InSpaceGrants | undefined,
+  request: InSpaceRequest | undefined,
   frame: Frame | undefined,
 ): MemorySpace | undefined {
   if (isDID(space)) {
@@ -1165,13 +1308,13 @@ function resolveInSpaceTargetSpace(
     callingSpace,
     name,
     tx,
-    grants,
+    request,
   );
   if (resolved !== undefined) {
     return optIntoInSpaceMultiSpaceCommit(frame, resolved);
   }
   const pending = frame!.pendingSpaceNames ??= new Map();
-  if (!pending.has(name)) pending.set(name, grants);
+  if (!pending.has(name)) pending.set(name, { ...request });
   return undefined;
 }
 
@@ -1344,3 +1487,38 @@ export function getTopFrame(): Frame | undefined {
 
 /** The full type of the `pattern` function including all overloads. */
 export type PatternBuilder = typeof pattern;
+
+/**
+ * Deep-freezes every partial cause `pattern` holds: its manifest of derived
+ * internal cells, and the `partialCause` of each `$alias` binding in its
+ * nodes and its result. The runtime keeps the id a partial cause names by the
+ * cause's identity, and refuses a cause that is an object but not deep-frozen.
+ * The builder calls this on every pattern it builds.
+ */
+export function freezePartialCauses(pattern: Pattern): void {
+  if (pattern.derivedInternalCells !== undefined) {
+    deepFreeze(pattern.derivedInternalCells);
+  }
+  // TODO(danfuzz): Walk with `data-model`'s value visitor once that is ready
+  // for use outside its package.
+  visitValue(pattern.result, freezeAliasCause);
+  for (const node of pattern.nodes) {
+    visitValue(node.inputs, freezeAliasCause);
+    visitValue(node.outputs, freezeAliasCause);
+  }
+}
+
+/**
+ * Helper for {@link freezePartialCauses}, the `visitValue()` callback, which
+ * deep-freezes the partial cause of an `$alias` binding and returns `null` so
+ * that the walk descends no further into it. An embedded pattern is not
+ * descended either: the causes it holds are its own, frozen when it was built.
+ */
+function freezeAliasCause(value: FabricExecValue): null | undefined {
+  if (isAliasBinding(value)) {
+    const { partialCause } = value.$alias;
+    if (partialCause !== undefined) deepFreeze(partialCause);
+    return null;
+  }
+  return isPattern(value) ? null : undefined;
+}

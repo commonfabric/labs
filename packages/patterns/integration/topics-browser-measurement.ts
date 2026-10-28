@@ -1,8 +1,8 @@
 /**
  * Browser-tier measurement of one operation on a Topics board, for
  * `docs/plans/topics-computation-cost.md`: reactive-body reads for the board's
- * pivot and for each topic's backlink, comment-count, and activity lifts,
- * scheduler graph size, and timing split between the main thread and the
+ * pivot and for each topic's backlink lift, scheduler graph size, and timing
+ * split between the main thread and the
  * worker as far as the shell's timing records that split.
  *
  * `measureTopicsReads()` turns telemetry and body read accounting on around the
@@ -92,16 +92,10 @@ const WORKER_RUNS_NOTE =
  */
 export const TOPICS_SOURCE_ROOT = join(import.meta.dirname!, "..");
 
-/** The board's pivot, and the per-topic lifts that read it or report activity. */
+/** The board's pivot, and the per-topic lift that reads it. */
 export const TOPICS_LIFTS: readonly TopicsLift[] = [
   { name: "crossrefTable", module: "topics/main.tsx", role: "producer" },
   { name: "backlinksOf", module: "topics/topic.tsx", role: "consumer" },
-  {
-    name: "presentCommentCountOf",
-    module: "topics/topic.tsx",
-    role: "consumer",
-  },
-  { name: "lastActivityOf", module: "topics/topic.tsx", role: "consumer" },
 ];
 
 /** The board's entry module, relative to the program root. */

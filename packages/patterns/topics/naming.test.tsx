@@ -462,7 +462,6 @@ export default pattern(() => {
     names: composerNames,
     newTitle: composerDraft,
     profileName: "Ada",
-    profileAvatar: "🦊",
   });
   const action_compose_a_topic = action(() => {
     composerSubmit.send();

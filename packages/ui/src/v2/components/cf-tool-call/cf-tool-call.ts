@@ -2,17 +2,11 @@ import type {
   BuiltInLLMToolCallPart,
   BuiltInLLMToolResultPart,
 } from "@commonfabric/api";
-import { consume } from "@lit/context";
 import { css, html } from "lit";
 import { property } from "lit/decorators.js";
 
 import { BaseElement } from "../../core/base-element.ts";
-import {
-  applyThemeToElement,
-  type CFTheme,
-  cfThemeContext,
-  defaultTheme,
-} from "../theme-context.ts";
+import { applyThemeToElement, type CFTheme } from "../theme-context.ts";
 
 export type ToolCallState = "pending" | "success" | "error";
 
@@ -219,20 +213,16 @@ export class CFToolCall extends BaseElement {
   @property({ type: Boolean, reflect: true })
   accessor expanded = false;
 
-  @consume({ context: cfThemeContext, subscribe: true })
+  /**
+   * A theme given to this element directly, written over the theme it would
+   * otherwise inherit. Left unset, the element draws the ambient theme.
+   */
   @property({ attribute: false })
-  accessor theme: CFTheme = defaultTheme;
+  accessor theme: CFTheme | undefined = undefined;
 
   constructor() {
     super();
     this.expanded = false;
-  }
-
-  override firstUpdated(
-    changedProperties: Map<string | number | symbol, unknown>,
-  ) {
-    super.firstUpdated(changedProperties);
-    this._updateThemeProperties();
   }
 
   override updated(
@@ -240,15 +230,8 @@ export class CFToolCall extends BaseElement {
   ) {
     super.updated(changedProperties);
     if (changedProperties.has("theme")) {
-      this._updateThemeProperties();
+      applyThemeToElement(this, this.theme);
     }
-  }
-
-  private _updateThemeProperties() {
-    if (!this.theme) return;
-
-    // Apply standard theme properties
-    applyThemeToElement(this, this.theme);
   }
 
   private get _state(): ToolCallState {

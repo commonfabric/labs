@@ -363,21 +363,26 @@ export function moduleDelegationsFromDocs(
  * transformer pipeline or SES verifier that alters emitted bytes (the source
  * set, keyed by content identity alone, persists across the change).
  *
- * The value is generated from a hash of the compiler inputs defined in
- * `compiler-fingerprint.deno.ts`. Editing those inputs moves the tag and
- * invalidates stale compiled docs. Deno source runs resolve the checked-in
- * source marker to that hash at runtime. Runtimes without repository file access
- * skip the compiled cache until a binary build bakes the hash into
- * `compile-cache-version.ts`. See `getCompileCacheRuntimeVersion()` and
- * `compiler-fingerprint.deno.ts`.
+ * A built artifact carries a version that is a hash of what its compiler
+ * emits for a fixed corpus (`compile-cache-output-version.deno.ts`), baked in
+ * at build time: a compiler change that compiles the corpus to the same
+ * documents keeps the tag, and one that changes any of them (a body, a stored
+ * field, an import edge), or an epoch bump, moves it. A Deno source run
+ * resolves the checked-in source marker instead: to the output version its
+ * tree has recorded for itself, while that memo still matches the tree, and
+ * otherwise to a hash of the compiler inputs, which moves on any edit to them
+ * (`compile-cache-output-memo.deno.ts`). Runtimes without repository file
+ * access skip the compiled cache until a build bakes a version into
+ * `compile-cache-version.ts` or defines one. See
+ * `getCompileCacheRuntimeVersion()`.
  */
 export {
   COMPILE_CACHE_RUNTIME_VERSION,
   SOURCE_COMPILE_CACHE_RUNTIME_VERSION,
 } from "./compile-cache-version.ts";
 
-type CompilerFingerprintModule = {
-  computeCurrentCompilerVersion(): Promise<string>;
+type SourceCompileCacheVersionModule = {
+  computeCurrentSourceCompileCacheVersion(): Promise<string>;
 };
 
 type CompileCacheVersionGlobal = typeof globalThis & {
@@ -433,12 +438,12 @@ async function resolveCompileCacheRuntimeVersion(
     return undefined;
   }
   const specifier = new URL(
-    "./compiler-fingerprint.deno.ts",
+    "./compile-cache-output-memo.deno.ts",
     import.meta.url,
   ).href;
   try {
-    const module = await import(specifier) as CompilerFingerprintModule;
-    return await module.computeCurrentCompilerVersion();
+    const module = await import(specifier) as SourceCompileCacheVersionModule;
+    return await module.computeCurrentSourceCompileCacheVersion();
   } catch (error) {
     if (isUnavailableSourceFingerprint(error)) {
       return undefined;
@@ -499,7 +504,8 @@ export function compiledDocKey(
  * resolves a module's edges from its own source, not its stored links).
  * Explicit source-package roots use {@link SOURCE_ROOT_SPECIFIER} and attached
  * data files use {@link DATA_FILE_SPECIFIER} instead; both participate in the
- * entry module's identity.
+ * identity of the module whose document carries them, which is the entry for a
+ * root and the reading module for a data file its source names.
  */
 export const ROOT_LINK_SPECIFIER = "cf:cache-root/";
 
@@ -951,14 +957,12 @@ export function codeFieldVerifies(
  * transition does by construction, because it stages a module's delegation
  * union on the same transaction that moves the piece's source pointer.
  *
- * A cache document is not on §8.12.5's route 2, whose declaration would be the
- * other answer. Route 2 declares one piece's flow join as the store's policy,
- * so it wants a store keyed on that piece's own nodes. A cache document is
- * keyed on module content: every piece in the space running that module
- * addresses it, and it outlives all of them. What route 2 leaves behind is
- * also permanent — a `declared` entry per measured path, which §8.12.1 does
- * not let back, on a document nothing collects — where the flow stamp this
- * keeps is a per-value component §8.12.8 replaces on overwrite.
+ * A cache document has no piece owner for §8.12.5's runtime-owned-store
+ * enrollment. It is keyed on module content: every piece in the space
+ * running that module addresses it, and it outlives all of them. Its
+ * undeclarable-policy marker exempts local-flow writes from writer-fit at
+ * every rung. It supplies no ownership claim, so neither ownership admission
+ * route applies. The flow stamps record the current value's label.
  *
  * The write stays a flow stamp target, which is where this stops short of
  * §18.6.2's write-side mirror — that section says the same addresses are not
@@ -1953,6 +1957,21 @@ export function planCompileCacheWriteChunks(
 }
 
 /**
+ * What a closure load found, for a caller that reports why a load missed:
+ * whether the entry document was absent, present but refused (no compiler
+ * integrity atom on its label, or a `code` link whose document did not
+ * arrive), verified, or verified and then refused with the whole closure
+ * because a link left the space; and how many distinct reached documents
+ * the walk refused the way an entry can be. A refused document drops
+ * silently from the closure, so without this a partial closure and a plain
+ * miss read alike.
+ */
+export type ClosureLoadTally = {
+  entry: "absent" | "unverified" | "verified" | "refused";
+  dropped: number;
+};
+
+/**
  * Load the integrity-valid compiled documents reachable from `entryIdentity` by
  * following import links. A **single** `sync()` on the entry cell under the
  * recursive {@link COMPILED_DOC_SCHEMA} transitively loads the whole closure
@@ -1978,10 +1997,13 @@ export async function loadCompiledClosure(
   entryIdentity: string,
   opts: { runtimeVersion: string },
   tx: IExtendedStorageTransaction,
+  tally?: ClosureLoadTally,
 ): Promise<Map<string, CompiledDoc>> {
   const atom = COMPILED_INTEGRITY_ATOM;
   const out = new Map<string, CompiledDoc>();
   const visited = new Set<string>();
+  // Refused documents by id, so one imported from several places counts once.
+  const refused = new Set<string>();
 
   // Integrity-gated read (fail-closed): the cell's stored doc only if its
   // persisted CFC label carries the compiler atom. No sync here — the entry's
@@ -2010,15 +2032,15 @@ export async function loadCompiledClosure(
     // process byte cache, storage-served compile bodies, repair and
     // replication write-backs). Written back into another space, a live view
     // serializes as a link to the place it was read from — a cross-space
-    // `/sourceMap` link instead of the map, which either lands silently
-    // corrupt (fresh target doc) or aborts the write-back when the target doc
-    // already carries its stored CFC envelope ("missing link source metadata
-    // … at /sourceMap" — the ensure-ON sx2-scale red). Materialize it to a
-    // plain value here, at the one read boundary every consumer funnels
-    // through, exactly as `policyManifests` are snapshotted above. The other
-    // verbatim-reused fields are immune: strings and string arrays either
-    // re-derive on write (`deriveModuleRecordFields`) or serialize through
-    // `JSON.stringify`.
+    // `/sourceMap` link instead of the map, which lands silently corrupt in
+    // the target document, whether or not that document already stores a
+    // label: a link write takes nothing from what it points at, and the
+    // compiled document's schema declares no write floor to weigh the linked
+    // source, so nothing refuses it. Materialize it to a plain value here, at
+    // the one read boundary every consumer funnels through, exactly as
+    // `policyManifests` are snapshotted above. The other verbatim-reused
+    // fields are immune: strings and string arrays either re-derive on write
+    // (`deriveModuleRecordFields`) or serialize through `JSON.stringify`.
     let sourceMap: unknown;
     try {
       sourceMap = doc.sourceMap === undefined
@@ -2055,7 +2077,13 @@ export async function loadCompiledClosure(
   // One sync pulls the entire link closure (recursive schema). No further syncs.
   await entryCell.sync();
   const entryDoc = verifiedDoc(entryCell);
-  if (entryDoc === undefined) return out;
+  if (entryDoc === undefined) {
+    if (tally !== undefined) {
+      tally.entry = entryCell.getRaw() === undefined ? "absent" : "unverified";
+    }
+    return out;
+  }
+  if (tally !== undefined) tally.entry = "verified";
 
   const queue: { doc: VerifiedCompiledDoc }[] = [{ doc: entryDoc }];
   while (queue.length > 0) {
@@ -2083,9 +2111,19 @@ export async function loadCompiledClosure(
       // Compiled-cache integrity and module delegation authority are attested
       // only in the linked cell's space. Mixed-space cache graphs fail closed
       // instead of rebasing a child space's attestation onto `space`.
-      if (linkedCell.space !== space) return new Map();
+      if (linkedCell.space !== space) {
+        if (tally !== undefined) tally.entry = "refused";
+        return new Map();
+      }
       const child = verifiedDoc(linkedCell.asSchema(COMPILED_DOC_SCHEMA));
-      if (child === undefined) continue;
+      if (child === undefined) {
+        const refusedId = linkedCell.getAsNormalizedFullLink().id;
+        if (tally !== undefined && !refused.has(refusedId)) {
+          refused.add(refusedId);
+          tally.dropped++;
+        }
+        continue;
+      }
       imports.push({ specifier: imp.specifier, identity: child.identity });
       if (!visited.has(child.identity)) queue.push({ doc: child });
     }

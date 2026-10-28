@@ -4,11 +4,14 @@ import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
-import type { Cell } from "../src/cell.ts";
+import type { Node, Pattern } from "../src/builder/types.ts";
+import { type Cell, cellTx } from "../src/cell.ts";
 import { parseLink } from "../src/link-utils.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import type { NodePlan } from "../src/runner.ts";
 import { Runtime } from "../src/runtime.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import { getTransactionReadActivities } from "../src/storage/transaction-inspection.ts";
 
 const signer = await Identity.fromPassphrase("node plan");
 const space = signer.did();
@@ -148,5 +151,146 @@ describe("Runner node plans", () => {
     const runningIds = [...runtime.runner.cancels.keys()];
     expect(runningIds.some((key) => key.endsWith(`/${childId}`))).toBe(true);
     expect(nested.child.nodes.length).toBe(1);
+  });
+
+  describe("of a node planned before", () => {
+    // The runner keeps what binding a node produces and resolves what the
+    // bound outputs redirect to on every plan. Each case plans the lift of a
+    // running instance twice, in two transactions, the way a pre-sync and
+    // then an instantiation plan it.
+
+    let compiled: Pattern;
+    let resultCell: Cell<any>;
+    let lift: Node;
+
+    /** Plans `node` in `tx`, on the result cell bound to it. */
+    function planIn(
+      tx: IExtendedStorageTransaction,
+      node: Node = lift,
+    ): NodePlan {
+      return runtime.runner.accessForTestingOnly.nodePlan(
+        tx,
+        node,
+        resultCell.withTx(tx),
+        compiled,
+      )!;
+    }
+
+    /** The addresses `tx` has read, in the order it read them. */
+    function readsOf(tx: IExtendedStorageTransaction): string[] {
+      return [...getTransactionReadActivities(tx)].map((read) =>
+        `${read.space} ${read.scope} ${read.id} ${read.type} ` +
+        JSON.stringify(read.path)
+      );
+    }
+
+    beforeEach(async () => {
+      compiled = await runtime.patternManager.compilePattern(PROGRAM, {
+        space,
+      });
+      resultCell = runtime.getCell(space, "node plan planned before");
+      const running = await runtime.runSynced(resultCell, compiled, {
+        seed: 1,
+        items: [{ n: 1 }],
+        count: 0,
+      });
+      await running.pull();
+      await runtime.idle();
+      // The lift on the root: the JavaScript node with no `$event` slot.
+      lift = compiled.nodes.find((node) => {
+        const tx = runtime.edit();
+        try {
+          const plan = planIn(tx, node);
+          return plan.kind === "javascript" &&
+            !(isObjectOrArray(plan.inputs) && "$event" in plan.inputs);
+        } finally {
+          tx.abort("node plans: read-only");
+        }
+      })!;
+    });
+
+    it("returns the bindings of the earlier plan, with its inputs cell on its own transaction", () => {
+      const firstTx = runtime.edit();
+      const secondTx = runtime.edit();
+      try {
+        const first = planIn(firstTx);
+        const second = planIn(secondTx);
+        if (first.kind !== "javascript" || second.kind !== "javascript") {
+          throw new Error("unreachable");
+        }
+
+        expect(second.inputs).toBe(first.inputs);
+        expect(second.outputs).toBe(first.outputs);
+        expect(second.inputsCell.getAsNormalizedFullLink().id).toBe(
+          first.inputsCell.getAsNormalizedFullLink().id,
+        );
+        expect(cellTx(first.inputsCell)).toBe(firstTx);
+        expect(cellTx(second.inputsCell)).toBe(secondTx);
+      } finally {
+        firstTx.abort("node plans: read-only");
+        secondTx.abort("node plans: read-only");
+      }
+    });
+
+    it("reads through its transaction what a first plan of the node reads", () => {
+      // A fresh runtime's first plan of a node computes its bindings; this
+      // runtime's later plans do not. Both resolve the outputs through the
+      // transaction they are made in, so both transactions record the same
+      // reads.
+
+      const laterTx = runtime.edit();
+      let later: string[];
+      try {
+        planIn(laterTx);
+        later = readsOf(laterTx);
+      } finally {
+        laterTx.abort("node plans: read-only");
+      }
+      runtime.runner.accessForTestingOnly.forgetNodeBindings();
+      const firstTx = runtime.edit();
+      let first: string[];
+      try {
+        planIn(firstTx);
+        first = readsOf(firstTx);
+      } finally {
+        firstTx.abort("node plans: read-only");
+      }
+
+      expect(later.length).toBeGreaterThan(0);
+      expect(later).toEqual(first);
+    });
+
+    it("follows a redirect its transaction holds at an output the earlier plan found none at", () => {
+      const firstTx = runtime.edit();
+      let output: NodePlan["writes"][number];
+      try {
+        const first = planIn(firstTx);
+        expect(first.writes.length).toBe(1);
+        [output] = first.writes;
+      } finally {
+        firstTx.abort("node plans: read-only");
+      }
+
+      const secondTx = runtime.edit();
+      try {
+        const elsewhere = runtime.getCell(
+          space,
+          "node plan redirect target",
+          undefined,
+          secondTx,
+        );
+        runtime.getCellFromLink(output, undefined, secondTx).setRaw(
+          elsewhere.getAsWriteRedirectLink(),
+        );
+        const second = planIn(secondTx);
+
+        expect(second.writes.map((link) => link.id)).toEqual([
+          output.id,
+          elsewhere.getAsNormalizedFullLink().id,
+        ]);
+      } finally {
+        secondTx.abort("node plans: read-only");
+      }
+    });
   });
 });

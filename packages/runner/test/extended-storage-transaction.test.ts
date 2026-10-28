@@ -12,6 +12,7 @@ import { taggedHashStringOf } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
 import { Runtime } from "../src/runtime.ts";
 import {
   createNonReactiveTransaction,
@@ -22,8 +23,10 @@ import type {
   IExtendedStorageTransaction,
   TransactionWriteDetail,
 } from "../src/storage/interface.ts";
+import { CFC_GRANT_ID_PREFIX } from "../src/cfc/grants.ts";
 import { RuntimeOwnedStores } from "../src/cfc/runtime-owned-stores.ts";
 import {
+  CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE,
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
   CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE,
   runtimeWritePolicyAuthorization,
@@ -448,11 +451,29 @@ describe("extended-storage-transaction", () => {
       const tx = runtime.edit();
       try {
         tx.recordCfcWritePolicyInput(
-          input("of:authorized"),
+          {
+            ...input("of:authorized"),
+            sources: [{ space, id: "of:owner", scope: "space", path: [] }],
+          },
           runtimeWritePolicyAuthorization,
         );
         const [recorded] = tx.getCfcState().writePolicyInputs;
         expect(tx.isRuntimeWritePolicyInput(recorded)).toBe(true);
+        expect(tx.isRuntimeOwnedStore(
+          space,
+          "of:authorized",
+          runtimeWritePolicyAuthorization,
+        )).toBe(true);
+        expect(tx.isEnrolledRuntimeOwnedStore(
+          space,
+          "of:authorized",
+          runtimeWritePolicyAuthorization,
+        )).toBe(false);
+        expect(tx.usesDerivedRuntimeOwnedStoreLabels(
+          space,
+          "of:authorized",
+          runtimeWritePolicyAuthorization,
+        )).toBe(false);
       } finally {
         await tx.commit().settled;
       }
@@ -510,6 +531,198 @@ describe("extended-storage-transaction", () => {
       }
     });
   });
+
+  describe("a piece-setup store's derived labels", () => {
+    const input = (id: string) => ({
+      kind: "structural-provenance",
+      target: { space, id, scope: "space", path: [] },
+      claim: CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE,
+      sources: [{ space, id: "of:owner", scope: "space", path: [] }],
+    } as const);
+
+    it("marks through a wrapper without enrolling the store", async () => {
+      const tx = runtime.edit();
+      const wrapper = createNonReactiveTransaction(tx);
+      try {
+        wrapper.recordCfcWritePolicyInput(
+          input("of:setup"),
+          runtimeWritePolicyAuthorization,
+        );
+        for (const reader of [tx, wrapper]) {
+          expect(reader.isRuntimeOwnedStore(
+            space,
+            "of:setup",
+            runtimeWritePolicyAuthorization,
+          )).toBe(true);
+          expect(reader.usesDerivedRuntimeOwnedStoreLabels(
+            space,
+            "of:setup",
+            runtimeWritePolicyAuthorization,
+          )).toBe(true);
+          expect(reader.isEnrolledRuntimeOwnedStore(
+            space,
+            "of:setup",
+            runtimeWritePolicyAuthorization,
+          )).toBe(false);
+          expect(reader.usesDerivedRuntimeOwnedStoreLabels(space, "of:setup"))
+            .toBe(false);
+          expect(reader.usesDerivedRuntimeOwnedStoreLabels(
+            space,
+            "of:another-store",
+            runtimeWritePolicyAuthorization,
+          )).toBe(false);
+        }
+      } finally {
+        await tx.commit().settled;
+      }
+    });
+
+    it("does not grant ownership to an unauthorized setup claim", async () => {
+      const tx = runtime.edit();
+      try {
+        tx.recordCfcWritePolicyInput(input("of:unauthorized-setup"));
+        expect(tx.isRuntimeOwnedStore(
+          space,
+          "of:unauthorized-setup",
+          runtimeWritePolicyAuthorization,
+        )).toBe(false);
+        expect(tx.usesDerivedRuntimeOwnedStoreLabels(
+          space,
+          "of:unauthorized-setup",
+          runtimeWritePolicyAuthorization,
+        )).toBe(false);
+      } finally {
+        await tx.commit().settled;
+      }
+    });
+
+    it("does not grant ownership from an owner in another space", async () => {
+      const otherSpace = (await Identity.fromPassphrase("setup-other-space"))
+        .did();
+      const tx = runtime.edit();
+      try {
+        tx.recordCfcWritePolicyInput({
+          ...input("of:foreign-owner"),
+          sources: [{
+            space: otherSpace,
+            id: "of:owner",
+            scope: "space",
+            path: [],
+          }],
+        }, runtimeWritePolicyAuthorization);
+        expect(tx.isRuntimeOwnedStore(
+          space,
+          "of:foreign-owner",
+          runtimeWritePolicyAuthorization,
+        )).toBe(false);
+        expect(tx.usesDerivedRuntimeOwnedStoreLabels(
+          space,
+          "of:foreign-owner",
+          runtimeWritePolicyAuthorization,
+        )).toBe(false);
+      } finally {
+        await tx.commit().settled;
+      }
+    });
+
+    it("does not grant ownership to a claim for part of a document", async () => {
+      const tx = runtime.edit();
+      try {
+        tx.recordCfcWritePolicyInput({
+          ...input("of:partly-setup"),
+          target: {
+            space,
+            id: "of:partly-setup",
+            scope: "space",
+            path: ["value"],
+          },
+        }, runtimeWritePolicyAuthorization);
+        expect(tx.isRuntimeOwnedStore(
+          space,
+          "of:partly-setup",
+          runtimeWritePolicyAuthorization,
+        )).toBe(false);
+        expect(tx.usesDerivedRuntimeOwnedStoreLabels(
+          space,
+          "of:partly-setup",
+          runtimeWritePolicyAuthorization,
+        )).toBe(false);
+      } finally {
+        await tx.commit().settled;
+      }
+    });
+
+    it("does not grant ownership to a claim without an owner", async () => {
+      const tx = runtime.edit();
+      try {
+        tx.recordCfcWritePolicyInput({
+          ...input("of:ownerless-setup"),
+          sources: [],
+        }, runtimeWritePolicyAuthorization);
+        expect(tx.isRuntimeOwnedStore(
+          space,
+          "of:ownerless-setup",
+          runtimeWritePolicyAuthorization,
+        )).toBe(false);
+        expect(tx.usesDerivedRuntimeOwnedStoreLabels(
+          space,
+          "of:ownerless-setup",
+          runtimeWritePolicyAuthorization,
+        )).toBe(false);
+      } finally {
+        await tx.commit().settled;
+      }
+    });
+
+    for (const outcome of ["commit", "abort"] as const) {
+      it(`does not carry setup ownership beyond ${outcome}`, async () => {
+        // Setup grants last for their transaction; subsequent writes need a
+        // live piece's enrollment rather than a remembered setup claim.
+        const first = runtime.edit();
+        first.recordCfcWritePolicyInput(
+          input("of:setup-earlier"),
+          runtimeWritePolicyAuthorization,
+        );
+        expect(first.usesDerivedRuntimeOwnedStoreLabels(
+          space,
+          "of:setup-earlier",
+          runtimeWritePolicyAuthorization,
+        )).toBe(true);
+        expect(first.isEnrolledRuntimeOwnedStore(
+          space,
+          "of:setup-earlier",
+          runtimeWritePolicyAuthorization,
+        )).toBe(false);
+        if (outcome === "commit") {
+          await first.commit().settled;
+        } else {
+          first.abort();
+        }
+
+        const later = runtime.edit();
+        try {
+          expect(later.isRuntimeOwnedStore(
+            space,
+            "of:setup-earlier",
+            runtimeWritePolicyAuthorization,
+          )).toBe(false);
+          expect(later.usesDerivedRuntimeOwnedStoreLabels(
+            space,
+            "of:setup-earlier",
+            runtimeWritePolicyAuthorization,
+          )).toBe(false);
+          expect(later.isEnrolledRuntimeOwnedStore(
+            space,
+            "of:setup-earlier",
+            runtimeWritePolicyAuthorization,
+          )).toBe(false);
+        } finally {
+          await later.commit().settled;
+        }
+      });
+    }
+  });
+
   describe("the enrollment of a store the runtime owns", () => {
     // The enrollment answers for the whole runtime rather than for one
     // transaction, which is what carries it to the reactive updates and
@@ -539,6 +752,18 @@ describe("extended-storage-transaction", () => {
             runtimeWritePolicyAuthorization,
           ),
         ).toBe(true);
+        expect(
+          later.isEnrolledRuntimeOwnedStore(
+            space,
+            "of:enrolled",
+            runtimeWritePolicyAuthorization,
+          ),
+        ).toBe(true);
+        expect(later.usesDerivedRuntimeOwnedStoreLabels(
+          space,
+          "of:enrolled",
+          runtimeWritePolicyAuthorization,
+        )).toBe(true);
       } finally {
         await later.commit().settled;
       }
@@ -552,9 +777,19 @@ describe("extended-storage-transaction", () => {
           "owner-key",
           runtimeWritePolicyAuthorization,
         );
-        expect(tx.isRuntimeOwnedStore(space, "of:unmarked-reader")).toBe(false);
+        expect(tx.isRuntimeOwnedStore(space, "of:unmarked-reader"))
+          .toBe(false);
         expect(
           tx.isRuntimeOwnedStore(
+            space,
+            "of:unmarked-reader",
+            runtimeWritePolicyAuthorization,
+          ),
+        ).toBe(true);
+        expect(tx.isEnrolledRuntimeOwnedStore(space, "of:unmarked-reader"))
+          .toBe(false);
+        expect(
+          tx.isEnrolledRuntimeOwnedStore(
             space,
             "of:unmarked-reader",
             runtimeWritePolicyAuthorization,
@@ -582,8 +817,27 @@ describe("extended-storage-transaction", () => {
           ),
         ).toBe(true);
         expect(
+          wrapper.isEnrolledRuntimeOwnedStore(
+            space,
+            "of:through-a-wrapper",
+            runtimeWritePolicyAuthorization,
+          ),
+        ).toBe(true);
+        expect(
           wrapper.isRuntimeOwnedStore(space, "of:through-a-wrapper"),
         ).toBe(false);
+        expect(
+          wrapper.isEnrolledRuntimeOwnedStore(space, "of:through-a-wrapper"),
+        ).toBe(false);
+        expect(wrapper.usesDerivedRuntimeOwnedStoreLabels(
+          space,
+          "of:through-a-wrapper",
+          runtimeWritePolicyAuthorization,
+        )).toBe(true);
+        expect(wrapper.usesDerivedRuntimeOwnedStoreLabels(
+          space,
+          "of:through-a-wrapper",
+        )).toBe(false);
       } finally {
         await tx.commit().settled;
       }
@@ -600,6 +854,13 @@ describe("extended-storage-transaction", () => {
         );
         expect(
           tx.isRuntimeOwnedStore(
+            space,
+            "of:enrolled-through-a-wrapper",
+            runtimeWritePolicyAuthorization,
+          ),
+        ).toBe(true);
+        expect(
+          tx.isEnrolledRuntimeOwnedStore(
             space,
             "of:enrolled-through-a-wrapper",
             runtimeWritePolicyAuthorization,
@@ -626,6 +887,13 @@ describe("extended-storage-transaction", () => {
         );
         expect(
           tx.isRuntimeOwnedStore(
+            space,
+            "of:scoped-instance",
+            runtimeWritePolicyAuthorization,
+          ),
+        ).toBe(true);
+        expect(
+          tx.isEnrolledRuntimeOwnedStore(
             space,
             "of:scoped-instance",
             runtimeWritePolicyAuthorization,
@@ -818,5 +1086,129 @@ describe("extended-storage-transaction", () => {
     const seq = tx.committedSeq?.(space);
     expect(seq).toBeGreaterThan(0);
     expect(wrapper.committedSeq?.(space)).toBe(seq);
+  });
+
+  describe("a seal destination that discards the transaction", () => {
+    // The commit writes a reserved CFC grant document outside `writeCfcGrant`,
+    // which the CFC boundary pass refuses as an unprivileged write to policy
+    // state. A destination that drops the writes instead of sealing them
+    // leaves the pass nothing to guard, so the commit seals without running
+    // it.
+
+    /** How many commits the CFC write gate has refused in this process. */
+    const policyRefusals = (): number => {
+      const cfc = getLoggerCountsBreakdown().cfc;
+      return typeof cfc === "object" ? cfc["write-policy-gate"]?.total ?? 0 : 0;
+    };
+
+    let discarding: ReturnType<typeof StorageManager.emulate>;
+    let serving: Runtime;
+    let discards: boolean;
+    let sealed: number;
+
+    beforeEach(() => {
+      discarding = StorageManager.emulate({ as: signer });
+      serving = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: discarding,
+        experimental: { serverExecution: true },
+        cfcEnforcementMode: "enforce-explicit",
+        cfcFlowLabels: "off",
+        cfcWriteFloor: "off",
+        cfcTriggerReadGating: false,
+        cfcDecomposedEnvelopes: false,
+        cfcPolicyEvaluation: "off",
+        cfcLabelMetadataProtection: "off",
+        cfcDeclaredMonotonicity: "off",
+      });
+      discards = false;
+      sealed = 0;
+      serving.installSealDestination({
+        discards: () => discards,
+        seal: (tx) => {
+          sealed++;
+          return discards ? Promise.resolve({ ok: {} }) : tx.tx.commit();
+        },
+      });
+    });
+    afterEach(async () => {
+      await serving?.dispose();
+      await discarding?.close();
+    });
+
+    /**
+     * Commits the write the boundary pass refuses, prepared first as the
+     * scheduler prepares a handler's transaction, and returns the result with
+     * the write-policy refusals the runtime reported meanwhile. `between` runs
+     * after the preparation and before the commit, where the destination's
+     * answer can change.
+     */
+    const commitRefusedWrite = async (between: () => void = () => {}) => {
+      const refusedBefore = policyRefusals();
+      const tx = serving.edit();
+      tx.setCfcEnforcementMode("enforce-explicit");
+      tx.writeOrThrow({
+        space,
+        id: `${CFC_GRANT_ID_PREFIX}discarded-probe` as URI,
+        type: "application/json",
+        path: ["value"],
+      }, { forged: true });
+      serving.prepareTxForCommit(tx);
+      between();
+      const result = await tx.commit().settled;
+      return { result, refused: policyRefusals() - refusedBefore };
+    };
+
+    it("refuses the write when the destination seals it", async () => {
+      const { result, refused } = await commitRefusedWrite();
+
+      expect(result.error?.name).toBe("CfcCommitRefusalError");
+      expect(result.error?.message).toContain(
+        "unprivileged write to protected runtime surface",
+      );
+      expect(refused).toBeGreaterThan(0);
+      expect(sealed).toBe(0);
+    });
+
+    it("hands the write to the destination, reporting no refusal, when the destination discards it", async () => {
+      discards = true;
+
+      const { result, refused } = await commitRefusedWrite();
+
+      expect(result.error).toBeUndefined();
+      expect(refused).toBe(0);
+      expect(sealed).toBe(1);
+    });
+
+    it("refuses the write at commit when the destination discarded it at preparation but seals it now", async () => {
+      // The overlay prunes its memory of terminal intents, so a run it would
+      // have dropped at preparation can be one it seals at commit. The commit
+      // asks again, and runs the pass the preparation skipped.
+      discards = true;
+
+      const { result, refused } = await commitRefusedWrite(() => {
+        discards = false;
+      });
+
+      expect(result.error?.name).toBe("CfcCommitRefusalError");
+      expect(result.error?.message).toContain(
+        "unprivileged write to protected runtime surface",
+      );
+      expect(refused).toBeGreaterThan(0);
+      expect(sealed).toBe(0);
+    });
+
+    it("hands the destination a write the pass refused at preparation, when the destination discards it at commit", async () => {
+      // The pass ran at preparation and reported its refusal. The commit does
+      // not fail on that verdict: the destination drops the writes, so the
+      // refused write reaches no store and no reader.
+      const { result, refused } = await commitRefusedWrite(() => {
+        discards = true;
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(refused).toBeGreaterThan(0);
+      expect(sealed).toBe(1);
+    });
   });
 });

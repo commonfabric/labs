@@ -117,21 +117,13 @@ describe("preload-profiles", () => {
         addedArrived.cancel();
       }
 
+      // Canceling ends the runtime's subscription. Home's storage watch
+      // outlives it and goes on loading what the server reports the roster
+      // linking to, so what reaches the replica afterward is not the
+      // preload's doing.
+      expect(runtime.scheduler.getStats().effects).toBe(1);
       cancel();
-      const afterCancel = seed.getCell(persona.did(), "after-cancel");
-      tx = seed.edit();
-      afterCancel.withTx(tx).set({ name: "After cancel" });
-      seed.prepareTxForCommit(tx);
-      expect((await tx.commit().settled).error).toBeUndefined();
-      tx = seed.edit();
-      home.withTx(tx).set({ profiles: [afterCancel] });
-      seed.prepareTxForCommit(tx);
-      expect((await tx.commit().settled).error).toBeUndefined();
-      await seed.storageManager.synced();
-      await server.idle();
-      await manager.synced();
-      await runtime.idle();
-      expect(stored(manager, afterCancel)).toBeUndefined();
+      expect(runtime.scheduler.getStats().effects).toBe(0);
     } finally {
       cancel();
       arrived.cancel();

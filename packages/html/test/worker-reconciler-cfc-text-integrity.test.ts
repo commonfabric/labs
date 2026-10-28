@@ -283,6 +283,110 @@ Deno.test("worker reconciler CFC text integrity across links", async (t) => {
     );
 
     await t.step(
+      "derives the required authorship from an author profile's written name, though another field also names someone else",
+      async () => {
+        // A field still at its default can carry the principal of the runtime
+        // that set it up, beside the owner's. A written name says whose the
+        // profile is, so only its claim counts; with no name written, every
+        // field counts and the text needs both authors.
+        const other = (await Identity.fromPassphrase("text-integrity other"))
+          .did();
+        const claimAt = (path: string[], ...subjects: string[]) => ({
+          path,
+          label: {
+            integrity: subjects.map((subject) => ({
+              kind: "represents-principal",
+              subject,
+            })),
+          },
+          origin: "declared",
+        });
+        const entries = [
+          claimAt(["name"], signer.did()),
+          claimAt(["avatar"], signer.did(), other),
+        ];
+        const authored = await write(
+          "stamped-author-text",
+          { body: ENDORSED },
+          [
+            { kind: "authored-by", subject: signer.did() },
+          ],
+        );
+        const underProfile = async (id: string, name: string) => {
+          const profile = await writeLabeled(
+            id,
+            { name, avatar: "x" },
+            entries,
+          );
+          return await mount({
+            type: "vnode",
+            name: "cf-cfc-authorship",
+            props: { verifyTextIntegrity: true, author: profile },
+            children: [authored.key("body") as never],
+          });
+        };
+        const named = await underProfile("stamped-named-profile", "Profile");
+        const unnamed = await underProfile("stamped-unnamed-profile", "");
+        try {
+          expect(named.texts()).toEqual([ENDORSED]);
+          expect(unnamed.texts()).toEqual([PLACEHOLDER]);
+        } finally {
+          named.cancel();
+          unnamed.cancel();
+        }
+      },
+    );
+
+    await t.step(
+      "hides an author's text when the author profile's name cannot be read",
+      async () => {
+        // A name held as a link back to itself cannot be followed to a value,
+        // so the read fails, and the label is read neither way. The author is
+        // handed over with its name kept as a cell, so that showing the prop
+        // does not follow the name itself.
+        const entries = [{
+          path: ["name"],
+          label: {
+            integrity: [{
+              kind: "represents-principal",
+              subject: signer.did(),
+            }],
+          },
+          origin: "declared",
+        }];
+        const authored = await write("cyclic-name-author-text", {
+          body: ENDORSED,
+        }, [{ kind: "authored-by", subject: signer.did() }]);
+        const underProfile = async (id: string, name: unknown) => {
+          await writeLabeled(id, { name }, entries);
+          const profile = runtime.getCell<unknown>(signer.did(), id, {
+            type: "object",
+            properties: { name: { asCell: ["cell"] } },
+          });
+          return await mount({
+            type: "vnode",
+            name: "cf-cfc-authorship",
+            props: { verifyTextIntegrity: true, author: profile },
+            children: [authored.key("body") as never],
+          });
+        };
+        const cyclicId = "cyclic-name-profile";
+        const named = await underProfile("readable-name-profile", "Profile");
+        const cyclic = await underProfile(
+          cyclicId,
+          link(runtime.getCell<unknown>(signer.did(), cyclicId).key("name")),
+        );
+        try {
+          expect(named.texts()).toEqual([ENDORSED]);
+          expect(cyclic.texts()).toEqual([PLACEHOLDER]);
+        } finally {
+          named.cancel();
+          cyclic.cancel();
+        }
+      },
+    );
+
+    await t.step(
       "hides text inside or around an author that represents no one",
       async () => {
         const text = await write("nested-author-text", { body: ENDORSED }, [

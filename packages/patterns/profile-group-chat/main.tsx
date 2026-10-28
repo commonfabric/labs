@@ -30,7 +30,7 @@ import {
  *     with a plain name label), the participant strip as `chip` badges, the
  *     viewer's own as `full`. Each badge carries the verified-identity seal and
  *     links to that person's profile.
- *   - A snapshot of name/avatar rides alongside the cell as a durable fallback
+ *   - A snapshot of the name rides alongside the cell as a durable fallback
  *     label (used for participant dedup and if the live cell is momentarily
  *     unresolved).
  *
@@ -50,7 +50,7 @@ export interface ChatMessage {
   /** Sender's profile name, snapshotted at send time (durable fallback label). */
   author: string;
 
-  /** Sender's profile avatar (URL or glyph), snapshotted at send time. */
+  /** Avatar text a stored message may carry. A new message holds "". */
   avatar: string;
   body: string;
   sentAt: number;
@@ -68,8 +68,8 @@ export type SendEvent = void;
 
 // Append a message. `profile` is the sender's live profile cell (the identity
 // rendered first-class via cf-profile-badge); it round-trips through `push` as a
-// link. `name`/`avatar` arrive as plain strings (named `computed` values
-// auto-unwrap as handler state) and are snapshotted as a durable fallback label;
+// link. `name` arrives as a plain string (named `computed` values auto-unwrap
+// as handler state) and is snapshotted as a durable fallback label;
 // `draft` is a live PerUser cell.
 const sendMessage = handler<SendEvent, {
   messages: MessagesCell;
@@ -77,8 +77,7 @@ const sendMessage = handler<SendEvent, {
   // May be undefined until the viewer's `#profile` wish resolves; guarded below.
   profile: ChatProfileCell | undefined;
   name: string;
-  avatar: string;
-}>((_event, { messages, draft, profile, name, avatar }) => {
+}>((_event, { messages, draft, profile, name }) => {
   const author = (name ?? "").trim();
   const body = (draft.get() ?? "").trim();
   if (!author || !body) return; // No profile yet, or empty message.
@@ -86,7 +85,7 @@ const sendMessage = handler<SendEvent, {
   messages.push({
     authorProfile: profile,
     author,
-    avatar: (avatar ?? "").trim(),
+    avatar: "",
     body,
     sentAt: Date.now(),
   });
@@ -115,15 +114,13 @@ export default pattern<ProfileGroupChatInput, ProfileGroupChatOutput>(
     // Resolve THIS viewer's shared profile (their default profile / picker
     // result under PR #3830). `#profile` is the live cell — the identity key
     // stored on each message and rendered via cf-profile-badge; the field
-    // targets give the snapshot strings (fallback label + participant dedup).
+    // target gives the snapshot name (fallback label + participant dedup).
     const profileWish = wish<{ name?: string; avatar?: string }>({
       query: "#profile",
     });
     const profileNameWish = wish<string>({ query: "#profileName" });
-    const profileAvatarWish = wish<string>({ query: "#profileAvatar" });
 
     const myName = computed(() => profileNameWish.result ?? "");
-    const myAvatar = computed(() => profileAvatarWish.result ?? "");
     // The live profile cell — stored on each message and passed to the badge.
     const myProfile = profileWish.result;
     // Gate the composer on BOTH the name (for the snapshot/label) AND the live
@@ -162,7 +159,6 @@ export default pattern<ProfileGroupChatInput, ProfileGroupChatOutput>(
       draft,
       profile: myProfile,
       name: myName,
-      avatar: myAvatar,
     });
 
     return {

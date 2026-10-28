@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { sha256 } from "@commonfabric/content-hash";
 import {
+  readRoutedBase64,
   routedStatementPayload,
   RoutedWriter,
   verifyRoutedProof,
@@ -59,7 +60,35 @@ const cases = [
   }, false],
   ["differentDeployment", good, { ...options, deployment: "another" }, false],
   ["expiredLease", good, { ...options, now: now + 600 }, false],
-  ["leaseOverOneHour", await proof({ exp: now + 3601 }), options, false],
+  ["leaseAtTenMinutes", await proof({ exp: now + 600 }), options, true],
+  ["leaseOverTenMinutes", await proof({ exp: now + 601 }), options, false],
+  ["leaseOfTheOldHour", await proof({ exp: now + 3600 }), options, false],
+  // A statement signed before its receipt: the issue-time bound is the one a
+  // compromised router cannot move, since the client signed it.
+  [
+    "leaseAtTenMinutesFromAnEarlierIssue",
+    await proof({ iat: now - 100, exp: now + 500 }),
+    options,
+    true,
+  ],
+  [
+    "leaseOverTenMinutesFromAnEarlierIssue",
+    await proof({ iat: now - 100, exp: now + 501 }),
+    options,
+    false,
+  ],
+  [
+    "issuedAtTheSkewBound",
+    await proof({ iat: now + 120, exp: now + 600 }),
+    options,
+    true,
+  ],
+  [
+    "issuedPastTheSkewBound",
+    await proof({ iat: now + 121, exp: now + 600 }),
+    options,
+    false,
+  ],
   ["receiptAtChallengeExpiry", await proof({ received: now + 60 }), {
     ...options,
     now: now + 60,
@@ -83,14 +112,14 @@ const cases = [
     false,
   ],
   [
-    "positiveSkewFullHourExceedsReceiptBound",
-    await proof({ iat: now + 1, exp: now + 3601 }),
+    "positiveSkewFullLeaseExceedsReceiptBound",
+    await proof({ iat: now + 1, exp: now + 601 }),
     options,
     false,
   ],
   [
-    "positiveSkewCappedToReceiptHour",
-    await proof({ iat: now + 1, exp: now + 3600 }),
+    "positiveSkewCappedToReceiptLease",
+    await proof({ iat: now + 1, exp: now + 600 }),
     options,
     true,
   ],
@@ -109,4 +138,22 @@ describe("routed wire proof authority", () => {
       expect(accepted).toBe(expected);
     });
   }
+});
+
+describe("readRoutedBase64()", () => {
+  it("returns the bytes of canonical text", () => {
+    expect(readRoutedBase64("AQI")).toEqual(new Uint8Array([1, 2]));
+  });
+
+  it("throws the routed denial for nonzero bits past the last whole byte", () => {
+    expect(() => readRoutedBase64("AQJ")).toThrow(
+      "Routed memory request denied",
+    );
+  });
+
+  it("throws the routed denial for a lone final character", () => {
+    expect(() => readRoutedBase64("AQIDB")).toThrow(
+      "Routed memory request denied",
+    );
+  });
 });

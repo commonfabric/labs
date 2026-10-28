@@ -3,7 +3,8 @@
  * service-account key's private key signs a JWT assertion that the token
  * endpoint exchanges for a short-lived access token; on GCE and GKE the
  * metadata server hands out the workload's own token instead, and no key is
- * stored anywhere.
+ * stored anywhere. The RS256 signing underneath is exported for other services
+ * that authenticate with a JWT signed by an RSA key, GitHub Apps among them.
  */
 
 import {
@@ -22,19 +23,79 @@ export interface ServiceAccountKey {
 
 const METADATA = "http://metadata.google.internal/computeMetadata/v1";
 
-// A PEM PKCS#8 private key -> a Web Crypto RS256 signing key.
-async function importPkcs8(pem: string): Promise<CryptoKey> {
+/**
+ * Imports `pem`, an RSA private key in PKCS#8 or in the PKCS#1 form GitHub
+ * issues for its apps, as a Web Crypto key that signs RS256. Web Crypto reads
+ * PKCS#8 alone, so a PKCS#1 key is first wrapped in the PKCS#8 structure that
+ * names it as an RSA key.
+ *
+ * @throws when `pem` is not a PEM RSA private key.
+ */
+export async function importRsaSigningKey(pem: string): Promise<CryptoKey> {
+  const label = /-----BEGIN ([A-Z ]+)-----/.exec(pem)?.[1];
+  if (label !== "RSA PRIVATE KEY" && label !== "PRIVATE KEY") {
+    throw new Error("expected a PEM RSA private key");
+  }
   const der = Uint8Array.from(
     atob(pem.replace(/-----[^-]+-----/g, "").replace(/\s+/g, "")),
     (c) => c.charCodeAt(0),
   );
   return await crypto.subtle.importKey(
     "pkcs8",
-    der,
+    label === "PRIVATE KEY" ? der : pkcs8FromPkcs1(der),
     { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
     false,
     ["sign"],
   );
+}
+
+// The DER encoding of the PKCS#8 fields ahead of the key: version 0, then the
+// algorithm identifier for `rsaEncryption` with its null parameters.
+// deno-fmt-ignore
+const PKCS8_RSA_PREFIX = [
+  0x02, 0x01, 0x00,
+  0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01,
+  0x05, 0x00,
+];
+
+/** Helper for `importRsaSigningKey()`, which wraps a PKCS#1 key as PKCS#8. */
+function pkcs8FromPkcs1(pkcs1: Uint8Array): Uint8Array<ArrayBuffer> {
+  const octets = [0x04, ...derLength(pkcs1.length)];
+  const content = PKCS8_RSA_PREFIX.length + octets.length + pkcs1.length;
+  const header = [0x30, ...derLength(content)];
+  const out = new Uint8Array(header.length + content);
+  out.set(header);
+  out.set(PKCS8_RSA_PREFIX, header.length);
+  out.set(octets, header.length + PKCS8_RSA_PREFIX.length);
+  out.set(pkcs1, header.length + PKCS8_RSA_PREFIX.length + octets.length);
+  return out;
+}
+
+/**
+ * Helper for `pkcs8FromPkcs1()`, which encodes `length` in the long form DER
+ * uses for every length an RSA key's structures have.
+ */
+function derLength(length: number): number[] {
+  const bytes: number[] = [];
+  for (let rest = length; rest > 0; rest = Math.floor(rest / 256)) {
+    bytes.unshift(rest % 256);
+  }
+  return [0x80 | bytes.length, ...bytes];
+}
+
+/** Returns a JWT carrying `claims`, signed RS256 with `key`. */
+export async function rs256Jwt(
+  key: CryptoKey,
+  claims: Readonly<Record<string, string | number>>,
+): Promise<string> {
+  const enc = (o: unknown) => toUnpaddedBase64urlFromText(JSON.stringify(o));
+  const signed = `${enc({ alg: "RS256", typ: "JWT" })}.${enc(claims)}`;
+  const sig = await crypto.subtle.sign(
+    "RSASSA-PKCS1-v1_5",
+    key,
+    new TextEncoder().encode(signed),
+  );
+  return `${signed}.${toUnpaddedBase64url(new Uint8Array(sig))}`;
 }
 
 /**
@@ -48,21 +109,13 @@ export async function saAssertion(
   nowSec: number,
   scope: string,
 ): Promise<string> {
-  const enc = (o: unknown) => toUnpaddedBase64urlFromText(JSON.stringify(o));
-  const head = enc({ alg: "RS256", typ: "JWT" });
-  const body = enc({
+  return await rs256Jwt(await importRsaSigningKey(key.private_key), {
     iss: key.client_email,
     scope,
     aud: key.token_uri,
     iat: nowSec,
     exp: nowSec + 3600,
   });
-  const sig = await crypto.subtle.sign(
-    "RSASSA-PKCS1-v1_5",
-    await importPkcs8(key.private_key),
-    new TextEncoder().encode(`${head}.${body}`),
-  );
-  return `${head}.${body}.${toUnpaddedBase64url(new Uint8Array(sig))}`;
 }
 
 /**

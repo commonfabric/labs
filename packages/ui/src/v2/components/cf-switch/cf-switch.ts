@@ -1,6 +1,6 @@
 import { booleanSchema } from "@commonfabric/runner/schemas";
 import { type CellHandle } from "@commonfabric/runtime-client";
-import { css, html, LitElement } from "lit";
+import { css, html } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 
 import { BaseElement } from "../../core/base-element.ts";
@@ -27,11 +27,6 @@ import { createBooleanCellController } from "../../core/cell-controller.ts";
  */
 
 export class CFSwitch extends BaseElement {
-  static override shadowRootOptions = {
-    ...LitElement.shadowRootOptions,
-    delegatesFocus: true,
-  };
-
   // deno-fmt-ignore
   static override styles = [
     BaseElement.baseStyles,
@@ -67,11 +62,11 @@ export class CFSwitch extends BaseElement {
       opacity: 0.5;
     }
 
-    :host:focus {
+    :host(:focus) {
       outline: none;
     }
 
-    :host:focus-visible .switch {
+    :host(:focus-visible) .switch {
       outline: 2px solid transparent;
       outline-offset: 2px;
       box-shadow:

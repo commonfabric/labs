@@ -177,6 +177,9 @@ Defaults:
 - Property defaults are applied from schema during object traversal
 - Top-level defaults are applied when current value is `undefined`
 - Defaults behind resolved `$ref` are honored
+- A link's stored `default`, combined into the selector at the hop, is applied
+  when the link's target is absent, whether the link is read within its
+  container or by its own path
 
 ---
 
@@ -232,7 +235,14 @@ resolve the reference and are not conflict dependencies.
 | Object property, link value, schema has `asCell` | Follows write redirects to stable target, then creates boundary object from resolved link (`getNextCellLink` path). | Follows redirects and continues traversal into resolved target content. |
 | Array element, link value, schema has `asCell` | Resolves write redirects first, then follows one additional link step for array semantics, then emits boundary object for the resolved target link. | Performs same link resolution, then continues schema traversal into the resolved element value. |
 | Array element, inline non-link object, schema has `asCell` | Boundary at element index. Emits `createObject(indexLink, undefined)`; no nested traversal for element fields. | No boundary shortcut; element object is traversed against element schema. |
-| Array element, inline non-link object, schema is not `asCell` | Element is wrapped via data-cell URI identity (`createDataCellURI`) for stable link identity during nested traversal. | Same behavior. |
+| Array element, inline non-link object or array, schema is not `asCell` | Element is given a compact `snapshot:` identifier naming its frozen value and source origin (`ImmutableCellStore.createElement`) for stable link identity during nested traversal. Nested traversal shares the frozen element and resolves relative links against the saved source document, without rewriting the element. | Same behavior. |
+
+A traversal whose context sets `inlineArrayItemsInPlace` is the exception to
+the last row, in either mode: it traverses the element in place, at its address
+in the document that stores it, mints no identifier, and issues no read at a
+snapshot identifier. `GraphQueryWalk` sets it for the walk a storage engine runs
+to resolve a schema query, which returns no object and whose storage holds no
+document at a snapshot identifier.
 
 ### Pointer and Redirect Details at Boundaries
 

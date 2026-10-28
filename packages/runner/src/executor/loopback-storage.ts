@@ -1,16 +1,24 @@
-// The serving runtime's loopback storage plane (server-execution v2
-// stage F, serving-loop.md §1 plane (a)): a StorageManager whose sessions
-// connect IN-PROCESS to the co-hosted memory server — the ONLY commit
-// path the loop's runtime uses — with the SAME signed `session.open`
-// production clients present. No parallel auth scheme: the loopback
-// session's principal is the service identity, verified by whatever
-// `authorizeSessionOpen` the host process configured, which is exactly
-// what makes the read-row admission's holder matching (protocol.md §2)
-// meaningful in production.
+/**
+ * The serving runtime's loopback storage plane (serving-loop.md §1 plane
+ * (a)): a StorageManager whose sessions connect to the memory server, in
+ * process or over transports that reach it on the thread that holds it, as
+ * the only commit path the loop's runtime uses, with the same signed
+ * `session.open` production clients present. No parallel auth scheme: the
+ * loopback session's principal is the service identity, verified by whatever
+ * `authorizeSessionOpen` the host process configured, which is what makes
+ * the read-row admission's holder matching (protocol.md §2) meaningful in
+ * production.
+ */
 
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
+import type { SessionDescriptor } from "@commonfabric/memory/v2";
 import * as MemoryClient from "@commonfabric/memory/v2/client";
-import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
+import {
+  type ClientBuild,
+  type ClientInfo,
+  createClientInfo,
+} from "@commonfabric/memory/v2/client-info";
+import type { LoopbackMemoryServer } from "./host-memory-server.ts";
 import type { SpaceHostRegistration } from "../space-host.ts";
 import {
   type Options,
@@ -18,35 +26,51 @@ import {
   StorageManager,
 } from "../storage/v2.ts";
 import { createSignedSessionOpenAuth } from "../storage/v2-remote-session.ts";
+import { runInServingContext } from "./serving-context.ts";
+
+/**
+ * Where a loopback session connects: the memory server reached in-process,
+ * or a factory of transports that reach it another way, such as a port to
+ * the thread that holds it.
+ */
+export type LoopbackPlane =
+  | LoopbackMemoryServer
+  | { createTransport(): MemoryClient.Transport };
 
 class LoopbackSessionFactory implements SessionFactory {
   readonly supportsAclBootstrap = true;
 
-  readonly #getServer: () => MemoryServer;
+  readonly #plane: LoopbackPlane;
 
   readonly #onServerFrame?: (frame: string) => void;
+  readonly #clientInfo: Readonly<ClientInfo>;
 
   constructor(
-    getServer: () => MemoryServer,
+    plane: LoopbackPlane,
     onServerFrame?: (frame: string) => void,
+    clientBuild?: ClientBuild,
   ) {
-    this.#getServer = getServer;
+    this.#plane = plane;
     this.#onServerFrame = onServerFrame;
+    this.#clientInfo = createClientInfo(clientBuild);
   }
 
-  /** The loopback transport, with each server frame reported AFTER the
-   * session has taken it. */
+  /** The loopback transport, with each server frame taken in the serving
+   * context and reported AFTER the session has taken it. */
   #transport(): MemoryClient.Transport {
-    const inner = MemoryClient.loopback(this.#getServer());
+    const inner = "createTransport" in this.#plane
+      ? this.#plane.createTransport()
+      : MemoryClient.loopback(this.#plane);
     const report = this.#onServerFrame;
-    if (report === undefined) return inner;
     return {
       ...inner,
       setReceiver: (next) =>
-        inner.setReceiver((payload) => {
-          next(payload);
-          report(payload);
-        }),
+        inner.setReceiver((payload) =>
+          runInServingContext(true, () => {
+            next(payload);
+            report?.(payload);
+          })
+        ),
     };
   }
 
@@ -62,6 +86,7 @@ class LoopbackSessionFactory implements SessionFactory {
     }
     const client = await MemoryClient.connect({
       transport: this.#transport(),
+      client: this.#clientInfo,
     });
     try {
       const session = await client.mount(
@@ -69,7 +94,7 @@ class LoopbackSessionFactory implements SessionFactory {
         mountOptions,
         (
           targetSpace: string,
-          descriptor: MemoryClient.MountOptions,
+          descriptor: SessionDescriptor,
           context: MemoryClient.SessionOpenAuthContext,
         ) =>
           createSignedSessionOpenAuth(
@@ -98,7 +123,7 @@ class LoopbackSessionFactory implements SessionFactory {
  */
 export class LoopbackStorageManager extends StorageManager {
   static connect(
-    server: MemoryServer,
+    plane: LoopbackPlane,
     options: Omit<Options, "memoryHost" | "spaceHostMap">,
     /** DIAGNOSTIC (tests): each frame the server sends to this manager's
      * sessions, reported once the session has taken it. A session's own
@@ -113,7 +138,7 @@ export class LoopbackStorageManager extends StorageManager {
         // storage address against this.
         memoryHost: new URL("memory://loopback"),
       },
-      new LoopbackSessionFactory(() => server, onServerFrame),
+      new LoopbackSessionFactory(plane, onServerFrame, options.clientBuild),
     );
   }
 

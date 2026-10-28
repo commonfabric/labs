@@ -7,9 +7,13 @@ import {
   type Cfc,
   type CurrentPrincipal,
   currentPrincipal,
+  type DID,
   handler,
   principalsOf,
+  profileOwnerOf,
   type RepresentsCurrentUser,
+  spaceAccess,
+  spaceAccessOf,
   Writable,
   type WriteAuthorizedBy,
 } from "commonfabric";
@@ -35,11 +39,12 @@ export type PanelAdderDid = AuthoredByCurrentUser<
 /**
  * The profile under which the person who added a panel acted.
  *
- * Only `admitPanel` writes it. The runtime stores a declared label entry at
- * the field carrying `represents-principal` for the principal whose action
- * wrote it, resolving that principal itself. The panel also stores copies of
- * the linked profile's label, marked `origin: "link"`, which name the
- * profile's owner; the README says how a reader tells the two apart.
+ * Only `admitPanel` writes it, and only with a profile whose own label
+ * attests the principal its event acts for. The runtime stores a declared
+ * label entry at the field carrying `represents-principal` for the principal
+ * whose action wrote it, resolving that principal itself. The panel also
+ * stores copies of the linked profile's label, marked `origin: "link"`, which
+ * name the profile's owner; the README says how a reader tells the two apart.
  */
 export type PanelAdderProfile = RepresentsCurrentUser<
   Cfc<
@@ -99,8 +104,8 @@ function isAdderDid(value: string): boolean {
   return value.length <= 195 && DID_SYNTAX.test(value);
 }
 
-/** Validate a panel before admitting its occurrence to the shared composition. */
-function validatePanel(panel: Panel): void {
+/** Validate a panel before admitting its occurrence to the Loom. */
+export function validatePanel(panel: Panel): void {
   if (panel.kind === "url" && externalUrl(panel.url) === undefined) {
     throw new Error("A URL panel requires an HTTP(S) URL without credentials");
   }
@@ -122,27 +127,10 @@ function containsPiece(
   });
 }
 
-/** `list` with `panel` inserted at `index`. */
-function withInserted(
-  list: readonly Writable<Panel>[],
-  index: number,
-  panel: Writable<Panel>,
-): Writable<Panel>[] {
-  return [...list.slice(0, index), panel, ...list.slice(index)];
-}
-
-/** Whether `panel` is one of the occurrences in `list`. */
-function containsOccurrence(
-  list: readonly Writable<Panel>[],
-  panel: Writable<Panel>,
-): boolean {
-  return list.some((existing) => existing.equals(panel));
-}
-
 /**
  * The adder fields a new occurrence takes: the profile the event acts under,
- * or else the principal the event acted for. A run that acts for no one
- * records neither.
+ * which {@link assertOwnProfile} has already checked, or else the principal
+ * the event acted for. A run that acts for no one records neither.
  */
 function adderFields(
   event: PanelAdmission,
@@ -157,13 +145,93 @@ function adderFields(
 }
 
 /**
+ * Throws unless `event` names no profile in `as`, or names one that is the own
+ * profile of the principal the event acts for, by the rule every reader of a
+ * person's profiles applies (`profileOwnerOf()`). A profile it returns no
+ * principal for is no one's, whether its label names nobody, names more than
+ * one principal, or holds a claim the reader refuses, or its `name` links
+ * outside the profile's own documents, and a run that acts for no one has no
+ * profile of its own.
+ */
+function assertOwnProfile(event: PanelAdmission): void {
+  if (event.as === undefined) return;
+  const actor = currentPrincipal();
+  if (actor !== undefined && profileOwnerOf(event.as) === actor) return;
+  throw new Error(
+    "A panel can be added under a profile only by the principal that profile represents",
+  );
+}
+
+/**
  * Returns the principals attested on `panel`'s `addedBy` field: none for a
  * field no stamp names, and `undefined` when a claim there is in a form a
- * runtime does not mint. Other fields can have their own authors without
- * changing who added the occurrence.
+ * runtime does not mint. The stamp is the one on the field itself: a value
+ * link stored there leads to a document with a label of its own, which says
+ * nothing about who wrote the field. Other fields can have their own authors
+ * without changing who added the occurrence.
  */
-function attestedAdders(panel: Writable<Panel>): string[] | undefined {
-  return principalsOf(panel.key("addedBy"), "authored-by");
+function attestedAdders(panel: Writable<Panel>): DID[] | undefined {
+  return principalsOf(panel.key("addedBy"), "authored-by", {
+    label: "written",
+  });
+}
+
+/**
+ * Throws unless the principal the running event acts for may remove `panel`
+ * for everyone: an occurrence its label attests to that principal alone, one
+ * that records no adder at all, or, for an OWNER of the Loom's space, one it
+ * attests to a principal the Loom's access list no longer admits, or one whose
+ * label does not settle on an adder. `panels` is
+ * the Loom's list, which anchors both access reads in the Loom's space: an
+ * occurrence `addPanel` linked may live in another space, whose list says
+ * nothing about who belongs to the Loom. The adder is read from the runtime's
+ * stamps on the occurrence's own fields, `authored-by` at `addedBy` and
+ * `represents-principal` at `addedByProfile`, where the stamp names whoever
+ * acted under the profile, never the linked profile's owner.
+ *
+ * An occurrence records no adder when it holds no profile and no stamp names
+ * anyone at `addedBy`, whose value is then its writer's claim and protects
+ * nothing. Every other occurrence whose stamps do not settle on one adder is
+ * an OWNER's alone to remove: one whose stamps name two principals, one
+ * holding a claim in a form no runtime mints, which a runtime did not write,
+ * and one that holds a profile no stamp says anyone acted under, since
+ * `admitPanel` stamps every profile it records. No participant's claim to it
+ * can be read, so none is protected, and the OWNER is who clears it up.
+ */
+export function assertRemovable(
+  panel: Writable<Panel>,
+  panels: Writable<Writable<Panel>[]>,
+): void {
+  const byDid = attestedAdders(panel);
+  const byProfile = principalsOf(
+    panel.key("addedByProfile"),
+    "represents-principal",
+    { label: "written" },
+  );
+  const adders = byDid === undefined || byProfile === undefined
+    ? undefined
+    : [...new Set([...byDid, ...byProfile])];
+  if (adders?.length === 0 && panel.get().addedByProfile === undefined) {
+    return;
+  }
+  if (adders?.length !== 1) {
+    if (spaceAccess(panels) === "OWNER") return;
+    throw new Error(
+      "A panel whose label does not settle on one adder can be removed only by an OWNER of the Loom",
+    );
+  }
+  const [adder] = adders;
+  const actor = currentPrincipal();
+  if (adder === actor) return;
+  // An owner clears up after a participant who has left: one the Loom's list
+  // grants nothing, as the list stands on this replica. A list not yet read
+  // admits nobody's removal of another's panel.
+  if (
+    spaceAccess(panels) === "OWNER" && spaceAccessOf(panels, adder) === "none"
+  ) return;
+  throw new Error(
+    "Only the principal who added a panel can remove it, unless they have left the Loom and an OWNER removes it",
+  );
 }
 
 /** A copy of `source` that keeps its target and title and takes a new adder. */
@@ -199,7 +267,7 @@ function admitCopy(
   validatePanel(copy);
   const occurrence = new Writable<Panel>();
   occurrence.set(copy);
-  panels.set(withInserted(list, index, occurrence));
+  panels.set(list.toSpliced(index, 0, occurrence));
 }
 
 /**
@@ -208,21 +276,20 @@ function admitCopy(
  * It is the only handler that may write a panel's `addedByProfile` or
  * `addedBy`, so every stream that adds a panel is a binding of it, and `mode`
  * says which. An event's `as` is the profile under which the person adding
- * acts; it is linked into an occurrence this handler creates, never into a
- * document the caller passed, and the runtime labels it with the principal who
- * acted. An occurrence this handler creates without `as` records that
- * principal in `addedBy` instead, attested the same way. Nothing in the event
- * names the adder.
- *
- * The body touches the occurrences in `panels` only through helpers. Its
- * state schema is inferred from the uses the body shows, and an occurrence
- * compared with `equals` or moved with `splice` there would be narrowed to a
- * cell whose value the piece registration can no longer read.
+ * acts, and its own label must attest that person; an event naming any other
+ * profile is refused. It is linked into an occurrence this handler creates,
+ * never into a document the caller passed, and the runtime labels it with the
+ * principal who acted. An occurrence this handler creates without `as` records
+ * that principal in `addedBy` instead, attested the same way. Nothing in the
+ * event names the adder.
  */
 export const admitPanel = handler<
   PanelAdmission,
   { panels: Writable<Writable<Panel>[]>; mode: AdmissionMode }
 >((event, { panels, mode }) => {
+  // Checked first, so an event naming a profile that is not the actor's is
+  // refused even where it would change nothing.
+  assertOwnProfile(event);
   const list = panels.get();
   if (mode === "piece") {
     const piece = event.piece;
@@ -241,7 +308,7 @@ export const admitPanel = handler<
     const index = insertionIndex(list, event.before);
     // A panel already present is not admitted again, so there is nothing to
     // validate or record.
-    if (containsOccurrence(list, panel)) return;
+    if (list.some((existing) => existing.equals(panel))) return;
     const value = panel.get();
     validatePanel(value);
     if (event.as !== undefined) {
@@ -272,10 +339,10 @@ export const admitPanel = handler<
         "A panel another principal added, or whose adder its label contests, cannot be linked; add a copy of it with `as` instead",
       );
     }
-    panels.set(withInserted(list, index, panel));
+    panels.set(list.toSpliced(index, 0, panel));
     return;
   }
-  if (!containsOccurrence(list, panel)) {
+  if (!list.some((existing) => existing.equals(panel))) {
     throw new Error("The panel is no longer in this Loom");
   }
   const index = insertionIndex(list, event.before);

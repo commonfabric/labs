@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
@@ -6,7 +7,11 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Runtime } from "../src/runtime.ts";
 import { PatternCoverageCollector } from "../src/pattern-coverage.ts";
 import type { Engine } from "../src/harness/engine.ts";
-import type { RuntimeProgram } from "../src/harness/types.ts";
+import type {
+  CompiledModuleArtifact,
+  RuntimeProgram,
+} from "../src/harness/types.ts";
+import { deriveModuleRecordFields } from "../src/sandbox/module-record-compiler.ts";
 import type {
   CommitError,
   IExtendedStorageTransaction,
@@ -444,6 +449,44 @@ describe("ESM compile via content-addressed cell cache", () => {
     const entry = closure.get(entryIdentity)!;
     expect(new Set(entry.exportNames)).toEqual(new Set(["default"]));
     expect(entry.importSpecs).toContain("./util.ts");
+  });
+
+  it("hands a warm hit the runtime imports its compiled documents carry", async () => {
+    const pm = runtime.patternManager;
+    await pm.compilePattern(PROGRAM, { space, tx });
+    await pm.flushCompileCacheWrites();
+
+    const engine = runtime.harness as Engine;
+    const compileToRecordGraph = engine.compileToRecordGraph.bind(engine);
+    const served: CompiledModuleArtifact[] = [];
+    using _compile = stub(
+      engine,
+      "compileToRecordGraph",
+      (program, options = {}) => {
+        const { precompiledModulesFor } = options;
+        return compileToRecordGraph(program, {
+          ...options,
+          ...(precompiledModulesFor === undefined ? {} : {
+            precompiledModulesFor: async (info) => {
+              const bodies = await precompiledModulesFor(info);
+              for (const artifact of bodies?.values() ?? []) {
+                served.push(artifact);
+              }
+              return bodies;
+            },
+          }),
+        });
+      },
+    );
+    await pm.compilePattern(PROGRAM, { space, tx });
+
+    expect(pm.getCompileCacheStats().hits).toBe(1);
+    expect(served.length).toBeGreaterThan(0);
+    for (const artifact of served) {
+      expect(artifact.importSpecs).toEqual(
+        deriveModuleRecordFields(artifact.js).importSpecs,
+      );
+    }
   });
 
   it("surfaces cold writeback failure instead of returning an unloadable pattern", async () => {

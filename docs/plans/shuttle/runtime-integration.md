@@ -131,9 +131,11 @@ Two disciplines every existing sink consumer rediscovered:
 
 - **Settling.** One logical change fires several sink callbacks before the
   reactive graph quiets. FUSE debounces on a timer; `renderVDomToHtml`
-  (`packages/cli/lib/piece-render.ts`) uses a reentrancy guard plus
-  `runtime.idle()` so several batches produce exactly one report per quiet
-  runtime. The guard-plus-`idle()` form is the one to adopt — no timer.
+  (`packages/cli/lib/piece-render.ts`) uses a reentrancy guard around a wait
+  its caller supplies, so several batches produce exactly one report per quiet
+  runtime. Under `cf piece render --watch` that wait is `runtime.idle()`,
+  repeated while storage holds work a computation is waiting for. The
+  guard-plus-`idle()` form is the one to adopt — no timer.
 - **Freshness requires running.** A piece that is not started serves stored
   state; computed values are only fresh when the pattern runs in this
   process. That is what `cf cell get --step` does per invocation
@@ -173,7 +175,7 @@ injection point that lets a lib function reuse a held controller:
   rest of the list follows. A supplied connection is the caller's to close,
   so `withAcl` disposes only a runtime it opened itself.
 - **Hardcode `loadPieces`:** `setPieceSlug`, `savePiecePattern`,
-  `applyPieceInput`, `linkSqliteDiskSource`, `resetHomePattern`, and
+  `applyPieceInput`, `linkSqliteDiskSource`, and
   `commands/deps.ts`. Each opens a fresh runtime and WebSocket per call. No
   shuttle-v1 verb reaches one, so each is a conversion for the milestone
   that first calls it.

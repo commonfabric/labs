@@ -298,10 +298,12 @@ identity. Resolved source may be shared within a reconciler for the same
 destination space, full source URL, and advertised identity. Retention is bounded
 by entry count and source string size. An open that finds no verified pattern
 for that source compiles it and verifies that identity in its destination space,
-including source-closure persistence on a compiler cache hit. The pattern that
-open verified is retained with the source and answers later opens for the same
-destination, URL, and identity without compiling again, because that destination
-already holds its closure. It answers only within the schema registry epoch that
+including source-closure persistence on a compiler cache hit. Opens for the same
+destination, URL, and identity that arrive while that compile runs share it
+rather than compiling the same source again. The pattern that open verified is
+retained with the source and answers later opens for the same destination, URL,
+and identity without compiling again, because that destination already holds
+its closure. It answers only within the schema registry epoch that
 compiled it: its serialized graph carries `cid:` schema references that a
 registry clear retires, so an open after a clear compiles again. Compilation or
 identity failure retires the source used by that attempt, with any pattern kept
@@ -313,16 +315,20 @@ independently of this source sharing.
 A piece that pattern code instantiates — a nested pattern, a piece a handler
 creates with `inSpace` — runs a module of the instantiating program, and what it
 claims follows from what that program claims. Where the instantiating piece
-follows a `system:` origin, the child lives in a space of its own, and the
+follows a `system:` origin, the child outlives the program that made it, and the
 child's module is one the runtime fetched from the patterns route as part of
 that program, the child claims the `system:` ref naming its own module: the
 runtime resolved that module from the deployment's route, which is the same
 ground on which it claims the ref for the surfaces it instantiates itself. A
-nested node in the parent's own space claims nothing — it is part of the
-parent's graph and is re-instantiated from the parent's program on each release
-of the parent, so an origin of its own would be followed twice. The profile a
-person creates from the profile surfaces is such a child, and follows
-`profile-home.tsx` as the deployment ships it. Both halves are required. A
+child outlives that program when it lives in a space of its own, or when a
+handler made it, in whichever space: no release of the parent instantiates it
+again. A nested node of the parent's own graph claims nothing — the parent's
+program re-instantiates it on each release of the parent, so an origin of its
+own would be followed twice. The profile a person creates from the profile
+surfaces is a child in a space of its own, and follows `profile-home.tsx` as the
+deployment ships it; the chat room a Loom's root makes in the Loom's space is a
+child a handler made, and follows `fabrichat/room.tsx`. Both halves are
+required. A
 module's name alone is author-controlled — a locally compiled program may call a
 file anything — and it is the followed parent that says the name was a route the
 runtime resolved.
@@ -468,7 +474,7 @@ storage schema to use these exact TypeScript field names.
 | Active origin | No origin, a `system:` ref, a stable mutable fabric-entity URL, or a content-addressed fabric pattern URL with an export symbol | **Partial**: `patternSource` stores the active origin string. Explicit history actions can clear it, restore an earlier origin, or accept one a person typed. Fabric origin creation and the stored export selector remain required |
 | Revision head | The stable identifier of the latest accepted source and origin state | **Partial**: the last valid `pieceSourceHistory` entry is the guarded head. It is not yet mirrored in the complete source-state schema |
 | Source revision log | Ordered records of every accepted source and origin state, with a durable reference to each immutable authored-program manifest | **Partial**: source-backed direct Piece API creation, lifecycle-aware edits, detach, revert, repoint, provenance repair, and origin updates append guarded records. Each record links to an existing source-document closure that is verified in the lifecycle write transaction. Programmatically constructed patterns without retained source, other creation paths, and immutable authored-program manifests remain required |
-| Last reconciliation | What following the active origin last did — followed, could not reach it, or refused what it offered — with when, why, and the identity the origin offered | **Partial**: reconciliation records the outcome, its time, the offered identity, and a refusal's reason on the piece, and an accepted transition clears it. An origin of a kind nothing follows yet records that, which is a state of its own rather than an absence. Reaching the same conclusion twice rewrites nothing |
+| Last reconciliation | What following the active origin last did — followed, could not reach it, or refused what it offered — with when, why, and the identity the origin offered | **Partial**: reconciliation records the outcome, its time, the offered identity, a refusal's reason, and for a `system:` origin the release time confirmed for the running source on the piece, and an accepted transition clears it. An origin of a kind nothing follows yet records that, which is a state of its own rather than an absence. Reaching the same conclusion twice rewrites nothing |
 | Descriptive repository | Optional locator shown by tooling; never followed | Implemented as `patternRepository` metadata |
 
 The runtime-neutral program digest is
@@ -642,7 +648,14 @@ home root, any more than a non-home one does. Migration preserves both as
 detached unless a durable tracking choice explicitly supplies and authorizes an
 origin. A root that records no origin and cannot start is still rolled forward
 to its space's official system source, because that is a repair of an unopenable
-space rather than an update, and it stamps the origin it rolled to.
+space rather than an update, and it stamps the origin it rolled to. Two kinds
+of root are the exception: one at the address the space's genesis commit
+reserves for the root an `inSpace(..., { root: true })` call places, and one
+whose own stored label carries a `represents-principal` claim, as a profile's
+does wherever it sits, a claim a link carries in not counting. Its creator's
+pattern placed it, the system source is no replacement for it, and a start that
+fails leaves it as it is, whether its pattern cannot load or CFC migration
+rejects its setup repair.
 New spaces create their root through the ordinary source-creation transition
 and link that new piece as the space root.
 
@@ -658,7 +671,7 @@ and link that new piece as the space root.
 | Refresh from a `system:` ref | The newly fetched program, if its executable identity, export symbol, or complete-program digest changed and it passed validation | The same `system:` ref and entry export | Append an automatic-update revision when the executable export or retained authored program changes |
 | Instantiate a surface the runtime supplies | The program resolved from the `system:` ref the runtime supplies for it | That ref | Append a create revision naming it |
 | Open a surface the runtime supplies that records no origin | The source it runs, when its space can load that; otherwise the program the `system:` ref currently resolves to | That ref | Append a baseline and a follow revision retaining what it runs; when that cannot be loaded, append a follow revision adopting the ref's program and record the displaced identity |
-| Instantiate a piece from pattern code | The instantiating program's module | The module's `system:` ref, when the instantiating piece follows a `system:` origin, the child lives in a space of its own, and the module came from the patterns route; else none (a nested node in the parent's own space claims none) | A create revision carrying the claimed origin, appended when the child's space already holds the source it runs; a detached child appends none (required work below), and a cross-space child carries its origin ahead of the revision |
+| Instantiate a piece from pattern code | The instantiating program's module | The module's `system:` ref, when the instantiating piece follows a `system:` origin, the child lives in a space of its own or a handler made it, and the module came from the patterns route; else none (a nested node of the parent's own graph claims none) | A create revision carrying the claimed origin, appended when the child's space already holds the source it runs; a detached child appends none (required work below), and a cross-space child carries its origin ahead of the revision |
 | Refresh from an external web URL | The newly fetched program, if its executable identity, export symbol, or complete-program digest changed and it passed validation | The same `https://` URL and entry export | Append an automatic-update revision when the executable export or retained authored program changes |
 | Load from a content-addressed URL or a pinned entity-FID URL | The exact executable source graph named by the identity or trailing pin; synthetic retention roots are excluded | The normalized fabric pattern URL and export symbol | Do not append an automatic-update revision because the resolved executable source graph cannot change |
 | Fork a piece | The source currently used by the selected piece | None | Append a fork revision with `forkedFrom`; do not copy the source piece's log |
@@ -785,8 +798,10 @@ historical origin retains that origin.
 Preflight and setup share stored-argument validation. Optional fields holding
 `undefined` count as absent. An argument document or linked value unreadable in
 the validating transaction defers to reactive reads; a readable wrong-typed
-value is refused. Preflight does not establish that every linked value is
-available.
+value is refused. A link stored at a position the schema types as a cell
+handle validates as that handle: only the top level of what it reaches is
+read, without descending, and held to the type the position allows. Preflight
+does not establish that every linked value is available.
 
 When validation needs to distinguish unreadable links from literal absence, its
 fallback builds a view whose fields follow stored links as validation reads
@@ -828,6 +843,53 @@ state written by the previous version and check the new one still reads it.
 That is a better check than the runtime can make, and repeating a weaker
 version of it at update time would only refuse releases the replays already
 cleared. Such a candidate is adopted as it stands.
+
+As it stands, but not out of order. Two hosts serving one space can offer
+different releases at once: a deployment partway through restarting its
+instances, two deployments reaching the same memory. A content identity says
+only that two sources differ, so a piece taking whatever differed would move
+between the two on every open. The deployment states when it released what it
+serves, the host sends that time beside the identity it advertises, and the
+revision that adopts a candidate records it. A later release offering the same
+source again moves the running source's time forward, on the record the
+reconciliation leaves, so that a release between the two, the one a rollback
+replaced among them, is earlier than what the piece runs. A candidate stating an
+earlier time than the running source's, or none against one, is not adopted;
+the piece keeps its source and records that it follows its origin. The time is the deploy's,
+not the commit's, so a rollback deployed later is the later release and is
+followed. A piece whose running pattern will not load takes the earlier release
+regardless, since it has nothing to start, unless its history records its move
+from that release to the running one: a runtime older than that move cannot load
+what the piece runs, and is behind it rather than holding a dead pattern, so the
+piece keeps its source. The loop and the header are in
+[pattern-updates.md](pattern-imports/pattern-updates.md#system-source-patterns--the-loop).
+
+The same answer holds for a step taken by hand when it is the same step:
+repointing a piece at a `system:` origin, following one again from its
+history, or taking what its active origin offers now. The contract half of the
+release testing is its first tier, the pattern-compat gate
+([pattern-update-testing.md](pattern-update-testing.md#tier-1--contract-compatibility)),
+which proves each release of a pattern's default export against the contracts
+that export's earlier releases recorded, the breaks it accepts by name included
+(`tasks/pattern-compat-accepted-breaks.ts`), and proves no other step. So the
+review leaves the schema comparison out only where the piece shows the step is
+one of those. It runs the default export, and the candidate is that export
+too. The source it runs was compiled from that origin's file: a module is
+named by its route path, which its identity covers, so the entry the piece's
+retained source names is the origin's route. The piece knows when that source
+was released, from a revision naming it or a confirmation of it. And the
+deployment states a later release time beside the candidate's identity.
+Every other step has its schemas compared and takes the explicit override, as
+any manual replacement does: an earlier release, a candidate or running source
+with no stated time, another export, and a piece whose source came from
+anywhere else. Release times order deploys, not commits, so a deployment
+serving source its gate never judged is trusted for it the same as by the
+automatic update. Either way the review validates the stored argument and the
+links it retains, and runs the CFC envelope merges the commit will make: those
+concern the piece's own data, which no release gate saw. A step taken by hand
+records the candidate's release time on its revision, as the automatic update
+does, and the commit checks again that the candidate is still the later
+release.
 
 Every other origin — another piece, exact pinned source — is somebody else's, and nobody promised anything about it. A candidate from one
 is adopted only if it is an acceptable replacement for what the piece runs,
@@ -898,6 +960,7 @@ of a schema warning does not waive this root-interface contract.
 | Structural schema comparison | Compare argument and result schemas and validate retained inputs when replacing an existing piece's source | **Implemented** for `PieceController.setPattern` |
 | Manual incompatible replacement | Warn about an incompatible pattern contract or retained link and require explicit confirmation or a command-line flag. Reject a candidate that cannot use the actual retained input | **Partial**: source-history actions return a one-use confirmation bound to the reviewed candidate and guarded state. `setPattern` rejects unless `dangerouslyAllowIncompatibleSchema` is supplied, and the command line exposes that flag without a first-class warning and confirmation flow |
 | Automatic update from a gated origin | Adopt a `system:` candidate as it stands; the release that produced it was gated by golden replays over representative state | **Implemented** |
+| Manual step to a gated origin | Review a later `system:` release of the pattern a piece took its source from without comparing schemas, and compare them for every other step | **Implemented**: a repoint, a follow from history, and taking the active origin's offer judge the step by the piece's source log, the export, and both release times, and record the candidate's release time on the revision |
 | Automatic update from an ungated origin | Compare the candidate with the accepted source in both directions, and adopt only an acceptable replacement | **Partial**: a candidate from an ungated origin must leave the piece's argument and result schemas exactly as they are, which refuses changes the piece could take. `PieceController.setPattern` already applies the relation this asks for |
 | Overriding a refused automatic update | Name the refusal and its reason on the source panel, and offer to adopt that exact candidate anyway, keeping the active origin | **Partial**: reconciliation records each refusal and its reason as durable state, the source panel names both, and its override resolves the active origin again and adopts what it offers through the one-use confirmation, keeping the origin. The override is offered only where a contract mismatch caused the refusal. Asking to override resolves the origin again, so an origin that moved since the refusal supplies the later candidate, and the confirmation binds to the one that override's own check reviewed |
 | Migrating a piece's data across a contract change | Migrate rather than refuse, so a contract change does not stop a piece following its origin | **Migration required**: an unaccepted refusal leaves the piece on its last accepted state |
@@ -1226,6 +1289,19 @@ is the batch lane's,
    candidate value even when it is unchanged, and advance the revision head.
 7. Start the accepted pattern on the existing piece result cell.
 
+A piece that is already running when it is opened keeps its reactive nodes
+through step 7. The runner's pattern watcher re-instantiates it on the accepted
+pattern, and the open waits for the watcher to finish. Where the
+re-instantiation succeeds, the caller is handed a piece running the pattern its
+`patternIdentity` names, as it is for a piece that was not running.
+
+Two cases leave the caller with the outgoing pattern's nodes still running. A
+re-instantiation that fails is logged, and the piece stays on the pattern it
+was running. On a runtime that seals its writes into a serving wave, the
+re-instantiation follows the wave's settlement, and the open does not wait for
+it. [In-place apply](pattern-imports/pattern-updates.md#in-place-apply) states
+which pointer moves the wait covers.
+
 If reconciliation fails and the current source remains loadable, the runtime
 starts that source. A piece in that state is not following its origin any
 more, and it must say so.
@@ -1274,11 +1350,12 @@ own.
 - **New source refused.** The origin resolved, and the piece did not adopt what
   it offered — the candidate is not an acceptable replacement for what the
   piece runs, its stored data does not satisfy the candidate's contract, the
-  source did not compile, or the source did not produce the identity its origin
-  advertised. This does not resolve itself. The panel names the reason, and
-  offers the actions that end it: take the candidate anyway, detach, or
-  repoint. What the attempt reported goes on a line of its own rather than
-  into a sentence, because a compiler's report is not a clause.
+  source did not compile, the source did not produce the identity its origin
+  advertised, or the write that would adopt it was refused for good. This does
+  not resolve itself. The panel names the reason, and offers the actions that
+  end it: take the candidate anyway, detach, or repoint. What the attempt
+  reported goes on a line of its own rather than into a sentence, because a
+  compiler's report is not a clause.
 
 A state that has nothing to report says nothing. A piece running what its
 origin offered gets its line in the panel's facts and no more: an explanation
@@ -1333,8 +1410,35 @@ so a refusal fails it whole, as the compatibility policy describes.
 Telling could-not-reach from refused needs the reconciliation to separate an
 origin it could not reach from one that resolved and offered source it could
 not use — a program that did not compile, one that did not produce the identity
-its origin advertised, one whose setup the piece's data refused. The first may
-fix itself and the rest will not, so they do not share a state on the panel.
+its origin advertised, one whose setup the piece's data refused, one whose
+adopting write was refused for good. The first may fix itself and the rest will
+not, so they do not share a state on the panel.
+
+A write is refused for good when the store refuses it as too large to admit, or
+when a stored envelope refuses its schema for changing or weakening a claim the
+envelope fixes. The same write receives either refusal again however often it is
+sent, and no grant lifts either. The runtime that received one therefore does
+not build that write again while nothing the refusal answered for has changed:
+the candidate the origin offers and the piece's source state, and, for a stored
+envelope's refusal, the envelopes the piece's argument and result documents
+store. Any of those changing puts the candidate up for adoption again. The
+envelopes stay as they are under a write made with the schema the piece runs, so
+a piece that goes on taking writes keeps the refusal, while a migration that
+rewrites them puts the candidate up again. A write refused as too large grows
+with what the piece holds, so a change to the piece's data does not put it up
+again. The space's memory session being replaced, as a host restart replaces it,
+puts every refused candidate in that space up again, since what the store admits
+may have changed with it, and a refusal that arrives after its own space's
+session was replaced during the attempt is not remembered at all. The runtime
+starting again puts every candidate up again. The piece stopping does not: a
+host that keeps a piece running stops and starts it. What the runtime remembers
+is its own: such a refusal is the verdict of the runtime that built the write
+and of the store it went to, and a later build, or a runtime under different
+enforcement, may build a write that is admitted. What the piece records is the
+refusal, which every runtime reports the same way. Every other failure — a
+conflict, a dropped connection, a flow-control or row-label refusal that a grant
+can lift — is proposed again on the next reconciliation, and an explicit ask
+builds and sends the write whatever was refused before.
 
 Distinguishing these needs the outcome of the last reconciliation to outlive
 the reconciliation, so the panel can show it to a reader who opened the piece
@@ -1372,7 +1476,15 @@ A content-addressed or explicitly pinned fabric URL has no subscription because
 its target cannot change. Each notification enters the same guarded transition
 described above. There is no separate unguarded update path.
 
-The subscription ends when the following piece stops, detaches, or repoints.
+A `system:` origin has no entity to subscribe to: the host serves one source
+for the life of its process. A restart replaces every memory session the host
+held, so the runtime reconciles each piece it follows from a `system:` origin
+again when that piece's space reports its session replaced on reconnect,
+through the same guarded transition. A host that changes what it serves
+without restarting is followed only by the piece's next open.
+
+The subscription ends when the following piece stops, detaches, or repoints,
+and so does the follow of a `system:` origin.
 Authorization loss, a prohibited cross-space information flow, unavailable
 source, and validation failure leave the last accepted source running and
 surface an origin error. A concurrent local edit or repoint advances the
@@ -1515,18 +1627,18 @@ rejected without offering confirmation.
 | Manually push local code with an identity key and create a piece | **Implemented** | `cf piece new` resolves a local file program, writes its content-addressed source closure in the target space, creates a piece, and authenticates through the supplied identity. `cf piece setsrc` updates the same piece. |
 | Wish a new pattern into being with an LLM-backed UI | **Partial** | The `write-and-run` example asks an LLM for pattern code and passes it to `compileAndRun`, whose callback lets the browser worker register the new piece in a space. It is not a general product affordance and does not record a source revision. The runtime `wish()` builtin is discovery, not code generation. [`hosted-pattern-authoring.md`](hosted-pattern-authoring.md) specifies the affordance and its entry points; it needs the complete authored-program manifest this document requires. |
 | Instantiate a surface the runtime supplies | **Implemented** | A `#profile` wish that finds no profile, or several with no default, renders a surface the runtime instantiates from a pattern this deployment serves; so does a multi-result wish's suggestion surface. Each supplies the `system:` ref naming its file, and `SourceReconciler.open` resolves that ref through the same `?identity` route and revalidating fetch reconciliation uses, against the host serving the surface's space. A surface that does not exist yet is answered with what the ref names now, and the run that creates it records that ref with its creation revision. One that exists is opened: a surface from before this claim records the ref with a follow revision, one that already records it follows it, and one its owner has repointed keeps what they chose. A surface from before this claim whose pattern its space can no longer load has nothing for that follow revision to retain, so the same revision adopts the program the ref names now and records the identity it displaced. Opening happens once per surface per process, which is what one look at a piece is. |
-| Instantiate a piece from pattern code | **Creation revision required** | A nested pattern, and a piece a handler creates with `inSpace`, runs a module of the instantiating program; a child in a space of its own records a `system:` origin when the instantiating piece follows one and the module came from the patterns route, and none otherwise; a nested node in the parent's own space records none. What is missing is the history of the detached case: `Runner.run` appends no creation revision for such a piece, so its exact source cannot be restored and its source panel has nothing to show. A cross-space `inSpace` child needs its source closure replicated into the child's space before one can be written, which is also why a child that claims an origin can carry it ahead of its creation revision. |
+| Instantiate a piece from pattern code | **Creation revision required** | A nested pattern, and a piece a handler creates with `inSpace`, runs a module of the instantiating program; a child in a space of its own, or one a handler made, records a `system:` origin when the instantiating piece follows one and the module came from the patterns route, and none otherwise; a nested node of the parent's own graph records none. What is missing is the history of the detached case: `Runner.run` appends no creation revision for such a piece, so its exact source cannot be restored and its source panel has nothing to show. A cross-space `inSpace` child needs its source closure replicated into the child's space before one can be written, which is also why a child that claims an origin can carry it ahead of its creation revision. |
 | Manually push code from a source URL and create a piece that remembers it | **CLI URL flow required** | The command-line `new` and `setsrc` commands accept local filesystem entries. `RuntimeClient.createPiece(URL)` fetches an HTTP or HTTPS program and records its canonical URL as the active origin with the creation revision. Fabric resolution can resolve content-addressed patterns and same-toolshed piece references to a source identity, but its result does not carry the export symbol as origin state. The command line still has no general `https://` or `cf://` source-origin operation. `--repository` is descriptive metadata and is not an origin. |
 | Use a UI affordance to push a known source URL into an owned space | **Partial** | A host can call `RuntimeClient.createPiece(URL)` to fetch and run an indexed HTTP or HTTPS program with its canonical URL recorded as the active origin. `fetchProgram` with `compileAndRun` and the omnibox's `fetchAndRunPattern` can also fetch and run indexed web programs, but those paths remain history-free. There is no corresponding fabric URL affordance. |
 | Manually push code from a source URL and create a piece that remembers it | **CLI URL flow required** | The command-line `new` and `setsrc` commands accept local filesystem entries. Fabric resolution can resolve content-addressed patterns and same-toolshed piece references to a source identity, but its result does not carry the export symbol as origin state. The command line has no `cf://` or `system:` source-origin operation. `--repository` is descriptive metadata and is not an origin. |
 | Use a UI affordance to push a known source URL into an owned space | **Fabric URL affordance required** | `RuntimeClient.createPiece(URL)`, `fetchProgram` with `compileAndRun`, and the omnibox's `fetchAndRunPattern` fetch and run a program from an arbitrary URL. None of them records an origin, and an arbitrary endpoint is no longer one, so they are one-shot instantiation rather than lifecycle operations. Nothing pushes a fabric URL into an owned space. |
 | Follow an immutable fabric URL | **Immutable URL follow required** | Following one resolves the pinned identity, adopts its source once, and can then never report a move again. Nothing follows a fabric origin at load today, and such an origin stores no export selector, so an implementation has either to store one or to choose the pinned source's normal entry export. |
 | Load or create from an immutable fabric URL | **Immutable URL flow required** | The source cache and fabric resolver can load verified `cf:pattern:<identity>` source and honor a trailing pin on an entity-FID reference. No product operation normalizes that URL and export symbol into immutable piece origin metadata or appends the required revision. |
-| Automatically refresh a mutable URL-origin piece when loaded | **Partial** | Opening a piece resolves its origin and adopts the source it names, before the piece starts, for every piece and through one mechanism. A `system:` ref resolves through the toolshed's `?identity` route, so an unchanged pattern costs one conditional request and no source download, and one whose compiled artifact this space no longer holds still compiles from source. A rooted path from before that scheme is re-stamped as the ref naming the same file. A mutable fabric entity resolves through the pattern identity it currently runs, and is observed while the follower runs; a content-addressed or pinned fabric URL resolves once and then has nothing to report. An accepted update changes the pattern, active origin, and guarded revision history atomically, and the piece's stored argument is guarded across it. Reconciliation resolves the current source rather than the complete accepted-manifest comparison specified below; a refusal is neither visible nor overridable; a failed resolution reaches no UI; and a piece nobody opens is never reconciled. |
+| Automatically refresh a mutable URL-origin piece when loaded | **Partial** | Opening a piece resolves its origin and adopts the source it names, before the piece starts, for every piece and through one mechanism. A `system:` ref resolves through the toolshed's `?identity` route, so an unchanged pattern costs one conditional request and no source download, and one whose compiled artifact this space no longer holds still compiles from source. A rooted path from before that scheme is re-stamped as the ref naming the same file. A mutable fabric entity resolves through the pattern identity it currently runs, and is observed while the follower runs; a content-addressed or pinned fabric URL resolves once and then has nothing to report. A running piece following a `system:` ref is reconciled again when its space's memory session is replaced, which a host restart causes. A `system:` candidate is not adopted when its host states an earlier release time than the running source's, which is the adopting revision's or a later one a release offering that same source has confirmed, or states none against one, unless the running pattern cannot load and the piece's history records no move to it from the candidate; a deployment that states no release time leaves its pieces following by identity alone. An adoption refused for good — by the store as too large, or by a stored envelope whose claim its schema changes or weakens — is recorded as a refusal and not prepared again in the same process while the candidate and the piece's source state stay as they were and, for a stored envelope's refusal, while the piece's argument and result documents store the envelopes it was refused over; that lasts until the space's memory session is replaced, and a refusal that arrives after its own space's session was replaced is not remembered. An accepted update changes the pattern, active origin, and guarded revision history atomically, and the piece's stored argument is guarded across it. Reconciliation resolves the current source rather than the complete accepted-manifest comparison specified below; a refusal is neither visible nor overridable; a failed resolution reaches no UI; and a piece nobody opens is never reconciled. |
 | Retain authored declaration files | **Implemented** | An authored declaration file is a module like any other. `computeModuleHashes` follows type-import edges and resolves them to a `.d.ts`, so editing one changes its importer's module identity and the entry identity. `persistableSourceFiles` keeps every rooted `.d.ts`, and both engine compile paths build the persisted module set from that same list, so a declaration-only change cannot reuse stale compiled bytes. Ambient, non-rooted declaration files are dropped, which is what distinguishes an authored declaration from the type environment the runtime injects. |
 | Publish explicit source subpaths | **Exports-map support required** | The `cf:` grammar parses a subpath. Compile resolution and the shared pin/update chase reject it before entry resolution, so current tooling cannot create a misleading subpath pin. There is no immutable authored-program manifest or exact public exports map. Entry imports continue to pin the entry identity. |
 | Record and propagate a runtime rebuild | **Provider and lifecycle required** | `computeModuleHashes` accepts `runtimeFingerprint`, and its unit test proves that changing the fingerprint changes a module with an external dependency. Production pattern compilation and source verification use the empty default. There is no authoritative executable-fingerprint provider. Source documents do not retain a non-empty identity fingerprint. The partial revision log has no runtime-neutral program digest, runtime-rebuild cause, owner-published propagation contract, or cross-runtime revert handling. |
-| Manage a space root through the ordinary piece lifecycle | **Partial** | A root is a piece, and it follows its origin through the same reconciliation as every other piece, on the same trigger. The shared menu actions work on it and the same guarded history records are appended. A first lifecycle transition freezes a legacy relative source path against the space's accepted host and retains the recorded path. What is left particular to a root is repair rather than update: a root that cannot start, and that records no origin or the same official system source, rolls forward to that source so its space stays openable, and one whose document was staged by another pattern version is re-staged once its origin confirms the pinned identity. Creation still stamps a raw `patternSource`, update authority is not a complete durable origin record, the creation template still lives on the mutable home root, and root linking does not validate a root interface. |
+| Manage a space root through the ordinary piece lifecycle | **Partial** | A root is a piece, and it follows its origin through the same reconciliation as every other piece, on the same trigger. A start that only needs the root running does not follow it: `cf piece new` starts the root on the pattern it holds to register a piece through its `addPiece` stream, following the origin only if that pattern cannot load, a verb's send starts it at delivery, and the next open follows the origin. The shared menu actions work on it and the same guarded history records are appended. A first lifecycle transition freezes a legacy relative source path against the space's accepted host and retains the recorded path. What is left particular to a root is repair rather than update: a root that cannot start, and that records no origin or the same official system source, rolls forward to that source so its space stays openable, unless this runtime cannot load the pattern it holds, its history records its move from the source the roll-forward would compile, and its host offers that source at an earlier release than the one it holds; and one whose document was staged by another pattern version is re-staged once its origin confirms the pinned identity. Creation still stamps a raw `patternSource`, update authority is not a complete durable origin record, the creation template still lives on the mutable home root, and root linking does not validate a root interface. |
 | Clone an existing piece into a new space and follow its upstream source | **Partial** | `cf-piece-menu` offers a default-data clone and a clone seeded with detached snapshots of the selected piece's input and stateful internal data. Computed values are recomputed in the new space. The menu creates a space through the current user's runtime with `RuntimeClient.createSpace(label)`, which lists it in the user's Home space list, reports progress and failures in a dialog, takes the space back out of that list with `RuntimeClient.unlistSpace()` when the clone fails, and navigates to the clone by the space's DID. `PieceController.cloneTo` copies one guarded snapshot of the selected piece's verified current program. It records the selected piece as a mutable fabric origin when the piece is detached, or passes through the piece's active origin. Relative fabric origins are qualified with their source space. Reconciliation observes a mutable upstream piece while the clone runs, applies compatible source changes, and restores that observation when the clone starts. Under this design a clone is opened rather than merely started, so the reconciliation an open performs is what installs that subscription. Cross-space source copies reject confidentiality and integrity labels that the copy cannot preserve. The clone receives an ordinary creation revision. Origin-chain cycle checks, same-identity origin-revision observation, and cross-host guarded observation remain required. |
 | Fork an existing piece and detach it | **Fork operation required** | Tooling can recover a piece's verified source closure, and the runtime can create another piece from a program. The clone action follows an upstream source and is not a fork. There is no detached fork operation or UI, no `forkedFrom` history, and no atomic detach contract. |
 | Stop following an active origin without changing the current source | **Partial** | `cf-piece-menu` exposes **Stop following source** for a piece with an active origin. `PieceController.changeSource` verifies the retained current source, atomically clears the origin without rerunning setup, and appends a detach revision. A later reconciliation reads that revision as the intentional detachment it is. It works through `RuntimeClient` in every `cf-render` host. The complete authored-program manifest and runtime-rebuild distinction remain required. |

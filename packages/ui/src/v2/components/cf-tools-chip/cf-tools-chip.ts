@@ -1,16 +1,15 @@
 import { ToolsArraySchema } from "@commonfabric/runner/component-read-contract";
 import { type CellHandle } from "@commonfabric/runtime-client";
-import { consume } from "@lit/context";
 import { css, html, nothing, render } from "lit";
 import { property, state } from "lit/decorators.js";
 
 import { BaseElement } from "../../core/base-element.ts";
 import { createCellController } from "../../core/cell-controller.ts";
 import {
+  AmbientThemeWatch,
   applyThemeToElement,
   type CFTheme,
-  cfThemeContext,
-  defaultTheme,
+  copyThemeProperties,
 } from "../theme-context.ts";
 
 /**
@@ -277,10 +276,12 @@ export class CFToolsChip extends BaseElement {
 
   #closeTimer?: ReturnType<typeof setTimeout>;
 
-  /** The theme, consumed from the provider. */
-  @consume({ context: cfThemeContext, subscribe: true })
+  /**
+   * A theme given to this element directly, written over the theme it would
+   * otherwise inherit. Left unset, the element draws the ambient theme.
+   */
   @property({ attribute: false })
-  accessor theme: CFTheme = defaultTheme;
+  accessor theme: CFTheme | undefined = undefined;
 
   // Overlay/popover state
   #overlay: HTMLDivElement | null = null;
@@ -289,6 +290,9 @@ export class CFToolsChip extends BaseElement {
 
   constructor() {
     super();
+    new AmbientThemeWatch(this, () => {
+      if (this.#overlay) copyThemeProperties(this, this.#overlay);
+    });
     this.label = "Tools";
     this.showCount = true;
     this.openOnHover = true;
@@ -497,6 +501,7 @@ export class CFToolsChip extends BaseElement {
 
   override updated(changed: Map<string | number | symbol, unknown>) {
     super.updated(changed);
+    if (changed.has("theme")) applyThemeToElement(this, this.theme);
     if (changed.has("open") || changed.has("tools")) {
       if (this.open) {
         this.#mountOverlay();
@@ -505,11 +510,8 @@ export class CFToolsChip extends BaseElement {
       } else {
         this.#unmountOverlay();
       }
-    } else if (this.open && changed.has("theme")) {
-      // Refresh theme tokens on overlay when theme changes.
-      if (this.#overlay) {
-        applyThemeToElement(this.#overlay, this.theme ?? defaultTheme);
-      }
+    } else if (this.#overlay && changed.has("theme")) {
+      copyThemeProperties(this, this.#overlay);
     }
   }
 
@@ -523,7 +525,7 @@ export class CFToolsChip extends BaseElement {
     el.dataset.cfToolsChipOverlay = "";
     document.body.appendChild(el);
     this.#overlay = el;
-    applyThemeToElement(el, this.theme ?? defaultTheme);
+    copyThemeProperties(this, el);
   }
 
   #unmountOverlay() {

@@ -11,6 +11,10 @@ import {
 
 import { createBuilder } from "../../../runner/src/builder/factory.ts";
 import type { Cell } from "../../../runner/src/builder/types.ts";
+import {
+  commitRefusal,
+  interceptPieceStartCommit,
+} from "../../../runner/test/support/intercept-piece-start-commit.ts";
 import { pieceId } from "../../src/piece-id.ts";
 import { PiecesController } from "../../src/ops/pieces-controller.ts";
 
@@ -376,6 +380,45 @@ export default pattern<{panels: Writable<Writable<unknown>[]>}>(({panels}) => ({
     });
 
     describe("instance members", () => {
+      describe("getRegisteredPieces()", () => {
+        it("reads later commits through a controller for a registered piece in another space", async () => {
+          const foreignPieces = new PiecesController(
+            createSession({
+              identity: signer,
+              spaceDid: await runtime.createSpace(),
+            }),
+            runtime,
+          );
+          const foreignPiece = await foreignPieces.runPersistent(
+            valuePattern(),
+            { value: 7 },
+            "foreign-registered-piece",
+          );
+          await pieces.add([foreignPiece]);
+          const active = await pieces.getActivePiece(foreignPiece);
+          expect(active).toBeDefined();
+          expect(address(active!.resolveAsCell())).toEqual(
+            address(foreignPiece),
+          );
+          const listed = (await pieces.getRegisteredPieces()).find((entry) =>
+            entry.id === pieceId(foreignPiece)
+          );
+          expect(listed).toBeDefined();
+          expect(listed!.pieces().getSpace()).toBe(foreignPieces.getSpace());
+          expect(await listed!.result.get(["value"])).toBe(7);
+
+          const argument = await foreignPieces.getArgument(foreignPiece);
+          const edited = await runtime.editWithRetry((tx) =>
+            argument.withTx(tx).key("value").set(8)
+          );
+          expect(edited.error).toBeUndefined();
+          await runtime.idle();
+          await pieces.synced();
+
+          expect(await listed!.result.get(["value"])).toBe(8);
+        });
+      });
+
       describe("remove()", () => {
         it("refuses to unlink a computed default root through member removal", async () => {
           const root = await installComputedRegistry("noop");
@@ -531,6 +574,43 @@ export default pattern<{panels: Writable<Writable<unknown>[]>}>(({panels}) => ({
           await expect(pieces.startPiece(id, "user")).rejects.toThrow(
             "No data at cell",
           );
+        });
+
+        describe("over a refused setup commit", () => {
+          // The piece is stopped first, so the start instantiates its graph
+          // again and commits the setup writes on a transaction of its own,
+          // which storage then refuses. The refusal retires the graph.
+
+          const refusal = commitRefusal("injected refusal of the start commit");
+
+          it("rejects with the refusal, given `awaitSetupCommit`", async () => {
+            await pieces.stopPiece(piece);
+            const intercepted = interceptPieceStartCommit(runtime, {
+              refusal,
+            });
+            try {
+              await expect(
+                pieces.startPiece(piece, undefined, { awaitSetupCommit: true }),
+              ).rejects.toThrow(refusal.message);
+              expect(runtime.runner.isRunning(piece)).toBe(false);
+            } finally {
+              intercepted.restore();
+            }
+          });
+
+          it("resolves without `awaitSetupCommit`", async () => {
+            await pieces.stopPiece(piece);
+            const intercepted = interceptPieceStartCommit(runtime, {
+              refusal,
+            });
+            try {
+              await pieces.startPiece(piece);
+              await runtime.runner.idlePieceInstantiationSettlements();
+              expect(runtime.runner.isRunning(piece)).toBe(false);
+            } finally {
+              intercepted.restore();
+            }
+          });
         });
       });
 

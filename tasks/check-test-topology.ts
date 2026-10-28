@@ -10,8 +10,8 @@
  *
  * The tree half needs no store and runs on every pull request. It reads
  * every file the repository holds for things that look like tests, and
- * fails on any that no suite accounts for, or that two suites claim under
- * the same record surface and variant. This is what catches a pull
+ * fails on any that no suite accounts for, or that two suites of the same
+ * variant claim. This is what catches a pull
  * request adding a test surface nobody registered, at the moment it is
  * added.
  *
@@ -36,8 +36,8 @@
  * every test deleted or renamed since.
  *
  * The reverse direction is reported rather than failed. A unit the
- * topology holds that no run has ever recorded is either a test that
- * never runs or a mapping that is wrong, and both are worth knowing
+ * topology holds that the run's records never reached is either a test
+ * that never runs or a mapping that is wrong, and both are worth knowing
  * about without blocking anybody.
  *
  *   deno task check-test-topology            # tree and workflows
@@ -46,7 +46,9 @@
  *
  * Each path is a file of records or a directory holding them, walked for
  * every `.ndjson` under it, so a run's downloaded record artifacts are
- * named as the one directory they arrive in. A directory a job gathered
+ * named as the one directory they arrive in. Of a job that was re-run,
+ * only the latest attempt's artifact is read, because the run as it
+ * stands is what that attempt recorded. A directory a job gathered
  * carries the commit its records are from in the facts beside them, and
  * a path holding no records fails rather than being read as a part of
  * the run that had none.
@@ -57,6 +59,7 @@ import {
   type AliasResolver,
   loadAliasResolver,
   parseReportGroups,
+  shippedArtifact,
   type TestIdentity,
   testIdentityKey,
 } from "@commonfabric/test-support/records";
@@ -113,6 +116,25 @@ const NOT_A_TEST_SURFACE: ReadonlyArray<{ path: string; reason: string }> = [
   {
     path: "packages/deno-web-test/test/bundle-project/bundled.test.ts",
     reason: "a project the harness runs to prove it bundles before serving",
+  },
+  {
+    path: "packages/deno-web-test/test/commands-project/press.test.ts",
+    reason: "a project the harness runs to prove a test can press trusted keys",
+  },
+  {
+    path: "packages/deno-web-test/test/late-registration-project/late.test.ts",
+    reason: "a project the harness runs to prove a run with a test it never " +
+      "ran claims nothing",
+  },
+  {
+    path: "packages/deno-web-test/test/load-error-project/loads.test.ts",
+    reason: "a project the harness runs to prove a run with a file that " +
+      "failed to load claims nothing",
+  },
+  {
+    path: "packages/deno-web-test/test/load-error-project/throws.test.ts",
+    reason: "a project the harness runs to prove a run with a file that " +
+      "failed to load claims nothing",
   },
   {
     path: "packages/deno-web-test/test/project-with-config/ed25519.test.ts",
@@ -486,6 +508,9 @@ export function checkStore(
     }
   }
   for (const suite of suites) {
+    // A gate's verdict is recorded by the job this check runs in, after it
+    // reads the lanes' records, so no gate is among them.
+    if (suite.judges !== undefined) continue;
     // A leaf declared unavailable leaves its unit expected to record,
     // because every other identity in that unit still runs.
     const unavailable = unavailableUnits(suite);
@@ -562,6 +587,33 @@ async function recordFiles(at: string): Promise<RecordFile[]> {
   return found.sort((left, right) => left.path.localeCompare(right.path));
 }
 
+/**
+ * The record files of `files`, less every one in an artifact that a later
+ * attempt at the same job superseded. A job that is re-run ships its
+ * artifact under the new attempt, beside the one the attempt before it
+ * shipped, and the run as it stands is each job's latest attempt. A file
+ * belongs to the artifact named by the directory it sits in, however the
+ * file was found.
+ */
+function latestAttempts(files: readonly RecordFile[]): RecordFile[] {
+  const shippedIn = (file: RecordFile) =>
+    shippedArtifact(path.basename(path.dirname(file.path)));
+  const latest = new Map<string, number>();
+  for (const file of files) {
+    const shipped = shippedIn(file);
+    if (shipped === undefined) continue;
+    latest.set(
+      shipped.artifact,
+      Math.max(latest.get(shipped.artifact) ?? 0, shipped.attempt),
+    );
+  }
+  return files.filter((file) => {
+    const shipped = shippedIn(file);
+    return shipped === undefined ||
+      shipped.attempt === latest.get(shipped.artifact);
+  });
+}
+
 /** The commit a gathered artifact's own facts name, where it holds them. */
 async function gatheredCommit(dir: string): Promise<string | undefined> {
   let facts: unknown;
@@ -587,12 +639,22 @@ export async function readRecords(
   paths: readonly string[],
   aliases?: AliasResolver,
 ): Promise<StoredIdentity[]> {
-  const resolver = aliases ?? await loadAliasResolver();
-  const records: StoredIdentity[] = [];
   const files: RecordFile[] = [];
   for (const at of paths) {
     for (const file of await recordFiles(at)) files.push(file);
   }
+  return await readFiles(
+    latestAttempts(files),
+    aliases ?? await loadAliasResolver(),
+  );
+}
+
+/** The records in `files`, their identities resolved through `resolver`. */
+async function readFiles(
+  files: readonly RecordFile[],
+  resolver: AliasResolver,
+): Promise<StoredIdentity[]> {
+  const records: StoredIdentity[] = [];
   for (const file of files) {
     const text = await Deno.readTextFile(file.path);
     for (const group of parseReportGroups(text)) {
@@ -718,15 +780,28 @@ export async function check(
     // is a part of the run the store half did not see, and summing them
     // first would let one path's records answer for another's. Judging
     // the part that did arrive is the guard reporting on a corpus it
-    // only partly read.
+    // only partly read. Which attempt at a job stands is decided across
+    // every path, and a path whose artifacts a later attempt superseded
+    // arrived all the same.
     const resolver = await loadAliasResolver();
+    const named: { at: string; files: RecordFile[] }[] = [];
+    for (const at of options.store.records) {
+      named.push({ at, files: await recordFiles(at) });
+    }
+    const standing = new Set(
+      latestAttempts(named.flatMap(({ files }) => files)).map((file) =>
+        file.path
+      ),
+    );
     // A run's records, and the findings they yield, can outnumber the
     // arguments one function call takes.
     const reads: StoredIdentity[][] = [];
     const empty: string[] = [];
-    for (const at of options.store.records) {
-      const read = await readRecords([at], resolver);
-      if (read.length === 0) empty.push(at);
+    for (const { at, files } of named) {
+      const current = files.filter((file) => standing.has(file.path));
+      const read = await readFiles(current, resolver);
+      const superseded = files.length > 0 && current.length === 0;
+      if (read.length === 0 && !superseded) empty.push(at);
       reads.push(read);
     }
     if (empty.length > 0) {

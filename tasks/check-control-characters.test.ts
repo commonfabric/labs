@@ -142,6 +142,7 @@ describe("check-control-characters", () => {
         const path of [
           "packages/content-hash/test/fixture-frank.txt",
           "packages/memory/memory.tldr",
+          "packages/cli/test/fixtures/view-language/make-infra/after.mk",
           "docs/history/specs/pattern-id-retirement.md",
           "packages/static/assets/types/es2023.d.ts",
         ]

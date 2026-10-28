@@ -100,6 +100,18 @@ counts their three child templates (`shape`, `value`, and `followRef`). These
 counters measure work before final entry coalescing; they do not count distinct
 persisted entries.
 
+`inputReadViewsBuilt` and `inputReadViewsReused` count the input-requirement
+verifications of a boundary pass, by whether the pass copied the transaction's
+reads for that verification or reused the copy it held. A written target is
+verified once under each schema that applies to it — its candidate schema, the
+schema its document stores, and the stored envelope at each path the write went
+through — and a failure ends its verifications early, so the two counters sum to
+the verifications run, not to the targets written. A pass copies the reads again
+only when a read was recorded or reclassified since the last verification. The
+counters cover that copy alone. The stored envelope behind each read is resolved
+again when a write retires one, and the labeled reads are assembled again with
+them, and neither is counted here.
+
 ## Parsing untrusted CFC labels
 
 `parseIfcLabel` from `@commonfabric/runner/cfc` is the public boundary for a
@@ -384,8 +396,8 @@ inference.
 > patterns, declared defaults (`Default<>`) become schema defaults and the
 > initial state is written to storage when the piece is instantiated. Without
 > that instantiation write, a schema `default` stays **virtual** — readable, but
-> backed by a read-only `data:` document — so writing through a nested cell it
-> materialized throws `ReadOnlyAddressError`, links resolve against stored
+> backed by a read-only `snapshot:` document — so writing through a nested cell
+> it materialized throws `ReadOnlyAddressError`, links resolve against stored
 > values only, and nested-path subscriptions see `undefined`. The examples below
 > therefore seed initial state with an explicit `runtime.edit()` transaction
 > before mutating through nested cells or resolving links.
@@ -449,7 +461,7 @@ const userCell = runtime.getCell(
 );
 
 // Schema defaults are readable immediately — but they are VIRTUAL (backed
-// by a read-only data: document), so seed the cell with a real write
+// by a read-only snapshot: document), so seed the cell with a real write
 // before mutating through nested cells.
 const seed = runtime.edit();
 userCell.withTx(seed).set({
@@ -570,14 +582,40 @@ runtime.runner.stop(result);
 The storage system provides persistence for cells and synchronization across
 clients.
 
+Storage synchronization and `Cell.pull()` depend on live space subscriptions. A
+terminated session makes storage synchronization return its failure even for
+documents already loaded into the replica, and `Cell.pull()` rejects terminal
+connection or takeover errors in any space the read reaches. A failed session in
+an unrelated space does not fail the pull. Authorization denials retain their
+absent-value semantics and per-space access report.
+`storageManager.spaceSessionError(space)` exposes a terminal session error
+without starting I/O. Ordinary reconnects keep the session open and restore its
+subscriptions; a takeover ends the session and requires a fresh client. An
+authoritative local store continues supplying reads independently of the remote
+session.
+
+Reactive reads through `get()`, `sink()`, and computations continue using cached
+documents; they do not surface terminal session errors through this check.
+`storageManager.subscribeSpaceSessionError(observer)` calls the observer with
+the space and the error when a space's session ends this way, so a long-lived
+subscriber learns that its documents will receive no further updates without
+reading anything.
+
 Remote memory connections use native WebSockets in browsers and for plain `ws:`
 URLs. Deno `wss:` connections use the `ws` package through Deno's Node TLS stack
 to avoid the native TLS flush bug tracked in
 [denoland/deno#36862](https://github.com/denoland/deno/issues/36862). This
-backend can be removed once the pinned Deno release includes the upstream fix.
-It uses Fabric's message compression, with WebSocket per-message compression
-disabled. Its send promise waits for local write completion; Fabric's protocol
-replies remain the authority for committed writes.
+backend also turns on TCP keepalive for the connection, starting probes after 30
+seconds without traffic. When the peer vanishes without closing the connection,
+the unanswered probes make the operating system fail the socket, and the memory
+client reconnects and restores the session's subscriptions. The operating
+system's probe interval and count decide how long that takes; with common
+defaults the socket fails about ten minutes after the connection goes quiet. The
+native Deno WebSocket exposes no socket options, so replacing this backend once
+the pinned Deno release includes the upstream fix needs another way to enable
+keepalive. It uses Fabric's message compression, with WebSocket per-message
+compression disabled. Its send promise waits for local write completion;
+Fabric's protocol replies remain the authority for committed writes.
 
 ```typescript
 import { Runtime } from "@commonfabric/runner";
@@ -950,6 +988,11 @@ For a space-scoped child, resume waits for the parent transaction to commit and
 retains the parent demand root across cold loading. Parent teardown cancels only
 the start it owns; a replacement or independently started child keeps running.
 Scoped serving children resume through their per-actor program coordinator.
+
+A handler creating a tracked child prepares the deferred source verifier before
+setting up its result graph. The creation revision retains the source verified
+in that setup transaction, including when the parent's compiled module loaded
+without loading the compiler.
 
 ## Service Architecture
 

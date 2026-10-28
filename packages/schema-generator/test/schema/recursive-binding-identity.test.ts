@@ -18,12 +18,16 @@ const ALIASES = `
   declare const g: Fn;
 `;
 
-/** Generates the schema and diagnostics of the fixture's root interface. */
-async function generate(code: string) {
+/**
+ * Generates the schema and diagnostics of the fixture's root interface, as a
+ * schema that defines a document where `definesDocument` is set.
+ */
+async function generate(code: string, definesDocument = false) {
   const { type, checker } = await getTypeFromCode(ALIASES + code, "Holder");
   const diagnostics: SchemaGenerationDiagnostic[] = [];
   const schema = asObjectSchema(
     new SchemaGenerator().generateSchema(type, checker, undefined, {
+      definesDocument,
       onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
       writerIdentityForSourceFile: (file) => ({ file }),
     }),
@@ -78,6 +82,26 @@ describe("recursive binding identity", () => {
         },
       },
     });
+    expect(diagnostics).toEqual([]);
+  });
+
+  it("keeps a writer named by the declared element of a nongeneric tuple alias", async () => {
+    const { schema, diagnostics } = await generate(`
+      type Pair = [WriteAuthorizedBy<string, typeof f>];
+      type Named = Pair;
+      interface Holder { pair: Pair; named: Named }
+    `);
+
+    for (const field of ["pair", "named"]) {
+      expect(asObjectSchema(schema.properties![field]!).items).toEqual({
+        type: "string",
+        ifc: {
+          writeAuthorizedBy: {
+            __ctWriterIdentityOf: { file: "test.ts", path: ["f"] },
+          },
+        },
+      });
+    }
     expect(diagnostics).toEqual([]);
   });
 
@@ -150,11 +174,13 @@ describe("recursive binding identity", () => {
   });
 
   for (const member of ["[W][0]", "W extends unknown ? W : never"]) {
-    it(`reports an unread writer when a generic member uses ${member}`, async () => {
-      const { diagnostics } = await generate(`
+    it(`reports an unread writer when a generic member uses ${member} in a schema that defines a document, and nothing in a view`, async () => {
+      const code = `
         interface Box<W> { value: ${member} }
         interface Holder { a: Box<WriteAuthorizedBy<string, typeof f>> }
-      `);
+      `;
+      const { diagnostics } = await generate(code, true);
+      const view = await generate(code);
 
       expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0]).toMatchObject({
@@ -163,6 +189,7 @@ describe("recursive binding identity", () => {
       });
       expect(diagnostics[0]!.message).toContain("operator syntax");
       expect(diagnostics[0]!.message).toContain("pass the policy unchanged");
+      expect(view.diagnostics).toEqual([]);
     });
   }
 

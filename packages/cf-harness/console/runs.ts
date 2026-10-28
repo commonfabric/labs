@@ -15,6 +15,10 @@ import type {
   HarnessToolCall,
   HarnessTranscriptMessage,
 } from "../src/contracts/transcript.ts";
+import {
+  type ConsoleToolOutputArtifact,
+  persistedToolOutput,
+} from "./steps.ts";
 
 /** How much of a title a listing entry carries before it is elided. */
 export const CONSOLE_RUN_TITLE_LIMIT = 200;
@@ -49,8 +53,8 @@ export interface ConsoleRunSummary {
   /** What the run failed at, and its detail, when it recorded a failure. */
   failure?: { kind: string; detail: string };
 
-  /** Every piece address `assign_slug` handed back, in the order named. */
-  pieceUrls: readonly string[];
+  /** Every slug `assign_slug` gave a piece, in the order named. */
+  pieceSlugs: readonly string[];
 }
 
 /**
@@ -200,6 +204,7 @@ export const consoleRunTitle = (
  */
 export const consoleRunLens = (
   transcript: readonly HarnessTranscriptMessage[],
+  toolOutputs: readonly ConsoleToolOutputArtifact[],
 ): ConsoleRunLens => {
   const calls = toolCallsById(transcript);
   const patternAttempts: ConsolePatternAttempt[] = [];
@@ -278,14 +283,20 @@ export const consoleRunLens = (
         break;
       }
       case "assign_slug": {
+        // The model is shown the slug alone; the URL, which carries the
+        // space's DID, is in the output the run persisted.
+        const url = asString(
+          asRecord(
+            persistedToolOutput(message.resultRef?.artifactPath, toolOutputs)
+              ?.value,
+          ).url,
+        );
         pieces.push({
           toolCallId: message.toolCallId,
           ...(asString(result.slug) !== undefined
             ? { slug: result.slug as string }
             : {}),
-          ...(asString(result.url) !== undefined
-            ? { url: result.url as string }
-            : {}),
+          ...(url !== undefined ? { url } : {}),
         });
         break;
       }
@@ -302,8 +313,9 @@ export const summarizeConsoleRun = (
   transcript: readonly HarnessTranscriptMessage[] = [],
 ): ConsoleRunSummary => {
   const title = consoleRunTitle(transcript);
-  const pieceUrls = consoleRunLens(transcript).pieces
-    .flatMap((piece) => piece.url === undefined ? [] : [piece.url]);
+  // The slugs are in the transcript, so no persisted output is read.
+  const pieceSlugs = consoleRunLens(transcript, []).pieces
+    .flatMap((piece) => piece.slug === undefined ? [] : [piece.slug]);
   return {
     runId: runState.runId,
     status: runState.status,
@@ -316,7 +328,7 @@ export const summarizeConsoleRun = (
     ...(runState.model !== undefined ? { model: runState.model } : {}),
     ...(title !== undefined ? { title } : {}),
     toolCallCount: runState.toolOutputs.length,
-    ...(runState.lineage !== undefined
+    ...(runState.lineage?.role === "subagent"
       ? {
         parentRunId: runState.lineage.parentRunId,
         parentToolCallId: runState.lineage.parentToolCallId,
@@ -331,7 +343,7 @@ export const summarizeConsoleRun = (
         },
       }
       : {}),
-    pieceUrls,
+    pieceSlugs,
   };
 };
 
@@ -340,9 +352,9 @@ export const summarizeConsoleRun = (
  * looking for is the one at the top. Runs updated in the same millisecond are
  * ordered by run id, so two requests reading the same state list them alike.
  */
-export const sortConsoleRuns = (
-  runs: readonly ConsoleRunSummary[],
-): readonly ConsoleRunSummary[] =>
+export const sortConsoleRuns = <Run extends ConsoleRunSummary>(
+  runs: readonly Run[],
+): readonly Run[] =>
   [...runs].sort((left, right) =>
     left.updatedAt === right.updatedAt
       ? left.runId.localeCompare(right.runId)

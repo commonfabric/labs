@@ -60,6 +60,20 @@ function installBrowserGlobals(): () => void {
       appendChild() {},
     }),
     createTreeWalker: () => ({}),
+    // The page publishes its deployment, as a toolshed with MEMORY_PUBLIC_URL
+    // and sharing on serves it.
+    querySelector: (selector: string) =>
+      selector === 'meta[name="cf-deployment"]'
+        ? {
+          getAttribute: (name: string) =>
+            name === "content"
+              ? JSON.stringify({
+                memoryUrl: "https://router.root-view.test",
+                experimental: { sharedMemoryConnection: true },
+              })
+              : null,
+        }
+        : null,
   });
   setGlobal("devicePixelRatio", 1);
   setGlobal("screen", { deviceXDPI: 1, logicalXDPI: 1 });
@@ -68,6 +82,7 @@ function installBrowserGlobals(): () => void {
     protocol: "http:",
     host: "localhost:8000",
     hostname: "localhost",
+    origin: "http://localhost:8000",
     href: "http://localhost:8000/common-knowledge",
   });
 
@@ -124,6 +139,53 @@ describe("XRootView", () => {
     }
   });
 
+  it("keeps reload guidance and unconfirmed-write protection after an update refusal", async () => {
+    const restore = installBrowserGlobals();
+    const originalError = console.error;
+    console.error = () => {};
+    try {
+      const { XRootView } = await import("../src/views/RootView.ts");
+      const view = new XRootView();
+      const generation = view.accessForTestingOnly.runtimeGeneration;
+      const event: ErrorNotification = {
+        type: NotificationType.ErrorReport,
+        code: RuntimeErrorCode.ClientUpdateRequired,
+        message: "This runtime must be updated",
+        unconfirmedWrites: true,
+      };
+      view._handleRuntimeError(event, generation - 1);
+      expect(templateMarkup(view.render())).not.toContain("Update required");
+      view._handleRuntimeError(
+        { ...event, unconfirmedWrites: false },
+        generation,
+      );
+      expect(templateMarkup(view.render())).toContain("Update required");
+      expect(templateMarkup(view.render())).not.toContain(
+        "Copy any recent edits",
+      );
+      const cleanUnload = new Event("beforeunload", { cancelable: true });
+      view.accessForTestingOnly.onBeforeUnload(
+        cleanUnload as BeforeUnloadEvent,
+      );
+      expect(cleanUnload.defaultPrevented).toBe(false);
+      view._handleRuntimeError(event, generation);
+      view._handleRuntimeError(
+        { ...event, unconfirmedWrites: false },
+        generation,
+      );
+      const markup = templateMarkup(view.render());
+      expect(markup).toContain("Update required");
+      expect(markup).toContain(event.message);
+      expect(markup).toContain("Copy any recent edits");
+      const unload = new Event("beforeunload", { cancelable: true });
+      view.accessForTestingOnly.onBeforeUnload(unload as BeforeUnloadEvent);
+      expect(unload.defaultPrevented).toBe(true);
+    } finally {
+      console.error = originalError;
+      restore();
+    }
+  });
+
   it("replaces the current worker after a compiler chunk load failure", async () => {
     const restore = installBrowserGlobals();
     const originalError = console.error;
@@ -157,6 +219,60 @@ describe("XRootView", () => {
       expect(runs).toHaveLength(1);
     } finally {
       console.error = originalError;
+      restore();
+    }
+  });
+
+  it("passes the page's memory URL and flags to RuntimeInternals", async () => {
+    const restore = installBrowserGlobals();
+    const { RuntimeInternals } = await import("@commonfabric/lib-shell");
+    const originalCreate = RuntimeInternals.create;
+    const captured: {
+      apiUrl?: URL;
+      memoryUrl?: URL;
+      sharedMemoryConnection?: boolean;
+    }[] = [];
+    RuntimeInternals.create = ((options) => {
+      captured.push({
+        apiUrl: options.apiUrl,
+        memoryUrl: options.memoryUrl,
+        sharedMemoryConnection: options.experimental?.sharedMemoryConnection,
+      });
+      return Promise.resolve({
+        runtime: () => ({
+          on: () => {},
+          off: () => {},
+          listEventAttention: () => Promise.resolve([]),
+        }),
+        dispose: () => Promise.resolve(),
+      } as unknown as Awaited<ReturnType<typeof RuntimeInternals.create>>);
+    }) as typeof RuntimeInternals.create;
+
+    try {
+      const { XRootView } = await import("../src/views/RootView.ts");
+      const view = new XRootView();
+      view.app = {
+        ...view.app,
+        identity: await Identity.fromPassphrase("root-view-memory-url-test"),
+      };
+      const task = view.accessForTestingOnly.rt;
+      task.run([view.app]);
+      await task.taskComplete;
+      expect(
+        captured.map(({ apiUrl, memoryUrl, sharedMemoryConnection }) => [
+          apiUrl?.href,
+          memoryUrl?.href,
+          sharedMemoryConnection,
+        ]),
+      ).toEqual([[
+        "http://localhost:8000/",
+        "https://router.root-view.test/",
+        // Adopted from the page: no define is set in a test run.
+        true,
+      ]]);
+    } finally {
+      RuntimeInternals.create = originalCreate;
+      delete (globalThis as { commonfabric?: unknown }).commonfabric;
       restore();
     }
   });

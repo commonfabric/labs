@@ -11,6 +11,7 @@
   },
   "exports": {
     ".": "./mod.ts",
-    "./cli": "./cli.ts"
+    "./cli": "./cli.ts",
+    "./commands": "./commands.ts"
   }
 }

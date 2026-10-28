@@ -133,6 +133,7 @@ describe("external content observation", () => {
         source,
         flow: { confidentiality: [], integrity: [] },
         consumed: { confidentiality: [], integrity: [] },
+        locations: [],
         labeledSpaces: [],
         sources: [],
       };

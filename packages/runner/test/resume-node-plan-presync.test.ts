@@ -3,7 +3,11 @@ import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
-import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
+import {
+  getLoggerCountsBreakdown,
+  getTimingStatsBreakdown,
+  resetAllTimingStats,
+} from "@commonfabric/utils/logger";
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import {
   decodeMemoryBoundary,
@@ -19,6 +23,7 @@ import { entityKey } from "../src/scheduler/keys.ts";
 import type { SessionFactory } from "../src/storage/v2.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { newSharedServer, TestStorageManager } from "./memory-v2-test-utils.ts";
+import { awaitReplica } from "./support/serving-waits.ts";
 
 const signer = await Identity.fromPassphrase("resume node plan presync");
 const space = signer.did();
@@ -260,6 +265,30 @@ class DenyingSpaceSessionFactory implements SessionFactory {
   }
 }
 
+// Four lifts over one argument: three read fields of the document the
+// argument links to, one reads through a link in that document into a
+// document in another space.
+const ONE_CROSSING_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { computed, pattern } from 'commonfabric';",
+      "type Leaf = { name?: string };",
+      "type Mid = { next?: Leaf };",
+      "type Top = { next?: Mid; a?: string; b?: string; c?: string };",
+      "export default pattern<{ def: Top }, {",
+      "  label: string; a: string; b: string; c: string;",
+      "}>(({ def }) => ({",
+      "  label: computed(() => `n:${def.next?.next?.name ?? 'none'}`),",
+      "  a: computed(() => `a:${def.a ?? ''}`),",
+      "  b: computed(() => `b:${def.b ?? ''}`),",
+      "  c: computed(() => `c:${def.c ?? ''}`),",
+      "}));",
+    ].join("\n"),
+  }],
+};
+
 describe("resume node plan pre-sync", () => {
   let server: MemoryV2Server.Server;
   let managerA: EmulatedStorageManager;
@@ -483,16 +512,19 @@ describe("resume node plan pre-sync", () => {
       "late handle parent",
     );
     await rt2.idle();
+    // The resume found nothing to deliver, so the arrival waited on below is
+    // the write's.
+    expect(localOnB(counter)).toBe(false);
 
     const tx2 = rt1.edit();
     counter.withTx(tx2).set({ n: 1 });
     expect((await tx2.commit().settled).error).toBeUndefined();
-    await rt1.storageManager.synced();
-    await rt2.storageManager.synced();
-    // Read nothing here: a read of the document would kick its load and
-    // mask a subscription the pre-sync failed to leave. The handler's own
-    // read is the check.
-    expect(localOnB(counter)).toBe(true);
+    // The write reaches replica B in a fan-out frame the server sends on its
+    // refresh cadence, after it has answered the commit, so the wait is on
+    // that arrival. Nothing here reads the document: a read would kick its
+    // load and mask a subscription the pre-sync failed to leave. Without the
+    // subscription no frame carries the document and the wait never returns.
+    await awaitReplica(managerB, () => localOnB(counter));
 
     resumed.key("bump").send({});
     await rt2.idle();
@@ -754,6 +786,52 @@ describe("resume node plan pre-sync", () => {
     expect(commitConflictCount()).toBe(before);
   });
 
+  it("finds a plan's far document local from the server's crossing, reading no plan", async () => {
+    const txP = rt1.edit();
+    const leafDoc = rt1.getCell<{ name?: string }>(
+      spaceP,
+      "one crossing leaf",
+      undefined,
+      txP,
+    );
+    leafDoc.withTx(txP).set({ name: "Ada" });
+    rt1.prepareTxForCommit(txP);
+    expect((await txP.commit().settled).error).toBeUndefined();
+    const tx1 = rt1.edit();
+    const midDoc = rt1.getCell<{ next?: unknown }>(
+      space,
+      "one crossing mid",
+      undefined,
+      tx1,
+    );
+    midDoc.withTx(tx1).set({ next: leafDoc });
+    const top = rt1.getCell<
+      { next?: unknown; a?: string; b?: string; c?: string }
+    >(space, "one crossing top", undefined, tx1);
+    top.withTx(tx1).set({ next: midDoc, a: "1", b: "2", c: "3" });
+    rt1.prepareTxForCommit(tx1);
+    expect((await tx1.commit().settled).error).toBeUndefined();
+
+    resetAllTimingStats();
+    const resumed = await createAndResume(
+      ONE_CROSSING_PROGRAM,
+      { def: top },
+      "one crossing parent",
+    );
+    // The frame that answered the plan's sync named the link into the other
+    // space, and the sync loaded the far document from there before it
+    // resolved: the pass had no plan left to read.
+    const stats = getTimingStatsBreakdown() as Record<
+      string,
+      Record<string, { count: number }>
+    >;
+    expect(stats.runner?.["start/resumeCrossSpaceRead"]?.count ?? 0).toBe(0);
+    expect(localOnB(leafDoc, spaceP)).toBe(true);
+    await rt2.idle();
+    expect(resumed.key("label").get()).toBe("n:Ada");
+    expect(resumed.key("a").get()).toBe("a:1");
+  });
+
   it("ends the cross-space pass when the far document never arrives", async () => {
     // The link into the other space names a document nothing ever wrote.
     // A cross-space hop kicks its load on every resolution, so a pass that
@@ -992,14 +1070,29 @@ describe("resume node plan pre-sync", () => {
         DEEP_READ_PROGRAM,
         { space },
       );
-      const resumed = await createAndResume(
-        DEEP_READ_PROGRAM,
-        { def: top },
+      // The piece is set up on runtime 1 and only its result document is
+      // local on runtime 2: the pre-sync below is the first on that
+      // replica, so the frame answering its plan's sync is the one that
+      // reports the link into the other space.
+      const tx1b = rt1.edit();
+      const resultCell1 = rt1.getCell<Record<string, unknown>>(
+        space,
         "principal-only family",
+        undefined,
+        tx1b,
       );
-      await rt2.idle();
-      await managerB.synced();
-      await rt2.idle();
+      // deno-lint-ignore no-explicit-any
+      const r1 = rt1.run(tx1b, compiled as any, { def: top }, resultCell1);
+      rt1.prepareTxForCommit(tx1b);
+      expect((await tx1b.commit().settled).error).toBeUndefined();
+      await r1.pull();
+      await rt1.idle();
+      await rt1.patternManager.flushCompileCacheWrites();
+      await rt1.storageManager.synced();
+      const resumed = rt2.getCellFromLink<Record<string, unknown>>(
+        r1.getAsNormalizedFullLink(),
+      );
+      await resumed.sync();
 
       const identity = { principal: signer.did() };
       const tx = rt2.edit();

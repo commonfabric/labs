@@ -12,6 +12,9 @@ type DatabaseConfig = {
   tables: Record<string, Record<string, string>>;
 };
 
+/** The resource whose field a presence room is derived from. */
+type PresenceField = "state" | "output";
+
 type PatternConfig = {
   name: string;
   displayName?: string;
@@ -19,6 +22,8 @@ type PatternConfig = {
   outputScope?: Scope;
   frameHeight?: string;
   databases?: Record<string, DatabaseConfig>;
+  presence?: Record<string, PresenceField>;
+  streams?: readonly string[];
 };
 
 type Options = {
@@ -101,7 +106,11 @@ function validateConfig(value: unknown):
       "name" | "displayName" | "stateScope" | "outputScope" | "frameHeight"
     >
   >
-  & { databases: Record<string, Required<DatabaseConfig>> } {
+  & {
+    databases: Record<string, Required<DatabaseConfig>>;
+    presence: Record<string, PresenceField>;
+    streams: string[];
+  } {
   const source = record(value, "IFRAME_PATTERN");
   if (typeof source.name !== "string" || !IDENTIFIER.test(source.name)) {
     throw new TypeError(
@@ -165,6 +174,62 @@ function validateConfig(value: unknown):
     };
   }
 
+  const presence: Record<string, PresenceField> = Object.create(null);
+  const presenceSource = source.presence === undefined
+    ? {}
+    : record(source.presence, "IFRAME_PATTERN.presence");
+  for (const [name, field] of Object.entries(presenceSource)) {
+    if (
+      name.length === 0 || RESERVED_RESOURCES.has(name) || name in databases
+    ) {
+      throw new TypeError(
+        `Presence room name ${
+          JSON.stringify(name)
+        } must be non-empty and distinct from input, state, output, and every database.`,
+      );
+    }
+    if (field !== "state" && field !== "output") {
+      throw new TypeError(
+        `Presence room ${
+          JSON.stringify(name)
+        } must name "state" or "output", the resource whose field it follows.`,
+      );
+    }
+    presence[name] = field;
+  }
+
+  const streamSource = source.streams === undefined ? [] : source.streams;
+  if (!Array.isArray(streamSource)) {
+    throw new TypeError("IFRAME_PATTERN.streams must be an array of names.");
+  }
+  const streams: string[] = [];
+  for (const name of streamSource) {
+    // A stream's name is also a field of the generated input interface and a
+    // destructured parameter, so it is an identifier; `__proto__` would
+    // destructure the input's prototype rather than a field.
+    if (
+      typeof name !== "string" || !IDENTIFIER.test(name) ||
+      name === "__proto__"
+    ) {
+      throw new TypeError(
+        `Stream name ${
+          JSON.stringify(name)
+        } must be a TypeScript identifier such as addItem.`,
+      );
+    }
+    if (
+      RESERVED_RESOURCES.has(name) || name in databases || name in presence ||
+      streams.includes(name)
+    ) {
+      throw new TypeError(
+        `Stream name ${
+          JSON.stringify(name)
+        } must be distinct from input, state, output, every database, every presence room, and every other stream.`,
+      );
+    }
+    streams.push(name);
+  }
+
   return {
     name: source.name,
     displayName,
@@ -172,6 +237,8 @@ function validateConfig(value: unknown):
     outputScope: scope(source.outputScope, "IFRAME_PATTERN.outputScope"),
     frameHeight,
     databases,
+    presence,
+    streams,
   };
 }
 
@@ -244,12 +311,23 @@ function databaseSource(
   return `  const { table } = cfSqlite;\n${declarations}\n`;
 }
 
+function streamVariable(index: number): string {
+  return `iframeStream${index}`;
+}
+
+// A verb's declared result is no concern of the guest, whose send resolves
+// with no value, so the frame takes a stream whatever result it declares.
+function streamType(name: string): string {
+  return `Stream<IframeStreamEvents[${JSON.stringify(name)}], unknown>`;
+}
+
 function wrapperSource(
   config: ReturnType<typeof validateConfig>,
   contractImport: string,
   guestHtml: string,
 ): string {
   const databases = Object.entries(config.databases);
+  const streams = config.streams;
   const scopes = new Set<Scope>([
     ...(config.stateScope === "space" ? [] : [config.stateScope]),
     ...(config.outputScope === "space" ? [] : [config.outputScope]),
@@ -265,22 +343,60 @@ function wrapperSource(
     ...(scopes.has("session") ? ["type PerSession"] : []),
     ...(scopes.has("user") ? ["type PerUser"] : []),
     ...(databases.length > 0 ? ["sqliteDatabase", "type SqliteDb"] : []),
+    ...(streams.length > 0 ? ["type Stream"] : []),
     "UI",
     "type VNode",
     constructsWritable ? "Writable" : "type Writable",
   ];
-  const contextDatabaseFields = databases.map(([name]) =>
-    `  ${JSON.stringify(name)}: SqliteDb;`
-  ).join("\n");
-  const contextDatabaseValues = databases.map(([name], index) =>
-    `    [${JSON.stringify(name)}]: ${databaseVariable(index)},`
-  ).join("\n");
+  // A presence room is the room of a field, so the context names the field's
+  // cell a second time and the resource kind withholds its data.
+  const presence = Object.entries(config.presence);
+  const presenceFieldType = {
+    state: "Writable<Default<IframeStateData, typeof DEFAULT_STATE>>",
+    output: "Writable<Default<IframeOutputData, typeof DEFAULT_OUTPUT>>",
+  };
+  const contextResourceFields = [
+    ...databases.map(([name]) => `  ${JSON.stringify(name)}: SqliteDb;`),
+    ...presence.map(([name, field]) =>
+      `  ${JSON.stringify(name)}: ${presenceFieldType[field]};`
+    ),
+    ...streams.map((name) => `  ${JSON.stringify(name)}: ${streamType(name)};`),
+  ].join("\n");
+  const contextResourceValues = [
+    ...databases.map(([name], index) =>
+      `    [${JSON.stringify(name)}]: ${databaseVariable(index)},`
+    ),
+    ...presence.map(([name, field]) =>
+      `    [${JSON.stringify(name)}]: ${field},`
+    ),
+    ...streams.map((name, index) =>
+      `    [${JSON.stringify(name)}]: ${streamVariable(index)},`
+    ),
+  ].join("\n");
   const resourceKinds = [
     '              input: "readonly",',
     ...databases.map(([name]) =>
       `              [${JSON.stringify(name)}]: "sqlite",`
     ),
+    ...presence.map(([name]) =>
+      `              [${JSON.stringify(name)}]: "presence",`
+    ),
+    ...streams.map((name) =>
+      `              [${JSON.stringify(name)}]: "stream",`
+    ),
   ].join("\n");
+  // Each stream is a required input: the guest that sends to it has nothing
+  // to send to without one. It is bound to a variable of its own, so its name
+  // cannot shadow a name the wrapper's body uses.
+  const streamInputFields = streams.map((name) =>
+    `  ${name}: ${streamType(name)};\n`
+  ).join("");
+  const streamEventsImport = streams.length > 0
+    ? "  type IframeStreamEvents,\n"
+    : "";
+  const streamParameters = streams.map((name, index) =>
+    `  ${name}: ${streamVariable(index)},\n`
+  ).join("");
 
   return `// Generated by tools/write-iframe-wrapper.ts.
 // Edit the contract or guest source and regenerate this wrapper.
@@ -294,7 +410,7 @@ import {
   type IframeInputData,
   type IframeOutputData,
   type IframeStateData,
-} from ${JSON.stringify(contractImport)};
+${streamEventsImport}} from ${JSON.stringify(contractImport)};
 
 export interface ${config.name}Input {
   input?: Default<IframeInputData, typeof DEFAULT_INPUT>;
@@ -314,8 +430,7 @@ ${
         config.outputScope,
       )
     };\n`
-  }
-}
+  }${streamInputFields}}
 
 export interface ${config.name}Output {
   [NAME]: string;
@@ -328,7 +443,7 @@ interface IframeContextInput {
   input: IframeInputData;
   state: Writable<Default<IframeStateData, typeof DEFAULT_STATE>>;
   output: Writable<Default<IframeOutputData, typeof DEFAULT_OUTPUT>>;
-${contextDatabaseFields}
+${contextResourceFields}
 }
 
 interface IframeContextOutput extends IframeContextInput {}
@@ -343,7 +458,7 @@ export default pattern<${config.name}Input, ${config.name}Output>(({
   input,
 ${config.stateScope === "space" ? "" : "  state,\n"}${
     config.outputScope === "space" ? "" : "  output,\n"
-  }}) => {
+  }${streamParameters}}) => {
 ${
     config.stateScope === "space"
       ? "  const state = new Writable<IframeStateData>(DEFAULT_STATE);\n"
@@ -359,7 +474,7 @@ ${
     input: iframeInput,
     state,
     output,
-${contextDatabaseValues}
+${contextResourceValues}
   });
 
   return {
@@ -499,7 +614,7 @@ async function main(): Promise<void> {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${htmlText(config.displayName)}</title>
-  <style>html,body,#root{box-sizing:border-box;width:100%;height:100%;margin:0}body{font-family:system-ui,sans-serif}</style>
+  <style>html,body,#root{box-sizing:border-box;width:100%;height:100%;margin:0}</style>
 </head>
 <body>
   <div id="root"></div>

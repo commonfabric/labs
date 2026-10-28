@@ -1,4 +1,5 @@
 import { assertEquals, assertExists, assertRejects } from "@std/assert";
+import { expect } from "@std/expect";
 import { FakeTime } from "@std/testing/time";
 import { defer } from "@commonfabric/utils/defer";
 import type { FabricValue } from "@commonfabric/data-model";
@@ -14,6 +15,7 @@ import {
 } from "../v2.ts";
 import {
   connect,
+  isPushedSync,
   loopback,
   type SessionOpenAuthContext,
   type Transport,
@@ -1038,6 +1040,61 @@ Deno.test("memory v2 client watch views expose incremental sync effects", async 
       }],
       removes: [],
     });
+  } finally {
+    await writerClient.close();
+    await observerClient.close();
+    await server.close();
+  }
+});
+
+Deno.test("memory v2 client marks a pushed frame as a push, and a watch reply as not one", async () => {
+  const server = new Server({
+    ...testSessionOpenServerOptions,
+    store: new URL("memory://memory-v2-client-pushed-sync"),
+  });
+  const writerClient = await connect({ transport: loopback(server) });
+  const observerClient = await connect({ transport: loopback(server) });
+  const space = "did:key:z6Mk-memory-v2-client-pushed-sync";
+  const writer = await writerClient.mount(
+    space,
+    {},
+    testSessionOpenAuthFactory,
+  );
+  const observer = await observerClient.mount(
+    space,
+    {},
+    testSessionOpenAuthFactory,
+  );
+
+  try {
+    const write = (localSeq: number, version: number) =>
+      writer.transact({
+        localSeq,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: "of:doc:pushed",
+          value: { value: { version } },
+        }],
+      });
+    await write(1, 1);
+    const { view, sync } = await observer.watchAddSync([{
+      id: "root",
+      kind: "graph",
+      query: {
+        roots: [{
+          id: "of:doc:pushed",
+          selector: { path: [], schema: false },
+        }],
+      },
+    }]);
+    const updates = view.subscribeSync();
+    await write(2, 2);
+    const pushed = await updates.next();
+
+    assertEquals(pushed.done, false);
+    assertEquals(isPushedSync(pushed.value as SessionSync), true);
+    assertEquals(isPushedSync(sync), false);
   } finally {
     await writerClient.close();
     await observerClient.close();
@@ -3184,7 +3241,9 @@ Deno.test("memory v2 client replays retained commits in localSeq order after rec
     const [applied1, applied2] = await Promise.all([first, second]);
 
     assertEquals(transport.connectionCount, 2);
-    assertEquals(transport.transactLocalSeqs, [1, 2, 1, 2]);
+    // The first send drops the connection before the second request resumes
+    // from readiness. Both retained commits reach the replacement in order.
+    expect(transport.transactLocalSeqs).toEqual([1, 1, 2]);
     assertEquals(applied1.seq, 1);
     assertEquals(applied2.seq, 2);
   } finally {
@@ -3934,6 +3993,108 @@ Deno.test("memory v2 client refuses root expectations without server capability"
       Error,
       "does not support a custom root intent",
     );
+  } finally {
+    await client.close();
+  }
+});
+
+Deno.test("memory v2 client refuses a space-kind expectation without server capability", async () => {
+  const client = await connect({
+    transport: handshakeTransport({
+      ...HELLO_OK,
+      flags: { ...HELLO_OK.flags, spaceKind: false },
+    }),
+  });
+  try {
+    await assertRejects(
+      () =>
+        client.mount("did:key:unsupported-kind-host", {
+          spaceKind: "fabrichat-room",
+        }),
+      Error,
+      "does not seal a space's declared kind",
+    );
+  } finally {
+    await client.close();
+  }
+});
+
+/**
+ * A handshake transport whose `session.open` results carry the `serverSeq` and
+ * the kind `reported()` returns, and which records the kind each
+ * `session.open` descriptor declares.
+ */
+const spaceKindTransport = (
+  reported: () => { serverSeq: number; spaceKind?: string },
+) => {
+  const transport = handshakeTransport(HELLO_OK);
+  const declared: unknown[] = [];
+  const send = transport.send.bind(transport);
+  transport.send = (payload) => {
+    const message = decodeMemoryBoundary(payload) as {
+      type: string;
+      session?: Record<string, unknown>;
+    };
+    if (message.type === "session.open") {
+      declared.push(
+        Object.hasOwn(message.session ?? {}, "spaceKind")
+          ? message.session?.spaceKind
+          : "(none)",
+      );
+    }
+    return send(payload);
+  };
+  const setReceiver = transport.setReceiver.bind(transport);
+  transport.setReceiver = (next) =>
+    setReceiver((payload) => {
+      const message = decodeMemoryBoundary(payload) as {
+        type: string;
+        ok?: Record<string, FabricValue>;
+      };
+      next(
+        message.type === "response" && message.ok?.sessionOpen !== undefined
+          ? encodeMemoryBoundary({
+            ...message,
+            ok: { ...message.ok, ...reported() },
+          })
+          : payload,
+      );
+    });
+  return { transport, declared };
+};
+
+Deno.test("memory v2 client reports the kind its latest open of a space with history carries, and declares none of its own", async () => {
+  let reported: { serverSeq: number; spaceKind?: string } = {
+    serverSeq: 3,
+    spaceKind: "fabrichat-room",
+  };
+  const { transport, declared } = spaceKindTransport(() => reported);
+  const client = await connect({ transport });
+  try {
+    const session = await client.mount("did:key:reported-kind");
+    assertEquals(session.declaredSpaceKind, { kind: "fabrichat-room" });
+    reported = { serverSeq: 3 };
+    await session.restore();
+    assertEquals(session.declaredSpaceKind, {});
+    assertEquals(declared, ["(none)", "(none)"]);
+  } finally {
+    await client.close();
+  }
+});
+
+Deno.test("memory v2 client reports nothing of the kind from an open of a space with no history, and declares its kind intent on every open", async () => {
+  let reported: { serverSeq: number; spaceKind?: string } = { serverSeq: 0 };
+  const { transport, declared } = spaceKindTransport(() => reported);
+  const client = await connect({ transport });
+  try {
+    const session = await client.mount("did:key:declared-kind", {
+      spaceKind: "fabrichat-room",
+    });
+    assertEquals(session.declaredSpaceKind, undefined);
+    reported = { serverSeq: 1, spaceKind: "fabrichat-room" };
+    await session.restore();
+    assertEquals(session.declaredSpaceKind, { kind: "fabrichat-room" });
+    assertEquals(declared, ["fabrichat-room", "fabrichat-room"]);
   } finally {
     await client.close();
   }

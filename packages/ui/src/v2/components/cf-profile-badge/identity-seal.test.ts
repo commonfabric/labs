@@ -28,6 +28,30 @@ describe("identitySeal", () => {
     expect(identitySeal(DID_A).hue).not.toBe(identitySeal(DID_B).hue);
   });
 
+  it("yields one seal for one profile of a principal, whitespace aside", () => {
+    expect(identitySeal(DID_A, ` ${DID_B} `)).toEqual(
+      identitySeal(DID_A, DID_B),
+    );
+  });
+
+  it("yields different seals for two profiles of one principal", () => {
+    const profileOne =
+      "did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp";
+    const profileTwo =
+      "did:key:z6MkjchhfUsD6mmvni8mCdXHw216Xrm9bQe2mBH1P5RDjVJG";
+
+    expect(identitySeal(DID_A, profileOne).ringGradient).not.toBe(
+      identitySeal(DID_A, profileTwo).ringGradient,
+    );
+    expect(identitySeal(DID_A, profileOne).did).toBe(DID_A);
+  });
+
+  it("yields different seals for one profile space claimed by two principals", () => {
+    expect(identitySeal(DID_A, DID_B).ringGradient).not.toBe(
+      identitySeal(DID_B, DID_B).ringGradient,
+    );
+  });
+
   it("produces a usable conic-gradient ring and HSL accent", () => {
     const seal = identitySeal(DID_A);
     expect(seal.ringGradient).toMatch(/^conic-gradient\(from \d+deg,/);

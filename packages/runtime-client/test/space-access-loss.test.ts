@@ -14,6 +14,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { RuntimeClients } from "@/backends/client-registry.ts";
 import { renderSpaceAccessProviderFor } from "@/backends/runtime-processor.ts";
+import { SpaceAccessRetries } from "@/backends/space-access-retries.ts";
 import { ownerClient, type WorkerClient } from "@/backends/worker-client.ts";
 import { EventEmitter } from "@/client/emitter.ts";
 import type {
@@ -28,9 +29,11 @@ import {
   isSpaceAccessLostNotification,
   NotificationType,
   RequestType,
+  RuntimeErrorCode,
   type SpaceAccessLostNotification,
 } from "@/protocol/mod.ts";
 import { RuntimeClient } from "@/runtime-client.ts";
+import { MessagePortRuntimeTransport } from "@/client/transports/message-port/transport-message-port.ts";
 import { buildProcessor } from "./backends/build-processor.ts";
 import { stubWorkerBoot } from "./backends/stub-worker-boot.ts";
 
@@ -53,6 +56,155 @@ class TestTransport extends EventEmitter<RuntimeTransportEvents>
 }
 
 describe("space access loss notification", () => {
+  it("delivers a retained bootstrap refusal after the owner's initialization reply", async () => {
+    const identity = await Identity.fromPassphrase("bootstrap update required");
+    const storage = StorageManager.emulate({ as: identity });
+    const runtime = new Runtime({
+      apiUrl: new URL("http://localhost/"),
+      storageManager: storage,
+    });
+    const status = { message: "Update this runtime", unconfirmedWrites: true };
+    const snapshot = stub(storage, "clientUpdateRequired", () => status);
+    const subscribe = stub(
+      storage,
+      "subscribeClientUpdateRequired",
+      (observer) => {
+        observer(status);
+        return () => {};
+      },
+    );
+    const channel = new MessageChannel();
+    const post = stub(ownerClient, "post", (message) => {
+      channel.port2.postMessage(realmFromFabricValue(message));
+      return true;
+    });
+    const clients = new RuntimeClients({
+      setConsoleBridge: () => {},
+      initializeRuntime: () =>
+        Promise.resolve(
+          buildProcessor({ runtime, identity, space: identity.did() }),
+        ),
+    });
+    channel.port2.addEventListener(
+      "message",
+      (event) => void clients.handleMessage(ownerClient, event),
+    );
+    channel.port2.start();
+    const client = await RuntimeClient.initialize(
+      new MessagePortRuntimeTransport({ port: channel.port1 }),
+      {
+        identity,
+        apiUrl: new URL("http://localhost/"),
+        spaceDid: identity.did(),
+      },
+    );
+    try {
+      const received: unknown[] = [];
+      client.on("error", (notice) => received.push(notice));
+      await client.getSettleStats();
+      expect(received).toEqual([{
+        type: NotificationType.ErrorReport,
+        code: RuntimeErrorCode.ClientUpdateRequired,
+        ...status,
+      }]);
+    } finally {
+      await client.dispose();
+      channel.port2.close();
+      snapshot.restore();
+      subscribe.restore();
+      post.restore();
+      await storage.close();
+    }
+  });
+
+  it("relays update-required status and replays it to a late client", async () => {
+    const identity = await Identity.fromPassphrase("processor update required");
+    const storage = StorageManager.emulate({ as: identity });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://fabric.example"),
+      storageManager: storage,
+    });
+    type Status = NonNullable<ReturnType<typeof storage.clientUpdateRequired>>;
+    let status: Status | undefined;
+    let changed: ((value: Status) => void) | undefined;
+    let cancelled = false;
+    const subscribe = stub(
+      storage,
+      "subscribeClientUpdateRequired",
+      (observer) => {
+        changed = observer;
+        return () => {
+          cancelled = true;
+        };
+      },
+    );
+    const snapshot = stub(storage, "clientUpdateRequired", () => status);
+    const notices: IPCRemotePost[] = [];
+    const post = stub(ownerClient, "post", (notice) => {
+      notices.push(notice);
+      return true;
+    });
+    const processor = buildProcessor({
+      runtime,
+      identity,
+      space: identity.did(),
+    });
+    try {
+      status = { message: "Reload this runtime", unconfirmedWrites: true };
+      changed!(status);
+      const notice = {
+        type: NotificationType.ErrorReport,
+        code: RuntimeErrorCode.ClientUpdateRequired,
+        ...status,
+      };
+      expect(notices).toEqual([notice]);
+      const late: IPCRemotePost[] = [];
+      processor.reportClientUpdateRequired({
+        id: 17,
+        post: (message) => {
+          late.push(message);
+          return true;
+        },
+      });
+      expect(late).toEqual([notice]);
+      await processor.dispose();
+      expect(cancelled).toBe(true);
+    } finally {
+      await processor.dispose();
+      subscribe.restore();
+      snapshot.restore();
+      post.restore();
+      await storage.close();
+    }
+  });
+
+  it("preserves update guidance and write uncertainty through worker IPC", async () => {
+    const identity = await Identity.fromPassphrase(
+      "update required client event",
+    );
+    const transport = new TestTransport();
+    const client = await RuntimeClient.initialize(transport, {
+      identity,
+      apiUrl: new URL("https://fabric.example"),
+      spaceDid: identity.did(),
+    });
+    const errors: unknown[] = [];
+    client.on("error", (notice) => errors.push(notice));
+    try {
+      const notice = {
+        type: NotificationType.ErrorReport,
+        code: RuntimeErrorCode.ClientUpdateRequired,
+        message: "Update the runtime",
+        unconfirmedWrites: true,
+      } as const;
+      expect(isIPCRemoteNotification(notice)).toBe(true);
+      transport.emit("message", notice);
+      expect(errors).toEqual([notice]);
+    } finally {
+      await client.dispose();
+    }
+  });
+
   it("declares the same space type that the protocol guard accepts", () => {
     assertType<IsExact<SpaceAccessLostNotification["space"], DID>>(true);
   });
@@ -94,6 +246,86 @@ describe("space access loss notification", () => {
       read.restore();
       changes.restore();
       losses.restore();
+      await storage.close();
+    }
+  });
+
+  it("retries through the retries it was given, reports their state, and offers no retry without them", async () => {
+    const identity = await Identity.fromPassphrase("render access retry");
+    const storage = StorageManager.emulate({ as: identity });
+    try {
+      const retried: MemorySpace[] = [];
+      const gate = Promise.withResolvers<void>();
+      const retries = new SpaceAccessRetries((space) => {
+        retried.push(space);
+        return gate.promise;
+      });
+      const provider = renderSpaceAccessProviderFor(
+        { storageManager: storage },
+        retries,
+      );
+      provider.retries?.retry(identity.did());
+      expect(retried).toEqual([identity.did()]);
+      expect(provider.retries?.state(identity.did())).toEqual({
+        retrying: true,
+        settled: 0,
+      });
+      gate.resolve();
+      await retries.retry(identity.did());
+      expect(provider.retries?.state(identity.did())).toEqual({
+        retrying: false,
+        settled: 1,
+      });
+      const bare = renderSpaceAccessProviderFor({ storageManager: storage });
+      expect(bare.retries).toBeUndefined();
+    } finally {
+      await storage.close();
+    }
+  });
+
+  it("tells a subscriber of a refused space when its retry starts and settles, and one of a standing space nothing", async () => {
+    const identity = await Identity.fromPassphrase("render access retry notes");
+    const storage = StorageManager.emulate({ as: identity });
+    const refused = identity.did();
+    const standing = "did:key:z6Mk-render-retry-standing" as MemorySpace;
+    const read = stub(
+      storage,
+      "spaceAccessError",
+      (space) => space === refused ? new Error("access denied") : undefined,
+    );
+    try {
+      const gates: PromiseWithResolvers<void>[] = [];
+      const retries = new SpaceAccessRetries(() => {
+        const gate = Promise.withResolvers<void>();
+        gates.push(gate);
+        return gate.promise;
+      });
+      const provider = renderSpaceAccessProviderFor(
+        { storageManager: storage },
+        retries,
+      );
+      let refusedChanges = 0;
+      let standingChanges = 0;
+      const cancelRefused = provider.subscribe(refused, () => refusedChanges++);
+      const cancelStanding = provider.subscribe(
+        standing,
+        () => standingChanges++,
+      );
+      const retry = retries.retry(refused);
+      const standingRetry = retries.retry(standing);
+      expect(refusedChanges).toBe(1);
+      for (const gate of gates) gate.resolve();
+      await Promise.all([retry, standingRetry]);
+      expect(refusedChanges).toBe(2);
+      expect(standingChanges).toBe(0);
+      cancelRefused();
+      cancelStanding();
+      const later = retries.retry(refused);
+      gates.at(-1)?.resolve();
+      await later;
+      expect(refusedChanges).toBe(2);
+    } finally {
+      read.restore();
       await storage.close();
     }
   });

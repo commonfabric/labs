@@ -1,8 +1,9 @@
 import type { JSONSchema } from "@commonfabric/api";
 import {
-  isObjectNotArray,
-  type ReadonlyRecord,
-} from "@commonfabric/utils/types";
+  isPatternToolSchema,
+  isPatternToolValue,
+} from "@commonfabric/piece/verb-listing";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import { ContextualFlowControl } from "../runner/src/cfc.ts";
 
@@ -12,36 +13,6 @@ export type CallableKind = "handler" | "tool";
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
-function isSchemaRecord(
-  schema: JSONSchema | undefined,
-): schema is ReadonlyRecord {
-  return isObjectNotArray(schema);
-}
-
-function isPatternSchemaValue(value: unknown): boolean {
-  if (!isObjectNotArray(value)) {
-    return false;
-  }
-
-  return "argumentSchema" in value || "resultSchema" in value ||
-    "nodes" in value;
-}
-
-function isPatternSchemaSchema(schema: JSONSchema | undefined): boolean {
-  if (!isSchemaRecord(schema)) return false;
-  if (ContextualFlowControl.getAsCellValues(schema).at(0) === "cell") {
-    return true;
-  }
-
-  const properties = schema.properties;
-  if (!isObjectNotArray(properties)) {
-    return false;
-  }
-
-  return "argumentSchema" in properties || "resultSchema" in properties ||
-    "nodes" in properties;
 }
 
 /**
@@ -66,24 +37,6 @@ export function isHandlerCell(v: unknown): boolean {
     }
   }
   return false;
-}
-
-export function isPatternToolValue(v: unknown): boolean {
-  if (!isObjectNotArray(v)) return false;
-  const obj = v as Record<string, unknown>;
-  return "pattern" in obj && "extraParams" in obj &&
-    isPatternSchemaValue(obj.pattern);
-}
-
-export function isPatternToolSchema(schema: JSONSchema | undefined): boolean {
-  if (!isSchemaRecord(schema)) return false;
-  const properties = schema.properties;
-  if (!isObjectNotArray(properties)) {
-    return false;
-  }
-
-  return "pattern" in properties && "extraParams" in properties &&
-    isPatternSchemaSchema(properties.pattern as JSONSchema | undefined);
 }
 
 export function classifyCallableEntry(

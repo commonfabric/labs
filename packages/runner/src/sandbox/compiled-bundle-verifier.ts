@@ -692,7 +692,7 @@ function classifyExpressionText(
       return { kind: "data" };
     }
 
-    if (isRawMutableExpression(normalized)) {
+    if (isRawMutableExpression(source, inner.start, inner.end, normalized)) {
       throw verificationErrorAt(
         source,
         filename,
@@ -1740,11 +1740,24 @@ function isPatternCoverageHitStatement(
   return /^(?:0|[1-9]\d*)$/.test(spanId);
 }
 
-function isRawMutableExpression(normalized: string): boolean {
+/**
+ * Whether the expression at `start` is an object, array, or regular expression
+ * literal, or a `new` expression, each of which yields mutable data. `start`
+ * is the first character of the expression's first token. The `new` keyword is
+ * matched against `source` rather than `normalized`, because trivia stripping
+ * runs `new Map()` together into `newMap()`, the same text as a call to a
+ * function named `newMap`. Any `new` token counts, `new.target` included.
+ */
+function isRawMutableExpression(
+  source: string,
+  start: number,
+  end: number,
+  normalized: string,
+): boolean {
   return normalized.startsWith("{") ||
     normalized.startsWith("[") ||
     normalized.startsWith("/") ||
-    normalized.startsWith("new");
+    startsWithStatementWord(source, start, end, "new");
 }
 
 function stripTrailingSemicolonRange(

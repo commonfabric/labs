@@ -6,7 +6,7 @@ import {
   unwrapExpression,
   unwrapTransparentWrapperOnce,
 } from "../utils/expression.ts";
-import { getKnownComputedKeyExpression } from "../utils/reactive-keys.ts";
+import { getStaticKeySegment } from "../utils/reactive-keys.ts";
 import type { PathSegment } from "./destructuring-lowering.ts";
 import { isPatternFactoryCalleeExpression } from "./structural-reactive-factory.ts";
 
@@ -76,23 +76,14 @@ export function getOpaqueAccessInfo(
     }
 
     if (ts.isElementAccessExpression(current)) {
-      const arg = current.argumentExpression;
-      if (
-        arg &&
-        (ts.isStringLiteral(arg) ||
-          ts.isNumericLiteral(arg) ||
-          ts.isNoSubstitutionTemplateLiteral(arg))
-      ) {
-        path.unshift(arg.text);
-      } else if (arg) {
-        const knownKeyExpression = getKnownComputedKeyExpression(arg, context);
-        if (knownKeyExpression) {
-          path.unshift(knownKeyExpression);
-        } else {
-          dynamic = true;
-        }
-      } else {
+      const segment = getStaticKeySegment(
+        current.argumentExpression,
+        context,
+      );
+      if (segment === undefined) {
         dynamic = true;
+      } else {
+        path.unshift(segment);
       }
       current = current.expression;
       continue;

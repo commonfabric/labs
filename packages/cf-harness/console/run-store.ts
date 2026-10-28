@@ -4,11 +4,30 @@
  * for the page: a run id and a tool-output name both arrive from a URL, so
  * both are checked against a path segment here rather than trusted into a
  * `join`.
+ *
+ * The console's own turns are not the only runs the harness makes on this
+ * machine: the agent runner runs `/ask` jobs and `agent()` built-ins, each
+ * under an artifact root of its own. {@link consoleArtifactRoots} names every
+ * root, and the per-run readers below each read the one root a run was found
+ * in.
  */
 
 import { join } from "@std/path";
+import {
+  clauseAlternatives,
+  type IFCLabel,
+  isCfcEnforcementMode,
+} from "@commonfabric/runner/cfc";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import type { HarnessRunState } from "../src/run-state.ts";
-import type { HarnessHandleTable } from "../src/contracts/handle-table.ts";
+import type {
+  HarnessHandleReferent,
+  HarnessHandleTable,
+} from "../src/contracts/handle-table.ts";
+import {
+  type ConsoleDisplayFit,
+  publicConsoleDisplay,
+} from "./display-ceiling.ts";
 import type { HarnessTranscriptMessage } from "../src/contracts/transcript.ts";
 import {
   isHarnessTranscriptOmissions,
@@ -58,13 +77,18 @@ const isSafeSegment = (segment: string): boolean =>
   SAFE_SEGMENT.test(segment) && segment !== "." && segment !== "..";
 
 /** The run directory, or `undefined` for a name that is not one. */
-const runRoot = (
+const runRoot = async (
   artifactRoot: string,
   runId: string,
-): string | undefined =>
-  isSafeSegment(runId) ? join(artifactRoot, runId) : undefined;
+): Promise<string | undefined> => {
+  const root = join(artifactRoot, runId);
+  return isSafeSegment(runId) && await isDirectory(root) ? root : undefined;
+};
 
-const readJson = async <Value>(path: string): Promise<Value | undefined> => {
+/** The JSON value at `path`, or `undefined` when it is absent or unreadable. */
+export const readJson = async <Value>(
+  path: string,
+): Promise<Value | undefined> => {
   try {
     return JSON.parse(await Deno.readTextFile(path)) as Value;
   } catch {
@@ -72,6 +96,46 @@ const readJson = async <Value>(path: string): Promise<Value | undefined> => {
     // produced, is a run to describe from what it does have.
     return undefined;
   }
+};
+
+/**
+ * Reads a run checkpoint with its required fields and directory identity.
+ * Listing, resolution, detail and neighbor tables share this eligibility rule.
+ * Optional records retain their writer's schema; this checks the checkpoint's
+ * outer shape rather than interpreting those records.
+ */
+const readRunState = async (
+  root: string,
+  runId: string,
+): Promise<HarnessRunState | undefined> => {
+  const value = await readJson<unknown>(join(root, "run-state.json"));
+  return hasRunStateShape(value, runId) ? value : undefined;
+};
+
+/** Checks checkpoint identity and the required outer fields of its schema. */
+const hasRunStateShape = (
+  value: unknown,
+  runId: string,
+): value is HarnessRunState => {
+  if (
+    !isObjectNotArray(value) || value.runId !== runId ||
+    (typeof value.status !== "string" ||
+      !["pending", "running", "completed", "canceled", "failed"].includes(
+        value.status,
+      )) ||
+    typeof value.createdAt !== "string" ||
+    typeof value.updatedAt !== "string" ||
+    typeof value.currentDir !== "string" ||
+    !isCfcEnforcementMode(value.cfcEnforcementMode) ||
+    !Array.isArray(value.policyEvents) || !Array.isArray(value.toolOutputs) ||
+    (value.policyDecisions !== undefined &&
+      !Array.isArray(value.policyDecisions)) ||
+    (value.cfcInvocationContexts !== undefined &&
+      !Array.isArray(value.cfcInvocationContexts))
+  ) {
+    return false;
+  }
+  return true;
 };
 
 /** Reads omission evidence without confusing a bad record with no record. */
@@ -111,6 +175,11 @@ const cellLabelIndex = async (
 /** Everything `/api/runs/<run-id>` answers with. */
 export interface ConsoleRunDetail {
   summary: ConsoleRunSummary;
+
+  /**
+   * The run's state, without the values its return referents stand for, which
+   * reach the owner only through `revealed`.
+   */
   runState: HarnessRunState;
   transcript: readonly HarnessTranscriptMessage[];
   lens: ConsoleRunLens;
@@ -125,6 +194,22 @@ export interface ConsoleRunDetail {
    * that cell would otherwise read as coming from nowhere.
    */
   handles: readonly ConsoleHandle[];
+
+  /**
+   * The values another agent found that this run holds as return referents,
+   * by token, for showing to the owner and never to a model. A value is here
+   * when it is a string whose label fits what the console may show.
+   */
+  revealed: Readonly<Record<string, string>>;
+
+  /**
+   * The sites each value in `revealed` came from, by token, as the hosts of
+   * the web pages its label says it was read from.
+   */
+  sites: Readonly<Record<string, readonly string[]>>;
+
+  /** The tokens of the run's return referents the console may not show. */
+  hidden: readonly string[];
 
   /**
    * Whether the run's space was read for per-cell labels, and what it said.
@@ -218,51 +303,264 @@ const toolOutputNames = async (root: string): Promise<string[]> => {
   });
 };
 
-/** Every run under the artifact root, most recently touched first. */
-export const listConsoleRuns = async (
-  artifactRoot: string,
-): Promise<readonly ConsoleRunSummary[]> => {
-  const summaries: ConsoleRunSummary[] = [];
+/**
+ * Who made a run. `console` is a turn this console ran; `ask` is a job the
+ * agent runner's local-jobs lane ran for `/ask`; `agent` is an `agent()`
+ * built-in's run that the runner's Fabric lane executed.
+ */
+export type ConsoleRunSource = "console" | "ask" | "agent";
+
+/** One row of the run list, with where the run came from. */
+export interface ConsoleListedRun extends ConsoleRunSummary {
+  source: ConsoleRunSource;
+}
+
+/**
+ * Where the console reads runs from: its own artifact root, and the agent
+ * runner's work root when there is one to read.
+ */
+export interface ConsoleRunRoots {
+  /** `<artifact-root>/<run-id>/`, which this console's own turns write. */
+  console: string;
+
+  /**
+   * The agent runner's work root, `$CF_HARNESS_HOME/agent-runs` unless the
+   * runner was told otherwise. Each job it runs writes its runs a level or two
+   * down: `<root>/local/<job-id>/artifacts/<run-id>/` for the local-jobs lane
+   * that `/ask` uses, `<root>/<run-key>/artifacts/<run-id>/` for the Fabric
+   * lane that executes `agent()`.
+   */
+  agentRuns?: string;
+}
+
+/** One artifact root to read, and who wrote the runs in it. */
+export interface ConsoleArtifactRoot {
+  source: ConsoleRunSource;
+  artifactRoot: string;
+}
+
+/** The directories directly under `root` that are safe to name, sorted. */
+const safeSubdirectories = async (root: string): Promise<string[]> => {
+  const names: string[] = [];
   try {
-    // `Deno.readDir` reports a missing directory on its first step rather than
-    // at the call, so an artifact root that no run has been written to yet is
-    // caught around the walk rather than around the call.
-    for await (const entry of Deno.readDir(artifactRoot)) {
-      if (!entry.isDirectory || !isSafeSegment(entry.name)) {
-        continue;
+    for await (const entry of Deno.readDir(root)) {
+      if (
+        entry.isDirectory && isSafeSegment(entry.name) &&
+        await isDirectory(join(root, entry.name))
+      ) {
+        names.push(entry.name);
       }
-      const root = join(artifactRoot, entry.name);
-      const runState = await readJson<HarnessRunState>(
-        join(root, "run-state.json"),
-      );
-      if (runState === undefined) {
-        continue;
-      }
-      const transcript = await readJson<HarnessTranscriptMessage[]>(
-        join(root, "transcript.json"),
-      ) ??
-        [];
-      summaries.push(summarizeConsoleRun(runState, transcript));
     }
   } catch {
-    // No run has been made yet, so there is no tree to list.
-    return [];
+    // A root nothing has run under yet is a root with no runs.
+  }
+  return names.sort();
+};
+
+/**
+ * The name of the agent runner's local-jobs lane under its work root. The
+ * runner puts that lane one level below the work root it shares with the
+ * Fabric lane (`packages/cli/commands/agent.ts`), so a Fabric run key can never
+ * be this name: the runner derives those keys from a hash.
+ */
+const LOCAL_JOBS_LANE = "local";
+
+/**
+ * Every artifact root the console reads, in precedence order: its own first,
+ * then each `/ask` job's, then each `agent()` run's, each group by directory
+ * name. A run id found in more than one is the first one's — run ids are
+ * random UUIDs, so this is a tie-break for an accident rather than a rule
+ * anyone relies on, and the list and the detail routes both apply it.
+ *
+ * Shortcut: this walks the runner's whole work root on every request, which is
+ * cheap at the hundreds of jobs a developer's machine holds. A runner that
+ * prunes nothing will make it slow; an index of run id to job, kept by the
+ * runner and updated as jobs write artifacts, is the way out.
+ */
+export const consoleArtifactRoots = async (
+  roots: ConsoleRunRoots,
+): Promise<readonly ConsoleArtifactRoot[]> => {
+  const found: ConsoleArtifactRoot[] = [
+    { source: "console", artifactRoot: roots.console },
+  ];
+  if (roots.agentRuns === undefined) {
+    return found;
+  }
+  const lanes = await safeSubdirectories(roots.agentRuns);
+  if (lanes.includes(LOCAL_JOBS_LANE)) {
+    const local = join(roots.agentRuns, LOCAL_JOBS_LANE);
+    for (const job of await safeSubdirectories(local)) {
+      const artifactRoot = join(local, job, "artifacts");
+      if (await isDirectory(artifactRoot)) {
+        found.push({ source: "ask", artifactRoot });
+      }
+    }
+  }
+  for (const lane of lanes) {
+    if (lane === LOCAL_JOBS_LANE) continue;
+    const artifactRoot = join(roots.agentRuns, lane, "artifacts");
+    if (await isDirectory(artifactRoot)) {
+      found.push({ source: "agent", artifactRoot });
+    }
+  }
+  return found;
+};
+
+/**
+ * Every run the console can read, from every root, most recently touched
+ * first. A run id that more than one root holds is listed once, from the root
+ * {@link consoleArtifactRoots} puts first.
+ */
+export const listAllConsoleRuns = async (
+  roots: ConsoleRunRoots,
+): Promise<readonly ConsoleListedRun[]> => {
+  const byId = new Map<string, ConsoleListedRun>();
+  for (const { source, artifactRoot } of await consoleArtifactRoots(roots)) {
+    for (const run of await listConsoleRuns(artifactRoot, source)) {
+      if (!byId.has(run.runId)) {
+        byId.set(run.runId, run);
+      }
+    }
+  }
+  return sortConsoleRuns([...byId.values()]);
+};
+
+/**
+ * The artifact root that holds `runId`, or `undefined` for a run no root holds
+ * or a name that is not a run id. Every per-run route resolves through this
+ * and then reads that one root, so a run's `delegate_task` children and the
+ * neighbours its handles resolve against are the ones its own job wrote.
+ *
+ * The first root whose run has a valid state wins, which is the root
+ * {@link listAllConsoleRuns} lists it from. A run directory with no state yet
+ * — one still being written, or a child whose tool outputs a route names
+ * directly — is still a run to read files from, so failing that the first
+ * root holding the directory at all answers.
+ */
+export const findConsoleRunRoot = async (
+  roots: ConsoleRunRoots,
+  runId: string,
+): Promise<ConsoleArtifactRoot | undefined> => {
+  if (!isSafeSegment(runId)) {
+    return undefined;
+  }
+  let holdsDirectory: ConsoleArtifactRoot | undefined;
+  for (const candidate of await consoleArtifactRoots(roots)) {
+    const runDir = await runRoot(candidate.artifactRoot, runId);
+    if (runDir === undefined) continue;
+    const runState = await readRunState(runDir, runId);
+    if (runState !== undefined) {
+      return candidate;
+    }
+    if (holdsDirectory === undefined) {
+      holdsDirectory = candidate;
+    }
+  }
+  return holdsDirectory;
+};
+
+/** Returns whether a path names a real directory rather than a symlink. */
+const isDirectory = async (path: string): Promise<boolean> => {
+  try {
+    return (await Deno.lstat(path)).isDirectory;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Every run under one artifact root, most recently touched first, each tagged
+ * with `source`.
+ */
+export const listConsoleRuns = async (
+  artifactRoot: string,
+  source: ConsoleRunSource = "console",
+): Promise<readonly ConsoleListedRun[]> => {
+  const summaries: ConsoleListedRun[] = [];
+  for (const name of await safeSubdirectories(artifactRoot)) {
+    const root = await runRoot(artifactRoot, name);
+    if (root === undefined) continue;
+    const runState = await readRunState(root, name);
+    if (runState === undefined) continue;
+    try {
+      const transcript = await readJson<HarnessTranscriptMessage[]>(
+        join(root, "transcript.json"),
+      ) ?? [];
+      summaries.push({ ...summarizeConsoleRun(runState, transcript), source });
+    } catch {
+      // An unreadable record excludes this run, not the rest of the root.
+    }
   }
   return sortConsoleRuns(summaries);
+};
+
+/** `runState` with its handle table holding no return referents. */
+const withoutReferents = (runState: HarnessRunState): HarnessRunState =>
+  runState.handleTable === undefined ? runState : {
+    ...runState,
+    handleTable: {
+      ...runState.handleTable,
+      referents: runState.handleTable.referents?.filter((referent) =>
+        referent.kind !== "return"
+      ),
+    },
+  };
+
+/**
+ * The hosts of the web pages `label` says its value was read from: the
+ * sources of the caveats a page's content carries.
+ */
+const labelSites = (label: IFCLabel): readonly string[] => {
+  const sites = new Set<string>();
+  const atoms = (label.confidentiality ?? []).flatMap(clauseAlternatives);
+  for (const atom of atoms) {
+    if (!isObjectNotArray(atom) || !isObjectNotArray(atom.source)) continue;
+    const { class: kind, subject } = atom.source;
+    if (kind !== "WebPage" || typeof subject !== "string") continue;
+    try {
+      sites.add(new URL(subject).host);
+    } catch {
+      // A page whose origin could not be read names no site.
+    }
+  }
+  return [...sites];
+};
+
+/**
+ * The return referents of a run as the console may show them: each string
+ * whose label fits `display` by its token, with the sites it came from, and
+ * the token of every other.
+ */
+const referentDisplay = (
+  referents: readonly HarnessHandleReferent[],
+  display: ConsoleDisplayFit,
+): Pick<ConsoleRunDetail, "revealed" | "sites" | "hidden"> => {
+  const revealed: Record<string, string> = {};
+  const sites: Record<string, readonly string[]> = {};
+  const hidden: string[] = [];
+  for (const referent of referents) {
+    if (referent.kind !== "return") continue;
+    if (typeof referent.value === "string" && display(referent.label)) {
+      revealed[referent.token] = referent.value;
+      sites[referent.token] = labelSites(referent.label);
+    } else {
+      hidden.push(referent.token);
+    }
+  }
+  return { revealed, sites, hidden };
 };
 
 /** One run read whole, or `undefined` when the artifact root holds no such run. */
 export const readConsoleRun = async (
   artifactRoot: string,
   runId: string,
+  display: ConsoleDisplayFit = publicConsoleDisplay,
 ): Promise<ConsoleRunDetail | undefined> => {
-  const root = runRoot(artifactRoot, runId);
+  const root = await runRoot(artifactRoot, runId);
   if (root === undefined) {
     return undefined;
   }
-  const runState = await readJson<HarnessRunState>(
-    join(root, "run-state.json"),
-  );
+  const runState = await readRunState(root, runId);
   if (runState === undefined) {
     return undefined;
   }
@@ -316,11 +614,12 @@ export const readConsoleRun = async (
   };
   return {
     summary: summarizeConsoleRun(runState, transcript),
-    runState,
+    runState: withoutReferents(runState),
     transcript,
-    lens: consoleRunLens(transcript),
+    lens: consoleRunLens(transcript, toolOutputs),
     steps,
     handles: consoleRunHandles(steps, table, labels),
+    ...referentDisplay(runState.handleTable?.referents ?? [], display),
     cellLabels: consoleCellLabelsSummary(labels),
     artifactNames: await namesPresent(root, RUN_ARTIFACT_NAMES),
     toolOutputNames: outputNames,
@@ -570,10 +869,7 @@ const readNeighbouringHandles = async (
   const handles: ConsoleHandle[] = [];
   try {
     for (const name of names) {
-      const entry = { name };
-      const runState = await readJson<HarnessRunState>(
-        join(artifactRoot, entry.name, "run-state.json"),
-      );
+      const runState = await readRunState(join(artifactRoot, name), name);
       for (const entryHandle of runState?.handleTable?.entries ?? []) {
         handles.push({
           token: entryHandle.token,
@@ -605,7 +901,7 @@ export const readConsoleRunArtifact = async (
   runId: string,
   name: string,
 ): Promise<string | undefined> => {
-  const root = runRoot(artifactRoot, runId);
+  const root = await runRoot(artifactRoot, runId);
   if (
     root === undefined || !isSafeSegment(name) ||
     !(RUN_ARTIFACT_NAMES as readonly string[]).includes(name)
@@ -629,7 +925,7 @@ export const readConsoleToolOutput = async (
   runId: string,
   name: string,
 ): Promise<string | undefined> => {
-  const root = runRoot(artifactRoot, runId);
+  const root = await runRoot(artifactRoot, runId);
   if (root === undefined || !isSafeSegment(name) || !name.endsWith(".json")) {
     return undefined;
   }

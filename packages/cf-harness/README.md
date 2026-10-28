@@ -44,6 +44,12 @@ no more than those three values, whatever the data behind it turned out to be.
 Widening what crosses means widening a schema on purpose, in the open, rather
 than a value slipping through because nobody said it should not.
 
+`read_value` is the one deliberate exception: it returns the value behind a
+handle the run holds and has described, whatever its shape, measured against the
+run's release and read ceilings rather than a schema. Its label joins the run's
+model context, so a run that reads pays for it in what it may release
+afterwards.
+
 **Work happens by running patterns over those handles.** When an agent needs
 something computed, it does not fetch the data and compute in its own context;
 it writes a pattern, runs it in the space against references it holds, and
@@ -112,23 +118,23 @@ The current design direction is:
 
 What works today:
 
-- shell-centric execution in a gVisor sandbox through one of two drivers: Docker
-  with the Docker-registered `runsc-cfc` runtime, which is the default, or a
-  `runsc` binary the harness invokes directly, selected with
-  `--sandbox-runtime runsc`; see [Sandbox runtimes](#sandbox-runtimes)
-- named `bash` sessions on the direct driver: a long-lived container that later
-  calls execute in, offered to the model only where the run's sandbox has
-  sessions and its CFC enforcement mode allows them
-- under the Docker driver, sandbox containers default to Docker
-  `--network bridge` so local Loom/Fabric helper services can be reached through
-  Docker Desktop's `host.docker.internal` host alias during early integration
-  work; set `CF_HARNESS_DOCKER_NETWORK_MODE=host` when a runtime should
-  explicitly use host networking. The direct driver reads the same variable and
-  defaults to `sandbox`, its counterpart of `bridge`
-- under the Docker driver, a default sandbox image aligned with the public CFC
-  kitchen-sink image published from the sibling `gvisor` repo:
-  - `us-docker.pkg.dev/commontools-core/common-fabric/sandbox-kitchensink:latest`
-  - override per run with `--sandbox-image` or `CF_HARNESS_SANDBOX_IMAGE`
+- shell-centric execution in a gVisor sandbox, through the direct driver: a
+  `runsc` binary the harness invokes itself, with no Docker. Where nothing names
+  the runtime, macOS runs it from its native cfc-vm store and Linux from the
+  store under `~/.local/share/runsc-cfc`; every other platform, the Loom local
+  host, and a console launched for a Loom instance refuse where none is named;
+  see [Sandbox runtimes](#sandbox-runtimes)
+- named `bash` sessions: a long-lived container that later calls execute in,
+  offered to the model only where the run's CFC enforcement mode allows them,
+  and not under the Linux default's `pasta` network
+- a sandbox network that defaults to `sandbox`, the driver's own: on Linux
+  `pasta` gives it egress and the host at `host.docker.internal`.
+  `CF_HARNESS_DOCKER_NETWORK_MODE` names one: `bridge` is that default, and
+  `none` and `host` are the others; the name is kept from the Docker driver, as
+  is its vocabulary
+- a kitchen-sink rootfs from the native store, as the sibling `gvisor` repo's
+  installers write it; name another with `--sandbox-rootfs` or
+  `CF_HARNESS_SANDBOX_ROOTFS`
 - durable Loom collections through an explicitly configured host transport; see
   [Durable Loom authoring](docs/LOOM_AUTHORING.md);
 - read-only Loom retrieval through a separately configured host transport, with
@@ -167,12 +173,51 @@ What works today:
     host-owned result file)
   - `describe_handle` (shape and labels of a handle's referent, and the tables
     of one that is a database together with how full each of them is, never its
-    data; see [Inspecting a handle's shape](#inspecting-a-handles-shape))
+    data; a piece's handle also lists the piece's verbs, each with its author's
+    description, the event schema it takes and the result schema it returns; see
+    [Inspecting a handle's shape](#inspecting-a-handles-shape))
   - `resolve_piece` (parent-only exact slug resolution in the session's space;
     returns a handle for child source reads and revisions, without source or
     values; requires a Fabric session)
   - `run_pattern` (present only when the run configures a fabric session; see
     [Running patterns against a Fabric space](#running-patterns-against-a-fabric-space))
+  - `call_verb` (present only when the run configures a fabric session; sends an
+    event to a handler verb on the result of a piece in the session's own space,
+    or of a piece in a foreign space admitted to the session: anything the run
+    reaches through the pieces it was given is in its scope. The piece, and
+    every piece the event names, must be behind a handle the run holds; an
+    address written out in full is refused unless the run holds it. The verb is
+    found among the result-side handlers `cf piece verbs` lists, and the event
+    judged by the gate `cf piece call` uses, so an undeclared field, a missing
+    required field, a copy where a reference is declared, or a name that is not
+    a verb is refused before anything is sent; a handle at a reference position
+    reaches the verb as the address it stands for. The call is awaited to its
+    settlement. The result returns the way a `run_pattern` value does: numbers,
+    booleans and nulls as themselves, a piece the verb returns as that piece's
+    handle, every other position as a handle into the handling's receipt; a
+    handler that throws returns its message)
+  - `read_value` (present only when the run configures a fabric session; returns
+    the value behind a handle the run holds, optionally narrowed by a
+    `/`-separated `select` path, in the session's space or an admitted foreign
+    space. A handle `describe_handle` has not answered for in this run is
+    refused, so a value is read after its shape was looked at; the handle table
+    records the answer on the entry. A link at the read position is followed; a
+    link inside the value returns as the linked document's handle. A position in
+    a derived document no run has written yet runs the piece behind the handle,
+    as `call_verb` does, and reads what it derives; a run not authorized for
+    side effects, as the policy gate decides for a side-effect tool, is refused
+    instead, naming that the piece has not run. Running it commits the piece's
+    derived values to the piece's space, a foreign one included, where a commit
+    the session may not make is refused after the value was read locally; a
+    handle on such a document itself names no piece to run, and the refusal says
+    to read it through the piece's handle. "Holds nothing at that path" means
+    the path does not exist. What it reads is measured through its own
+    transaction against the release ceiling with the model as the sink, the
+    measurement `call_verb` and `run_pattern` apply to their results; a refused
+    read names the offending atoms and that `delegate_task` can hand the handle
+    to a subagent; a value above the session's read ceiling, which subagents
+    inherit, is refused naming that ceiling and the atoms the value carries. A
+    released read's label joins the run's model context)
   - `search_patterns` (present only when the run configures a pattern index with
     `--pattern-index-url`; finds published patterns by hashtag or free text and
     reports each one's kind, evidence quality, declared shapes, and import
@@ -198,11 +243,15 @@ What works today:
     (present only with `--loom-retrieval-config`; read-only, each row measured
     against the run's observation ceiling; a row loom returns without a label is
     given the query's label, and one whose label is malformed is withheld)
-  - `list_commands` and `run_command` (present only with
+  - `list_commands`, `run_command`, and `run_read_command` (present only with
     `--loom-commands-config` or `CF_HARNESS_LOOM_COMMANDS_CONFIG`; the commands
-    the host's broker admits for this run, run as the agent; each answer
-    `run_command` returns is measured like a retrieval row, and the listing is
-    the host's command metadata, unmeasured)
+    the host's broker admits for this run, run as the agent; the listing shows
+    each command as a one-line signature and is the host's command metadata,
+    unmeasured; `run_command` refuses a name the listing does not show, takes
+    one call or a batch of up to sixteen, and measures each answer like a
+    retrieval row; `run_read_command` takes the same calls but sends only a
+    command a fresh listing declares a read and the broker grants read-only,
+    while `run_command` remains write-class)
   - `research` (present when the run resolves a documentation corpus or pattern
     index; performs bounded, iterative Common Fabric research over exact docs,
     skills, published pattern source and dependencies, and safe handle shapes,
@@ -230,9 +279,15 @@ What works today:
 - targeted exact-string edits plus whole-file replace/create and append writes
 - initial and in-run image attachments for model vision-capable flows
 - bounded public HTTP(S) fetches through `web_fetch`, with redirect validation,
-  local/private target blocking, extracted text/links, and raw bounded response
-  retention in tool-output artifacts; `web_fetch` is intentionally not part of
-  the default parent tool surface
+  extracted text/links, and raw bounded response retention in tool-output
+  artifacts; `web_fetch` is intentionally not part of the default parent tool
+  surface. It fetches only from addresses on the open internet, whether the URL
+  names the address or a host name resolves to it. It refuses local, private and
+  reserved addresses, and any address on a network one of this device's
+  interfaces is on, such as a home network's public IPv6 prefix; an IPv6
+  interface's network counts as at least the /64 that holds its address. The
+  process running it needs `--allow-sys=networkInterfaces` to read those
+  networks
 - provider-neutral bounded prompt/tool loop with OpenAI-compatible gateway and
   opt-in ChatGPT/Codex subscription transports
 - interactive chat NDJSON stdio transport with opt-in SQLite session, turn, and
@@ -277,13 +332,13 @@ What works today:
 
 The sandbox `bash` tool has a provisional direct-`curl` guard while sandbox
 networking is enabled: explicit `curl` invocations may target loopback HTTP(S)
-hosts such as `localhost`, `127.0.0.1`, `[::1]`, and Docker Desktop's
-`host.docker.internal` host alias, but obvious external `curl` targets are
-denied before sandbox execution. The refusal states that rule and names no host
-to try instead, since what answers on those names is the driver's: under Docker
-`host.docker.internal` reaches any port of the host, and under the direct driver
-on macOS only the ports the launch forwards into the VM. This is an integration
-unblock, not a complete network confinement model.
+hosts such as `localhost`, `127.0.0.1`, `[::1]`, and the `host.docker.internal`
+host alias, but obvious external `curl` targets are denied before sandbox
+execution. The refusal states that rule and names no host to try instead, since
+what answers on those names is the platform's: on Linux `host.docker.internal`
+reaches any port of the host, through `pasta`, and on macOS only the ports the
+launch forwards into the VM. This is an integration unblock, not a complete
+network confinement model.
 
 - CFC mode plumbing with:
   - `disabled`
@@ -365,9 +420,9 @@ What is not done yet:
 - [src/sqlite-session-store.ts](src/sqlite-session-store.ts)
   - SQLite-backed interactive chat session, turn, and event persistence
 - [src/sandbox/](src/sandbox/)
-  - the Docker and direct `runsc` sandbox drivers, the selection between them,
-    the CFC result parser they share, and the process runner that holds a
-    session's long-lived child
+  - the direct `runsc` sandbox driver, the selection of its settings, its CFC
+    result parser, and the process runner that holds a session's long-lived
+    child
 - [src/artifacts.ts](src/artifacts.ts)
   - persisted run state, run manifest, transcript and its omission record, run
     report, capability snapshot, and tool output storage
@@ -437,7 +492,8 @@ From [packages/cf-harness](.):
   release-refusal trace, and the persisted label plus `TransformedBy` on derived
   data. It reads the identity keyfile from `CF_HARNESS_FABRIC_IDENTITY` and
   never echoes it; override the toolshed, space, cell, and space-db through the
-  environment variables it documents at the top.
+  environment variables it documents at the top. It runs on the platform's
+  default sandbox runtime unless `CF_HARNESS_SANDBOX_RUNTIME` names it.
 
 ## CLI Example
 
@@ -522,8 +578,13 @@ research, and descendant calls. Each completed model call contributes once,
 including calls made by a child that later fails or is canceled. The persisted
 `run-report.json` keeps `usage` and `modelUsage` for the direct run, plus
 `totalUsage` including research and descendants. The batch result JSON carries
-that total usage object. `costUsd`, when present, came from the provider;
-`estimatedCostUsd` is an estimate based on the
+that total usage object. The report's `model` is the requested identifier.
+`modelResponses` records the provider's returned model identifier for each
+direct call, or `null` when unavailable. `actualModels` contains the distinct
+observed identifiers; `modelAttributionComplete` is true only when every direct
+turn has one. Research and descendant attribution belongs to those runs' own
+reports. `costUsd`, when present, came from the provider; `estimatedCostUsd` is
+an estimate based on the
 [public OpenAI price schedule](https://developers.openai.com/api/docs/pricing)
 for GPT-6.1 Sol, GPT-6 Luna, and GPT-5.6 models and is not an invoice or a
 subscription quota conversion.
@@ -729,6 +790,51 @@ state and cannot override a resumed binding, while a whole-tree restorer must
 supply a matching typed `subagentResumeContext` when it reconstructs a child
 beneath its trusted root/parent session.
 
+Start a new root run from a checkpoint with
+`--continue-run <run-root-or-run-state.json> --prompt="Next request"`.
+`--prompt-file` and positional text also supply the required new message.
+Continuation gets a new run id, records the predecessor in its lineage, and
+leaves the predecessor's artifacts and result untouched. It seeds the model with
+history through the last complete tool-call checkpoint, excluding turn-local
+notices persisted with `turnLocal: true`. Older artifacts have no such marker,
+so unmarked notice text remains ordinary history. The marker is omitted from
+provider requests. A dropped tail or a recorded status other than `completed`
+adds the cause-neutral interrupted-turn notice before the new message; a run
+with no complete checkpoint is refused. The harness always rebuilds the system
+message from this invocation's flags, the recorded task classification, and the
+new result contract. Tools, host mounts, fabric mounts, skills, pattern index,
+and depth use this invocation's configuration. Only additional instructions
+default to the recorded ones; `--system-prompt` replaces them. Output mode comes
+from this invocation, defaulting to `operator` when `--output-mode` is absent.
+Runs without recorded instruction defaults are refused before any model request.
+A run bound to one exact prompt value cannot be continued, because the binding
+does not cover a new prompt. A run whose artifacts link outside its run root
+cannot be continued.
+
+Continuation explicitly retains the prior handle table, result schema, research
+context, CFC record, and prompt-slot binding. Both batch continuation and chat
+turns use the same next-run builder. Research retains the latest orientation and
+two latest answers, marked historical. Grants, skills, and turn guidance are
+re-established as turn-local context before the new input. Skill-context handles
+expire as they do between chat turns. The new result defaults to `result.json`
+under the new run's artifact directory; `--structured-result-path` can name
+another new path without repeating the recorded schema. An explicit schema must
+agree with the recorded one. Output paths that overlap the prior run's artifacts
+or result are refused. Continuation shares resume's provider, credential owner,
+read-ceiling, sandbox-runtime and CFC-mode checks, also refusing a changed model
+or a subagent source. It cannot be combined with `--resume-run` or `--skill`.
+`--task-tags` and `--task-domains` remain refused because they classify a new
+task, rather than a follow-up.
+
+A follow-up accepts `--image` and `--input-cell` with the same formats and
+limits as a first run. Images are snapshotted under the new run's artifact
+directory and attached to its new prompt. New input cells mint handles into the
+carried table, so earlier tokens still resolve. Attachment names are retained
+across continuations; a new input cell whose name is already held is refused
+before any model request. `assignedPieces` also carries forward. When no new
+input cells are supplied, their confirmed slugs are announced as attachments, as
+in later chat turns.
+
 The gateway and subscription routes have different billing, workspace policy,
 retention, and model availability. The model catalog is read live from the
 selected subscription; an explicit unavailable model fails instead of being
@@ -745,14 +851,19 @@ credential-store and resolver APIs. It never reads or imports the ordinary Codex
 CLI login.
 
 ```bash
-CF_HARNESS_HOME=/canonical/private/home \
+CF_HARNESS_HOME=/canonical/private/home CF_HARNESS_SANDBOX_RUNTIME=runsc \
   deno run --no-lock -A src/loom-local-host-main.ts batch -- \
   --workspace ../.. --prompt "Summarize this workspace."
 
-CF_HARNESS_HOME=/canonical/private/home \
+CF_HARNESS_HOME=/canonical/private/home CF_HARNESS_SANDBOX_RUNTIME=runsc \
   deno run --no-lock -A src/loom-local-host-main.ts interactive -- \
   --chat-session-db /private/runtime/chat.sqlite
 ```
+
+Both name the sandbox runtime, `runsc`: this host takes no default, and refuses
+a run that names none ([Sandbox runtimes](#sandbox-runtimes)). Name its binary
+and rootfs as well, with `CF_HARNESS_RUNSC_BINARY` and
+`CF_HARNESS_SANDBOX_ROOTFS`, as Loom does.
 
 The entrypoint serves both execution shapes. It rejects missing or invalid
 provider configuration, and reads only the persisted preference from that
@@ -975,7 +1086,9 @@ name of whoever committed it is tied to a person for good.
 
 ### Sandbox runtimes
 
-Sandboxed tools run through one of two drivers, and a run selects one:
+Sandboxed tools run through one driver, `runsc`: the harness writes an OCI
+bundle and invokes a `runsc` binary itself, with no Docker. A run can name it
+and its settings:
 
 ```bash
 deno task run -- \
@@ -986,42 +1099,225 @@ deno task run -- \
   --prompt "Run uname -a and report the exact output."
 ```
 
-`--sandbox-runtime` takes `docker` or `runsc`, with `CF_HARNESS_SANDBOX_RUNTIME`
-as its default. A run that names neither uses Docker. The flags in this section
-are the batch CLI's; the interactive stdio entrypoint and the interactive lane
-of the Loom local host refuse them and read the environment variables alone. The
-console refuses the three selection flags, `--sandbox-runtime`,
-`--sandbox-rootfs`, and `--sandbox-cfc-policy`, and reads their variables alone.
-The two sidecar directory flags are the Docker driver's: the console's launcher,
-`console:launch`, takes `--cfc-result-dir` and `--cfc-invocation-context-dir` on
-the Docker driver and refuses them under `runsc`. The console takes no Docker
-image or Docker runtime name. The two drivers coexist on one machine: the direct
-driver registers nothing with Docker and keeps its `runsc` state under the run's
-own scratch directory.
+`--sandbox-runtime` takes `runsc`, with `CF_HARNESS_SANDBOX_RUNTIME` as its
+default. `docker`, the name of the Docker driver cf-harness no longer has, is
+refused wherever it is named, as `invalid-request`, saying the driver is gone
+and how a run is started instead; any other name is refused too. The flags in
+this section are the batch CLI's; the interactive stdio entrypoint and the
+interactive lane of the Loom local host refuse them and read the environment
+variables alone. The console refuses the three selection flags,
+`--sandbox-runtime`, `--sandbox-rootfs`, and `--sandbox-cfc-policy`, and reads
+their variables alone.
 
-- `docker` drives Docker with a Docker-registered runtime, normally `runsc-cfc`.
-  `--sandbox-image`, `--sandbox-docker-runtime`, `--cfc-result-dir`, and
-  `--cfc-invocation-context-dir` configure it, and the direct driver reads none
-  of them.
-- `runsc` writes an OCI bundle and invokes a `runsc` binary itself, with no
-  Docker: gVisor's `runsc` on Linux, and on macOS the darwin build from the
-  sibling `gvisor` repo, which is expected to forward the same command line into
-  one VM. Its settings are `--sandbox-rootfs` (`CF_HARNESS_SANDBOX_ROOTFS`),
-  `--sandbox-cfc-policy` (`CF_HARNESS_RUNSC_CFC_POLICY`),
-  `CF_HARNESS_RUNSC_BINARY`, and the shared `CF_HARNESS_DOCKER_NETWORK_MODE`.
+Where neither the flag nor the variable names a runtime, the entrypoint's
+platform decides, except for the two entrypoints Loom starts:
+
+- **On macOS** the run uses the direct driver with the native runtime: the
+  `runsc` shim, the rootfs image and the VM of the cfc-vm store that gVisor's
+  macOS installer writes. The store is the directory `CFC_VM_HOME` names, or
+  else `~/Library/Application Support/cfc-vm`. The run is refused, before
+  anything executes, where that store cannot provide it. The refusal names the
+  store and each thing that is in the way. That VM runs on Apple silicon alone,
+  so a process on any other Mac is refused whatever the store holds, saying so:
+  cf-harness has no other runtime to offer it.
+- **On Linux** the run uses the direct driver with the native runtime: gVisor's
+  own `runsc`, the unpacked kitchen-sink rootfs and the CFC policy of the store
+  gVisor's Linux installer (`tools/cfc-rootfs/install.sh` in the gVisor fork's
+  release) writes under `~/.local/share/runsc-cfc`. For root that `runsc` runs
+  as it is. For any other user it runs rootless (`--rootless`), in a user
+  namespace of its own, which the host has to allow a process that is not root:
+  where `user.max_user_namespaces` is 0, `kernel.unprivileged_userns_clone` is
+  0, or `kernel.apparmor_restrict_unprivileged_userns` is 1 (Ubuntu 23.10 and
+  later ship that), the run is refused before the store is looked at, naming the
+  parameter and the `sysctl -w` that lifts it, or running as root. A `runsc`
+  named by `CF_HARNESS_RUNSC_BINARY` runs as it is, without `--rootless`; a
+  process that is not root still needs the same user namespaces for pasta's
+  network, and is checked and refused the same way, unless it names a `none` or
+  `host` network. The run is refused, before anything executes, where the store
+  cannot provide it, as on macOS.
+- **On every other platform** there is no default, and a run that names no
+  runtime is refused, saying that `runsc` runs on macOS (Apple silicon) and
+  Linux alone. A run there names `runsc` and its settings.
+- **The Loom local host** takes no default on any platform. Loom names the
+  runtime of every run it starts, so a `batch` or `interactive` run that names
+  none is refused, saying that Loom must name `runsc`.
+- **A console launched for a Loom instance**, which is `console:launch` given
+  `--instance`, takes none either, and is refused the same way: Loom chooses
+  each instance's runtime, and a default could be another. The same launch with
+  no `--instance` takes the platform's default.
+
+A macOS store is set up for the default when it holds each of the following that
+no setting replaces, and the default is refused when any of those is missing.
+Only `config.json` is required whatever is named. The first five are refused as
+symbolic links too, and so is any of them reached through a directory of the
+store that is one, such as `bin`: each has to be the file or directory itself,
+at its path in the store, as gVisor's installer writes it. A piece that is there
+but that this process cannot use is refused for that, and named so rather than
+as missing: a file it cannot open to read, and a binary it cannot execute.
+
+| In the store            | What it is                                        | Required unless                                   |
+| ----------------------- | ------------------------------------------------- | ------------------------------------------------- |
+| `bin/runsc`             | the `runsc` shim, an executable file              | `CF_HARNESS_RUNSC_BINARY` names a binary          |
+| `bin/cfc-vm`            | the VM daemon the shim starts, an executable file | `CF_HARNESS_RUNSC_BINARY` names a binary          |
+| `config.json`           | the VM's configuration                            | always required                                   |
+| `images/kitchensink`    | the directory a container names as its rootfs     | `CF_HARNESS_SANDBOX_ROOTFS` or the flag names one |
+| `ext4/kitchensink.ext4` | the block image the shim runs that rootfs from    | `CF_HARNESS_SANDBOX_ROOTFS` or the flag names one |
+| `policy.json`           | the CFC policy; see below                         | a policy is under the home, or a policy is named  |
+
+A Linux store is set up for the default when it holds each of the following that
+no setting replaces. Linux's `runsc` is handed the paths the store's links lead
+to and reads nothing by its path in the store, so a piece reached through a
+symbolic link is taken where it leads. A piece that is there but that this
+process cannot use is refused for that, as on macOS.
+
+| In `~/.local/share/runsc-cfc` | What it is                                                            | Required unless                                   |
+| ----------------------------- | --------------------------------------------------------------------- | ------------------------------------------------- |
+| `bin/runsc`                   | gVisor's `runsc`, an executable file                                  | `CF_HARNESS_RUNSC_BINARY` names a binary          |
+| `images/kitchensink`          | the kitchen-sink image unpacked to a directory                        | `CF_HARNESS_SANDBOX_ROOTFS` or the flag names one |
+| `cfc-policy.json`             | the CFC policy, which is the default one of the home, looked for once | a policy is named                                 |
+
+The driver's `sandbox` network is the VM's on macOS. On Linux, under the
+default, it gives a container egress, and the host at `host.docker.internal`,
+the name Docker's bridge gave it; without a `pasta` (a `runsc` configured by
+hand, with no helper) runsc's own `sandbox` network is loopback alone. `pasta`,
+from passt, gives it: each container starts inside a network namespace of
+pasta's (and, for a user that is not root, a user namespace of pasta's too),
+which runsc takes as its host network, so the container sees one interface of
+pasta's (10.0.2.15, gateway 10.0.2.2) and none of the host's. Pasta translates
+its traffic to the host's sockets, and a connection to the gateway reaches the
+host's own loopback, which a hosts file the driver binds over `/etc/hosts` names
+`host.docker.internal`. For root, pasta makes no user namespace and keeps root,
+and runs in a mount namespace of its own that `unshare` (util-linux) makes,
+since it then mounts its own `/proc` in the mount namespace it runs in. Pasta
+starts what it runs in a PID namespace of its own, so a session's container
+started under it would record pids its later calls could not find: under pasta's
+network no sandbox session is offered, and the `bash` tool takes no `session`.
+Pasta also clears the parent-death signal of what it runs, so the driver runs it
+through `setpriv --pdeathsig KILL` (util-linux): a call that times out, or is in
+flight when the runtime closes, stops its pasta, and its container dies with
+pasta's namespace. No port is forwarded into the container, or from the
+container's loopback to the host's. A user id, or a kernel parameter, that
+cannot be read refuses the default rather than being guessed at. Where no
+`pasta` is on `PATH`, no `setpriv`, or for root no `unshare`, the default is
+refused, saying to install passt (`sudo apt install passt`) or util-linux, or to
+name a network: `CF_HARNESS_DOCKER_NETWORK_MODE=none` gives the container
+loopback alone, and `host` the host's own network, interfaces and all. Those two
+need none of `pasta`, `setpriv` or `unshare`; a process that is not root still
+needs user namespaces for the store's rootless `runsc`, as above.
+
+A defaulted macOS run takes its CFC policy from
+`$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists, and
+otherwise from the store's own `policy.json`. gVisor's release installer writes
+that file; a store built from source has one only if someone put it there. The
+default is refused where neither is there, because a run enforces CFC unless
+told otherwise and an enforcing run with no policy cannot start. That refusal
+comes before the enforcement mode is looked at: a non-enforcing mode such as
+`--cfc-enforcement-mode observe` alone does not get past it. A run on the
+default without a policy names the policy as empty, with
+`--sandbox-cfc-policy ""`, and a mode that does not enforce, both. A `runsc`
+setting that is named replaces the store's: a named rootfs stands in for the
+image, `CF_HARNESS_RUNSC_BINARY` for the shim and the daemon beside it, and a
+named policy, by `--sandbox-cfc-policy` or `CF_HARNESS_RUNSC_CFC_POLICY`, for
+both defaults. `--sandbox-cfc-policy ""` names none, and the run then starts
+only in a mode that does not enforce: an enforcing mode is refused as the run
+starts. `--sandbox-rootfs ""` names no rootfs, and the default, which runs only
+from one, is refused for it.
+
+Two more things refuse the default, each before anything executes:
+
+- **A policy that cannot be read.** A default policy the harness could not look
+  at, or that is there and could not be opened, is not known to be one a run can
+  use, so the next default does not stand in for it. The refusal names the file
+  and the reason. A named `runsc` is refused the same way. A policy that is not
+  there is absent, and so is one whose path runs through a file, such as a home
+  that is not a directory.
+- **A store given by another path than the one it is at.** The driver hands the
+  macOS `runsc` the rootfs by the path the file system has for it, and that
+  `runsc` recognizes one of its store's images by comparing the path as written
+  with the store's as it was given. A `CFC_VM_HOME`, or a home, that reaches the
+  store through a symbolic link would therefore start containers with an empty
+  root, so it is refused, naming the path to set `CFC_VM_HOME` to. `/tmp` on
+  macOS is such a link.
+
+The settings of the Docker driver are gone with it. Its flags,
+`--sandbox-image`, `--sandbox-docker-runtime`, `--cfc-result-dir` and
+`--cfc-invocation-context-dir`, are refused as flags an entrypoint does not
+take. Its variables, `CF_HARNESS_SANDBOX_IMAGE`,
+`CF_HARNESS_SANDBOX_DOCKER_RUNTIME`, `CF_HARNESS_RUNSC_CFC_RESULT_DIR` and
+`CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR`, are read by nothing, so an
+environment that still exports them runs as if it did not.
+`CF_HARNESS_DOCKER_NETWORK_MODE` is not one of them: it names the driver's
+network, below, and keeps its name.
+
+A named `runsc` takes the settings named with it and the defaults the
+[current-state reference](docs/CURRENT_STATE.md#sandbox-runtimes) lists for
+them: its binary is `CF_HARNESS_RUNSC_BINARY` or a `runsc` on `PATH` rather than
+the store's shim, and it never takes the store's own policy. On macOS a named
+`runsc` given no rootfs runs the kitchen-sink image of the same store the
+default would, the one `CFC_VM_HOME` names, else the one under the home; on
+Linux it runs the kitchen-sink rootfs of the Linux store under the home.
+
+The batch CLI's operator summary has a `sandbox` line saying which runtime the
+run used and whether it was named or defaulted, such as
+`sandbox: runsc (default on macOS: the native store at <store>)` or
+`sandbox: runsc (named by --sandbox-runtime)`. The run's recorded runtime
+description carries the same fact as `selection`.
+
+A run stays on the runtime it started on, and so does an interactive session,
+since another runtime need not read the CFC labels of a run's files where that
+one kept them. A run's state records its runtime as `sandboxRuntime` from the
+moment its engine is built. A run whose state records the Docker driver, as
+`docker` or as a capability snapshot of kind `docker-runsc-cfc`, is still read,
+and a `--resume-run` of it is refused with `provider-mismatch`, saying the
+driver is gone and to start a new run. A turn of a stored session that records
+`docker` is refused the same way, saying to start a new session. A record that
+names a runtime this cf-harness does not know is refused too. A run recorded
+before runs recorded their runtime is held to the runtime its capability
+snapshot describes, where it has one; only a run with no such description, and a
+chat session stored before sessions recorded a runtime, is bound to `runsc` on
+its next resume or turn, as the
+[current-state reference](docs/CURRENT_STATE.md#selection) sets out.
+
+A run on the native default is a run on the direct driver, with everything the
+rest of this section says of that driver, and these differences of platform:
+
+- **On either platform**, a workspace or a writable host mount that holds the
+  `runsc` binary, the rootfs or the policy is refused, since the sandbox could
+  rewrite them, and so is a writable mount inside the rootfs. On Linux, given a
+  home, the whole `runsc-cfc` store under it is held both ways, unused sibling
+  images included: it may not lie inside a writable mount, and no writable mount
+  may lie inside it. On Linux those are the store's own pieces under
+  `~/.local/share/runsc-cfc`, so a run whose workspace is the home directory
+  names another workspace; the refusal says that the runtime was the default.
+- **On macOS**, a writable mount that lies inside the cfc-vm store, or that
+  holds it, is refused too, for any `runsc` run, whatever binary, rootfs and
+  policy it names, because the macOS `runsc` runs from the store. And
+  `host.docker.internal` reaches only the host ports the launch forwards into
+  the VM.
+- **On Linux** there is no VM; the default network is pasta's, above, and the
+  host is reached at `host.docker.internal` on every port its loopback serves.
+
+The driver keeps its `runsc` state under the run's own scratch directory and
+registers nothing anywhere. The `runsc` it invokes is gVisor's own on Linux, and
+on macOS the darwin build from the sibling `gvisor` repo, which forwards the
+same command line into one VM. Its settings are `--sandbox-rootfs`
+(`CF_HARNESS_SANDBOX_ROOTFS`), `--sandbox-cfc-policy`
+(`CF_HARNESS_RUNSC_CFC_POLICY`), `CF_HARNESS_RUNSC_BINARY`, and
+`CF_HARNESS_DOCKER_NETWORK_MODE`.
 
 The direct driver passes `--cfc` to `runsc` exactly when a CFC policy is
 configured, and an enforcing run without one is refused before anything
-executes. With no policy named, it uses the one the Docker path's installer
-places at `$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists,
-so both drivers label the same files the same way.
+executes. With no policy named, it uses the one at
+`$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists. That is
+the only default of a named `runsc`; the store's own `policy.json` is a default
+of the runtime macOS defaults to and of no other.
 
-Under the direct driver `bash` takes an optional `session`, in a run whose CFC
-enforcement mode allows one. A call that names a session executes in a container
-the harness keeps for the rest of the run, and a call that names none runs in a
-fresh container of its own. Sessions are refused in the enforcing CFC modes, so
-a run in one of them, `enforce-strict` by default, is offered `bash` with no
-`session`, as a run under Docker is in every mode.
+`bash` takes an optional `session`, in a run whose CFC enforcement mode allows
+one and whose network is not `pasta`'s, which Linux's default network is
+(above). A call that names a session executes in a container the harness keeps
+for the rest of the run, and a call that names none runs in a fresh container of
+its own. Sessions are refused in the enforcing CFC modes, so a run in one of
+them, `enforce-strict` by default, is offered `bash` with no `session`.
 
 The direct driver refuses a CFC policy, a rootfs, or a `runsc` binary that lies
 inside a writable mount of the run, and a scratch directory that lies inside any
@@ -1030,30 +1326,16 @@ mount.
 Every run that the batch CLI, the interactive stdio entrypoint, the Loom local
 host, or the console starts on the direct driver runs its commands as root, on
 every host. None of them configures a container user: only a caller that builds
-the runtime itself can name one, numerically. The Docker driver's default on
-Linux is the host user. Those runs also use the direct driver's default scratch
-directory, which is made for the run with no access for group or others, under a
-parent the driver verifies is this user's alone. Only a caller that builds the
-runtime itself can name another scratch directory, and that one is not verified.
+the runtime itself can name one, numerically. Those runs also use the direct
+driver's default scratch directory, which is made for the run with no access for
+group or others, under a parent the driver verifies is this user's alone. Only a
+caller that builds the runtime itself can name another scratch directory, and
+that one is not verified.
 
 [Sandbox runtimes](docs/CURRENT_STATE.md#sandbox-runtimes) in the current-state
 reference is the full contract: the defaults of each setting, the runtime
-description each driver records and how to tell the two apart in it, the
-network-mode mapping, the session contract and its refusals, the lifecycle of a
-session's process, and the trust checks.
-
-On hosts without the `runsc-cfc` Docker runtime (or where the installed CFC
-policy does not label the workspace mount, which makes in-sandbox file reads
-fail with SIGSYS), the Docker driver can run with the plain `runc` runtime and
-observe-mode CFC:
-
-```bash
-export CF_HARNESS_SANDBOX_DOCKER_RUNTIME=runc
-export CF_HARNESS_CFC_ENFORCEMENT_MODE=observe
-```
-
-Tool outputs are then exposed raw with policy warnings recorded in the run
-report instead of being denied for missing trusted mediation metadata.
+description the driver records, the network-mode mapping, the session contract
+and its refusals, the lifecycle of a session's process, and the trust checks.
 
 ### Model attempts and transport retry
 
@@ -1066,10 +1348,17 @@ otherwise, with the status and selected headers.
 
 A final assistant reply must contain non-whitespace text. A reply with no text
 and no function tool calls fails the run with `provider-unavailable`, including
-when the provider returned HTTP 200. Tool-only replies continue through normal
-tool dispatch. The normalized assistant message stays in the transcript, and the
-run report retains the model attempts and token usage. This failure does not
-trigger a retry.
+when the provider returned HTTP 200. The one exception is a run that has
+`submit_result`: when a turn that still offers tools follows, its first such
+reply is answered with a host notice asking it to submit the answer, or why it
+cannot be given, and only a second fails it. Tool-only replies continue through
+normal tool dispatch. The normalized assistant message stays in the transcript,
+and the run report retains the model attempts and token usage. This failure does
+not trigger a retry. A Codex attempt that reached its terminal response records
+that response's `status` as `terminalStatus` and the type of each of its output
+items as `outputItemTypes`, which together say whether a blank reply was a
+`completed` response with an empty message, a reasoning item alone, or no item
+at all.
 
 A failed attempt carries the provider's own reason wherever the provider stated
 one. `providerError` holds the provider's `type`, `code`, and `message` as the
@@ -1189,15 +1478,16 @@ granted token, not a tool of its own, and `describe_handle` answers the
 registry's shape like any other reference.
 
 What the model receives is a token and fixed prose, never data. Reading anything
-behind the token means running a pattern over it, where the CFC boundary rules
-as it does for every other flow — in particular, a piece's `$NAME` is a value,
-and a name computed from labeled data taints a name-listing pattern's result,
-which strict enforcement refuses whole. A refused name read leaves the name
-unknown. For an explicit reference-listing task, a pattern can return entry
-references without reading values, with addresses returned as tokens through the
-ordinary outbound swap. This does not authorize crawling references to identify
-an unspecified edit target; the shared target-selection guidance applies to the
-registry announcement too.
+behind the token means running a pattern over it, or `read_value` once
+`describe_handle` has answered for it, where the CFC boundary rules as it does
+for every other flow — in particular, a piece's `$NAME` is a value, and a name
+computed from labeled data taints a name-listing pattern's result, which strict
+enforcement refuses whole. A refused name read leaves the name unknown. For an
+explicit reference-listing task, a pattern can return entry references without
+reading values, with addresses returned as tokens through the ordinary outbound
+swap. This does not authorize crawling references to identify an unspecified
+edit target; the shared target-selection guidance applies to the registry
+announcement too.
 
 The grants are recorded in run state (`wellKnownGrants`), replayed rather than
 re-minted on resume, and reported in the operator summary as `fabricGrants:`. A
@@ -1222,7 +1512,10 @@ pass on by accident. No shape is stated on the flag, by rule: an input cell
 carries its own declared schema in the fabric — the same place its CFC labels
 live — and `describe_handle` answers from that declaration, so there is one
 source of truth and nothing an operator-written view could drift from or quietly
-claim.
+claim. A run granted `read_value` can read an input's value once
+`describe_handle` has answered for it; that value arrives as a tool result,
+measured against the release ceiling like any other, and its label joins the
+run's model context.
 
 A `<link>` may also be a piece's NAME: `pattern:<space>/<slug>`, or the bare
 `<slug>` meaning a piece in the session's own space. That is what a surface
@@ -1233,11 +1526,12 @@ than it is told for a reference. It names a piece, not a cell inside one: a path
 after the slug is refused, and the general cell case is CT-2319's. The retired
 `piece:` spelling is not read as an address.
 
-A qualified name is resolved in the session's own space or not at all. A space
-the session cannot check the name of — one configured by `did:key`, which
-carries no name — refuses the qualified form rather than answering with this
-space's same-slug piece, because the same slug in another space is a different
-piece. A bare slug is unaffected: it names no space to disagree about.
+A qualified name is resolved in the session's own space or not at all. The space
+in `pattern:<space>/<slug>` is spelled by its DID, or by the legacy name a
+session opened it by. A name for a space that has none, and any other space, is
+refused rather than answered with this space's same-slug piece, because the same
+slug in another space is a different piece. A bare slug is unaffected: it names
+no space to disagree about.
 
 An input cell names a task target, so failure is closed and loud rather than
 tolerated: a malformed argument is a usage error, and a reference that does not
@@ -1245,6 +1539,8 @@ parse, targets an unadmitted space, names a piece the space does not hold, or
 arrives on a run without a fabric session fails the run before the model is
 involved. The cells are recorded in run state (`inputCells`), replayed rather
 than re-minted on resume, and reported in the operator summary as `inputCells:`.
+A continuation retains those names and tokens and appends its new attachments;
+reusing a held attachment name is refused.
 
 #### Inspecting a handle's shape
 
@@ -1530,13 +1826,11 @@ The child a `delegate_task` hands that handle to mounts the directory read-only
 at `/acquired-skill`, and mounts the one skill its handle names and no other.
 Such a child builds a sandbox of its own — a mount is a property of the
 container, so the child is given the parent's sandbox configuration plus that
-one mount and builds its own sandbox from it. Under the Docker driver that sets
-it apart from a child with no acquired skill, which shares its parent's sandbox
-runtime. Under the direct driver every child builds a runtime of its own, and
-this one's carries the mount. Building is possible only where this harness built
-the parent's sandbox from a configuration; a run whose sandbox runtime was
-handed in has none to extend, and its children share that runtime on either
-driver, acquired skill or not. It receives `run_skill_script` and the operator's
+one mount and builds its own sandbox from it. Every child builds a runtime of
+its own, and this one's carries the mount. Building is possible only where this
+harness built the parent's sandbox from a configuration; a run whose sandbox
+runtime was handed in has none to extend, and its children share that runtime,
+acquired skill or not. It receives `run_skill_script` and the operator's
 allowlist entries for that pin, and for no other skill: the allowlist is the
 run's while a child's tool surface is its profile's, and neither reaches the
 other on its own. An acquisition is not an authorization — mounting the bytes
@@ -1651,6 +1945,15 @@ somewhere, attached metadata accompanies it, and trusted-side code resolves it.
 They deliberately remain separate until experience supplies a concrete reason to
 unify them.
 
+### Pattern-index client
+
+The shared signed client, successor resolution, search-body composition, and
+feedback vocabulary live in
+[`@commonfabric/pattern-index`](../pattern-index/README.md). Harness
+configuration and identity loading live in `src/pattern-index/factory.ts`;
+composition, publication gates, the session ledger, probes, retrieval scoring,
+and tools remain in this package.
+
 ### Seeding the pattern index
 
 The corpus has two kinds of entry, with different purposes and evidence:
@@ -1734,31 +2037,32 @@ Research is a private tool loop, not web search or a delegable child profile.
 Its `inspect_pattern` and `open_pattern_file` tools accept a bare pattern id or
 `cf:pattern:<id>`; index lookups and retained evidence use the bare id.
 
-Fresh CLI tasks and interactive sessions without retained research request an
-opening `orient` pass for open-ended tasks. A task already selecting an
-implementation skips that automatic pass only through attached `patternRefs` or
-explicit markers in the request: `pattern:<space>/<slug>`, `cf:pattern:<id>`, or
-`skill:<id>`. A skill id names a registered skill or an `owner/repository/skill`
-address. Bare ids, paths, and prose such as "use the named skill X" remain open
-unless X uses a marker. Recognition uses the existing address parsers; it does
-not resolve references, acquire skills, or grant authority. The ordinary tools
-do that. The parent can still call `research` for an unresolved question.
-Subsequent chat turns reuse the retained findings and let the parent request
-targeted answers; they do not repeat orientation. It runs through the ordinary
-policy, artifacts, provenance, cancellation, and usage path before the first
-parent turn. A host-supplied user message puts the result immediately before the
-task. The result's `purpose` limits what `complete` means: a complete
-orientation establishes a supported approach; it does not claim that the
-application has been built. Both purposes can inspect pattern source, describe
-handles, and return examples. Orientation's `leads` are host-observed metadata,
-usable as search references for delegation, and remain separate from inspected
-`patterns`. Orientation's `refinedTask` restates the request as the intersection
-of what was asked and what research verified is possible, each part bound to the
-grant or confirmed pattern that serves it, with the parts nothing serves left
-under `missing`; the parent works, and writes a delegation's goal, from it. An
-orientation that omits it is still admitted. The current user goal accompanies
-narrower research questions and delegated tasks so they retain the original
-context.
+Fresh CLI tasks tagged `author` (see task classification below), fresh CLI tasks
+in the `fabric` domain run at `--depth deep`, and interactive sessions without
+retained research, request an opening `orient` pass for open-ended tasks. A task
+already selecting an implementation skips that automatic pass through attached
+`patternRefs` or explicit markers in the request: `pattern:<space>/<slug>`,
+`cf:pattern:<id>`, or `skill:<id>`. A skill id names a registered skill or an
+`owner/repository/skill` address. Bare ids, paths, and prose such as "use the
+named skill X" remain open unless X uses a marker. Recognition uses the existing
+address parsers; it does not resolve references, acquire skills, or grant
+authority. The ordinary tools do that. The parent can still call `research` for
+an unresolved question. Subsequent chat turns reuse the retained findings and
+let the parent request targeted answers; they do not repeat orientation. It runs
+through the ordinary policy, artifacts, provenance, cancellation, and usage path
+before the first parent turn. A host-supplied user message puts the result
+immediately before the task. The result's `purpose` limits what `complete`
+means: a complete orientation establishes a supported approach; it does not
+claim that the application has been built. Both purposes can inspect pattern
+source, describe handles, and return examples. Orientation's `leads` are
+host-observed metadata, usable as search references for delegation, and remain
+separate from inspected `patterns`. Orientation's `refinedTask` restates the
+request as the intersection of what was asked and what research verified is
+possible, each part bound to the grant or confirmed pattern that serves it, with
+the parts nothing serves left under `missing`; the parent works, and writes a
+delegation's goal, from it. An orientation that omits it is still admitted. The
+current user goal accompanies narrower research questions and delegated tasks so
+they retain the original context.
 
 Orientation and the parent distinguish inputs already given, inputs findable
 within the granted scope, and actions the available capabilities cannot perform.
@@ -1789,6 +2093,83 @@ first read it, and counts as cited by its old id only where the bytes still
 match the digest — a source that changed is reported stale, its old id refused,
 and the fresh read left in the catalog under a new id. Attached pattern
 references are leads until inspected.
+
+A fresh CLI run tags its task before assembling the prompt
+(`src/task-classification.ts`) with every kind of work it calls for: `respond`,
+`find`, `act`, `pieces`, `author`. A keyword rule reads the task and what the
+run holds (input cells, attached patterns, a browser). A task asking to use,
+call, run or invoke a verb, or to add something to "the" or "this" thing other
+than a loom, while the run holds input cells, is `pieces` and `act`. When no
+rule applies, the classifier assumes rather than asking a model: `find`, plus
+`pieces` when the run holds input cells, plus `act` when it has a browser and
+the task names an action verb the rule knows. A misread task still reaches what
+it needs, since the tool allow-list does not narrow; it takes longer. A
+classifier that throws falls back to every tag. The tags, the path that chose
+them (`rule`, `assumed`, `fallback`), and the classification's wall time are
+recorded as `taskClassification` in `run-state.json` and `run-report.json`.
+`scripts/task-classification-eval.ts` scores the rule against a cheap-model
+classifier over the playtest asks, by hand. The classifier also names the
+domains a task's work happens in: `fabric` (held or authored pieces, the pattern
+index, how Common Fabric works), `personal` (the person's calendar, mail and
+messages), and `web`. Only a positive sign names one, so a question of general
+knowledge, or an operation in the person's application, has none; they and what
+chose them (`domainsPath`) are recorded beside the tags. Of classified runs,
+only an `author` task, or a `deep` run in the `fabric` domain, gets the opening
+research pass, since that pass reads Common Fabric's docs, pattern index and
+source; a run that was never classified, such as an interactive session, gets it
+whenever it is otherwise eligible. `src/prompt-sections.ts` says, in one table,
+which tags and depths each conditional part of the prompt reaches. The parent's
+orientation follows the tags: `pieces` and `author` add the code-authoring
+framing (reading docs and skills, repairing code, acquiring a skill by its id),
+`pieces` a short held-pieces block (the input cells are the pieces of the loom
+the person is in; `describe_handle`, `read_value`, and `call_verb` read and act
+on them) where any other task gets one sentence saying handles may be held,
+`author` alone the piece-targeting guidance, the instruction to verify an
+effect, and the revision-verification guidance, `pieces` and `find` the
+held-handle and grant guidance, `find` and `author` the findable and
+pattern-index guidance, `author` what research is (a private pass that reports
+what to run and cannot execute) and the opening-research rule, `act`, `pieces`
+and `author` delegation, `find` and `act` the Weaver command guidance, and `act`
+the browser guidance. The tool allow-list does not narrow, so a task given too
+few tags can still reach what it needs; a run with no classification carries all
+of the orientation.
+
+The caller chooses the run's depth before it starts, with `--depth quick`,
+`standard` (the default) or `deep`; the tags say what kind of work a task is,
+the domains where, and the depth how far to take it. A caller that knows more
+than the keyword rule can state the tags (`--task-tags`) or the domains
+(`--task-domains`, where `none` is no domain), each in place of the
+classifier's, which decides any part the caller leaves out; the record says
+`caller` for a part it stated. None of these grants authority. An agent-runner
+local job takes `depth`, `tags` and `domains` from its request, and
+`reasoningEffort` from its profile, which a request may lower but not raise. A
+`standard` run's prompt has no strategy section. A `quick` run is told to answer
+directly when it can, and otherwise to take the shortest path that does what was
+asked, adding nothing beyond it. A `deep` run is told to search every source of
+the person's data (`personal` domain) or to read several web sources (`web`), to
+leave only material worth opening, and to read its result back before it
+finishes (`src/strategy.ts`). A `deep` run also adds the opening research pass
+for a classified task in the `fabric` domain; an `author` task gets that pass at
+any depth. The effort applies to the job's own model calls and children on its
+model; research keeps its own effort setting.
+
+A tool descriptor is a contract: its name, its parameters with one-line
+descriptions, and a sentence or two on what the tool does and returns. Task tags
+never change them, so runs offering the same tools on the same runtime send the
+same descriptor bytes for every task, in the prefix their requests share. The
+rules for using a tool are guidance in `src/tool-guidance.ts`, opened as context
+messages for the tools the session's backings carry and fitted to the tags with
+the rest of the orientation: `author` gets writing, running and naming patterns
+(the confidentiality ceiling, a query's `LIMIT`, a composed pattern's error
+branch, pending results, `resultSchema`) and `pattern-author` delegation;
+`author`, `find` and `pieces` get building on research (`followUpTo`, naming the
+handle); `pieces` gets reading and acting on pieces (verbs, `fill`,
+`rowLabelReads`, research handles); `find` and `act` get the host's commands
+(`loomId`, `expectedVersion`, batching, `not_granted`) and how loom retrieval
+withholds a row; `find`, `act` and `pieces` get when to resolve a named piece,
+which `author` has inside piece targeting. A rule needed only once it fires is
+left to the tool's refusal or result, which explains itself. A subagent whose
+profile holds `run_pattern` carries its rules in its own system prompt.
 
 Opening research has a durable `openingResearch` checkpoint in `run-state.json`.
 The driver records pending intent before invocation, then records whether a kit
@@ -1968,17 +2349,40 @@ Unpaired work, including a tool call still running when the cancel lands, and
 process interruptions do not advance the checkpoint; their evidence remains in
 the audit trail.
 
-`finalizeOnTurnLimit` reserves the last root model turn for a partial answer
-with harness and native tools disabled. It warns two turns beforehand and
-records `budget_finalized` with a `gave-up` task outcome. Provider failures,
-blank answers, and attempted final tool calls remain failures. Root budgets
-include this final call; provider retries and child budgets are separate.
-Generated budget notices remain in events and durable run artifacts, but are
-excluded from returned transcripts and interactive checkpoints so subsequent
-user turns receive a fresh budget. They also state their turn-local scope for
-explicit artifact resume and opaque provider context that may retain them.
-`CF_HARNESS_CHAT_ARTIFACT_ROOT` supplies the Loom host's default durable run
-root, including for restored sessions without their own artifact root.
+`CfHarnessPromptLoop.runPrompt()` and `runTranscript()` accept an optional
+`takeMessages(turn)` callback, which may return user message strings directly or
+through a promise. The loop calls it before each root model request, including
+the first, with the number of the model turn that will receive the messages. It
+also checks before accepting a final text answer, structured result, or
+`finish_task` ending when another model turn remains; pending messages keep the
+run going within its existing turn budget. Each turn number is asked at most
+once: an ending take replaces the next turn's start take, and messages arriving
+between them wait for the following boundary. A call consumes the messages it
+returns; the host must not return them again. Each string is appended verbatim
+as an ordinary user message, after the prompt or previous turn's tool results,
+and retained in resumable history and subsequent checkpoints. Delegated child
+loops never receive the callback, and the loop never calls it after ending or
+when no model request remains. Steering is refused when the prompt-slot binding
+carries `valueDigest`, `slotDigest`, or `snapshotDigest`, because that binding
+authorizes one exact prompt value.
+
+Every run gets 32 root model turns unless its host names another budget. With a
+budget of three turns or more, two turns before the last the host tells the
+model how many remain, so it can finish rather than be cut off; a subagent's run
+is told the same against its own budget. A run that has `submit_result` is told
+to submit on the next turn; acceptance ends the run when it owes no piece output
+and no pending steer continues it. `finalizeOnTurnLimit` instead reserves the
+last root model turn for a partial answer with harness and native tools
+disabled, warning in those terms, and records `budget_finalized` with a
+`gave-up` task outcome. Provider failures, blank answers, and attempted final
+tool calls remain failures. Root budgets include this final call; provider
+retries and child budgets are separate. Generated budget notices remain in
+events and durable run artifacts, but are excluded from returned transcripts and
+interactive checkpoints so subsequent user turns receive a fresh budget. They
+also state their turn-local scope for explicit artifact resume and opaque
+provider context that may retain them. `CF_HARNESS_CHAT_ARTIFACT_ROOT` supplies
+the Loom host's default durable run root, including for restored sessions
+without their own artifact root.
 
 Successful `assign_slug` calls also retain host-owned naming receipts: a slug
 and the piece's complete reference, including its space. A completed turn that
@@ -2064,9 +2468,16 @@ references with a JSON map from space DIDs to HTTP(S) origins, for example
 queries, and fragments are refused. The default admits no foreign spaces; `{}`
 explicitly clears an environment default. The session registers these host
 routes before returning to its callers and refuses a route that conflicts with
-its own space or an established runtime route. The same admission predicate
-governs input-cell minting, `describe_handle`, and `run_pattern` link inputs.
-Named piece attachments continue to resolve in the session's own space.
+its own space or an established runtime route. Against a deployment that
+publishes a memory URL, such as one behind a memory router, a route to the
+deployment's own API origin or memory URL is the default route, and a route to
+another deployment's origin is registered once the session has read where that
+deployment serves Memory, from its `/api/meta`: a route whose memory host cannot
+be read is refused as `foreign-host-unread`, and one past the 64 origins a
+runtime keeps as `foreign-host-limit`. A refused route makes the session fail to
+start, naming the reason. The same admission predicate governs input-cell
+minting, `describe_handle`, and `run_pattern` link inputs. Named piece
+attachments continue to resolve in the session's own space.
 
 This is trusted startup configuration, unavailable to model tool arguments and
 console task bodies. Reads use the session's configured identity and existing
@@ -2221,7 +2632,7 @@ The slug is validated, then checked for availability, before anything is
 written, so an unusable slug is a structured error that changes nothing. A slug
 already naming another piece is never repointed: the tool appends a counter —
 `-2`, `-3`, and so on — to the requested word until it reaches a free name, or
-one already naming this piece, and the receipt's `slug` and `url` carry the name
+one already naming this piece, and the receipt's `slug` carries the name
 assigned, which is where the model reads the address it got. A requested word so
 long that no counter fits under the slug length limit is the one collision that
 is refused. The availability question fails closed: a slug is free only on the
@@ -2443,15 +2854,13 @@ does not change the original publication record. A missing publication report
 means that attempt queued nothing, and `status: "queued"` records intent rather
 than index acceptance. This join needs no source hashing or live index lookup.
 
-The URL is the session's API URL, the space, and the slug — the address
-`cf piece new` prints — and it appears only when `--fabric-space` names the
-space. A space configured as a `did:key` has no URL that is not built from that
-DID, and a bare fabric identifier does not cross the model boundary, so the
-model-facing output carries the slug alone rather than a fabricated link. The
-prompt loop strips `pieceId` and records that omission. Nothing in the remaining
-output is swapped for a handle token, because nothing in it is a fabric
-reference: the slug is the model's own word and the URL is the operator's API
-URL and space name. Its error `message`, which can carry a DID from an
+The URL is the session's API URL, the space's DID, and the slug, which is the
+address the shell opens. A session configured by a space's legacy name gets the
+URL of the DID that name resolves to. The prompt loop strips `pieceId` and `url`
+from what the model is shown, because both carry fabric identifiers, and records
+those omissions; the console reads the URL from the persisted output. Nothing in
+the remaining output is swapped for a handle token, because the slug is the
+model's own word. Its error `message`, which can carry a DID from an
 authorization failure, is scrubbed for bare fabric identifiers like the other
 free-text fields. Compiler diagnostics come back as
 `{ status: "compile-error", message }` so the model can iterate on the source;
@@ -2586,22 +2995,20 @@ deno task run -- \
   --prompt "Build this pattern."
 ```
 
-Sandbox image override, under the Docker driver:
+Sandbox rootfs override, for a rootfs with the tools a run needs:
 
 ```bash
 deno task run -- \
   --workspace /path/to/common-fabric-2 \
   --cwd pattern-factory \
   --gateway-auth-mode none \
-  --sandbox-image registry.example/cf-harness-sandbox:deno2 \
+  --sandbox-rootfs /path/to/deno2-rootfs \
   --prompt "Run deno task cf --help and report whether it works."
 ```
 
 Use this for Deno 2 / Common Fabric CLI validation while keeping the mounted
 workspace as the source of truth for Labs, Pattern Factory, and Loom code. Run
-reports include the selected sandbox image in the capability snapshot. The
-direct driver does not read `--sandbox-image`, and the `image` in its capability
-snapshot is the rootfs path.
+reports include the rootfs as the `image` of the capability snapshot.
 
 Loom-backed batch runs may also pass a retained manifest:
 
@@ -2633,12 +3040,19 @@ A run configured with a schema is offered `submit_result`, and its system prompt
 asks for the result through it: the model passes the whole value as `result`,
 the harness validates it against the schema, and the host writes it to the
 structured-result path. A refused value comes back as `invalid_result` with the
-reason, and the model corrects it and submits again; a later valid submission
-replaces an earlier one. This is the way that works under every enforcement mode
-and prompt-slot role — under `enforce-strict`, a run whose prompt is bound as
-`context` or `quote` is refused `bash`, `edit_file`, and `write_file`, and so
-cannot write the file itself. A run that does hold such a tool may still write
-the file directly; both ways end at the same path. With `--allow-tool`, name
+reason, and the model corrects it and submits again. An accepted value is the
+run's return: once any required piece output is satisfied, the run completes
+after the turn that submitted it, and the words the model wrote beside the call,
+if any, are its final answer. With `takeMessages` and a model turn remaining, a
+pending user message continues the run instead. A later valid submission
+replaces the earlier result. A turn with neither words nor a tool call gets one
+host notice asking for the submission when a turn that still offers tools
+follows it; a second such turn, or one with no such turn after it, fails the
+run. This is the way that works under every enforcement mode and prompt-slot
+role — under `enforce-strict`, a run whose prompt is bound as `context` or
+`quote` is refused `bash`, `edit_file`, and `write_file`, and so cannot write
+the file itself. A run that does hold such a tool may still write the file
+directly; both ways end at the same path. With `--allow-tool`, name
 `submit_result` alongside the run's other tools. The schema and host path are
 retained in run state, so a resumed root run keeps the same result contract
 without repeating the command-line flags; a conflicting restatement is refused.
@@ -2654,7 +3068,9 @@ provided inline with `--structured-result-schema` or read from
 `--structured-result-schema-file`. After the run, cf-harness reads the sidecar,
 validates it with the same JSON Schema validation primitives used by subagent
 `returnSchema`, records `structured_result` in the batch metadata, and exits
-nonzero when the file is missing, invalid JSON, or schema-invalid.
+nonzero when the file is missing, invalid JSON, or schema-invalid. Its
+`validation_error` says which: a missing file reads as no structured result
+submitted, and a schema-invalid one names the field and the reason.
 
 When constraining the parent tool surface to `delegate_task`, authorize the
 child profile separately so the delegation policy transition is explicit:
@@ -2667,6 +3083,11 @@ deno task run -- \
   --allow-subagent-profile default \
   --prompt "Delegate a focused inspection and summarize the result."
 ```
+
+The `delegate_task` descriptor a run offers lists only the profiles the run
+allows. A delegation to another profile is refused, and recorded among the run's
+failures as `subagent_profile_not_allowed`; the model reads the refusal and the
+run goes on, so that kind is never the run's `primaryFailure`.
 
 The browser profile is the only path to the `browser` tool. The tool drives the
 host `agent-browser` CLI one structured action per call, while the parent still
@@ -2796,19 +3217,23 @@ page.
 
 No operation names this device, its network, or an address written as an IP
 literal: `open`, a `urlHandle`'s value, and a `urlPattern` naming a host are
-refused here, and the host refuses such a load whatever starts it. Once a
-hand-off is sent, the page may hold the owner's sign-in, however the hand-off
-ends: finished, declined, refused, withheld by the run's read ceiling, or never
-answered because the run withdrew it. From then on the session can only be read
-and opened on the web origin of the last page the run saw before it first handed
-the page off: `click`, `check`, `press`, `fill`, `type`, and `select` change the
-page, `back` and `forward` leave it for an address nobody checked, and `reload`
-may send it again, so all of them are refused. The origin is checked against the
-address the host committed for each result, not only the one an `open` asked
-for, so a result the owner, the page, or a redirect took to another origin is
-withheld; a hand-off the owner ends elsewhere tells the run only how it ended
-and where. A page handed off on no web origin the run knows leaves no site to
-open.
+refused here, and the host refuses such a load whatever starts it. A host is
+judged as a URL parser reads it, so `http://0x7f.1/` names 127.0.0.1, and a
+`urlPattern` may put a glob in its host only as the labels leading a name on the
+open web, as in `https://*.shop.example/**`. A pattern that names no host, such
+as `**/checkout`, may match any page, which the host keeps off this device and
+its network. Once a hand-off is sent, the page may hold the owner's sign-in,
+however the hand-off ends: finished, declined, refused, withheld by the run's
+read ceiling, or never answered because the run withdrew it. From then on the
+session can only be read and opened on the web origin of the last page the run
+saw before it first handed the page off: `click`, `check`, `press`, `fill`,
+`type`, and `select` change the page, `back` and `forward` leave it for an
+address nobody checked, and `reload` may send it again, so all of them are
+refused. The origin is checked against the address the host committed for each
+result, not only the one an `open` asked for, so a result the owner, the page,
+or a redirect took to another origin is withheld; a hand-off the owner ends
+elsewhere tells the run only how it ended and where. A page handed off on no web
+origin the run knows leaves no site to open.
 
 A value reaches a page in one of two ways, and the host is told which:
 
@@ -3002,12 +3427,10 @@ search hit is a component to wire, not a specification to rebuild: importing it
 costs the import line, and rewriting it from its description publishes a second
 pattern doing the same job under a different id.
 
-The profile carries its own turn budget of 24, in place of the default subagent
-cap of 8. Authoring is a write, compile-error, fix loop and each iteration costs
-a turn; at the default the loop runs out before a non-trivial pattern compiles,
-and a child that ran out of turns has nothing to return. A delegation may still
-name its own `maxModelTurns`, bounded by the same maximum of 64 every profile
-is.
+The profile runs on the default subagent budget of 32 turns. Authoring is a
+write, compile-error, fix loop and each iteration costs a turn, so a delegation
+expecting a long loop may name its own `maxModelTurns`, bounded by the same
+maximum of 64 every profile is.
 
 The profile also carries a return contract, and it is the profile's rather than
 a default: a `pattern-author` delegation that declares a `returnSchema` of its
@@ -3452,6 +3875,14 @@ one check answering to two authorities, which is the shape AUD-15 and AUD-15a
 are already split along. AUD-9 now expresses the six and nothing else; AUD-24
 carries the snapshot as `extends`, and a finding from it renders as ours.
 
+**AUD-25 counts the links the snapshot's reader found.** Each cell record lists
+the path of every link its reader found in the cell, as `linkPaths`, and those
+are the links the check counts. A reference leaves a label entry of its own only
+where it carries a label, so a result that links its rows bare has no such entry
+to count, and the list is what keeps that run from reading as one whose cells
+hold no link. A record that lists no link paths is read by the entries a link's
+own label left.
+
 [audit/citations.ts](audit/citations.ts) holds that table and
 `audit/test/citation-drift.test.ts` reads every cited document and requires each
 quote to still be in it, so a specification edit that invalidates a check breaks
@@ -3493,11 +3924,7 @@ deno task cfc-audit /tmp/cfc-properties \
 Two properties the brief for this suite named are established elsewhere, and a
 second copy would be a second encoding rather than more coverage:
 
-- **P-refuse-start** — under the Docker driver
-  `assertDockerRunscCfcTransportForMode` refuses to start an enforcing run whose
-  CFC transports are unwired, and `test/docker-runsc-sandbox.test.ts` covers
-  both enforcing modes, each transport missing on its own, and both present.
-  Under the direct driver `assertRunscCfcPolicyForMode` refuses to start an
+- **P-refuse-start** — `assertRunscCfcPolicyForMode` refuses to start an
   enforcing run that has no CFC policy, and `test/runsc-sandbox.test.ts` covers
   both enforcing modes.
 - **P-dial-order** and **P-posture-parity** — `audit/test/seeded-violations.ts`
@@ -3677,60 +4104,17 @@ for it: the gate needs a serving deployment, so `API_URL` is what admits it, and
 every case is skipped without one. That file's own header carries a local
 invocation.
 
-Under the Docker driver, runs on Linux default to the host UID/GID. On macOS,
-the default omits `--user` because Docker Desktop bind mounts may expose host
-files as `root:root`, which prevents non-root container users from writing
-mounted Loom workspaces. An explicit `containerUser` still overrides the
-platform default.
-
-The two sidecar directories described below are the Docker driver's CFC
-transport. The direct driver has neither. Where a CFC policy is configured, it
-hands `runsc` the invocation context and takes the result back on descriptors it
-opens for each call, from files private to that call under the run's scratch
-directory; with no policy it hands over no context and takes back no result. See
-[Sandbox runtimes](#sandbox-runtimes).
-
-CFC sandbox result mediation requires the installed `runsc-cfc` runtime to use
-the same host result directory that `cf-harness` reads. Configure runsc with
-`--cfc-result-dir=/path/to/results`, then set
-`CF_HARNESS_RUNSC_CFC_RESULT_DIR=/path/to/results` or pass `cfcResultDir` in the
-explicit sandbox config.
-
-CFC invocation context transport is similarly coordinated through a host sidecar
-directory. Configure runsc with
-`--cfc-invocation-context-dir=/path/to/invocations`, then set
-`CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR=/path/to/invocations` or pass
-`cfcInvocationContextDir` in the explicit sandbox config. `cf-harness` writes
-`<containerID>.json` after `docker create` and before `docker start`; the
-payload contains audit/provenance context plus optional trusted `cfcInputLabels`
-for supported startup inputs (`command`, `argv`, `args`, `env`, `cwd`, and
-`stdin`). `stdin` labels are modeled as labels on the stdin source and taint
-only after the sandbox reads or maps fd 0, not as automatic startup task taint.
-
-Configuring `cfcInvocationContextDir` says where `cf-harness` writes; it says
-nothing about whether the runtime reads there, and the two sidecar directories
-are registered independently, so a host can have a working result transport —
-sidecars arrive, output mediation succeeds — while every input label goes into a
-directory nothing reads. Under an `enforce-*` mode `cf-harness` therefore reads
-the runtime's registered arguments from `docker info` before starting a
-container, and refuses the invocation when no valid absolute invocation-context
-directory is registered, because that half fails open: nothing downstream
-notices a sandbox that started untainted. `unregistered` is the only status that
-states a fact about the world: no valid absolute directory is registered.
-`registered` means only that something absolute is registered, never that the
-transport works; the snapshot reports both paths without comparing them because
-path text cannot establish that the daemon and harness resolve two names to the
-same directory. Moby shell-parses the registered argument strings before runsc
-sees them, so `cf-harness` trusts a registration only when every argument
-consists of characters in `[A-Za-z0-9._/=:,-]`. Any other character produces the
-distinct `unsafe-runtime-arguments` decline-to-affirm and refuses an enforcing
-invocation; a legitimate directory containing an excluded character must be
-renamed. A registration that could not be read at all is reported as
-`indeterminate` and the run proceeds, so an unreachable Docker daemon cannot
-pass for evidence of a misconfiguration. The CFC policy snapshot carries that
-reading as `cfc.invocationContextTransportReadiness` — `registered`,
-`unregistered`, `unsafe-runtime-arguments`, `indeterminate`, or `unverified`
-before any enforcing invocation has probed.
+The sandbox's CFC transport is the driver's own. Where a CFC policy is
+configured, it hands `runsc` the invocation context and takes the result back on
+descriptors it opens for each call, from files private to that call under the
+run's scratch directory; with no policy it hands over no context and takes back
+no result. The context carries audit and provenance context plus optional
+trusted `cfcInputLabels` for supported startup inputs (`command`, `argv`,
+`args`, `env`, `cwd`, and `stdin`). `stdin` labels are modeled as labels on the
+stdin source and taint only after the sandbox reads or maps fd 0, not as
+automatic startup task taint. The CFC policy snapshot records the transport as
+`fd` and its readiness as `intrinsic`: there is no registration to read and no
+directory that could go unread. See [Sandbox runtimes](#sandbox-runtimes).
 
 When a trusted prompt-slot binding is present, `cf-harness` also records which
 model-authored invocation inputs the bound prompt shaped — shell commands,
@@ -3749,15 +4133,6 @@ does not store raw stdout/stderr bytes, but its labels and observation refs can
 still disclose which confidential sources influenced model-visible context.
 Handle it under the same access and retention boundary as transcripts, tool
 outputs, run state, and CFC policy traces.
-
-On Docker Desktop for macOS, use the host path for `cf-harness` and the
-`/host_mnt/...` projection for Docker's runtime args. The gVisor
-`docker-desktop-cfc-setup` helper defaults to:
-
-```bash
-export CF_HARNESS_RUNSC_CFC_RESULT_DIR="$HOME/.local/share/runsc-cfc/cfc-results"
-export CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR="$HOME/.local/share/runsc-cfc/cfc-invocations"
-```
 
 ## Related Docs
 

@@ -22,12 +22,38 @@ a record: archive it to `docs/history/plans/` following the procedure in
 - [Unify Weaver Ask and CF harness](weaver-ask-console.md) sequences typed
   callbacks, a cohesive handles module, one session UI for both command aliases,
   and hands-on demo validation across labs, Weaver, and Loom.
+- [The served vote's remaining cost: the main thread's fan-out](served-vote-fan-out.md)
+  carries the served-vote investigation on from where its records leave it:
+  the memory server's per-session walk and encode on the main thread, the
+  four measurements that decide which change to make, the recipes for taking
+  them, and how the overlapped commit is validated.
+- [The serving loop off the request thread](serving-loop-worker.md) moves the
+  server-execution host into a Web Worker of the toolshed process: the worker
+  reads the store on its own SQLite connections, sends wave commits and
+  everything else it needs from the memory server over a `MessagePort`, and
+  the request thread stops waiting behind waves.
 - [Memory router security requirements](memory-router-security-requirements.md)
   defines the authentication, authorization, isolation, and public-ingress
   gates for multiplexed Memory WebSockets routed to toolsheds.
-- [Compact CFC label maps](compact-cfc-label-maps.md) proposes shared label
-  subtrees, graph-aware policy queries, and a reader-first stored-format migration
-  to bound the cost of staged reference diamonds.
+- [Independent reference labels](cfc-independent-reference-labels.md) moves a
+  link write to the specified contract (§8.2, §8.12.8): the slot persists the
+  creating attempt's own label and nothing copied from the target, a label
+  envelope beside a mergeable append describes the committed list, and a
+  specs ruling retires the `LinkReference` atom, after which the runtime
+  stopped minting and reading it. Legacy entries stay as conservative
+  restrictions; no migration runs.
+- [Release gates without an integrity union](cfc-release-gate-integrity.md)
+  keeps one consumed value's evidence from releasing another value's clause:
+  the write, sink and display gates run value-intrinsic rules at each location
+  an access consumed and the other rules over the join (§5.3, §4.6.3). What
+  remains is a specs ruling on the join within one location and the display's
+  fit of a cell's stored label.
+- [Input requirements on an endorsed computation's arguments](cfc-argument-input-requirements.md)
+  refuses a stand-in fed to code a rule endorses, by checking the integrity
+  each argument declares against the reads made through it. The declaration is
+  taken from the code's own module, not the graph's data, so a rule that guards
+  on the identity rests on it. It needs a narrow specs ruling first, and it
+  parks a per-item threshold drawn from a policy key.
 
 - [Shuffled test order: what is left to build](test-order-shuffle.md) carries
   the piece the shuffle does not yet have: a shuffle inside this repository's
@@ -117,38 +143,39 @@ a record: archive it to `docs/history/plans/` following the procedure in
   [`../features/vouched-ingest-channel-mint.md`](../features/vouched-ingest-channel-mint.md).
 - [Integration-test video demos](integration-test-video-demos.md) tracks
   optional CI adoption and further fixture hardening.
-- [Lazy cell materialization](lazy-cell-materialization.md) sequences a
-  schema-observing lazy view over a cell, a transaction mode that hands one back
-  from every read, and the runner disposition for a reader that touches data the
-  schema no longer describes.
 - [Stream markers out of stored data](stream-markers-out-of-stored-data.md)
   moves stream-ness out of the stored `{ "$stream": true }` value and into the
   link schema and the module wrapper, and triggers the cold-start repairs on a
   structural mismatch instead of the missing marker. It names putting the
   owner into a stream's address as the follow-up it is written toward.
+- [Cutting the resume pre-sync's cost](resume-presync-cost.md) removes what
+  the pre-sync repeats or does not need: a child start re-planning the
+  subtree its parent named, every plan's inputs cell re-inlining its
+  schemas, a cross-space pass that materializes every plan to find a link,
+  a planning loop that never yields to read the answers it asked for, and a
+  node bound once for the pre-sync and again for its instantiation.
 - [Pre-syncing from node plans](presync-from-node-plans.md) makes one
   derivation per pattern node serve both instantiation and the pre-sync, so a
   resume and a fresh start name exactly what each lift, handler, builtin, and
   nested pattern reads under their declared read schemas, then holds each
   node's first run on the loads it named instead of on a space-wide timer.
-- [Making pattern computation cost declarable and visible](pattern-computation-cost.md)
-  pairs two repairs to the same gap: the collection algebra has incremental
-  `map`, `filter`, and `flatMap` but no `groupBy`, keyed lookup, join, or
-  incremental `reduce`, so a group-by is written as nested scans over a
-  reactive array; and a scheduler node records how often an action ran but not
-  how much it read, so the cost is invisible until somebody profiles. Carries
-  the access counter, the missing operators, the replication failures that
-  currently push authors off the incremental path, and the authoring guidance
-  that steers them into the expensive construct.
-- [Choosing which tests a pull request runs](pull-request-test-selection.md)
-  replaces the sixty-seven pull-request jobs with five, each running a subset
-  chosen from what the record store knows about which tests have caught real
-  regressions, and packed to finish inside five minutes. It carries the
-  repository-side topology that lets a new test surface be registered once
-  and picked up by both the full run and the selection, the scoring, flake
-  and packing rules, and the two things a subset breaks and this replaces:
-  coverage becomes a trend rather than a gate, and a regression that only
-  `main` catches is reported back to the change that introduced it.
+- [A scheduler breaker for remote-echo write loops](scheduler-remote-echo-breaker.md)
+  bounds the loop in which a derivation writes a document, a remote change to
+  that same document re-triggers it, and it writes again without end because
+  another session is doing the same from the other side. Detection keyed per
+  `(action, document)` on the self-referential, foreign-triggered, value-changing
+  write; capped exponential backoff on the re-run; a counted loud line, a
+  scheduler stat, and trips and clears reported over the memory session to the
+  health route beside the commit rates; and a two-session harness that trips
+  the loop on purpose. The
+  backoff Topic 911 waits for, and the first of Topic 913's three guardrails.
+  Always on, in every runtime.
+- [Durable history of new real test failures and a bounded
+  aggregate](durable-new-real-test-failure-history.md) keeps every new real
+  test failure the test-selection publisher has credited a test with through
+  a bootstrap, a rename, and an outage, and stops the publisher's aggregate
+  growing with the age of the store. It is built, and waits for the checks
+  its first run after landing answers.
 - [Memory `apply-op`](memory-apply-op.md) sequences the editor-neutral
   collaborative-field substrate, the first CodeMirror codec and editor
   integration, and the checkpoints and review gates required before a future
@@ -211,6 +238,17 @@ a record: archive it to `docs/history/plans/` following the procedure in
   board and topic grow their verbs without breaking the pieces already holding
   data: the shape the board demands of a stored topic, the one rehearsed break
   that narrowing it needs, and the items waiting on platform work.
+- [`compact-space`](compact-space.md) designs the operator tool that shrinks
+  one space's revision history after a write storm: materialize a `set` at
+  every selected head under one `system` compaction commit, keep every head's
+  address but the ACL document's, which records the compaction, drop the
+  rows behind it, hollow every commit payload outside a retained window
+  except the genesis receipt's and those an `op_*` row references, while
+  keeping every commit's identity,
+  and write the result out with `VACUUM INTO`. Options for what compaction
+  means and what each breaks, the flags, the safety and rollback recipe for
+  Estuary, and the server change that goes first because it keeps a future
+  storm from degrading the space it hits.
 - [`cf space clone` rehearsal](space-clone-rehearsal.md) records the design for
   rehearsal-grade copies of populated spaces. The tooling has shipped (`cf
   space`, `cf inspect churn`); the operating procedure lives in
@@ -224,8 +262,8 @@ a record: archive it to `docs/history/plans/` following the procedure in
   [shaped reads and verb results](shaped-reads-and-verb-results.md) — the shared
   read layer, how a shape says "an address here, a value there", and what
   calling a verb adds — and at
-  [CLI surface shape](cli-surface-shape.md) for the command surface and an
-  additive path to it. Start here rather than at either part.
+  [CLI surface shape](../history/plans/cli-surface-shape.md) for the command surface, an executed
+  plan now archived. Start here rather than at either part.
 - [References as arguments](references-as-arguments.md) proposes lifting
   address resolution out of the LLM dialog builtin, which already does it, and
   into the boundary every external caller crosses. An LLM and the CLI can

@@ -1,17 +1,29 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
+import { CFC_CONCEPT_KIND, type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
+import type { IFCLabel } from "@commonfabric/runner/cfc";
+import type { FabricValue } from "@commonfabric/data-model";
 import { consoleRunLens, summarizeConsoleRun } from "../../console/runs.ts";
+import { ownerConsoleDisplay } from "../../console/display-ceiling.ts";
 import {
+  type ConsoleRunRoots,
+  findConsoleRunRoot,
+  listAllConsoleRuns,
   listConsoleRuns,
   readConsoleRun,
   readConsoleRunArtifact,
+  readConsoleRunFamilyGraph,
   readConsoleRunFlow,
   readConsoleToolOutput,
 } from "../../console/run-store.ts";
+import { writeRunRootFixture } from "./run-root-fixture.ts";
 import { createHarnessRunState } from "../../src/run-state.ts";
+import {
+  createHarnessHandleTable,
+  mintReferentHandle,
+} from "../../src/handle-table.ts";
 import type { HarnessTranscriptMessage } from "../../src/contracts/transcript.ts";
-import { createToolOutputId } from "../../src/contracts/tool-result.ts";
 import {
   HARNESS_CELL_LABELS_TYPE,
   type HarnessCellLabels,
@@ -20,6 +32,10 @@ import {
   HARNESS_HANDLE_TABLE_TYPE,
   type HarnessHandleTable,
 } from "../../src/contracts/handle-table.ts";
+import {
+  createToolOutputId,
+  createToolResultRef,
+} from "../../src/contracts/tool-result.ts";
 
 const runState = (runId: string, updatedAt: string) => ({
   ...createHarnessRunState({
@@ -116,6 +132,17 @@ const unreadSnapshot = (): HarnessCellLabels => ({
   cells: [],
 });
 
+/** The output the run's `assign_slug` call persisted, URL included. */
+const ASSIGN_SLUG_OUTPUT = {
+  artifactPath: "/runs/r1/tool-outputs/r1_assign_slug_4-assign_slug.json",
+  value: {
+    status: "ok",
+    slug: "books",
+    space: "did:key:z6MkBooks",
+    url: "http://localhost:8000/did:key:z6MkBooks/books",
+  },
+};
+
 /** A run that searched, failed to compile, fixed, and named the piece. */
 const buildTranscript = (): HarnessTranscriptMessage[] => [
   { role: "user", content: "track the books I am reading" },
@@ -144,10 +171,18 @@ const buildTranscript = (): HarnessTranscriptMessage[] => [
   }),
   result("c3", "run_pattern", { status: "ok", pieceId: "piece-9" }),
   call("c4", "assign_slug", { slug: "books" }),
-  result("c4", "assign_slug", {
-    slug: "books",
-    url: "http://localhost:8000/my-space/books",
-  }),
+  {
+    role: "tool",
+    toolCallId: "c4",
+    toolName: "assign_slug",
+    content: JSON.stringify({ status: "ok", slug: "books" }),
+    resultRef: createToolResultRef(
+      createToolOutputId("r1", "assign_slug", 4),
+      "assign_slug",
+      "r1",
+      ASSIGN_SLUG_OUTPUT.artifactPath,
+    ),
+  },
   call("c5", "record_feedback", { patternId: "p-books", verdict: "up" }),
   result("c5", "record_feedback", { status: "ok" }),
 ];
@@ -155,7 +190,7 @@ const buildTranscript = (): HarnessTranscriptMessage[] => [
 describe("console/runs", () => {
   describe("consoleRunLens()", () => {
     it("keeps every run_pattern attempt, so the fix rounds stay visible", () => {
-      const lens = consoleRunLens(buildTranscript());
+      const lens = consoleRunLens(buildTranscript(), []);
       expect(lens.patternAttempts.map((attempt) => attempt.status)).toEqual([
         "compile-error",
         "ok",
@@ -169,7 +204,7 @@ describe("console/runs", () => {
     });
 
     it("reads the index calls and the address a person can open", () => {
-      const lens = consoleRunLens(buildTranscript());
+      const lens = consoleRunLens(buildTranscript(), [ASSIGN_SLUG_OUTPUT]);
       expect(lens.searches[0].query).toBe("reading list #books");
       expect(lens.searches[0].hits[0]).toEqual({
         patternId: "p-books",
@@ -177,14 +212,22 @@ describe("console/runs", () => {
         score: 0.82,
       });
       expect(lens.feedback[0].verdict).toBe("up");
-      expect(lens.pieces[0].url).toBe("http://localhost:8000/my-space/books");
+      expect(lens.pieces[0].url).toBe(
+        "http://localhost:8000/did:key:z6MkBooks/books",
+      );
+    });
+
+    it("returns no address for a piece whose persisted output it was not given", () => {
+      const lens = consoleRunLens(buildTranscript(), []);
+      expect(lens.pieces[0].slug).toBe("books");
+      expect(lens.pieces[0].url).toBeUndefined();
     });
 
     it("names a search made on tags alone by its tags", () => {
       const lens = consoleRunLens([
         call("c1", "search_patterns", { tags: ["#books", "#reading"] }),
         result("c1", "search_patterns", { status: "ok", results: [] }),
-      ]);
+      ], []);
       expect(lens.searches[0].query).toBe("#books #reading");
     });
 
@@ -195,7 +238,7 @@ describe("console/runs", () => {
           status: "ok",
           results: [{ patternId: "p-books", description: "Reading list" }],
         }),
-      ]);
+      ], []);
       expect(lens.searches[0].hits[0]).toEqual({
         patternId: "p-books",
         description: "Reading list",
@@ -206,7 +249,7 @@ describe("console/runs", () => {
       const lens = consoleRunLens([
         call("c1", "run_pattern", { sourceText: "x" }),
         result("c1", "run_pattern", "the sandbox died mid-write"),
-      ]);
+      ], []);
       expect(lens.patternAttempts).toHaveLength(1);
       expect(lens.patternAttempts[0].status).toBe("unknown");
     });
@@ -230,9 +273,7 @@ describe("console/runs", () => {
         runState("r1", "2026-01-01T00:00:01.000Z"),
         buildTranscript(),
       );
-      expect(summary.pieceUrls).toEqual([
-        "http://localhost:8000/my-space/books",
-      ]);
+      expect(summary.pieceSlugs).toEqual(["books"]);
     });
   });
 
@@ -309,6 +350,458 @@ describe("console/runs", () => {
     it("is empty rather than failing when no run has been made", async () => {
       await withArtifactRoot(async (root) => {
         expect(await listConsoleRuns(join(root, "absent"))).toEqual([]);
+      });
+    });
+
+    describe("across the agent runner's work root", () => {
+      /**
+       * A console root and a runner work root laid out as the runner lays one
+       * out: an `/ask` job under `local/<job-id>/artifacts/`, an `agent()` run
+       * under `<run-key>/artifacts/`.
+       */
+      const withRoots = (
+        body: (
+          roots: Required<ConsoleRunRoots>,
+          base: string,
+        ) => Promise<void>,
+      ) =>
+        withArtifactRoot(async (base) => {
+          const roots = {
+            console: join(base, "console", "runs"),
+            agentRuns: join(base, "agent-runs"),
+          };
+          const askRoot = join(roots.agentRuns, "local", "job-1", "artifacts");
+          await writeRun(roots.console, "mine", "2026-01-01T00:00:01.000Z");
+          await writeRun(askRoot, "asked", "2026-01-01T00:00:03.000Z");
+          await writeRun(
+            askRoot,
+            "asked.subagent.1",
+            "2026-01-01T00:00:04.000Z",
+          );
+          await writeRun(
+            join(roots.agentRuns, "Key_abc-1", "artifacts"),
+            "built-in",
+            "2026-01-01T00:00:02.000Z",
+          );
+          await body(roots, base);
+        });
+
+      it("lists every root's runs together, each tagged with who made it", async () => {
+        await withRoots(async (roots) => {
+          const runs = await listAllConsoleRuns(roots);
+          expect(runs.map(({ runId, source }) => ({ runId, source })))
+            .toEqual([
+              { runId: "asked.subagent.1", source: "ask" },
+              { runId: "asked", source: "ask" },
+              { runId: "built-in", source: "agent" },
+              { runId: "mine", source: "console" },
+            ]);
+        });
+      });
+
+      it("lists only the console's own runs where there is no work root to read", async () => {
+        await withRoots(async (roots, base) => {
+          const alone = await listAllConsoleRuns({ console: roots.console });
+          expect(alone.map((run) => run.runId)).toEqual(["mine"]);
+          const absent = await listAllConsoleRuns({
+            console: roots.console,
+            agentRuns: join(base, "absent"),
+          });
+          expect(absent.map((run) => run.runId)).toEqual(["mine"]);
+        });
+      });
+
+      it("reads each run, its family and its files from the root that holds it", async () => {
+        await withRoots(async (roots) => {
+          const askRoot = join(roots.agentRuns, "local", "job-1", "artifacts");
+          expect(await findConsoleRunRoot(roots, "asked")).toEqual({
+            source: "ask",
+            artifactRoot: askRoot,
+          });
+          expect((await readConsoleRun(askRoot, "asked"))?.summary.runId)
+            .toBe("asked");
+          expect(await readConsoleRunFlow(askRoot, "asked")).toBeDefined();
+          expect(
+            await readConsoleRunArtifact(askRoot, "asked", "run-state.json"),
+          ).toBeDefined();
+
+          const builtIn = await findConsoleRunRoot(roots, "built-in");
+          expect(builtIn?.source).toBe("agent");
+          expect(
+            (await readConsoleRun(builtIn!.artifactRoot, "built-in"))?.summary
+              .runId,
+          ).toBe("built-in");
+
+          expect((await findConsoleRunRoot(roots, "mine"))?.source)
+            .toBe("console");
+          expect(await findConsoleRunRoot(roots, "nowhere")).toBeUndefined();
+        });
+      });
+
+      it("reads a run id two roots hold from the console's own root, and lists it once", async () => {
+        await withRoots(async (roots) => {
+          await writeRun(
+            join(roots.agentRuns, "local", "job-2", "artifacts"),
+            "mine",
+            "2026-01-01T00:00:09.000Z",
+          );
+          expect((await findConsoleRunRoot(roots, "mine"))?.source)
+            .toBe("console");
+          const listed = (await listAllConsoleRuns(roots)).filter((run) =>
+            run.runId === "mine"
+          );
+          expect(listed.map((run) => run.source)).toEqual(["console"]);
+        });
+      });
+
+      for (
+        const level of [
+          "lane",
+          "local-lane",
+          "job",
+          "ask-artifacts",
+          "agent-artifacts",
+          "run",
+        ] as const
+      ) {
+        it(`rejects a symlinked ${level} descendant for listing and resolution`, async () => {
+          await withRoots(async (roots, base) => {
+            const outside = join(base, "outside");
+            let target: string;
+            let link: string;
+            if (level === "local-lane") {
+              await Deno.remove(join(roots.agentRuns, "local"), {
+                recursive: true,
+              });
+              target = join(outside, "local");
+              link = join(roots.agentRuns, "local");
+              await writeRun(
+                join(target, "job", "artifacts"),
+                "escaped",
+                "2026-01-01T00:00:05.000Z",
+              );
+            } else if (level === "lane") {
+              target = join(outside, "lane");
+              link = join(roots.agentRuns, "outside-lane");
+              await writeRun(
+                join(target, "artifacts"),
+                "escaped",
+                "2026-01-01T00:00:05.000Z",
+              );
+            } else if (level === "job") {
+              target = join(outside, "job");
+              link = join(roots.agentRuns, "local", "outside-job");
+              await writeRun(
+                join(target, "artifacts"),
+                "escaped",
+                "2026-01-01T00:00:05.000Z",
+              );
+            } else if (level === "run") {
+              await writeRun(outside, "escaped", "2026-01-01T00:00:05.000Z");
+              target = join(outside, "escaped");
+              link = join(roots.console, "escaped");
+            } else {
+              target = join(outside, "artifacts");
+              link = level === "ask-artifacts"
+                ? join(roots.agentRuns, "local", "outside-job", "artifacts")
+                : join(roots.agentRuns, "outside-lane", "artifacts");
+              await writeRun(target, "escaped", "2026-01-01T00:00:05.000Z");
+            }
+            await Deno.mkdir(join(link, ".."), { recursive: true });
+            await Deno.symlink(target, link);
+            expect((await listAllConsoleRuns(roots)).map((run) => run.runId))
+              .not.toContain("escaped");
+            expect(await findConsoleRunRoot(roots, "escaped")).toBeUndefined();
+          });
+        });
+      }
+
+      it("opens the listed ask duplicate when the console run is a symlink", async () => {
+        await withRoots(async (roots, base) => {
+          const outside = join(base, "outside");
+          await writeRun(outside, "asked", "2026-01-01T00:00:05.000Z");
+          await Deno.writeTextFile(
+            join(outside, "asked", "transcript.json"),
+            JSON.stringify([{ role: "user", content: "outside" }]),
+          );
+          await Deno.symlink(
+            join(outside, "asked"),
+            join(roots.console, "asked"),
+          );
+          const row = (await listAllConsoleRuns(roots)).find((run) =>
+            run.runId === "asked"
+          )!;
+          const found = (await findConsoleRunRoot(roots, "asked"))!;
+          expect(found.source).toBe(row.source);
+          expect(
+            (await readConsoleRun(found.artifactRoot, "asked"))?.summary.title,
+          ).toBe(row.title);
+        });
+      });
+
+      for (
+        const [kind, state] of [
+          ["malformed", "{"],
+          ["null", "null"],
+          ["incomplete", '{"runId":"asked"}'],
+          [
+            "wrong-identity",
+            JSON.stringify(runState("another-id", "2026-01-01T00:00:01.000Z")),
+          ],
+        ]
+      ) {
+        it(`skips a ${kind} state per run and resolves the valid lower-priority duplicate`, async () => {
+          await withRoots(async (roots) => {
+            await Deno.mkdir(join(roots.console, "asked"));
+            await Deno.writeTextFile(
+              join(roots.console, "asked", "run-state.json"),
+              state,
+            );
+            const rows = await listAllConsoleRuns(roots);
+            expect(
+              rows.filter((run) => run.source === "console").map((run) =>
+                run.runId
+              ),
+            ).toEqual(["mine"]);
+            expect(
+              rows.filter((run) => run.runId === "asked").map((run) =>
+                run.source
+              ),
+            ).toEqual(["ask"]);
+            expect((await findConsoleRunRoot(roots, "asked"))?.source).toBe(
+              "ask",
+            );
+            expect(await readConsoleRun(roots.console, "asked"))
+              .toBeUndefined();
+          });
+        });
+      }
+
+      it("prefers an ask job over an agent lane for the same run id", async () => {
+        await withRoots(async (roots) => {
+          await writeRun(
+            join(roots.agentRuns, "Key_abc-1", "artifacts"),
+            "asked",
+            "2026-01-01T00:00:09.000Z",
+          );
+          expect(
+            (await listAllConsoleRuns(roots)).filter((run) =>
+              run.runId === "asked"
+            ).map((run) => run.source),
+          ).toEqual(["ask"]);
+          expect((await findConsoleRunRoot(roots, "asked"))?.source).toBe(
+            "ask",
+          );
+        });
+      });
+
+      it("finds a run directory that has no state yet, for its files", async () => {
+        await withRoots(async (roots) => {
+          const askRoot = join(roots.agentRuns, "local", "job-1", "artifacts");
+          await Deno.mkdir(join(askRoot, "stateless", "tool-outputs"), {
+            recursive: true,
+          });
+          expect((await findConsoleRunRoot(roots, "stateless"))?.artifactRoot)
+            .toBe(askRoot);
+        });
+      });
+
+      it("refuses a run id that escapes the run tree, and reads no directory whose name is unsafe", async () => {
+        await withRoots(async (roots) => {
+          for (const runId of ["..", ".", "a/b", "../local", ""]) {
+            expect(await findConsoleRunRoot(roots, runId)).toBeUndefined();
+          }
+          await writeRun(
+            join(roots.agentRuns, "local", "job 3", "artifacts"),
+            "spaced",
+            "2026-01-01T00:00:05.000Z",
+          );
+          await writeRun(
+            join(roots.agentRuns, "key~", "artifacts"),
+            "tilde",
+            "2026-01-01T00:00:05.000Z",
+          );
+          const ids = (await listAllConsoleRuns(roots)).map((run) => run.runId);
+          expect(ids).not.toContain("spaced");
+          expect(ids).not.toContain("tilde");
+          expect(await findConsoleRunRoot(roots, "spaced")).toBeUndefined();
+          expect(await findConsoleRunRoot(roots, "tilde")).toBeUndefined();
+        });
+      });
+    });
+
+    it("reads the selected job's family, neighbor handles and parent and child payloads", async () => {
+      await withArtifactRoot(async (base) => {
+        const fixture = await writeRunRootFixture(base);
+        const found = (await findConsoleRunRoot(fixture.roots, "asked"))!;
+        expect(found.artifactRoot).toBe(fixture.ask);
+        const detail = (await readConsoleRun(found.artifactRoot, "asked"))!;
+        expect(detail.summary.title).toBe("selected parent");
+        expect(
+          detail.handles.find((handle) => handle.token === fixture.token)?.ref,
+        ).toBe("/of:fid1:selected");
+        const flow = (await readConsoleRunFlow(found.artifactRoot, "asked"))!;
+        expect(
+          flow.turns[0].nodes.flatMap((node) => node.children).map((node) =>
+            node.runId
+          ),
+        ).toEqual([fixture.child]);
+        const graph =
+          (await readConsoleRunFamilyGraph(found.artifactRoot, "asked"))!;
+        expect(
+          graph.nodes.filter((node) => node.kind === "pattern").map((node) =>
+            node.patternId
+          ),
+        ).toEqual(["selected-parent", "selected-child"]);
+        expect(
+          graph.nodes.filter((node) => node.kind === "cell").map((node) =>
+            node.address
+          ),
+        ).toEqual(["/of:fid1:selected"]);
+        for (const runId of ["asked", fixture.child]) {
+          const root = (await findConsoleRunRoot(fixture.roots, runId))!;
+          expect(
+            JSON.parse(
+              (await readConsoleToolOutput(
+                root.artifactRoot,
+                runId,
+                fixture.outputName,
+              ))!,
+            ),
+          ).toEqual({ marker: "selected", runId });
+        }
+      });
+    });
+
+    it("reads the strings the run's return referents stand for when they fit the owner's display, and the tokens of the rest", async () => {
+      await withArtifactRoot(async (root) => {
+        const owner = "did:key:z6Mkowner";
+        const referent = (value: FabricValue, label: IFCLabel) => ({
+          kind: "return" as const,
+          source: "delegate_task:child",
+          value,
+          label,
+          labelSource: "child" as const,
+        });
+        const page = await mintReferentHandle(
+          createHarnessHandleTable("r1"),
+          referent("12 Main St", {
+            confidentiality: [
+              cfcAtom.caveat(
+                CFC_CONCEPT_KIND.PromptInjectionRiskUnscreened,
+                cfcAtom.resource("WebPage", "https://shop.test"),
+              ),
+            ],
+          }),
+        );
+        const mine = await mintReferentHandle(
+          page.table,
+          referent("my note", { confidentiality: [cfcAtom.user(owner)] }),
+        );
+        const theirs = await mintReferentHandle(
+          mine.table,
+          referent("their note", {
+            confidentiality: [cfcAtom.user("did:key:z6Mkothers")],
+          }),
+        );
+        const structured = await mintReferentHandle(
+          theirs.table,
+          referent({ street: "12 Main St" }, {}),
+        );
+        const caveat = (source: CfcAtom) => ({
+          confidentiality: [
+            cfcAtom.caveat(
+              CFC_CONCEPT_KIND.PromptInjectionRiskUnscreened,
+              source,
+            ),
+          ],
+        });
+        const sourcedElsewhere = await mintReferentHandle(
+          structured.table,
+          referent("from a person", caveat(cfcAtom.user(owner))),
+        );
+        const opaquePage = await mintReferentHandle(
+          sourcedElsewhere.table,
+          referent(
+            "from an opaque page",
+            caveat(cfcAtom.resource("WebPage", "opaque origin")),
+          ),
+        );
+        const document = await mintReferentHandle(opaquePage.table, {
+          kind: "document",
+          source: "loom_search",
+          value: "a row",
+          label: {},
+          labelSource: "row",
+        });
+        const runRoot = join(root, "r1");
+        await Deno.mkdir(runRoot, { recursive: true });
+        await Deno.writeTextFile(
+          join(runRoot, "run-state.json"),
+          JSON.stringify({
+            ...runState("r1", "2026-01-01T00:00:01.000Z"),
+            handleTable: document.table,
+          }),
+        );
+        await Deno.writeTextFile(join(runRoot, "transcript.json"), "[]");
+
+        const shown = await readConsoleRun(
+          root,
+          "r1",
+          ownerConsoleDisplay(owner),
+        );
+        const unowned = await readConsoleRun(root, "r1");
+
+        expect(shown?.revealed).toEqual({
+          [page.token]: "12 Main St",
+          [mine.token]: "my note",
+          [sourcedElsewhere.token]: "from a person",
+          [opaquePage.token]: "from an opaque page",
+        });
+        expect(shown?.sites).toEqual({
+          [page.token]: ["shop.test"],
+          [mine.token]: [],
+          [sourcedElsewhere.token]: [],
+          [opaquePage.token]: [],
+        });
+        expect(shown?.hidden).toEqual([theirs.token, structured.token]);
+        expect(unowned?.revealed).toEqual({});
+        expect(unowned?.hidden).toEqual([
+          page.token,
+          mine.token,
+          theirs.token,
+          structured.token,
+          sourcedElsewhere.token,
+          opaquePage.token,
+        ]);
+        expect(
+          shown?.runState.handleTable?.referents?.map(({ token }) => token),
+        )
+          .toEqual([document.token]);
+      });
+    });
+
+    it("reads the address of a piece the run named from the output the naming call persisted", async () => {
+      await withArtifactRoot(async (root) => {
+        await writeRun(root, "r1", "2026-01-01T00:00:01.000Z");
+        expect((await readConsoleRun(root, "r1"))?.lens.pieces).toEqual([{
+          toolCallId: "c4",
+          slug: "books",
+        }]);
+        await Deno.writeTextFile(
+          join(
+            root,
+            "r1",
+            "tool-outputs",
+            toolOutputName("r1", "assign_slug", 4),
+          ),
+          JSON.stringify(ASSIGN_SLUG_OUTPUT.value),
+        );
+        expect((await readConsoleRun(root, "r1"))?.lens.pieces).toEqual([{
+          toolCallId: "c4",
+          slug: "books",
+          url: ASSIGN_SLUG_OUTPUT.value.url,
+        }]);
       });
     });
 
