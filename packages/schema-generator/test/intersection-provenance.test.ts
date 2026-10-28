@@ -584,6 +584,14 @@ describe("SchemaGenerator", () => {
         { ...UNSUPPORTED_NON_OBJECT as object, ifc: labelS },
       ],
       [
+        "keeps the labels of a primitive constituent a literal beside it narrows on the fallback",
+        `
+          type M1 = Confidential<string, readonly ["s"]> & "x";
+          type M2 = { y: string };
+        `,
+        { ...UNSUPPORTED_NON_OBJECT as object, ifc: labelS },
+      ],
+      [
         "keeps a nested member's labels on the fallback beside an array",
         `
           type M1 = { a: { x: Confidential<string, readonly ["s"]> } };
