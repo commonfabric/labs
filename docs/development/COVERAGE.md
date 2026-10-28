@@ -862,7 +862,11 @@ reports' zero-hit lines across the files the branch changed. Point `DENO_DIR` at
 a new empty directory for each run, since each lane starts without V8's code
 cache. With your usual Deno cache directory, a module that a test runs in a
 subprocess reports its top-level lines as covered or not depending on whether
-something had run it before.
+something had run it before. A new directory also lacks the native libraries
+that FFI packages such as `@db/sqlite` fetch on first use, and a test that
+allows network access only to `127.0.0.1` cannot fetch them, so copy the
+`plug` directory from your usual Deno cache (the location `deno info` names)
+into each new one.
 
 Take both measurements from the same base. Rebasing between them straddles two
 trees and the delta stops meaning anything, so rebase first and measure after.
