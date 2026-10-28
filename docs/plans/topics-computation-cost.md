@@ -174,7 +174,7 @@ implementation and prototypes can begin earlier.
       would have measured one are gone from the headless tier. The stored
       values are reliable once every writer runs the current topic module and
       legacy writers are retired
-      ([rollout](../../packages/patterns/topics/state-upgrades.md#rollout-and-rollback)).
+      ([rollout](../../patterns/apps/topics/state-upgrades.md#rollout-and-rollback)).
 - [ ] **T5 — Harden accepted changes and prepare release artifacts.** Add
       regression read budgets, run all relevant authored/package/integration
       tests, preserve compatibility baselines, pass the
