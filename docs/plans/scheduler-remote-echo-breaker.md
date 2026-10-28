@@ -96,6 +96,9 @@ operations on this document, proves no such agreement. Missing elision metadata
 leaves the staged classification in force; an empty revision list alone does
 not establish convergence.
 
+Sealed commits from the co-hosted executor report a sequence number without
+elision metadata, so their runs use the staged classification.
+
 Fresh input changes can arrive alongside an output change in the same run.
 They do not exempt a differing output from detection: concurrent input progress
 can coexist with a real disagreement. Server-confirmed identity writes provide
@@ -111,7 +114,7 @@ document.
 
 Which triggers the run changed is read at commit kickoff, while the
 transaction's write details are still staged. The steps are formed once the
-commit has succeeded, using the source transaction's per-space elision verdict
+commit has succeeded, using the source transaction's per-document elision verdict
 and the pairs the breaker holds then, since another run of the action may have
 opened one while this run committed. An action the
 breaker holds no pair of can only begin counting, which takes an echo step, so

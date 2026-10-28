@@ -3,6 +3,10 @@
  * post-commit observers can distinguish agreement from a durable overwrite.
  * Operation indexes refer to the commit sent over the wire, after local
  * session writes have been removed.
+ *
+ * Partial-elision handling is defensive for ordinary documents: their identity
+ * commits elide every operation. Individual elision is reserved for `cid:` sets
+ * identical to stored content (03-commit-model.md §3.6.1).
  */
 
 import {
