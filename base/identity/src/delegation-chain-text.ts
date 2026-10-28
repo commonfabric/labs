@@ -16,9 +16,6 @@ import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import { DelegationError } from "./delegation.ts";
 
-/** The unpadded base64url alphabet, and nothing else. */
-const BASE64URL = /^[A-Za-z0-9_-]*$/;
-
 /**
  * What a chain file names itself, in its `format` field. A name rather than
  * a version: a reader tolerates fields it does not know, and a change it
@@ -50,8 +47,11 @@ export function encodeDelegationChains(
  * first. Throws a `DelegationError` for text that is not what
  * {@link encodeDelegationChains} writes: anything but a JSON object naming
  * {@link DELEGATION_CHAIN_FORMAT} and listing non-empty lists of base64url
- * strings. Decodes none of the delegations; a holder decodes and verifies
- * them.
+ * strings. The contract is that a text written as the encoder writes it
+ * reads everywhere; a looser spelling, padded or with whitespace, reads
+ * where the runtime's decoder admits it and is refused where it does not,
+ * which is no loss, since nothing writes one. Decodes none of the
+ * delegations; a holder decodes and verifies them.
  */
 export function decodeDelegationChains(text: string): Uint8Array[][] {
   let parsed: unknown;
@@ -80,22 +80,11 @@ export function decodeDelegationChains(text: string): Uint8Array[][] {
       if (typeof link !== "string") {
         throw new DelegationError(`chain ${i} link ${j} is not a string`);
       }
-      // The one spelling of the bytes: the unpadded base64url alphabet,
-      // with every bit of the last character accounted for. A decoder
-      // that skips whitespace or ignores trailing bits would otherwise
-      // read a text another decoder refuses.
-      let bytes: Uint8Array;
       try {
-        bytes = fromBase64url(link);
+        return fromBase64url(link);
       } catch {
         throw new DelegationError(`chain ${i} link ${j} is not base64url`);
       }
-      if (!BASE64URL.test(link) || toUnpaddedBase64url(bytes) !== link) {
-        throw new DelegationError(
-          `chain ${i} link ${j} is not canonical unpadded base64url`,
-        );
-      }
-      return bytes;
     });
   });
 }
