@@ -173,7 +173,17 @@ interface AliasShape {
   readonly properties: ReadonlyMap<string, AliasBinding>;
 }
 
-type AliasBinding = SourceRef | AliasShape;
+/**
+ * A value that is one of several refs: `a ?? b`, or `c ? a : b`, where the
+ * operands it may take its value from resolve to refs that differ. What is
+ * done through the value is done through each of them.
+ */
+interface AliasAlternatives {
+  /** The refs the value may be. */
+  readonly alternatives: readonly SourceRef[];
+}
+
+type AliasBinding = SourceRef | AliasShape | AliasAlternatives;
 
 function materializeSourceRef(ref: SourceRef): SourceRef {
   if (!ref.arrayElement || ref.dynamic) {
@@ -201,6 +211,29 @@ function extendSourceRef(
     dynamic: base.dynamic,
     elementResult: base.elementResult && path.length === 0,
   };
+}
+
+/**
+ * Returns the ref for the member below `ref` that a key no static path names
+ * picks: a dynamic ref at the static prefix the key is read below.
+ */
+function dynamicRefBelow(ref: SourceRef): SourceRef {
+  const prefix = materializeSourceRef(ref);
+  return { root: prefix.root, path: prefix.path, dynamic: true };
+}
+
+/**
+ * Returns the binding for the member `key` of the value `binding` binds: the
+ * ref below its ref or below each of its alternatives, or its shape's
+ * property.
+ */
+function bindingMember(
+  binding: AliasBinding,
+  key: string,
+): AliasBinding | undefined {
+  return isAliasShape(binding)
+    ? binding.properties.get(key)
+    : mapBindingRefs(binding, (ref) => extendSourceRef(ref, [key]));
 }
 
 const PARAMETER_SUMMARY_PREFIX = "__param";
@@ -287,10 +320,38 @@ const FALLBACK_OPERATORS = new Set<ts.SyntaxKind>([
 ]);
 
 /**
- * The methods ref resolution steps through on a member spine: a cell's
- * `.get()`, `.key()` and `.elementById()`, and a local map's `.get()`.
+ * The cell methods whose result is a cell ref resolution can still name, by
+ * the ref each one's result addresses given the ref of the cell it is called
+ * on. `.key(...)` names a member below the receiver exactly as a property
+ * access does, and `.elementById(...)` an element no static path names.
+ * `.for(cause)` returns the receiver itself, its cause set, and
+ * `.resolveAsCell()` the cell the receiver's links lead to, which holds the
+ * receiver's own data.
  */
-const REF_RESOLVING_METHODS = new Set(["get", "key", "elementById"]);
+const CELL_REF_STEPS: ReadonlyMap<
+  string,
+  (
+    receiver: SourceRef,
+    args: readonly ts.Expression[],
+    checker: ts.TypeChecker | undefined,
+  ) => SourceRef
+> = new Map([
+  ["key", (receiver, args, checker) => {
+    const argPath = extractLiteralPathArguments(args, checker);
+    return argPath.dynamic
+      ? dynamicRefBelow(receiver)
+      : extendSourceRef(receiver, argPath.path);
+  }],
+  ["elementById", (receiver) => dynamicRefBelow(receiver)],
+  ["for", (receiver) => receiver],
+  ["resolveAsCell", (receiver) => receiver],
+]);
+
+/**
+ * The methods ref resolution steps through on a member spine: a cell's
+ * `.get()` and its {@link CELL_REF_STEPS}, and a local map's `.get()`.
+ */
+const REF_RESOLVING_METHODS = new Set(["get", ...CELL_REF_STEPS.keys()]);
 const PRECISE_CHAIN_METHODS = new Set([
   "map",
   "mapWithPattern",
@@ -965,6 +1026,20 @@ function isTopmostMemberNode(node: ts.Node): boolean {
 }
 
 /**
+ * True when a member of `expression`'s value is accessed where it stands, as
+ * `.set` is in `x.key("a").set(v)`: the access then says what is done with
+ * the value.
+ */
+function isChainedIntoMemberAccess(expression: ts.Expression): boolean {
+  const usage = outermostTransparentWrapper(expression);
+  const parent = usage.parent;
+  return !!parent &&
+    (ts.isPropertyAccessExpression(parent) ||
+      ts.isElementAccessExpression(parent)) &&
+    parent.expression === usage;
+}
+
+/**
  * True when the member/call spine `resolveSourceRef` walks to reach a root
  * passes through a call — `table.find(matches)?.mentionedBy`, say, but not
  * `table.rows.first`.
@@ -1399,8 +1474,8 @@ function forEachSourceRefLeaf(
   binding: AliasBinding,
   visit: (ref: SourceRef) => void,
 ): void {
-  if (isSourceRefBinding(binding)) {
-    visit(binding);
+  if (!isAliasShape(binding)) {
+    bindingRefs(binding).forEach(visit);
     return;
   }
   for (const child of binding.properties.values()) {
@@ -1793,6 +1868,63 @@ function isSourceRefBinding(binding: AliasBinding): binding is SourceRef {
   return "root" in binding;
 }
 
+function isAliasAlternatives(
+  binding: AliasBinding,
+): binding is AliasAlternatives {
+  return "alternatives" in binding;
+}
+
+/**
+ * Returns the refs a binding's value may be: its one ref, or each of its
+ * alternatives. A shape is no ref itself, whatever its properties are.
+ */
+function bindingRefs(
+  binding: AliasBinding | undefined,
+): readonly SourceRef[] {
+  if (!binding) return [];
+  if (isSourceRefBinding(binding)) return [binding];
+  if (isAliasAlternatives(binding)) return binding.alternatives;
+  return [];
+}
+
+/** Returns the binding for a value that is one of `refs`. */
+function refsBinding(refs: readonly SourceRef[]): AliasBinding | undefined {
+  if (refs.length === 0) return undefined;
+  return refs.length === 1 ? refs[0] : { alternatives: refs };
+}
+
+/**
+ * Returns the binding for a value got the same way from each ref `binding`'s
+ * value may be, `step` naming the ref it gets from one.
+ */
+function mapBindingRefs(
+  binding: AliasBinding,
+  step: (ref: SourceRef) => SourceRef,
+): AliasBinding | undefined {
+  return refsBinding(bindingRefs(binding).map(step));
+}
+
+/**
+ * Returns the binding for a value that is the value of one binding or the
+ * other: the one binding where both agree, and otherwise the alternatives
+ * their refs make up. A shape cannot be an alternative, so a value that may be
+ * one has no binding.
+ */
+function eitherBinding(
+  left: AliasBinding,
+  right: AliasBinding,
+): AliasBinding | undefined {
+  if (aliasBindingEquals(left, right)) return left;
+  if (isAliasShape(left) || isAliasShape(right)) return undefined;
+  const alternatives: SourceRef[] = [];
+  for (const ref of [...bindingRefs(left), ...bindingRefs(right)]) {
+    if (!alternatives.some((known) => aliasBindingEquals(known, ref))) {
+      alternatives.push(ref);
+    }
+  }
+  return refsBinding(alternatives);
+}
+
 function aliasBindingEquals(
   left: AliasBinding,
   right: AliasBinding,
@@ -1819,13 +1951,20 @@ function aliasBindingEquals(
     return true;
   }
 
+  if (isAliasAlternatives(left) && isAliasAlternatives(right)) {
+    return left.alternatives.length === right.alternatives.length &&
+      left.alternatives.every((ref) =>
+        right.alternatives.some((other) => aliasBindingEquals(ref, other))
+      );
+  }
+
   return false;
 }
 
 function clearBindingAliases(
   name: ts.BindingName,
   aliases: Map<string, SourceRef>,
-  aliasShapes: Map<string, AliasShape>,
+  aliasShapes: Map<string, AliasShape | AliasAlternatives>,
 ): void {
   if (ts.isIdentifier(name)) {
     aliases.delete(name.text);
@@ -1842,7 +1981,7 @@ function assignParameterBindingAlias(
   name: ts.BindingName,
   source: AliasBinding | undefined,
   aliases: Map<string, SourceRef>,
-  aliasShapes: Map<string, AliasShape>,
+  aliasShapes: Map<string, AliasShape | AliasAlternatives>,
   markWildcard: (name: string, path?: readonly string[]) => void,
   checker?: ts.TypeChecker,
 ): void {
@@ -1866,9 +2005,7 @@ function assignParameterBindingAlias(
   }
 
   if (ts.isArrayBindingPattern(name)) {
-    if (isSourceRefBinding(source)) {
-      markWildcard(source.root, source.path);
-    }
+    for (const ref of bindingRefs(source)) markWildcard(ref.root, ref.path);
     clearBindingAliases(name, aliases, aliasShapes);
     return;
   }
@@ -1877,9 +2014,7 @@ function assignParameterBindingAlias(
     if (ts.isOmittedExpression(element)) continue;
 
     if (element.dotDotDotToken || element.initializer) {
-      if (isSourceRefBinding(source)) {
-        markWildcard(source.root, source.path);
-      }
+      for (const ref of bindingRefs(source)) markWildcard(ref.root, ref.path);
       clearBindingAliases(element.name, aliases, aliasShapes);
       continue;
     }
@@ -1891,8 +2026,10 @@ function assignParameterBindingAlias(
       }
     } else {
       key = getStaticPropertyKeyText(element.propertyName, checker);
-      if (!key && isSourceRefBinding(source)) {
-        markWildcard(source.root, source.path);
+      if (!key) {
+        for (const ref of bindingRefs(source)) {
+          markWildcard(ref.root, ref.path);
+        }
       }
     }
 
@@ -1903,9 +2040,7 @@ function assignParameterBindingAlias(
 
     assignParameterBindingAlias(
       element.name,
-      isSourceRefBinding(source)
-        ? extendSourceRef(source, [key])
-        : source.properties.get(key),
+      bindingMember(source, key),
       aliases,
       aliasShapes,
       markWildcard,
@@ -2127,7 +2262,7 @@ export function analyzeFunctionCapabilities(
 
     const states = new Map<string, MutableCapabilityState>();
     const aliases = new Map<string, SourceRef>();
-    const aliasShapes = new Map<string, AliasShape>();
+    const aliasShapes = new Map<string, AliasShape | AliasAlternatives>();
     const optionalPresenceAliases = new Set<string>();
     // Truthiness tests whose read waits for the end of the walk, since only
     // then is it known whether another use already retains the value tested.
@@ -2589,8 +2724,7 @@ export function analyzeFunctionCapabilities(
       }
 
       const [head, ...tail] = path;
-      const child = binding.properties.get(head!);
-      return resolveShapePath(child, tail);
+      return resolveShapePath(bindingMember(binding, head!), tail);
     };
 
     const resolveBinding = (
@@ -2624,16 +2758,19 @@ export function analyzeFunctionCapabilities(
       expression: ts.Expression,
     ): AliasBinding | undefined => {
       const current = unwrapExpression(expression);
-      if (
-        ts.isBinaryExpression(current) &&
-        FALLBACK_OPERATORS.has(current.operatorToken.kind)
-      ) {
-        const left = resolveBinding(current.left);
-        const right = resolveBinding(current.right);
-        if (left && right) {
-          return aliasBindingEquals(left, right) ? left : undefined;
-        }
-        return left ?? right;
+      // A fallback's value is one operand's, and a conditional's one branch's.
+      // An operand that resolves to nothing tracked contributes no ref.
+      const operands = ts.isBinaryExpression(current) &&
+          FALLBACK_OPERATORS.has(current.operatorToken.kind)
+        ? [current.left, current.right]
+        : ts.isConditionalExpression(current)
+        ? [current.whenTrue, current.whenFalse]
+        : undefined;
+      if (operands) {
+        const [left, right] = operands.map((operand) =>
+          resolveBinding(operand)
+        );
+        return left && right ? eitherBinding(left, right) : left ?? right;
       }
 
       const info = extractAccessPath(current, checker);
@@ -2682,14 +2819,12 @@ export function analyzeFunctionCapabilities(
         // An element access by a key that can name any member resolves to
         // the static prefix it reads below.
         if (
-          innerBinding && key === undefined &&
-          isSourceRefBinding(innerBinding)
+          innerBinding && key === undefined && !isAliasShape(innerBinding)
         ) {
           if (ts.isCallExpression(receiver)) {
             pendingResolvedGetCalls?.push(receiver);
           }
-          const prefix = materializeSourceRef(innerBinding);
-          return { root: prefix.root, path: prefix.path, dynamic: true };
+          return mapBindingRefs(innerBinding, dynamicRefBelow);
         }
       }
 
@@ -2707,45 +2842,18 @@ export function analyzeFunctionCapabilities(
         }
 
         const receiverBinding = resolveBinding(current.expression.expression);
-        if (receiverBinding && isSourceRefBinding(receiverBinding)) {
-          if (methodName === "get" && current.arguments.length === 0) {
-            return receiverBinding;
-          }
-          // The cell `resolveAsCell()` hands back is the receiver's, followed
-          // to its target, so what is done through it is done to the
-          // receiver. The call itself is charged where it is visited.
-          if (
-            methodName === "resolveAsCell" && current.arguments.length === 0
-          ) {
-            return receiverBinding;
-          }
-          if (methodName === "key") {
-            const argPath = extractLiteralPathArguments(
-              current.arguments,
-              checker,
-            );
-            if (argPath.dynamic) {
-              return {
-                ...receiverBinding,
-                dynamic: true,
-              };
-            }
-            return {
-              root: receiverBinding.root,
-              path: [...receiverBinding.path, ...argPath.path],
-              dynamic: receiverBinding.dynamic,
-            };
-          }
-          // elementById addresses a separate, deterministically derived entity,
-          // not a static path into the array. Resolve it to a dynamic binding on
-          // the array root so reads and writes through it are attributed
-          // conservatively to the array the handler already touches.
-          if (methodName === "elementById") {
-            return {
-              ...receiverBinding,
-              dynamic: true,
-            };
-          }
+        if (
+          receiverBinding && !isAliasShape(receiverBinding) &&
+          methodName === "get" && current.arguments.length === 0
+        ) {
+          return receiverBinding;
+        }
+        const step = CELL_REF_STEPS.get(methodName);
+        if (step && receiverBinding) {
+          return mapBindingRefs(
+            receiverBinding,
+            (ref) => step(ref, current.arguments, checker),
+          );
         }
       }
 
@@ -2759,26 +2867,38 @@ export function analyzeFunctionCapabilities(
       return binding && isSourceRefBinding(binding) ? binding : undefined;
     };
 
-    const resolveConservativeCallReceiverRef = (
-      call: ts.CallExpression,
-    ): SourceRef | undefined => {
-      const target = unwrapExpression(call.expression);
+    // Every ref the value of `expression` may be, each `exact` when the value
+    // is that ref's own cell or value. A method call ref resolution does not
+    // step through computes its value from the refs of its receiver
+    // (`table.filter(f)` holds something derived from `table`), and those
+    // refs are not exact.
+    const resolveValueRefs = (
+      expression: ts.Expression,
+    ): readonly { ref: SourceRef; exact: boolean }[] => {
+      const binding = resolveBinding(expression);
+      if (binding) {
+        return bindingRefs(binding).map((ref) => ({ ref, exact: true }));
+      }
+      const current = unwrapExpression(expression);
+      if (!ts.isCallExpression(current)) return [];
+      const target = unwrapExpression(current.expression);
       if (
         !ts.isPropertyAccessExpression(target) &&
         !ts.isElementAccessExpression(target)
       ) {
-        return undefined;
+        return [];
       }
-
-      const direct = resolveSourceRef(target.expression);
-      if (direct) {
-        return direct;
-      }
-
-      return ts.isCallExpression(target.expression)
-        ? resolveConservativeCallReceiverRef(target.expression)
-        : undefined;
+      return resolveValueRefs(target.expression).map(({ ref }) => ({
+        ref,
+        exact: false,
+      }));
     };
+
+    // The refs `expression`'s value may be exactly: one, or the alternatives
+    // of a fallback or a conditional.
+    const resolveExactRefs = (
+      expression: ts.Expression,
+    ): readonly SourceRef[] => bindingRefs(resolveBinding(expression));
 
     const buildAliasBindingFromExpression = (
       expression: ts.Expression,
@@ -2805,12 +2925,15 @@ export function analyzeFunctionCapabilities(
           return resolveBinding(receiverExpr);
         }
 
+        // A lookup finds an element, which binds what the receiver's
+        // element binds. An element of a tracked array is marked found, so
+        // a truthiness check on it says only that one was.
         if (
           receiverExpr && methodName !== undefined &&
           ELEMENT_LOOKUP_METHODS.has(methodName)
         ) {
           const binding = resolveArrayElementBinding(receiverExpr);
-          if (binding && isSourceRefBinding(binding)) {
+          if (binding && isSourceRefBinding(binding) && binding.arrayElement) {
             return {
               root: binding.root,
               path: binding.path,
@@ -2819,6 +2942,7 @@ export function analyzeFunctionCapabilities(
               elementResult: true,
             };
           }
+          return binding;
         }
       }
 
@@ -2858,13 +2982,15 @@ export function analyzeFunctionCapabilities(
       return properties.size > 0 ? { properties } : undefined;
     };
 
+    // A collection's element is any value put in it, so it binds the refs
+    // of every one.
     const mergeAliasBinding = (
       current: AliasBinding | undefined,
       next: AliasBinding | undefined,
     ): AliasBinding | undefined => {
       if (!next) return current;
       if (!current) return next;
-      return aliasBindingEquals(current, next) ? current : undefined;
+      return eitherBinding(current, next);
     };
 
     const updateLocalCollectionBinding = (
@@ -2903,6 +3029,22 @@ export function analyzeFunctionCapabilities(
         ) {
           return resolveArrayElementBinding(receiverExpr);
         }
+      }
+
+      // An array literal's element is one of the values written in it, or
+      // one of a spread source's elements. A value that resolves to nothing
+      // tracked adds no ref, and a shape among them leaves no binding.
+      if (ts.isArrayLiteralExpression(current)) {
+        let binding: AliasBinding | undefined;
+        for (const element of current.elements) {
+          const next = ts.isSpreadElement(element)
+            ? resolveArrayElementBinding(element.expression)
+            : buildAliasBindingFromExpression(element);
+          if (!next) continue;
+          binding = binding ? eitherBinding(binding, next) : next;
+          if (!binding) return undefined;
+        }
+        return binding;
       }
 
       const localName = getIdentifierName(expression);
@@ -3107,18 +3249,16 @@ export function analyzeFunctionCapabilities(
 
         for (const property of pattern.properties) {
           if (ts.isSpreadAssignment(property)) {
-            if (isSourceRefBinding(source)) {
-              markWildcard(source.root, source.path);
+            for (const ref of bindingRefs(source)) {
+              markWildcard(ref.root, ref.path);
             }
             continue;
           }
 
           if (ts.isShorthandPropertyAssignment(property)) {
-            const binding = isSourceRefBinding(source)
-              ? extendSourceRef(source, [property.name.text])
-              : source.properties.get(property.name.text);
-            if (binding && isSourceRefBinding(binding)) {
-              trackRead(binding.root, binding.path);
+            const binding = bindingMember(source, property.name.text);
+            for (const ref of bindingRefs(binding)) {
+              trackRead(ref.root, ref.path);
             }
             assignBindingAlias(property.name, binding);
             continue;
@@ -3129,8 +3269,10 @@ export function analyzeFunctionCapabilities(
           }
 
           const key = getStaticPropertyKeyText(property.name, checker);
-          if (!key && isSourceRefBinding(source)) {
-            markWildcard(source.root, source.path);
+          if (!key) {
+            for (const ref of bindingRefs(source)) {
+              markWildcard(ref.root, ref.path);
+            }
           }
 
           if (!key) {
@@ -3138,11 +3280,9 @@ export function analyzeFunctionCapabilities(
             continue;
           }
 
-          const binding = isSourceRefBinding(source)
-            ? extendSourceRef(source, [key])
-            : source.properties.get(key);
-          if (binding && isSourceRefBinding(binding)) {
-            trackRead(binding.root, binding.path);
+          const binding = bindingMember(source, key);
+          for (const ref of bindingRefs(binding)) {
+            trackRead(ref.root, ref.path);
           }
           assignExpressionPatternAlias(property.initializer, binding);
         }
@@ -3150,8 +3290,8 @@ export function analyzeFunctionCapabilities(
       }
 
       if (ts.isArrayLiteralExpression(pattern)) {
-        if (source && isSourceRefBinding(source)) {
-          markWildcard(source.root, source.path);
+        for (const ref of bindingRefs(source)) {
+          markWildcard(ref.root, ref.path);
         }
         for (const element of pattern.elements) {
           if (ts.isSpreadElement(element)) {
@@ -3163,21 +3303,21 @@ export function analyzeFunctionCapabilities(
     };
 
     const markWildcardFromExpression = (expression: ts.Expression): void => {
-      const ref = resolveSourceRef(expression);
-      if (!ref) return;
-      markWildcard(ref.root, ref.path);
+      for (const ref of resolveExactRefs(expression)) {
+        markWildcard(ref.root, ref.path);
+      }
     };
 
     const markFromExpression = (
       expression: ts.Expression,
       marker: (name: string, path: readonly string[]) => void,
     ): void => {
-      const ref = resolveSourceRef(expression);
-      if (!ref) return;
-      if (ref.dynamic) {
-        markWildcard(ref.root, ref.path);
+      for (const ref of resolveExactRefs(expression)) {
+        if (ref.dynamic) {
+          markWildcard(ref.root, ref.path);
+        }
+        marker(ref.root, ref.path);
       }
-      marker(ref.root, ref.path);
     };
 
     const markIdentityUseRef = (
@@ -3352,8 +3492,9 @@ export function analyzeFunctionCapabilities(
         const capabilityArgument = isSpreadArgument
           ? argument.expression
           : argument;
-        const source = resolveSourceRef(capabilityArgument);
-        if (!source) continue;
+        // An argument that may be one of several refs passes each of them.
+        const sources = resolveExactRefs(capabilityArgument);
+        if (sources.length === 0) continue;
 
         const cellKind = getParameterDeclaredCellKind(parameter, checker);
         if (!cellKind) {
@@ -3383,36 +3524,38 @@ export function analyzeFunctionCapabilities(
           outermostTransparentWrapper(capabilityArgument),
         );
 
-        if (source.dynamic) {
-          markWildcard(source.root, source.path);
-          continue;
-        }
+        for (const source of sources) {
+          if (source.dynamic) {
+            markWildcard(source.root, source.path);
+            continue;
+          }
 
-        const sourcePath = isSpreadArgument
-          ? [...source.path, "0"]
-          : source.path;
+          const sourcePath = isSpreadArgument
+            ? [...source.path, "0"]
+            : source.path;
 
-        switch (cellKind) {
-          case "cell":
-            trackRead(source.root, sourcePath);
-            trackWrite(source.root, sourcePath);
-            break;
-          case "readonly":
-            trackRead(source.root, sourcePath);
-            break;
-          case "writeonly":
-            trackWrite(source.root, sourcePath);
-            break;
-          case "comparable":
-            recordComparablePath(source.root, sourcePath, {
-              cellLike: true,
-            });
-            break;
-          case "opaque":
-          case "stream":
-          case "sqlite":
-            recordOpaquePath(source.root, sourcePath);
-            break;
+          switch (cellKind) {
+            case "cell":
+              trackRead(source.root, sourcePath);
+              trackWrite(source.root, sourcePath);
+              break;
+            case "readonly":
+              trackRead(source.root, sourcePath);
+              break;
+            case "writeonly":
+              trackWrite(source.root, sourcePath);
+              break;
+            case "comparable":
+              recordComparablePath(source.root, sourcePath, {
+                cellLike: true,
+              });
+              break;
+            case "opaque":
+            case "stream":
+            case "sqlite":
+              recordOpaquePath(source.root, sourcePath);
+              break;
+          }
         }
       }
 
@@ -3531,30 +3674,71 @@ export function analyzeFunctionCapabilities(
       );
     };
 
+    // Charges what the cell step `methodName` on `receiver` does beyond naming
+    // the ref its result addresses, and returns that ref when the step leaves
+    // it to be charged where the result is used. Resolving reads the
+    // receiver's links: the resolved cell may be handed anywhere and read
+    // there, so the receiver is kept whole, and what may be written through it
+    // where the alias is not followed stays unverified. A step that picks a
+    // cell no static path names (`elementById`, a key that can name any
+    // member) returns a cell that can be used for anything, so its static
+    // prefix is a wildcard whatever is done with it next.
+    const chargeCellStep = (
+      methodName: string,
+      call: ts.CallExpression,
+      receiverExpression: ts.Expression,
+      receiver: SourceRef,
+    ): SourceRef | undefined => {
+      const stepped = CELL_REF_STEPS.get(methodName)!(
+        receiver,
+        call.arguments,
+        checker,
+      );
+      if (methodName === "resolveAsCell") {
+        if (!checker || isCellLikeExpression(receiverExpression)) {
+          markUnverifiedCellUse(receiver.root);
+        }
+        trackReadRef(receiver);
+        trackFullShapeReadRef(receiver);
+        return undefined;
+      }
+      if (stepped.dynamic && !receiver.dynamic) {
+        markWildcard(stepped.root, stepped.path);
+        return undefined;
+      }
+      return stepped;
+    };
+
     // Visits what resolving `expression` to a ref, in place of visiting it,
     // leaves unvisited though it is evaluated, walking down the member spine:
-    // the key of each element access, and each operand of a fallback wherever
-    // on the spine it sits. A spine that passes through a call is walked
+    // the key of each element access, each operand of a fallback and each
+    // branch of a conditional wherever on the spine it sits, and the
+    // conditional's condition. A spine that passes through a call is walked
     // whole, as the expression it belongs to would be, which visits the
     // call's arguments and callbacks:
     // `table.find((row) => equals(self, row.topic))` in
     // `table.find(…)?.mentionedBy ?? []` among them; a read the walk repeats
-    // is a set entry, so recording it twice costs nothing. Below a fallback,
-    // which ref resolution walks through and nothing else visits, a call it
-    // steps through (`.get()`, `.key()`, `.elementById()`) has only its
-    // arguments visited and its receiver walked: walking the `people.get()`
-    // in `(people.get() ?? [])[0]?.name` whole would read all of `people`,
-    // where the ref reads `name`.
+    // is a set entry, so recording it twice costs nothing. Below a fallback or
+    // a conditional, which ref resolution walks through and nothing else
+    // visits, a call it steps through (`.get()` or a cell step) has its
+    // arguments visited, what the step does beyond naming a ref charged, and
+    // its receiver walked: walking the `people.get()` in
+    // `(people.get() ?? [])[0]?.name` whole would read all of `people`, where
+    // the ref reads `name`.
     const visitOperandsOfResolvedRef = (
       expression: ts.Expression,
       belowFallback = false,
     ): void => {
       const current = unwrapExpression(expression);
-      if (
-        ts.isBinaryExpression(current) &&
-        FALLBACK_OPERATORS.has(current.operatorToken.kind)
-      ) {
-        for (const operand of [current.left, current.right]) {
+      const operands = ts.isBinaryExpression(current) &&
+          FALLBACK_OPERATORS.has(current.operatorToken.kind)
+        ? [current.left, current.right]
+        : ts.isConditionalExpression(current)
+        ? [current.whenTrue, current.whenFalse]
+        : undefined;
+      if (operands) {
+        if (ts.isConditionalExpression(current)) visit(current.condition);
+        for (const operand of operands) {
           if (resolveSourceRef(operand)) {
             visitOperandsOfResolvedRef(operand, true);
           } else {
@@ -3590,6 +3774,17 @@ export function analyzeFunctionCapabilities(
             ? resolveSourceRef(target.expression)
             : undefined;
           if (receiver) recordMergeableReadSite(receiver, current);
+          if (CELL_REF_STEPS.has(target.name.text)) {
+            const receiverExpression = unwrapAssertCapture(target.expression);
+            for (const ref of resolveExactRefs(receiverExpression)) {
+              chargeCellStep(
+                target.name.text,
+                current,
+                receiverExpression,
+                ref,
+              );
+            }
+          }
           current.arguments.forEach(visit);
           visitOperandsOfResolvedRef(target.expression, belowFallback);
         } else {
@@ -4028,8 +4223,10 @@ export function analyzeFunctionCapabilities(
             ELEMENT_SUBSET_METHODS.has(localMethodName))
         ) {
           const derived = buildAliasBindingFromExpression(node);
-          if (derived && isSourceRefBinding(derived) && escapesWhole(node)) {
-            trackEscapeRef(materializeSourceRef(derived));
+          if (derived && escapesWhole(node)) {
+            for (const ref of bindingRefs(derived)) {
+              trackEscapeRef(materializeSourceRef(ref));
+            }
           }
         }
 
@@ -4047,132 +4244,137 @@ export function analyzeFunctionCapabilities(
             const argument = node.arguments[index];
             if (!paramSummary || !argument) continue;
 
-            const source = resolveSourceRef(argument);
-            if (!source) continue;
+            // An argument that may be one of several refs passes each of them.
+            const sources = resolveExactRefs(argument);
+            if (sources.length === 0) continue;
             capabilityHandledArgs.add(index);
             summaryHandledArgumentUses.add(argument);
 
-            if (paramSummary.hasUnverifiedCellUse) {
-              markUnverifiedCellUse(source.root);
-            }
-            if (source.dynamic || paramSummary.wildcard) {
-              if (source.dynamic || source.path.length === 0) {
-                markWildcard(source.root, source.path);
-              } else {
-                // The callee's unknown access reaches only the value passed,
-                // not the members beside it: that value is read whole, its
-                // siblings narrow as their own reads say, and what the
-                // callee may write through it stays unverified.
-                trackEscapeRef(source);
+            for (const source of sources) {
+              if (paramSummary.hasUnverifiedCellUse) {
                 markUnverifiedCellUse(source.root);
               }
-              // A wildcard hides which members the callee touches, not that
-              // it reads or writes the argument. Its reads and writes still
-              // land on the argument, at the static prefix where the
-              // argument's own key is dynamic.
-              const at = (path: readonly string[]): SourceRef =>
-                source.dynamic ? source : {
-                  root: source.root,
-                  path: [...source.path, ...path],
-                  dynamic: false,
-                };
-              for (const readPath of paramSummary.readPaths) {
-                trackReadRef(at(readPath));
-              }
-              for (const writePath of paramSummary.writePaths) {
-                trackWriteRef(at(writePath));
-              }
-              continue;
-            }
-
-            for (const readPath of paramSummary.readPaths) {
-              trackRead(source.root, [...source.path, ...readPath]);
-            }
-            // What the callee let leave whole leaves the caller's value whole
-            // too: its own members the caller never sees are read wherever
-            // the callee sent them.
-            for (const fullShapePath of paramSummary.fullShapePaths ?? []) {
-              trackFullShapeRead(source.root, [
-                ...source.path,
-                ...fullShapePath,
-              ]);
-            }
-            // And what the callee let leave may be read anywhere beneath,
-            // so the caller uses nothing there for identity alone either.
-            for (const escapedPath of paramSummary.escapedPaths ?? []) {
-              recordEscape(source.root, [...source.path, ...escapedPath]);
-            }
-            // Where the callee read through a key that can name any member,
-            // the caller's value is reached below that prefix by an access
-            // neither names: its identity markings there are erased, as the
-            // callee's are, and the prefix reaches the caller's summary.
-            for (const wildcardPath of paramSummary.wildcardPaths ?? []) {
-              const path = [...source.path, ...wildcardPath];
-              if (!isSelfReference(source.root, path)) {
-                ensureState(source.root).wildcardPaths.add(encodePath(path));
-              }
-            }
-            for (const writePath of paramSummary.writePaths) {
-              trackWrite(source.root, [...source.path, ...writePath]);
-            }
-            for (const opaquePath of paramSummary.opaquePaths ?? []) {
-              recordOpaquePath(source.root, [
-                ...source.path,
-                ...opaquePath,
-              ]);
-            }
-            if (
-              paramSummary.capability === "opaque" &&
-              !paramSummary.passthrough &&
-              paramSummary.readPaths.length === 0 &&
-              paramSummary.writePaths.length === 0 &&
-              (paramSummary.opaquePaths?.length ?? 0) === 0
-            ) {
-              markOpaqueUse(source.root, source.path);
-            }
-
-            for (const identityPath of paramSummary.identityPaths ?? []) {
-              if (source.dynamic) {
-                markWildcard(source.root, source.path);
-              } else {
-                const isComparablePath = (paramSummary.comparablePaths ?? [])
-                  .some((path) =>
-                    path.length === identityPath.length &&
-                    path.every((segment, index) =>
-                      segment === identityPath[index]
-                    )
-                  );
-                const recordPath = isComparablePath
-                  ? recordComparablePath
-                  : recordIdentityPath;
-                recordPath(
-                  source.root,
-                  [...source.path, ...identityPath],
-                  {
-                    cellLike: (paramSummary.identityCellPaths ?? []).some(
-                      (path) =>
-                        path.length === identityPath.length &&
-                        path.every((segment, index) =>
-                          segment === identityPath[index]
-                        ),
-                    ),
-                  },
-                );
-              }
-            }
-
-            if (paramSummary.passthrough && source.path.length === 0) {
-              if (paramSummary.identityOnly) {
-                if (paramSummary.capability === "comparable") {
-                  recordComparablePath(source.root, []);
+              if (source.dynamic || paramSummary.wildcard) {
+                if (source.dynamic || source.path.length === 0) {
+                  markWildcard(source.root, source.path);
                 } else {
-                  recordIdentityPath(source.root, []);
+                  // The callee's unknown access reaches only the value passed,
+                  // not the members beside it: that value is read whole, its
+                  // siblings narrow as their own reads say, and what the
+                  // callee may write through it stays unverified.
+                  trackEscapeRef(source);
+                  markUnverifiedCellUse(source.root);
+                }
+                // A wildcard hides which members the callee touches, not that
+                // it reads or writes the argument. Its reads and writes still
+                // land on the argument, at the static prefix where the
+                // argument's own key is dynamic.
+                const at = (path: readonly string[]): SourceRef =>
+                  source.dynamic ? source : {
+                    root: source.root,
+                    path: [...source.path, ...path],
+                    dynamic: false,
+                  };
+                for (const readPath of paramSummary.readPaths) {
+                  trackReadRef(at(readPath));
+                }
+                for (const writePath of paramSummary.writePaths) {
+                  trackWriteRef(at(writePath));
+                }
+                continue;
+              }
+
+              for (const readPath of paramSummary.readPaths) {
+                trackRead(source.root, [...source.path, ...readPath]);
+              }
+              // What the callee let leave whole leaves the caller's value whole
+              // too: its own members the caller never sees are read wherever
+              // the callee sent them.
+              for (const fullShapePath of paramSummary.fullShapePaths ?? []) {
+                trackFullShapeRead(source.root, [
+                  ...source.path,
+                  ...fullShapePath,
+                ]);
+              }
+              // And what the callee let leave may be read anywhere beneath,
+              // so the caller uses nothing there for identity alone either.
+              for (const escapedPath of paramSummary.escapedPaths ?? []) {
+                recordEscape(source.root, [...source.path, ...escapedPath]);
+              }
+              // Where the callee read through a key that can name any member,
+              // the caller's value is reached below that prefix by an access
+              // neither names: its identity markings there are erased, as the
+              // callee's are, and the prefix reaches the caller's summary.
+              for (const wildcardPath of paramSummary.wildcardPaths ?? []) {
+                const path = [...source.path, ...wildcardPath];
+                if (!isSelfReference(source.root, path)) {
+                  ensureState(source.root).wildcardPaths.add(encodePath(path));
                 }
               }
-              markPassthrough(
-                source.root,
-                paramSummary.identityOnly ? { identityOnly: true } : undefined,
-              );
+              for (const writePath of paramSummary.writePaths) {
+                trackWrite(source.root, [...source.path, ...writePath]);
+              }
+              for (const opaquePath of paramSummary.opaquePaths ?? []) {
+                recordOpaquePath(source.root, [
+                  ...source.path,
+                  ...opaquePath,
+                ]);
+              }
+              if (
+                paramSummary.capability === "opaque" &&
+                !paramSummary.passthrough &&
+                paramSummary.readPaths.length === 0 &&
+                paramSummary.writePaths.length === 0 &&
+                (paramSummary.opaquePaths?.length ?? 0) === 0
+              ) {
+                markOpaqueUse(source.root, source.path);
+              }
+
+              for (const identityPath of paramSummary.identityPaths ?? []) {
+                if (source.dynamic) {
+                  markWildcard(source.root, source.path);
+                } else {
+                  const isComparablePath = (paramSummary.comparablePaths ?? [])
+                    .some((path) =>
+                      path.length === identityPath.length &&
+                      path.every((segment, index) =>
+                        segment === identityPath[index]
+                      )
+                    );
+                  const recordPath = isComparablePath
+                    ? recordComparablePath
+                    : recordIdentityPath;
+                  recordPath(
+                    source.root,
+                    [...source.path, ...identityPath],
+                    {
+                      cellLike: (paramSummary.identityCellPaths ?? []).some(
+                        (path) =>
+                          path.length === identityPath.length &&
+                          path.every((segment, index) =>
+                            segment === identityPath[index]
+                          ),
+                      ),
+                    },
+                  );
+                }
+              }
+
+              if (paramSummary.passthrough && source.path.length === 0) {
+                if (paramSummary.identityOnly) {
+                  if (paramSummary.capability === "comparable") {
+                    recordComparablePath(source.root, []);
+                  } else {
+                    recordIdentityPath(source.root, []);
+                  }
+                }
+                markPassthrough(
+                  source.root,
+                  paramSummary.identityOnly
+                    ? { identityOnly: true }
+                    : undefined,
+                );
+              }
             }
           }
         } else if (!identityArgumentCall) {
@@ -4194,12 +4396,15 @@ export function analyzeFunctionCapabilities(
           const receiverExpression = unwrapAssertCapture(
             node.expression.expression,
           );
-          const directReceiver = resolveSourceRef(receiverExpression);
-          const receiver = directReceiver ??
-            resolveConservativeCallReceiverRef(node);
-          if (receiver) {
-            const methodName = getCallMethodName(node.expression);
-            const shouldTrackFullShape = !directReceiver &&
+          const methodName = getCallMethodName(node.expression);
+          // A receiver that may be one of several refs is each of them, and
+          // what the call does it does through every one.
+          for (
+            const { ref: receiver, exact } of resolveValueRefs(
+              receiverExpression,
+            )
+          ) {
+            const shouldTrackFullShape = !exact &&
               (!methodName || !PRECISE_CHAIN_METHODS.has(methodName));
             if (!methodName) {
               // A dynamic method name (`cell[m]()`) on a cell-like receiver
@@ -4217,44 +4422,18 @@ export function analyzeFunctionCapabilities(
               } else {
                 trackReadRef(receiver);
               }
-            } else if (methodName === "resolveAsCell") {
-              // Resolving reads the receiver's links. The resolved cell may be
-              // handed anywhere and read there, so the receiver is kept whole;
-              // what may be written through it where the alias is not followed
-              // stays unverified. Reads and writes through the alias are
-              // charged where they occur.
-              if (!checker || isCellLikeExpression(receiverExpression)) {
-                markUnverifiedCellUse(receiver.root);
-              }
-              trackReadRef(receiver);
-              trackFullShapeReadRef(receiver);
-            } else if (methodName === "elementById") {
-              // Addresses a separately derived entity; attribute the access
-              // conservatively to the whole array root.
-              markWildcard(receiver.root, receiver.path);
-            } else if (methodName === "key") {
-              const argPath = extractLiteralPathArguments(
-                node.arguments,
-                checker,
+            } else if (CELL_REF_STEPS.has(methodName)) {
+              // The ref the step's result addresses is charged where the
+              // result is used: a member access on it charges what that access
+              // does, and a result used any other way is read here.
+              const stepped = chargeCellStep(
+                methodName,
+                node,
+                receiverExpression,
+                receiver,
               );
-              if (argPath.dynamic) {
-                markWildcard(receiver.root, receiver.path);
-              } else {
-                const keyUsage = outermostTransparentWrapper(node);
-                const keyUsageParent = keyUsage.parent;
-                const isChainedIntoMemberAccess = !!(
-                  keyUsageParent &&
-                  (ts.isPropertyAccessExpression(keyUsageParent) ||
-                    ts.isElementAccessExpression(keyUsageParent)) &&
-                  keyUsageParent.expression === keyUsage
-                );
-                if (!isChainedIntoMemberAccess) {
-                  trackReadRef({
-                    root: receiver.root,
-                    path: [...receiver.path, ...argPath.path],
-                    dynamic: receiver.dynamic,
-                  });
-                }
+              if (stepped && !isChainedIntoMemberAccess(node)) {
+                trackReadRef(stepped);
               }
             } else if (identityEqualsCall) {
               markIdentityUseRef(receiver, node.expression.expression, {
@@ -4359,7 +4538,7 @@ export function analyzeFunctionCapabilities(
               }
               if (shouldTrackFullShape) {
                 trackFullShapeReadRef(receiver);
-              } else if (directReceiver) {
+              } else if (exact) {
                 trackReadRef(receiver);
               }
             }
@@ -4377,10 +4556,10 @@ export function analyzeFunctionCapabilities(
             if (!argument) continue;
             const unwrappedArgument = unwrapExpression(argument);
             if (!ts.isIdentifier(unwrappedArgument)) continue;
-            const source = resolveSourceRef(unwrappedArgument);
-            if (!source) continue;
-            if (source.dynamic || source.path.length > 0) continue;
-            markWildcard(source.root, source.path);
+            for (const source of resolveExactRefs(unwrappedArgument)) {
+              if (source.dynamic || source.path.length > 0) continue;
+              markWildcard(source.root, source.path);
+            }
           }
         }
         if (identityArgumentCall) {
@@ -4391,13 +4570,13 @@ export function analyzeFunctionCapabilities(
           // treat an argument recorded here as compared rather than read.
           for (const argument of node.arguments) {
             const comparedArgument = unwrapAssertCapture(argument);
-            const source = resolveSourceRef(comparedArgument);
-            if (source) {
+            const sources = resolveExactRefs(comparedArgument);
+            for (const source of sources) {
               markIdentityUseRef(source, comparedArgument, {
                 comparable: identityEqualsCall,
               });
-              identityArgumentUses.add(comparedArgument);
             }
+            if (sources.length > 0) identityArgumentUses.add(comparedArgument);
           }
         }
 
@@ -4481,11 +4660,14 @@ export function analyzeFunctionCapabilities(
       }
 
       if (ts.isForOfStatement(node)) {
+        // The ref an array literal's element binds is one of its values, not
+        // the iterable, so the literal is walked as written.
         const iterableBinding = resolveArrayElementBinding(node.expression);
-        const iterableRef =
-          iterableBinding && isSourceRefBinding(iterableBinding)
-            ? iterableBinding
-            : undefined;
+        const iterableRef = iterableBinding &&
+            isSourceRefBinding(iterableBinding) &&
+            !ts.isArrayLiteralExpression(unwrapExpression(node.expression))
+          ? iterableBinding
+          : undefined;
         if (iterableRef) {
           if (iterableRef.dynamic) {
             trackReadRef(iterableRef);

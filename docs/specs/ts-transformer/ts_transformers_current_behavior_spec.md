@@ -2316,6 +2316,33 @@ adjustments:
   stays unverified for what is done through it where the alias is not followed
   (`test/policy/capability-analysis.test.ts`; fixture
   `ast-transform/handler-nullable-cell-const`)
+- capability analysis resolves a value to every tracked ref it may be, and
+  what is done through the value is charged to each of them. A fallback
+  (`a ?? b`, `a || b`) or a conditional (`c ? a : b`) whose operands resolve to
+  refs that differ resolves to all of them; an operand that resolves to nothing
+  tracked adds none, so `a ?? []` and `c ? a : []` resolve to `a`. An element
+  of an array literal is each value written in it, or each element of a spread
+  in it, and an element of a local array or map is each value put in it; the
+  element a lookup (`find`, `findLast`, `at`) or a `for…of` variable takes is
+  one of those, and the literal itself is read as written. A member access, a `.get()` or a cell step on such a value, a local bound to
+  it, an argument passed as it to a callee whose summary or declared cell
+  parameter charges it, and an identity call's argument all act through each
+  ref. So `(c ? a : b).set(v)` and `const t = c ? a : b; t.key("x").push(v)`
+  write both cells, and a computed that writes that way lists both among its
+  `materializerWriteInputPaths`, without which the runtime does not run it for
+  its writes. The cell methods resolution steps through are one table,
+  `CELL_REF_STEPS`: `.key(...)` names a member below its receiver as a property
+  access does (`x.key("a")` resolves as `x.a`, and a key that can name any
+  member as `x[k]` does, at the static prefix the key is read below);
+  `.elementById(...)` names an element no static path names; `.for(cause)`
+  returns its receiver with the cause set; and `.resolveAsCell()` is the alias
+  above. A step whose result no static path names marks that prefix a wildcard
+  wherever the result goes; a step on a ref that is already dynamic is charged
+  as any other use of that ref is. A method call no step names yields a value
+  derived from its receiver's refs (`table.filter(f)`), which is charged to
+  them conservatively and never taken for one of them (`resolveValueRefs` and
+  `CELL_REF_STEPS` in `policy/capability-analysis.ts`;
+  `test/policy/capability-analysis-value-refs.test.ts`)
 - capability analysis resolves member access through `.get()` when the member
   access itself is observed (`notes.get().length` records `["length"]` rather
   than a blanket root read) and suppresses the redundant blanket `.get()` read.
@@ -2362,8 +2389,10 @@ adjustments:
   (`items[selected.get()]`) is a read of its own wherever the access sits, and
   where the analysis resolves a fallback's operand or a `for..of` iterable to
   a ref in place of walking it, it still visits what that operand evaluates:
-each operand of a fallback, wherever on the member spine it sits, a call on
-  the spine with its arguments and callbacks, and the keys on the spine. A
+  each operand of a fallback and each branch of a conditional, wherever on the
+  member spine it sits, the conditional's condition, a call on the spine with
+  its arguments and callbacks, and the keys on the spine; a cell step on the
+  spine still charges what it does beyond naming its ref. A
   write through such a key (`counts.key(i).set(v)`) stays a wildcard and is
   also recorded as a write of the prefix, so the prefix's capability says it
   is written. A `.key()` call with such a key, an argument passed to a callee
