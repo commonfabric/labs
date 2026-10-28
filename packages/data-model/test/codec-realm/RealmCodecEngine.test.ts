@@ -352,10 +352,15 @@ describe("RealmCodecEngine", () => {
      * exhausted call stack can: between a walk entering a container and the
      * code that would leave it. A real overflow strikes there or elsewhere,
      * as the engine's code happens to be compiled, which this pins down.
+     *
+     * Fails unless the stub took effect, `push()` having been called `nth`
+     * times and thrown, so that a walk which stops pushing there cannot let a
+     * test pass without reaching the window it is about.
      */
     function overflowingAtPush<T>(nth: number, body: () => T): T {
       const push = IndexTrackingStack.prototype.push;
       let pushes = 0;
+      let threw = false;
       const pushStub = stub(
         IndexTrackingStack.prototype,
         "push",
@@ -363,6 +368,7 @@ describe("RealmCodecEngine", () => {
           push.call(this, value);
           pushes++;
           if (pushes === nth) {
+            threw = true;
             throw new RangeError("Maximum call stack size exceeded");
           }
         },
@@ -371,6 +377,8 @@ describe("RealmCodecEngine", () => {
         return body();
       } finally {
         pushStub.restore();
+        expect({ pushes: Math.min(pushes, nth), threw })
+          .toEqual({ pushes: nth, threw: true });
       }
     }
 
