@@ -1134,12 +1134,17 @@ Default paths of §7:
   string[]` gives the fallback `ifc: { confidentiality: C }`. A scope a
   member states is not lifted. A fallback that meets a definition still
   being generated, as one inside a recursive interface does, is checked once
-  generation is done, and refused where it kept fewer restrictions than that
-  definition states ("An intersection whose constituents cannot be merged
-  keeps the labels of its constituents, but it meets `Node` inside the
-  definition of `Node` …"). The restrictions a wrapper places on it count as
-  kept, so `child?: Confidential<Node & string[], C>` inside `Node` is read
-  where `Node` states `C`.
+  generation is done, at each position emitting it, and refused where one
+  holds fewer restrictions than that definition states ("An intersection
+  whose constituents cannot be merged keeps the labels of its constituents,
+  but it meets `Node` inside the definition of `Node` …"). A position holds
+  the restrictions stated there: those a wrapper places on the fallback, and
+  where an alias names it, those beside the reference as well as the
+  alias's own. So `child?: Confidential<Node & string[], C>` inside `Node` is
+  read where `Node` states `C`, and so is `child?: Confidential<Child, C>`
+  for `type Child = Node & string[]`, but not beside `other?: Child`: the
+  label beside one reference does not reach another. A fallback emitted
+  nowhere is held to the labels it kept.
 - A property several constituents declare takes the schema of its type in
   the intersection, which the checker gives as the intersection of the
   declared types: `{ a: unknown } & { a: string }` and

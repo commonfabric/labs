@@ -466,33 +466,46 @@ export const labelsBesideAnyValue = (
  * definitions not yet written (`unwritten`) in `definitions`, and the labels
  * it kept (`labelsBesideAnyValue()`): one an intersection the checker gives
  * `any` settled to (`"any"`), or one an intersection this generator cannot
- * merge falls back to (`"unsupported"`). A fallback's `kept` takes in the
- * restrictions a wrapper places on a copy of it, where it is emitted
- * (`GenerationContext.anyValuesBySchema`).
+ * merge falls back to (`"unsupported"`). A fallback is checked where it is
+ * emitted (`GenerationContext.anyValuesBySchema`).
  */
 export type AnyValueBesideUnwritten = {
   readonly from: "any" | "unsupported";
   readonly definitions: Readonly<Record<string, MutableJSONSchema>>;
   readonly unwritten: readonly string[];
-  kept: IfcLabels | undefined;
+  readonly kept: IfcLabels | undefined;
 };
 
 /**
  * Refuses a value in `values` that kept fewer restrictions than the
  * definitions it met before they were written state now that they are: a
  * reference met inside its own definition, as recursion meets it, names a
- * definition whose labels could not be read there.
+ * definition whose labels could not be read there. A value `bySchema` finds
+ * emitted in `schema`, the schema generated, is held to that at each position
+ * emitting it, with the restrictions stated there (`emittedAnyValues()`), so
+ * that a label one use of it states does not reach another. A value emitted
+ * nowhere is held to what it kept.
  */
 export const assertAnyValuesKeptLabels = (
   values: readonly AnyValueBesideUnwritten[],
+  schema: MutableJSONSchema,
+  bySchema?: WeakMap<object, AnyValueBesideUnwritten>,
 ): void => {
-  for (const { from, definitions, unwritten, kept } of values) {
+  const emitted = bySchema && values.length > 0
+    ? emittedAnyValues(schema, bySchema)
+    : new Map<AnyValueBesideUnwritten, IfcLabels[]>();
+  for (const value of values) {
+    const { from, definitions, unwritten, kept } = value;
+    const held = emitted.get(value) ?? [kept ?? {}];
     for (const name of unwritten) {
       const stated = labelsBesideAnyValue(
         [{ $ref: `${LOCAL_DEFINITION_PREFIX}${name}` }],
         definitions,
       );
-      if (stated !== undefined && !holdsIfcLabels(kept ?? {}, stated)) {
+      if (
+        stated !== undefined &&
+        !held.every((labels) => holdsIfcLabels(labels, stated))
+      ) {
         throw new Error(
           from === "any"
             ? `A value intersected with \`any\` keeps the labels of what it ` +
@@ -504,10 +517,53 @@ export const assertAnyValuesKeptLabels = (
               `the labels of its constituents, but it meets \`${name}\` ` +
               `inside the definition of \`${name}\`, where those labels ` +
               `cannot be read yet. Declare that intersection with ` +
-              `constituents that merge, or with the labels \`${name}\` ` +
-              `states.`,
+              `constituents that merge, or label it, or each use of it, ` +
+              `with the labels \`${name}\` states.`,
         );
       }
     }
   }
+};
+
+/**
+ * The restrictions each value `bySchema` holds is emitted with in `schema`,
+ * one entry for each position emitting it: the value itself, or a copy of it
+ * a wrapper labels, or a reference reaching a definition that is one, with
+ * the labels along its reference chain (`declaredIfcLabels()`). A definition
+ * emits nothing itself; the references reaching it do.
+ */
+const emittedAnyValues = (
+  schema: MutableJSONSchema,
+  bySchema: WeakMap<object, AnyValueBesideUnwritten>,
+): Map<AnyValueBesideUnwritten, IfcLabels[]> => {
+  const emitted = new Map<AnyValueBesideUnwritten, IfcLabels[]>();
+  if (!isObjectOrArray(schema)) return emitted;
+  const definitions = isObjectOrArray(schema.$defs) ? schema.$defs : {};
+
+  const visited = new Set<MutableJSONSchema>();
+  const visit = (node: MutableJSONSchema, emits: boolean): void => {
+    if (!isObjectOrArray(node) || visited.has(node)) return;
+    visited.add(node);
+    const value = emits
+      ? referenceChain(node, definitions)
+        .map((link) => bySchema.get(link))
+        .find((found) => found !== undefined)
+      : undefined;
+    if (value) {
+      const labels = declaredIfcLabels(node, definitions);
+      emitted.set(value, [
+        ...emitted.get(value) ?? [],
+        (labels && restrictionsAndEvidence(labels).restrictions) ?? {},
+      ]);
+    }
+    forEachSubschema(node, (child) => {
+      visit(child as MutableJSONSchema, true);
+      return false;
+    }, { includeUnused: true });
+  };
+  visit(schema, true);
+  for (const definition of Object.values(definitions)) {
+    visit(definition, false);
+  }
+  return emitted;
 };

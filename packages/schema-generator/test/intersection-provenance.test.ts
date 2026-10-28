@@ -1483,6 +1483,94 @@ describe("SchemaGenerator", () => {
       }
     });
 
+    it("keeps a fallback an alias names where a wrapper labels its reference", async () => {
+      // The wrapper's labels go beside the reference to `Child`, where the
+      // fallback is used, so that use keeps them.
+
+      const { byType, byNode } = await schemasOfBothPaths(
+        `
+          type Child = Node & string[];
+          interface Node {
+            secret: Confidential<string, readonly ["s"]>;
+            child?: Confidential<Child, readonly ["s"]>;
+          }
+        `,
+        "Node",
+      );
+      for (const read of [byType, byNode]) {
+        const schema = read() as {
+          $defs: Record<string, { properties?: Record<string, JSONSchema> }>;
+        };
+
+        expect(schema.$defs.Node?.properties?.child).toEqual({
+          $ref: "#/$defs/Child",
+          ifc: labelS,
+        });
+        expect(schema.$defs.Child).toEqual(UNSUPPORTED_INDEX_SIGNATURE);
+      }
+    });
+
+    it("keeps a fallback an alias names and labels at a reference with no label", async () => {
+      const { byType, byNode } = await schemasOfBothPaths(
+        `
+          type Child = Confidential<Node & string[], readonly ["s"]>;
+          interface Node {
+            secret: Confidential<string, readonly ["s"]>;
+            child?: Child;
+          }
+        `,
+        "Node",
+      );
+      for (const read of [byType, byNode]) {
+        const schema = read() as {
+          $defs: Record<string, { properties?: Record<string, JSONSchema> }>;
+        };
+
+        expect(schema.$defs.Node?.properties?.child).toEqual({
+          $ref: "#/$defs/Child",
+        });
+        expect(schema.$defs.Child).toEqual({
+          ...UNSUPPORTED_INDEX_SIGNATURE as object,
+          ifc: labelS,
+        });
+      }
+    });
+
+    for (
+      const [order, members] of [
+        [
+          "the labeled one first",
+          `child?: Confidential<Child, readonly ["s"]>; other?: Child;`,
+        ],
+        [
+          "the unlabeled one first",
+          `other?: Child; child?: Confidential<Child, readonly ["s"]>;`,
+        ],
+      ]
+    ) {
+      it(`throws where a fallback an alias names has a reference without the labels beside a labeled one, ${order}`, async () => {
+        // A label beside one reference does not reach the other, which holds
+        // the fallback without it.
+
+        const { byType, byNode } = await schemasOfBothPaths(
+          `
+            type Child = Node & string[];
+            interface Node {
+              secret: Confidential<string, readonly ["s"]>;
+              ${members}
+            }
+          `,
+          "Node",
+        );
+        const message = "An intersection whose constituents cannot be " +
+          "merged keeps the labels of its constituents, but it meets `Node` " +
+          "inside the definition of `Node`";
+
+        expect(byType).toThrow(message);
+        expect(byNode).toThrow(message);
+      });
+    }
+
     it("keeps a value where `any` meets a definition before it is written with its labels", async () => {
       const { byType, byNode } = await schemasOfBothPaths(
         `

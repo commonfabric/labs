@@ -2136,7 +2136,11 @@ export class SchemaGenerator {
 
     settlePoliciesReadInPart(result);
     stateReferencedIfcLabels(result);
-    assertAnyValuesKeptLabels(context.anyValuesBesideUnwritten);
+    assertAnyValuesKeptLabels(
+      context.anyValuesBesideUnwritten,
+      result,
+      context.anyValuesBySchema,
+    );
     assertScopeDeclarationsAreReachable(result);
     return result;
   }

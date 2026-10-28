@@ -235,8 +235,8 @@ export interface GenerationContext {
 
   /**
    * Each fallback in `anyValuesBesideUnwritten` by its schema and by each copy
-   * of it a wrapper makes (`withValueRecordsOf()`), so the restrictions the
-   * wrapper places on a copy count as kept.
+   * of it a wrapper makes (`withValueRecordsOf()`), so that each position
+   * emitting it is checked with the restrictions stated there.
    */
   anyValuesBySchema?: WeakMap<object, AnyValueBesideUnwritten>;
 
