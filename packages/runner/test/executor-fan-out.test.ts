@@ -83,6 +83,22 @@ const FAN_OUT_PATTERN = [
   "});",
 ].join("\n");
 
+/** A piece OWNING a per-session draft with a default (the FabriChat
+ * group-draft shape): the result links to the draft, so a viewer's `$value`
+ * binding writes one field of it, and `echo` reads it per session. */
+const OWNED_DRAFT_PATTERN = [
+  "import { computed, pattern, Writable } from 'commonfabric';",
+  "interface Draft { title: string; members: string }",
+  "const EMPTY_DRAFT: Draft = { title: '', members: '' };",
+  "export default pattern<",
+  "  { n?: number },",
+  "  { draft: Writable<Draft>; echo: string }",
+  ">(() => {",
+  "  const draft = new Writable.perSession<Draft>(EMPTY_DRAFT);",
+  "  return { draft, echo: computed(() => 'echo:' + draft.get().title) };",
+  "});",
+].join("\n");
+
 /** A per-user wish into the viewer's Home, and a reader of its result: the
  * reader's instance for a user follows the wish's per-user state store. */
 const WISH_TAG = "fan_out_wish_profile";
@@ -648,6 +664,49 @@ describe("fan-out stage B: the per-demander run supply (E2E)", () => {
       () => instanceHolds(engine, bobKey, '"echo:B"'),
     );
     expect(instanceHolds(engine, aliceKey, '"echo:B"')).toBe(false);
+    setup.cancel();
+  });
+
+  it("(n) a session that arrives watching a piece OWNING a per-session default finds that default seeded in its own instance — the ARRIVAL SEED — so its first blind write of one field lands beside the other defaults", async () => {
+    // The piece's start seeded the draft for Alice alone. Bob's runtime
+    // runs none of the pattern — his page is a served view — so nothing
+    // on his side seeds his session's draft; the serving loop seeds it
+    // when his demand arrives. Without the seed his first keystroke, a
+    // blind write of `title`, creates his instance as `{title}` and the
+    // handler reading it under the draft's schema sees no draft at all.
+
+    const setup = await standUp({
+      names: { arg: "fo-n-arg", result: "fo-n-result" },
+      pattern: OWNED_DRAFT_PATTERN,
+      clients: [aliceSigner],
+    });
+    const { engine, compiled } = setup;
+    const bob = await setup.watchRoot(bobSigner);
+    const bobSession = resolveScopeKey("session", bob.scopeKeyIdentity);
+    await awaitAdmitted(
+      server,
+      () => instanceHolds(engine, bobSession, '"members":""'),
+    );
+    expect(host!.stats().demand.ownedDefaultSeeds).toBeGreaterThan(0);
+
+    const draft = bob.getCell<{ draft: { title: string; members: string } }>(
+      space,
+      "fo-n-result",
+      compiled.resultSchema,
+    ).key("draft");
+    await draft.sync();
+    const written = await bob.commitUiCellWrite(draft.key("title"), "B", {
+      blind: true,
+    });
+    expect(written.error).toBeUndefined();
+    await awaitAdmitted(
+      server,
+      () => instanceHolds(engine, bobSession, '"echo:B"'),
+    );
+    const drafts = [...rowsUnder(engine, bobSession).values()].filter((
+      value,
+    ) => JSON.stringify(value ?? null).includes('"title":"B"'));
+    expect(drafts).toEqual([{ title: "B", members: "" }]);
     setup.cancel();
   });
 

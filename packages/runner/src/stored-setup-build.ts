@@ -109,10 +109,10 @@ export interface StampedPattern extends PatternLevel {
 }
 
 /**
- * The projection map of `result`: for each `$alias` in it whose partial
- * cause is positional, the path of the slot holding it, the cell's number,
- * and the path the alias names inside the cell, in slot-path order. An alias
- * is a leaf: nothing inside one is a slot.
+ * The projection map of `result`, the result of the pattern level `level`:
+ * for each `$alias` in it whose partial cause is positional, the path of the
+ * slot holding it, the cell's number, and the path the alias names inside the
+ * cell, in slot-path order. An alias is a leaf: nothing inside one is a slot.
  *
  * An alias of a named instance of `level`, one of its
  * `derivedInternalCells` with a `legacyPartialCause`, counts as positional at
@@ -121,7 +121,7 @@ export interface StampedPattern extends PatternLevel {
  */
 export function projectionMap(
   result: unknown,
-  level: PatternLevel = {},
+  level: PatternLevel,
 ): [string, number, string][] {
   const legacyNumbers = new Map<string, number>();
   const descriptors = Array.isArray(level.derivedInternalCells)

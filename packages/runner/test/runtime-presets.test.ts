@@ -144,6 +144,7 @@ const MINIMAL_TREATMENT: Record<RuntimeOptionKey, MinimalTreatment> = {
   cfcSinkMaxConfidentiality: { treat: "absent" },
   cfcReadMaxConfidentiality: { treat: "absent" },
   cfcReadOnExceed: { treat: "absent" },
+  preferredProfileSpace: { treat: "absent" },
   trustSnapshotProvider: { treat: "absent" },
   hideInternalStackFrames: { treat: "absent" },
   commitBackpressure: { treat: "absent" },

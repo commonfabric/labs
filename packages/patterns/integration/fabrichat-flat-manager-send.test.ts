@@ -33,6 +33,7 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import { writeOwnProfile } from "./own-profile-fixture.ts";
 
 const owner = await Identity.fromPassphrase("fabrichat-manager-roles");
 const PATTERNS = fromFileUrl(new URL("..", import.meta.url));
@@ -297,7 +298,12 @@ describe("FabriChat flat manager sends", () => {
    * grants.
    */
   const addBob = async (labeled: boolean) => {
-    const profile = await writeProfile("viewer profile", "Viewer");
+    const profile = await writeOwnProfile(
+      runtime,
+      await runtime.createSpace({}),
+      "viewer profile",
+      "Viewer",
+    );
     const bobProfile = await writeProfile("bob profile", "Bob");
     const { offerRoom } = await writeHome(labeled, profile, {
       [BOB]: [bobProfile],
@@ -338,7 +344,12 @@ describe("FabriChat flat manager sends", () => {
       it(`stores a shared message through a ${labeled ? "root-private" : "public"} manager's ${discovered ? "discovered" : "supplied"} flat bindings`, async () => {
         expect(runtime.cfcEnforcementMode).toBe("enforce-strict");
         const social = await runtime.createSpace({});
-        const profile = await writeProfile("viewer profile", "Viewer");
+        const profile = await writeOwnProfile(
+          runtime,
+          await runtime.createSpace({}),
+          "viewer profile",
+          "Viewer",
+        );
         const { wrapper } = await writeHome(labeled, profile, {});
 
         const program = await resolveLocalProgram(
@@ -371,6 +382,7 @@ describe("FabriChat flat manager sends", () => {
         await runtime.idle();
         await room.pull();
         expect(refusals).toEqual([]);
+        expect(room.key("canSend").get()).toBe(true);
         const click = {
           type: "click",
           requestId: "flat-manager-send",

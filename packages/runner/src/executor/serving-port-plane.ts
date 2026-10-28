@@ -52,6 +52,7 @@ import type {
   ListedServedAclChange,
   WaveCommitRejection,
   WaveCommitSink,
+  WaveReadQuery,
   WaveSpaceCommit,
 } from "./wave.ts";
 
@@ -271,6 +272,15 @@ class PlaneWaveCommitSink implements WaveCommitSink, WaveCommitSinkReads {
   }
 
   /** @inheritDoc */
+  staleReads(
+    space: MemorySpace,
+    reads: ReadonlyArray<WaveReadQuery>,
+    holder: string | undefined,
+  ): Promise<ReadonlyArray<{ read: WaveReadQuery; seq: number }>> {
+    return this.#reads.staleReads(space, reads, holder);
+  }
+
+  /** @inheritDoc */
   sessionOverwritePathsSince(
     space: MemorySpace,
     doc: { id: string; scope?: CellScope; scopeKey: string },
@@ -455,6 +465,17 @@ class PlaneMemoryServer implements HostMemoryServer {
     principal: string | undefined,
   ): ReturnType<HostMemoryServer["foreignWriteAuthorityFor"]> {
     return this.#endpoint.request("server.foreignWriteAuthorityFor", {
+      space,
+      principal,
+    });
+  }
+
+  /** @inheritDoc */
+  foreignReadAuthorityFor(
+    space: string,
+    principal: string | undefined,
+  ): ReturnType<HostMemoryServer["foreignReadAuthorityFor"]> {
+    return this.#endpoint.request("server.foreignReadAuthorityFor", {
       space,
       principal,
     });

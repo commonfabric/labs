@@ -537,20 +537,29 @@ current value. CI keeps stable `default` and
 `opposite` roles; `tasks/server-execution-ci.ts` derives their actual ON/OFF
 posture from the first-party default constant. The opposite toolshed binary is
 built with an explicit inverse so its browser shell, server, and test processes
-stay aligned. [EXPERIMENTAL_OPTIONS.md](EXPERIMENTAL_OPTIONS.md#serverexecution)
-covers the flag itself.
+stay aligned. Whichever role resolves ON also runs with
+`EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true` on its Toolshed servers, its
+baked shell, and the test processes of its package-integration and
+pattern-integration suites, so the ON arm's browsers receive only what their
+views need, and its posture probe checks that the toolshed publishes it.
+[EXPERIMENTAL_OPTIONS.md](EXPERIMENTAL_OPTIONS.md#serverexecution) covers the
+flag itself.
 
 Running an explicit posture locally means putting the flag on every process the
 test spans, not only the one `deno test` starts. A pattern integration test
 drives a runtime in the test process and commits through a toolshed, and the
 per-class commit admission rows are enforced by the memory server under the
 flag, so a test process on the ON arm talking to a toolshed on the OFF arm is
-on neither arm. Start the servers with it too:
+on neither arm. Start the servers with it too. CI's ON arm also runs with web
+view-scoped replication, so reproducing one of its failures takes that flag on
+the same processes:
 
 ```bash
-EXPERIMENTAL_SERVER_EXECUTION=true ./scripts/start-local-dev.sh
+EXPERIMENTAL_SERVER_EXECUTION=true EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true \
+  ./scripts/start-local-dev.sh
 cd packages/patterns
-EXPERIMENTAL_SERVER_EXECUTION=true API_URL=http://localhost:8000/ \
+EXPERIMENTAL_SERVER_EXECUTION=true EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true \
+  API_URL=http://localhost:8000/ \
   deno test --no-check -A ./integration/<name>.test.ts
 ```
 
@@ -564,8 +573,10 @@ curl -fsS http://localhost:8000/api/health/stats | jq -e '.servingLoop != null'
 `servingLoop` is null on the OFF arm and an object on the ON arm. A lane makes
 this check against every Toolshed server its capabilities start, through
 `verifyServerExecutionPosture()` in `tasks/server-execution-ci.ts`. That
-function also checks the shell half, the define baked into the shell, which
-`/api/meta` reports as `shellServerExecutionDefine`.
+function also checks the shell half of server execution, the define baked into
+the shell, which `/api/meta` reports as `shellServerExecutionDefine`. The web
+view-scoped define the ON arm's shell bakes is not reported; the bake table in
+`cachedBinaries()` sets it, and the binary cache key covers that table.
 
 The toolshed log records the same thing, but it accumulates NUL bytes, so
 `grep` can decide it is binary and print nothing rather than the line that is

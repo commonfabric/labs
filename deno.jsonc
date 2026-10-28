@@ -92,6 +92,8 @@
     // Reports the docs/ link graph; --allow-write serves its --out flag.
     "docs-links": "deno run --allow-read --allow-write ./scripts/docs-links.ts",
     "cf": "deno run --allow-run --allow-env --allow-read ./packages/cli/launcher.ts",
+    // The team's Topics board from the command line; see skills/topics.
+    "topics": "deno run --allow-net --allow-read --allow-write --allow-env --allow-run ./packages/patterns/topics/tools/topics.ts",
     "agents-host": "deno run -A ./packages/connectors/agents/host/main.ts",
     "github-host": "deno run -A ./packages/connectors/github/host/main.ts",
     "test": "./tasks/test.ts",

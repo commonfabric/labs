@@ -57,6 +57,12 @@ export default pattern(() => {
     createdByName: "Legacy creator",
     createdBy: creator,
     comments,
+    commentCount: new Writable(0),
+    lastActivityAt: new Writable(0),
+    links,
+    createdAt: 0,
+    bodyUpdatedAt: updatedAt,
+    titleUpdatedAt: updatedAt,
   };
   const subject = Topic({
     ...upgrade,
@@ -180,6 +186,9 @@ export default pattern(() => {
     version.get() === Number.MAX_SAFE_INTEGER + 1
   );
 
+  // A handler completes the author step and leaves the activity step to the
+  // lift, so the upgrade a handler runs stops at version one.
+  const AUTHOR_STEP_VERSION = 1;
   const oldVersion = new Writable(0);
   const oldCreator = new Writable<TopicAuthor | undefined>({
     name: "",
@@ -200,6 +209,12 @@ export default pattern(() => {
       createdByName: "Old creator",
       createdBy: oldCreator,
       comments: oldComments,
+      commentCount: new Writable(0),
+      lastActivityAt: new Writable(0),
+      links: new Writable<TopicLink[]>([]),
+      createdAt: 0,
+      bodyUpdatedAt: 0,
+      titleUpdatedAt: 0,
     },
     comments: oldComments,
     commentDraft: oldDraft,
@@ -211,7 +226,7 @@ export default pattern(() => {
   );
   const action_upgrade_and_submit = action(() => upgradeAndSubmit.send());
   const assert_handler_upgraded_before_appending = assert(() =>
-    oldVersion.get() === TOPIC_STATE_VERSION &&
+    oldVersion.get() === AUTHOR_STEP_VERSION &&
     oldCreator.get()?.name === "Old creator" &&
     oldComments.get().length === 2 &&
     oldComments.get()[0].author?.name === "Old commenter" &&
@@ -234,7 +249,20 @@ export default pattern(() => {
       topicStateVersion: deferredVersion,
       createdByName: deferredName,
       createdBy: deferredCreator,
-      comments: new Writable<LegacyComment[]>([]),
+      // A handler leaves an empty thread's author step to the lift, so the
+      // thread holds one comment whose author is already complete.
+      comments: new Writable<LegacyComment[]>([{
+        authorName: "Commenter",
+        author: { name: "Commenter", kind: "person" },
+        body: "Settled",
+        sentAt: 1,
+      }]),
+      commentCount: new Writable(0),
+      lastActivityAt: new Writable(0),
+      links: new Writable<TopicLink[]>([]),
+      createdAt: 0,
+      bodyUpdatedAt: 0,
+      titleUpdatedAt: 0,
     },
   });
   const action_save_with_incomplete_upgrade = action(() =>
@@ -248,7 +276,7 @@ export default pattern(() => {
     deferredName.set("Arrived creator")
   );
   const assert_handler_completes_available_upgrade = assert(() =>
-    deferredVersion.get() === TOPIC_STATE_VERSION &&
+    deferredVersion.get() === AUTHOR_STEP_VERSION &&
     deferredCreator.get().name === "Arrived creator"
   );
 

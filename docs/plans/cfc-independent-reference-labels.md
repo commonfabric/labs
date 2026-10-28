@@ -403,12 +403,6 @@ measurement is still owed.
 
 Depends on stage 1's acceptance measurement.
 
-`docs/plans/compact-cfc-label-maps.md` proposes a shared-subtree label map to
-bound the exponential growth of staged-reference diamonds. The growth is the
-copy; with stage 1 a diamond's map holds one entry per reference. Archive that
-plan to `docs/history/plans/` as superseded once the diamond probe confirms the
-bound, with the measurement linked from the archive note.
-
 The sqlite builtin holds two arrangements that the refusal of a link to an
 unlabeled document made necessary, in `builtins/sqlite-builtins.ts` and
 `docs/specs/sqlite-builtin/06-cfc.md`. A row that holds a link column

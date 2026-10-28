@@ -40,7 +40,7 @@ import type {
   HarnessSkillsRootRecord,
 } from "./contracts/skill.ts";
 import type {
-  HarnessSubagentLineage,
+  HarnessRunLineage,
   HarnessSubagentRunRef,
 } from "./contracts/subagent.ts";
 import type { ToolResultRef } from "./contracts/tool-result.ts";
@@ -58,6 +58,7 @@ import type {
   HarnessModelAuthSource,
   HarnessModelProviderId,
 } from "./config.ts";
+import type { HarnessSystemPromptInputs } from "./contracts/system-prompt.ts";
 import type { HarnessTaskClassification } from "./task-classification.ts";
 
 export type HarnessRunStatus =
@@ -226,6 +227,9 @@ export interface HarnessRunState {
    */
   pieceOutputRequired?: boolean;
 
+  /** Additional instructions a follow-up may inherit. */
+  systemPromptInputs?: HarnessSystemPromptInputs;
+
   /** Root-run structured-result configuration, retained across resume. */
   structuredResult?: {
     schema: JSONSchema;
@@ -310,7 +314,7 @@ export interface HarnessRunState {
   docsQueryFailures?: number;
 
   toolOutputs: ToolResultRef[];
-  lineage?: HarnessSubagentLineage;
+  lineage?: HarnessRunLineage;
   subagentRuns?: HarnessSubagentRunRef[];
   failureRecords?: HarnessFailureRecord[];
   primaryFailure?: HarnessFailureRecord;
@@ -338,6 +342,11 @@ export interface CreateHarnessRunStateOptions {
   credentialOwner?: HarnessCredentialOwnerRef;
   harnessHomeIdentity?: string;
   artifactRoot?: string;
+  /** Additional instructions a follow-up may inherit. */
+  systemPromptInputs?: HarnessSystemPromptInputs;
+  taskClassification?: HarnessTaskClassification;
+
+  /** Root-run structured-result configuration, retained across resume. */
   structuredResult?: {
     schema: JSONSchema;
     path: string;
@@ -386,7 +395,7 @@ export interface CreateHarnessRunStateOptions {
   openingResearch?: HarnessOpeningResearch;
   researchFailures?: number;
   docsQueryFailures?: number;
-  lineage?: HarnessSubagentLineage;
+  lineage?: HarnessRunLineage;
   subagentRuns?: HarnessSubagentRunRef[];
   failureRecords?: HarnessFailureRecord[];
   primaryFailure?: HarnessFailureRecord;
@@ -439,6 +448,12 @@ export const createHarnessRunState = (
       : {}),
     ...(options.artifactRoot !== undefined
       ? { artifactRoot: options.artifactRoot }
+      : {}),
+    ...(options.taskClassification !== undefined
+      ? { taskClassification: structuredClone(options.taskClassification) }
+      : {}),
+    ...(options.systemPromptInputs !== undefined
+      ? { systemPromptInputs: structuredClone(options.systemPromptInputs) }
       : {}),
     ...(options.structuredResult !== undefined
       ? { structuredResult: structuredClone(options.structuredResult) }

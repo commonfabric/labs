@@ -328,7 +328,8 @@ export class BuildConfig {
    * embedded when an embedded module imports it. The toolshed leaves out the
    * files in the pattern trees that it never serves to a runtime: the
    * integration tests with their helpers and fixtures, the recorded
-   * compatibility baselines, Deno unit tests, and iframe guest sources.
+   * compatibility baselines, the Topics board's command-line client, Deno unit
+   * tests, and iframe guest sources.
    * Authored `.test.tsx` pattern tests are served because a program can attach
    * them as source roots. Excluding development-only files also keeps their npm
    * dependencies out of the binary.
@@ -337,6 +338,7 @@ export class BuildConfig {
     if (binary !== "toolshed") return [];
     const directories = [
       this.#path("packages", "patterns", "integration"),
+      this.#path("packages", "patterns", "topics", "tools"),
       this.#path(...BASELINES_DIR.split("/")),
     ];
     const files = this.patternPaths().flatMap((tree) =>

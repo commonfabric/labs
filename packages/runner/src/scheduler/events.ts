@@ -1,5 +1,6 @@
 import { getLogger } from "@commonfabric/utils/logger";
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
+import { entityKey } from "./keys.ts";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { createRef } from "../create-ref.ts";
@@ -32,11 +33,13 @@ import type {
   CommitError,
   IExtendedStorageTransaction,
   IPreconditionFailedError,
+  IReadActivity,
   IStorageManager,
   IStorageNotification,
   IStorageTransaction,
   MemorySpace,
 } from "../storage/interface.ts";
+import { ReplicaLoadFailureError } from "../storage/interface.ts";
 import {
   localReadFailure,
   releaseLocalReadBasis,
@@ -2492,6 +2495,7 @@ export async function dispatchQueuedEvent(state: {
         state.recordLineageEvent(requeued.originTx, requeued);
       }
       state.queueExecution();
+      return requeued;
     };
 
     // Re-queue a transient outcome for a later retry. With `runAt` the retry is
@@ -2610,18 +2614,103 @@ export async function dispatchQueuedEvent(state: {
     };
 
     const finalize = (error?: unknown): void => {
-      // A served run that read a document this runtime refuses by
-      // construction read an absence that is not the document's state, so
-      // whatever it did with it — an `undefined` argument, a throw, a
-      // branch taken on nothing — is no consequence of the event. The read
-      // is refused the same way every time, so the entry fails permanently
-      // in `dispatch-load`, as a load that cannot succeed fails it. Only
-      // what the run itself read decides this: the preflight's dependency
-      // walk is a transaction of its own, and a refused document only it
-      // reaches leaves the run free to dispatch.
-      const refused = served === undefined
+      // A served run that read a document this runtime does not admit
+      // read an absence that is not the document's state, so whatever it
+      // did with it — an `undefined` argument, a throw, a branch taken on
+      // nothing — is no consequence of the event. The read is refused the
+      // same way every time until the target's access list changes, so
+      // the entry fails permanently in `dispatch-load`, as a load that
+      // cannot succeed fails it. Only what the run itself read decides
+      // this: the preflight's dependency walk is a transaction of its own,
+      // and a refused document only it reaches leaves the run free to
+      // dispatch.
+      const refusedRead = served === undefined
         ? undefined
         : refusedReadIn(state.runtime.storageManager, tx.tx);
+      if (refusedRead?.standing === "unresolved") {
+        // The run read a foreign scoped instance whose actor's grant is still
+        // being asked for — a document its body alone reaches, since the
+        // preflight parks on one its declared schema reaches. The read kicked
+        // the load, and the event runs again once that load settles, with the
+        // document or with the refusal the next run reads as such. The
+        // re-queued entry is passed over meanwhile, so dispatch does not spin
+        // on a grant in flight, and idle waits on it as on any parked head.
+        state.noteLineageRerun(tx);
+        if (tx.status().status === "ready") {
+          tx.abort(
+            new Error(
+              "served run read a foreign scoped instance whose actor's grant " +
+                `is unresolved: ${refusedRead.document}`,
+            ),
+          );
+        }
+        const requeued = requeueForNameResolution();
+        requeued.retryReadinessPending = true;
+        const manager = state.runtime.storageManager;
+        const identity = tx.tx.scopeKeyIdentity ??
+          state.runtime.scopeKeyIdentity;
+        const key = entityKey(refusedRead.address, identity);
+        void (manager.loadsSettled?.([key]) ?? Promise.resolve()).then(
+          () => {
+            delete requeued.retryReadinessPending;
+            state.queueExecution();
+          },
+          (cause: unknown) => {
+            // The load failed — a transport, session or authorization
+            // failure, never the grant's refusal, which settles the load as
+            // an absence. A re-run would dispatch against a replica whose
+            // required load failed, which the preflight's park never does,
+            // so the entry fails as it does there: deferred with the typed
+            // failure on its checkpoint, no consequence written, a later
+            // drain re-delivering it, and the later same-space arrivals held
+            // behind it. The drop settles the requeued entry's callback; a
+            // failed origin that dropped it meanwhile left nothing to drop.
+            delete requeued.retryReadinessPending;
+            const detail = cause instanceof Error
+              ? cause.message
+              : String(cause);
+            const failure = cause instanceof ReplicaLoadFailureError
+              ? cause.failure
+              : {
+                failureClass: "unknown" as const,
+                recoveryEpoch: "untyped",
+                permanentEvidence: false,
+              };
+            dropQueuedEvent(
+              state,
+              requeued,
+              `Event deferred: the load of ${refusedRead.document}, read ` +
+                `under a grant then unresolved, failed before the re-run ` +
+                `(${key}: ${detail}); the entry stays pending and a later ` +
+                `drain re-delivers it`,
+              "deferred",
+              {
+                quiet: true,
+                servedOutcome: {
+                  kind: "deferred",
+                  cause: "load-park",
+                  role: "failed-head",
+                  failure,
+                },
+              },
+            );
+            deferLaterSameSpaceServedEvents(
+              state,
+              requeued,
+              `whose served run's load of ${refusedRead.document} failed`,
+            );
+            state.queueExecution();
+          },
+        );
+        runFinalCommitCallback();
+        tx.abandonStagedWork(
+          eventAbandonError(
+            "served run re-runs once the grant it read under is resolved",
+          ),
+        );
+        return;
+      }
+      const refused = refusedRead?.document;
       if (refused !== undefined) {
         if (tx.status().status === "ready") {
           tx.abort(new Error(`served run read a refused document: ${refused}`));
@@ -3359,8 +3448,10 @@ export async function dispatchQueuedEvent(state: {
 }
 
 /**
- * The first document whose value `tx` read that `manager` refuses by
- * construction, as `<space>/<scope>/<id>`, or `undefined` when it read none.
+ * The first document whose value `tx` read under its identity that `manager`
+ * does not admit (`scopedReadStanding`), as `<space>/<scope>/<id>` with the
+ * standing it has and its address, or `undefined` when every document it read
+ * is admitted.
  * A read of the document's root counts, as a read of its value does, among
  * the reads the run depends on. Three kinds of read do not count, since none
  * is the run consuming the document's data: a read of its CFC metadata, which
@@ -3373,10 +3464,14 @@ export async function dispatchQueuedEvent(state: {
  * natively; a transaction that records none names no document.
  */
 export function refusedReadIn(
-  manager: Pick<IStorageManager, "refusesReadByConstruction">,
-  tx: Pick<IStorageTransaction, "getReadActivities">,
-): string | undefined {
-  if (manager.refusesReadByConstruction === undefined) return undefined;
+  manager: Pick<IStorageManager, "scopedReadStanding">,
+  tx: Pick<IStorageTransaction, "getReadActivities" | "scopeKeyIdentity">,
+): {
+  document: string;
+  standing: "refused" | "unresolved";
+  address: Pick<IReadActivity, "space" | "id" | "scope">;
+} | undefined {
+  if (manager.scopedReadStanding === undefined) return undefined;
   for (const read of tx.getReadActivities?.() ?? []) {
     if (
       isLinkResolutionProbe(read.meta) ||
@@ -3385,8 +3480,13 @@ export function refusedReadIn(
       continue;
     }
     if (read.path.length > 0 && read.path[0] !== "value") continue;
-    if (manager.refusesReadByConstruction(read)) {
-      return `${read.space}/${read.scope ?? "space"}/${read.id}`;
+    const standing = manager.scopedReadStanding(read, tx.scopeKeyIdentity);
+    if (standing !== "admitted") {
+      return {
+        document: `${read.space}/${read.scope ?? "space"}/${read.id}`,
+        standing,
+        address: { space: read.space, id: read.id, scope: read.scope },
+      };
     }
   }
   return undefined;

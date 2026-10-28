@@ -7,6 +7,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import type { JSONSchema } from "../../runner/src/builder/types.ts";
 import { vnodeSchema } from "../../runner/src/schemas.ts";
+import { seedProfileOwner } from "../../runner/test/cfc-seed-envelope.ts";
 import { createTrustedBuilder } from "../../runner/test/support/trusted-builder.ts";
 import type { VDomOp } from "../src/vdom-ops.ts";
 import { WorkerReconciler } from "../src/worker/reconciler.ts";
@@ -117,6 +118,7 @@ Deno.test("worker reconciler over the props of the view a wish shows", async (t)
       avatar: "",
       elements: [{ cell: piece, tag: "#props", userTags: [], title: "props" }],
     });
+    seedProfileOwner(pieceTx, profile.getAsNormalizedFullLink(), owner.did());
     expect((await pieceTx.commit().settled).error).toBeUndefined();
     const homeTx = runtime.edit();
     const homeDefault = runtime.getCell(

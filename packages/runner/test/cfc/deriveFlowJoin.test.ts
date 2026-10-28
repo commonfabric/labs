@@ -34,7 +34,7 @@ import {
   writeSeedEnvelopeDoc,
 } from "../cfc-seed-envelope.ts";
 
-/** Resolves a class-filtered scan, keeping component and template buckets apart. */
+/** Resolves a scan with independent runtime value, existence, and template labels. */
 function scan(
   entries: LabelMapEntry[],
   path: string[],
@@ -74,9 +74,17 @@ function scan(
   );
   const buckets = new Map<string, LabelMapEntry[]>();
   for (const entry of ancestors) {
-    const bucket = `${entry.origin ?? "legacy"}:${
-      template(entry) && entry.observes === "shape"
-    }`;
+    // Runtime existence is frozen independently of current content (§4.6.3).
+    // Membership templates describe a third fact; declared and legacy entries
+    // retain their covering policy resolution.
+    let channel = "covering";
+    if (
+      entry.observes === "shape" &&
+      (entry.origin === "derived" || entry.origin === "structure")
+    ) {
+      channel = template(entry) ? "membership" : "existence";
+    }
+    const bucket = `${entry.origin ?? "legacy"}:${channel}`;
     const group = buckets.get(bucket) ?? [];
     group.push(entry);
     buckets.set(bucket, group);

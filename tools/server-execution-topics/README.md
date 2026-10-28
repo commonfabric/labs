@@ -103,10 +103,10 @@ replaces its cached binary only after successful compilation. A failed build
 preserves the old binary. This avoids treating an embedded commit as proof that
 a cached binary contains the current source.
 
-The child environment always follows the requested lane, even when the parent's
-execution flag disagrees. Endpoint reads reject unsuccessful HTTP responses; the
-server, client, and baked shell must agree with the lane. The seed checker
-independently asserts the raw flag's mapping before resolving an unset value
-through the first-party default. Latency runs require the quiet-machine
-condition both before setup and after compilation, and every sample during the
-workload must satisfy it.
+The child environment always carries the requested lane's flags
+(`ServerExecutionCiLane.environment`), even when the parent's disagree. Endpoint
+reads reject unsuccessful HTTP responses; the server, client, and baked shell
+must agree with the lane. The seed checker independently asserts the raw flag's
+mapping before resolving an unset value through the first-party default. Latency
+runs require the quiet-machine condition both before setup and after
+compilation, and every sample during the workload must satisfy it.

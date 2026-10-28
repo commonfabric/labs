@@ -145,7 +145,7 @@ describe("stored-setup-build", () => {
         },
       };
 
-      expect(projectionMap(result)).toEqual([
+      expect(projectionMap(result, {})).toEqual([
         ["$UI/children/0", 1, ""],
         ["$UI/children/2", 0, "label"],
       ]);

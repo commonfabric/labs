@@ -398,6 +398,12 @@ function createFilterInstance(
       return;
     }
 
+    // Checked first, so that a list builtin that fails leaves its container
+    // holding nothing rather than an empty list.
+    if (list !== undefined && !Array.isArray(list)) {
+      throw new Error("filter currently only supports arrays");
+    }
+
     // A fresh (non-resume) reconcile has no container yet; seed [] so the first
     // render has a value. On resume this is unreachable — the defer guard above
     // either holds for the still-loading container or sees the durable value, so
@@ -409,10 +415,6 @@ function createFilterInstance(
       probeScoped(() => resultWithLog.set([]));
       releaseRemovedElements(runtime, elementRuns, new Set());
       return;
-    }
-
-    if (!Array.isArray(list)) {
-      throw new Error("filter currently only supports arrays");
     }
 
     // The whole current key set has to exist before any element is touched:

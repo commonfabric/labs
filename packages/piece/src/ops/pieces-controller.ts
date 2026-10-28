@@ -19,6 +19,7 @@ import {
 import { isDID } from "@commonfabric/identity/did";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import { setLLMUrl } from "@commonfabric/llm";
+import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
 import type { CfcPosture } from "@commonfabric/runner";
 import {
   applyPieceSourceTransition,
@@ -300,9 +301,13 @@ export class PiecesController<T = unknown> {
       cfcReadMaxConfidentiality,
       cfcReadOnExceed,
       clientClass,
+      clientBuild,
     }: {
       apiUrl: URL | string;
       identity: Identity;
+
+      /** Application and loaded labs build reported by this runtime. */
+      clientBuild?: ClientBuild;
 
       /**
        * The space to open, as a `did:key:` DID or as a legacy space name,
@@ -397,6 +402,7 @@ export class PiecesController<T = unknown> {
     const storageManager = StorageManager.open({
       as: session.as,
       memoryHost,
+      clientBuild,
     });
     // Shared first-party posture for client runtimes against a deployed API
     // (CT-1814); the CFC pin this site previously restated lives in the

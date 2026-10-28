@@ -2180,14 +2180,13 @@ describe("run-pattern", () => {
 
     it("commits no unlabelled copy when a pattern-body map reads labelled values inline", async () => {
       // A pattern-body `.map()` runs as the built-in map, whose coordinator
-      // reads the list raw. With the labelled values inline in that list, the
+      // reads the list raw. With the labeled values inline in that list, the
       // read carries their confidentiality into the stores the map writes —
       // its result container and one result document per element. Those are
-      // stores the runtime owns, so each declares that confidentiality
-      // (§8.12.5 route 2) rather than refusing the write, and the run
-      // commits. Nothing copies the text even so: each element result is a
-      // link into the labelled source path, so the labelled text exists at
-      // rest only in the seeded source document.
+      // stores the runtime owns, so ownership admits the writes; a live
+      // enrollment keeps their flow labels in derived stamps. Each element
+      // result is a link into the labeled source path, so the labeled text
+      // exists at rest only in the seeded source document.
       //
       // What the labels stop is the ANSWER. The model's context is outside
       // every space, so the answer ceiling withholds the value the tool would

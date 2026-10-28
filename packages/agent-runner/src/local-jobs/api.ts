@@ -7,15 +7,22 @@
  *
  * - `GET /health` — the lane is serving.
  * - `POST /jobs` — enqueue `{caller, profile, idempotencyKey, task,
- *   instructions?, context?, resultSchema, tools?, maxModelTurns?,
+ *   instructions?, context?, resultSchema?, tools?, maxModelTurns?,
  *   maxInputBytes?, maxOutputTokens?, imageAttachments?, depth?, tags?,
- *   domains?, reasoningEffort?, browserHost?, inputs?, foreignSpaces?}`,
+ *   domains?, reasoningEffort?, browserHost?, inputs?, foreignSpaces?,
+ *   interactive?}`,
  *   where `inputs` maps a name to a piece address and `foreignSpaces` a
  *   space DID an input names to the origin serving it;
  *   answers `201` with the new job, or `200` with the one the key already
  *   names for the same request.
+ *   `interactive` is a boolean: these jobs are ordered first and may use
+ *   the slot held for them when the lane has at least two slots.
  * - `GET /jobs?limit=n` — the newest jobs, newest first.
  * - `GET /jobs/<id>` — one job.
+ * - `POST /jobs/<id>/messages` — accept `{caller, idempotencyKey, message,
+ *   instructions?, imageAttachments?, inputs?, foreignSpaces?}` on the
+ *   conversation's head; returns `{message, job}`,
+ *   `201` on acceptance or `200` on replay.
  * - `POST /jobs/<id>/cancel` — ask a job to stop.
  * - `GET /jobs/<id>/events?after=<seq>` — the job's events after `seq` as
  *   server-sent events, then each new one as it is appended, ending after
@@ -26,6 +33,10 @@
  *   still owed first (`./browser-host.ts`).
  * - `POST /jobs/<id>/browser/result` — `{id, result}`, the host's answer to
  *   one operation.
+ *
+ * A schema-less job answers with its final assistant text. The durable event
+ * stream includes whole root assistant `text {turn, text}` messages and
+ * cumulative `usage {usage, coverage}` after each model call.
  *
  * A refusal is `{ok: false, code, error}` with a 4xx status.
  */
@@ -51,7 +62,9 @@ import {
 import type { LocalJobProfiles } from "./profiles.ts";
 import {
   LOCAL_JOB_TERMINAL_STATES,
+  type LocalJobAttachments,
   type LocalJobEvent,
+  type LocalJobMessageRequest,
   type LocalJobRequest,
   type LocalJobStore,
 } from "./store.ts";
@@ -59,7 +72,7 @@ import {
 /** Longest idempotency key, caller or profile name a request may carry. */
 const MAX_NAME_LENGTH = 200;
 
-/** Largest JSON enqueue body accepted by the private socket. */
+/** Largest JSON enqueue or message body accepted by the private socket. */
 const MAX_ENQUEUE_BYTES = 1024 * 1024;
 
 /** How often an open event stream says it is alive when nothing happens. */
@@ -159,6 +172,49 @@ const listOf = <T extends string>(
     : undefined;
 };
 
+/** Reads attachments with the same bounds and shapes on both routes. */
+const attachmentsOf = (
+  { imageAttachments, inputs, foreignSpaces }: Record<string, unknown>,
+): LocalJobAttachments | { error: string } => {
+  let images: HarnessInlineImageAttachment[] | undefined;
+  try {
+    images = imagesOf(imageAttachments);
+  } catch (error) {
+    return {
+      error: error instanceof Error
+        ? error.message
+        : "Invalid image attachments.",
+    };
+  }
+  if (
+    inputs !== undefined &&
+    (!isObjectNotArray(inputs) ||
+      !Object.values(inputs).every((address) =>
+        typeof address === "string" && address.length > 0
+      ))
+  ) {
+    return { error: "`inputs` must map names to piece addresses." };
+  }
+  if (
+    foreignSpaces !== undefined &&
+    (!isObjectNotArray(foreignSpaces) ||
+      !Object.values(foreignSpaces).every((host) =>
+        typeof host === "string" && host.length > 0
+      ))
+  ) {
+    return { error: "`foreignSpaces` must map space DIDs to host origins." };
+  }
+  return {
+    ...(images !== undefined ? { imageAttachments: images } : {}),
+    ...(inputs !== undefined
+      ? { inputs: inputs as Record<string, string> }
+      : {}),
+    ...(foreignSpaces !== undefined
+      ? { foreignSpaces: foreignSpaces as Record<string, string> }
+      : {}),
+  };
+};
+
 /** Helper for enqueue, which reads a request body or names what is wrong. */
 const enqueueRequestOf = (
   value: unknown,
@@ -188,9 +244,7 @@ const enqueueRequestOf = (
     domains,
     reasoningEffort,
     browserHost,
-    imageAttachments,
-    inputs,
-    foreignSpaces,
+    interactive,
   } = value as Record<string, unknown>;
   const name = (field: unknown) =>
     typeof field === "string" && field.length > 0 &&
@@ -204,10 +258,16 @@ const enqueueRequestOf = (
   if (typeof task !== "string" || task.length === 0) {
     return { error: "`task` must be a nonempty string." };
   }
+  if (interactive !== undefined && typeof interactive !== "boolean") {
+    return { error: "`interactive` must be a boolean." };
+  }
   if (instructions !== undefined && typeof instructions !== "string") {
     return { error: "`instructions` must be a string." };
   }
-  if (!isObjectNotArray(resultSchema) && typeof resultSchema !== "boolean") {
+  if (
+    resultSchema !== undefined && !isObjectNotArray(resultSchema) &&
+    typeof resultSchema !== "boolean"
+  ) {
     return { error: "`resultSchema` must be a JSON schema." };
   }
   if (
@@ -273,44 +333,19 @@ const enqueueRequestOf = (
   if (browserHost !== undefined && !isObjectNotArray(browserHost)) {
     return { error: "`browserHost` must be an object." };
   }
-  let images: HarnessInlineImageAttachment[] | undefined;
-  try {
-    images = imagesOf(imageAttachments);
-  } catch (error) {
-    return {
-      error: error instanceof Error
-        ? error.message
-        : "Invalid image attachments.",
-    };
-  }
-  if (
-    inputs !== undefined &&
-    (!isObjectNotArray(inputs) ||
-      !Object.values(inputs).every((address) =>
-        typeof address === "string" && address.length > 0
-      ))
-  ) {
-    return { error: "`inputs` must map names to piece addresses." };
-  }
-  if (
-    foreignSpaces !== undefined &&
-    (!isObjectNotArray(foreignSpaces) ||
-      !Object.values(foreignSpaces).every((host) =>
-        typeof host === "string" && host.length > 0
-      ))
-  ) {
-    return { error: "`foreignSpaces` must map space DIDs to host origins." };
-  }
+  const attachments = attachmentsOf(value);
+  if ("error" in attachments) return attachments;
   return {
     caller: caller as string,
     profile: profile as string,
     idempotencyKey: idempotencyKey as string,
     request: {
       task,
-      ...(images !== undefined ? { imageAttachments: images } : {}),
+      ...(interactive !== undefined ? { interactive } : {}),
+      ...attachments,
       ...(instructions !== undefined ? { instructions } : {}),
       ...(context !== undefined ? { context } : {}),
-      resultSchema,
+      ...(resultSchema !== undefined ? { resultSchema } : {}),
       ...(tools !== undefined ? { tools: tools as string[] } : {}),
       ...(maxModelTurns !== undefined ? { maxModelTurns } : {}),
       ...(typeof maxInputBytes === "number" ? { maxInputBytes } : {}),
@@ -322,14 +357,100 @@ const enqueueRequestOf = (
       ...(browserHost !== undefined
         ? { browserHost: browserHost as Record<string, unknown> }
         : {}),
-      ...(inputs !== undefined
-        ? { inputs: inputs as Record<string, string> }
-        : {}),
-      ...(foreignSpaces !== undefined
-        ? { foreignSpaces: foreignSpaces as Record<string, string> }
-        : {}),
     },
   };
+};
+
+/** Reads a message body, preserving absent versus supplied instructions. */
+const messageRequestOf = (value: unknown):
+  | LocalJobMessageRequest
+  | { error: string } => {
+  if (!isObjectNotArray(value)) return { error: "The body must be an object." };
+  const { caller, idempotencyKey, message, instructions } = value as Record<
+    string,
+    unknown
+  >;
+  if (
+    typeof caller !== "string" || caller.length === 0 ||
+    caller.length > MAX_NAME_LENGTH ||
+    typeof idempotencyKey !== "string" || idempotencyKey.length === 0 ||
+    idempotencyKey.length > MAX_NAME_LENGTH ||
+    typeof message !== "string" || message.length === 0 ||
+    (instructions !== undefined && typeof instructions !== "string")
+  ) {
+    return {
+      error:
+        "`caller`, `idempotencyKey` and `message` must be nonempty strings; `instructions` must be a string when supplied.",
+    };
+  }
+  const attachments = attachmentsOf(value);
+  if ("error" in attachments) return attachments;
+  return {
+    caller,
+    idempotencyKey,
+    message,
+    ...attachments,
+    ...(instructions !== undefined ? { instructions } : {}),
+  };
+};
+
+/** Accepts a bounded message and starts any follow-up it opens. */
+const acceptMessage = async (
+  options: LocalJobApiOptions,
+  id: string,
+  request: Request,
+): Promise<Response> => {
+  if (
+    Number(request.headers.get("content-length") ?? "0") > MAX_ENQUEUE_BYTES
+  ) return refuse(413, "too_large", "The message is too large.");
+  let text: string | undefined;
+  try {
+    text = await boundedBodyText(request, MAX_ENQUEUE_BYTES);
+  } catch {
+    return refuse(400, "invalid_request", "The body could not be read.");
+  }
+  if (text === undefined) {
+    return refuse(413, "too_large", "The message is too large.");
+  }
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return refuse(400, "invalid_request", "The body must be JSON.");
+  }
+  const read = messageRequestOf(body);
+  if ("error" in read) return refuse(400, "invalid_request", read.error);
+  const accepted = options.store.acceptMessage(id, read, {
+    validateFollowUp: (name, request) => {
+      const profile = options.profiles.get(name);
+      if (profile === undefined) {
+        return {
+          code: "unknown_profile",
+          error: "The host no longer names the head's profile.",
+        };
+      }
+      const narrowed = narrowLocalJobProfile(profile, request);
+      return "refusal" in narrowed
+        ? { code: "beyond_profile", error: narrowed.refusal }
+        : undefined;
+    },
+  });
+  if ("code" in accepted) {
+    const status = accepted.code === "not_found"
+      ? 404
+      : accepted.code === "not_callers"
+      ? 403
+      : accepted.code === "unknown_profile" ||
+          accepted.code === "beyond_profile"
+      ? 400
+      : 409;
+    return refuse(status, accepted.code, accepted.error);
+  }
+  if (accepted.created) options.kick();
+  return json(accepted.created ? 201 : 200, {
+    message: accepted.message,
+    job: accepted.job,
+  });
 };
 
 /** Helper for the stream, which writes one event as a server-sent event. */
@@ -638,6 +759,11 @@ async (request: Request): Promise<Response> => {
   }
 
   const id = parts[1];
+  if (
+    parts.length === 3 && parts[2] === "messages" && request.method === "POST"
+  ) {
+    return await acceptMessage(options, id, request);
+  }
   if (store.get(id) === undefined) {
     return refuse(404, "not_found", `No job \`${id}\`.`);
   }

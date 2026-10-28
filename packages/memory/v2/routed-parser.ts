@@ -9,29 +9,27 @@ import { isCanonicalEd25519DID } from "@commonfabric/identity";
 import { isPlainObject } from "@commonfabric/utils/types";
 import { utf8Compare } from "@commonfabric/utils/utf8";
 
-import { ROUTED_HOLDINGS_LIMIT } from "./routed-limits.ts";
+import {
+  ROUTED_DEFAULT_SLOT_LIMIT,
+  ROUTED_HOLDINGS_LIMIT,
+  ROUTED_PART_BYTES,
+  ROUTED_QUEUE_LIMIT,
+} from "./routed-limits.ts";
 import { requireRouted } from "./routed-wire.ts";
 
-export { ROUTED_HOLDINGS_LIMIT };
+export {
+  ROUTED_DEFAULT_SLOT_LIMIT,
+  ROUTED_HOLDINGS_LIMIT,
+  ROUTED_PART_BYTES,
+  ROUTED_QUEUE_LIMIT,
+};
 
 /** Maximum raw public-stage frame bytes. */
 export const ROUTED_RAW_LIMIT = 8 * 1024 * 1024;
 /** Maximum expanded public-stage frame bytes. */
 export const ROUTED_EXPANDED_LIMIT = 16 * 1024 * 1024;
-/** Maximum queued bytes on one ticketed data socket. */
-export const ROUTED_QUEUE_LIMIT = 4 * 1024 * 1024;
 /** Maximum JSON nesting in any routed input; the router's `DEPTH_LIMIT`. */
 export const ROUTED_DEPTH_LIMIT = 64;
-/**
- * JSON values in one frame by default: the router's default `max_frame_slots`
- * and the toolshed's default `limits.frameSlots`. Also the cap on the
- * toolshed's own inputs, which are not frames (its policy config, the
- * directory snapshot, the epoch ledger's lines and a link agent's flags), as
- * the router applies its default to its own inputs. A frame's cap is the
- * receiver's: the toolshed's `limits.frameSlots` or the SDK's cap learned
- * from `hello.ok.routerFrameSlots`, with this default when it is absent.
- */
-export const ROUTED_DEFAULT_SLOT_LIMIT = 150_000;
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });

@@ -80,6 +80,12 @@ import { markDurableReadTx } from "../storage/reactivity-log.ts";
  * `scopeKeyIdentity` carries the deferring run's viewing identity through the
  * asynchronous pull and each seed attempt, so scoped containers initialize the
  * instance whose absence caused the deferral.
+ *
+ * With `seedEmpty` false nothing is seeded, and the coordinator is re-armed
+ * once the pull settles, for a coordinator that writes its container only
+ * once a reconcile succeeds: its container is absent only where every
+ * reconcile so far failed, and an empty list there would read as a result it
+ * never produced.
  */
 export function seedResultContainerWhenPullSettles(
   runtime: Runtime,
@@ -90,9 +96,10 @@ export function seedResultContainerWhenPullSettles(
   logger: Logger,
   seedActionId: string,
   identity?: ScopeKeyIdentity,
+  seedEmpty = true,
 ): Promise<void> {
   const seedIfStillAbsent = (): Promise<void> => {
-    if (!stillHeld()) return Promise.resolve();
+    if (!seedEmpty || !stillHeld()) return Promise.resolve();
     return runtime.editWithRetry((seedTx) => {
       if (!stillHeld()) return;
       markDurableReadTx(seedTx);
@@ -172,12 +179,16 @@ export interface ResumeContainerWait {
  * the container alone: a coordinator that swaps in a replacement waits for that
  * one as well, since a replacement's own state is what its first reconcile
  * confirms.
+ *
+ * `seedEmpty` says whether the wait seeds an absent container with `[]`, as
+ * {@link seedResultContainerWhenPullSettles} describes.
  */
 export function resumeContainerWait(
   runtime: Runtime,
   logger: Logger,
   seedActionId: string,
   identity?: ScopeKeyIdentity,
+  seedEmpty = true,
 ): ResumeContainerWait {
   let outstanding: Cell<any[]> | undefined;
   let waited: Cell<any[]> | undefined;
@@ -198,6 +209,7 @@ export function resumeContainerWait(
         logger,
         seedActionId,
         identity,
+        seedEmpty,
       );
       // The chain settles whether or not the coordinator was still holding the
       // container to re-arm, and a coordinator that was not is one this wait

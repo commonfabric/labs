@@ -11,8 +11,8 @@
  * space and sends an event.
  *
  * With handlers run by each session's own runtime, every act lands, and each
- * offer reaches Grace's inbox, a space that admits no such label. Under server
- * execution, each act is refused: see `expectRefusedUnderServerExecution()`.
+ * offer reaches Grace's inbox, a space that admits no such label. The same
+ * acts and deliveries succeed under server execution.
  *
  * Both stand-ins share the harness's one space, Ada's home, so the server
  * runs with no access list: a home space grants no one but its owner.
@@ -24,11 +24,9 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { Identity } from "@commonfabric/identity";
-import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
 import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,
-  resolveServerExecution,
 } from "./multi-runtime-harness.ts";
 
 const PROGRAM_PATH = join(
@@ -38,9 +36,6 @@ const PROGRAM_PATH = join(
   "main.tsx",
 );
 const ROOT_PATH = join(import.meta.dirname!, "..");
-
-/** Whether this run's harness serves handlers from a serving loop. */
-const SERVER_EXECUTION = resolveServerExecution();
 
 /** Ada's session, whose DID the fixture's label names. */
 const ADA = "fabrichat-stamped-catalog-ada";
@@ -62,15 +57,6 @@ const linkTo = (address: CellAddress) => ({
   },
 });
 
-/**
- * The refusals the CFC write gate has logged in this process, where the
- * harness's serving loop runs under server execution.
- */
-const writeRefusals = (): number => {
-  const cfc = getLoggerCountsBreakdown().cfc;
-  return typeof cfc === "object" ? cfc["write-policy-gate"]?.total ?? 0 : 0;
-};
-
 describe("fabrichat stamped title offers across runtimes", () => {
   let harness: MultiRuntimeHarness;
   let ada: MultiRuntimeSession;
@@ -84,27 +70,6 @@ describe("fabrichat stamped title offers across runtimes", () => {
     ((await grace.read(["offers"], { piece: graceInbox })) as
       | { id: string }[]
       | undefined ?? []).some((offer) => offer.id === id);
-
-  /**
-   * Asserts that the request `requestId`, sent once the write gate had logged
-   * `refusedBefore` refusals, was refused by the gate and recorded nothing.
-   */
-  const expectRefusedUnderServerExecution = async (
-    requestId: string,
-    refusedBefore: number,
-  ): Promise<void> => {
-    // TODO(danfuzz): This is the wrong outcome, pinned as what happens
-    // today. The served act's join holds the stamped title, from Ada's home,
-    // beside clauses from other spaces, the room's among them, so the
-    // stream-entries documents it writes in Ada's home lose their exemption
-    // from writer-fit and are measured against `Space(<her home>)`, which her
-    // own `PersonalSpace` label doesn't fit. Expect the act to land, as the other
-    // posture does, once the CFC specification rules on whether such a
-    // document admits its space owner's label and the runtime follows
-    // (`isDeclarablePolicyStore()` in `packages/runner/src/cfc/prepare.ts`).
-    expect(writeRefusals()).toBeGreaterThan(refusedBefore);
-    expect(await ada.read(["requests", requestId])).toBeUndefined();
-  };
 
   beforeEach(async () => {
     // Ada's stand-in lives in her home space, where a Home does.
@@ -168,17 +133,12 @@ describe("fabrichat stamped title offers across runtimes", () => {
   });
 
   it("offers a group to a member added to it, through their profile's inbox", async () => {
-    const refusedBefore = writeRefusals();
     await ada.send("offerRoom", {
       requestId: "add-grace",
       room: linkTo(group),
       profile: linkTo(graceProfile),
     });
     await harness.settle();
-    if (SERVER_EXECUTION) {
-      await expectRefusedUnderServerExecution("add-grace", refusedBefore);
-      return;
-    }
     expect(await ada.read(["requests", "add-grace"])).toEqual({
       status: "done",
       delivery: "offered",
@@ -198,30 +158,20 @@ describe("fabrichat stamped title offers across runtimes", () => {
     expect(await ada.read(["outgoingNotices", "length"])).toBe(1);
 
     // A start naming her profile finds the room, and offers it there.
-    const refusedBefore = writeRefusals();
     await ada.send("openDirect", {
       requestId: "d-again",
       counterpart: grace.identity.did(),
       profile: linkTo(graceProfile),
     }, START_ACTION);
     await harness.settle();
-    if (SERVER_EXECUTION) {
-      await expectRefusedUnderServerExecution("d-again", refusedBefore);
-      return;
-    }
     expect(await ada.read(["requests", "d-again", "status"])).toBe("done");
     expect(await ada.read(["outgoingNotices", "length"])).toBe(0);
     await harness.settleUntil(() => graceHolds("d-again"));
   });
 
   it("joins a group the catalog lists, under a request", async () => {
-    const refusedBefore = writeRefusals();
     await ada.send("joinRoom", { requestId: "j-team", room: linkTo(group) });
     await harness.settle();
-    if (SERVER_EXECUTION) {
-      await expectRefusedUnderServerExecution("j-team", refusedBefore);
-      return;
-    }
     expect(await ada.read(["requests", "j-team", "status"])).toBe("done");
     expect(await ada.read(["requests", "j-team", "entry", "kind"])).toBe(
       "group",

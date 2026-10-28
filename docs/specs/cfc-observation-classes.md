@@ -109,6 +109,19 @@ A read consumes the join of every entry whose class is in its consumed set:
 | `linkResolutionProbe` / slot-pointer read (no deref) | `followRef` | which reference sits here — **stops being excluded**; consumes the link-origin entry's `followRef` class |
 | dereference (follow a ref to its target) | the dereference trace pair it already is | unchanged; target read classified at the target path |
 
+Runtime-minted concrete existence entries resolve independently from current
+value entries (§4.6.3, §8.12.8). Each retains its own most-specific applicable
+entry, and an observation consuming both joins them. A public child existence
+entry therefore cannot hide a confidential ancestor value; a public child
+value cannot hide confidential ancestor existence. Wildcard membership
+entries also retain their independent resolution. Declared and legacy covering
+entries keep their existing component resolution.
+
+Returning a primitive through a query-result proxy consumes its value, even
+when constructing that view first probes its shape. This applies to JavaScript
+primitives as well as Fabric primitives. A shape-only storage observation
+continues to consume only its shape classes.
+
 The load-bearing change is the third row: the `followRef` observation, today
 dropped from the flow join, becomes a consumed class carrying the link entry's
 label — closing SC-8.
@@ -322,15 +335,12 @@ every other path the wiring transaction wrote.
 so such a read consumes nothing; a marked read that materializes content is
 unaffected and keeps consuming its ordinary labels.
 
-The measurement that forced this: at the strict dials with server execution
-on, `packages/patterns/integration/cfc-render-policy-demo.test.ts` lost each
-sub-piece's entire user interface to the §8.10.6 display ceiling. The
-transaction that wired the two sub-patterns up probed the sigil interior of
-the document holding the confidential health cell's reference, consumed the
-`origin:"link"` entry there, and the §8.12.5 route-2 declaration then wrote
-that clause at the ROOT of four documents at once — the sub-piece result
-projections among them, so the ceiling denied their `$UI` whole. Four such
-declarations per failing run before the skip, none after.
+A wiring transaction that consumed the `origin: "link"` entry of a
+confidential reference would carry that clause into every result projection
+it rewrote. A derived stamp at a sub-piece result's root covers its `$UI`, so
+§8.10.6's display ceiling would deny the whole interface. Excluding the
+runtime's reference-only wiring probes prevents that propagation; content
+reads remain labeled.
 
 The list coordinators are the case this could have under-tainted. `map`,
 `filter` and `flatMap` mark the presence probe and the slot-identity diffs
@@ -379,10 +389,13 @@ instead of the flow join:
   everything that resolves at the slot, whatever its class, wildcard
   templates included (spec §18.6.2 `referenceLabel`), as one class-less entry
   at the view's root. That holds for `resolveAsCell()`, a lazy read's hop, a
-  query-result proxy, and every link an eager schema read crosses. A rebase
-  keeps a class-less ancestor entry, so every position reached through the
-  link carries them, as spec §4.6.3 and §8.2.4 require, where the slot's own
-  `followRef` entry is dropped below the target. No path carries anything
+  query-result proxy, and every link an eager schema read crosses. Eager
+  materialization also journals the pointer observation and its dereference
+  trace at each crossing. The transaction's flow join therefore consumes the
+  reference restrictions even when the returned primitive carries no label
+  view. A rebase keeps a class-less ancestor entry, so every position reached
+  through the link carries them, as spec §4.6.3 and §8.2.4 require, where the
+  slot's own `followRef` entry is dropped below the target. No path carries anything
   else from the slot: the handle's view is confidentiality alone, since the
   slot's integrity endorses the selection the slot holds and not a copy of
   the handle (spec §3.7.2), and the labels of the document the handle names

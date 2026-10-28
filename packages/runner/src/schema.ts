@@ -1857,15 +1857,30 @@ class TransformObjectCreator
   }
 
   /**
-   * Records the crossing with the label view in effect at its target: the
-   * reference restrictions of the slot the link left, given the view the
-   * route has there and the labels stored at the slot (`referenceRestrictionsOf`).
+   * Records the reference observation and crossing with the label view at its
+   * target: the reference restrictions of the slot the link left, given the
+   * view the route has there and the labels stored at the slot
+   * (`referenceRestrictionsOf`).
    *
    * The target's own stored labels are not part of the view. They are read
    * from the target wherever a cell there is labeled, and reading them here
    * would read into a document that minting a handle to it does not read.
    */
   cross(source: NormalizedFullLink, target: NormalizedFullLink): void {
+    // Following a reference consumes its own restrictions as well as the
+    // target observations (§8.2.4). Keep the pointer read and its trace in
+    // the transaction even when the returned value cannot carry a label view.
+    // The traversal already records the slot's scheduling dependencies,
+    // including batched array reads; this observation is for CFC alone.
+    this.#tx.runWithAmbientReadMeta(
+      ignoreReadForScheduling,
+      () => readMaybeLink(this.#tx, source),
+    );
+    this.#tx.recordCfcDereferenceTrace({
+      source: cfcAddressFromLink(source),
+      target: cfcAddressFromLink(target),
+      kind: target.overwrite === "redirect" ? "write-redirect" : "value",
+    });
     const slotView = this.#labelViewFor(source);
     this.#push(
       target,

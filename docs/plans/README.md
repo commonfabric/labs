@@ -35,9 +35,6 @@ a record: archive it to `docs/history/plans/` following the procedure in
 - [Memory router security requirements](memory-router-security-requirements.md)
   defines the authentication, authorization, isolation, and public-ingress
   gates for multiplexed Memory WebSockets routed to toolsheds.
-- [Compact CFC label maps](compact-cfc-label-maps.md) proposes shared label
-  subtrees, graph-aware policy queries, and a reader-first stored-format migration
-  to bound the cost of staged reference diamonds.
 - [Independent reference labels](cfc-independent-reference-labels.md) moves a
   link write to the specified contract (§8.2, §8.12.8): the slot persists the
   creating attempt's own label and nothing copied from the target, a label

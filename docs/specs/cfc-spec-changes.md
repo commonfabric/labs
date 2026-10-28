@@ -407,11 +407,10 @@ drew a clause from elsewhere, which the skip is scoped away from, so the
 implemented shape measures the cache write and can refuse it at strict where
 §18.6.2's shape, having no write target there at all, would not.
 
-Route 2 is not open to this class, on the keying ground an entries document
-is off it for — a cache document is keyed on module content, every piece in
-the space running that module addresses it, and it outlives all of them —
-and on a second: route 2 leaves a `declared` entry per measured path, which
-§8.12.1 does not let back, on a document nothing collects.
+Runtime-owned-store admission is not open to this class: a cache document
+is keyed on module content, every piece in the space running that module
+addresses it, and it outlives all of them. The ownership marker names stores
+belonging to one piece's nodes, not such shared documents.
 
 All three are outside the check at every rung, through one predicate
 (`isDeclarablePolicyStore`), and the skip is scoped to a join the target's
@@ -453,82 +452,50 @@ refuses a clause a policy evaluation would have discharged. A residual stands wh
 computed document, from a schema-carrying write: it stops being a write
 ceiling there, and stays a read floor.
 
-A fourth narrowing does not skip the measurement but answers it. The runtime
-materializes documents to hold a piece's MACHINERY rather than data an author
-named: a piece's argument, result and internal documents, minted by the runner
-from the piece's result cause; the state documents a builtin mints from its own
-node's cause; and the documents that anchoring splits out of a value written
-into any of those. The atoms these carry are a property of the transaction that
-filled them, so a declaration written into a schema either misses them or
-over-declares every instance of the pattern. §8.12.5's route 2 is what the
-runtime uses instead: the write that puts the join on a path also declares, in
-that same transaction, a policy covering it — the ceiling that resolved at the
-path plus exactly the clauses that had nowhere to go. The store's promise
-becomes the audience of what it holds, rather than the check being skipped.
+A fourth narrowing admits eligible misfits on runtime-owned stores. For a store
+with a live enrollment or an authenticated piece-setup claim, its persistence
+rule implements a slice of
+[specs#78](https://github.com/commonfabric/specs/pull/78), option (b): the
+write's derived component holds the misfit, and the declared component is
+unchanged. The runtime implements this proposed rule at the strict default,
+ahead of its ruling and reconciliation of the pin. The current pin requires
+option 2's declaration, so it does not conform to the pin on this point.
 
-This is not a new route. §8.12.8's component table already names "explicit
-store-label operations (upgrades per §8.12.5 …)" as a provenance of the
-declared component, alongside schema `ifc` declarations — so a runtime-made
-upgrade is a sanctioned way for that component to change, and §8.12.5 option 2
-states the discipline: atomically tighten the store's label, then write. The
-runtime declares in the transaction that writes, which is that atomicity.
+Piece setup supplies a separate transaction-local claim for its argument,
+result and internal stores. Their setup writes take the derived-only route
+when committed before the piece starts, as in
+`PiecesController.setupPersistent()`. This claim creates no lifetime enrollment
+and does not carry into later transactions.
 
-What the widening adds is that the route runs on every write to such a store
-rather than only while a piece is being set up, and what licenses that is a
-property of the declaration rather than of when it is made. A declared clause
-list is a ceiling under §8.12.4 — `canWrite` asks that the store's declared
-confidentiality be at least as restrictive as the data's, which is `∃` a
-declared clause subsuming each label clause — and it is the reader's floor
-under the same section: a reader is tainted by at least the declared label, and
-§8.12.8 makes reader taint consume the effective label, which always includes
-the declared component. Subsumption makes the two agree: satisfying a declared
-clause implies satisfying the label it admits, so every reader of the store
-satisfies every clause the store admits. Each upgrade therefore admits more
-data AND narrows the audience by the same step. An unbounded reactive stream of
-upgrades leaves the store readable by fewer principals than it started with,
-never by more, which is why the route needs no bound on how often it may fire
-or on which clauses a later transaction may contribute. §8.12.5's own
-soundness argument is the same one: existing readers already expect data at the
-original label level.
+A generic authorized ownership marker without a live enrollment still takes
+option 2: the write declares a covering policy, adding clauses and preserving
+every stored alternative. One-shot handoffs such as agent run records and
+marker-only anchored children retain that declaration ratchet. Lazy scoped
+initialization on a later transaction before enrollment keeps the generic marker
+and declaration route too. This slice addresses piece setup and enrolled stores,
+not every runtime-minted document.
 
-The route adds CLAUSES and never alternatives, which is the line §8.12.7 and
-safety invariant 1 draw. Adding a clause is the tightening §8.12.1 admits.
-Adding an alternative to a clause already stored grows that clause's reader set
-and is a widening, which those sections admit only through a grant record
-consulted at access time or an intent-gated declassification event — neither of
-which a write-side fit check is or could be. The mint folds clause LISTS, so a
-stored disjunction comes back with the alternatives it went in with.
+The ownership claim covers a piece's argument, result and internal stores, a
+builtin's node-owned stores, and documents anchored out of them. It requires the
+runtime's authorization and a whole-document address in the owner's space. A
+document without that claim keeps its ordinary writer-fit check. The runtime
+also retains refusals for a schema declaration at the written path, an
+ungrantable read-failed clause, and a foreign-container clause; these are
+fail-closed residuals against the proposal.
 
-The cost is §8.12.2's ratchet: a store that once held data derived from a
-labeled read keeps that clause after the read stops, which is the over-taint
-direction. Its end state is a declared list whose clauses have disjoint
-audiences, which no principal satisfies — the store keeps admitting writes and
-stops being readable. §8.12.7 records that outcome for its own case as safe and
-an operational footgun worth flagging in review, and the direction here is the
-same: refusal, not disclosure.
+The derived stamp taints readers of the write. A later write to an enrolled
+store replaces the value stamp with its own derivation, while the existence
+stamp remains frozen. Clean creation records no empty existence entry, so a
+path created clean receives a frozen existence label from its first labeled
+write; a later clean overwrite still carries that label. Stored declarations
+remain unchanged; their
+repair is an explicit owner release under §8.12.7 route 2c when the owner has
+that authority. Nothing in this implementation repairs affected deployments.
 
-The claim that a store is the runtime's is made by the runtime, never measured
-from an input's own fields: the recording method is on the public transaction
-interface, so a marker without the runtime's authorization names nothing, and
-neither does one naming a store outside the owner's own space. It lasts for one
-transaction where the store is minted and filled in one go, and is enrolled for
-as long as the piece's nodes run where the store is written by the reactive
-updates, event handlers and settled requests that follow the mint. Ownership
-passes to an anchored child, whose id is derived from its parent's rather than
-named by an author. A document nobody named is untouched: a write to an
-ordinary document measures against its own ceiling whichever transaction makes
-it, so widening the route in time does not widen it in scope.
-
-Two costs sit outside the store, and both belong to the route rather than to
-the widening. The declared list is a conjunction every reader carries, so a
-store accumulating clauses with disjoint audiences ends up readable by nobody
-while still admitting writes — §8.12.2's ratchet reaching its end, refusal
-rather than disclosure. And a transaction that could not commit now commits, so
-whatever else it staged proceeds: a post-commit effect, a sink request. A
-builtin whose store moves onto the route therefore needs something else to
-refuse its request, which is a `sink-request` ceiling where the builtin stages
-one and nothing where it does not. Contract text in
-`docs/specs/cfc-enforcement-matrix.md` §4; tests `cfc-writer-fit.test.ts`.
+Admitting the store write also lets the transaction commit any staged request.
+The builtin's sink gate still owns that request's release, which is independent
+of the state store's writer-fit check. Implementation and boundaries:
+`cfc-enforcement-matrix.md` §4; tests: `cfc-writer-fit.test.ts`.
 
 (d) **[normative] Residency fit — the ceiling a document carries by living
 where it lives.** `proposed` in
@@ -537,52 +504,37 @@ of its questions: residency joins `Space(S)` over a declared policy as well as
 without one, and a store bound to one principal also carries
 `User(<that principal>)`; the runner conforms to both.
 The fit measurement joins the target's declared policy with
-one RESIDENCY clause, `Space(<the space the document resides in>)`. A flow
-clause listing that space among its alternatives therefore fits the document
-whatever it declares. The soundness argument is that writing into the space
-the clause already names discloses nothing: the `Space` atom's audience is
-that space's reader set — §4.9.3 resolves it by dereferencing its id against
-the space's ACL, the same document that decides who receives a replica — so
-every principal holding the target is inside the audience the alternative
-names, and the write reaches no reader the data had not already reached. The
-guarantee is therefore exactly as strong as the deployment's ACL posture, the
-same bound the §4.9.3 membership lookup carries.
+`Space(<the space the document resides in>)`. A space-scoped document also
+carries `PersonalSpace(<that same space>)`, the addition proposed by
+[specs#71](https://github.com/commonfabric/specs/pull/71). That proposal is
+closed without merging. The runtime implements its proposed own-space rule
+at the strict default, ahead of a ruling and a reconciled pin. The existing
+specs#68 marker covers the base residency work; the own-space addition has
+neither a separate marker nor a default-off dial. This is a nonconforming
+semantic gap and does not satisfy the correspondence procedure's step 4.
+The conformance statement and enforcement matrix record the gap, which still
+needs a ruling.
 
-The rule is confined to `Space` deliberately, and for two different reasons.
-`User(<subject>)` and the bare DID spelling name a person: a space grants
-reader roles that person does not hold, so admitting them would place data
-readable by one principal into a store its co-readers sync. That argument
-does not reach `PersonalSpace(<owner>)`, which names a space rather than a
-person (SC-39). What keeps that form out is narrower and mechanical: the
-residency clause is built from the target's address alone — `Space(<the space
-this document is stored in>)` — and the runtime cannot form
-`PersonalSpace(<owner>)` from an address, because nothing marks a space as
-personal (§3.6.4 has one stop being personal with no marker changing) or
-names its owner without resolving its ACL. The clause is
-unavailable rather than unsound. A deployment that did resolve ownership
-could admit it on the same footing as `Space`, since the two atoms would then
-name one space and so one audience; the limit is what the measurement can
-construct, not what it may admit.
+A flow clause listing either spelling of the target's own space among its
+alternatives fits a space-scoped document whatever it declares. The proposal
+uses §4.9.4's reading of both atoms as ACL-dereferenced containers: the same
+space's ACL decides their readers and who receives the target's bytes. The
+measurement constructs these clauses from the target's space directly. It
+neither substitutes the acting principal nor resolves an owner for another
+space. The guarantee is as strong as the deployment's ACL posture.
 
-One spec question this exposes and should settle: §4.9.4 describes
-`HasRole(user, PersonalSpace(User), reader)` as minted by a §4.9.3 point query
-against that space's own ACL record, and calls it one of "the two `Space(...)`
-atoms", which reads `PersonalSpace` as an ACL-dereferenced container atom. That
-sits in tension with §3.6.4's fixed membership, and with a deployment
-classification that commits the very field such a point query would have to
-read. SC-39 settles it: §3.6.5 has a member added to a space gain access to
-all data in it with no labels rewritten, so a personal space's audience grows
-after the fact and the atom is an ACL-dereferenced container. The
-fixed-membership reading recorded here is therefore wrong, and the rationale
-above has been rewritten accordingly. Residency's behavior is unchanged, but
-its ground moves: the atom stays out because the measurement cannot construct
-it from an address, not because its audience is one person. Reading
-back is unaffected in every case: the derived stamp persists the full join, so
-the egress and display ceilings fit the unchanged label, and the space
-principal there resolves to a reader only through the §4.3.3
-`SpaceReaderAccess` exchange rule on verified `HasRole` membership. The
-ungrantable read-failed marker stays outside the residency clause as it stays
-outside every ceiling.
+`User(<subject>)` and the bare DID spelling name a person rather than a space,
+so neither supplies space-scoped residency. A `user` or `session` document
+keeps the base residency rule: `Space(S)` and, when available, the principal
+its instance is bound to. It gets no additional `PersonalSpace(S)` clause,
+even when that principal is unavailable. Its own user's personal-space data
+can still fit through the existing owner-as-reader subsumption of SC-39.
+Another space's `PersonalSpace` does not fit an unbound store by residency.
+
+The derived stamp persists the full join, so egress and display still judge
+the unchanged label. The new fit changes neither reader taint nor stored
+policy: it removes no declaration or frozen existence entry. The
+ungrantable read-failed marker remains outside every ceiling.
 
 Spec home: §8.12.4's `canWrite`, alongside the declared-policy measurement.
 Two points the spec should settle explicitly. Residency is a property of the
@@ -1359,8 +1311,9 @@ ceiling denies the piece's whole user interface rather than the confidential
 field inside it. Measured on
 `packages/patterns/integration/cfc-render-policy-demo.test.ts` at the strict
 dials: the clause reached the flow join through one observation, a `followRef`
-read at the sigil interior carrying the wiring marker, and the §8.12.5 route-2
-declaration then wrote it at `path: []` of four documents at once.
+read at the sigil interior carrying the wiring marker. Such a read would
+put its clause in the derived stamp at `path: []` of each rewritten result,
+where the label would cover the whole user interface.
 
 Proposed edit: say in §4.6.3's refinement list that the dereference trace is
 one of two things that make a reference-identity probe something other than a

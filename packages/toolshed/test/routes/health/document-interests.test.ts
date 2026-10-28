@@ -1,5 +1,6 @@
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { connect, loopback } from "@commonfabric/memory/v2/client";
+import { createClientInfo } from "@commonfabric/memory/v2/client-info";
 import { getDocumentInterests, Server } from "@commonfabric/memory/v2/server";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
@@ -32,6 +33,42 @@ function server(): Server {
 }
 
 describe("health document interests", () => {
+  it("reports runtime attribution when the reserved generation field is absent", async () => {
+    const memory = server();
+    const identity = {
+      ...createClientInfo({ application: "cf", gitSha: null }),
+    };
+    delete identity.generation;
+    let client: Awaited<ReturnType<typeof connect>> | undefined;
+    try {
+      client = await connect({ transport: loopback(memory), client: identity });
+      const session = await client.mount(space, {}, (
+        _space,
+        _session,
+        { audience, challenge },
+      ) => ({
+        invocation: { aud: audience, challenge: challenge.value },
+        authorization: {},
+      }));
+      const id = "cid:optional-generation";
+      await session.watchSet([{
+        id: "watch",
+        kind: "graph",
+        query: { roots: [{ id, selector: { path: [], schema: false } }] },
+      }]);
+      const response = await app.request(url(id));
+      expect(response.status).toBe(200);
+      const report = documentInterests.responses[200]
+        .content["application/json"].schema.parse(await response.json());
+      expect(report.totalMatches).toBe(1);
+      expect(report.sessions[0].client).toStrictEqual(identity);
+      expect(report.sessions[0].principal).toBe(principal);
+    } finally {
+      await client?.close();
+      await memory.close();
+    }
+  });
+
   it("attributes direct and dependency-only schema retention to separate sessions", async () => {
     const memory = server();
     const client = await connect({ transport: loopback(memory) });

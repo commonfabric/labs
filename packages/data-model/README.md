@@ -44,6 +44,17 @@ Two things follow for a class written here:
 - `test/frozen-classes.test.ts` walks `src/` and fails for any exported class
   that is not frozen, so a new class cannot leave the block out unnoticed.
 
+## The `fvj1:` codec's array limit
+
+The format lets an implementation limit how long an array may be, provided it
+states the limit
+([`3-json-encoding.md`](../../docs/specs/space-model-formal-spec/3-json-encoding.md)
+Section 3, "Maximum array length"). This package's limit is 2^32 - 1
+(4,294,967,295) elements, the most a JavaScript array can hold. An array of that
+length is within it even when every element is a hole, so
+`fvj1:[{"/hole":4294967295}]` decodes, and `fvj1:[{"/hole":4294967296}]` is
+refused.
+
 ## Conformance fixtures
 
 Two fixtures record what this package does, for an implementation in another
@@ -54,8 +65,11 @@ language to test itself against:
 - `test/fixtures/hash-conformance.json`, the bytes `hashOf()` feeds SHA-256 and
   the digest it returns, described in `test/fixtures/hash-conformance.md`.
 
-Both write their values in the notation `test/fixtures/value-descriptors.md`
-defines. Each is generated from its cases, in `src/fvj1-conformance.ts` and
+Both write each value as its `fvj1:` text, with the mods to decoding it that
+state what no text carries. The first states what decoding the text returns by
+probes, paths into the value paired with what is there, in the vocabulary
+`test/fixtures/value-probes.md` defines, and then what re-encoding it writes.
+Each is generated from its cases, in `src/fvj1-conformance.ts` and
 `src/hash-conformance.ts`, by `deno task regenerate-fvj1-conformance` and
 `deno task regenerate-hash-conformance`, and a test fails whenever a fixture and
 the code disagree.

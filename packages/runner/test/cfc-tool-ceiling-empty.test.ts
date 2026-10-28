@@ -45,7 +45,7 @@ describe("CFC tool ceiling empty", () => {
     ).toBe(true);
   });
 
-  it("allows when no ceiling is declared (non-array)", () => {
+  it("allows when no ceiling is declared", () => {
     expect(
       toolAllowsObservedConfidentiality(
         catalogWithToolCeiling(undefined),
@@ -68,6 +68,26 @@ describe("CFC tool ceiling empty", () => {
         catalogWithToolCeiling(["a"]),
         "mytool",
         ["b"],
+      ),
+    ).toBe(false);
+  });
+
+  it("denies every call under a ceiling declared as anything but a list", () => {
+    // A malformed declaration fails even when the call observed nothing
+    // (§8.10.3), rather than read as no ceiling at all.
+
+    expect(
+      toolAllowsObservedConfidentiality(
+        catalogWithToolCeiling({}),
+        "mytool",
+        ["secret"],
+      ),
+    ).toBe(false);
+    expect(
+      toolAllowsObservedConfidentiality(
+        catalogWithToolCeiling({}),
+        "mytool",
+        [],
       ),
     ).toBe(false);
   });

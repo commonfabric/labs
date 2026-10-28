@@ -7,12 +7,10 @@
  * `{pending, requestHash}` — as surely as it taints the rows. The claim rides
  * the requesting run's own commit, so there is no transaction in which such a
  * parameter is untainted, and an author cannot know which atoms a given
- * transaction will carry. The control paths therefore take §8.12.5 route 2:
- * the runtime declares their policy from the transaction's join. What that
- * store's own empty ceiling was refusing by accident goes to the builtin,
- * which refuses a request carrying confidentiality bound for a database in
- * another space before it is staged, and declares the membership of a shared
- * result.
+ * transaction will carry. The runtime-owned control paths carry the
+ * transaction's join in their derived component. The builtin refuses a
+ * request carrying confidentiality bound for a database in another space
+ * before it is staged, and declares the membership of a shared result.
  *
  * The fixture labels the column a parameter is read OUT of differently from
  * the column the second query projects, so an implementation that widened the
@@ -90,6 +88,7 @@ type StoredEntry = {
   path: string[];
   label: { confidentiality?: unknown[] };
   origin?: string;
+  observes?: string;
 };
 
 describe("sqliteQuery's control state under a labeled parameter", () => {
@@ -104,11 +103,8 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
       cfcEnforcementMode: "enforce-strict",
       cfcFlowLabels: "persist",
       // The dials every preset deployment pins, rather than the constructor
-      // defaults. `cfcDeclaredMonotonicity` is the one this file is about:
-      // it judges whether a DECLARED entry may be replaced at a path, and
-      // re-declaring the control state on every issue is the whole mechanism
-      // under review — asserting a ratchet with the ratchet's own gate off
-      // would be asserting it against nothing.
+      // defaults. Declared monotonicity remains enforced while the control
+      // state's derived labels follow each issue's reads.
       cfcWriteFloor: "enforce",
       cfcPolicyEvaluation: "enforce",
       cfcLabelMetadataProtection: "enforce",
@@ -206,17 +202,25 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
     }
   };
 
-  /**
-   * Every confidentiality atom the DECLARED entries at `path` carry. All of
-   * them rather than the first: a schema's own declaration and one the
-   * runtime made from a transaction are both `declared`, and reading one of
-   * the two would answer a different question depending on which landed
-   * first.
-   */
+  /** All confidentiality atoms declared at `path`. */
   const declaredAt = (cell: Cell<unknown>, path: string[]): unknown[] =>
     storedEntries(cell)
       .filter((entry) =>
         entry.origin === "declared" &&
+        entry.path.length === path.length &&
+        entry.path.every((segment, i) => segment === path[i])
+      )
+      .flatMap((entry) => entry.label.confidentiality ?? []);
+
+  /** All confidentiality atoms derived for one observation class at `path`. */
+  const derivedAt = (
+    cell: Cell<unknown>,
+    path: string[],
+    observes: "value" | "shape" = "value",
+  ): unknown[] =>
+    storedEntries(cell)
+      .filter((entry) =>
+        entry.origin === "derived" && entry.observes === observes &&
         entry.path.length === path.length &&
         entry.path.every((segment, i) => segment === path[i])
       )
@@ -508,10 +512,10 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
     expect(state.result).toEqual([{ body: "first" }, { body: "second" }]);
   });
 
-  it("declares the parameter's clause on the request hash", async () => {
+  it("derives the parameter's clause on the request hash", async () => {
     // `/requestHash` rather than `/pending` because of which writes touch
     // which path. The hash moves on every issue, so every labeled issue
-    // writes it and declares there. The flag is written only by a claim that
+    // writes its derived component. The flag is written only by a claim that
     // finds it down, and whether this fixture's labeled claim does is the
     // order two settles landed in. The reader cases below decide that order.
 
@@ -528,15 +532,14 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
     // The clause the PARAMETER carried, on a path no schema declares. The key
     // column's clause is not the projected column's, so this cannot be
     // satisfied by the query's own static confidentiality.
-    expect(hasClause(declaredAt(bodies, ["requestHash"]), KEY_CLAUSE))
+    expect(hasClause(derivedAt(bodies, ["requestHash"]), KEY_CLAUSE))
       .toBe(true);
+    expect(declaredAt(bodies, ["requestHash"])).toEqual([]);
   });
 
   it("declares nothing on the control paths of a literal-parameter query", async () => {
     // The control. A literal parameter reads nothing labeled, so the issue
-    // transaction carries no clause and the route has nothing to declare —
-    // which is why a fixture whose parameter is a literal passes with the
-    // control paths undeclared.
+    // transaction carries no clause to stamp on the control paths.
 
     const db = labeledDb();
     await seedMessages(db);
@@ -551,8 +554,9 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
     );
     expect(state.error).toBeUndefined();
     expect(state.result).toEqual([{ body: "first" }, { body: "second" }]);
-    expect(hasClause(declaredAt(bodies, ["requestHash"]), KEY_CLAUSE))
+    expect(hasClause(derivedAt(bodies, ["requestHash"]), KEY_CLAUSE))
       .toBe(false);
+    expect(declaredAt(bodies, ["requestHash"])).toEqual([]);
   });
 
   it("settles a query whose parameter is labeled from its first issue", async () => {
@@ -619,7 +623,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
     expect(state.result).toEqual([{ body: "first" }, { body: "second" }]);
     // The first issue did carry the parameter's clause, which is what makes
     // this a different case from the ones above.
-    expect(hasClause(declaredAt(bodies, ["requestHash"]), KEY_CLAUSE))
+    expect(hasClause(derivedAt(bodies, ["requestHash"]), KEY_CLAUSE))
       .toBe(true);
     // The rows are the columns' to label, at the root as at the column: a
     // fix that declared the parameter's clause on each row would settle this
@@ -698,8 +702,8 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
     it("labels each row by the column it came from", async () => {
       // The rows are the columns' to label, and the settle transaction
       // carries nothing of its own, so the parameter's clause reaches the
-      // membership and not the row. Route 2 declines at `/body` in any case:
-      // the write schema declares there.
+      // membership and not the row. The write schema declares `/body`, so
+      // runtime ownership cannot admit a misfit there.
 
       const db = labeledDb();
       await seedMessages(db);
@@ -718,55 +722,48 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
     });
   });
 
-  it("accumulates a clause per differently-labeled parameter and drops none", async () => {
-    // The ratchet the route asks for: a clause a transaction put on the
-    // control state stays there after the read that carried it stops. Three
-    // issues of ONE query node, each parameterized out of a differently
-    // labeled column of the same row, so each issue's transaction carries one
-    // clause and the accumulation is visible one clause at a time. Each
-    // column is projected by a query of its own: a row reached through a
-    // result carries the labels of every column the result projects, so one
-    // query over all three would put all three clauses on the first issue.
+  it("replaces the hash's value label while retaining parameter existence labels", async () => {
+    // Three issues read separately projected, differently labeled columns.
+    // The parameter's existence carries the first clause throughout. Its
+    // value's second clause leaves the third issue's join, and the hash's
+    // derived value label follows that join.
 
     const { pick, bodies, rowsFor, first, second, third } =
       await runPickedParameterPattern("ratchet");
 
     await rowsFor(2);
-    expect(hasClause(declaredAt(bodies, ["requestHash"]), first)).toBe(true);
-    // Absent as much as present: an implementation that declared the whole
-    // of what the transaction could ever carry, rather than what THIS issue
-    // carried, would satisfy every presence assertion below and none of
-    // these.
-    expect(hasClause(declaredAt(bodies, ["requestHash"]), second)).toBe(false);
-    expect(hasClause(declaredAt(bodies, ["requestHash"]), third)).toBe(false);
+    expect(hasClause(derivedAt(bodies, ["requestHash"]), first)).toBe(true);
+    expect(hasClause(derivedAt(bodies, ["requestHash"]), second)).toBe(false);
+    expect(hasClause(derivedAt(bodies, ["requestHash"]), third)).toBe(false);
 
     const pickSecond = runtime.edit();
     pick.withTx(pickSecond).set(1);
     expect((await pickSecond.commit().settled).error).toBeUndefined();
     await rowsFor(1);
-    expect(hasClause(declaredAt(bodies, ["requestHash"]), first)).toBe(true);
-    expect(hasClause(declaredAt(bodies, ["requestHash"]), second)).toBe(true);
-    expect(hasClause(declaredAt(bodies, ["requestHash"]), third)).toBe(false);
+    expect(hasClause(derivedAt(bodies, ["requestHash"]), first)).toBe(true);
+    expect(hasClause(derivedAt(bodies, ["requestHash"]), second)).toBe(true);
+    expect(hasClause(derivedAt(bodies, ["requestHash"]), third)).toBe(false);
 
     const pickThird = runtime.edit();
     pick.withTx(pickThird).set(2);
     expect((await pickThird.commit().settled).error).toBeUndefined();
     await rowsFor(2);
-    const held = declaredAt(bodies, ["requestHash"]);
+    const held = derivedAt(bodies, ["requestHash"]);
     expect(hasClause(held, first)).toBe(true);
-    expect(hasClause(held, second)).toBe(true);
+    expect(hasClause(held, second)).toBe(false);
     expect(hasClause(held, third)).toBe(true);
+    const existence = derivedAt(bodies, ["requestHash"], "shape");
+    expect(hasClause(existence, first)).toBe(true);
+    expect(hasClause(existence, second)).toBe(false);
+    expect(hasClause(existence, third)).toBe(false);
+    expect(declaredAt(bodies, ["requestHash"])).toEqual([]);
   });
 
   describe("what a reader of the control state carries", () => {
-    // A reader of a control path carries what the route declared there, and
-    // the route declares where a labeled transaction WROTE. The request hash
-    // moves on every issue, so it carries everything the issues of this
-    // query brought. The pending flag is written only by an issue that finds
-    // it down, so what its reader carries turns on what each labeled issue
-    // found stored. Both histories are produced here by holding a request at
-    // the provider, which is the one place the order of two settles is the
-    // test's to decide.
+    // A reader consumes both value and frozen existence labels. A clean
+    // settle replaces the pending flag's value label, while the shape entry
+    // keeps a labeled claim's influence. Holding a request at the provider
+    // fixes the claims' order without depending on elapsed time.
 
     const readIntoAnUndeclaredStore = async (
       // deno-lint-ignore no-explicit-any -- the builtin's state
@@ -786,8 +783,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
      * Settles the derived-parameter query with its labeled claim having
      * raised the flag. The first query is held at the provider until the
      * issue with the empty parameter has settled, so the labeled claim finds
-     * the flag down, writes it, and the route declares the parameter's
-     * clause there.
+     * the flag down and writes it with the parameter's derived label.
      */
     const settledOverARaisedFlag = async (cause: string) => {
       const db = labeledDb();
@@ -816,7 +812,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
       // The issue with the empty parameter is held at the provider until the
       // labeled one has claimed, so the labeled claim finds the flag up. A
       // write of the value a path already holds is no write, which leaves
-      // the labeled transaction declaring on the hash it moved and nowhere
+      // the labeled transaction stamping the hash it moved and nowhere
       // else. The held issue then settles nothing, because the store records
       // another request's hash.
 
@@ -838,9 +834,9 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
         (value) => (value?.result ?? []).length === 2,
       );
 
-      expect(hasClause(declaredAt(bodies, ["requestHash"]), KEY_CLAUSE))
+      expect(hasClause(derivedAt(bodies, ["requestHash"]), KEY_CLAUSE))
         .toBe(true);
-      expect(hasClause(declaredAt(bodies, ["pending"]), KEY_CLAUSE))
+      expect(hasClause(derivedAt(bodies, ["pending"]), KEY_CLAUSE))
         .toBe(false);
       const wrote = await readIntoAnUndeclaredStore(
         bodies,
@@ -850,22 +846,65 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
       expect(wrote.error).toBeUndefined();
     });
 
-    it("refuses the same write once a labeled issue has raised the flag", async () => {
-      // The settle lowers the flag from a transaction that carries nothing,
-      // and the declaration the claim made stands: a declared component
-      // grows by clause and gives none back (CFC spec §8.12.1), whatever the
-      // transaction rewriting the path carried.
+    it("refuses a reader's write while a labeled claim holds the flag raised", async () => {
+      const db = labeledDb();
+      await seedMessages(db);
+      const unlabeledSettled = defer();
+      const labeledClaimed = defer();
+      const releaseLabeled = defer();
+      beforeEachQuery(async (sql, params) => {
+        if (sql === KEYS_SQL) await unlabeledSettled.promise;
+        if (sql === BODIES_SQL && (params as unknown[])[0] !== "") {
+          labeledClaimed.resolve();
+          await releaseLabeled.promise;
+        }
+      });
+      const { bodies } = await runDerivedParameterPattern(
+        db,
+        "reader-pending-in-flight",
+      );
+      const cancel = bodies.sink((value: QueryState<BodyRow> | undefined) => {
+        if (value?.pending === false) unlabeledSettled.resolve();
+      });
+      try {
+        await labeledClaimed.promise;
+        expect(bodies.get()?.pending).toBe(true);
+        expect(hasClause(derivedAt(bodies, ["pending"]), KEY_CLAUSE))
+          .toBe(true);
+        expect(declaredAt(bodies, ["pending"])).toEqual([]);
+        const wrote = await readIntoAnUndeclaredStore(
+          bodies,
+          "pending",
+          "reader-pending-in-flight-probe",
+        );
+        expect(wrote.error?.message).toContain(
+          "writer-fit confidentiality misfit",
+        );
+      } finally {
+        releaseLabeled.resolve();
+        cancel();
+      }
+    });
+
+    it("keeps the pending flag's existence label after a clean settle", async () => {
+      // The clean settle replaces the value label. Its frozen shape entry
+      // still taints a reader of the flag, without declaring a store policy.
 
       const bodies = await settledOverARaisedFlag("reader-pending-raised");
 
-      expect(hasClause(declaredAt(bodies, ["pending"]), KEY_CLAUSE))
+      expect(hasClause(derivedAt(bodies, ["pending"]), KEY_CLAUSE))
+        .toBe(false);
+      expect(declaredAt(bodies, ["pending"])).toEqual([]);
+      expect(hasClause(derivedAt(bodies, ["pending"], "shape"), KEY_CLAUSE))
         .toBe(true);
       const wrote = await readIntoAnUndeclaredStore(
         bodies,
         "pending",
         "reader-pending-raised-probe",
       );
-      expect(wrote.error).toBeDefined();
+      expect(wrote.error?.message).toContain(
+        "writer-fit confidentiality misfit",
+      );
     });
 
     it("refuses the same write from a reader of the request hash", async () => {
@@ -878,10 +917,8 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
         (value) => (value?.result ?? []).length === 2,
       );
 
-      // The declared clause is a floor every reader of that path carries, so
-      // a store that declares nothing cannot hold what this one read. That
-      // is the route's documented cost, landing where the route put the
-      // declaration and nowhere else.
+      // The hash's derived label still taints its reader, so a store that
+      // declares nothing cannot hold what this one read.
       const wrote = await readIntoAnUndeclaredStore(
         bodies,
         "requestHash",
@@ -891,15 +928,9 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
     });
 
     describe("the pending flag against the result's top", () => {
-      // The flag takes its label from the claims that raised it, and a
-      // claim carries the request's selection label and nothing of the
-      // rows: the builtin reads its own settled result as a read of its
-      // write destination, which stays out of the join. The result's top
-      // takes the same selection label from each settle, joined with the
-      // rows' labels. So a reader of the flag of a settled query carries no
-      // more than a reader of the result's length, and none of a projected
-      // column's label. Each case asserts the flag's reader carries
-      // something first, since an empty join is within every bound.
+      // A clean completion clears the pending flag's value label. Its
+      // frozen existence label still records the labeled claim. The
+      // result's membership carries only issues that actually settled rows.
 
       it("carries no clause on a raised flag that the result's length lacks", async () => {
         const bodies = await settledOverARaisedFlag("bound-raised");
@@ -930,18 +961,18 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
         const flag = readerCarries(bodies, ["pending"]);
         const top = readerCarries(bodies, RESULT_TOP);
         expect(hasClause(flag, second)).toBe(true);
-        expect(hasClause(flag, third)).toBe(true);
+        expect(hasClause(flag, third)).toBe(false);
+        expect(derivedAt(bodies, ["pending"])).toEqual([]);
+        expect(declaredAt(bodies, ["pending"])).toEqual([]);
         expect(atomsBeyond(flag, top)).toEqual([]);
         expect(atomsBeyond(BODY_CLAUSE, top)).toEqual([]);
         expect(atomsBeyond(BODY_CLAUSE, flag)).toEqual([BODY_CLAUSE[1]]);
       });
 
-      it("carries a superseded issue's clause on the flag and on the result's length", async () => {
-        // The second issue raises the flag and is held at the provider
-        // until the third has claimed, so its rows never land. Its clause
-        // reaches the top all the same, through the third: both issues read
-        // the one parameter cell, and what a reader of that cell carries
-        // has grown by the second's clause and gives none back.
+      it("keeps a superseded claim's existence label off the result's membership", async () => {
+        // The second issue raises the flag and is held until the third
+        // claims it. Only the third settles rows. The flag's frozen shape
+        // entry keeps the second clause, while the result never receives it.
 
         const { pick, bodies, rowsFor, second } =
           await runPickedParameterPattern("bound-superseded");
@@ -973,14 +1004,16 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
         const flag = readerCarries(bodies, ["pending"]);
         const top = readerCarries(bodies, RESULT_TOP);
         expect(hasClause(flag, second)).toBe(true);
-        expect(atomsBeyond(flag, top)).toEqual([]);
+        expect(derivedAt(bodies, ["pending"])).toEqual([]);
+        expect(declaredAt(bodies, ["pending"])).toEqual([]);
+        expect(hasClause(top, second)).toBe(false);
+        expect(atomsBeyond(flag, top)).toEqual([second[1]]);
       });
 
-      it("carries a failed issue's clause on the flag and not on the result's length", async () => {
-        // Where the bound stops. The claim of an issue that fails has
-        // raised the flag and declared there, and the settle of a failure
-        // writes the error and no rows, so it declares nothing on the
-        // result. The top keeps what the issues that settled rows brought.
+      it("keeps a failed claim's existence label off the result's membership", async () => {
+        // A failure settles the pending flag cleanly and writes no rows.
+        // The flag's frozen shape entry keeps the failed claim's clause;
+        // the result's membership keeps the last successful issue's label.
 
         const { pick, bodies, rowsFor, first, second } =
           await runPickedParameterPattern("bound-failed");
@@ -1004,6 +1037,8 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
         const flag = readerCarries(bodies, ["pending"]);
         const top = readerCarries(bodies, RESULT_TOP);
         expect(hasClause(flag, second)).toBe(true);
+        expect(derivedAt(bodies, ["pending"])).toEqual([]);
+        expect(declaredAt(bodies, ["pending"])).toEqual([]);
         expect(hasClause(top, first)).toBe(true);
         expect(atomsBeyond(second, top)).toEqual([second[1]]);
       });
@@ -1083,11 +1118,10 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
       expect(refused.pending).toBe(false);
       expect(refused.result ?? []).toEqual([]);
       // The refusal is written by the issuing transaction, which carries the
-      // clause it is refusing over, so route 2 declares that clause on the
-      // paths it writes, and a pattern that renders "this query was refused"
-      // inherits it.
-      expect(hasClause(declaredAt(bodies, ["error"]), KEY_CLAUSE)).toBe(true);
-      expect(hasClause(declaredAt(bodies, ["pending"]), KEY_CLAUSE)).toBe(true);
+      // clause it is refusing over. The paths it writes carry that derived
+      // label, which a pattern rendering "this query was refused" inherits.
+      expect(hasClause(derivedAt(bodies, ["error"]), KEY_CLAUSE)).toBe(true);
+      expect(hasClause(derivedAt(bodies, ["pending"]), KEY_CLAUSE)).toBe(true);
       // No request hash goes with the refusal, so an evaluation whose reads
       // carry nothing asks again rather than finding a memo hit. A refusal
       // folded into the ordinary settled shape would be permanent.

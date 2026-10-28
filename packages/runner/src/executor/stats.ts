@@ -306,6 +306,13 @@ export type ServingLoopStats = {
      * and the pass after one that threw partway, reconcile every key. */
     demandKeysReconciled: number;
 
+    /** The (piece root, demanding pair) seedings of owed defaults the
+     * passes completed — the arrival seed: a pattern-owned cell declaring a
+     * default at a scope narrower than its result is seeded in a demanding
+     * pair's instance when the pair's demand for the piece arrives, as the
+     * piece's start seeds it for the identity the start runs under. */
+    ownedDefaultSeeds: number;
+
     /** Root documents the pass pulled TOGETHER before its sequential
      * structure loads ran (`SpaceServer.#loadStructureRootDocs`): the
      * instance each demand names and, for every scoped demand, the space
@@ -528,6 +535,17 @@ export type ServingLoopStats = {
     handlerNotRunDeferrals: number;
 
     /**
+     * Events requeued at a wave commit because a recorded read of the handler
+     * run was stale: a commit the serving replica had not taken wrote what
+     * the run read (serving-loop.md §3d). Counted per event, the later
+     * entries of the stream requeued behind one included. Each re-drains
+     * once the replica has taken the staling commit, so a count that climbs
+     * on one stream names a document written faster than the loop replays
+     * the handler reading it.
+     */
+    staleReadRequeues: number;
+
+    /**
      * Drain deferrals that spent none of the deferral budget because an entry
      * that arrived earlier in the same space was still pending (events.md
      * §5): the deferred event may address a piece that the earlier one's
@@ -737,6 +755,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     demandPasses: 0,
     demandPassMs: 0,
     demandKeysReconciled: 0,
+    ownedDefaultSeeds: 0,
     structureRootsPreloaded: 0,
     pushGrowthWakes: 0,
     watchWakes: 0,
@@ -760,6 +779,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     lt1LateSealsRefused: 0,
     orphanDeliveriesRefused: 0,
     handlerNotRunDeferrals: 0,
+    staleReadRequeues: 0,
     arrivalHeldDeferrals: 0,
     loadParkDeferrals: 0,
     loadParkFailures: 0,

@@ -12,10 +12,14 @@ import {
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
 import { cfcPosture, publishCfcPosture } from "@/lib/cfc-posture.ts";
+import { SERVING_RUNTIME_EXPERIMENTAL } from "@commonfabric/runner/executor/serving-runtime";
 import {
   experimentalPosture,
   publishExperimentalPosture,
+  publishServingExperimentalOverrides,
 } from "@/lib/experimental-posture.ts";
+import { serverExecutionEnabledFromEnv } from "@/lib/server-execution-flag.ts";
+import { shellDeploymentPage } from "@/routes/shell/shell.index.ts";
 import {
   attachRuntimeOtelBridge,
   createToolshedRuntime,
@@ -222,6 +226,59 @@ Deno.test("createToolshedRuntime publishes the posture it resolved", async () =>
     await storageManager.close();
     publishExperimentalPosture(null);
     publishCfcPosture(null);
+  }
+});
+
+Deno.test("createToolshedRuntime publishes the serverExecution the serving loop goes on to publish, so a page built before the loop starts carries it", async () => {
+  // The shell takes serverExecution from the page, which is built once, from
+  // the posture published here. The serving loop starts on the same
+  // resolution and publishes its forced value over `/api/meta` once it is up
+  // (lib/server-execution.ts). The two agree only because the webhook
+  // runtime resolves the arm as the loop's gate does.
+
+  const signer = await Identity.fromPassphrase(
+    "runtime-options-serving-posture-test",
+  );
+  for (const value of [undefined, "true", "false"]) {
+    const env = (name: string) =>
+      name === "EXPERIMENTAL_SERVER_EXECUTION" ? value : undefined;
+    const storageManager = StorageManager.emulate({ as: signer });
+    publishExperimentalPosture(null);
+    publishServingExperimentalOverrides(null);
+    let runtime: Runtime | undefined;
+    try {
+      runtime = createToolshedRuntime(
+        {
+          MEMORY_URL: "http://memory.test:8000/",
+          API_URL: "http://api.test:9000/",
+          API_INTERNAL_URL: undefined,
+          OTEL_ENABLED: false,
+          OTEL_SERVICE_NAME: "toolshed-test",
+          ENV: "test",
+        },
+        storageManager,
+        env,
+      );
+      const page = shellDeploymentPage(
+        { MEMORY_PUBLIC_URL: undefined },
+        experimentalPosture(),
+      );
+      if (serverExecutionEnabledFromEnv(env)) {
+        publishServingExperimentalOverrides(SERVING_RUNTIME_EXPERIMENTAL);
+      }
+      expect(page.experimental?.serverExecution, String(value)).toBe(
+        serverExecutionEnabledFromEnv(env),
+      );
+      expect(experimentalPosture()?.serverExecution, String(value)).toBe(
+        page.experimental?.serverExecution,
+      );
+    } finally {
+      await runtime?.dispose();
+      await storageManager.close();
+      publishExperimentalPosture(null);
+      publishServingExperimentalOverrides(null);
+      publishCfcPosture(null);
+    }
   }
 });
 

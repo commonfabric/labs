@@ -11,7 +11,13 @@
  */
 
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
+import type { SessionDescriptor } from "@commonfabric/memory/v2";
 import * as MemoryClient from "@commonfabric/memory/v2/client";
+import {
+  type ClientBuild,
+  type ClientInfo,
+  createClientInfo,
+} from "@commonfabric/memory/v2/client-info";
 import type { LoopbackMemoryServer } from "./host-memory-server.ts";
 import type { SpaceHostRegistration } from "../space-host.ts";
 import {
@@ -37,13 +43,16 @@ class LoopbackSessionFactory implements SessionFactory {
   readonly #plane: LoopbackPlane;
 
   readonly #onServerFrame?: (frame: string) => void;
+  readonly #clientInfo: Readonly<ClientInfo>;
 
   constructor(
     plane: LoopbackPlane,
     onServerFrame?: (frame: string) => void,
+    clientBuild?: ClientBuild,
   ) {
     this.#plane = plane;
     this.#onServerFrame = onServerFrame;
+    this.#clientInfo = createClientInfo(clientBuild);
   }
 
   /** The loopback transport, with each server frame taken in the serving
@@ -77,6 +86,7 @@ class LoopbackSessionFactory implements SessionFactory {
     }
     const client = await MemoryClient.connect({
       transport: this.#transport(),
+      client: this.#clientInfo,
     });
     try {
       const session = await client.mount(
@@ -84,7 +94,7 @@ class LoopbackSessionFactory implements SessionFactory {
         mountOptions,
         (
           targetSpace: string,
-          descriptor: MemoryClient.MountOptions,
+          descriptor: SessionDescriptor,
           context: MemoryClient.SessionOpenAuthContext,
         ) =>
           createSignedSessionOpenAuth(
@@ -128,7 +138,7 @@ export class LoopbackStorageManager extends StorageManager {
         // storage address against this.
         memoryHost: new URL("memory://loopback"),
       },
-      new LoopbackSessionFactory(plane, onServerFrame),
+      new LoopbackSessionFactory(plane, onServerFrame, options.clientBuild),
     );
   }
 

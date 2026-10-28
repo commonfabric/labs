@@ -386,18 +386,14 @@ const labelForEntriesAtPath = (
       continue;
     }
     const component = entry.origin ?? "legacy";
-    // Frozen-existence vs membership-template join (template-population
-    // §3.2, first exception): a frozen concrete `shape` entry records
-    // departed HISTORY;
-    // the `*` membership template records CURRENT shape. They answer
-    // different questions under one class, so where both cover a read
-    // their labels JOIN rather than compete in replace-down — replacing
-    // would let a stale frozen label mask current membership taint or
-    // vice versa. Scoped to structure/derived-origin shape-class
-    // templates (a separate resolution bucket per component); everything
-    // else keeps replace-down.
-    const bucket = template && entry.observes === "shape"
-      ? `${component}\u0000shape-template`
+    // Runtime existence and current value measurements resolve independently
+    // (§4.6.3): a public child in either class cannot shadow the other's
+    // secret ancestor. Frozen existence also joins current membership
+    // templates (§4.6.3), which describe a different fact in the shape
+    // channel. Each keeps replace-down within its own component and class.
+    const bucket = entry.observes === "shape" &&
+        (entry.origin === "derived" || entry.origin === "structure")
+      ? `${component}\u0000${template ? "shape-template" : "shape"}`
       : component;
     const match = matches.get(bucket);
     if (match === undefined || match.depth < entry.path.length) {
@@ -3795,9 +3791,10 @@ const linkEntrySuperseded = (
  * in `@commonfabric/memory/v2`).
  *
  * This is an enumeration of two id classes rather than a rule about documents
- * the runtime mints. The runtime mints many more, and route 2 (§8.12.5) is
- * what most of them take: the document anchoring splits out of a value has an
- * id derived from its parent's, which no author named either, and it is
+ * the runtime mints. The runtime mints many more, and runtime-owned-store
+ * admission (§8.12.5) is what most of them take: a document anchoring splits
+ * out of a value has an id derived from its parent's, which no author named,
+ * and it is
  * measured. Adding a class here means arguing that case on its own.
  *
  * A class is enumerable here only while its ids say which class they are. A
@@ -5480,6 +5477,15 @@ const declaredObservesClass = (
     : undefined;
 };
 
+/** The `ifc` keys the specification types as lists of atoms or clauses. */
+const LABEL_LIST_KEYS = [
+  "confidentiality",
+  "integrity",
+  "addIntegrity",
+  "requiredIntegrity",
+  "maxConfidentiality",
+] as const;
+
 const unsupportedTrustSensitiveReason = (
   schema: JSONSchema,
   path: readonly string[],
@@ -5512,13 +5518,37 @@ const unsupportedTrustSensitiveReason = (
   ) {
     return `malformed writePolicyAnyOf at /${path.join("/")}`;
   }
+  // A label list declared as anything but a list is malformed (§4.2.1, §8.8).
+  // Its readers skip what is not a list, so it would be enforced as no label,
+  // no floor, or no ceiling, or crash the commit; a malformed declaration
+  // fails here instead (§8.10.3).
+  for (const key of LABEL_LIST_KEYS) {
+    if (ifc[key] !== undefined && !Array.isArray(ifc[key])) {
+      return `malformed ${key} at /${path.join("/")}`;
+    }
+  }
+  if (!writesEventIntegrityAsList(ifc.uiContract)) {
+    return `malformed uiContract.requiredEventIntegrity at /${path.join("/")}`;
+  }
   return undefined;
 };
 
 /**
+ * Whether `contract`, a UI contract as a schema declares it, writes its
+ * `requiredEventIntegrity`, where it writes one, as a list. Its parse
+ * (`uiContractFromSchema()`) keeps only a list, so a requirement written as
+ * anything else would be dropped.
+ */
+const writesEventIntegrityAsList = (contract: unknown): boolean =>
+  !isObjectNotArray(contract) ||
+  contract.requiredEventIntegrity === undefined ||
+  Array.isArray(contract.requiredEventIntegrity);
+
+/**
  * Whether the `writePolicyAnyOf` that `ifc` declares is one this runner
  * enforces: a nonempty list of alternatives, each a writer claim with at most a
- * UI contract that parses beside it, and no writer or contract of the
+ * UI contract that parses beside it, its event integrity written as a list
+ * where it writes one, and no writer or contract of the
  * position's own beside the list, which would leave unclear which of the two
  * governs.
  */
@@ -5532,7 +5562,8 @@ const isWellFormedWritePolicyAnyOf = (ifc: Record<string, unknown>) => {
         key === "writeAuthorizedBy" || key === "uiContract"
       ) &&
       (policy.uiContract === undefined ||
-        uiContractFromSchema({ ifc: policy } as JSONSchema) !== undefined)
+        (uiContractFromSchema({ ifc: policy } as JSONSchema) !== undefined &&
+          writesEventIntegrityAsList(policy.uiContract)))
     );
 };
 
@@ -11858,11 +11889,9 @@ export function* prepareBoundaryCommitSteps(
     );
   }
   const targetKeys = new Set([...candidates.keys(), ...linkWrites.keys()]);
-  // Only the strict rung's §8.12.5 route-2 declaration asks whether a target
-  // is a store the runtime owns, and only where the flow join is stamped, so
-  // no other posture pays for the question — and every rung below keeps the
-  // persist-and-flag diagnostic that is its rollout signal, storing no
-  // declared policy it could never take back.
+  // Only the strict rung's runtime-owned admission asks whether a target is
+  // a store the runtime owns, and only where the flow join is stamped. Lower
+  // rungs keep their persist-and-flag diagnostic and the same derived stamps.
   const askRuntimeOwnership = flowPersist && writerFitRejects;
   // A vouched ingest writes its provenance mark even when the payload write
   // carries no schema candidate and flow labels are off, so the ingest target
@@ -12022,6 +12051,9 @@ export function* prepareBoundaryCommitSteps(
     //   is one per-tx union with no per-atom attribution, so a single
     //   foreign labeled contribution makes the WHOLE stamped entry eligible
     //   — ambiguous provenance fails toward protection.
+    // - runtime-owned declarations retained for transaction-only markers:
+    //   these come from the flow join, not an authored schema, so the same
+    //   cross-space protection applies.
     //
     // NOT eligible (persist verbatim): AUTHORED `declared` entries (schema
     // policy — the schema document replicates to the destination anyway, so
@@ -12031,12 +12063,7 @@ export function* prepareBoundaryCommitSteps(
     // schema mints (`minted` — no observation feeds them at all), and the
     // local external-ingest mark (minted from this tx's own channel stamp —
     // no cross-space observation feeds it; its atoms commit like any others
-    // if they later flow into a foreign target through the join). The
-    // §8.12.5 route-2 declaration below is the one `declared` entry that IS
-    // eligible: its content comes from the flow join rather than from an
-    // author's schema, so leaving it verbatim beside a committed derived
-    // stamp carrying those same clauses would publish in one entry what the
-    // other protects.
+    // if they later flow into a foreign target through the join).
     const crossSpaceEligible = labelProtectionMode !== "off"
       ? new Set<LabelMapEntry>()
       : undefined;
@@ -12537,11 +12564,7 @@ export function* prepareBoundaryCommitSteps(
     // this walk is about to persist replaces the stored declared entry at
     // the same path (the carry-forward below skips replaced paths), so this
     // is where a schema-minted store policy changes — compare against the
-    // stored entries per canUpdateStoreLabel before it does. The §8.12.5
-    // route-2 declaration in the flow-persist stamping below adds clauses
-    // after this point rather than replacing any, which is the restricting
-    // direction; it coalesces with the carried-forward stored entry instead
-    // of standing in for it. The stored
+    // stored entries per canUpdateStoreLabel before it does. The stored
     // metadata was read above under the internal-verifier meta
     // (storedMetadataFor), so the gate consumes no additional reads. Under
     // `enforce` a violation records fail-closed reasons and skips persisting
@@ -12603,8 +12626,8 @@ export function* prepareBoundaryCommitSteps(
     // each path's declared ceiling: the whole-value destination fit and the
     // per-path fit of the join. `Space(<this space>)` is one clause, so a
     // flow clause listing the target's own space among its alternatives fits
-    // a document stored there, and a clause without such an alternative
-    // measures against the declared policy alone. The atom's audience is the
+    // a document stored there. The other residency clauses below join the
+    // same ceiling beside its declared policy. The atom's audience is the
     // space's reader set — §4.9.3 resolves it against the space's ACL, the
     // same document that decides who receives a replica — so it already
     // contains every principal the stored bytes reach, and the guarantee is
@@ -12612,12 +12635,12 @@ export function* prepareBoundaryCommitSteps(
     // persists the full join, leaving the egress and display gates the
     // unchanged label.
     //
-    // The space's clause takes the `Space` form alone. The bare DID-string
-    // spelling gates by equality against one acting reader, so it reaches a
-    // narrower audience than the space's readers. `PersonalSpace(<owner>)`
-    // names a space rather than a person (SC-39), and nothing in an address
-    // names a space's owner or marks the space as personal, so that atom
-    // cannot be built from the target's address.
+    // An unbound document also admits `PersonalSpace(<this space>)`, whose
+    // readers are resolved from the same ACL. This is the own-space rule
+    // proposed in https://github.com/commonfabric/specs/pull/71; its gap from
+    // the pinned specification is recorded in the CFC enforcement matrix.
+    // Bound instances do not gain that clause, even when the serving
+    // context cannot identify their principal.
     //
     // A `user` or `session` document is one principal's instance, and
     // `User(<that principal>)` joins the space's clause there: they are the
@@ -12637,6 +12660,7 @@ export function* prepareBoundaryCommitSteps(
       : undefined;
     const residencyCeiling: readonly CfcConfClause[] = [
       cfcAtom.space(space),
+      ...(scope === "space" ? [cfcAtom.personalSpace(space)] : []),
       ...(scopedReader === undefined ? [] : [cfcAtom.user(scopedReader)]),
     ];
     // Whole-value write destinations stamped as written
@@ -13154,11 +13178,11 @@ export function* prepareBoundaryCommitSteps(
       const declaredPolicyEntries = flowConfidentiality.length > 0
         ? persistedLabelEntries.filter(isDeclaredValuePolicyEntry)
         : [];
-      // Whether a misfit below is answered by declaring a covering policy
-      // (§8.12.5 route 2) instead of refusing: this document is a store the
-      // runtime owns, at a rung that would reject.
-      // `cfc-enforcement-matrix.md` §4 states the route; the rest of the
-      // conditions on it are at the mint below.
+      // Whether runtime ownership can admit a misfit at a rung that would
+      // reject. Lifetime enrollment and authenticated piece setup keep the
+      // misfit solely in derived stamps.
+      // `cfc-enforcement-matrix.md` §4 states the admission boundary; the
+      // remaining conditions are checked below.
       //
       // The route ACTS on the runtime's claim rather than measuring it, which
       // is why the transaction answers only for markers that arrived carrying
@@ -13281,16 +13305,6 @@ export function* prepareBoundaryCommitSteps(
           id,
           runtimeWritePolicyAuthorization,
         );
-        // TODO(danfuzz): A stream's entries document in a person's home space
-        // is measured once the join also holds a clause from another space,
-        // and its ceiling is then `Space(<home>)` alone, which the home
-        // owner's own `PersonalSpace` label doesn't fit. So under server
-        // execution, a handler in the home that reads data stamped with that
-        // label beside data from another space, and sends an event, is
-        // refused for the event's bookkeeping alone, as
-        // `fabrichat-stamped-title-offers-multi-runtime.test.ts` pins. Settle
-        // with the CFC specification whether such a document admits its space
-        // owner's label, then follow it here and drop that pin.
         const measuredPaths = isDeclarablePolicyStore(
             id,
             flowJoinIsLocal,
@@ -13361,66 +13375,35 @@ export function* prepareBoundaryCommitSteps(
               )
             )
           ) {
-            // §8.12.5 route 2, the monotone-safe upgrade: the transaction
-            // writing the join onto this path also declares, in that same
-            // transaction, a policy covering it. What lands is the ceiling
-            // resolved above plus exactly the clauses that had nowhere to
-            // go, so the store's promise becomes the audience of what it
-            // holds. What lands is what the ceiling did not already cover,
-            // so a clause residency satisfies stays in the stamp alone.
-            // A store the runtime owns is filled by the runtime out of what
-            // the writing transaction read — a piece's argument document,
-            // the internal documents and streams its result projects to,
-            // and the state documents a builtin mints from its own node's
-            // cause — and no value schema can carry that declaration,
-            // because the atoms are a property of the transaction rather
-            // than of the pattern.
-            //
-            // The declaration only ever grows by CLAUSE, which is what
-            // §8.12.1 asks of a declared component. `declaredCeiling`
-            // resolves over the entries this walk is about to persist,
-            // carried-forward stored declared entries among them, so the
-            // union below contains every clause the path already declared,
-            // and adding clauses is the restricting direction.
-            //
-            // Growing a stored clause's ALTERNATIVES would be the other
-            // thing: it enlarges that clause's reader set, which §8.12.7
-            // and safety invariant 1 admit only through a grant record or
-            // an intent-gated declassification event. `foldedUnique` folds
-            // clause LISTS — `normalizeClause` works inside one clause and
-            // never merges two — so a stored disjunction comes back with
-            // the alternatives it went in with.
-            //
-            // Growth is also what makes the route safe to run on every
-            // write rather than only while the runtime is setting a piece
-            // up. A clause list is read two ways, and the two agree: as a
-            // ceiling §8.12.4's `canWrite` admits a label clause when SOME
-            // declared clause subsumes it, and as a reader's floor that
-            // same section taints a reader with at least the declared
-            // label. Subsumption means satisfying the declared clause
-            // implies satisfying the label, so a reader of this store
-            // satisfies every clause the store admits. Adding a clause
-            // therefore admits more data AND narrows the audience by the
-            // same step, however many times it happens — §8.12.5's own
-            // argument for option 2, applied per write.
-            //
-            // Marked like a flow stamp rather than like an authored
-            // declaration: the content is the join, so it carries whatever
-            // foreign label metadata the join carries.
-            persistedLabelEntries.push(markFlowStampEntry({
-              path,
-              label: {
-                confidentiality: foldedUnique([
-                  ...declaredCeiling as readonly CfcConfClause[],
-                  ...offending as readonly CfcConfClause[],
-                ]),
-              },
-              origin: "declared",
-            }));
+            const derivedOnly = tx.usesDerivedRuntimeOwnedStoreLabels(
+              target.space,
+              id,
+              runtimeWritePolicyAuthorization,
+            );
+            // A live enrollment or a piece setup claim keeps this attempt's
+            // misfit solely in the derived stamps below:
+            // https://github.com/commonfabric/specs/pull/78
+            // A generic transaction-only marker can describe a handoff to
+            // authored clients, including an AgentRun record or an anchored child;
+            // retain its declaration until those lifecycles are covered.
+            if (!derivedOnly) {
+              persistedLabelEntries.push(markFlowStampEntry({
+                path,
+                label: {
+                  confidentiality: foldedUnique([
+                    ...declaredCeiling as readonly CfcConfClause[],
+                    ...offending as readonly CfcConfClause[],
+                  ]),
+                },
+                origin: "declared",
+              }));
+            }
             tx.noteCfcDiagnostic(
-              `writer-fit(runtime-owned-store-declared): ${id} at /${
-                path.join("/")
-              } (§8.12.5 route 2): ${offending.map(renderCfcAtom).join(", ")}`,
+              `writer-fit(runtime-owned-store-${
+                derivedOnly ? "derived" : "declared"
+              }): ${id} at /${path.join("/")} (§8.12.5): ${
+                offending.map(renderCfcAtom).join(", ")
+              }`,
             );
             continue;
           }

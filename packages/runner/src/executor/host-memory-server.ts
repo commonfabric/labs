@@ -28,6 +28,7 @@ type ServerMembers = Pick<
   | "commitDelegatedAppend"
   | "engineForSpace"
   | "foreignWriteAuthorityFor"
+  | "foreignReadAuthorityFor"
   | "resolveSpaceOwner"
   | "setViewSelection"
 >;

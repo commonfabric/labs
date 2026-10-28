@@ -21,6 +21,7 @@
     "./config": "./src/config.ts",
     "./engine": "./src/engine.ts",
     "./prompt-loop": "./src/prompt-loop.ts",
+    "./run-continuation": "./src/run-continuation.ts",
     "./interactive-chat-service": "./src/interactive-chat-service.ts",
     "./interactive-chat-stdio": "./src/interactive-chat-stdio.ts",
     "./loom-local-host": "./src/loom-local-host.ts",

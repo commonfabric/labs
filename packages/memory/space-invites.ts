@@ -137,7 +137,13 @@ export function isInviteSecret(value: unknown): value is string {
   if (typeof value !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(value)) {
     return false;
   }
-  const bytes = fromBase64url(value);
+  let bytes: Uint8Array;
+  try {
+    bytes = fromBase64url(value);
+  } catch {
+    // Text with nonzero bits past its last whole byte, which no encoder writes.
+    return false;
+  }
   return bytes.length === 32 && toUnpaddedBase64url(bytes) === value;
 }
 

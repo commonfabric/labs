@@ -64,6 +64,7 @@ function workerSide() {
   };
   const processor = {
     isDisposed: () => false,
+    reportClientUpdateRequired: () => {},
     assertAttachable: (context: RuntimeSecurityContext) => {
       asserted.push(context);
       if (context.identity === running.identity) return;

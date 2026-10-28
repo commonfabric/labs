@@ -46,6 +46,7 @@ import {
   type GenesisRoot,
   getCommitPreconditionsConfig,
   getServerExecutionConfig,
+  identityOfScopeKey,
   isScopeKey,
   type MemoryProtocolFlags,
   type OperationFieldQuery,
@@ -161,6 +162,9 @@ import {
   type QueuedEventAppend,
 } from "./event-append-queue.ts";
 import {
+  type ClientUpdateRequired,
+  type ForeignScopedReadGrant,
+  type IForeignScopedReadRefusedError,
   IMemoryAddress,
   IMemorySpaceAddress,
   IMergedChanges,
@@ -183,6 +187,7 @@ import {
   PushError,
   ReplicaLoadFailureError,
   Result,
+  type ScopedReadStanding,
   SealedCommitVerdict,
   SealedNativeCommit,
   State,
@@ -1159,12 +1164,20 @@ export interface Options {
 
   /** Server-execution v2 Phase 5: declares this manager a SERVING
    *  manager whose home space is `servingHomeSpace`. Providers opened
-   *  for OTHER spaces refuse scoped (user/session) reads fail-closed
-   *  (protocol.md §2's grant-scoped read design, RULED 2026-08-13) —
-   *  a serving runtime's foreign scoped read would otherwise resolve
+   *  for OTHER spaces gate scoped (user/session) reads (protocol.md
+   *  §2's grant-scoped read): one naming the reading actor's own
+   *  instance is admitted when `foreignScopedReadGrant` grants that
+   *  actor READ on the space, and every other is refused — a serving
+   *  runtime's unnamed foreign scoped read would otherwise resolve
    *  against the delegating service envelope and silently read an
    *  empty instance. Absent on every non-serving manager. */
   servingHomeSpace?: MemorySpace;
+
+  /** The memory server's read authority probe a serving manager resolves
+   *  foreign scoped reads with (see `servingHomeSpace`); installable later
+   *  through `installForeignScopedReadGrant`. Absent, every foreign scoped
+   *  read is refused. */
+  foreignScopedReadGrant?: ForeignScopedReadGrant;
 }
 
 /**
@@ -1643,6 +1656,9 @@ export class StorageManager implements IStorageManager {
     MemorySpace,
     MemoryV2Client.DeclaredSpaceKind
   >();
+  #clientUpdateError: Error | undefined;
+  #clientUpdateStatus: ClientUpdateRequired | undefined;
+  #clientUpdateObservers = new Set<(status: ClientUpdateRequired) => void>();
   #spaceAccessErrors = new Map<MemorySpace, Error>();
   #spaceAccessObservers = new Set<(space: MemorySpace, error: Error) => void>();
   #spaceAccessChangeObservers = new Set<(space: MemorySpace) => void>();
@@ -1764,6 +1780,11 @@ export class StorageManager implements IStorageManager {
 
   /** Phase 5: the serving manager's home space (Options.servingHomeSpace). */
   #servingHomeSpace?: MemorySpace;
+
+  /** The read authority probe foreign scoped reads resolve their actor's
+   * grant with (Options.foreignScopedReadGrant,
+   * `installForeignScopedReadGrant`). */
+  #foreignScopedReadGrant?: ForeignScopedReadGrant;
 
   /** The read ceiling every session this manager opens declares
    * (`setSessionReadCeiling`); undefined on a manager whose sessions read
@@ -1901,6 +1922,7 @@ export class StorageManager implements IStorageManager {
       memoryEventAppendQueueStore();
     this.#eventAppendPacing = options.eventAppendPacing;
     this.#servingHomeSpace = options.servingHomeSpace;
+    this.#foreignScopedReadGrant = options.foreignScopedReadGrant;
     // Snapshot + freeze: the resolver snapshotted its own copy at
     // open(), so refusal logic must see the same fixed facts — a
     // caller mutating their map object must not desynchronize them.
@@ -2082,6 +2104,25 @@ export class StorageManager implements IStorageManager {
     return { accepted: true };
   }
 
+  /** Opens through admission unless this manager already requires an update. */
+  async #createSession(
+    ...args: Parameters<SessionFactory["create"]>
+  ): Promise<OpenedSpaceSession> {
+    if (this.#clientUpdateError !== undefined) throw this.#clientUpdateError;
+    const signal = args[3];
+    const noteFailure = (error: Error): void => {
+      if (signal?.aborted !== true) this.#noteClientUpdateRequired(error);
+    };
+    try {
+      const opened = await this.#sessionFactory.create(...args);
+      opened.session.subscribeTermination(noteFailure);
+      return opened;
+    } catch (error) {
+      if (error instanceof Error) noteFailure(error);
+      throw error;
+    }
+  }
+
   /**
    * Creates a space and returns its DID. See `IStorageManager.createSpace`.
    *
@@ -2122,7 +2163,7 @@ export class StorageManager implements IStorageManager {
       ...(spaceKind === undefined ? {} : { spaceKind }),
     };
     const aclId = aclDocId(space);
-    const { client, session } = await this.#sessionFactory.create(
+    const { client, session } = await this.#createSession(
       space,
       key,
       { sessionId: crypto.randomUUID(), ...declarations },
@@ -2134,7 +2175,7 @@ export class StorageManager implements IStorageManager {
       if (spaceKind !== undefined && client.serverFlags?.spaceKind !== true) {
         throw new Error("Host does not support declared space kinds");
       }
-      await session.transact({
+      const commit = session.transact({
         ...declarations,
         localSeq: 1,
         reads: {
@@ -2143,6 +2184,8 @@ export class StorageManager implements IStorageManager {
         },
         operations: [{ op: "set", id: aclId, value: { value: { ...acl } } }],
       });
+      this.trackPendingCommit(commit);
+      await commit;
     } finally {
       try {
         await client.close();
@@ -2320,6 +2363,11 @@ export class StorageManager implements IStorageManager {
   }
 
   /** @inheritDoc */
+  installForeignScopedReadGrant(grant: ForeignScopedReadGrant): void {
+    this.#foreignScopedReadGrant = grant;
+  }
+
+  /** @inheritDoc */
   integrateStoreWrites(
     space: MemorySpace,
     writes: readonly { id: string; scopeKey: ScopeKey }[],
@@ -2346,7 +2394,7 @@ export class StorageManager implements IStorageManager {
     // told nothing of the kind, and stays open without being told. A session
     // of its own, opened now, is told the kind as the space stands, and is
     // closed however the read ends.
-    const { client, session } = await this.#sessionFactory.create(
+    const { client, session } = await this.#createSession(
       space,
       this.as,
       {
@@ -2387,10 +2435,18 @@ export class StorageManager implements IStorageManager {
         subscription: this.#subscription,
         scopeKeyIdentity: () => this.scopeKeyIdentity(),
         localSessionDocuments: () => this.#localSessionDocuments === true,
-        // Phase 5's producer-side foreign-scoped-read refusal: only a
+        // Phase 5's producer-side foreign-scoped-read gate: only a
         // serving manager sets a home space, and only its FOREIGN
-        // providers refuse (see Options.servingHomeSpace).
-        refuseForeignScopedReads: this.#refusesForeignScopedReadsIn(space),
+        // providers gate (see Options.servingHomeSpace). The grant is
+        // resolved at each use, so one installed after the provider
+        // opened still decides its reads.
+        gateForeignScopedReads: this.#gatesForeignScopedReadsIn(space),
+        foreignScopedReadGrant: () => {
+          const grant = this.#foreignScopedReadGrant;
+          return grant === undefined
+            ? undefined
+            : (principal: string) => grant(space, principal);
+        },
         storeReadThrough: () => this.#storeReadThroughs.get(space),
         loadCrossings: (crossings) => this.#loadCrossings(crossings),
         isRead: (address) => {
@@ -2424,13 +2480,14 @@ export class StorageManager implements IStorageManager {
               routeSignal,
             )
           : (_routeGeneration, routeSignal) =>
-            this.#sessionFactory.create(space, signer, {
+            this.#createSession(space, signer, {
               sessionId: this.#sessionId,
               ...this.#sessionDescriptorFields(),
             }, routeSignal),
         syncReplayDependencies: (document) =>
           this.#syncCfcSchemaDocument(space, document),
         getTelemetry: () => this.#telemetry,
+        trackPendingCommit: (promise) => this.trackPendingCommit(promise),
         onSessionReplaced: () => {
           for (const observer of [...this.#spaceSessionReplacedObservers]) {
             try {
@@ -2441,6 +2498,7 @@ export class StorageManager implements IStorageManager {
           }
         },
         onSessionError: (error) => {
+          this.#noteClientUpdateRequired(error);
           for (const observer of [...this.#spaceSessionErrorObservers]) {
             try {
               observer(space, error);
@@ -2543,7 +2601,7 @@ export class StorageManager implements IStorageManager {
       const detached = this.#detachedSessionResumes.get(space);
       this.#detachedSessionResumes.delete(space);
       const normal = track(
-        await this.#sessionFactory.create(
+        await this.#createSession(
           space,
           signer,
           detached !== undefined && detached.routeGeneration === routeGeneration
@@ -2625,7 +2683,7 @@ export class StorageManager implements IStorageManager {
         bootstrapSessionId = crypto.randomUUID();
       }
       const bootstrap = track(
-        await this.#sessionFactory.create(
+        await this.#createSession(
           space,
           signer,
           { sessionId: bootstrapSessionId },
@@ -2639,7 +2697,7 @@ export class StorageManager implements IStorageManager {
         // first inspection; the resume below then opens what it wrote.
         if (isFresh(current)) {
           try {
-            await bootstrap.session.transact({
+            const commit = bootstrap.session.transact({
               localSeq: 1,
               reads: {
                 confirmed: [{ id: aclId, path: toDocumentPath([]), seq: 0 }],
@@ -2654,6 +2712,8 @@ export class StorageManager implements IStorageManager {
               assertCurrentRoute();
               routeState.writeIssuedGeneration = routeGeneration;
             });
+            this.trackPendingCommit(commit);
+            await commit;
           } catch (error) {
             // A concurrent genesis by the same user's other runtime wins the
             // same document; any other failure is a real bootstrap error.
@@ -2669,7 +2729,7 @@ export class StorageManager implements IStorageManager {
 
       assertCurrentRoute();
       const resumed = track(
-        await this.#sessionFactory.create(
+        await this.#createSession(
           space,
           signer,
           resumeNormal,
@@ -2805,6 +2865,48 @@ export class StorageManager implements IStorageManager {
   }
 
   /** @inheritDoc */
+  clientUpdateRequired(): ClientUpdateRequired | undefined {
+    return this.#clientUpdateStatus;
+  }
+
+  /** @inheritDoc */
+  subscribeClientUpdateRequired(
+    observer: (status: ClientUpdateRequired) => void,
+  ): Cancel {
+    this.#clientUpdateObservers.add(observer);
+    if (this.#clientUpdateStatus !== undefined) {
+      try {
+        observer(this.#clientUpdateStatus);
+      } catch (cause) {
+        console.error("client-update-required subscriber threw:", cause);
+      }
+    }
+    return () => this.#clientUpdateObservers.delete(observer);
+  }
+
+  /** Retains a refusal and the write uncertainty present before commits settle. */
+  #noteClientUpdateRequired(error: Error): void {
+    if (!MemoryV2Client.isClientUpdateRequiredError(error)) return;
+    this.#clientUpdateError ??= error;
+    const unconfirmedWrites = this.hasPendingCommits() ||
+      this.#clientUpdateStatus?.unconfirmedWrites === true;
+    if (this.#clientUpdateStatus?.unconfirmedWrites === unconfirmedWrites) {
+      return;
+    }
+    this.#clientUpdateStatus = Object.freeze({
+      message: this.#clientUpdateError.message,
+      unconfirmedWrites,
+    });
+    for (const observer of [...this.#clientUpdateObservers]) {
+      try {
+        observer(this.#clientUpdateStatus);
+      } catch (cause) {
+        console.error("client-update-required subscriber threw:", cause);
+      }
+    }
+  }
+
+  /** @inheritDoc */
   spaceSessionError(space: MemorySpace): Error | undefined {
     return this.#providers.get(space)?.replica.sessionError();
   }
@@ -2863,6 +2965,9 @@ export class StorageManager implements IStorageManager {
       context,
     });
     if (this.#pendingCommits.size === 1) {
+      if (this.#clientUpdateError !== undefined) {
+        this.#noteClientUpdateRequired(this.#clientUpdateError);
+      }
       this.#notifyPendingCommits(true);
     }
     tracked.finally(() => {
@@ -3170,13 +3275,49 @@ export class StorageManager implements IStorageManager {
   }
 
   /**
-   * Whether this manager's provider for `space` refuses scoped reads: a
-   * serving manager reads no foreign space's scoped instances (see
-   * `Options.servingHomeSpace`).
+   * Whether this manager's provider for `space` gates scoped reads: a
+   * serving manager reads a foreign space's scoped instances only under
+   * their actor's grant (see `Options.servingHomeSpace`).
    */
-  #refusesForeignScopedReadsIn(space: MemorySpace): boolean {
+  #gatesForeignScopedReadsIn(space: MemorySpace): boolean {
     return this.#servingHomeSpace !== undefined &&
       this.#servingHomeSpace !== space;
+  }
+
+  /** @inheritDoc */
+  scopedReadStanding(
+    address: Pick<IMemorySpaceAddress, "space" | "scope">,
+    identity: ScopeKeyIdentity | undefined,
+  ): ScopedReadStanding {
+    const scope = normalizeCellScope(address.scope);
+    if (scope === "space" || !this.#gatesForeignScopedReadsIn(address.space)) {
+      return "admitted";
+    }
+    return this.#scopedReadStandingOf(
+      address.space,
+      this.#foreignInstanceKey(scope, identity),
+    );
+  }
+
+  /**
+   * Where a gated read of `instance` in `space` stands
+   * (`scopedReadStanding`): refused when it names no actor's instance,
+   * else the space's provider's verdict on the actor. With no probe to ask,
+   * or no provider open yet, there is nothing to resolve the grant from —
+   * refused without one, unresolved before the provider opens and asks.
+   */
+  #scopedReadStandingOf(
+    space: MemorySpace,
+    instance: ScopeKey | undefined,
+  ): ScopedReadStanding {
+    if (instance === undefined) return "refused";
+    const actor = identityOfScopeKey(instance)?.principal;
+    if (actor === undefined) return "refused";
+    if (this.#foreignScopedReadGrant === undefined) return "refused";
+    const provider = this.#providers.get(space);
+    return provider === undefined
+      ? "unresolved"
+      : provider.replica.foreignScopedReadStanding(actor);
   }
 
   /**
@@ -3184,10 +3325,12 @@ export class StorageManager implements IStorageManager {
    * which takes the load's failure if it had one. The release that brings
    * the key's count back to zero settles the key's waiters and, when no
    * failure was recorded, reports the recovery epoch to
-   * `loadRecoveryObserver`. A scoped read of a space whose provider refuses
-   * such reads registers nothing, and its release does nothing: the read
-   * returns no data however long it is waited for, so it is not a load in
-   * flight, and nothing parks on it.
+   * `loadRecoveryObserver`. A scoped read of another space that this serving
+   * manager refuses (`scopedReadStanding`) registers nothing, and its release
+   * does nothing: the read returns no data however long it is waited for, so
+   * it is not a load in flight, and nothing parks on it. One whose actor's
+   * grant is still being asked for registers as any load does: its pull
+   * settles it, with the data or with the refusal.
    *
    * With `prefetch`, the load is one no reader asked for. A waiter still
    * waits for it to settle, since its landing is what a cold read is waiting
@@ -3208,7 +3351,13 @@ export class StorageManager implements IStorageManager {
     },
     { prefetch = false }: { prefetch?: boolean } = {},
   ): (failure?: unknown) => void {
-    if (this.refusesReadByConstruction(address)) return () => {};
+    if (
+      address.scope !== "space" &&
+      this.#gatesForeignScopedReadsIn(address.space) &&
+      this.#scopedReadStandingOf(address.space, address.scopeKey) === "refused"
+    ) {
+      return () => {};
+    }
     const key = entityKey(address, this.scopeKeyIdentity());
     let entry = this.#pendingLoads.get(key);
     if (entry === undefined) {
@@ -3224,8 +3373,13 @@ export class StorageManager implements IStorageManager {
     entry.count++;
     this.#pendingLoads.set(key, entry);
     return (failure?: unknown) => {
-      if (prefetch) entry.prefetchFailure ??= failure;
-      else entry.failure ??= failure;
+      // A gated read's refusal settles the load as an absence, not as a
+      // failure of the load: the document is absent for its reader, and
+      // what a run reads decides it (`scopedReadStanding`), so a document
+      // the preflight alone reaches does not fail the event (events.md §5).
+      const counted = isForeignScopedReadRefusal(failure) ? undefined : failure;
+      if (prefetch) entry.prefetchFailure ??= counted;
+      else entry.failure ??= counted;
       entry.count--;
       if (entry.count > 0) return;
       this.#pendingLoads.delete(key);
@@ -3283,14 +3437,6 @@ export class StorageManager implements IStorageManager {
     scopeKey?: ScopeKey;
   }[] {
     return [...this.#pendingLoads.values()].map((entry) => entry.address);
-  }
-
-  /** @inheritDoc */
-  refusesReadByConstruction(
-    address: { space: MemorySpace; scope?: CellScope },
-  ): boolean {
-    return normalizeCellScope(address.scope) !== "space" &&
-      this.#refusesForeignScopedReadsIn(address.space);
   }
 
   pendingLoadGeneration(key: string): number | undefined {
@@ -3388,8 +3534,8 @@ export class StorageManager implements IStorageManager {
     // The runner's explicit-instance read (server-execution v2 stage A):
     // a served per-instance run's load of a scoped doc NAMES that
     // principal's instance — the load registers, travels, and lands per
-    // instance. A load of a foreign space's scoped doc, which a serving
-    // manager refuses by construction, travels but registers nothing
+    // instance. A load of a foreign space's scoped doc that a serving
+    // manager refuses travels but registers nothing
     // (`#registerPendingLoad()`). Own-identity loads (every client, the
     // OFF arm) name nothing and take exactly the pre-stage-A path.
     const instance = this.#foreignInstanceKey(scope, options?.scopeKeyIdentity);
@@ -3479,10 +3625,11 @@ export class StorageManager implements IStorageManager {
       const space = crossing.space as MemorySpace;
       const id = crossing.id as URI;
       const scope = normalizeCellScope(crossing.scope);
-      // A scoped read of a foreign space is one a serving manager refuses
-      // by construction (ProviderOptions.refuseForeignScopedReads); the
-      // run that reads it is failed at dispatch, so no load is kicked.
-      if (scope !== "space" && this.#refusesForeignScopedReadsIn(space)) {
+      // A crossing names no actor's instance, so a scoped crossing into a
+      // foreign space is a read a serving manager refuses
+      // (ProviderOptions.gateForeignScopedReads); the run that reads it is
+      // withdrawn, so no load is kicked.
+      if (scope !== "space" && this.#gatesForeignScopedReadsIn(space)) {
         continue;
       }
       const target = `${space}\0${scope}\0${id}`;
@@ -3544,9 +3691,8 @@ export class StorageManager implements IStorageManager {
    * served per-instance run's read of a scoped instance the replica has
    * never seen. Registered like syncCell's load (the preflight park
    * cross-matches the instance-keyed address) and named on the wire,
-   * except that a read this manager refuses by construction
-   * (`refusesReadByConstruction()`) registers nothing for a preflight to
-   * park on.
+   * except that a read this manager refuses (`scopedReadStanding()`)
+   * registers nothing for a preflight to park on.
    * Own-identity or space-scope addresses name nothing and take the
    * ordinary root pull; a load that fails hands back the pull-kick
    * reservation so a later read may retry.
@@ -4057,6 +4203,9 @@ type ProviderOptions = {
   subscription: IStorageSubscription;
   onAccessChange?: (error: Error | undefined) => void;
 
+  /** Registers operation writes with the manager's durability barrier. */
+  trackPendingCommit?: (promise: Promise<unknown>) => void;
+
   /** Called when the space's memory session is replaced on reconnect. */
   onSessionReplaced?: () => void;
 
@@ -4088,15 +4237,23 @@ type ProviderOptions = {
   /** OW27 per-stream send pacing (see Options). */
   eventAppendPacing?: EventAppendPacing | false;
 
-  /** Server-execution v2 Phase 5 (protocol.md §2's grant-scoped read
-   * design, RULED 2026-08-13 — the delegated-scoped-read fail-closed
-   * precondition): set on a SERVING manager's FOREIGN-space providers.
-   * A scoped (user/session) read against such a provider REFUSES
-   * loudly instead of shipping an unnamed scoped root the memory
-   * server would resolve against the delegating service envelope —
-   * the silent-empty-instance trap. Space-scope foreign reads (the
-   * §2b free-read row) are unaffected. */
-  refuseForeignScopedReads?: boolean;
+  /** Server-execution v2 Phase 5 (protocol.md §2's grant-scoped read):
+   * set on a SERVING manager's FOREIGN-space providers. A scoped
+   * (user/session) read against such a provider is admitted when it
+   * names an actor's instance and `foreignScopedReadGrant` grants that
+   * actor READ on the space, and REFUSES loudly otherwise, instead of
+   * shipping an unnamed scoped root the memory server would resolve
+   * against the delegating service envelope — the silent-empty-instance
+   * trap. Space-scope foreign reads (the §2b free-read row) are
+   * unaffected. */
+  gateForeignScopedReads?: boolean;
+
+  /** The read authority probe for this provider's space, resolved at each
+   * use so one installed after the provider opened still decides its
+   * reads; resolving to `undefined` refuses every gated read. */
+  foreignScopedReadGrant?: () =>
+    | ((principal: string) => ReturnType<ForeignScopedReadGrant>)
+    | undefined;
 
   /** The manager's store read-through for this space, resolved at each
    * use so an install after the replica was built still takes effect
@@ -4405,15 +4562,19 @@ class Provider
   }
 
   applyOperation(operation: ApplyOpOperation): Promise<ApplyOpResolution> {
-    return this.#followReplacement((replica) =>
+    const commit = this.#followReplacement((replica) =>
       replica.applyOperation(operation)
     );
+    this.options.trackPendingCommit?.(commit);
+    return commit;
   }
 
   releaseOperationField(operation: ReleaseOpFieldOperation): Promise<void> {
-    return this.#followReplacement((replica) =>
+    const commit = this.#followReplacement((replica) =>
       replica.releaseOperationField(operation)
     );
+    this.options.trackPendingCommit?.(commit);
+    return commit;
   }
 
   /**
@@ -4925,6 +5086,20 @@ const docKey = (id: URI, instance: string): string => `${instance}\0${id}`;
  * caller knows it, the explicit instance key. */
 type LocalDocAddress = { id: URI; scope?: CellScope; scopeKey?: ScopeKey };
 
+/** Whether `failure`, as a pull reports it, is a gated read's refusal. */
+const isForeignScopedReadRefusal = (failure: unknown): boolean =>
+  typeof failure === "object" && failure !== null &&
+  (failure as { name?: unknown }).name === "ForeignScopedReadRefusedError";
+
+/**
+ * One actor's grant verdict as a replica holds it (`#foreignScopedReadVerdict`):
+ * the probe's promise, and its answer once it has one.
+ */
+type ForeignScopedReadVerdictEntry = {
+  settled?: Awaited<ReturnType<ForeignScopedReadGrant>>;
+  promise: ReturnType<ForeignScopedReadGrant>;
+};
+
 /**
  * One space's local replica: the documents the server has confirmed, the
  * local writes pending on them, and the session that keeps the two in step.
@@ -5203,9 +5378,33 @@ export class SpaceReplica
   #eventAppendQueueStore?: EventAppendQueueStore;
   #eventAppendPacing?: EventAppendPacing | false;
 
-  /** Phase 5's producer-side foreign-scoped-read refusal (see
-   * ProviderOptions.refuseForeignScopedReads). */
-  #refuseForeignScopedReads = false;
+  /** Phase 5's producer-side foreign-scoped-read gate (see
+   * ProviderOptions.gateForeignScopedReads). */
+  #gateForeignScopedReads = false;
+
+  /** The read authority probe for this space, resolved at each use (see
+   * ProviderOptions.foreignScopedReadGrant). */
+  #foreignScopedReadGrant: NonNullable<
+    ProviderOptions["foreignScopedReadGrant"]
+  > = () => undefined;
+
+  /** The grant verdicts this provider has asked for, by actor: a settled
+   * one answers `foreignScopedReadStanding` and every later read of that
+   * actor's instances until word of an access-list change
+   * (`noteAclChanged`) asks for each again, the last verdict standing
+   * until the new one lands. */
+  readonly #foreignScopedReadVerdicts = new Map<
+    string,
+    ForeignScopedReadVerdictEntry
+  >();
+
+  /** The named reads this provider refused, by actor, so that an actor the
+   * list comes to grant has them pulled again: nothing else would, since a
+   * refused load left no document for a reader's change to re-run on. */
+  readonly #refusedScopedAsks = new Map<
+    string,
+    Map<string, { id: URI; scope: CellScope; scopeKey: ScopeKey }>
+  >();
 
   #closed = false;
   readonly #closeSignal = Promise.withResolvers<void>();
@@ -5352,6 +5551,7 @@ export class SpaceReplica
    * silent absent read.
    */
   #lastAuthorizationError: IAuthorizationError | null = null;
+  #sessionAdmissionError: Error | undefined;
   #onAccessChange?: (error: Error | undefined) => void;
   #cancelTermination: Cancel | undefined;
   #onSessionReplaced?: () => void;
@@ -5398,7 +5598,9 @@ export class SpaceReplica
     this.#routeGeneration = options.routeGeneration;
     this.#eventAppendQueueStore = options.eventAppendQueueStore;
     this.#eventAppendPacing = options.eventAppendPacing;
-    this.#refuseForeignScopedReads = options.refuseForeignScopedReads === true;
+    this.#gateForeignScopedReads = options.gateForeignScopedReads === true;
+    this.#foreignScopedReadGrant = options.foreignScopedReadGrant ??
+      (() => undefined);
     this.#storeReadThrough = options.storeReadThrough ?? (() => undefined);
     this.#loadCrossings = options.loadCrossings;
     this.#isRead = options.isRead ?? (() => false);
@@ -5817,8 +6019,12 @@ export class SpaceReplica
     // revocation (SessionRevokedError) carries a different name and is not an
     // authorization denial for this space, so only the AuthorizationError is
     // surfaced here.
-    const closeError = this.#sessionSession?.closeError;
-    if (closeError !== undefined && closeError.name === "AuthorizationError") {
+    const closeError = this.#sessionAdmissionError ??
+      this.#sessionSession?.closeError;
+    if (
+      closeError !== undefined && closeError.name === "AuthorizationError" &&
+      !MemoryV2Client.isClientUpdateRequiredError(closeError)
+    ) {
       return closeError;
     }
     return undefined;
@@ -5827,7 +6033,7 @@ export class SpaceReplica
   /** The terminal error of the remote subscription supplying this replica. */
   sessionError(): Error | undefined {
     if (this.#storeReadThrough() !== undefined) return undefined;
-    return this.#sessionSession?.closeError;
+    return this.#sessionAdmissionError ?? this.#sessionSession?.closeError;
   }
 
   /**
@@ -5915,51 +6121,154 @@ export class SpaceReplica
   noteAclChanged(): void {
     if (this.#closed) return;
     this.#aclChangedSinceMount = true;
+    // The list that decided every actor's grant has changed: each actor this
+    // replica has asked about is asked about again now, rather than on its
+    // next load, since an instance already loaded is read from the replica
+    // and loads no more. Its last verdict stands until the new one lands.
+    for (const actor of [...this.#foreignScopedReadVerdicts.keys()]) {
+      this.#askForeignScopedReadGrant(actor);
+    }
   }
 
   /**
-   * THE SESSION REMOUNT itself. Drop a memoized session that an ACL verdict
-   * terminated, so the next `#memoizedSessionHandle()` opens a fresh one.
-   *
-   * A revoked (or permanently denied) space session is TERMINAL for that
-   * session object: `terminateSession` (memory/v2/client.ts) closes it,
-   * clears its watch specs, and stores the verdict in `closeError`, which
-   * `#assertOpen()` then rethrows for every later call. Nothing on the read
-   * or commit path ever dropped the memoized mount —
-   * `#memoizedSessionHandle()` clears it only in `close()`/`closeNow()` — so
-   * every subsequent pull
-   * reused the same dead session and the space read `unauthorized` forever.
-   * `storage/rejection.ts`'s `SessionError` note named this gap when it was
-   * written: "the convergence argument is sound, only the remount is
-   * missing."
-   *
-   * WHY ONLY WORD OF AN ACL CHANGE TRIGGERS IT. The verdict that killed the
-   * session is a function of the space's ACL, so re-opening on any other
-   * schedule re-runs a decision whose inputs have not changed — one doomed
-   * round-trip per retry, exactly the cost `isTransientCommitRejection`
-   * refuses to pay for `SessionError`. This is the space-root ensure's own
-   * discipline for the very same boot order, one layer down: latch the owed
-   * work at the fail-closed refusal, consume it when a commit touches
-   * `of:<space>` (executor/space-server.ts `#rootEnsureAwaitingOwner`). A
-   * client sees no ACL commit for a space it was refused, so its word is a
-   * host's retry instead, one attempt per call.
-   *
-   * WHY IT CANNOT WIDEN AUTHORITY. This re-opens a session; it does not
-   * decide one. `session.open` re-runs the server's full admission against
-   * the ACL as it now stands, and under OW31's ruled read posture a serving
-   * mount carries `actingAs: "space-owner"`, so the server re-resolves the
-   * binding from the LANDED ACL and the session runs as whoever owns the
-   * space now. Two cases:
-   *   - the genesis case (this defect): the pre-genesis session opened under
-   *     the service envelope's fresh-space READ floor and the genesis ACL
-   *     `{user: OWNER}` de-authorized it by design. The re-open binds the
-   *     user, who is OWNER, and is admitted.
-   *   - a GENUINE de-authorization (the user removed, ownership moved): the
-   *     re-open is DENIED at `session.open`. `#memoizedSessionHandle()`'s
-   *     catch drops the failed handle, the load keeps failing, and the
-   *     served event
-   *     keeps deferring — the ratified wedge, which OW54's give-up arm
-   *     covers. Fail-closed, and loud.
+   * Where this provider stands on a gated read of `actor`'s instances (see
+   * IStorageManager.scopedReadStanding): a provider that gates nothing
+   * admits, one with no probe to ask refuses, and otherwise the verdict it
+   * has for the actor decides, unresolved until the probe answers.
+   */
+  foreignScopedReadStanding(actor: string): ScopedReadStanding {
+    if (!this.#gateForeignScopedReads) return "admitted";
+    if (this.#foreignScopedReadGrant() === undefined) return "refused";
+    const entry = this.#foreignScopedReadVerdicts.get(actor);
+    if (entry?.settled === undefined) return "unresolved";
+    return entry.settled.granted ? "admitted" : "refused";
+  }
+
+  /**
+   * The probe's verdict on `actor`'s READ grant for this space: the one
+   * already asked for, else a fresh ask.
+   */
+  #foreignScopedReadVerdict(
+    actor: string,
+  ): ReturnType<ForeignScopedReadGrant> {
+    return this.#foreignScopedReadVerdicts.get(actor)?.promise ??
+      this.#askForeignScopedReadGrant(actor);
+  }
+
+  /**
+   * Asks the probe for `actor`'s READ grant on this space and records the
+   * ask, the actor's last verdict standing until this one lands. A probe
+   * that throws refuses, fail-closed, with the error as the reason. An
+   * answer that admits an actor the list refused before pulls the reads it
+   * refused again (`#refusedScopedAsks`). Without a probe, refused and
+   * recorded nowhere, so a probe installed later is asked.
+   */
+  #askForeignScopedReadGrant(
+    actor: string,
+  ): ReturnType<ForeignScopedReadGrant> {
+    const grant = this.#foreignScopedReadGrant();
+    if (grant === undefined) {
+      return Promise.resolve({
+        granted: false,
+        reason: "this runtime holds no read authority probe to resolve the " +
+          "actor's grant with",
+      });
+    }
+    let entry = this.#foreignScopedReadVerdicts.get(actor);
+    if (entry === undefined) {
+      entry = { promise: Promise.resolve({ granted: true }) };
+      this.#foreignScopedReadVerdicts.set(actor, entry);
+    }
+    const current = entry;
+    const before = current.settled;
+    const asked: ReturnType<ForeignScopedReadGrant> = Promise.resolve()
+      .then(() => grant(actor))
+      .catch((error: unknown) => {
+        logger.warn("foreign-scoped-read-grant-probe-failed", () => [
+          `the read authority probe for ${this.#space} (actor ${actor}) ` +
+          "failed; refusing the actor's instances fail-closed until the " +
+          "space's access list changes (protocol.md §2)",
+          error,
+        ]);
+        return {
+          granted: false as const,
+          reason: `the read authority probe failed: ${String(error)}`,
+        };
+      })
+      .then((verdict) => {
+        // A later ask supersedes this one; its answer is the one that stands.
+        if (current.promise !== asked || this.#closed) return verdict;
+        current.settled = verdict;
+        if (verdict.granted && before?.granted !== true) {
+          this.#repullRefusedScopedAsks(actor);
+        }
+        return verdict;
+      });
+    current.promise = asked;
+    return asked;
+  }
+
+  /**
+   * Pulls again every named read of `actor`'s instances this replica
+   * refused, now that the list grants the actor: their readers were
+   * withdrawn on an absence, and only a landed document runs them again.
+   */
+  #repullRefusedScopedAsks(actor: string): void {
+    const asks = this.#refusedScopedAsks.get(actor);
+    if (asks === undefined) return;
+    this.#refusedScopedAsks.delete(actor);
+    for (const { id, scope, scopeKey } of asks.values()) {
+      void this.sync(id, { path: [], schema: false }, scope, scopeKey);
+    }
+  }
+
+  /**
+   * The refusal a gated scoped read of `address` is answered with, or
+   * `undefined` for one the gate admits: a read naming an actor's instance
+   * whose actor the space's access list grants READ, as the probe resolves
+   * it. A space-scope read is never gated.
+   */
+  async #foreignScopedReadRefusal(
+    address: { id: URI; scope?: CellScope; scopeKey?: ScopeKey },
+  ): Promise<IForeignScopedReadRefusedError | undefined> {
+    const scope = normalizeCellScope(address.scope) ?? "space";
+    if (scope === "space") return undefined;
+    const refusal = (why: string): IForeignScopedReadRefusedError => ({
+      name: "ForeignScopedReadRefusedError",
+      message: `foreign scoped read refused on the serving path: ` +
+        `${address.id} (scope "${scope}") in ${this.#space} — ${why} ` +
+        "(protocol.md §2's grant-scoped read: a serving runtime reads a " +
+        "foreign scoped instance under its actor's own READ grant)",
+    });
+    const key = address.scopeKey;
+    if (key === undefined) {
+      return refusal(
+        "the read names no actor's instance, and the serving runtime's own " +
+          "instance of a foreign scoped document is never read",
+      );
+    }
+    const actor = identityOfScopeKey(key)?.principal;
+    if (actor === undefined) return refusal(`"${key}" names no actor`);
+    const verdict = await this.#foreignScopedReadVerdict(actor);
+    if (verdict.granted) return undefined;
+    let asks = this.#refusedScopedAsks.get(actor);
+    if (asks === undefined) {
+      asks = new Map();
+      this.#refusedScopedAsks.set(actor, asks);
+    }
+    // Keyed by the instance, so two session instances of one document are
+    // two asks, each pulled again.
+    asks.set(`${key}\0${address.id}`, {
+      id: address.id,
+      scope,
+      scopeKey: key,
+    });
+    return refusal(`the instance is ${actor}'s, and ${verdict.reason}`);
+  }
+
+  /**
+   * Reconsiders a permanent admission or ACL refusal after word of an ACL
+   * change. Runtime incompatibility requires a new runtime and stays latched.
    */
   #consumeOwedSessionRemount(): void {
     if (!this.#aclChangedSinceMount) return;
@@ -5974,7 +6283,12 @@ export class SpaceReplica
     // the client's own `reconnect()`/`restore()` already heals) must all be
     // left alone: this arm exists for the one termination class no other
     // path recovers from.
-    const closeError = this.#sessionSession?.closeError;
+    const closeError = this.#sessionAdmissionError ??
+      this.#sessionSession?.closeError;
+    if (MemoryV2Client.isClientUpdateRequiredError(closeError)) {
+      this.#aclChangedSinceMount = false;
+      return;
+    }
     if (
       closeError === undefined ||
       (closeError.name !== "SessionRevokedError" &&
@@ -5992,6 +6306,7 @@ export class SpaceReplica
     }
     this.#aclChangedSinceMount = false;
     this.#sessionHandle = undefined;
+    this.#sessionAdmissionError = undefined;
     this.#sessionClient = undefined;
     // Dropping the terminated session drops the `closeError` half of
     // `authorizationError()` with it. That is the right direction — keeping it
@@ -7094,7 +7409,8 @@ export class SpaceReplica
     const sessionError = this.sessionError();
     if (
       !this.#closed && sessionError !== undefined &&
-      sessionError.name !== "AuthorizationError"
+      (sessionError.name !== "AuthorizationError" ||
+        MemoryV2Client.isClientUpdateRequiredError(sessionError))
     ) {
       return { error: toPullError(sessionError) };
     }
@@ -7103,39 +7419,30 @@ export class SpaceReplica
     for (const [address] of normalizedEntries) {
       this.#rootWatchesOf(address).pulledInPass = this.#releasePasses;
     }
-    // Phase 5's delegated-scoped-read fail-closed refusal, ENTRY-scoped
-    // (the F3 fix; protocol.md §2's grant-scoped read design): decided
-    // HERE, per caller, before the entries join the coalesced
-    // watch-refresh batch — the batch shares ONE pending promise across
-    // every concurrent caller, so a refusal thrown inside the batch
-    // (the `#refreshWatchSet()` backstop below) poisons innocent SPACE-scope
-    // foreign reads coalesced beside the offender: the load-bearing
-    // §2b free-read row would fail intermittently whenever any pattern
-    // persistently attempted one foreign scoped read. Refusing the
-    // OFFENDING caller's pull keeps the refusal action-scoped, the
-    // arc's standing refusal convention. The refusal is typed rather than
-    // a `ConnectionError`: it can never heal in this runtime. For the same
-    // reason the manager registers no pending load for such a read
-    // (`#registerPendingLoad()`), so a served event's preflight never parks
-    // on one, whenever the refusal lands relative to the preflight. A served
-    // run that reads the document's value is failed at dispatch instead
-    // (`refusesReadByConstruction()`).
-    if (this.#refuseForeignScopedReads) {
+    // Phase 5's grant-scoped read gate, ENTRY-scoped (the F3 fix;
+    // protocol.md §2): decided HERE, per caller, before the entries join
+    // the coalesced watch-refresh batch — the batch shares ONE pending
+    // promise across every concurrent caller, so a refusal thrown inside
+    // the batch (the `#refreshWatchSet()` backstop below) poisons innocent
+    // SPACE-scope foreign reads coalesced beside the offender: the
+    // load-bearing §2b free-read row would fail intermittently whenever
+    // any pattern persistently attempted one refused foreign scoped read.
+    // Refusing the OFFENDING caller's pull keeps the refusal
+    // action-scoped, the arc's standing refusal convention. The refusal
+    // is typed rather than a `ConnectionError`: it heals only when the
+    // target's access list changes. For the same reason the manager
+    // registers no pending load for a read it has already refused
+    // (`#registerPendingLoad()`), so a served event's preflight never
+    // parks on one. A served run that reads the document's value is
+    // withdrawn instead (`scopedReadStanding()`). A space-scope entry is
+    // never gated and costs no turn here.
+    if (this.#gateForeignScopedReads) {
       for (const [address] of normalizedEntries) {
-        const scope = normalizeCellScope(address.scope) ?? "space";
-        if (scope !== "space") {
-          return {
-            error: {
-              name: "ForeignScopedReadRefusedError",
-              message: `foreign scoped read refused on the serving path: ` +
-                `${address.id} (scope "${scope}") in ${this.#space} — ` +
-                "a serving runtime reads foreign scoped instances only " +
-                "under the grant-scoped read design (protocol.md §2; " +
-                "delegated scoped reads are fail-closed until grant " +
-                "resolution lands)",
-            },
-          };
+        if ((normalizeCellScope(address.scope) ?? "space") === "space") {
+          continue;
         }
+        const refusal = await this.#foreignScopedReadRefusal(address);
+        if (refusal !== undefined) return { error: refusal };
       }
     }
     // Compose the dedup key from per-part hashes instead of hashing a fresh
@@ -8091,35 +8398,32 @@ export class SpaceReplica
       if (watchEntries.length === 0) {
         return { ok: {} };
       }
-      // Phase 5's delegated-scoped-read fail-closed refusal, producer
-      // side (protocol.md §2's grant-scoped read design; see
-      // ProviderOptions.refuseForeignScopedReads): a serving runtime's
-      // scoped read of a FOREIGN space never reaches the wire — the
-      // unnamed scoped root would resolve against the delegating
-      // service envelope (a silently empty instance), and the runner
-      // cannot yet name a per-run foreign instance on a subscription.
-      // The memory server's admission carries the co-hosted belt; this
-      // is the producer half, so the two land as one stack.
+      // Phase 5's grant-scoped read gate, producer side (protocol.md §2;
+      // see ProviderOptions.gateForeignScopedReads): a serving runtime's
+      // UNNAMED scoped read of a FOREIGN space never reaches the wire —
+      // the unnamed scoped root would resolve against the delegating
+      // service envelope (a silently empty instance). A named one reaches
+      // it only once pull() has admitted it on its actor's grant. The
+      // memory server's admission resolves the same grant as the
+      // co-hosted belt; this is the producer half.
       //
-      // BACKSTOP only (the F3 fix): the live refusal is ENTRY-scoped at
+      // BACKSTOP only (the F3 fix): the live decision is ENTRY-scoped at
       // pull() — per caller, before the entry joins the batch — because
       // a throw HERE fails the whole coalesced batch (one shared
       // pending promise), poisoning innocent space-scope reads beside
       // the offender. Every watch entry flows through pull(), so this
-      // arm firing means a new path bypassed the entry refusal — a
-      // bug, kept loud rather than silently filtered (dropping the
-      // entry would resolve its caller OK without the data).
-      if (this.#refuseForeignScopedReads) {
+      // arm firing means a new path bypassed the entry gate — a bug,
+      // kept loud rather than silently filtered (dropping the entry
+      // would resolve its caller OK without the data).
+      if (this.#gateForeignScopedReads) {
         for (const [address] of watchEntries) {
           const scope = address.scope ?? "space";
-          if (scope !== "space") {
+          if (scope !== "space" && address.scopeKey === undefined) {
             throw new Error(
               `foreign scoped read refused on the serving path: ` +
                 `${address.id} (scope "${scope}") in ${this.#space} — ` +
-                "a serving runtime reads foreign scoped instances only " +
-                "under the grant-scoped read design (protocol.md §2; " +
-                "delegated scoped reads are fail-closed until grant " +
-                "resolution lands)",
+                "an unnamed scoped read reached the wire past the entry " +
+                "gate (protocol.md §2's grant-scoped read)",
             );
           }
         }
@@ -11899,6 +12203,7 @@ export class SpaceReplica
           }
           this.#sessionClient = resolved.client;
           this.#sessionSession = resolved.session;
+          this.#sessionAdmissionError = undefined;
           this.#lastAuthorizationError = null;
           this.#onAccessChange?.(undefined);
           this.#cancelTermination?.();
@@ -11908,7 +12213,10 @@ export class SpaceReplica
                 return;
               }
               const reported = this.sessionError() !== undefined;
-              if (MemoryV2Client.isPermanentAuthorizationError(error)) {
+              if (
+                MemoryV2Client.isPermanentAuthorizationError(error) &&
+                !MemoryV2Client.isClientUpdateRequiredError(error)
+              ) {
                 this.#onAccessChange?.(error);
               }
               if (reported) this.#onSessionError?.(error);
@@ -11936,11 +12244,22 @@ export class SpaceReplica
         },
       ).catch((error) => {
         if (this.#sessionHandle === handle) {
-          this.#sessionHandle = undefined;
-          if (
-            !this.#closed && error instanceof Error &&
-            isPermanentAuthorizationFailure(error)
-          ) this.#onAccessChange?.(error);
+          const permanent = error instanceof Error && (
+            isPermanentAuthorizationFailure(error) ||
+            MemoryV2Client.isClientUpdateRequiredError(error)
+          );
+          if (permanent && !this.#closed) {
+            this.#sessionAdmissionError = error;
+            if (
+              isPermanentAuthorizationFailure(error) &&
+              !MemoryV2Client.isClientUpdateRequiredError(error)
+            ) {
+              this.#onAccessChange?.(error);
+            }
+            this.#onSessionError?.(error);
+          } else {
+            this.#sessionHandle = undefined;
+          }
         }
         throw error;
       });
@@ -11997,7 +12316,10 @@ const isPermanentAuthorizationFailure = (error: { name: string }): boolean =>
 // tell an authorization denial apart from a transport failure. Everything else
 // remains a ConnectionError.
 const toPullError = (error: unknown): PullError => {
-  if (!(error instanceof Error) || error.name !== "AuthorizationError") {
+  if (
+    !(error instanceof Error) || error.name !== "AuthorizationError" ||
+    MemoryV2Client.isClientUpdateRequiredError(error)
+  ) {
     return toConnectionError(error);
   }
   const details = error as unknown as {

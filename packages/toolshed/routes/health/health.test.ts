@@ -4,7 +4,7 @@ import { connect, loopback } from "@commonfabric/memory/v2/client";
 import { Server } from "@commonfabric/memory/v2/server";
 
 import env from "@/env.ts";
-import { stats as statsRoute } from "@/routes/health/health.routes.ts";
+import { StatsResponseSchema as declared } from "@/routes/health/health.routes.ts";
 import createApp from "@/lib/create-app.ts";
 import router from "@/routes/health/health.index.ts";
 
@@ -42,6 +42,33 @@ Deno.test("health routes", async (t) => {
   );
 
   await t.step(
+    "GET /api/health/stats reports this process's memory",
+    async () => {
+      const processMemory = async () => {
+        const response = await app.request("/api/health/stats");
+        assertEquals(response.status, 200);
+        const json = await response.json();
+        assertEquals(
+          declared.safeParse({ ...json, processMemory: undefined }).success,
+          false,
+        );
+        return declared.parse(json).processMemory;
+      };
+      const size = 256 * 1024 * 1024;
+      const before = await processMemory();
+      expect(before.rss).toBeGreaterThan(0);
+      expect(before.heapUsed).toBeGreaterThan(0);
+      expect(before.external).toBeLessThan(size);
+      // A buffer allocated in this process, which serves the route, shows in
+      // the report while it is held.
+      const held = new Uint8Array(size);
+      const during = await processMemory();
+      expect(during.external).toBeGreaterThanOrEqual(size);
+      assertEquals(held.length, size);
+    },
+  );
+
+  await t.step(
     "GET /api/health/stats reports the memory server's document caches",
     async () => {
       // The provider is registered by the Server constructor (newest live
@@ -53,16 +80,6 @@ Deno.test("health routes", async (t) => {
         sessionOpenAuth: { audience: "did:key:z6Mk-health-stats-audience" },
       });
       try {
-        const declared = (statsRoute.responses as Record<
-          number,
-          {
-            content: {
-              "application/json": {
-                schema: { safeParse(value: unknown): { success: boolean } };
-              };
-            };
-          }
-        >)[200].content["application/json"].schema;
         const stats = async () => {
           const response = await app.request("/api/health/stats");
           assertEquals(response.status, 200);
@@ -126,16 +143,6 @@ Deno.test("health routes", async (t) => {
         subscriptionRefreshDelayMs: "manual",
       });
       try {
-        const declared = (statsRoute.responses as Record<
-          number,
-          {
-            content: {
-              "application/json": {
-                schema: { safeParse(value: unknown): { success: boolean } };
-              };
-            };
-          }
-        >)[200].content["application/json"].schema;
         const stats = async () => {
           const response = await app.request("/api/health/stats");
           assertEquals(response.status, 200);
@@ -222,16 +229,6 @@ Deno.test("health routes", async (t) => {
         subscriptionRefreshDelayMs: "manual",
       });
       try {
-        const declared = (statsRoute.responses as Record<
-          number,
-          {
-            content: {
-              "application/json": {
-                schema: { safeParse(value: unknown): { success: boolean } };
-              };
-            };
-          }
-        >)[200].content["application/json"].schema;
         const stats = async () => {
           const response = await app.request("/api/health/stats");
           assertEquals(response.status, 200);

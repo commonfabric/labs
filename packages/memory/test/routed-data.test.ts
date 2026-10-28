@@ -38,6 +38,7 @@ import { listenRoutedMemory } from "../v2/routed-listener.ts";
 import {
   decodeRoutedFrame,
   encodeRoutedFrame,
+  ROUTED_EXPANDED_LIMIT,
   ROUTED_QUEUE_LIMIT,
   ROUTED_RAW_LIMIT,
   routedFlags,
@@ -1300,7 +1301,7 @@ describe("optional routed host quotas", () => {
 
 Deno.test("routed host limits are config over defaults, and must nest", () => {
   assertEquals(routedHostLimits(), DEFAULT_ROUTED_HOST_LIMITS);
-  // A session's watch IDs are configuration, sized to fit one frame.
+  // A session's watch IDs are configuration.
   assertEquals(routedHostLimits().watchesPerSession, 2048);
   assertEquals(
     routedHostLimits({ watchesPerSession: 40960 }).watchesPerSession,
@@ -1720,6 +1721,103 @@ Deno.test("a session's watch IDs are bounded by configuration, and a mutation pa
       await f.close();
     }
   });
+  await t.step(
+    "a set staged in parts is bounded as the set its parts make",
+    async () => {
+      const f = await fixture("watches-per-session-staged", {
+        limits: { watchesPerSession: 8, holdingsPerSession: 4 },
+      });
+      try {
+        const session = await f.open();
+        const request = (fields: Record<string, unknown>) =>
+          f.request({
+            type: "session.watch.set",
+            space: f.space.did(),
+            sessionId: session.sessionId,
+            ...fields,
+          });
+        const holdings = (length: number) =>
+          Array.from({ length }, (_, i) => ({ id: `of:held-${i}`, seq: 1 }));
+        // Two parts of four IDs fill the bound, and a third part's one more
+        // ID, though its frame is small, takes the set past it.
+        assertEquals(
+          (await request({
+            watches: watches("a", 4),
+            stage: "ab",
+            part: 0,
+            more: true,
+          })).ok,
+          { staged: true },
+        );
+        assertEquals(
+          (await request({
+            watches: watches("b", 4),
+            stage: "ab",
+            part: 1,
+            more: true,
+          })).ok,
+          { staged: true },
+        );
+        const reasons = await refusalReasons(async () => {
+          const refused = await request({
+            watches: watches("c", 1),
+            stage: "ab",
+            part: 2,
+          });
+          assert(refused.error !== undefined, JSON.stringify(refused));
+          // Holdings named over two parts are bounded together as well.
+          assert(
+            (await request({
+              watches: [],
+              holdings: holdings(3),
+              stage: "held",
+              part: 0,
+              more: true,
+            })).ok,
+          );
+          const holdingsRefused = await request({
+            watches: [],
+            holdings: holdings(2),
+            stage: "held",
+            part: 1,
+          });
+          assert(
+            holdingsRefused.error !== undefined,
+            JSON.stringify(holdingsRefused),
+          );
+        });
+        assertEquals(reasons, ["frame-limit", "frame-limit"]);
+        // Held parts changed nothing the session holds, and the set their
+        // parts make, applied, is what it then holds: a set staged at the
+        // bound is taken, and leaves no room for another ID.
+        assert(
+          (await request({
+            watches: watches("d", 4),
+            stage: "de",
+            part: 0,
+            more: true,
+          })).ok,
+        );
+        assert(
+          (await request({ watches: watches("e", 4), stage: "de", part: 1 }))
+            .ok,
+        );
+        const full = await refusalReasons(async () => {
+          const refused = await f.request({
+            type: "session.watch.add",
+            space: f.space.did(),
+            sessionId: session.sessionId,
+            watches: watches("f", 1),
+          });
+          assert(refused.error !== undefined, JSON.stringify(refused));
+        });
+        assertEquals(full, ["frame-limit"]);
+        assertEquals(f.socket.readyState, 1);
+      } finally {
+        await f.close();
+      }
+    },
+  );
   await t.step("the default bound of 2,048, in one frame", async () => {
     const f = await fixture("watches-per-session-default");
     try {
@@ -2031,6 +2129,211 @@ Deno.test("holdings and views named on a watch add leave a session's counted usa
     await f.close();
     resetServerExecutionConfig();
   }
+});
+
+Deno.test("a set staged in parts counts toward the context's quotas from its first part", async (t) => {
+  const watches = (prefix: string, length: number) =>
+    Array.from(
+      { length },
+      (_, i) => ({ id: `${prefix}${i}`, kind: "graph", query: { roots: [] } }),
+    );
+  const holdings = (prefix: string, length: number) =>
+    Array.from({ length }, (_, i) => ({ id: `of:${prefix}${i}`, seq: 0 }));
+  const set = (
+    f: Awaited<ReturnType<typeof fixture>>,
+    session: { sessionId: string },
+    fields: Record<string, unknown>,
+  ) =>
+    f.request({
+      type: "session.watch.set",
+      space: f.space.did(),
+      sessionId: session.sessionId,
+      ...fields,
+    });
+  const retriable = (answer: Record<string, unknown>) =>
+    (answer.error as { retriable?: boolean } | undefined)?.retriable;
+  await t.step(
+    "watches, through a refused part, and past what is held",
+    async () => {
+      const f = await fixture("staged-context-watches", {
+        limits: { watchesPerContext: 6, watchesPerSession: 6 },
+      });
+      try {
+        const first = await f.open(), second = await f.open();
+        const part = (prefix: string, length: number, index: number) =>
+          set(f, first, {
+            watches: watches(prefix, length),
+            stage: "ab",
+            part: index,
+            ...(index === 0 ? { more: true } : {}),
+          });
+        assertEquals((await part("a", 4, 0)).ok, { staged: true });
+        const reasons = await refusalReasons(async () => {
+          // The held part's four IDs count before the set is applied: three
+          // more would make seven in the context.
+          assertEquals(
+            retriable(await set(f, second, { watches: watches("c", 3) })),
+            true,
+          );
+          assert((await set(f, second, { watches: watches("c", 2) })).ok);
+          // The last part would take the set to five, seven in the context.
+          assertEquals(retriable(await part("b", 1, 1)), true);
+          // A refusal made here leaves the server holding the set's first part,
+          // and the set counted: three more IDs are still too many.
+          assertEquals(
+            retriable(await set(f, second, { watches: watches("c", 3) })),
+            true,
+          );
+        });
+        assertEquals(reasons, ["watch-limit", "watch-limit", "watch-limit"]);
+        // With room made, the same last part follows the part still held and
+        // applies the set: the first session holds five IDs.
+        assert((await set(f, second, { watches: watches("c", 1) })).ok);
+        assert((await part("b", 1, 1)).ok);
+        // A set staged smaller than what the session holds leaves it counting
+        // what it holds, five, so the second session has room for one ID.
+        assert(
+          (await set(f, first, {
+            watches: watches("e", 1),
+            stage: "e",
+            part: 0,
+            more: true,
+          })).ok,
+        );
+        const held = await refusalReasons(async () => {
+          assertEquals(
+            retriable(await set(f, second, { watches: watches("c", 2) })),
+            true,
+          );
+        });
+        assertEquals(held, ["watch-limit"]);
+        assertEquals(f.socket.readyState, 1);
+      } finally {
+        await f.close();
+      }
+    },
+  );
+  await t.step("holdings", async () => {
+    const f = await fixture("staged-context-holdings", {
+      limits: { holdingsPerContext: 4 },
+    });
+    try {
+      const first = await f.open(), second = await f.open();
+      assertEquals(
+        (await set(f, first, {
+          watches: [],
+          holdings: holdings("a", 3),
+          stage: "held",
+          part: 0,
+          more: true,
+        })).ok,
+        { staged: true },
+      );
+      const reasons = await refusalReasons(async () => {
+        // The held part's three holdings count: two more would make five.
+        assertEquals(
+          retriable(
+            await set(f, second, { watches: [], holdings: holdings("b", 2) }),
+          ),
+          true,
+        );
+      });
+      assertEquals(reasons, ["holdings-limit"]);
+      // The set applied counts what it holds, four, and the context is full.
+      assert(
+        (await set(f, first, {
+          watches: [],
+          holdings: holdings("c", 1),
+          stage: "held",
+          part: 1,
+        })).ok,
+      );
+      const full = await refusalReasons(async () => {
+        assert(
+          (await set(f, second, { watches: [], holdings: holdings("b", 1) }))
+            .error !== undefined,
+        );
+      });
+      assertEquals(full, ["holdings-limit"]);
+      assertEquals(f.socket.readyState, 1);
+    } finally {
+      await f.close();
+    }
+  });
+  await t.step("a part after one the server could not read", async () => {
+    const f = await fixture("staged-unread-part", {
+      limits: { watchesPerContext: 6, watchesPerSession: 6 },
+    });
+    try {
+      const first = await f.open(), second = await f.open();
+      const part = (index: number, fields: Record<string, unknown>) =>
+        set(f, first, { stage: "ab", part: index, more: true, ...fields });
+      assertEquals((await part(0, { watches: watches("a", 2) })).ok, {
+        staged: true,
+      });
+      // A holding the server cannot read passes the list checks made here,
+      // and the server refuses the part without ending the set it holds.
+      const unread = await part(1, { watches: [], holdings: [1] });
+      assert(unread.error !== undefined, JSON.stringify(unread));
+      const reasons = await refusalReasons(async () => {
+        // The held part's two IDs still count: five more would make seven.
+        assertEquals(
+          retriable(await set(f, second, { watches: watches("c", 5) })),
+          true,
+        );
+        // The refusal ended the set here, so the next part, which would
+        // follow the parts the server holds, is refused for good.
+        const next = await part(1, { watches: watches("b", 1) });
+        assert(next.error !== undefined, JSON.stringify(next));
+        assertEquals(retriable(next), undefined);
+      });
+      assertEquals(reasons, ["watch-limit", "staged-set-not-held"]);
+      // A set sent again from its first part is taken, and counts as it is.
+      assertEquals((await part(0, { watches: watches("d", 2) })).ok, {
+        staged: true,
+      });
+      assert(
+        (await set(f, first, {
+          watches: watches("e", 1),
+          stage: "ab",
+          part: 1,
+        })).ok,
+      );
+      assert((await set(f, second, { watches: watches("c", 3) })).ok);
+      assertEquals(f.socket.readyState, 1);
+    } finally {
+      await f.close();
+    }
+  });
+  await t.step("with no quota, which keeps no mirror", async () => {
+    const f = await fixture("staged-no-quota", {
+      limits: routedHostLimits(Object.fromEntries(
+        Object.keys(DEFAULT_ROUTED_HOST_LIMITS).map((key) => [key, null]),
+      )),
+    });
+    try {
+      const first = await f.open();
+      assertEquals(
+        (await set(f, first, {
+          watches: watches("a", 4),
+          stage: "ab",
+          part: 0,
+          more: true,
+        })).ok,
+        { staged: true },
+      );
+      assert(
+        (await set(f, first, {
+          watches: watches("b", 1),
+          stage: "ab",
+          part: 1,
+        }))
+          .ok,
+      );
+    } finally {
+      await f.close();
+    }
+  });
 });
 
 Deno.test("holdings and views are counted as lists, and anything else closes the socket", async (t) => {
@@ -5152,6 +5455,141 @@ describe("routed close diagnostics", () => {
         limitBytes: ROUTED_RAW_LIMIT,
         classification: "single-message",
       });
+    } finally {
+      await o.close();
+    }
+  });
+
+  /** One part of a split sync for `sessionId`, of about `bytes` encoded. */
+  const syncPart = (
+    space: string,
+    sessionId: string,
+    bytes: number,
+    more: boolean,
+  ): ServerMessage => ({
+    type: "session/effect",
+    space,
+    sessionId,
+    effect: {
+      type: "sync",
+      fromSeq: 0,
+      toSeq: 1,
+      upserts: [{
+        branch: "",
+        id: "of:part",
+        seq: 1,
+        doc: { value: "x".repeat(bytes) },
+      }],
+      removes: [],
+      ...(more ? { more: true } : {}),
+    },
+  } as ServerMessage);
+
+  it("splits a sync only past what one message may take: 16 MiB compressed, 8 MiB as text", async () => {
+    for (
+      const [name, whole, options] of [
+        ["compressed", ROUTED_EXPANDED_LIMIT, {}],
+        ["text", ROUTED_RAW_LIMIT, {
+          negotiatedFlags: { messageCompressionV1: false },
+        }],
+      ] as const
+    ) {
+      const f = await fixture(`split-whole-${name}`, options);
+      const connect = f.server.connectRouted.bind(f.server);
+      let limits: { whole?: number } | undefined;
+      const connected = stub(
+        f.server,
+        "connectRouted",
+        (sender, owns, parts) => {
+          limits = parts;
+          return connect(sender, owns, parts);
+        },
+      );
+      try {
+        const socket = await f.dataSocket(await f.issueTicket());
+        await socket.take();
+        expect(limits?.whole).toBe(whole);
+      } finally {
+        connected.restore();
+        await f.close();
+      }
+    }
+  });
+
+  it("bounds the parts of split syncs together, apart from other output", async () => {
+    const o = await outputFixture("output-split-sync", {
+      outputBytesPerSocket: 256 * 1024,
+    });
+    const callbacks: (() => void)[] = [];
+    using _send = stubOutput(o.socket, (_bytes, done) => {
+      assert(done);
+      callbacks.push(done);
+    });
+    try {
+      const space = o.f.space.did();
+      // Five 100 KiB parts of one session's sync, and two of another's, are
+      // retained together past the 256 KiB bound, within eight times it.
+      for (let i = 0; i < 4; i++) o.send(syncPart(space, "s1", 100_000, true));
+      o.send(syncPart(space, "s1", 100_000, false));
+      o.send(syncPart(space, "s2", 100_000, true));
+      o.send(syncPart(space, "s2", 100_000, false));
+      expect(o.socket.readyState).toBe(WebSocket.OPEN);
+      // Output that is no part is bounded on its own: alone it is admitted,
+      // and a message that would take it past the bound is refused.
+      o.send(o.response(200 * 1024));
+      expect(() => o.send(o.response(100 * 1024))).toThrow(
+        "Routed memory output limit",
+      );
+      await o.socket.closed.promise;
+      o.f.host.close();
+      expect(o.closedVerdicts()[0].outputLimit).toMatchObject({
+        limitBytes: 256 * 1024,
+        classification: "queued-output",
+      });
+    } finally {
+      await o.close();
+    }
+  });
+
+  it("refuses a part that would take the parts retained past eight times the bound", async () => {
+    const o = await outputFixture("output-split-sync-bound", {
+      outputBytesPerSocket: 256 * 1024,
+    });
+    const callbacks: (() => void)[] = [];
+    using _send = stubOutput(o.socket, (_bytes, done) => {
+      assert(done);
+      callbacks.push(done);
+    });
+    try {
+      const space = o.f.space.did();
+      // Six parts of 300 KiB, 1.8 MiB, fit the 2 MiB the parts may take; a
+      // seventh does not.
+      for (let i = 0; i < 6; i++) {
+        o.send(syncPart(space, "s1", 300 * 1024, true));
+      }
+      expect(() => o.send(syncPart(space, "s1", 300 * 1024, false))).toThrow(
+        "Routed memory output limit",
+      );
+      await o.socket.closed.promise;
+      o.f.host.close();
+      expect(o.closedVerdicts()[0].outputLimit).toMatchObject({
+        limitBytes: 2 * 1024 * 1024,
+        classification: "sync-parts",
+      });
+    } finally {
+      await o.close();
+    }
+  });
+
+  it("closes the socket on a message for another session between a split sync's parts", async () => {
+    const o = await outputFixture("output-split-sync-interleaved");
+    try {
+      const space = o.f.space.did();
+      o.send(syncPart(space, "s1", 1000, true));
+      expect(() => o.send(syncPart(space, "s2", 1000, false))).toThrow();
+      await o.socket.closed.promise;
+      o.f.host.close();
+      expect(o.closedVerdicts()[0].reason).toBe("data-protocol");
     } finally {
       await o.close();
     }

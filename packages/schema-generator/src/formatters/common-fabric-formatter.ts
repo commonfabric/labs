@@ -90,9 +90,10 @@ import {
   withIfcLabels,
 } from "../ifc-labels.ts";
 import {
-  holdsUnreadLabel,
-  holdsUnreadMetadataLabel,
-  reportUnreadLabel,
+  type LabelListReading,
+  readingOfLabelList,
+  readingOfMetadataLabels,
+  reportLabelReading,
 } from "../unread-label-diagnostics.ts";
 import { reportUnreadWriterBinding } from "../writer-binding-diagnostics.ts";
 import {
@@ -3671,25 +3672,29 @@ export class CommonFabricFormatter implements TypeFormatter {
         parameterTypes,
       );
     };
-    // A label list the lowering cannot read in full would lower as no label or
-    // with a `null` atom without a word to the author.
-    const reportUnread = (index: number) =>
-      reportUnreadLabel(
+    // A label list the lowering cannot read in full would otherwise lower with
+    // a `null` atom, or as nothing the runtime reads, without a word to the
+    // author.
+    const report = (index: number, reading: LabelListReading) => {
+      if (reading === "read") return;
+      reportLabelReading(
         context,
         aliasName,
+        reading,
         aliasArgs[index],
         aliasArgNodes?.[index],
       );
+    };
     const readLabels = (index: number): unknown => {
       const labels = readValue(index);
-      if (holdsUnreadLabel(labels)) reportUnread(index);
+      report(index, readingOfLabelList(labels));
       return labels;
     };
     // The list a trusted pattern's name stands for when the policy writes no
     // `requiredEventIntegrity` of its own, checked as a written one is.
     const patternLabels = (pattern: unknown, index: number): unknown[] => {
       const labels = [pattern];
-      if (holdsUnreadLabel(labels)) reportUnread(index);
+      report(index, readingOfLabelList(labels));
       return labels;
     };
 
@@ -3699,7 +3704,7 @@ export class CommonFabricFormatter implements TypeFormatter {
         if (!isObjectOrArray(payload) || Array.isArray(payload)) {
           return undefined;
         }
-        if (holdsUnreadMetadataLabel(payload)) reportUnread(1);
+        report(1, readingOfMetadataLabels(payload));
         return { ...payload };
       }
       case "Confidential":

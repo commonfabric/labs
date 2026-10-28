@@ -29,3 +29,9 @@ export class HarnessControlError extends Error {
  */
 export const harnessResumeRefusal = (message: string): HarnessControlError =>
   new HarnessControlError("provider-mismatch", message);
+
+/** Names the requested operation when a recorded run cannot be used. */
+export const harnessRecordedRunRefusal = (
+  mode: "resume" | "continue",
+  detail: string,
+): HarnessControlError => harnessResumeRefusal(`${mode} ${detail}`);

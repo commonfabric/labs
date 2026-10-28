@@ -236,10 +236,12 @@ export {
 } from "./pattern-source-scheme.ts";
 export { DocumentLoadError, loadDocument } from "./document-readiness.ts";
 export {
+  loadProfileCandidates,
   orderProfileCandidates,
-  profileCellIsValid,
   type ProfileOrder,
+  profileOwnership,
 } from "./profile-order.ts";
+export { loadProfileOwnerDocuments, profileOwnerAt } from "./profile-owner.ts";
 export {
   classifyPieceOriginString,
   type PieceOriginKind as PieceOriginClassification,

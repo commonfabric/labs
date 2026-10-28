@@ -92,6 +92,15 @@ export class XRootView extends BaseView implements ShellApp {
       width: 100%;
     }
 
+    #client-update-required {
+      position: fixed;
+      z-index: 1001;
+      top: 1rem;
+      left: 50%;
+      transform: translateX(-50%);
+      width: min(32rem, calc(100vw - 2rem));
+    }
+
     #event-attention {
       position: fixed;
       z-index: 1000;
@@ -151,6 +160,10 @@ export class XRootView extends BaseView implements ShellApp {
   @state()
   private accessor _resolvingAttention = new Map<string, symbol>();
 
+  @state()
+  private accessor _clientUpdateRequired: ErrorNotification | undefined =
+    undefined;
+
   #eventAttentionMutation = 0;
   #eventAttentionMutationVersions = new Map<
     DID,
@@ -181,6 +194,16 @@ export class XRootView extends BaseView implements ShellApp {
   ): void => {
     console.error("[RuntimeClient Error]", event);
     if (generation !== this.#runtimeGeneration) {
+      return;
+    }
+
+    if (event.code === RuntimeErrorCode.ClientUpdateRequired) {
+      this._clientUpdateRequired = {
+        ...event,
+        unconfirmedWrites: event.unconfirmedWrites === true ||
+          this._clientUpdateRequired?.unconfirmedWrites === true ||
+          this.runtime?.hasPendingWrites() === true,
+      };
       return;
     }
 
@@ -411,10 +434,15 @@ export class XRootView extends BaseView implements ShellApp {
    * check is current; while writes are unconfirmed, this asks the browser to
    * confirm leaving instead of silently losing them. Commits confirm quickly
    * (typically well under a second), so the prompt only appears in the narrow
-   * window a reload would actually lose data.
+   * window a reload could lose data. An update-required refusal retains the
+   * warning after rejected commits leave the pending set, because rejection
+   * does not establish whether an unconfirmed write reached the server.
    */
   #onBeforeUnload = (event: BeforeUnloadEvent): void => {
-    if (this.runtime?.hasPendingWrites()) {
+    if (
+      this.runtime?.hasPendingWrites() ||
+      this._clientUpdateRequired?.unconfirmedWrites === true
+    ) {
       event.preventDefault();
     }
   };
@@ -777,6 +805,18 @@ export class XRootView extends BaseView implements ShellApp {
           .preserveRuntimeErrorsForNextViewChange="${this
             .preserveRuntimeErrorsForNextViewChange}"
         ></x-app-view>
+        ${this._clientUpdateRequired === undefined ? undefined : html`
+          <aside id="client-update-required" class="attention-card" role="alert">
+            <h2>Update required</h2>
+            <p>${this._clientUpdateRequired.message}</p>
+            <p>Reload this tab to load the current version. Retrying access cannot update this runtime.</p>
+            ${this._clientUpdateRequired.unconfirmedWrites === true
+              ? html`
+                <p>Some changes were not confirmed as saved. Copy any recent edits you need to keep before reloading; this tab cannot confirm whether they reached the server.</p>
+              `
+              : undefined}
+          </aside>
+        `}
         ${this._eventAttention.length === 0 ? undefined : html`
           <aside
             id="event-attention"

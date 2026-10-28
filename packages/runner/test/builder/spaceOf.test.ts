@@ -235,6 +235,22 @@ describe("spaceOf()", () => {
       expect(callIn("lift", link.getAsReactiveProxy())).toBe(elsewhere);
       await runtime.storageManager.synced();
     });
+
+    it("returns `undefined` for a cell whose links run in a cycle, in a lift and in a handler", async () => {
+      const tx = runtime.edit();
+      const loop = runtime.getCell<unknown>(
+        home,
+        "space-of loop",
+        undefined,
+        tx,
+      );
+      loop.setRawUntyped(loop.getAsLink());
+      expect((await tx.commit().settled).error).toBeUndefined();
+
+      expect(callIn("lift", loop)).toBeUndefined();
+      expect(callIn("handler", loop)).toBeUndefined();
+      await runtime.storageManager.synced();
+    });
   });
 
   it("returns `undefined` for a target passed as `undefined`", () => {

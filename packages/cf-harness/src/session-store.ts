@@ -41,6 +41,9 @@ export interface HarnessChatSessionSnapshot {
    * turn's run holds a table.
    */
   handleTable?: HarnessHandleTable;
+
+  /** Attachment, assignment, and grant names bound in retained history. */
+  heldInputNames?: readonly string[];
 }
 
 export interface HarnessChatEventListOptions {

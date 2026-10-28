@@ -14,6 +14,7 @@ import {
   experimentalOptionsFromEnv,
   type RuntimeFetch,
 } from "@commonfabric/runner";
+import { toolshedClientBuild } from "./build-info.ts";
 import { publishServingExperimentalOverrides } from "./experimental-posture.ts";
 import { serverExecutionEnabledFromEnv } from "./server-execution-flag.ts";
 import { ExecutorHost } from "@commonfabric/runner/executor/host";
@@ -372,6 +373,7 @@ export function startServerExecutionHost(options: {
       // every serving runtime forces on top. `/api/meta` publishes those same
       // forced flags below.
       createRuntime: servingRuntimeFactory({
+        clientBuild: toolshedClientBuild(),
         server: options.server,
         identity: options.identity,
         apiUrl: options.apiUrl,

@@ -47,6 +47,38 @@ import type {
 
 const logger = getLogger("link-resolution");
 
+/**
+ * Thrown when the links a resolution follows run in a cycle, so that they
+ * name no value at all, which a caller can tell from a failure to read.
+ */
+export class LinkCycleError extends Error {}
+
+/**
+ * Returns what `resolve` returns, or `undefined` when the links it follows
+ * run in a cycle and so name nothing.
+ *
+ * @throws What `resolve` throws for any other reason.
+ */
+export function unlessCyclic<T>(resolve: () => T): T | undefined {
+  try {
+    return resolve();
+  } catch (error) {
+    if (error instanceof LinkCycleError) return undefined;
+    throw error;
+  }
+}
+
+/**
+ * Returns the error to throw for the cycle `message` describes, logging it
+ * at debug level: a caller that takes the cycle for an answer
+ * ({@link unlessCyclic}) has nothing to report, and one it fails reports the
+ * error where it fails, as it would any other.
+ */
+function linkCycle(message: string): LinkCycleError {
+  logger.debug("link-res-cycle", message);
+  return new LinkCycleError(message);
+}
+
 export type LastNode = "value" | "writeRedirect" | "top";
 
 /**
@@ -127,6 +159,9 @@ type LinkHop = {
    * subject is the link as stored.
    */
   storedSchema?: JSONSchema;
+
+  /** The stored destination before the caller's remaining path is appended. */
+  storedTarget: NormalizedFullLink;
 
   link: NormalizedFullLink;
   source: NormalizedFullLink;
@@ -497,9 +532,11 @@ const resolutionMemoVariant = (
  * - A/foo → A/foo
  * - A → B → C → A
  *
- * A link whose target passes back through the link's own position in the same
+ * A link whose stored target passes back through its own position in the same
  * document (e.g. A → A/foo) makes the path grow on every hop, so the pair
- * never repeats; that shape is detected separately on the first hop.
+ * never repeats; that shape is detected separately on the first hop. The
+ * caller's remaining path is excluded from this check: a finite query can
+ * revisit a link to an ancestor while consuming its remaining segments.
  *
  * Growing-path cycles that span documents, e.g.
  * - A → B, B → A/foo
@@ -754,11 +791,7 @@ export function resolveLinkTracingDereferences(
     // from: computed for the first before the loop, refreshed by each hop.
     const key = addressKey;
     if (seen.has(key)) {
-      logger.error(
-        "link-res-error",
-        debugStr`Link cycle detected ${key}: $quote,long${[...seen]}`,
-      );
-      throw new Error(
+      throw linkCycle(
         debugStr`Link cycle detected at ${key}: $quote,long${[...seen]}`,
       );
     }
@@ -778,6 +811,7 @@ export function resolveLinkTracingDereferences(
       const nextLink = hopAt(link, link.path, probe);
       nextHop = {
         link: nextLink,
+        storedTarget: nextLink,
         source: { ...link, path: [...link.path] },
         kind: hopKindForLink(nextLink),
         depth: link.path.length,
@@ -803,6 +837,7 @@ export function resolveLinkTracingDereferences(
             const nextLink = hopAt(link, lastValid, parent);
             nextHop = {
               link: nextLink,
+              storedTarget: nextLink,
               source: { ...link, path: [...lastValid] },
               kind: hopKindForLink(nextLink),
               depth: lastValid.length,
@@ -868,12 +903,12 @@ export function resolveLinkTracingDereferences(
         break;
       }
       noteDeclaredReadScope(tx, hopCap, nextHop.link.scope);
-      // A link whose target passes back through the link's own position can
+      // A link whose stored target passes through its own position can
       // never resolve: the value at that position is the link itself, so
       // every hop re-follows it with a longer path and the (document, path)
       // cycle key never repeats. Detect this on the first hop.
       const hopSource = nextHop.source;
-      const hopTarget = nextHop.link;
+      const hopTarget = nextHop.storedTarget;
       if (
         hopTarget.space === hopSource.space &&
         hopTarget.id === hopSource.id &&
@@ -883,8 +918,7 @@ export function resolveLinkTracingDereferences(
       ) {
         const detail = `link at [${hopSource.path.join("/")}] targets its ` +
           `own subpath [${hopTarget.path.join("/")}]`;
-        logger.error("link-res-error", `Link cycle detected: ${detail}`);
-        throw new Error(`Link cycle detected at ${key}: ${detail}`);
+        throw linkCycle(`Link cycle detected at ${key}: ${detail}`);
       }
       carriedCap = hopCap;
       traces.push(recordDereferenceHop(tx, nextHop));

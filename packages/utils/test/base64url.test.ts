@@ -61,6 +61,70 @@ for (const fromBase64 of [fromBase64url, fromBase64Polyfill]) {
         });
       }
     }
+
+    describe("whitespace", () => {
+      // ASCII whitespace, which `Uint8Array.fromBase64()` would skip.
+
+      const WHITESPACE: readonly (readonly [string, string])[] = [
+        ["a space", " "],
+        ["a tab", "\t"],
+        ["a line feed", "\n"],
+        ["a form feed", "\f"],
+        ["a carriage return", "\r"],
+      ];
+
+      for (const [label, ws] of WHITESPACE) {
+        it(`throws on ${label} inside the text`, () => {
+          expect(() => fromBase64(`AQ${ws}I`)).toThrow();
+        });
+      }
+
+      it("throws on whitespace after the text", () => {
+        expect(() => fromBase64("AQI ")).toThrow();
+      });
+    });
+
+    describe("a final group of one character", () => {
+      // Six bits, which hold no whole byte.
+
+      for (const encoded of ["A", "AAAAA", "A==", "A==="]) {
+        it(`throws on \`${encoded}\``, () => {
+          expect(() => fromBase64(encoded)).toThrow();
+        });
+      }
+    });
+
+    describe("bits past the last whole byte", () => {
+      // A final group of two characters carries four bits past its byte, and
+      // one of three carries two. Each case sets one of them.
+
+      const NONZERO: readonly string[] = ["AR", "AS", "AU", "AY", "AQJ", "AQK"];
+
+      for (const encoded of NONZERO) {
+        it(`throws on \`${encoded}\`, which sets one of them`, () => {
+          expect(() => fromBase64(encoded)).toThrow(
+            "nonzero bits past the last whole byte",
+          );
+        });
+      }
+
+      it("throws on one of them set under padding", () => {
+        expect(() => fromBase64("AR==")).toThrow(
+          "nonzero bits past the last whole byte",
+        );
+      });
+
+      it("throws on one of them set after whole groups", () => {
+        expect(() => fromBase64("AQIDBR")).toThrow(
+          "nonzero bits past the last whole byte",
+        );
+      });
+
+      it("decodes text whose bits past the last whole byte are all zero", () => {
+        expect(fromBase64("AQIDBA")).toEqual(new Uint8Array([1, 2, 3, 4]));
+        expect(fromBase64("AQIDBAU")).toEqual(new Uint8Array([1, 2, 3, 4, 5]));
+      });
+    });
   });
 }
 

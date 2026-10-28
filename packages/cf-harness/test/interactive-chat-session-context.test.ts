@@ -10,6 +10,7 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { toFileUrl } from "@std/path";
 import {
   HARNESS_CHAT_PROTOCOL_VERSION,
   HARNESS_CHAT_REQUEST_TYPE,
@@ -20,6 +21,11 @@ import type {
   HarnessPatternRefSpec,
 } from "../src/contracts/pattern-refs.ts";
 import type { HarnessTranscriptMessage } from "../src/contracts/transcript.ts";
+import {
+  createHarnessRunState,
+  type HarnessRunState,
+} from "../src/run-state.ts";
+import { openSqliteHarnessChatSessionStore } from "../src/sqlite-session-store.ts";
 import type { CfHarnessEngine } from "../src/engine.ts";
 import { REVISION_VERIFICATION_GUIDANCE } from "../src/revision-verification.ts";
 import {
@@ -48,6 +54,11 @@ const stubEngine = (
     config: { fabricSession: { space: "context-space" } },
     fabricSessionAvailable: true,
     startRun: () => undefined,
+    getRunState: () =>
+      createHarnessRunState({
+        currentDir: "/workspace",
+        cfcEnforcementMode: "disabled",
+      }),
     failRun: () => Promise.resolve(),
     establishWellKnownGrants: () =>
       Promise.resolve([{ name: "piece-registry", token: "cfh:a:grant" }]),
@@ -71,6 +82,7 @@ const stubEngine = (
 
 const recordingLoop = (
   seen: HarnessTranscriptMessage[][],
+  runState?: HarnessRunState,
 ): HarnessInteractivePromptLoopFactory =>
 () => ({
   runTranscript: (options: RunHarnessTranscriptOptions) => {
@@ -84,6 +96,10 @@ const recordingLoop = (
           { role: "assistant", content: "done" },
         ],
         modelTurns: 1,
+        runState: runState ?? createHarnessRunState({
+          currentDir: "/workspace",
+          cfcEnforcementMode: "disabled",
+        }),
       } as HarnessPromptLoopResult,
     );
   },
@@ -141,6 +157,82 @@ const startedService = async (
 };
 
 describe("interactive chat session context", () => {
+  it("refuses names held by prior attachments, assignments, and grants after restoring a session", async () => {
+    const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+    let store = await openSqliteHarnessChatSessionStore({
+      url: toFileUrl(path),
+    });
+    try {
+      const held = createHarnessRunState({
+        currentDir: "/workspace",
+        cfcEnforcementMode: "disabled",
+      });
+      held.inputCells = [{
+        name: "attached",
+        token: "cfh:a:cell",
+        ref: "/of:fid1:old",
+      }];
+      held.assignedPieces = [{ slug: "assigned", ref: "/of:fid1:piece" }];
+      held.wellKnownGrants = [{
+        name: "piece-registry",
+        token: "cfh:a:grant",
+        ref: "/of:fid1:registry",
+      }];
+      const first = new HarnessInteractiveChatService({
+        sessionStore: store,
+        createPromptLoop: recordingLoop([], held),
+      });
+      await first.startSession("open", {
+        sessionId: "session-1",
+        workspace: { hostPath: "/workspace" },
+        model: "gpt-test",
+      });
+      await runTurn(first, "first", "Make a piece");
+      expect(store.getSession("session-1")?.heldInputNames).toEqual([
+        "attached",
+        "assigned",
+        "piece-registry",
+      ]);
+      store.close();
+      store = await openSqliteHarnessChatSessionStore({ url: toFileUrl(path) });
+      const seen: HarnessTranscriptMessage[][] = [];
+      const next = new HarnessInteractiveChatService({
+        sessionStore: store,
+        basePromptLoopOptions: {
+          engine: stubEngine({
+            inputCells: [{ name: "fresh", ref: "/of:fid1:new" }],
+          }),
+        },
+        createPromptLoop: recordingLoop(seen),
+      });
+      await next.initializeFromStore();
+      for (const name of ["attached", "assigned", "piece-registry"]) {
+        await runTurn(next, name, "Use this", [{ name, ref: "/of:fid1:new" }]);
+        const failure = next.events("session-1").find((envelope) =>
+          envelope.turnId === name && envelope.event.kind === "turn_failed"
+        );
+        expect(JSON.stringify(failure)).toContain(
+          `--input-cell name \`${name}\` is already held by this run`,
+        );
+        expect(seen).toHaveLength(0);
+      }
+      await runTurn(next, "unique", "Use a fresh attachment", [{
+        name: "fresh",
+        ref: "/of:fid1:new",
+      }]);
+      expect(seen).toHaveLength(1);
+      expect(seen[0].map((m) => m.content).join("\n")).toContain("fresh");
+      expect(store.getSession("session-1")?.heldInputNames).toEqual([
+        "attached",
+        "assigned",
+        "piece-registry",
+      ]);
+    } finally {
+      store.close();
+      await Deno.remove(path);
+    }
+  });
+
   it("supplies target-selection context to an unconfigured interactive turn", async () => {
     const seen: HarnessTranscriptMessage[][] = [];
     const service = await startedService(seen);

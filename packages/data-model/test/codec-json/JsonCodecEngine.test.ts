@@ -1183,6 +1183,15 @@ describe("JsonCodecEngine", () => {
       expect(result.length).toBe(2 ** 32 - 1);
     });
 
+    it("returns a `ProblematicValue` given a run one past the array maximum", () => {
+      const result = decodeArray([{ "/hole": 2 ** 32 }]);
+
+      expect(result).toBeInstanceOf(ProblematicValue);
+      expect((result as unknown as ProblematicValue).error).toContain(
+        "past the",
+      );
+    });
+
     it("decodes a run of one, the smallest a count may be", () => {
       const result = decodeArray(["a", { "/hole": 1 }, "b"]) as FabricValue[];
 

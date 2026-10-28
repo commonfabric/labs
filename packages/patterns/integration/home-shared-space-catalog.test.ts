@@ -53,6 +53,7 @@ import type {
   SharedSpaceCollectionView,
   SharedSpaceInterface,
 } from "../system/shared-space-interface.ts";
+import { moduleByteCache } from "./pieces-controller.ts";
 
 const owner = await Identity.fromPassphrase("Home catalog owner");
 const service = await Identity.fromPassphrase("Home catalog service");
@@ -211,16 +212,18 @@ function watchHandlingCommits(runtime: Runtime) {
   const edit = runtime.edit.bind(runtime);
   const wrapped = stub(runtime, "edit", (...args) => {
     const tx = interceptTransaction(edit(...args), (method, _args, proceed) => {
-      if (
-        method !== "commit" || !tx.dispatchedEventId || !tx.handlingReceiptLink
-      ) {
+      if (!tx.dispatchedEventId || !tx.handlingReceiptLink) return proceed();
+      // The receipt is read before the transaction is prepared for commit: a
+      // read after that invalidates a prepared transaction's flow checks.
+      if (method === "prepareForCommit") {
+        outcomes.record({
+          eventId: tx.dispatchedEventId,
+          value: runtime.getCellFromLink(tx.handlingReceiptLink).withTx(tx)
+            .getRaw(),
+        });
         return proceed();
       }
-      outcomes.record({
-        eventId: tx.dispatchedEventId,
-        value: runtime.getCellFromLink(tx.handlingReceiptLink).withTx(tx)
-          .getRaw(),
-      });
+      if (method !== "commit") return proceed();
       const receipt = proceed() as ReturnType<
         IExtendedStorageTransaction["commit"]
       >;
@@ -266,6 +269,7 @@ async function withHome(
   const fresh = (executeOnServer = serverExecution) => {
     const storage = EmulatedStorageManager.connectTo(server, { as: owner });
     const runtime = new Runtime({
+      moduleByteCache,
       apiUrl: new URL("https://home.example"),
       storageManager: storage,
       experimental: { serverExecution: executeOnServer },
@@ -295,6 +299,7 @@ async function withHome(
             servingHomeSpace: space,
           });
           const runtime = new Runtime({
+            moduleByteCache,
             apiUrl: new URL("https://home.example"),
             storageManager: storage,
             servingPosture: true,
@@ -931,6 +936,7 @@ describe("Home shared-space catalog", () => {
       await withHome(serving, async (_runtime, home, _fresh, server) => {
         const storage = EmulatedStorageManager.connectTo(server, { as: owner });
         const reader = new Runtime({
+          moduleByteCache,
           apiUrl: new URL("https://home.example"),
           storageManager: storage,
           experimental: { serverExecution: serving },
@@ -991,6 +997,7 @@ describe("Home shared-space catalog", () => {
           as: outsider,
         });
         const reader = new Runtime({
+          moduleByteCache,
           apiUrl: new URL("https://home.example"),
           storageManager: storage,
           experimental: { serverExecution: serving },

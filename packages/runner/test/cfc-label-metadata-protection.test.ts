@@ -526,24 +526,20 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
       }
     });
 
-    it("commits the runtime-owned-store declaration built from that same join", async () => {
-      // The §8.12.5 route-2 declaration a store the runtime owns mints carries the
-      // flow join as its content, so it is the one `declared` entry the
-      // transform applies to. Leaving it verbatim beside the committed
-      // derived stamp of the same atoms would publish in one entry what the
-      // other protects.
+    it("protects the retained declaration of a transaction-marked store", async () => {
+      // A transaction-only marker retains option 2's declaration, including
+      // protection for the foreign identities it takes from the flow join.
 
       const { storageManager, runtime } = makeRuntime("enforce", {
         // `persist` is the rung that writes the flow join into the stored
-        // label map. The declaration the assertions below read is minted
-        // from that join.
+        // label map, where the assertions below read the derived component.
         cfcFlowLabels: "persist",
       });
       try {
         await seedSource(runtime, spaceA, "substrate-source");
         const tx = runtime.edit();
-        // Route 2 runs at a rung that rejects a writer-fit misfit. The
-        // `declared` entry the assertions below read is minted there.
+        // Runtime ownership admits this write at the rung that rejects an
+        // ordinary store's writer-fit misfit.
         tx.setCfcEnforcementMode("enforce-strict");
         const source = runtime.getCell(
           spaceA,
@@ -586,9 +582,10 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
           spaceB,
           substrateLink.id,
         );
-        const declared = entries.find((e) => e.origin === "declared");
-        expect(declared).toBeDefined();
-        expect(declared!.label.confidentiality).toContainEqual({
+        expect(
+          entries.find((entry) => entry.origin === "declared")
+            ?.label.confidentiality,
+        ).toContainEqual({
           type: CFC_ATOM_TYPE.User,
           subject: commitCfcFieldValue("did:key:alice"),
         });

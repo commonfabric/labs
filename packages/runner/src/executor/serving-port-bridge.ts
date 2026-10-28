@@ -352,6 +352,11 @@ export class ServingPortBridge {
         server.foreignWriteAuthorityFor(space, principal),
     );
     endpoint.onRequest(
+      "server.foreignReadAuthorityFor",
+      ({ space, principal }) =>
+        server.foreignReadAuthorityFor(space, principal),
+    );
+    endpoint.onRequest(
       "server.checkServedAclChange",
       ({ change }) => server.checkServedAclChange(servedAclChangeOf(change)),
     );

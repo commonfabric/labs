@@ -68,7 +68,7 @@ const sameSessionDescriptor = (
   },
 ): boolean =>
   valueEqual(
-    left.client === undefined ? undefined : parseClientInfo(left.client),
+    parseClientInfo(left.client) ?? undefined,
     right.client,
   ) &&
   (typeof left.sessionId === "string" ? left.sessionId : undefined) ===

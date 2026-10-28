@@ -776,8 +776,9 @@ executing:
   which the removed fan-out had covered incidentally). The foreign
   commit is never home input — W and the input batch stay per home
   space.
-  Foreign SCOPED reads are the exception: fail-closed refused until
-  the grant-scoped read design's resolution lands — protocol.md §2.)*
+  A foreign SCOPED read is admitted on the reading actor's own READ
+  grant in the foreign space's access list and refused otherwise —
+  protocol.md §2's grant-scoped read.)*
 - **Scope discovery is part of read discovery**: a run's scope is the
   narrowest scope of anything it read, so it too is discovered by
   running. A narrowing discovery writes the broad-slot redirect AND
@@ -1263,17 +1264,21 @@ the 2026-08-24 ruling; the owner may re-rule it).
   seq is what the wave CLAIMS its view covers, and the view its
   runs read is the replica's, which can sit below it: a commit admitted
   between a run's reads and the seal that opens the wave is counted in
-  the basis and absent from the view. The concurrency rule's per-doc CAS
-  is what covers the gap, and its pure-derivation arm says how.
+  the basis and absent from the view. The concurrency rule below is
+  what covers the gap: its pure-derivation arm holds a written doc to
+  the replica's view at the seal, and its non-re-derivable arm holds
+  the run's recorded reads to the store's heads.
 - Failure isolation is per action: an aborted tx discards only its own
   writes; the wave keeps the rest.
 - A derivation run that read the value of a document its runtime refuses
-  by construction (protocol.md §2's foreign scoped read refusal) aborts
-  its tx rather than sealing it. What it derived came from an absence
-  that is not the document's state, and sealing it would overwrite the
-  instance a runtime that can read the document derives. The refusal is
-  the same on every run, so the abort takes no retry; the run's reads stay
-  subscribed, and a change to any other input runs it again.
+  (protocol.md §2's grant-scoped read), or one whose actor's grant it is
+  still asking for, aborts its tx rather than sealing it. What it derived
+  came from an absence that is not the document's state, and sealing it
+  would overwrite the instance a runtime that can read the document
+  derives. A refusal is the same on every run until the foreign space's
+  access list changes, so the abort takes no retry; the run's reads stay
+  subscribed, and a change to any other input, or the admitted instance
+  landing, runs it again.
 - A derivation run that read, through a link, an absent user- or
   session-scoped instance of a document another derivation registered in
   this runtime declares as a write (a builtin's stores included) aborts its
@@ -1289,8 +1294,14 @@ the 2026-08-24 ruling; the owner may re-rule it).
 the wave's read basis, and conflict handling is PER WRITE CLASS.
 A write's class is determined by the producing RUN's kind — every
 write of an event-handler run is non-re-derivable; every write of a
-derivation run is a pure derivation write (RULED 2026-08-05). The
-classes:
+derivation run is a pure derivation write (RULED 2026-08-05).
+Re-derivable names who re-arms a withdrawn write, not whether it can be
+recovered: the dependency graph re-runs a derivation on its own when an
+input it recorded moves, while nothing in the graph points back at an
+event, so the wave re-arms a handler's write itself by withholding the
+event's mark and watermark advance along with the write, and the drain
+replays the event. Both arms recover by running code again; only the
+first does so for free. The classes:
 
 - **Pure derivation writes**: a doc whose head advanced past the basis
   (a concurrent authored commit landed mid-wave) has its derived write
@@ -1336,19 +1347,73 @@ classes:
   to unconsequenced (requeue) rather than lose them. events.md §4's
   atomicity survives the retry: the watermark advance and its
   consequences move TOGETHER into the rebased commit, never
-  separately. This class CASes against the wave's basis alone — the
-  pure-derivation arm's lower basis does not carry here. Its conflict
-  arm rebases or requeues rather than dropping, and requeueing against
-  a seq the replica has not caught up to yet is the sustained-traffic
-  livelock this section forbids.
+  separately. This class CASes against the wave's basis, and an
+  `event-handler` contribution is held to its recorded reads as well
+  (PROPOSED 2026-10-23, awaiting ruling). Each confirmed read in its
+  sealed transaction is held to the store's head at the read's path,
+  under the intrusion exemption above: a commit after the read's seq
+  that wrote the path and that the tenure's own derived commits do not
+  account for makes the read STALE. The check is made again inside the
+  store transaction that commits the wave, as every written document's
+  head is: the batch carries each contribution's reads, a commit admitted
+  between the wave's own check and that transaction stales a read there,
+  and the refusal names the read, so that the event requeues alone and
+  the wave re-attempts. The reads held are the home space's, as a
+  client commit's are: a client's transaction commits once per space it
+  wrote, each commit carrying that space's reads, and a space it only
+  read gets no commit and no validation, so a read in another space is
+  held to nothing on either arm. The reads are what the client arm
+  validates, and the replica gap above is why the basis cannot stand in
+  for them here: a commit admitted before the seal opened the wave sits
+  at or below the basis while the run that read the doc never saw it,
+  and the write landing anyway is a blind write computed from state the
+  store had already replaced — the shape that lands a handler's
+  `set(read + 1)` over a peer's value the serving replica had not taken.
+  The pure-derivation arm's view check does not carry here, because it
+  is taken on the docs a run WROTE; a handler's reads are what decide
+  its writes, and the two need not be the same docs.
+
+  A stale read requeues the event WHOLE, ahead of every per-doc
+  disposition — supersession, the basis CAS, and the rebase never run
+  for it. The run's output as a whole rests on what it read, and the
+  wave cannot tell which write a read decided: a write the firing
+  session later overwrote may be the one a fresh read would not have
+  made, in favor of one it would, and a patch that commutes with the
+  concurrent write on paths may carry a value computed from the path
+  that moved. Rebase keeps its place for a contribution whose reads are
+  all current and whose written doc moved under it — a blind append or
+  increment on a doc the run never read, a bookkeeping advance. Reads
+  are recorded per path and checked per path, so a concurrent write to
+  a path the run did not read conflicts with nothing.
+
+  A requeued event re-drains once the replica's confirmed seq for every
+  doc a stale read named has reached the seq of the commit that made
+  the read stale — the catch-up gate. Replaying it earlier would read
+  the same replica state, seal the same write, and conflict the same
+  way, which is the sustained-traffic livelock this section forbids;
+  gated, each lap waits for the delivery of one frame and no longer.
+  Nothing bounds the laps themselves: a document written faster than
+  the loop replays conflicts on every lap, and `events.staleReadRequeues`
+  (§7) is where that shows. A requeue decided at the commit step, for a
+  stale read or a semantic rebase conflict alike, carries the order
+  events.md §2 promises: every `event-handler` contribution in the wave
+  whose durable entry sits later in the same stream requeues with it,
+  and the drain holds those entries behind the requeued head (events.md
+  §5's arrival-order barrier) until its replay commits. Derivations
+  downstream of the withdrawn writes need no fold beyond the read
+  closure: the replay's commit dirties the runs whose recorded reads it
+  touches, and a replay that writes what the store already holds
+  commits nothing, leaving values computed from exactly that state in
+  place.
 
 **A consequence write the firing session overwrote is SUPERSEDED.** An
 event's consequence takes effect at the event's place in the order of
 the session that fired it, wherever its commit lands. That session
 committed the event and rendered the handler's speculative echo
 (speculation.md), so whatever it wrote afterward it wrote over that
-echo. Before the CAS above, each write of an `event-handler` contribution
-delivering a durable entry is checked against the authored commits of
+echo. After the stale-read check and before the CAS above, each write of
+an `event-handler` contribution delivering a durable entry, its reads all
+current, is checked against the authored commits of
 the entry's firing session — the `firedAt` user and session the run acts
 as — after the entry's seq. A patch at or below a path one of those
 commits overwrote is DROPPED from the consequence, and so is a whole-doc
@@ -1356,10 +1421,12 @@ commits overwrote is DROPPED from the consequence, and so is a whole-doc
 path with a `set` or `delete` (the root) or with a `replace`, `add` or
 `remove` patch; a write that merges into existing content (`append`,
 `splice`, `increment`, and the like) overwrites nothing. The rule holds
-wherever the session's write fell: before the wave's basis, which is
-where a requeued or late-drained handler finds it, or mid-wave, where the
-overlap would otherwise requeue the event and the requeued run would
-write over it again. The event still completes: its other writes, its
+wherever the session's write fell: below the wave's basis, which is
+where a requeued or late-drained handler finds it — a run that read the
+doc before the write reached its replica is requeued on the stale read,
+and its replay meets the write here — or mid-wave, for a doc the run
+wrote without reading, where the overlap would otherwise requeue the
+event. The event still completes: its other writes, its
 consequence mark and its watermark advance ride the wave commit, and
 `consequenceOf` names it, so a wave whose consequence lost every domain
 write still commits that entry's consequence, and an entry held behind
@@ -1899,14 +1966,15 @@ foreignEngineFailures, warmRequests, watermarkLag, demandArrivals,
 undemandedNarrowingRuns, earlyEmitRefusals, demand: {demandedRows,
 demandedInstances, demandedInstancesMax, demandedPairs, demandedWriters,
 demandedWritersMax, demandRootEnters, demandRootLeaves, notCurrentRearms,
-demandPasses, demandPassMs, demandKeysReconciled, structureRootsPreloaded,
-pushGrowthWakes, watchWakes, warmWakes}, settle:
+demandPasses, demandPassMs, demandKeysReconciled, ownedDefaultSeeds,
+structureRootsPreloaded, pushGrowthWakes, watchWakes, warmWakes}, settle:
 {series, dropped}, settleAdvances: {count, lastDelta, series, dropped}, events:
 {appended, processed, coalescedPerWaveMax, skippedIdempotent,
 drainInFlightSkips, visibilityBarriers, visibilityRecoveries,
 visibilityDeferrals, deferredRescansArmed, deferredRescansFired,
 lt1LeftoversPurged, lt1LateSealsRefused, orphanDeliveriesRefused,
-handlerNotRunDeferrals, arrivalHeldDeferrals, loadParkDeferrals,
+handlerNotRunDeferrals, staleReadRequeues, arrivalHeldDeferrals,
+loadParkDeferrals,
 loadParkFailures, deliveryDeferralsActive, deliveryFailuresActive,
 maxAccumulatedDeliveryFailureMs, deliveryFailureWakesArmed,
 deliveryFailureWakesFired, needsAttention: {total, byPhase},
@@ -1975,7 +2043,12 @@ head above W. An event-visibility floor can constrain the same cycle, so the
 counter does not isolate the marginal effect of the shadow floor. The shadow
 clamp covers inbound foreign novelty still hidden by a parked own write; it
 is honesty, not failure,
-and lifts by itself; `storeReads` counts the engine reads that the store
+and lifts by itself; `events.staleReadRequeues` counts events requeued at
+the wave commit for a stale recorded read (§3d), once per requeue, the
+later entries of the stream folded in behind one included — a count that
+climbs on one stream names a document written faster than the loop
+replays the handler reading it, which the catch-up gate bounds per lap
+and nothing bounds in total; `storeReads` counts the engine reads that the store
 read-through posture (§1 plane (a)) performs for serving replicas, and
 `storeRefreshes` counts the held documents it re-reads off the feed, both
 zero while the posture is off; `unstampedSealRefusals` counts write-carrying
@@ -2036,6 +2109,17 @@ time, review MINOR-3);
 `demandKeysReconciled` the instance keys the passes reconciled, accumulated
 over the passes whose reconcile completed, so a pass that throws partway adds
 nothing.
+`ownedDefaultSeeds` the (piece root, demanding pair) seedings the passes
+completed — the ARRIVAL SEED: a pattern-owned cell declaring a default at a
+scope narrower than its result (scoped-cell-instances.md, "A pattern-owned
+cell narrower than its result starts from its declared default for each
+actor instance") is seeded in a demanding pair's instance when the pair's
+demand for a loaded root arrives, as the piece's start seeds it for the
+identity the start runs under. A viewer whose runtime runs none of the
+pattern never starts the piece; without the seed its first write into such
+a cell would create the instance holding that one field alone. The pass
+awaits the seeds ahead of the arrival re-arm, so a node re-run for the
+arriving demander reads the seeded instance.
 The pass reads the demand set per session (`demandForSpace`): the memory
 server keeps each session's share and hands back the same object until a
 write to that session's watches, views, delivered entities, graph misses, or

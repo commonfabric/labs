@@ -63,6 +63,7 @@ const DIRS = [
   "packages/patterns/system",
   "packages/patterns/test",
   "packages/patterns/tools",
+  "packages/patterns/topics/tools",
   "packages/patterns/weekly-calendar",
   "packages/pattern-index",
   "packages/piece",

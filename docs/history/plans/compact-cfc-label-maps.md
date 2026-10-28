@@ -1,3 +1,11 @@
+---
+status: historical
+created: 2026-09-28
+archived: 2026-10-26
+reason: "Superseded proposal: once a link slot persisted only the reference's own label (#8767), a staged-reference diamond stopped growing the stored label map (depth 12: 8,192 entries and 1.19 MB before, 1 entry and 185 bytes after)."
+superseded-by: "docs/plans/cfc-independent-reference-labels.md"
+---
+
 # Compact CFC label maps
 
 Status: proposed; the representation and reader migration below are
@@ -9,7 +17,7 @@ Preparation of a staged reference diamond should depend on the graph's distinct
 label subtrees and the policy queries it answers, rather than the number of
 root-to-leaf paths. Each path must retain exactly its confidentiality,
 integrity, origin, and observation class. The
-[reference initialization contract](../specs/cfc-protected-initialization.md)
+[reference initialization contract](../../specs/cfc-protected-initialization.md)
 also requires staging-order independence and finite views of valid object
 cycles.
 
@@ -18,7 +26,7 @@ snapshot. It still constructs and persists a flat list of paths. At depth 12, a
 binary diamond has 25 staged references and 14 documents, but its prepared maps
 contain 24,560 entries and serialize to approximately 3 MB. Increasing depth
 adds paths exponentially. The
-[measurement record](../history/development/performance/2026-09-25-staged-reference-cache/README.md)
+[measurement record](../development/performance/2026-09-25-staged-reference-cache/README.md)
 separates preparation time from serialized map size.
 
 This work requires both a shared internal representation and a versioned stored
@@ -86,7 +94,7 @@ while a policy reader can turn it into an unbounded flat array.
 Use a new envelope version, provisionally version 3, and a new label-map
 version. Versions 1 and 2 keep their meanings. Centralize validation in
 `metadata.ts` and retain the
-[fail-closed envelope rule](../specs/cfc-stored-envelope.md). Unknown versions,
+[fail-closed envelope rule](../../specs/cfc-stored-envelope.md). Unknown versions,
 invalid indices, malformed or duplicate edges, invalid entries, and unresolvable
 labels refuse the read. Define limits on input nodes, edges, and operation work;
 exhaustion refuses explicitly rather than returning an empty map. Choose limits

@@ -2,6 +2,10 @@
  * A panel is added under a profile only by the principal that profile
  * represents. Bob is refused Alice's profile on every stream that adds a
  * panel, and from the root's Duplicate button, and is admitted under his own.
+ * He is refused, too, a profile of his whose `name` links to the name of
+ * another profile of his, as `#profile` refuses one: its label names him, but
+ * its name is borrowed from outside its own documents, so it is no one's own
+ * profile (`profileOwnerOf()`).
  */
 import {
   action,
@@ -11,6 +15,7 @@ import {
   multiUserTest,
   pattern,
   principalOf,
+  profileOwnerOf,
   type RepresentsCurrentUser,
   TESTS,
   type TrustedActionWrite,
@@ -49,6 +54,66 @@ interface ProfileWriteState {
   /** The name to write into it. */
   name: string;
 }
+
+/**
+ * A person's own profile, as `OwnProfile` is, whose `name` is always set,
+ * which only `writeNamedProfile` writes, from the same reviewed surface.
+ */
+type NamedProfile = RepresentsCurrentUser<
+  TrustedActionWrite<
+    { name: string },
+    typeof writeNamedProfile,
+    typeof PROFILE_ACTION,
+    typeof PROFILE_SURFACE
+  >
+>;
+
+/** What `writeNamedProfile` is bound to. */
+interface NamedProfileWriteState {
+  /** The profile to write. */
+  profile: Writable<NamedProfile>;
+
+  /** The name to write into it. */
+  name: string;
+}
+
+/** Writes the acting person's `NamedProfile`, under `name`. */
+const writeNamedProfile = handler<unknown, NamedProfileWriteState>((
+  _event,
+  { profile, name },
+) => {
+  profile.set({ name });
+});
+
+/**
+ * A person's own profile, as `OwnProfile` is, whose `name` holds a link, which
+ * only `writeBorrowingProfile` writes, from the same reviewed surface.
+ */
+type BorrowingProfile = RepresentsCurrentUser<
+  TrustedActionWrite<
+    { name?: Writable<string> },
+    typeof writeBorrowingProfile,
+    typeof PROFILE_ACTION,
+    typeof PROFILE_SURFACE
+  >
+>;
+
+/** What `writeBorrowingProfile` is bound to. */
+interface BorrowingProfileWriteState {
+  /** The profile to write. */
+  profile: Writable<BorrowingProfile>;
+
+  /** The name, in another document, that its `name` is to link. */
+  name: Writable<string>;
+}
+
+/** Writes the acting person's `BorrowingProfile`, its `name` linking `name`. */
+const writeBorrowingProfile = handler<unknown, BorrowingProfileWriteState>((
+  _event,
+  { profile, name },
+) => {
+  profile.set({ name });
+});
 
 /** Writes the acting person's own profile, under `name`. */
 const writeOwnProfile = handler<unknown, ProfileWriteState>((
@@ -132,10 +197,20 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const addPieceAsSelf = action(() =>
     setup.loom.addPiece.send({ piece, as: profile })
   );
+  const named = Writable.of<NamedProfile>();
+  const writeNamed = writeNamedProfile({ profile: named, name: "Bob" });
+  const borrowing = Writable.of<BorrowingProfile>();
+  const writeBorrowing = writeBorrowingProfile({
+    profile: borrowing,
+    name: named.key("name"),
+  });
+  const addPieceAsBorrowing = action(() =>
+    setup.loom.addPiece.send({ piece, as: borrowing })
+  );
   return {
     // Each refused event is reported as a runtime error.
     allowRuntimeErrors: true,
-    expectRuntimeErrors: 4,
+    expectRuntimeErrors: 5,
     [TESTS]: [
       { action: writeProfile, event: {}, trustedUi: profileGesture },
       { action: recordMe },
@@ -157,6 +232,19 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       { action: actAsAlice },
       { render: setup.loom[UI] },
       { action: duplicateFromUI },
+      { assertion: assert(() => setup.loom.panels.length === 1) },
+      { action: writeNamed, event: {}, trustedUi: profileGesture },
+      { action: writeBorrowing, event: {}, trustedUi: profileGesture },
+      // His label is on the borrowing profile, and the name it links is his
+      // own profile's, so reading only whom it represents takes it for his.
+      { assertion: assert(() => profileOwnerOf(named) === me.get()) },
+      {
+        assertion: assert(() =>
+          principalOf(borrowing, "represents-principal") === me.get()
+        ),
+      },
+      { assertion: assert(() => profileOwnerOf(borrowing) === undefined) },
+      { action: addPieceAsBorrowing },
       { assertion: assert(() => setup.loom.panels.length === 1) },
       { action: addPieceAsSelf },
       {

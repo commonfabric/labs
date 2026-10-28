@@ -15,16 +15,23 @@ export function listElementLink(
   index: number,
 ): NormalizedFullLink {
   if (isPrimitiveCellLink(slot)) return parseLink(slot, listBase);
+  return listSlotPlace(listBase, index);
+}
 
+/**
+ * The link to the place at `index` in the list at `listBase`, whatever the
+ * slot there holds, its schema narrowed to that index.
+ */
+export function listSlotPlace(
+  listBase: NormalizedFullLink,
+  index: number,
+): NormalizedFullLink {
   const indexPart = String(index);
-  const elementSchema = listBase.schema === undefined
-    ? undefined
-    : ContextualFlowControl.schemaAtPath(listBase.schema, [indexPart]);
-  const slotBase: NormalizedFullLink = {
+  return {
     ...listBase,
     path: [...listBase.path, indexPart],
-    schema: elementSchema,
+    schema: listBase.schema === undefined
+      ? undefined
+      : ContextualFlowControl.schemaAtPath(listBase.schema, [indexPart]),
   };
-
-  return slotBase;
 }

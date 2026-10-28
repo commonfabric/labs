@@ -86,6 +86,7 @@ export const stats: AppRouteHandler<StatsRoute> = (c) => {
     logCounts: getLoggerCountsBreakdown(),
     timingStats: getTimingStatsBreakdown(),
     slowQueries: [...getSlowQueries()],
+    processMemory: Deno.memoryUsage(),
     ...(documentCaches === undefined ? {} : { documentCaches }),
     ...(commitRates === undefined ? {} : { commitRates }),
     ...(sessionReports === undefined ? {} : { sessionReports }),

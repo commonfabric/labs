@@ -139,6 +139,53 @@ describe("XRootView", () => {
     }
   });
 
+  it("keeps reload guidance and unconfirmed-write protection after an update refusal", async () => {
+    const restore = installBrowserGlobals();
+    const originalError = console.error;
+    console.error = () => {};
+    try {
+      const { XRootView } = await import("../src/views/RootView.ts");
+      const view = new XRootView();
+      const generation = view.accessForTestingOnly.runtimeGeneration;
+      const event: ErrorNotification = {
+        type: NotificationType.ErrorReport,
+        code: RuntimeErrorCode.ClientUpdateRequired,
+        message: "This runtime must be updated",
+        unconfirmedWrites: true,
+      };
+      view._handleRuntimeError(event, generation - 1);
+      expect(templateMarkup(view.render())).not.toContain("Update required");
+      view._handleRuntimeError(
+        { ...event, unconfirmedWrites: false },
+        generation,
+      );
+      expect(templateMarkup(view.render())).toContain("Update required");
+      expect(templateMarkup(view.render())).not.toContain(
+        "Copy any recent edits",
+      );
+      const cleanUnload = new Event("beforeunload", { cancelable: true });
+      view.accessForTestingOnly.onBeforeUnload(
+        cleanUnload as BeforeUnloadEvent,
+      );
+      expect(cleanUnload.defaultPrevented).toBe(false);
+      view._handleRuntimeError(event, generation);
+      view._handleRuntimeError(
+        { ...event, unconfirmedWrites: false },
+        generation,
+      );
+      const markup = templateMarkup(view.render());
+      expect(markup).toContain("Update required");
+      expect(markup).toContain(event.message);
+      expect(markup).toContain("Copy any recent edits");
+      const unload = new Event("beforeunload", { cancelable: true });
+      view.accessForTestingOnly.onBeforeUnload(unload as BeforeUnloadEvent);
+      expect(unload.defaultPrevented).toBe(true);
+    } finally {
+      console.error = originalError;
+      restore();
+    }
+  });
+
   it("replaces the current worker after a compiler chunk load failure", async () => {
     const restore = installBrowserGlobals();
     const originalError = console.error;

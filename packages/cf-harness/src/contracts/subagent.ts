@@ -339,6 +339,13 @@ export interface HarnessSubagentLineage {
   depth: number;
 }
 
+/** Root and child relationships recorded on a run. */
+export type HarnessRunLineage = HarnessSubagentLineage | {
+  role: "continuation";
+  rootRunId: string;
+  parentRunId: string;
+};
+
 export interface HarnessSubagentResumeContext {
   type: "cf-harness.subagent-resume-context";
   version: 1;

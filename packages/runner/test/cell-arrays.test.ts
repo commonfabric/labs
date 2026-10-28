@@ -19,7 +19,10 @@ import { type Cell, elementSchemaFor, isCell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import { TransactionWrapper } from "../src/storage/extended-storage-transaction.ts";
 import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
-import { isLinkResolutionProbe } from "../src/storage/reactivity-log.ts";
+import {
+  isLinkResolutionProbe,
+  isReadIgnoredForScheduling,
+} from "../src/storage/reactivity-log.ts";
 import { getTransactionReadActivities } from "../src/storage/transaction-inspection.ts";
 import { hasInlineCellScheme } from "../src/immutable-cell.ts";
 
@@ -308,7 +311,21 @@ describe("plain-schema array traversal", () => {
     expect(rows.map(({ label }) => label)).toEqual(["First", "Second"]);
     expect(sourceBatches).toEqual([true, false]);
 
-    const batchedActivities = [...getTransactionReadActivities(tx)];
+    const activities = [...getTransactionReadActivities(tx)];
+    const referenceObservations = activities.filter((activity) =>
+      activity.id === sourceId && activity.path.length === 2 &&
+      isLinkResolutionProbe(activity.meta)
+    );
+    expect(new Set(referenceObservations.map((activity) => activity.path[1])))
+      .toEqual(new Set(["0", "1"]));
+    expect(
+      referenceObservations.every((activity) =>
+        isReadIgnoredForScheduling(activity.meta)
+      ),
+    ).toBe(true);
+    const batchedActivities = activities.filter((activity) =>
+      !isReadIgnoredForScheduling(activity.meta)
+    );
     const sourceItemActivities = batchedActivities.filter((activity) =>
       activity.id === sourceId && activity.path.length === 2
     );
