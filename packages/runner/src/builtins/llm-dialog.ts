@@ -845,6 +845,18 @@ function traverseAndSerialize(
 }
 
 /**
+ * Whether `value` is a link in the LLM-friendly JSON form: an object whose one
+ * key, `@link`, holds a string matching the link pattern.
+ */
+function isLLMFriendlyLinkObject(
+  value: unknown,
+): value is { "@link": string } {
+  return isObjectOrArray(value) && typeof value["@link"] === "string" &&
+    Object.keys(value).length === 1 &&
+    matchLLMFriendlyLink.test(value["@link"]);
+}
+
+/**
  * Traverses a value and converts any of our LLM friendly JSON link object
  * format cells mentioned to actual cells.
  *
@@ -863,11 +875,7 @@ function traverseAndCellify(
     if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
       try {
         const parsed = JSON.parse(trimmed);
-        if (
-          isObjectOrArray(parsed) && typeof parsed["@link"] === "string" &&
-          Object.keys(parsed).length === 1 &&
-          matchLLMFriendlyLink.test(parsed["@link"])
-        ) {
+        if (isLLMFriendlyLinkObject(parsed)) {
           const link = parseLLMFriendlyLink(parsed["@link"], space);
           return runtime.getCellFromLink(link);
         }
@@ -877,13 +885,7 @@ function traverseAndCellify(
     }
   }
 
-  // It's a valid link, if
-  // - it's a record with a single key "/"
-  // - the value of the "/" key is a string that matches the URI pattern
-  if (
-    isObjectOrArray(value) && typeof value["@link"] === "string" &&
-    Object.keys(value).length === 1 && matchLLMFriendlyLink.test(value["@link"])
-  ) {
+  if (isLLMFriendlyLinkObject(value)) {
     const link = parseLLMFriendlyLink(value["@link"], space);
     return runtime.getCellFromLink(link);
   }
@@ -2535,6 +2537,24 @@ function toolInputRequiredIntegrityFailure(
       }
     }
   }
+  // Dictionary entries (2020-12): a supplied key is gated by every
+  // `patternProperties` pattern it matches, and by `additionalProperties` when
+  // neither `properties` nor a pattern names it. A reference is gated whole at
+  // its own position, so the walk does not read its `@link` as a key.
+  if (isObjectNotArray(value) && !isLLMFriendlyLinkObject(value)) {
+    const failure = toolInputDictionaryIntegrityFailure(
+      runtime,
+      space,
+      structural,
+      value,
+      path,
+      trust,
+      structuralRoot,
+    );
+    if (failure !== undefined) {
+      return failure;
+    }
+  }
   // Array elements: a tuple slot's floor gates its exact position, and a
   // floor under `items` gates the positions past the slots (2020-12,
   // matching the sanitizer's semantics — e.g.
@@ -2584,6 +2604,66 @@ function toolInputRequiredIntegrityFailure(
         if (failure !== undefined) {
           return failure;
         }
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The first floor that `structural`'s `patternProperties` or
+ * `additionalProperties` declares and an entry of `value` does not meet, for
+ * {@link toolInputRequiredIntegrityFailure}. A pattern that is not a valid
+ * regular expression refuses the call, since the keys it names cannot be
+ * known.
+ */
+function toolInputDictionaryIntegrityFailure(
+  runtime: Runtime,
+  space: MemorySpace,
+  structural: Record<string, unknown>,
+  value: Record<string, unknown>,
+  path: string,
+  trust: CfcFloorTrustContext,
+  root: JSONSchema,
+): string | undefined {
+  const properties = isObjectNotArray(structural.properties)
+    ? structural.properties
+    : {};
+  const patterns: [RegExp, unknown][] = [];
+  if (isObjectNotArray(structural.patternProperties)) {
+    for (
+      const [pattern, schema] of Object.entries(structural.patternProperties)
+    ) {
+      try {
+        patterns.push([new RegExp(pattern, "u"), schema]);
+      } catch {
+        return `field "${path || "(root)"}" declares a patternProperties ` +
+          `pattern that is not a valid regular expression; refusing the ` +
+          `call (fail closed)`;
+      }
+    }
+  }
+  const additional = structural.additionalProperties;
+  for (const [key, entry] of Object.entries(value)) {
+    const entryPath = path ? `${path}.${key}` : key;
+    const schemas = patterns.filter(([pattern]) => pattern.test(key)).map((
+      [, schema],
+    ) => schema);
+    if (schemas.length === 0 && !Object.hasOwn(properties, key)) {
+      schemas.push(additional);
+    }
+    for (const schema of schemas) {
+      const failure = toolInputRequiredIntegrityFailure(
+        runtime,
+        space,
+        schema,
+        entry,
+        entryPath,
+        trust,
+        root,
+      );
+      if (failure !== undefined) {
+        return failure;
       }
     }
   }

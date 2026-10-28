@@ -27,6 +27,7 @@ import {
   accountFor,
   addLaneResults,
   ANNOTATED_FAILURES,
+  annotateLaneFailures,
   batchCoverage,
   batchesOf,
   batchRepeats,
@@ -4886,12 +4887,15 @@ describe("what a lane does with the batches it was given", () => {
   async function run(
     command: readonly string[],
     over: { full?: boolean; manifest?: Manifest; stop?: LaneStop } = {},
-  ): Promise<{ ok: boolean; measured: TestRecord[] }> {
+  ): Promise<{ ok: boolean; measured: TestRecord[]; annotations: string[] }> {
     const spool = await Deno.makeTempDir({ prefix: "lane-spool-" });
     const { stop } = over;
     const restore = outsideJob();
     const log = console.log;
-    console.log = () => {};
+    const annotations: string[] = [];
+    console.log = (line: string) => {
+      if (line.startsWith("::error")) annotations.push(line);
+    };
     try {
       const ok = await runLane(
         {
@@ -4919,7 +4923,7 @@ describe("what a lane does with the batches it was given", () => {
       const measured = written.split("\n")
         .filter((line) => line.length > 0)
         .map((line) => JSON.parse(line) as TestRecord);
-      return { ok, measured };
+      return { ok, measured, annotations };
     } finally {
       console.log = log;
       restore();
@@ -4956,6 +4960,121 @@ describe("what a lane does with the batches it was given", () => {
     // carrying both outcomes for the identity.
     expect(batchOutcome(measured)).toBe("pass");
   });
+
+  it("leaves excused failures out of the live annotations", async () => {
+    const restore = setEnv({
+      GITHUB_ACTIONS: "true",
+      GITHUB_STEP_SUMMARY: undefined,
+    });
+    try {
+      const { ok, annotations } = await run(recording("", "fail"), {
+        full: true,
+        manifest: withholding(),
+      });
+      expect(ok).toBe(true);
+      expect(annotations).toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+
+  for (const missingManifest of [false, true]) {
+    const title = missingManifest
+      ? "keeps later batches running when rerun-command lookup cannot read the workspace manifest"
+      : "annotates a gating failure before starting the next batch and keeps running the lane";
+    it(title, async () => {
+      const spool = await Deno.makeTempDir({ prefix: "lane-early-failure-" });
+      const lines: string[] = [];
+      const entries = ["first", "second"].map((name, index) => ({
+        test: { k: "unit" as const, s: "bakery", n: `${name} > runs` },
+        suite: name,
+        unit: `packages/bakery/${name}.test.ts`,
+        cost: 2 - index,
+      }));
+      let secondRan = false;
+      const reporting = (index: number) => {
+        const entry = entries[index]!;
+        return suite({
+          id: entry.suite,
+          units: [entry.unit],
+          locate: (record) =>
+            record.test.n === entry.test.n
+              ? { level: "unit", unit: entry.unit }
+              : undefined,
+          command: (_units, context) => {
+            if (index === 1) {
+              expect(lines.filter((line) => line.startsWith("::error")))
+                .toHaveLength(1);
+              expect(lines.some((line) => line.startsWith("FAILED:")))
+                .toBe(false);
+              secondRan = true;
+            }
+            return Promise.resolve([{
+              command: [
+                Deno.execPath(),
+                "eval",
+                `const dir = Deno.env.get("CF_TEST_RECORDS_DIR");
+               Deno.mkdirSync(dir, { recursive: true });
+               Deno.writeTextFileSync(
+                 dir + "/fragment-fixture.ndjson",
+                 JSON.stringify(${
+                  JSON.stringify({
+                    line: "record",
+                    test: entry.test,
+                    outcome: index === 0 ? "fail" : "pass",
+                    durationMs: 1,
+                  })
+                }) + "\\n",
+               );`,
+              ],
+              cwd: context.root,
+            }]);
+          },
+        });
+      };
+      const restore = setEnv({
+        RUNNER_TEMP: undefined,
+        GITHUB_ACTIONS: "true",
+        GITHUB_STEP_SUMMARY: undefined,
+      });
+      const warnings: unknown[][] = [];
+      const warn = console.warn;
+      console.warn = (...args: unknown[]) => warnings.push(args);
+      const log = console.log;
+      console.log = (line: string) => lines.push(line);
+      try {
+        const ok = await runLane({
+          lane: 1,
+          of: 1,
+          full: true,
+          dryRun: false,
+          laneCount: false,
+          root: missingManifest ? spool : REPOSITORY,
+          at: "2026-09-01T00:00:00Z",
+          coverageDir: `${spool}/coverage`,
+        }, {
+          manifest: () =>
+            Promise.resolve({
+              manifest: manifestOf(entries),
+              objectName: "manifest-fixture.json.gz",
+            }),
+          topology: () => Promise.resolve([reporting(0), reporting(1)]),
+          spool: () => spool,
+        });
+        expect(ok).toBe(false);
+        expect(secondRan).toBe(true);
+        expect(warnings).toHaveLength(missingManifest ? 1 : 0);
+        expect(lines.filter((line) => line.startsWith("::error")))
+          .toHaveLength(1);
+        expect(lines.some((line) => line.startsWith("FAILED:"))).toBe(true);
+      } finally {
+        console.log = log;
+        console.warn = warn;
+        restore();
+        await Deno.remove(spool, { recursive: true });
+      }
+    });
+  }
 
   it("fails a lane told to stop, runs nothing more, and says what it spent", async () => {
     const stop = new LaneStop();
@@ -6608,6 +6727,44 @@ describe("the summary a lane ends with", () => {
         "rerun: cd packages/runner && deno task test --filter 'a, b: c'" +
         "%0AError: 100%25%0Abroken",
     );
+  });
+
+  it("annotates each failing identity once across batches and the closing summary, within one lane limit", () => {
+    const lines: string[] = [];
+    const annotated = new Set<string>();
+    const first = { record: record("unit", "runner", "first", "fail") };
+    const second = { record: record("unit", "runner", "second", "fail") };
+    const passing = { record: record("unit", "runner", "passed", "pass") };
+    const actions = (name: string) =>
+      name === "GITHUB_ACTIONS" ? "true" : undefined;
+    const log = console.log;
+    const restore = setEnv({ GITHUB_STEP_SUMMARY: undefined });
+    console.log = (line: string) => lines.push(line);
+    try {
+      annotateLaneFailures([passing, first, first], annotated, actions);
+      expect(lines).toEqual([errorAnnotation(first)]);
+      annotateLaneFailures([first, second], annotated, actions);
+      expect(lines).toEqual([errorAnnotation(first), errorAnnotation(second)]);
+      const rest = Array.from({ length: ANNOTATED_FAILURES }, (_, index) => ({
+        record: record("unit", "runner", `rest-${index}`, "fail"),
+      }));
+      annotateLaneFailures(rest, annotated, actions);
+      reportLane(
+        {
+          tests: [first, second, ...rest],
+          commands: [],
+          seconds: 1,
+        },
+        actions,
+        annotated,
+      );
+      expect(lines.filter((line) => line.startsWith("::error")))
+        .toHaveLength(ANNOTATED_FAILURES);
+      expect(annotated.size).toBe(ANNOTATED_FAILURES);
+    } finally {
+      console.log = log;
+      restore();
+    }
   });
 
   it("prints the summary last, annotating only inside GitHub Actions", () => {

@@ -471,6 +471,17 @@ class PlaneMemoryServer implements HostMemoryServer {
   }
 
   /** @inheritDoc */
+  foreignReadAuthorityFor(
+    space: string,
+    principal: string | undefined,
+  ): ReturnType<HostMemoryServer["foreignReadAuthorityFor"]> {
+    return this.#endpoint.request("server.foreignReadAuthorityFor", {
+      space,
+      principal,
+    });
+  }
+
+  /** @inheritDoc */
   resolveSpaceOwner(engine: Engine.Engine, space: string): string | undefined {
     return resolveSpaceOwnerOf(engine, space);
   }

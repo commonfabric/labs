@@ -985,6 +985,145 @@ describe("CFC trusted agent: tool-input requiredIntegrity (Epic D2)", () => {
   });
 });
 
+/**
+ * Runs `body` against the tool catalog of a pattern whose `sendRoute` tool
+ * declares `inputSchema`, with a call into `body` that reads the routes the
+ * tool has sent.
+ */
+const withTool = async <T>(
+  inputSchema: JSONSchema,
+  body: (tool: {
+    runtime: Runtime;
+    catalog: ReturnType<typeof llmToolExecutionHelpers.buildToolCatalog>;
+    sent: () => Promise<string[]>;
+  }) => Promise<T>,
+): Promise<T> => {
+  const storageManager = StorageManager.emulate({ as: signer });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+  });
+  const tx = runtime.edit();
+  const { commonfabric } = createTrustedBuilder(runtime);
+  const { pattern, handler, Writable } = commonfabric;
+  try {
+    const sendRoute = handler<{ route: string }, { sent: any }>(
+      inputSchema,
+      {
+        type: "object",
+        properties: {
+          sent: {
+            type: "array",
+            items: { type: "string" },
+            asCell: ["cell"],
+          },
+        },
+        required: ["sent"],
+      },
+      ({ route }, { sent }) => {
+        sent.push(route);
+      },
+    );
+    const resultSchema = {
+      type: "object",
+      properties: {
+        sent: { type: "array", items: { type: "string" } },
+        tools: true,
+      },
+      required: ["sent", "tools"],
+    } as const satisfies JSONSchema;
+    const testPattern = pattern(
+      () => {
+        const sent = Writable.of<string[]>([]);
+        return {
+          sent,
+          tools: {
+            sendRoute: {
+              description: "Send along a route.",
+              inputSchema,
+              handler: sendRoute({ sent }),
+            },
+          },
+        };
+      },
+      false,
+      resultSchema,
+    );
+    const resultCell = runtime.getCell(
+      space,
+      "agent-send-route",
+      resultSchema,
+      tx,
+    );
+    const result = runtime.run(tx, testPattern, {}, resultCell);
+    runtime.prepareTxForCommit(tx);
+    await tx.commit().settled;
+    await runtime.idle();
+
+    const catalog = llmToolExecutionHelpers.buildToolCatalog(
+      result.key("tools") as any,
+      false,
+    );
+    return await body({
+      runtime,
+      catalog,
+      sent: async () =>
+        ((await result.key("sent").pull()) as string[] | undefined) ?? [],
+    });
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
+};
+
+/**
+ * What the `sendRoute` tool declaring `inputSchema` commits after the model
+ * calls it with `input`, or with what `input` returns when it is a function of
+ * the tool's runtime: the routes it sent, or `[]` where the call was denied
+ * before the tool ran.
+ */
+const sentAfterCall = (
+  inputSchema: JSONSchema,
+  input:
+    | Record<string, unknown>
+    | ((runtime: Runtime) => Promise<Record<string, unknown>>),
+): Promise<string[]> =>
+  withTool(inputSchema, async ({ runtime, catalog, sent }) => {
+    await llmToolExecutionHelpers.executeToolCalls(runtime, space, catalog, [{
+      type: "tool-call",
+      toolCallId: "call-send-route",
+      toolName: "sendRoute",
+      input: typeof input === "function" ? await input(runtime) : input,
+    }] as any);
+    await runtime.idle();
+    return await sent();
+  });
+
+/**
+ * Commits `value` under `schema` to the cell `name`, written by the agent
+ * kernel builtin, and returns the reference the model passes for it.
+ */
+const seedKernelCell = async (
+  runtime: Runtime,
+  name: string,
+  schema: JSONSchema,
+  value: unknown,
+): Promise<{ "@link": string }> => {
+  const tx = runtime.edit();
+  setCfcImplementationIdentity(tx, {
+    kind: "builtin",
+    builtinId: "agent-kernel-demo",
+  });
+  const cell = runtime.getCell(space, name, schema, tx);
+  cell.set(value as any);
+  tx.prepareCfc();
+  expect((await tx.commit().settled).ok).toBeDefined();
+  await runtime.idle();
+  return {
+    "@link": createLLMFriendlyLink(cell.getAsNormalizedFullLink(), space),
+  };
+};
+
 describe("CFC trusted agent: a floor declared as anything but a list", () => {
   // A `requiredIntegrity` the specification types as a list (§8.8), declared
   // as anything else, refuses the call wherever the input schema declares it,
@@ -1079,117 +1218,6 @@ describe("CFC trusted agent: a floor declared as anything but a list", () => {
       }, ""),
     ).toBeUndefined();
   });
-
-  /**
-   * Runs `body` against the tool catalog of a pattern whose `sendRoute` tool
-   * declares `inputSchema`, with a call into `body` that reads the routes the
-   * tool has sent.
-   */
-  const withTool = async <T>(
-    inputSchema: JSONSchema,
-    body: (tool: {
-      runtime: Runtime;
-      catalog: ReturnType<typeof llmToolExecutionHelpers.buildToolCatalog>;
-      sent: () => Promise<string[]>;
-    }) => Promise<T>,
-  ): Promise<T> => {
-    const storageManager = StorageManager.emulate({ as: signer });
-    const runtime = new Runtime({
-      apiUrl: new URL(import.meta.url),
-      storageManager,
-    });
-    const tx = runtime.edit();
-    const { commonfabric } = createTrustedBuilder(runtime);
-    const { pattern, handler, Writable } = commonfabric;
-    try {
-      const sendRoute = handler<{ route: string }, { sent: any }>(
-        inputSchema,
-        {
-          type: "object",
-          properties: {
-            sent: {
-              type: "array",
-              items: { type: "string" },
-              asCell: ["cell"],
-            },
-          },
-          required: ["sent"],
-        },
-        ({ route }, { sent }) => {
-          sent.push(route);
-        },
-      );
-      const resultSchema = {
-        type: "object",
-        properties: {
-          sent: { type: "array", items: { type: "string" } },
-          tools: true,
-        },
-        required: ["sent", "tools"],
-      } as const satisfies JSONSchema;
-      const testPattern = pattern(
-        () => {
-          const sent = Writable.of<string[]>([]);
-          return {
-            sent,
-            tools: {
-              sendRoute: {
-                description: "Send along a route.",
-                inputSchema,
-                handler: sendRoute({ sent }),
-              },
-            },
-          };
-        },
-        false,
-        resultSchema,
-      );
-      const resultCell = runtime.getCell(
-        space,
-        "agent-malformed-floor",
-        resultSchema,
-        tx,
-      );
-      const result = runtime.run(tx, testPattern, {}, resultCell);
-      runtime.prepareTxForCommit(tx);
-      await tx.commit().settled;
-      await runtime.idle();
-
-      const catalog = llmToolExecutionHelpers.buildToolCatalog(
-        result.key("tools") as any,
-        false,
-      );
-      return await body({
-        runtime,
-        catalog,
-        sent: async () =>
-          ((await result.key("sent").pull()) as string[] | undefined) ?? [],
-      });
-    } finally {
-      await runtime.dispose();
-      await storageManager.close();
-    }
-  };
-
-  /**
-   * What the `sendRoute` tool declaring `inputSchema` commits after the model
-   * calls it with `input`: the routes it sent, or `[]` where the call was
-   * denied before the tool ran.
-   */
-  const sentAfterCall = (
-    inputSchema: JSONSchema,
-    input: Record<string, unknown>,
-  ): Promise<string[]> =>
-    withTool(inputSchema, async ({ runtime, catalog, sent }) => {
-      await llmToolExecutionHelpers.executeToolCalls(runtime, space, catalog, [{
-        type: "tool-call",
-        toolCallId: "call-malformed-floor",
-        toolName: "sendRoute",
-        input,
-      }] as any);
-      await runtime.idle();
-      return await sent();
-    });
 
   /** A tool input holding an optional tree of `Node`, defined by `node`. */
   const withTree = (node: Record<string, unknown>) =>
@@ -1294,6 +1322,112 @@ describe("CFC trusted agent: a floor declared as anything but a list", () => {
           },
         }),
         { route: "a" },
+      ),
+    ).toEqual(["a"]);
+  });
+});
+
+describe("CFC trusted agent: floors on a dictionary's values", () => {
+  // A floor under `patternProperties` or `additionalProperties` gates each
+  // supplied entry it applies to, as JSON Schema 2020-12 applies those
+  // keywords: every pattern a key matches, and `additionalProperties` for a
+  // key neither `properties` nor a pattern names.
+
+  const FLOORED = { type: "string", ifc: { requiredIntegrity: [KERNEL_ATOM] } };
+
+  /** A tool input whose optional `notes` dictionary is `dictionary`. */
+  const withNotes = (dictionary: Record<string, unknown>) =>
+    ({
+      type: "object",
+      properties: {
+        route: { type: "string" },
+        notes: { type: "object", ...dictionary },
+      },
+      required: ["route"],
+    }) as unknown as JSONSchema;
+
+  it("denies a literal under a floor on `additionalProperties`", async () => {
+    expect(
+      await sentAfterCall(withNotes({ additionalProperties: FLOORED }), {
+        route: "a",
+        notes: { x: "attacker" },
+      }),
+    ).toEqual([]);
+  });
+
+  it("denies a literal under a floor on a pattern the key matches", async () => {
+    expect(
+      await sentAfterCall(
+        withNotes({ patternProperties: { "^to-": FLOORED } }),
+        { route: "a", notes: { "to-main": "attacker" } },
+      ),
+    ).toEqual([]);
+  });
+
+  it("denies a literal under a pattern's floor on a key `properties` names", async () => {
+    expect(
+      await sentAfterCall(
+        withNotes({
+          properties: { to: { type: "string" } },
+          patternProperties: { "^to$": FLOORED },
+        }),
+        { route: "a", notes: { to: "attacker" } },
+      ),
+    ).toEqual([]);
+  });
+
+  it("gates only the keys no pattern matches by `additionalProperties`", async () => {
+    const schema = withNotes({
+      patternProperties: { "^memo-": { type: "string" } },
+      additionalProperties: FLOORED,
+    });
+    expect(
+      await sentAfterCall(schema, { route: "a", notes: { "memo-1": "hi" } }),
+    ).toEqual(["a"]);
+    expect(
+      await sentAfterCall(schema, { route: "a", notes: { to: "attacker" } }),
+    ).toEqual([]);
+  });
+
+  it("leaves a key `properties` names to its own schema", async () => {
+    expect(
+      await sentAfterCall(
+        withNotes({
+          properties: { memo: { type: "string" } },
+          additionalProperties: FLOORED,
+        }),
+        { route: "a", notes: { memo: "hi" } },
+      ),
+    ).toEqual(["a"]);
+  });
+
+  it("denies a call whose pattern is not a valid regular expression", async () => {
+    expect(
+      await sentAfterCall(
+        withNotes({ patternProperties: { "(": { type: "string" } } }),
+        { route: "a", notes: { x: "hi" } },
+      ),
+    ).toEqual([]);
+  });
+
+  it("runs the tool for an entry passed as a reference carrying the floor", async () => {
+    expect(
+      await sentAfterCall(
+        withNotes({ additionalProperties: FLOORED }),
+        async (runtime) => ({
+          route: "a",
+          notes: {
+            to: await seedKernelCell(
+              runtime,
+              "dictionary-kernel-recipient",
+              {
+                type: "string",
+                ifc: { integrity: [KERNEL_ATOM] },
+              } as const satisfies JSONSchema,
+              "alice@example.com",
+            ),
+          },
+        }),
       ),
     ).toEqual(["a"]);
   });

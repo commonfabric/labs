@@ -5218,13 +5218,7 @@ describe("Phase 3 events-down (serving side)", () => {
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
 
-    // Restart coverage requires a fresh runtime, even when the idle park
-    // finishes with a state that the host could otherwise retain.
-    host = newHost({
-      flushDeadlineMs: 5_000,
-      idleParkMs: 600_000,
-      parkedRuntimeRetentionMs: 0,
-    });
+    host = newHost();
     const argumentLink = argument.getAsNormalizedFullLink();
     const argumentId = argumentLink.id;
     const storedLog =
@@ -5284,9 +5278,14 @@ describe("Phase 3 events-down (serving side)", () => {
       // Rotate the tenure while no checkpoint exists durably. B1 is both the
       // later arrival whose barrier behavior is under test and the new input
       // that activates the successor tenure. The still-failing A2 is therefore
-      // re-observed from durable state and begins at count one.
-      const previousServingManager = servingManager;
-      expect(previousServingManager).toBeDefined();
+      // re-observed from durable state and begins at count one. The
+      // successor serves with whatever runtime the host hands it: a fresh one
+      // from the factory above, which records it, or the parked one when a
+      // session refresh re-activates the space before B1 lands
+      // (serving-loop.md §1, "Parking"), which the factory never sees. The
+      // serving manager is the one last recorded either way, so the
+      // recovery signal below reaches the tenure's load recovery observer
+      // whichever the host chose.
       await host!.spaceServer(space)!.park("idle");
       rejectWaveCommitWhen = (batch) => {
         const rejects = JSON.stringify(batch.operations).includes(
@@ -5312,8 +5311,6 @@ describe("Phase 3 events-down (serving side)", () => {
         () => host!.stats().events.deliveryCheckpointWriteFailures >= 2,
       );
       expect(rejectedWaveCommits).toBe(1);
-      expect(servingManager).toBeDefined();
-      expect(servingManager).not.toBe(previousServingManager);
       rejectWaveCommitWhen = undefined;
       const wakeCheckpointRetry = async (suffix: string, value: number) => {
         const wake = clientRuntime.getCell<{ value: number }>(

@@ -391,9 +391,9 @@ took the branch, so a call site of the form
 from one run to the next, and one line of movement moves a count exactly as
 thirty-nine did. Do not reason from what the `if` line itself reports either.
 That count is a projection of V8's block ranges onto lines: it differs between
-the one-line and the braced form of the same guard, and it changed between deno
-2.8.3 and the pinned 2.9.4, which now credits a braced guard's line with the
-condition's own count. See
+the one-line and the braced form of the same guard, and the attribution can
+change across Deno releases. A braced guard's line can receive the condition's
+own count even when its body never ran. See
 [deno coverage: one-line guard reported uncovered when its branch is not taken](deno-coverage-guard-line-artifact.md).
 
 ### Paths reached only when something happens twice

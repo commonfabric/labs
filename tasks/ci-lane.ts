@@ -2783,6 +2783,8 @@ export async function runLane(
   // What the lane's closing summary says: every test its batches reported,
   // by identity, and what failed with no failing test to say why.
   const tests = new Map<string, TestResult>();
+  const annotated = new Set<string>();
+  let members: Map<string, string> | undefined;
   const commands: FailedCommand[] = [];
   const notes: string[] = [];
   try {
@@ -2832,6 +2834,31 @@ export async function runLane(
           ...(excusing ? [] : accounting.excused),
         ]),
       );
+      const failing = [...tests.values()].filter(({ record }) =>
+        record.outcome === "fail"
+      );
+      if (
+        members === undefined &&
+        failing.some(({ record }) => record.test.k === "unit")
+      ) {
+        try {
+          members = new Map(
+            (await readWorkspaceMembers(path.join(options.root, "deno.jsonc")))
+              .map((member) => [getPackageName(member), member]),
+          );
+        } catch (error) {
+          members = new Map();
+          console.warn(
+            "ci-lane: could not look up unit-test rerun commands:",
+            error,
+          );
+        }
+      }
+      for (const test of failing) {
+        const rerun = laneRerun(test.record, members ?? new Map());
+        if (rerun !== undefined) test.rerun = rerun;
+      }
+      annotateLaneFailures(failing, annotated);
       for (const { name } of accounting.silent) {
         commands.push({
           label: `${batch.suite.id} ${name}`,
@@ -2972,22 +2999,6 @@ export async function runLane(
     ]);
   }
   describeCoverage(coverage, converted.reports, marked);
-  // The workspace's members are read only where a failing unit test needs
-  // one for its rerun command.
-  const failing = [...tests.values()].filter(({ record }) =>
-    record.outcome === "fail"
-  );
-  const members = failing.some(({ record }) => record.test.k === "unit")
-    ? new Map(
-      (await readWorkspaceMembers(path.join(options.root, "deno.jsonc"))).map(
-        (member) => [getPackageName(member), member],
-      ),
-    )
-    : new Map<string, string>();
-  for (const test of failing) {
-    const rerun = laneRerun(test.record, members);
-    if (rerun !== undefined) test.rerun = rerun;
-  }
   const summary: RunSummary = {
     tests: [...tests.values()],
     commands,
@@ -3001,7 +3012,7 @@ export async function runLane(
   if (!ok && passed(summary)) {
     notes.push("The lane failed for a reason the output above gives.");
   }
-  reportLane(summary);
+  reportLane(summary, Deno.env.get, annotated);
   return ok;
 }
 
@@ -3056,24 +3067,38 @@ export function addLaneResults(
 export const ANNOTATED_FAILURES = 10;
 
 /**
+ * Raises GitHub Actions annotations for failing identities not in `annotated`,
+ * up to the lane's limit. The same set spans batches and the closing summary.
+ */
+export function annotateLaneFailures(
+  tests: readonly TestResult[],
+  annotated: Set<string>,
+  env: (name: string) => string | undefined = Deno.env.get,
+): void {
+  if (env("GITHUB_ACTIONS") !== "true") return;
+  for (const test of tests) {
+    if (annotated.size >= ANNOTATED_FAILURES) break;
+    if (test.record.outcome !== "fail") continue;
+    const key = testIdentityKey(test.record.test);
+    if (annotated.has(key)) continue;
+    console.log(errorAnnotation(test));
+    annotated.add(key);
+  }
+}
+
+/**
  * Ends a lane's output with its summary and adds the summary to the job's
- * step summary. Inside GitHub Actions it also raises an error annotation
- * for each of the first failing tests, which is where a pull request's
- * checks and `gh run view` show them.
+ * step summary. Inside GitHub Actions it annotates failures the batches have
+ * not already annotated, within the lane's limit.
  */
 export function reportLane(
   summary: RunSummary,
   env: (name: string) => string | undefined = Deno.env.get,
+  annotated: Set<string> = new Set(),
 ): void {
   printSummary(summary);
   appendSummary(["```text", ...summaryLines(summary), "```", ""].join("\n"));
-  if (env("GITHUB_ACTIONS") !== "true") return;
-  const failing = summary.tests.filter(({ record }) =>
-    record.outcome === "fail"
-  );
-  for (const test of failing.slice(0, ANNOTATED_FAILURES)) {
-    console.log(errorAnnotation(test));
-  }
+  annotateLaneFailures(summary.tests, annotated, env);
 }
 
 /** The workflow command that raises an error annotation for a failing test. */

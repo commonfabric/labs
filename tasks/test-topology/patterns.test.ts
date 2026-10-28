@@ -78,13 +78,63 @@ describe("the pattern and package suites", () => {
             pivot,
           ]
         ) {
-          expect(suite.unitsForChange?.(new Set([source]))).toEqual([pivot]);
+          expect(suite.unitsForChange?.(new Set([source]))).toContain(pivot);
         }
         expect(
           suite.unitsForChange?.(
             new Set(["packages/patterns/topics/README.md"]),
           ),
         ).toEqual([]);
+      }
+    }
+  });
+
+  it("requires the Topics measurements for changes to the authored sources and shared measurement inputs", async () => {
+    const measurements = [
+      "topics-headless-fixture",
+      "topics-lazy-lookup-reruns",
+      "topics-read-budget-small-and-threads",
+      "topics-read-budget-single-bucket",
+      "topics-read-budget-high-degree",
+      "topics-read-budget-mentions-16",
+      "topics-browser-measurement",
+    ].map((name) => `packages/patterns/integration/${name}.test.ts`).sort();
+    for (const defaultEnabled of [false, true]) {
+      const loaded = await loadPatternSuites(root, defaultEnabled);
+      for (const id of Object.values(arms(defaultEnabled))) {
+        const suite = pick(loaded, id);
+        for (const source of ["main.tsx", "topic.tsx"]) {
+          expect(
+            suite.unitsForChange?.(
+              new Set([`packages/patterns/topics/${source}`]),
+            ),
+          ).toEqual([
+            ...measurements,
+            "packages/patterns/integration/topic-board-pivot-sessions.test.ts",
+          ].sort());
+        }
+        for (
+          const input of [
+            "topics-headless-fixture.ts",
+            "topics-cost-cases.ts",
+            "topics-read-budget.ts",
+            "topics-read-budget-limits.ts",
+            "topics-read-budget-suite.ts",
+            "topics-browser-measurement.ts",
+            "topics-browser-measurement-core.ts",
+            "topics-browser-posture.ts",
+            "topics-navigation-helpers.ts",
+          ]
+        ) {
+          expect(
+            suite.unitsForChange?.(
+              new Set([`packages/patterns/integration/${input}`]),
+            ),
+          ).toEqual(measurements);
+        }
+        for (const file of measurements) {
+          expect(suite.unitsForChange?.(new Set([file]))).toEqual([file]);
+        }
       }
     }
   });

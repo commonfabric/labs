@@ -97,9 +97,13 @@ export function servingRuntimeFactory(
       as: options.identity,
       clientBuild: options.clientBuild,
       // Naming the home space makes the manager's foreign-space providers
-      // refuse scoped reads, fail-closed (protocol.md §2's grant-scoped read
-      // design).
+      // gate scoped reads: admitted on the reading actor's own READ grant
+      // in the foreign space, which the server's probe resolves, refused
+      // otherwise (protocol.md §2's grant-scoped read).
       servingHomeSpace: space,
+      ...(context.foreignScopedReadGrant === undefined
+        ? {}
+        : { foreignScopedReadGrant: context.foreignScopedReadGrant }),
     });
     // Installed ahead of the runtime, so no read this factory could ever
     // perform reaches the session.

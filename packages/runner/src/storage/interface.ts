@@ -802,16 +802,30 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   >[];
 
   /**
-   * Whether this manager refuses every read of `address` by construction: a
-   * serving manager reads no scoped instance of a space other than its home
-   * (protocol.md §2's fail-closed interim). Such a read returns no data
-   * however long it is waited for, so the manager registers no pending load
-   * for it, and a served run that reads it has read an absence that is not
-   * the document's state.
+   * Where this manager stands on a read of `address` under `identity`
+   * (protocol.md §2's grant-scoped read). Only a serving manager stands
+   * anywhere but `"admitted"`, and only on a scoped (user or session) read of
+   * a space other than its home: such a read is admitted when it names the
+   * reading actor's own instance and the space's own access list grants that
+   * actor READ, refused when it names no actor's instance or the grant was
+   * resolved and found wanting, and unresolved until the probe for the
+   * actor's grant has answered. A refused read returns no data however long
+   * it is waited for, so the manager registers no pending load for it. A
+   * served run that read a document whose standing is not `"admitted"` read
+   * an absence that is not the document's state.
    */
-  refusesReadByConstruction?(
+  scopedReadStanding?(
     address: Pick<IMemorySpaceAddress, "space" | "scope">,
-  ): boolean;
+    identity: ScopeKeyIdentity | undefined,
+  ): ScopedReadStanding;
+
+  /**
+   * Installs the memory server's read authority probe a serving manager
+   * resolves foreign scoped reads with (see `scopedReadStanding`). Without
+   * one, every such read is refused. Optional: only a manager co-hosted
+   * with the memory server can hold one.
+   */
+  installForeignScopedReadGrant?(grant: ForeignScopedReadGrant): void;
 
   /**
    * Generation of the currently in-flight load for an entity key, or
@@ -3949,17 +3963,39 @@ export type PullError =
   | IForeignScopedReadRefusedError;
 
 /** A serving runtime's refusal of a scoped read of a space other than its home
- * (protocol.md §2's fail-closed interim for delegated scoped reads). The read's
- * scope and the runtime's serving posture decide it, never transport or session
- * state, so the same read from the same runtime is refused every time. So it is
- * no load in flight: the storage manager registers no pending load for it. A
- * served run that reads the document's value fails permanently in
- * `dispatch-load` (events.md §5), and where the refusal reaches a load
- * failure it is permanent evidence rather than a retryable `connection`
- * failure. */
+ * (protocol.md §2's grant-scoped read): the read names no actor's instance,
+ * or the space's access list grants the actor it names no READ. The read's
+ * scope, the runtime's serving posture and the target's list decide it, never
+ * transport or session state, so the same read from the same runtime is
+ * refused every time until that list changes. So it is no load in flight: the
+ * storage manager registers no pending load for a read it has decided, and
+ * settles one it registered while asking for the actor's grant as an absence
+ * rather than a failure. A served run that reads the document's value fails
+ * permanently in `dispatch-load` (events.md §5), and where the refusal reaches
+ * a load failure it is permanent evidence rather than a retryable
+ * `connection` failure. */
 export interface IForeignScopedReadRefusedError extends IStorageError {
   readonly name: "ForeignScopedReadRefusedError";
 }
+
+/**
+ * Where a storage manager stands on a scoped read of a space other than the
+ * one it serves (`IStorageManager.scopedReadStanding`): admitted, refused for
+ * as long as the target's access list stands, or unresolved while the actor's
+ * grant is being asked for.
+ */
+export type ScopedReadStanding = "admitted" | "refused" | "unresolved";
+
+/**
+ * The memory server's read authority probe (`Server.foreignReadAuthorityFor`):
+ * whether `principal` holds READ on `space` by that space's own access list.
+ * A serving manager asks it before a foreign scoped read naming the
+ * principal's instance leaves it (protocol.md §2's grant-scoped read).
+ */
+export type ForeignScopedReadGrant = (
+  space: MemorySpace,
+  principal: string,
+) => Promise<{ granted: true } | { granted: false; reason: string }>;
 
 export interface IStoreError extends IStorageError {
   readonly name: "StoreError";
