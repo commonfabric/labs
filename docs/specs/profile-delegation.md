@@ -5,7 +5,7 @@
 Design, implemented through its fourth phase for the command line: the
 server verifies a chain, a runtime presents one, a profile space is born
 owning itself with its delegation recorded in Home, and `cf delegation`
-issues a chain to another key. The phase after that, caveats with
+issues a chain to another key. The phase after that, policy and
 revocation, is design only; "Phases" below says which is which. The document
 is written against the session authentication and access-list rules in
 [`memory-v2/04-protocol.md`](memory-v2/04-protocol.md) §4.5 and the profile
@@ -281,11 +281,157 @@ does not:
   the server verifies it the same way. A profile is the case where the owner
   is the space DID itself.
 
-Caveat evaluation (`pol`) is out of scope for the first slice: the server
-accepts an empty policy and refuses a non-empty one. A later slice evaluates
-read-only caveats, which map onto the access list's READ < WRITE < OWNER
-ordering, and command restriction, once the protocol authorizes commands
-individually.
+A policy (`pol`) narrows a chain to the documents it names; "Policy" below
+is its design, the fifth phase. Until that phase lands, the server accepts an
+empty policy and refuses a non-empty one. Command restriction, a narrower
+`cmd` than `/memory`, waits for the protocol to authorize operations
+individually: the one command invoked today is `session.open`, which no
+narrower path covers, so read-only cannot be said with a command and is
+said with a policy.
+
+## Policy
+
+A delegation's `pol` is the one place a chain can say less than "the whole
+of the issuer's grant", and the server is the one place that can hold a
+session to it. The access list grants levels to principals, and it is good
+at that: membership is enumerable, and adding or removing a principal takes
+effect at the next open and sweeps the sessions already open. What it
+cannot say is "this document and no other", and the runtime's
+owner-integrity labels cannot say it either: they are a policy honest
+runtimes apply before they commit, and the server admits any commit the
+access list allows. A policy on a chain is enforced by the server per
+operation, so it is the first authority finer than a space that a modified
+client cannot step around.
+
+### What a policy constrains
+
+UCAN evaluates a policy against the arguments of the invocation the chain
+authorizes. The one invocation here is `session.open`, whose arguments name
+no document, so the design declares what a `/memory` command's arguments
+are: every access the session makes to a document, each one
+
+```json
+{ "access": "read", "id": "of:..." }
+```
+
+or `"write"` in place of `"read"`, with the document's entity id. The server
+evaluates the session's policy against each access as the session makes it.
+A `transact` is one access per operation, all `"write"`; a `graph.query` is
+one `"read"` per root and one per document a traversal reaches; a watch is
+the same for its roots and for every document whose change it would
+deliver. Nothing else a session does names a document, and every message
+that does is held to the policy.
+
+This per-access shape is chosen so that the protocol's cutover to
+per-operation invocations (`memory-v2/04-protocol.md` §4.5.2) changes where
+the policy is evaluated and not what it says: a `/memory/transact`
+invocation's arguments are its operations, and the same policy quantified
+over them with `all` means what it means here.
+
+### The policy language
+
+The policy is UCAN's: a list of statements, the list an implicit `and`,
+each statement an operator, a selector into the arguments, and a value.
+The server evaluates this subset, and the identity codec refuses a
+delegation whose policy uses anything else, so an operator the server does
+not know can never be read as permissive:
+
+- `==` and `!=` against a string, `like` with `*` as the one wildcard;
+- `and`, `or`, `not` over statements;
+- `all` and `any` over a collection, which the arguments here do not
+  contain, kept so a policy written for the cutover's `.ops` evaluates the
+  same way.
+
+The selectors that matter are `.access` and `.id`. The numeric comparisons
+are not needed by any argument here and are left out until one is.
+
+Three policies, as examples:
+
+```json
+[["==", ".id", "of:doc:abc"]]
+```
+
+grants the chain's level on one document, read and write.
+
+```json
+[["like", ".id", "of:inbox:*"]]
+```
+
+grants it on every document under a prefix.
+
+```json
+[["or", [["==", ".access", "read"], ["==", ".id", "of:doc:abc"]]]]
+```
+
+reads the whole space and writes one document.
+
+### What a policy cannot say
+
+A policy compares arguments to values written in the delegation. It cannot
+name the acting principal, so "write the documents you created" is not a
+policy; it is a rule the server would have to know, with the creator of a
+document read from its first revision. That rule is what an inbox wants for
+its wildcard WRITE, so that each sender touches only its own offers. It is
+recorded under "Open questions" as a grant-side rule rather than built here:
+a grant carries no policy today, and the one rule an inbox needs is not one
+the policy language can express.
+
+### Evaluation
+
+The server's verifier returns the chain's policy beside its root issuer and
+expiry: the concatenation of every link's statements, since each link
+narrows what it received and the whole chain is an `and`. The session
+carries it, as it carries `capabilityPrincipal` and `delegationEnd`.
+
+The level still resolves from the root issuer's grant, and the policy says
+which documents that level reaches. Each requirement check the server makes
+for a session with a policy (`#authorizeCurrentSessionWithEngine` and the
+read paths) is followed by the access check:
+
+- A `transact` with any operation outside the policy is refused whole, with
+  a permanent `AuthorizationError` naming the first operation refused. A
+  commit is atomic, and admitting the operations inside the policy alone
+  would commit something the client did not write.
+- A `graph.query` or watch whose root is outside the policy is refused the
+  same way. A document a traversal reaches that is outside the policy is
+  omitted, as a document above the session's read ceiling is omitted: a
+  link into a document the chain does not cover is a link the session
+  cannot follow, not an error in the query.
+- A watch delivers no change to a document outside the policy.
+
+The access-list mutation check is unchanged: replacing the list needs
+OWNER, and a policy narrows which documents a level reaches, so a chain
+granting OWNER with a policy that excludes the access-list document cannot
+replace it. A policy that includes it can.
+
+An empty policy is the whole space, as today. A policy is evaluated at every
+access rather than at admission, so there is nothing to re-check when it
+would change: it cannot change for the life of the session, since the chain
+is what the session was admitted under.
+
+### The client's half
+
+The client store holds chains and presents one per space and key, chosen as
+today. A chain with a policy is presented like any other, and the server
+decides each access, so a client that opens a space with a chain narrower
+than what it then does is refused per operation rather than at open. Two
+things change on the client:
+
+- The capability check it makes before opening reads the chain's level as
+  it does now and ignores the policy. The check is for a quick refusal, and
+  "this level, on some documents" is not a quick refusal.
+- A holder with two chains over one space whose policies cover different
+  documents has no way to choose per operation, since a session presents one
+  chain. That holder opens two sessions, or is issued one chain whose policy
+  is the union. The store keeps presenting one chain per space and key,
+  which is recorded as a limit rather than solved.
+
+### Identity codec
+
+`checkPayload` admits a non-empty `pol` whose statements all use the subset
+above with string values, and refuses any other. `delegationCovers` is
+unchanged: the command is still `/memory` or narrower, and the policy is
+what narrows within it.
 
 ## Opening a session with a delegation
 
@@ -357,7 +503,9 @@ verifies the signature as it does now, then, when `prf` is present:
    `/memory/session.open`.
 5. Each proof is within `nbf` and `exp`, to the second, with no clock-skew
    grace.
-6. Each proof's `pol` is empty (first slice).
+6. Each proof's `pol` is empty until the fifth phase, and from then a
+   policy in the subset "Policy" defines, which the verifier returns
+   concatenated over the chain.
 7. The chain links: `proofs[i].aud === proofs[i + 1].iss` for each `i`, and
    `proofs[last].aud === invocation.iss`.
 
@@ -484,10 +632,25 @@ a requirement.
 - **Adding a key** (a device, an agent): the core identity issues a
   delegation to it over the space. No commit to the space.
 - **Removing a key the core delegated to**: the core identity revokes its own
-  delegation. Per-delegation revocation is a later slice; until it lands, the
-  delegation is issued with an expiry, and removing the key is waiting for
-  it. The server's existing per-space capability cache and
-  `session/admissible` machinery are where a revocation list would hook in.
+  delegation, and the revocation reaches the server two ways. Expiry is the
+  everyday one: every delegation `cf delegation issue` writes carries one,
+  the holder renews by being issued again, and removing a key is not
+  renewing it; the server holds a session to its chain's expiry after
+  admission. For a revocation that cannot wait, the space holds a
+  revocation document beside its access list, `of:<space>/revocations`,
+  listing the CIDs of refused delegations; writing it needs OWNER, by the
+  same whole-document rule as the access list (INV-12). The server refuses
+  an open whose chain contains a listed CID, and a commit that touches the
+  document sweeps the space's open sessions the way an access-list commit
+  does (`#revokeDeauthorizedSessions`), ending every session whose chain
+  contains a CID the document now lists; the server already records each
+  session's chain with its authorization, so it knows which. A listed CID
+  refuses every chain through that delegation, so revoking a link cuts off
+  everything delegated onward from it. The issuer knows what it issued from
+  its Home: `cf delegation issue` records each delegation's CID, audience,
+  space, and expiry there, under `{ issued: <space> }`, which
+  `cf delegation issued` lists and `cf delegation revoke <cid>` writes to
+  the space's revocation document from.
 - **Rotating the core identity**: the old core, holding OWNER through the
   root delegation, issues a delegation to the new core over the space, and
   the new core presents the chain of two: profile to old core, old core to
@@ -580,8 +743,15 @@ part of this design.
    next phase confines each sender to its own documents, a chain delivered there
    can be removed or written over by anyone with the address; the file stays the
    recovery.
-5. **Caveats and revocation.** Read-only caveats, and per-delegation
-   revocation.
+5. **Policy and revocation.** The server evaluates a chain's policy per
+   document access, so a delegation can grant its level on one document or
+   a prefix rather than the whole space ("Policy"); the identity codec
+   admits the policy subset and refuses the rest; `cf delegation issue`
+   takes a policy and records what it issued in Home; and a space's
+   revocation document lets an owner refuse a delegation by CID before it
+   expires, sweeping open sessions as an access-list change does
+   ("Rotation and revocation"). A grant-side rule confining a wildcard
+   WRITE to the documents a sender created is left open.
 
 ## Open questions
 
@@ -629,6 +799,18 @@ part of this design.
   The destroy-the-key variant is chosen here for its simplicity; revisit it
   if a profile-signed claim becomes a requirement, since a destroyed key
   cannot be recovered into that variant later.
+- **A grant-side rule for an inbox.** The inbox grants the world WRITE,
+  and the one rule that would make that safe, each sender confined to the
+  documents it created, is not a policy: a policy compares arguments to
+  values written in the delegation and cannot name the acting principal.
+  The server could hold a wildcard grant to that rule itself, reading a
+  document's creator from its first revision, which is a change to the
+  access list's shape, `{ "*": { capability: "WRITE", own: true } }` or
+  the like, and to `cf acl`, `ACLManager`, and the server's resolution of
+  a grant. Whether that is the shape, or an inbox is instead a space whose
+  offers each sender delivers into a document of its own by some other
+  means, is open; the policy evaluation this phase builds is what either
+  would rest on.
 - **The delegation is a real UCAN; the invocation is not yet.** The
   repository's content hash is SHA-256 over a tag-byte structural encoding
   of a fabric value, named as `fid1`; a UCAN's identifier is a CIDv1 over
@@ -659,4 +841,8 @@ part of this design.
 | Delegation store, keyed by space DID | `runtime/runner/src/storage/v2.ts`, storage manager mount |
 | Sign genesis as the profile key; issue the delegation; destroy the key | the profile creation path (`profile-create.tsx`) and `StorageManager.createSpace` |
 | Record the delegation beside the profile link | the Home default pattern's `profiles` entries |
+| Evaluate a session's policy per document access; return it from the verifier | `runtime/memory/v2/session-open-auth.ts` and `runtime/memory/v2/server.ts`, the requirement checks, the graph traversal, and watch delivery |
+| Admit the policy subset in a delegation | `checkPayload` in `base/identity/src/delegation.ts` |
+| The revocation document; refuse a listed CID; sweep sessions on a change to it | `runtime/memory/acl.ts` beside `aclDocId`, and `runtime/memory/v2/server.ts` beside the access-list sweep |
+| Issue with a policy; record what was issued in Home; list and revoke | `cf delegation` over `runtime/cli/lib/delegation.ts` |
 | Protocol description | `memory-v2/04-protocol.md` §4.5 |
