@@ -1125,7 +1125,19 @@ Default paths of §7:
   `Record<string, unknown> & Record<number, string>`, which no one
   `additionalProperties` can state — produce a **permissive fallback, not a
   throw**: `{ type: "object", additionalProperties: true,
-  $comment: "Unsupported intersection pattern: <reason>" }`.
+  $comment: "Unsupported intersection pattern: <reason>" }`. The fallback
+  may hold a constituent's data anywhere, so it keeps the labels of its
+  constituents as a property the checker gives `any` keeps them (§9,
+  `labelsBesideAnyValue()`): every restriction a constituent states anywhere
+  in its value, a member's or an array's items' included, goes on the whole
+  fallback, and its evidence goes nowhere. `{ x: Confidential<string, C> } &
+  string[]` gives the fallback `ifc: { confidentiality: C }`. A scope a
+  member states is not lifted. A fallback that meets a definition still
+  being generated, as one inside a recursive interface does, is checked once
+  generation is done, and refused where it kept fewer restrictions than that
+  definition states ("An intersection whose constituents cannot be merged
+  keeps the labels of its constituents, but it meets `Node` inside the
+  definition of `Node` …").
 - A property several constituents declare takes the schema of its type in
   the intersection, which the checker gives as the intersection of the
   declared types: `{ a: unknown } & { a: string }` and

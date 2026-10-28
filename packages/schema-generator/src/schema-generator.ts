@@ -45,6 +45,7 @@ import {
   IntersectionFormatter,
   propertyScopesError,
   sharedPropertySchema,
+  unsupportedIntersectionSchema,
   withoutDocumentation,
 } from "./formatters/intersection-formatter.ts";
 import { isDefaultLibrarySourceFile } from "./typescript/default-library.ts";
@@ -1601,11 +1602,7 @@ function mergeValues(
     };
   }
   const unsupported = (reason: string): MutableJSONSchema => {
-    const schema: MutableJSONSchemaObj = {
-      type: "object",
-      additionalProperties: true,
-      $comment: `Unsupported intersection pattern: ${reason}`,
-    };
+    const schema = unsupportedIntersectionSchema(reason, reduced, context);
     context.schemaOrigins?.set(schema, {
       kind: "intersection",
       parts: () => reduced,

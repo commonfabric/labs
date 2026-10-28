@@ -10,7 +10,10 @@ import ts from "typescript";
 
 import { extractDocFromType } from "../doc-utils.ts";
 import type { GenerationContext, TypeFormatter } from "../interface.ts";
-import { labelsBesideAnyValue } from "../ifc-labels.ts";
+import {
+  type AnyValueBesideUnwritten,
+  labelsBesideAnyValue,
+} from "../ifc-labels.ts";
 import type { SchemaGenerator } from "../schema-generator.ts";
 import { withIndexKeys, withOriginOf } from "../schema-origins.ts";
 import { dedupeByValueEqual } from "../value-equality.ts";
@@ -175,6 +178,52 @@ export function anyValueSchema(
   },
   context: GenerationContext,
 ): MutableJSONSchema {
+  const labels = labelsKeptBesideAnyValue(constituents, "any", context);
+  const schema: MutableJSONSchemaObj = {
+    ...(labels !== undefined ? { ifc: labels } : {}),
+    ...(stated.scope !== undefined ? { scope: stated.scope } : {}),
+    ...(stated.default !== undefined ? { default: stated.default } : {}),
+  };
+  return Object.keys(schema).length > 0 ? schema : true;
+}
+
+/**
+ * The schema of an intersection of constituents with these schemas that this
+ * generator cannot merge, for `reason`: any object, with the labels kept of
+ * the constituents as for an intersection the checker gives `any`
+ * (`labelsBesideAnyValue()`). The object may hold a constituent's data
+ * anywhere, so a restriction written anywhere in one, as on a member, would
+ * otherwise fail open there.
+ */
+export function unsupportedIntersectionSchema(
+  reason: string,
+  constituents: readonly MutableJSONSchema[],
+  context: GenerationContext,
+): MutableJSONSchemaObj {
+  const labels = labelsKeptBesideAnyValue(
+    constituents,
+    "unsupported",
+    context,
+  );
+  return {
+    type: "object",
+    additionalProperties: true,
+    $comment: `Unsupported intersection pattern: ${reason}`,
+    ...(labels !== undefined ? { ifc: labels } : {}),
+  };
+}
+
+/**
+ * The labels kept of `constituents` beside a value that may hold their data
+ * anywhere (`labelsBesideAnyValue()`), a value `from` the reading it names,
+ * with a definition met before it is written left to be checked once
+ * generation is done (`anyValuesBesideUnwritten`).
+ */
+function labelsKeptBesideAnyValue(
+  constituents: readonly MutableJSONSchema[],
+  from: AnyValueBesideUnwritten["from"],
+  context: GenerationContext,
+): Record<string, unknown> | undefined {
   const unwritten = new Set<string>();
   const labels = labelsBesideAnyValue(
     constituents,
@@ -183,17 +232,13 @@ export function anyValueSchema(
   );
   if (unwritten.size > 0) {
     context.anyValuesBesideUnwritten.push({
+      from,
       definitions: context.definitions,
       unwritten: [...unwritten],
       kept: labels,
     });
   }
-  const schema: MutableJSONSchemaObj = {
-    ...(labels !== undefined ? { ifc: labels } : {}),
-    ...(stated.scope !== undefined ? { scope: stated.scope } : {}),
-    ...(stated.default !== undefined ? { default: stated.default } : {}),
-  };
-  return Object.keys(schema).length > 0 ? schema : true;
+  return labels;
 }
 
 export class IntersectionFormatter implements TypeFormatter {
@@ -285,11 +330,13 @@ export class IntersectionFormatter implements TypeFormatter {
       checker,
     );
     if (failureReason) {
-      const schema: MutableJSONSchemaObj = {
-        type: "object",
-        additionalProperties: true,
-        $comment: `Unsupported intersection pattern: ${failureReason}`,
-      };
+      const schema = unsupportedIntersectionSchema(
+        failureReason,
+        partsToProcess.map((part) =>
+          this.#schemaGenerator.formatChildType(part, context)
+        ),
+        context,
+      );
       context.schemaOrigins?.set(schema, {
         kind: "intersection",
         parts: () =>

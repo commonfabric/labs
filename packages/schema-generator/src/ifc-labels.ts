@@ -462,11 +462,14 @@ export const labelsBesideAnyValue = (
 };
 
 /**
- * A value an intersection the checker gives `any` settled to, which met
+ * A value that may hold its constituents' data anywhere, which met
  * definitions not yet written (`unwritten`) in `definitions`, and the labels
- * it kept (`labelsBesideAnyValue()`).
+ * it kept (`labelsBesideAnyValue()`): one an intersection the checker gives
+ * `any` settled to (`"any"`), or one an intersection this generator cannot
+ * merge falls back to (`"unsupported"`).
  */
 export type AnyValueBesideUnwritten = {
+  readonly from: "any" | "unsupported";
   readonly definitions: Readonly<Record<string, MutableJSONSchema>>;
   readonly unwritten: readonly string[];
   readonly kept: IfcLabels | undefined;
@@ -481,7 +484,7 @@ export type AnyValueBesideUnwritten = {
 export const assertAnyValuesKeptLabels = (
   values: readonly AnyValueBesideUnwritten[],
 ): void => {
-  for (const { definitions, unwritten, kept } of values) {
+  for (const { from, definitions, unwritten, kept } of values) {
     for (const name of unwritten) {
       const stated = labelsBesideAnyValue(
         [{ $ref: `${LOCAL_DEFINITION_PREFIX}${name}` }],
@@ -489,11 +492,18 @@ export const assertAnyValuesKeptLabels = (
       );
       if (stated !== undefined && !holdsIfcLabels(kept ?? {}, stated)) {
         throw new Error(
-          `A value intersected with \`any\` keeps the labels of what it is ` +
-            `intersected with, but it meets \`${name}\` inside the ` +
-            `definition of \`${name}\`, where those labels cannot be read ` +
-            `yet. Declare that value without \`any\`, or with the labels ` +
-            `\`${name}\` states.`,
+          from === "any"
+            ? `A value intersected with \`any\` keeps the labels of what it ` +
+              `is intersected with, but it meets \`${name}\` inside the ` +
+              `definition of \`${name}\`, where those labels cannot be read ` +
+              `yet. Declare that value without \`any\`, or with the labels ` +
+              `\`${name}\` states.`
+            : `An intersection whose constituents cannot be merged keeps ` +
+              `the labels of its constituents, but it meets \`${name}\` ` +
+              `inside the definition of \`${name}\`, where those labels ` +
+              `cannot be read yet. Declare that intersection with ` +
+              `constituents that merge, or with the labels \`${name}\` ` +
+              `states.`,
         );
       }
     }

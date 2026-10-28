@@ -184,4 +184,22 @@ describe("intersection-property-schema", () => {
       scope: "user",
     });
   });
+
+  it("keeps a member's labels on the fallback for constituents that cannot be merged", async () => {
+    const [schema] = await schemasOf(`
+      import { toSchema } from "commonfabric";
+      import type { Confidential } from "commonfabric";
+      export const schema = toSchema<{
+        a: { x: Confidential<string, ["secret"]> } & string[];
+      }>();
+    `);
+
+    expect(propertyA(schema)).toEqual({
+      type: "object",
+      additionalProperties: true,
+      $comment:
+        "Unsupported intersection pattern: index signature on constituent",
+      ifc: { confidentiality: ["secret"] },
+    });
+  });
 });
