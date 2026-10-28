@@ -566,7 +566,12 @@ part of this design.
    delegation can carry an expiry, which the server already holds a
    session to. A Home-space affordance for the same, and a daemon that
    holds a chain from elsewhere than a file, are left for the hosts that
-   need them.
+   need them. When one does, the delegatee's inbox is the channel: the
+   issuer delivers the chain there as an offer, and the holder reads what
+   verifies and ends at its key, skipping the rest. The inbox grants the
+   world WRITE, so until the policy work of the next phase confines each
+   sender to its own documents, a chain delivered there can be removed or
+   written over by anyone with the address; the file stays the recovery.
 5. **Caveats and revocation.** Read-only caveats, and per-delegation
    revocation.
 
