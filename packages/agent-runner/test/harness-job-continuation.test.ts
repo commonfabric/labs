@@ -78,6 +78,35 @@ describe("harness-job continuation", () => {
     });
   });
 
+  for (const instructions of [undefined, ""]) {
+    it(`${instructions === undefined ? "inherits predecessor instructions when omitted" : "clears predecessor instructions when explicitly empty"} in a follow-up spec`, async () => {
+      const first = await run(spec, scriptedJob(() => answerReply("first")));
+      expect(first.outcome).toBe("completed");
+      const script = scriptedJob(() => answerReply("next"));
+      const next = await run(
+        {
+          ...spec,
+          task: "Follow-up task",
+          instructions,
+          continueFrom: { runRoot: first.report!.runRef! },
+        },
+        script,
+        "second",
+      );
+      expect(next.outcome).toBe("completed");
+      const system = script.requests[0].transcript.find((m) =>
+        m.role === "system"
+      )!.content;
+      expect(system.includes(spec.instructions!)).toBe(
+        instructions === undefined,
+      );
+      const recorded = await readHarnessRunArtifacts(next.report!.runRef!);
+      expect(recorded.runState.systemPromptInputs?.systemPrompt).toBe(
+        instructions ?? spec.instructions,
+      );
+    });
+  }
+
   for (const replace of [false, true]) {
     it(`continues history with its own result file and ${replace ? "replaced" : "inherited"} instructions`, async () => {
       const firstScript = scriptedJob(() => answerReply("first"));

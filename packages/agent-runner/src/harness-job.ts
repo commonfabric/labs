@@ -369,8 +369,8 @@ const argvOf = (
     ? ["--loom-commands-config", spec.loomCommandsConfigPath]
     : []),
   // One word each, for the reason the prompt is.
-  ...(spec.instructions !== undefined || spec.continueFrom !== undefined
-    ? [`--system-prompt=${spec.instructions ?? ""}`]
+  ...(spec.instructions !== undefined
+    ? [`--system-prompt=${spec.instructions}`]
     : []),
   ...(spec.maxModelTurns !== undefined
     ? ["--max-model-turns", String(spec.maxModelTurns)]
