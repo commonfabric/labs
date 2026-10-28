@@ -1328,11 +1328,14 @@ function partLabelsOf(
  * written around, each alone, where they are some but not all of the value's
  * members, and otherwise on the whole value, except evidence, which goes on
  * the whole value only where its part holds all of the value's data, and
- * nowhere where it reaches no member the value has. A label written around
- * members the value does not have, as `Pick` and `Omit` leave members out,
- * goes nowhere where its part's data is under those members alone
- * (`PartLabels.confined`), and evidence goes nowhere in any case. A value
- * accepting nothing needs none.
+ * nowhere where it reaches no member the value has. A restriction whose part
+ * holds data under keys it does not name, through an index signature, as an
+ * array, or naming none (`PartLabels.confined`), may be anywhere in the
+ * value, and goes on the whole of it, as the type path places one
+ * (`payloadReach()`). A label written around members the value does not
+ * have, as `Pick` and `Omit` leave members out, goes nowhere where its part's
+ * data is under those members alone, and evidence goes nowhere in any case.
+ * A value accepting nothing needs none.
  */
 function withPartLabels(
   schema: MutableJSONSchema,
@@ -1367,7 +1370,9 @@ function withPartLabels(
     }
     if (
       properties && reached.length > 0 &&
-      (reach === "must" ? !holdsAll : reached.length < count)
+      (reach === "must"
+        ? !holdsAll
+        : confined !== false && reached.length < count)
     ) {
       const labeled: Record<string, MutableJSONSchema> = { ...properties };
       for (const member of reached) {

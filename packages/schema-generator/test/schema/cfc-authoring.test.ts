@@ -3283,6 +3283,44 @@ describe("Schema: CFC authoring aliases", () => {
       });
     }
 
+    for (
+      const [shape, inner] of [
+        ['Pick<Confidential<T, readonly ["c"]>, "x" | "y">', "a `Pick`"],
+        ['Confidential<T, readonly ["c"]> & { y: number }', "an intersection"],
+      ] as const
+    ) {
+      it(`labels the whole of ${inner} under bindings with a restriction whose payload's index signature supplies a key it does not name`, async () => {
+        // The payload may hold its data under `y` through its index
+        // signature, so the restriction reaches `y` as well as `x`.
+        const { value, diagnostics } = await generate(`
+          type Outer<T> = Confidential<{ inner: ${shape} }, readonly ["b"]>;
+          interface Holder { value: Outer<{ x: string; [key: string]: unknown }> }
+        `);
+        const { ifc, properties } = (value as any).properties.inner;
+        expect(ifc).toEqual({ confidentiality: ["c"] });
+        expect(properties.x.ifc).toBeUndefined();
+        expect(properties.y.ifc).toBeUndefined();
+        expect(diagnostics).toEqual([]);
+      });
+    }
+
+    it("labels the whole of an `Omit` under bindings whose payload intersects a bound parameter with a member of its own", async () => {
+      // The policy was written around `T & { y: number }`, read with `T`
+      // bound to its argument, so it reaches `x` as well as `y`.
+      const { value, diagnostics } = await generate(`
+        type Outer<T> = Confidential<
+          { inner: Omit<Confidential<T & { y: number }, readonly ["c"]>, never> },
+          readonly ["b"]
+        >;
+        interface Holder { value: Outer<{ x: string }> }
+      `);
+      const { ifc, properties } = (value as any).properties.inner;
+      expect(ifc).toEqual({ confidentiality: ["c"] });
+      expect(properties.x.ifc).toBeUndefined();
+      expect(properties.y.ifc).toBeUndefined();
+      expect(diagnostics).toEqual([]);
+    });
+
     it("labels the whole of an `Omit` under bindings with a restriction whose payload holds data under keys no member names", async () => {
       // The payload's index signature may hold its data under any key, the
       // keys the `Omit` keeps among them.
@@ -4026,6 +4064,15 @@ describe("Schema: CFC authoring aliases", () => {
         type OmitSecEither<T, U> =
           OmitSec<T | U | Confidential<Two, readonly ["b"]>>;
         type ReadonlyUnion<T, U> = Readonly<Sec<T> | Sec<U>>;
+        type OmitCompound<T> =
+          Omit<Confidential<T & { y: number }, readonly ["c"]>, never>;
+        type OmitCompoundIntegrity<T> =
+          Omit<Integrity<T & { y: number }, readonly ["i"]>, never>;
+        type OmitCompoundOr<T> = Omit<
+          | Confidential<T & { y: number }, readonly ["c"]>
+          | Sec<{ x: string; y: number }>,
+          never
+        >;
         type OmitOpen<T> = Omit<T | Sec<T>, never>;
         type OmitOpenLabeled<T> =
           Omit<T | Confidential<unknown, readonly ["c"]>, never>;
@@ -4176,6 +4223,41 @@ describe("Schema: CFC authoring aliases", () => {
           expect(read.schema).toEqual(direct.schema);
           expect((read.schema as Record<string, unknown>).ifc).toEqual(ifc);
           expect(read.diagnostics).toEqual([]);
+        });
+      }
+
+      for (
+        const [alias, ifc] of [
+          ["OmitCompound<{ x: string }>", { confidentiality: ["c"] }],
+          ["OmitCompoundIntegrity<{ x: string }>", { integrity: ["i"] }],
+          ["OmitCompoundOr<{ x: string }>", { confidentiality: ["a", "c"] }],
+          [
+            "OmitCompound<{ x: string } | { x: string; w: 1 }>",
+            { confidentiality: ["c"] },
+          ],
+        ] as const
+      ) {
+        it(`labels the whole of \`${alias}\`, whose payload intersects a bound parameter with a member of its own`, async () => {
+          // The policy was written around `T & { y: number }`, read with `T`
+          // bound to its argument, so it reaches `x` as well as `y`.
+          const { schema, diagnostics } = await generate(alias, DECLARATIONS);
+          const { ifc: whole, properties } = schema as {
+            ifc: Record<string, string[]>;
+            properties: Record<string, { ifc?: unknown }>;
+          };
+          expect(
+            Object.fromEntries(
+              Object.entries(whole).map(([key, atoms]) => [
+                key,
+                [...atoms].sort(),
+              ]),
+            ),
+          ).toEqual(ifc);
+          expect(Object.keys(properties).sort()).toEqual(["x", "y"]);
+          for (const property of Object.values(properties)) {
+            expect(property.ifc).toBeUndefined();
+          }
+          expect(diagnostics).toEqual([]);
         });
       }
 

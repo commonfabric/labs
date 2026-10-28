@@ -605,8 +605,17 @@ const PRIMITIVE_TYPE_FLAGS = ts.TypeFlags.StringLike |
 const isPrimitiveValue = (
   type: ts.Type,
   checker: ts.TypeChecker,
+): boolean => isPrimitiveParts([type], checker);
+
+/**
+ * Whether the intersection of `intersected` is a primitive value
+ * (`isPrimitiveValue()`), each read through the parts it has.
+ */
+const isPrimitiveParts = (
+  intersected: readonly ts.Type[],
+  checker: ts.TypeChecker,
 ): boolean => {
-  const parts = type.isIntersection() ? type.types : [type];
+  const parts = intersected.flatMap(partsOf);
   return parts.some((part) => (part.flags & PRIMITIVE_TYPE_FLAGS) !== 0) &&
     parts.every((part) =>
       (part.flags & PRIMITIVE_TYPE_FLAGS) !== 0 ||
@@ -623,21 +632,24 @@ const alternativesOf = (type: ts.Type): readonly ts.Type[] =>
   type.isUnion() ? type.types : [type];
 
 /**
- * Whether `alternative`, an alternative of a policy's payload, is data that
- * lists no member to find it under: neither a primitive, nor `null`,
- * `undefined`, `void` or `never`, which hold no data, nor a type with a data
- * member of its own (`dataMemberDeclarations()`), as `{}`, `unknown`, an
- * unbound parameter and a lone carrier have none.
+ * Whether `alternative`, an alternative of a policy's payload given as the
+ * parts it intersects (`Payload`), is data that lists no member to find it
+ * under: neither a primitive, nor `null`, `undefined`, `void` or `never`,
+ * which hold no data, nor a type with a data member of its own
+ * (`payloadMemberDeclarations()`), as `{}`, `unknown`, an unbound parameter
+ * and a lone carrier have none.
  */
 const listsNoMembers = (
-  alternative: ts.Type,
+  alternative: readonly ts.Type[],
   checker: ts.TypeChecker,
 ): boolean =>
-  (alternative.flags &
+  alternative.every((part) =>
+    (part.flags &
       (ts.TypeFlags.Null | ts.TypeFlags.Undefined | ts.TypeFlags.Void |
-        ts.TypeFlags.Never)) === 0 &&
-  !isPrimitiveValue(alternative, checker) &&
-  dataMemberDeclarations(alternative, checker).size === 0;
+        ts.TypeFlags.Never)) === 0
+  ) &&
+  !isPrimitiveParts(alternative, checker) &&
+  payloadMemberDeclarations([alternative], checker).size === 0;
 
 /**
  * The declarations of each member `type` holds as data, by name: none for a
@@ -672,22 +684,99 @@ const dataMemberDeclarations = (
 };
 
 /**
- * The payload `metadata`'s carrier recorded, read under the bindings its
- * metadata is read under: a type parameter they bind is its argument, as
- * the checker would instantiate it.
+ * A payload a policy was written around (`CarrierStamp.of`), as the
+ * alternatives it may be, each the parts whose intersection it is. Read under
+ * bindings, a part a type parameter stands for is the argument bound to it,
+ * so `T & { y: number }` at `T = { x: string }` is `{ x: string }` and
+ * `{ y: number }`, an intersection of them the checker has no public way to
+ * build. An alternative holding no bound parameter is one part, itself.
  */
-const boundPayloadOf = (metadata: CarriedMetadata): ts.Type | undefined => {
-  let payload = metadata.of;
-  let bound = metadata.bound;
-  for (
-    let argument = payload && boundArgumentOfType(payload, bound);
-    argument;
-    argument = boundArgumentOfType(argument.type, argument.bound)
-  ) {
-    payload = argument.type;
-    bound = argument.bound;
+type Payload = readonly (readonly ts.Type[])[];
+
+/**
+ * The payload `metadata`'s carrier recorded, read under the bindings its
+ * metadata is read under (`Payload`): a type parameter they bind is its
+ * argument, as the checker would instantiate it, alone or in a union or an
+ * intersection, which distributes over a union its argument is.
+ */
+const boundPayloadOf = (metadata: CarriedMetadata): Payload | undefined =>
+  metadata.of && payloadUnder(metadata.of, metadata.bound);
+
+/**
+ * Helper for {@link boundPayloadOf}, which returns `type` read under `bound`
+ * as a payload (`Payload`). An alternative that intersects `null`,
+ * `undefined` or `never` with anything else holds nothing, and drops out.
+ */
+const payloadUnder = (
+  type: ts.Type,
+  bound: BoundTypeParameters | undefined,
+): Payload => {
+  const argument = boundArgumentOfType(type, bound);
+  if (argument) return payloadUnder(argument.type, argument.bound);
+  if (type.isUnion()) {
+    return type.types.flatMap((alternative) =>
+      payloadUnder(alternative, bound)
+    );
   }
-  return payload;
+  if (
+    !type.isIntersection() ||
+    !type.types.some((part) => holdsBoundParameter(part, bound))
+  ) {
+    return [[type]];
+  }
+  let alternatives: (readonly ts.Type[])[] = [[]];
+  for (const part of type.types) {
+    const read = payloadUnder(part, bound);
+    alternatives = alternatives.flatMap((parts) =>
+      read.map((more) => [...parts, ...more])
+    );
+  }
+  return alternatives.filter((parts) =>
+    parts.length === 1 ||
+    parts.every((part) =>
+      (part.flags &
+        (ts.TypeFlags.Null | ts.TypeFlags.Undefined | ts.TypeFlags.Never)) ===
+        0
+    )
+  );
+};
+
+/**
+ * Whether `type` is a type parameter `bound` binds, or a union or an
+ * intersection holding one.
+ */
+const holdsBoundParameter = (
+  type: ts.Type,
+  bound: BoundTypeParameters | undefined,
+): boolean =>
+  boundArgumentOfType(type, bound) !== undefined ||
+  (type.isUnionOrIntersection() &&
+    type.types.some((part) => holdsBoundParameter(part, bound)));
+
+/**
+ * The declarations of each member `of`, a payload, holds as data, by name
+ * (`dataMemberDeclarations()`): those of every part of every alternative
+ * that is no primitive value, each name holding the declarations of each
+ * part that has it.
+ */
+const payloadMemberDeclarations = (
+  of: Payload,
+  checker: ts.TypeChecker,
+): ReadonlyMap<string, readonly ts.Declaration[]> => {
+  const members = new Map<string, ts.Declaration[]>();
+  for (const parts of of) {
+    if (isPrimitiveParts(parts, checker)) continue;
+    for (const part of parts) {
+      for (
+        const [name, declarations] of dataMemberDeclarations(part, checker)
+      ) {
+        const held = members.get(name) ?? [];
+        for (const declaration of declarations) held.push(declaration);
+        members.set(name, held);
+      }
+    }
+  }
+  return members;
 };
 
 /**
@@ -751,17 +840,17 @@ const holdsCarriersUnwritten = (
  */
 const payloadReach = (
   type: ts.Type,
-  of: ts.Type | undefined,
+  of: Payload | undefined,
   checker: ts.TypeChecker,
 ): { may: readonly string[] | "all"; must: readonly string[] | "all" } => {
   const reach = reachOfPayload(type, of, checker);
-  const held = of?.isUnion()
-    ? of.types.filter((alternative) =>
-      partsOf(alternative).every((part) => partsOf(type).includes(part))
+  const held = of && of.length > 1
+    ? of.filter((parts) =>
+      parts.flatMap(partsOf).every((part) => partsOf(type).includes(part))
     )
     : [];
   return held.length === 1
-    ? { may: reach.may, must: reachOfPayload(type, held[0], checker).must }
+    ? { may: reach.may, must: reachOfPayload(type, held, checker).must }
     : reach;
 };
 
@@ -772,7 +861,7 @@ const partsOf = (type: ts.Type): readonly ts.Type[] =>
 /** Helper for `payloadReach()`, for a payload read as a whole. */
 const reachOfPayload = (
   type: ts.Type,
-  of: ts.Type | undefined,
+  of: Payload | undefined,
   checker: ts.TypeChecker,
 ): { may: readonly string[] | "all"; must: readonly string[] | "all" } => {
   // No payload recorded (`payloadOfStamp()`): the payload's data may be
@@ -784,23 +873,19 @@ const reachOfPayload = (
     alternativesOf(type).every((alternative) =>
       isPrimitiveValue(alternative, checker)
     ) &&
-    alternativesOf(of).some((alternative) =>
-      isPrimitiveValue(alternative, checker)
-    )
+    of.some((parts) => isPrimitiveParts(parts, checker))
   ) {
     return { may: "all", must: "all" };
   }
-  const payloadMembers = dataMemberDeclarations(of, checker);
-  const payloadIndexes = alternativesOf(of).flatMap((alternative) =>
-    checker.getIndexInfosOfType(alternative)
+  const payloadMembers = payloadMemberDeclarations(of, checker);
+  const payloadIndexes = of.flatMap((parts) =>
+    parts.flatMap((part) => checker.getIndexInfosOfType(part))
   );
   const indexed = payloadIndexes.length > 0;
   // An alternative that lists no members, such as `{}` or `unknown`, leaves
   // its data free to be under any key, as an index signature does.
   const open = indexed ||
-    alternativesOf(of).some((alternative) =>
-      listsNoMembers(alternative, checker)
-    );
+    of.some((parts) => listsNoMembers(parts, checker));
   const valueMembers = [...dataMemberDeclarations(type, checker)];
   const unwritten = holdsCarriersUnwritten(type, checker);
   // A value an object part of which has an index signature holds data under
@@ -923,7 +1008,7 @@ const placeCarriedLabels = (
   type: ts.Type,
   placed: readonly {
     readonly labels: Record<string, unknown>;
-    readonly of: ts.Type | undefined;
+    readonly of: Payload | undefined;
   }[],
   context: GenerationContext,
 ): MutableJSONSchema => {

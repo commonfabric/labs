@@ -202,13 +202,15 @@ intersection, as a scope wrapper nested in another with no cell between
 them, and defaults that differ leave none; its labels are placed as the type
 path places a CFC carrier's (§11): a restriction goes on the members of the
 result it declares, or on the whole result where it declares all of them or
-none, and evidence (`integrity`, `addIntegrity`) goes on the whole result
+none, or holds data under keys it does not name, through an index signature
+or as an array, and evidence (`integrity`, `addIntegrity`) goes on the whole result
 only where the labeled constituent holds all of its data, every member any
 constituent declares, its items where one is an array, and the values under
 keys no member names where one has an index signature, and otherwise on the
 members it declares, as data another constituent holds may be data the
 labeled one never established; a union's restrictions go on the members any
-of its arms declares, and its evidence on the members of the arm the value
+of its arms declares, or on the whole result where an arm holds data under
+keys it does not name, and its evidence on the members of the arm the value
 is. A keyword written beside a reference is read in place of the
 definition's, through a chain of references, except its labels, which join
 the definition's. A merge met again inside itself, as the members of two
@@ -1494,7 +1496,12 @@ Mechanics:
   `packages/api/cfc.ts`), because TypeScript merges a carrier into whatever
   its value is merged into: an intersection, a spread, a mapped type. So a
   label is placed by the payload it records, never by where the carrier sits
-  (`placeCarriedLabels`, `payloadReach`):
+  (`placeCarriedLabels`, `payloadReach`). A payload read under bindings has
+  each type parameter it holds read as the argument bound to it, wherever in
+  the payload the parameter stands, part by part where it stands in an
+  intersection, which distributes over a union the argument is: so
+  `Confidential<T & { y: number }, L>` at `T = { x: string }` was written
+  around `x` as well as `y` (`boundPayloadOf`).
   - A restriction lands wherever the payload's data may be: on each member of
     the value the payload names, and on each member with no declaration. A
     mapped type that renames its keys keeps no member's declaration, nor does
