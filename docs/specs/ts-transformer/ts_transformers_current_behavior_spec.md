@@ -2459,7 +2459,16 @@ adjustments:
   assigned to anything but a local its own function declares, or handed to a
   callee with no summary, it is read wherever it lands by members the analysis
   never sees, so a member the body did read on the way must not narrow it to
-  that member. The left operand of `??` and `||` is the expression's value
+  that member. The elements a spread puts in an array literal leave whole with
+  it the same way, unless the array, or the copy a `filter`, `sort`,
+  `toSorted` or `slice` makes of it, is handed on by reference: a builder's
+  result, an argument the callee takes as written (a cell write among them),
+  or a local the body only measures, writes into and hands on so. A lift
+  returning `[...rows].sort(by)` narrows `rows` to what `by` reads, while
+  `const sorted = [...rows].sort(by); sorted.map(...)` keeps it whole
+  (`test/policy/capability-analysis-value-refs.test.ts`;
+  `packages/patterns/regression/spread-copy-read.test.tsx`). The left operand
+  of `??` and `||` is the expression's value
   whenever it is there, so it leaves when the expression does. A helper's
   summary carries what the helper let leave whole, and the caller charges it to
   the argument it passed. What a helper returns counts: a function declaration,

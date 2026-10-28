@@ -1212,6 +1212,41 @@ function outermostValueForwarder(node: ts.Expression): ts.Expression {
 }
 
 /**
+ * Returns the expression whose value holds the elements of the array literal
+ * `literal`: the literal, or the copy a `filter`, `sort`, `toSorted` or
+ * `slice` called on it makes, however many are chained.
+ */
+function arrayLiteralElementCarrier(literal: ts.Expression): ts.Expression {
+  let current = outermostValueForwarder(literal);
+  while (true) {
+    const access = current.parent;
+    const call = access?.parent;
+    if (
+      !access || !ts.isPropertyAccessExpression(access) ||
+      access.expression !== current ||
+      !ELEMENT_SUBSET_METHODS.has(access.name.text) ||
+      !call || !ts.isCallExpression(call) || call.expression !== access
+    ) {
+      return current;
+    }
+    current = outermostValueForwarder(call);
+  }
+}
+
+/**
+ * Returns the name of the local `value` initializes, when it is the whole
+ * initializer of a declaration that binds a single name.
+ */
+function localInitializedBy(value: ts.Expression): string | undefined {
+  const at = outermostValueForwarder(value);
+  const declaration = at.parent;
+  return declaration && ts.isVariableDeclaration(declaration) &&
+      declaration.initializer === at && ts.isIdentifier(declaration.name)
+    ? declaration.name.text
+    : undefined;
+}
+
+/**
  * Whether an object literal is one alias resolution can model: static keys
  * and no spread, which is what `buildAliasBindingFromExpression` requires
  * before it records the literal's properties as an alias shape.
@@ -2685,6 +2720,65 @@ export function analyzeFunctionCapabilities(
             !isCellWrite(destination.call) &&
             !isArrayIsArrayCall(destination.call, checker);
       }
+    };
+
+    // True when `value`, put where it is, is handed on by reference: a
+    // builder's result, or an argument the callee takes as written rather than
+    // one a local collection holds.
+    const handedOnByReference = (value: ts.Expression): boolean => {
+      const destination = wholeValueDestination(value);
+      return !escapesWhole(value) &&
+        (destination.kind === "result" ||
+          (destination.kind === "argument" &&
+            !isLocalCollectionWrite(destination.call, destination.argument)));
+    };
+
+    // True when the body never reads an element of the array the local
+    // `name` holds: it only measures it, writes into it (`copy[i] = v`, or an
+    // identity writer such as `splice` whose result goes unused), and hands it
+    // on by reference. A name the body declares again is read as the same
+    // local, and a use whose parent links stop short, a synthesized node's, is
+    // read as a read: either can only answer false.
+    const elementsUnreadThrough = (name: string): boolean => {
+      const isUnreadUse = (use: ts.Identifier): boolean => {
+        const usage = outermostTransparentWrapper(use);
+        const parent = usage.parent;
+        if (!parent) return false;
+        if (
+          ts.isPropertyAccessExpression(parent) && parent.expression === usage
+        ) {
+          if (parent.name.text === "length") return true;
+          const call = parent.parent;
+          return ARRAY_IDENTITY_WRITER_METHODS.has(parent.name.text) &&
+            !!call && ts.isCallExpression(call) &&
+            call.expression === parent && !!call.parent &&
+            ts.isExpressionStatement(call.parent);
+        }
+        if (
+          ts.isElementAccessExpression(parent) && parent.expression === usage
+        ) {
+          const assignment = outermostTransparentWrapper(parent).parent;
+          return !!assignment && ts.isBinaryExpression(assignment) &&
+            assignment.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+            outermostTransparentWrapper(parent) === assignment.left;
+        }
+        return handedOnByReference(usage);
+      };
+      let unread = true;
+      const visitUses = (node: ts.Node): void => {
+        if (!unread) return;
+        if (
+          ts.isIdentifier(node) && node.text === name &&
+          !isDeclarationIdentifier(node) && !isNonValueIdentifierUsage(node) &&
+          !isUnreadUse(node)
+        ) {
+          unread = false;
+          return;
+        }
+        ts.forEachChild(node, visitUses);
+      };
+      if (fn.body) visitUses(fn.body);
+      return unread;
     };
 
     const getIdentifierName = (
@@ -4630,18 +4724,40 @@ export function analyzeFunctionCapabilities(
         const spreadExpr = node.expression;
         if (spreadExpr) {
           const ref = resolveSourceRef(spreadExpr);
+          const identityArrayLocal = getIdentityArrayLocalNameForElementUsage(
+            node,
+          );
+          const writtenByIdentity = identityArrayLocal !== undefined &&
+            identityArrayLocals.has(identityArrayLocal);
           if (ref) {
             trackReadRef(ref);
-            const identityArrayLocal = getIdentityArrayLocalNameForElementUsage(
-              node,
-            );
-            if (
-              identityArrayLocal && identityArrayLocals.has(identityArrayLocal)
-            ) {
-              markArrayItemIdentityUseRef(ref);
-            }
+            if (writtenByIdentity) markArrayItemIdentityUseRef(ref);
           } else {
             markWildcardFromExpression(spreadExpr);
+          }
+          // The elements a spread puts in an array literal are put in it as a
+          // value written there is, and leave whole with the array, unless it
+          // or a copy a subset method makes of it is handed on by reference,
+          // directly or through a local that reads none of them. Reads through
+          // the literal's elements are charged besides, so they do not narrow
+          // what the array holds.
+          const literal = !writtenByIdentity && node.parent &&
+              ts.isArrayLiteralExpression(node.parent)
+            ? node.parent
+            : undefined;
+          const elements = literal && resolveArrayElementBinding(spreadExpr);
+          if (literal && elements) {
+            const carrier = arrayLiteralElementCarrier(literal);
+            const local = localInitializedBy(carrier);
+            const elementsLeaveWhole = local === undefined
+              ? !handedOnByReference(carrier)
+              : !elementsUnreadThrough(local);
+            if (elementsLeaveWhole) {
+              forEachSourceRefLeaf(elements, (leaf) => {
+                const element = materializeSourceRef(leaf);
+                if (!element.dynamic) trackEscapeRef(element);
+              });
+            }
           }
         }
       }

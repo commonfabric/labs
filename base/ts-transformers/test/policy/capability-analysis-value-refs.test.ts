@@ -95,6 +95,27 @@ async function onlyLift(
   };
 }
 
+/**
+ * The fields of an element of `rows` that the argument schema of the module's
+ * only lift keeps.
+ */
+async function liftRowFields(source: string): Promise<string[]> {
+  const output = await transformSource(source, { types: COMMONFABRIC_TYPES });
+  const [argument] = callSchemas(parseModule(output), "lift");
+  const definitions = argument!.$defs as
+    | Record<string, Record<string, unknown>>
+    | undefined;
+  const resolve = (schema: Record<string, unknown>) =>
+    typeof schema.$ref === "string"
+      ? definitions![schema.$ref.replace("#/$defs/", "")]!
+      : schema;
+  const rows = resolve(
+    (argument!.properties as Record<string, Record<string, unknown>>).rows!,
+  );
+  const element = resolve(rows.items as Record<string, unknown>);
+  return Object.keys(element.properties as Record<string, unknown>).sort();
+}
+
 describe("capability-analysis-value-refs", () => {
   describe("a cell method that returns a cell for its receiver's data", () => {
     it("charges a `.set()` chained onto `.for()` as a write alone", async () => {
@@ -401,6 +422,99 @@ export default pattern<{ id?: string; places: Writable<Record<string, Place>> }>
 );
 `);
       expect(options?.completeSchedulerScopeSummary).toBeUndefined();
+    });
+  });
+
+  describe("an array literal a spread fills", () => {
+    it("keeps every field a later read of a local sorted copy reads", async () => {
+      const fields = await liftRowFields(`
+import { lift } from "commonfabric";
+interface Row { id: number; name: string; note: string }
+export default lift(({ rows }: { rows: Row[] }): string => {
+  const copy = [...rows].sort((a, b) => a.id - b.id);
+  return copy.map((row) => row.name).join(",");
+});
+`);
+      expect(fields).toEqual(["id", "name", "note"]);
+    });
+
+    it("keeps every field of a sorted copy handed to a helper", async () => {
+      const fields = await liftRowFields(`
+import { lift } from "commonfabric";
+interface Row { id: number; name: string; note: string }
+const namesOf = (rows: Row[]) => rows.map((row) => row.name).join(",");
+export default lift(({ rows }: { rows: Row[] }): string =>
+  namesOf([...rows].sort((a, b) => a.id - b.id))
+);
+`);
+      expect(fields).toEqual(["id", "name", "note"]);
+    });
+
+    it("keeps every field of a copy handed to a helper beside a lookup that reads one", async () => {
+      const fields = await liftRowFields(`
+import { lift } from "commonfabric";
+interface Row { id: number; name: string; note: string }
+const namesOf = (rows: Row[]) => rows.map((row) => row.name).join(",");
+export default lift(({ rows }: { rows: Row[] }): string => {
+  const first = rows.find((row) => row.id === 1);
+  return \`\${first?.id}:\${namesOf([...rows])}\`;
+});
+`);
+      expect(fields).toEqual(["id", "name", "note"]);
+    });
+
+    it("narrows a builder's returned sorted copy to the fields its comparator reads", async () => {
+      // A builder's result is handed on by reference, so whoever reads the
+      // copy's elements reads the stored rows whole
+      // (`packages/patterns/kept-element-references.test.tsx`).
+
+      const fields = await liftRowFields(`
+import { lift } from "commonfabric";
+interface Row { id: number; name: string; note: string }
+export default lift(({ rows }: { rows: Row[] }): Row[] =>
+  [...rows].sort((a, b) => a.id - b.id)
+);
+`);
+      expect(fields).toEqual(["id"]);
+    });
+
+    it("keeps comparing the elements of a copy the body only splices and writes back", async () => {
+      const state = await stateProperties(`
+import { equals, handler, Writable } from "commonfabric";
+interface Row { id: number; name: string }
+export default handler<void, { rows: Writable<Row[]>; gone: Writable<Row> }>(
+  (_, { rows, gone }) => {
+    const list = rows.get();
+    const index = list.findIndex((row) => equals(row, gone.get()));
+    const copy = [...list];
+    copy.splice(index, 1);
+    rows.set(copy);
+  },
+);
+`);
+      expect(state.rows!.items).toEqual({
+        type: "unknown",
+        asCell: ["comparable"],
+      });
+    });
+
+    it("keeps every field of a copy the body reads before writing it back", async () => {
+      const state = await stateProperties(`
+import { equals, handler, Writable } from "commonfabric";
+interface Row { id: number; name: string }
+export default handler<
+  void,
+  { rows: Writable<Row[]>; gone: Writable<Row>; names: Writable<string> }
+>((_, { rows, gone, names }) => {
+  const list = rows.get();
+  const index = list.findIndex((row) => equals(row, gone.get()));
+  const copy = [...list];
+  copy.splice(index, 1);
+  names.set(copy.map((row) => row.name).join(","));
+  rows.set(copy);
+});
+`);
+      expect(state.rows!.items).toEqual({ $ref: "#/$defs/Row" });
     });
   });
 });
