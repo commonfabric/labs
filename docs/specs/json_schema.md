@@ -519,7 +519,10 @@ what the cursor declares about its type decides how:
   and nothing has been turned down.
 - A type list, an `anyOf` or a `oneOf` narrows each arm and unions the
   results; an arm that narrows to `false` drops out, and one that narrows to a
-  true schema makes the union `true`. Returning to the same `anyOf` or `oneOf`
+  true schema makes the union `true`. The arms of an `anyOf` or a `oneOf` are
+  read without the keywords beside them, but a label beside the union labels
+  every child it narrows to, as an object's label labels its properties.
+  Returning to the same `anyOf` or `oneOf`
   branch list in the same definition scope without consuming a path segment
   contributes `false`: the other arms already describe the children it can
   reach. Consuming a segment permits the list to be expanded again, so recursive

@@ -759,6 +759,16 @@ export class ContextualFlowControl {
         (Array.isArray(cursor.type) || "anyOf" in cursor || "oneOf" in cursor ||
           typeless)
       ) {
+        // A label beside the union is on the value whichever arm admits it,
+        // so it labels that value's children, as an object's label labels
+        // its properties: the arms of an `anyOf` or a `oneOf` are narrowed
+        // without the keywords beside them.
+        if (cursor.ifc !== undefined) {
+          ContextualFlowControl.addIfcAtoms(
+            joined,
+            cursor.ifc.confidentiality,
+          );
+        }
         // A type-list arm replaces its type with a scalar, and a schema
         // declaring no type is read as an object and as an array. Only a
         // compound can recur here without consuming a path segment, so only

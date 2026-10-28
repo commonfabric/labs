@@ -303,6 +303,30 @@ describe("ContextualFlowControl.schemaAtPath", () => {
     expect(ContextualFlowControl.schemaAtPath(schema, ["0"])).toBe(true);
   });
 
+  it("carries a label beside an `anyOf` or a `oneOf` to the children of its arms", () => {
+    // The arms are narrowed without the keywords beside them, so the label
+    // reaches a child the way an object's label reaches its properties, for
+    // a key an arm declares and for one it admits as anything.
+
+    for (const keyword of ["anyOf", "oneOf"] as const) {
+      const schema = {
+        [keyword]: [
+          { type: "object", properties: { a: { type: "string" } } },
+          { type: "null" },
+        ],
+        ifc: { confidentiality: ["sec"] },
+      } as JSONSchema;
+
+      expect(ContextualFlowControl.schemaAtPath(schema, ["a"])).toEqual({
+        type: "string",
+        ifc: { confidentiality: ["sec"] },
+      });
+      expect(ContextualFlowControl.schemaAtPath(schema, ["b"])).toEqual({
+        ifc: { confidentiality: ["sec"] },
+      });
+    }
+  });
+
   it("returns each key's own narrowing of a frozen schema that omits `type`, whichever key is narrowed first", () => {
     // Such a schema narrows as an object and as an array, so a key the
     // object reading leaves open and a key it declares do not share the
