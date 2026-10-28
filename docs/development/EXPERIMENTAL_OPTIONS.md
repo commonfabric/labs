@@ -35,9 +35,9 @@ was last checked against the code.
 | [`computedCellIds`](#computedcellids)                                       | `EXPERIMENTAL_COMPUTED_CELL_IDS` env, or `RuntimeOptions.experimental`                                                                          | on                                                                                   | Robin McCollum (#4659)                                | graduate to unconditional behavior, then delete flag                                                                                                                                                                              | implemented, on by default                                                      |
 | [`lazyMaterialization`](#lazymaterialization)                               | `EXPERIMENTAL_LAZY_MATERIALIZATION` env, or `RuntimeOptions.experimental`                                                                       | on                                                                                   | Bernhard Seefeld                                      | fold into base read semantics, then delete flag                                                             | implemented, on by default                                         |
 | [`readerSchemaPrecedence`](#readerschemaprecedence)                         | `EXPERIMENTAL_READER_SCHEMA_PRECEDENCE` env, or `RuntimeOptions.experimental`                                                                   | on                                                                                   | Robin McCollum (#6338)                                | graduate to unconditional behavior, then delete flag                                                                                                                                                                              | implemented, on by default                                                      |
-| [`viewScopedReplication` / `webViewScopedReplication`](#viewscopedreplication--webviewscopedreplication) | `EXPERIMENTAL_VIEW_SCOPED_REPLICATION` / `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION`, or `RuntimeOptions.experimental` | global off; web inherits global | Bernhard Seefeld (2026-09-09) | validate view selection and guarded previews, then graduate per client class | experimental, off by default |
+| [`viewScopedReplication` / `webViewScopedReplication`](#viewscopedreplication--webviewscopedreplication) | `EXPERIMENTAL_VIEW_SCOPED_REPLICATION` / `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION`, or `RuntimeOptions.experimental`; the shell adopts both from its deployment, and an explicit build define overrides it | global off; web inherits global | Bernhard Seefeld (2026-09-09) | validate view selection and guarded previews, then graduate per client class | experimental, off by default |
 | [`viewScopedReplicationV1`](#viewscopedreplicationv1) | Memory hello capability | available when server execution is on | Bernhard Seefeld (2026-09-09) | retain as protocol negotiation until older clients and servers retire | optional capability |
-| [`serverExecution`](#serverexecution) | `EXPERIMENTAL_SERVER_EXECUTION` env, or `RuntimeOptions.experimental` | **off** (`SERVER_EXECUTION_DEFAULT_ENABLED = false`; explicit `true` selects the other arm) | Bernhard Seefeld (#5339, server-execution v2 plan Phase 1 stage A; Phase 7 flip-ready #5849) | soak on main at the ON default, then delete the flag and OFF path | Serving stack and OW28 scoped compilation have direct coverage; Phase-7 gate dispositions govern a renewed rollout; the section's dated entries carry each flip; stable `default`/`opposite` CI roles keep both postures guarded and make a default flip data-only |
+| [`serverExecution`](#serverexecution) | `EXPERIMENTAL_SERVER_EXECUTION` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment, and an explicit build define overrides it | **off** (`SERVER_EXECUTION_DEFAULT_ENABLED = false`; explicit `true` selects the other arm) | Bernhard Seefeld (#5339, server-execution v2 plan Phase 1 stage A; Phase 7 flip-ready #5849) | soak on main at the ON default, then delete the flag and OFF path | Serving stack and OW28 scoped compilation have direct coverage; Phase-7 gate dispositions govern a renewed rollout; the section's dated entries carry each flip; stable `default`/`opposite` CI roles keep both postures guarded and make a default flip data-only |
 | [`localSessionDocuments`](#localsessiondocuments) | `EXPERIMENTAL_LOCAL_SESSION_DOCUMENTS` env / shell build define, or `RuntimeOptions.experimental`; clients adopt the deployment value | off | Bernhard Seefeld (#8919) | validate local session semantics and performance, then graduate for client execution | implemented, opt-in; requires validation-only commit support |
 | [`sharedMemoryConnection`](#sharedmemoryconnection) | `EXPERIMENTAL_SHARED_MEMORY_CONNECTION` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment, and an explicit build define of the same name overrides it | off | Bernhard Seefeld (2026-09-29) | turn on once a deployment's routing serves a connection carrying several spaces, then delete the flag and the connection-per-space path | implemented, off by default |
 | [`localFold`](#localfold) | `EXPERIMENTAL_LOCAL_FOLD` env / shell build define, or `RuntimeOptions.experimental` | off | Robin McCollum (2026-10-14) | decide between the fold and reverting a refused derived write, then delete the flag and the losing arm | implemented, off by default |
@@ -331,8 +331,13 @@ flags it adopts from the deployment it runs against.
 
 - **Toggle via.** `EXPERIMENTAL_SERVER_EXECUTION` environment variable (through
   the canonical mapping described in the category note above), or
-  `RuntimeOptions.experimental.serverExecution`; browser-side via the shell
-  build define of the same name
+  `RuntimeOptions.experimental.serverExecution`. The browser shell takes it
+  from the deployment it runs against, as `"deployment"` in
+  `SHELL_FLAG_SOURCES`
+  ([`packages/runner/src/deployment-meta.ts`](../../packages/runner/src/deployment-meta.ts)):
+  a toolshed publishes its resolved arm in the page it serves and on
+  `/api/meta`, and the shell adopts it unless the shell build define of the
+  same name pins it
   ([`packages/shell/felt.config.ts`](../../packages/shell/felt.config.ts) /
   [`packages/shell/src/lib/env.ts`](../../packages/shell/src/lib/env.ts)). The
   ambient control point is `setServerExecutionConfig` in
@@ -424,7 +429,8 @@ flags it adopts from the deployment it runs against.
   toolshed's serving-host gate and its memory ACL principal lists (the
   DELEGATING class since OW31's build — the process identity is no
   longer an implicit-OWNER service principal), and the browser
-  shell's build define fallback. An UNSET flag resolves to it; an explicit
+  shell where neither its build define nor its deployment states an arm. An
+  UNSET flag resolves to it; an explicit
   `EXPERIMENTAL_SERVER_EXECUTION=false` (or `experimental.serverExecution:
   false`, or the shell define `"false"`) selects the OFF arm and an explicit
   `true` the ON arm, regardless of the constant; whichever arm is not the
@@ -432,7 +438,9 @@ flags it adopts from the deployment it runs against.
   default is ON). CI resolves stable `default` and `opposite`
   roles through `tasks/server-execution-ci.ts`: `default` leaves the flag
   unset, while `opposite` explicitly selects the inverse and bakes that same
-  value into its toolshed shell. Therefore changing the default is exactly:
+  value into its toolshed shell. Whichever role resolves ON also sets
+  `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true`, so the ON arm is exercised
+  with web view-scoped replication. Therefore changing the default is exactly:
   `SERVER_EXECUTION_DEFAULT_ENABLED`, the summary cell above, a dated status
   entry here, and a delta in the plan's live coordination block; workflow
   job topology, probes, skip placement, coverage ownership, test record
@@ -477,6 +485,12 @@ flags it adopts from the deployment it runs against.
   retires and the OFF code path is removed — a separate post-soak PR (the plan's
   Phase 7 task 2; it also removes the opposite suites and the
   `toolshed-baked-opposite` capability).
+- **Status on 2026-10-27 (the shell follows its deployment).** The first-party
+  default is unchanged. The browser shell takes the arm from the toolshed that
+  serves it, where its build define leaves the flag unset, so a deployment
+  that sets `EXPERIMENTAL_SERVER_EXECUTION` runs its browsers on the same arm
+  as its serving loop. Before, a release build carried no define and its
+  shell ran the first-party default against any deployment.
 - **Status on 2026-09-11 (the served source update).** Under ON,
   `setsrc` runs on the space's serving runtime as well, and `cf piece
   setsrc` requests it: the update's setup transaction commits directly to
@@ -572,10 +586,17 @@ flags it adopts from the deployment it runs against.
   are available through `RuntimeOptions.experimental`, deployment metadata, and
   the shell's build defines. Both have server authority in the experimental flag
   registry; explicit environment values still take precedence when adopting
-  deployment defaults.
+  deployment defaults. Both are `"deployment"` in `SHELL_FLAG_SOURCES`, so the
+  browser shell runs what the toolshed serving it publishes, and a shell build
+  define pins either flag over the deployment.
 - **Default:** global `false`; web override absent. A web runtime resolves
   `webViewScopedReplication ?? viewScopedReplication ?? false`. An explicit web
-  `false` overrides a global `true`.
+  `false` overrides a global `true`. CI's server-execution ON arm sets the web
+  override `true` on its Toolshed servers, baked shells and the test processes
+  of its package- and pattern-integration suites
+  (`SERVER_EXECUTION_ON_ENVIRONMENT` in `tasks/server-execution-ci.ts`), and
+  its OFF arm sets neither flag. The setting follows the ON arm, so a flip of
+  `serverExecution`'s default moves it to the `default` role's lanes.
 - **Scope:** requires `serverExecution: true`, the browser-worker
   `clientClass: "web"` preset, and a server advertising
   `viewScopedReplicationV1`. Other client classes retain ordinary replication.
@@ -637,6 +658,12 @@ flags it adopts from the deployment it runs against.
   record](../history/development/performance/2026-10-23-served-vote-plan-and-selection.md),
   [chat
   record](../history/development/performance/2026-10-23-served-chat-burst-per-session-rows.md)).
+- **Status (2026-10-27):** off by default. The browser shell takes both flags
+  from its deployment rather than from its build, so a toolshed started with
+  `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true` turns it on for the browsers
+  it serves, where the shell's resolved `serverExecution` is on as well (the
+  scope above). A shell build define still pins either flag, and
+  `serverExecution` too.
 
 
 ### `lazyMaterialization`
@@ -1697,6 +1724,25 @@ the per-epic implementation notes).
 >   client then removes a watch by replacing the session's watch set, and
 >   keeps the watches of documents nothing reads rather than releasing them.
 >   It is permanent.
+> - **`syncPartsV1`** is a build-inherent capability, hardwired to `true` on
+>   both peers. A client advertising it handles a session sync sent as
+>   several messages as the one sync they divide (the memory protocol
+>   chapter's section 4.2.3), and a server splits a sync for such a client on
+>   a connection whose transport bounds its messages: the routed host splits a
+>   sync past the routed frame cap or the bytes a message may take (16 MiB
+>   expanded when compressed, 8 MiB as text), in parts of 1 MiB. A direct server advertises it and
+>   sends every sync whole. A peer that omits it parses as `false`, and is
+>   sent every sync whole. It is permanent.
+> - **`watchSetPartsV1`** is a build-inherent capability, hardwired to
+>   `true`. It advertises that the server applies a `session.watch.set` staged
+>   in parts as one set (the memory protocol chapter's section 4.3.5). Only
+>   the server advertises it; a client reads it from `hello.ok` and never
+>   offers it. A client stages a set whose encoding exceeds its connection's
+>   bounds: on a routed connection the 4 MiB a request may take or the frame
+>   cap, in parts of 1 MiB; on a direct one the server's limit on the slots of
+>   a client message. Older
+>   servers omit it, which parses as `false`, and a client then sends every
+>   set whole. It is permanent.
 > - **`admissionNotice`** is a build-inherent capability, hardwired to `true`
 >   on both peers. It advertises the `session/admissible` push of the memory
 >   protocol chapter's section 4.2.2: a server tells a connection it refused a
@@ -2261,9 +2307,9 @@ serving loop a deployment would run.
 
 Browser-side flags are baked at build time and carried to the web worker
 that hosts the runtime; changing one means rebuilding and redeploying the
-shell. The exception is the flags `SHELL_FLAG_SOURCES` gives the deployment
-(`sharedMemoryConnection` today), which the shell adopts from its deployment
-where the define leaves them unset: see
+shell. The exception is the flags `SHELL_FLAG_SOURCES` gives the deployment,
+the server-execution arm and view-scoped replication among them, which the
+shell adopts from its deployment where the define leaves them unset: see
 [Clients that are not built alongside their server](#clients-that-are-not-built-alongside-their-server).
 
 ```
@@ -2295,7 +2341,7 @@ the defines and serves the bundle, so the two ship one posture per deploy.
 One shell build is served by every deployment, though, so a flag that
 deployments sharing a build set differently cannot be a define alone. Those
 flags are the ones `SHELL_FLAG_SOURCES` in `deployment-meta.ts` gives the
-deployment (`sharedMemoryConnection`): a compiled toolshed publishes them, out of the
+deployment: a compiled toolshed publishes them, out of the
 posture it publishes on `/api/meta`, in the `<meta name="cf-deployment">`
 element of the page it serves, beside the memory URL, and the shell adopts
 them from the page, or from `/api/meta` when the page states nothing or came
@@ -2712,3 +2758,19 @@ server](#clients-that-are-not-built-alongside-their-server).
 - **Test controls**: `TEST_LLM`, `TEST_HTTP`, and the integration-test
   environment variables (`HEADLESS`, `PIPE_CONSOLE`,
   `CFC_BROWSER_PROFILE_COUNT`, `CF_WAITFOR_DELAY_MS`).
+
+### `MEMORY_MINIMUM_CLIENT_GENERATION` (disabled)
+
+**Status (2026-10-26):** client retirement is disabled. The memory server has no
+admission decision based on client attribution. Its deprecated
+`minimumClientGeneration` option accepts only omission or `0`; Toolshed's
+`MEMORY_MINIMUM_CLIENT_GENERATION` accepts only unset or the exact string `0`.
+Other values refuse startup, so a configuration change cannot enable retirement.
+Attribution remains active. Producers retain a reserved `generation: 1` report
+field for compatible readers; readers also accept reports that omit it. The
+field has no admission meaning.
+
+Any replacement retirement mechanism needs a runtime-wide update state that
+survives replacement sessions, user guidance for updates and unconfirmed writes,
+and tested behavior through reconnects, repeated reads, and navigation. See
+[client attribution](../../packages/memory/README.md#client-attribution).

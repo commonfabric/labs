@@ -461,8 +461,9 @@ export interface ExperimentalOptions {
    * pattern it last set up otherwise than this runtime's build of it, an
    * instance at a number the record cannot vouch for takes a child only as
    * the one positional child of its pattern identity, and none takes the
-   * child at its own positional spot. Defaults to off, which compiles every instance
-   * positionally, so nothing names an instance and nothing is carried over.
+   * child at its own positional spot. Defaults to off, which compiles every
+   * instance positionally, so nothing names an instance and nothing is
+   * carried over.
    * Turning it on is one-way for the data it writes, and needs every runtime
    * that opens the same space to run the same naming mode first
    * (`docs/development/EXPERIMENTAL_OPTIONS.md#instancenames`), so no
