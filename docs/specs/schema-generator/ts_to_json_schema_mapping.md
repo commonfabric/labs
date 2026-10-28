@@ -1500,10 +1500,16 @@ Mechanics:
   each type parameter it holds read as the argument bound to it, wherever in
   the payload the parameter stands, part by part where it stands in an
   intersection, which distributes over a union the argument is, and a mapped
-  type over one, as `Readonly<T>`, read as what it maps over: so
+  type over one that keeps every key of it, as `Readonly<T>` and
+  `Pick<T, keyof T>` do, read as what it maps over: so
   `Confidential<T & { y: number }, L>` and
   `Confidential<Readonly<T> & { y: number }, L>` at `T = { x: string }` were
-  written around `x` as well as `y` (`boundPayloadOf`).
+  written around `x` as well as `y` (`boundPayloadOf`). A mapped type over
+  one that lists its keys, as `Pick<T, "x">` does, is read by those keys.
+  Any other, whose keys the bindings alone cannot name, as one that renames
+  them with an `as` clause or picks keys a bound parameter gives, leaves the
+  payload unread: its restrictions land on the whole value, and its evidence
+  nowhere.
   - A restriction lands wherever the payload's data may be: on each member of
     the value the payload names, and on each member with no declaration. A
     mapped type that renames its keys keeps no member's declaration, nor does

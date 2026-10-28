@@ -4109,6 +4109,29 @@ describe("Schema: CFC authoring aliases", () => {
           | Sec<{ x: string; y: number }>,
           never
         >;
+        type OmitReadonlyIntegrityOr<T> = Omit<
+          | Integrity<Readonly<T> & { y: number }, readonly ["i"]>
+          | Integrity<{ x: string; y: number }, readonly ["i"]>,
+          never
+        >;
+        type OmitRenamedOr<T> = Omit<
+          | Confidential<
+            { [K in keyof T as \`get_\${K & string}\`]: T[K] } & { y: number },
+            readonly ["c"]
+          >
+          | Sec<{ get_x: string; y: number }>,
+          never
+        >;
+        type OmitPickKeysOr<T, K extends keyof T> = Omit<
+          | Confidential<Pick<T, K> & { y: number }, readonly ["c"]>
+          | Sec<{ x: string; y: number }>,
+          never
+        >;
+        type OmitPickXOr<T> = Omit<
+          | Confidential<Pick<T, "x"> & { y: number }, readonly ["c"]>
+          | Sec<{ x: string; y: number }>,
+          never
+        >;
         type Same<X> = X extends object ? X : never;
         type OmitConditional<T> =
           Omit<Confidential<Same<T> & { y: number }, readonly ["c"]>, never>;
@@ -4307,6 +4330,7 @@ describe("Schema: CFC authoring aliases", () => {
           ["OmitPartial<{ x: string }>", { confidentiality: ["c"] }],
           ["OmitPickAll<{ x: string }>", { confidentiality: ["c"] }],
           ["OmitReadonlyOr<{ x: string }>", { confidentiality: ["a", "c"] }],
+          ["OmitReadonlyIntegrityOr<{ x: string }>", { integrity: ["i"] }],
           ["OmitConditional<{ x: string }>", { confidentiality: ["c"] }],
         ] as const
       ) {
@@ -4326,6 +4350,32 @@ describe("Schema: CFC authoring aliases", () => {
               ]),
             ),
           ).toEqual(ifc);
+          expect(diagnostics).toEqual([]);
+        });
+      }
+
+      for (
+        const [alias, keys] of [
+          ["OmitRenamedOr<{ x: string }>", ["get_x", "y"]],
+          ['OmitPickKeysOr<{ x: string; z: 1 }, "x">', ["x", "y"]],
+          ["OmitPickXOr<{ x: string; z: 1 }>", ["x", "y"]],
+        ] as const
+      ) {
+        it(`labels the whole of \`${alias}\`, whose member's payload maps a bound parameter to keys it does not hold as they are`, async () => {
+          // A mapping that lists its keys is read by them, and one whose keys
+          // the bindings alone cannot name, as a renaming `as` clause's, as
+          // reaching all of the object, so `c` reaches every member either
+          // way.
+          const { schema, diagnostics } = await generate(alias, DECLARATIONS);
+          const { ifc, properties } = schema as {
+            ifc: { confidentiality: string[] };
+            properties: Record<string, { ifc?: unknown }>;
+          };
+          expect([...ifc.confidentiality].sort()).toEqual(["a", "c"]);
+          expect(Object.keys(properties).sort()).toEqual(keys);
+          for (const property of Object.values(properties)) {
+            expect(property.ifc).toBeUndefined();
+          }
           expect(diagnostics).toEqual([]);
         });
       }
