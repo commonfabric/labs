@@ -31,6 +31,10 @@ import type { PromptSlotRole } from "@commonfabric/cf-harness/contracts/prompt-s
 import type { HarnessRunDepth } from "@commonfabric/cf-harness/contracts/run-depth";
 import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
 import { createHarnessHandleTable } from "@commonfabric/cf-harness/handle-table";
+import {
+  type CfHarnessHostMountConfig,
+  formatHostMountSpec,
+} from "@commonfabric/cf-harness/host-mounts";
 import { createHarnessImageAttachmentFromBase64 } from "@commonfabric/cf-harness/image-attachments";
 import type {
   HarnessModelLimits,
@@ -124,6 +128,9 @@ export interface HarnessJobSpec extends HarnessModelLimits {
 
   /** The tools the job may use; a schema adds `submit_result`. */
   tools: readonly string[];
+
+  /** Host directories granted to this run's sandbox. */
+  hostMounts?: readonly CfHarnessHostMountConfig[];
 
   /**
    * The subagent profiles `delegate_task` may spawn; none when absent. A job
@@ -335,6 +342,10 @@ const argvOf = (
   HARNESS_JOB_CFC_ENFORCEMENT_MODE,
   "--workspace",
   workspace,
+  ...(spec.hostMounts ?? []).flatMap((mount) => [
+    "--host-mount",
+    formatHostMountSpec(mount),
+  ]),
   "--artifact-root",
   artifactRoot,
   // One word, so that a task starting with `-` still reads as the value

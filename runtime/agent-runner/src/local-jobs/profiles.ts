@@ -5,15 +5,15 @@
  * prompt-slot role its task binds as, whether a job may bring a browser
  * host, and the fabric session, pattern index and subagent profiles its
  * tools run against. The host writes the file; a caller names a profile and
- * may only narrow it — fewer tools, fewer turns, no browser — never widen
- * it, and never set its role or its fabric.
+ * may only narrow it — fewer tools, fewer turns, fewer or readonly mounts,
+ * no browser — never widen it, and never set its role or its fabric.
  *
  * A profile is refused when it is read if it grants a tool nothing in it
  * backs, the same contradiction `cf-harness` refuses a run for, so a bad
  * grant stops the runner's start rather than failing every job.
  */
 
-import { isAbsolute } from "@std/path";
+import { dirname, isAbsolute } from "@std/path";
 
 import { parseCfHarnessCliToolId } from "@commonfabric/cf-harness/cli";
 import type { HarnessModelLimits } from "@commonfabric/cf-harness/model/client";
@@ -32,6 +32,12 @@ import {
 import { validateHarnessForeignSpaces } from "@commonfabric/cf-harness/foreign-spaces";
 import { parseHandleRef } from "@commonfabric/cf-harness/handle-table";
 import { commandEndpointUrlProblem } from "@commonfabric/cf-harness/loom-commands";
+import {
+  type CfHarnessHostMountConfig,
+  type CfHarnessHostMountMode,
+  formatHostMountSpec,
+  parseHostMountSpecs,
+} from "@commonfabric/cf-harness/host-mounts";
 import {
   checkInputCellSpec,
   parseNamedPieceAddress,
@@ -86,6 +92,9 @@ export interface LocalJobProfile extends HarnessModelLimits {
    * The console's operator flag, `--allow-browser-host`, is the same grant.
    */
   browserHost?: boolean;
+
+  /** Host directories granted to the job's sandbox, including follow-ups. */
+  hostMounts?: readonly CfHarnessHostMountConfig[];
 
   /**
    * The fabric session a job's fabric tools (`run_pattern` and its kin) run
@@ -146,11 +155,23 @@ export interface LocalJobFabric {
 /** The profiles a host file names, by name. */
 export type LocalJobProfiles = ReadonlyMap<string, LocalJobProfile>;
 
+/** One profile mount a caller selects, optionally lowering its access. */
+export interface LocalJobHostMountSelection {
+  /** The name granted by the host's profile. */
+  name: string;
+
+  /** The requested access; the profile's when absent. */
+  mode?: CfHarnessHostMountMode;
+}
+
 /** What a caller may ask of a profile. */
 export interface LocalJobNarrowing extends HarnessModelLimits {
   tools?: readonly string[];
   maxModelTurns?: number;
   reasoningEffort?: ReasoningEffort;
+
+  /** Selected profile mounts; all when absent, none for an empty list. */
+  hostMounts?: readonly LocalJobHostMountSelection[];
 
   /** The request's browser host declaration, when it made one. */
   browserHost?: unknown;
@@ -228,7 +249,11 @@ const isUrl = (value: unknown): value is string => {
 };
 
 /** Helper for reading, which checks one profile and returns it. */
-const profileOf = (name: string, value: unknown): LocalJobProfile => {
+const profileOf = async (
+  name: string,
+  value: unknown,
+  cwd: string,
+): Promise<LocalJobProfile> => {
   const fail = (what: string): never => {
     throw new Error(`Local job profile \`${name}\`: ${what}.`);
   };
@@ -246,6 +271,7 @@ const profileOf = (name: string, value: unknown): LocalJobProfile => {
     model,
     reasoningEffort,
     browserHost,
+    hostMounts,
     fabric,
     patternIndexUrl,
     patternIndexPublish,
@@ -315,6 +341,39 @@ const profileOf = (name: string, value: unknown): LocalJobProfile => {
   }
   if (browserHost !== undefined && typeof browserHost !== "boolean") {
     fail("`browserHost` must be true or false");
+  }
+  let mounts: readonly CfHarnessHostMountConfig[] | undefined;
+  if (hostMounts !== undefined) {
+    if (!Array.isArray(hostMounts)) {
+      return fail("`hostMounts` must be a list of mounts");
+    }
+    try {
+      const specs = hostMounts.map((mount: unknown) => {
+        if (!isObjectNotArray(mount)) {
+          return fail("each `hostMounts` entry must be an object");
+        }
+        const { name, hostPath, sandboxPath, mode } = mount;
+        if (
+          typeof name !== "string" || typeof hostPath !== "string" ||
+          typeof sandboxPath !== "string" || typeof mode !== "string"
+        ) {
+          return fail(
+            "`hostMounts` entries require string name, hostPath, sandboxPath, and mode fields",
+          );
+        }
+        return formatHostMountSpec({ name, hostPath, sandboxPath, mode });
+      });
+      mounts = await parseHostMountSpecs(specs, cwd);
+      // Resolving a symlink can introduce characters the CLI grammar cannot
+      // represent. Refuse those here, before a job needs to reapply the grant.
+      for (const mount of mounts) formatHostMountSpec(mount);
+    } catch (error) {
+      fail(
+        `\`hostMounts\`: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
   const session = fabric === undefined ? undefined : fabricOf(fabric, fail);
   if (patternIndexUrl !== undefined && !isUrl(patternIndexUrl)) {
@@ -400,6 +459,7 @@ const profileOf = (name: string, value: unknown): LocalJobProfile => {
     ...(model !== undefined ? { model: model as string } : {}),
     ...(effort !== undefined ? { reasoningEffort: effort } : {}),
     ...(browserHost === true ? { browserHost: true } : {}),
+    ...(mounts !== undefined ? { hostMounts: mounts } : {}),
     ...(session !== undefined ? { fabric: session } : {}),
     ...(patternIndexUrl !== undefined
       ? {
@@ -449,9 +509,14 @@ export const readLocalJobProfiles = async (
     throw new Error("The local job profile file must hold a JSON object.");
   }
   return new Map(
-    Object.entries(value as Record<string, unknown>).map((
-      [name, profile],
-    ) => [name, profileOf(name, profile)]),
+    await Promise.all(
+      Object.entries(value as Record<string, unknown>).map(async (
+        [name, profile],
+      ): Promise<[string, LocalJobProfile]> => [
+        name,
+        await profileOf(name, profile, dirname(path)),
+      ]),
+    ),
   );
 };
 
@@ -588,9 +653,9 @@ const refuseInputs = (
 
 /**
  * The profile a caller's request runs under: `profile` narrowed to the tools
- * and turns the caller asked for, and to a browser host only when the
- * request declared one, or the reason the request asks for more than the
- * profile allows.
+ * and turns and host mounts the caller asked for, and to a browser host only
+ * when the request declared one, or the reason the request asks for more than
+ * the profile allows.
  */
 export const narrowLocalJobProfile = (
   profile: LocalJobProfile,
@@ -603,7 +668,26 @@ export const narrowLocalJobProfile = (
     browserHost,
     maxInputBytes,
     maxOutputTokens,
+    hostMounts,
   } = narrowing;
+  const mounts: CfHarnessHostMountConfig[] = [];
+  for (const selected of hostMounts ?? []) {
+    const granted = profile.hostMounts?.find((mount) =>
+      mount.name === selected.name
+    );
+    if (granted === undefined) {
+      return {
+        refusal: `The profile does not grant host mount \`${selected.name}\`.`,
+      };
+    }
+    if (selected.mode === "writable" && granted.mode === "readonly") {
+      return {
+        refusal:
+          `The profile grants host mount \`${selected.name}\` as readonly.`,
+      };
+    }
+    mounts.push({ ...granted, mode: selected.mode ?? granted.mode });
+  }
   for (const name of ["maxInputBytes", "maxOutputTokens"] as const) {
     const value = narrowing[name];
     const maximum = profile[name];
@@ -668,6 +752,7 @@ export const narrowLocalJobProfile = (
   return {
     profile: {
       ...rest,
+      ...(hostMounts !== undefined ? { hostMounts: mounts } : {}),
       ...(subagentProfiles !== undefined && delegates
         ? { subagentProfiles }
         : {}),

@@ -220,6 +220,7 @@ export const localJobSpecOf = async (
     ...(profile.commands !== undefined
       ? { commands: { ...profile.commands, runId: job.id } }
       : {}),
+    hostMounts: profile.hostMounts,
     fabric: fabric && {
       ...fabric,
       maxConfidentiality: await agentRunObservationCeiling(

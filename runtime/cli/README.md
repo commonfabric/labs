@@ -1913,7 +1913,7 @@ authority. A caller enqueues
 `{caller, profile, idempotencyKey, task,
 instructions?, context?, resultSchema?, tools?, maxModelTurns?, maxInputBytes?,
 maxOutputTokens?, imageAttachments?, depth?, tags?, domains?, reasoningEffort?,
-browserHost?, inputs?, foreignSpaces?, interactive?}`
+browserHost?, inputs?, foreignSpaces?, interactive?, hostMounts?}`
 with `POST /jobs`, bounded at 1 MiB of UTF-8 JSON before parsing, reads a job
 with `GET /jobs/<id>` or the newest with `GET /jobs?limit=n`, stops one with
 `POST /jobs/<id>/cancel`, and watches one with
@@ -1980,6 +1980,26 @@ harness admits one level of delegation, so depth is `1`. Only a child's
 `browser` tool steps carry `action` (such as `click` or `snapshot`), without the
 operation's arguments or page content. Other child tool steps, such as
 `submit_result`, omit `action`.
+
+A profile may grant `hostMounts`, a list of
+`{name, hostPath, sandboxPath, mode}` objects. Each names an existing host
+directory mounted into the job's sandbox, with `mode: "readonly"` or
+`"writable"`. Names start with an alphanumeric character and contain only
+alphanumerics, dots, underscores, or dashes; names must be unique. Host paths
+resolve relative to the profile file's directory and must name existing non-root
+directories. Sandbox paths must be absolute and non-root. The runner uses
+cf-harness's mount validation when reading the profile file, so an invalid grant
+refuses startup. Fields must fit the harness's comma-separated grammar: no
+commas or surrounding whitespace.
+
+A request may narrow that grant with `hostMounts: [{name, mode?}]`, selecting
+only profile mounts and optionally lowering `writable` to `readonly`. An omitted
+mode keeps the granted mode. An ungranted name or a request for `writable` on a
+`readonly` mount is `400 beyond_profile`; requests cannot set mount paths.
+Omitting `hostMounts` retains all profile mounts, while `[]` selects none. The
+selection participates in enqueue idempotency and is retained by follow-ups.
+Every run, including a follow-up, reapplies its effective mounts and advertises
+them in its prompt.
 
 Each root assistant message with nonempty content emits one `text {turn, text}`
 event, whole and without truncation or coalescing, in order with its steps.

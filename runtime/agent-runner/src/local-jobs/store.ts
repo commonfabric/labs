@@ -28,7 +28,10 @@ import type {
 import { hashStringOf } from "@commonfabric/data-model";
 import { Database } from "@db/sqlite";
 
-import type { ReasoningEffort } from "./profiles.ts";
+import type {
+  LocalJobHostMountSelection,
+  ReasoningEffort,
+} from "./profiles.ts";
 
 /** A job's state. */
 export type LocalJobState =
@@ -59,6 +62,9 @@ export interface LocalJobRequest extends HarnessModelLimits {
   tools?: string[];
   maxModelTurns?: number;
   imageAttachments?: HarnessInlineImageAttachment[];
+
+  /** Selected profile mounts, retained with the request across follow-ups. */
+  hostMounts?: LocalJobHostMountSelection[];
 
   /** A person is waiting: ordered first and eligible for the reserved slot. */
   interactive?: boolean;

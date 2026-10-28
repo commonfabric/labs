@@ -37,6 +37,7 @@
     "./fabric-session": "./src/fabric-session.ts",
     "./foreign-spaces": "./src/foreign-spaces.ts",
     "./handle-table": "./src/handle-table.ts",
+    "./host-mounts": "./src/host-mounts.ts",
     "./input-cells": "./src/input-cells.ts",
     "./gateway/openai-client": "./src/gateway/openai-client.ts",
     "./model/client": "./src/model/client.ts",
