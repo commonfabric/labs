@@ -142,7 +142,7 @@ export const NEXT_RUN_STATE_FIELDS = {
   },
   systemPromptInputs: {
     kind: "carried",
-    reason: "Recorded builder inputs rebuild the new system prompt.",
+    reason: "Recorded additional instructions and output mode supply defaults.",
   },
   structuredResult: {
     kind: "re-derived",

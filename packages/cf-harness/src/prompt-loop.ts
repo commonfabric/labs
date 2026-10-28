@@ -378,7 +378,7 @@ export interface HarnessModelUsageUpdate {
 }
 
 export interface RunHarnessPromptOptions {
-  /** Builder inputs retained for a later continuation. */
+  /** Additional instructions and output mode retained for a continuation. */
   systemPromptInputs?: HarnessSystemPromptInputs;
 
   prompt: string;
@@ -413,7 +413,7 @@ export interface RunHarnessPromptOptions {
 }
 
 export interface RunHarnessTranscriptOptions {
-  /** Builder inputs retained for a later continuation. */
+  /** Additional instructions and output mode retained for a continuation. */
   systemPromptInputs?: HarnessSystemPromptInputs;
 
   transcript: readonly HarnessTranscriptMessage[];

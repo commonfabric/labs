@@ -3,12 +3,16 @@ import type { HarnessPatternIndexConfig } from "../config.ts";
 import type { CfHarnessHostMountConfig } from "../host-mounts.ts";
 import type { HarnessRunDepth } from "./run-depth.ts";
 
-/** Prompt-builder components; result and task classification live in run state. */
+/** Defaults a later invocation can inherit when its flags omit them. */
 export interface HarnessSystemPromptInputs {
   outputMode: "batch" | "operator";
+  systemPrompt?: string;
+}
+
+/** Effective configuration for this invocation's system prompt. */
+export interface HarnessSystemPromptConfig extends HarnessSystemPromptInputs {
   workspace: string;
   focusRoot?: string;
-  systemPrompt?: string;
   depth?: HarnessRunDepth;
   allowedToolIds?: readonly BuiltinToolId[];
   patternIndex?: HarnessPatternIndexConfig;

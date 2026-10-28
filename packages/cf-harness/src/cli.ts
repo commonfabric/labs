@@ -7,7 +7,10 @@ import { normalize as normalizeSandboxPath } from "@std/path/posix";
 import type { JSONSchema } from "@commonfabric/api";
 import type { HarnessRunState } from "./run-state.ts";
 import type { CfHarnessStructuredResultConfig } from "./contracts/structured-result.ts";
-import type { HarnessSystemPromptInputs } from "./contracts/system-prompt.ts";
+import type {
+  HarnessSystemPromptConfig,
+  HarnessSystemPromptInputs,
+} from "./contracts/system-prompt.ts";
 import {
   DEFAULT_GATEWAY_BASE_URL,
   DEFAULT_HARNESS_MODEL,
@@ -330,8 +333,8 @@ export interface CfHarnessCliConfig extends HarnessSessionConfig {
   resultJsonPath?: string;
   structuredResult?: CfHarnessStructuredResultRequest;
 
-  /** Prompt-builder properties explicitly named by this invocation. */
-  systemPromptInputFlags: readonly (keyof HarnessSystemPromptInputs)[];
+  /** Whether this invocation explicitly selected its output mode. */
+  outputModeExplicit: boolean;
 
   runManifestPath?: string;
   printTranscript: boolean;
@@ -2192,20 +2195,7 @@ export const parseCfHarnessCliArgs = async (
     ...(allowedToolIds !== undefined ? { allowedToolIds } : {}),
     allowedSubagentProfiles,
     outputMode: outputMode ?? "operator",
-    systemPromptInputFlags: ([
-      ["output-mode", "outputMode"],
-      ["workspace", "workspace"],
-      ["focus-root", "focusRoot"],
-      ["system-prompt", "systemPrompt"],
-      ["depth", "depth"],
-      ["allow-tool", "allowedToolIds"],
-      ["host-mount", "hostMounts"],
-      ["fabric-mount", "fabricMountPath"],
-      ["pattern-index-url", "patternIndex"],
-      ["no-skill-catalog", "skillCatalogEnabled"],
-    ] as const).filter(([flag]) => argvHolds(flagWords, [`--${flag}`])).map((
-      [, key],
-    ) => key),
+    outputModeExplicit: argvHolds(flagWords, ["--output-mode"]),
     streamEvents: Boolean(args["stream-events"]),
     promptSlotRole: promptSlotRole ?? "direct-command",
     ...(prompt !== undefined ? { prompt } : {}),
@@ -2773,41 +2763,18 @@ export const buildCfHarnessBatchSystemPrompt = (
   return lines.join("\n");
 };
 
-/** Selects only serializable inputs the system-prompt builder reads. */
+/** Records only defaults the next invocation can inherit. */
 const systemPromptInputsOf = (
-  config: Parameters<typeof resolveCfHarnessCliSystemPrompt>[0],
+  config: HarnessSystemPromptInputs,
 ): HarnessSystemPromptInputs => ({
   outputMode: config.outputMode,
-  workspace: config.workspace,
-  focusRoot: config.focusRoot,
-  systemPrompt: config.systemPrompt,
-  depth: config.depth,
-  allowedToolIds: config.allowedToolIds,
-  patternIndex: config.patternIndex,
-  hostMounts: config.hostMounts,
-  fabricMountPath: config.fabricMountPath,
-  skillCatalogEnabled: config.skillCatalogEnabled,
-  skillNames: config.skillNames,
+  ...(config.systemPrompt === undefined
+    ? {}
+    : { systemPrompt: config.systemPrompt }),
 });
 
-/** Builds from recorded components and the effective result destination. */
-const buildSystemPromptFromInputs = (
-  inputs: HarnessSystemPromptInputs,
-  structuredResult: CfHarnessStructuredResultConfig | undefined,
-  shape: {
-    tags?: ReadonlySet<HarnessTaskTag>;
-    domains?: ReadonlySet<HarnessTaskDomain>;
-  },
-): string | undefined =>
-  resolveCfHarnessCliSystemPrompt({
-    ...inputs,
-    structuredResult,
-    taskTags: shape.tags,
-    taskDomains: shape.domains,
-  });
-
 export const resolveCfHarnessCliSystemPrompt = (
-  config: HarnessSystemPromptInputs & {
+  config: HarnessSystemPromptConfig & {
     structuredResult?: CfHarnessStructuredResultConfig;
     taskTags?: ReadonlySet<HarnessTaskTag>;
     taskDomains?: ReadonlySet<HarnessTaskDomain>;
@@ -4109,33 +4076,32 @@ export const runCfHarnessCli = async (
       if (continuation !== undefined) {
         effectiveStructuredResult = continuation.structuredResult;
         const recordedInputs = artifacts.runState.systemPromptInputs!;
-        const currentInputs = systemPromptInputsOf({
+        const promptConfig: HarnessSystemPromptConfig = {
           ...parsed,
-          structuredResult: effectiveStructuredResult,
+          outputMode: parsed.outputModeExplicit
+            ? parsed.outputMode
+            : recordedInputs.outputMode,
+          systemPrompt: parsed.systemPrompt ?? recordedInputs.systemPrompt,
           fabricMountPath: parsed.fabricMount !== undefined
             ? DEFAULT_RUNSC_FABRIC_MOUNT_PATH
             : undefined,
-        });
-        const inputs: HarnessSystemPromptInputs = {
-          ...recordedInputs,
-          ...Object.fromEntries(
-            parsed.systemPromptInputFlags.map((
-              key,
-            ) => [key, currentInputs[key]]),
-          ),
         };
-        continuation.runState.systemPromptInputs = inputs;
+        continuation.runState.systemPromptInputs = systemPromptInputsOf(
+          promptConfig,
+        );
         continuation.transcript = continuation.transcript.filter((message) =>
           message.role !== "system"
         );
-        const systemPrompt = buildSystemPromptFromInputs(
-          inputs,
-          effectiveStructuredResult,
-          classifiedShape(
-            artifacts.runState.taskClassification,
-            inputs.depth ?? DEFAULT_HARNESS_RUN_DEPTH,
-          ),
+        const shape = classifiedShape(
+          artifacts.runState.taskClassification,
+          promptConfig.depth ?? DEFAULT_HARNESS_RUN_DEPTH,
         );
+        const systemPrompt = resolveCfHarnessCliSystemPrompt({
+          ...promptConfig,
+          structuredResult: effectiveStructuredResult,
+          taskTags: shape.tags,
+          taskDomains: shape.domains,
+        });
         if (systemPrompt !== undefined) {
           continuation.transcript.unshift({
             role: "system",
@@ -4307,15 +4273,16 @@ export const runCfHarnessCli = async (
         classification,
         parsed.depth ?? DEFAULT_HARNESS_RUN_DEPTH,
       );
-      const systemPromptInputs = systemPromptInputsOf({
+      const promptConfig = {
         ...parsed,
         structuredResult: effectiveStructuredResult,
         fabricMountPath: parsed.fabricMount !== undefined
           ? DEFAULT_RUNSC_FABRIC_MOUNT_PATH
           : undefined,
-        ...(shape.tags !== undefined ? { taskTags: shape.tags } : {}),
-        ...(shape.domains !== undefined ? { taskDomains: shape.domains } : {}),
-      });
+        taskTags: shape.tags,
+        taskDomains: shape.domains,
+      };
+      const systemPromptInputs = systemPromptInputsOf(promptConfig);
       result = await loop.runPrompt({
         systemPromptInputs,
         prompt: parsed.prompt!,
@@ -4328,11 +4295,7 @@ export const runCfHarnessCli = async (
             )
           ),
         ),
-        systemPrompt: buildSystemPromptFromInputs(
-          systemPromptInputs,
-          effectiveStructuredResult,
-          shape,
-        ),
+        systemPrompt: resolveCfHarnessCliSystemPrompt(promptConfig),
         contextMessages: orientContextMessages(contextMessages, shape),
         model: parsed.model,
         maxModelTurns: parsed.maxModelTurns,

@@ -242,12 +242,14 @@ describe("continue-run", () => {
     });
     state.systemPromptInputs = {
       outputMode: "operator",
-      workspace,
       systemPrompt: "Prior instructions",
     };
     history[0] = {
       role: "system",
-      content: resolveCfHarnessCliSystemPrompt(state.systemPromptInputs)!,
+      content: resolveCfHarnessCliSystemPrompt({
+        ...state.systemPromptInputs,
+        workspace,
+      })!,
     };
     requests = [];
     errors = [];
@@ -439,16 +441,83 @@ describe("continue-run", () => {
     await unchanged();
   });
 
+  for (const grantMount of [false, true]) {
+    it(`advertises a recorded host mount only when the follow-up ${grantMount ? "grants" : "omits"} it`, async () => {
+      Object.assign(state.systemPromptInputs!, {
+        hostMounts: [{
+          name: "archive",
+          hostPath: workspace,
+          sandboxPath: "/archive",
+          mode: "readonly",
+        }],
+      });
+      await save();
+      expect(
+        await run(
+          grantMount
+            ? [
+              "--host-mount",
+              `name=archive,source=${workspace},target=/archive,mode=readonly`,
+            ]
+            : [],
+        ),
+      ).toBe(0);
+      const system = requests[0].transcript.find((m) =>
+        m.role === "system"
+      )!.content;
+      expect(system.includes("/archive")).toBe(grantMount);
+    });
+  }
+
+  it("advertises no preloaded skills from the predecessor", async () => {
+    Object.assign(state.systemPromptInputs!, {
+      skillNames: ["prior-skill"],
+      skillCatalogEnabled: true,
+    });
+    await save();
+    expect(await run()).toBe(0);
+    const system =
+      requests[0].transcript.find((m) => m.role === "system")!.content;
+    expect(system).not.toContain("Configured skills guidance:");
+    expect(
+      requests[0].transcript.some((m) => m.content.includes("<skill_context")),
+    ).toBe(false);
+  });
+
+  it("uses only the follow-up's tool grants in its prompt and request", async () => {
+    Object.assign(state.systemPromptInputs!, {
+      allowedToolIds: ["read_file", "finish_task"],
+    });
+    await save();
+    expect(await run(["--allow-tool=read_file"])).toBe(0);
+    const system =
+      requests[0].transcript.find((m) => m.role === "system")!.content;
+    expect(system).not.toContain("Use finish_task to ask");
+    expect(system).toContain("Act on reasonable defaults");
+    expect(requests[0].tools.map((tool) => tool.toolId)).toEqual(["read_file"]);
+  });
+
+  it("replaces the recorded output mode when the follow-up names its own", async () => {
+    state.systemPromptInputs = {
+      outputMode: "batch",
+      systemPrompt: "Prior instructions",
+    };
+    await save();
+    expect(await run(["--output-mode=operator"])).toBe(0);
+    const system =
+      requests[0].transcript.find((m) => m.role === "system")!.content;
+    expect(system).toContain("Operator guidance for cf-harness runs");
+    expect((await nextArtifacts()).runState.systemPromptInputs).toEqual({
+      outputMode: "operator",
+      systemPrompt: "Prior instructions",
+    });
+  });
+
   for (const replacement of [undefined, "Replacement components"]) {
-    it(`rebuilds a manual continuation from recorded components ${replacement === undefined ? "without" : "with"} new instructions`, async () => {
+    it(`rebuilds a manual continuation with recorded instruction defaults ${replacement === undefined ? "without" : "with"} new instructions`, async () => {
       state.systemPromptInputs = {
         outputMode: "batch",
-        workspace,
         systemPrompt: "Recorded components",
-        allowedToolIds: ["bash"],
-        depth: "quick",
-        skillCatalogEnabled: false,
-        skillNames: ["retained-skill"],
       };
       state.taskClassification = {
         type: "cf-harness.task-classification",
@@ -493,11 +562,8 @@ describe("continue-run", () => {
         expect(system).not.toContain("Recorded components");
       }
       const next = await nextArtifacts();
-      expect(next.runState.systemPromptInputs).toMatchObject({
+      expect(next.runState.systemPromptInputs).toEqual({
         outputMode: "batch",
-        depth: "quick",
-        skillCatalogEnabled: false,
-        skillNames: ["retained-skill"],
         systemPrompt: replacement ?? "Recorded components",
       });
       expect(next.runState.taskClassification).toEqual(
@@ -1012,8 +1078,6 @@ describe("continue-run", () => {
         await Deno.writeTextFile(state.structuredResult.path, '"prior result"');
         state.systemPromptInputs = {
           outputMode: "batch",
-          workspace,
-          allowedToolIds: priorSubmitTool ? undefined : ["bash"],
           systemPrompt: "Keep this user instruction.",
         };
         const sourceSystem = buildCfHarnessBatchSystemPrompt({
@@ -1268,7 +1332,6 @@ describe("continue-run", () => {
     it(`rebuilds harness guidance with ${additionalInstructions === "" ? "empty" : "new"} additional instructions`, async () => {
       state.systemPromptInputs = {
         outputMode: "batch",
-        workspace,
         systemPrompt: "Prior additional instructions",
       };
       state.structuredResult = {

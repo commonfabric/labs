@@ -32,7 +32,7 @@ const priorState = () =>
     status: "completed",
     currentDir: "/workspace",
     cfcEnforcementMode: "disabled",
-    systemPromptInputs: { outputMode: "operator", workspace: "/workspace" },
+    systemPromptInputs: { outputMode: "operator" },
   });
 
 const answer = (index: number): HarnessResearchRunSummary => ({

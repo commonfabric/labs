@@ -1736,7 +1736,7 @@ export class CfHarnessEngine {
     return this.getRunState();
   }
 
-  /** Records the components from which the surface builds its system prompt. */
+  /** Records additional instructions and output mode as continuation defaults. */
   setSystemPromptInputs(systemPromptInputs: HarnessSystemPromptInputs): void {
     this.#runState = patchHarnessRunState(this.#runState, {
       systemPromptInputs: structuredClone(systemPromptInputs),
