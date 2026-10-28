@@ -617,8 +617,11 @@ describe("instance-carry-over", () => {
     });
 
     it("starts fresh, and reports it, where the pattern last set up does not name it", async () => {
-      // Matching an instance the pattern last set up left positional is not
-      // part of carry-over yet.
+      // TODO(danfuzz): The fresh child is this tier's behavior, not the
+      // intended one. Matching an instance the pattern last set up left
+      // positional by order carries this child over, and the count becomes 7;
+      // the `TODO(danfuzz)` where carry-over plans each instance is that
+      // change.
 
       const cell = await deployedParent("previous-positional", {
         named: DEPLOYED,
@@ -632,6 +635,12 @@ describe("instance-carry-over", () => {
     });
 
     it("starts fresh, and reports it, where the parent's pattern last set up does not load", async () => {
+      // TODO(danfuzz): The fresh child is this tier's behavior, not the
+      // intended one. Matching an instance by its own pattern identity, where
+      // the pattern last set up does not load, carries this child over, and
+      // the count becomes 7; the `TODO(danfuzz)` where carry-over plans each
+      // instance is that change.
+
       const cell = await deployedParent("previous-unloadable", {
         record: "absent",
       });

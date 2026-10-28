@@ -15488,6 +15488,13 @@ export class Runner {
         uncarried.push({ name, recordDisagrees: true });
         continue;
       }
+      // TODO(danfuzz): An instance the pattern last set up does not name,
+      // and every instance where that pattern does not load, starts fresh
+      // here. Matching such an instance by order among that pattern's
+      // positional children, and by its own pattern identity among the
+      // parent's positional children, carries its deployed child over. The
+      // carry-over tests that expect a fresh child for these two cases carry
+      // a `TODO(danfuzz)` naming this one, and change with it.
       const child = previous === undefined
         ? undefined
         : this.#previousInstanceChild(tx, parent, previous.pattern, descriptor);
