@@ -245,7 +245,7 @@ export function aggregate(
           }
         }
       }
-      const rollback = trackListSetupRollback(tx, runtime, runs);
+      const rollback = trackListSetupRollback(tx, runs);
       const operation = inputs.withTx(tx).key("operation").get();
       const listCell = inputs.key("list").withTx(tx).resolveAsCell();
       const rawList = listCell.getRaw() as unknown;

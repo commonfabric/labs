@@ -25,18 +25,20 @@ import {
   type FabricPrimitiveValueTag,
 } from "./interface.ts";
 
-/** The only regex flavor currently representable as a JS `RegExp`. */
-const DEFAULT_FLAVOR = "es2025";
+/**
+ * The flavor of a JS `RegExp`, and the only one currently representable as
+ * one.
+ */
+const JS_FLAVOR = "es2025";
 
 /**
- * The encoded state of a {@link FabricRegExp}. Each field is optional on the
- * wire, an absent one standing for its default, which is what lets a narrower
- * encoder omit it.
+ * The encoded state of a {@link FabricRegExp}. All three fields are required,
+ * and the format has no default flavor.
  */
 type FabricRegExpState = {
-  flavor?: string;
-  source?: string;
-  flags?: string;
+  flavor: string;
+  source: string;
+  flags: string;
 };
 
 /**
@@ -50,8 +52,8 @@ type FabricRegExpState = {
  * un-cloned, so no mutable state is exposed -- `value` returns a fresh clone on
  * each call.
  *
- * `flavor` identifies the regex dialect. Only `"es2025"` (the default) is
- * currently representable as a JS `RegExp`; for that flavor the
+ * `flavor` identifies the regex dialect. Only `"es2025"`, the dialect of a JS
+ * `RegExp`, is currently representable as one; for that flavor the
  * constructor proactively builds and retains a private `RegExp`, which both
  * validates the pattern syntax eagerly and makes `value` cheap. Other flavors
  * are stored faithfully (`source` / `flags` / `flavor`) but cannot yet produce
@@ -100,7 +102,7 @@ export class FabricRegExp extends BaseFabricPrimitive
       rejectExtraRegExpProperties(regexOrFlavor);
       this.#source = regexOrFlavor.source;
       this.#flags = regexOrFlavor.flags;
-      this.#flavor = DEFAULT_FLAVOR;
+      this.#flavor = JS_FLAVOR;
     } else {
       this.#flavor = regexOrFlavor;
       this.#source = source ?? "";
@@ -110,7 +112,7 @@ export class FabricRegExp extends BaseFabricPrimitive
     // Only `"es2025"` is representable as a JS `RegExp`; build it eagerly
     // (which also validates the pattern). Other flavors store their strings but
     // have no convertible JS form yet.
-    this.#value = (this.#flavor === DEFAULT_FLAVOR)
+    this.#value = (this.#flavor === JS_FLAVOR)
       ? new RegExp(this.#source, this.#flags)
       : undefined;
   }
@@ -190,13 +192,9 @@ export class FabricRegExp extends BaseFabricPrimitive
       /**
        * @inheritDoc
        *
-       * A field that is *present* and not a string is refused, and that
-       * includes one present as `undefined`: nothing here emits such a state,
-       * and letting it default would silently answer a question the wire did
-       * actually ask -- a `flavor` sent that way would come back `es2025`,
-       * naming a dialect the sender did not. An absent field is a different
-       * thing, and takes its default in `decode()`, which is what lets a
-       * narrower encoder omit one.
+       * All three fields are required, each a string; the format fills in
+       * none of them, a `flavor` above all, since an absent one would leave
+       * the dialect of the pattern unstated.
        *
        * The check matters more than it looks. The constructor stores a
        * non-`es2025` flavor's `source` and `flags` without touching them, so
@@ -205,17 +203,7 @@ export class FabricRegExp extends BaseFabricPrimitive
        * it.
        */
       canDecode(state: FabricValue): state is FabricRegExpState {
-        if (!isPlainObject(state)) {
-          return false;
-        }
-
-        for (const key of ["flavor", "source", "flags"] as const) {
-          if (Object.hasOwn(state, key) && (typeof state[key] !== "string")) {
-            return false;
-          }
-        }
-
-        return true;
+        return isPlainObject(state) && hasStringFields(state);
       }
 
       /**
@@ -234,9 +222,7 @@ export class FabricRegExp extends BaseFabricPrimitive
         _env: LiveEnvironment,
         mutable = false,
       ): FabricValue {
-        const flavor = state.flavor ?? DEFAULT_FLAVOR;
-        const source = state.source ?? "";
-        const flags = state.flags ?? "";
+        const { flavor, source, flags } = state;
 
         try {
           return new FabricRegExp(flavor, source, flags);
@@ -270,23 +256,8 @@ export class FabricRegExp extends BaseFabricPrimitive
 
       /** @inheritDoc */
       canDecode(state: RealmCodecValue): state is FabricRegExpState {
-        if (!isPlainObject(state)) {
-          return false;
-        }
-
-        // `Object.hasOwn()` rather than a comparison against `undefined`: a
-        // field present and `undefined` is not an absent one, and this format
-        // carries `undefined` faithfully, so both shapes genuinely arrive.
-        for (const key of ["flavor", "source", "flags"] as const) {
-          if (
-            Object.hasOwn(state, key) &&
-            (typeof (state as Record<string, unknown>)[key] !== "string")
-          ) {
-            return false;
-          }
-        }
-
-        return true;
+        return isPlainObject(state) &&
+          hasStringFields(state as Record<string, unknown>);
       }
 
       /**
@@ -303,9 +274,7 @@ export class FabricRegExp extends BaseFabricPrimitive
         _env: LiveEnvironment,
         mutable = false,
       ): FabricValue {
-        const flavor = state.flavor ?? DEFAULT_FLAVOR;
-        const source = state.source ?? "";
-        const flags = state.flags ?? "";
+        const { flavor, source, flags } = state;
 
         try {
           return new FabricRegExp(flavor, source, flags);
@@ -345,6 +314,20 @@ export class FabricRegExp extends BaseFabricPrimitive
   static get [REALM_CODEC](): TerminalCodec<RealmCodecValue> {
     return this.#realmCodec;
   }
+}
+
+/**
+ * Indicates whether `state` holds the three fields of a `RegExp@1` state as own
+ * properties, each a string, so that nothing inherited stands in for one. A
+ * field present as `undefined`, which the realm format carries, is refused like
+ * an absent one.
+ */
+function hasStringFields(
+  state: Readonly<Record<string, unknown>>,
+): state is FabricRegExpState {
+  return (["flavor", "source", "flags"] as const).every((key) =>
+    Object.hasOwn(state, key) && (typeof state[key] === "string")
+  );
 }
 
 /**

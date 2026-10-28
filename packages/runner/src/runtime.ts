@@ -458,10 +458,13 @@ export interface ExperimentalOptions {
    * (`docs/specs/computed-cell-identity.md`, "Sub-pattern instance identity").
    * Defaults to off, which compiles every instance positionally. Turning it on
    * moves every deployed `const`-bound child from its positional identity to a
-   * named one, where it starts fresh unless something carries the deployed
-   * child over, and needs every runtime that opens the same space to run the
-   * same naming mode first, so no environment variable reaches it
-   * (`docs/development/EXPERIMENTAL_OPTIONS.md#instancenames`).
+   * named one. The first setup that names an instance carries its deployed
+   * child over where the pattern the parent last set up loads and names it
+   * too, and the parent's setup record, where it has one, numbers its cell as
+   * this runtime's build of that pattern does; otherwise the instance starts
+   * fresh. It needs every runtime that opens the
+   * same space to run the same naming mode first, so no environment variable
+   * reaches it (`docs/development/EXPERIMENTAL_OPTIONS.md#instancenames`).
    */
   instanceNames?: boolean | undefined;
 }

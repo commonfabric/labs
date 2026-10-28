@@ -32,6 +32,8 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 
 import { sqliteQuery } from "../src/builtins/sqlite-builtins.ts";
+import { cfcLabelViewForCell } from "../src/cfc/label-view.ts";
+import { cfcConfidentialityForObservationNode } from "../src/cfc/observation.ts";
 import type { Cell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -43,11 +45,16 @@ interface QueryState {
   pending?: boolean;
   error?: unknown;
   requestHash?: string;
+  requestKey?: string;
 }
 
 describe("sqlite-query-unsent-cancellation", () => {
   const drive = async (
-    options: { cancel?: "before-abandon" },
+    options: {
+      cancel?: "before-abandon";
+      requestKey?: string | { nested: string };
+      labeled?: boolean;
+    },
   ) => {
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({
@@ -58,15 +65,26 @@ describe("sqlite-query-unsent-cancellation", () => {
       const setup = runtime.edit();
       const parent = runtime.getCell(space, "unsent-parent", undefined, setup);
       parent.set({});
+      const key = runtime.getCell<string | { nested: string } | undefined>(
+        space,
+        "unsent-key",
+        options.labeled
+          ? { type: "string", ifc: { confidentiality: ["request-secret"] } }
+          : undefined,
+        setup,
+      );
+      key.set(options.requestKey);
       const inputs = runtime.getImmutableCell(
         space,
         {
           db: { id: "of:unsent-cancelled-query" },
           sql: "SELECT content FROM messages",
+          ...(options.requestKey === undefined ? {} : { requestKey: key }),
         },
         undefined,
         setup,
       );
+      runtime.prepareTxForCommit(setup);
       expect((await setup.commit().settled).error).toBeUndefined();
 
       let cancel!: () => void;
@@ -104,6 +122,16 @@ describe("sqlite-query-unsent-cancellation", () => {
       await runtime.idle();
       await runtime.settled();
 
+      if (options.labeled) {
+        if (!result) throw new Error("A query result is required");
+        expect(cfcConfidentialityForObservationNode({
+          labelView: cfcLabelViewForCell(
+            result.key("requestKey").resolveAsCell(),
+          ),
+          logicalPath: [],
+        })).toContainEqual("request-secret");
+      }
+
       return result?.get() as QueryState | undefined;
     } finally {
       await runtime.dispose({ closeStorage: false });
@@ -124,5 +152,25 @@ describe("sqlite-query-unsent-cancellation", () => {
     const state = await drive({});
     expect(String(state?.error)).toContain("refused before it started");
     expect(state?.pending).toBe(false);
+  });
+
+  it("correlates an unsent refusal with the request that was abandoned", async () => {
+    const state = await drive({ requestKey: "abandoned search" });
+    expect(String(state?.error)).toContain("refused before it started");
+    expect(state?.pending).toBe(false);
+    expect(state?.requestKey).toBe("abandoned search");
+  });
+
+  it("preserves the request key's label when its staging transaction is abandoned", async () => {
+    const state = await drive({ requestKey: "private search", labeled: true });
+    expect(String(state?.error)).toContain("refused before it started");
+    expect(state?.requestKey).toBe("private search");
+  });
+
+  it("omits a non-string request key from an asynchronous ending", async () => {
+    const state = await drive({ requestKey: { nested: "not a string" } });
+    expect(String(state?.error)).toContain("refused before it started");
+    expect(state?.pending).toBe(false);
+    expect(state?.requestKey).toBeUndefined();
   });
 });

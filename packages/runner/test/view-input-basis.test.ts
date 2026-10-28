@@ -8,6 +8,7 @@ import { Identity } from "@commonfabric/identity";
 import {
   componentReadSchema,
   ProfileBadgeSchema,
+  SubmitInputDraftSchema,
 } from "../src/component-read-contract.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { Action } from "../src/scheduler/types.ts";
@@ -209,6 +210,11 @@ describe("view input basis", () => {
     expect(componentReadSchema("cf-input", "value", supplied, {})).toBe(
       supplied,
     );
+    expect(componentReadSchema("cf-submit-input", "draft", supplied, {})).toBe(
+      supplied,
+    );
+    expect(componentReadSchema("cf-submit-input", "draft", undefined, {}))
+      .toBe(SubmitInputDraftSchema);
     expect(componentReadSchema("cf-input", "value", false, {})).toEqual({
       type: "string",
     });

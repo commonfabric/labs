@@ -1,12 +1,24 @@
+import { SubmitInputDraftSchema } from "@commonfabric/runner/component-read-contract";
+import type { CellHandle } from "@commonfabric/runtime-client";
 import { getLogger } from "@commonfabric/utils/logger";
 import { css, html, type PropertyValues } from "lit";
 import { BaseElement } from "../../core/base-element.ts";
+import { CellController } from "../../core/cell-controller.ts";
 import "../cf-button/cf-button.ts";
 
 const logger = getLogger("cf-submit-input", {
   enabled: false,
   level: "debug",
 });
+
+/** A controlled draft and the identity of the edit that produced it. */
+export interface SubmitInputDraft {
+  /** The exact displayed text. */
+  value: string;
+
+  /** The identity of the input edit that supplied the text. */
+  revision: string;
+}
 
 /**
  * CFSubmitInput - A text field with a submit button whose click carries the
@@ -18,11 +30,17 @@ const logger = getLogger("cf-submit-input", {
  * text rides the trusted click — together with the surrounding surface's UI
  * integrity (data-ui-action / data-ui-event-integrity on the host and an
  * ancestor). Because the text travels in the event, the consuming handler needs
- * no durable draft cell, and the field clears itself in the DOM after submit —
+ * no durable draft cell by default. The field clears in the DOM after submit,
  * deferred past the click's handling so the value is read first, and guarded so
  * a back-to-back submit's freshly typed name is never wiped. This
  * keeps a cross-space create handler stable across retries — the event payload
  * is fixed — with nothing to clobber.
+ *
+ * A caller may instead bind `$draft`, which makes clearing caller-controlled.
+ * Each input writes `{ value, revision }` through `CellController`; the raw submit
+ * carries the displayed text and `target.dataset.draftRevision`. The caller
+ * clears only the matching revision after accepting the send. The controller
+ * keeps pending local input visible over stale bound-state deliveries.
  *
  * Pressing Enter in the field submits as well. The field sits inside a `<form>`
  * holding a hidden native submit button, so Enter triggers the browser's
@@ -47,8 +65,7 @@ const logger = getLogger("cf-submit-input", {
  * @attr {string} input-id - id forwarded to the inner <input> so callers/tests
  *   can target the field directly
  * @attr {boolean} disabled - Whether the field and button are disabled
- * @attr {string} initial-value - Optional one-time seed copied into `value` on
- *   first render; the field is uncontrolled after that
+ * @attr {string} initial-value - Optional one-time seed for an unbound field
  * @attr {string} value - Live field text; read on the host as
  *   event.target.value when the submit button is clicked
  */
@@ -97,6 +114,7 @@ export class CFSubmitInput extends BaseElement {
     disabled: { type: Boolean, reflect: true },
     initialValue: { type: String, attribute: "initial-value" },
     value: { type: String },
+    draft: { attribute: false },
   };
 
   declare placeholder: string;
@@ -105,8 +123,8 @@ export class CFSubmitInput extends BaseElement {
   declare disabled: boolean;
 
   /**
-   * Optional one-time seed for the field text, copied into `value` on first
-   * render. The field is uncontrolled after that.
+   * Optional one-time seed for an unbound field. A bound draft supplies its
+   * own initial text.
    */
   declare initialValue: string;
 
@@ -115,6 +133,13 @@ export class CFSubmitInput extends BaseElement {
    * the submit button is clicked.
    */
   declare value: string;
+
+  /** Optional shared draft; bind with `$draft` for caller-controlled clearing. */
+  declare draft: CellHandle<SubmitInputDraft> | undefined;
+
+  #draftController = new CellController<SubmitInputDraft>(this, {
+    timing: { strategy: "immediate" },
+  });
 
   constructor() {
     super();
@@ -140,12 +165,24 @@ export class CFSubmitInput extends BaseElement {
   private _submitting = false;
 
   /**
-   * Copies `initialValue` into the editable `value` once, the first time it is
-   * present. Later `initialValue` changes and the user's own typing are left
-   * alone, so the field stays uncontrolled.
+   * Reads the bound draft through the controller, which protects pending local
+   * edits. An unbound field takes `initialValue` once and then follows typing.
    */
   override willUpdate(changed: PropertyValues) {
     super.willUpdate(changed);
+    if (changed.has("draft")) {
+      this.#draftController.bind(
+        this.draft ?? { value: "", revision: "" },
+        SubmitInputDraftSchema,
+      );
+      if (this.draft === undefined) this.removeAttribute("data-draft-revision");
+    }
+    if (this.draft !== undefined) {
+      const draft = this.#draftController.getValue();
+      this.value = draft?.value ?? "";
+      this.setAttribute("data-draft-revision", draft?.revision ?? "");
+      return;
+    }
     if (!this._seeded && this.initialValue) {
       this._seeded = true;
       this.value = this.initialValue;
@@ -158,6 +195,11 @@ export class CFSubmitInput extends BaseElement {
 
   private _onInput(event: Event) {
     this.value = (event.target as HTMLInputElement).value;
+    if (this.draft !== undefined) {
+      const revision = crypto.randomUUID();
+      this.setAttribute("data-draft-revision", revision);
+      this.#draftController.setValue({ value: this.value, revision });
+    }
   }
 
   /**
@@ -207,19 +249,20 @@ export class CFSubmitInput extends BaseElement {
       return;
     }
     this._submitting = true;
-    // Clear the field only after the submit click has been handled — the
+    // Clear an unbound field only after the submit click has been handled — the
     // framework's host-level click listener reads `event.target.value` while
     // handling the click. A `setTimeout` runs after that dispatch (a microtask
     // defer proved too early in practice), so the submitted text is captured
     // first. Clear only if the field still holds the submitted text: a
     // back-to-back create may have already typed the next name, which must not
-    // be wiped. The value is local component state, so this guard is synchronous
-    // and race-free — and no durable cell is written, so there is nothing to
-    // clobber across the cross-space commit. The in-flight flag is reset here
-    // whether or not the clear runs, so a later submit is never blocked.
+    // be wiped. This unbound clear writes only local component state, so it
+    // cannot clobber a durable cell across the cross-space commit. A bound draft
+    // is left for its caller to clear after accepting the submit. The in-flight
+    // flag is reset here whether or not the clear runs, so a later submit is
+    // never blocked.
     setTimeout(() => {
       this._submitting = false;
-      if (this.value !== submitted) return;
+      if (this.draft !== undefined || this.value !== submitted) return;
       this.value = "";
       const input = this._input;
       if (input) input.value = "";

@@ -648,12 +648,21 @@ export class MultiRuntimeSession {
    * refusal came on (which the storage manager answers with a retry of its
    * own), or an explicit retry such as the shell's Retry or this. With one
    * connection per space, the default and what these sessions use, a refused
-   * open closes its connection, and the server's hint has nowhere to go, so
-   * a read made after a grant finds the retained refusal until this is
-   * called.
+   * open closes its connection, and the server sends the hint on the
+   * connections the runtime's other spaces hold; a runtime holding none
+   * keeps the refusal until a retry.
    */
   async retrySpaceAccess(space: string): Promise<void> {
     await this.#client.call("retrySpaceAccess", { space });
+  }
+
+  /**
+   * Whether this runtime retains a refusal of `space`, asked without opening
+   * the space, so the answer is the runtime's own and no retry of this
+   * call's.
+   */
+  async spaceRefused(space: string): Promise<boolean> {
+    return await this.#client.call("spaceRefused", { space }) as boolean;
   }
 
   /**

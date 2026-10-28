@@ -258,7 +258,7 @@ function createMapInstance(
   };
 
   const reconcile: Action = (tx: IExtendedStorageTransaction) => {
-    const rollback = trackListSetupRollback(tx, runtime, elementRuns);
+    const rollback = trackListSetupRollback(tx, elementRuns);
     // Captured before the loop consumes it: this reconcile's element runs use
     // the current value; the flag is cleared only once a non-empty resume batch
     // has been processed (below), so a transient empty first reconcile doesn't

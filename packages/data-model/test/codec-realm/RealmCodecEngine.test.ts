@@ -498,28 +498,42 @@ describe("RealmCodecEngine", () => {
       expect(() => fabricFromRealmValue(wire(walked))).toThrow(/reserves/);
     });
 
-    it("returns an empty `es2025` pattern for a `RegExp@1` state with no fields", () => {
-      // Section 7.1: every field of this codec's state defaults when absent,
-      // which is what lets a narrower encoder omit what it has nothing to say
-      // about.
+    it("returns a `ProblematicValue` for a `RegExp@1` state lacking a field", () => {
+      // Section 7.1: all three fields of this codec's state are required, and
+      // none has a default.
 
-      const decoded = fabricFromRealmValue(wire(tagged("RegExp@1", {})));
+      const engine = newDefaultRealmCodecEngine({ lenient: true });
+      for (
+        const state of [
+          {},
+          { source: "a", flags: "g" },
+          { flavor: "es2025", flags: "g" },
+          { flavor: "es2025", source: "a" },
+        ]
+      ) {
+        const decoded = engine.decode(
+          wire(tagged("RegExp@1", state)),
+          NULL_LIVE_ENVIRONMENT,
+        );
 
-      expect(decoded).toBeInstanceOf(FabricRegExp);
-      expect((decoded as FabricRegExp).flavor).toBe("es2025");
-      expect((decoded as FabricRegExp).source).toBe("");
-      expect((decoded as FabricRegExp).flags).toBe("");
+        expect(decoded).toBeInstanceOf(ProblematicValue);
+        expect((decoded as ProblematicValue).error)
+          .toMatch(/state is not one this codec decodes/);
+      }
     });
 
     it("returns a `ProblematicValue` for a `RegExp@1` field present as `undefined`", () => {
-      // Absent and present-as-`undefined` are different, and this format is
-      // where the difference can arise: cloning carries `undefined` directly,
-      // so a peer can send one on purpose, and defaulting it would answer a
-      // question the wire did ask.
+      // This format is where a field present as `undefined` can arise:
+      // cloning carries `undefined` directly, so a peer can send one on
+      // purpose.
 
       const engine = newDefaultRealmCodecEngine({ lenient: true });
       const decoded = engine.decode(
-        wire(tagged("RegExp@1", { source: undefined })),
+        wire(tagged("RegExp@1", {
+          source: undefined,
+          flags: "g",
+          flavor: "es2025",
+        })),
         NULL_LIVE_ENVIRONMENT,
       );
 

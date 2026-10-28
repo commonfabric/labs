@@ -114,6 +114,23 @@ describe("space access across runtimes", () => {
     ]);
   });
 
+  it("clears a refused reader's refusal once its owner grants it, without the reader opening the room again", async () => {
+    const room = await createRoom("Healed");
+    await expect(guest.read(["title"], { piece: room })).rejects.toThrow(
+      `lacks READ on space ${room.space}`,
+    );
+    expect(await guest.spaceRefused(room.space)).toBe(true);
+
+    await owner.send(
+      "grant",
+      { principal: guest.identity.did() },
+      CHANGE_ACCESS,
+      { piece: room },
+    );
+    await harness.settle();
+    expect(await guest.spaceRefused(room.space)).toBe(false);
+  });
+
   it("throws on a read of a room after its owner revokes the reader", async () => {
     // The guest's runtime already holds the room when the revoke lands, so
     // the read that follows has data to return and nothing of its own that

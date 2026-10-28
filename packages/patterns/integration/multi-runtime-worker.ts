@@ -1118,8 +1118,8 @@ const handlers: Record<
    * Make this runtime reconsider a space it was refused, as the shell's Retry
    * does (`Runtime.retrySpaceAccess()`). A permanent refusal is retained
    * until an ACL notice, the server's `session/admissible` hint, or an
-   * explicit retry; with one connection per space the refused open closed
-   * the connection the hint would ride, so only the retry reaches it.
+   * explicit retry; with one connection per space the hint comes on the
+   * connection of another space this runtime holds, if it holds one.
    */
   async retrySpaceAccess({ space }) {
     if (typeof space !== "string") {
@@ -1128,6 +1128,17 @@ const handlers: Record<
     await controller().runtime.retrySpaceAccess(space as MemorySpace);
     await idle();
     return {};
+  },
+
+  /** Whether this runtime retains a refusal of `space`, without opening it. */
+  async spaceRefused({ space }) {
+    if (typeof space !== "string") {
+      throw new TypeError("spaceRefused takes a space DID.");
+    }
+    await idle();
+    return controller().runtime.storageManager.authorizationError?.(
+      space as MemorySpace,
+    ) !== undefined;
   },
 
   /**

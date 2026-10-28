@@ -11,6 +11,16 @@ import {
 } from "./schemas.ts";
 import { NAME } from "./shared.ts";
 
+/** Read schema shared by `cf-submit-input` and server view traversal. */
+export const SubmitInputDraftSchema = {
+  type: "object",
+  properties: {
+    value: { type: "string" },
+    revision: { type: "string" },
+  },
+  required: ["value", "revision"],
+} as const satisfies JSONSchema;
+
 /** Read schema shared by cf-chat and its server view traversal. */
 export const BuiltInLLMMessagesArraySchema = {
   type: "array",
@@ -334,6 +344,7 @@ export const componentReadContracts: Readonly<
   Record<string, Readonly<Record<string, ComponentPropRead>>>
 > = {
   "cf-input": { value: { schema: stringSchema } },
+  "cf-submit-input": { draft: { schema: SubmitInputDraftSchema } },
   "cf-textarea": { value: { schema: stringSchema } },
   "cf-checkbox": { checked: { schema: booleanSchema } },
   "cf-switch": { checked: { schema: booleanSchema } },

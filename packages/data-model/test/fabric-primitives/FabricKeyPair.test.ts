@@ -327,6 +327,23 @@ describe("FabricKeyPair", () => {
             .toBe(false);
         });
 
+        it("returns `false` for a field that is inherited rather than own", () => {
+          // Read as an own property, so a `privateKey` reachable only through
+          // the prototype chain does not stand in for one.
+          const polluted = Object.prototype as { privateKey?: unknown };
+          polluted.privateKey = "AQID";
+          try {
+            expect(
+              codec.canDecode({
+                algorithm: "ExampleAlgorithm",
+                publicKey: "AQID",
+              }),
+            ).toBe(false);
+          } finally {
+            delete polluted.privateKey;
+          }
+        });
+
         it("returns `false` for a record with a non-string field", () => {
           expect(
             codec.canDecode({

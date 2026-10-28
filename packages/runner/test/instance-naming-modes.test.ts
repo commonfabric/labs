@@ -213,13 +213,14 @@ describe("instance-naming-modes", () => {
       return { started, aCount: value.aCount, sCount: value.sCount };
     };
 
-    it("starts it, with fresh children, when a runtime with naming on reopens a parent one with naming off set up", async () => {
-      // The named instances run at spots of their own, which the setup with
-      // naming off never set up.
+    it("starts it, carrying its children over to the instances' names, when a runtime with naming on reopens a parent one with naming off set up", async () => {
+      // The pattern the parent last set up is this one, which names both
+      // instances, so each carries over the child at the positional cause
+      // that pattern gives it.
       expect(await setUpThenStart(false, true)).toEqual({
         started: true,
-        aCount: 0,
-        sCount: 0,
+        aCount: 7,
+        sCount: 20,
       });
     });
 

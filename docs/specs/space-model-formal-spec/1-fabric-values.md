@@ -671,13 +671,11 @@ export class FabricError extends FabricNativeWrapper<Error> {
       }
 
       /**
-       * Rebuilds a `FabricError` from wire state. Uses `type` for class
-       * identity, falling back to `name` for backward compatibility with
-       * data encoded before `type` was added; missing `message`
-       * becomes `''`. Those two fallbacks accept states the format refuses
-       * (`3-json-encoding.md` Section 3, `Error@1`). Reserved and unsafe
-       * keys are excluded from the extras. Frozen unless `mutable`
-       * (Section 2.4).
+       * Rebuilds a `FabricError` from wire state, which `canDecode()` has
+       * held to a `type` and a `message` (`3-json-encoding.md` Section 3,
+       * `Error@1`). A `name` that is `null` or absent is the same as `type`.
+       * Reserved and unsafe keys are excluded from the extras. Frozen unless
+       * `mutable` (Section 2.4).
        */
       decode(
         _typeTag: string,
@@ -686,9 +684,9 @@ export class FabricError extends FabricNativeWrapper<Error> {
         mutable = false,
       ): FabricValue {
         const s = state as Record<string, FabricValue>;
-        const type = (s.type as string) ?? (s.name as string) ?? 'Error';
+        const type = s.type as string;
         const name = (s.name as string | null | undefined) ?? type;
-        const message = (s.message as string) ?? '';
+        const message = s.message as string;
 
         const extras: Array<[string, FabricValue]> = [];
         for (const key of Object.keys(s)) {

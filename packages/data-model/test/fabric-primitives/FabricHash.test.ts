@@ -262,6 +262,18 @@ describe("FabricHash", () => {
         it("returns `false` for a record with a non-string field", () => {
           expect(codec.canDecode({ tag: "fid1", hash: 7 })).toBe(false);
         });
+
+        it("returns `false` for a field that is inherited rather than own", () => {
+          // Read as an own property, so a `hash` reachable only through the
+          // prototype chain does not stand in for one.
+          const polluted = Object.prototype as { hash?: unknown };
+          polluted.hash = "AQID";
+          try {
+            expect(codec.canDecode({ tag: "fid1" })).toBe(false);
+          } finally {
+            delete polluted.hash;
+          }
+        });
       });
 
       describe("decode()", () => {
