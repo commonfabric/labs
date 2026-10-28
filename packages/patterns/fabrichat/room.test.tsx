@@ -165,13 +165,13 @@ export default pattern(() => {
       },
       { assertion: assert(() => composerDisabled(pending[UI]) === true) },
       { assertion: assert(() => composerDisabled(alice[UI]) === false) },
-      // The conversation's composer and a thread's start out disabled, before
-      // whether the viewer may send has computed.
+      // The main composer starts disabled before permission has computed; no
+      // thread composer is mounted until a thread is selected.
       {
         assertion: assert(() =>
           composerDisabledDefault(alice[UI], "fabrichat-message") === true &&
-          composerDisabledDefault(alice[UI], "fabrichat-thread-message") ===
-            true
+          findNodeByProp(alice[UI], "inputId", "fabrichat-thread-message") ===
+            undefined
         ),
       },
       {
@@ -184,7 +184,7 @@ export default pattern(() => {
       // resolved, are refused.
       {
         action: alice.sendMessage,
-        event: typed("Hello, team"),
+        event: typed("  Hello, team  "),
         trustedUi: sendGesture,
       },
       {
@@ -197,7 +197,7 @@ export default pattern(() => {
         event: typed("From nobody"),
         trustedUi: sendGesture,
       },
-      { assertion: assert(() => bodies(messages) === "Hello, team") },
+      { assertion: assert(() => bodies(messages) === "  Hello, team  ") },
       {
         assertion: assert(() =>
           equals(stored(messages)[0]?.authorProfile, aliceProfile) &&
@@ -218,7 +218,7 @@ export default pattern(() => {
       },
       {
         assertion: assert(() =>
-          bodies(messages) === "Hello, team | Hi, Alice | Hi, Alice"
+          bodies(messages) === "  Hello, team   | Hi, Alice | Hi, Alice"
         ),
       },
       { assertion: assert(() => alice.messages.count === 3) },
@@ -232,19 +232,29 @@ export default pattern(() => {
 
       // Edits: only the sender's.
       {
+        action: aliceOnFirst.editMessage,
+        event: typed(" \t "),
+        trustedUi: editGesture,
+      },
+      {
+        assertion: assert(() =>
+          stored(messages)[0]?.body === "  Hello, team  "
+        ),
+      },
+      {
         action: bobOnFirst.editMessage,
         event: typed("Hijacked"),
         trustedUi: editGesture,
       },
       {
         action: aliceOnFirst.editMessage,
-        event: typed("Hello, everyone"),
+        event: typed("  Hello, everyone  "),
         trustedUi: editGesture,
       },
       {
         assertion: assert(() => {
           const first = stored(messages)[0];
-          return first?.body === "Hello, everyone" &&
+          return first?.body === "  Hello, everyone  " &&
             first?.editedAt !== undefined;
         }),
       },
@@ -310,7 +320,7 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           mainTexts(alice.messages.latest.messages) ===
-            "Hello, everyone | <gone> | <gone> | In both | Quoting you"
+            "  Hello, everyone   | <gone> | <gone> | In both | Quoting you"
         ),
       },
       {
@@ -328,7 +338,7 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           stored(messages).length === 6 &&
-          stored(messages)[0]?.body === "Hello, everyone"
+          stored(messages)[0]?.body === "  Hello, everyone  "
         ),
       },
     ],
@@ -337,6 +347,7 @@ export default pattern(() => {
       // resolved.
       "This send has no text in `body`, and no attachments.",
       "Your profile hasn't loaded yet.",
+      "This edit has no text in `body`.",
       // Bob's edit of Alice's message, and the edit of a deleted one.
       "Only its author can edit a message.",
       "That message was deleted.",

@@ -268,7 +268,7 @@ function createFilterInstance(
   };
 
   const reconcile: Action = (tx: IExtendedStorageTransaction) => {
-    const rollback = trackListSetupRollback(tx, runtime, elementRuns);
+    const rollback = trackListSetupRollback(tx, elementRuns);
     const elementAwaitSync = resumeBatchAwaitSync;
     // The identity-bearing prefix — op, list materialization, scope, the
     // result container — is the plan the resume pre-sync shares, naming the

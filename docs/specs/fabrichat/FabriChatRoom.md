@@ -60,10 +60,23 @@ under their own access, which every session of theirs shares.
 The contract's derived `PerUser` values are `participantEntries` and
 `participantPrincipals`.
 
-The room's `[UI]` keeps its composer's state, the draft, the reply and the
-attachments being composed, as a `PerSession` value of its own, so two
+The room's `[UI]` keeps its composer's state, the drafts, the reply and the
+attachments being composed, in `PerSession` values of its own, so two
 placements of the same room open in one session show the same composer state,
 as one conversation shown twice should.
+
+The main composer and each thread hold independent drafts, each with the exact
+text and the identity of its latest edit. Each thread composer owns a draft cell,
+under the mapped occurrence identity of its root's cell. Only the selected
+thread's composer is rendered; returning to a thread, including after closing
+its panel, restores its draft. A thread submit captured before the selected
+thread changed is refused, so its text cannot be sent to another thread. A
+refused send keeps its draft. An accepted send clears only the submitted edit,
+in the transaction that appends
+the message; a newer edit survives even when it has the same text. The submit
+gesture carries the text to store, so a pending draft update cannot change a
+message's body. Whitespace-only text is checked separately from the text kept
+in the message.
 
 The main composer attaches files. Its attach control sends the room's
 `ensureFileStore` as it opens its file picker, so that the space has a store by

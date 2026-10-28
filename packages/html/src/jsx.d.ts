@@ -3366,9 +3366,11 @@ interface CFSubmitInputAttributes<T> extends CFHTMLAttributes<T> {
   "buttonText"?: string;
   "inputId"?: string;
   "disabled"?: boolean | CellLike<boolean>;
-  // Optional initial text. The field is otherwise uncontrolled: it mirrors the
-  // typed text into its own `value` (read on the host as event.target.value on
-  // submit) and is not meant for two-way cell binding.
+  /** Shared editable draft; its caller clears it after accepting a submit. */
+  "$draft"?: CellLike<{ value: string; revision: string } | undefined>;
+
+  // Optional initial text for an unbound field. A bound `$draft` supplies its
+  // own initial text; `value` always mirrors the displayed text for submit.
   "initialValue"?: string;
 }
 

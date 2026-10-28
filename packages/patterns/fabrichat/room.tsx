@@ -82,6 +82,7 @@ import {
   dropAttachment,
   FABRICHAT_POLICY,
   isOwnerOf,
+  type JoinedEvent,
   type JoiningManager,
   type MessageCell,
   messageEntries,
@@ -1391,6 +1392,66 @@ const FabriChatAttachingFile = pattern<AttachingFileInput, { [UI]: VNode }>(
   },
 );
 
+/** One thread composer's session-owned draft and view. */
+interface ThreadComposerOutput {
+  [UI]: VNode;
+  draft: PerSession<Writable<{ value: string; revision: string }>>;
+}
+
+/** Owns one thread's session draft under its root's mapped occurrence identity. */
+const FabriChatThreadComposer = pattern<{
+  root: Cell<RepliedMessage>;
+  disabled: boolean | Default<true>;
+  myProfile: ProfileCell | undefined;
+  messages: MessagesCell;
+  composer: PerSession<ComposerCell>;
+  shownIn: ShownIn;
+  threadInfo: ThreadInfoCell;
+  joined?: Stream<JoinedEvent>;
+}, PerSession<ThreadComposerOutput>>(
+  (
+    {
+      root,
+      disabled,
+      myProfile,
+      messages,
+      composer,
+      shownIn,
+      threadInfo,
+      joined,
+    },
+  ) => {
+    const draft = new Writable.perSession<{ value: string; revision: string }>({
+      value: "",
+      revision: "",
+    });
+    const send = commitThreadSend({
+      myProfile,
+      messages,
+      composer,
+      shownIn,
+      threadInfo,
+      joined,
+      draft,
+    });
+    return {
+      draft,
+      [UI]: (
+        <cf-submit-input
+          data-ui-action={CHAT_SEND_ACTION}
+          data-thread-key={computed(() => viewKeyOf(root) ?? "")}
+          inputId="fabrichat-thread-message"
+          $draft={draft}
+          placeholder="Reply in thread"
+          buttonText="Reply"
+          disabled={disabled}
+          onClick={send}
+        />
+      ),
+    };
+  },
+);
+
 /**
  * A conversation with a composer that sends as the viewer: the whole of
  * `ChatRoomOutput`, given the viewer's profile.
@@ -1583,6 +1644,14 @@ export const FabriChatRoomCore = pattern<
     return key !== undefined && places[key] !== undefined ? key : "";
   });
   const hasThread = computed(() => openThreadKey !== "");
+  const threadComposerRoots = computed(
+    (): PerSession<Cell<RepliedMessage>[]> => {
+      const root = composer.get()?.thread;
+      return openThreadKey === "" || root === undefined
+        ? []
+        : [root.resolveAsCell()];
+    },
+  );
   // The session's open thread: its root, and every message in the thread the
   // root starts, in the order the room recorded them. The thread's list maps
   // it, so a session holds a thread row for each message of the thread it has
@@ -1685,10 +1754,31 @@ export const FabriChatRoomCore = pattern<
   const attachingFiles = computed((): PerSession<ComposerAttachment[]> =>
     composer.get()?.attaching ?? []
   );
+  const threadComposers = threadComposerRoots.map((root) =>
+    FabriChatThreadComposer({
+      root,
+      disabled: cannotSend,
+      myProfile,
+      messages,
+      composer,
+      shownIn: threadShownIn,
+      threadInfo,
+      joined: tellJoined,
+    })
+  );
+  const selectedThreadDraft = computed(
+    (): Writable<{ value: string; revision: string }> | undefined =>
+      threadComposers[0]?.draft,
+  );
+  // The aggregate view belongs to the session, as the child composers do.
+  const threadComposerViews = computed((): PerSession<VNode[]> =>
+    threadComposers.map((threadComposer) => threadComposer[UI])
+  );
   const sendThreadReply = commitThreadSend({
     myProfile,
     messages,
     composer,
+    draft: selectedThreadDraft,
     shownIn: threadShownIn,
     threadInfo,
     joined: tellJoined,
@@ -1875,6 +1965,7 @@ export const FabriChatRoomCore = pattern<
           <cf-submit-input
             data-ui-action={CHAT_SEND_ACTION}
             inputId="fabrichat-message"
+            $draft={composer.key("draft")}
             placeholder="Message"
             buttonText="Send"
             disabled={cannotSend}
@@ -1980,14 +2071,7 @@ export const FabriChatRoomCore = pattern<
             data-ui-pattern={CHAT_SEND_SURFACE}
             data-ui-event-integrity={CHAT_SEND_SURFACE}
           >
-            <cf-submit-input
-              data-ui-action={CHAT_SEND_ACTION}
-              inputId="fabrichat-thread-message"
-              placeholder="Reply in thread"
-              buttonText="Reply"
-              disabled={cannotSend}
-              onClick={sendThreadReply}
-            />
+            {threadComposerViews}
           </div>
         </cf-vstack>
       </cf-vstack>
