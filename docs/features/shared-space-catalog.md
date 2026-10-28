@@ -300,12 +300,13 @@ order, and otherwise returns `conflict` with the reason given:
 
 The last check is the handler's own: it asks the runtime it runs on, as
 [`space-access.md`](space-access.md#a-deleted-space) describes, so an event
-naming a space that is not deleted, forged or mistaken, changes nothing. An
-answer of `undefined`, a space the runtime has not heard about yet, returns
-`not-deleted` too, and the caller sends the event again once its own runtime
-reports the deletion. Success returns `deleted`, advances the entry's revision
-as a membership change does, and keeps `since`, `from`, the title, and every
-offer receipt naming the space.
+naming a space that is not deleted, forged or mistaken, changes nothing. The
+handler passes the entry's space DID, and on a runtime that has not opened the
+space, the call has the handler run again once the memory server has answered
+for it. A runtime with no memory server it can ask about the space reads
+`undefined`, and the handler returns `not-deleted`. Success returns `deleted`,
+advances the entry's revision as a membership change does, and keeps `since`,
+`from`, the title, and every offer receipt naming the space.
 
 `deleted` is terminal. No command restores or saves a deleted entry:
 `changeMembership` returns `conflict: unsupported-state` for it, and a later

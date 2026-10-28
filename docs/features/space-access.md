@@ -231,24 +231,46 @@ returns `"none"`, `spaceMembers(target)` returns `undefined`, and
 `spaceReaderRole()` finds no role in it for anyone.
 
 `spaceDeleted(target)` is what tells a deleted space apart from one the
-principal has merely lost:
+principal has merely lost. Its `target` is a cell, as `spaceAccess(target)`
+takes, or a well-formed DID string naming the space itself
+(`isWellFormedDID()`), since deletion is a fact about a space rather than about
+any value in it, and a list of spaces holds their DIDs. Any other string throws.
 
 | Answer | When |
 | --- | --- |
-| `true` | the memory server has refused this runtime `target`'s space with the `deleted` marker |
+| `true` | the memory server has refused this runtime the space with the `deleted` marker |
 | `false` | the server has admitted the runtime to the space, or has refused it without the marker |
-| `undefined` | the server has not yet answered for the space, or `target` was passed as `undefined` |
+| `undefined` | in a computation, the server has not yet answered for the space; anywhere, the runtime has no memory server it can ask about the space, or `target` was passed as `undefined` |
+
+A call about a space the runtime has not opened opens it, by reading the space's
+access-list document through the call's transaction as `spaceAccess(target)`
+does, so the memory server answers for it. The run waits for that answer
+through machinery the runtime already has, not a retry or a poll of its own:
+
+- A reactive computation gets `undefined` at once, and is run again when the
+  answer arrives: an admission delivers the access list it read, and a refusal
+  reaches it through the storage manager's access-change observer
+  (`subscribeSpaceAccessChange()`), which runs it again through
+  `Scheduler.invalidateAction()`, as it does for `spaceAccess(target)`.
+- A handler does not see `undefined` for a space it is waiting on. The call
+  ends the run with `RetryImmediately`, the signal a handler run already raises
+  for an `inSpace()` name with no resolved DID: the scheduler drops the run's
+  transaction, the runtime waits for the server's answer, and the handler runs
+  again with the answer in place.
+
+A runtime with no memory server it can ask about the space, such as one whose
+routing gives the space's host no route, returns `undefined` from both, and a
+handler is not run again: there is no answer to wait for.
 
 It can be called where `spaceAccess(target)` can: in a handler or a reactive
 computation, and a call in a pattern body throws. Deletion is the same for every
 principal, and the server refuses a deleted space to a serving runtime as it
 refuses it to a client, so the answer does not depend on who asks, and a call in
-a computation leaves its read scope as it is. It is kept current the way a
-refusal is, through the storage manager's access-change observer, and once
-`true` it stays `true`. A space deleted after the server refused the runtime for
-another reason reads `false` until a `retrySpaceAccess(space)` brings back the
-server's new answer. It tells a principal who names a space nothing the server's
-refusal of that space does not already tell them.
+a computation leaves its read scope as it is. Once `true` it stays `true`. A
+space deleted after the server refused the runtime for another reason reads
+`false` until a `retrySpaceAccess(space)` brings back the server's new answer.
+It tells a principal who names a space nothing the server's refusal of that
+space does not already tell them.
 
 `spaceaccesslost`, the runtime's notice of a refused space across the worker
 boundary, carries `deleted: true` for a deleted space. The renderer's
