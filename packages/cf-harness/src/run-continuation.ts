@@ -142,7 +142,7 @@ export const NEXT_RUN_STATE_FIELDS = {
   },
   systemPromptInputs: {
     kind: "carried",
-    reason: "Recorded additional instructions and output mode supply defaults.",
+    reason: "Recorded additional instructions supply the continuation default.",
   },
   structuredResult: {
     kind: "re-derived",

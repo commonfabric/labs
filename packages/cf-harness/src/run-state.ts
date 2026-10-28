@@ -227,7 +227,7 @@ export interface HarnessRunState {
    */
   pieceOutputRequired?: boolean;
 
-  /** Additional instructions and output mode a follow-up may inherit. */
+  /** Additional instructions a follow-up may inherit. */
   systemPromptInputs?: HarnessSystemPromptInputs;
 
   /** Root-run structured-result configuration, retained across resume. */
@@ -342,7 +342,7 @@ export interface CreateHarnessRunStateOptions {
   credentialOwner?: HarnessCredentialOwnerRef;
   harnessHomeIdentity?: string;
   artifactRoot?: string;
-  /** Additional instructions and output mode a follow-up may inherit. */
+  /** Additional instructions a follow-up may inherit. */
   systemPromptInputs?: HarnessSystemPromptInputs;
   taskClassification?: HarnessTaskClassification;
 

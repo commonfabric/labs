@@ -804,11 +804,12 @@ with no complete checkpoint is refused. The harness always rebuilds the system
 message from this invocation's flags, the recorded task classification, and the
 new result contract. Tools, host mounts, fabric mounts, skills, pattern index,
 and depth use this invocation's configuration. Only additional instructions
-default to the recorded ones; `--system-prompt` replaces them. Output mode also
-defaults to the recording when `--output-mode` is absent. Runs without recorded
-instruction defaults are refused before any model request. A run bound to one
-exact prompt value cannot be continued, because the binding does not cover a new
-prompt. A run whose artifacts link outside its run root cannot be continued.
+default to the recorded ones; `--system-prompt` replaces them. Output mode comes
+from this invocation, defaulting to `operator` when `--output-mode` is absent.
+Runs without recorded instruction defaults are refused before any model request.
+A run bound to one exact prompt value cannot be continued, because the binding
+does not cover a new prompt. A run whose artifacts link outside its run root
+cannot be continued.
 
 Continuation explicitly retains the prior handle table, result schema, research
 context, CFC record, and prompt-slot binding. Both batch continuation and chat

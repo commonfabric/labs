@@ -1736,7 +1736,7 @@ export class CfHarnessEngine {
     return this.getRunState();
   }
 
-  /** Records additional instructions and output mode as continuation defaults. */
+  /** Records additional instructions as the continuation default. */
   setSystemPromptInputs(systemPromptInputs: HarnessSystemPromptInputs): void {
     this.#runState = patchHarnessRunState(this.#runState, {
       systemPromptInputs: structuredClone(systemPromptInputs),

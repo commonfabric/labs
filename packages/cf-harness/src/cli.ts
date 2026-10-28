@@ -333,9 +333,6 @@ export interface CfHarnessCliConfig extends HarnessSessionConfig {
   resultJsonPath?: string;
   structuredResult?: CfHarnessStructuredResultRequest;
 
-  /** Whether this invocation explicitly selected its output mode. */
-  outputModeExplicit: boolean;
-
   runManifestPath?: string;
   printTranscript: boolean;
   apiKey?: string;
@@ -1589,7 +1586,6 @@ export const parseCfHarnessCliArgs = async (
   > = {},
 ): Promise<CfHarnessCliConfig | { help: true }> => {
   const normalizedArgv = argv[0] === "--" ? argv.slice(1) : argv;
-  const flagWords = normalizedArgv.map((argument) => argument.split("=", 1)[0]);
   const undeclared: string[] = [];
   const args = parseArgs([...normalizedArgv], {
     string: [...CLI_STRING_FLAGS],
@@ -2195,7 +2191,6 @@ export const parseCfHarnessCliArgs = async (
     ...(allowedToolIds !== undefined ? { allowedToolIds } : {}),
     allowedSubagentProfiles,
     outputMode: outputMode ?? "operator",
-    outputModeExplicit: argvHolds(flagWords, ["--output-mode"]),
     streamEvents: Boolean(args["stream-events"]),
     promptSlotRole: promptSlotRole ?? "direct-command",
     ...(prompt !== undefined ? { prompt } : {}),
@@ -2763,11 +2758,10 @@ export const buildCfHarnessBatchSystemPrompt = (
   return lines.join("\n");
 };
 
-/** Records only defaults the next invocation can inherit. */
+/** Records the additional instructions a continuation can inherit. */
 const systemPromptInputsOf = (
   config: HarnessSystemPromptInputs,
 ): HarnessSystemPromptInputs => ({
-  outputMode: config.outputMode,
   ...(config.systemPrompt === undefined
     ? {}
     : { systemPrompt: config.systemPrompt }),
@@ -4078,9 +4072,6 @@ export const runCfHarnessCli = async (
         const recordedInputs = artifacts.runState.systemPromptInputs!;
         const promptConfig: HarnessSystemPromptConfig = {
           ...parsed,
-          outputMode: parsed.outputModeExplicit
-            ? parsed.outputMode
-            : recordedInputs.outputMode,
           systemPrompt: parsed.systemPrompt ?? recordedInputs.systemPrompt,
           fabricMountPath: parsed.fabricMount !== undefined
             ? DEFAULT_RUNSC_FABRIC_MOUNT_PATH

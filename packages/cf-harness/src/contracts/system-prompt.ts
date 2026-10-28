@@ -3,14 +3,14 @@ import type { HarnessPatternIndexConfig } from "../config.ts";
 import type { CfHarnessHostMountConfig } from "../host-mounts.ts";
 import type { HarnessRunDepth } from "./run-depth.ts";
 
-/** Defaults a later invocation can inherit when its flags omit them. */
+/** Additional instructions a later invocation can inherit. */
 export interface HarnessSystemPromptInputs {
-  outputMode: "batch" | "operator";
   systemPrompt?: string;
 }
 
 /** Effective configuration for this invocation's system prompt. */
 export interface HarnessSystemPromptConfig extends HarnessSystemPromptInputs {
+  outputMode: "batch" | "operator";
   workspace: string;
   focusRoot?: string;
   depth?: HarnessRunDepth;

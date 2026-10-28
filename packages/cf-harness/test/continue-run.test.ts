@@ -83,6 +83,7 @@ describe("continue-run", () => {
   let state: HarnessRunState;
   let requests: HarnessModelTurnRequest[];
   let errors: string[];
+  let output: string[];
   let before: Map<string, string>;
   let scripted: HarnessAssistantTranscriptMessage[];
   let structuredHostFailures: boolean;
@@ -141,7 +142,10 @@ describe("continue-run", () => {
       ...(fabric === undefined
         ? {}
         : { fabricSessionFactory: () => Promise.resolve(fabric!.session) }),
-      io: { stdout: () => {}, stderr: (text) => errors.push(text) },
+      io: {
+        stdout: (text) => output.push(text),
+        stderr: (text) => errors.push(text),
+      },
       createPromptLoop: (options) =>
         new CfHarnessPromptLoop({
           ...options,
@@ -241,18 +245,19 @@ describe("continue-run", () => {
       artifactRoot: priorRoot,
     });
     state.systemPromptInputs = {
-      outputMode: "operator",
       systemPrompt: "Prior instructions",
     };
     history[0] = {
       role: "system",
       content: resolveCfHarnessCliSystemPrompt({
         ...state.systemPromptInputs,
+        outputMode: "operator",
         workspace,
       })!,
     };
     requests = [];
     errors = [];
+    output = [];
     scripted = [];
     structuredHostFailures = false;
     await save();
@@ -497,26 +502,43 @@ describe("continue-run", () => {
     expect(requests[0].tools.map((tool) => tool.toolId)).toEqual(["read_file"]);
   });
 
-  it("replaces the recorded output mode when the follow-up names its own", async () => {
-    state.systemPromptInputs = {
-      outputMode: "batch",
-      systemPrompt: "Prior instructions",
-    };
-    await save();
-    expect(await run(["--output-mode=operator"])).toBe(0);
-    const system =
-      requests[0].transcript.find((m) => m.role === "system")!.content;
-    expect(system).toContain("Operator guidance for cf-harness runs");
-    expect((await nextArtifacts()).runState.systemPromptInputs).toEqual({
-      outputMode: "operator",
-      systemPrompt: "Prior instructions",
+  for (const mode of [undefined, "batch"]) {
+    it(`uses ${mode ?? "the default operator"} mode for both the continuation prompt and printed output`, async () => {
+      Object.assign(state.systemPromptInputs!, { outputMode: "batch" });
+      await save([
+        {
+          role: "system",
+          content: buildCfHarnessBatchSystemPrompt({
+            systemPrompt: "Prior instructions",
+          }),
+        },
+        ...history.slice(1),
+      ]);
+      expect(await run(mode === undefined ? [] : ["--output-mode=batch"])).toBe(
+        0,
+      );
+      const system = requests[0].transcript.find((m) =>
+        m.role === "system"
+      )!.content;
+      const printed = output.join("");
+      if (mode === undefined) {
+        expect(system).toContain("Operator guidance for cf-harness runs");
+        expect(printed).toContain("Next answer\n\nrunId:");
+        expect(printed).toContain("status: completed");
+      } else {
+        expect(system).not.toContain("Operator guidance for cf-harness runs");
+        expect(printed).toBe("Next answer\n");
+      }
+      expect((await nextArtifacts()).runState.systemPromptInputs).toEqual({
+        systemPrompt: "Prior instructions",
+      });
+      await unchanged();
     });
-  });
+  }
 
   for (const replacement of [undefined, "Replacement components"]) {
     it(`rebuilds a manual continuation with recorded instruction defaults ${replacement === undefined ? "without" : "with"} new instructions`, async () => {
       state.systemPromptInputs = {
-        outputMode: "batch",
         systemPrompt: "Recorded components",
       };
       state.taskClassification = {
@@ -553,7 +575,7 @@ describe("continue-run", () => {
       expect(system).toContain(
         "You are cf-harness, an autonomous agent harness",
       );
-      expect(system).not.toContain("Operator guidance for cf-harness runs");
+      expect(system).toContain("Operator guidance for cf-harness runs");
       expect(system).toContain("/workspace/new-result.json");
       expect(system).not.toContain("old-result.json");
       expect(system).not.toContain("Unusable recorded string");
@@ -563,7 +585,6 @@ describe("continue-run", () => {
       }
       const next = await nextArtifacts();
       expect(next.runState.systemPromptInputs).toEqual({
-        outputMode: "batch",
         systemPrompt: replacement ?? "Recorded components",
       });
       expect(next.runState.taskClassification).toEqual(
@@ -1077,7 +1098,6 @@ describe("continue-run", () => {
         };
         await Deno.writeTextFile(state.structuredResult.path, '"prior result"');
         state.systemPromptInputs = {
-          outputMode: "batch",
           systemPrompt: "Keep this user instruction.",
         };
         const sourceSystem = buildCfHarnessBatchSystemPrompt({
@@ -1331,7 +1351,6 @@ describe("continue-run", () => {
   for (const additionalInstructions of ["New instructions", ""]) {
     it(`rebuilds harness guidance with ${additionalInstructions === "" ? "empty" : "new"} additional instructions`, async () => {
       state.systemPromptInputs = {
-        outputMode: "batch",
         systemPrompt: "Prior additional instructions",
       };
       state.structuredResult = {
@@ -1371,7 +1390,7 @@ describe("continue-run", () => {
       expect(system).toContain(
         "You are cf-harness, an autonomous agent harness",
       );
-      expect(system).not.toContain("Operator guidance for cf-harness runs:");
+      expect(system).toContain("Operator guidance for cf-harness runs:");
       expect(system).toContain("/workspace/new-result.json");
       expect(system).not.toContain("old-result.json");
       expect(system).not.toContain("Prior additional instructions");
