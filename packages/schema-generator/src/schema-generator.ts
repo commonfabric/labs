@@ -51,7 +51,6 @@ import {
 import { isDefaultLibrarySourceFile } from "./typescript/default-library.ts";
 import {
   denotesSameType,
-  entityNameRight,
   getTypeAliasDeclaration,
   holdsFreeTypeParameter,
   holdsTypeParameter,
@@ -1936,10 +1935,6 @@ export class SchemaGenerator {
    * generation's `definitionStack` (`readAliasChain()`).
    */
   #chainReadings: WeakMap<object, ChainReading[]> = new WeakMap();
-
-  /** Whether each alias declaration reaches itself (`#aliasReachesItself()`). */
-  #aliasesReachingThemselves: WeakMap<ts.TypeAliasDeclaration, boolean> =
-    new WeakMap();
 
   /** Each chain reading's arguments form (`#argumentsFormOf()`). */
   #argumentForms: WeakMap<ChainReading, string | undefined> = new WeakMap();
@@ -4564,17 +4559,16 @@ export class SchemaGenerator {
    * or a union holding one is `any` to the checker, and only the written
    * declaration holds its labels, scope, or default. `undefined` for any other
    * reference, which reads as `any` does. A reference read again inside its
-   * own reading is a recursion through the alias where the alias's
-   * declaration reaches itself (`#aliasReachesItself()`), as `Tree` in
-   * `type Tree = { next: Tree } | Secret` and `Nest<T[]>` in
-   * `type Nest<T> = { inner: Nest<T[]> } | Secret` do. Every branch of such a
-   * declaration is read, so its reading has no end: the alias is `any` to the
+   * own reading with arguments that denote the same written nodes
+   * (`#writtenArguments()`), as `Tree` is in `type Tree = { next: Tree } |
+   * Secret`, recurses without end, and so does one whose argument is met
+   * again inside what it denotes, as `Nest<T[]>` is in
+   * `type Nest<T> = { inner: Nest<T[]> } | Secret`: the alias is `any` to the
    * checker there too, and its labels would be lost at that depth, so it is
-   * refused (`reportRecursiveAliasOfAny()`). An alias whose declaration does
-   * not reach itself nests only as deep as the type written around it,
-   * however its references repeat: `Box<Box<T>>`, and `Wrap<Wrap<T>>` where
-   * `type Wrap<T> = Box<T>`, whose one reference to `Box` is read at each
-   * level.
+   * refused (`reportRecursiveAliasOfAny()`). One read again with arguments
+   * that denote other nodes nests only as deep as those arguments:
+   * `Wrap<Wrap<T>>`, where `type Wrap<T> = Box<T>` reads its one reference to
+   * `Box` at each level.
    */
   #readAliasOfAny(
     reference: ts.TypeReferenceNode,
@@ -4595,9 +4589,13 @@ export class SchemaGenerator {
     ) {
       return undefined;
     }
-    const inside = context.aliasesReadForAny;
+    const inside = context.aliasesReadForAny ?? [];
+    const written = this.#writtenArguments(reference, context);
     if (
-      inside?.has(reference) && this.#aliasReachesItself(declaration, checker)
+      written.selfNested ||
+      inside.some((reading) =>
+        reading.reference === reference && reading.arguments === written.key
+      )
     ) {
       reportRecursiveAliasOfAny(context, reference);
       return {};
@@ -4607,43 +4605,58 @@ export class SchemaGenerator {
     return this.#analyzeChildNode(declaration.type, checker, {
       ...unbound,
       ...(bound.arguments.size > 0 && { boundTypeParameters: bound }),
-      aliasesReadForAny: new Set([...inside ?? [], reference]),
+      aliasesReadForAny: [...inside, { reference, arguments: written.key }],
     });
   }
 
   /**
-   * Whether `declaration` reaches itself through the alias declarations its
-   * references name, each read once: a declaration that does not can nest in
-   * itself only as deep as the type written around it.
+   * The arguments `reference` writes, as a key of the written nodes they
+   * denote: each argument's node, with the node bound to each type parameter
+   * it names, read in turn under the bindings of the place that node is
+   * written. And whether a node is met again inside what it denotes: an
+   * argument written inside the declaration it is an argument to, which
+   * grows at each level, as `T[]` in `type Nest<T> = { inner: Nest<T[]> }`
+   * does.
    */
-  #aliasReachesItself(
-    declaration: ts.TypeAliasDeclaration,
-    checker: ts.TypeChecker,
-  ): boolean {
-    const cached = this.#aliasesReachingThemselves.get(declaration);
-    if (cached !== undefined) return cached;
-    const read = new Set<ts.TypeAliasDeclaration>();
-    const reaches = (node: ts.Node): boolean => {
-      if (ts.isTypeReferenceNode(node)) {
-        const symbol = checker.getSymbolAtLocation(
-          entityNameRight(node.typeName),
-        );
-        const target = symbol &&
-          (symbol.flags & ts.SymbolFlags.Alias
-            ? checker.getAliasedSymbol(symbol)
-            : symbol).declarations?.find(ts.isTypeAliasDeclaration);
-        if (target === declaration) return true;
-        if (target && !read.has(target)) {
-          read.add(target);
-          if (reaches(target.type)) return true;
-        }
+  #writtenArguments(
+    reference: ts.TypeReferenceNode,
+    context: GenerationContext,
+  ): { key: string; selfNested: boolean } {
+    const checker = context.typeChecker;
+    let selfNested = false;
+    const keyOf = (
+      node: ts.TypeNode,
+      bound: BoundTypeParameters | undefined,
+      outer: ReadonlySet<ts.Node>,
+    ): string => {
+      if (outer.has(node)) {
+        selfNested = true;
+        return "^";
       }
-      return ts.forEachChild(node, (child) => reaches(child) || undefined) ??
-        false;
+      const within = new Set([...outer, node]);
+      const named: string[] = [];
+      const visit = (part: ts.Node): void => {
+        const parameter = ts.isTypeReferenceNode(part)
+          ? typeParameterOfReference(part, checker)
+          : undefined;
+        const argument = parameter && bound?.arguments.get(parameter);
+        if (argument) {
+          named.push(
+            argument.node
+              ? keyOf(argument.node, argument.bound, within)
+              : `t${this.#bindingId(argument.type)}`,
+          );
+          return;
+        }
+        ts.forEachChild(part, visit);
+      };
+      visit(node);
+      return `${this.#bindingId(node)}(${named.join(",")})`;
     };
-    const result = reaches(declaration.type);
-    this.#aliasesReachingThemselves.set(declaration, result);
-    return result;
+    const key = (reference.typeArguments ?? []).map((argument) =>
+      keyOf(argument, context.boundTypeParameters, new Set())
+    ).join(",");
+    return { key, selfNested };
   }
 
   /**

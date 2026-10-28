@@ -144,16 +144,18 @@ refers to itself inside its declaration is `any` to the checker there too,
 and the labels it wraps would be lost at that depth, so the reading is the
 `cfc-schema:recursive-alias-of-any` error, which advises writing `unknown`,
 which the checker keeps a wrapper around. A recursion is a reference read
-again inside its own reading where the alias's declaration reaches itself
-through the alias declarations it references (`#aliasReachesItself()`),
-as `Tree` does and as `type Nest<T> = { inner: Nest<T[]> } | Secret` does
-however its argument grows: every branch of such a declaration is read, so
-the reading has no end. An alias whose declaration does not reach itself
-nests only as deep as the type written around it, however its references
-repeat, and keeps the label at each level: `Box<Box<string>>`, and
-`Wrap<Wrap<string>>` where `type Wrap<T> = Box<T>`. A recursion through a
-named definition is not one either: the definition's `$ref` ends it, and the
-alias is read afresh inside the definition. A plain generic declaration is read under
+again inside its own reading with arguments that denote the same written
+nodes, each type parameter an argument names followed to the node bound to it
+(`#writtenArguments()`), as `Tree` is in `type Tree = { next: Tree } |
+Secret`, or a reference whose argument is met again inside what it denotes,
+which grows at each level, as `T[]` does in
+`type Nest<T> = { inner: Nest<T[]> } | Secret`, through a generic interface
+as well: neither reading has an end. A reference read again with arguments
+that denote other nodes nests only as deep as those arguments, and keeps the
+label at each level: `Box<Box<string>>`, and `Wrap<Wrap<string>>` where
+`type Wrap<T> = Box<T>`, whose one reference to `Box` is read at each level.
+A recursion through a named definition is not one either: the definition's
+`$ref` ends it, and the alias is read afresh inside the definition. A plain generic declaration is read under
 bindings for every required parameter, taken from the reference's written
 arguments or preceding-parameter defaults (§4.1). A member the bindings cannot
 read, such as an indexed access with no checker-created instantiation, remains

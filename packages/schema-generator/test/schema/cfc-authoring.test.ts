@@ -1767,6 +1767,12 @@ describe("Schema: CFC authoring aliases", () => {
           "Twice<Twice<string>>",
           4,
         ],
+        [
+          "an alias forwarding to one that forwards to it",
+          "type Box<T> = { next: T } | Secret; type Wrap<T> = Box<T>; type Wraps<T> = Wrap<Wrap<T>>;",
+          "Wraps<Wraps<string>>",
+          4,
+        ],
       ] as const
     ) {
       it(`keeps the label at every level of a generic alias nested in itself finitely through ${written}`, async () => {
@@ -1791,6 +1797,54 @@ describe("Schema: CFC authoring aliases", () => {
         }
       });
     }
+
+    it("keeps the label at every level of a forwarded nesting whose alias also recurs through a named definition", async () => {
+      for (
+        const { schema, diagnostics } of await bothPaths(
+          `type Node = { box: Box<string> };
+           type Box<T> = { next: T } | Secret | Node;
+           type Wrap<T> = Box<T>;`,
+          "Wrap<Wrap<string>>",
+        )
+      ) {
+        const box = (next: unknown) => ({
+          anyOf: [
+            { type: "object", properties: { next }, required: ["next"] },
+            SECRET,
+            { $ref: "#/$defs/Node" },
+          ],
+        });
+        expect(schema.properties.a).toEqual(box(box({ type: "string" })));
+        expect(schema.$defs.Node.properties.box).toEqual(
+          box({ type: "string" }),
+        );
+        expect(diagnostics).toEqual([]);
+      }
+    });
+
+    it("reports nothing for a generic alias nested in itself finitely through a generic interface", async () => {
+      for (
+        const { diagnostics } of await bothPaths(
+          "type Box<T> = { next: T } | Secret; interface Holder<T> { v: Box<T> }",
+          "Holder<Holder<string>>",
+        )
+      ) {
+        expect(diagnostics).toEqual([]);
+      }
+    });
+
+    it("reports `cfc-schema:recursive-alias-of-any` for a generic alias whose recursion through a generic interface nests its argument without end", async () => {
+      for (
+        const { diagnostics } of await bothPaths(
+          "type Tree<T> = Node<T> | Secret; interface Node<T> { next: Tree<T[]> }",
+          "Tree<string>",
+        )
+      ) {
+        expect(diagnostics.map(({ type }) => type)).toEqual([
+          "cfc-schema:recursive-alias-of-any",
+        ]);
+      }
+    });
 
     it("reports `cfc-schema:recursive-alias-of-any` for a generic alias whose recursion nests its argument without end", async () => {
       for (
