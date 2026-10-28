@@ -187,6 +187,7 @@ import {
   type CellRef,
   type CellResolveAsCellRequest,
   CellResponse,
+  type CellSendHandledResponse,
   type CellSendRequest,
   type CellSendReviewedRequest,
   type CellSetRequest,
@@ -2283,7 +2284,9 @@ export class RuntimeProcessor {
     });
   }
 
-  handleCellSend(request: CellSendRequest): void | Promise<void> {
+  handleCellSend(
+    request: CellSendRequest,
+  ): void | Promise<void | CellSendHandledResponse> {
     const event = mapCellRefsToSigilLinks(request.event);
     return this.#sendCellEvent(
       request.cell,
@@ -2301,8 +2304,8 @@ export class RuntimeProcessor {
    * a native control bound to the request's surface and action, which stamps
    * the event with `native` provenance for them, replacing any `provenance`
    * the payload carries, and marks it renderer-trusted, and waits for the
-   * event's handling. Reached only through a client of this worker, which a
-   * pattern the worker runs is not.
+   * event's handling, returning its receipt. Reached only through a client of
+   * this worker, which a pattern the worker runs is not.
    *
    * @throws If the payload is not a record, or the surface or action is
    *   blank, and when the event, or the run of the stream's handler, is
@@ -2310,7 +2313,7 @@ export class RuntimeProcessor {
    */
   async handleCellSendReviewed(
     request: CellSendReviewedRequest,
-  ): Promise<void> {
+  ): Promise<CellSendHandledResponse> {
     const payload = mapCellRefsToSigilLinks(request.event);
     if (!isPlainObject(payload)) {
       throw new Error("A reviewed action's event must be a record.");
@@ -2321,7 +2324,7 @@ export class RuntimeProcessor {
       throw new Error("A reviewed action requires a surface and an action.");
     }
     const control = { surface: request.surface, action: request.action };
-    await this.#sendCellEvent(
+    return await this.#sendCellEvent(
       request.cell,
       (send) => bindNativeUiControl({ send }, control)(payload),
       "handling",
@@ -2333,14 +2336,24 @@ export class RuntimeProcessor {
    * an event to `ref` in a transaction of its own. `deliver` sends the event
    * through the function it is given. With `wait` undefined the outcome is
    * logged; `commit` waits for the transaction's commit, and `handling` for
-   * the commit of the handler's run as well, and either rejects with the
-   * refusal.
+   * the commit of the handler's run as well, returning the handling's
+   * receipt, and either rejects with the refusal.
    */
   #sendCellEvent(
     ref: CellRef,
     deliver: (send: (event: unknown) => void) => void,
+    wait: "handling",
+  ): Promise<CellSendHandledResponse>;
+  #sendCellEvent(
+    ref: CellRef,
+    deliver: (send: (event: unknown) => void) => void,
     wait: "commit" | "handling" | undefined,
-  ): void | Promise<void> {
+  ): void | Promise<void | CellSendHandledResponse>;
+  #sendCellEvent(
+    ref: CellRef,
+    deliver: (send: (event: unknown) => void) => void,
+    wait: "commit" | "handling" | undefined,
+  ): void | Promise<void | CellSendHandledResponse> {
     const tx = this.#runtime.edit();
     const cell = getCell(this.#runtime, ref).withTx(tx);
     const handled = wait === "handling"
@@ -2355,10 +2368,18 @@ export class RuntimeProcessor {
     const commit = tx.commit().settled;
     if (handled !== undefined) {
       return this.#requireCellCommit(commit).then(async () => {
-        const handling = (await handled.promise).status();
+        const handledTx = await handled.promise;
+        const handling = handledTx.status();
         if (handling.status === "error") {
           throw new Error(transactionFailureMessage(handling.error));
         }
+        // Under server execution the transaction is the worker's echo of the
+        // served run, which names the same receipt: its address derives from
+        // the event, and the served run is the one that writes it.
+        const receipt = handledTx.handlingReceiptLink;
+        return receipt === undefined ? {} : {
+          receipt: createCellRef(this.#runtime.getCellFromLink(receipt)),
+        };
       });
     }
     if (wait === "commit") return this.#requireCellCommit(commit);

@@ -55,9 +55,10 @@ const write = {
 } as const;
 const send = {
   kind: "ungated",
-  why: "an event the host sends; the refusal of a handling it waits for " +
-    "carries the reason, which can quote a value, as an error report's " +
-    "message can",
+  why: "an event the host sends; a send that waits for its handling returns " +
+    "a reference to the handling's receipt, whose value the host reads " +
+    "through the gate, and the refusal of that handling carries the " +
+    "reason, which can quote a value, as an error report's message can",
 } as const;
 const setting = {
   kind: "no-cell-value",

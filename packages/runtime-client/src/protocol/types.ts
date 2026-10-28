@@ -167,7 +167,8 @@ export enum RequestType {
    * Sends an event to a cell in a transaction of its own. Local visibility
    * lands with the commit; remote confirmation is not waited for, so that a
    * slow server cannot block cell IPC, unless the request waits for the
-   * event's handling, which under server execution is the served run.
+   * event's handling, which under server execution is the served run. A send
+   * that waits is answered with the handling's receipt.
    */
   CellSend = "cell:send",
 
@@ -176,8 +177,9 @@ export enum RequestType {
    * {@link CellSend} sends an event, except that the worker stamps the event
    * with `native` provenance for the request's surface and action and marks
    * it renderer-trusted, so that it satisfies a write's UI contract for that
-   * surface and action. Waits for the event's handling, and rejects with the
-   * reason when the event, or the run of the stream's handler, is refused.
+   * surface and action. Waits for the event's handling, is answered with the
+   * handling's receipt, and rejects with the reason when the event, or the
+   * run of the stream's handler, is refused.
    */
   CellSendReviewed = "cell:send-reviewed",
 
@@ -1296,7 +1298,7 @@ export type CellSendRequest = BaseRequest & {
   /**
    * Wait for the event's handling as well as its commit, and return its
    * refusal, such as a write the handler made that the runtime refused, to
-   * the caller.
+   * the caller, or else its receipt.
    */
   awaitHandling?: boolean;
 };
@@ -1323,6 +1325,20 @@ export type CellSendReviewedRequest = BaseRequest & {
 
   /** The action the control takes, matched against a contract's `action`. */
   action: string;
+};
+
+/**
+ * The answer to a send that waited for its handling: a
+ * {@link RequestType.CellSend} with `awaitHandling`, or a
+ * {@link RequestType.CellSendReviewed}.
+ */
+export type CellSendHandledResponse = {
+  /**
+   * The handling's receipt, the cell the handler's result is written to,
+   * which the host reads as it reads any other cell. Absent when the handling
+   * wrote none.
+   */
+  receipt?: CellRef;
 };
 
 /**
@@ -4398,6 +4414,7 @@ export type RemoteResponse =
   | CellValueResponse
   | CellGetResponse
   | CellResponse
+  | CellSendHandledResponse
   | HomePatternResponse
   | JoinVisitedRoomResponse
   | CfcLabelViewResponse
@@ -4617,11 +4634,11 @@ export type Commands = {
   };
   [RequestType.CellSend]: {
     request: CellSendRequest;
-    response: EmptyResponse;
+    response: EmptyResponse | CellSendHandledResponse;
   };
   [RequestType.CellSendReviewed]: {
     request: CellSendReviewedRequest;
-    response: EmptyResponse;
+    response: CellSendHandledResponse;
   };
   [RequestType.CellSubscribe]: {
     request: CellSubscribeRequest;

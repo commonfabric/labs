@@ -70,15 +70,16 @@ type-check until it says how it stands.
 A cell's reads and writes through one runtime client run in the order they were
 asked for, through whichever handle on the cell and path: `sync()`, `pull()`,
 `set()`, `setStrict()`, `push()`, `initialize()`, `send()`, `sendStrict()`,
-`sendReviewed()` and `update()` share one queue, and each request goes to the
-worker once the one before it has been answered. `set()` shows its value at once
-and sends it in its turn. `update(updater)` computes a write in its turn, from
-the value the operations queued before it left, or else what its handle holds,
-reading the cell first where the handle holds nothing. A write asked for after
-it lands after it. A write another handle made that has already settled counts
-only once its update reaches this handle, so an update can compute from a value
-that write has since replaced. Its write is a blind overwrite, as `set()`'s is,
-not an atomic read-modify-write; `push()` appends as the worker merges.
+`sendForReceipt()`, `sendReviewed()` and `update()` share one queue, and each
+request goes to the worker once the one before it has been answered. `set()`
+shows its value at once and sends it in its turn. `update(updater)` computes a
+write in its turn, from the value the operations queued before it left, or else
+what its handle holds, reading the cell first where the handle holds nothing. A
+write asked for after it lands after it. A write another handle made that has
+already settled counts only once its update reaches this handle, so an update
+can compute from a value that write has since replaced. Its write is a blind
+overwrite, as `set()`'s is, not an atomic read-modify-write; `push()` appends as
+the worker merges.
 
 ## Observing authorship
 
@@ -184,6 +185,18 @@ turns an event down throws, which fails its run and rejects the send. Under
 server execution the run it waits for is the served one, whose outcome reaches
 the worker as the consequence the serving loop recorded for the event.
 
+`CellHandle.sendForReceipt(event)` waits for the handler's run as
+`sendStrict(event, { awaitHandling: true })` does, rejecting on the same
+refusals, and resolves with a `CellHandle` on the handling's receipt: the cell
+the handler's result is written to, the served run's under server execution. It
+resolves with `undefined` when the handling wrote no receipt, which a handler
+outside any pattern does not write. The worker answers with a reference to the
+receipt rather than its value, so the host reads the result as it reads any
+other cell, through the gate [Refused reads](#refused-reads) describes. The
+handle carries no schema: bind the one the handler declares for its result with
+`asSchema()`, and read it with `pull()`, which loads it, since under server
+execution the worker holds nothing of the receipt before it does.
+
 `CellHandle.sendReviewed(event, { surface, action })` sends a reviewed action
 from a control the host draws itself, bound to one trusted surface and one
 action. The worker stamps the event with `native` provenance for them, replacing
@@ -191,10 +204,11 @@ any `provenance` the payload carries, and marks it renderer-trusted, so a write
 gated on that surface and action commits as it would for a reviewed gesture on
 the pattern's rendered surface. It always waits for the handler's run, as
 `sendStrict()` does with `awaitHandling`, and rejects with the reason on the
-same refusals. The event is a trusted gesture, as a DOM event on the pattern's
-rendered surface is, so it meets what `grantSpaceAccess()` and
-`revokeSpaceAccess()` require of a handler's event; the change they stage is
-still held to every other check.
+same refusals. The worker's answer carries the handling's receipt, as it does
+for a `cell:send` that waits; `sendReviewed()` resolves with nothing. The event
+is a trusted gesture, as a DOM event on the pattern's rendered surface is, so it
+meets what `grantSpaceAccess()` and `revokeSpaceAccess()` require of a handler's
+event; the change they stage is still held to every other check.
 [Host embedding, §11](../../docs/features/host-embedding.md#11-policy-record-native-reviewed-acts-count-as-trusted-gestures)
 records the principle that a native reviewed act counts wherever a trusted
 gesture does. `sendReviewed()` mints trusted events, so it is for the host's own

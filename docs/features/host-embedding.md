@@ -553,9 +553,12 @@ refused, or when the run throws or its event is dropped or refused admission.
 A run that finishes without an error resolves it, whether or not it wrote
 anything; a handler that turns an event down throws, with a reason a person can
 read, which fails its run and rejects the send. Under server execution the run is the served one, and its outcome is the
-consequence the serving loop recorded for the event. `sendStrict()` waits the
-same way when given `{ awaitHandling: true }`, and otherwise confirms only that
-the runtime took the event.
+consequence the serving loop recorded for the event. The worker answers with
+a reference to the handling's receipt, as it answers a `cell:send` that waits,
+and `sendReviewed()` resolves with nothing. `sendStrict()` waits the same way
+when given `{ awaitHandling: true }`, and otherwise confirms only that the
+runtime took the event; `sendForReceipt()` waits the same way and resolves with
+a handle on the receipt.
 
 The runtime's ordinary checks still apply: the writer the contract names, the
 surface and action, the actor, and the space's access list. The mark reaches a
@@ -613,6 +616,9 @@ handling resolving `sendStrict()` without `awaitHandling`, a reviewed grant
 changing a space's access list for an `OWNER` and refused for a member without
 one, the same grant changing nothing through `sendStrict()`, the event the
 worker delivers, and the requests it refuses.
+`packages/runtime-client/test/send-for-receipt.test.ts` covers the receipt the
+worker answers `cell:send-reviewed` and a waiting `cell:send` with, in both
+modes, and `sendForReceipt()` reading the handler's result from it.
 `packages/runner/test/builder/space-access-change.test.ts` and
 `packages/runner/test/executor-space-access-change.test.ts` cover a native
 control's grant and revoke on a client and on a serving runtime.

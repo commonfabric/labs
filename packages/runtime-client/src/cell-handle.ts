@@ -37,6 +37,7 @@ import {
   type CellPullRequest,
   type CellReadRefusal,
   type CellRef,
+  type CellSendHandledResponse,
   type CellValueResponse,
   type CfcLabelView,
   JSONValue,
@@ -848,6 +849,29 @@ export class CellHandle<T = unknown> {
   }
 
   /**
+   * Sends `event` to the stream this handle names and waits for its
+   * handling, as `sendStrict(event, { awaitHandling: true })` does, rejecting
+   * on the same refusals, and returns a handle on the handling's receipt: the
+   * cell the handler's result is written to, which under server execution is
+   * the served run's. `undefined` when the handling wrote no receipt.
+   *
+   * The handle carries no schema; bind one with {@link asSchema} to read the
+   * result as the handler declares it. Read it with {@link pull}, which loads
+   * the receipt: under server execution the worker holds nothing of it until
+   * it is loaded, so {@link sync} finds nothing there.
+   */
+  async sendForReceipt(event: T): Promise<CellHandle<unknown> | undefined> {
+    const serialized = CellHandle.serialize(event as ClientCellValue);
+    const response = await this.#enqueueOperation(() =>
+      this.#send(serialized, true, true)
+    );
+    const receipt = response?.receipt;
+    return receipt === undefined
+      ? undefined
+      : new CellHandle(this.#rt, receipt);
+  }
+
+  /**
    * Sends `event` to the stream this handle names as the action `control`
    * names, taken on a control the host draws itself, bound to that trusted
    * surface and action. The runtime stamps the event with `native`
@@ -896,7 +920,7 @@ export class CellHandle<T = unknown> {
     event: FabricValue,
     propagateFailure = false,
     awaitHandling = false,
-  ): Promise<void> {
+  ): Promise<CellSendHandledResponse | undefined> {
     const request = this.#conn.request<RequestType.CellSend>({
       type: RequestType.CellSend,
       cell: this.ref(),
@@ -909,6 +933,7 @@ export class CellHandle<T = unknown> {
       if (!this.#conn.signal.aborted) {
         console.error("[CellHandle] Send failed:", error);
       }
+      return undefined;
     });
   }
 
