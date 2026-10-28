@@ -312,9 +312,10 @@ export const createHarnessImageAttachmentFromBase64 = async (
   };
 };
 
-export const materializeImageAttachmentContentPart = async (
+/** Reads attachment bytes under their recorded size and digest contract. */
+const readImageAttachmentBytes = async (
   attachment: HarnessImageAttachment,
-): Promise<OpenAIChatMessageContentPart> => {
+): Promise<Uint8Array> => {
   const sourceLabel = attachment.snapshotPath === undefined
     ? "image attachment"
     : "image attachment snapshot";
@@ -344,6 +345,28 @@ export const materializeImageAttachmentContentPart = async (
       `${sourceLabel} digest changed after run start: ${sourcePath}`,
     );
   }
+  return bytes;
+};
+
+/** Snapshots a validated prompt attachment under its run's own output tree. */
+export const snapshotHarnessImageAttachment = async (
+  attachment: HarnessImageAttachment,
+  snapshotDir: string,
+): Promise<HarnessImageAttachment> => ({
+  ...attachment,
+  snapshotPath: await writeImageAttachmentSnapshot(
+    snapshotDir,
+    await readImageAttachmentBytes(attachment),
+    attachment.digest,
+    attachment.mediaType,
+  ),
+});
+
+/** Materializes the recorded image for the model's request. */
+export const materializeImageAttachmentContentPart = async (
+  attachment: HarnessImageAttachment,
+): Promise<OpenAIChatMessageContentPart> => {
+  const bytes = await readImageAttachmentBytes(attachment);
   return {
     type: "image_url",
     image_url: {

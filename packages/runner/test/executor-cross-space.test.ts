@@ -20,7 +20,7 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
-import type { Options } from "../src/storage/v2.ts";
+import type { Options, SpaceReplica } from "../src/storage/v2.ts";
 import {
   Runtime,
   type ServerRunInfo,
@@ -54,6 +54,7 @@ import {
   serverSeq,
 } from "@commonfabric/memory/v2/engine";
 import {
+  resolveScopeKey,
   streamEntriesDocId,
   type StreamEventsDocValue,
 } from "@commonfabric/memory/v2";
@@ -2027,39 +2028,112 @@ describe("Phase 5 cross-space serving", () => {
     }
   });
 
-  it("a serving manager's FOREIGN provider refuses scoped reads fail-closed (protocol.md §2's grant-scoped read design)", async () => {
+  it("a serving manager's FOREIGN provider admits a scoped read naming an actor's own instance the space grants READ, refuses every other, and asks again after the list changes (protocol.md §2's grant-scoped read)", async () => {
+    const aliceDid = aliceSigner.did();
+    const bobDid = bobSigner.did();
+    // Alice owns the foreign space; bob holds nothing there yet.
+    await server.writeDocument(foreignSpace, `of:${foreignSpace}`, {
+      [aliceDid]: "OWNER",
+    });
+    const probed: string[] = [];
     const manager = SharedServerStorageManager.connectTo(server, {
       as: serviceSigner,
       servingHomeSpace: homeSpace,
+      foreignScopedReadGrant: (space, principal) => {
+        probed.push(`${space}\0${principal}`);
+        return server.foreignReadAuthorityFor(space, principal);
+      },
     });
+    const foreignUser = { space: foreignSpace, scope: "user" as const };
     try {
-      // Scoped read of a FOREIGN space: refused at the producer, before
-      // any wire frame — the unnamed scoped root would resolve against
-      // the delegating service envelope (a silently empty instance).
-      const foreignScoped = await manager.open(foreignSpace).sync(
+      // UNNAMED: refused before any pull, and at the pull — the unnamed
+      // scoped root would resolve against the delegating service envelope,
+      // a silently empty instance.
+      expect(manager.scopedReadStanding(foreignUser, undefined)).toBe(
+        "refused",
+      );
+      const unnamed = await manager.open(foreignSpace).sync(
         "of:x-scoped" as never,
         { path: [], schema: false },
         "user",
       );
-      expect(foreignScoped.error?.message ?? "").toContain(
-        "foreign scoped read refused on the serving path",
+      expect(unnamed.error?.name).toBe("ForeignScopedReadRefusedError");
+      expect(unnamed.error?.message ?? "").toContain(
+        "names no actor's instance",
       );
 
-      // Space-scope foreign reads stay free (§2b's free-read row).
-      const foreignSpaceScope = await manager.open(foreignSpace).sync(
-        "of:x-plain" as never,
+      // Alice's own instance: unresolved until her grant is asked for,
+      // admitted once the probe answers, and asked for once per actor.
+      const alice = { principal: aliceDid };
+      expect(manager.scopedReadStanding(foreignUser, alice)).toBe(
+        "unresolved",
+      );
+      await manager.syncInstance(
+        { space: foreignSpace, id: "of:x-scoped" as never, scope: "user" },
+        alice,
+      );
+      expect(manager.scopedReadStanding(foreignUser, alice)).toBe("admitted");
+      expect(probed).toEqual([`${foreignSpace}\0${aliceDid}`]);
+      await manager.syncInstance(
+        { space: foreignSpace, id: "of:x-other" as never, scope: "session" },
+        { principal: aliceDid, sessionId: "alice-session" as never },
+      );
+      expect(probed).toHaveLength(1);
+
+      // Bob's instance: refused on the list, typed, with the list's reason.
+      const bob = { principal: bobDid };
+      const refused = await manager.open(foreignSpace).sync(
+        "of:x-scoped" as never,
         { path: [], schema: false },
+        "user",
+        resolveScopeKey("user", bob),
       );
-      expect(foreignSpaceScope.error).toBeUndefined();
+      expect(refused.error?.name).toBe("ForeignScopedReadRefusedError");
+      expect(refused.error?.message ?? "").toContain(
+        `grants ${bobDid} nothing (READ required)`,
+      );
+      expect(manager.scopedReadStanding(foreignUser, bob)).toBe("refused");
 
-      // The F3 fix — refusal is ENTRY-scoped, decided at sync() entry
-      // before the batch: a scoped read and an innocent SPACE-scope
-      // read issued concurrently coalesce into ONE watch-refresh batch
-      // with one shared pending promise, and pre-fix the scoped
-      // refusal threw over the whole batch — the load-bearing §2b
-      // free-read row failed alongside the offender (a persistently
-      // retrying scoped reader degraded a space's legitimate foreign
-      // reads into flake).
+      // Word of an access-list change asks about every actor again at once,
+      // each last verdict standing meanwhile: alice's instances, already
+      // loaded and never pulled again, stay admitted throughout. Once alice
+      // grants bob READ, his standing turns admitted on the probe's answer
+      // alone, and the read refused earlier is pulled again for him, since
+      // nothing else would load it.
+      const replica = manager.open(foreignSpace).replica as SpaceReplica;
+      const repulled: string[] = [];
+      const originalSync = replica.sync.bind(replica);
+      replica.sync = (id, selector, scope, instance) => {
+        repulled.push(`${id}|${instance}`);
+        return originalSync(id, selector, scope, instance);
+      };
+      await server.writeDocument(foreignSpace, `of:${foreignSpace}`, {
+        [aliceDid]: "OWNER",
+        [bobDid]: "READ",
+      });
+      manager.noteSpaceAclChanged(foreignSpace);
+      expect(manager.scopedReadStanding(foreignUser, alice)).toBe("admitted");
+      expect(manager.scopedReadStanding(foreignUser, bob)).toBe("refused");
+      await manager.syncInstance(
+        { space: foreignSpace, id: "of:x-other" as never, scope: "user" },
+        bob,
+      );
+      expect(manager.scopedReadStanding(foreignUser, bob)).toBe("admitted");
+      expect(manager.scopedReadStanding(foreignUser, alice)).toBe("admitted");
+      expect(probed).toEqual([
+        `${foreignSpace}\0${aliceDid}`,
+        `${foreignSpace}\0${bobDid}`,
+        `${foreignSpace}\0${aliceDid}`,
+        `${foreignSpace}\0${bobDid}`,
+      ]);
+      expect(repulled).toContain(
+        `of:x-scoped|${resolveScopeKey("user", bob)}`,
+      );
+
+      // Space-scope foreign reads stay free (§2b's free-read row), and
+      // the F3 fix holds: a refused scoped read and an innocent SPACE-scope
+      // read issued together coalesce into one watch-refresh batch, and
+      // only the offender's pull fails.
       const provider = manager.open(foreignSpace);
       const [poisoner, innocent] = await Promise.all([
         provider.sync(
@@ -2072,9 +2146,7 @@ describe("Phase 5 cross-space serving", () => {
           { path: [], schema: false },
         ),
       ]);
-      expect(poisoner.error?.message ?? "").toContain(
-        "foreign scoped read refused on the serving path",
-      );
+      expect(poisoner.error?.name).toBe("ForeignScopedReadRefusedError");
       expect(innocent.error).toBeUndefined();
 
       // HOME scoped reads keep today's behavior (the OW17 tolerated
@@ -2085,12 +2157,101 @@ describe("Phase 5 cross-space serving", () => {
         "user",
       );
       expect(homeScoped.error).toBeUndefined();
+      expect(
+        manager.scopedReadStanding({ space: homeSpace, scope: "user" }, bob),
+      ).toBe("admitted");
+    } finally {
+      await manager.close();
+    }
+  });
 
-      // A NON-serving manager (no servingHomeSpace) is untouched.
+  it("a tenure's serving runtime resolves a foreign scoped read's grant through the co-hosted server, whatever its factory handed the manager (protocol.md §2's grant-scoped read)", async () => {
+    // The factory above builds its manager with no probe; the SpaceServer
+    // installs the server's on the runtime it is handed, so a tenure admits
+    // the actor's own instance on the foreign space's list and refuses a
+    // stranger's.
+    const aliceDid = aliceSigner.did();
+    const bobDid = bobSigner.did();
+    await server.writeDocument(foreignSpace, `of:${foreignSpace}`, {
+      [aliceDid]: "OWNER",
+    });
+    host = newHost();
+    clientManager = SharedServerStorageManager.connectTo(server, {
+      as: aliceSigner,
+    });
+    clientRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: clientManager,
+    });
+    const demandCell = clientRuntime.getCell<{ ping: number }>(
+      homeSpace,
+      "grant-wiring-demand",
+      undefined,
+    );
+    const cancel = demandCell.sink(() => {});
+    try {
+      await activated(homeSpace);
+      const manager = servingRuntime!.storageManager;
+      const foreignUser = { space: foreignSpace, scope: "user" as const };
+      const alice = { principal: aliceDid };
+      const bob = { principal: bobDid };
+      // Unresolved rather than refused: a probe is installed and not yet asked.
+      expect(manager.scopedReadStanding!(foreignUser, alice)).toBe(
+        "unresolved",
+      );
+      await manager.syncInstance!(
+        { space: foreignSpace, id: "of:x-wired" as never, scope: "user" },
+        alice,
+      );
+      expect(manager.scopedReadStanding!(foreignUser, alice)).toBe("admitted");
+      await manager.syncInstance!(
+        { space: foreignSpace, id: "of:x-wired" as never, scope: "user" },
+        bob,
+      );
+      expect(manager.scopedReadStanding!(foreignUser, bob)).toBe("refused");
+    } finally {
+      cancel();
+    }
+  });
+
+  it("a serving manager with no read authority probe refuses every foreign scoped read, named or not, and a non-serving manager gates nothing", async () => {
+    const aliceDid = aliceSigner.did();
+    await server.writeDocument(foreignSpace, `of:${foreignSpace}`, {
+      [aliceDid]: "OWNER",
+    });
+    const manager = SharedServerStorageManager.connectTo(server, {
+      as: serviceSigner,
+      servingHomeSpace: homeSpace,
+    });
+    try {
+      const alice = { principal: aliceDid };
+      expect(
+        manager.scopedReadStanding(
+          { space: foreignSpace, scope: "user" },
+          alice,
+        ),
+      ).toBe("refused");
+      const named = await manager.open(foreignSpace).sync(
+        "of:x-scoped" as never,
+        { path: [], schema: false },
+        "user",
+        resolveScopeKey("user", alice),
+      );
+      expect(named.error?.name).toBe("ForeignScopedReadRefusedError");
+      expect(named.error?.message ?? "").toContain(
+        "no read authority probe",
+      );
+
       const plain = SharedServerStorageManager.connectTo(server, {
         as: aliceSigner,
       });
       try {
+        expect(
+          plain.scopedReadStanding(
+            { space: foreignSpace, scope: "user" },
+            alice,
+          ),
+        ).toBe("admitted");
         const clientScoped = await plain.open(foreignSpace).sync(
           "of:x-scoped" as never,
           { path: [], schema: false },

@@ -322,15 +322,12 @@ every other path the wiring transaction wrote.
 so such a read consumes nothing; a marked read that materializes content is
 unaffected and keeps consuming its ordinary labels.
 
-The measurement that forced this: at the strict dials with server execution
-on, `packages/patterns/integration/cfc-render-policy-demo.test.ts` lost each
-sub-piece's entire user interface to the §8.10.6 display ceiling. The
-transaction that wired the two sub-patterns up probed the sigil interior of
-the document holding the confidential health cell's reference, consumed the
-`origin:"link"` entry there, and the §8.12.5 route-2 declaration then wrote
-that clause at the ROOT of four documents at once — the sub-piece result
-projections among them, so the ceiling denied their `$UI` whole. Four such
-declarations per failing run before the skip, none after.
+A wiring transaction that consumed the `origin: "link"` entry of a
+confidential reference would carry that clause into every result projection
+it rewrote. A derived stamp at a sub-piece result's root covers its `$UI`, so
+§8.10.6's display ceiling would deny the whole interface. Excluding the
+runtime's reference-only wiring probes prevents that propagation; content
+reads remain labeled.
 
 The list coordinators are the case this could have under-tainted. `map`,
 `filter` and `flatMap` mark the presence probe and the slot-identity diffs

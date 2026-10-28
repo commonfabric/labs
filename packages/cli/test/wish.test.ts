@@ -17,6 +17,7 @@ import {
   WISH_STREAM_MARKER,
 } from "../lib/wish.ts";
 import { safeStringify } from "../lib/render.ts";
+import { seedProfileOwner } from "../../runner/test/cfc-seed-envelope.ts";
 
 // Exercises the headless wish read core (`resolveWish`) against an emulated
 // runtime — no live server. The full `readWish` (which adds a session-backed
@@ -70,6 +71,11 @@ describe("cf wish headless read (resolveWish)", () => {
       bio: "Mathematician & first programmer.",
       elements: [],
     });
+    seedProfileOwner(
+      tx,
+      profileDefaultCell.getAsNormalizedFullLink(),
+      userIdentity.did(),
+    );
     profileSpaceCell.key("defaultPattern").set(profileDefaultCell);
     await tx.commit().settled;
     await runtime.idle();

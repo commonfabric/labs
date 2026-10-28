@@ -538,6 +538,15 @@ export interface WaveSpaceCommit {
    * reported precondition failure resolve per write class. */
   preconditionOwners?: number[];
 
+  /** Per surviving event-handler contribution — home batch only: the
+   * recorded reads of its home transaction, which the sink re-verifies
+   * inside its store transaction and reports stale ones of in the
+   * rejection's `staleReads` (§3d). */
+  handlerReads?: ReadonlyArray<{
+    contribution: number;
+    reads: ReadonlyArray<WaveReadQuery>;
+  }>;
+
   /**
    * Owning contribution index per operation — home batch only. The sink
    * returns the failed operation for a proven-no-commit row-label refusal or
@@ -613,7 +622,9 @@ export function isAclDocumentWriteRefusal(
  * keys whose head moved past the wave's basis after the accumulator's own
  * head query — the race window the resolve loop closes;
  * `failedPreconditions` names indexes into the batch's preconditions
- * array. A rejection naming neither is terminal for the wave.
+ * array; `staleReads` names served handler reads a commit staled after the
+ * accumulator's own read check. A rejection naming none of these is
+ * terminal for the wave.
  */
 export interface WaveCommitRejection {
   name:
@@ -624,12 +635,52 @@ export interface WaveCommitRejection {
   conflictedDocs?: readonly string[];
   failedPreconditions?: readonly number[];
 
+  /** Each by the contribution that read it and the read's position in that
+   * contribution's entry of the batch's `handlerReads`, with the seq of the
+   * newest commit that staled it (§3d). */
+  staleReads?: ReadonlyArray<
+    { contribution: number; read: number; seq: number }
+  >;
+
   /**
    * Operation index for a deterministic `RowLabelCommitError` or
    * `AclDocumentWriteRefused`.
    */
   failedOperation?: number;
 }
+
+/**
+ * One confirmed read of a sealed event-handler run, as the wave hands it to
+ * the sink's stale-read check (serving-loop.md §3d).
+ */
+export interface WaveReadQuery {
+  /** The document the read named. */
+  id: string;
+
+  /** The scope the read named, absent for a space-scoped read. */
+  scope?: CellScope;
+
+  /** The instance key that scope resolves to for the run. */
+  scopeKey: string;
+
+  /** The path the read observed. */
+  path: readonly string[];
+
+  /** The store seq the read's confirmed value stood at. */
+  seq: number;
+
+  /** A shallow read, which only a write at or above its path stales. */
+  nonRecursive?: boolean;
+}
+
+/**
+ * A served access-list change together with the list of changes its
+ * `change` function applies, so that a host whose memory server is on
+ * another thread can send the list and rebuild the function there.
+ */
+export type ListedServedAclChange = ServedAclChange & {
+  readonly changes: readonly SpaceAccessChange[];
+};
 
 /**
  * Where the wave commit step commits to. Stage F implements this on the
@@ -646,6 +697,13 @@ export interface WaveCommitRejection {
  *   the batch itself carries no store-level read CAS, and §3d forbids
  *   blind derived writes, so this re-verification is the load-bearing
  *   concurrency check;
+ * - `commitWave` MUST re-verify, inside that same transaction, every read
+ *   the batch's `handlerReads` carries — a served handler's recorded reads,
+ *   each held to the store's head at its path under the holder exemption —
+ *   and report the stale ones in `staleReads`, so that a commit admitted
+ *   between the accumulator's own read check and the transaction requeues
+ *   the event rather than landing a write computed from what the store
+ *   has replaced (§3d);
  * - whole-wave CAS failure is FORBIDDEN (§3d): a rejection must name what
  *   conflicted (or which preconditions failed, by index) so the wave
  *   resolves per doc, per write class, and re-attempts. The loop
@@ -654,6 +712,15 @@ export interface WaveCommitRejection {
  *   advanced — each re-attempt observes strictly newer store state.
  */
 export interface WaveCommitSink {
+  /**
+   * Whether the sink reports each batch it commits to the memory server
+   * itself, as `Server.noteExecutorCommit()` takes it, before `commitWave`
+   * returns; the loop then reports nothing for the batch. A sink on the
+   * memory server's own thread does, so that the fan-out of a wave's rows
+   * is under way before the loop, on another thread, does anything next.
+   */
+  readonly reportsCommits?: boolean;
+
   /** Current head seq per doc-instance key (`${id} ${scopeKey}`),
    * 0 for a doc never written. */
   currentHeads(
@@ -682,6 +749,22 @@ export interface WaveCommitSink {
     sinceSeq: number,
     holder: string | undefined,
   ): Promise<boolean>;
+
+  /**
+   * The reads among `reads` that are STALE — a commit after the read's seq
+   * wrote the read's path, and `holder`'s own derived commits do not account
+   * for it — each with the seq of the newest such commit, which is what the
+   * handler's replay waits for the replica to take (§3d). A tail append to a
+   * stream sidecar stales no read of an existing entry. This is the
+   * accumulator's own check, ahead of the per-doc dispositions; the sink's
+   * `commitWave` makes it again inside its transaction. A sink that cannot
+   * answer omits it, and the event-handler arm's read check stands down.
+   */
+  staleReads?(
+    space: MemorySpace,
+    reads: ReadonlyArray<WaveReadQuery>,
+    holder: string | undefined,
+  ): Promise<ReadonlyArray<{ read: WaveReadQuery; seq: number }>>;
 
   /**
    * The value paths that the authored commits of `session` overwrote in a
@@ -882,6 +965,21 @@ export interface WaveCommitOutcome {
     seq: number;
     writes: Array<{ id: string; scopeKey: ScopeKey }>;
   }>;
+
+  /** Events requeued at this commit step for a stale recorded read, the
+   * later entries of their streams folded in behind them included (§3d) —
+   * §7's `events.staleReadRequeues` feeds from this. */
+  staleReadRequeues: number;
+
+  /** Per event requeued for a stale read: the doc instances whose commits
+   * the replica must have taken before the event re-drains, each with the
+   * seq of the newest commit that staled a read of it, and the identity
+   * their scopes resolve against — the catch-up gate (§3d). */
+  requeueCatchUp: Array<{
+    eventId: string;
+    scopeKeyIdentity?: ScopeKeyIdentity;
+    docs: Array<{ id: string; scope?: CellScope; seq: number }>;
+  }>;
 }
 
 const docInstanceKey = (id: string, scopeKey: string): string =>
@@ -1030,6 +1128,19 @@ export class WaveAccumulator
     keys: Set<string>;
     sealedBefore: number;
   }> = [];
+
+  /**
+   * The predecessor's home commit where it landed after this wave took its
+   * basis ({@link noteOwnWaveCommit}), with the doc instances it wrote.
+   * Every contribution here read the replica with those writes applied,
+   * since the serving runtime's own optimistic layer held them before the
+   * commit was in flight, so a doc one writes that sits exactly at the
+   * commit's seq is rebased to that head rather than conflicting.
+   */
+  readonly #ownWaveCommits: Array<{ seq: number; keys: Set<string> }> = [];
+
+  /** The doc instances the home commit wrote, empty until it has landed. */
+  #committedHomeKeys: ReadonlySet<string> = new Set();
   readonly #scopeKeyIdentity: ScopeKeyIdentity;
   readonly #replicaFor: (space: MemorySpace) => ISpaceReplica;
   readonly #lease: WaveLease | undefined;
@@ -1228,6 +1339,15 @@ export class WaveAccumulator
     return this.#basisSeq;
   }
 
+  /**
+   * The doc instances (`${id} ${scopeKey}`) the home commit wrote as the
+   * replica holds them, which leaves out the docs it field-merged against a
+   * concurrent commit; empty until it has landed.
+   */
+  get committedHomeKeys(): ReadonlySet<string> {
+    return this.#committedHomeKeys;
+  }
+
   get contributionCount(): number {
     return this.#contributions.length;
   }
@@ -1253,6 +1373,23 @@ export class WaveAccumulator
       keys: new Set(docs.map((doc) => docInstanceKey(doc.id, doc.scopeKey))),
       sealedBefore: this.#contributions.length,
     });
+  }
+
+  /**
+   * Notes that the predecessor wave's home commit landed at `seq`, writing
+   * the doc instances `keys`, after this wave took its basis: the shape a
+   * seal leaves when it opens this wave while that commit is in flight to
+   * the store. A doc in `keys` that sits exactly at `seq` is not a conflict
+   * for any contribution here, each of which read the replica with the
+   * commit's writes applied: the replica's claim check refuses a run that
+   * read them stale at its own commit (`StorageTransactionInconsistent`),
+   * so no such run seals. The sink still re-verifies that the doc sits
+   * there. A commit at or below the basis is covered by the basis itself and
+   * leaves no note.
+   */
+  noteOwnWaveCommit(seq: number, keys: ReadonlySet<string>): void {
+    if (seq <= this.#basisSeq) return;
+    this.#ownWaveCommits.push({ seq, keys: new Set(keys) });
   }
 
   /** Contributions whose run kind is anything but the loop's own
@@ -2044,6 +2181,8 @@ export class WaveAccumulator
       orphanDeliveriesRefused: 0,
       dispositions: this.#contributions.map(() => ({ kind: "committed" })),
       foreignCommits: [],
+      staleReadRequeues: 0,
+      requeueCatchUp: [],
     };
 
     // The lease check (serving-loop.md §2's stop-committing MUST): work
@@ -2096,6 +2235,11 @@ export class WaveAccumulator
     const requeued = new Set<number>();
     const droppedWhole = new Set<number>();
 
+    /** Event-handler contributions requeued for a stale recorded read, and
+     * those folded in behind one of them for stream order (§3d): the
+     * events `staleReadRequeues` counts. */
+    const staleReadRequeued = new Set<number>();
+
     /** Event-handler contributions refused as ORPHANS (stage C build W3,
      * (α3)) — a subset of `droppedWhole`, kept apart for the
      * disposition message; the outcome COUNT is per EVENT
@@ -2133,11 +2277,33 @@ export class WaveAccumulator
      * doc still sits exactly there inside its store transaction). */
     const rebasedHeads = new Map<string, number>();
 
+    /** Rebased docs whose write was field-merged against a concurrent
+     * commit: the store then holds a merge the replica never did, which
+     * is why the successor wave is not told of these. A doc rebased with
+     * its write standing whole is not among them. */
+    const mergedDocs = new Set<string>();
+
     const heads = new Map(
       await sink.currentHeads(this.#space, [...allDocs.values()]),
     );
     for (const [key] of allDocs) {
-      if ((heads.get(key) ?? 0) > this.#basisSeq) conflicted.add(key);
+      const head = heads.get(key) ?? 0;
+      if (head <= this.#basisSeq) continue;
+      // A doc sitting exactly at the predecessor's commit that landed after
+      // the basis (noteOwnWaveCommit) is rebased to that head for every
+      // contribution writing it, and the sink re-verifies it there.
+      if (
+        this.#ownWaveCommits.some((own) =>
+          own.seq === head && own.keys.has(key)
+        )
+      ) {
+        rebasedHeads.set(key, head);
+        for (const [index, docs] of homeWrites.entries()) {
+          if (docs.has(key)) rebasedDocs[index].add(key);
+        }
+        continue;
+      }
+      conflicted.add(key);
     }
 
     /** Whether `key` conflicts FOR this contribution: the doc moved past
@@ -2165,10 +2331,11 @@ export class WaveAccumulator
      * Dropping costs nothing: the value is re-derivable, and a derivation
      * that read the doc carries it in its basis rows, so the arrival of
      * the commit it missed re-runs it through the ordinary dependency
-     * path. Non-re-derivable consequences keep the wave's basis alone —
-     * their conflict arm rebases or requeues rather than dropping, and
-     * requeueing against a seq the replica has not caught up to is the
-     * sustained-traffic livelock §3d forbids. */
+     * path. A non-re-derivable consequence takes no view check here: its
+     * reads are held to the store ahead of this loop, and one with a stale
+     * read is requeued whole before any doc of its reaches this, so what
+     * arrives here rests on current reads and conflicts on its written
+     * docs against the wave's basis alone. */
     const conflictsFor = async (
       contribution: WaveContribution,
       key: string,
@@ -2376,6 +2543,7 @@ export class WaveAccumulator
             ) {
               rebasedDocs[contribution.index].add(key);
               rebasedHeads.set(key, heads.get(key) ?? 0);
+              mergedDocs.add(key);
             } else if (contribution.context.kind === "event-handler") {
               requeued.add(contribution.index);
               break;
@@ -2537,9 +2705,29 @@ export class WaveAccumulator
           // cannot see a droppedWhole orphan, hence the separate fold.
           const eventOrphaned = sameEvent !== undefined &&
             orphanRefusedEvents.has(sameEvent);
+          // A requeue keeps the order events.md §2 promises per stream: an
+          // event-handler contribution whose durable entry sits later in
+          // the same stream as a requeued one requeues with it, and its
+          // replay re-drains behind that head (§3d). Later is by seq, and
+          // by position among entries one commit appended, which share a
+          // seq.
+          const entry = contribution.context.streamEntry;
+          const requeuedAheadInStream = (
+            within: ReadonlySet<number>,
+          ): boolean =>
+            contribution.context.kind === "event-handler" &&
+            entry !== undefined &&
+            this.#contributions.some((c) => {
+              const ahead = c.context.streamEntry;
+              return within.has(c.index) && ahead !== undefined &&
+                ahead.sidecarId === entry.sidecarId &&
+                (ahead.seq < entry.seq ||
+                  (ahead.seq === entry.seq && ahead.index < entry.index));
+            });
+          const streamOrderRequeued = requeuedAheadInStream(requeued);
           if (
             !parentRequeued && !eventRequeued && !readWithdrawn &&
-            !emitterWithdrawn && !eventOrphaned
+            !emitterWithdrawn && !eventOrphaned && !streamOrderRequeued
           ) {
             continue;
           }
@@ -2549,7 +2737,7 @@ export class WaveAccumulator
           if (contribution.context.kind === "event-handler") {
             if (
               (emitterWithdrawn || eventOrphaned) && !parentRequeued &&
-              !eventRequeued && !readWithdrawn
+              !eventRequeued && !readWithdrawn && !streamOrderRequeued
             ) {
               droppedWhole.add(idx);
               orphanRefused.add(idx);
@@ -2564,6 +2752,9 @@ export class WaveAccumulator
               }
             } else {
               requeued.add(idx);
+              if (requeuedAheadInStream(staleReadRequeued)) {
+                staleReadRequeued.add(idx);
+              }
             }
           } else {
             if (readWithdrawn && contribution.context.kind === "derivation") {
@@ -2626,6 +2817,37 @@ export class WaveAccumulator
           droppedWhole.add(contribution.index);
           outcome.dependencyDroppedWrites += this.#homeOpCount(contribution);
         }
+      }
+    }
+
+    // The stale-read check of the non-re-derivable class (§3d): an
+    // event-handler contribution is held to its recorded reads, each at its
+    // path against the store's head, exempting the tenure's own derived
+    // commits as `conflictsFor` does for a derivation's view. A stale read
+    // requeues the event whole, ahead of every per-doc disposition: the
+    // run's output as a whole rests on what it read, and nothing here can
+    // tell which write a read decided. What the replay waits for is the
+    // newest commit that staled each read, carried out per doc.
+    if (sink.staleReads !== undefined) {
+      for (const contribution of this.#contributions) {
+        const idx = contribution.index;
+        if (
+          contribution.context.kind !== "event-handler" ||
+          requeued.has(idx) || droppedWhole.has(idx)
+        ) {
+          continue;
+        }
+        const reads = this.#handlerReadsOf(contribution);
+        if (reads.length === 0) continue;
+        const stale = await sink.staleReads(
+          this.#space,
+          reads,
+          this.#lease?.holder,
+        );
+        if (stale.length === 0) continue;
+        requeued.add(idx);
+        staleReadRequeued.add(idx);
+        this.#noteCatchUp(outcome, contribution, stale);
       }
     }
 
@@ -2755,6 +2977,7 @@ export class WaveAccumulator
           0,
           foreignSeqs,
           orphanRefused,
+          staleReadRequeued,
         );
         return outcome;
       }
@@ -2774,7 +2997,21 @@ export class WaveAccumulator
           result.ok.seq,
           foreignSeqs,
           orphanRefused,
+          staleReadRequeued,
         );
+        // A doc this wave field-merged sits at a merge the replica never
+        // held, so it is left out: a successor's write to it conflicts.
+        const committed = new Set<string>();
+        for (const contribution of this.#survivors(requeued, droppedWhole)) {
+          for (const key of homeWrites[contribution.index].keys()) {
+            if (
+              !droppedDocs[contribution.index].has(key) && !mergedDocs.has(key)
+            ) {
+              committed.add(key);
+            }
+          }
+        }
+        this.#committedHomeKeys = committed;
         outcome.seq = result.ok.seq;
         return outcome;
       }
@@ -2806,6 +3043,7 @@ export class WaveAccumulator
           // this doc so the next resolve pass re-decides against the
           // new head (§3d's re-CAS).
           rebasedHeads.delete(key);
+          mergedDocs.delete(key);
           for (const perContribution of rebasedDocs) {
             perContribution.delete(key);
           }
@@ -2829,6 +3067,37 @@ export class WaveAccumulator
           }
           progressed = true;
         }
+      }
+      // The sink found reads stale inside its transaction: a commit landed
+      // after our own check, and each owning event requeues as it would
+      // have then (§3d). Gathered per contribution first, so the catch-up
+      // names every doc the replay waits for, not the first one found.
+      const staleByOwner = new Map<
+        number,
+        Array<{ read: WaveReadQuery; seq: number }>
+      >();
+      for (const stale of rejection.staleReads ?? []) {
+        const owner = stale.contribution;
+        const read = batch.handlerReads
+          ?.find((entry) => entry.contribution === owner)
+          ?.reads[stale.read];
+        if (
+          read === undefined || requeued.has(owner) || droppedWhole.has(owner)
+        ) {
+          continue;
+        }
+        let held = staleByOwner.get(owner);
+        if (held === undefined) {
+          held = [];
+          staleByOwner.set(owner, held);
+        }
+        held.push({ read, seq: stale.seq });
+      }
+      for (const [owner, stale] of staleByOwner) {
+        requeued.add(owner);
+        staleReadRequeued.add(owner);
+        this.#noteCatchUp(outcome, this.#contributions[owner], stale);
+        progressed = true;
       }
       if (!progressed) {
         logger.warn("wave-commit-rejected", () => [
@@ -2946,7 +3215,7 @@ export class WaveAccumulator
     context: WaveRunContext,
     space: MemorySpace,
     changes: readonly SpaceAccessChange[],
-  ): ServedAclChange | undefined {
+  ): ListedServedAclChange | undefined {
     const carriage = delegatedCarriageOf(context);
     const { eventId, streamEntry } = context;
     if (
@@ -2970,6 +3239,7 @@ export class WaveAccumulator
       },
       change: (stored) =>
         applyAccessListChanges(space, validateStoredAcl(stored), changes),
+      changes,
     };
   }
 
@@ -3013,6 +3283,63 @@ export class WaveAccumulator
     contribution: WaveContribution,
   ): SealedSpaceContribution | undefined {
     return contribution.spaces.find((s) => s.space === this.#space);
+  }
+
+  /**
+   * The confirmed reads of a contribution's home transaction, as the wave
+   * hands them to the sink's stale-read check and carries them in the home
+   * batch for the sink's re-verification (§3d). Empty for a contribution
+   * that sealed nothing in the home space.
+   */
+  #handlerReadsOf(contribution: WaveContribution): WaveReadQuery[] {
+    const home = this.#homeSealed(contribution);
+    if (home === undefined) return [];
+    return home.sealed.commit.reads.confirmed.map((read): WaveReadQuery => ({
+      id: read.id,
+      ...(read.scope === undefined ? {} : { scope: read.scope }),
+      scopeKey: this.#scopeKeyFor(read.scope, contribution.context),
+      path: read.path,
+      seq: read.seq,
+      ...(read.nonRecursive === undefined
+        ? {}
+        : { nonRecursive: read.nonRecursive }),
+    }));
+  }
+
+  /**
+   * Records in `outcome` what the replay of `contribution`'s event waits
+   * for: each doc instance a stale read named, at the newest seq that staled
+   * a read of it — the catch-up gate's input (§3d). A contribution with no
+   * event, such as an in-process cascade copy, gates nothing.
+   */
+  #noteCatchUp(
+    outcome: WaveCommitOutcome,
+    contribution: WaveContribution,
+    stale: ReadonlyArray<{ read: WaveReadQuery; seq: number }>,
+  ): void {
+    const eventId = contribution.context.eventId;
+    if (eventId === undefined) return;
+    const docs = new Map<
+      string,
+      { id: string; scope?: CellScope; seq: number }
+    >();
+    for (const { read, seq } of stale) {
+      const key = docInstanceKey(read.id, read.scopeKey);
+      const held = docs.get(key);
+      if (held === undefined || held.seq < seq) {
+        docs.set(key, {
+          id: read.id,
+          ...(read.scope === undefined ? {} : { scope: read.scope }),
+          seq,
+        });
+      }
+    }
+    const identity = contribution.context.scopeKeyIdentity;
+    outcome.requeueCatchUp.push({
+      eventId,
+      ...(identity === undefined ? {} : { scopeKeyIdentity: identity }),
+      docs: [...docs.values()],
+    });
   }
 
   #foreignSealed(contribution: WaveContribution): SealedSpaceContribution[] {
@@ -3275,6 +3602,10 @@ export class WaveAccumulator
     const consequenceOf: string[] = [];
     const sqliteScopeKeys: Array<{ op: number; scopeKey: ScopeKey }> = [];
     const outboxAppends: OutboxAppendRow[] = [];
+    const handlerReads: Array<{
+      contribution: number;
+      reads: WaveReadQuery[];
+    }> = [];
     // §3b's overwrite unit: when one wave holds several runs of the same
     // (action, instance) — a later contribution re-ran the action against
     // earlier sealed writes — the LAST run's rows replace the earlier
@@ -3282,6 +3613,12 @@ export class WaveAccumulator
     const basisInstances = new Map<string, WaveBasisInstanceRows>();
     for (const contribution of this.#survivors(requeued, droppedWhole)) {
       const context = contribution.context;
+      if (context.kind === "event-handler") {
+        const reads = this.#handlerReadsOf(contribution);
+        if (reads.length > 0) {
+          handlerReads.push({ contribution: contribution.index, reads });
+        }
+      }
       // FP1's fold completeness (the stage-G review's M-A): appends and
       // consequence coverage ride EVERY survivor — one that sealed only
       // FOREIGN spaces, or sealed nothing at all (the zero-seal emitter
@@ -3570,6 +3907,7 @@ export class WaveAccumulator
         : { derivedThrough: this.#derivedThrough }),
       ...(sqliteScopeKeys.length === 0 ? {} : { sqliteScopeKeys }),
       ...(outboxAppends.length === 0 ? {} : { outboxAppends }),
+      ...(handlerReads.length === 0 ? {} : { handlerReads }),
     };
   }
 
@@ -3785,8 +4123,24 @@ export class WaveAccumulator
     homeSeq: number,
     foreignSeqs: ReadonlyMap<string, number>,
     orphanRefused: ReadonlySet<number> = new Set(),
+    staleReadRequeued: ReadonlySet<number> = new Set(),
   ): void {
     this.#reportRequeuedEvents(outcome, (idx) => requeued.has(idx));
+    // Counted per EVENT, as the requeue is reported: an event sealing
+    // several contributions counts once, and one the report leaves out (a
+    // cascade child with no entry of its own) counts nowhere, and gates
+    // nothing.
+    const staleReadEvents = new Set<string>();
+    for (const idx of staleReadRequeued) {
+      const eventId = this.#contributions[idx].context.eventId;
+      if (eventId !== undefined && outcome.requeuedEventIds.includes(eventId)) {
+        staleReadEvents.add(eventId);
+      }
+    }
+    outcome.staleReadRequeues = staleReadEvents.size;
+    outcome.requeueCatchUp = outcome.requeueCatchUp.filter((gate) =>
+      outcome.requeuedEventIds.includes(gate.eventId)
+    );
     const acceptedBySpace = new Map<
       MemorySpace,
       Array<{ contribution: SealedSpaceContribution; seq: number }>

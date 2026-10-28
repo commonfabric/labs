@@ -146,6 +146,25 @@ describe("list-result-container-seed", () => {
       expect(logger.warnings).toEqual([]);
     });
 
+    it("writes nothing to a container the pull left absent with `seedEmpty` false, and re-arms the coordinator", async () => {
+      const container = newContainer("absent-left-unseeded");
+      let rearmed = 0;
+      await seedResultContainerWhenPullSettles(
+        runtime,
+        container,
+        () => true,
+        () => rearmed++,
+        Promise.resolve(),
+        logger,
+        "map/resume-seed/of:absent-left-unseeded",
+        undefined,
+        false,
+      );
+      expect(valueOf(container)).toBeUndefined();
+      expect(rearmed).toBe(1);
+      expect(logger.warnings).toEqual([]);
+    });
+
     it("counts against the storage settle barrier until the seed has landed", async () => {
       const container = newContainer("barrier-held-until-seeded");
       const pull = Promise.withResolvers<void>();

@@ -1874,15 +1874,17 @@ Tasks:
       judges foreign rows against their own co-hosted engines
       (serving-loop.md §6 step 2, pinned at the helper —
       `selectForeignStaleInstances`).
-      Foreign SCOPED reads are FAIL-CLOSED refused at both ends — the
-      RULED 2026-08-13 delegated-scoped-read precondition: the
-      grant-scoped read design landed in protocol.md §2 (carried actor
-      + grant; resolution refuses, never envelope fallback), its
-      fail-closed interim is the producer-side provider refusal + the
-      admission-side unnamed-scoped refusal, and the read row gained
-      FP2's cross-engine widening + the per-process full-DR1-holder
+      Foreign SCOPED reads are admitted on the reading actor's own READ
+      grant in the target space's access list, the actor's entry or an
+      `ANYONE` entry granting READ or more, and refused otherwise —
+      protocol.md §2's grant-scoped read (RULED 2026-10-27): the
+      serving manager's gate asks `Server.foreignReadAuthorityFor`
+      before a named read leaves it, admission resolves the same grant
+      for a named root in a space whose lease the requester does not
+      hold and refuses an unnamed one, and the read row keeps FP2's
+      cross-engine widening + the per-process full-DR1-holder
       sharpening (`v2-explicit-read.test.ts`'s Phase-5 arms,
-      red-first).
+      `executor-cross-space.test.ts`'s grant-scoped read cases).
 - [ ] Per-reader clearance enforced where the read is served (sqlite row
       admissibility, CFC labels). (The per-reader memo/materialization
       machinery is builtins.md §2's landed base; cross-space label

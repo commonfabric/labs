@@ -222,9 +222,10 @@ space.
   claim, not proof of access.
 - **`participantEntries`** pairs each of `participants` with the principal it
   stands for: one entry per participant, in the order of `participants`,
-  holding its `profile` and, as `principal`, the principal its profile's
-  `represents-principal` label attests. An entry has no `principal` when its
-  profile attests none, or when the label can't be read where the list is
+  holding its `profile` and, as `principal`, the principal whose own profile
+  it is (`profileOwnerOf()`). An entry has no `principal` when its profile is
+  no one's, as one whose `name` links outside its own documents is, or when
+  its label can't be read where the list is
   derived, as when the profile's space refuses the reader, so two readers can
   read different principals for the same participant. It is derived for each
   reader and is best effort, not an access list, and like `participants` it is
@@ -249,8 +250,8 @@ space.
   `sendMessage` records as a message's `authorProfile`, so a client tells the
   reader's own messages from the rest by comparing the two links, and finds
   the reader among `participants` the same way. Its `principal` is the
-  principal that profile's `represents-principal` label attests, absent where
-  it attests none or the label can't be read, as for `participantEntries`. Its
+  principal whose own profile that is (`profileOwnerOf()`), absent where it is
+  no one's or its label can't be read, as for `participantEntries`. Its
   `role` is the reader's access to the room's space, as the space's access
   list grants it (`OWNER`, `WRITE`, `READ`, or `none`), absent while that
   isn't known. Like `participantEntries`, the profile and the principal are
@@ -589,10 +590,10 @@ repeated or delayed event can't undo what the person meant.
   and is given one of its own.
 - `target.value?: string` — The chat address of the person to admit: a
   principal's DID, as the room's add control holds it.
-- `profile?: Cell<ChatProfile>` — The person's profile, whose
-  `represents-principal` label names them, as the reader's manager lists it in
-  its `people`. Given with `target.value`, the two must name the same person;
-  given alone, the label names whom to admit.
+- `profile?: Cell<ChatProfile>` — The person's profile, theirs by
+  `profileOwnerOf()`, as the reader's manager lists it in its `people`. Given
+  with `target.value`, the two must name the same person; given alone, the
+  person whose own profile it is is the one to admit.
 
 Admits someone to a room's space, and has the reader's chat manager
 ([`ChatManagerOutput`](ChatManagerOutput.md)) tell them of the room. Unlike the

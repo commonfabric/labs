@@ -1202,6 +1202,12 @@ const ARGUMENT_PROVIDERS: Readonly<
   // spelling that points a name at a collection. Same grammar as a link
   // endpoint, so the same candidates.
   "piece set-slug:source": pieceWithPathCandidates,
+  // A picture has no single extension; the shell's own file completion is
+  // the honest candidate set, for the file read and the file written.
+  "profile set-picture:image-file": () =>
+    Promise.resolve(directive({ kind: "files" })),
+  "profile get-picture:file": () =>
+    Promise.resolve(directive({ kind: "files" })),
   "piece new:main": patternFiles,
   "piece setsrc:main": patternFiles,
   "check:files": patternFiles,

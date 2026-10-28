@@ -7,8 +7,9 @@
  * enforcing modes. This tool is the host-side way to the same file: it takes
  * the value as its input, validates it against the configured schema, and the
  * host writes it where the file-based path would have left it, so everything
- * downstream reads one place. An accepted value is the run's return: the
- * prompt loop ends the run after the turn that submitted it.
+ * downstream reads one place. An accepted value is the run's return. The
+ * prompt loop ends after that turn unless the driver supplies a pending steer
+ * and another model turn remains; a later submission replaces the value.
  *
  * A handle token in the value stays the token the model wrote. The token is
  * what a result writer resolves; the prompt loop exempts this tool's input

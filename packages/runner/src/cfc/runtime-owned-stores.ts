@@ -91,8 +91,8 @@ export const runtimeOwnedStoreKey = (space: string, id: string): string =>
  * key would let one instance's teardown take the other's enrollments with it.
  *
  * A piece owns nothing outside its own space. A store elsewhere belongs to
- * whoever holds that space's replicas, so a policy declared on it out of this
- * piece's flow join would put those bytes behind a promise made here.
+ * whoever holds that space's replicas, so this piece supplies no ownership
+ * authority for admitting its writes.
  */
 export const runtimeOwnedStoreOwnerKey = (
   store: { space: string },

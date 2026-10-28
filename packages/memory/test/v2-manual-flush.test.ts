@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { spy } from "@std/testing/mock";
 import { FakeTime } from "@std/testing/time";
 
 import {
@@ -194,6 +195,36 @@ describe("v2 server manual flush mode", () => {
 
       await server.flushSessions([spaceB]);
       expect(deliveredDocIds(messagesB)).toEqual(["of:doc:b"]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("evaluates no watch set for a flush naming a space nothing dirtied", async () => {
+    // A caller that flushes after its own write finds the batch already sent
+    // whenever an earlier flush took it first.
+
+    const server = new Server({
+      ...testSessionOpenServerOptions,
+      store: new URL("memory://manual-flush-clean"),
+      subscriptionRefreshDelayMs: "manual",
+    });
+    try {
+      const space = "did:key:z6Mk-manual-flush-clean";
+      const messages = await openWatchingSession(server, space, "of:doc:k");
+      await server.writeDocument(space, "of:doc:k", { sent: true });
+      await server.flushSessions([space]);
+      expect(deliveredDocIds(messages)).toEqual(["of:doc:k"]);
+      messages.length = 0;
+
+      const evaluations = spy(server, "evaluateWatchSet");
+      try {
+        await server.flushSessions([space]);
+        expect(evaluations.calls).toEqual([]);
+      } finally {
+        evaluations.restore();
+      }
+      expect(messages).toEqual([]);
     } finally {
       await server.close();
     }

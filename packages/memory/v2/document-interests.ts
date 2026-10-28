@@ -3,6 +3,7 @@
  * The lookup reads existing indexes; it never loads or traverses documents.
  */
 import { DEFAULT_BRANCH } from "../v2.ts";
+import type { ClientInfo } from "./client-info.ts";
 import { toDocKey, type TrackedGraphState } from "./query.ts";
 import { cacheKeyForEntity } from "./server-sync.ts";
 import type { SessionState } from "./session-registry.ts";
@@ -26,6 +27,10 @@ export type DocumentInterestQuery = {
 export type DocumentInterestSession = {
   /** Session identifier, never a session token. */
   sessionId: string;
+
+  /** Self-reported runtime identity; `null` when the client supplied none. */
+  client: ClientInfo | null;
+
   /** Authenticated identity that opened the session, when known. */
   principal: string | null;
   /** Delegated read identity, when the session has one. */
@@ -140,6 +145,7 @@ export function inspectDocumentInterests(
     if (matches.length === limit) continue;
     matches.push({
       sessionId: session.id,
+      client: session.client === undefined ? null : { ...session.client },
       principal: session.principal ?? null,
       actingPrincipal: session.actingPrincipal ?? null,
       connectionId: session.ownerConnectionId,

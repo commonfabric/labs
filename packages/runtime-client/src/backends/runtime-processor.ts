@@ -525,8 +525,8 @@ export function browserWorkerParamsFromInitializationData(
   return {
     apiUrl: new URL(data.apiUrl),
     storageManager,
-    // The host decides the flags (shell build-time defines); absent ⇒ runtime
-    // defaults.
+    // The host decides the flags (the shell's build-time defines and the ones
+    // it adopts from its deployment); absent ⇒ runtime defaults.
     experimental: data.experimental ?? {},
     telemetry,
     ...(data.spaceHostMap !== undefined
@@ -546,6 +546,9 @@ export function browserWorkerParamsFromInitializationData(
       : {}),
     ...(data.cfcReadOnExceed !== undefined
       ? { cfcReadOnExceed: data.cfcReadOnExceed }
+      : {}),
+    ...(data.preferredProfileSpace !== undefined
+      ? { preferredProfileSpace: data.preferredProfileSpace }
       : {}),
     ...(data.cfcTrustConfig !== undefined
       ? { cfcTrustConfig: data.cfcTrustConfig }
@@ -858,6 +861,7 @@ export function securityContextFrom(
     cfcFlowLabels: data.cfcFlowLabels,
     cfcReadMaxConfidentiality: data.cfcReadMaxConfidentiality,
     cfcReadOnExceed: data.cfcReadOnExceed,
+    preferredProfileSpace: data.preferredProfileSpace,
     cfcTrustConfig: data.cfcTrustConfig,
     renderDeclassificationPolicy: data.renderDeclassificationPolicy,
     renderConfidentialityCeiling: data.renderConfidentialityCeiling,
@@ -1086,6 +1090,7 @@ export class RuntimeProcessor {
   #cancelSpaceAccessLoss?: Cancel;
   #cancelSpaceAccessRestored?: Cancel;
   #cancelConnectionRestored?: Cancel;
+  #cancelClientUpdateRequired?: Cancel;
 
   /**
    * The retries of refused spaces in flight, which the render boundaries'
@@ -1129,6 +1134,17 @@ export class RuntimeProcessor {
     // the space with no access error. A storage manager that cannot say what
     // the error is cannot tell the two apart, so nothing is posted for it.
     const storage = runtime.storageManager;
+    this.#cancelClientUpdateRequired = storage?.subscribeClientUpdateRequired?.(
+      (status) => {
+        for (const client of clients()) {
+          client.post({
+            type: NotificationType.ErrorReport,
+            code: RuntimeErrorCode.ClientUpdateRequired,
+            ...status,
+          });
+        }
+      },
+    );
     const accessError = storage?.spaceAccessError?.bind(storage);
     if (accessError !== undefined) {
       this.#cancelSpaceAccessRestored = storage?.subscribeSpaceAccessChange?.(
@@ -1470,6 +1486,8 @@ export class RuntimeProcessor {
         this.#cancelSpaceAccessRestored = undefined;
         this.#cancelConnectionRestored?.();
         this.#cancelConnectionRestored = undefined;
+        this.#cancelClientUpdateRequired?.();
+        this.#cancelClientUpdateRequired = undefined;
         this.#spaceAccessRetries.dispose();
         this.#intentOutcomeCancel = undefined;
         this.#profilePreloadCancel?.();
@@ -1516,6 +1534,17 @@ export class RuntimeProcessor {
 
   isDisposed(): boolean {
     return this.#isDisposed;
+  }
+
+  /** Sends an attached client the runtime's retained update requirement. */
+  reportClientUpdateRequired(client: WorkerClient): void {
+    const status = this.#runtime.storageManager?.clientUpdateRequired?.();
+    if (status === undefined) return;
+    client.post({
+      type: NotificationType.ErrorReport,
+      code: RuntimeErrorCode.ClientUpdateRequired,
+      ...status,
+    });
   }
 
   /**
@@ -4468,6 +4497,8 @@ export class RuntimeProcessor {
 
     const storageManager = StorageManager.open({
       as: identity,
+      clientBuild: data.clientBuild ??
+        { application: "runtime-client", gitSha: null },
       memoryHost,
       spaceHostMap: data.spaceHostMap,
       // Host dogfood toggle (commonfabric.concurrentWatchRefresh): overlap

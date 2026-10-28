@@ -16,6 +16,10 @@ import {
   principalClaimSubject,
   representsPrincipalSubject,
 } from "@commonfabric/runner/cfc/represents-principal";
+import {
+  cfcSchemaGivesNoShape,
+  cfcSchemaIsInternalKey,
+} from "@commonfabric/runner/cfc/schema-primitives";
 import type { JSONSchema } from "@commonfabric/runner/shared";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
@@ -152,6 +156,58 @@ export const AUTHOR_CLAIM_SCHEMA: JSONSchema = {
  */
 const asClaimReader = (author: unknown): unknown =>
   isCellHandle(author) ? author.asSchema(AUTHOR_CLAIM_SCHEMA) : author;
+
+/**
+ * The shape a value cell bound with no shape of its own is read under: a
+ * primitive or `null` as it is, a record as one holding none of its fields,
+ * and a list as references to its elements. The observation wants the value's
+ * label, not the value, and a read under it still reads the value's position,
+ * so a change there or to the label runs the observation again. A record's
+ * fields are not read; a list's elements are, each link among them resolved
+ * and its target read at its root alone, and nothing below that root is
+ * followed. It reads every value as something,
+ * since the connection drops an update holding nothing, and the label rides
+ * the update. Without it the value reads whole through a proxy, following
+ * every link it holds.
+ */
+export const VALUE_LABEL_SCHEMA: JSONSchema = {
+  anyOf: [
+    { type: ["string", "number", "boolean", "null"] },
+    { type: "object", properties: {} },
+    { type: "array", items: { type: "unknown" } },
+  ],
+};
+
+/**
+ * Whether `schema` declares nothing at all for a read of its cell: it gives no
+ * shape (`cfcSchemaGivesNoShape()`), and carries none of the keywords the
+ * runtime reads for itself (`cfcSchemaIsInternalKey()`: `ifc`, `asCell`,
+ * `asStream`, `scope`), which constrain no value but do bear on the read.
+ */
+const declaresNothing = (schema: JSONSchema | undefined): boolean =>
+  cfcSchemaGivesNoShape(schema) &&
+  !(isObjectOrArray(schema) &&
+    Object.keys(schema).some(cfcSchemaIsInternalKey));
+
+/**
+ * `value` as the observation reads it: narrowed to {@link VALUE_LABEL_SCHEMA}
+ * when it is a `CellHandle` whose schema, or the ancestor schema the worker
+ * narrows it from, declares nothing, else as given.
+ *
+ * The label is read at the cell's address, and a schema bears on that read
+ * only through what it declares about following links: an `asCell` or
+ * `scope` cap, or a stream. A schema that declares nothing declares none of
+ * them, and neither does the narrowed one, so the label is the one the cell
+ * as bound reads. Any other schema, one that gives no shape but carries a
+ * runtime keyword among them, is kept.
+ */
+const asLabelReader = (value: unknown): unknown => {
+  if (!isCellHandle(value)) return value;
+  const { schema, keyedFrom } = value.ref();
+  return declaresNothing(schema ?? keyedFrom?.schema)
+    ? value.asSchema(VALUE_LABEL_SCHEMA)
+    : value;
+};
 
 const hasLabelQuery = (value: unknown): value is CfcLabelQueryableValue =>
   isObjectOrArray(value) &&
@@ -539,7 +595,11 @@ export const authorshipStateForLabel = (
  * `$author` on `cf-cfc-authorship`). Either may also be a plain value, which
  * has no label to load. An author `CellHandle` is read under
  * {@link AUTHOR_CLAIM_SCHEMA}, the fields a claim is read from and no more,
- * whatever schema it was bound with. A label counts as loaded once a read of
+ * whatever schema it was bound with. A value `CellHandle` whose schema
+ * declares nothing (no shape and no runtime keyword) is read under
+ * {@link VALUE_LABEL_SCHEMA}: its position, and for a list each element's
+ * target at its root alone. Any other value `CellHandle` is read as it is
+ * bound. A label counts as loaded once a read of
  * it has finished with nothing left waiting: the value's own label, or that
  * of the
  * cell it resolves to, is read, from the subscription's update when that
@@ -611,7 +671,7 @@ class AuthorshipObservationState {
     kind: string,
     authorName: string | undefined,
   ) {
-    this.#value = value;
+    this.#value = asLabelReader(value);
     this.#author = asClaimReader(author);
     this.#onState = onState;
     this.#kind = kind;

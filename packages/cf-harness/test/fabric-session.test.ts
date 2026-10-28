@@ -96,6 +96,10 @@ describe("fabric-session", () => {
         loadIdentity: () => Promise.resolve(identity),
         initialize: (options) => {
           expect(options.identity).toBe(identity);
+          expect(options.clientBuild).toEqual({
+            application: "cf-harness",
+            gitSha: null,
+          });
           expect(routed).toEqual([]);
           return Promise.resolve(controller);
         },

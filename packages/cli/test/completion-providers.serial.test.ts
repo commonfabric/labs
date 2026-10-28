@@ -293,6 +293,8 @@ const DIRECTIVE_CASES: Array<[string, string, string | undefined]> = [
   ["cf piece new --input-file ", "files", undefined],
   ["cf view ", "files", undefined],
   ["cf exec ", "files", undefined],
+  ["cf profile set-picture x0 ", "files", undefined],
+  ["cf profile get-picture x0 ", "files", undefined],
   ["cf space clone --to ", "dirs", undefined],
   ["cf space clone x --from ", "files", undefined],
   ["cf space verify ", "dirs", undefined],

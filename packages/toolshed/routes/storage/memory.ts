@@ -102,6 +102,7 @@ export { memoryEngineStoreUrl };
 await FS.ensureDir(memoryEngineStoreUrl);
 
 export const memoryServer = new MemoryServer.Server({
+  minimumClientGeneration: env.MEMORY_MINIMUM_CLIENT_GENERATION,
   store: memoryEngineStoreUrl,
   authorizeSessionOpen,
   ...(sharedMemoryConnection || routerPolicy !== undefined

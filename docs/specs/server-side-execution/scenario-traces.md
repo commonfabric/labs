@@ -671,7 +671,11 @@ these.
   counter was missing from §7's stats shape — FIXED with this fold.)
 - Q2: non-re-derivable writes REBASE AND RETRY with field-level
   merge; the watermark advance and its consequences move TOGETHER,
-  never separately. [serving-loop §3d; events §4]
+  never separately. An event-handler contribution with a stale
+  recorded read requeues WHOLE ahead of the rebase, the later entries
+  of its stream in the wave requeue with it, and the re-drain waits on
+  the replica taking the commit that staled the read. [serving-loop
+  §3d, PROPOSED 2026-10-23; events §2, §5]
 - Q3: semantic rebase conflict ⇒ REQUEUE (ran, raced) — distinct
   from DROP (cannot run at all) — distinct again from the
   superseded-WRITE drop. [serving-loop §3d; events §5]

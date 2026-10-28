@@ -186,6 +186,10 @@ describe("openGithubFabricRuntime", () => {
     const memoryHosts: string[] = [];
     using _open = stub(StorageManager, "open", (options) => {
       memoryHosts.push(options.memoryHost.href);
+      expect(options.clientBuild).toEqual({
+        application: "github-host",
+        gitSha: null,
+      });
       return StorageManager.emulate({ as: options.as });
     });
     const runtimeMemoryUrls: (string | undefined)[] = [];

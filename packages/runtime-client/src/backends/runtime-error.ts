@@ -10,7 +10,12 @@ import {
 import { postToClient } from "./post-to-client.ts";
 
 /** The code a runtime error crosses to the client with, if it has one. */
-export function runtimeErrorCode(error: unknown): RuntimeErrorCode | undefined {
+export function runtimeErrorCode(
+  error: unknown,
+):
+  | RuntimeErrorCode.CompilerStackLoadFailed
+  | RuntimeErrorCode.SpaceNotFound
+  | undefined {
   return error instanceof CompilerStackLoadError
     ? RuntimeErrorCode.CompilerStackLoadFailed
     : error instanceof SpaceNotFoundError

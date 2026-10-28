@@ -21,6 +21,7 @@ import type {
   PresenceFacets,
   PresenceRecord,
 } from "@commonfabric/memory/v2";
+import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
 import type { MetaField, RuntimeSizes } from "@commonfabric/runner";
 import type {
   CfcConfClause,
@@ -703,6 +704,9 @@ export type IPCClientMessage = {
  * only by its message.
  */
 export enum RuntimeErrorCode {
+  /** The memory server requires replacing this runtime before it can mount. */
+  ClientUpdateRequired = "client-update-required",
+
   /**
    * The worker could not load its compiler stack, so nothing it was asked to
    * compile can run. Distinguished because the client's remedy is a reload
@@ -813,6 +817,12 @@ export type BaseRequest = {
  * lifetime -- nothing here can be changed by a later request.
  */
 export type InitializationData = {
+  /**
+   * Application name and loaded labs commit reported by the embedder. When
+   * absent, the runtime reports `runtime-client` with an unknown Git SHA.
+   */
+  clientBuild?: ClientBuild;
+
   /**
    * The backend server. It serves the HTTP APIs, patterns, LLM requests and
    * the health check, and is the default storage host when `memoryUrl` is
@@ -963,6 +973,14 @@ export type InitializationData = {
    * which is `fail`.
    */
   cfcReadOnExceed?: "fail" | "skip";
+
+  /**
+   * The space of the profile the worker's runtime answers `#profile` with,
+   * among the user's profiles (`RuntimeOptions.preferredProfileSpace`): the
+   * one a host keeping a profile per identity it presents acts as. Absent
+   * answers as the home orders them.
+   */
+  preferredProfileSpace?: DID;
 
   /**
    * The deployment trust configuration the worker's runtime evaluates concept
@@ -1123,6 +1141,7 @@ export type RuntimeSecurityContext =
     | "cfcFlowLabels"
     | "cfcReadMaxConfidentiality"
     | "cfcReadOnExceed"
+    | "preferredProfileSpace"
     | "cfcTrustConfig"
     | "renderDeclassificationPolicy"
     | "renderConfidentialityCeiling"
@@ -4128,47 +4147,59 @@ export type ConnectionRestoredNotification = {
 
 /**
  * An error with no request to fail -- a renderer error, or one a pattern
- * raised between requests. Every field but `message` is context that the
- * raising site may or may not have had.
+ * raised between requests. Update-required reports include write uncertainty;
+ * other context is included when the raising site has it.
  */
-export type ErrorNotification = {
-  type: NotificationType.ErrorReport;
+export type ErrorNotification =
+  & {
+    type: NotificationType.ErrorReport;
 
-  /**
-   * What went wrong.
-   */
-  message: string;
+    /**
+     * What went wrong.
+     */
+    message: string;
 
-  /**
-   * Names the kind of failure where one is named.
-   */
-  code?: RuntimeErrorCode;
+    /**
+     * The piece it happened in, where that is known.
+     */
+    pieceId?: string;
 
-  /**
-   * The piece it happened in, where that is known.
-   */
-  pieceId?: string;
+    /**
+     * The space it happened in, where that is known.
+     */
+    space?: string;
 
-  /**
-   * The space it happened in, where that is known.
-   */
-  space?: string;
+    /**
+     * The pattern it happened in, where that is known.
+     */
+    patternId?: string;
 
-  /**
-   * The pattern it happened in, where that is known.
-   */
-  patternId?: string;
+    /**
+     * The spell it happened in, where that is known.
+     */
+    spellId?: string;
 
-  /**
-   * The spell it happened in, where that is known.
-   */
-  spellId?: string;
+    /**
+     * The stack as raised, where one survived.
+     */
+    stackTrace?: string;
+  }
+  & (
+    | {
+      /** Runtime replacement is required. */
+      code: RuntimeErrorCode.ClientUpdateRequired;
 
-  /**
-   * The stack as raised, where one survived.
-   */
-  stackTrace?: string;
-};
+      /** Writes were unconfirmed at refusal or attempted afterward. */
+      unconfirmedWrites: boolean;
+    }
+    | {
+      /** Names another kind of failure where one is named. */
+      code?: Exclude<RuntimeErrorCode, RuntimeErrorCode.ClientUpdateRequired>;
+
+      /** Write uncertainty belongs to update-required reports. */
+      unconfirmedWrites?: never;
+    }
+  );
 
 /** One telemetry marker. Sent only while telemetry is enabled. */
 export type TelemetryNotification = {

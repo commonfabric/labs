@@ -17,6 +17,7 @@ import {
 } from "@commonfabric/data-model/codecs";
 import { internPathSelector } from "@commonfabric/data-model-schema";
 import { isPlainObject, unsafeObjectKeyIn } from "@commonfabric/utils/types";
+import type { ClientInfo } from "./v2/client-info.ts";
 import type { SessionReadCeiling } from "./v2/read-ceiling.ts";
 
 export const MEMORY_PROTOCOL = "memory" as const;
@@ -1225,6 +1226,22 @@ export type MemoryProtocolFlags = {
    */
   watchRemoveV1: boolean;
 
+  /**
+   * A sync may come as several messages (04-protocol.md section 4.2.3),
+   * enabled only when both peers advertise it: the client handles them as
+   * the one sync they divide, and the server splits a sync only on a
+   * connection whose transport bounds its messages. Inherent to the build.
+   */
+  syncPartsV1: boolean;
+
+  /**
+   * Server capability: a `session.watch.set` may come as staged parts that
+   * the server applies as one set (04-protocol.md section 4.3.5). Inherent
+   * to the build, so a server of this version always advertises it. Absent
+   * (an older server) parses to false: a client then sends every set whole.
+   */
+  watchSetPartsV1: boolean;
+
   /** The peer can exchange versioned binary gzip message envelopes. */
   messageCompressionV1: boolean;
 
@@ -1409,6 +1426,8 @@ export type WireMemoryProtocolFlags = {
   readonly commitLabelTableV1?: boolean;
   syncCrossingsV1?: boolean;
   watchRemoveV1?: boolean;
+  syncPartsV1?: boolean;
+  watchSetPartsV1?: boolean;
   messageCompressionV1?: boolean;
   sqliteCommitRowLabelEval?: boolean;
   sqliteQueryReader?: boolean;
@@ -1456,6 +1475,9 @@ export type SessionOpenAuthMetadata = {
 };
 
 export type SessionDescriptor = {
+  /** Self-reported runtime identity, declared afresh on every open. */
+  client?: ClientInfo;
+
   /** Assert the immutable custom-root reservation when mounting or resuming. */
   genesisRoot?: GenesisRoot;
 
@@ -1602,6 +1624,8 @@ export type GraphQuery = {
   atSeq?: number;
   branch?: BranchName;
   excludeSent?: boolean;
+  /** Include the highest authored commit at or below the query's sequence. */
+  includeAuthoredSeq?: boolean;
 };
 
 export type EntitySnapshot = {
@@ -1633,6 +1657,11 @@ export type EntitySnapshot = {
 export type GraphQueryResult = {
   serverSeq: number;
   entities: EntitySnapshot[];
+  /**
+   * Present when requested, bounded by `atSeq` and restricted to the
+   * branch.
+   */
+  authoredSeq?: number;
 };
 
 export type EntityIdListResult = {
@@ -1763,6 +1792,13 @@ export type SessionSync = {
 
   /** Complete view eligibility, applied atomically after this frame's documents. */
   viewPlans?: ViewPlan[];
+
+  /**
+   * On every part of a split sync but the last (`syncPartsV1`): the parts
+   * that follow, in effects for the same session, carry the rest of its
+   * lists (04-protocol.md section 4.2.3).
+   */
+  more?: true;
 };
 
 /** Local execution eligibility for one current renderer interest. */
@@ -2088,6 +2124,29 @@ export type WatchSetRequest = {
    * its watches without downloading again every document it still holds.
    */
   holdings?: SessionHolding[];
+
+  /**
+   * On every part of a watch set staged in parts (`watchSetPartsV1`): the
+   * set's name, which every part of it carries, and the number of parts
+   * before this one. The server refuses a part that does not follow the parts
+   * of its set it holds, and with it the rest of the set (04-protocol.md
+   * section 4.3.5).
+   */
+  stage?: string;
+  part?: number;
+
+  /**
+   * On every part of a staged watch set but the last: the server holds this
+   * part's lists and answers {@link WatchSetStagedResult}, and the part
+   * without `more` replaces the watch set with the concatenation of every
+   * part's lists, as the one set they divide.
+   */
+  more?: true;
+};
+
+/** The answer to a staged part of a watch set: held, not yet applied. */
+export type WatchSetStagedResult = {
+  staged: true;
 };
 
 export type WatchAddRequest = {
@@ -2388,6 +2447,9 @@ export type SessionAdmissibleMessage = {
 export type V2Error = {
   name: string;
   message: string;
+  /** Runtime incompatibility that requires replacing the client before mounting. */
+  clientUpdateRequired?: true;
+
   precondition?: string;
   retryAfterSeq?: number;
 
@@ -2698,6 +2760,11 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   syncCrossingsV1: true,
   // Build-inherent: this build's server removes watches by id.
   watchRemoveV1: true,
+  // Build-inherent: this build's client handles a sync split across
+  // messages, and its routed host splits one for a client that does.
+  syncPartsV1: true,
+  // Build-inherent: this build's server applies a watch set staged in parts.
+  watchSetPartsV1: true,
 });
 
 /**
@@ -2931,6 +2998,16 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
+  const syncPartsV1 = value.syncPartsV1;
+  if (syncPartsV1 !== undefined && typeof syncPartsV1 !== "boolean") {
+    return null;
+  }
+
+  const watchSetPartsV1 = value.watchSetPartsV1;
+  if (watchSetPartsV1 !== undefined && typeof watchSetPartsV1 !== "boolean") {
+    return null;
+  }
+
   return {
     modernCellRep: modernCellRep === true,
     genesisRoot: value.genesisRoot === true,
@@ -2992,6 +3069,12 @@ export const parseMemoryProtocolFlags = (
     // Absent (an older server) parses to false: a client then replaces the
     // whole watch set to remove a watch.
     watchRemoveV1: watchRemoveV1 === true,
+    // Absent (an older peer) parses to false: a server then sends that
+    // client every sync whole.
+    syncPartsV1: syncPartsV1 === true,
+    // Absent (an older server) parses to false: a client then sends every
+    // watch set whole.
+    watchSetPartsV1: watchSetPartsV1 === true,
     routedAuthV1: value.routedAuthV1 === true,
     routedCompressionV1: value.routedCompressionV1 === true,
   };
@@ -3039,6 +3122,8 @@ export const wireMemoryProtocolFlags = (
   routedCompressionV1: flags.routedCompressionV1,
   syncCrossingsV1: flags.syncCrossingsV1,
   watchRemoveV1: flags.watchRemoveV1,
+  syncPartsV1: flags.syncPartsV1,
+  watchSetPartsV1: flags.watchSetPartsV1,
 });
 
 /**

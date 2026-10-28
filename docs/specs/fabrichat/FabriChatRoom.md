@@ -50,8 +50,8 @@ when they're read. Neither is stored. `viewer` and `messageRights` are computed
 for each reader too, `viewer` from their profile and access, and
 `messageRights` from those and the messages, for every message at once.
 
-`participantEntries` is computed from `participants`, reading the
-`represents-principal` label on each profile with `principalOf()`, and
+`participantEntries` is computed from `participants`, reading whose own profile
+each is with `profileOwnerOf()`, and
 `participantPrincipals` is computed from those entries. A profile lives in its
 owner's own space, so a reader that space refuses reads no principal from it.
 Both are derived per user, so each user reads instances of their own, derived

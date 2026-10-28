@@ -77,6 +77,16 @@ export const NO_CANDIDATES = new Map<string, string>([
   ["acl set:capability", "a capability string, composed rather than chosen"],
   ["piece search:query", "a search query"],
   ["profile create:name", "a display name the caller is coining"],
+  ["profile rename:name", "the same"],
+  // A profile's space DID: the profiles are the caller's own, listed by
+  // `cf profile list`, and reading them takes a connection completion never
+  // opens.
+  ["profile rename:space", "a profile space DID, from `cf profile list`"],
+  ["profile restore:space", "the same"],
+  ["profile attest-name:space", "the same"],
+  ["profile retire:space", "the same"],
+  ["profile set-picture:space", "the same"],
+  ["profile get-picture:space", "the same"],
   [
     "piece follow:origin",
     "a source origin the caller names, such as a `system:` ref",
@@ -102,6 +112,10 @@ export const NO_CANDIDATES = new Map<string, string>([
  * under `<command path>:<long name>`.
  */
 export const NO_OPTION_CANDIDATES = new Map<string, string>([
+  [
+    "profile attest-name:expect",
+    "the receipt from the owner-reviewed inspection",
+  ],
   [
     "profile repair-name-protection:expect",
     "the receipt from the owner-reviewed inspection",

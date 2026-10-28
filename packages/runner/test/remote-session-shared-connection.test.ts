@@ -84,6 +84,7 @@ describe("RemoteSessionFactory connection sharing", () => {
       createStorageAddressResolver(server.url, options.spaceHostMap),
       user,
       createSocket,
+      { application: "cf", gitSha: "b".repeat(40) },
     );
     factory.setSharedConnections(options.shared);
     factories.push(factory);
@@ -98,6 +99,31 @@ describe("RemoteSessionFactory connection sharing", () => {
     server.server.accessForTestingOnly.sessionsForSpace(space)
       .filter((session) => session.ownerConnectionId !== null)
       .map((session) => session.principal);
+
+  for (const shared of [false, true]) {
+    it(`attributes spaces to one runtime with shared connections=${shared}`, async () => {
+      const server = startServer({ connectionAuth: shared });
+      const { factory } = harnessFor(server, { shared });
+      const other = harnessFor(server, { shared }).factory;
+      await Promise.all(SPACES.map((space) => factory.create(space)));
+      const reports = SPACES.map((space) =>
+        server.server.accessForTestingOnly.sessionsForSpace(space)[0].client
+      );
+      expect(reports[0]).toMatchObject({
+        application: "cf",
+        gitSha: "b".repeat(40),
+        generation: 1,
+      });
+      expect(reports[1]).toEqual(reports[0]);
+      expect(reports[2]).toEqual(reports[0]);
+      await other.create(SPACES[0]);
+      const all = server.server.accessForTestingOnly.sessionsForSpace(
+        SPACES[0],
+      );
+      expect(new Set(all.map((session) => session.client?.instanceId)).size)
+        .toBe(2);
+    });
+  }
 
   describe("with sharing off", () => {
     it("dials one socket per space, each naming its space", async () => {

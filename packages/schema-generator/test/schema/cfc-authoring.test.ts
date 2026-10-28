@@ -1939,14 +1939,6 @@ describe("Schema: CFC authoring aliases", () => {
       expect(messages[0]).toContain('`readonly [...string[], "b"]`');
     });
 
-    it("reports a label argument that is not a tuple", async () => {
-      const messages = await unreadLabels(`
-        interface SchemaRoot { t: Confidential<string, string[]> }
-      `);
-      expect(messages).toHaveLength(1);
-      expect(messages[0]).toContain("`string[]`");
-    });
-
     it("reports a label list inside a \`Cfc\` payload", async () => {
       const messages = await unreadLabels(`
         interface SchemaRoot {
@@ -2115,6 +2107,133 @@ describe("Schema: CFC authoring aliases", () => {
         }
       `);
       expect(messages).toEqual([]);
+    });
+  });
+
+  describe("a label list that is not a list", () => {
+    // The runtime reads labels only from a list, so one that reads as no list,
+    // as an array type or a union of tuples does, would reach it as no label
+    // at all. The generator reports it as an error, where a list read only in
+    // part is a warning.
+
+    const ALIASES = `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
+      type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+      type Integrity<T, X extends readonly unknown[]> = Cfc<T, { integrity: X }>;
+      type AddIntegrity<T, X extends readonly unknown[]> = Cfc<T, { addIntegrity: X }>;
+      type RequiresIntegrity<T, X extends readonly unknown[]> = Cfc<T, { requiredIntegrity: X }>;
+      type MaxConfidentiality<T, X extends readonly unknown[]> = Cfc<T, { maxConfidentiality: X }>;
+    `;
+
+    /** The severity and type of each label diagnostic `SchemaRoot` reports. */
+    const labelDiagnostics = async (code: string) => {
+      const { type, checker } = await getTypeFromCode(
+        ALIASES + code,
+        "SchemaRoot",
+      );
+      const diagnostics: SchemaGenerationDiagnostic[] = [];
+      new SchemaGenerator().generateSchema(type, checker, undefined, {
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      });
+      return diagnostics.filter((diagnostic) =>
+        diagnostic.type.startsWith("cfc-label:")
+      );
+    };
+    const kinds = (diagnostics: readonly SchemaGenerationDiagnostic[]) =>
+      diagnostics.map((diagnostic) => [diagnostic.severity, diagnostic.type]);
+
+    it("reports an array type as an error, naming it as written", async () => {
+      const diagnostics = await labelDiagnostics(`
+        interface SchemaRoot { t: Confidential<string, string[]> }
+      `);
+      expect(kinds(diagnostics)).toEqual([["error", "cfc-label:not-a-list"]]);
+      expect(diagnostics[0]!.message).toContain(
+        "A label list of `Confidential` is not a list: `string[]`",
+      );
+    });
+
+    for (
+      const alias of [
+        "Confidential",
+        "Integrity",
+        "AddIntegrity",
+        "RequiresIntegrity",
+        "MaxConfidentiality",
+      ]
+    ) {
+      it(`reports \`readonly string[]\` given to \`${alias}\``, async () => {
+        expect(
+          kinds(
+            await labelDiagnostics(`
+              interface SchemaRoot { t: ${alias}<string, readonly string[]> }
+            `),
+          ),
+        ).toEqual([["error", "cfc-label:not-a-list"]]);
+      });
+    }
+
+    it("reports a union of tuples, which reads as no list", async () => {
+      expect(
+        kinds(
+          await labelDiagnostics(`
+            interface SchemaRoot {
+              t: Confidential<string, readonly ["a"] | readonly ["b"]>;
+            }
+          `),
+        ),
+      ).toEqual([["error", "cfc-label:not-a-list"]]);
+    });
+
+    it("reports an array type a generic label parameter is given", async () => {
+      expect(
+        kinds(
+          await labelDiagnostics(`
+            type Labeled<L extends readonly unknown[]> = Confidential<string, L>;
+            interface SchemaRoot { t: Labeled<string[]> }
+          `),
+        ),
+      ).toEqual([["error", "cfc-label:not-a-list"]]);
+    });
+
+    it("reports a label list inside a \`Cfc\` payload", async () => {
+      expect(
+        kinds(
+          await labelDiagnostics(`
+            interface SchemaRoot {
+              t: Cfc<string, { requiredIntegrity: string[] }>;
+            }
+          `),
+        ),
+      ).toEqual([["error", "cfc-label:not-a-list"]]);
+    });
+
+    it("reports a UI contract's event integrity inside a \`Cfc\` payload", async () => {
+      expect(
+        kinds(
+          await labelDiagnostics(`
+            interface SchemaRoot {
+              t: Cfc<string, {
+                uiContract: {
+                  helper: "UiAction";
+                  action: "save";
+                  trustedPattern: "trusted";
+                  requiredEventIntegrity: string[];
+                };
+              }>;
+            }
+          `),
+        ),
+      ).toEqual([["error", "cfc-label:not-a-list"]]);
+    });
+
+    it("reports a list read only in part as a warning, not an error", async () => {
+      expect(
+        kinds(
+          await labelDiagnostics(`
+            interface SchemaRoot { t: Confidential<string, readonly ["a" | "b"]> }
+          `),
+        ),
+      ).toEqual([["warning", "cfc-label:unread"]]);
     });
   });
 

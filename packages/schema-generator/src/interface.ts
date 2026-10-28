@@ -78,7 +78,8 @@ export interface SchemaGenerationDiagnostic {
     | "schema-type:unread"
     | "cfc-schema:recursion-limit"
     | "cfc-write-authorized-by:unread"
-    | "cfc-label:unread";
+    | "cfc-label:unread"
+    | "cfc-label:not-a-list";
   readonly message: string;
   readonly node?: ts.Node;
 }

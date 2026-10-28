@@ -134,7 +134,7 @@ describe("agent-connections", () => {
           createPromptLoop: (options) => ({
             runPrompt: async () => {
               await Deno.writeTextFile(
-                join(options.workspaceHostPath!, "agent-result.json"),
+                options.engine!.getRunState().structuredResult!.path,
                 JSON.stringify({ answer: "Solaris" }),
               );
               return {

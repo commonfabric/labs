@@ -691,11 +691,71 @@ Deno.test("labs ci trust: an earlier attempt GitHub does not return fails the co
   );
 });
 
+// Attempt 1 of `of`, as GitHub returns an attempt it left in progress with no
+// conclusion after a rerun followed it.
+function unclosedFirstAttempt(of: Run): Run {
+  return { ...of, run_attempt: 1, status: "in_progress", conclusion: null };
+}
+
+Deno.test("labs ci trust: an earlier attempt GitHub left in progress takes its conclusion from its jobs", async () => {
+  const failedJob = run({ conclusion: "success", run_attempt: 2 });
+  const passedJobs = run({ conclusion: "success", run_attempt: 2 });
+  const queuedJobReplaced = run({ conclusion: "success", run_attempt: 2 });
+  const runningJobStopped = run({ conclusion: "success", run_attempt: 2 });
+  // Its second attempt was replaced while queued, so it is passed over.
+  const passedThenReplaced = run({ conclusion: "cancelled", run_attempt: 2 });
+  const noJobListed = run({ conclusion: "success", run_attempt: 2 });
+  const listings: [Run, GithubAnswer][] = [
+    [failedJob, jobPage(3, ["success", "failure", "skipped"])],
+    [passedJobs, jobPage(2, ["success", "skipped"])],
+    [queuedJobReplaced, {
+      total_count: 2,
+      jobs: [{ ...STOPPED, id: 4, conclusion: "success" }, QUEUED],
+    }],
+    [runningJobStopped, {
+      total_count: 2,
+      jobs: [{ ...STOPPED, id: 4, conclusion: "success" }, STOPPED],
+    }],
+    [passedThenReplaced, jobPage(2, ["success", "skipped"])],
+    [noJobListed, NO_JOBS],
+  ];
+  await withGithubAttempt(
+    byUrl([
+      ...listings.flatMap(([retried, jobs]) => {
+        const first = unclosedFirstAttempt(retried);
+        return [
+          [attemptUrl(first), first] as const,
+          [jobsUrl(first), jobs] as const,
+        ];
+      }),
+      [jobsUrl(passedThenReplaced), NO_JOBS],
+      ...annotationAnswers(),
+    ]),
+    async () => {
+      const v = await labsCiTrust.collect(
+        ctx(listings.map(([retried]) => retried)),
+      );
+      // Green: the third, whose first attempt is passed over because its one
+      // cancelled job never reached a runner; the fifth, whose first attempt
+      // passed and whose second is passed over; and the last, whose first
+      // attempt listed no job. The first attempt of every other run failed, or
+      // passed and still needed a rerun, or ran a job its own timeout stopped.
+      assertEquals(cellColors(v.extra), [
+        "var(--status-bad)",
+        "var(--status-bad)",
+        "var(--status-good)",
+        "var(--status-bad)",
+        "var(--status-good)",
+        "var(--status-good)",
+      ]);
+      assertEquals(v.value, "50.0%");
+    },
+  );
+});
+
 Deno.test("labs ci trust: an earlier attempt that is not the one asked for fails the collection", async () => {
   const retried = run({ conclusion: "success", run_attempt: 2 });
   const answers: Run[] = [
-    // Still going, so it carries no verdict to read.
-    { ...attemptOf(retried, 1, "failure"), status: "in_progress", conclusion: null },
     // Another run's attempt.
     { ...attemptOf(retried, 1, "failure"), id: retried.id + 1 },
     // Another attempt of the same run.
@@ -706,7 +766,7 @@ Deno.test("labs ci trust: an earlier attempt that is not the one asked for fails
       await assertRejects(
         () => labsCiTrust.collect(ctx([retried])),
         Error,
-        "did not include a completed conclusion",
+        `when asked for run ${retried.id} attempt 1`,
       );
     });
   }

@@ -7,6 +7,7 @@ import {
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
 import { resolveWish } from "../lib/wish.ts";
+import { seedProfileOwner } from "../../runner/test/cfc-seed-envelope.ts";
 
 // A `cf wish` invocation is a COLD replica: a fresh process whose runtime has
 // synced nothing, reading home records another session persisted. The
@@ -77,6 +78,11 @@ describe("cf wish headless read on a cold replica", () => {
       bio: "Mathematician & first programmer.",
       elements: [],
     });
+    seedProfileOwner(
+      tx,
+      profileDefaultCell.getAsNormalizedFullLink(),
+      userIdentity.did(),
+    );
     profileSpaceCell.key("defaultPattern").set(profileDefaultCell);
     await tx.commit().settled;
     await runtime.idle();
@@ -144,6 +150,11 @@ describe("cf wish headless read on a cold replica", () => {
             bio: "",
             elements: [],
           });
+          seedProfileOwner(
+            tx,
+            profile.getAsNormalizedFullLink(),
+            userIdentity.did(),
+          );
           expect((await tx.commit().settled).error).toBeUndefined();
           profiles.push(profile);
         }

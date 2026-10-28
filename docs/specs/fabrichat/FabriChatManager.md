@@ -188,10 +188,10 @@ request's id, which the room reads back as the add's `delivery`.
   [`FabriChatRoom.md`](FabriChatRoom.md#prerequisites)).
 - **A principal from a profile.** A client that starts a direct room from a
   person's profile needs that profile's principal, since `openDirect` and
-  `createGroup` take principals. A profile's value carries a
-  `represents-principal` label, which
-  `principalOf(profile, "represents-principal")` reads
-  ([reading the principal a label attests](../../features/principal-of.md)).
+  `createGroup` take principals. Whose own profile a profile is,
+  `profileOwnerOf(profile)` reads, by the rule every reader of a person's
+  profiles applies
+  ([whose own profile a profile is](../../features/principal-of.md#whose-own-profile-a-profile-is)).
   A social space's member set pairs each principal with a profile (see [social
   spaces](README.md#social-spaces)), so starting a conversation with someone
   found in one needs nothing more.

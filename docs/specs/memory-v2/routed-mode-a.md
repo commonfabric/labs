@@ -467,7 +467,29 @@ bound. A message sent to a socket holding nothing is admitted up to 8 MiB, the
 router's response-header limit and the SDK's frame limit, and written as the
 usual 32 KiB records; no message over 8 MiB is sent on any socket. A refusal
 closes the socket with an `output-limit` verdict classified `single-message`
-(over 8 MiB) or `queued-output`. Toolshed output passes records to the socket,
+(over 8 MiB) or `queued-output`.
+
+The toolshed splits a sync that one message could not carry, past
+`limits.frameSlots` or the bytes a message may take (16 MiB once expanded,
+when the socket compresses its output, else the 8 MiB on the socket), into
+parts of at most 1 MiB
+(`ROUTED_PART_BYTES`), for a client that advertised `syncPartsV1`
+([04-protocol.md](04-protocol.md) section 4.2.3), and sends them back to back
+on its socket. Splitting costs the toolshed's thread more than sending whole:
+on the rehearsal's 300-topic Topics board, splitting every sync past 1 MiB
+took the board's toolshed 18.8 s over one benchmark run, up to 746 ms for a
+sync whose whole encoding took 370 ms, so a sync that fits goes whole; the router forwards each as a message of its own, so other
+toolsheds' messages for the connection go out between them. The
+`outputBytesPerSocket` bound neither refuses nor counts parts. The parts a data
+socket retains, of however many split syncs, are bounded together by eight
+times it, 32 MiB at the default, and none when it is `null`; a part past that
+is refused as `sync-parts`, and each part is still at most 8 MiB. The server
+builds and encodes a whole sync before its first part goes, so a sync whose
+parts exceed that bound cannot be delivered, and a socket retains a split
+sync's parts as it would have retained the sync. Every message that is not a
+part is bounded as before, so a reader that falls behind is still closed.
+
+Toolshed output passes records to the socket,
 in order, while the record bytes awaiting write callbacks are below a 256 KiB
 send window (`ROUTER_SEND_WINDOW_BYTES`, local to the toolshed), and resumes
 from the callback that brings them back under it; returned request credit goes
@@ -625,8 +647,10 @@ streamed bodies are checked at the toolshed and SDK. The SDK refuses to send a
 frame exceeding the advertised cap and closes on receiving one. Endpoint
 exposure is also bounded by the byte caps (8 MiB raw, 16 MiB expanded, 8 MiB
 for one message sent alone and 4 MiB of output queued behind other output per
-data socket), including when value counting is disabled. A
-whole-space sync can exceed these byte bounds and needs chunking (infra#244).
+data socket), including when value counting is disabled. A sync past those
+byte caps or the value cap is sent in parts to a client that takes one in
+parts, so these bounds apply to each part; a single document past them still
+cannot be delivered, nor can a sync whose compressed whole exceeds 8 MiB.
 Context, principal, router and toolshed quotas cover sessions, watches and
 holdings; resource bounds and exact values are in the infra router README.
 
@@ -693,15 +717,18 @@ value as `routerFrameSlots` and the SDK applies it in both directions. The other
 is `max_watches_per_session == watchesPerSession`, the watch IDs one session may
 hold, default 2,048, which may not exceed `watchesPerContext` when both are
 enabled. Matching a disabled watch quota means `null` on both sides. The two are
-sized together: a session is restored by one `session.watch.set` that names
-its whole watch set, so that many watches must fit one frame together with
-their selectors, views and holdings. The count limit does not enforce this
-aggregate size: incremental adds can create a set too large to restore, causing
-reconnect attempts to fail. Size the limit against the workload's complete
-restore frame. Clients that do not learn `routerFrameSlots` retain their own
-150,000-slot ceiling. A frame's `watches` have no count
-bound of their own. The infra router README's capacity section has the
-arithmetic and maps each limit to the router's.
+sized together: a session is restored by a `session.watch.set` that names its
+whole watch set with its selectors, views and holdings. A set past the 4 MiB
+a request may take or the frame cap the SDK learned is staged in parts of at
+most 1 MiB
+([04-protocol.md](04-protocol.md) section 4.3.5), which the router and the
+toolshed count as the set the parts make, so the restore of a set within the
+watch limit fits however many frames it takes. A server that does not
+advertise `watchSetPartsV1` is sent the set whole, which must then fit one
+frame. Clients that do not learn `routerFrameSlots` retain their own
+150,000-slot ceiling. A frame's `watches` have no count bound of their own.
+The infra router README's capacity section has the arithmetic and maps each
+limit to the router's.
 
 The toolshed answers one request it refuses and leaves the data socket open.
 A request over a session, watch (views included) or holdings limit, or one
@@ -711,10 +738,34 @@ for a session the toolshed revoked, or a principal it released, after the
 router forwarded it is denied for good, as is a watch mutation, a set or an
 add, that would leave a session with more than `watchesPerSession` watch IDs
 or `viewsPerSession` views (`frame-limit`), when the respective quota is enabled.
+A part of a set staged in parts is checked as the set the parts of its set so
+far make, and its holdings against `holdingsPerSession` as well, since the
+frame bound on holdings bounds each part alone. A part that more parts follow
+changes nothing the session holds, but from the set's first part until the set
+is applied or ends, the session counts toward every watch and holdings quota
+the larger of what it holds and what the parts so far make, since the server
+holds the parts meanwhile. A part the toolshed refuses leaves the set staged
+and counted, as the server still holds it. A refusal from the server ends the
+toolshed's record of the set, and the server's set too, unless the server
+refused a message it could not read or a session whose lease ran out, whose
+parts it then still holds; the answer does not say which, so the toolshed
+counts what the session counted before the refused request until its next
+watch mutation is admitted. The toolshed and the router, each when it counts
+watches, views or holdings, deny for good a later part that does not follow the
+parts it records (`staged-set-not-held` in the toolshed), so parts the server
+still holds are never applied. The router ends its record and its count of a
+set on any refusal from the toolshed, so its count can be below the toolshed's
+until then. A client sends a refused set again from its first part, as the SDK
+does. The Memory server bounds the
+characters of every set a connection is staging together
+([04-protocol.md](04-protocol.md) section 4.3.5). The router holds a
+session's requests behind its unanswered watch mutation, so a set of `n` parts
+takes `n` round trips to the toolshed.
 Each is logged in the toolshed's own journal, never the router's, as a
 `routed-memory-verdict` with verdict `request-refused` and reason
 `session-limit`, `watch-limit`, `holdings-limit`, `frame-limit`,
-`principal-expired`, `session-not-held` or `principal-not-held`. A frame that
+`principal-expired`, `session-not-held`, `staged-set-not-held` or
+`principal-not-held`. A frame that
 itself names more than the enabled `holdingsPerSession` quota is malformed,
 and so is a request whose
 `watches`, `holdings` or `views` is not a JSON list. Such a
@@ -722,14 +773,12 @@ request is not answered: it closes the socket, as the router closes the
 client's connection on one. The SDK declares at most 8,192 holdings
 on a routed connection. A session that holds more declares the first 8,192,
 and the server delivers the documents left out a second time, since a document
-a session does not declare is one it is sent again. Two limits follow for such
-a session. The server removes only documents a session declares, so a document
+a session does not declare is one it is sent again. A limit follows for such a
+session: the server removes only documents a session declares, so a document
 left out that is no longer in the session's watch set gets no remove, and the
 client keeps the value it last had for it until the document is watched again.
-And the documents left out all come back in one response frame, which must fit
-the 8 MiB the toolshed may send to a data socket as one message
-(`limits.outputBytesPerSocket`, default 4 MiB, bounds only output queued behind
-other output); a response past 8 MiB closes the socket.
+The documents left out come back in the response's sync, which a client that
+takes a sync in parts receives in parts.
 
 Each context closes with one `routed-memory-verdict` event whose verdict is
 `context-closed` and whose `reason` retains the first socket failure through
@@ -738,17 +787,20 @@ failed send, before socket accounting can change during close:
 
 - `frameBytes`: the attempted message's encoded payload size, in UTF-8 bytes
   for text or byte-array length for binary.
-- `bufferedBytes`: the larger of retained logical output bytes and npm `ws`'s
-  `bufferedAmount`. Control sockets use `bufferedAmount` alone. Socket writable
-  bytes can include framing.
+- `bufferedBytes`: the larger of retained logical output bytes, parts of
+  split syncs excluded, and npm `ws`'s `bufferedAmount`; for a part of a split
+  sync, the bytes of parts retained. Control sockets use `bufferedAmount`
+  alone. Socket writable bytes can include framing.
 - `limitBytes`: the bound that refused the send: 8 MiB for a message too large
-  to send alone, else `limits.outputBytesPerSocket` (default 4 MiB) on their
-  sum; equality is admitted.
+  to send alone, the bound on parts for a part of a split sync, else
+  `limits.outputBytesPerSocket` (default 4 MiB) on their sum; equality is
+  admitted.
 - `endpoint`: `data` or `control`. A control-link failure carries its snapshot
   into each context it closes, unless that context already has a socket failure.
-- `classification`: `single-message` when `frameBytes` exceeds 8 MiB, otherwise
-  `queued-output` (the message would fit alone but not behind the output the
-  socket holds).
+- `classification`: `single-message` when `frameBytes` exceeds 8 MiB,
+  `sync-parts` for a part of a split sync that would take the parts the socket
+  retains past their bound, otherwise `queued-output` (the message would fit
+  alone but not behind the output the socket holds).
 - `messageType`: the structured Memory message kind when available at the
   sender; omitted for binary control records and data greetings.
 - `diagnostics`: for structured data output, separate socket and retained-body

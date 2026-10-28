@@ -59,6 +59,7 @@ import {
 } from "../lib/cell-selection.ts";
 import { safeStringify } from "../lib/render.ts";
 import { sendThroughStandIn } from "./utils.ts";
+import { seedProfileOwner } from "../../runner/test/cfc-seed-envelope.ts";
 
 const userIdentity = await Identity.fromPassphrase("cf-four-ways-user");
 
@@ -105,6 +106,11 @@ describe("read options, four ways", () => {
       tx,
     );
     profileCell.set({ ...PROFILE });
+    seedProfileOwner(
+      tx,
+      profileCell.getAsNormalizedFullLink(),
+      userIdentity.did(),
+    );
     profileSpaceCell.key("defaultPattern").set(profileCell);
     await tx.commit().settled;
     await runtime.idle();

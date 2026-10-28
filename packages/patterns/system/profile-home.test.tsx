@@ -155,6 +155,14 @@ export default pattern(() => {
     profile.setPicture.send({ picture: new FabricBytes(new Uint8Array()) });
     profile.setPicture.send({});
   });
+  // An explicit clear removes it, and leaves the avatar text alone.
+  const action_clear_picture = action(() => {
+    profile.setPicture.send({ clear: true });
+  });
+  // An explicit clear of the avatar text removes it.
+  const action_clear_avatar_text = action(() => {
+    profile.setAvatar.send({ clear: true });
+  });
   // The share inbox link. Loom sends it serialized, as the `link@1` sigil
   // naming the inbox piece and its space; here the link is a live cell, the
   // catalog card added below, because a link into a space the harness does
@@ -269,6 +277,12 @@ export default pattern(() => {
   const assert_picture_unchanged_after_empty = assert(() =>
     bytesAre(profile.picture, PICKED_PICTURE) && profile.avatar === "AL"
   );
+  const assert_picture_cleared = assert(() =>
+    profile.picture === undefined && profile.avatar === "AL"
+  );
+  const assert_avatar_cleared = assert(() =>
+    profile.picture === undefined && profile.avatar === ""
+  );
   // CT-1828: an empty send must not clear a previously-set avatar.
   const assert_avatar_unchanged_after_empty = assert(() =>
     profile.avatar === "AL"
@@ -312,6 +326,11 @@ export default pattern(() => {
 
   const action_set_name = action(() => {
     profile.setName.send({ name: "Grace Hopper" });
+  });
+
+  // A name holding a control character is refused, not stored.
+  const action_control_character_name = action(() => {
+    profile.setName.send({ name: "Grace\u0007Hopper" });
   });
 
   const action_add_external_profile_link = action(() => {
@@ -401,6 +420,8 @@ export default pattern(() => {
       { assertion: assert_name_unchanged_after_empty },
       { action: action_whitespace_name },
       { assertion: assert_name_unchanged_after_empty },
+      { action: action_control_character_name },
+      { assertion: assert_name_unchanged_after_empty },
       // External profile links are owner-authored public https links. Unsafe
       // schemes are rejected at write time, then the owner can remove a link.
       { action: action_add_external_profile_link },
@@ -422,6 +443,10 @@ export default pattern(() => {
       { assertion: assert_picture_picked },
       { action: action_send_no_picture },
       { assertion: assert_picture_unchanged_after_empty },
+      { action: action_clear_picture },
+      { assertion: assert_picture_cleared },
+      { action: action_clear_avatar_text },
+      { assertion: assert_avatar_cleared },
       // Add/remove exercise the full owner-protected element write stack:
       // the same-transaction card instantiation linked into the
       // writeAuthorizedBy-protected list (prepare's setup-schema / child-doc
@@ -472,5 +497,7 @@ export default pattern(() => {
       { action: action_remove_with_empty_event },
       { assertion: assert_removed_element },
     ],
+    // The refused control-character name.
+    expectRuntimeErrors: 1,
   };
 });

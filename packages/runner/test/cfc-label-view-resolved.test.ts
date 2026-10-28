@@ -8,6 +8,7 @@ import {
   cfcLabelViewForCellWithStatus,
   cfcLabelViewForResolvedCellWithStatus,
   cfcLabelViewForResolvedTarget,
+  cfcLabelViewForResolvedTargetWithStatus,
 } from "../src/cfc/label-view.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-label-view-resolved");
@@ -168,6 +169,58 @@ describe("cfcLabelViewForResolvedCellWithStatus", () => {
 
       const status = cfcLabelViewForResolvedCellWithStatus(loop.key("self"));
       expect(status.readFailed).toBe(true);
+    });
+  });
+
+  describe("cfcLabelViewForResolvedTargetWithStatus()", () => {
+    it("returns the resolved target's view with no failure, and none for a value no label is stored for", async () => {
+      await withRuntime(async (runtime) => {
+        const labeled = runtime.getCell<string>(space, "status-labeled", {
+          type: "string",
+          ifc: { confidentiality: ["from-target"] },
+        });
+        const bare = runtime.getCell<string>(space, "status-bare");
+        await commit(runtime, (tx) => {
+          labeled.withTx(tx).set("labeled");
+        });
+        await commit(runtime, (tx) => {
+          bare.withTx(tx).set("bare");
+        });
+
+        expect(cfcLabelViewForResolvedTargetWithStatus(labeled)).toEqual({
+          view: cfcLabelViewForResolvedTarget(labeled),
+          readFailed: false,
+        });
+        expect(cfcLabelViewForResolvedTarget(labeled)).toBeDefined();
+        expect(cfcLabelViewForResolvedTargetWithStatus(bare)).toEqual({
+          view: undefined,
+          readFailed: false,
+        });
+      });
+    });
+
+    it("reports a failed read where the resolution throws", async () => {
+      await withRuntime(async (runtime) => {
+        const loop = runtime.getCell<Record<string, unknown>>(
+          space,
+          "status-loop",
+        );
+        await commit(runtime, (tx) => {
+          loop.withTx(tx).key("self").set("placeholder");
+        });
+        await commit(runtime, (tx) => {
+          loop.withTx(tx).key("self").setRawUntyped(
+            loop.key("self").getAsLink(),
+          );
+        });
+
+        const status = cfcLabelViewForResolvedTargetWithStatus(
+          loop.key("self"),
+        );
+        expect(status.readFailed).toBe(true);
+        expect(cfcLabelViewForResolvedTarget(loop.key("self")))
+          .toBeUndefined();
+      });
     });
   });
 

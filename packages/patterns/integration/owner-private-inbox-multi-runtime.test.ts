@@ -17,7 +17,6 @@
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
 import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,
@@ -79,12 +78,12 @@ describe("owner-private inbox across runtimes", () => {
 
   /**
    * How many commits the CFC write gate has refused, in the sender's runtime
-   * and in this process, where the serving loop runs. The gate counts each
+   * and where the serving loop runs. The gate counts each
    * refusal whatever the log level shows.
    */
   const refusals = async (): Promise<number> =>
     writeRefusals(await sender.loggerCounts()) +
-    writeRefusals(getLoggerCountsBreakdown());
+    writeRefusals((await harness.servingDiagnostics()).loggerCounts);
 
   /**
    * Has the sender's own handler send an offer, and waits for the owner to
@@ -132,12 +131,15 @@ describe("owner-private inbox across runtimes", () => {
     await harness.settle();
     expect(await stranger.read(["copiedTitle"])).toBe("Offers");
 
-    const refusedBefore = writeRefusals(getLoggerCountsBreakdown());
+    const refusedBefore = writeRefusals(
+      (await harness.servingDiagnostics()).loggerCounts,
+    );
     await stranger.send("copyOffers");
     await harness.settle();
-    expect(writeRefusals(getLoggerCountsBreakdown())).toBeGreaterThan(
-      refusedBefore,
-    );
+    expect(writeRefusals((await harness.servingDiagnostics()).loggerCounts))
+      .toBeGreaterThan(
+        refusedBefore,
+      );
     expect(await stranger.read(["copiedOffers"])).toEqual([]);
   });
 });

@@ -915,7 +915,7 @@ describe("deployment-meta", () => {
               memoryUrl: "https://router.example",
               experimental: {
                 sharedMemoryConnection: true,
-                serverExecution: true,
+                readerSchemaPrecedence: true,
               },
             }),
           );
@@ -951,7 +951,7 @@ describe("deployment-meta", () => {
           {},
           { experimental: null },
           { experimental: {} },
-          { experimental: { serverExecution: true } },
+          { experimental: { readerSchemaPrecedence: true } },
         ]
       ) {
         const read = await deploymentForShell({
@@ -1057,7 +1057,10 @@ describe("deployment-meta", () => {
   describe("SHELL_DEPLOYMENT_FLAGS", () => {
     it("is the flags SHELL_FLAG_SOURCES gives the deployment", () => {
       expect(SHELL_DEPLOYMENT_FLAGS).toEqual([
+        "serverExecution",
         "localSessionDocuments",
+        "viewScopedReplication",
+        "webViewScopedReplication",
         "sharedMemoryConnection",
         "instanceNames",
       ]);
@@ -1072,10 +1075,17 @@ describe("deployment-meta", () => {
       }
     });
 
-    it("holds no flag the serving loop forces, since the page is built once", () => {
+    it("holds no flag the serving loop forces that the page's posture does not already carry", () => {
       // /api/meta applies the serving overrides live; a page carrying one of
       // them would disagree with it whenever the loop started or stopped.
+      // serverExecution is the exception: the loop runs exactly when the
+      // deployment resolves it on, and forces it on, so the posture the page
+      // is built from already carries the value the loop publishes.
       for (const flag of SHELL_DEPLOYMENT_FLAGS) {
+        if (flag === "serverExecution") {
+          expect(SERVING_RUNTIME_EXPERIMENTAL[flag]).toBe(true);
+          continue;
+        }
         expect(flag in SERVING_RUNTIME_EXPERIMENTAL, flag).toBe(false);
       }
     });
@@ -1087,8 +1097,9 @@ describe("deployment-meta", () => {
         sharedMemoryConnection: true,
         serverExecution: false,
         readerSchemaPrecedence: true,
+        localFold: true,
         unknownToThisBuild: true,
-      })).toEqual({ sharedMemoryConnection: true });
+      })).toEqual({ sharedMemoryConnection: true, serverExecution: false });
       expect(shellFlagsFromDeclared({ sharedMemoryConnection: false }))
         .toEqual({ sharedMemoryConnection: false });
     });

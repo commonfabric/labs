@@ -45,6 +45,7 @@ export {
   cfcLabelViewForResolvedCell,
   cfcLabelViewForResolvedCellWithStatus,
   cfcLabelViewForResolvedTarget,
+  cfcLabelViewForResolvedTargetWithStatus,
   cfcLabelViewFromMetadata,
   cfcLabelViewSourceForCell,
   cloneCfcLabelView,
@@ -98,10 +99,10 @@ export type {
 } from "./types.ts";
 // `runtimeWritePolicyAuthorization` is deliberately NOT re-exported here.
 // `./cfc` is a public entry point of this package, and the value is what
-// mints a write-policy input the route-2 declaration acts on; publishing it
-// would let anything that can import the package name it. The type above
-// carries no such risk — it is erased, and names nothing at run time. The
-// runtime passes the value through an in-package import.
+// mints a write-policy input the runtime-owned-store admission acts on;
+// publishing it would let anything that can import the package name it. The
+// type above carries no such risk — it is erased, and names nothing at run
+// time. The runtime passes the value through an in-package import.
 export {
   cfcCanonicalClauseDigest,
   collectDeclaredMonotonicityViolations,

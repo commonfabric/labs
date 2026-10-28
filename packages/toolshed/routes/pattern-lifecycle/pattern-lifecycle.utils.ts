@@ -9,38 +9,29 @@
 
 import type { AttributeValue } from "@opentelemetry/api";
 
-import { createSession, type Identity } from "@commonfabric/identity";
-import type { DID, MemorySpace } from "@commonfabric/memory/interface";
+import type { MemorySpace } from "@commonfabric/memory/interface";
 import {
   streamEntriesDocId,
   type StreamEventsDocValue,
 } from "@commonfabric/memory/v2";
 import type { Server } from "@commonfabric/memory/v2/server";
-import {
-  confirmServedInstantiate,
-  confirmServedRegistration,
-  confirmServedSetSource,
-  finishServedRegistration,
-  PiecesController,
-  prepareServedRegistration,
-  servedInstantiatePiece,
-  type ServedInstantiateReceipt,
-  ServedLifecycleRefusal,
-  type ServedLifecycleRefusalCode,
-  type ServedPatternRef,
-  type ServedPatternSource,
-  type ServedRegistrationOutcome,
-  type ServedRegistrationPreparation,
-  servedSetPieceSource,
-  type ServedSetSourceReceipt,
-  servedUploadPattern,
+import type {
+  ServedInstantiateReceipt,
+  ServedLifecycleReceipts,
+  ServedLifecycleRefusalCode,
+  ServedLifecycleVerbDescriptor,
+  ServedLifecycleVerbRunner,
+  ServedPatternRef,
+  ServedPatternSource,
+  ServedRegistrationOutcome,
+  ServedRegistrationPreparation,
+  ServedSetSourceReceipt,
 } from "@commonfabric/piece/ops";
-import type { Runtime, RuntimeProgram } from "@commonfabric/runner";
+import type { RuntimeProgram } from "@commonfabric/runner";
 import {
-  type ExecutorHost,
-  type LifecycleVerb,
-  SpaceNotServedError,
-} from "@commonfabric/runner/executor/host";
+  type LifecyclePhaseTiming,
+  LifecycleVerbFailure,
+} from "@commonfabric/runner/executor/lifecycle-verb";
 import {
   authorizeSpaceWriter,
   type SpaceAuthorityDeps,
@@ -51,17 +42,13 @@ export interface LifecycleDeps {
   authority: SpaceAuthorityDeps;
 
   /**
-   * The serving loop's host; `undefined` on a deployment running without
-   * it, which answers every verb 503.
-   */
-  host: () => ExecutorHost | undefined;
-
-  /**
-   * The identity the serving runtime's piece controller opens the space
-   * as — the serving side's own, since the verb runs as the loop's
+   * The serving loop, running on this thread or in a worker of this process;
+   * `undefined` on a deployment running without it, which answers every verb
+   * 503. It builds each verb from the descriptor it is sent and runs it as
+   * the serving side's own identity, since the verb runs as the loop's
    * bookkeeping under the lease.
    */
-  serviceIdentity: Identity;
+  host: () => ServedLifecycleVerbRunner | undefined;
 
   /** Trusted event ingress after this route authenticates and authorizes the caller. */
   append: Server["commitDelegatedAppend"];
@@ -85,12 +72,6 @@ export interface LifecycleDeps {
 /** The part of a trace span a lifecycle request marks. */
 export interface RequestSpan {
   setAttribute(key: string, value: AttributeValue): unknown;
-}
-
-/** One timed step of a lifecycle request, in elapsed milliseconds. */
-export interface LifecyclePhaseTiming {
-  phase: string;
-  ms: number;
 }
 
 /** An `instantiate` receipt with the steps the serving side timed. */
@@ -140,11 +121,6 @@ const REFUSAL_STATUS: Record<
   "source-moved": 409,
 };
 
-/** The document a piece id names — the root the serving loop demands. */
-function pieceRootDocId(pieceId: string): string {
-  return pieceId.startsWith("of:") ? pieceId : `of:${pieceId}`;
-}
-
 function wireSource(source: WireSource): ServedPatternSource | undefined {
   if (source.program !== undefined && source.pattern === undefined) {
     return { program: source.program };
@@ -156,47 +132,38 @@ function wireSource(source: WireSource): ServedPatternSource | undefined {
 }
 
 /**
- * A lap timer over one served verb: each call records, under the verb's
- * name, the time since the previous call or since the timer started.
+ * A served verb's refusal as `error` carries it: the serving loop's own
+ * `ServedLifecycleRefusal`, or the error of the same name and code it
+ * arrives as from a loop in a worker, whose port carries no classes.
  */
-function verbTimer(
-  verbName: string,
-  timings: LifecyclePhaseTiming[] | undefined,
-): (phase: string) => void {
-  let since = performance.now();
-  return (phase) => {
-    const now = performance.now();
-    timings?.push({
-      phase: `${verbName}.${phase}`,
-      ms: Math.round(now - since),
-    });
-    since = now;
-  };
-}
+const servedRefusalOf = (
+  error: unknown,
+): { code: ServedLifecycleRefusalCode; message: string } | undefined => {
+  if (!(error instanceof Error) || error.name !== "ServedLifecycleRefusal") {
+    return undefined;
+  }
+  const { code } = error as { code?: unknown };
+  return typeof code === "string" && Object.hasOwn(REFUSAL_STATUS, code)
+    ? { code: code as ServedLifecycleRefusalCode, message: error.message }
+    : undefined;
+};
 
 /**
- * Authorize the caller and run one verb on the space's serving runtime.
- * `run` receives a piece controller over that runtime; `confirm` is the
- * verb's durability read, which the loop runs after the wave commit.
+ * Authorize the caller and run one verb on the space's serving runtime,
+ * resolving with the receipt the verb's name promises.
  *
- * `timings` collects the verb's steps in the order they happened: the
- * writer check (`authorize`), the serving side's session (`session`), the
- * wait for a cycle of the serving loop to take the verb (`queue`), the
- * verb itself (`run`), the wave commit after it (`commit`), and the
- * durability read (`confirm`). A step that never finished is left out.
+ * `timings` collects the verb's steps in the order they happened: the writer
+ * check (`<verb>.authorize`) here, then the steps the serving side times and
+ * returns with the receipt, its session, the wait for a cycle of the loop to
+ * take the verb, the run, the wave commit and the durability read.
  */
-async function runServedVerb<T>(
+async function runServedVerb<Verb extends ServedLifecycleVerbDescriptor>(
   deps: LifecycleDeps,
   callerDid: string,
   space: string,
-  verb: {
-    name: string;
-    run: (pieces: PiecesController) => Promise<T>;
-    confirm: LifecycleVerb<T>["confirm"];
-    demandRoots?: LifecycleVerb<T>["demandRoots"];
-  },
+  verb: Verb,
   timings?: LifecyclePhaseTiming[],
-): Promise<LifecycleResult<T>> {
+): Promise<LifecycleResult<ServedLifecycleReceipts[Verb["name"]]>> {
   const host = deps.host();
   if (host === undefined) {
     return refuse(
@@ -206,13 +173,16 @@ async function runServedVerb<T>(
         "verbs cannot run on it (EXPERIMENTAL_SERVER_EXECUTION).",
     );
   }
-  const lap = verbTimer(verb.name, timings);
+  const authorizing = performance.now();
   const authority = await authorizeSpaceWriter(
     deps.authority,
     space,
     callerDid,
   );
-  lap("authorize");
+  timings?.push({
+    phase: `${verb.name}.authorize`,
+    ms: Math.round(performance.now() - authorizing),
+  });
   if (!authority.ok) {
     deps.logger?.warn(
       { space, caller: callerDid, detail: authority.logDetail },
@@ -220,49 +190,28 @@ async function runServedVerb<T>(
     );
     return refuse(403, "forbidden", authority.message);
   }
-  const session = await createSession({
-    identity: deps.serviceIdentity,
-    spaceDid: space as DID,
-  });
-  lap("session");
-  const confirm = verb.confirm;
   try {
-    const receipt = await host.runLifecycleVerb<T>(space as MemorySpace, {
-      name: verb.name,
-      run: async (runtime: Runtime) => {
-        lap("queue");
-        try {
-          return await verb.run(
-            new PiecesController(session, runtime, {
-              deferSpaceCellSync: true,
-            }),
-          );
-        } finally {
-          lap("run");
-        }
-      },
-      ...(confirm === undefined ? {} : {
-        confirm: async (runtime: Runtime, receipt: T) => {
-          lap("commit");
-          try {
-            await confirm(runtime, receipt);
-          } finally {
-            lap("confirm");
-          }
-        },
-      }),
-      ...(verb.demandRoots === undefined
-        ? {}
-        : { demandRoots: verb.demandRoots }),
-    });
-    if (confirm === undefined) lap("commit");
-    return { status: 200, body: receipt };
+    const run = await host.runLifecycleVerb(space as MemorySpace, verb);
+    for (const timing of run.timings) timings?.push(timing);
+    return {
+      status: 200,
+      body: run.receipt as ServedLifecycleReceipts[Verb["name"]],
+    };
   } catch (error) {
-    if (error instanceof ServedLifecycleRefusal) {
-      return refuse(REFUSAL_STATUS[error.code], error.code, error.message);
+    if (error instanceof LifecycleVerbFailure) {
+      for (const timing of error.timings) timings?.push(timing);
+    }
+    const refusal = servedRefusalOf(error);
+    if (refusal !== undefined) {
+      return refuse(
+        REFUSAL_STATUS[refusal.code],
+        refusal.code,
+        refusal.message,
+      );
     }
     const message = error instanceof Error ? error.message : String(error);
-    if (error instanceof SpaceNotServedError) {
+    // The loop's own `SpaceNotServedError`, by the name a worker's port keeps.
+    if (error instanceof Error && error.name === "SpaceNotServedError") {
       return refuse(503, "space-not-served", message);
     }
     deps.logger?.warn(
@@ -274,18 +223,18 @@ async function runServedVerb<T>(
 }
 
 /** The `upload` verb: compile `program` into the space it names. */
-export function processUpload(
+export async function processUpload(
   deps: LifecycleDeps,
   callerDid: string,
   input: { space: string; program: RuntimeProgram },
 ): Promise<LifecycleResult<{ pattern: ServedPatternRef }>> {
-  return runServedVerb(deps, callerDid, input.space, {
+  const uploaded = await runServedVerb(deps, callerDid, input.space, {
     name: "upload",
-    run: async (pieces) => ({
-      pattern: (await servedUploadPattern(pieces, input.program)).ref,
-    }),
-    confirm: undefined,
+    request: { program: input.program },
   });
+  return uploaded.status === 200
+    ? { status: 200, body: { pattern: uploaded.body } }
+    : uploaded;
 }
 
 /** What the `instantiate` verb takes from its request. */
@@ -367,40 +316,24 @@ async function instantiate(
       "Supply exactly one of `program` and `pattern`.",
     ));
   }
-  const result = await runServedVerb<ServedInstantiateReceipt>(
-    deps,
-    callerDid,
-    input.space,
-    {
-      name: "instantiate",
-      run: (pieces) =>
-        servedInstantiatePiece(pieces, {
-          source,
-          ...(input.argument === undefined ? {} : { argument: input.argument }),
-          ...(input.repository === undefined
-            ? {}
-            : { repository: input.repository }),
-          ...(input.slug === undefined ? {} : { slug: input.slug }),
-          ...(input.force === undefined ? {} : { force: input.force }),
-          ...(input.register === undefined ? {} : { register: input.register }),
-          ...(input.requestKey === undefined
-            ? {}
-            : { requestKey: input.requestKey }),
-          actingUser: callerDid,
-        }),
-      confirm: (runtime, receipt) =>
-        confirmServedInstantiate(
-          runtime,
-          input.space as MemorySpace,
-          receipt,
-          callerDid,
-        ),
-      ...(input.start === false
+  const result = await runServedVerb(deps, callerDid, input.space, {
+    name: "instantiate",
+    request: {
+      source,
+      ...(input.argument === undefined ? {} : { argument: input.argument }),
+      ...(input.repository === undefined
         ? {}
-        : { demandRoots: (receipt) => [pieceRootDocId(receipt.pieceId)] }),
+        : { repository: input.repository }),
+      ...(input.slug === undefined ? {} : { slug: input.slug }),
+      ...(input.force === undefined ? {} : { force: input.force }),
+      ...(input.register === undefined ? {} : { register: input.register }),
+      ...(input.requestKey === undefined
+        ? {}
+        : { requestKey: input.requestKey }),
+      actingUser: callerDid,
+      start: input.start !== false,
     },
-    timings,
-  );
+  }, timings);
   if (result.status !== 200) return result;
   if (
     result.body.registration.status === "skipped" ||
@@ -424,24 +357,10 @@ async function instantiate(
       },
     },
   });
-  const prepared = await runServedVerb<ServedRegistrationPreparation>(
-    deps,
-    callerDid,
-    input.space,
-    {
-      name: "registration-prepare",
-      run: (pieces) =>
-        prepareServedRegistration(pieces, result.body, callerDid),
-      confirm: (runtime, prepared) =>
-        confirmServedRegistration(
-          runtime,
-          input.space as MemorySpace,
-          prepared.receipt,
-          callerDid,
-        ),
-    },
-    timings,
-  );
+  const prepared = await runServedVerb(deps, callerDid, input.space, {
+    name: "registration-prepare",
+    request: { receipt: result.body, actingUser: callerDid },
+  }, timings);
   if (prepared.status !== 200) {
     return incomplete(result.body, "preparation", prepared.body.code);
   }
@@ -459,24 +378,10 @@ async function instantiate(
       ms: Math.round(performance.now() - delivering),
     });
   }
-  const finished = await runServedVerb<ServedInstantiateReceipt>(
-    deps,
-    callerDid,
-    input.space,
-    {
-      name: "registration-finish",
-      run: (pieces) =>
-        finishServedRegistration(pieces, prepared.body, callerDid, outcome),
-      confirm: (runtime, receipt) =>
-        confirmServedRegistration(
-          runtime,
-          input.space as MemorySpace,
-          receipt,
-          callerDid,
-        ),
-    },
-    timings,
-  );
+  const finished = await runServedVerb(deps, callerDid, input.space, {
+    name: "registration-finish",
+    request: { prepared: prepared.body, actingUser: callerDid, outcome },
+  }, timings);
   return finished.status === 200
     ? finished
     : incomplete(prepared.body.receipt, "completion", finished.body.code);
@@ -595,11 +500,9 @@ export async function processSetSource(
   }
   let candidate: ServedPatternRef;
   if (source.program !== undefined) {
-    const program = source.program;
     const uploaded = await runServedVerb(deps, callerDid, input.space, {
       name: "upload",
-      run: async (pieces) => (await servedUploadPattern(pieces, program)).ref,
-      confirm: undefined,
+      request: { program: source.program },
     });
     if (uploaded.status !== 200) return uploaded;
     candidate = uploaded.body;
@@ -608,26 +511,21 @@ export async function processSetSource(
   }
   return await runServedVerb(deps, callerDid, input.space, {
     name: "setsrc",
-    run: (pieces) =>
-      servedSetPieceSource(pieces, {
-        pieceId: input.piece,
-        pattern: candidate,
-        ...(input.repository === undefined
-          ? {}
-          : { repository: input.repository }),
-        ...(input.dangerouslyAllowIncompatibleSchema === undefined ? {} : {
-          dangerouslyAllowIncompatibleSchema:
-            input.dangerouslyAllowIncompatibleSchema,
-        }),
-        ...(input.expectedPattern === undefined
-          ? {}
-          : { expectedPattern: input.expectedPattern }),
-        actingUser: callerDid,
+    request: {
+      pieceId: input.piece,
+      pattern: candidate,
+      ...(input.repository === undefined
+        ? {}
+        : { repository: input.repository }),
+      ...(input.dangerouslyAllowIncompatibleSchema === undefined ? {} : {
+        dangerouslyAllowIncompatibleSchema:
+          input.dangerouslyAllowIncompatibleSchema,
       }),
-    confirm: (runtime, receipt) =>
-      confirmServedSetSource(runtime, input.space as MemorySpace, receipt),
-    ...(input.start === false
-      ? {}
-      : { demandRoots: (receipt) => [pieceRootDocId(receipt.pieceId)] }),
+      ...(input.expectedPattern === undefined
+        ? {}
+        : { expectedPattern: input.expectedPattern }),
+      actingUser: callerDid,
+      start: input.start !== false,
+    },
   });
 }

@@ -220,13 +220,22 @@ The strict-only delta is:
   are the empty "public" ceiling, fail-closed) joined with the target's
   RESIDENCY clause at each path where the component lands, with the shared
   clause-subsumption predicate of the egress gates (`atomsOutsideCeiling`).
-  The residency clause is `Space(<the space the document lives in>)`. That
+  Residency includes `Space(<the space the document lives in>)`. That
   atom's audience is the space's reader set — §4.9.3 resolves it by
   dereferencing its id against the space's ACL, the same document that decides
   who receives a replica — so every principal holding the bytes is inside the
   audience it names, and a flow clause listing the target's own space among
   its alternatives fits a document there whatever that document declares. A
-  `user` or `session` document is one principal's instance: its scope key is
+  space-scoped document also carries `PersonalSpace(<that same space>)` in
+  its residency ceiling. This is the own-space case proposed in
+  [specs#71](https://github.com/commonfabric/specs/pull/71): §4.9.4 reads both
+  spellings against that space's ACL. It uses the target's space, not the
+  acting principal or an ownership lookup, and adds no clause for another
+  space. The proposal is closed without merging; this implementation follows
+  its proposed rule ahead of a ruling and a reconciled pin. The existing
+  residency marker names specs#68; this addition has no separate marker.
+  The conformance statement records the semantic gap at the strict default.
+  A `user` or `session` document is one principal's instance: its scope key is
   built from that principal, and the memory server serves it only to that
   principal's sessions, so its residency clause also carries
   `User(<that principal>)`, as strong as the deployment's binding of instances
@@ -257,13 +266,13 @@ The strict-only delta is:
   <clauses>`. Scope note (v1): link-covered writes carry per-slot link labels
   instead of the join and are outside the check, as is the pure-link-structure
   shape channel; grown existence atoms (SC-4) are historical and deliberately
-  never measured — only the current join is; `Space` is the only form a
-  space's own residency clause takes, because `User` and the bare DID-string
+  never measured — only the current join is. `User` and the bare DID-string
   spelling gate by equality against one acting reader, making their audience
-  narrower than the set of principals a space grants reader roles to, while
-  `PersonalSpace(<owner>)` names a space whose clause the measurement cannot
-  build from a target address (SC-39), and `User` joins it only as a scoped
-  instance's own principal; and the ungrantable
+  narrower than the set of principals a space grants reader roles to. They
+  therefore supply no space-scoped residency; `User` joins the ceiling only
+  as a scoped instance's own principal. A `user` or `session` document gets
+  no own-space `PersonalSpace` clause, including when its scoped principal
+  is unavailable. The ungrantable
   read-failed marker sits outside every ceiling, the residency clause
   included, so a poisoned measurement never proves fit. The reserved policy
   namespaces are outside the check too: the durable policy manifests
@@ -294,8 +303,8 @@ The strict-only delta is:
   reasoned tx whose reads never tripped an eager relevance mark cannot slip the
   ladder ([extended-storage-transaction.ts](../../packages/runner/src/storage/extended-storage-transaction.ts)).
 
-  One of the forms residency excludes is readable in the DECLARED half of the
-  ceiling, in one direction. A `PersonalSpace(owner)` LABEL clause answers a
+  The DECLARED half of the ceiling also admits an owner case, in one
+  direction. A `PersonalSpace(owner)` LABEL clause answers a
   declared ceiling naming that owner, because §3.6.2's role order makes an
   owner a reader and §3.6.4 makes that principal the space's sole owner, and
   the fit test asks only that everyone the ceiling admits is entitled to the
@@ -348,8 +357,8 @@ The strict-only delta is:
   document.
 
   Two id classes is what this is, rather than a rule about documents the
-  runtime mints. The runtime mints many more and route 2 below is what most
-  of them take — the document anchoring splits out of a value has an id
+  runtime mints. The runtime mints many more, and most take owned-store
+  admission — the document anchoring splits out of a value has an id
   derived from its parent's, which no author named either, and it is
   measured. Adding a class here means arguing that case on its own.
 
@@ -403,7 +412,7 @@ The strict-only delta is:
   rather than only in an unusual flow.
 
   Three things bound the marker, and the first is what the other two rest on.
-  The recording method is the same public one route 2's marker uses, so the
+  The recording method is the same public one the ownership marker uses, so the
   runtime's authorization is what separates a claim it made from one pattern-
   authored code wrote; a marker without it counts for nothing. The marker
   names a whole document, because whether a schema could have declared a
@@ -415,7 +424,7 @@ The strict-only delta is:
   lasts for the transaction that recorded it, with no enrollment beside it:
   the measurement runs over documents the asking transaction wrote, so a
   marker recorded beside the write always covers the question. That is the one
-  respect in which it is narrower than route 2's marker, which answers for
+  respect in which it is narrower than the ownership marker, which answers for
   stores a later transaction writes.
 
   One thing this class does NOT take from §18.6.2 is its write-side mirror.
@@ -444,39 +453,12 @@ The strict-only delta is:
   obligation to document "the excluded address patterns" is discharged by this
   section.
 
-  A cache document is off route 2 on the same keying ground an entries
-  document is. Route 2 declares one piece's flow join as the store's policy,
-  so it wants a store keyed on that piece's own nodes; a cache document is
-  keyed on module content, every piece in the space running that module
-  addresses it, and it outlives all of them. What route 2 leaves behind is
-  also permanent, and that is the second reason. It writes a `declared` entry
-  per measured path, which §8.12.1 does not let back, on a document nothing
-  collects; the flow stamp the skip keeps instead is a per-value component
-  §8.12.8 replaces on overwrite. The two routes agree on what a later reader
-  carries — reading a cache document is how a pattern's code is loaded, and
-  under either route the clause reaches whoever loads that module next — so
-  that consequence is not what separates them.
-
-  An entries document takes this route rather than §8.12.5's route 2 below,
-  and the ownership route 2 asks for is the reason. Route 2 declares a policy
-  out of one piece's flow join, so it reaches stores keyed on that piece's
-  own nodes, and its enrollment lasts as long as those nodes do. An entries
-  document is keyed on the stream, and every party that can reach the stream
-  writes to the same document: a piece the stream was handed to, the serving
-  space's drain, another space's outbox delivery. It also outlives all of
-  them, because it is the durable log a later wave drains. `wish`'s interval
-  clock below is off route 2 on that same keying ground, which is a separate
-  question from the measurement one this section settles above.
-
-  Where the route would lead is measured rather than argued. Route 2 declares
-  at the path the misfit was measured at, and a mark on an entries document
-  that already holds entries is measured at `/entries/<n>/consequenced`. So
-  the declaration lands at that entry's own path, and a second mark on the
-  next entry lands beside it rather than folding into it: two marks carrying
-  different atoms leave two `declared` entries, at `/entries/0/consequenced`
-  and `/entries/1/consequenced`. A declared entry is permanent, so the stored
-  label map would grow by one entry per event the stream ever carried, on a
-  durable log that outlives the pieces that wrote to it.
+  A cache document is outside runtime-owned-store admission because its
+  identity is keyed on module content and shared across pieces. An entries
+  document is keyed on its stream and shared by every party that writes to
+  it. Neither belongs to one piece's nodes, so neither takes that piece's
+  ownership marker or enrollment. Their separate measurement exemption is
+  scoped by the contributing documents' spaces, as described below.
 
   The skip is scoped to a join the target's own space produced, for the marked
   class as much as for the two id classes. Every clause the join carries comes
@@ -542,82 +524,75 @@ The strict-only delta is:
   carries that class, the §8.11.3 objection to it, and the channel it leaves
   open.
 
-- **Runtime-owned-store declaration (§8.12.5 route 2) — implemented.** The
-  runtime materializes a set of documents to hold a piece's machinery rather
-  than data an author named. There are four kinds: a piece's argument
-  document, its result document, and the internal documents and streams its
-  result projects to, all minted by the runner from the piece's result cause;
-  the state documents a builtin mints from its own node's cause, such as a
-  dialog's result, internal state and pinned-cell list, or a list operation's
-  result container; the per-event documents a builtin mints inside one
-  transaction, such as a dialog message; and the documents anchoring splits
-  out of a value written into any of those. The runtime fills all of them
-  with whatever the writing transaction read. An author cannot know which
-  atoms a given transaction will carry, so a declaration written into a schema
-  either misses them or over-declares every instance of the pattern. The
-  transaction declares the policy instead, which is §8.12.5's route 2: the
-  write that puts the join on a path also declares, in that same transaction,
-  a policy covering it. What lands is the ceiling that resolved at the path
-  plus exactly the clauses that had nowhere to go, as an ordinary `declared`
-  entry, so the fit test passes and the store's promise becomes the audience
-  of what it holds.
+- **Runtime-owned-store derived admission — implementation pending a ruling.**
+  The runtime materializes documents for a piece's argument, result, internal
+  cells and streams; for a builtin's node-owned state and per-event state; and
+  for values anchored out of those documents. An authorized ownership marker
+  admits a writer-fit misfit on these stores under the conditions below. The
+  persistence rule depends on the claim's provenance and lifetime. For a store
+  with a live enrollment or an authenticated piece-setup claim, the flow-stamp
+  pass records the write's confidentiality in its `derived` component alone;
+  admission adds no `declared` entry. A store named only by a generic
+  transaction-local ownership marker still takes §8.12.5 option 2: the write
+  declares a covering policy in the same transaction. That declaration adds
+  clauses, never alternatives, and preserves existing declared clauses.
 
-  Declaring is what makes the route sound where an exemption would not be.
-  The declared clauses persist as store policy, so readers of the store
-  consume them, and go on consuming them after an overwrite clears the
-  derived stamp. They are the clauses the ceiling did not already cover
-  rather than the whole join: a clause the residency alternative satisfies
-  lands in the stamp and not in the declaration, because the store already
-  answers for it. The cost is the ratchet §8.12.2 asks for: a document that
-  once held data derived from a labeled read keeps that clause after the read
-  stops. The direction is over-taint.
+  The enrolled-store and piece-setup rule implements a slice of the change in
+  [specs#78](https://github.com/commonfabric/specs/pull/78), §8.12.5. The pinned
+  specification still requires option 2's declaration on these stores; the
+  strict default implements this slice ahead of its ruling. The specification
+  dependency remains open until the ruling and pin are reconciled. There is no
+  separate `SPEC-PENDING` marker or default-off dial: the three-slot budget is
+  full. This is a nonconforming semantic gap and does not satisfy step 4 of the
+  correspondence procedure. @danfuzz has authorized proceeding ahead of specs;
+  that permission does not supply a ruling or amend the procedure. This entry
+  and the conformance statement record the gap. The marker count is therefore
+  not a complete inventory of semantic gaps. The proposal
+  admits more writes than this implementation: existing authored-declaration,
+  read-failed and foreign-container refusals remain fail-closed residuals
+  against the proposal.
 
-  The route runs on every write to such a store, not only while the piece is
-  being set up. What makes that safe is a property of the declaration rather
-  than of when it is made. A declared clause list is read two ways, and the
-  two agree: as a ceiling, §8.12.4's `canWrite` admits a label clause when
-  SOME declared clause subsumes it, and as a reader's taint, that same
-  section makes the declared label a floor every reader carries — §8.12.8
-  has reader taint consume the effective label, which always includes the
-  declared component. Subsumption means satisfying the declared clause
-  implies satisfying the label, so every reader of the store satisfies every
-  clause the store admits. One upgrade therefore admits more data AND
-  narrows the audience by the same step, and so does the next one: an
-  unbounded reactive stream of upgrades leaves a store readable by fewer
-  people than it started with, never by more. That is why the route needs no
-  bound on how many times it may fire, or on which clauses it may take from
-  a later transaction. It is §8.12.5's own argument for option 2 — existing
-  readers already expect data at the original label level — applied once per
-  write rather than once per piece.
+  A reader of a labeled write consumes its derived label (§8.12.8). On an
+  enrolled path that already exists, a later write replaces the value and
+  iteration stamps with its own derivation. The existence stamp stays frozen at
+  the path's creation. A new store created under a label therefore still carries
+  that creation label after an overwrite; derived admission is not an owner
+  release. Stored declarations also remain unchanged and continue to taint
+  reads. Lowering them requires §8.12.7's release routes. A path with no
+  recorded existence entry receives a legacy backfill on its first labeled
+  write. Clean creation records no empty existence entry, so this includes a
+  path created clean: its first labeled write's confidentiality stays frozen
+  after a clean overwrite. Derived admission can shed later distinct clauses
+  from the value stamp, but it cannot shed that first existence label.
 
-  The declaration is the runtime's to make. §8.12.8's component table names
-  "explicit store-label operations (upgrades per §8.12.5)" as a provenance
-  of the declared component beside schema `ifc` declarations, and §8.12.5
-  states the discipline as atomically tightening the label and then writing,
-  which is what declaring in the writing transaction does. The authority
-  §8.12.7 and safety invariant 1 require is for WIDENING — adding an
-  alternative to a clause already stored, which grows that clause's reader
-  set and is admissible only through a grant record or an intent-gated
-  declassification event. This route adds clauses and never alternatives, so
-  it never asks for that authority; the mint folds clause LISTS, and a
-  stored disjunction comes back with the alternatives it went in with.
+  The route runs on every write while the runtime's ownership claim holds. At
+  strict it records `writer-fit(runtime-owned-store-derived)` for an enrolled
+  store or authenticated piece setup, and
+  `writer-fit(runtime-owned-store-declared)` for a generic marker-only store,
+  naming the document, path and misfit. Lower rungs retain their
+  `writer-fit(persist-and-flag)` diagnostic and derived stamps. Admission
+  changes no sink ceiling: a builtin that stages an effect still needs its own
+  sink gate, as described below.
 
-  The route is the strict rung's, like the reject it replaces, and §18.6.3's
-  "strict only rejects more" holds across it: a writer-fit misfit is not a
-  rejection at `enforce-explicit` — it persists and flags — so admitting one
-  at strict with a declaration admits nothing a lower rung refused. Every
-  rung below keeps its `writer-fit(persist-and-flag)` diagnostic, which is
-  the rollout signal, and stores no declared policy it could never take back.
-  That last is a statement about the RUNG rather than about a deployment: the
-  shell posture below strict still escalates per transaction, so an escalated
-  transaction writes a permanent declared entry that every rung's readers then
-  consume, and §8.12.1 does not let it back.
-  At strict, a declaration records a `writer-fit(runtime-owned-store-declared)`
-  diagnostic naming the document, the path, and the clauses added: a
-  permanent change to a store's policy leaves a trace even at the rung that
-  admits it.
+  Piece setup records a separate authenticated claim for its argument, result
+  and internal stores on the transaction preparing them. That claim selects
+  derived-only persistence even when setup commits before the nodes start:
+  [`PiecesController.setupPersistent()`](../../packages/piece/src/ops/pieces-controller.ts)
+  is one such path. It creates no lifetime enrollment and carries no authority
+  into the next transaction. Starting the piece establishes the live enrollment
+  its later writes use.
 
-  What bounds the route, and what it declares once inside:
+  Generic one-shot handoffs, including agent run records, refused-slot copies
+  and marker-only anchored children, retain the declaration route and its
+  ratchet. A child does not inherit its parent's setup claim or enrollment.
+  Anchoring records generic ownership for the child, so its eligible misfits
+  remain declared. The declared entries on these writes still pass through the cross-space
+  metadata protection used for flow-derived labels. Later authored clients of
+  a one-shot handoff continue to use its stored policy. Lazy scoped-default
+  seeding on a later transaction also keeps the generic marker; before graph
+  enrollment, those writes can still declare a misfit.
+
+  What bounds the route:
 
   - **Who recorded the marker.** The recording method is on the public
     transaction interface, so an input's own fields say only what its
@@ -638,10 +613,9 @@ The strict-only delta is:
     A builtin names only the stores it mints from its own node's cause. In
     every case the address must name a whole document rather than a path
     inside one, and must lie in the owner's own space: a store elsewhere
-    belongs to whoever holds that space's replicas, so a policy declared on
-    it out of this piece's join would put those bytes behind a promise made
-    here. The result document is the one address a caller may have chosen
-    rather than the runtime minted; from the moment setup writes the piece's
+    belongs to whoever holds that space's replicas, so this piece's ownership
+    claim cannot admit writes there. The result document is the one address a
+    caller may have chosen rather than the runtime minted; from the moment setup writes the piece's
     meta into it, it is that piece's store and nothing else's, and the route
     reaches every path written there. Every document the route does not
     reach keeps the ceiling it resolves to, and a misfit there is refused as
@@ -657,6 +631,9 @@ The strict-only delta is:
     churning list ever held. A store minted per event takes the marker alone
     for the same reason. Both carry the runtime's authorization, and both
     are refused for an address naming part of a document or another space.
+    The separate piece-setup claim selects derived-only persistence for its
+    transaction without enrolling anything. A generic ownership marker alone
+    continues to declare the write's misfit.
   - **Which builtins may take it.** A builtin whose result store moves onto
     the route gives up whatever its own ceiling was refusing, so the test is
     what refuses that write instead. A builtin that stages its request as a
@@ -677,7 +654,7 @@ The strict-only delta is:
     parameters no author can foresee, while `/result`'s per-column entries
     stay the author's: the route declines at a declared path, and the
     transaction that settles a request reads its destination's hash as a read
-    of the write destination, so the clauses the control state accumulates
+    of the write destination, so the clauses the control state carries
     never reach the rows. The second thing that store's ceiling was refusing
     was the membership of a result selected by a labeled parameter,
     which no transaction's join can supply once the settle carries nothing;
@@ -688,7 +665,7 @@ The strict-only delta is:
     there is no egress to govern and no refusal to move,
     and their stores take the route on the node-keyed test alone. That is
     the reading to apply to a new builtin: ask what it stages before asking
-    what its stores may declare. `builtin-ownership-route.test.ts` pairs the
+    which stores it owns. `builtin-ownership-route.test.ts` pairs the
     two sets mechanically, so a builtin that stages an effect and takes the
     route fails rather than passing on a reviewer noticing. Served
     `compileAndRun` stages its detached program through a `compileAndRun`
@@ -699,7 +676,7 @@ The strict-only delta is:
     for this one. A store the runtime keys on something other than a node —
     `wish`'s interval clock, keyed on the interval, and its shared hashtag
     state, keyed on the space and scope — is shared by every piece that asks
-    for it, so no one piece's flow join may declare its policy. And a
+    for it, so no one piece may claim ownership of it. And a
     sidecar's result cell is the result cell of the piece the sidecar runs,
     which that piece's own instantiation enrolls and its stop releases;
     enrolling it again under the piece that launched it would hold it past
@@ -738,7 +715,7 @@ The strict-only delta is:
     That direction has a shape an author meets rather than predicts, so it is
     stated here concretely. On a piece whose result projects a list of
     objects, `items.key(0).set({ note: labeled })` commits: the write goes
-    through the parent, re-anchors the element, and the route declares.
+    through the parent, re-anchors the element, and the route admits it.
     `items.key(0).key("note").set(labeled)` is refused with a writer-fit
     misfit naming the child: the write addresses the child directly, so the
     marker the parent's walk would have recorded is never reached, and the
@@ -774,21 +751,14 @@ The strict-only delta is:
     another document's value. The same test file pins the four outcomes.
   - **How far it reaches inside that document.** Every path the
     transaction writes there, not only the paths setup wrote: the marker
-    names the store, and the declaration is a statement about the store.
+    names the store, and its ownership covers the written paths.
   - **No schema declaration at that path.** A schema that declares at the
-    written path owns the store's policy there. Widening it from the join
-    would make the walk's own re-mint non-monotone on the next write, and
-    would brick the path under the declared-monotonicity gate. That store's
-    route 2 is the author's, in the schema. The reverse order stays
-    reachable, and is §8.12.1 rather than a defect of the route: a pattern
-    that later adds an `ifc` at a path the route already declared has to
-    name what the store already promises, or the monotonicity gate rejects
-    the write for dropping a stored clause. The gate ships at `observe`, so
-    this is diagnosed rather than refused until it is raised to `enforce`.
-  - **No poisoned measurement.** The ungrantable read-failed marker is
-    outside every ceiling, so it is outside what the route may declare: a
-    measurement the runtime could not take proves nothing about the
-    audience, and declaring it would write a clause no reader can satisfy.
+    written path owns the store's policy there. Its misfit is refused. An
+    existing stored declaration also remains subject to §8.12.1's
+    monotonicity gate; this route neither replaces nor lowers it.
+  - **No poisoned measurement.** A measurement carrying the ungrantable
+    read-failed marker proves nothing about the audience. Its misfit is
+    refused even on a runtime-owned store.
   - **No foreign container clause.** A container clause is honored by a
     replica set rather than by a reader check — §4.9.3 resolves it against
     that space's ACL, the document that also decides who holds the bytes —
@@ -796,7 +766,7 @@ The strict-only delta is:
     readers. That is why residency admits a clause naming another space
     only in its `PersonalSpace(owner)` spelling, and only into a scoped
     instance of that owner, while another space's `Space` atom stays
-    refused; the route declares no container clause naming another.
+    refused; the route admits no misfit containing a foreign container clause.
     `PersonalSpace(owner)` is the second spelling of one: §4.9.4 calls the
     two forms "the two `Space(...)` atoms", and §3.6.4 makes the named
     principal the sole owner of the space whose id it is. The same-space
@@ -808,17 +778,10 @@ The strict-only delta is:
     commitment answer one the same way. A person-audience clause is
     not a container clause: `User(alice)` is honored by the reader check
     whoever holds the bytes.
-  - **Growth only.** Within the walk, the ceiling the declaration starts
-    from resolves over the entries that walk is about to persist,
-    carried-forward stored declared entries among them, so a later
-    transaction carrying a wider join adds its clauses to what the path
-    already declared rather than replacing them. The entry coalesces with
-    the carried-forward stored entry rather than standing in for it. Adding
-    clauses is the restricting direction, so the monotonicity gate that runs
-    earlier in the same walk cannot be contradicted by what this route
-    pushes. Growth is also what reaches a store written before any labeled
-    read entered a transaction writing it: that store declares nothing, and
-    the write that first carries a join is the one that declares it.
+  - **Independent components.** The flow-stamp pass retains existing
+    declarations and frozen existence entries while replacing the value
+    stamps on overwritten paths. An unlabeled overwrite does not erase a
+    declared policy or the label of the path's creation.
 
   What the route does NOT reach is a document nobody named. A write to an
   ordinary document measures against its own ceiling whichever transaction
@@ -828,45 +791,17 @@ The strict-only delta is:
   outside the route for a different reason — the measurement skips them
   altogether, per the exemption above.
 
-  It DOES reach further than the setup-time route in two ways worth stating,
-  because neither follows from "the same rule, later". The piece's result
-  document is on the route and was not before, and it is the member the
-  "no schema declares this" argument does not carry — an author may write
-  `ifc` into a pattern's `resultSchema`. Where they did, the route declines
-  and the misfit stands; where they did not, it reaches every path written
-  there. And what the route tests is the STORE, not the caller: once a store
-  is enrolled, any writer reaching it takes the route and contributes the
-  clause its own join carries. The direction stays refusal — every clause
-  added narrows the store's audience and its readers carry it — so this is a
-  permanent over-taint another writer can impose rather than a disclosure it
-  can obtain. Constraining it to the runtime's own writes would need
-  something the transaction does not carry: pattern-authored code runs in the
-  runtime's realm, so "who is writing" is not a question the write side can
-  ask.
+  The piece's result document is covered, except at a written path whose
+  schema declares a policy. The route tests the store's ownership, not the
+  caller: any writer reaching an enrolled store may take it. Each write
+  carries its own derivation, which its readers consume. No writer gains
+  authority to remove an existing declaration through this admission.
 
-  Two costs come with it, both outside the store. The declared list is a
-  conjunction every reader carries, so a store that accumulates clauses with
-  disjoint audiences ends up readable by nobody while still admitting
-  writes; that is §8.12.2's ratchet reaching its end, and §8.12.7 records the
-  same outcome for its own case as safe and an operational footgun worth
-  flagging in review — the direction is refusal rather than disclosure. Two
-  shapes reach it soonest, and both are worth knowing before raising the rung.
-  A piece's RESULT document is what other pieces read, and it now accumulates
-  every clause the piece ever read. And a conditional keeps ONE result store
-  per node — `ifElse`, `when`, `unless`, and `inspectConfLabel` over whatever
-  it is pointed at — so a branch that fires once leaves its clause on the
-  store the other branch writes through afterwards. Both are the ratchet
-  behaving as specified rather than a defect in the route, and both are
-  arguments for the per-value components carrying the audience rather than
-  the declared one. And a transaction that could not commit
-  now commits, so whatever else it staged proceeds — a post-commit effect, a
-  sink request. That is why the condition above asks what refuses a
-  builtin's request once its store no longer does, and it is the whole of
-  what the LLM sinks lose: `MAX_ENFORCEMENT_SINK_CEILINGS` declares no
-  ceiling for them, so a request the store's misfit used to refuse by
-  accident now goes. `max-enforcement-posture.test.ts` and
-  `builtin-abandoned-request.test.ts` pin that, and both flip when the
-  boundary-scoped admission mechanism that preset describes lands.
+  Committing the transaction also releases whatever effects it staged. A
+  builtin's sink gate must therefore decide whether its request may leave;
+  the state store's writer-fit check is not that gate.
+  `max-enforcement-posture.test.ts` and `builtin-abandoned-request.test.ts`
+  cover the admission of LLM requests whose sink has no configured ceiling.
 
   Implementation in
   [prepare.ts](../../packages/runner/src/cfc/prepare.ts)

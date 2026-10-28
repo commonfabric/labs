@@ -12,7 +12,7 @@ import {
   TESTS,
   Writable,
 } from "commonfabric";
-import Topic, { type TopicOutput } from "./topic.tsx";
+import Topic, { TOPIC_STATE_VERSION, type TopicOutput } from "./topic.tsx";
 
 /** Shared topic and its stored state version. */
 interface Setup {
@@ -25,7 +25,7 @@ interface Setup {
 
 /** Creates shared legacy records with migration initially disabled. */
 export const setup = pattern(() => {
-  const migrated = new Writable(1);
+  const migrated = new Writable(TOPIC_STATE_VERSION);
   const topic = Topic({
     createdByName: "Legacy creator",
     topicStateVersion: migrated,
@@ -60,7 +60,7 @@ export const first = pattern<{ setup: Setup }>(({ setup }) => {
     setup.topic.comments[0].author?.name === "Fable" &&
     setup.topic.comments[0].author?.kind === "legacy" &&
     setup.topic.comments[1].author?.name === "Current author" &&
-    setup.migrated.get() === 1
+    setup.migrated.get() === TOPIC_STATE_VERSION
   );
   const assert_both_appends = assert(() =>
     setup.topic.comments.length === 4 &&
@@ -109,7 +109,7 @@ export const second = pattern<{ setup: Setup }>(({ setup }) => {
     setup.topic.comments[0].author?.name === "Fable" &&
     setup.topic.comments[0].author?.kind === "legacy" &&
     setup.topic.comments[1].author?.name === "Current author" &&
-    setup.migrated.get() === 1
+    setup.migrated.get() === TOPIC_STATE_VERSION
   );
   const assert_both_appends = assert(() =>
     setup.topic.comments.length === 4 &&

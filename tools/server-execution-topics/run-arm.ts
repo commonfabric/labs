@@ -15,6 +15,7 @@ import {
 } from "../../tasks/ci-capabilities.ts";
 import {
   assertServerExecutionCiPosture,
+  SERVER_EXECUTION_ON_ENVIRONMENT,
   serverExecutionCiLane,
 } from "../../tasks/server-execution-ci.ts";
 
@@ -37,15 +38,24 @@ const lane = serverExecutionCiLane(role);
 const capability: CapabilityId = role === "default"
   ? "toolshed-baked"
   : "toolshed-baked-opposite";
+/**
+ * `env` carrying the lane's exact flag posture: none of the variables a lane
+ * sets except the ones this lane sets, at its values.
+ */
+function withLanePosture(env: Record<string, string>): Record<string, string> {
+  const posture = { ...env };
+  delete posture.EXPERIMENTAL_SERVER_EXECUTION;
+  for (const name of Object.keys(SERVER_EXECUTION_ON_ENVIRONMENT)) {
+    delete posture[name];
+  }
+  return { ...posture, ...lane.environment };
+}
+
 /** Builds a complete child environment with the lane's exact flag posture. */
 function executionEnvironment(
   overrides: Record<string, string> = {},
 ): Record<string, string> {
-  const env = { ...Deno.env.toObject(), ...overrides };
-  if (lane.experimentalValue === undefined) {
-    delete env.EXPERIMENTAL_SERVER_EXECUTION;
-  } else env.EXPERIMENTAL_SERVER_EXECUTION = lane.experimentalValue;
-  return env;
+  return withLanePosture({ ...Deno.env.toObject(), ...overrides });
 }
 
 /** Reads an endpoint only when its HTTP response succeeded. */
@@ -109,16 +119,13 @@ for (const path of sourcePaths) {
   await Deno.mkdir(dirname(destination), { recursive: true });
   await Deno.copyFile(join(root, path), destination);
 }
-const flags = Object.fromEntries(
+const flags = withLanePosture(Object.fromEntries(
   Object.entries(Deno.env.toObject()).filter(([key]) =>
     key.startsWith("EXPERIMENTAL_") ||
     key.startsWith("CF_TOPIC") ||
     ["CF_TIMING_MEASURES", "CF_MEMORY_FRAME_LOG", "CF_PROF_CPU"].includes(key)
   ),
-);
-if (lane.experimentalValue === undefined) {
-  delete flags.EXPERIMENTAL_SERVER_EXECUTION;
-} else flags.EXPERIMENTAL_SERVER_EXECUTION = lane.experimentalValue;
+));
 const cpuModel = Deno.build.os === "darwin"
   ? (await exec("/usr/sbin/sysctl", ["-n", "machdep.cpu.brand_string"])).trim()
   : Deno.build.os === "linux"

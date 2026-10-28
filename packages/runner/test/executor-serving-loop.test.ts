@@ -742,6 +742,51 @@ describe("stage F serving loop", () => {
     expect(settles() - before.settle).toBe(served);
   });
 
+  it("finishes an overlapped wave commit in a later step: the authored commit settles, and a commit-wait span records the finish", async () => {
+    // Under `overlapWaveCommit` a cycle ends with its commit in flight, and
+    // a later step finishes it: the next cycle's settle, or the committing
+    // cycle's own end when nothing arrived to overlap it with. The
+    // `commit-wait` span is recorded by that finish and by nothing else,
+    // so its arrival says a commit was left in flight and then finished by
+    // the loop rather than by the park.
+    const timing = getLogger("executor");
+    const waits = () =>
+      timing.getTimeStats("executor", "wave", "commit-wait")?.count ?? 0;
+    const before = waits();
+    const waited = Promise.withResolvers<void>();
+    const time = timing.time.bind(timing);
+    using _time = stub(timing, "time", (...args) => {
+      const result = time(...args);
+      if (waits() > before) waited.resolve();
+      return result;
+    });
+
+    host = newHost({
+      flushDeadlineMs: 5_000,
+      idleParkMs: 600_000,
+      overlapWaveCommit: true,
+    });
+    openClient();
+    const engine = await server.engineForSpace(space);
+
+    const clientArg = clientRuntime.getCell<{ n: number }>(
+      space,
+      "overlapped-commit-arg",
+      undefined,
+    );
+    await clientArg.sync();
+    const tx = clientRuntime.edit();
+    clientArg.withTx(tx).set({ n: 11 });
+    expect((await tx.commit().settled).error).toBeUndefined();
+    const authoredSeq = Engine.serverSeq(engine);
+    await awaitSettled(clientRuntime, space, authoredSeq);
+
+    await waited.promise;
+    await host.close();
+
+    expect(waits() - before).toBeGreaterThanOrEqual(1);
+  });
+
   it("retries a demanded root the loader could not start YET: demand precedes the instantiation commit (the creation race), the deferred ensure re-attempts on a later cycle, and the piece serves", async () => {
     host = newHost({ flushDeadlineMs: 5_000, idleParkMs: 600_000 });
     // NO onServingRuntime pattern run: unlike the tests above, the

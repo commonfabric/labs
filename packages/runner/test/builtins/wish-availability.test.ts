@@ -19,6 +19,7 @@ import {
   newLoopbackServer,
 } from "../../src/storage/v2-emulate.ts";
 import type { SessionFactory } from "../../src/storage/v2.ts";
+import { seedProfileOwner } from "../cfc-seed-envelope.ts";
 import { TestStorageManager } from "../memory-v2-test-utils.ts";
 
 const user = await Identity.fromPassphrase("generic wish availability");
@@ -87,6 +88,9 @@ describe("wish-availability", () => {
         profile.withTx(profileTx).set({ initialNameApplied: "Tester" });
         runtime.prepareTxForCommit(profileTx);
         expect((await profileTx.commit().settled).error).toBeUndefined();
+        const owned = runtime.edit();
+        seedProfileOwner(owned, profile.getAsNormalizedFullLink(), user.did());
+        expect((await owned.commit().settled).error).toBeUndefined();
         const tx = runtime.edit();
         runtime.getHomeSpaceCell(tx).asSchema(undefined).set({
           defaultPattern: {

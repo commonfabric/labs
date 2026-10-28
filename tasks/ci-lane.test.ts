@@ -25,6 +25,9 @@ import {
 
 import {
   accountFor,
+  addLaneResults,
+  ANNOTATED_FAILURES,
+  annotateLaneFailures,
   batchCoverage,
   batchesOf,
   batchRepeats,
@@ -41,12 +44,14 @@ import {
   describeCoverage,
   describePlan,
   describeWithheld,
+  errorAnnotation,
   type Execution,
   gainedSince,
   landedFiles,
   type LaneDeps,
   type LaneOptions,
   lanePlan,
+  laneRerun,
   LaneStop,
   main,
   manifestMoment,
@@ -56,6 +61,7 @@ import {
   parseLaneArgs,
   PATTERN_COVERAGE_DIR,
   planOver,
+  reportLane,
   requestedRun,
   rerunFailures,
   runBatch,
@@ -3157,6 +3163,153 @@ describe("the lane's own housekeeping", () => {
       await Deno.remove(root, { recursive: true });
     }
   });
+
+  /**
+   * Runs the only lane of a pull request's run over `suites` in a root
+   * holding a workspace of `packages/bakery`, and returns whether it
+   * passed and the block it ended with.
+   */
+  async function closingSummary(
+    suites: Suite[],
+  ): Promise<{ ok: boolean; summary: string[] }> {
+    const root = await Deno.makeTempDir({ prefix: "lane-summary-" });
+    await Deno.writeTextFile(
+      `${root}/deno.jsonc`,
+      JSON.stringify({ workspace: ["./packages/bakery"] }),
+    );
+    const lines: string[] = [];
+    const log = console.log;
+    // As it runs outside a job, whatever job runs this test.
+    const restore = setEnv({
+      RUNNER_TEMP: undefined,
+      GITHUB_ACTIONS: undefined,
+      GITHUB_STEP_SUMMARY: undefined,
+    });
+    console.log = (line: string) => lines.push(line);
+    try {
+      const ok = await runLane(
+        {
+          lane: 1,
+          of: 1,
+          full: false,
+          dryRun: false,
+          laneCount: false,
+          root,
+          at: "2026-09-01T00:00:00Z",
+        },
+        {
+          topology: () => Promise.resolve(suites),
+          manifest: ({ at }) =>
+            Promise.resolve({ absent: `no manifest at ${at}: held out here` }),
+          spool: () => undefined,
+        },
+      );
+      return {
+        ok,
+        summary: lines.slice(
+          lines.findIndex((line) => line.includes("test summary")) + 1,
+        ),
+      };
+    } finally {
+      console.log = log;
+      restore();
+      await Deno.remove(root, { recursive: true });
+    }
+  }
+
+  const unit = "packages/bakery/glaze.test.ts";
+
+  it("ends with each failing test, its error, and how to run it again", async () => {
+    const report = `<testsuites><testsuite name="./glaze.test.ts">
+  <testcase name="glaze" classname="./glaze.test.ts"/>
+  <testcase name="glaze &gt; sets" classname="./glaze.test.ts">
+    <failure message="Uncaught Error: still runny">stack</failure>
+  </testcase>
+</testsuite></testsuites>`;
+    const { ok, summary } = await closingSummary([suite({
+      id: "workspace-unit",
+      units: [unit],
+      locate: () => ({ level: "unit" as const, unit }),
+      command: (_units, context) => {
+        const at = `${context.outputDir}/report.xml`;
+        return Promise.resolve([{
+          command: [
+            Deno.execPath(),
+            "eval",
+            `Deno.writeTextFileSync(${JSON.stringify(at)}, ` +
+            `${JSON.stringify(report)}); Deno.exit(1)`,
+          ],
+          cwd: context.root,
+          junit: [{
+            kind: "unit",
+            scope: "bakery",
+            path: at,
+            filePrefix: "packages/bakery",
+          }],
+        }]);
+      },
+    })]);
+
+    expect(ok).toBe(false);
+    expect(summary[0]).toMatch(/^FAILED: 1 failed, 0 passed, 0 skipped \(/);
+    expect(summary.slice(1)).toEqual([
+      "",
+      "FAIL unit/bakery: glaze > sets",
+      "  file:  packages/bakery/glaze.test.ts",
+      "  rerun: cd packages/bakery && deno task test --filter glaze",
+      "  | Error: still runny",
+      "",
+      "Logs: the output above",
+    ]);
+  });
+
+  it("ends by saying why it failed where no test failed", async () => {
+    const { ok, summary } = await closingSummary([suite({
+      id: "workspace-unit",
+      units: [unit],
+      locate: () => ({ level: "unit" as const, unit }),
+      command: async (_units, context) => {
+        // A pass, and a coverage profile no conversion can read.
+        const profiles = `${context.root}/coverage-raw/workspace-unit/bakery`;
+        await Deno.mkdir(profiles, { recursive: true });
+        await Deno.writeTextFile(`${profiles}/broken.json`, "{");
+        const record = JSON.stringify({
+          line: "record",
+          test: { k: "unit", s: "bakery", n: "glaze > sets" },
+          outcome: "pass",
+          durationMs: 1,
+        });
+        return [{
+          command: [
+            Deno.execPath(),
+            "eval",
+            `Deno.writeTextFileSync(
+              Deno.env.get("CF_TEST_RECORDS_DIR") + "/fragment-a.ndjson",
+              ${JSON.stringify(record + "\n")},
+            )`,
+          ],
+          cwd: context.root,
+        }];
+      },
+    })]);
+
+    expect(ok).toBe(false);
+    expect(summary[0]).toMatch(/^FAILED: 0 failed, 1 passed, 0 skipped \(/);
+    expect(summary.slice(1)).toEqual([
+      "",
+      "Converting a coverage profile lost a tracked file.",
+      "",
+      "Logs: the output above",
+    ]);
+  });
+
+  it("ends a passing lane with one line", async () => {
+    const { ok, summary } = await closingSummary([]);
+
+    expect(ok).toBe(true);
+    expect(summary).toHaveLength(1);
+    expect(summary[0]).toMatch(/^PASSED: 0 failed, 0 passed, 0 skipped \(/);
+  });
 });
 
 describe("what a lane records about itself", () => {
@@ -4734,12 +4887,15 @@ describe("what a lane does with the batches it was given", () => {
   async function run(
     command: readonly string[],
     over: { full?: boolean; manifest?: Manifest; stop?: LaneStop } = {},
-  ): Promise<{ ok: boolean; measured: TestRecord[] }> {
+  ): Promise<{ ok: boolean; measured: TestRecord[]; annotations: string[] }> {
     const spool = await Deno.makeTempDir({ prefix: "lane-spool-" });
     const { stop } = over;
     const restore = outsideJob();
     const log = console.log;
-    console.log = () => {};
+    const annotations: string[] = [];
+    console.log = (line: string) => {
+      if (line.startsWith("::error")) annotations.push(line);
+    };
     try {
       const ok = await runLane(
         {
@@ -4767,7 +4923,7 @@ describe("what a lane does with the batches it was given", () => {
       const measured = written.split("\n")
         .filter((line) => line.length > 0)
         .map((line) => JSON.parse(line) as TestRecord);
-      return { ok, measured };
+      return { ok, measured, annotations };
     } finally {
       console.log = log;
       restore();
@@ -4804,6 +4960,121 @@ describe("what a lane does with the batches it was given", () => {
     // carrying both outcomes for the identity.
     expect(batchOutcome(measured)).toBe("pass");
   });
+
+  it("leaves excused failures out of the live annotations", async () => {
+    const restore = setEnv({
+      GITHUB_ACTIONS: "true",
+      GITHUB_STEP_SUMMARY: undefined,
+    });
+    try {
+      const { ok, annotations } = await run(recording("", "fail"), {
+        full: true,
+        manifest: withholding(),
+      });
+      expect(ok).toBe(true);
+      expect(annotations).toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+
+  for (const missingManifest of [false, true]) {
+    const title = missingManifest
+      ? "keeps later batches running when rerun-command lookup cannot read the workspace manifest"
+      : "annotates a gating failure before starting the next batch and keeps running the lane";
+    it(title, async () => {
+      const spool = await Deno.makeTempDir({ prefix: "lane-early-failure-" });
+      const lines: string[] = [];
+      const entries = ["first", "second"].map((name, index) => ({
+        test: { k: "unit" as const, s: "bakery", n: `${name} > runs` },
+        suite: name,
+        unit: `packages/bakery/${name}.test.ts`,
+        cost: 2 - index,
+      }));
+      let secondRan = false;
+      const reporting = (index: number) => {
+        const entry = entries[index]!;
+        return suite({
+          id: entry.suite,
+          units: [entry.unit],
+          locate: (record) =>
+            record.test.n === entry.test.n
+              ? { level: "unit", unit: entry.unit }
+              : undefined,
+          command: (_units, context) => {
+            if (index === 1) {
+              expect(lines.filter((line) => line.startsWith("::error")))
+                .toHaveLength(1);
+              expect(lines.some((line) => line.startsWith("FAILED:")))
+                .toBe(false);
+              secondRan = true;
+            }
+            return Promise.resolve([{
+              command: [
+                Deno.execPath(),
+                "eval",
+                `const dir = Deno.env.get("CF_TEST_RECORDS_DIR");
+               Deno.mkdirSync(dir, { recursive: true });
+               Deno.writeTextFileSync(
+                 dir + "/fragment-fixture.ndjson",
+                 JSON.stringify(${
+                  JSON.stringify({
+                    line: "record",
+                    test: entry.test,
+                    outcome: index === 0 ? "fail" : "pass",
+                    durationMs: 1,
+                  })
+                }) + "\\n",
+               );`,
+              ],
+              cwd: context.root,
+            }]);
+          },
+        });
+      };
+      const restore = setEnv({
+        RUNNER_TEMP: undefined,
+        GITHUB_ACTIONS: "true",
+        GITHUB_STEP_SUMMARY: undefined,
+      });
+      const warnings: unknown[][] = [];
+      const warn = console.warn;
+      console.warn = (...args: unknown[]) => warnings.push(args);
+      const log = console.log;
+      console.log = (line: string) => lines.push(line);
+      try {
+        const ok = await runLane({
+          lane: 1,
+          of: 1,
+          full: true,
+          dryRun: false,
+          laneCount: false,
+          root: missingManifest ? spool : REPOSITORY,
+          at: "2026-09-01T00:00:00Z",
+          coverageDir: `${spool}/coverage`,
+        }, {
+          manifest: () =>
+            Promise.resolve({
+              manifest: manifestOf(entries),
+              objectName: "manifest-fixture.json.gz",
+            }),
+          topology: () => Promise.resolve([reporting(0), reporting(1)]),
+          spool: () => spool,
+        });
+        expect(ok).toBe(false);
+        expect(secondRan).toBe(true);
+        expect(warnings).toHaveLength(missingManifest ? 1 : 0);
+        expect(lines.filter((line) => line.startsWith("::error")))
+          .toHaveLength(1);
+        expect(lines.some((line) => line.startsWith("FAILED:"))).toBe(true);
+      } finally {
+        console.log = log;
+        console.warn = warn;
+        restore();
+        await Deno.remove(spool, { recursive: true });
+      }
+    });
+  }
 
   it("fails a lane told to stop, runs nothing more, and says what it spent", async () => {
     const stop = new LaneStop();
@@ -6336,5 +6607,215 @@ describe("what a lane hands the children it spawns", () => {
     // The lane itself holds nothing for a child to inherit, which is
     // what leaves the declaration as the only way one gets a token.
     expect(heldAfter).toEqual([undefined, undefined]);
+  });
+});
+
+describe("the summary a lane ends with", () => {
+  /** A record of a test of `kind` in `scope`. */
+  const record = (
+    kind: string,
+    scope: string,
+    name: string,
+    outcome: TestRecord["outcome"],
+    file?: string,
+  ): TestRecord => ({
+    line: "record",
+    test: { k: kind, s: scope, n: name },
+    outcome,
+    durationMs: 1,
+    ...(file === undefined ? {} : { file }),
+  });
+  const members = new Map([["runner", "packages/runner"]]);
+
+  it("gives a rerun command for each kind of test a developer can run", () => {
+    expect(laneRerun(record("unit", "runner", "a > b", "fail"), members))
+      .toBe("cd packages/runner && deno task test --filter a");
+    expect(laneRerun(
+      record(
+        "integration",
+        "shell",
+        "x",
+        "fail",
+        "packages/shell/integration/login.test.ts",
+      ),
+      members,
+    )).toBe("deno task integration shell login");
+    expect(laneRerun(
+      record("pattern", "patterns", "packages/patterns/dice.test.tsx", "fail"),
+      members,
+    )).toBe(
+      "deno task integration pattern-tests packages/patterns/dice.test.tsx",
+    );
+  });
+
+  it("gives no rerun command for a test with no local command", () => {
+    expect(laneRerun(record("unit", "nowhere", "a", "fail"), members))
+      .toBeUndefined();
+    expect(laneRerun(record("gate", "repo", "fmt", "fail"), members))
+      .toBeUndefined();
+    expect(laneRerun(record("integration", "cf-harness", "a", "fail"), members))
+      .toBeUndefined();
+  });
+
+  it("keeps a failure the lane fails for over any other outcome of its test", () => {
+    const tests = new Map();
+    const failed = record("unit", "runner", "flaps", "fail");
+    const failing = new Set([JSON.stringify(["unit", "runner", "flaps"])]);
+    addLaneResults(
+      tests,
+      [record("unit", "runner", "flaps", "pass"), failed],
+      new Map([[failed, "Uncaught Error: no"]]),
+      failing,
+    );
+    addLaneResults(
+      tests,
+      [record("unit", "runner", "flaps", "pass")],
+      new Map(),
+      failing,
+    );
+
+    expect([...tests.values()]).toEqual([{
+      record: failed,
+      message: "Uncaught Error: no",
+    }]);
+  });
+
+  it("takes a failure's message from whichever of its records carries one", () => {
+    // A producer's spool can record a failure the JUnit report records
+    // again, and only the report's record carries the message.
+    const tests = new Map();
+    const spooled = record("unit", "runner", "breaks", "fail");
+    const reported = record("unit", "runner", "breaks", "fail");
+    addLaneResults(
+      tests,
+      [spooled, reported],
+      new Map([[reported, "Uncaught Error: broke"]]),
+      new Set([JSON.stringify(["unit", "runner", "breaks"])]),
+    );
+
+    expect([...tests.values()]).toEqual([{
+      record: spooled,
+      message: "Uncaught Error: broke",
+    }]);
+  });
+
+  it("leaves out a failure the lane excused", () => {
+    const tests = new Map();
+    addLaneResults(
+      tests,
+      [record("unit", "runner", "flaky", "fail")],
+      new Map(),
+      new Set(),
+    );
+
+    expect([...tests.values()]).toEqual([]);
+  });
+
+  it("annotates a failing test with its file, name, rerun command and error", () => {
+    expect(errorAnnotation({
+      record: record(
+        "unit",
+        "runner",
+        "a, b: c",
+        "fail",
+        "packages/runner/t.ts",
+      ),
+      message: "Uncaught Error: 100%\nbroken",
+      rerun: "cd packages/runner && deno task test --filter 'a, b: c'",
+    })).toBe(
+      "::error file=packages/runner/t.ts,title=unit/runner%3A a%2C b%3A c::" +
+        "rerun: cd packages/runner && deno task test --filter 'a, b: c'" +
+        "%0AError: 100%25%0Abroken",
+    );
+  });
+
+  it("annotates each failing identity once across batches and the closing summary, within one lane limit", () => {
+    const lines: string[] = [];
+    const annotated = new Set<string>();
+    const first = { record: record("unit", "runner", "first", "fail") };
+    const second = { record: record("unit", "runner", "second", "fail") };
+    const passing = { record: record("unit", "runner", "passed", "pass") };
+    const actions = (name: string) =>
+      name === "GITHUB_ACTIONS" ? "true" : undefined;
+    const log = console.log;
+    const restore = setEnv({ GITHUB_STEP_SUMMARY: undefined });
+    console.log = (line: string) => lines.push(line);
+    try {
+      annotateLaneFailures([passing, first, first], annotated, actions);
+      expect(lines).toEqual([errorAnnotation(first)]);
+      annotateLaneFailures([first, second], annotated, actions);
+      expect(lines).toEqual([errorAnnotation(first), errorAnnotation(second)]);
+      const rest = Array.from({ length: ANNOTATED_FAILURES }, (_, index) => ({
+        record: record("unit", "runner", `rest-${index}`, "fail"),
+      }));
+      annotateLaneFailures(rest, annotated, actions);
+      reportLane(
+        {
+          tests: [first, second, ...rest],
+          commands: [],
+          seconds: 1,
+        },
+        actions,
+        annotated,
+      );
+      expect(lines.filter((line) => line.startsWith("::error")))
+        .toHaveLength(ANNOTATED_FAILURES);
+      expect(annotated.size).toBe(ANNOTATED_FAILURES);
+    } finally {
+      console.log = log;
+      restore();
+    }
+  });
+
+  it("prints the summary last, annotating only inside GitHub Actions", () => {
+    const failing = Array.from(
+      { length: ANNOTATED_FAILURES + 2 },
+      (_unused, index) => ({
+        record: record("unit", "runner", `t${index}`, "fail"),
+      }),
+    );
+    const printedUnder = (env: Record<string, string>): string[] => {
+      const lines: string[] = [];
+      const log = console.log;
+      console.log = (line: string) => lines.push(line);
+      try {
+        reportLane(
+          { tests: failing, commands: [], seconds: 1 },
+          (name) => env[name],
+        );
+      } finally {
+        console.log = log;
+      }
+      return lines;
+    };
+
+    const stepSummary = Deno.makeTempFileSync({ prefix: "lane-step-" });
+    // The step summary of whatever job runs this test is not written to.
+    const outsideJob = setEnv({ GITHUB_STEP_SUMMARY: undefined });
+    let local: string[];
+    let actions: string[];
+    try {
+      local = printedUnder({});
+      actions = printedUnder({ GITHUB_ACTIONS: "true" });
+    } finally {
+      outsideJob();
+    }
+    expect(local.some((line) => line.startsWith("::error"))).toBe(false);
+    expect(local).toContain("FAIL unit/runner: t0");
+    expect(actions.filter((line) => line.startsWith("::error")).length)
+      .toBe(ANNOTATED_FAILURES);
+    // The step summary holds the block, fenced so that it renders as the
+    // log shows it.
+    const restore = setEnv({ GITHUB_STEP_SUMMARY: stepSummary });
+    try {
+      printedUnder({});
+    } finally {
+      restore();
+    }
+    const written = Deno.readTextFileSync(stepSummary);
+    Deno.removeSync(stepSummary);
+    expect(written).toMatch(/^```text\nFAILED: 12 failed/);
+    expect(written).toContain("FAIL unit/runner: t0\n");
+    expect(written.endsWith("```\n")).toBe(true);
   });
 });

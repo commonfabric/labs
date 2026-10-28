@@ -223,6 +223,7 @@ export function attachOptionsFrom(
     cfcFlowLabels: options.cfcFlowLabels,
     cfcReadMaxConfidentiality: options.cfcReadMaxConfidentiality,
     cfcReadOnExceed: options.cfcReadOnExceed,
+    preferredProfileSpace: options.preferredProfileSpace,
     cfcTrustConfig: options.cfcTrustConfig,
     renderDeclassificationPolicy: options.renderDeclassificationPolicy,
     renderConfidentialityCeiling: options.renderConfidentialityCeiling,
@@ -872,6 +873,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       cfcFlowLabels: options.cfcFlowLabels,
       cfcReadMaxConfidentiality: options.cfcReadMaxConfidentiality,
       cfcReadOnExceed: options.cfcReadOnExceed,
+      preferredProfileSpace: options.preferredProfileSpace,
       cfcTrustConfig: options.cfcTrustConfig,
       renderDeclassificationPolicy: options.renderDeclassificationPolicy,
       renderConfidentialityCeiling: options.renderConfidentialityCeiling,
@@ -900,6 +902,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     // field added to that type is a type error here until this literal names
     // it. `initialize()` checks the values.
     const data = {
+      clientBuild: options.clientBuild,
       apiUrl: options.apiUrl.toString(),
       memoryUrl: options.memoryUrl?.toString(),
       spaceHostMap: options.spaceHostMap,
@@ -910,6 +913,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       cfcFlowLabels: options.cfcFlowLabels,
       cfcReadMaxConfidentiality: options.cfcReadMaxConfidentiality,
       cfcReadOnExceed: options.cfcReadOnExceed,
+      preferredProfileSpace: options.preferredProfileSpace,
       cfcTrustConfig: options.cfcTrustConfig,
       renderDeclassificationPolicy: options.renderDeclassificationPolicy,
       renderConfidentialityCeiling: options.renderConfidentialityCeiling,

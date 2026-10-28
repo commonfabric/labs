@@ -751,62 +751,39 @@ read out of a labeled row puts that row's label on the hash. Which atoms that
 is depends on what the transaction issuing the request read, which no `ifc`
 written into a schema can say.
 
-So the result cell is a store the runtime owns, and its control paths declare
-their policy from the issuing transaction — CFC spec §8.12.5 route 2, the
-same route the runner's own piece documents take. The declaration grows by
-clause and never shrinks, which is the ratchet §8.12.2 asks for: a query cell
-parameterized out of three differently labeled reads ends up admitting all
-three and readable by whoever satisfies all three.
+The result cell is a store the runtime owns and enrolls for the life of its
+node. Eligible misfits on its control paths are recorded in the issuing
+transaction's derived stamps, under the runtime-owned-store admission described
+in [`../cfc-enforcement-matrix.md`](../cfc-enforcement-matrix.md) §4. This is
+the persistence change proposed in specs#78, implemented ahead of its ruling.
+The control write adds no declared policy.
 
-The route declares on the paths the issuing transaction writes, and which
-paths those are depends on what the claim finds stored. `/requestHash` moves
-on every issue, so every labeled issue declares there, and that is the path
-on which the declaration is always observable. `/pending` is written only by
-a claim that finds the flag down. A claim made while an earlier request of
-the same node is still in flight sets the flag to the value it already holds,
-which is no write, and declares nothing there. So a query whose labeled issue
-follows a settled one carries the parameter's clause on `/pending`, and a
-query whose only labeled issue overlapped an unlabeled one does not.
+`/requestHash` changes on each issue. `/pending` changes only when a claim
+raises a flag that was down. A claim while an earlier request is still in
+flight may leave `/pending` unchanged, so that flag does not necessarily
+carry the latest issue's label. Each written control value carries the
+issuing transaction's join, which a reader consumes.
 
-The settle takes no declaration back. It rewrites `pending` — and, on a
-failure, `error` — from a transaction that reads only its own write
-destination and therefore carries nothing, and a declared component grows by
-clause and gives none back (CFC spec §8.12.1), whatever the transaction
-rewriting the path carried. A reader of `pending` is tainted by every clause
-a labeled issue declared there, and stays so after the query settles. A
-pattern that copies the flag, or anything computed from it, into a store
-whose policy an author wrote has to admit those clauses there.
+The settle rewrites `/pending` and, on failure, `/error` from a transaction
+that reads its own write destination rather than application input. Its
+value stamps therefore reflect that settle's derivation. For an existing
+path initialized without taint, a clean settle leaves no issuing-request
+clause in its value stamp. A declaration already stored there, or the
+frozen existence stamp of a path created under taint, remains. Clearing
+those requires the appropriate release route, not an ordinary settle. A
+path with no recorded existence entry can receive a legacy backfill at its
+first labeled write even when its value already existed. That frozen entry
+also remains after a clean settle.
 
-What the flag carries is bounded by the result's top. A claim carries `S`
-and nothing of the rows: the builtin reads its own settled result as a read
-of its write destination, which stays out of the join (§18.6.2). Each settle
-that writes rows declares that same `S` on `/result`, joined with the rows'
-labels. So a reader of the flag of a settled query carries no more than a
-reader of the result's length, and none of a projected column's label. An
-issue that another superseded before its rows landed is inside the bound as
-well. Both read the same parameter cell, and what a reader of that cell
-carries grows by clause and gives none back, so the issue that settled
-carried the superseded one's `S` with its own.
+The issuing transaction writes a foreign-space refusal, so its `/error`
+value carries the clause that caused the refusal. Rendering that error
+therefore consumes the issuing transaction's label. The same value-stamp
+replacement and existence rules apply to a later write there.
 
-The bound stops at two states. While a labeled request is in flight the flag
-carries its `S` and the top does not, until the settle declares it there. And
-the settle of a FAILED issue writes `/error` and no rows, and declares
-nothing on `/result`, so after a failure the flag carries that issue's `S`
-and the top keeps what the issues that settled rows brought. That settle
-carries nothing, so it declares nothing on `/error` either.
-
-The foreign-space refusal below declares the same way. It is written by the
-ISSUING transaction — the one carrying the clause it refuses over, since that
-is the condition it fires on — so the route declares that clause on the
-control paths the refusal writes, `/error` among them. A pattern that renders
-"this query was refused" therefore inherits the atoms the refusal was about,
-and a store it writes them into has to admit them. That is the ratchet
-landing where the refusal did rather than an accident, and it is worth
-knowing before rendering a refusal into a store whose policy an author wrote.
-
-`/result`'s per-column entries are untouched — the route declines at a path a
-schema declares — and so are the row documents, because that settle
-transaction carries no clause of its own.
+`/result`'s per-column and selection entries keep their authored policy.
+The runtime-owned route declines at a path whose schema declares a policy,
+and the transaction settling rows adds no flow clause of its own. A
+request's labeled selection inputs are recorded separately, as below.
 
 ### Where a query's selection inputs are labeled
 
@@ -821,8 +798,8 @@ the request, recorded at issue and supplied by the settle.
 | which reference sits at a `/result` slot | `S`, and the label of the row at that slot | declared `observes: "followRef"` entry at `/result/*` for `S`; the link entry at the slot for the row's label |
 | a row's content | the row's column and row labels | the row document's own entries |
 | a row document's existence | the row's label | the row document's root entry |
-| `/requestHash` | `S`, accumulated over issues | route-2 declaration by the issuing transaction |
-| `/pending` | the `S` of each issue whose claim raised the flag, accumulated | route-2 declaration by the issuing transaction |
+| `/requestHash` | the current issue's `S`, plus applicable declared and frozen existence labels | derived value stamp by the issuing transaction, joined with retained components |
+| `/pending` | the last writer's join, plus applicable declared and frozen existence labels | derived value stamp by that transaction, joined with retained components |
 
 All of it holds at every scope. A session-scoped result is materialized per
 reader, which limits who can read it and does not label what that reader's

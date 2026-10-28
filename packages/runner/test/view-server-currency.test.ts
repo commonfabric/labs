@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
-import { stub } from "@std/testing/mock";
+import { spy, stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
 import type { ViewInterest, ViewPlan } from "@commonfabric/memory/v2";
@@ -423,6 +423,96 @@ describe("view-server-currency", () => {
     expect(upstreamRuns).toBe(1);
     expect(completedRuns).toBe(1);
     expect(output.get()).toBe(7);
+    cancel();
+  });
+
+  it("proves a producer that two adopted nodes reach once per wake", async () => {
+    emit([{
+      ...plan,
+      generation: 2,
+      eligibleActions: ["visible", "upstream"],
+      inputs: [...plan.inputs!, upstream.getAsNormalizedFullLink()],
+    }]);
+    const producer: Action = Object.assign(
+      (tx: IExtendedStorageTransaction) => {
+        upstream.withTx(tx).get();
+        middle.withTx(tx).set(4);
+      },
+      {
+        viewPiece: root.getAsNormalizedFullLink(),
+        viewNodeId: "upstream",
+        viewLocalOnly: true,
+        writes: [middle.getAsNormalizedFullLink()],
+      },
+    );
+    runtime.scheduler.register(producer, { adoptViewIdentity: identity });
+    register();
+    const cancel = output.sink(() => {});
+    await runtime.idle();
+    const upstreamId = upstream.getAsNormalizedFullLink().id;
+    let upstreamReads = 0;
+    const documentAt = replica.getDocument.bind(replica);
+    restore.push(
+      stub(replica, "getDocument", (id, scope, identity) => {
+        if (id === upstreamId) upstreamReads++;
+        return documentAt(id, scope, identity);
+      }).restore,
+    );
+    using sources = spy(runtime.viewReplication, "pieceCurrent");
+    emit([{
+      ...plan,
+      generation: 3,
+      eligibleActions: ["visible", "upstream"],
+      inputs: [...plan.inputs!, upstream.getAsNormalizedFullLink()],
+    }]);
+    expect(upstreamReads).toBe(1);
+    expect(sources.calls).toHaveLength(1);
+    await runtime.idle();
+    expect(runs).toBe(0);
+    cancel();
+  });
+
+  it("proves again under a plan accepted while a pass ran", () => {
+    const pass = runtime.viewReplication.createProofPass();
+    const piece = root.getAsNormalizedFullLink();
+    expect(
+      runtime.viewReplication.initialViewDependencies(
+        piece,
+        "visible",
+        identity,
+        pass,
+      ),
+    ).toBeDefined();
+    emit([{
+      ...plan,
+      generation: 2,
+      producers: [plan.producers![0], {
+        ...plan.producers![1],
+        basis: {
+          reads: [{ ...basis(upstream), fingerprint: "stale" }],
+          outputs: [basis(middle)],
+        },
+      }],
+    }]);
+    expect(
+      runtime.viewReplication.initialViewDependencies(
+        piece,
+        "visible",
+        identity,
+        pass,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("does not resubscribe an adopted node whose proof a wake finds unchanged", async () => {
+    const action = register();
+    const cancel = output.sink(() => {});
+    await runtime.idle();
+    using resubscribes = spy(runtime.scheduler, "resubscribe");
+    emit([{ ...plan, generation: 2 }]);
+    expect(resubscribes.calls.filter((call) => call.args[0] === action))
+      .toHaveLength(0);
+    expect(runtime.scheduler.isDirty(action)).toBe(false);
     cancel();
   });
 

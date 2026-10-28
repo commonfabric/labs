@@ -54,6 +54,118 @@ const renderTargets = (value: unknown): Cell<unknown>[] => {
 /** The text each of the three published panels renders. */
 const PANEL_TEXTS = ["Cold URL title", "Cold document", "Cold foreign piece"];
 
+/** A telemetry marker that names a failure, kept for a stuck wait's report. */
+type FailureMarker = { at: number; runtime: string; line: string };
+
+/** How many markers a record keeps; older ones are dropped. */
+const FAILURE_MARKERS_KEPT = 200;
+
+/**
+ * Records, into `into`, every telemetry marker of `runtime` that carries an
+ * error or a commit retry, named `label`. A served refresh that never
+ * arrives is the one failure this file reports with nothing said about why
+ * (the wait's own report renders the stale view); the markers the runtimes
+ * emitted meanwhile say which push, pull, run, or event commit failed. Kept
+ * bounded, and read only when a wait fails.
+ */
+const recordFailureMarkers = (
+  runtime: Runtime,
+  label: string,
+  into: FailureMarker[],
+) => {
+  runtime.telemetry.addEventListener("telemetry", (event) => {
+    const { marker } = event as RuntimeTelemetryEvent;
+    let line: string | undefined;
+    switch (marker.type) {
+      case "storage.push.error":
+        line = `${marker.type} ${marker.id} ${marker.error}: ${marker.message}`;
+        break;
+      case "storage.pull.error":
+        line = `${marker.type} ${marker.id} ${marker.error}`;
+        break;
+      case "scheduler.run.complete":
+        if (marker.error !== undefined) {
+          line = `${marker.type} ${marker.actionId} ${marker.error}`;
+        }
+        break;
+      case "scheduler.event.commit":
+        if (marker.error !== undefined || marker.retryAttempt !== undefined) {
+          line = `${marker.type} ${marker.handlerId} error=${marker.error} ` +
+            `retry=${marker.retryAttempt} permanent=${marker.permanentRejection}`;
+        }
+        break;
+    }
+    if (line === undefined) return;
+    into.push({ at: performance.now(), runtime: label, line });
+    if (into.length > FAILURE_MARKERS_KEPT) into.shift();
+  });
+};
+
+/** The serving-loop counters a stuck refresh's report names. */
+const STUCK_REFRESH_COUNTERS = [
+  "activeSpaces",
+  "waves",
+  "wavesBudgetExhausted",
+  "exhaustedAdvances",
+  "derivedCommits",
+  "supersededWrites",
+  "structureLoadFailures",
+  "structureLoadRefused",
+  "structureLoadDeferred",
+  "structureLoadStuck",
+  "structureLoadTerminal",
+  "unstampedSealRefusals",
+  "servedIntentSealFailures",
+  "foreignWriteRefusals",
+  "reactivationBackoffs",
+] as const;
+
+/**
+ * The counters a stuck refresh's report compares: what the host reports once
+ * the wait has failed, and what it reported before the owner's edits, since
+ * the counters run from the host's start and the first render is part of
+ * them.
+ */
+type StuckRefreshSnapshot = Pick<
+  ReturnType<ExecutorHost["stats"]>,
+  typeof STUCK_REFRESH_COUNTERS[number] | "lease" | "parkedRuntimes" | "demand"
+>;
+
+/**
+ * Reports what the serving loop and the runtimes did while a served refresh
+ * was awaited: the host's §7 counters that name a refused, deferred, or
+ * failed structure load, a seal the loop refused, a lost lease, or a park,
+ * each as its final value and its change since `before` was taken at the
+ * owner's edits, and the failure markers recorded since `since`. Printed
+ * once, on the failure, so a passing run says nothing.
+ */
+const reportStuckServedRefresh = (
+  before: StuckRefreshSnapshot | undefined,
+  after: StuckRefreshSnapshot | undefined,
+  markers: FailureMarker[],
+  since: number,
+) => {
+  const counters = after === undefined ? "no host" : [
+    ...STUCK_REFRESH_COUNTERS.map((name) => {
+      const change = before === undefined ? "?" : after[name] - before[name];
+      return `${name}=${after[name]} (+${change})`;
+    }),
+    `lease=${JSON.stringify(after.lease)}`,
+    `parkedRuntimes=${JSON.stringify(after.parkedRuntimes)}`,
+    `demand=${JSON.stringify(after.demand)}`,
+  ].join(" ");
+  const recent = markers.filter((marker) => marker.at >= since);
+  console.error(
+    `served refresh stuck: serving loop, final (+change since the owner's ` +
+      `edits): ${counters}\n` +
+      `${recent.length} failure marker(s) since the owner's edits ` +
+      `(${markers.length} recorded in all):\n` +
+      recent.map((marker) =>
+        `  +${Math.round(marker.at - since)}ms ${marker.runtime} ${marker.line}`
+      ).join("\n"),
+  );
+};
+
 describe("loom-cold-reader", () => {
   /**
    * Publishes a loom root holding a URL panel, a document panel, and a piece
@@ -101,6 +213,7 @@ describe("loom-cold-reader", () => {
       return runtime;
     };
     const stops: (() => void)[] = [];
+    const markers: FailureMarker[] = [];
     let host: ExecutorHost | undefined;
     const close = async () => {
       for (const stop of stops) stop();
@@ -202,6 +315,7 @@ describe("loom-cold-reader", () => {
               servingPosture: true,
               experimental: { serverExecution: true, computedCellIds: true },
             });
+            recordFailureMarkers(runtime, `served ${servedSpace}`, markers);
             return Promise.resolve({
               runtime,
               dispose: () => runtime.dispose(),
@@ -218,6 +332,8 @@ describe("loom-cold-reader", () => {
         documentRef,
         client,
         serve,
+        host: () => host,
+        markers,
         stops,
         close,
       };
@@ -241,9 +357,10 @@ describe("loom-cold-reader", () => {
   ) => {
     const { access, viewerIdentity, space, rootRef, documentRef, client } =
       loom;
-    const { stops } = loom;
+    const { stops, markers } = loom;
     if (served) loom.serve();
     const viewer = client(viewerIdentity, served, localFold);
+    recordFailureMarkers(viewer, "viewer", markers);
     expect(
       (await new ACLManager(viewer, space.did()).get())?.[viewerIdentity.did()],
     ).toBe(access);
@@ -302,6 +419,9 @@ describe("loom-cold-reader", () => {
     collectNotesBindings(value);
     expect(textareas).toHaveLength(1);
     const updater = client(loom.owner);
+    recordFailureMarkers(updater, "updater", markers);
+    const editsAt = performance.now();
+    const statsAtEdits = served ? loom.host()?.stats() : undefined;
     const boundNotes = updater.getCellFromLink(textareas[0].getAsLink());
     await boundNotes.sync();
     await updater.editWithRetry((tx) => {
@@ -319,7 +439,19 @@ describe("loom-cold-reader", () => {
       ui,
       (value) => visibleText(value).includes("Refreshed source"),
       { stuckLabel: `published source refresh in ${access} view` },
-    );
+    ).catch((error) => {
+      // The wait's own report renders the stale view and nothing of why it
+      // is stale; this says what the loop and the runtimes did meanwhile.
+      if (served) {
+        reportStuckServedRefresh(
+          statsAtEdits,
+          loom.host()?.stats(),
+          markers,
+          editsAt,
+        );
+      }
+      throw error;
+    });
     expect(visibleText(refreshed)).toContain("Cold document");
     const viewerDocument = viewer.getCellFromLink(documentRef);
     await viewerDocument.sync();

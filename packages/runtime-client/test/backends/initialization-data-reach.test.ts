@@ -55,6 +55,7 @@ const federatedHost = "http://federated.initialization-data-reach.test/";
  * rather than as what was sent.
  */
 const SENT = {
+  clientBuild: { application: "shell", gitSha: "a".repeat(40) },
   apiUrl,
   memoryUrl,
   spaceHostMap: { [federatedSpace]: federatedHost },
@@ -70,6 +71,7 @@ const SENT = {
   cfcFlowLabels: "persist",
   cfcReadMaxConfidentiality: [cfcAtom.user(signer.did())],
   cfcReadOnExceed: "skip",
+  preferredProfileSpace: federatedSpace,
   cfcTrustConfig: {
     statements: [{
       concrete: {
@@ -128,6 +130,10 @@ type FieldReach = {
 };
 
 const REACH = {
+  clientBuild: {
+    reads: (o) => o.storage.clientBuild,
+    expected: SENT.clientBuild,
+  },
   apiUrl: {
     reads: (o) => o.runtime.apiUrl.href,
     expected: apiUrl,
@@ -180,6 +186,10 @@ const REACH = {
   cfcReadOnExceed: {
     reads: (o) => o.runtime.cfcReadOnExceed,
     expected: "skip",
+  },
+  preferredProfileSpace: {
+    reads: (o) => o.runtime.preferredProfileSpace,
+    expected: federatedSpace,
   },
   cfcTrustConfig: {
     // The runtime's own validated copy, so the case turns on the statement

@@ -343,6 +343,7 @@ export class RuntimeClients {
         );
         this.#runtime = await this.#initialization;
         this.#reply({ msgId: message.msgId }, request.type, client);
+        this.#runtime.reportClientUpdateRequired(client);
         return;
       }
 
@@ -393,6 +394,7 @@ export class RuntimeClients {
         const registered = this.#attachedClients.get(client.id);
         if (registered) registered.attached = true;
         this.#reply({ msgId }, request.type, client);
+        this.#runtime.reportClientUpdateRequired(client);
         return;
       }
 

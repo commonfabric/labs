@@ -178,8 +178,8 @@ export default pattern<ProfileBadgeStoryInput, ProfileBadgeStoryOutput>(() => {
           style={{ fontSize: "0.875rem", color: "#6b7280", maxWidth: "40ch" }}
         >
           Avatar paths shown: image (Ada), emoji (Grace), initials (Alan). The
-          verification signal is the generative seal — a DID-derived aura ring
-          plus a cursor-reactive glint (there is no shield icon). It only
+          verification signal is the generative seal — an identity-derived aura
+          ring plus a cursor-reactive glint (there is no shield icon). It only
           renders for a runtime-attested profile (a “represents-principal” CFC
           label), which this story can’t mint, so these badges stay in the plain
           “presented” state. Hover or focus a badge to see its tooltip

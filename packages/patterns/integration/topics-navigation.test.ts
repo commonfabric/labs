@@ -16,6 +16,7 @@ import {
   PieceController,
   PiecesController,
 } from "./pieces-controller.ts";
+import { topicAt } from "./topic-board-fixture.ts";
 
 const { API_URL, FRONTEND_URL } = env;
 const FIRST_TITLE = "Navigation target";
@@ -126,15 +127,3 @@ describe("Topics durable navigation", () => {
     assertEquals(droppedEvents, []);
   });
 });
-
-async function topicAt(
-  board: PieceController,
-  index: number,
-): Promise<PieceController> {
-  const result = await board.result.getCell();
-  await result.pull();
-  return new PieceController(
-    board.pieces(),
-    result.key("topics").key(index).resolveAsCell(),
-  );
-}

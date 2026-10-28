@@ -9,6 +9,7 @@
 // explicit toolshed override if present, otherwise the source-run COMMIT_SHA
 // fallback, so `/api/meta` presents the same field as a compiled binary.
 
+import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
 import {
   type BuildInfo,
   normalize,
@@ -26,9 +27,12 @@ export const buildInfo: BuildInfo = readBuildInfoFrom(COMPILED_PATH);
 /**
  * The raw `EXPERIMENTAL_SERVER_EXECUTION` value present in the build
  * environment when this binary was built — the value the browser shell
- * BAKED as its esbuild define (packages/shell/felt.config.ts; the shell
- * has no serve-time override) — or null when it was unset (the shell then
- * follows `SERVER_EXECUTION_DEFAULT_ENABLED`) and in a source run. Same
+ * BAKED as its esbuild define (packages/shell/felt.config.ts), which pins
+ * the shell's arm over its deployment's when it is `"true"` or `"false"`
+ * (the shell ignores any other value, with a warning) — or null when it was
+ * unset (the shell then takes the arm this toolshed publishes, and
+ * `SERVER_EXECUTION_DEFAULT_ENABLED` where it publishes none) and in a
+ * source run. Same
  * failure posture as `readBuildInfoFrom`: an unreadable or malformed
  * marker reads as null. Surfaced on `/api/meta` as
  * `shellServerExecutionDefine` so CI's server-execution lanes can verify
@@ -93,4 +97,9 @@ export function resolveGitSha(): string | null {
     buildInfo.commitSha,
     env.COMMIT_SHA,
   );
+}
+
+/** Returns the application and loaded labs build for toolshed's runtimes. */
+export function toolshedClientBuild(): ClientBuild {
+  return { application: "toolshed", gitSha: resolveGitSha() };
 }

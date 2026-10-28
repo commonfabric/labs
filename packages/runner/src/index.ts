@@ -121,6 +121,7 @@ export type {
 export {
   hasOperationStorageCapability,
   hasPresenceStorageCapability,
+  UnreportedAuthoredBoundaryError,
 } from "./storage/interface.ts";
 export { isCfcEnforcementRejection } from "./storage/rejection.ts";
 export { transactionFailureMessage } from "./storage/transaction-errors.ts";
@@ -235,10 +236,12 @@ export {
 } from "./pattern-source-scheme.ts";
 export { DocumentLoadError, loadDocument } from "./document-readiness.ts";
 export {
+  loadProfileCandidates,
   orderProfileCandidates,
-  profileCellIsValid,
   type ProfileOrder,
+  profileOwnership,
 } from "./profile-order.ts";
+export { loadProfileOwnerDocuments, profileOwnerAt } from "./profile-owner.ts";
 export {
   classifyPieceOriginString,
   type PieceOriginKind as PieceOriginClassification,

@@ -1,5 +1,99 @@
 # @commonfabric/cli
 
+## Managing your profiles
+
+`cf profile list --identity <keyfile> --api-url <url>` prints the profiles of
+the identity in the order `#profile` answers in, one line each: a `*` on the
+profile `#profile` answers with, the profile's space, its name, and `(picture)`
+when it has a picture attested to its owner, or
+`(picture not attested to its owner)` for any other. With `--json` it prints
+each row as an object that carries no bytes:
+
+- `name`: the profile's display name, or `""`;
+- `picture`: `{ "size": <bytes>, "byOwner": <boolean> }`, or `null` when it has
+  none;
+- `avatar`: the legacy avatar, which a profile shows where it has no picture, as
+  `{ "text": <text>, "byOwner": <boolean> }`, or, for a `data:` URL,
+  `{ "size": <bytes it holds>, "byOwner": <boolean> }`, or `null` when it has
+  none;
+- `space`, `id` and `address`: the profile's space, its piece's id, and its
+  canonical address;
+- `current`: whether `#profile` answers with it.
+
+A profile's space lets anyone write, and each write labels the value with the
+principal who wrote it, so `byOwner` is `true` only where the value's own label
+attests the profile's owner and no one else; a value stored without a label is
+not attested to its owner. A retired profile is not listed, and neither is one
+whose document is gone; a listed profile that cannot be read fails the listing.
+Listing reads the home root and runs nothing.
+
+Only the identity's own profiles are listed, by the rule `#profile` applies too
+("Profile" in [`HOME_SPACE.md`](../../docs/common/conventions/HOME_SPACE.md)). A
+profile is the identity's own when its `name`, followed through every link it
+holds, stays within the profile's own documents, and its label names the
+identity, and no one else, as the principal it represents: the claim a rename
+through the profile's own `setName` mints for whoever made it, or the one its
+name field's owner policy installed when the profile was set up. A profile Home
+lists that is not the identity's own, and a document carrying no label at all,
+is not listed, no row is marked `current` when `#profile` answers with such a
+profile, and every command below that names a profile by its space refuses it. A
+label that cannot be read fails the listing, or the command, rather than being
+taken for someone else's.
+
+A name stored before names were labeled carries no label on its value, though
+its profile is the identity's own through its name field's owner policy.
+`cf profile attest-name <space>` labels such a name for the profile Home lists
+in `<space>`, retired or not, in two steps, as
+`cf profile repair-name-protection` does. Without `--apply` it prints the stored
+name and an inspection receipt (with `--json`, `status: "inspected"`, `name` and
+`inspection`) and changes nothing. After reviewing the name,
+`--apply --expect <inspection>` accepts that name, unchanged, under the
+profile's own owner policy for its name, as the identity running the command,
+and the name's value is then labeled as that identity's; the output names the
+name it attested. A name changed since the inspection is refused. It refuses a
+profile that is not the identity's own and a profile whose name policy names
+another owner, and says so, changing nothing, for a name already attested to the
+identity.
+
+`cf profile get-picture <space> <file>` writes the bytes of the picture of the
+profile that lives in `<space>` to `<file>`, or to standard output when `<file>`
+is `-`. It refuses a picture not attested to the owner. A picture stored before
+writes to it were labeled carries no label at all, so it reads `byOwner: false`
+and `get-picture` refuses it. Its owner attests it by setting it again:
+`cf profile set-picture <space> --keep-current` sets the picture already stored
+again, as the identity running the command, and the write labels it with that
+identity.
+
+`cf profile rename <space> <name>` renames the profile that lives in `<space>`,
+and `cf profile set-picture <space> <image-file>` sets its picture to the bytes
+of `<image-file>`: a PNG, JPEG, GIF, WebP, AVIF or BMP image of at most 256 KiB,
+stored as it is. Nothing crops or scales it, as the shell's picture picker does
+to a 128-pixel square, so pass an image of the size it should be shown at.
+`cf profile set-picture <space> --clear` removes the picture, and the legacy
+avatar text with it, since a profile shows that text where it has no picture.
+`cf profile set-picture <space> --keep-current` sets the picture already stored
+again, which attests it to the identity running the command; it refuses a
+profile with no picture. `rename` and `set-picture` write through the profile's
+own handlers (`setName`, `setPicture`, `setAvatar`), so the profile runs for the
+length of the command, and both refuse a retired profile.
+
+`cf profile retire <space>` retires the profile that lives in `<space>`, as the
+Remove control in Home's profile picker does: Home lists it in
+`retiredProfiles`, and it is not one of the identity's profiles until it is
+restored. `#profile` does not answer with it, `cf profile list` leaves it out,
+and the picker lists it among the removed profiles. The profile's space and its
+data stay on the host, so a link to it held elsewhere still shows it. Home
+refuses to retire the profile `#profile` returns: the default when one is set,
+and otherwise the most recently used profile, or the first listed. The last live
+profile is always that profile. Set another profile as the default first.
+`cf profile restore <space>` restores a retired profile, as the picker's Restore
+does, and it is then one of the identity's profiles again. Both send a plain
+event to Home's handler of the same name, the only writers `retiredProfiles`
+admits; any pattern that reaches Home's streams can send the same events, as it
+can rename a profile. "Profile" in
+[`HOME_SPACE.md`](../../docs/common/conventions/HOME_SPACE.md) describes the
+list.
+
 ## Repairing profile name protection
 
 `cf profile repair-name-protection --cell <profile-address> --identity <keyfile>
@@ -1806,16 +1900,18 @@ Persistent `<socket>.lock` and `<store>.lock` files retain their inodes, while
 the kernel releases ownership on shutdown or crash. Startup cleanup aborts
 active runs and waits for them to settle, closes the store and listener, and
 removes its token. Active job rows remain `running`; the next start recovers
-them as `interrupted` with `RUNNER_RESTARTED`. Requests receive 503 until
-initialization completes.
+them as `interrupted` with `RUNNER_RESTARTED`. Before settling their waiting
+messages, startup checks each recorded harness run root for a continuable
+checkpoint. A checkpoint lets waiting messages open a follow-up; without one,
+they drop as `interrupted`. Requests receive 503 until initialization completes.
 
 The door is HTTP on the Unix socket, mode 0600, with a bearer token in
 `<socket>.token`, also 0600 and minted at each start: reaching the socket is the
 authority. A caller enqueues
 `{caller, profile, idempotencyKey, task,
-instructions?, context?, resultSchema, tools?, maxModelTurns?, maxInputBytes?,
+instructions?, context?, resultSchema?, tools?, maxModelTurns?, maxInputBytes?,
 maxOutputTokens?, imageAttachments?, depth?, tags?, domains?, reasoningEffort?,
-browserHost?, inputs?, foreignSpaces?}`
+browserHost?, inputs?, foreignSpaces?, interactive?}`
 with `POST /jobs`, bounded at 1 MiB of UTF-8 JSON before parsing, reads a job
 with `GET /jobs/<id>` or the newest with `GET /jobs?limit=n`, stops one with
 `POST /jobs/<id>/cancel`, and watches one with
@@ -1834,6 +1930,16 @@ it `down` with that reason, and a failed start leaves it `refused` with the
 error. Observed queue scan or record-follow failures mark it `down`; a
 successful scan marks it `up`. An idle queue is healthy: this does not detect a
 subscription that silently stops delivering changes.
+
+`interactive` is an optional boolean indicating that a person is waiting.
+Interactive queued jobs start ahead of every queued background job, oldest first
+within each class. The local lane runs at most `--max-concurrent-local` jobs at
+once. With at least two slots, background jobs may occupy at most one fewer than
+that limit, holding the last slot for an interactive job; interactive jobs may
+use any free slot. With one slot, nothing is reserved because one slot cannot be
+reserved while still running background jobs. The flag only orders admission and
+reserves capacity. It participates in enqueue idempotency and is inherited by
+follow-ups with the retained request.
 
 Health also lists `routes` as `{method, path}` entries (`:id` is a path
 parameter), the loaded `profileFile`, the resolved SQLite `storePath`, and
@@ -1863,15 +1969,28 @@ handed. An input in another space with no host, a `foreignSpaces` entry no input
 names, or a slug address naming another space is refused at enqueue as
 `beyond_profile`. It may set nothing else. A job runs through the same
 `cf-harness` path as an agent run, with the fabric session its profile names, if
-any. Every tool call, including delegated calls, counts as progress, and so does
-its return; prose and reasoning do not. A `step` carries `{turn, tool}`, and the
-same step again with `returned: true` once the calls of that turn have returned
-and the loop's model has the turn. A `command` records each command the host ran
-for it. Children add `child: {profile, childRunId, parentToolCallId, depth}` to
-either body. The harness admits one level of delegation, so depth is `1`. Only a
-child's `browser` tool steps carry `action` (such as `click` or `snapshot`),
-without the operation's arguments or page content. Other child tool steps, such
-as `submit_result`, omit `action`.
+any. Every tool call, including delegated calls, produces progress, as does its
+return. A `step` carries `{turn, tool}`, and the same step again with
+`returned: true` once the calls of that turn have returned and the loop's model
+has the turn. A `command` records each command the host ran for it. Children add
+`child: {profile, childRunId, parentToolCallId, depth}` to either body. The
+harness admits one level of delegation, so depth is `1`. Only a child's
+`browser` tool steps carry `action` (such as `click` or `snapshot`), without the
+operation's arguments or page content. Other child tool steps, such as
+`submit_result`, omit `action`.
+
+Each root assistant message with nonempty content emits one `text {turn, text}`
+event, whole and without truncation or coalescing, in order with its steps.
+Delegated assistant text is not emitted. Turns start at this job's first model
+call, including on follow-ups. The store keeps these events durably, so a job's
+event history holds its assistant text. Reasoning is not emitted.
+
+After each completed model call, including descendant calls, a
+`usage {usage, coverage}` event reports cumulative usage for this run. Its
+`coverage` matches the report's `usageCoverage`: `including-descendants` when
+the harness supplies the total for the tree, otherwise `direct`. Unreported
+usage is omitted until the provider supplies a measurement; partial measurements
+do not account for unreported provider work.
 
 The lane coalesces consecutive steps with the same tool, child, browser action
 and `returned`, ignoring turn numbers. Thus N identical browser operations in
@@ -1915,6 +2034,104 @@ Enqueue commits its job and first event in a SQLite WAL transaction with
 key with the same request returns that job; a different request or profile
 returns a conflict.
 
+A caller sends another message with `POST /jobs/<id>/messages`, also bounded at
+1 MiB of UTF-8 JSON:
+
+```json
+{
+  "caller": "cfs:weaver",
+  "idempotencyKey": "message-81",
+  "message": "Use the April numbers.",
+  "instructions": "Answer briefly."
+}
+```
+
+`caller` must match the conversation's caller. `message` is a nonempty string;
+`instructions` is optional and replaces the system framing of a follow-up,
+inherited by later jobs unless replaced again. `imageAttachments`, `inputs` and
+`foreignSpaces` use the enqueue shapes, bounds and profile validation. Images
+join the follow-up's new prompt; inputs add named handles, with foreign spaces
+routed as on enqueue. Existing history and held input routes carry forward;
+omitted attachments are not sent again as new inputs.
+
+`instructions`, `imageAttachments` and `inputs` (with their `foreignSpaces`) are
+follow-up-only: a message carrying any of them, to a queued or running head with
+no cancel requested, is refused as `409 follow_up_only`. After cancel, they wait
+for their own follow-up. If a new input name collides with a held input,
+assigned slug or grant, acceptance still returns normally and the follow-up
+fails `PROVIDER_FAILURE` before any model call, with the builder's own reason in
+`errorDetail`.
+
+The request grants no profile, tools or limits. Any job id in a conversation
+addresses its newest job, the head. Every local run receives the message hook. A
+message to a queued or running head waits there to be taken at a model turn
+boundary. A message to a finished head with a recorded run opens a new queued
+job, with `continues` naming its predecessor, its task replaced by the message,
+and the rest of the predecessor's request inherited. A recorded run has a
+complete checkpoint from which another run can start. An interrupted job is
+continuable when recovery finds such a checkpoint.
+
+The response is `201 {message, job}` on acceptance or `200 {message, job}` on
+replay. The message record has fixed `key`, `target`, `message`, `acceptedAt`
+and, when supplied, `instructions`, `imageAttachments`, `inputs` and
+`foreignSpaces`. Its current `delivery` is `pending`, `delivered`, `follow-up`,
+or `dropped`; `jobId` names the job waiting on or answering it, `turn` is
+present after delivery, and `reason` after a drop. `job` is that job's current
+snapshot. A first acceptance returns `pending` or `follow-up`. The same
+caller/key/fingerprint returns the current record without writing events, even
+after the head moves on or can no longer continue. The fingerprint includes the
+target id, message, and presence and value of instructions, images, inputs and
+foreign-space routes. Keys share one namespace per caller with enqueue: reusing
+a key across routes, or changing its fingerprint, returns
+`409 idempotency_conflict`.
+
+The job view adds `continues`, `continuedBy` (its sole follow-up once opened),
+`openedBy` (the message that opened a follow-up), and `messages` (the current
+records of messages that waited on this job, in acceptance order). A finished
+job stays finished. Its event stream stays unchanged when a later message opens
+a follow-up directly; the follow-up starts with its own queued event.
+
+A waiting message publishes `message {key, delivery: "pending"}`. Taking it
+publishes `{key, delivery: "delivered", turn}`. When a job ends, its first
+remaining message opens one follow-up and publishes
+`{key, delivery: "follow-up", jobId}`; the rest publish
+`{key, delivery: "moved", jobId}` on the old job and `pending` on the new job.
+Each such outcome precedes the old job's terminal state event. A run takes
+messages in acceptance order up to the first message only a follow-up can
+answer, one carrying `instructions`, `imageAttachments` or `inputs`, or the
+first message accepted after that holder's cancel request. Messages behind it
+wait with it. A moved message loses the old holder's cancellation restriction,
+but a message carrying instructions or attachments still waits to open its own
+follow-up.
+
+Cancellation drops waiting messages accepted before the request as
+`{key, delivery: "dropped", reason: "cancelled"}`. Later messages wait for the
+follow-up. Without a recorded run, remaining messages drop as `not_continuable`,
+or `interrupted` on restart recovery, before the terminal event. Queued
+cancellation and `PROFILE_UNAVAILABLE` failures have no recorded run.
+
+Every refusal is `{ok: false, code, error}`:
+
+| Status | Code                   | Condition                                                                                      |
+| ------ | ---------------------- | ---------------------------------------------------------------------------------------------- |
+| 400    | `invalid_request`      | Invalid JSON, missing or mistyped fields, or an empty message.                                 |
+| 413    | `too_large`            | The body exceeds 1 MiB.                                                                        |
+| 404    | `not_found`            | The target job does not exist.                                                                 |
+| 403    | `not_callers`          | The body names another caller.                                                                 |
+| 409    | `not_continuable`      | The finished head, including an interrupted one, has no complete recorded checkpoint.          |
+| 409    | `follow_up_only`       | `instructions`, `imageAttachments` or `inputs` sent to a queued or running head before cancel. |
+| 400    | `unknown_profile`      | Opening a follow-up or admitting attachments needs a profile no longer named.                  |
+| 400    | `beyond_profile`       | The follow-up request exceeds or invalidates its profile.                                      |
+| 409    | `idempotency_conflict` | The caller's key already names another request or route.                                       |
+
+The local harness lane takes messages at model-turn boundaries. A finished job
+with a recorded checkpoint can open a follow-up, whose new harness run carries
+the predecessor's history and handles. Each conversation uses its first job's
+workspace; each job keeps its own artifacts and result file. A follow-up's
+instructions and context replace its system framing. A message after a cancel
+request waits for a follow-up. Jobs without a complete checkpoint cannot be
+continued.
+
 Each `command` event carries `{command, ok, outputs?}`. A refused command also
 carries the outcome's `code` and `hostCode` when present, and `error` from an
 admitted host answer, limited to 500 characters. An answer withheld by CFC
@@ -1945,17 +2162,27 @@ every operation still unanswered and every withdrawal still unacknowledged
 first, and a repeated answer reads as a duplicate. `GET /jobs/<id>` shows the
 host as `browser {state, attached, outstanding, withdrawn}`.
 
-A job ends `completed` with its result as soon as the harness accepts the
-model's `submit_result`; nothing the model does after an accepted result can
-fail it, since the run asks the model for nothing further. A job that ends
-`failed` carries `errorCode`, and `errorDetail` where the run said why: for
-`INVALID_RESULT`, that no structured result was submitted, or the field the
-schema refused and the reason. Both appear in the job snapshot and in its final
-`state` event.
+`resultSchema` is optional. With a schema, a job ends `completed` with its
+validated JSON result once the harness accepts the model's `submit_result` and
+no message is waiting to be taken; the run then asks the model for nothing
+further, so nothing after the accepted result can fail it. When a message is
+waiting and a model turn remains, the run takes it and continues, and that later
+work decides how the job ends: a later `submit_result` replaces the result, and
+a later failure or cancellation is the job's outcome. Without a schema, the job
+has no structured-result contract, result file or `submit_result` tool, and its
+`result` is the final assistant text as a plain string. Follow-ups inherit the
+absence of a schema. An empty assistant answer with no tool calls fails under
+the harness's existing `PROVIDER_FAILURE` handling; exhausting its turn budget
+without a final answer remains `LIMIT_REACHED`. A job that ends `failed` carries
+`errorCode`, and `errorDetail` where the run said why: for `INVALID_RESULT`,
+that no structured result was submitted, or the field the schema refused and the
+reason. Both appear in the job snapshot and in its final `state` event.
 
 A job the runner was running when it stopped or crashed ends `interrupted`
 (`RUNNER_RESTARTED`) when it next starts, and is never run again: it may already
-have changed things.
+have changed things. Its recorded checkpoint can seed a new follow-up, whether
+the message waited through the restart or arrived afterward. The new run retains
+completed work and marks the prior request as interrupted.
 
 ## One deployment per process
 
@@ -2007,6 +2234,17 @@ memo, which names a space once for the life of the process.
   endpoint or contract validation reports the same way.
 - The launcher spawns the child CLI with `deno run --quiet` so Deno's own
   warnings (npm "Ignored build scripts" banner) never reach users.
+
+### What a read waits for under server execution
+
+With server execution on, a read first waits until the serving runtime has
+reacted to every authored commit at or below the server's head as it stands when
+the read begins. The serving runtime runs the handlers and derives what a read
+returns. A `cf cell set` that sends an event returns with the event committed
+and that run still ahead, and a `cf piece call` returns that way under
+`--no-wait`, so the wait is what makes a `cf cell get` that follows one, from
+the same process or another, read what the run stored. With server execution
+off, this runtime runs what it reads, and no such wait occurs.
 
 ### What a call refuses before it dispatches
 

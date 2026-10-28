@@ -3490,6 +3490,110 @@ describe("v2-server-acl", () => {
     });
   });
 
+  describe("foreignReadAuthorityFor()", () => {
+    it("refuses every principal a space with no store, and creates none", async () => {
+      const server = createAclServer("memory://foreign-read-creation", {
+        mode: "enforce",
+      });
+      const space = "did:key:z6Mk-foreign-read-creation";
+      try {
+        for (const principal of [space, ALICE]) {
+          expect(await server.foreignReadAuthorityFor(space, principal))
+            .toEqual({
+              granted: false,
+              reason: `no space has the DID ${space} — a space exists once ` +
+                "its genesis ACL commit lands (protocol.md §2)",
+            });
+        }
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("refuses a read with no acting principal", async () => {
+      const server = createAclServer("memory://foreign-read-no-actor", {
+        mode: "enforce",
+      });
+      const space = "did:key:z6Mk-foreign-read-no-actor";
+      try {
+        await initializeSpaceAcl(server, space, { [ALICE]: "OWNER" });
+        expect(await server.foreignReadAuthorityFor(space, undefined))
+          .toEqual({
+            granted: false,
+            reason: "no acting principal — a foreign scoped read is " +
+              "admitted only under the carried actor's own grant " +
+              "(protocol.md §2)",
+          });
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("returns a grant to a principal its space's ACL grants `READ` or more, in every ACL mode", async () => {
+      // The grant is the serving plane's own rule, so `off` decides nothing
+      // here: a stranger is refused on a server whose client plane enforces
+      // no list at all.
+      for (const mode of ["off", "enforce"] as const) {
+        const server = createAclServer(`memory://foreign-read-acl-${mode}`, {
+          mode,
+        });
+        const space = `did:key:z6Mk-foreign-read-acl-${mode}`;
+        try {
+          await initializeSpaceAcl(server, space, {
+            [ALICE]: "OWNER",
+            [BOB]: "READ",
+          });
+          expect(await server.foreignReadAuthorityFor(space, ALICE)).toEqual({
+            granted: true,
+          });
+          expect(await server.foreignReadAuthorityFor(space, BOB)).toEqual({
+            granted: true,
+          });
+          expect(await server.foreignReadAuthorityFor(space, CAROL)).toEqual({
+            granted: false,
+            reason: `the ACL of ${space} grants ${CAROL} nothing ` +
+              "(READ required)",
+          });
+        } finally {
+          await server.close();
+        }
+      }
+    });
+
+    it("refuses every principal a space whose ACL is missing or retracted", async () => {
+      const server = createAclServer("memory://foreign-read-no-acl", {
+        mode: "off",
+      });
+      const space = "did:key:z6Mk-foreign-read-no-acl";
+      try {
+        // A populated space with no list: the client path's compat arm
+        // admits authenticated principals, the serving plane does not.
+        const writer = await connect(server);
+        const opened = await openSession(writer, space, ALICE);
+        expectExists(opened.ok);
+        expectExists(
+          (await transactSet(
+            writer,
+            space,
+            opened.ok.sessionId,
+            "of:note",
+            { text: "hi" },
+            1,
+          )).ok,
+        );
+        expect(await server.foreignReadAuthorityFor(space, ALICE)).toEqual({
+          granted: false,
+          reason: `${space} exists with no ACL document — the serving ` +
+            "plane fails closed (protocol.md §2's interim; the client " +
+            "path's legacy compat arm is a rollout accommodation, not a " +
+            "grant)",
+        });
+      } finally {
+        await server.close();
+      }
+    });
+  });
+
   describe("checkServedAclChange() and commitServedAclChange()", () => {
     // Each case serves a change of the access list of `space`, which alice
     // owns and bob may write, made by a run delivering an event on a stream

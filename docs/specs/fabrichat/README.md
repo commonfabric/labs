@@ -340,8 +340,9 @@ design, as below.
   click to the viewer's manager's `openDirect` itself, since a reviewed gesture
   does not carry across a `send` from another handler. It names the participant
   by their profile, bound as its control's `name`, which crosses into the
-  click's event as the profile's cell; the manager reads the counterpart from
-  the profile's `represents-principal` label, and offers the room through the
+  click's event as the profile's cell; the manager reads the counterpart as
+  the principal whose own profile it is (`profileOwnerOf()`), and offers the
+  room through the
   share inbox the profile points at. A chip a room rendered before its control
   named a profile names the participant's principal instead, as
   `target.dataset.counterpart`, which the manager still reads.

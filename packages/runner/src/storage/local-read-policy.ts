@@ -28,17 +28,66 @@ export class LocalReadUnavailable extends Error {
 /** Local eligibility in addition to replica coverage, such as producer currency. */
 type LocalReadPolicy = {
   permits?: () => (address: IMemorySpaceAddress) => boolean;
+
+  /** The checker the transaction's reads share, made at its first read. */
+  readPermits?: (address: IMemorySpaceAddress) => boolean;
+
   failure?: LocalReadUnavailable;
   basis: PathKeyMap<{ address: IMemorySpaceAddress; covered: () => boolean }>;
+
+  /** How many value reads the basis has recorded, repeats included. */
+  reads: number;
+
   conditions: { address: IMemorySpaceAddress; current: () => boolean }[];
   wakes: PathKeyMap<IMemorySpaceAddress>;
+
+  /**
+   * The validation a commit passed, made just before committing, and how
+   * much of the basis it saw.
+   */
+  validatedForCommit?: { stretch: object; reads: number; conditions: number };
 };
 
 const policies = new WeakMap<object, LocalReadPolicy>();
 
 /**
+ * The synchronous stretch a commit's validations share. It ends at the next
+ * microtask checkpoint, and sooner wherever something can change what a
+ * validation in it proved (`endLocalReadValidationStretch()`). It belongs to
+ * the realm rather than to a runtime, because a microtask checkpoint does:
+ * whatever ends it for one runtime ends it for every runtime in the realm,
+ * which only ever makes a validation check again.
+ */
+let validationStretch: object | undefined;
+
+/** Returns the open validation stretch, opening one when none is open. */
+function currentValidationStretch(): object {
+  if (validationStretch === undefined) {
+    const stretch = {};
+    validationStretch = stretch;
+    queueMicrotask(() => {
+      if (validationStretch === stretch) validationStretch = undefined;
+    });
+  }
+  return validationStretch;
+}
+
+/**
+ * Ends the open validation stretch, so that every validation after it checks
+ * replica and local scheduler state again. Whatever can change what a
+ * validation proved, whether producer currency, a document's coverage or
+ * value, or a condition, ends the stretch first.
+ */
+export function endLocalReadValidationStretch(): void {
+  validationStretch = undefined;
+}
+
+/**
  * Restricts a transaction before its first read; restrictions cannot be cleared.
- * `permits` creates a checker for one synchronous read or validation pass.
+ * `permits` creates a checker. The transaction's reads share one, and each
+ * validation pass makes its own, so what a read let through is checked again
+ * before the transaction can seal. The passes a commit makes itself stand on
+ * the one `validateLocalReadBasisForCommit()` made just before it.
  */
 export function restrictToLocalReads(
   tx: IStorageTransaction,
@@ -53,6 +102,7 @@ export function restrictToLocalReads(
   const policy: LocalReadPolicy = {
     permits,
     basis: new PathKeyMap(),
+    reads: 0,
     conditions: [],
     wakes: new PathKeyMap(),
   };
@@ -85,7 +135,11 @@ export function assertLocalReadAvailable(
     address.id,
     ...address.path,
   ], { address, covered });
-  if (covered() && policy.permits?.()(address) !== false) return;
+  policy.reads++;
+  if (covered()) {
+    policy.readPermits ??= policy.permits?.();
+    if (policy.readPermits?.(address) !== false) return;
+  }
   const failure = new LocalReadUnavailable(address);
   policy.failure ??= failure;
   throw failure;
@@ -99,6 +153,8 @@ export function releaseLocalReadBasis(tx: object): void {
   policy.wakes.clear();
   policy.conditions.length = 0;
   policy.permits = undefined;
+  policy.readPermits = undefined;
+  policy.validatedForCommit = undefined;
 }
 
 /** Whether the inputs of a disposed attempt have become eligible for a new run. */
@@ -113,7 +169,11 @@ export function localReadsReady(tx: object): boolean {
   return true;
 }
 
-/** Rechecks residency and producer currency before a transaction can seal. */
+/**
+ * Rechecks residency and producer currency before a transaction can seal. A
+ * transaction `validateLocalReadBasisForCommit()` passed in the open stretch,
+ * having read and required nothing since, stands on that pass.
+ */
 export function validateLocalReadBasis(
   tx: object,
 ): LocalReadUnavailable | undefined {
@@ -121,6 +181,52 @@ export function validateLocalReadBasis(
   if (policy === undefined || policy.failure !== undefined) {
     return policy?.failure;
   }
+  const validated = policy.validatedForCommit;
+  if (
+    validated !== undefined && validated.stretch === validationStretch &&
+    validated.reads === policy.reads &&
+    validated.conditions === policy.conditions.length
+  ) return undefined;
+  return validatePolicy(policy);
+}
+
+/**
+ * Validates a transaction about to commit, as `validateLocalReadBasis()` does,
+ * for a caller that commits it next in the same synchronous stretch. The
+ * validations the commit makes before it hands its writes over then stand on
+ * this one, unless the transaction reads or requires more first, or the
+ * stretch ends: anything that changes what they check in between must end it.
+ */
+export function validateLocalReadBasisForCommit(
+  tx: object,
+): LocalReadUnavailable | undefined {
+  const policy = policyFor(tx);
+  if (policy === undefined || policy.failure !== undefined) {
+    return policy?.failure;
+  }
+  const stretch = currentValidationStretch();
+  const failure = validatePolicy(policy);
+  // A pass that applied a frame itself, as a store read-through can on a
+  // replica miss, ended the stretch it began in, and what it checked before
+  // the frame stands for nothing after it.
+  if (failure === undefined && validationStretch === stretch) {
+    policy.validatedForCommit = {
+      stretch,
+      reads: policy.reads,
+      conditions: policy.conditions.length,
+    };
+  }
+  return failure;
+}
+
+/**
+ * Helper for `validateLocalReadBasis()` and
+ * `validateLocalReadBasisForCommit()`, which makes one full validation pass
+ * over `policy` and latches the first failure.
+ */
+function validatePolicy(
+  policy: LocalReadPolicy,
+): LocalReadUnavailable | undefined {
   for (const { address, current } of policy.conditions) {
     if (current()) continue;
     policy.failure = new LocalReadUnavailable(address);
