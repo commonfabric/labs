@@ -14,6 +14,7 @@ import {
   currentPrincipal,
   equals,
   pattern,
+  spaceAccessOf,
   TESTS,
   UI,
   Writable,
@@ -144,7 +145,7 @@ function roomLinkOf(room: unknown): unknown {
 
 /** The room a request's outcome names, as a cell. */
 const roomOf = (
-  requests: Writable<Record<string, ChatRequestOutcome>>,
+  requests: Cell<Record<string, ChatRequestOutcome>>,
   id: string,
 ) => requests.key(id).key("entry").key("room").resolveAsCell();
 
@@ -463,10 +464,23 @@ export default pattern(() => {
       // A request already decided changes nothing when it arrives again.
       {
         action: group.createGroup,
-        event: { requestId: "g-1", title: "Team", members: [] },
+        event: {
+          requestId: "g-1",
+          title: "Changed",
+          members: [BOB],
+          joinableByLink: true,
+        },
         trustedUi: startGesture,
       },
-      { assertion: assert(() => group.rooms.length === 1) },
+      {
+        assertion: assert(() =>
+          group.rooms.length === 1 &&
+          group.rooms[0]?.room.key("about").get()?.title === "Team" &&
+          recipientsOf(groupNotices) === CAROL &&
+          spaceAccessOf(roomOf(groupRequests, "g-1"), CAROL) === "OWNER" &&
+          spaceAccessOf(roomOf(groupRequests, "g-1"), BOB) === "none"
+        ),
+      },
       // The start controls are enabled, and a start the manager can't act on
       // is refused with its reason: a direct room with this user themself,
       // with someone who isn't a principal, or a group room with no title.
