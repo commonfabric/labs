@@ -82,7 +82,10 @@ import {
   UnresolvedInputError,
 } from "./schema-view.ts";
 import { canFollowScopedLink, isCellScope } from "./scope.ts";
-import { getTransactionForChildCells } from "./storage/extended-storage-transaction.ts";
+import {
+  createDetachedChildCellTransaction,
+  getTransactionForChildCells,
+} from "./storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "./storage/interface.ts";
 import { usesLocalReads } from "./storage/local-read-policy.ts";
 import {
@@ -678,7 +681,7 @@ export function processDefaultValue(
       return createCell(
         runtime,
         { ...link, schema: resolvedSchema },
-        tx,
+        getTransactionForChildCells(tx),
         synced,
         "stream",
         cfcLabelView,
@@ -699,7 +702,7 @@ export function processDefaultValue(
           link.space,
           resolvedSchema.default,
           resolvedSchema,
-          tx,
+          getTransactionForChildCells(tx),
           cfcLabelView,
         );
       } else {
@@ -1167,15 +1170,23 @@ export function validateAndTransform(
   _seen?: Array<[string, any]>,
   options?: ValidateAndTransformOptions,
 ): any {
-  // If the transaction is no longer open, read through the runtime's ambient
-  // read path instead. Open transactions still take precedence so reads can see
-  // their own uncommitted state.
+  // If the transaction is no longer open, read through a read-only transaction
+  // of this read's own instead. Open transactions still take precedence so
+  // reads can see their own uncommitted state.
+  //
+  // That transaction is dropped with the read, and the handles the read mints
+  // carry none: a transaction checks a document out at the instant it first
+  // touches it, so a handle bound to this one would keep reading the instant
+  // of a read already over, and a document the read found absent would stay
+  // absent through the handle however long it was held, its load included.
   //
   // A transaction marked for lazy materialization is kept whatever its state:
   // a view reads the state ITS transaction saw, and swapping a finished one for
   // a fresh read would read newer state where the view's contract is to
   // refuse. The refusal comes from the marked transaction's own guard below.
-  if (tx?.isLazyMaterialize() !== true) tx = runtime.readTx(tx);
+  if (tx?.isLazyMaterialize() !== true && tx?.status().status !== "ready") {
+    tx = createDetachedChildCellTransaction(runtime.readTx());
+  }
 
   // Reconstruct doc, path, schema from link and runtime
   let link = isCellViewRef(sourceRef) ? sourceRef.link : sourceRef;

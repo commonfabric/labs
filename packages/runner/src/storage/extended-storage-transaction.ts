@@ -4673,10 +4673,13 @@ export interface TransactionWrapperOptions {
   nonReactive?: boolean;
 
   /**
-   * Transaction to use for creating child cells. If not provided, uses the
-   * wrapped transaction.
+   * The transaction the child cells a read mints carry. Absent, they carry
+   * the wrapped transaction. `"none"`, they carry no transaction, so each of
+   * their reads opens one of its own and sees the replica as it stands then,
+   * rather than the instant the wrapped transaction checked a document out
+   * at.
    */
-  childCellTx?: IExtendedStorageTransaction;
+  childCellTx?: IExtendedStorageTransaction | "none";
 
   /**
    * If true, drops settle callbacks instead of registering them. For work that
@@ -4711,10 +4714,13 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
   }
 
   /**
-   * Get the transaction to use for creating child cells.
+   * Get the transaction to use for creating child cells, or `undefined` when
+   * they carry none.
    */
-  getTransactionForChildCells(): IExtendedStorageTransaction {
-    return this.#options.childCellTx ?? this.#wrapped;
+  getTransactionForChildCells(): IExtendedStorageTransaction | undefined {
+    const childCellTx = this.#options.childCellTx;
+    if (childCellTx === "none") return undefined;
+    return childCellTx ?? this.#wrapped;
   }
 
   /**
@@ -5347,13 +5353,31 @@ export function createDuplicateWorkTransaction(
 }
 
 /**
- * Create a non-reactive transaction wrapper for Cell.sample().
- * Reads won't trigger re-execution, but child cells will be reactive.
+ * Create a non-reactive transaction wrapper for Cell.sample(). Reads won't
+ * trigger re-execution, but child cells will be reactive: they carry
+ * `childCellTx`, the transaction the sample was asked through, or none when
+ * the sample was asked through no open transaction and `tx` is the read-only
+ * one it opened for itself.
  */
 export function createNonReactiveTransaction(
   tx: IExtendedStorageTransaction,
+  childCellTx: IExtendedStorageTransaction | "none" = tx,
 ): TransactionWrapper {
-  return new TransactionWrapper(tx, { nonReactive: true, childCellTx: tx });
+  return new TransactionWrapper(tx, { nonReactive: true, childCellTx });
+}
+
+/**
+ * Create a transaction wrapper for a read asked through no open transaction.
+ * The read runs on `tx`, a read-only transaction nothing commits, which
+ * checks each document out at the instant the read first touches it. The
+ * handles the read mints carry no transaction, so a handle held past the read
+ * sees what the replica holds when it is read, a document that arrived after
+ * the read included.
+ */
+export function createDetachedChildCellTransaction(
+  tx: IExtendedStorageTransaction,
+): TransactionWrapper {
+  return new TransactionWrapper(tx, { childCellTx: "none" });
 }
 
 /**

@@ -483,14 +483,15 @@ describe("default-app golden replay (state survives an in-place roll-forward)", 
     expect(metadataOnlyRoot.getMetaRaw("schema")).not.toEqual(
       currentPattern.resultSchema,
     );
+    // Starting the root runs the pinned pattern and leaves the setup marker
+    // on the pattern that set the document up: the start is not the repair.
     await controller.startPiece(metadataOnlyRoot);
-    expect(metadataOnlyRoot.key("profileName").getRaw()).toBeUndefined();
+    expect(getPatternSetupIdentityRef(metadataOnlyRoot)).not.toEqual(
+      currentRef,
+    );
 
     // Opening the root re-stages a document its pinned pattern did not set
-    // up, which is what repairs the projection. The repair writes through a
-    // transaction of its own, so read the root it hands back rather than the
-    // one captured before it: the older cell still describes the metadata the
-    // re-stage replaced.
+    // up, which is what repairs the projection.
     const repaired = await controller.ensureDefaultPattern();
     await runtime.idle();
     expect(getPatternSetupIdentityRef(repaired.getCell())).toEqual(currentRef);
