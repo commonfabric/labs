@@ -1822,6 +1822,49 @@ describe("Schema: CFC authoring aliases", () => {
       }
     });
 
+    for (
+      const [alias, keys] of [
+        ["Omit", `"parent"`],
+        ["Pick", `"value"`],
+      ] as const
+    ) {
+      it(`reports nothing for a recursion through a member \`${alias}\` drops`, async () => {
+        for (
+          const { schema, diagnostics } of await bothPaths(
+            `type Data<T> =
+               | ${alias}<{ parent: Data<T>; value: T }, ${keys}>
+               | Secret;`,
+            "Data<string>",
+          )
+        ) {
+          expect(schema.properties.a).toEqual({
+            anyOf: [
+              {
+                type: "object",
+                properties: { value: { type: "string" } },
+                required: ["value"],
+              },
+              SECRET,
+            ],
+          });
+          expect(diagnostics).toEqual([]);
+        }
+      });
+    }
+
+    it("reports `cfc-schema:recursive-alias-of-any` for a recursion through a member `Omit` keeps", async () => {
+      for (
+        const { diagnostics } of await bothPaths(
+          `type Data<T> = Omit<{ parent: Data<T>; value: T }, "value"> | Secret;`,
+          "Data<string>",
+        )
+      ) {
+        expect(diagnostics.map(({ type }) => type)).toEqual([
+          "cfc-schema:recursive-alias-of-any",
+        ]);
+      }
+    });
+
     it("reports nothing for a generic alias nested in itself finitely through a generic interface", async () => {
       for (
         const { diagnostics } of await bothPaths(

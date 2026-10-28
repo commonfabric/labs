@@ -168,6 +168,38 @@ describe("alias-of-any-schema", () => {
       .toEqual([]);
   });
 
+  for (
+    const [alias, keys] of [
+      ["Omit", `"parent"`],
+      ["Pick", `"value"`],
+    ] as const
+  ) {
+    it(`reports nothing for a recursion through a member \`${alias}\` drops`, async () => {
+      const { input, diagnostics } = await patternInputOf(`
+        import { pattern } from "commonfabric";
+        import type { Confidential } from "commonfabric";
+        type Secret = Confidential<any, ["secret"]>;
+        type Data<T> =
+          | ${alias}<{ parent: Data<T>; value: T }, ${keys}>
+          | Secret;
+        export default pattern<{ a: Data<string> }>(() => ({}));
+      `);
+
+      expect(propertyA(input)).toEqual({
+        anyOf: [
+          {
+            type: "object",
+            properties: { value: { type: "string" } },
+            required: ["value"],
+          },
+          { ifc: { confidentiality: ["secret"] } },
+        ],
+      });
+      expect(diagnostics.filter(({ severity }) => severity === "error"))
+        .toEqual([]);
+    });
+  }
+
   it("reports `cfc-schema:recursive-alias-of-any` for a recursive alias wrapping a label around `any`", async () => {
     const { diagnostics } = await patternInputOf(`
       import { pattern } from "commonfabric";

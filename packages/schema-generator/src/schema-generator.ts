@@ -5270,8 +5270,28 @@ export class SchemaGenerator {
         if (second === undefined) return undefined;
         const keys = literalKeys(second, context);
         if (keys === undefined) return undefined;
+        // An operand written in place as a type literal is read for the
+        // members kept alone, so a member the alias drops is not read, nor a
+        // recursion through it, as `parent` in
+        // `Omit<{ parent: Data<T>; value: T }, "parent">` is not.
+        const written = unwrapTypeParentheses(first);
+        const kept = (member: ts.TypeElement): boolean => {
+          const key = ts.isPropertySignature(member)
+            ? getPropertyNameText(member.name, checker)
+            : undefined;
+          return key === undefined || keys.has(key) === (name === "Pick");
+        };
         // The picked members are the labelled value's, so its label stays.
-        const operand = analyze(first, instantiatedAs);
+        const operand = ts.isTypeLiteralNode(written)
+          ? this.#analyzeTypeNodeStructure(
+            ts.factory.updateTypeLiteralNode(
+              written,
+              ts.factory.createNodeArray(written.members.filter(kept)),
+            ),
+            checker,
+            instantiatedAs ? { ...context, instantiatedAs } : context,
+          )
+          : analyze(first, instantiatedAs);
         const { ifc, ...payload } = isObjectOrArray(operand) &&
             !Array.isArray(operand)
           ? operand as Record<string, unknown>
