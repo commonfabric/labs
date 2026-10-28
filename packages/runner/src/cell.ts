@@ -4566,13 +4566,20 @@ export class CellImpl<T extends FabricValue>
     options?: {
       params?: ReadonlyArray<unknown> | Record<string, unknown>;
       reactOn?: unknown;
+      requestKey?: string;
       maxConfidentiality?: ReadonlyArray<unknown>;
       onExceed?: "fail" | "skip";
       readClearance?: boolean;
       scope?: CellScope;
     },
   ): Reactive<
-    { pending: boolean; result?: Row[]; error?: unknown; withheld?: number }
+    {
+      pending: boolean;
+      result?: Row[];
+      error?: unknown;
+      withheld?: number;
+      requestKey?: string;
+    }
   > {
     // The scope binds the node the way `.asScope` binds the builder export:
     // the runner folds the node's default scope into the result cell's link.
@@ -4590,6 +4597,7 @@ export class CellImpl<T extends FabricValue>
       sql,
       params: options?.params,
       reactOn: options?.reactOn,
+      requestKey: options?.requestKey,
       // CFC Phase 3 read surface: the declared output ceiling + exceed mode.
       maxConfidentiality: options?.maxConfidentiality,
       onExceed: options?.onExceed,
@@ -4600,7 +4608,13 @@ export class CellImpl<T extends FabricValue>
       // columns. Read loosely — it is not part of the public options type.
       rowSchema: (options as { rowSchema?: unknown } | undefined)?.rowSchema,
     }) as Reactive<
-      { pending: boolean; result?: Row[]; error?: unknown; withheld?: number }
+      {
+        pending: boolean;
+        result?: Row[];
+        error?: unknown;
+        withheld?: number;
+        requestKey?: string;
+      }
     >;
   }
 

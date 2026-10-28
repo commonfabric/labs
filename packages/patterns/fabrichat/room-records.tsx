@@ -717,7 +717,13 @@ export interface RoomStreamEvent {
   emoji?: string;
 
   /** A rendered control's text. */
-  readonly target?: { readonly value?: string };
+  readonly target?: {
+    readonly value?: string;
+    readonly dataset?: {
+      readonly draftRevision?: string;
+      readonly threadKey?: string;
+    };
+  };
 }
 
 /** A file a composer is attaching: the request adding it to the store. */
@@ -730,10 +736,12 @@ export interface ComposerAttachment {
 }
 
 /**
- * Where a rendered composer keeps the reply, the edit and the attachments it
- * is composing.
+ * Where a rendered composer keeps its drafts, reply, edit, and attachments.
  */
 export interface ComposerState {
+  /** The main composer's exact text and the edit that produced it. */
+  draft?: { value: string; revision: string };
+
   /** The message the next send replies to in the main conversation. */
   replyTo?: MessageCell;
 
@@ -852,6 +860,9 @@ export interface EventSendState extends SendState, TitlingState {}
 
 /** What a rendered thread composer's send is bound to. */
 export interface ThreadSendState extends ComposerSendState, TitlingState {
+  /** The selected thread composer's own draft, absent for a direct send. */
+  draft?: Writable<{ value: string; revision: string } | undefined>;
+
   /** Where the reply is shown. */
   shownIn: ShownIn;
 }
@@ -989,10 +1000,10 @@ const resolvedProfile = (
   return profile?.get() === undefined ? undefined : profile;
 };
 
-/** The text an event sends: its `body`, or a rendered control's, trimmed. */
+/** The exact text an event sends: its `body`, or a rendered control's. */
 const textOf = (event: RoomStreamEvent): string => {
   const text = event?.body ?? event?.target?.value;
-  return typeof text === "string" ? text.trim() : "";
+  return typeof text === "string" ? text : "";
 };
 
 /** Whether `event` carries its text as a string, empty or not. */
@@ -1243,7 +1254,7 @@ const sendInto = (
   if (profile === undefined) throw new Error(NO_PROFILE);
   const body = textOf(event);
   const attachments = attachmentsIn(messages, attached);
-  if (body === "" && attachments.length === 0) {
+  if (body.trim() === "" && attachments.length === 0) {
     throw new Error("This send has no text in `body`, and no attachments.");
   }
   if (!hasTextIn(event)) throw new Error("This send's `body` isn't text.");
@@ -1351,8 +1362,8 @@ const composedAttachments = (
 /**
  * Sends a rendered composer's text, from `ChatSendSurface`, replying in the
  * main conversation to the message the composer holds, if any, and attaching
- * the files the store added for it; then ends that reply, and those
- * attachments.
+ * the files the store added for it. Ends that reply and those attachments, and
+ * clears the draft only if it still identifies the submitted edit.
  */
 export const commitComposerSend = handler<RoomStreamEvent, ComposerSendState>(
   (event, { myProfile, messages, composer, store, joined }) => {
@@ -1369,10 +1380,27 @@ export const commitComposerSend = handler<RoomStreamEvent, ComposerSendState>(
       reply === undefined ? undefined : { quotes: reply, shownIn: "main" },
       joined,
     );
+    clearSubmittedDraft(event, composer.key("draft"));
     if (reply !== undefined) composer.key("replyTo").set(undefined);
     if (attaching.length > 0) composer.key("attaching").set(undefined);
   },
 );
+
+/** Clears only the submitted edit, within the accepted send's transaction. */
+const clearSubmittedDraft = (
+  event: RoomStreamEvent,
+  cell: Writable<{ value: string; revision: string } | undefined>,
+): void => {
+  const target = cell.resolveAsCell();
+  const draft = target.get();
+  const revision = event.target?.dataset?.draftRevision;
+  if (
+    revision !== undefined && draft?.revision === revision &&
+    draft.value === textOf(event)
+  ) {
+    target.set({ value: "", revision });
+  }
+};
 
 /** One file `cf-file-input` reports it has stored in the blob store. */
 export interface UploadedFile {
@@ -1493,13 +1521,34 @@ export const dropAttachment = handler<unknown, DropAttachmentState>(
  * Sends a rendered thread composer's text, from `ChatSendSurface`, into the
  * open thread, quoting the message of the thread the composer holds, if any,
  * and titling the thread with the event's `threadTitle` where it carries one
- * and the thread has none; then ends that quote.
+ * and the thread has none. Ends that quote, and clears the draft only if it
+ * still identifies the submitted edit.
  */
 export const commitThreadSend = handler<RoomStreamEvent, ThreadSendState>(
-  (event, { myProfile, messages, composer, shownIn, threadInfo, joined }) => {
+  (
+    event,
+    {
+      myProfile,
+      messages,
+      composer,
+      draft,
+      shownIn,
+      threadInfo,
+      joined,
+    },
+  ) => {
     // A cleared link still reads back as a cell, holding nothing.
     const root = composer.get()?.thread;
     const thread = root?.get() === undefined ? undefined : root;
+    const threadKey = thread === undefined
+      ? undefined
+      : threadInfoKeyOf(thread);
+    const submittedThreadKey = event.target?.dataset?.threadKey;
+    if (submittedThreadKey !== undefined && submittedThreadKey !== threadKey) {
+      throw new Error(
+        "The open thread changed. Reopen the thread before sending this draft.",
+      );
+    }
     const link = composer.get()?.threadQuotes;
     const quotes = link?.get() === undefined ? undefined : link;
     if (quotes !== undefined) checkComposedQuote(quotes, shownIn);
@@ -1516,6 +1565,7 @@ export const commitThreadSend = handler<RoomStreamEvent, ThreadSendState>(
       joined,
       threadInfo,
     );
+    if (draft !== undefined) clearSubmittedDraft(event, draft);
     if (quotes !== undefined) composer.key("threadQuotes").set(undefined);
   },
 );
@@ -1562,7 +1612,7 @@ export const commitEdit = handler<RoomStreamEvent, EditState>(
     const body = textOf(event);
     if (
       !hasTextIn(event) ||
-      (body === "" && (current.attachments?.length ?? 0) === 0)
+      (body.trim() === "" && (current.attachments?.length ?? 0) === 0)
     ) {
       throw new Error("This edit has no text in `body`.");
     }

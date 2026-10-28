@@ -420,7 +420,7 @@ export default pattern(() => {
         action: alice.sendMessage,
         event: {
           type: "click",
-          target: { value: "Ten" },
+          body: "   ",
           attachments: [
             notes,
             notes,
@@ -439,12 +439,13 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           all(messages).length === 3 &&
-          all(messages)[2]?.attachments?.length === 10
+          all(messages)[2]?.attachments?.length === 10 &&
+          all(messages)[2]?.body === "   "
         ),
       },
 
       // An edit replaces the text alone, and of a message with attachments
-      // may leave it empty, but not carry no text at all.
+      // may leave only whitespace, but not carry no text at all.
       {
         action: alice.editMessage,
         event: { message: first, target: { value: "Look again" } },
@@ -452,7 +453,7 @@ export default pattern(() => {
       },
       {
         action: alice.editMessage,
-        event: { message: messageOf(messages.key(2)), target: { value: "" } },
+        event: { message: messageOf(messages.key(2)), body: " \t " },
         trustedUi: editGesture,
       },
       {
@@ -463,6 +464,17 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           holds(messages, 0, "Look again", [photo, notes]) &&
+          all(messages)[2]?.body === " \t " &&
+          all(messages)[2]?.attachments?.length === 10
+        ),
+      },
+      {
+        action: alice.editMessage,
+        event: { message: messageOf(messages.key(2)), body: "" },
+        trustedUi: editGesture,
+      },
+      {
+        assertion: assert(() =>
           all(messages)[2]?.body === "" &&
           all(messages)[2]?.attachments?.length === 10
         ),

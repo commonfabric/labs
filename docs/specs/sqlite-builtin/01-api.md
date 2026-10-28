@@ -97,11 +97,13 @@ export interface ISqliteQueryable {
     options?: {
       params?: ReadonlyArray<unknown> | Record<string, unknown>;
       reactOn?: unknown;
+      requestKey?: string;
     },
   ): Reactive<{
     pending: boolean;
     result?: SqliteQueryRow<Row>[];
     error?: any;
+    requestKey?: string;
   }>;
 }
 
@@ -233,8 +235,16 @@ db.query<Row = Record<string, unknown>>(
      *  Pass the whole `db` for "any committed write to this database re-runs".
      *  See Section 05. */
     reactOn?: unknown;
+
+    /** Application key echoed on the request's pending and settled states. */
+    requestKey?: string;
   },
-): Reactive<{ pending: boolean; result?: QueryRow<Row>[]; error?: any }>;
+): Reactive<{
+  pending: boolean;
+  result?: QueryRow<Row>[];
+  error?: any;
+  requestKey?: string;
+}>;
 ```
 
 `db.query` is **read-only**. The server rejects any statement that is not a
@@ -257,6 +267,7 @@ export type SqliteQueryParams = {
   sql: string;
   params?: ReadonlyArray<unknown> | Record<string, unknown>;
   reactOn?: unknown;
+  requestKey?: string;
 };
 export declare const sqliteQuery: <Row = Record<string, unknown>>(
   params: Opaque<SqliteQueryParams>,
@@ -264,11 +275,22 @@ export declare const sqliteQuery: <Row = Record<string, unknown>>(
   pending: boolean;
   result?: QueryRow<Row>[];
   error?: any;
+  requestKey?: string;
 }>;
 ```
 
 `db.query<Row>(sql, opts)` and `sqliteQuery<Row>({ db, sql, ...opts })` lower to
 the same `sqliteQuery` node; choose whichever reads better.
+
+`requestKey` is an optional application key, captured with the inputs and echoed
+on every pending, successful, or failed state that the request publishes.
+Changing it changes the memo identity even when SQL and parameters match. A
+consumer compares it with its current application key before using the state;
+updating an input does not synchronously replace the query's previous state.
+The key does not change row identities and is absent for an untagged request.
+Keep it stable for unchanged search and source inputs; unrelated rendering state
+in the key causes another database request. A source registration generation
+belongs in the key only when a new registration requires a fresh request.
 
 SQLite permits result aliases that Fabric records reserve against prototype
 pollution. A reactive query carries a row containing `constructor` or

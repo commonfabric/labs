@@ -24,6 +24,7 @@ import {
   isWellFormedDID,
   NAME,
   pattern,
+  type PerUser,
   spaceOf,
   type Stream,
   UI,
@@ -343,7 +344,7 @@ export interface MainOutput {
   openChatDirect: Stream<ManagerStreamEvent>;
 
   /** The FabriChat manager's notices. */
-  chatNotices: ChatManagerNotice[];
+  chatNotices: PerUser<ChatManagerNotice[]>;
 
   /**
    * Starts a direct chat from the FabriChat manager listing the rooms the

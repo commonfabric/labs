@@ -2,11 +2,14 @@
  * A member viewing a piece that shows, through a link, a piece in a space the
  * member has not been granted, and coming to see that piece once granted,
  * without reloading. The memory server refuses the member's runtime the linked
- * space on its first open, and the connection-per-space client closes the
- * connection that refusal arrived on, so the grant reaches no session of the
- * member's. What brings the piece in is the shell asking again: through the
- * Retry button on the renderer's "Access unavailable" placeholder, or on the
- * page regaining focus.
+ * space on its first open, and the renderer shows an "Access unavailable"
+ * placeholder with a Retry button in the piece's place. The connection-per-space
+ * client closes the connection that refusal arrived on, and the server holds
+ * the refusal for the member: a grant sends its notice to every connection
+ * serving the member, here the one to the view's space, and the runtime retries
+ * the refused space on its own. The shell asks again too, on the Retry button
+ * and on the page regaining focus, for a refusal no notice reaches; while the
+ * space is still refused, that retry is refused as well.
  */
 
 import { expect } from "@std/expect";
@@ -28,8 +31,6 @@ import { ACLManager } from "@commonfabric/runner";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 
 import "../src/globals.ts";
-
-import { clickPierce } from "./shadow-dom.ts";
 
 const { API_URL, FRONTEND_URL } = env;
 const REPO_ROOT = resolve(import.meta.dirname!, "../../..");
@@ -188,9 +189,7 @@ describe("shell space access retry", () => {
    * refusal in the piece's place, and for the member's runtime to settle and
    * sync every space it opened, then hands `run` the page, the refused
    * space, the settled retries the refusal showed, and a grant of that space
-   * to the member. The grant resolves once the server has committed it, and
-   * then requires that the page still shows the refusal, no retry under way:
-   * nothing but a retry the shell asks for brings the piece in.
+   * to the member, which resolves once the server has committed it.
    */
   async function refusedOnFirstOpen(
     run: (refused: {
@@ -261,9 +260,9 @@ describe("shell space access retry", () => {
       const retries = await waitForRefusal(page);
       // Under server execution the member's runtime opens its home space
       // after the view, and the reads that follow open the refused space's
-      // session again. One landing after the grant would admit the space with
-      // no retry of the shell's, so the grant waits until the view has settled
-      // and every space the runtime opened has synced.
+      // session again, so `run` starts once the view has settled and every
+      // space the runtime opened has synced, with no open of the refused
+      // space still under way.
       await awaitViewSettled(page);
       await page.evaluate(async () => {
         await globalThis.commonfabric?.rt?.allSynced();
@@ -275,8 +274,6 @@ describe("shell space access retry", () => {
         retries,
         grant: async () => {
           await acl.set(member.did(), "WRITE");
-          await awaitViewSettled(page);
-          expect(await retryReading(page, retries)).toBe("idle");
         },
       });
     } finally {
@@ -284,22 +281,35 @@ describe("shell space access retry", () => {
     }
   }
 
-  it("shows the piece once the member, granted it, presses Retry", async () => {
-    await refusedOnFirstOpen(async ({ page, retries, grant }) => {
+  it("shows the piece once the member is granted it, the shell asking for no retry", async () => {
+    await refusedOnFirstOpen(async ({ page, space, retries, grant }) => {
+      // Every retry the shell asks the runtime for while the grant lands is
+      // recorded, so the piece is shown to have come in by the grant's notice.
+      await page.evaluate(() => {
+        const rt = globalThis.commonfabric?.rt;
+        if (rt === undefined) throw new Error("No runtime client exposed");
+        const asked: string[] = [];
+        const retrySpaceAccess = rt.retrySpaceAccess;
+        Reflect.set(globalThis, "__retriesAsked", asked);
+        rt.retrySpaceAccess = (retried) => {
+          asked.push(retried);
+          return retrySpaceAccess.call(rt, retried);
+        };
+      });
       await grant();
-      await clickPierce(page, "[data-space-access-retry]");
-      // The click reaches the worker before the settle request does, and the
-      // worker marks the retry in flight while handling it, so once the view
-      // has settled the page shows the retry under way or past.
-      await awaitViewSettled(page);
-      expect(await retryReading(page, retries)).not.toBe("idle");
       expect(await waitForRetryOutcome(page, retries)).toBe("piece");
+      const asked = await page.evaluate((space) => {
+        const rt = globalThis.commonfabric?.rt;
+        if (rt !== undefined) Reflect.deleteProperty(rt, "retrySpaceAccess");
+        const asked = Reflect.get(globalThis, "__retriesAsked") as string[];
+        return asked.filter((retried) => retried === space);
+      }, { args: [space] });
+      expect(asked).toEqual([]);
     });
   });
 
-  it("shows the piece once the page, its member granted it, regains focus", async () => {
-    await refusedOnFirstOpen(async ({ page, space, retries, grant }) => {
-      await grant();
+  it("asks the runtime to retry the refused space when the page regains focus, and shows that retry refused", async () => {
+    await refusedOnFirstOpen(async ({ page, space, retries }) => {
       // The shell asks the runtime from inside the `focus` handler, so the
       // retries it asked for are the calls made while the event is
       // dispatched.
@@ -320,7 +330,7 @@ describe("shell space access retry", () => {
         return asked.filter((retried) => retried === space);
       }, { args: [space] });
       expect(asked).toEqual([space]);
-      expect(await waitForRetryOutcome(page, retries)).toBe("piece");
+      expect(await waitForRetryOutcome(page, retries)).toBe("refused");
     });
   });
 

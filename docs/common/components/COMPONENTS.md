@@ -192,7 +192,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-slider` | Range input slider | `$value` |
 | `cf-space-create` | Label field + create button that creates a new space owned by the signed-in identity, with a random DID, and adds it to that identity's Home space list; fires `cf-space-created` with `{ did, label }`; the label is the entry's name | |
 | `cf-space-link` | Renders a space as a clickable navigation pill; opens the space by `spaceDid` when given, else by the legacy `spaceName` | |
-| `cf-submit-input` | Text field + submit button whose real (trusted) click carries the typed text as `event.target.value` with the surface's UI integrity, so it can authorize an owner-protected runtime write; prefer over `cf-message-input` when the submit gesture must be trusted | |
+| `cf-submit-input` | Text field + submit button whose real (trusted) click carries the typed text as `event.target.value` with the surface's UI integrity, so it can authorize an owner-protected runtime write; prefer over `cf-message-input` when the submit gesture must be trusted | `$draft` |
 | `cf-svg` | Renders SVG content from a string; safe for untrusted content, and anything that would run script is dropped | |
 | `cf-switch` | Toggle switch for binary on/off state | `$checked` |
 | `cf-tab` | Individual tab button used within `cf-tab-list` | |
@@ -221,6 +221,26 @@ cell means none confirmed — check the component source before assuming.
 | `cf-webhook` | Webhook integration: receives payloads into a stream | `$inbox`, `$config` |
 
 ---
+
+## cf-submit-input
+
+Clicking the submit button or pressing Enter sends a trusted click to the host's
+`onClick` handler. Its `target.value` is the exact displayed text. Without a
+binding, the field clears after dispatching that click; `initialValue` can seed
+it once.
+
+Bind `$draft` to a writable `{ value: string; revision: string }` cell to keep
+drafts across placements and let the caller decide when to clear them. The field
+writes a new revision for every input edit and carries that revision as
+`target.dataset.draftRevision` on the submit click. The handler stores the event's
+text, and clears the bound draft in the accepting transaction only if both its
+revision and value still match the event. Keep the revision when clearing its
+value. A refused send leaves the draft untouched, and a newer edit survives even
+when its text is identical to the submitted text. The bound field uses
+`CellController` to protect pending local edits from stale deliveries.
+
+The draft binding supplies its own initial text and controls clearing; a bound
+field does not use `initialValue` or clear itself after dispatch.
 
 ## cf-form
 
