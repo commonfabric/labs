@@ -1047,11 +1047,14 @@ holds the measurements and the conditions for revisiting.
   naming writes any data. A manifest entry an older guard reads is not enough
   on its own: an older runtime's plain reopen of a parent is never judged by
   its guard.
-- **Status on 2026-10-23.** The transformer's off arm is held to `main`'s
+- **Status on 2026-10-28.** The transformer's off arm is held to `main`'s
   output by the golden fixtures and `pipeline-regressions.test.ts`, and both
   arms by `transform.test.ts`. That compiled code is never shared between the
-  two modes is pinned by `packages/runner/test/instance-naming-modes.test.ts`,
-  and the plumbing by `packages/runner/test/experimental-options.test.ts` and
+  two modes is pinned by `packages/runner/test/instance-naming-modes.test.ts`.
+  So is a cold start, in either mode, of a parent the other mode set up: the
+  two modes stamp the same setup record, so the start runs the parent, and
+  with no carry-over its children start fresh. The plumbing is pinned by
+  `packages/runner/test/experimental-options.test.ts` and
   `packages/runner/test/deployment-meta.test.ts`.
 - **Path to removal.** Once on everywhere, delete the runtime option, its env,
   authority and shell-source entries, `namesInstances()`,

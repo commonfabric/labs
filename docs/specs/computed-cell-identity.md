@@ -123,7 +123,10 @@ record of the build it staged (`packages/runner/src/stored-setup-build.ts`): the
 pattern identity it describes, a digest of the level's positional cells by
 number and description, the cells holding state by number and description, and a
 digest of the projection map, each result path that links a positional cell with
-the cell's number. The descriptions are the schema-free ones of
+the cell's number. A named instance counts as a positional cell at the number
+of its `legacyPartialCause`, in the cells and in the projection map alike, so a
+build's record is the same whether or not it names instances. The descriptions
+are the schema-free ones of
 `packages/runner/src/cause-assignment.ts`, so a schema-generator change that
 moves no cell changes no record. A sub-pattern child is described by its
 pattern identity and the least of the names its module gives it, so a child
