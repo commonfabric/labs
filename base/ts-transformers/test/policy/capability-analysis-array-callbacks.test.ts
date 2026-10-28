@@ -256,6 +256,38 @@ export default pattern<{
       });
     });
 
+    it("reaches the input schema whole through the array a callback is handed when its receiver resolves only in part", async () => {
+      // `table` reaches the callback only through a sorted copy, which the
+      // receiver's own ref, `self`, does not name.
+
+      const schema = await liftInputSchema(
+        `table.filter((row) => row.topic !== undefined).length > 0
+  ? (self ? [...table].sort(() => 0) : self as typeof table)
+    .filter((_, index, all) => all[index].mentionedBy !== undefined)
+  : []`,
+      );
+
+      expect(elementProperties(schema)).toEqual({
+        topic: { type: "unknown" },
+        mentionedBy: { type: "unknown" },
+      });
+    });
+
+    it("reaches the input schema whole from a callback passed by name over a fallback to an array literal of objects", async () => {
+      const schema = await liftInputSchema(
+        `table.filter((row) => row.topic !== undefined).length > 0
+  ? (table ?? [{ topic: self, mentionedBy: self }]).filter(mentioned)
+  : []`,
+        `const mentioned = (row: { mentionedBy: unknown }) =>
+  row.mentionedBy !== undefined;`,
+      );
+
+      expect(elementProperties(schema)).toEqual({
+        topic: { type: "unknown" },
+        mentionedBy: { type: "unknown" },
+      });
+    });
+
     it("reaches the input schema through the array a callback is handed", async () => {
       const schema = await liftInputSchema(
         `table.filter((row, index, all) =>

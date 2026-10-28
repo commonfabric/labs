@@ -396,6 +396,22 @@ export default handler<
       expect(state.flag!.asCell).toEqual(["readonly"]);
     });
 
+    it("reads what the left of `&&` reads when a `for…of` iterates its right", async () => {
+      const { properties } = await onlyLift(`
+import { computed, pattern } from "commonfabric";
+interface Row { id: number; name: string }
+export default pattern<{ enabled: boolean; rows: Row[] }>(({ enabled, rows }) => {
+  const names = computed(() => {
+    let joined = "";
+    for (const row of (enabled && rows) as Row[]) joined += row.name;
+    return joined;
+  });
+  return { names };
+});
+`);
+      expect(Object.keys(properties).sort()).toEqual(["enabled", "rows"]);
+    });
+
     it("reads what its condition reads when a member is read through it", async () => {
       const { properties } = await onlyLift(`
 import { computed, pattern } from "commonfabric";
@@ -518,6 +534,18 @@ export default lift(({ rows, enabled }: { rows: Row[]; enabled: boolean }): Row[
 );
 `);
       expect(fields).toEqual(["id", "name", "note"]);
+    });
+
+    it("keeps the field an inline callback reads through elements of a copy or another array", async () => {
+      const fields = await liftRowFields(`
+import { lift } from "commonfabric";
+interface Row { id: number; name: string; note: string }
+export default lift(({ rows, other }: { rows: Row[]; other: Row[] }): Row[] =>
+  (rows.length > 0 ? [...rows].sort((a, b) => a.id - b.id) : other)
+    .filter((row) => row.name === "A")
+);
+`);
+      expect(fields).toEqual(["id", "name"]);
     });
 
     it("keeps comparing the elements of a copy the body only splices and writes back", async () => {

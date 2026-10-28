@@ -9,7 +9,10 @@
  * accumulator at when given no initial value all read `name` where the
  * narrowing would not see it, so the callback would read `undefined` and a
  * filter would drop every row. The named callback reads the same through a
- * conditional or a fallback around the copy it filters.
+ * conditional or a fallback around the copy it filters, and an inline
+ * callback, an array parameter and a named callback read the same where the
+ * conditional's other branch is a second array or an array literal of
+ * objects.
  *
  * Run: deno task cf test packages/patterns/regression/array-callback-reads.test.tsx
  */
@@ -44,6 +47,24 @@ const fallbackCopyByName = lift(({ rows }: { rows: Row[] }): Row[] =>
   ([...rows].sort((a, b) => a.id - b.id) ?? []).filter(isA)
 );
 
+type Mixed = { rows: Row[]; other: Row[]; enabled: boolean };
+
+const mixedInline = lift(({ rows, other, enabled }: Mixed): Row[] =>
+  (enabled ? [...rows].sort((a, b) => a.id - b.id) : other)
+    .filter((row) => row.name === "A")
+);
+
+const mixedThroughArray = lift(({ rows, other, enabled }: Mixed): Row[] =>
+  (enabled ? [...rows].sort((a, b) => a.id - b.id) : other)
+    .filter((_, index, all) => all[index].name === "A")
+);
+
+const mixedWithLiteral = lift(({ rows, other, enabled }: Mixed): Row[] =>
+  (enabled
+    ? [...rows].sort((a, b) => a.id - b.id)
+    : [{ id: other[0].id, name: "A" }]).filter(isA)
+);
+
 const filteredByName = lift(({ rows }: { rows: Row[] }): Row[] =>
   rows.filter((row) => row.id > 0).filter(isA)
 );
@@ -76,6 +97,14 @@ export default pattern(() => {
     rows: conditionalCopyByName({ rows, enabled: true }),
   });
   const fallback = names({ rows: fallbackCopyByName({ rows }) });
+  const other = [{ id: 3, name: "C" }];
+  const inline = names({ rows: mixedInline({ rows, other, enabled: true }) });
+  const mixedArray = names({
+    rows: mixedThroughArray({ rows, other, enabled: true }),
+  });
+  const withLiteral = names({
+    rows: mixedWithLiteral({ rows, other, enabled: true }),
+  });
   const filtered = names({ rows: filteredByName({ rows }) });
   const reduced = anyNamedA({ rows });
   const first = firstName({ rows });
@@ -88,6 +117,13 @@ export default pattern(() => {
   );
   const assert_fallback_copy_callback_reads_name = assert(() =>
     fallback === "A"
+  );
+  const assert_mixed_inline_callback_reads_name = assert(() => inline === "A");
+  const assert_mixed_array_parameter_reads_name = assert(() =>
+    mixedArray === "A"
+  );
+  const assert_mixed_literal_branch_keeps_name = assert(() =>
+    withLiteral === "A"
   );
   const assert_named_callback_on_filter_reads_name = assert(() =>
     filtered === "A"
@@ -102,6 +138,9 @@ export default pattern(() => {
       { assertion: assert_array_parameter_reads_name },
       { assertion: assert_conditional_copy_callback_reads_name },
       { assertion: assert_fallback_copy_callback_reads_name },
+      { assertion: assert_mixed_inline_callback_reads_name },
+      { assertion: assert_mixed_array_parameter_reads_name },
+      { assertion: assert_mixed_literal_branch_keeps_name },
       { assertion: assert_named_callback_on_filter_reads_name },
       { assertion: assert_reduce_element_reads_name },
       { assertion: assert_reduce_accumulator_reads_name },

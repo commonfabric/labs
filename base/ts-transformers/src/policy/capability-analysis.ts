@@ -2080,6 +2080,24 @@ function eitherBinding(
   return refsBinding(alternatives);
 }
 
+/**
+ * Returns the binding for an element that is one of `left`'s or one of
+ * `right`'s, either of which may be absent. Where one is a shape the two
+ * cannot be alternatives, and the element keeps the refs the other may be: a
+ * shape stands for an object literal put in the array, whose values leave
+ * whole where the literal is written, so a read through the element charges
+ * nothing they need.
+ */
+function eitherElementBinding(
+  left: AliasBinding | undefined,
+  right: AliasBinding | undefined,
+): AliasBinding | undefined {
+  if (!left) return right;
+  if (!right) return left;
+  return eitherBinding(left, right) ??
+    refsBinding([...bindingRefs(left), ...bindingRefs(right)]);
+}
+
 function aliasBindingEquals(
   left: AliasBinding,
   right: AliasBinding,
@@ -3237,10 +3255,10 @@ export function analyzeFunctionCapabilities(
       if (operands) {
         let binding: AliasBinding | undefined;
         for (const operand of operands) {
-          const next = resolveArrayElementBinding(operand);
-          if (!next) continue;
-          binding = binding ? eitherBinding(binding, next) : next;
-          if (!binding) return undefined;
+          binding = eitherElementBinding(
+            binding,
+            resolveArrayElementBinding(operand),
+          );
         }
         return binding;
       }
@@ -3262,16 +3280,16 @@ export function analyzeFunctionCapabilities(
 
       // An array literal's element is one of the values written in it, or
       // one of a spread source's elements. A value that resolves to nothing
-      // tracked adds no ref, and a shape among them leaves no binding.
+      // tracked adds no ref.
       if (ts.isArrayLiteralExpression(current)) {
         let binding: AliasBinding | undefined;
         for (const element of current.elements) {
-          const next = ts.isSpreadElement(element)
-            ? resolveArrayElementBinding(element.expression)
-            : buildAliasBindingFromExpression(element);
-          if (!next) continue;
-          binding = binding ? eitherBinding(binding, next) : next;
-          if (!binding) return undefined;
+          binding = eitherElementBinding(
+            binding,
+            ts.isSpreadElement(element)
+              ? resolveArrayElementBinding(element.expression)
+              : buildAliasBindingFromExpression(element),
+          );
         }
         return binding;
       }
@@ -3915,12 +3933,27 @@ export function analyzeFunctionCapabilities(
         }
         // The receiver itself, handed to the callback, binds what the
         // receiver binds: through it the callback reads the elements again.
+        // Only a receiver whose refs account for every element the callback
+        // is handed stands for the array; one that resolves to some of them
+        // leaves the rest read unseen.
         if (
           parameters.array !== undefined &&
           callbackArg.parameters[parameters.array]
         ) {
           const receiverBinding = resolveBinding(receiverExpr);
-          if (receiverBinding) {
+          const receiverElements = receiverBinding &&
+              !isAliasShape(receiverBinding)
+            ? mapBindingRefs(receiverBinding, (ref) => ({
+              root: ref.root,
+              path: ref.path,
+              dynamic: ref.dynamic,
+              arrayElement: true,
+            }))
+            : undefined;
+          if (
+            receiverBinding && receiverElements &&
+            aliasBindingEquals(receiverElements, itemBinding)
+          ) {
             paramBindings.set(parameters.array, receiverBinding);
           } else {
             elementsReadUnseen();
@@ -3980,9 +4013,10 @@ export function analyzeFunctionCapabilities(
 
     // Visits what resolving `expression` to a ref, in place of visiting it,
     // leaves unvisited though it is evaluated, walking down the member spine:
-    // the key of each element access, each operand of a fallback and each
-    // branch of a conditional wherever on the spine it sits, and the
-    // conditional's condition. A spine that passes through a call is walked
+    // the key of each element access, each operand a fallback, a conditional,
+    // `&&` or a comma forwards, wherever on the spine it sits, and what such a
+    // forwarder evaluates without forwarding — a conditional's condition, the
+    // left of `&&` or a comma. A spine that passes through a call is walked
     // whole, as the expression it belongs to would be, which visits the
     // call's arguments and callbacks:
     // `table.find((row) => equals(self, row.topic))` in
@@ -3999,14 +4033,17 @@ export function analyzeFunctionCapabilities(
       belowFallback = false,
     ): void => {
       const current = unwrapExpression(expression);
-      const operands = ts.isBinaryExpression(current) &&
-          FALLBACK_OPERATORS.has(current.operatorToken.kind)
-        ? [current.left, current.right]
-        : ts.isConditionalExpression(current)
-        ? [current.whenTrue, current.whenFalse]
-        : undefined;
+      const operands = forwardedOperands(current);
       if (operands) {
-        if (ts.isConditionalExpression(current)) visit(current.condition);
+        // What the forwarder evaluates without forwarding — a conditional's
+        // condition, the left of `&&` or a comma — is visited as written.
+        if (ts.isConditionalExpression(current)) {
+          visit(current.condition);
+        } else if (
+          ts.isBinaryExpression(current) && !operands.includes(current.left)
+        ) {
+          visit(current.left);
+        }
         for (const operand of operands) {
           if (resolveSourceRef(operand)) {
             visitOperandsOfResolvedRef(operand, true);
@@ -4406,18 +4443,19 @@ export function analyzeFunctionCapabilities(
             // stays in the schema rather than being shrunk out of it.
             !identityArgumentUses.has(node)
           ) {
-            const ref = resolveSourceRef(node);
-            if (ref) {
-              trackReadRef(ref);
-              // A member that leaves the analysis whole is read in full
-              // wherever it lands, exactly as an identifier is; the identifier
-              // handler above states the reason. A primitive has nothing
-              // below it to keep whole.
-              if (
-                !ref.dynamic && !isPrimitiveLikeExpression(node) &&
-                escapesWhole(node)
-              ) {
-                trackEscapeRef(ref);
+            // A member of a value that may be one of several refs is read
+            // through each of them.
+            const refs = resolveExactRefs(node);
+            if (refs.length > 0) {
+              const leavesWhole = !isPrimitiveLikeExpression(node) &&
+                escapesWhole(node);
+              for (const ref of refs) {
+                trackReadRef(ref);
+                // A member that leaves the analysis whole is read in full
+                // wherever it lands, exactly as an identifier is; the
+                // identifier handler above states the reason. A primitive has
+                // nothing below it to keep whole.
+                if (!ref.dynamic && leavesWhole) trackEscapeRef(ref);
               }
               // If this resolution went through a .get() call, record the
               // alias name so the identifier handler can skip redundant

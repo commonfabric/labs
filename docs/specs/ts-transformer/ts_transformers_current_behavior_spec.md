@@ -2447,8 +2447,10 @@ adjustments:
   first is the accumulator, and the first as well when either is given no
   initial value, which starts the accumulator at an element, and the first
   two for `sort` and `toSorted`. A receiver that is a fallback or a
-  conditional holds the elements of each operand it may yield. The
-  parameter the method hands the array itself to binds the receiver's own ref.
+  conditional holds the elements of each operand it may yield, and an array
+  literal of objects among them leaves the others' refs bound. The parameter
+  the method hands the array itself to binds the receiver's own ref where
+  that ref accounts for every element the callback is handed.
   Where the callback runs over the elements unseen — a function passed by
   name, a rest parameter, a function expression reading `arguments`, or an
   array parameter whose receiver resolves to no ref — each element is read
