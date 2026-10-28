@@ -98,6 +98,17 @@ the parent reads `{ "x": 5 }` while `key("x")` selects nothing. Leaving the
 keyed cell agnostic instead would read the property with no schema, dropping
 the constraints and labels the part declares on it.
 
+Under an `allOf` beside a declared `type` the disagreement runs the other
+way. Narrowing reads the keywords beside the conjunction and not its parts,
+so a key those keywords admit narrows to what they say about it, whatever a
+part declares. Over `{ "x": 5, "y": 1 }` under
+`{ "type": "object", "properties": { "y": { "type": "number" } }, "allOf": [{ "type": "object", "properties": { "x": { "type": "string" } } }] }`,
+`key("x")` carries the wildcard and reads `5`, which a read of the parent does
+not return, and the part's constraints and labels on `x` do not reach the
+keyed cell. Both cases close when narrowing reads a child out of each part of
+a conjunction; until then, a schema that has to hold for keyed reads states
+its constraints beside the `allOf` rather than only inside it.
+
 What the entry crossing compares against is the reader's own schema. An
 agnostic reader whose read passes through one link to reach a slot
 holding another adopts the second link's schema, which describes the
