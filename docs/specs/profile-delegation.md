@@ -578,6 +578,12 @@ part of this design.
   key is not the user's, and whether the owner-integrity labels on the
   profile's fields follow the same change. Neither is decided, and neither
   is needed until unlinkability from readers of the space is a requirement.
+  The inbox is the other place a profile reveals its identity: every
+  profile points at the one inbox Home holds, so two profiles that share
+  an inbox share an owner. Unlinkability gives each profile an inbox of
+  its own, reached through the profile's chain like any space it covers;
+  the host already resolves an inbox through the profile that points at
+  it, so the change is to stop reconciling them to one.
 - **A serving runtime keeps its full rights, and the server must stop
   reading "home" off self-ownership.** The serving runtime acts as the
   service identity, whose authority is deployment policy rather than
