@@ -71,11 +71,13 @@ none, one and two messages (RUN):
 | two       | 25              | 17           | 35                   | 7                 |
 
 The space-scoped count was the same on both: 17, 53 and 87. So a session of a
-room holds four more small documents of its own than on `main`, and about three
-more for each message row it renders, which `main` held once per user. A row
-derives what its reader may do to its message from `cannotWrite`, which is now
-per session, and the row's edit, delete and obliterate controls' displays from
-that.
+room holds four more small documents of its own than on `main` (RUN), and
+three more reachable from the rendering for each message row it renders, which
+`main` held once per user (RUN). A row derives what its reader may do to its
+message, its `rights`, from `cannotWrite`, which is now per session, and the
+row's edit, delete and obliterate controls' displays from that. The three are
+those displays. The rendering links no `rights`, so the probe does not count
+it, and the row's increase is likely four documents (INFERRED).
 
 ## What an updated room does
 
@@ -88,6 +90,17 @@ every check holds: Home and each room adopt the tree's source, nothing logs a
 refused transition, a dropped stored slot or a failed start, every stored slot
 reads back, and the updated room edits and reacts to a seeded message (RUN). A
 CFC denial listener added to a copy of the test recorded no denial (RUN).
+
+A copy of the test read the group room's `canSend`, `viewer`, `messageRights`
+and `canAdd` before and after the update, in both runs, with the link each
+resolves to (RUN). Before, each resolved to a document at the user scope;
+after, to a different document at the session scope, holding the value the
+updated room derives. The user-scoped document each had resolved to before
+still holds its last value, and the room's result no longer links to it: an
+updated room leaves one such document for each of these values, for each user
+who read it, which nothing reads or retires. Each holds a value the room
+derived from its records, the reader's access and their profile, and nothing a
+person wrote, so nothing is lost with it.
 
 ## What the gate reports
 
@@ -135,7 +148,11 @@ only its owner may read, can't add a reaction for them to tally.
 
 - 2026-10-28, @danfuzz: the room's `viewer`, `canSend`, `messageRights` and
   `canAdd` become per session (Q50-A).
-- 2026-10-28, under that ruling, by the agent coordinating the change for
+- 2026-10-28, under the first ruling, by the agent coordinating the change for
   @danfuzz: the output types declare the scope, with the break accepted here,
   rather than leaving the types unscoped over per-session values, which the
   gate would not have reported.
+- 2026-10-28, @danfuzz, once the per-row cost was measured: the rows'
+  values stay per session in this change, and a follow-up moves the rows'
+  display facts into one per-session record per room, keyed by message, and
+  measures the cost again (Q51-A).
