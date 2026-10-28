@@ -50,9 +50,10 @@ export abstract class BaseCodecAct<Encoded> {
   }
 
   /**
-   * Leaves the given value, its walk being finished. It has to be the value
+   * Leaves the given value, its walk having completed. It has to be the value
    * most recently entered, entering and leaving nesting strictly, which is
-   * what the subclass contract asks of an implementation.
+   * what the subclass contract asks of an implementation. A walk that throws
+   * leaves through {@link #abandon} instead.
    *
    * @throws If the value is not the one most recently entered.
    */
