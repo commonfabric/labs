@@ -140,6 +140,11 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
   ["ingest mint:gmail-id-token", "the same"],
   ["ingest mint:target", "a cell reference the caller chooses"],
   ["space invite create:ttl", "an admission lifetime in seconds"],
+  [
+    "delegation issue:to",
+    "a DID being delegated to; nothing here enumerates them",
+  ],
+  ["delegation issue:expires-in", "a delegation lifetime in seconds"],
   ["space invite create:max-uses", "a distinct identity count"],
   ["space invite create:shell", "a caller-selected shell origin"],
   [

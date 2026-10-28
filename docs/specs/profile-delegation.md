@@ -2,11 +2,11 @@
 
 ## Status
 
-Design, implemented through its third phase: the server verifies a chain, a
-runtime presents one, and a profile space is born owning itself with its
-delegation recorded in Home. The two phases after that, chains to other keys
-and caveats with revocation, are design only; "Phases" below says which is
-which. The document is written against the session authentication and
+Design, implemented through its fourth phase for the command line: the
+server verifies a chain, a runtime presents one, a profile space is born
+owning itself with its delegation recorded in Home, and `cf delegation`
+issues a chain to another key. The phase after that, caveats with
+revocation, is design only; "Phases" below says which is which. The document is written against the session authentication and
 access-list rules in
 [`memory-v2/04-protocol.md`](memory-v2/04-protocol.md) §4.5 and the profile
 creation path in [`shared-profile-space.md`](shared-profile-space.md), and is
@@ -272,10 +272,11 @@ does not:
 
 - **A device or agent key.** The core identity issues
   `{ iss: coreDID, aud: agentDID, sub: profileDID, cmd: "/memory", pol: [...] }`
-  and hands the agent both delegations. The agent opens the profile as its
-  own key with a chain of two. The agent's delegation can expire, can carry
-  caveats, and can be withheld from the next agent, none of which touches the
-  profile's access list.
+  and hands the agent both delegations, which `cf delegation issue` does
+  as a chain file. The agent opens the profile as its own key with a chain
+  of two. The agent's delegation can expire, can carry caveats, and can be
+  withheld from the next agent, none of which touches the profile's access
+  list.
 - **Any space, not only profiles.** Nothing in the chain rule is specific to
   profiles. An owner of any space can delegate to any key the same way, and
   the server verifies it the same way. A profile is the case where the owner
@@ -553,11 +554,21 @@ part of this design.
    delegation at startup. The server reads a self-owned space's declared
    kind before taking it for a home, and `sessionOpenProofs` is on by
    default.
-4. **Chains beyond the profile.** A `cf` command and a Home-space affordance
-   to issue a delegation from the core identity to another key; agent and
-   daemon identities use it.
-5. **Caveats and revocation.** Read-only caveats, expiry on issued
-   delegations, and per-delegation revocation.
+4. **Chains beyond the profile.** Implemented for the command line.
+   `cf delegation issue` issues a delegation over a space from the
+   identity to another key and writes the chain that key presents: the
+   delegation alone where the access list grants the identity, and behind
+   the delegation Home records where the identity holds the space through
+   one, as a profile's owner does. The chain travels as a file
+   (`delegation-chain-text.ts` in the identity package), `cf delegation
+   show` describes one, and `--delegations` or `CF_DELEGATIONS` names
+   the files whose chains a `cf` runtime holds when it connects. An issued
+   delegation can carry an expiry, which the server already holds a
+   session to. A Home-space affordance for the same, and a daemon that
+   holds a chain from elsewhere than a file, are left for the hosts that
+   need them.
+5. **Caveats and revocation.** Read-only caveats, and per-delegation
+   revocation.
 
 ## Open questions
 
@@ -622,6 +633,7 @@ part of this design.
 | Create a space that owns itself; sign the delegation before the key is dropped | `StorageManager.createSelfOwnedSpace` in `packages/runner/src/storage/v2.ts`; `inSpace(..., { selfOwned: true })` through `Runtime.createSpace` |
 | Record the delegation in the calling space, beside the allocation | `Runtime.resolveInSpaceNameSync`, under `delegationsCause` |
 | Hold Home's recorded delegations at startup | `Runtime.loadProfileDelegations`, called by the runtime-client worker and the `cf` CLI |
+| Issue a chain to another key; describe and hold chain files | `cf delegation` over `packages/cli/lib/delegation.ts`, the chain-file codec in `packages/identity/src/delegation-chain-text.ts`, and `loadPieces` holding the files `--delegations` names |
 | Present chains under emulation | the emulated session factory in `packages/runner/src/storage/v2-emulate.ts` |
 | Build the signed open with `prf` and proofs | `packages/runner/src/storage/v2-remote-session.ts`, `createSignedSessionOpenAuth` |
 | Keep the chain across reopens | `packages/memory/v2/client.ts`, the session's reopen descriptor |

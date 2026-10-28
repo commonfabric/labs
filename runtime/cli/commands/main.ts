@@ -10,6 +10,7 @@ import {
 import { acl } from "./acl.ts";
 import { agent } from "./agent.ts";
 import { completion } from "./completion.ts";
+import { delegation } from "./delegation.ts";
 import { deps } from "./deps.ts";
 import { check } from "./dev.ts";
 import { exec } from "./exec.ts";
@@ -128,6 +129,7 @@ export const main = new Command()
   // @ts-ignore for the above type issue
   .command("cell", cell)
   .command("check", check)
+  .command("delegation", delegation)
   .command("deps", deps)
   // @ts-ignore for the above type issue
   .command("inspect", inspect)

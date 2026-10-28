@@ -1556,6 +1556,19 @@ export function targetOptions(
   option("-a,--api-url <url:string>", "URL of the fabric server instance.");
   env("CF_IDENTITY=<path:string>", "Path to an identity keyfile.");
   option("-i,--identity <path:string>", "Path to an identity keyfile.");
+  // A chain file is what `cf delegation issue` writes for the identity: the
+  // delegations its sessions present to open a space another key owns.
+  env(
+    "CF_DELEGATIONS=<path:string>",
+    "Path to a delegation chain file the identity holds.",
+  );
+  const delegations = [
+    "--delegations <path:string>",
+    "Path to a delegation chain file the identity holds. Repeatable.",
+    { collect: true },
+  ] as const;
+  if (opts.global) cmd.globalOption(...delegations);
+  else cmd.option(...delegations);
   if (space) {
     env("CF_SPACE=<space:string>", "The space name or DID.");
     option("-s,--space <space:string>", "The space name or DID");
@@ -3153,6 +3166,12 @@ export interface PieceCLIOptions {
 
   apiUrl?: string;
   identity?: string;
+
+  /**
+   * Delegation chain files the identity holds: one path from
+   * `CF_DELEGATIONS`, or each `--delegations` written.
+   */
+  delegations?: string | string[];
   space?: string;
 
   /**
@@ -5384,6 +5403,13 @@ export function parseSpaceOptions(
     identity: absPath(input.identity),
   };
   if (input.json) output.jsonOutput = true;
+  if (input.delegations !== undefined) {
+    output.delegations = (typeof input.delegations === "string"
+      ? [input.delegations]
+      : input.delegations).map((path) =>
+        absPath(path)
+      );
+  }
 
   // The space the reference below is checked against: `--space`, or the space
   // a `--url` carries.

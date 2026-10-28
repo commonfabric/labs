@@ -4763,21 +4763,32 @@ export class Runtime {
       if (!isCell(link)) continue;
       const space = link.getAsNormalizedFullLink().space;
       if (space === home.space) continue;
-      const record = this.getCell(
-        home.space,
-        delegationsCause(space),
-        delegationRecordSchema,
-      );
-      await record.sync();
       // Each recorded delegation is one the space issued to this key, so
       // each is a chain of its own.
-      for (const delegation of record.get()?.delegations ?? []) {
-        if (!(delegation instanceof FabricBytes)) continue;
-        await this.storageManager.addDelegationChain([delegation.slice()]);
+      for (const delegation of await this.recordedDelegations(space)) {
+        await this.storageManager.addDelegationChain([delegation]);
         held += 1;
       }
     }
     return held;
+  }
+
+  /**
+   * The delegations the Home space records over `space`, as their bytes,
+   * oldest first: the one the space issued to this key when it was created
+   * to own itself, and any added beside it since. Empty for a space Home
+   * records none for. Each is a copy, the caller's to keep or change.
+   */
+  async recordedDelegations(space: MemorySpace): Promise<Uint8Array[]> {
+    const record = this.getCell(
+      this.getHomeSpaceCell().space,
+      delegationsCause(space),
+      delegationRecordSchema,
+    );
+    await record.sync();
+    return (record.get()?.delegations ?? []).flatMap((delegation) =>
+      delegation instanceof FabricBytes ? [delegation.slice()] : []
+    );
   }
 
   /**
