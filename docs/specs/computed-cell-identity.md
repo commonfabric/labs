@@ -284,10 +284,14 @@ these that applies:
    build the record describes. That build was made by the runtime that set the
    parent up, and the cause is one this runtime's build of the same pattern
    gives, so the record is held against this runtime's build
-   (`compareStoredSetupBuild`). An instance whose cell the record shows
-   holding state at another number, or whose description the record's cells
-   cannot be matched with, carries nothing over, and goes to step 5. With no
-   record, this runtime's build places the instance.
+   (`compareStoredSetupBuild`). Where it disagrees, a number this runtime's
+   builds give may name another child: the numbers of a cell holding state
+   the record shows at another number, and of every cell of a description
+   whose cells the record cannot be matched with, are ones it cannot vouch
+   for. An instance whose cell is at such a number goes to step 3, as does one
+   step 2 would place at such a spot, and step 4 is skipped for every
+   instance of the parent. With no record, this runtime's build places the
+   instance.
 2. Where that pattern is loaded and does not name the instance, which is new or
    positional there, the instance is matched by order. Counting the new
    pattern's positional nodes and such instances of one pattern identity in the
