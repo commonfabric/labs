@@ -229,11 +229,11 @@ recipient admission time.
 `saved` entries belong in the ordinary collection. `archived` entries belong in
 the archived collection with an explicit restore action. Both states retain the
 entry and leave the space's ACL unchanged. Access loss is an independent
-observation, not a membership change. So is a space's retirement
-([random space identities](../specs/random-space-identities.md#retiring-a-space)),
+observation, not a membership change. So is a space's deletion
+([random space identities](../specs/random-space-identities.md#deleting-a-space)),
 after which the space refuses every reader for good: it changes no entry in any
 catalog, and each entry naming the space keeps its state and revision.
-Retirement is not implemented yet. Stored states are extensible nonempty
+Deleting a space is not implemented yet. Stored states are extensible nonempty
 strings of at most 32 characters. Readers retain `left` and other unfamiliar
 states without listing them as saved or archived. This API can apply only saved
 and archived choices; an action on an entry in another state returns

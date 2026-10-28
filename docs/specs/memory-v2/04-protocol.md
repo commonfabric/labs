@@ -27,9 +27,9 @@ rewrite. In particular:
 - the server ACL policy gates session opens and commands when enabled
 - fresh spaces require a space-identity- or service-authorized ACL genesis
   transaction before ordinary writes
-- space retirement (section 4.5.1, INV-15) is specified and not yet
-  implemented: the server refuses a retirement record under INV-12's validity
-  clause, as it refuses any ACL document that is not an access list
+- deleting a space (section 4.5.1, INV-15) is specified and not yet
+  implemented: the server refuses the tombstone it writes under INV-12's
+  validity clause, as it refuses any ACL document that is not an access list
 - route-level `Origin` enforcement remains deferred
 - session resume remains keyed by caller-supplied `(space, sessionId)` rather
   than a server-issued, principal-bound identifier
@@ -808,10 +808,10 @@ interface ResponseMessage<Result> {
     permanentEvidence?: true;
     // Engine revision whose ACL state produced an authorization denial.
     aclRevision?: number;
-    // On an AuthorizationError, present and `true` when the space is retired
+    // On an AuthorizationError, present and `true` when the space is deleted
     // (section 4.5.1): every principal is refused it for good. An older client
     // ignores the marker and reads the denial as permanent, which it is.
-    retired?: true;
+    deleted?: true;
   };
 }
 
@@ -1758,50 +1758,51 @@ the space ACL document (wire entity id `of:<space DID>`) for every command:
 | never-created ACL, server sequence 0 | Authenticated READ only, except that the space DID itself holds OWNER; the first write must be a valid ACL-only genesis by the space identity or a service DID |
 | never-created ACL, server sequence greater than 0 | Temporary pre-launch compatibility: authenticated READ and WRITE, never OWNER |
 | malformed, ownerless, or retracted ACL | No ordinary access (fail closed) |
-| retirement record | No access for any principal, service DIDs included, for good |
+| a deleted space's tombstone | No access for any principal, service DIDs included, for good |
 
 Configured service DIDs hold implicit OWNER on every space, so they can
-initialize or repair ACL state, except a retired space's. The exact space DID
+initialize or repair ACL state, except a deleted space's. The exact space DID
 holds OWNER only while the space has no ACL document and no history, which is
 what genesis needs and all it needs; after that it holds what the ACL grants it,
 like any other principal. A space DID therefore cannot repair a malformed or
 retracted ACL, and cannot claim a populated space that has none. A valid ACL
 mutation is a whole-document, space-scoped replacement on the default branch and
-must retain at least one concrete (non-`"*"`) OWNER, unless it retires the
-space, as below. Patch, deletion, mixed ACL/data commits, and last-owner removal
-are rejected. These shape and genesis rules are hard storage invariants in both
-`observe` and `enforce`; `observe` relaxes only READ and WRITE shortfalls on an
-already valid ACL, and refuses a principal lacking OWNER, so no principal can
-write a space's ACL while a deployment stages its access control. The one ACL
-mutation a principal without OWNER may make, in both modes, is removing its own
-entry: a replacement whose document is the stored one less that principal's
-entry, and nothing else, from a list with no `"*"` entry.
+must retain at least one concrete (non-`"*"`) OWNER, unless it deletes the
+space, as below. A patch, a document `delete`, a mixed ACL/data commit, and
+last-owner removal are rejected. These shape and genesis rules are hard storage
+invariants in both `observe` and `enforce`; `observe` relaxes only READ and
+WRITE shortfalls on an already valid ACL, and refuses a principal lacking OWNER,
+so no principal can write a space's ACL while a deployment stages its access
+control. The one ACL mutation a principal without OWNER may make, in both modes,
+is removing its own entry: a replacement whose document is the stored one less
+that principal's entry, and nothing else, from a list with no `"*"` entry.
 
-A space's sole member retires it, which ends it for everyone and for good. The
-retirement commit is an ACL-only commit, shaped as any other, whose document is
-a retirement record rather than an access list:
+A space's sole member deletes it, which ends it for everyone and for good.
+Deleting a space writes its ACL document and never removes it: the deletion
+commit is an ACL-only commit, shaped as any other, whose document is a
+tombstone rather than an access list:
 
 ```json
-{ "retired": { "by": "did:key:z6Mk..." } }
+{ "deleted": { "by": "did:key:z6Mk..." } }
 ```
 
-`by` names the committing principal, and the record holds nothing else. The
+`by` names the committing principal, and the tombstone holds nothing else. The
 server admits it only when the stored ACL is valid and its one entry is that
 principal at OWNER, so another member has to be removed, visibly and through
-the ordinary check, before the space can be retired. That asks no authority an
-OWNER does not already hold. A principal never retires its own Home space,
-whose DID is the principal's own identity. From the retirement commit on, the
+the ordinary check, before the space can be deleted. That asks no authority an
+OWNER does not already hold. A principal never deletes its own Home space,
+whose DID is the principal's own identity. From the deletion commit on, the
 server refuses every command any principal sends the space, a service DID's
-included, with a permanent `AuthorizationError` carrying `retired: true`,
+included, with a permanent `AuthorizationError` carrying `deleted: true`,
 revokes the sessions open on it as it revokes those any ACL commit
 deauthorizes, and admits no further commit to it, so no principal can undo the
-retirement. A retirement record is not an access list, so a server rolled
-back to a release that does not know the record finds the ACL malformed, and
-refuses the space to every principal but a service DID.
+deletion. A tombstone is not an access list, so a server rolled back to a
+release that does not know tombstones finds the ACL malformed, and refuses the
+space to every principal but a service DID.
 
 The shape and genesis rules are catalogued as **INV-12** (ACL mutation commit
-shape) and **INV-13** (ACL genesis precedence and authority), and retirement as
-**INV-15** (space retirement), in
+shape) and **INV-13** (ACL genesis precedence and authority), and deleting a
+space as **INV-15** (space deletion), in
 [`09-invariants.md`](09-invariants.md#inv-12--acl-mutation-commit-shape) —
 go there for the exact admission predicate, what each rejection message means,
 and what is and is not known about why the whole-document rule exists. A client
