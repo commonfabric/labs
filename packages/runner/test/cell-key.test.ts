@@ -123,11 +123,20 @@ describe("Cell", () => {
           expect(cell.key("x", "y").get()).toBeUndefined();
         });
 
-        it("keeps `false` for a key under a conjunction declaring no type, which a read of the parent keeps", () => {
-          // Narrowing does not read a child out of an `allOf`, so the keyed
-          // cell selects nothing, while a read of the parent evaluates the
-          // conjunction whole and reaches the property.
+        it("keeps `false` for a path below a scalar", () => {
+          const cell = cellHolding(
+            "below a scalar",
+            { type: "object", properties: { n: { type: "number" } } },
+            { n: { inner: 5 } },
+          );
 
+          expect(linkSchemaOf(cell.key("n", "inner"))).toBe(false);
+          expect(cell.key("n", "inner").get()).toBeUndefined();
+        });
+      });
+
+      describe("under a conjunction", () => {
+        it("narrows a key under a conjunction declaring no type to the child a part declares, as a read of the parent reaches it", () => {
           const cell = cellHolding(
             "typeless conjunction",
             {
@@ -140,19 +149,30 @@ describe("Cell", () => {
           );
 
           expect(cell.get()).toEqual({ x: 5 });
-          expect(linkSchemaOf(cell.key("x"))).toBe(false);
-          expect(cell.key("x").get()).toBeUndefined();
+          expect(linkSchemaOf(cell.key("x"))).toEqual({ type: "number" });
+          expect(cell.key("x").get()).toBe(5);
         });
 
-        it("keeps `false` for a path below a scalar", () => {
+        it("narrows a key under a typed object to what its conjunction parts declare, as a read of the parent does", () => {
+          // A part typing the key `string` holds a number there, so a read of
+          // the parent drops it, and the keyed cell reads nothing either.
+
           const cell = cellHolding(
-            "below a scalar",
-            { type: "object", properties: { n: { type: "number" } } },
-            { n: { inner: 5 } },
+            "typed conjunction",
+            {
+              type: "object",
+              properties: { y: { type: "number" } },
+              allOf: [{
+                type: "object",
+                properties: { x: { type: "string" } },
+              }],
+            },
+            { x: 5, y: 1 },
           );
 
-          expect(linkSchemaOf(cell.key("n", "inner"))).toBe(false);
-          expect(cell.key("n", "inner").get()).toBeUndefined();
+          expect(cell.get()).not.toHaveProperty("x");
+          expect(linkSchemaOf(cell.key("x"))).toEqual({ type: "string" });
+          expect(cell.key("x").get()).toBeUndefined();
         });
       });
 

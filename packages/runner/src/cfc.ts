@@ -4,7 +4,10 @@ import {
   type JSONValue,
 } from "@commonfabric/api";
 import { isDeepFrozen } from "@commonfabric/data-model";
-import { internSchema } from "@commonfabric/data-model-schema";
+import {
+  internSchema,
+  schemaWithProperties,
+} from "@commonfabric/data-model-schema";
 import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
 import {
   isExternalSchemaRef,
@@ -99,16 +102,29 @@ interface RootedSchemaVisit {
   parent?: RootedSchemaVisit;
 }
 
-/** What a union narrows to, with the definitions it is selected against. */
-interface NarrowedUnion {
-  /** The union of what the arms narrow to. */
+/**
+ * What a union or a conjunction narrows to, with the definitions it is
+ * selected against.
+ */
+interface NarrowedBranches {
+  /**
+   * The union of what the arms narrow to, or the conjunction of what the
+   * parts do.
+   */
   readonly schema: JSONSchema;
 
   /**
-   * The definition map in effect for `schema`: the arms' maps merged, or the
-   * union's own map where no arm carries one.
+   * The definition map in effect for `schema`: the branches' maps merged, or
+   * the list's own map where no branch carries one.
    */
   readonly defs: Record<string, JSONSchema> | undefined;
+
+  /**
+   * Confidentiality atoms of the conjuncts that declare no child at the
+   * segment, which still label the value they describe and so every child of
+   * it.
+   */
+  readonly labels?: readonly IFCAtom[];
 }
 
 const rootedSchemaVisitIsActive = (
@@ -145,6 +161,12 @@ const buildSymbolicSchemaAtPathClassifier = (
         nextFullSchema,
         nextActive,
       );
+    }
+    // A conjunction narrows a key through every part, so two keys its own
+    // keywords classify alike can still narrow apart; it takes the exact-path
+    // key.
+    if (Array.isArray(schema.allOf) && schema.allOf.length > 0) {
+      return undefined;
     }
     if (Array.isArray(schema.type)) {
       const { type: _types, ...base } = schema;
@@ -346,6 +368,86 @@ function enumeratedTypes(
   }
   return types;
 }
+
+/** The kinds of value that hold children. */
+type ContainerKind = "object" | "array";
+
+const CONTAINER_KINDS: readonly ContainerKind[] = ["object", "array"];
+
+/**
+ * The container kinds `schema` admits, read off the type it declares or the
+ * types its `enum` or `const` members take, as narrowing reads them;
+ * `undefined` where it admits every kind, declaring no type or `unknown`.
+ */
+function admittedContainerKinds(
+  schema: JSONSchema,
+): readonly ContainerKind[] | undefined {
+  if (!isObjectOrArray(schema)) return undefined;
+  const types = schema.type === undefined
+    ? enumeratedTypes(schema)
+    : Array.isArray(schema.type)
+    ? schema.type
+    : [schema.type];
+  if (types === undefined || types.includes("unknown")) return undefined;
+  return CONTAINER_KINDS.filter((kind) => types.includes(kind));
+}
+
+/**
+ * `schema` read as a conjunct of a value that is one of `kinds`: a schema
+ * declaring no type takes the one kind left, and a type list loses the
+ * container kind the other conjuncts exclude. Without that, a part such as
+ * `{ minItems: 1 }` beside `{ type: "array" }` would be read as an object
+ * too, and admit a key the conjunction cannot hold.
+ */
+function settledToContainerKinds(
+  schema: JSONSchema,
+  kinds: readonly ContainerKind[],
+): JSONSchema {
+  if (kinds.length !== 1 || !isObjectOrArray(schema)) return schema;
+  if (Array.isArray(schema.type)) {
+    const excluded = kinds[0] === "object" ? "array" : "object";
+    return schema.type.includes(excluded)
+      ? { ...schema, type: schema.type.filter((type) => type !== excluded) }
+      : schema;
+  }
+  return ContextualFlowControl.settledForContainer(schema, kinds[0]);
+}
+
+/**
+ * Whether `narrowed` is the object `fallback` a narrowing hands back for a
+ * key the schema leaves out, the labels it joined on the way aside.
+ */
+function isFallbackReading(
+  narrowed: JSONSchema,
+  fallback: JSONSchema,
+): boolean {
+  if (!isObjectOrArray(narrowed) || !isObjectOrArray(fallback)) return false;
+  const keys = Object.keys(fallback).filter((key) => key !== "ifc");
+  return Object.keys(narrowed).filter((key) => key !== "ifc").length ===
+      keys.length &&
+    keys.every((key) =>
+      Object.hasOwn(narrowed, key) &&
+      (narrowed as Record<string, unknown>)[key] ===
+        (fallback as Record<string, unknown>)[key]
+    );
+}
+
+/**
+ * Whether `narrowed` admits every value and says nothing besides the labels
+ * it carries: `true`, or the empty object a narrowing attaches labels to.
+ */
+const admitsAnythingUnmarked = (narrowed: JSONSchema): boolean =>
+  narrowed === true ||
+  (isObjectOrArray(narrowed) &&
+    Object.keys(narrowed).every((key) => key === "ifc"));
+
+/**
+ * One string naming the segments of `path`, each length-prefixed so that a
+ * segment containing the separator cannot collide with a differently-split
+ * path.
+ */
+const segmentsKey = (path: readonly string[]): string =>
+  path.map((part) => `|${part.length}:${part}`).join("");
 
 /**
  * The empty schema `getSchemaAtPath()` returns in place of `true`, one
@@ -684,7 +786,7 @@ export class ContextualFlowControl {
     extraConfidentiality: Set<unknown> | undefined,
     defaultEmptyProperties: JSONSchema,
     defaultMissingProperty: JSONSchema,
-    walk?: BranchListWalk<NarrowedUnion>,
+    walk?: BranchListWalk<NarrowedBranches>,
   ): JSONSchema {
     const joined = (extraConfidentiality !== undefined)
       ? new Set<unknown>(extraConfidentiality)
@@ -729,18 +831,50 @@ export class ContextualFlowControl {
           });
         }
       }
+      // A conjunction narrows this segment part by part, whatever type sits
+      // beside it, and the loop goes on from the conjunction of the children
+      // the parts declare. Only a reference can bring the cursor back to the
+      // same parts without consuming the segment, so the result is reused
+      // keyed by the parts, the keywords beside them, the definitions they
+      // resolve against and the segment. An `allOf` holding no parts is
+      // passed over, as traversal passes over it.
+      if (
+        isObjectOrArray(cursor) && Array.isArray(cursor.allOf) &&
+        cursor.allOf.length > 0
+      ) {
+        walk ??= new BranchListWalk<NarrowedBranches>();
+        const conjunctionWalk = walk;
+        const { allOf, $defs: _defs, ...rest } = cursor;
+        const beside = internSchema(rest) as JSONSchemaObj;
+        const conjunctionDefs = defs;
+        const narrowed = conjunctionWalk.expand(
+          [allOf, conjunctionDefs, "allOf", beside, part],
+          () =>
+            ContextualFlowControl.#narrowConjunction(
+              allOf,
+              beside,
+              part,
+              conjunctionDefs,
+              defaultEmptyProperties,
+              defaultMissingProperty,
+              conjunctionWalk,
+            ),
+        );
+        if (narrowed === REACHED_AGAIN) return false;
+        cursor = narrowed.schema;
+        defs = narrowed.defs;
+        ContextualFlowControl.addIfcAtoms(joined, narrowed.labels);
+        continue;
+      }
       // A cursor declaring no `type` admits every type, and which of its
       // keywords apply is settled only by a value — `properties` and
       // `additionalProperties` by an object, `prefixItems` and `items` by an
       // array. Narrowing without one can say only what both readings admit,
       // so such a cursor is read as the union of its object and array
-      // readings. A caller holding the value settles the type first. A
-      // conjunction is left out: this narrowing does not read a child out of
-      // `allOf` parts, and a reading that ignored them would admit a property
-      // a part constrains as anything, its schema and labels dropped.
+      // readings. A caller holding the value settles the type first.
       const typeless = isObjectOrArray(cursor) && cursor.type === undefined &&
         !("anyOf" in cursor) && !("oneOf" in cursor) &&
-        !("allOf" in cursor) && !ContextualFlowControl.isTrueSchema(cursor);
+        !ContextualFlowControl.isTrueSchema(cursor);
       if (
         isObjectOrArray(cursor) &&
         (Array.isArray(cursor.type) || "anyOf" in cursor || "oneOf" in cursor ||
@@ -751,7 +885,7 @@ export class ContextualFlowControl {
         // compound can recur here without consuming a path segment, so only
         // a compound's result is reused, keyed by its branch lists, the
         // definitions they resolve against, and the path segments left.
-        walk ??= new BranchListWalk<NarrowedUnion>();
+        walk ??= new BranchListWalk<NarrowedBranches>();
         const unionWalk = walk;
         const unionObject = cursor;
         const unionDefs = defs;
@@ -773,7 +907,7 @@ export class ContextualFlowControl {
           branches,
           unionDefs,
           unionObject.oneOf,
-          path.length - index,
+          segmentsKey(path.slice(index)),
         ];
         const narrowed = branches === undefined
           ? narrowUnion()
@@ -883,8 +1017,8 @@ export class ContextualFlowControl {
     extraConfidentiality: Set<unknown> | undefined,
     defaultEmptyProperties: JSONSchema,
     defaultMissingProperty: JSONSchema,
-    walk: BranchListWalk<NarrowedUnion>,
-  ): NarrowedUnion {
+    walk: BranchListWalk<NarrowedBranches>,
+  ): NarrowedBranches {
     const options = typeless
       ? [{ ...cursor, type: "object" as const }, {
         ...cursor,
@@ -934,6 +1068,140 @@ export class ContextualFlowControl {
         ? subSchemaArr[0]
         : { anyOf: subSchemaArr },
       defs: definitions ?? defs,
+    };
+  }
+
+  /**
+   * Helper for `#schemaAtPathInternal()`, which narrows the conjunction of
+   * the `allOf` parts and the keywords `beside` them by the one path segment
+   * `segment`.
+   *
+   * Each part is read with the keywords beside it merged in, as traversal
+   * reads it, and those keywords are also read on their own, so a part's
+   * `properties` does not hide a property declared beside it. A conjunct
+   * that declares a child at the segment contributes it, and the result is
+   * the conjunction of those children. One that leaves the key out (the
+   * missing-property and empty-properties defaults), admits it as anything,
+   * or refuses it declares nothing there and drops out, though its labels
+   * stay: the conjunction describes one value, so a label any conjunct puts
+   * on that value labels its children too. With no child declared, a part
+   * admitting the key as anything makes the result `true`, else a part
+   * leaving it out makes it that default, else it is `false`.
+   *
+   * A `false` conjunct makes the result `false`, and so do conjuncts whose
+   * declared types share no container kind, since no value the conjunction
+   * admits holds a child.
+   */
+  static #narrowConjunction(
+    allOf: readonly JSONSchema[],
+    beside: JSONSchemaObj,
+    segment: string,
+    defs: Record<string, JSONSchema> | undefined,
+    defaultEmptyProperties: JSONSchema,
+    defaultMissingProperty: JSONSchema,
+    walk: BranchListWalk<NarrowedBranches>,
+  ): NarrowedBranches {
+    // A conjunct sits in the conjunction's document, so its refs resolve
+    // against the map in effect. The kinds a conjunct admits are read off the
+    // level a reference resolves to, which is why one is resolved here
+    // rather than at the start of its own narrowing.
+    const document = cfcSchemaDocumentOf(defs);
+    const conjuncts = [
+      beside,
+      ...allOf.map((part) => schemaWithProperties(beside, part)),
+    ].map((conjunct) => {
+      if (!isObjectOrArray(conjunct) || !("$ref" in conjunct)) {
+        return { schema: conjunct, defs };
+      }
+      const resolved = ContextualFlowControl.resolveSchemaRefsOrThrow(
+        conjunct,
+        document,
+      );
+      return {
+        schema: resolved,
+        defs: isObjectOrArray(resolved) ? resolved.$defs : undefined,
+      };
+    });
+    if (
+      conjuncts.some(({ schema }) =>
+        ContextualFlowControl.isFalseSchema(schema)
+      )
+    ) {
+      return { schema: false, defs };
+    }
+    let kinds: readonly ContainerKind[] | undefined;
+    for (const { schema } of conjuncts) {
+      const admitted = admittedContainerKinds(schema);
+      if (admitted === undefined) continue;
+      kinds = kinds === undefined
+        ? admitted
+        : kinds.filter((kind) => admitted.includes(kind));
+    }
+    if (kinds !== undefined && kinds.length === 0) {
+      return { schema: false, defs };
+    }
+
+    const labels = new Set<unknown>();
+    const children: JSONSchema[] = [];
+    let admitsAnything = false;
+    let leftOut: JSONSchema | undefined;
+    conjuncts.forEach((conjunct, index) => {
+      // The keywords beside the parts reach each part already, so on their
+      // own they contribute only a child a part's keywords hid.
+      const isPart = index > 0;
+      const narrowed = ContextualFlowControl.#schemaAtPathInternal(
+        kinds === undefined
+          ? conjunct.schema
+          : settledToContainerKinds(conjunct.schema, kinds),
+        [segment],
+        conjunct.defs,
+        undefined,
+        defaultEmptyProperties,
+        defaultMissingProperty,
+        walk,
+      );
+      if (narrowed === false) {
+        // A refusal carries no labels, so the conjunct's own are read off it.
+        if (isObjectOrArray(conjunct.schema)) {
+          ContextualFlowControl.addIfcAtoms(
+            labels,
+            conjunct.schema.ifc?.confidentiality,
+          );
+        }
+        return;
+      }
+      const leavesOut = isFallbackReading(narrowed, defaultMissingProperty) ||
+        isFallbackReading(narrowed, defaultEmptyProperties);
+      if (!leavesOut && !admitsAnythingUnmarked(narrowed)) {
+        children.push(narrowed);
+        return;
+      }
+      if (isObjectOrArray(narrowed)) {
+        ContextualFlowControl.addIfcAtoms(
+          labels,
+          narrowed.ifc?.confidentiality,
+        );
+      }
+      if (!isPart) return;
+      if (leavesOut) leftOut ??= narrowed;
+      else admitsAnything = true;
+    });
+
+    // Each child came back as a document of its own, as a union's arms do,
+    // and the conjunction of them is one document.
+    const { fragments, definitions } = hoistCfcSchemaDefs(children);
+    const unique = [...new Set(fragments.map((child) => internSchema(child)))];
+    return {
+      schema: unique.length > 1
+        ? { allOf: unique }
+        : unique.length === 1
+        ? unique[0]
+        : admitsAnything
+        ? true
+        : leftOut ?? false,
+      defs: definitions ?? defs,
+      ...(labels.size !== 0 &&
+        { labels: ContextualFlowControl.lub(labels) }),
     };
   }
 
