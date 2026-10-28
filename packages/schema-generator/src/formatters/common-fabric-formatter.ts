@@ -88,6 +88,7 @@ import {
 import {
   EVIDENCE_LABELS,
   joinPlacedIfcLabels,
+  placementShape,
   POLICY_READ_IN_PART,
   referenceChain,
   withIfcLabels,
@@ -905,19 +906,6 @@ const placeLabelsOn = (
   }
   return { ...(schema as MutableJSONSchemaObj), properties: labeled };
 };
-
-/**
- * A schema of `schema`'s shape as `placeLabelsOn()` reads it, and nothing
- * else: each of its members, accepting anything, where it has any.
- */
-const placementShape = (schema: MutableJSONSchema): MutableJSONSchema =>
-  isObjectNotArray(schema) && isObjectOrArray(schema.properties)
-    ? {
-      properties: Object.fromEntries(
-        Object.keys(schema.properties).map((name) => [name, {}]),
-      ),
-    }
-    : {};
 
 /**
  * `schema`, the schema of a value of `type`, with each of `placed`'s labels

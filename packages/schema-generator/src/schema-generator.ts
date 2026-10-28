@@ -107,7 +107,9 @@ import {
   declaredIfcLabels,
   holdsIfcLabels,
   joinMemberIfcLabels,
+  joinPlacedIfcLabels,
   labeledValueMember,
+  placementShape,
   restrictionsAndEvidence,
   settlePoliciesReadInPart,
   stateReferencedIfcLabels,
@@ -350,54 +352,46 @@ function unionArms(
 }
 
 /**
- * The labels of the value `schema` denotes, which may be any arm of it
- * (`unionArms()`): those declared along each reference chain on the way to an
- * arm (`declaredIfcLabels()`), a union's joined with those of its arms
- * (`joinMemberIfcLabels()`). A union is labeled by every label it and its
- * arms declare read in full (`holdsUnreadArmLabel()`), or not at all, as a
- * union read by type is: a label read in part could claim what its author
- * never wrote together, and a join leaves out what an unread one held. A
- * union with an arm that is a bare `unknown` (`isBareUnknown()`) is that
- * `unknown`, as the checker reduces `unknown | X`, so it has only its own
- * labels.
+ * `picked`, the view `Pick` or `Omit` builds of `operand`, with the labels of
+ * whichever arm of `operand` the value is (`labeledArms()`): the arm's own,
+ * and those of the unions it is an arm of, placed on the view as far as they
+ * reach (`withPartLabels()`), as the type path places a member's
+ * (`placeCarriedLabels()`). Several arms' labels are each placed so on the
+ * view's shape alone, then joined where they land (`joinPlacedIfcLabels()`).
+ * A union is labeled by every label it and its arms declare read in full
+ * (`holdsUnreadArmLabel()`), or not at all, as a union read by type is: a
+ * label read in part could claim what its author never wrote together, and a
+ * join leaves out what an unread one held. An arm that is `unknown` is one
+ * with no labels and no members, as `keyof unknown` is `never`.
  */
-function armLabels(
-  schema: MutableJSONSchema,
+function withArmLabels(
+  picked: MutableJSONSchema,
+  operand: MutableJSONSchema,
   context: GenerationContext,
-): Record<string, unknown> | undefined {
-  const labels = declaredIfcLabels(schema, context.definitions);
-  const resolved = resolveLocalRef(schema, context);
-  if (!isObjectOrArray(resolved) || !Array.isArray(resolved.anyOf)) {
-    return labels;
-  }
-  const arms = resolved.anyOf as MutableJSONSchema[];
-  if (arms.some((arm) => isBareUnknown(arm, context))) return labels;
-  if (holdsUnreadArmLabel(schema, context)) return undefined;
-  return joinMemberIfcLabels(
-    labels ?? {},
-    arms.map((arm) => armLabels(arm, context) ?? {}),
+): MutableJSONSchema {
+  const arms = labeledArms(operand, context);
+  const value = valueMembersOf([picked], context);
+  const place = (schema: MutableJSONSchema, arm: LabeledArm) =>
+    withPartLabels(
+      schema,
+      [
+        ...arm.labels,
+        ...(isObjectOrArray(arm.schema)
+          ? partLabelsOf([arm.schema as MutableJSONSchemaObj], context)
+          : []),
+      ],
+      value,
+      context,
+    );
+  const [only, ...others] = arms;
+  if (only && others.length === 0) return place(picked, only);
+  if (holdsUnreadArmLabel(operand, context)) return picked;
+  const shape = placementShape(picked);
+  return withOriginOf(
+    joinPlacedIfcLabels(picked, arms.map((arm) => place(shape, arm))),
+    picked,
+    context,
   );
-}
-
-/**
- * Whether `schema` is a bare `unknown`, which no label declared on the way
- * to it makes a carrier (`declaredIfcLabels()`), or a union with an arm that
- * is one, which the checker reduces to it.
- */
-function isBareUnknown(
-  schema: MutableJSONSchema,
-  context: GenerationContext,
-): boolean {
-  if (declaredIfcLabels(schema, context.definitions) !== undefined) {
-    return false;
-  }
-  const resolved = resolveLocalRef(schema, context);
-  if (!isObjectOrArray(resolved)) return false;
-  return Array.isArray(resolved.anyOf)
-    ? (resolved.anyOf as MutableJSONSchema[]).some((arm) =>
-      isBareUnknown(arm, context)
-    )
-    : resolved.type === "unknown";
 }
 
 /**
@@ -1070,6 +1064,7 @@ function armsOfUnion(
       labels: restrictions,
       members: unionMembersOf(arms, context),
       reach: "may",
+      confined: arms.every((arm) => confinesData(arm, context)),
     }]
     : [];
   return arms.flatMap((arm) =>
@@ -1090,6 +1085,21 @@ function armsOfUnion(
       ],
     }))
   );
+}
+
+/**
+ * Whether `schema`, read as `withBesideKeywords()` reads it, holds its data
+ * under the members it declares alone: it declares some, and is no array and
+ * has no index signature, whose data no member names (`declaredMembersOf()`,
+ * `holdsItems()`, `unnamedKeysOf()`).
+ */
+function confinesData(
+  schema: MutableJSONSchema,
+  context: GenerationContext,
+): boolean {
+  return declaredMembersOf(schema, context).length > 0 &&
+    !holdsItems(schema, context) &&
+    unnamedKeysOf(schema, context) === undefined;
 }
 
 /** The members any of `arms` declares (`declaredMembersOf()`). */
@@ -1258,11 +1268,12 @@ function withoutLabels(
  * Labels a part of an intersection states, the members of the part's value
  * they were written around, whether that value is an array (`items`), the
  * keys under which it establishes data no member names (`unnamed`,
- * `establishedUnnamedKeysOf()`), and how far into the merged value they
- * reach, as the type path places a CFC
- * carrier's labels on its payload (`placeCarriedLabels()`). A restriction
- * reaches wherever the part's data may be (`"may"`): the members it was
- * written around, or the whole value where those are none. Evidence
+ * `establishedUnnamedKeysOf()`), whether its data is under the members it
+ * declares alone (`confined`), and how far into the merged value they reach,
+ * as the type path places a CFC carrier's labels on its payload
+ * (`placeCarriedLabels()`). A restriction reaches wherever the part's data
+ * may be (`"may"`): the members it was written around, or the whole value
+ * where those are none. Evidence
  * (`EVIDENCE_LABELS`) reaches only where the part's data must be (`"must"`):
  * the whole value where the part holds all of its data (`ValueMembers`), and
  * otherwise the members it was written around, as data the value holds
@@ -1274,6 +1285,7 @@ type PartLabels = {
   readonly reach: "may" | "must";
   readonly items?: boolean;
   readonly unnamed?: IndexKeys | undefined;
+  readonly confined?: boolean;
 };
 
 /**
@@ -1290,7 +1302,12 @@ function partLabelsOf(
     const { restrictions, evidence } = restrictionsAndEvidence(part.ifc);
     return [
       ...(restrictions
-        ? [{ labels: restrictions, members, reach: "may" as const }]
+        ? [{
+          labels: restrictions,
+          members,
+          reach: "may" as const,
+          confined: confinesData(part, context),
+        }]
         : []),
       ...(evidence
         ? [{
@@ -1311,8 +1328,11 @@ function partLabelsOf(
  * written around, each alone, where they are some but not all of the value's
  * members, and otherwise on the whole value, except evidence, which goes on
  * the whole value only where its part holds all of the value's data, and
- * nowhere where it reaches no member the value has. A value accepting
- * nothing needs none.
+ * nowhere where it reaches no member the value has. A label written around
+ * members the value does not have, as `Pick` and `Omit` leave members out,
+ * goes nowhere where its part's data is under those members alone
+ * (`PartLabels.confined`), and evidence goes nowhere in any case. A value
+ * accepting nothing needs none.
  */
 function withPartLabels(
   schema: MutableJSONSchema,
@@ -1322,7 +1342,9 @@ function withPartLabels(
 ): MutableJSONSchema {
   if (schema === false || placed.length === 0) return schema;
   let result: MutableJSONSchema = schema;
-  for (const { labels, members, reach, items, unnamed } of placed) {
+  for (
+    const { labels, members, reach, items, unnamed, confined } of placed
+  ) {
     const properties: Record<string, MutableJSONSchema> | undefined =
       isObjectSchema(result) && isObjectOrArray(result.properties)
         ? result.properties as Record<string, MutableJSONSchema>
@@ -1337,6 +1359,12 @@ function withPartLabels(
       (!value.items || items === true) &&
       (!value.unnamed || unnamed === "string" || unnamed === value.unnamed);
     if (reach === "must" && !holdsAll && reached.length === 0) continue;
+    if (
+      properties && members.length > 0 && reached.length === 0 &&
+      (reach === "must" || confined === true)
+    ) {
+      continue;
+    }
     if (
       properties && reached.length > 0 &&
       (reach === "must" ? !holdsAll : reached.length < count)
@@ -1567,12 +1595,13 @@ function mergeParts(
   const key = `merge|${
     hashStringOf([
       parts.map((part) => withOriginsNumbered(part, context)),
-      carried.map(({ labels, members, reach, items, unnamed }) => [
+      carried.map(({ labels, members, reach, items, unnamed, confined }) => [
         labels,
         members,
         reach,
         items === true,
         unnamed ?? null,
+        confined === true,
       ]),
     ] as FabricValue)
   }`;
@@ -5189,19 +5218,15 @@ export class SchemaGenerator {
         const keys = literalKeys(second, context);
         if (keys === undefined) return undefined;
         // The picked members are those of whichever arm the labeled value
-        // is, so it keeps the labels of every arm, joined.
+        // is, so they have the labels that arm puts on them, joined over the
+        // arms the value may be.
         const operand = analyze(first, instantiatedAs);
-        const labels = armLabels(operand, context);
-        const { ifc, ...payload } = isObjectOrArray(operand) &&
-            !Array.isArray(operand)
-          ? operand as Record<string, unknown>
-          : { ifc: undefined };
         const picked = pickedView(
-          ifc === undefined ? operand : payload as MutableJSONSchema,
+          withoutLabels(operand, context),
           context,
           name === "Pick" ? { pick: keys } : { omit: keys },
         );
-        return picked && labels ? withIfcLabels(picked, labels) : picked;
+        return picked && withArmLabels(picked, operand, context);
       }
       case "Record": {
         if (second === undefined) return undefined;

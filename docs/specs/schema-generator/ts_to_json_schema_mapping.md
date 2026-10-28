@@ -289,15 +289,20 @@ in `keyof T`. An `unknown` arm, labeled or not, has no keys, as
 `keyof unknown` is `never`, so it is an object with no members: `Omit` of a
 union holding one keeps no member. A `Pick` naming a key some arm lacks, or a
 union with another arm that is no object, keeps the general path. Since the
-value is whichever arm it is, the object has the labels declared along the
-operand's references and every arm's, joined (`joinMemberIfcLabels`), every
-value of each read in full or none of them, as a union read by type is. A
-metadata key the lowering could not read at all is not declared on the arm,
-so a member holding one counts as read. A union with an arm that is a bare
-`unknown`, with no label declared on the way to it, is that `unknown`, as the
-checker reduces `unknown | X`, and has only the labels declared on the union
-itself; an `unknown` with a label declared on it is its carrier, an arm like
-any other. Unions these
+value is whichever arm it is, the labels of each arm, its own and those
+declared on the unions it is an arm of, are placed on the object as far as
+they reach, as the type path places a member's (§11, "A label lands on the
+part of a value its policy was written around"), and then joined where they
+land (`joinPlacedIfcLabels`), every value of each read in full or none
+of them, as a union read by type is. A label written around members the
+object leaves out lands nowhere where its arm holds its data under those
+members alone, and evidence lands nowhere in any case, so
+`Omit<Integrity<T, L>, keyof T>` and `Omit<Confidential<T, L>, keyof T>`
+carry no label; a restriction written around an arm that names no members,
+as `unknown` does, or that has an index signature, labels the whole object.
+A metadata key the lowering could not read at all is not declared on the
+arm, so a member holding one counts as read. A bare `unknown` arm has no
+labels and no members. Unions these
 rules build — a tuple's items, a shared property, a merged signature — fold
 equal arms by value-model equality (`dedupeByValueEqual`), flatten a bare
 nested union, and keep an `unknown` arm beside the others as a synthetic
@@ -1657,8 +1662,8 @@ Mechanics:
   `Pick<Sec<Confidential<X, ["b"]> | Y>, "a">`, labeled with both. Both
   sides bind the first alias's parameters to the checker's arguments, never
   to the ones a reference writes, so they agree. Written under bindings, a
-  `Pick` or an `Omit` of a labeled operand keeps the labels of every member
-  too, joined (above), while a user's alias of one there is a mapped type
+  `Pick` or an `Omit` of a labeled operand places and joins the labels of
+  every member too (§2), while a user's alias of one there is a mapped type
   over a bound parameter, which is not fully read (below). Any other object
   that holds a carrier as a property, as a mapped type its author wrote does
   (`{ readonly [K in keyof Sec<X>]: Sec<X>[K] }`), is labeled by it, each

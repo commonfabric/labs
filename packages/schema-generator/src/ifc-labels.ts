@@ -207,6 +207,23 @@ const listedMembers = (
     : undefined;
 
 /**
+ * A schema of `schema`'s shape alone, as labels are placed on it: an object
+ * with each of its members, accepting anything, where it has any, and
+ * otherwise a schema accepting anything. Each member of a value that may be
+ * any one of several has its labels placed on one, to be joined
+ * (`joinPlacedIfcLabels()`).
+ */
+export const placementShape = (schema: MutableJSONSchema): MutableJSONSchema =>
+  isObjectNotArray(schema) && isObjectNotArray(schema.properties)
+    ? {
+      type: "object",
+      properties: Object.fromEntries(
+        Object.keys(schema.properties).map((name) => [name, {}]),
+      ),
+    }
+    : {};
+
+/**
  * `schema`, the schema of a value that may be any one of several members,
  * with their labels joined where they land: `placed` holds, for each member,
  * a schema of the value's shape alone carrying the labels that member puts

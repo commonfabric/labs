@@ -3265,6 +3265,43 @@ describe("Schema: CFC authoring aliases", () => {
       });
     }
 
+    for (const alias of ["Integrity", "Confidential"]) {
+      it(`labels nothing with \`${alias}\` written around the members an \`Omit\` under bindings leaves out`, async () => {
+        // The value holds none of the data the policy was written around.
+        const { value, diagnostics } = await generate(`
+          type Outer<T> = Confidential<
+            { inner: Omit<${alias}<T, readonly ["l"]>, "x" | "z"> },
+            readonly ["b"]
+          >;
+          interface Holder { value: Outer<{ x: string; z: 1 }> }
+        `);
+        expect((value as any).properties.inner).toEqual({
+          type: "object",
+          properties: {},
+        });
+        expect(diagnostics).toEqual([]);
+      });
+    }
+
+    it("labels the whole of an `Omit` under bindings with a restriction whose payload holds data under keys no member names", async () => {
+      // The payload's index signature may hold its data under any key, the
+      // keys the `Omit` keeps among them.
+      const { value, diagnostics } = await generate(`
+        type Outer<T> = Confidential<
+          { inner: Omit<Confidential<T, readonly ["c"]>, "x" | "z"> },
+          readonly ["b"]
+        >;
+        interface Holder { value: Outer<{ x: string; z: 1; [k: string]: unknown }> }
+      `);
+      expect((value as any).properties.inner).toEqual({
+        type: "object",
+        properties: {},
+        additionalProperties: { type: "unknown" },
+        ifc: { confidentiality: ["c"] },
+      });
+      expect(diagnostics).toEqual([]);
+    });
+
     for (
       const [alias, argument, ifc] of [
         [
@@ -3286,6 +3323,11 @@ describe("Schema: CFC authoring aliases", () => {
           'Pick<T | Integrity<{ x: string; z: 1 }, readonly ["j"]>, "x">',
           'Integrity<{ x: string }, readonly ["i"]>',
           undefined,
+        ],
+        [
+          'Omit<Integrity<T, readonly ["i"]> | Sec<T>, never>',
+          "{ x: string }",
+          { confidentiality: ["a"] },
         ],
         [
           'Pick<Sec<T>, "x">',
