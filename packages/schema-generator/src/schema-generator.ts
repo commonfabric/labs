@@ -3026,6 +3026,39 @@ export class SchemaGenerator {
   }
 
   /**
+   * The reference `context` reads, where `type` is the declared type of the
+   * generic alias it names, lowered by `CommonFabricFormatter` from the
+   * reference's arguments, as a CFC alias the checker reads as `any` is
+   * (`#resolveTypeReferenceFromScope()`); `undefined` for any other reading.
+   * The declared type's parameters are unbound in it, so it is one type for
+   * every such reference, and the reading is told apart by the reference.
+   */
+  #declaredAliasReference(
+    type: ts.Type,
+    context: GenerationContext,
+  ): ts.TypeReferenceNode | undefined {
+    const written = context.typeNode &&
+      unwrapTypeParentheses(context.typeNode);
+    if (
+      !written || !ts.isTypeReferenceNode(written) ||
+      !written.typeArguments?.length || !ts.isIdentifier(written.typeName)
+    ) {
+      return undefined;
+    }
+    const symbol = this.#resolveTypeName(
+      written,
+      written.typeName,
+      context.typeChecker,
+      context,
+    );
+    return symbol !== undefined &&
+        context.typeChecker.getDeclaredTypeOfSymbol(symbol) === type &&
+        this.#commonFabricFormatter.supportsType(type, context)
+      ? written
+      : undefined;
+  }
+
+  /**
    * The declaration's type names a reading under bindings. The root's
    * instantiation and its recursive member's declaration then share an
    * identity; the binding key distinguishes their arguments and writers.
@@ -3438,11 +3471,17 @@ export class SchemaGenerator {
     // type parameter bindings is that type together with them, as its
     // definition's name is (`#bindingKey()`), so the same declared type read
     // under other bindings inside it is no cycle, and so is a reading of
-    // another variant (`#readingVariant()`).
+    // another variant (`#readingVariant()`). A generic alias's declared type,
+    // read from a reference's arguments (`#declaredAliasReference()`), is one
+    // type for every such reference, so its reading is that type together
+    // with the reference, and another reference to the alias inside it,
+    // `Confidential<Confidential<any, A>, B>`, is no cycle.
     const bound = context.boundTypeParameters;
     const bindingKey = this.#bindingKey(context);
     const bindingType = this.#bindingType(type, context);
-    const variant = this.#readingVariant(context);
+    const declaredAt = this.#declaredAliasReference(type, context);
+    const variant = this.#readingVariant(context) +
+      (declaredAt ? `:at${this.#bindingId(declaredAt)}` : "");
     const stackKey = bindingKey === undefined
       ? variant === "" ? type : `${variant}|${this.#bindingId(type)}`
       : `${variant}${this.#bindingId(bindingType)}|${bindingKey}`;
@@ -4519,9 +4558,12 @@ export class SchemaGenerator {
    * (`writesWrapperErasedByAny()`): `Confidential<any, C>`, `PerUser<any>`,
    * or a union holding one is `any` to the checker, and only the written
    * declaration holds its labels, scope, or default. `undefined` for any other
-   * reference, which reads as `any` does. The alias read again inside its own
-   * declaration is `any` to the checker there too, and its labels would be
-   * lost at that depth, so it is refused (`reportRecursiveAliasOfAny()`).
+   * reference, which reads as `any` does. A reference read again inside its
+   * own reading is a recursion through the alias, as the reference a
+   * declaration writes to itself is read at every level: it is `any` to the
+   * checker there too, and its labels would be lost at that depth, so it is
+   * refused (`reportRecursiveAliasOfAny()`). A finite nesting, `Box<Box<T>>`,
+   * reads each level through a reference of its own.
    */
   #readAliasOfAny(
     reference: ts.TypeReferenceNode,
@@ -4543,7 +4585,7 @@ export class SchemaGenerator {
       return undefined;
     }
     const inside = context.aliasesReadForAny;
-    if (inside?.has(declaration)) {
+    if (inside?.has(reference)) {
       reportRecursiveAliasOfAny(context, reference);
       return {};
     }
@@ -4552,7 +4594,7 @@ export class SchemaGenerator {
     return this.#analyzeChildNode(declaration.type, checker, {
       ...unbound,
       ...(bound.arguments.size > 0 && { boundTypeParameters: bound }),
-      aliasesReadForAny: new Set([...inside ?? [], declaration]),
+      aliasesReadForAny: new Set([...inside ?? [], reference]),
     });
   }
 

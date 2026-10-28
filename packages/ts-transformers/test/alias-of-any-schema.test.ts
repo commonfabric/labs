@@ -61,6 +61,12 @@ describe("alias-of-any-schema", () => {
         { ifc: { confidentiality: ["secret"], integrity: ["verified"] } },
       ],
       [
+        "a CFC alias nested in itself written in place",
+        "",
+        `Confidential<Confidential<any, ["a"]>, ["b"]>`,
+        { ifc: { confidentiality: ["a", "b"] } },
+      ],
+      [
         "a scope wrapper",
         `type Mine = PerUser<any>;`,
         "Mine",
@@ -98,6 +104,25 @@ describe("alias-of-any-schema", () => {
     );
 
     expect(propertyA(input)).toEqual({ ifc: { confidentiality: ["secret"] } });
+  });
+
+  it("keeps the label at every level of a generic alias nested in itself finitely", async () => {
+    const { input, diagnostics } = await patternInputOf(`
+      import { pattern } from "commonfabric";
+      import type { Confidential } from "commonfabric";
+      type Box<T> = { next: T } | Confidential<any, ["secret"]>;
+      export default pattern<{ a: Box<Box<string>> }>(() => ({}));
+    `);
+
+    const box = (next: unknown) => ({
+      anyOf: [
+        { type: "object", properties: { next }, required: ["next"] },
+        { ifc: { confidentiality: ["secret"] } },
+      ],
+    });
+    expect(propertyA(input)).toEqual(box(box({ type: "string" })));
+    expect(diagnostics.filter(({ severity }) => severity === "error"))
+      .toEqual([]);
   });
 
   it("reports `cfc-schema:recursive-alias-of-any` for a recursive alias wrapping a label around `any`", async () => {

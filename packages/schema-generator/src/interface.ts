@@ -374,11 +374,12 @@ export interface GenerationContext {
   scopeBrandRead?: ReadonlySet<ts.Type>;
 
   /**
-   * The aliases whose declarations this reading is inside, each read in place
-   * of the `any` the checker reads its name as, because what it writes is a
-   * wrapper the checker erases around `any` (`writesWrapperErasedByAny()`).
+   * The references whose aliases' declarations this reading is inside, each
+   * read in place of the `any` the checker reads its name as, because what
+   * the declaration writes is a wrapper the checker erases around `any`
+   * (`writesWrapperErasedByAny()`).
    */
-  aliasesReadForAny?: ReadonlySet<ts.TypeAliasDeclaration>;
+  aliasesReadForAny?: ReadonlySet<ts.TypeReferenceNode>;
 
   /**
    * The members written for `payload`, the payload of a union of scope

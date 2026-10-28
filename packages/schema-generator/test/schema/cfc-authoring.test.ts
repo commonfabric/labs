@@ -1652,6 +1652,18 @@ describe("Schema: CFC authoring aliases", () => {
           { ifc: { confidentiality: ["s"], integrity: ["v"] } },
         ],
         [
+          "a CFC alias nested in itself, written in place",
+          "",
+          `Confidential<Confidential<any, readonly ["a"]>, readonly ["b"]>`,
+          { ifc: { confidentiality: ["a", "b"] } },
+        ],
+        [
+          "a CFC alias nested in itself through another, written in place",
+          "",
+          `Confidential<Integrity<Confidential<any, readonly ["a"]>, readonly ["i"]>, readonly ["b"]>`,
+          { ifc: { confidentiality: ["a", "b"], integrity: ["i"] } },
+        ],
+        [
           "a CFC alias around a default written in place",
           "",
           `Confidential<Default<any, 5>, readonly ["s"]>`,
@@ -1720,6 +1732,40 @@ describe("Schema: CFC authoring aliases", () => {
           ts.findAncestor(diagnostics[0]!.node, ts.isPropertySignature)?.name
             .getText(),
         ).toBe("next");
+      }
+    });
+
+    it("keeps the label at every level of a generic alias nested in itself finitely", async () => {
+      for (
+        const { schema, diagnostics } of await bothPaths(
+          "type Box<T> = { next: T } | Secret;",
+          "Box<Box<string>>",
+        )
+      ) {
+        const box = (next: unknown) => ({
+          anyOf: [
+            { type: "object", properties: { next }, required: ["next"] },
+            SECRET,
+          ],
+        });
+        expect(schema.properties.a).toEqual(box(box({ type: "string" })));
+        expect(diagnostics).toEqual([]);
+      }
+    });
+
+    it("reports nothing for a recursive alias of `any` holding only a `Projection`, which is read by its type", async () => {
+      for (
+        const { schema, diagnostics } of await bothPaths(
+          `type ProjectionOf<T, P> = Cfc<T, { projection: { from: "/"; path: P } }>;
+           type Projection<S> = S extends { root: infer R; path: infer P }
+             ? ProjectionOf<R, P>
+             : never;
+           type Loose = { next: Loose } | Projection<any> | any;`,
+          "Loose",
+        )
+      ) {
+        expect(schema.properties.a).toBe(true);
+        expect(diagnostics).toEqual([]);
       }
     });
 

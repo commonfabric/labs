@@ -1239,9 +1239,13 @@ export function writesWrapperErasedByAny(
           ts.isTypeAliasDeclaration,
         );
       if (declaration && !read.has(declaration)) {
-        if (CFC_ALIAS_NAMES.has(declaration.name.text)) return true;
         read.add(declaration);
-        if (writes(declaration.type)) return true;
+        // A canonical alias this formatter lowers from the type the checker
+        // resolves it to (`lowersFromSyntax()`) is no wrapper read from its
+        // syntax, and nor is what its declaration resolves to.
+        if (CFC_ALIAS_NAMES.has(declaration.name.text)) {
+          if (lowersFromSyntax(declaration.name.text)) return true;
+        } else if (writes(declaration.type)) return true;
       }
     }
     return ts.forEachChild(node, (child) => writes(child) || undefined) ??
