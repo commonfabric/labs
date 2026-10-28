@@ -11,6 +11,7 @@ import {
   handler,
   NAME,
   pattern,
+  type PerUser,
   type Stream,
   UI,
   type VNode,
@@ -114,7 +115,7 @@ export interface MainOutput {
   sharedSpaceCatalog: SharedSpaceCatalogStorage;
 
   /** The rooms the manager lists for the person. */
-  rooms: ChatIndexEntry[];
+  rooms: PerUser<ChatIndexEntry[]>;
 }
 
 export default pattern<MainInput, MainOutput>((
