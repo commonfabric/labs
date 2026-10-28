@@ -137,14 +137,6 @@ describe("ContextualFlowControl.schemaAtPath", () => {
     expect(
       ContextualFlowControl.schemaAtPath({ items: { type: "number" } }, ["1"]),
     ).toBe(true);
-    // A conjunction is not narrowed here: a type-less `allOf` holds no
-    // children rather than admitting one a part constrains as anything.
-    expect(
-      ContextualFlowControl.schemaAtPath(
-        { allOf: [{ properties: { a: { type: "number" } } }] },
-        ["a"],
-      ),
-    ).toBe(false);
     expect(
       ContextualFlowControl.schemaAtPath(
         { additionalProperties: { type: "boolean" } },
@@ -637,6 +629,196 @@ describe("ContextualFlowControl.schemaAtPath", () => {
       $defs: {
         Inner: { type: "number" },
       },
+    });
+  });
+
+  describe("under an `allOf`", () => {
+    // A conjunction narrows a segment through each part with the keywords
+    // beside it merged in, and through those keywords on their own, to the
+    // conjunction of the children they declare. The sentinels stand for the
+    // ones `schema-view.ts` passes, so a key every part leaves out can be told
+    // from one a part admits as anything.
+
+    const EMPTY = Object.freeze({ $comment: "emptyProperties" });
+    const MISSING = Object.freeze({ $comment: "missingProperty" });
+    const atKey = (schema: JSONSchema, ...path: string[]) =>
+      ContextualFlowControl.schemaAtPath(
+        schema,
+        path,
+        undefined,
+        EMPTY,
+        MISSING,
+      );
+
+    it("returns the child a part declares, whether or not a type sits beside the `allOf`", () => {
+      const part: JSONSchema = {
+        type: "object",
+        properties: { x: { type: "number" } },
+      };
+
+      expect(atKey({ allOf: [part] }, "x")).toEqual({ type: "number" });
+      expect(atKey({ type: "object", allOf: [part] }, "x")).toEqual({
+        type: "number",
+      });
+      expect(
+        atKey(
+          { type: "object", allOf: [{ properties: part.properties }] },
+          "x",
+        ),
+      )
+        .toEqual({ type: "number" });
+    });
+
+    it("returns a property declared beside the `allOf` that a part's `properties` replaces", () => {
+      // The merge is shallow, so the part's `properties` map replaces the
+      // sibling one, and the sibling keywords read on their own still
+      // declare `y`.
+
+      const schema: JSONSchema = {
+        type: "object",
+        properties: { y: { type: "number" } },
+        allOf: [{ type: "object", properties: { x: { type: "string" } } }],
+      };
+
+      expect(atKey(schema, "x")).toEqual({ type: "string" });
+      expect(atKey(schema, "y")).toEqual({ type: "number" });
+      expect(atKey(schema, "z")).toEqual(MISSING);
+    });
+
+    it("returns the conjunction of the children several parts declare", () => {
+      expect(
+        atKey({
+          allOf: [
+            { type: "object", properties: { x: { type: "number" } } },
+            { type: "object", properties: { x: { type: "string" } } },
+          ],
+        }, "x"),
+      ).toEqual({ allOf: [{ type: "number" }, { type: "string" }] });
+    });
+
+    it("returns what the other parts declare where a part refuses the key, with that part's labels joined", () => {
+      const schema: JSONSchema = {
+        allOf: [
+          {
+            type: "object",
+            ifc: { confidentiality: ["A"] },
+            properties: { y: {} },
+            additionalProperties: false,
+          },
+          { type: "object", properties: { x: { type: "number" } } },
+        ],
+      };
+
+      expect(atKey(schema, "x")).toEqual({
+        type: "number",
+        ifc: { confidentiality: ["A"] },
+      });
+    });
+
+    it("joins the labels of a part that refuses a key below the one it declares", () => {
+      const schema: JSONSchema = {
+        allOf: [
+          {
+            type: "object",
+            properties: {
+              a: { type: "object", properties: { b: { type: "number" } } },
+            },
+          },
+          {
+            type: "object",
+            properties: {
+              a: {
+                type: "object",
+                ifc: { confidentiality: ["B"] },
+                additionalProperties: false,
+              },
+            },
+          },
+        ],
+      };
+
+      expect(atKey(schema, "a", "b")).toEqual({
+        type: "number",
+        ifc: { confidentiality: ["B"] },
+      });
+    });
+
+    it("returns the missing-property default where every part leaves the key out, and `true` where a part admits it as anything", () => {
+      const namesY: JSONSchema = { type: "object", properties: { y: {} } };
+
+      expect(atKey({ allOf: [namesY] }, "x")).toEqual(MISSING);
+      expect(atKey({ allOf: [namesY, { type: "object" }] }, "x")).toBe(true);
+    });
+
+    it("returns `false` where a part is `false` or the parts share no container kind", () => {
+      expect(atKey({ allOf: [false, { type: "object" }] }, "x")).toBe(false);
+      expect(atKey({ allOf: [{ type: "array" }, { type: "string" }] }, "0"))
+        .toBe(false);
+      expect(
+        atKey({
+          allOf: [
+            { type: "string" },
+            { type: "object", properties: { x: {} } },
+          ],
+        }, "x"),
+      ).toBe(false);
+      // `{ minItems: 1 }` declares no type, and is read as the array the other
+      // part makes the value, so it holds no `length` key.
+      expect(atKey({ allOf: [{ type: "array" }, { minItems: 1 }] }, "length"))
+        .toBe(false);
+    });
+
+    it("returns what a conjunction declares where it reaches itself through a reference", () => {
+      const schema: JSONSchema = {
+        $defs: {
+          R: {
+            allOf: [{ $ref: "#/$defs/R" }, {
+              type: "object",
+              properties: {
+                x: { type: "number" },
+                r: { $ref: "#/$defs/R" },
+              },
+            }],
+          },
+        },
+        $ref: "#/$defs/R",
+      };
+
+      expect(atKey(schema, "x")).toEqual({ type: "number" });
+      expect(atKey(schema, "r", "x")).toEqual({ type: "number" });
+    });
+
+    it("keeps the definitions a part's child reaches", () => {
+      const schema: JSONSchema = {
+        $defs: {
+          N: { type: "number" },
+          S: { type: "object", properties: { x: { $ref: "#/$defs/N" } } },
+          Unused: { type: "boolean" },
+        },
+        allOf: [{ $ref: "#/$defs/S" }],
+      };
+
+      expect(atKey(schema, "x")).toEqual({
+        $ref: "#/$defs/N",
+        $defs: { N: { type: "number" } },
+      });
+    });
+
+    it("returns each key's own child from a deep-frozen schema whose sibling keywords classify the keys alike", () => {
+      // The keywords beside the `allOf` leave both keys out, so a cache keyed
+      // by their reading alone would hand `z` the child the part declares for
+      // `x`.
+
+      const schema = deepFreeze({
+        type: "object",
+        properties: { y: { type: "number" } },
+        allOf: [{ type: "object", properties: { x: { type: "string" } } }],
+      }) as JSONSchema;
+
+      expect(ContextualFlowControl.schemaAtPath(schema, ["x"])).toEqual({
+        type: "string",
+      });
+      expect(ContextualFlowControl.schemaAtPath(schema, ["z"])).toBe(true);
     });
   });
 });

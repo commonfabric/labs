@@ -548,16 +548,35 @@ what the cursor declares about its type decides how:
 - A true schema — `true`, `{}`, or one carrying only `asCell`, `default` and
   the other internal keys — is the wildcard every child narrows to, markers
   and all. A false schema, `false` or `{ not: true }`, holds no children.
-- An `allOf` is not read a child out of: a conjunction beside no `type`
-  narrows to `false`. Traversal evaluates a conjunction whole, merging the
-  keywords beside it into each part, which is where a property only a part
-  declares is reached. A conjunction beside a declared `type` narrows through
-  the keywords beside it alone, and its parts are not consulted: under
-  `{ "type": "object", "properties": { "y": … }, "allOf": [{ "type": "object", "properties": { "x": { "type": "string" } } }] }`,
-  `x` narrows to `true`, where a read of the parent, which evaluates the part,
-  does not return an `x` holding a number. Both are limits of narrowing rather
-  than answers about the conjunction, and a caller meets each as the answer it
-  looks like: `Cell.key()` under the first carries `false` and selects a
-  property the parent reads, and under the second carries the wildcard and
-  reads a property the parent does not
-  ([The read entry](link-schema-precedence.md#the-read-entry)).
+- An `allOf` narrows a segment through its parts, whatever type sits beside
+  it. Each part is read with the keywords beside the `allOf` merged in, as
+  traversal reads it, and those keywords are read on their own too, so a
+  part's `properties`, which replaces the sibling map in the merge, does not
+  hide a property declared beside it. The segment narrows to the conjunction
+  of the children they declare: `{ allOf: [A, B] }` when two declare one, the
+  child itself when one does. A conjunct that leaves the key out (a missing
+  property, or empty `properties`), admits it as anything, or refuses it
+  declares nothing there and drops out, though the confidentiality it joins on
+  the way, or declares itself where it refuses, still labels the child. With
+  no child declared, a part admitting the key as anything gives `true`, else a
+  part leaving it out gives that reading, else the segment narrows to `false`.
+  A `false` part makes the segment `false`, and so do parts whose declared
+  types share no container kind; a part declaring no type is read as the one
+  container kind the others leave, so `{ minItems: 1 }` beside
+  `{ type: "array" }` holds no `length` key. Returning to the same parts
+  without consuming the segment contributes nothing, so
+  `R = allOf(R, B)` narrows to what `B` declares. An `allOf` holding no parts
+  is passed over.
+
+  Dropping a part that refuses a key follows traversal, which keeps a property
+  any part keeps, so a read of the parent and a read of the key agree there.
+  They differ where several parts declare the key. Traversal merges the
+  parts' results by keeping every key any part produced, so over `{ "x": 5 }`
+  under an `allOf` of two objects typing `x` as a number and as a string, the
+  parent reads `x: 5` from the first part, while `x` narrows to
+  `{ allOf: [{ type: "number" }, { type: "string" }] }` and reads nothing.
+  The narrowing is the conjunction's reading; the merge admits a value one
+  part rejects. They differ too where a part's `properties` replaces the
+  sibling map: traversal reads only the merged parts and drops a property
+  declared beside the `allOf` alone, which the narrowing still reads with its
+  schema and labels.

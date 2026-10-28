@@ -1078,8 +1078,8 @@ describe("schema-view", () => {
     describe("under a schema that names no properties and refuses the rest", () => {
       // `additionalProperties: false` with no `properties` beside it turns down
       // every key the data carries. The narrowing reports each one as a bare
-      // `false`, the same return it gives for a shape it cannot read a child out
-      // of, so the view has to tell the two apart from the schema.
+      // `false`, the same return it gives for a type that holds no children,
+      // so the view has to tell the two apart from the schema.
 
       const closed = { type: "object", additionalProperties: false } as const;
 
@@ -1428,10 +1428,10 @@ describe("schema-view", () => {
       }
     });
 
-    it("still reads a property whose shape the narrowing cannot see through", async () => {
-      // `schemaAtPath` also returns `false` where it cannot read a child out of
-      // the shape it was given. That is not a rejection, and the subschema is
-      // still reachable below it.
+    it("reads a property under an `allOf` through the part that names it", async () => {
+      // The view narrows each key of `p` through the parts of its `allOf`, so
+      // `name` reads under the part that names it, as an eager read reaches it
+      // by merging the parts' results.
       const read = await seeded(
         "rejected-allof",
         { p: { name: "Ada", secret: "hidden" } },

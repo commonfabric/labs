@@ -3799,10 +3799,7 @@ export class CellImpl<T extends FabricValue>
       // and no object is the exception: the store reads it as a value, so it
       // reads with no schema (`schemaAdmitsLength()`).
       // `getSchemaAtPath()` returns `undefined` for a schema where narrowing
-      // refuses the position, and also where it cannot read a child out of
-      // an `allOf` declaring no type. The second keeps `false` too, so a key
-      // under such a conjunction selects nothing even where a read of the
-      // parent, which evaluates the conjunction whole, reaches it.
+      // refuses the position.
       const parentSchema = currentLink.schema;
       const segment = key.toString();
       childSchema = parentSchema === undefined

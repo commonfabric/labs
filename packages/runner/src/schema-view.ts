@@ -161,8 +161,7 @@ const EXCLUDED_MISSING: JSONSchema = Object.freeze({
  *
  * This is its own marker because `schemaAtPath` also returns `false` where
  * the schema has turned nothing down: for a declared type that holds no
- * children, and for an `allOf`, which it does not read a child out of while
- * the subschema is still reachable below.
+ * children.
  */
 const EXCLUDED_REJECTED: JSONSchema = Object.freeze({
   $comment: "rejectedProperty",
@@ -251,12 +250,9 @@ const childSchema = (
   // settled off the schema: the child is absent to a reader, and the link
   // under it is never followed. Without `additionalProperties`, a schema that
   // names some properties reaches `schemaAtPath` as a missing property rather
-  // than as `false`, and an eager read drops the property either way.
-  //
-  // A schema that names no properties and carries `allOf` parts has turned
-  // nothing down: an eager read merges the keywords beside an `allOf` into
-  // each part before it looks at a key, so a part can name this one. An
-  // `allOf` holding no parts names nothing, and an eager read passes over it.
+  // than as `false`, and an eager read drops the property either way. Under
+  // an `allOf`, `schemaAtPath` returns what the parts declare, so `false`
+  // there means no part admits the key either.
   if (
     isObjectOrArray(schema.properties) &&
     Object.hasOwn(schema.properties, key) &&
@@ -264,10 +260,7 @@ const childSchema = (
   ) {
     return EXCLUDED_REJECTED;
   }
-  if (
-    schema.additionalProperties === false &&
-    (isObjectOrArray(schema.properties) || !schema.allOf?.length)
-  ) {
+  if (schema.additionalProperties === false) {
     return EXCLUDED_REJECTED;
   }
   // What remains is a type that holds no children, and an eager read selects
