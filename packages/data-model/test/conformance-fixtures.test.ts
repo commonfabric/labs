@@ -802,6 +802,29 @@ describe("conformance-fixtures", () => {
       }
     });
 
+    it("counts a tag-shaped key under an escape as a record key, the values under `/object` being decoded and those under `/quote` not", () => {
+      // Under each escape the sole key reads like a tag; were it taken for
+      // one, the record and its key would go uncounted.
+      const long = "x".repeat(floors.stringLength + 1);
+      const deep = nestedIn(floors.depth, '{"/Bytes@1":"AA"}');
+
+      expect(
+        requirementsOfText(`fvj1:{"/object":{"/Symbol@1":"${long}"}}`),
+      ).toEqual({ stringLength: floors.stringLength + 1 });
+      expect(
+        requirementsOfText(`fvj1:{"/quote":{"/Symbol@1":"${long}"}}`),
+      ).toEqual({ stringLength: floors.stringLength + 1 });
+
+      // A tagged value under `/object` is a primitive, adding no depth, and
+      // one under `/quote` is a record holding a string.
+      expect(requirementsOfText(`fvj1:{"/object":{"/k":${deep}}}`)).toEqual({
+        depth: floors.depth + 1,
+      });
+      expect(requirementsOfText(`fvj1:{"/quote":{"/k":${deep}}}`)).toEqual({
+        depth: floors.depth + 2,
+      });
+    });
+
     it("counts a primitive's tag left unclaimed as an instance", () => {
       const text = `fvj1:${nestedIn(floors.depth, '{"/Bytes@1":"AA"}')}`;
 
@@ -837,7 +860,7 @@ describe("conformance-fixtures", () => {
       expect(
         meetsRequirementsForTestingOnly({
           flavors: ["es2025"],
-          arrayLength: 2 ** 32 - 1,
+          arrayLength: 2 ** 26,
           propertyCount: 2 ** 30,
           stringLength: 2 ** 26,
           bytesLength: 2 ** 27,
@@ -854,7 +877,7 @@ describe("conformance-fixtures", () => {
 
     it("returns `false` for a size past any of this package's guarantees", () => {
       const pastEach: readonly FixtureRequirements[] = [
-        { arrayLength: 2 ** 32 },
+        { arrayLength: 2 ** 26 + 1 },
         { stringLength: 2 ** 26 + 1 },
         { bytesLength: 2 ** 27 + 1 },
         { symbolKeyLength: 2 ** 26 + 1 },

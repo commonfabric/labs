@@ -54,10 +54,13 @@ the figures below. Past one, it may refuse a value or may handle it. Most of the
 figures are set by the host rather than by a check in this package's code, and
 each says where its bound comes from.
 
-- **Arrays:** 2^32 - 1 (4,294,967,295) elements, the most a JavaScript array can
-  hold. An array of that length is within it even when every element is a hole,
-  so `fvj1:[{"/hole":4294967295}]` decodes and re-encodes. The JSON decoder
-  refuses a longer array, which JavaScript cannot build.
+- **Arrays:** 2^26 (67,108,864) elements. An array of that length is within it
+  even when every element is a hole: `fvj1:[{"/hole":67108864}]` decodes, and
+  the array it stands for encodes, hashes and compares, in about a second each.
+  The bound is this package's own: encoding, hashing and comparing walk every
+  index, holes included, so a very sparse array past this figure is slow. The
+  JSON decoder accepts a longer array, up to 2^32 - 1 elements, the most a
+  JavaScript array can hold, but past 2^26 this package promises nothing.
 - **Records:** no figure. A record is built as a JavaScript object, so its size
   is bounded only by memory and by how many properties the JavaScript engine
   lets one object hold, which is far above the floor: a record of 2^22 members

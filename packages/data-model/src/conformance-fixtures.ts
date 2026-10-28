@@ -278,7 +278,7 @@ export const SIZE_FLOORS: { readonly [Measure in SizeMeasure]: number } = Object
  */
 const SIZE_GUARANTEES: { readonly [Measure in SizeMeasure]: number } = Object
   .freeze({
-    arrayLength: 2 ** 32 - 1,
+    arrayLength: 2 ** 26,
     propertyCount: Infinity,
     stringLength: 2 ** 26,
     bytesLength: 2 ** 27,
@@ -409,7 +409,12 @@ function sizesOf(
       if (!key.startsWith("/")) {
         visitRecord(members, depth, literal);
       } else if (key === `/${CODEC_META_TAGS.object}`) {
-        visit(held, depth, false);
+        // The escaped record's keys are literal, and its values are not.
+        if (typeof held === "object" && held !== null && !Array.isArray(held)) {
+          visitRecord(Object.entries(held), depth, false);
+        } else {
+          visit(held, depth, false);
+        }
       } else if (key === `/${CODEC_META_TAGS.quote}`) {
         visit(held, depth, true);
       } else if (key === `/${CODEC_META_TAGS.hole}`) {
