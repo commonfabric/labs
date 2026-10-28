@@ -5278,10 +5278,15 @@ describe("Phase 3 events-down (serving side)", () => {
       // Rotate the tenure while no checkpoint exists durably. B1 is both the
       // later arrival whose barrier behavior is under test and the new input
       // that activates the successor tenure. The still-failing A2 is therefore
-      // re-observed from durable state and begins at count one.
+      // re-observed from durable state and begins at count one. The
+      // successor serves with whatever runtime the host hands it: a fresh one
+      // from the factory above, which records it, or the parked one when a
+      // session refresh re-activates the space before B1 lands
+      // (serving-loop.md §1, "Parking"), which the factory never sees. The
+      // serving manager is the one last recorded either way, so the
+      // recovery signal below reaches the tenure's load recovery observer
+      // whichever the host chose.
       await host!.spaceServer(space)!.park("idle");
-      servingRuntime = undefined;
-      servingManager = undefined;
       rejectWaveCommitWhen = (batch) => {
         const rejects = JSON.stringify(batch.operations).includes(
           '"deliveryDeferral"',
