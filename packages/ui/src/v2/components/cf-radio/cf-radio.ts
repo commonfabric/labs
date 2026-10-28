@@ -22,7 +22,8 @@ import { BaseElement } from "../../core/base-element.ts";
  * <cf-radio name="option" value="no">No</cf-radio>
  *
  * @note Use within cf-radio-group, which handles the arrow keys and the
- * selection among its radios. Each enabled radio is its own Tab stop.
+ * selection among its radios, and makes them one Tab stop. A radio outside a
+ * group is a Tab stop of its own while enabled.
  */
 
 export class CFRadio extends BaseElement {
@@ -234,7 +235,13 @@ export class CFRadio extends BaseElement {
   private _updateAriaAttributes() {
     this.setAttribute("aria-checked", String(this.checked));
     this.setAttribute("aria-disabled", String(this.disabled));
-    this.tabIndex = this.disabled ? -1 : 0;
+    const radioGroup = this.closest("cf-radio-group");
+    if (radioGroup) {
+      // The group keeps one Tab stop among its radios.
+      radioGroup.dispatchEvent(new Event("radio-state"));
+    } else {
+      this.tabIndex = this.disabled ? -1 : 0;
+    }
   }
 
   private _handleClick(event: Event) {
