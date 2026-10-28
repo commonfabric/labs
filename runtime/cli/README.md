@@ -3432,6 +3432,9 @@ A chain file is JSON naming its format, `commonfabric/delegation-chains`, and
 listing chains, each the delegations' envelope bytes root first in base64url.
 The delegations inside are UCAN envelopes, so the file adds nothing a holder has
 to trust beyond them; a chain that does not verify is refused where it is held.
+The format is this repository's own rather than the UCAN working group's
+container, which bundles tokens in no order for the recipient to link; reading
+and writing a container is a later feature, for tooling that speaks it.
 
 A `cf` command that opens spaces holds the chains in the files
 `--delegations <path>` names, repeatable, or the one `CF_DELEGATIONS` names,
