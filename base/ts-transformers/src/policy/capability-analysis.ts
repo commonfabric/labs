@@ -14,6 +14,7 @@ import {
   getNodeText,
   isCellLikeType,
   isWildcardTraversalCall,
+  unwrapCellLikeType,
 } from "../ast/mod.ts";
 import {
   type CapabilityParamSummary,
@@ -2646,6 +2647,72 @@ export function analyzeFunctionCapabilities(
       return isCellLikeType(checker.getTypeAtLocation(expr), checker);
     };
 
+    // True when every element an array of `arrayType` may hold is a
+    // primitive, across each array type a union of them may be.
+    const hasPrimitiveElementTypes = (arrayType: ts.Type): boolean => {
+      if (!checker) return false;
+      const nonNullable = checker.getNonNullableType(arrayType);
+      const arrays = nonNullable.isUnion() ? nonNullable.types : [nonNullable];
+      const elements: ts.Type[] = [];
+      for (const array of arrays) {
+        const element = checker.getIndexTypeOfType(array, ts.IndexKind.Number);
+        if (!element) return false;
+        for (const member of element.isUnion() ? element.types : [element]) {
+          elements.push(member);
+        }
+      }
+      return elements.some((element) =>
+        !(element.flags & ts.TypeFlags.Never)
+      ) &&
+        elements.every((element) =>
+          !!(element.flags & (
+            ts.TypeFlags.BooleanLike | ts.TypeFlags.NumberLike |
+            ts.TypeFlags.StringLike | ts.TypeFlags.BigIntLike |
+            ts.TypeFlags.ESSymbolLike | ts.TypeFlags.EnumLike |
+            ts.TypeFlags.Never
+          ))
+        );
+    };
+
+    // The type the declaration of `ref`'s parameter gives the value at its
+    // path, followed through cells, properties and array elements; undefined
+    // for a root no parameter declares or a path the type does not name.
+    const declaredTypeAt = (ref: SourceRef): ts.Type | undefined => {
+      if (!checker || ref.dynamic) return undefined;
+      const parameter = fn.parameters[parameterStateKeys.indexOf(ref.root)];
+      if (!parameter) return undefined;
+      let type: ts.Type | undefined = typeRegistry?.get(parameter) ??
+        checker.getTypeAtLocation(parameter);
+      for (const segment of materializeSourceRef(ref).path) {
+        const value = unwrapCellLikeType(type, checker);
+        if (!value) return undefined;
+        const holder = checker.getNonNullableType(value);
+        const property = checker.getPropertyOfType(holder, segment);
+        type = property
+          ? checker.getTypeOfSymbolAtLocation(property, parameter)
+          : checker.getIndexTypeOfType(
+            holder,
+            /^\d+$/.test(segment) ? ts.IndexKind.Number : ts.IndexKind.String,
+          );
+        if (!type) return undefined;
+      }
+      return unwrapCellLikeType(type, checker);
+    };
+
+    // True when the elements `arrayExpr` spreads, which resolves to `ref`, are
+    // primitives by its own type or by the type `ref`'s parameter declares:
+    // `Array.isArray` narrows to `any[]`, which says nothing either way.
+    const hasPrimitiveElements = (
+      arrayExpr: ts.Expression,
+      ref: SourceRef,
+    ): boolean => {
+      if (!checker) return false;
+      const declared = declaredTypeAt(ref);
+      return hasPrimitiveElementTypes(
+        typeRegistry?.get(arrayExpr) ?? checker.getTypeAtLocation(arrayExpr),
+      ) || (declared !== undefined && hasPrimitiveElementTypes(declared));
+    };
+
     const isPrimitiveLikeExpression = (expr: ts.Expression): boolean => {
       // Prefer the transformer-known type: on synthetic callbacks (e.g. the
       // destructure-lowered lift-applied param) the checker resolves bindings
@@ -4204,8 +4271,8 @@ export function analyzeFunctionCapabilities(
         } else if (isNonValueIdentifierUsage(node)) {
           // Ignore key names and non-value positions.
         } else {
-          const source = aliases.get(node.text);
-          const held = source === undefined
+          const alias = aliases.get(node.text);
+          const held = alias === undefined
             ? aliasShapes.get(node.text) ??
               localArrayElementBindings.get(node.text) ??
               localMapValueBindings.get(node.text)
@@ -4238,7 +4305,20 @@ export function analyzeFunctionCapabilities(
               }
             });
           }
-          if (source && !isMemberRootIdentifier(node)) {
+          // A local bound to a value that may be one of several refs is used
+          // through each of them, as one bound to a single ref is. What a
+          // local collection holds is its elements' binding, not its own.
+          const ownBinding = alias === undefined
+            ? aliasShapes.get(node.text)
+            : undefined;
+          const usedRefs = isMemberRootIdentifier(node)
+            ? []
+            : alias !== undefined
+            ? [alias]
+            : ownBinding !== undefined && isAliasAlternatives(ownBinding)
+            ? ownBinding.alternatives
+            : [];
+          for (const source of usedRefs) {
             const resolvedSource = materializeSourceRef(source);
             const usage = outermostTransparentWrapper(node);
             const parent = usage.parent;
@@ -4944,7 +5024,12 @@ export function analyzeFunctionCapabilities(
             identityArrayLocals.has(identityArrayLocal);
           if (ref) {
             trackReadRef(ref);
-            if (writtenByIdentity) markArrayItemIdentityUseRef(ref);
+            // A primitive element has no identity of its own: written back by
+            // identity it would become a link to the slot it was read from,
+            // which names another value once the array's elements shift.
+            if (writtenByIdentity && !hasPrimitiveElements(spreadExpr, ref)) {
+              markArrayItemIdentityUseRef(ref);
+            }
           } else {
             markWildcardFromExpression(spreadExpr);
           }

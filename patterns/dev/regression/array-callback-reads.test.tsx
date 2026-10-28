@@ -10,7 +10,8 @@
  * narrowing would not see it, so the callback would read `undefined` and a
  * filter would drop every row. The named callback reads the same through a
  * conditional or a fallback around the copy it filters, and an inline
- * callback, an array parameter and a named callback read the same where the
+ * callback, a destructured parameter, an array parameter and a named
+ * callback read the same where the
  * conditional's other branch is a second array or an array literal of
  * objects.
  *
@@ -52,6 +53,11 @@ type Mixed = { rows: Row[]; other: Row[]; enabled: boolean };
 const mixedInline = lift(({ rows, other, enabled }: Mixed): Row[] =>
   (enabled ? [...rows].sort((a, b) => a.id - b.id) : other)
     .filter((row) => row.name === "A")
+);
+
+const mixedDestructured = lift(({ rows, other, enabled }: Mixed): Row[] =>
+  (enabled ? [...rows].sort((a, b) => a.id - b.id) : other)
+    .filter(({ name }) => name === "A")
 );
 
 const mixedThroughArray = lift(({ rows, other, enabled }: Mixed): Row[] =>
@@ -99,6 +105,9 @@ export default pattern(() => {
   const fallback = names({ rows: fallbackCopyByName({ rows }) });
   const other = [{ id: 3, name: "C" }];
   const inline = names({ rows: mixedInline({ rows, other, enabled: true }) });
+  const destructured = names({
+    rows: mixedDestructured({ rows, other, enabled: true }),
+  });
   const mixedArray = names({
     rows: mixedThroughArray({ rows, other, enabled: true }),
   });
@@ -119,6 +128,9 @@ export default pattern(() => {
     fallback === "A"
   );
   const assert_mixed_inline_callback_reads_name = assert(() => inline === "A");
+  const assert_mixed_destructured_parameter_reads_name = assert(() =>
+    destructured === "A"
+  );
   const assert_mixed_array_parameter_reads_name = assert(() =>
     mixedArray === "A"
   );
@@ -139,6 +151,7 @@ export default pattern(() => {
       { assertion: assert_conditional_copy_callback_reads_name },
       { assertion: assert_fallback_copy_callback_reads_name },
       { assertion: assert_mixed_inline_callback_reads_name },
+      { assertion: assert_mixed_destructured_parameter_reads_name },
       { assertion: assert_mixed_array_parameter_reads_name },
       { assertion: assert_mixed_literal_branch_keeps_name },
       { assertion: assert_named_callback_on_filter_reads_name },

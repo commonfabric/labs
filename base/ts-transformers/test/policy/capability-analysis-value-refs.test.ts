@@ -548,6 +548,66 @@ export default lift(({ rows, other }: { rows: Row[]; other: Row[] }): Row[] =>
       expect(fields).toEqual(["id", "name"]);
     });
 
+    it("keeps the elements of a primitive array a shifted copy of it writes back as values", async () => {
+      // An element written back by identity becomes a link to the slot it was
+      // read from; a number has no identity, and `slice(-3)` moves it to
+      // another slot, so the link would name the value now there.
+
+      const state = await stateProperties(`
+import { handler, Writable } from "commonfabric";
+export default handler<void, { history: Writable<number[]> }>(
+  (_, { history }) => {
+    const updated = [...history.get(), 1].slice(-3);
+    history.set(updated);
+  },
+);
+`);
+      expect(state.history!.items).toEqual({ type: "number" });
+    });
+
+    it("keeps the elements of a primitive array a shifted copy of it writes back as values through a conditional", async () => {
+      // `Array.isArray` types the copy's source `any[]`; the declared type of
+      // `history` says its elements are numbers.
+
+      const state = await stateProperties(`
+import { handler, Writable } from "commonfabric";
+export default handler<void, { history: Writable<number[]> }>(
+  (_, { history }) => {
+    const current = history.get();
+    const list = Array.isArray(current) ? current : [];
+    const updated = [...list, 1].slice(-3);
+    history.set(updated);
+  },
+);
+`);
+      expect(state.history!.items).toEqual({ type: "number" });
+    });
+
+    it("keeps the elements of a primitive array a prepended copy of it writes back as values", async () => {
+      const state = await stateProperties(`
+import { handler, Writable } from "commonfabric";
+export default handler<void, { history: Writable<number[]> }>(
+  (_, { history }) => {
+    const updated = [1, ...history.get()];
+    history.set(updated);
+  },
+);
+`);
+      expect(state.history!.items).toEqual({ type: "number" });
+    });
+
+    it("keeps the field a destructured callback parameter compares through elements of a copy or another array", async () => {
+      const fields = await liftRowFields(`
+import { lift } from "commonfabric";
+interface Row { id: number; name: string; note: string }
+export default lift(({ rows, other }: { rows: Row[]; other: Row[] }): Row[] =>
+  (rows.length > 0 ? [...rows].sort((a, b) => a.id - b.id) : other)
+    .filter(({ name }) => name === "A")
+);
+`);
+      expect(fields).toEqual(["id", "name"]);
+    });
+
     it("keeps comparing the elements of a copy the body only splices and writes back", async () => {
       const state = await stateProperties(`
 import { equals, handler, Writable } from "commonfabric";
