@@ -11,7 +11,9 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 import { defer } from "@commonfabric/utils/defer";
+import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
 import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
 
 import type { FabricValue } from "@";
@@ -344,6 +346,34 @@ describe("RealmCodecEngine", () => {
     // thousand levels of these walks, and quick to build all the same.
     const depth = 100_000;
 
+    /**
+     * Calls `body` with the `push()` of every `IndexTrackingStack` made to
+     * throw a `RangeError` once it has pushed for the `nth` time, as an
+     * exhausted call stack can: between a walk entering a container and the
+     * code that would leave it. A real overflow strikes there or elsewhere,
+     * as the engine's code happens to be compiled, which this pins down.
+     */
+    function overflowingAtPush<T>(nth: number, body: () => T): T {
+      const push = IndexTrackingStack.prototype.push;
+      let pushes = 0;
+      const pushStub = stub(
+        IndexTrackingStack.prototype,
+        "push",
+        function (this: IndexTrackingStack<unknown>, value: unknown): void {
+          push.call(this, value);
+          pushes++;
+          if (pushes === nth) {
+            throw new RangeError("Maximum call stack size exceeded");
+          }
+        },
+      );
+      try {
+        return body();
+      } finally {
+        pushStub.restore();
+      }
+    }
+
     /** Returns an array of arrays `depth` deep, around `1`. */
     function nestedArray(): FabricValue {
       let value: FabricValue = 1;
@@ -363,6 +393,15 @@ describe("RealmCodecEngine", () => {
       expect(() => act.encodeValue(value)).toThrow(RangeError);
       expect(() => act.encodeValue(value)).toThrow(RangeError);
       expect(act.encodeValue([[1]])).toEqual([[1]]);
+    });
+
+    it("throws the `RangeError` that strikes just after a container is entered, when encoding and decoding", () => {
+      expect(() =>
+        overflowingAtPush(2, () => newDefaultRealmCodecEngine().encode([[1]]))
+      ).toThrow(RangeError);
+      expect(() =>
+        overflowingAtPush(2, () => fabricFromRealmValue(wire([[1]])))
+      ).toThrow(RangeError);
     });
 
     it("throws the host's `RangeError` when decoding", () => {
