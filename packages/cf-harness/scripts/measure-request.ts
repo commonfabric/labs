@@ -194,8 +194,10 @@ export const measureRequest = async (
           ...(tags !== undefined ? { taskTags: tags } : {}),
         }),
       },
-      ...(tags === undefined ? opened : orientContextMessages(opened, tags))
-        .map((content) => ({ role: "user" as const, content })),
+      ...orientContextMessages(opened, {
+        ...(tags !== undefined ? { tags } : {}),
+        depth: "standard",
+      }).map((content) => ({ role: "user" as const, content })),
       { role: "user", content: task },
     ];
     const body = await captureBody(transcript, tools);

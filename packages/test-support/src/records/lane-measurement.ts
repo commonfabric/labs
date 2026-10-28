@@ -14,7 +14,11 @@
  * {@link coverageRecords} the coverage ones.
  */
 
-import type { TestIdentity, TestRecord } from "./schema.ts";
+import {
+  shippedArtifact,
+  type TestIdentity,
+  type TestRecord,
+} from "./schema.ts";
 
 /** The record surface the lane measures itself on. */
 export const LANE_MEASUREMENT_SURFACE = { kind: "gate", scope: "ci" };
@@ -132,8 +136,6 @@ export const COVERAGE_OBJECT_GLOB =
  * `undefined` for any other name.
  */
 export function coverageArtifactAttempt(name: string): number | undefined {
-  const match = name.match(
-    new RegExp(`^test-records-${COVERAGE_ARTIFACT}-a(\\d+)$`),
-  );
-  return match === null ? undefined : Number(match[1]);
+  const shipped = shippedArtifact(name);
+  return shipped?.artifact === COVERAGE_ARTIFACT ? shipped.attempt : undefined;
 }

@@ -11,18 +11,6 @@
       "length": 131,
       "preview": "({ table, self }) => table\n    .filter((row) => (0, commonfabric_2.equals)(self, row.topic))\n    .flatMap((row) => row.mentionedBy)",
       "excerpt": "});\nconst backlinksOf = (0, commonfabric_2.lift)(({ table, self }) => table\n    .filter((row) => (0, commonfabric_2.equals)(self, row.topic))\n    .flatMap((row) => row.mentionedBy), {\n    type: \"object\",\n"
-    },
-    "presentCommentCountOf": {
-      "module": "/topics/topic.tsx",
-      "length": 74,
-      "preview": "({ comments }) => comments.filter((c) => c.removedAt === undefined).length",
-      "excerpt": "});\nconst presentCommentCountOf = (0, commonfabric_2.lift)(({ comments }) => comments.filter((c) => c.removedAt === undefined).length, {\n    type: \"object\",\n"
-    },
-    "lastActivityOf": {
-      "module": "/topics/topic.tsx",
-      "length": 380,
-      "preview": "({ comments, links, createdAt, bodyUpdatedAt, titleUpdatedAt }) => {\n    let newest = Math.max(createdAt, bodyUpdatedAt, titleUpdatedAt);\n    for (const c of comments) {\n        newest = Math.max(newe",
-      "excerpt": "});\nconst lastActivityOf = (0, commonfabric_2.lift)(({ comments, links, createdAt, bodyUpdatedAt, titleUpdatedAt }) => {\n    let newest = Math.max(createdAt, bodyUpdatedAt, titleUpdatedAt);\n    for (const c of comments) {\n        newest = Math.max(newest, c.sentAt, c.editedAt ?? 0, c.removedAt ?? 0);\n    }\n    for (const l of links) {\n        newest = Math.max(newest, l.addedAt ?? 0, l.removedAt ?? 0);\n    }\n    return newest;\n}, {\n    type: \"object\",\n"
     }
   },
   "cardsByActivityPreview": "({ rows }) => rows.toSorted((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0))",

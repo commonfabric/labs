@@ -6,7 +6,7 @@
  * drawing the tiles chart their history with.
  */
 
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import { maxOf, minOf } from "@commonfabric/utils/math";
 import type { Run, Status } from "./types.ts";
 import { PROD_SERVICE, REPO } from "./config.ts";
@@ -132,6 +132,9 @@ export interface GitHubRequestOptions {
   /** The REST API version required by an endpoint newer than the default. */
   apiVersion?: string;
 
+  /** A JSON body, which makes the request a `POST`. */
+  body?: string;
+
   /**
    * Lets a request for a list of workflow runs through. `github-runs.ts` is
    * the module that reads those lists, and the reasons it reads them as it
@@ -145,17 +148,30 @@ export interface GitHubRequestOptions {
  */
 export class GitHubStatusError extends Error {
   #status: number;
+  #rateLimited: boolean;
 
-  /** Constructs an instance for a request GitHub answered with `status`. */
-  constructor(message: string, status: number) {
+  /**
+   * Constructs an instance for a request GitHub answered with `status`, which
+   * says whether GitHub refused it for exceeding a rate limit.
+   */
+  constructor(message: string, status: number, rateLimited = false) {
     super(message);
     this.name = "GitHubStatusError";
     this.#status = status;
+    this.#rateLimited = rateLimited;
   }
 
   /** The HTTP status GitHub answered with. */
   get status(): number {
     return this.#status;
+  }
+
+  /**
+   * Whether GitHub refused the request for exceeding a rate limit, so that
+   * the same request may succeed later.
+   */
+  get rateLimited(): boolean {
+    return this.#rateLimited;
   }
 }
 
@@ -364,6 +380,7 @@ function githubRequest(
   token: string,
   withTimeout: boolean,
   apiVersion = "2022-11-28",
+  body?: string,
 ): Promise<Response> {
   const init: RequestInit = {
     headers: {
@@ -372,6 +389,10 @@ function githubRequest(
       "x-github-api-version": apiVersion,
     },
   };
+  if (body !== undefined) {
+    init.method = "POST";
+    init.body = body;
+  }
   if (withTimeout) init.signal = AbortSignal.timeout(15_000);
   return fetch(
     `https://api.github.com/${path.replace(/^\//, "")}`,
@@ -445,6 +466,7 @@ async function githubResponse(
       token,
       withTimeout,
       options.apiVersion,
+      options.body,
     );
     if (response.status === 401) credential.refused(token);
   } catch (error) {
@@ -528,6 +550,7 @@ async function githubJson<T>(
     throw new GitHubStatusError(
       `GitHub API ${path} failed: HTTP ${res.status}${detail}`,
       res.status,
+      rateLimited || res.status === 429,
     );
   }
   try {
@@ -552,6 +575,57 @@ export async function github<T = unknown>(
 ): Promise<T> {
   const t = githubCredential(path, credential);
   return (await githubJson<T>(path, t, false, options)).value;
+}
+
+/**
+ * The error a GitHub GraphQL query throws when GitHub answers it with errors
+ * of its own rather than an HTTP failure.
+ */
+export class GitHubGraphqlError extends Error {
+  #types: readonly string[];
+
+  /** Constructs an instance for errors of the given GraphQL `types`. */
+  constructor(message: string, types: readonly string[]) {
+    super(message);
+    this.name = "GitHubGraphqlError";
+    this.#types = types;
+  }
+
+  /** The types GitHub gave its errors, such as `FORBIDDEN`. */
+  get types(): readonly string[] {
+    return this.#types;
+  }
+}
+
+/**
+ * Runs a query against GitHub's GraphQL API and returns its `data`. Throws a
+ * `GitHubGraphqlError` when GitHub answers with errors, even alongside data.
+ */
+export async function githubGraphql(
+  query: string,
+  variables: Readonly<Record<string, unknown>>,
+  credential?: GitHubCredential,
+): Promise<unknown> {
+  const answer = await github<unknown>(
+    "graphql",
+    credential,
+    { body: JSON.stringify({ query, variables }) },
+  );
+  if (!isObjectNotArray(answer)) {
+    throw new Error("GitHub GraphQL returned invalid data");
+  }
+  if (Array.isArray(answer.errors) && answer.errors.length > 0) {
+    const errors = answer.errors.filter(isObjectNotArray);
+    throw new GitHubGraphqlError(
+      `GitHub GraphQL failed: ${
+        errors.map((error) => String(error.message)).join("; ")
+      }`,
+      errors.flatMap((error) =>
+        typeof error.type === "string" ? [error.type] : []
+      ),
+    );
+  }
+  return answer.data;
 }
 
 /**
@@ -684,6 +758,44 @@ export async function runArtifactId(options: {
     .filter((artifact) => artifact.name === name && !artifact.expired)
     .map((artifact) => artifact.id);
   return ids.length === 0 ? undefined : maxOf(ids);
+}
+
+// Requests in flight at once when a tile reads many repositories. GitHub asks
+// for a client's requests to be spread out rather than fired together.
+export const GITHUB_REQUEST_CONCURRENCY = 8;
+
+/** The message of `error`, or `error` itself when it is not an `Error`. */
+export function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Runs `tasks` with at most `limit` in flight at once, returning their results
+ * in the order of `tasks`. Once a task rejects, no further task starts, and
+ * the returned promise rejects with that task's error.
+ */
+export async function inParallel<T>(
+  limit: number,
+  tasks: readonly (() => Promise<T>)[],
+): Promise<T[]> {
+  const results = new Array<T>(tasks.length);
+  let next = 0;
+  let failed = false;
+  const worker = async (): Promise<void> => {
+    while (!failed && next < tasks.length) {
+      const index = next++;
+      try {
+        results[index] = await tasks[index]();
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(limit, tasks.length) }, worker),
+  );
+  return results;
 }
 
 // Cache an async result for ttlMs; a rejection is not cached (so it retries).

@@ -1,7 +1,12 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { languageForFile } from "../../../../../lib/view/languages/language.ts";
+import {
+  decodeLanguageInput,
+  languageForFile,
+  languageForSource,
+  languageMatchingSources,
+} from "../../../../../lib/view/languages/language.ts";
 import { xmlLanguage } from "../../../../../lib/view/languages/xml/language.ts";
 import type { Line, TokenClass } from "../../../../../lib/view/model.ts";
 
@@ -46,6 +51,32 @@ describe("xmlLanguage", () => {
     ) {
       expect(languageForFile(path).id).toBe("xml");
     }
+  });
+
+  it("selects XML for a source that opens with an XML declaration", () => {
+    const declared = '<?xml version="1.0" encoding="UTF-8"?>\n<document/>\n';
+    for (const path of ["App.csproj", "feed", undefined]) {
+      expect(languageForSource(path, declared).id).toBe("xml");
+    }
+    const bytes = new TextEncoder().encode(`\uFEFF${declared}`);
+    expect(decodeLanguageInput("Web.config", bytes).language.id).toBe("xml");
+    expect(languageMatchingSources("Main.storyboard", ["", declared])?.id)
+      .toBe("xml");
+  });
+
+  it("leaves other sources and recognized names to their own language", () => {
+    for (
+      const text of [
+        '  <?xml version="1.0"?>\n<document/>\n',
+        "<document/>\n",
+        "Type <?xml to start a declaration.\n",
+      ]
+    ) {
+      expect(languageForSource("MainMenu.xib", text).id).toBe("plain-text");
+    }
+    const declared = '<?xml version="1.0"?>\n<document/>\n';
+    expect(languageForSource("notes.txt", declared).id).toBe("plain-text");
+    expect(languageForSource("README.md", declared).id).toBe("markdown");
   });
 
   it("colors tags, attributes, and the markup around them", () => {

@@ -88,8 +88,13 @@ jobs:
         with:
           cache: false
 
-      - name: 🔍 Verify lock file & install dependencies
-        uses: ./.github/actions/deno-install
+      # Resolve only what this job executes. A workspace-wide install makes
+      # this independent publisher fail when an unrelated dependency cannot
+      # be fetched.
+      - name: 📦 Cache publisher dependencies
+        run: >-
+          deno cache --frozen tasks/test-selection-publish.ts
+          tasks/step-summary.ts
 
       # The store is public to read, so building the manifest needs no
       # credential, and this step is not given the access token. The

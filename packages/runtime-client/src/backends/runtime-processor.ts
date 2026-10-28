@@ -127,6 +127,7 @@ import {
   publishCustodyAnswer,
   readCustodyAnswer,
 } from "@commonfabric/runner/cfc/custody-seal";
+import { cfcSchemaGivesNoShape } from "@commonfabric/runner/cfc/schema-primitives";
 import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
 import { bindNativeUiControl } from "@commonfabric/runner/native-ui";
 import {
@@ -146,11 +147,7 @@ import {
   resetAllTimingBaselines,
 } from "@commonfabric/utils/logger";
 import { backtickQuote } from "@commonfabric/utils/markdown";
-import {
-  isObjectNotArray,
-  isObjectOrArray,
-  isPlainObject,
-} from "@commonfabric/utils/types";
+import { isObjectNotArray, isPlainObject } from "@commonfabric/utils/types";
 
 import { HostReadGate } from "./host-read-gate.ts";
 import { postToClient } from "./post-to-client.ts";
@@ -176,6 +173,8 @@ import {
 } from "./worker-client.ts";
 import {
   type ActionRunTraceResponse,
+  type BlobUrlRequest,
+  type BlobUrlResponse,
   BooleanResponse,
   type CellFieldsRequest,
   type CellFieldsResponse,
@@ -526,8 +525,8 @@ export function browserWorkerParamsFromInitializationData(
   return {
     apiUrl: new URL(data.apiUrl),
     storageManager,
-    // The host decides the flags (shell build-time defines); absent ⇒ runtime
-    // defaults.
+    // The host decides the flags (the shell's build-time defines and the ones
+    // it adopts from its deployment); absent ⇒ runtime defaults.
     experimental: data.experimental ?? {},
     telemetry,
     ...(data.spaceHostMap !== undefined
@@ -547,6 +546,9 @@ export function browserWorkerParamsFromInitializationData(
       : {}),
     ...(data.cfcReadOnExceed !== undefined
       ? { cfcReadOnExceed: data.cfcReadOnExceed }
+      : {}),
+    ...(data.preferredProfileSpace !== undefined
+      ? { preferredProfileSpace: data.preferredProfileSpace }
       : {}),
     ...(data.cfcTrustConfig !== undefined
       ? { cfcTrustConfig: data.cfcTrustConfig }
@@ -758,11 +760,15 @@ export function toConsoleDebugValue(value: unknown): FabricValue {
   });
 }
 
-export const hasExplicitSubscriptionSchema = (schema: unknown): boolean =>
-  schema === true ||
-  (schema !== undefined && schema !== false &&
-    isObjectOrArray(schema) &&
-    Object.keys(schema).length > 0);
+/**
+ * Whether `schema`, the one a subscription reads its cell under, gives what it
+ * reads a shape. One that gives none (absent, `true`, `{}`, or nothing but
+ * annotations and the runtime's own keywords, `cfcSchemaGivesNoShape()`) reads
+ * a value through a query-result proxy that follows every link it holds and
+ * depends on all of it.
+ */
+export const subscriptionSchemaGivesShape = (schema: unknown): boolean =>
+  !cfcSchemaGivesNoShape(schema as JSONSchema | undefined);
 
 /**
  * Connects render boundaries to authoritative access verdict changes. Given
@@ -855,6 +861,7 @@ export function securityContextFrom(
     cfcFlowLabels: data.cfcFlowLabels,
     cfcReadMaxConfidentiality: data.cfcReadMaxConfidentiality,
     cfcReadOnExceed: data.cfcReadOnExceed,
+    preferredProfileSpace: data.preferredProfileSpace,
     cfcTrustConfig: data.cfcTrustConfig,
     renderDeclassificationPolicy: data.renderDeclassificationPolicy,
     renderConfidentialityCeiling: data.renderConfidentialityCeiling,
@@ -1081,6 +1088,9 @@ export class RuntimeProcessor {
    */
   #hostReadGate = new HostReadGate(undefined, {});
   #cancelSpaceAccessLoss?: Cancel;
+  #cancelSpaceAccessRestored?: Cancel;
+  #cancelConnectionRestored?: Cancel;
+  #cancelClientUpdateRequired?: Cancel;
 
   /**
    * The retries of refused spaces in flight, which the render boundaries'
@@ -1118,6 +1128,38 @@ export class RuntimeProcessor {
       ?.subscribeSpaceAccessLoss?.((space) => {
         for (const client of clients()) {
           client.post({ type: NotificationType.SpaceAccessLost, space });
+        }
+      });
+    // An access change is a denial or a recovery, and only a recovery leaves
+    // the space with no access error. A storage manager that cannot say what
+    // the error is cannot tell the two apart, so nothing is posted for it.
+    const storage = runtime.storageManager;
+    this.#cancelClientUpdateRequired = storage?.subscribeClientUpdateRequired?.(
+      (status) => {
+        for (const client of clients()) {
+          client.post({
+            type: NotificationType.ErrorReport,
+            code: RuntimeErrorCode.ClientUpdateRequired,
+            ...status,
+          });
+        }
+      },
+    );
+    const accessError = storage?.spaceAccessError?.bind(storage);
+    if (accessError !== undefined) {
+      this.#cancelSpaceAccessRestored = storage?.subscribeSpaceAccessChange?.(
+        (space) => {
+          if (accessError(space) !== undefined) return;
+          for (const client of clients()) {
+            client.post({ type: NotificationType.SpaceAccessRestored, space });
+          }
+        },
+      );
+    }
+    this.#cancelConnectionRestored = runtime.storageManager
+      ?.subscribeConnectionRestored?.(() => {
+        for (const client of clients()) {
+          client.post({ type: NotificationType.ConnectionRestored });
         }
       });
   }
@@ -1440,6 +1482,12 @@ export class RuntimeProcessor {
         this.#intentOutcomeCancel?.();
         this.#cancelSpaceAccessLoss?.();
         this.#cancelSpaceAccessLoss = undefined;
+        this.#cancelSpaceAccessRestored?.();
+        this.#cancelSpaceAccessRestored = undefined;
+        this.#cancelConnectionRestored?.();
+        this.#cancelConnectionRestored = undefined;
+        this.#cancelClientUpdateRequired?.();
+        this.#cancelClientUpdateRequired = undefined;
         this.#spaceAccessRetries.dispose();
         this.#intentOutcomeCancel = undefined;
         this.#profilePreloadCancel?.();
@@ -1488,6 +1536,17 @@ export class RuntimeProcessor {
     return this.#isDisposed;
   }
 
+  /** Sends an attached client the runtime's retained update requirement. */
+  reportClientUpdateRequired(client: WorkerClient): void {
+    const status = this.#runtime.storageManager?.clientUpdateRequired?.();
+    if (status === undefined) return;
+    client.post({
+      type: NotificationType.ErrorReport,
+      code: RuntimeErrorCode.ClientUpdateRequired,
+      ...status,
+    });
+  }
+
   /**
    * Refuses an attach whose asserted security context is not this runtime's.
    *
@@ -1518,7 +1577,8 @@ export class RuntimeProcessor {
    * Tears down everything one client owns, leaving the runtime and every other
    * client's work running. This is what a client's departure costs: its cell
    * and operation subscriptions stop, its presence memberships end, its VDOM
-   * trees unmount, and nothing else moves.
+   * trees unmount, and the documents nothing reads any longer are released
+   * (`Runtime.releaseUnreadDocuments()`).
    *
    * The runtime itself is never touched here, however the departing client
    * came to leave. Only {@link dispose} ends a runtime, and only the client
@@ -1581,6 +1641,9 @@ export class RuntimeProcessor {
       if (membership.client.id !== client.id) continue;
       void this.#endPresenceMembership(subscriptionId);
     }
+
+    // What only this client read is now read by nothing.
+    void this.#runtime.releaseUnreadDocuments();
   }
 
   #hostSelectedCell(ref: CellRef): Cell<unknown> {
@@ -2343,16 +2406,21 @@ export class RuntimeProcessor {
 
     const cell = getCell(this.#runtime, request.cell);
 
+    // Whether this subscription has been reported as reading through a
+    // proxy, so that it is reported once rather than on every delivery.
+    let reported = false;
     const cancel = this.#hostReadGate.subscribe(cell, request.cell, {
       includeCfcLabel: request.includeCfcLabel,
     }, (value) => {
-      // Log empty-schema subscriptions that produce CellResult proxies.
-      // These are the call sites that need real schemas added. The schema
-      // checked is the one the cell reads under, which for a ref keyed from
-      // an ancestor is the one the worker narrowed to.
-      if (!isCellResult(value)) return;
+      // Log subscriptions whose schema gives no shape and that produce
+      // CellResult proxies, `true` and a schema of annotations alone among
+      // them. These are the call sites that need real schemas added. The
+      // schema checked is the one the cell reads under, which for a ref keyed
+      // from an ancestor is the one the worker narrowed to.
+      if (reported || !isCellResult(value)) return;
       const schema = cell.getAsNormalizedFullLink().schema;
-      if (!hasExplicitSubscriptionSchema(schema)) {
+      if (!subscriptionSchemaGivesShape(schema)) {
+        reported = true;
         console.error(
           `[handleCellSubscribe] EMPTY SCHEMA SUBSCRIPTION producing ` +
             `CellResult proxy. Add a schema to this subscription site!\n` +
@@ -3821,14 +3889,14 @@ export class RuntimeProcessor {
     if (!isDID(request.space)) {
       throw new Error("uploadBlob requires a space DID");
     }
-    const suffix = (request.suffix ?? "bin").replace(/^\./, "") || "bin";
+    // With no suffix, the upload names no blob in its path, and the store
+    // chooses the suffix itself.
+    const suffix = request.suffix?.replace(/^\./, "");
+    const blobPath = suffix ? `/upload.${encodeURIComponent(suffix)}` : "";
     // The blob belongs to the named space, so it uploads to — and its
     // returned URL resolves against — THAT space's host.
     const host = this.#runtime.hostForSpace(request.space);
-    const target = new URL(
-      `/${request.space}/blobs/upload.${encodeURIComponent(suffix)}`,
-      host,
-    );
+    const target = new URL(`/${request.space}/blobs${blobPath}`, host);
     // The envelope's decode already produced this; `request.body` is a
     // `FabricBytes` by the time it arrives, and a handler owns the values its
     // request carries per `BaseRequest`, so nothing else is reading it. The
@@ -3838,11 +3906,19 @@ export class RuntimeProcessor {
     if (!(bytes instanceof FabricBytes)) {
       throw new Error("uploadBlob requires bytes as its body");
     }
+    if (request.name !== undefined && typeof request.name !== "string") {
+      throw new Error(
+        "uploadBlob requires any name it is given to be a string",
+      );
+    }
     // Blob upload payloads must preserve FabricBytes even when the wider
-    // process is running with legacy memory JSON flags.
+    // process is running with legacy memory JSON flags. A blob with no name
+    // has no `name` key at all, since its id is the hash of exactly what is
+    // sent.
     const body = blobUploadCodec.encode({
       type: request.contentType,
       body: bytes,
+      ...(request.name === undefined ? {} : { name: request.name }),
     });
     const response = await fetch(target, {
       method: "POST",
@@ -3861,6 +3937,32 @@ export class RuntimeProcessor {
     return {
       id: result.id,
       url: resolveBlobUrl(result.url, host, request.space),
+    };
+  }
+
+  /**
+   * Returns the URL the host of the request's space serves the request's blob
+   * at: the URL an upload of it returns, without the file suffix, and with
+   * `?download` for a request to save it.
+   */
+  handleBlobUrl(request: BlobUrlRequest): BlobUrlResponse {
+    if (!isDID(request.space)) {
+      throw new Error("blobUrl requires a space DID");
+    }
+    if (typeof request.id !== "string" || request.id.length === 0) {
+      throw new Error("blobUrl requires a blob id");
+    }
+    const hash = request.id.startsWith("fid1:")
+      ? request.id.slice("fid1:".length)
+      : request.id;
+    const host = this.#runtime.hostForSpace(request.space);
+    const query = request.download === true ? "?download" : "";
+    return {
+      url: resolveBlobUrl(
+        `blobs/${encodeURIComponent(hash)}${query}`,
+        host,
+        request.space,
+      ),
     };
   }
 
@@ -4126,6 +4228,8 @@ export class RuntimeProcessor {
         return this.setBreakpoints(request);
       case RequestType.UploadBlob:
         return await this.handleUploadBlob(request);
+      case RequestType.BlobUrl:
+        return this.handleBlobUrl(request);
       case RequestType.VDomMount:
         return this.handleVDomMount(request, client);
       case RequestType.VDomUnmount:
@@ -4393,6 +4497,8 @@ export class RuntimeProcessor {
 
     const storageManager = StorageManager.open({
       as: identity,
+      clientBuild: data.clientBuild ??
+        { application: "runtime-client", gitSha: null },
       memoryHost,
       spaceHostMap: data.spaceHostMap,
       // Host dogfood toggle (commonfabric.concurrentWatchRefresh): overlap

@@ -35,20 +35,24 @@ moderation, defaulting to true for group rooms and false for direct rooms.
 Editing, deleting, and reacting require a resolved profile. Obliteration depends
 on ownership and moderation rights and works without a readable profile.
 
-Display controls use the principal attested by the viewer's profile. Without
-that attestation, original-sender controls are unavailable. The runtime exposes
-the authenticated principal only inside handlers. Selecting another person's
-attested profile can therefore offer controls the handler refuses; view rights
-cannot fully identify the authenticated viewer yet. Participant links remain in
-the roster when their profiles are unreadable.
+Display controls use the owner `profileOwnerOf()` identifies for the viewer's
+profile, including its name-chain ownership check. Without a recognized owner,
+original-sender controls are unavailable. The runtime exposes the authenticated
+principal only inside handlers. Selecting another person's attested profile can
+therefore offer controls the handler refuses; view rights cannot fully identify
+the authenticated viewer yet. Participant presentation does not determine
+membership; access to the space does.
 
 The room offers the latest 100 main-conversation messages and derives thread
 summaries in one pass through the messages. Its UI has thread and older-message
 navigation, retitling, and a composer shared by placements in the same session.
-Message bodies preserve the exact submitted text, while whitespace-only bodies
-are refused. Replies cannot target deleted messages or quote a thread-only
-message in the main conversation. A refused send preserves its draft; a
-successful send clears only the draft that still matches the submitted text.
+Message bodies preserve the exact submitted text. A whitespace-only body is
+accepted only with attachments. Replies cannot target deleted messages or quote
+a thread-only message in the main conversation. Each session keeps a main draft
+and a separate draft for each thread root. A refused send preserves its draft; a
+successful send clears only the draft with the submitted text and revision, so a
+newer edit survives even if its text is identical. Switching threads restores
+each thread's draft, and a send captured for another thread is refused.
 Message-act refusals throw with a reason, and add and retitle requests retain
 private outcomes.
 

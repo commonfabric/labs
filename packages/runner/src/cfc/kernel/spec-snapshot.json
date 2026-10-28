@@ -1,5 +1,5 @@
 {
-  "specsCommit": "b080918905c5a5b7d2e0524012ca99d169ae36c0",
+  "specsCommit": "0c12ccf38b92c1696b7e47bd1eab8ddf42d2d6ef",
   "sections": [
     "1",
     "1.1",
@@ -1257,6 +1257,24 @@
       "section": "8.12.6",
       "name": "propagateExpiration",
       "sha256": "928ab29914a50b74989076397cede64699b5b59f1ed981bdc878fb571237e9ef"
+    },
+    {
+      "file": "08-12-store-label-monotonicity.md",
+      "section": "8.12.7",
+      "name": "canReleaseStoredClause",
+      "sha256": "ba271dfc86a75e913129bcfb5b49a20684983f00618ef6c11daf2ef87fae3e97"
+    },
+    {
+      "file": "08-12-store-label-monotonicity.md",
+      "section": "8.12.7",
+      "name": "standsForActor",
+      "sha256": "ba271dfc86a75e913129bcfb5b49a20684983f00618ef6c11daf2ef87fae3e97"
+    },
+    {
+      "file": "08-12-store-label-monotonicity.md",
+      "section": "8.12.7",
+      "name": "ownerReleaseAt",
+      "sha256": "ba271dfc86a75e913129bcfb5b49a20684983f00618ef6c11daf2ef87fae3e97"
     },
     {
       "file": "08-13-opaque-inputs.md",

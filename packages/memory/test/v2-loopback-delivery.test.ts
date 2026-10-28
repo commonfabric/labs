@@ -11,8 +11,11 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { ServerMessage } from "../v2.ts";
-import { loopback } from "../v2/client.ts";
-import type { Server } from "../v2/server.ts";
+import {
+  connectionError,
+  loopback,
+  queuedFrameTransport,
+} from "../v2/client.ts";
 
 // A stand-in for the server. `loopback` calls `connect` once and then only
 // `receive` and `close` on what it hands back, so nothing else of Server is
@@ -24,7 +27,7 @@ const harness = (onFrame?: (index: number) => void) => {
       emit = send;
       return { receive: () => Promise.resolve(), close: () => {} };
     },
-  } as unknown as Server;
+  };
 
   const transport = loopback(server);
   const received: string[] = [];
@@ -248,6 +251,76 @@ describe("client", () => {
       await h.transport.close();
       for (let hop = 0; hop < 50; hop++) await Promise.resolve();
       expect(h.received.length).toBe(0);
+    });
+
+    it("queues a frame the server sends as it connects", async () => {
+      const server = {
+        connect(send: (message: ServerMessage) => void) {
+          send({ type: "response", requestId: "at-connect" } as ServerMessage);
+          return { receive: () => Promise.resolve(), close: () => {} };
+        },
+      };
+      const transport = loopback(server);
+      const received: string[] = [];
+      transport.setReceiver((payload) => received.push(payload));
+      await transport.delivered!();
+      expect(received.length).toBe(1);
+    });
+  });
+
+  describe("queuedFrameTransport()", () => {
+    const connection = () => {
+      const taken: string[] = [];
+      let closed = 0;
+      return {
+        taken,
+        closedCount: () => closed,
+        connection: {
+          receive(payload: string) {
+            taken.push(payload);
+            return Promise.resolve();
+          },
+          close() {
+            closed += 1;
+          },
+        },
+      };
+    };
+
+    it("hands a sent frame to the connection", async () => {
+      const c = connection();
+      const transport = queuedFrameTransport(c.connection);
+      await transport.send("hello");
+      expect(c.taken).toEqual(["hello"]);
+    });
+
+    it("rejects a send after close with a connection error", async () => {
+      const c = connection();
+      const transport = queuedFrameTransport(c.connection);
+      await transport.close();
+      await expect(transport.send("late")).rejects.toMatchObject({
+        name: connectionError("").name,
+      });
+      expect(c.taken).toEqual([]);
+      expect(c.closedCount()).toBe(1);
+    });
+
+    it("reports a lost connection to the close receiver, dropping the frames held", async () => {
+      const c = connection();
+      const transport = queuedFrameTransport(c.connection);
+      const received: string[] = [];
+      const lost: Error[] = [];
+      transport.setReceiver((payload) => received.push(payload));
+      transport.setCloseReceiver!((error) => {
+        if (error !== undefined) lost.push(error);
+      });
+      transport.deliver("held");
+      transport.lose(new Error("port closed"));
+      transport.lose(new Error("again"));
+      for (let hop = 0; hop < 50; hop++) await Promise.resolve();
+      expect(received).toEqual([]);
+      expect(lost.map((error) => error.message)).toEqual(["port closed"]);
+      expect(c.closedCount()).toBe(0);
     });
   });
 });

@@ -32,11 +32,13 @@ import { hasInlineCellScheme } from "../src/immutable-cell.ts";
 // durable document at all. Reading it returns undefined, and rather than
 // reconcile against that absent value (which would write a stale-basis result
 // that conflicts on commit and re-runs in a loop), the builtin pulls the
-// container and defers. Once the pull settles and the container is still absent,
-// the builtin seeds an empty array so the coordinator is not wedged waiting for
-// a value that will never arrive. The per-element results then re-trigger the
-// reconcile, which rebuilds the aggregate against the confirmed per-element
-// values.
+// container and defers. Once the pull settles the builtin re-arms its
+// reconcile, so the coordinator is not wedged waiting for a value that will
+// never arrive. A filter or flatMap first seeds an empty array into a container
+// that is still absent; a map seeds nothing, since it writes its container only
+// when a reconcile succeeds, and an empty list there would read as a result it
+// never produced. The reconcile then rebuilds the aggregate against the
+// confirmed per-element values.
 //
 // This drives that path deterministically, in three runs. A discovery run on an
 // emulated storage manager (its own private in-process server) resolves the
@@ -48,9 +50,9 @@ import { hasInlineCellScheme } from "../src/immutable-cell.ts";
 // container's own id, so the container genuinely has no durable document while
 // the input list and the per-element result docs persist normally. The resuming
 // run (runtime B) loads everything except the container, and the builtin
-// recovers: it defers, seeds the empty container (a write the server accepts,
-// since no document exists under that id), and rebuilds the aggregate from the
-// per-element values. The outcome tests assert that the resume itself wrote
+// recovers: it defers, seeds the empty container where it seeds (a write the
+// server accepts, since no document exists under that id), and rebuilds the
+// aggregate from the per-element values. The outcome tests assert that the resume itself wrote
 // the container, that no document under the container id arrived before that
 // write, that the aggregate converges, and that the resume settles with every
 // commit confirmed durably.
@@ -65,9 +67,10 @@ import { hasInlineCellScheme } from "../src/immutable-cell.ts";
 // releases the answers: a recovery that really waits for the absence
 // confirmation writes nothing during the hold, where one that skips the pull
 // or reconciles immediately writes during it and fails. After release, the
-// server's absence statement precedes the first aggregate write; that write
-// is the empty seed (`[]`, no element content); a later write carries the
-// full aggregate — the documents the persisted slots link, or the inline
+// server's absence statement precedes the first aggregate write; for a
+// builtin that seeds, that write is the empty seed (`[]`, no element content),
+// and a later write carries the full aggregate, while for a map the first is
+// the full aggregate — the documents the persisted slots link, or the inline
 // values themselves; every container write settles, with lost optimistic
 // races followed by a confirmed retry; after convergence, further reactive
 // rounds and a long stretch of logical time produce no new commits; and a
@@ -607,7 +610,8 @@ describe("list builtin resume container defer", () => {
 
     // RESUME (runtime B): the server has no document under the container id,
     // so the coordinator reconcile reads it undefined and takes the
-    // defer-then-seed recovery path.
+    // defer-then-rebuild recovery path, seeding first where the builtin
+    // seeds.
     const rt2 = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: sm2,
@@ -630,11 +634,11 @@ describe("list builtin resume container defer", () => {
         await rc2.pull();
         await rt2.idle();
       }
-      // Durable convergence: every resume commit (the seeded container and
+      // Durable convergence: every resume commit (any seeded container and
       // the rebuilt aggregate) confirmed by the server.
       await sm2.synced();
 
-      // The resume wrote the container itself — the seeded empty array and
+      // The resume wrote the container itself — any seeded empty array and
       // the rebuilt aggregate — which only the recovery path does.
       expect(resumeContainerWrites).toBeGreaterThan(0);
       // Until that first recovery write, the server had delivered no
@@ -642,7 +646,7 @@ describe("list builtin resume container defer", () => {
       // statements — so the reconcile ran against a genuinely absent
       // container.
       expect(upsertsBeforeFirstContainerWrite).toBe(0);
-      // After the seed lands the document exists, and the resume session
+      // After the first recovery write lands the document exists, and the resume session
       // watches it, so the server's later sync frames deliver it. This also
       // keeps the receive-side counter honest: if the sync wire shape
       // drifted past countWithheldUpserts, this fails rather than letting
@@ -865,9 +869,10 @@ describe("list builtin resume container defer", () => {
   // recovery SEQUENCE, not only the outcome: the container is durably absent
   // while everything else the persisted run wrote is durably present; the
   // resume requests the container and receives the server's absence statement
-  // before its first container write; that first write is the bare empty seed;
-  // a later write rebuilds the aggregate by linking the persisted per-element
-  // documents; every container write is confirmed; and once converged, no
+  // before its first container write; with `seeds`, that first write is the
+  // bare empty seed and a later write rebuilds the aggregate by linking the
+  // persisted per-element documents, and without it the first write is that
+  // rebuild; every container write is confirmed; and once converged, no
   // further commits occur — including across a long stretch of logical time —
   // with the rebuilt aggregate present in durable server state.
   async function runResumeSequence<T extends unknown[]>(
@@ -877,6 +882,7 @@ describe("list builtin resume container defer", () => {
     resultField: string,
     read: (rc: Cell<any>) => T,
     expected: T,
+    seeds = true,
   ): Promise<void> {
     const persisted = new Map<string, { id: string; scope?: unknown }>();
     sm1Frame = (direction, payload) => {
@@ -1048,15 +1054,20 @@ describe("list builtin resume container defer", () => {
         // write: recovery confirmed absence, then wrote.
         expect(firstAbsent).toBeGreaterThanOrEqual(0);
         expect(firstAbsent).toBeLessThan(firstValueWrite);
-        // The first aggregate write is the empty seed — it writes `[]` into
-        // the slots and carries none of the aggregate's element content — and
-        // the rebuild is a later aggregate write carrying all of it. Nothing
-        // between them writes element content either.
+        // For a builtin that seeds, the first aggregate write is the empty
+        // seed — it writes `[]` into the slots and carries none of the
+        // aggregate's element content — and the rebuild is a later aggregate
+        // write carrying all of it. For one that does not, the first is the
+        // rebuild. Nothing before the rebuild writes element content either.
         const seed = valueWrites[0];
-        expect(writesEmptyAggregate(JSON.parse(seed.opsJson))).toBe(true);
-        expect(carriesAnyElement(seed)).toBe(false);
         const rebuildIndex = writes.findIndex(carriesFullAggregate);
-        expect(rebuildIndex).toBeGreaterThan(writes.indexOf(seed));
+        if (seeds) {
+          expect(writesEmptyAggregate(JSON.parse(seed.opsJson))).toBe(true);
+          expect(carriesAnyElement(seed)).toBe(false);
+          expect(rebuildIndex).toBeGreaterThan(writes.indexOf(seed));
+        } else {
+          expect(rebuildIndex).toBe(writes.indexOf(seed));
+        }
         for (const write of writes.slice(0, rebuildIndex)) {
           expect(carriesAnyElement(write)).toBe(false);
         }
@@ -1217,7 +1228,10 @@ describe("list builtin resume container defer", () => {
     );
   });
 
-  it("map resume confirms absence, seeds, then rebuilds durably", async () => {
+  it("map resume confirms absence, then rebuilds durably without seeding", async () => {
+    // A map writes its container only when a reconcile succeeds, so its
+    // resume seeds nothing: an absent container is one no reconcile wrote.
+
     await runResumeSequence(
       MAP_PROGRAM,
       MAP_ITEMS,
@@ -1225,6 +1239,7 @@ describe("list builtin resume container defer", () => {
       "doubled",
       (rc) => rc.key("doubled").getAsQueryResult() ?? [],
       [2, 4, 6],
+      false,
     );
   });
 });

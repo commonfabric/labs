@@ -692,13 +692,14 @@ describe("launch", () => {
         .toThrow(/^(?!.*pieces\.json).*$/s);
     });
 
-    it("throws for a space named by DID, which composes no piece URL", () => {
-      expect(() =>
-        resolveConsoleLaunchPlan(NO_INSTANCE, {
-          ...NAMED_FABRIC,
-          space: "did:key:z6Mk",
-        })
-      ).toThrow("rather than a DID");
+    it("returns a plan naming the space DID a caller gives", () => {
+      const space = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+      const plan = resolveConsoleLaunchPlan(NO_INSTANCE, {
+        ...NAMED_FABRIC,
+        space,
+      });
+
+      expect(plan.environment.CF_HARNESS_FABRIC_SPACE).toBe(space);
     });
   });
 

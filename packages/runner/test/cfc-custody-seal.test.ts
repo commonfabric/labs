@@ -2282,15 +2282,17 @@ describe("cfc-custody-seal", () => {
 
     it("reads a seat cell's attestation and its clauses from the same entries", async () => {
       const cases: [unknown[], RegExp][] = [
-        // An attestation a link carries from the document it points to says
-        // whom that document represents, not whom the seat cell does.
+        // A seat cell with no written name is read from every entry, an
+        // attestation a link carried included, so a private clause on that
+        // entry is the seat's too.
         [[{
           path: [],
           observes: "followRef",
           label: {
             integrity: [{ kind: "represents-principal", subject: carol.did() }],
+            confidentiality: [cfcAtom.user(bob.did())],
           },
-        }], /attests no principal/],
+        }], /the room's readers do not hold/],
         // A private clause on the cell's shape is as much the cell's as one
         // on its value.
         [[{

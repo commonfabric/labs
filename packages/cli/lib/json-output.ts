@@ -109,19 +109,15 @@ export function reservesStdoutForCommandOutput(
   }
   if (args[0] === "exec") return true;
   if (args[0] === "wish") return true;
-  // `set` is absent for the same reason it is absent below: it writes prose,
-  // not a machine surface. The superseded top-level spellings of `get` and
-  // `call` answer for as long as they are mounted, so they reserve stdout on
-  // the same terms as the nouns that replaced them.
-  if (args[0] === "get" || args[0] === "call") return true;
   const subcommand = nounSubcommand(args);
   if (subcommand === undefined) return false;
   // Keyed by the whole path where the noun decides the answer, and by the
-  // subcommand alone where both nouns agree.
+  // subcommand alone where it does not. `cell set` is absent because it
+  // writes prose, not a machine surface.
   const path = `${args[0]} ${subcommand}`;
   return path === "cell get" || path === "piece call" ||
-    subcommand === "get-label" ||
-    subcommand === "set-label" ||
+    path === "cell get-label" ||
+    path === "cell set-label" ||
     subcommand === "survey" || subcommand === "repair" ||
     subcommand === "retarget" || subcommand === "rollback" ||
     subcommand === "restore";

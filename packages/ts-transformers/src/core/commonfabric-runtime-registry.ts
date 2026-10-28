@@ -100,6 +100,27 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     category: "ignored",
     reactiveOrigin: false,
   },
+  // Reads whose own profile a cell is, from its label and the pointers along
+  // its name, and returns a plain DID. It builds no graph node.
+  {
+    exportName: "profileOwnerOf",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  // Reads which pattern result a cell belongs to, from the runtime's
+  // back-link, and returns a plain string. It builds no graph node.
+  {
+    exportName: "resultOwnerOf",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  // Reads a list's elements as the cells their links name, and returns them
+  // as plain cells. It builds no graph node.
+  {
+    exportName: "linksOf",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
   // Reads the key of the event the running handler handles, and returns a
   // plain string rather than a reactive value.
   {
@@ -131,6 +152,17 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
   // originates nothing reactive and is a plain call.
   {
     exportName: "assertRenderParts",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  // `nameInstance` gives a sub-pattern instance bound to a `const` its
+  // instance name and returns the instance unchanged.
+  // ReactiveVariableForTransformer emits the calls when its `instanceNames`
+  // option is on; authored code does not.
+  // The instance it hands back is the pattern call's own result, so the call
+  // originates nothing reactive of its own and is a plain call.
+  {
+    exportName: "nameInstance",
     category: "ignored",
     reactiveOrigin: false,
   },
@@ -321,6 +353,13 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     category: "ignored",
     reactiveOrigin: false,
   },
+  // spaceMembers(target) reads the principals the space's access list names,
+  // and builds no graph node either.
+  {
+    exportName: "spaceMembers",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
   // spaceOf(target) returns the DID of the space a cell's value lives in, or
   // `undefined`. It builds no graph node, so it is a plain call inside the
   // computation or handler that makes it.
@@ -340,6 +379,14 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
   },
   {
     exportName: "revokeSpaceAccess",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  // nameBlob(target, blobId, name) stages a blob's record in the running
+  // handler and returns its id. It builds no graph node, so it is a plain call
+  // inside the handler that makes it.
+  {
+    exportName: "nameBlob",
     category: "ignored",
     reactiveOrigin: false,
   },

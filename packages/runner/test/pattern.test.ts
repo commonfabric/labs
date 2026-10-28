@@ -200,12 +200,26 @@ describe("pattern", () => {
     ).toThrow("is reserved");
   });
 
+  it("rejects a reserved $instance key in user-supplied causes at build time", () => {
+    const isPositive = lift((value: number) => value > 0);
+
+    // A user cause carrying `$instance` would mimic a named sub-pattern
+    // instance's cause — the build throws at the `.for()` call.
+    expect(() =>
+      pattern(() => {
+        const sneaky = (isPositive(1) as any).for({ $instance: "child" });
+        return { sneaky };
+      })
+    ).toThrow('top-level key "$instance" is reserved');
+  });
+
   it("accepts record causes without a top-level $generated key", () => {
     const isPositive = lift((value: number) => value > 0);
 
     const testPattern = pattern(() => {
       // Nested `$generated` can't collide with the flat generated causes, and
-      // only `$generated` is reserved — other `$`-keys stay legal.
+      // only `$generated` and `$instance` are reserved — other `$`-keys stay
+      // legal.
       const nested = (isPositive(1) as any).for({ outer: { $generated: 0 } });
       const sigilish = (isPositive(2) as any).for({ $kind: "stream" });
       return { nested, sigilish };

@@ -377,6 +377,20 @@ export function localObjectName(context: RunContext): string {
 }
 
 /**
+ * The parts of the name the shipping action gives a job's artifact,
+ * `test-records-<artifact>-a<attempt>`: the suffix the job named it for,
+ * and the run attempt that uploaded it. Undefined for any other name.
+ */
+export function shippedArtifact(
+  name: string,
+): { artifact: string; attempt: number } | undefined {
+  const [, artifact, attempt] = name.match(/^test-records-(.+)-a(\d+)$/) ?? [];
+  return artifact === undefined || attempt === undefined
+    ? undefined
+    : { artifact, attempt: Number(attempt) };
+}
+
+/**
  * Object name for one CI artifact's records, relative to the relay's
  * `submissions/ci/` folder. The run id and the artifact name — which
  * carries the attempt that produced it — are unique within a repository,

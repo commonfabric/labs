@@ -109,6 +109,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-avatar-input` | Picks an image and fires it as profile-picture bytes, cropped square and scaled down | |
 | `cf-badge` | Status indicator / label with visual variants | |
 | `cf-bar-mark` | Bar mark rendered inside `cf-chart` | `$data` |
+| `cf-blob-link` | Link that downloads a blob from a space's blob store, given its reference `{ space, id }` (see [files](../capabilities/files.md)) | |
 | `cf-button` | Interactive button with color/variant/size options | |
 | `cf-calendar` | Month-grid mini calendar | `$value`, `$markedDates` |
 | `cf-canvas` | Fixed-size canvas surface emitting `cf-canvas-click` with x/y | |
@@ -147,6 +148,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-hscroll` | Horizontal scroll container | |
 | `cf-hstack` | Horizontal stack layout (flexbox) (see [stacks](#cf-vstack--cf-hstack)) | |
 | `cf-iframe` | Sandboxed guest with explicit cell, stream, SQLite, service, or presence-room capabilities | |
+| `cf-image` | Image from raw `bytes` and a `media-type`, or from a blob reference `{ space, id }` (see [files](../capabilities/files.md)) | |
 | `cf-image-input` | Image capture/upload with compression, EXIF, camera support | |
 | `cf-input` | Text input with validation and reactive binding | `$value` |
 | `cf-input-otp` | One-time-password input with individual digit fields | |
@@ -169,7 +171,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-picker` | Carousel selection over cells with `[UI]` | `$items`, `$selectedIndex` |
 | `cf-piece` | Provides piece context to child components | |
 | `cf-plaid-link` | Plaid banking integration | `$auth` |
-| `cf-profile-badge` | The blessed, trusted way to render a profile identity (avatar + name + the generative verification seal — a DID-derived aura ring + cursor glint, no shield icon); navigable to the profile. Variants `full`/`chip`/`circle`/`hero` + `size`/`noNavigate` attrs (CT-1761). Prefer it over a bare name/avatar anywhere an identity appears. | `$profile` |
+| `cf-profile-badge` | The blessed, trusted way to render a profile identity (avatar + name + the generative verification seal — an aura ring derived from the owner's DID and, for a profile, its space, + cursor glint, no shield icon); navigable to the profile. Variants `full`/`chip`/`circle`/`hero` + `size`/`noNavigate` attrs (CT-1761). Prefer it over a bare name/avatar anywhere an identity appears. | `$profile` |
 | `cf-progress` | Progress bar, determinate or indeterminate | |
 | `cf-prompt-input` | Multiline prompt input with `@`-mentions, attachments, voice | `$mentionable`, `$model` |
 | `cf-question` | Asks a single question and collects the answer | |
@@ -190,7 +192,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-slider` | Range input slider | `$value` |
 | `cf-space-create` | Label field + create button that creates a new space owned by the signed-in identity, with a random DID, and adds it to that identity's Home space list; fires `cf-space-created` with `{ did, label }`; the label is the entry's name | |
 | `cf-space-link` | Renders a space as a clickable navigation pill; opens the space by `spaceDid` when given, else by the legacy `spaceName` | |
-| `cf-submit-input` | Text field + submit button whose real (trusted) click carries the typed text as `event.target.value` with the surface's UI integrity, so it can authorize an owner-protected runtime write; prefer over `cf-message-input` when the submit gesture must be trusted | |
+| `cf-submit-input` | Text field + submit button whose real (trusted) click carries the typed text as `event.target.value` with the surface's UI integrity, so it can authorize an owner-protected runtime write; prefer over `cf-message-input` when the submit gesture must be trusted | `$draft` |
 | `cf-svg` | Renders SVG content from a string; safe for untrusted content, and anything that would run script is dropped | |
 | `cf-switch` | Toggle switch for binary on/off state | `$checked` |
 | `cf-tab` | Individual tab button used within `cf-tab-list` | |
@@ -219,6 +221,26 @@ cell means none confirmed — check the component source before assuming.
 | `cf-webhook` | Webhook integration: receives payloads into a stream | `$inbox`, `$config` |
 
 ---
+
+## cf-submit-input
+
+Clicking the submit button or pressing Enter sends a trusted click to the host's
+`onClick` handler. Its `target.value` is the exact displayed text. Without a
+binding, the field clears after dispatching that click; `initialValue` can seed
+it once.
+
+Bind `$draft` to a writable `{ value: string; revision: string }` cell to keep
+drafts across placements and let the caller decide when to clear them. The field
+writes a new revision for every input edit and carries that revision as
+`target.dataset.draftRevision` on the submit click. The handler stores the event's
+text, and clears the bound draft in the accepting transaction only if both its
+revision and value still match the event. Keep the revision when clearing its
+value. A refused send leaves the draft untouched, and a newer edit survives even
+when its text is identical to the submitted text. The bound field uses
+`CellController` to protect pending local edits from stale deliveries.
+
+The draft binding supplies its own initial text and controls clearing; a bound
+field does not use `initialValue` or clear itself after dispatch.
 
 ## cf-form
 
@@ -1074,7 +1096,7 @@ and (for the current viewer) a verified seal that user-space cannot forge.
 
 | You are showing… | Use | Why |
 | --- | --- | --- |
-| **any participant** whose live profile cell you hold — the viewer (via `wish`) or anyone who contributed their cell on join | `cf-profile-badge` bound to that cell | trusted; draws name + avatar + a DID-derived verified seal; cross-space reads resolve for every viewer (CT-1667/1687) |
+| **any participant** whose live profile cell you hold — the viewer (via `wish`) or anyone who contributed their cell on join | `cf-profile-badge` bound to that cell | trusted; draws name + avatar + a verified seal; verification attests the owner, and the seal, derived from the owner's DID and the profile's space, tells their profiles apart (a record of the person that is not a profile wears the owner's seal alone); cross-space reads resolve for every viewer (CT-1667/1687) |
 | a person you hold **only a snapshot** for — a self-contained piece, or an offline remote profile space | `cf-avatar` + their name | untrusted fallback, safe for any value; needs no profile cell |
 | a row that **may or may not** carry a profile — one written before the space had profiles, beside rows that do | `cf-profile-badge` with `fallback-name` | one binding for both, so nothing has to test a cell-typed field for presence; the name shows only where no profile resolves |
 
@@ -1147,8 +1169,10 @@ const profileWish = wish({ query: "#profile" }); // resolves the viewer's profil
   other participants, bind the profile cell they contributed to the shared roster
   on join.
 - `size`: `xs | sm | md | lg | xl`.
-- The verified seal only appears for a live, runtime-attested profile cell (it
-  will not show in stories or `--no-run` checks — that is expected, not a failure).
+- The verified seal only appears for a live, runtime-attested cell: a profile,
+  or another record of the person whose label attests them, which wears the
+  owner's seal alone (it will not show in stories or `--no-run` checks — that
+  is expected, not a failure).
 - **Every participant** with a stored profile cell can be badged — not just the
   viewer. Cross-space profile reads resolve for any authorized viewer (CT-1667/1687),
   so store each person's `#profile` cell in the shared `PerSpace` roster on join and

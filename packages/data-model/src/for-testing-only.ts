@@ -24,8 +24,9 @@
  * among them. They are what `test/fixtures/fvj1-conformance.json` and
  * `test/fixtures/hash-conformance.json` are generated from: language-neutral
  * records of what this package's JSON codec and hasher do, against which an
- * implementation of either elsewhere tests itself. Their values are written in
- * the notation `test/fixtures/value-descriptors.md` defines.
+ * implementation of either elsewhere tests itself. Both write each value as an
+ * `fvj1:` text with the mods to decoding it, and the JSON codec's states what
+ * a decode returns by probes, as `test/fixtures/value-probes.md` defines.
  *
  * An internal is here when a test of the package's public surface cannot reach
  * it dependably. Each one's doc comment says why that is.
@@ -56,18 +57,32 @@ import {
   FabricUnavailable,
 } from "@/fabric-primitives";
 import {
-  descriptorOf,
-  fabricValueOfDescriptor,
-  type ValueDescriptor,
+  fabricValueOfTextWithMods,
+  type FixtureJson,
+  type FixtureRequirements,
+  type FixtureString,
+  meetsRequirements,
+  type PathStep,
+  type ProbeForm,
+  probesOf,
+  requirementsOf,
+  SIZE_FLOORS,
+  type SizeMeasure,
+  type TextWithMods,
+  textWithModsOf,
+  type ValuePatch,
+  type ValuePath,
+  type ValueProbe,
 } from "./conformance-fixtures.ts";
 import {
   type Fvj1ConformanceCase,
   fvj1ConformanceCases,
   fvj1ConformanceFixtureText,
-  type Fvj1DecodeOutcome,
   fvj1DecodeOutcomeOf,
-  type Fvj1EncodeOutcome,
   fvj1EncodeOutcomeOf,
+  type Fvj1Outcome,
+  fvj1ProblematicPathsOf,
+  type Fvj1Refusal,
 } from "./fvj1-conformance.ts";
 import {
   type HashConformanceCase,
@@ -272,29 +287,78 @@ export const FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY: {
 });
 
 export type {
+  FixtureJson,
+  FixtureRequirements,
+  FixtureString,
   Fvj1ConformanceCase,
-  Fvj1DecodeOutcome,
-  Fvj1EncodeOutcome,
+  Fvj1Outcome,
+  Fvj1Refusal,
   HashConformanceCase,
   HashOutcome,
-  ValueDescriptor,
+  PathStep,
+  ProbeForm,
+  SizeMeasure,
+  TextWithMods,
+  ValuePatch,
+  ValuePath,
+  ValueProbe,
 };
 
 /**
- * `descriptorOf()` from `conformance-fixtures.ts`, which returns a value's
- * descriptor in the notation `test/fixtures/value-descriptors.md` defines.
+ * The floor `3-json-encoding.md` section 12 sets by each measure of a value's
+ * size, past which a fixture entry states the guarantee it requires.
  */
-export const descriptorOfForTestingOnly: (
-  value: FabricValue,
-) => ValueDescriptor = descriptorOf;
+export const SIZE_FLOORS_FOR_TESTING_ONLY: {
+  readonly [Measure in SizeMeasure]: number;
+} = SIZE_FLOORS;
 
 /**
- * `fabricValueOfDescriptor()` from `conformance-fixtures.ts`, the inverse of
- * {@link descriptorOfForTestingOnly}.
+ * `requirementsOf()` from `conformance-fixtures.ts`, which returns what a
+ * reader must support to read the fixture entry for a text and mods: the
+ * flavors a case marks, and by each measure the size of the value the text
+ * writes, past the floors.
  */
-export const fabricValueOfDescriptorForTestingOnly: (
-  descriptor: ValueDescriptor,
-) => FabricValue = fabricValueOfDescriptor;
+export const requirementsOfForTestingOnly: (
+  stated: TextWithMods,
+  flavors?: readonly string[],
+) => FixtureRequirements | undefined = requirementsOf;
+
+/**
+ * `meetsRequirements()` from `conformance-fixtures.ts`, which indicates
+ * whether this package meets what a fixture entry requires, a reader skipping
+ * an entry whose requirements it does not meet.
+ */
+export const meetsRequirementsForTestingOnly: (
+  requires: FixtureRequirements | undefined,
+) => boolean = meetsRequirements;
+
+/**
+ * `probesOf()` from `conformance-fixtures.ts`, which returns a value's probes,
+ * in the vocabulary `test/fixtures/value-probes.md` defines, but none at or
+ * under a path a patch in `patches` states, no text carrying what a patch puts
+ * there.
+ */
+export const probesOfForTestingOnly: (
+  value: FabricValue,
+  patches?: readonly ValuePatch[],
+) => ValueProbe[] = probesOf;
+
+/**
+ * `textWithModsOf()` from `conformance-fixtures.ts`, which returns a value
+ * written as an `fvj1:` text and the mods to decoding it.
+ */
+export const textWithModsOfForTestingOnly: (
+  value: FabricValue,
+) => TextWithMods = textWithModsOf;
+
+/**
+ * `fabricValueOfTextWithMods()` from `conformance-fixtures.ts`, which returns
+ * the value an `fvj1:` text and the mods to decoding it write, the inverse of
+ * {@link textWithModsOfForTestingOnly}.
+ */
+export const fabricValueOfTextWithModsForTestingOnly: (
+  stated: TextWithMods,
+) => FabricValue = fabricValueOfTextWithMods;
 
 /**
  * The conformance cases for the `fvj1:` JSON encoding, those in
@@ -320,21 +384,30 @@ export const fvj1ConformanceFixtureTextForTestingOnly: (
 
 /**
  * `fvj1EncodeOutcomeOf()` from `fvj1-conformance.ts`, which returns what
- * encoding a value with this package's default JSON codec does, in the shape a
- * fixture entry's `encode` holds.
+ * encoding a value with this package's default JSON codec does: the text it
+ * writes, or the refusal.
  */
 export const fvj1EncodeOutcomeOfForTestingOnly: (
   value: FabricValue,
-) => Fvj1EncodeOutcome = fvj1EncodeOutcomeOf;
+) => Fvj1Outcome = fvj1EncodeOutcomeOf;
 
 /**
  * `fvj1DecodeOutcomeOf()` from `fvj1-conformance.ts`, which returns what
- * decoding a text with this package's default JSON codec does, in the shape a
- * fixture entry's `decode` holds.
+ * decoding a text with mods with this package's JSON codec does: the probes of
+ * the value it returns, or the refusal.
  */
 export const fvj1DecodeOutcomeOfForTestingOnly: (
+  stated: TextWithMods,
+) => Fvj1Outcome = fvj1DecodeOutcomeOf;
+
+/**
+ * `fvj1ProblematicPathsOf()` from `fvj1-conformance.ts`, which returns the
+ * path of each `ProblematicValue` a lenient decode of a text with this
+ * package's default JSON codec returns.
+ */
+export const fvj1ProblematicPathsOfForTestingOnly: (
   text: string,
-) => Fvj1DecodeOutcome = fvj1DecodeOutcomeOf;
+) => ValuePath[] = fvj1ProblematicPathsOf;
 
 /**
  * The conformance cases for the content hash, those in `hash-conformance.ts`

@@ -11,7 +11,17 @@
  */
 
 import { diffContentRowCount, maxPagerTop, maxTop } from "./actions.ts";
-import { cpLen, paint, RESET, type Style } from "./ansi.ts";
+import {
+  cpLen,
+  LEADING_ESCAPE,
+  paint,
+  RESET,
+  stripAnsi,
+  type Style,
+  term,
+  visibleWidth,
+} from "./ansi.ts";
+import { BLAME_WIDTH, blameLabel, type BlameLine } from "./blame.ts";
 import type { Document, Line, StructureNode, ViewMode } from "./model.ts";
 import {
   type DisplayCell,
@@ -204,6 +214,14 @@ export interface ViewState {
    * when `showLineNumbers` is set. */
   lineNumbers?: readonly (number | null)[] | null;
 
+  /** The blame column: the attribution it shows on each display line in view,
+   * or null there for none, and the time its ages are measured to, in
+   * milliseconds since the epoch. Null or absent when the column is hidden. */
+  blame?: {
+    readonly lines: readonly (BlameLine | null)[];
+    readonly now: number;
+  } | null;
+
   /** How the non-printable characters in the content are shown. */
   displayMode: DisplayMode;
 
@@ -294,6 +312,13 @@ function gutterWidth(doc: Document, view: ViewState): number {
   return Math.max(4, String(Math.max(1, max)).length + 1);
 }
 
+/** The width of the blame column at the right of a `width`-column screen: its
+ * full width when it is `shown` and leaves at least as much for the rest of the
+ * row, else zero. */
+export function blameColumnWidth(width: number, shown: boolean): number {
+  return shown && width >= 2 * BLAME_WIDTH ? BLAME_WIDTH : 0;
+}
+
 /** Layout widths the content area is laid out with, for cursor placement. */
 function layout(
   doc: Document,
@@ -302,9 +327,11 @@ function layout(
   gutterWidth: number;
   guideWidth: number;
   contentWidth: number;
+  blameWidth: number;
 } {
+  const blameWidth = blameColumnWidth(view.width, !!view.blame);
   const fitted = fitViewLayout(
-    view.width,
+    view.width - blameWidth,
     gutterWidth(doc, view),
     view.selected ? 1 : 0,
     view.expandMargin ? DIFF_MARGIN_WIDTH : 0,
@@ -314,6 +341,7 @@ function layout(
     gutterWidth: fitted.gutterWidth,
     guideWidth: fitted.guideWidth,
     contentWidth: fitted.contentWidth + fitted.marginWidth,
+    blameWidth,
   };
 }
 
@@ -375,7 +403,9 @@ export interface OverlayState {
 
 /** A push-button in a modal dialog. Its {@link kind} sets where the Tab focus
  * starts ("default") and which button Esc activates ("cancel"); its first letter
- * matching {@link hotkey} is drawn highlighted and activates it directly. */
+ * matching {@link hotkey} is drawn highlighted and activates it directly. A
+ * lowercase hotkey answers its letter typed in either case; an uppercase one
+ * answers only the uppercase letter. */
 export interface DialogButton {
   readonly label: string;
   readonly hotkey: string;
@@ -387,6 +417,14 @@ export interface DialogState {
   readonly title: string;
   readonly body: readonly string[];
   readonly buttons: readonly DialogButton[];
+
+  /** Whether the body is program output, which starts at the left margin
+   * rather than being centered. */
+  readonly output?: boolean;
+
+  /** The width the box gives the body, in columns, when that is fixed rather
+   * than fitted to the body's lines. */
+  readonly width?: number;
 
   /** Index of the focused button — the one Space and Enter activate, drawn
    * highlighted. When absent, the default button (if any) is highlighted. */
@@ -488,6 +526,7 @@ export function renderFrame(doc: Document, view: ViewState): string[] {
     gutterWidth: gw,
     guideWidth,
     contentWidth,
+    blameWidth,
   } = layout(doc, view);
   const annotations = new Map(
     (view.diffAnnotations ?? []).map((annotation) => [
@@ -559,7 +598,9 @@ export function renderFrame(doc: Document, view: ViewState): string[] {
   let endMarkStart = diffEndRow + (hasDiffEndConnector ? 1 : 0);
   const availableEndRows = contentHeight - Math.max(0, endMarkStart - view.top);
   const showEndMark = view.isDiff === true && !view.cursor;
-  let endRows = showEndMark ? endMarkRows(view.width, availableEndRows) : [];
+  // End-mark rows span the screen up to the blame column.
+  const endWidth = Math.max(1, view.width - blameWidth);
+  let endRows = showEndMark ? endMarkRows(endWidth, availableEndRows) : [];
   if (
     showEndMark && hasDiffEndConnector && availableEndRows <= 0 &&
     diffEndRow >= view.top && diffEndRow < view.top + contentHeight
@@ -571,6 +612,7 @@ export function renderFrame(doc: Document, view: ViewState): string[] {
   let displayedCells: readonly DisplayCell[] | undefined;
   let displayedSelection: SelectionSpan | null = null;
   let displayedMatches: LineMatches | null = null;
+  let blameStartLine = -1;
 
   for (let r = 0; r < contentHeight; r++) {
     const rowIdx = view.top + r;
@@ -578,7 +620,7 @@ export function renderFrame(doc: Document, view: ViewState): string[] {
     if (endMark !== null) {
       const suffix = plainSuffix(
         hasDiffEndConnector && rowIdx === diffEndRow
-          ? diffEndSuffix(view.width)
+          ? diffEndSuffix(endWidth)
           : "",
       );
       rows.push(
@@ -586,9 +628,9 @@ export function renderFrame(doc: Document, view: ViewState): string[] {
           undefined,
           view,
           0,
-          Math.max(1, view.width),
-          Math.max(1, view.width),
-          Math.max(1, view.width),
+          endWidth,
+          endWidth,
+          endWidth,
           0,
           false,
           null,
@@ -596,7 +638,7 @@ export function renderFrame(doc: Document, view: ViewState): string[] {
           null,
           endMark,
           suffix,
-        ),
+        ) + blameCell(null, 0, false, blameWidth, view.color),
       );
       continue;
     }
@@ -617,6 +659,15 @@ export function renderFrame(doc: Document, view: ViewState): string[] {
       displayedSelection = null;
       displayedMatches = null;
     }
+    // A line's blame label goes on the first of its rows on screen, unless the
+    // line above it is on screen and comes from the same commit, so each run of
+    // lines from one commit is labeled once.
+    const startsOnScreen = firstOfLine || r === 0;
+    const labelsBlame = startsOnScreen &&
+      !(blameStartLine === lineIdx - 1 &&
+        view.blame?.lines[lineIdx - 1]?.commit ===
+          view.blame?.lines[lineIdx]?.commit);
+    if (startsOnScreen) blameStartLine = lineIdx;
     const annotation = annotations.get(lineIdx);
     const labelsWrappedExpansion = annotation === "expandDown" &&
       wrapPlan !== null &&
@@ -667,7 +718,7 @@ export function renderFrame(doc: Document, view: ViewState): string[] {
         contentWidth,
         wrapPlan,
         suffix,
-      ),
+      ) + blameCell(view.blame, lineIdx, labelsBlame, blameWidth, view.color),
     );
   }
   rows.push(renderStatus(doc, view, wrapPlan));
@@ -759,6 +810,28 @@ function renderContentRow(
     suffix,
   );
   return gutter + guide + content;
+}
+
+/** A `width`-column cell of the `blame` column for a row showing display
+ * line `lineIdx`, carrying the line's label when `labeled`. */
+function blameCell(
+  blame: ViewState["blame"],
+  lineIdx: number,
+  labeled: boolean,
+  width: number,
+  color: boolean,
+): string {
+  if (width === 0) return "";
+  const line = blame?.lines[lineIdx];
+  const label = blame && line && labeled
+    ? truncate(showControls(blameLabel(line, blame.now)), width - 1, true)
+    : "";
+  // The label's alignment padding stays outside its link.
+  const text = label.trimStart();
+  const linked = color && line?.url && text
+    ? " ".repeat(label.length - text.length) + term.hyperlink(line.url, text)
+    : label;
+  return paintIf(" " + padTo(linked, width - 1), ui.lineNumber, color);
 }
 
 function guideChar(
@@ -1097,12 +1170,15 @@ function renderStatus(
 
   // The right of the bar carries the current file (bold) then the position; the
   // file is capped so it never crowds out the position or the left hints.
-  const fileMax = Math.max(8, Math.floor(view.width / 2) - visibleLen(pos) - 2);
+  const fileMax = Math.max(
+    8,
+    Math.floor(view.width / 2) - visibleWidth(pos) - 2,
+  );
   const file = view.currentFile
     ? truncate(showControls(view.currentFile), fileMax, false)
     : "";
   const rightPlain = file ? `${file}  ${pos}` : pos;
-  const rightW = visibleLen(rightPlain);
+  const rightW = visibleWidth(rightPlain);
 
   // The left is truncated to whatever space the right leaves it.
   const leftBudget = Math.max(0, view.width - rightW - 2);
@@ -1120,7 +1196,7 @@ function renderStatus(
   const rightAnsi =
     (file ? paint(file, ui.statusFile) + paint("  ", ui.statusBar) : "") +
     paint(pos, ui.statusBar);
-  const leftW = visibleLen(leftPlain);
+  const leftW = visibleWidth(leftPlain);
   const space = Math.max(1, view.width - leftW - rightW);
   const line = leftAnsi + paint(" ".repeat(space), ui.statusBar) + rightAnsi;
   const pad = view.width - (leftW + space + rightW);
@@ -1134,7 +1210,7 @@ function fitHints(
 ): readonly KeyHint[] {
   const out: KeyHint[] = [];
   for (const h of hints) {
-    if (visibleLen(hintsPlain([...out, h])) > budget) break;
+    if (visibleWidth(hintsPlain([...out, h])) > budget) break;
     out.push(h);
   }
   return out;
@@ -1351,7 +1427,7 @@ function darkenSpan(
   if (r < 0 || r >= rows.length || from < 0) return;
   const n = Math.min(count, view.width - from);
   if (n <= 0) return;
-  const chars = sliceVisible(rows[r], from, from + n).replace(ANSI, "")
+  const chars = stripAnsi(sliceVisible(rows[r], from, from + n))
     .padEnd(n, " ").slice(0, n);
   rows[r] = overlayRow(rows[r], from, paint(chars, ui.overlayShadow));
 }
@@ -1398,10 +1474,15 @@ export interface DialogBox {
 }
 
 /** Geometry of the centered dialog box, sized to its content (title, body and
- * button row) and clamped to leave two cells for the drop shadow. */
-export function dialogBox(view: ViewState, dialog: DialogState): DialogBox {
+ * button row) or to the body's fixed width, and clamped to leave two cells for
+ * the drop shadow. */
+export function dialogBox(
+  view: Pick<ViewState, "width" | "height">,
+  dialog: DialogState,
+): DialogBox {
   const titleW = cpLen(dialog.title) + 4; // the padding spaces and some fill
-  const bodyW = dialog.body.reduce((m, l) => Math.max(m, cpLen(l)), 0);
+  const bodyW = dialog.width ??
+    dialog.body.reduce((m, l) => Math.max(m, cpLen(l)), 0);
   const btnW = buttonsWidth(dialog.buttons);
   const contentW = Math.max(titleW, bodyW, btnW);
   // The margin columns each side, then the two borders.
@@ -1450,6 +1531,37 @@ function layoutButtons(
   return out;
 }
 
+/**
+ * Returns the inner row of a dialog box of `innerH` rows that the buttons are
+ * drawn on, or -1 when the box is too short to show them below the body.
+ */
+function buttonRowOf(dialog: DialogState, innerH: number): number {
+  const row = innerH - 2; // the buttons' shadow takes the last row
+  return row > dialog.body.length ? row : -1;
+}
+
+/**
+ * Returns the index of the button drawn at the zero-based screen cell `x`, `y`,
+ * at rest or pushed one column right, or -1 when no button is drawn there.
+ */
+export function dialogButtonAt(
+  view: Pick<ViewState, "width" | "height">,
+  dialog: DialogState,
+  x: number,
+  y: number,
+): number {
+  const box = dialogBox(view, dialog);
+  const buttonRow = buttonRowOf(dialog, box.innerH);
+  const col = x - box.x - 1;
+  if (
+    box.boxW < 2 || buttonRow < 0 || y !== box.y + 1 + buttonRow ||
+    col >= box.innerW
+  ) return -1;
+  return layoutButtons(dialog.buttons, box.innerW).findIndex((
+    { start, faceW },
+  ) => col >= start && col <= start + faceW);
+}
+
 /** The face index of the highlighted shortcut letter, or -1 if the hotkey does
  * not appear in the label. Offset by one for the leading pad space. */
 function hotkeyFaceIndex(b: DialogButton): number {
@@ -1482,8 +1594,7 @@ function applyDialog(
   );
 
   const layout = layoutButtons(dialog.buttons, innerW);
-  const buttonRow = innerH - 2;
-  const shadowRow = innerH - 1;
+  const buttonRow = buttonRowOf(dialog, innerH);
   // The focused button is drawn highlighted; without an explicit focus, the
   // default button is. A pushed button is drawn mid-press.
   const focusIdx = dialog.focus ??
@@ -1494,10 +1605,10 @@ function applyDialog(
     for (let c = 0; c < innerW; c++) cells[c] = { ch: " ", style: panelBg };
     const bodyIdx = i - 1; // one blank row sits under the title
     if (bodyIdx >= 0 && bodyIdx < dialog.body.length) {
-      placeCentered(cells, dialog.body[bodyIdx], textStyle);
+      placeText(cells, dialog.body[bodyIdx], textStyle, dialog.output);
     } else if (i === buttonRow) {
       placeButtonFaces(cells, layout, view.color, panelBg, focusIdx, pushedIdx);
-    } else if (i === shadowRow && view.color) {
+    } else if (buttonRow >= 0 && i === buttonRow + 1 && view.color) {
       placeButtonShadows(cells, layout, panelBg, pushedIdx);
     }
     const rowText = paintIf("║", border, view.color) +
@@ -1508,11 +1619,19 @@ function applyDialog(
   if (view.color) castShadow(rows, view, x, y, boxW, boxH);
 }
 
-/** Write `text` centered in `cells`, one blank margin column inside each edge. */
-function placeCentered(cells: Cell[], text: string, style: Style): void {
+/** Write `text` in `cells`, centered or starting after the dialog's margin,
+ * and clipped to leave one blank column inside each edge. */
+function placeText(
+  cells: Cell[],
+  text: string,
+  style: Style,
+  leftAligned = false,
+): void {
   const innerW = cells.length;
   const chars = [...showControls(text)];
-  const start = 1 + Math.max(0, Math.floor((innerW - 2 - chars.length) / 2));
+  const start = leftAligned
+    ? DIALOG_HMARGIN
+    : 1 + Math.max(0, Math.floor((innerW - 2 - chars.length) / 2));
   for (let j = 0; j < chars.length; j++) {
     const col = start + j;
     if (col >= 1 && col <= innerW - 2) cells[col] = { ch: chars[j], style };
@@ -1581,7 +1700,7 @@ function placeButtonShadows(
 /** Splice `insert` into `base` starting at visible column `x`. */
 function overlayRow(base: string, x: number, insert: string): string {
   const left = sliceVisible(base, 0, x);
-  const insertW = visibleLen(insert);
+  const insertW = visibleWidth(insert);
   const right = sliceVisible(base, x + insertW, Number.MAX_SAFE_INTEGER);
   return left + RESET + insert + RESET + right;
 }
@@ -1666,15 +1785,8 @@ function kindGlyph(kind: string): string {
 // Visible-width string ops (ANSI-aware)
 //
 
-// deno-lint-ignore no-control-regex
-const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
-
-function visibleLen(text: string): number {
-  return cpLen(text.replace(ANSI, ""));
-}
-
 function padTo(text: string, width: number): string {
-  const len = visibleLen(text);
+  const len = visibleWidth(text);
   if (len >= width) return text;
   return text + " ".repeat(width - len);
 }
@@ -1687,8 +1799,7 @@ function sliceVisible(text: string, from: number, to: number): string {
   let i = 0;
   while (i < text.length) {
     if (text[i] === "\x1b") {
-      // deno-lint-ignore no-control-regex
-      const m = text.slice(i).match(/^\x1b\[[0-9;?]*[A-Za-z]/);
+      const m = text.slice(i).match(LEADING_ESCAPE);
       if (m) {
         out += m[0];
         i += m[0].length;
@@ -1723,7 +1834,6 @@ function truncCenter(text: string, width: number, fill: string): string {
 export const _internal = {
   sliceVisible,
   padTo,
-  visibleLen,
   cellsToAnsi,
   mergeBg,
   darkenSpan,

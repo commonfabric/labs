@@ -27,10 +27,18 @@ runs:
           exit 1
         fi
 
-        if deno install --cached-only "${frozen_arg[@]}"; then
+        binary_entrypoints=(
+          packages/toolshed/index.ts
+          packages/cli/mod.ts
+        )
+
+        if deno install --cached-only "${frozen_arg[@]}" &&
+          deno install --entrypoint --cached-only "${frozen_arg[@]}" "${binary_entrypoints[@]}"; then
           echo "Deno dependencies are available in the local cache."
-          exit 0
+        else
+          echo "Deno cache is incomplete; fetching dependencies."
+          deno install "${frozen_arg[@]}"
+          deno install --entrypoint "${frozen_arg[@]}" "${binary_entrypoints[@]}"
         fi
 
-        echo "Deno cache is incomplete; fetching dependencies."
-        deno install "${frozen_arg[@]}"
+        echo "CF_DENO_DEPENDENCIES_INSTALLED=1" >> "$GITHUB_ENV"

@@ -17,6 +17,33 @@ export function isPermanentRejection(
 }
 
 /**
+ * The space refused the commit because the principal lacks the grant the
+ * write needs: an `AuthorizationError` the memory server marked with
+ * `permanentEvidence`, beside the ACL revision (`aclRevision`) it decided
+ * the refusal by. No re-run can supply a grant, so the same write is refused
+ * again while that revision stands, and a reactive run takes no retry on
+ * one; it runs again when an input it did not write changes. An
+ * `AuthorizationError` without that evidence is not one of these, and keeps
+ * the bounded retry: a name off the wire is not durable evidence, and one
+ * the server marked `retriable` is a denial a fresh handshake heals.
+ */
+export function isPermanentAuthorizationRefusal(
+  error:
+    | {
+      name?: string;
+      permanentEvidence?: unknown;
+      aclRevision?: unknown;
+      retriable?: unknown;
+    }
+    | undefined
+    | null,
+): boolean {
+  return error?.name === "AuthorizationError" &&
+    error.permanentEvidence === true &&
+    typeof error.aclRevision === "number" && error.retriable !== true;
+}
+
+/**
  * The names of terminal commit rejections: a commit-time evaluation that
  * DETERMINISTICALLY refused the committed data itself, so re-running the
  * identical handler recomputes the identical refused write and can NEVER

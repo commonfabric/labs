@@ -596,15 +596,26 @@ session.
 
 Reactive reads through `get()`, `sink()`, and computations continue using cached
 documents; they do not surface terminal session errors through this check.
+`storageManager.subscribeSpaceSessionError(observer)` calls the observer with
+the space and the error when a space's session ends this way, so a long-lived
+subscriber learns that its documents will receive no further updates without
+reading anything.
 
 Remote memory connections use native WebSockets in browsers and for plain `ws:`
 URLs. Deno `wss:` connections use the `ws` package through Deno's Node TLS stack
 to avoid the native TLS flush bug tracked in
 [denoland/deno#36862](https://github.com/denoland/deno/issues/36862). This
-backend can be removed once the pinned Deno release includes the upstream fix.
-It uses Fabric's message compression, with WebSocket per-message compression
-disabled. Its send promise waits for local write completion; Fabric's protocol
-replies remain the authority for committed writes.
+backend also turns on TCP keepalive for the connection, starting probes after 30
+seconds without traffic. When the peer vanishes without closing the connection,
+the unanswered probes make the operating system fail the socket, and the memory
+client reconnects and restores the session's subscriptions. The operating
+system's probe interval and count decide how long that takes; with common
+defaults the socket fails about ten minutes after the connection goes quiet. The
+native Deno WebSocket exposes no socket options, so replacing this backend once
+the pinned Deno release includes the upstream fix needs another way to enable
+keepalive. It uses Fabric's message compression, with WebSocket per-message
+compression disabled. Its send promise waits for local write completion;
+Fabric's protocol replies remain the authority for committed writes.
 
 ```typescript
 import { Runtime } from "@commonfabric/runner";

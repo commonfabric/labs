@@ -159,6 +159,10 @@ async function readPlan(
   }
 
   const acl = await new ACLManager(runtime, space).getStored();
+  // Whether the profile's owner wrote a name decides which of its label's
+  // entries name its owner, so the document the name resolves to is loaded
+  // before the label is read.
+  await profile.key("name").resolveAsCell().sync();
   const owners = isACL(acl) && hasConcreteOwner(acl)
     ? Object.entries(acl).flatMap(([principal, capability]) =>
       principal !== "*" && capability === "OWNER" ? [principal] : []
@@ -168,6 +172,7 @@ async function readPlan(
   let represented: DID[] | undefined;
   try {
     represented = attestedPrincipalsAt(
+      runtime,
       tx,
       profileLink,
       "represents-principal",

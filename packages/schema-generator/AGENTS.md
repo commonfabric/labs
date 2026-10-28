@@ -43,7 +43,7 @@ subpath exports. Entry point is `src/index.ts` (not `mod.ts`).
   `Default`'s brand check) — a user type named e.g. `Integrity` will lower to
   `ifc` metadata. Known foot-gun; don't "fix" silently, it's load-bearing for
   api aliases.
-- JSDoc flows into schemas: first doc → `description`, `#hashtags` → `tags`,
+- JSDoc flows into schemas: first doc (including hashtags) → `description`,
   conflicting docs → `$comment`. Declaration files are excluded.
 - Two analysis paths — type-based and node-based (synthetic TypeNodes from
   ts-transformers, or `any`-widened types). They can encode literals differently

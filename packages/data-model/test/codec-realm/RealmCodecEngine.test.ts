@@ -11,7 +11,9 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 import { defer } from "@commonfabric/utils/defer";
+import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
 import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
 
 import type { FabricValue } from "@";
@@ -339,6 +341,84 @@ describe("RealmCodecEngine", () => {
     });
   });
 
+  describe("nesting past what the call stack holds", () => {
+    // Deep enough to exhaust any host's call stack, which gives out at a few
+    // thousand levels of these walks, and quick to build all the same.
+    const depth = 100_000;
+
+    /**
+     * Calls `body` with the `push()` of every `IndexTrackingStack` made to
+     * throw a `RangeError` once it has pushed for the `nth` time, as an
+     * exhausted call stack can: between a walk entering a container and the
+     * code that would leave it. A real overflow strikes there or elsewhere,
+     * as the engine's code happens to be compiled, which this pins down.
+     *
+     * Fails unless the stub took effect, `push()` having been called `nth`
+     * times and thrown, so that a walk which stops pushing there cannot let a
+     * test pass without reaching the window it is about.
+     */
+    function overflowingAtPush<T>(nth: number, body: () => T): T {
+      const push = IndexTrackingStack.prototype.push;
+      let pushes = 0;
+      let threw = false;
+      const pushStub = stub(
+        IndexTrackingStack.prototype,
+        "push",
+        function (this: IndexTrackingStack<unknown>, value: unknown): void {
+          push.call(this, value);
+          pushes++;
+          if (pushes === nth) {
+            threw = true;
+            throw new RangeError("Maximum call stack size exceeded");
+          }
+        },
+      );
+      try {
+        return body();
+      } finally {
+        pushStub.restore();
+        expect({ pushes: Math.min(pushes, nth), threw })
+          .toEqual({ pushes: nth, threw: true });
+      }
+    }
+
+    /** Returns an array of arrays `depth` deep, around `1`. */
+    function nestedArray(): FabricValue {
+      let value: FabricValue = 1;
+      for (let i = 0; i < depth; i++) {
+        value = [value];
+      }
+      return value;
+    }
+
+    it("throws the host's `RangeError` when encoding, and leaves the act able to encode again", () => {
+      const act = new RealmEncodeAct(
+        newDefaultRealmCodecEngine(),
+        NULL_LIVE_ENVIRONMENT,
+      );
+      const value = nestedArray();
+
+      expect(() => act.encodeValue(value)).toThrow(RangeError);
+      expect(() => act.encodeValue(value)).toThrow(RangeError);
+      expect(act.encodeValue([[1]])).toEqual([[1]]);
+    });
+
+    it("throws the `RangeError` that strikes just after a container is entered, when encoding and decoding", () => {
+      expect(() =>
+        overflowingAtPush(2, () => newDefaultRealmCodecEngine().encode([[1]]))
+      ).toThrow(RangeError);
+      expect(() =>
+        overflowingAtPush(2, () => fabricFromRealmValue(wire([[1]])))
+      ).toThrow(RangeError);
+    });
+
+    it("throws the host's `RangeError` when decoding", () => {
+      expect(() => fabricFromRealmValue(wire(nestedArray()))).toThrow(
+        RangeError,
+      );
+    });
+  });
+
   describe("decode()", () => {
     it("returns a plain payload as it stands", () => {
       // With no tagged form anywhere in it, an ordinary value decodes to
@@ -418,28 +498,42 @@ describe("RealmCodecEngine", () => {
       expect(() => fabricFromRealmValue(wire(walked))).toThrow(/reserves/);
     });
 
-    it("returns an empty `es2025` pattern for a `RegExp@1` state with no fields", () => {
-      // Section 7.1: every field of this codec's state defaults when absent,
-      // which is what lets a narrower encoder omit what it has nothing to say
-      // about.
+    it("returns a `ProblematicValue` for a `RegExp@1` state lacking a field", () => {
+      // Section 7.1: all three fields of this codec's state are required, and
+      // none has a default.
 
-      const decoded = fabricFromRealmValue(wire(tagged("RegExp@1", {})));
+      const engine = newDefaultRealmCodecEngine({ lenient: true });
+      for (
+        const state of [
+          {},
+          { source: "a", flags: "g" },
+          { flavor: "es2025", flags: "g" },
+          { flavor: "es2025", source: "a" },
+        ]
+      ) {
+        const decoded = engine.decode(
+          wire(tagged("RegExp@1", state)),
+          NULL_LIVE_ENVIRONMENT,
+        );
 
-      expect(decoded).toBeInstanceOf(FabricRegExp);
-      expect((decoded as FabricRegExp).flavor).toBe("es2025");
-      expect((decoded as FabricRegExp).source).toBe("");
-      expect((decoded as FabricRegExp).flags).toBe("");
+        expect(decoded).toBeInstanceOf(ProblematicValue);
+        expect((decoded as ProblematicValue).error)
+          .toMatch(/state is not one this codec decodes/);
+      }
     });
 
     it("returns a `ProblematicValue` for a `RegExp@1` field present as `undefined`", () => {
-      // Absent and present-as-`undefined` are different, and this format is
-      // where the difference can arise: cloning carries `undefined` directly,
-      // so a peer can send one on purpose, and defaulting it would answer a
-      // question the wire did ask.
+      // This format is where a field present as `undefined` can arise:
+      // cloning carries `undefined` directly, so a peer can send one on
+      // purpose.
 
       const engine = newDefaultRealmCodecEngine({ lenient: true });
       const decoded = engine.decode(
-        wire(tagged("RegExp@1", { source: undefined })),
+        wire(tagged("RegExp@1", {
+          source: undefined,
+          flags: "g",
+          flavor: "es2025",
+        })),
         NULL_LIVE_ENVIRONMENT,
       );
 

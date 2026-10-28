@@ -11,9 +11,12 @@
  * recomputed from the edited text.
  */
 
+import { basename, dirname } from "@std/path";
+
 import { spliceAll } from "@commonfabric/utils/arrays";
 import { maxOf } from "@commonfabric/utils/math";
 
+import type { BlameRequest, BlameTarget } from "./blame.ts";
 import type { Document, Line, Span, ViewMode } from "./model.ts";
 import { cpLen } from "./ansi.ts";
 import {
@@ -43,6 +46,7 @@ import {
   MESSAGE_INDENT,
   messageAt,
   sameCommit,
+  withoutTransportCR,
 } from "./commitmsg.ts";
 import type { Highlighter, Language } from "./languages/language.ts";
 import { canRenderDiffLines } from "./languages/language.ts";
@@ -121,6 +125,12 @@ export function diffSource(
     fileText: expectedFiles,
     hunks: saveHunks,
   };
+  let blameRoot: string | null | undefined;
+  const blameTargets = (text: string) =>
+    diffBlameTargets(text, ws, () => {
+      if (blameRoot === undefined) blameRoot = git?.repoRoot?.() ?? null;
+      return blameRoot;
+    });
   let countContextText: string | undefined;
   let countContexts: readonly DiffCountFileContext[] = [];
   const diffCountContexts = (text: string) => {
@@ -142,6 +152,7 @@ export function diffSource(
       label: null,
       isDiff: true,
       diffCountContexts,
+      blameTargets,
       editable: false,
       reason:
         "This diff doesn't match any file on disk, so there is nothing to edit.",
@@ -259,6 +270,7 @@ export function diffSource(
       : `${files.length} files`,
     isDiff: true,
     diffCountContexts,
+    blameTargets,
     editable: true,
     policy,
     logicalEnd: (lines, row) =>
@@ -2277,6 +2289,70 @@ function mutableHunks(
     }
     return out;
   });
+}
+
+/**
+ * What `git blame` attributes each new-side line of a diff to. A file that
+ * follows a commit header is blamed as it stands in that commit. Any other
+ * file is blamed as it stands in the working tree, a hunk at a time, and only
+ * while the file still holds the hunk's new side at the hunk's lines. A target
+ * carries its line's text, which the blamed file's line must also have. A file
+ * the workspace no longer has is found at its path under `root()`, the top of
+ * the repository, when a commit header precedes it.
+ */
+function diffBlameTargets(
+  text: string,
+  ws: DiffWorkspace,
+  root: () => string | null,
+): (BlameTarget | null)[] {
+  const lines = text.split("\n");
+  const targets = new Array<BlameTarget | null>(lines.length).fill(null);
+  const model = parseDiff(text);
+  if (!model) return targets;
+  const commits = findCommitHeaders(lines);
+  for (const file of model.files) {
+    const path = file.newPath;
+    if (path === undefined) continue;
+    const rev = commits.findLast((commit) => commit.line < file.headerLine)
+      ?.sha;
+    const absPath = ws.resolve(path);
+    const inWorkspace = absPath === null
+      ? null
+      : { cwd: dirname(absPath), path: basename(absPath) };
+    let workspaceLines: readonly string[] | null | undefined;
+    const onDisk = (line: number, text: string): boolean => {
+      workspaceLines ??= absPath === null
+        ? null
+        : ws.read(absPath)?.split("\n") ?? null;
+      return workspaceLines !== null &&
+        withoutTransportCR(workspaceLines[line] ?? "") ===
+          withoutTransportCR(text);
+    };
+    for (const hunk of file.hunks) {
+      const rows: { row: number; line: number; text: string }[] = [];
+      for (let row = hunk.headerLine + 1; row <= hunk.endLine; row++) {
+        const line = model.lines[row]?.newLine;
+        if (line !== undefined) {
+          rows.push({ row, line, text: lines[row].slice(1) });
+        }
+      }
+      const top = rev !== undefined && inWorkspace === null ? root() : null;
+      const request: BlameRequest | null = rev !== undefined
+        ? inWorkspace
+          ? { ...inWorkspace, rev }
+          : top === null
+          ? null
+          : { cwd: top, path, rev }
+        : rows.every(({ line, text }) => onDisk(line, text))
+        ? inWorkspace
+        : null;
+      if (request === null) continue;
+      for (const { row, line, text } of rows) {
+        targets[row] = { request, line, text };
+      }
+    }
+  }
+  return targets;
 }
 
 /** The commit header that owns each parsed hunk, in document order. */

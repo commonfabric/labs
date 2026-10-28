@@ -1,5 +1,99 @@
 # @commonfabric/cli
 
+## Managing your profiles
+
+`cf profile list --identity <keyfile> --api-url <url>` prints the profiles of
+the identity in the order `#profile` answers in, one line each: a `*` on the
+profile `#profile` answers with, the profile's space, its name, and `(picture)`
+when it has a picture attested to its owner, or
+`(picture not attested to its owner)` for any other. With `--json` it prints
+each row as an object that carries no bytes:
+
+- `name`: the profile's display name, or `""`;
+- `picture`: `{ "size": <bytes>, "byOwner": <boolean> }`, or `null` when it has
+  none;
+- `avatar`: the legacy avatar, which a profile shows where it has no picture, as
+  `{ "text": <text>, "byOwner": <boolean> }`, or, for a `data:` URL,
+  `{ "size": <bytes it holds>, "byOwner": <boolean> }`, or `null` when it has
+  none;
+- `space`, `id` and `address`: the profile's space, its piece's id, and its
+  canonical address;
+- `current`: whether `#profile` answers with it.
+
+A profile's space lets anyone write, and each write labels the value with the
+principal who wrote it, so `byOwner` is `true` only where the value's own label
+attests the profile's owner and no one else; a value stored without a label is
+not attested to its owner. A retired profile is not listed, and neither is one
+whose document is gone; a listed profile that cannot be read fails the listing.
+Listing reads the home root and runs nothing.
+
+Only the identity's own profiles are listed, by the rule `#profile` applies too
+("Profile" in [`HOME_SPACE.md`](../../docs/common/conventions/HOME_SPACE.md)). A
+profile is the identity's own when its `name`, followed through every link it
+holds, stays within the profile's own documents, and its label names the
+identity, and no one else, as the principal it represents: the claim a rename
+through the profile's own `setName` mints for whoever made it, or the one its
+name field's owner policy installed when the profile was set up. A profile Home
+lists that is not the identity's own, and a document carrying no label at all,
+is not listed, no row is marked `current` when `#profile` answers with such a
+profile, and every command below that names a profile by its space refuses it. A
+label that cannot be read fails the listing, or the command, rather than being
+taken for someone else's.
+
+A name stored before names were labeled carries no label on its value, though
+its profile is the identity's own through its name field's owner policy.
+`cf profile attest-name <space>` labels such a name for the profile Home lists
+in `<space>`, retired or not, in two steps, as
+`cf profile repair-name-protection` does. Without `--apply` it prints the stored
+name and an inspection receipt (with `--json`, `status: "inspected"`, `name` and
+`inspection`) and changes nothing. After reviewing the name,
+`--apply --expect <inspection>` accepts that name, unchanged, under the
+profile's own owner policy for its name, as the identity running the command,
+and the name's value is then labeled as that identity's; the output names the
+name it attested. A name changed since the inspection is refused. It refuses a
+profile that is not the identity's own and a profile whose name policy names
+another owner, and says so, changing nothing, for a name already attested to the
+identity.
+
+`cf profile get-picture <space> <file>` writes the bytes of the picture of the
+profile that lives in `<space>` to `<file>`, or to standard output when `<file>`
+is `-`. It refuses a picture not attested to the owner. A picture stored before
+writes to it were labeled carries no label at all, so it reads `byOwner: false`
+and `get-picture` refuses it. Its owner attests it by setting it again:
+`cf profile set-picture <space> --keep-current` sets the picture already stored
+again, as the identity running the command, and the write labels it with that
+identity.
+
+`cf profile rename <space> <name>` renames the profile that lives in `<space>`,
+and `cf profile set-picture <space> <image-file>` sets its picture to the bytes
+of `<image-file>`: a PNG, JPEG, GIF, WebP, AVIF or BMP image of at most 256 KiB,
+stored as it is. Nothing crops or scales it, as the shell's picture picker does
+to a 128-pixel square, so pass an image of the size it should be shown at.
+`cf profile set-picture <space> --clear` removes the picture, and the legacy
+avatar text with it, since a profile shows that text where it has no picture.
+`cf profile set-picture <space> --keep-current` sets the picture already stored
+again, which attests it to the identity running the command; it refuses a
+profile with no picture. `rename` and `set-picture` write through the profile's
+own handlers (`setName`, `setPicture`, `setAvatar`), so the profile runs for the
+length of the command, and both refuse a retired profile.
+
+`cf profile retire <space>` retires the profile that lives in `<space>`, as the
+Remove control in Home's profile picker does: Home lists it in
+`retiredProfiles`, and it is not one of the identity's profiles until it is
+restored. `#profile` does not answer with it, `cf profile list` leaves it out,
+and the picker lists it among the removed profiles. The profile's space and its
+data stay on the host, so a link to it held elsewhere still shows it. Home
+refuses to retire the profile `#profile` returns: the default when one is set,
+and otherwise the most recently used profile, or the first listed. The last live
+profile is always that profile. Set another profile as the default first.
+`cf profile restore <space>` restores a retired profile, as the picker's Restore
+does, and it is then one of the identity's profiles again. Both send a plain
+event to Home's handler of the same name, the only writers `retiredProfiles`
+admits; any pattern that reaches Home's streams can send the same events, as it
+can rename a profile. "Profile" in
+[`HOME_SPACE.md`](../../docs/common/conventions/HOME_SPACE.md) describes the
+list.
+
 ## Repairing profile name protection
 
 `cf profile repair-name-protection --cell <profile-address> --identity <keyfile>
@@ -418,17 +512,26 @@ uses this fixture mechanism at both postures.
 
 `cf view [file]` is an interactive pager for transformed TypeScript, source
 files, and unified diffs. Named Markdown, JSON, JSONC, JSON Lines, YAML, Python,
-Swift, Kotlin, TOML, shell, Java properties, ProGuard, and XML files use their
-own syntax highlighting. Shell covers Bash and POSIX shell scripts named `.sh`,
-`.bash`, or `.command`, and Bash's startup files, such as `.bashrc` and
-`.profile`. A heredoc's body is colored as a string, with the expansions its
-delimiter allows. A Swift package manifest is Swift source under its `.swift`
-extension, and a module's `.swiftinterface` is Swift as well. Gradle build and
-settings scripts are Kotlin scripts under the `.kts` extension. Gradle version
-catalogs and Cargo manifests are TOML, as are Cargo lock files. The ProGuard
-language covers the keep rules that ProGuard and R8 read: `proguard-rules.pro`
-and `consumer-rules.pro` select it by name, and another `.pro` file uses it when
-one of its lines starts with one of ProGuard's option names, because Qt project
+Swift, Kotlin, TOML, HCL, shell, makefile, Java properties, INI, ProGuard, and
+XML files use their own syntax highlighting. HCL covers OpenTofu and Terraform
+configuration named `.tf` or `.tofu`, variable definitions files named
+`.tfvars`, backend configuration files named `.tfbackend`, and other `.hcl`
+files, such as dependency lock files. A string's interpolations and template
+directives are colored as code inside the string. Shell covers Bash and POSIX
+shell scripts named `.sh`, `.bash`, or `.command`, and Bash's startup files,
+such as `.bashrc` and `.profile`. A heredoc's body is colored as a string, with
+the expansions its delimiter allows. The makefile language reads GNU make's
+syntax in files named `Makefile`, `makefile`, `GNUmakefile`, or `.mk`. Make
+passes recipe lines to the shell, so they are colored as shell. The same is true
+of the command in a `!=` assignment and the argument of the `shell` function.
+Make's own variable references and function calls are colored inside that shell
+text. A Swift package manifest is Swift source under its `.swift` extension, and
+a module's `.swiftinterface` is Swift as well. Gradle build and settings scripts
+are Kotlin scripts under the `.kts` extension. Gradle version catalogs and Cargo
+manifests are TOML, as are Cargo lock files. The ProGuard language covers the
+keep rules that ProGuard and R8 read: `proguard-rules.pro` and
+`consumer-rules.pro` select it by name, and another `.pro` file uses it when one
+of its lines starts with one of ProGuard's option names, because Qt project
 files and Prolog use that suffix as well. XML covers Android manifests,
 resources, and layouts, SVG images, and Apple property lists, entitlements, and
 privacy manifests. Web manifests, TLDraw documents, Deno lock files, editor
@@ -440,16 +543,30 @@ without a filename keeps TypeScript highlighting when its module header
 identifies it. Python interpreter shebangs select Python for otherwise
 unrecognized names, `swift` and `xcrun swift` shebangs select Swift, and
 `kotlin` shebangs select Kotlin. `sh`, `bash`, `dash`, and `ash` shebangs select
-shell, which covers Git hooks and other extensionless programs. Node, Deno, and
-Bun shebangs select the TypeScript and JavaScript language family. A diff reads
-a shebang for a file whose path selects no language, from a hunk that starts at
-the file's first line, from the workspace file, or from the old Git blob. Other
-filename-free source and named files with unrecognized syntax are shown as plain
-text. For piped source, `--filename` selects syntax as though the input had that
-name. `--language` selects a language by its stable identifier or alias. Both
-options keep the pipe read-only and suppress unified-diff auto-detection. An
-explicit language takes priority when both options are present. Use `--diff`
-instead when the pipe is a unified diff.
+shell, which covers Git hooks and other extensionless programs. `make` and
+`gmake` shebangs select the makefile language. Node, Deno, and Bun shebangs
+select the TypeScript and JavaScript language family. For an otherwise
+unrecognized name, source that starts with an XML declaration (`<?xml`), after
+any byte order mark, selects XML, which covers Interface Builder documents,
+project files, and the other XML formats that no extension announces. A diff
+reads a shebang or an XML declaration for a file whose path selects no language,
+from a hunk that starts at the file's first line, from the workspace file, or
+from the old Git blob. Other filename-free source and named files with
+unrecognized syntax are shown as plain text. For piped source, `--filename`
+selects syntax as though the input had that name. `--language` selects a
+language by its stable identifier or alias. Both options keep the pipe read-only
+and suppress unified-diff auto-detection. An explicit language takes priority
+when both options are present. Use `--diff` instead when the pipe is a unified
+diff.
+
+INI covers `.ini` files, which include Ansible inventories with that suffix,
+Ansible's `ansible.cfg` and `.ansible.cfg`, and the configuration files of
+Python tools such as `setup.cfg`, `.coveragerc`, `.flake8`, `pylintrc`, and
+`.codespellrc`. Another `.cfg` file is INI when its first line other than blank
+lines and comments heads a section whose name does not start the way a JSON
+array's first value does. A line in an Ansible inventory that names a host and
+then sets `name=value` variables colors the host and each variable. The
+structure tree lists sections with the keys and hosts in each.
 
 The binary language handles known binary filenames, input containing a NUL byte,
 and input that is not valid UTF-8. It starts in a read-only rendered view with
@@ -470,10 +587,11 @@ and TypeScript semantic lookup.
 
 Automatic content detection is limited to binary input, structurally identified
 raw unified diffs, and standard Git commit output. A raw diff starts at the
-first nonblank line. Recognized shebangs and transformed compiler headers remain
-explicit selectors. A shared extension such as `.cfg` consults the source for
-the one pattern its metadata names. JSON-, YAML-, Markdown-, Python-, and other
-language-shaped source is otherwise not guessed from its syntax.
+first nonblank line. Recognized shebangs, XML declarations, and transformed
+compiler headers remain explicit selectors. A shared extension such as `.cfg`
+consults the source for the pattern each language's metadata pairs with it.
+JSON-, YAML-, Markdown-, Python-, and other language-shaped source is otherwise
+not guessed from its syntax.
 
 A diff shows its whole-diff change totals at the top right corner of its first
 line: the added line count and the removed line count, colored like additions
@@ -485,7 +603,10 @@ with one row of overlap. While browsing, `j` / `k` and `J` / `K` move down / up,
 Space and `b` / `B` page down / up, and `g` / `G` jump to the top / bottom.
 Ctrl-N / Ctrl-P move down / up, and Ctrl-D / Ctrl-U move half a page.
 Confirmation prompts use navigation keys to move button focus; Space activates
-the focused button. Printable keys enter text while a filter is active.
+the focused button. Pressing the primary mouse button on a button pushes it, and
+releasing it over the same button activates that button. Releasing it anywhere
+else, or pressing a key first, lets go of the button without activating it.
+Printable keys enter text while a filter is active.
 
 Press `i` in a diff to open its file and commit list. The list starts in browse
 mode. Press `/` to filter it by file name, commit hash, or commit subject. In
@@ -513,6 +634,42 @@ Markdown files can switch between the source and a rendered terminal view with
 markers, tables, rules, and code. The same view is available for Markdown files
 inside a unified diff; diff markers, addition and deletion tints, line
 positions, and hunk expansion remain in place.
+
+Press `P` to push the branch checked out in the repository the viewer runs in,
+as it stands, to the branch of the same name on `origin`. The push is forced,
+but fails rather than discard commits on `origin` that the branch has never
+included, even when they have been fetched. A dialog shows git's output as it
+arrives, with an Abort button that stops the push. When the push ends, the
+dialog adds how it ended, and two buttons replace Abort. Close leaves that
+summary in the status line. Quit (`Q`) closes the viewer, first offering to save
+any unsaved edits. When the server's reply offers a page for creating a pull
+request, the viewer opens it in the browser. Git asks nothing on the terminal
+while the viewer holds it; a question such as a key's passphrase goes to the
+program `SSH_ASKPASS` names, and fails when it names none. `P` refuses to push
+`origin`'s default branch, and refuses when `origin` names no default branch
+(`git remote set-head origin --auto` finds it). It also refuses a checkout not
+on a branch, and refuses when git started the viewer as its pager for a
+different repository.
+
+In the main view, `b` shows or hides the blame column in place of paging up;
+Page Up and Ctrl-B still page up there. The column takes the right 20 columns of
+the screen when the terminal is at least 40 columns wide. Each line's entry is
+how long ago the commit that last changed it was written, then the author's
+name, cut to fit. The age is a whole number of seconds under a minute, minutes
+under an hour, hours under a day, days under a year, and years after that, each
+rounded to the nearest, so that 59.6 seconds reads `1m`: `45s`, `3h`, `168d`,
+`2y`. When the repository's default remote (the one `git fetch` uses when given
+none), or else `origin`, or else another remote, is on GitHub, each entry is a
+link to its commit's page there, for terminals that open links. Links are drawn
+only when color is on. A run of adjacent lines from one commit shows its entry
+once, on the first of them on screen. A file's lines are blamed as the viewer's
+text, so edited lines read `uncommitted` before they are saved. In a diff, a
+file that follows a commit header is blamed as it stands in that commit. Any
+other hunk is blamed as its file stands in the working tree, and only while that
+file still holds the hunk's added and context lines where the hunk places them.
+Removed lines show nothing. The column fills in as `git blame` finishes for each
+file in view. When git cannot blame a file, the status line says why, and the
+viewer does not try that file again.
 
 Press `\` in the interactive pager to cycle through unwrapped lines, hard
 wrapping, and word wrapping. Hard wrapping fills every screen row before it
@@ -977,8 +1134,7 @@ reference, and both are read on exactly as if they had been written, so
 
 Those three each sit under the noun they act on: `get` and `set` name a cell, so
 they are `cf cell` subcommands, while `call` invokes a verb on a piece and is a
-`cf piece` one. The bare `cf get`, `cf set` and `cf call` still answer, hidden
-and superseded — see [Superseded spellings](#superseded-spellings).
+`cf piece` one.
 
 A target may select `#argument` on its piece segment, before any qualifiers or
 path, which selects the piece's arguments cell the way `--input` does — on a
@@ -1013,8 +1169,7 @@ link is also checked against its destination's contract, which still refuses a
 required field it cannot reach. Addressing the raw argument cell by id avoids
 that whole-document check, but it is an unsafe recovery tool: it can erase
 link-bearing data that a later `cf cell set` will refuse to restore because the
-serialized link has no durable source contract. The superseded `cf set` spelling
-mounts this same command and has identical validation behavior.
+serialized link has no durable source contract.
 
 ## Linking piece inputs
 
@@ -1256,6 +1411,13 @@ a DID or a legacy space name, and a legacy name resolves, without the network,
 to the DID it has always reached. A name or DID that reaches no space opens
 nothing: `cf piece new` there reports that no space answers to it, and names
 `cf space create` as the way to make one.
+
+A Home's source is changed in place, with
+`cf piece setsrc --cell <home-root> ./my-home.tsx`, where the root is the link
+`cf wish '#default' --select @` answers with in the Home space; no command
+installs or replaces a Home root.
+[Custom Home pattern](../../docs/common/conventions/HOME_SPACE.md#custom-home-pattern)
+walks through it.
 
 ## Where a piece is created
 
@@ -1523,13 +1685,14 @@ echo '{"integrity":[],"observes":"value"}' \
 ```
 
 The command updates the label through the same checked write path used by
-ordinary runtime operations. It does not edit raw CFC metadata. The
-stored-schema rules reject a confidentiality update that would make data less
-restricted and an integrity update that would silently make data more trusted.
-An absent path is also rejected rather than creating policy metadata without a
-value. An `observes` update is rejected when it would combine with an existing
-observation class instead of preserving the requested class. Omitting `observes`
-from a later update preserves an existing unambiguous class.
+ordinary runtime operations. Without
+`--dangerously-allow-lowering-confidentiality` it does not edit raw CFC
+metadata. The stored-schema rules reject a confidentiality update that would
+make data less restricted and an integrity update that would silently make data
+more trusted. An absent path is also rejected rather than creating policy
+metadata without a value. An `observes` update is rejected when it would combine
+with an existing observation class instead of preserving the requested class.
+Omitting `observes` from a later update preserves an existing unambiguous class.
 
 The path is followed through the links it crosses, as `get-label` reads it, so
 the update lands on the doc that holds the value rather than the doc the path
@@ -1537,6 +1700,37 @@ started in. The classes it is checked against are the effective ones, which
 merge both documents: the resolved doc's stored classes, and any the selected
 slot's own schema declares. Asking for `shape` where either declares `value` is
 refused rather than replacing it.
+
+`--dangerously-allow-lowering-confidentiality` turns the update into the
+opposite operation: it lowers confidentiality at the path, rewriting the stored
+CFC metadata. Every confidentiality clause stored at the path that the input's
+`confidentiality` list does not name is removed — from the declared label and
+the stored schema's declaration, from the labels derived from what was written
+there (the `shape` and `value` entries `get-label` shows), and from a link's own
+label. The input holds `confidentiality` alone, and each clause it names must
+already be stored at the path; adding a clause, or changing integrity or
+`observes`, is an update without the flag. Labels at other paths are left as
+they are, including an ancestor's label that covers this path.
+
+```bash
+echo '{"confidentiality":[]}' \
+  | cf cell set-label --cell ID queue --dangerously-allow-lowering-confidentiality
+```
+
+The identity may lower confidentiality only in its own space, the space whose
+DID is the identity's, and only for clauses whose every alternative stands for
+the identity alone: its DID, a `User`, `Context` or `Resource` atom naming it,
+or its own space as `Space` or `PersonalSpace`. A `User` subject or a
+`PersonalSpace` owner may be the digest commitment a cross-space write stores in
+place of the DID. A clause with any other alternative refuses the whole
+lowering, and every clause stays in place. So does a clause the path still shows
+afterwards that the input does not name, from a position the lowering does not
+rewrite: an ancestor's or a wildcard label, a branch of the stored schema, or
+the piece's own schema, which a change to the pattern lowers. Each lowering
+commits with a create-only receipt in that space, readable by the identity
+alone, recording the clauses removed and digests of the stored metadata before
+and after. Reads served before the lowering keep the label they were served
+under.
 
 ## Invocation sessions
 
@@ -1706,28 +1900,46 @@ Persistent `<socket>.lock` and `<store>.lock` files retain their inodes, while
 the kernel releases ownership on shutdown or crash. Startup cleanup aborts
 active runs and waits for them to settle, closes the store and listener, and
 removes its token. Active job rows remain `running`; the next start recovers
-them as `interrupted` with `RUNNER_RESTARTED`. Requests receive 503 until
-initialization completes.
+them as `interrupted` with `RUNNER_RESTARTED`. Before settling their waiting
+messages, startup checks each recorded harness run root for a continuable
+checkpoint. A checkpoint lets waiting messages open a follow-up; without one,
+they drop as `interrupted`. Requests receive 503 until initialization completes.
 
 The door is HTTP on the Unix socket, mode 0600, with a bearer token in
 `<socket>.token`, also 0600 and minted at each start: reaching the socket is the
 authority. A caller enqueues
 `{caller, profile, idempotencyKey, task,
-instructions?, context?, resultSchema, tools?, maxModelTurns?, browserHost?,
-inputs?, foreignSpaces?}`
-with `POST /jobs`, reads a job with `GET /jobs/<id>` or the newest with
-`GET /jobs?limit=n`, stops one with `POST /jobs/<id>/cancel`, and watches one
-with `GET /jobs/<id>/events?after=<seq>`, a stream of server-sent events that
-ends after the job's terminal state. `GET /health` keeps `lanes.local` and
-`lanes.fabric` as booleans and adds `readiness.local` and `readiness.fabric`,
-each `{state, since, reason}`. States are `starting`, `up`, `down`, or
-`refused`; `since` is an ISO timestamp of the last state or reason change.
-`reason` is null for an up lane. Fabric remains `starting` until its first
-successful queue scan; `--local-only` leaves it `down` with that reason, and a
-failed start leaves it `refused` with the error. Observed queue scan or
-record-follow failures mark it `down`; a successful scan marks it `up`. An idle
-queue is healthy: this does not detect a subscription that silently stops
-delivering changes.
+instructions?, context?, resultSchema?, tools?, maxModelTurns?, maxInputBytes?,
+maxOutputTokens?, imageAttachments?, depth?, tags?, domains?, reasoningEffort?,
+browserHost?, inputs?, foreignSpaces?, interactive?}`
+with `POST /jobs`, bounded at 1 MiB of UTF-8 JSON before parsing, reads a job
+with `GET /jobs/<id>` or the newest with `GET /jobs?limit=n`, stops one with
+`POST /jobs/<id>/cancel`, and watches one with
+`GET /jobs/<id>/events?after=<seq>`, a stream of server-sent events that ends
+after the job's terminal state. A request's `depth` (`quick`, `standard` or
+`deep`), `tags` and `domains` say how far to take the task, what kind of work it
+is and where it happens, each of the last two in place of the harness's
+classification. `domains: []` states no domain; `tags` must name at least one
+known tag. They grant nothing. `reasoningEffort` may lower the profile's, never
+raise it. `GET /health` keeps `lanes.local` and `lanes.fabric` as booleans and
+adds `readiness.local` and `readiness.fabric`, each `{state, since, reason}`.
+States are `starting`, `up`, `down`, or `refused`; `since` is an ISO timestamp
+of the last state or reason change. `reason` is null for an up lane. Fabric
+remains `starting` until its first successful queue scan; `--local-only` leaves
+it `down` with that reason, and a failed start leaves it `refused` with the
+error. Observed queue scan or record-follow failures mark it `down`; a
+successful scan marks it `up`. An idle queue is healthy: this does not detect a
+subscription that silently stops delivering changes.
+
+`interactive` is an optional boolean indicating that a person is waiting.
+Interactive queued jobs start ahead of every queued background job, oldest first
+within each class. The local lane runs at most `--max-concurrent-local` jobs at
+once. With at least two slots, background jobs may occupy at most one fewer than
+that limit, holding the last slot for an interactive job; interactive jobs may
+use any free slot. With one slot, nothing is reserved because one slot cannot be
+reserved while still running background jobs. The flag only orders admission and
+reserves capacity. It participates in enqueue idempotency and is inherited by
+follow-ups with the retained request.
 
 Health also lists `routes` as `{method, path}` entries (`:id` is a path
 parameter), the loaded `profileFile`, the resolved SQLite `storePath`, and
@@ -1745,11 +1957,11 @@ error.
 A profile, named in the host's file, is the authority a job runs with: its
 tools, its host Loom files, its model-turn cap, the prompt-slot role its task
 binds as, and whether a job may bring a browser host (`browserHost: true`). A
-request may name fewer tools and fewer turns, and, under a profile that admits
-one, declare a browser host (below); leaving it out declines the browser. Under
-a profile with a fabric session it may hand the job pieces as
-`inputs: {<name>: <address>}`: each becomes an input cell the model holds as a
-handle from its first turn. An address naming another space by DID
+request may name fewer tools and fewer turns, narrow its model limits, and,
+under a profile that admits one, declare a browser host (below); leaving it out
+declines the browser. Under a profile with a fabric session it may hand the job
+pieces as `inputs: {<name>: <address>}`: each becomes an input cell the model
+holds as a handle from its first turn. An address naming another space by DID
 (`//<did>/of:<id>`) needs that space's host in
 `foreignSpaces: {<did>: <origin>}`; the job's session is routed there for that
 space, under the profile's identity, and may call the verbs of the piece it was
@@ -1757,15 +1969,28 @@ handed. An input in another space with no host, a `foreignSpaces` entry no input
 names, or a slug address naming another space is refused at enqueue as
 `beyond_profile`. It may set nothing else. A job runs through the same
 `cf-harness` path as an agent run, with the fabric session its profile names, if
-any. Every tool call, including delegated calls, counts as progress, and so does
-its return; prose and reasoning do not. A `step` carries `{turn, tool}`, and the
-same step again with `returned: true` once the calls of that turn have returned
-and the loop's model has the turn. A `command` records each command the host ran
-for it. Children add `child: {profile, childRunId, parentToolCallId, depth}` to
-either body. The harness admits one level of delegation, so depth is `1`. Only a
-child's `browser` tool steps carry `action` (such as `click` or `snapshot`),
-without the operation's arguments or page content. Other child tool steps, such
-as `submit_result`, omit `action`.
+any. Every tool call, including delegated calls, produces progress, as does its
+return. A `step` carries `{turn, tool}`, and the same step again with
+`returned: true` once the calls of that turn have returned and the loop's model
+has the turn. A `command` records each command the host ran for it. Children add
+`child: {profile, childRunId, parentToolCallId, depth}` to either body. The
+harness admits one level of delegation, so depth is `1`. Only a child's
+`browser` tool steps carry `action` (such as `click` or `snapshot`), without the
+operation's arguments or page content. Other child tool steps, such as
+`submit_result`, omit `action`.
+
+Each root assistant message with nonempty content emits one `text {turn, text}`
+event, whole and without truncation or coalescing, in order with its steps.
+Delegated assistant text is not emitted. Turns start at this job's first model
+call, including on follow-ups. The store keeps these events durably, so a job's
+event history holds its assistant text. Reasoning is not emitted.
+
+After each completed model call, including descendant calls, a
+`usage {usage, coverage}` event reports cumulative usage for this run. Its
+`coverage` matches the report's `usageCoverage`: `including-descendants` when
+the harness supplies the total for the tree, otherwise `direct`. Unreported
+usage is omitted until the provider supplies a measurement; partial measurements
+do not account for unreported provider work.
 
 The lane coalesces consecutive steps with the same tool, child, browser action
 and `returned`, ignoring turn numbers. Thus N identical browser operations in
@@ -1780,6 +2005,132 @@ including returns and command receipts; a returning child reveals its sibling's
 last step, and the parent's step resumes when no child remains. Children cannot
 delegate further; nested progress needs lineage in the harness's transcript
 contract before that restriction is widened.
+
+A host profile may bound each model call with `maxInputBytes` and
+`maxOutputTokens`; a caller may only narrow either ceiling. Bounded calls use
+`openai-codex`, make one provider attempt without transport retries, check the
+final UTF-8 request body before sending it, and set the provider's output-token
+ceiling, including reasoning tokens. The byte check includes instructions,
+history and tool schemas and rejects oversized context without discarding it.
+The same model client carries these limits into research and delegated calls. A
+run under the gateway provider refuses these limits as its model client is
+built, before any model call. An input-byte ceiling is not a token count;
+callers budgeting tokens must reserve separate provider framing headroom.
+Provider-added native-search context and image token expansion require separate
+accounting; the serialized byte check does not bound them. A response that
+reaches its output-token ceiling ends as a provider failure, with no partial
+structured result admitted.
+
+`imageAttachments` contains at most eight `{mediaType, base64}` objects, using
+PNG, JPEG, GIF or WebP bytes. Canonical base64 and the declared image signature
+are validated before enqueue; the whole request still fits the same 1 MiB body
+limit. The harness snapshots these bytes into the job's workspace and sends the
+images through its normal image attachment path. Attachments confer no authority
+to read a host path. Their exact bytes participate in the enqueue idempotency
+key.
+
+Enqueue commits its job and first event in a SQLite WAL transaction with
+`synchronous = FULL` before acknowledging it. Repeating a caller's idempotency
+key with the same request returns that job; a different request or profile
+returns a conflict.
+
+A caller sends another message with `POST /jobs/<id>/messages`, also bounded at
+1 MiB of UTF-8 JSON:
+
+```json
+{
+  "caller": "cfs:weaver",
+  "idempotencyKey": "message-81",
+  "message": "Use the April numbers.",
+  "instructions": "Answer briefly."
+}
+```
+
+`caller` must match the conversation's caller. `message` is a nonempty string;
+`instructions` is optional and replaces the system framing of a follow-up,
+inherited by later jobs unless replaced again. `imageAttachments`, `inputs` and
+`foreignSpaces` use the enqueue shapes, bounds and profile validation. Images
+join the follow-up's new prompt; inputs add named handles, with foreign spaces
+routed as on enqueue. Existing history and held input routes carry forward;
+omitted attachments are not sent again as new inputs.
+
+`instructions`, `imageAttachments` and `inputs` (with their `foreignSpaces`) are
+follow-up-only: a message carrying any of them, to a queued or running head with
+no cancel requested, is refused as `409 follow_up_only`. After cancel, they wait
+for their own follow-up. If a new input name collides with a held input,
+assigned slug or grant, acceptance still returns normally and the follow-up
+fails `PROVIDER_FAILURE` before any model call, with the builder's own reason in
+`errorDetail`.
+
+The request grants no profile, tools or limits. Any job id in a conversation
+addresses its newest job, the head. Every local run receives the message hook. A
+message to a queued or running head waits there to be taken at a model turn
+boundary. A message to a finished head with a recorded run opens a new queued
+job, with `continues` naming its predecessor, its task replaced by the message,
+and the rest of the predecessor's request inherited. A recorded run has a
+complete checkpoint from which another run can start. An interrupted job is
+continuable when recovery finds such a checkpoint.
+
+The response is `201 {message, job}` on acceptance or `200 {message, job}` on
+replay. The message record has fixed `key`, `target`, `message`, `acceptedAt`
+and, when supplied, `instructions`, `imageAttachments`, `inputs` and
+`foreignSpaces`. Its current `delivery` is `pending`, `delivered`, `follow-up`,
+or `dropped`; `jobId` names the job waiting on or answering it, `turn` is
+present after delivery, and `reason` after a drop. `job` is that job's current
+snapshot. A first acceptance returns `pending` or `follow-up`. The same
+caller/key/fingerprint returns the current record without writing events, even
+after the head moves on or can no longer continue. The fingerprint includes the
+target id, message, and presence and value of instructions, images, inputs and
+foreign-space routes. Keys share one namespace per caller with enqueue: reusing
+a key across routes, or changing its fingerprint, returns
+`409 idempotency_conflict`.
+
+The job view adds `continues`, `continuedBy` (its sole follow-up once opened),
+`openedBy` (the message that opened a follow-up), and `messages` (the current
+records of messages that waited on this job, in acceptance order). A finished
+job stays finished. Its event stream stays unchanged when a later message opens
+a follow-up directly; the follow-up starts with its own queued event.
+
+A waiting message publishes `message {key, delivery: "pending"}`. Taking it
+publishes `{key, delivery: "delivered", turn}`. When a job ends, its first
+remaining message opens one follow-up and publishes
+`{key, delivery: "follow-up", jobId}`; the rest publish
+`{key, delivery: "moved", jobId}` on the old job and `pending` on the new job.
+Each such outcome precedes the old job's terminal state event. A run takes
+messages in acceptance order up to the first message only a follow-up can
+answer, one carrying `instructions`, `imageAttachments` or `inputs`, or the
+first message accepted after that holder's cancel request. Messages behind it
+wait with it. A moved message loses the old holder's cancellation restriction,
+but a message carrying instructions or attachments still waits to open its own
+follow-up.
+
+Cancellation drops waiting messages accepted before the request as
+`{key, delivery: "dropped", reason: "cancelled"}`. Later messages wait for the
+follow-up. Without a recorded run, remaining messages drop as `not_continuable`,
+or `interrupted` on restart recovery, before the terminal event. Queued
+cancellation and `PROFILE_UNAVAILABLE` failures have no recorded run.
+
+Every refusal is `{ok: false, code, error}`:
+
+| Status | Code                   | Condition                                                                                      |
+| ------ | ---------------------- | ---------------------------------------------------------------------------------------------- |
+| 400    | `invalid_request`      | Invalid JSON, missing or mistyped fields, or an empty message.                                 |
+| 413    | `too_large`            | The body exceeds 1 MiB.                                                                        |
+| 404    | `not_found`            | The target job does not exist.                                                                 |
+| 403    | `not_callers`          | The body names another caller.                                                                 |
+| 409    | `not_continuable`      | The finished head, including an interrupted one, has no complete recorded checkpoint.          |
+| 409    | `follow_up_only`       | `instructions`, `imageAttachments` or `inputs` sent to a queued or running head before cancel. |
+| 400    | `unknown_profile`      | Opening a follow-up or admitting attachments needs a profile no longer named.                  |
+| 400    | `beyond_profile`       | The follow-up request exceeds or invalidates its profile.                                      |
+| 409    | `idempotency_conflict` | The caller's key already names another request or route.                                       |
+
+The local harness lane takes messages at model-turn boundaries. A finished job
+with a recorded checkpoint can open a follow-up, whose new harness run carries
+the predecessor's history and handles. Each conversation uses its first job's
+workspace; each job keeps its own artifacts and result file. A follow-up's
+instructions and context replace its system framing. A message after a cancel
+request waits for a follow-up. Jobs without a complete checkpoint cannot be
+continued.
 
 Each `command` event carries `{command, ok, outputs?}`. A refused command also
 carries the outcome's `code` and `hostCode` when present, and `error` from an
@@ -1811,17 +2162,27 @@ every operation still unanswered and every withdrawal still unacknowledged
 first, and a repeated answer reads as a duplicate. `GET /jobs/<id>` shows the
 host as `browser {state, attached, outstanding, withdrawn}`.
 
-A job ends `completed` with its result as soon as the harness accepts the
-model's `submit_result`; nothing the model does after an accepted result can
-fail it, since the run asks the model for nothing further. A job that ends
-`failed` carries `errorCode`, and `errorDetail` where the run said why: for
-`INVALID_RESULT`, that no structured result was submitted, or the field the
-schema refused and the reason. Both appear in the job snapshot and in its final
-`state` event.
+`resultSchema` is optional. With a schema, a job ends `completed` with its
+validated JSON result once the harness accepts the model's `submit_result` and
+no message is waiting to be taken; the run then asks the model for nothing
+further, so nothing after the accepted result can fail it. When a message is
+waiting and a model turn remains, the run takes it and continues, and that later
+work decides how the job ends: a later `submit_result` replaces the result, and
+a later failure or cancellation is the job's outcome. Without a schema, the job
+has no structured-result contract, result file or `submit_result` tool, and its
+`result` is the final assistant text as a plain string. Follow-ups inherit the
+absence of a schema. An empty assistant answer with no tool calls fails under
+the harness's existing `PROVIDER_FAILURE` handling; exhausting its turn budget
+without a final answer remains `LIMIT_REACHED`. A job that ends `failed` carries
+`errorCode`, and `errorDetail` where the run said why: for `INVALID_RESULT`,
+that no structured result was submitted, or the field the schema refused and the
+reason. Both appear in the job snapshot and in its final `state` event.
 
 A job the runner was running when it stopped or crashed ends `interrupted`
 (`RUNNER_RESTARTED`) when it next starts, and is never run again: it may already
-have changed things.
+have changed things. Its recorded checkpoint can seed a new follow-up, whether
+the message waited through the restart or arrived afterward. The new run retains
+completed work and marks the prior request as interrupted.
 
 ## One deployment per process
 
@@ -1873,6 +2234,17 @@ memo, which names a space once for the life of the process.
   endpoint or contract validation reports the same way.
 - The launcher spawns the child CLI with `deno run --quiet` so Deno's own
   warnings (npm "Ignored build scripts" banner) never reach users.
+
+### What a read waits for under server execution
+
+With server execution on, a read first waits until the serving runtime has
+reacted to every authored commit at or below the server's head as it stands when
+the read begins. The serving runtime runs the handlers and derives what a read
+returns. A `cf cell set` that sends an event returns with the event committed
+and that run still ahead, and a `cf piece call` returns that way under
+`--no-wait`, so the wait is what makes a `cf cell get` that follows one, from
+the same process or another, read what the run stored. With server execution
+off, this runtime runs what it reads, and no such wait occurs.
 
 ### What a call refuses before it dispatches
 
@@ -2599,51 +2971,12 @@ ID from it, as [Space invitations](#space-invitations) describes.
 
 ## Command visibility
 
-A registered command appears in `cf --help` unless it is one of the two kinds
-below. The direct `fuse-daemon` and `fuse-supervisor` entry points are visible
+A registered command appears in `cf --help` unless it is hidden, as
+`cf completion complete` is: the completion scripts call it, and nobody types
+it. The direct `fuse-daemon` and `fuse-supervisor` entry points are visible
 because packaged launchers use them. Shell completion drops commands whose
 description opens with `Internal:`, because those are spawned by `cf fuse` and
 never typed at a prompt.
-
-### Superseded spellings
-
-Each command sits under the noun it acts on. Where that moved a command, the
-spelling it had is still accepted and still completes its own flags and
-arguments, so a script written against it keeps working; it is hidden from
-`cf --help` and never offered as a completion, and a run that reaches it says on
-stderr what to write instead — its help page included, whether `--help` asked
-for that page or a refusal printed it, since the page is otherwise a screen of
-examples in the spelling that is going away. A line refused during argument
-parsing never reaches the command, and carries the notice only where the refusal
-prints a help page with it — the reads that reserve stdout for machine-readable
-output print none, so `cf get --bogus` says nothing. **These spellings are not
-guaranteed to work after 2026-09-11**, so migrate before then: a later change
-removes them, and nothing holds them open past that date.
-
-| Write this               | Instead of               |
-| ------------------------ | ------------------------ |
-| `cf cell get`            | `cf get`                 |
-| `cf cell set`            | `cf set`                 |
-| `cf cell get-label`      | `cf piece get-label`     |
-| `cf cell set-label`      | `cf piece set-label`     |
-| `cf piece call`          | `cf call`                |
-| `cf space recreate-root` | `cf piece recreate-root` |
-
-This is a migration aid rather than a second surface: nothing here teaches the
-right column as an alternative spelling to keep using. `--piece` is a different
-case — a deprecated name for `--cell` that carries no end date and no notice.
-
-### Retired: `cf space set-home`
-
-A Home is created on its user's first open and changed only in place, so a
-command that installs a Home root has no job. `cf space set-home` and its
-`cf piece set-home` mount are retired: both are hidden, and a run of either
-refuses and says what does each half of the work — first open for creation,
-`cf piece setsrc --cell <home-root> ./my-home.tsx` for the source, where the
-root is the link `cf wish '#default' --select @` answers with in the Home space.
-**The spelling stops answering after 2026-10-21**, when a later change removes
-the mounts. See
-[Custom Home pattern](../../docs/common/conventions/HOME_SPACE.md#custom-home-pattern).
 
 ## Evaluating patterns from another tool
 

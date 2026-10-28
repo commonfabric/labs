@@ -55,11 +55,7 @@ import {
 import { buildSpaceInviteCommand } from "./space-invites.ts";
 import { hasJsonArgument } from "../lib/json-output.ts";
 import { shellQuote } from "../lib/shell-quote.ts";
-import {
-  buildCreateSpaceCommand,
-  buildRecreateRootCommand,
-  buildRetiredSetHomeCommand,
-} from "./piece.ts";
+import { buildCreateSpaceCommand, buildRecreateRootCommand } from "./piece.ts";
 
 function out(json: boolean, data: unknown, render: () => void): void {
   if (json) console.log(JSON.stringify(data, null, 2));
@@ -794,6 +790,4 @@ export const space = new Command()
     "recreate-root",
     buildRecreateRootCommand("space recreate-root"),
   )
-  /* space set-home — retired; answers with what replaced it, hidden */
-  .command("set-home", buildRetiredSetHomeCommand("space set-home").hidden())
   .command("invite", buildSpaceInviteCommand());

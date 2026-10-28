@@ -407,4 +407,46 @@ describe("bigintFromUnpaddedBase64url()", () => {
   it("throws on a non-base64url character", () => {
     expect(() => bigintFromUnpaddedBase64url("A/8")).toThrow();
   });
+
+  describe("minimality", () => {
+    // A leading `0x00` is needed exactly when the next byte's high bit is set,
+    // and a leading `0xff` exactly when it is clear (`3-json-encoding.md`
+    // Section 3, `BigInt@1`).
+
+    const NOT_MINIMAL: readonly (readonly [string, string])[] = [
+      ["`0x00 0x00`", "AAA"],
+      ["`0x00 0x7f`", "AH8"],
+      ["`0x00 0x00 0x80`", "AACA"],
+      ["`0xff 0xff`", "__8"],
+      ["`0xff 0x80`", "_4A"],
+      ["`0xff 0xff 0x7f`", "__9_"],
+    ];
+
+    for (const [bytes, encoded] of NOT_MINIMAL) {
+      it(`throws on ${bytes}, whose leading byte the sign does not need`, () => {
+        expect(() => bigintFromUnpaddedBase64url(encoded)).toThrow(
+          "not minimal",
+        );
+      });
+    }
+
+    const MINIMAL: readonly (readonly [string, string, bigint])[] = [
+      ["`0x00`", "AA", 0n],
+      ["`0xff`", "_w", -1n],
+      ["`0x00 0x80`", "AIA", 128n],
+      ["`0xff 0x7f`", "_38", -129n],
+    ];
+
+    for (const [bytes, encoded, value] of MINIMAL) {
+      it(`decodes ${bytes}, whose leading byte the sign needs`, () => {
+        expect(bigintFromUnpaddedBase64url(encoded)).toBe(value);
+      });
+    }
+
+    it("throws on bytes that are not minimal under padding", () => {
+      expect(() => bigintFromUnpaddedBase64url("AAA=")).toThrow(
+        "not minimal",
+      );
+    });
+  });
 });

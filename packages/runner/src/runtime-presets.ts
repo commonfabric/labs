@@ -92,6 +92,9 @@
  * |                            | the serving runtime reads under it per run       |
  * | cfcReadOnExceed            | core-default (`fail`); delta on the same two,    |
  * |                            | beside the ceiling it qualifies                  |
+ * | preferredProfileSpace      | core-default (none — the home's order); delta on |
+ * |                            | browserWorker (the host acting as one of the     |
+ * |                            | user's profiles says which)                      |
  * | patternEnvironment         | pinned from apiUrl in productionServer /         |
  * |                            | remoteClient / browserWorker (patterns fetch     |
  * |                            | against the real deployment, not the builder's   |
@@ -100,7 +103,8 @@
  * | fetch                      | real everywhere; patternTest delta (mock)        |
  * | errorHandlers              | delta (collectors/telemetry), per preset         |
  * | consoleHandler             | delta (productionServer, browserWorker)          |
- * | clientClass                | pinned to `"web"` by browserWorker; unset       |
+ * | clientClass                | pinned to `"web"` by browserWorker; remoteClient |
+ * |                            | delta for a client modeling a browser tab; unset |
  * |                            | elsewhere                                        |
  * | navigateCallback           | delta (patternTest, remoteClient, browserWorker) |
  * | pieceCreatedCallback       | delta (browserWorker only)                       |
@@ -176,7 +180,7 @@ import type {
   RuntimeOptions,
 } from "./runtime.ts";
 import type { CommitBackpressurePolicy } from "./scheduler/backpressure.ts";
-import type { IStorageManager } from "./storage/interface.ts";
+import type { IStorageManager, MemorySpace } from "./storage/interface.ts";
 import type { RuntimeTelemetry } from "./telemetry.ts";
 
 //
@@ -220,6 +224,7 @@ export const RUNTIME_OPTION_KEYS = [
   "cfcSinkMaxConfidentiality",
   "cfcReadMaxConfidentiality",
   "cfcReadOnExceed",
+  "preferredProfileSpace",
   "trustSnapshotProvider",
   "hideInternalStackFrames",
   "commitBackpressure",
@@ -280,16 +285,11 @@ export type CfcPosture = "max-enforcement";
  * sink's absence from a ceiling list. Building the mechanism that retires the
  * gap is planned in `docs/plans/cfc-llm-sink-admission.md`.
  *
- * Until the §8.12.5 route-2 widening, one path was gated anyway, by accident:
- * a pattern calling `llm(...)` staged its request in the transaction that also
- * wrote the builtin's own result store, that store declared nothing, and the
- * writer-fit misfit refused the commit. It fired on every such call, so under
- * this posture an llm call over caveated content did not work at all — the
- * opposite of what the rationale above says the sink is for. The store now
- * declares what flows into it, so the ungoverned statement holds of the
- * builtin path too. `max-enforcement-posture.test.ts` pins the hand-staged
- * request and `builtin-abandoned-request.test.ts` the builtin one; both flip
- * to asserting the refusal when the admission mechanism lands.
+ * The builtin's runtime-owned result store admits the write and records
+ * its flow label in the derived component, so it supplies no sink admission
+ * gate. `max-enforcement-posture.test.ts` pins the hand-staged request and
+ * `builtin-abandoned-request.test.ts` the builtin one; both flip to asserting
+ * refusal when the admission mechanism lands.
  */
 export const MAX_ENFORCEMENT_SINK_GOVERNANCE: SinkGovernanceRegistry = Object
   .freeze({
@@ -597,6 +597,14 @@ export interface RemoteClientPresetParams extends CoreParams {
 
   /** The read ceiling's fallback `onExceed`, beside the ceiling it qualifies. */
   cfcReadOnExceed?: CfcReadOnExceed;
+
+  /**
+   * The client class the runtime declares. A remote client is unclassed; one
+   * standing in for a browser tab, as the pattern integration harness's
+   * sessions do, declares `"web"`, and then follows the web client's flags,
+   * view-scoped replication among them, exactly as the browser worker does.
+   */
+  clientClass?: "web";
 }
 
 export interface PatternTestPresetParams extends CoreParams {
@@ -649,6 +657,12 @@ export interface BrowserWorkerPresetParams extends CoreParams {
 
   /** The read ceiling's fallback `onExceed`, from the same source. */
   cfcReadOnExceed?: CfcReadOnExceed;
+
+  /**
+   * The profile `#profile` answers with
+   * (`RuntimeOptions.preferredProfileSpace`), from `InitializationData`.
+   */
+  preferredProfileSpace?: MemorySpace;
 
   /**
    * The deployment trust configuration, from `InitializationData`: the host
@@ -752,6 +766,9 @@ export const runtimePresets = {
         ? { cfcWriteFloor: params.cfcWriteFloor }
         : {}),
       ...readCeilingOptions(params),
+      ...(params.clientClass !== undefined
+        ? { clientClass: params.clientClass }
+        : {}),
       ...(params.errorHandlers !== undefined
         ? { errorHandlers: params.errorHandlers }
         : {}),
@@ -817,7 +834,8 @@ export const runtimePresets = {
    * In-browser worker runtime behind the shell (runtime-client's
    * RuntimeProcessor). Everything host-decided arrives as data from
    * `InitializationData` — experimental flags are the shell's build-time
-   * defines, the CFC dials are host-controlled rollout.
+   * defines with its deployment's adopted where none pins them, the CFC
+   * dials are host-controlled rollout.
    */
   browserWorker(params: BrowserWorkerPresetParams): RuntimeOptions {
     return {
@@ -837,6 +855,9 @@ export const runtimePresets = {
         ? { cfcFlowLabels: params.cfcFlowLabels }
         : {}),
       ...readCeilingOptions(params),
+      ...(params.preferredProfileSpace !== undefined
+        ? { preferredProfileSpace: params.preferredProfileSpace }
+        : {}),
       ...(params.cfcTrustConfig !== undefined
         ? { cfcTrustConfig: params.cfcTrustConfig }
         : {}),

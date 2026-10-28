@@ -401,12 +401,7 @@ export function splitPathPrefix(
  * offering none. `wish` shapes what its query resolved to, and resolving a
  * wish commits a cell to the space: a Tab must not write.
  */
-const PROJECTION_SOURCE_COMMANDS: readonly string[] = [
-  "cell get",
-  // The superseded top-level spelling, which still completes its own options
-  // for a caller who has not migrated.
-  "get",
-];
+const PROJECTION_SOURCE_COMMANDS: readonly string[] = ["cell get"];
 
 /**
  * Field paths into the value a read returns, for `--select` and `--schema`.
@@ -1189,22 +1184,15 @@ const ARGUMENT_PROVIDERS: Readonly<
   "agent show:run": agentRunCandidates,
   "agent cancel:run": agentRunCandidates,
   "cell get-label:path": cellPathCandidates,
-  "piece get-label:path": cellPathCandidates,
   "cell set-label:path": cellPathCandidates,
-  "piece set-label:path": cellPathCandidates,
   "piece call:callable": callableCandidates,
-  "call:callable": callableCandidates,
   // The first positional of `cf cell get`/`cf cell set` is a cell path unless the caller
   // writes a canonical address there, and an address is pasted rather than
   // completed — so the path candidates serve the slot either way.
   "cell get:addressOrPath": cellPathCandidates,
-  "get:addressOrPath": cellPathCandidates,
   "cell get:path": cellPathCandidates,
-  "get:path": cellPathCandidates,
   "cell set:addressOrPath": cellPathCandidates,
-  "set:addressOrPath": cellPathCandidates,
   "cell set:path": cellPathCandidates,
-  "set:path": cellPathCandidates,
   "piece link:source": pieceWithPathCandidates,
   "piece link:target": pieceWithPathCandidates,
   // Naming an existing slug re-points it, which is the case completion helps
@@ -1214,6 +1202,12 @@ const ARGUMENT_PROVIDERS: Readonly<
   // spelling that points a name at a collection. Same grammar as a link
   // endpoint, so the same candidates.
   "piece set-slug:source": pieceWithPathCandidates,
+  // A picture has no single extension; the shell's own file completion is
+  // the honest candidate set, for the file read and the file written.
+  "profile set-picture:image-file": () =>
+    Promise.resolve(directive({ kind: "files" })),
+  "profile get-picture:file": () =>
+    Promise.resolve(directive({ kind: "files" })),
   "piece new:main": patternFiles,
   "piece setsrc:main": patternFiles,
   "check:files": patternFiles,

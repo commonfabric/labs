@@ -15,7 +15,11 @@
     // that grows an outside caller earns one then. `.` is the package's own
     // rather than an answer to a caller: a member declaring a `name` owes an
     // `exports` map, and importing this one builds the whole command tree.
-    ".": "./mod.ts"
+    ".": "./mod.ts",
+    // The Topics board's live view draws in `cf view`'s colors and frames.
+    "./view/ansi": "./lib/view/ansi.ts",
+    "./view/display": "./lib/view/display.ts",
+    "./view/theme": "./lib/view/theme.ts"
   },
   "imports": {
     // Dependency guide: ../../docs/development/DEPENDENCIES.md
@@ -30,6 +34,7 @@
     "marked": "npm:marked@^18.0.6",
     "@binclusive/tree-sitter-kotlin-wasm": "npm:@binclusive/tree-sitter-kotlin-wasm@0.1.0",
     "@binclusive/tree-sitter-swift-wasm": "npm:@binclusive/tree-sitter-swift-wasm@0.1.0",
+    "@tree-sitter-grammars/tree-sitter-hcl": "npm:@tree-sitter-grammars/tree-sitter-hcl@1.2.0",
     "@tree-sitter-grammars/tree-sitter-toml": "npm:@tree-sitter-grammars/tree-sitter-toml@0.7.0",
     "tree-sitter-bash": "npm:tree-sitter-bash@0.25.1",
     "tree-sitter-python": "npm:tree-sitter-python@0.25.0",

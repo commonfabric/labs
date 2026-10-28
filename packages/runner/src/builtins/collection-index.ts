@@ -194,7 +194,7 @@ function createCollectionIndexInstance(
   const reconcile: Action = (tx) => {
     requiredConfirmations = new Set();
     try {
-      const rollback = trackListSetupRollback(tx, runtime, runs);
+      const rollback = trackListSetupRollback(tx, runs);
       const args = inputs.withTx(tx);
       const mode = args.key("mode").get();
       const keys = listSlotResolutions(runtime, tx, inputs);

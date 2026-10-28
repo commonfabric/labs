@@ -2056,11 +2056,18 @@ type CalculatorRequest = {
           ]),
         ),
       ).toEqual(unsupported("index signature on constituent"));
+      // An index signature merges beside the members, which keep the types
+      // their own declarations give them.
       expect(
         await schemaOf(
           f.createIntersectionTypeNode([alias("Foo"), alias("Rec")]),
         ),
-      ).toEqual(unsupported("index signature on constituent"));
+      ).toEqual({
+        type: "object",
+        properties: { x: { type: "unknown" }, y: { type: "string" } },
+        required: ["x", "y"],
+        additionalProperties: { type: "string" },
+      });
       // `unknown` is the identity: what is left stands as it is.
       expect(
         await schemaOf(
@@ -4094,6 +4101,162 @@ namespace Local {
       expect(schema.properties).toEqual({ name: { type: "string" } });
       expect(schema.required).toEqual(["name"]);
       expect(schema.additionalProperties).toEqual({ type: "number" });
+    });
+
+    /** A synthetic `{ [k: <key>]: <value> }`. */
+    const indexedLiteral = (
+      key:
+        | ts.SyntaxKind.StringKeyword
+        | ts.SyntaxKind.NumberKeyword
+        | ts.TypeNode,
+      value: ts.TypeNode,
+    ) =>
+      ts.factory.createTypeLiteralNode([
+        ts.factory.createIndexSignature(
+          undefined,
+          [ts.factory.createParameterDeclaration(
+            undefined,
+            undefined,
+            ts.factory.createIdentifier("k"),
+            undefined,
+            typeof key === "number"
+              ? ts.factory.createKeywordTypeNode(key)
+              : key,
+          )],
+          value,
+        ),
+      ]);
+    const numberNode = () =>
+      ts.factory.createKeywordTypeNode(ts.SyntaxKind.NumberKeyword);
+    const unsupportedKeys = {
+      type: "object",
+      additionalProperties: true,
+      $comment:
+        "Unsupported intersection pattern: index signatures on different keys",
+    };
+
+    it("returns the fallback for synthetic index signatures on different keys", async () => {
+      // A numeric index signature's schema reads as a string one's, so the
+      // keys each applies to are recorded where the literal is read.
+
+      const { checker } = await getTypeFromCode(
+        "type Dummy = unknown;",
+        "Dummy",
+      );
+      const typeNode = ts.factory.createIntersectionTypeNode([
+        indexedLiteral(ts.SyntaxKind.StringKeyword, numberNode()),
+        indexedLiteral(ts.SyntaxKind.NumberKeyword, numberNode()),
+      ]);
+
+      expect(
+        new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+          typeNode,
+          checker,
+        ),
+      ).toEqual(unsupportedKeys);
+    });
+
+    it("returns the fallback for a synthetic index signature on unrecorded keys beside another", async () => {
+      // Nothing records which keys a template-literal index signature applies
+      // to, so it merges with no other.
+
+      const { checker } = await getTypeFromCode(
+        "type Dummy = unknown;",
+        "Dummy",
+      );
+      const prefixed = ts.factory.createTemplateLiteralType(
+        ts.factory.createTemplateHead("foo-"),
+        [ts.factory.createTemplateLiteralTypeSpan(
+          ts.factory.createKeywordTypeNode(ts.SyntaxKind.StringKeyword),
+          ts.factory.createTemplateTail(""),
+        )],
+      );
+      const typeNode = ts.factory.createIntersectionTypeNode([
+        indexedLiteral(prefixed, numberNode()),
+        indexedLiteral(
+          ts.SyntaxKind.StringKeyword,
+          ts.factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword),
+        ),
+      ]);
+
+      expect(
+        new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+          typeNode,
+          checker,
+        ),
+      ).toEqual({
+        type: "object",
+        additionalProperties: true,
+        $comment:
+          "Unsupported intersection pattern: index signature on unrecorded keys",
+      });
+    });
+
+    it("keeps both arms of a synthetic union of index signatures on different keys", async () => {
+      // The two arms' schemas are equal, so the union folds to one; the fold
+      // is recorded, and an intersection reads each arm.
+
+      const { checker } = await getTypeFromCode(
+        "type Dummy = unknown;",
+        "Dummy",
+      );
+      const typeNode = ts.factory.createIntersectionTypeNode([
+        ts.factory.createParenthesizedType(
+          ts.factory.createUnionTypeNode([
+            indexedLiteral(ts.SyntaxKind.StringKeyword, numberNode()),
+            indexedLiteral(ts.SyntaxKind.NumberKeyword, numberNode()),
+          ]),
+        ),
+        indexedLiteral(
+          ts.SyntaxKind.StringKeyword,
+          ts.factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword),
+        ),
+      ]);
+
+      expect(
+        new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+          typeNode,
+          checker,
+        ),
+      ).toEqual({
+        anyOf: [
+          unsupportedKeys,
+          {
+            type: "object",
+            properties: {},
+            additionalProperties: { type: "number" },
+          },
+        ],
+      });
+    });
+
+    it("returns the fallback for merged synthetic numeric index signatures beside a string one", async () => {
+      const { checker } = await getTypeFromCode(
+        "type Dummy = unknown;",
+        "Dummy",
+      );
+      const numbered = ts.factory.createParenthesizedType(
+        ts.factory.createIntersectionTypeNode([
+          indexedLiteral(ts.SyntaxKind.NumberKeyword, numberNode()),
+          indexedLiteral(
+            ts.SyntaxKind.NumberKeyword,
+            ts.factory.createLiteralTypeNode(
+              ts.factory.createNumericLiteral(1),
+            ),
+          ),
+        ]),
+      );
+      const typeNode = ts.factory.createIntersectionTypeNode([
+        numbered,
+        indexedLiteral(ts.SyntaxKind.StringKeyword, numberNode()),
+      ]);
+
+      expect(
+        new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+          typeNode,
+          checker,
+        ),
+      ).toEqual(unsupportedKeys);
     });
   });
 

@@ -16,6 +16,8 @@ import {
   github,
   githubDownload,
   githubOperationsInProgress,
+  GitHubStatusError,
+  inParallel,
   memo,
   performanceGithub,
   RUN_LIST_ACCESS,
@@ -130,11 +132,13 @@ Deno.test("github: non-OK -> throws with the status; the error body is not retur
       const e = await assertRejects(() => github("repos/o/missing"), Error);
       assertEquals(e.message, "GitHub API repos/o/missing failed: HTTP 404");
       assertEquals(friendlyError(e.message), "not found");
+      assert(e instanceof GitHubStatusError && !e.rateLimited);
     });
     await withFetch(() => Response.json({}, { status: 429 }), async () => {
       const e = await assertRejects(() => github("rate/limited"), Error);
       assertEquals(e.message, "GitHub API rate/limited failed: HTTP 429");
       assertEquals(friendlyError(e.message), "rate limit hit");
+      assert(e instanceof GitHubStatusError && e.rateLimited);
     });
     await withFetch(
       () =>
@@ -149,6 +153,7 @@ Deno.test("github: non-OK -> throws with the status; the error body is not retur
           "GitHub API rate/limited failed: HTTP 403 (rate-limited)",
         );
         assertEquals(friendlyError(e.message), "rate limit hit");
+        assert(e instanceof GitHubStatusError && e.rateLimited);
       },
     );
   });
@@ -1052,4 +1057,32 @@ Deno.test("runArtifactId: a listing naming no artifacts at all -> undefined", as
     undefined,
   );
   assertEquals(paths.length, 1);
+});
+
+Deno.test("inParallel: returns results in the order of the tasks, with at most the limit in flight", async () => {
+  let running = 0;
+  let most = 0;
+  const waits = [3, 1, 2, 0, 1].map((ticks, index) => async () => {
+    running++;
+    most = Math.max(most, running);
+    for (let tick = 0; tick < ticks; tick++) await Promise.resolve();
+    running--;
+    return index;
+  });
+  assertEquals(await inParallel(2, waits), [0, 1, 2, 3, 4]);
+  assertEquals(most, 2);
+});
+
+Deno.test("inParallel: starts no task after one rejects, and rejects with its error", async () => {
+  const started: number[] = [];
+  const tasks = [0, 1, 2, 3].map((index) => async () => {
+    started.push(index);
+    if (index === 0) throw new Error("first failed");
+    // The other worker's task is still going when the first one fails.
+    for (let tick = 0; tick < 3; tick++) await Promise.resolve();
+    return index;
+  });
+  const e = await assertRejects(() => inParallel(2, tasks), Error);
+  assertEquals(e.message, "first failed");
+  assertEquals(started, [0, 1]);
 });

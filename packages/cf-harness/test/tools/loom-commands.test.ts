@@ -44,6 +44,7 @@ import {
   runCommandModelView,
   type RunCommandOutput,
   runCommandTool,
+  runReadCommandTool,
 } from "../../src/tools/loom-commands.ts";
 import { LOOM_RETRIEVAL_MAX_OUTPUT_CHARS } from "../../src/tools/loom-retrieval.ts";
 import { getBuiltinTool } from "../../src/tools/registry.ts";
@@ -113,6 +114,7 @@ const contextWith = (
     config?: HarnessLoomCommandsConfig;
     configured?: boolean;
     aborted?: boolean;
+    cancelDuringListing?: boolean;
     ceiling?: readonly unknown[];
     queryLabel?: unknown[];
     referents?: Record<string, unknown>[];
@@ -126,6 +128,7 @@ const contextWith = (
     run(request: ProcessRunRequest): Promise<ProcessRunResult> {
       calls.push(request);
       if (request.args[1] === "list") {
+        if (options.cancelDuringListing) controller.abort();
         return Promise.resolve({
           stdout: options.manifest ?? JSON.stringify(MANIFEST),
           stderr: "",
@@ -219,6 +222,7 @@ const engineWith = (
   options: {
     ceiling?: readonly unknown[];
     cfcEnforcementMode?: CfcEnforcementMode;
+    manifest?: () => string;
   } = {},
 ) => {
   const calls: ProcessRunRequest[] = [];
@@ -245,7 +249,7 @@ const engineWith = (
         calls.push(request);
         return Promise.resolve({
           stdout: request.args[1] === "list"
-            ? JSON.stringify(MANIFEST)
+            ? options.manifest?.() ?? JSON.stringify(MANIFEST)
             : answer,
           stderr: "",
           exitCode: 0,
@@ -268,10 +272,11 @@ describe("loom-commands tools", () => {
       docsCorpusAvailable: false,
     };
 
-    it("names the two tools, listing as a read and running as a write", () => {
+    it("classifies the command tools by their authority", () => {
       expect([...LOOM_COMMAND_TOOL_IDS]).toEqual([
         "list_commands",
         "run_command",
+        "run_read_command",
       ]);
       expect(getBuiltinTool("list_commands")?.descriptor.effectClass).toBe(
         "read",
@@ -279,8 +284,24 @@ describe("loom-commands tools", () => {
       expect(getBuiltinTool("run_command")?.descriptor.effectClass).toBe(
         "write",
       );
+      expect(getBuiltinTool("run_read_command")?.descriptor.effectClass).toBe(
+        "read",
+      );
       expect(LOOM_COMMAND_TOOLS.map((tool) => tool.descriptor.toolId))
-        .toEqual(["list_commands", "run_command"]);
+        .toEqual(["list_commands", "run_command", "run_read_command"]);
+    });
+
+    it("marks the reads the host grants, and not the write", () => {
+      expect(
+        LOOM_COMMAND_TOOLS.map((tool) => [
+          tool.descriptor.toolId,
+          tool.descriptor.hostGrantedRead,
+        ]),
+      ).toEqual([
+        ["list_commands", true],
+        ["run_command", undefined],
+        ["run_read_command", true],
+      ]);
     });
 
     it("withholds the tools without a host command broker and offers them with one", () => {
@@ -375,6 +396,25 @@ describe("loom-commands tools", () => {
       expect(output.hidden).toBe(1);
       expect(output.compacted).toBeUndefined();
       expect(output.omitted).toBeUndefined();
+    });
+
+    it("shows the broker's read-only grant on the entries it stamps, and on no other", async () => {
+      const { context } = contextWith({
+        manifest: JSON.stringify({
+          commands: [
+            { id: "loom.inspect", effect: "read", readOnlyGranted: true },
+            { id: "loom.read", effect: "read", readOnlyGranted: "true" },
+            { id: "loom.compose", effect: "change" },
+          ],
+        }),
+      });
+      const output = listed(await listCommandsTool.invoke(context, {}));
+      expect(output.entries.map((entry) => [entry.name, entry.readOnlyGranted]))
+        .toEqual([
+          ["loom.inspect", true],
+          ["loom.read", undefined],
+          ["loom.compose", undefined],
+        ]);
     });
 
     it("returns the full argument schema, without `x-*` keywords, only for a command named in `detail`", async () => {
@@ -492,6 +532,31 @@ describe("loom-commands tools", () => {
         expect(output.reason).toContain(`${HARNESS_COMMAND_ARGS_MAX_BYTES}`);
       }
       expect(calls).toHaveLength(0);
+    });
+
+    it("does not dispatch after cancellation while the fresh catalog is loading", async () => {
+      for (const tool of [runCommandTool, runReadCommandTool]) {
+        const { context, calls } = contextWith({
+          cancelDuringListing: true,
+          manifest: JSON.stringify({
+            commands: [{
+              id: "loom.inspect",
+              effect: "read",
+              readOnlyGranted: true,
+              inputs: { type: "object" },
+            }],
+          }),
+        });
+        expect(
+          await tool.invoke(context, { command: "loom.inspect", args: {} }),
+        )
+          .toMatchObject({
+            status: "failed_to_deliver",
+            code: "cancelled",
+            landed: "no",
+          });
+        expect(calls.map((call) => call.args[1])).toEqual(["list"]);
+      }
     });
 
     it("returns an error without starting a process once the turn is cancelled", async () => {
@@ -627,6 +692,49 @@ describe("loom-commands tools", () => {
           ["list", "--json"],
           ["run", "loom.compose"],
           ["run", "loom.inspect"],
+        ]);
+      });
+
+      it("sends a read batch's granted reads read-only and refuses its other calls without sending them", async () => {
+        const { context, calls } = contextWith({
+          manifest: JSON.stringify({
+            commands: [
+              { id: "loom.inspect", effect: "read", readOnlyGranted: true },
+              { id: "loom.compose", effect: "change", readOnlyGranted: true },
+              { id: "loom.read", effect: "read" },
+            ],
+          }),
+          answer: (request) =>
+            Promise.resolve({
+              stdout: JSON.stringify({ ok: true, id: request.args[2] }),
+              stderr: "",
+              exitCode: 0,
+            }),
+        });
+        const output = batched(
+          await runReadCommandTool.invoke(context, {
+            calls: [
+              { command: "loom.inspect", args: {} },
+              { command: "loom.compose", args: {} },
+              { command: "loom.read", args: {} },
+            ],
+          }),
+        );
+        expect(output.results).toMatchObject([
+          { status: "executed", outcome: { ok: true, id: "loom.inspect" } },
+          { status: "failed_to_deliver", code: "not_granted", landed: "no" },
+          { status: "failed_to_deliver", code: "not_granted", landed: "no" },
+        ]);
+        expect(calls.map((call) => call.args.slice(1))).toEqual([
+          ["list", "--json"],
+          [
+            "run",
+            "loom.inspect",
+            "--args-json",
+            "-",
+            "--json",
+            "--read-only",
+          ],
         ]);
       });
 
@@ -1244,6 +1352,205 @@ describe("loom-commands tools", () => {
   });
 
   describe("prompt loop", () => {
+    /** Lists commands, invokes one read, then finishes a context-bound task. */
+    const readOnce = (
+      engine: CfHarnessEngine,
+      role: PromptSlotBinding["role"] | null = "context",
+    ) => {
+      const payloads = ["list_commands", "run_read_command"].map((name) => ({
+        choices: [{
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "",
+            tool_calls: [{
+              id: name,
+              type: "function",
+              function: {
+                name,
+                arguments: JSON.stringify(
+                  name === "list_commands" ? {} : {
+                    command: "loom.inspect",
+                    args: {},
+                    loomId: "loom-0123456789abcdef",
+                  },
+                ),
+              },
+            }],
+          },
+        }],
+      }));
+      let index = 0;
+      return new CfHarnessPromptLoop({
+        engine,
+        apiKey: "synthetic-test-key",
+        model: "gpt-5.4",
+        allowedToolIds: ["list_commands", "run_read_command"],
+        fetchFn: (_url, init) =>
+          Promise.resolve(
+            new Response(
+              JSON.stringify(
+                responsesBodyFromChatFixture(
+                  payloads[index++] ?? {
+                    choices: [{
+                      index: 0,
+                      message: { role: "assistant", content: "Done" },
+                    }],
+                  },
+                  init?.body,
+                ),
+              ),
+              { status: 200 },
+            ),
+          ),
+      }).runPrompt({
+        prompt: "Read the trip loom",
+        ...(role === null ? {} : {
+          promptSlotBinding: {
+            type: CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
+            source: { type: "test.prompt-slot", subject: "preparation" },
+            role,
+            kernelName: "cf-harness",
+            surface: "test",
+            subject: "preparation",
+            eventId: "event-preparation",
+          },
+        }),
+      });
+    };
+
+    for (
+      const cfcEnforcementMode of [
+        "enforce-explicit",
+        "enforce-strict",
+      ] as const
+    ) {
+      it(`runs a broker-granted context read at ${cfcEnforcementMode} and records its observation`, async () => {
+        const { engine, calls } = engineWith(
+          JSON.stringify({
+            ok: true,
+            outputs: { title: "Trip loom" },
+            ifc: { confidentiality: [OWNER] },
+          }),
+          {
+            cfcEnforcementMode,
+            manifest: () =>
+              JSON.stringify({
+                commands: [{
+                  id: "loom.inspect",
+                  effect: "read",
+                  readOnlyGranted: true,
+                }],
+              }),
+          },
+        );
+        const result = await readOnce(engine);
+        expect(calls.map((call) => call.args)).toEqual([
+          ["command", "list", "--json"],
+          ["command", "list", "--json"],
+          [
+            "command",
+            "run",
+            "loom.inspect",
+            "--args-json",
+            "-",
+            "--json",
+            "--loom",
+            "loom-0123456789abcdef",
+            "--read-only",
+          ],
+        ]);
+        expect(result.runState.policyDecisions).toContainEqual(
+          expect.objectContaining({
+            toolId: "run_read_command",
+            decision: "allowed",
+          }),
+        );
+        const message = result.transcript.find((entry) =>
+          entry.role === "tool" && entry.toolName === "run_read_command"
+        );
+        expect(message).toBeDefined();
+        if (message?.role !== "tool") throw new Error("Missing read output");
+        expect(JSON.parse(message.content)).toMatchObject({
+          status: "executed",
+        });
+        expect(JSON.parse(message.content)).not.toHaveProperty("cfc");
+        expect(engine.getRunState().cfcModelContext?.observations)
+          .toContainEqual(
+            expect.objectContaining({
+              toolId: "run_read_command",
+              label: { confidentiality: [OWNER] },
+            }),
+          );
+      });
+
+      for (
+        const row of [
+          { id: "loom.inspect", effect: "change", readOnlyGranted: true },
+          { id: "loom.inspect", readOnlyGranted: true },
+          { id: "loom.inspect", effect: "unknown", readOnlyGranted: true },
+          { id: "loom.inspect", effect: "read" },
+          { id: "loom.inspect", effect: "read", readOnlyGranted: false },
+          { id: "loom.inspect", effect: "read", readOnlyGranted: "true" },
+        ]
+      ) {
+        it(`refuses a context-bound read at ${cfcEnforcementMode} when the fresh broker row is ${JSON.stringify(row)}`, async () => {
+          let lists = 0;
+          const { engine, calls } = engineWith(JSON.stringify({ ok: true }), {
+            cfcEnforcementMode,
+            manifest: () =>
+              JSON.stringify({
+                commands: [
+                  ++lists === 1
+                    ? {
+                      id: "loom.inspect",
+                      effect: "read",
+                      readOnlyGranted: true,
+                    }
+                    : row,
+                ],
+              }),
+          });
+          const result = await readOnce(engine);
+          expect(calls.map((call) => call.args[1])).toEqual(["list", "list"]);
+          const message = result.transcript.find((entry) =>
+            entry.role === "tool" && entry.toolName === "run_read_command"
+          );
+          expect(message).toBeDefined();
+          if (message?.role !== "tool") throw new Error("Missing read output");
+          expect(JSON.parse(message.content)).toMatchObject({
+            status: "failed_to_deliver",
+            code: "not_granted",
+            landed: "no",
+          });
+        });
+      }
+    }
+
+    for (const role of ["quote", null] as const) {
+      it(`does not grant strict broker reads to ${role ?? "absent"} task authority`, async () => {
+        const { engine, calls } = engineWith(JSON.stringify({ ok: true }), {
+          cfcEnforcementMode: "enforce-strict",
+          manifest: () =>
+            JSON.stringify({
+              commands: [{
+                id: "loom.inspect",
+                effect: "read",
+                readOnlyGranted: true,
+              }],
+            }),
+        });
+        const result = await readOnce(engine, role);
+        expect(calls).toEqual([]);
+        expect(
+          result.runState.policyDecisions?.filter((row) =>
+            row.decision === "denied"
+          ).map((row) => row.toolId),
+        )
+          .toEqual(["list_commands", "run_read_command"]);
+      });
+    }
+
     /**
      * Has the model call `run_command` once under `binding` — `loom.compose`
      * unless `input` says otherwise — then finish.
@@ -1322,6 +1629,14 @@ describe("loom-commands tools", () => {
       ) {
         const { engine, calls } = engineWith(JSON.stringify({ ok: true }), {
           cfcEnforcementMode: "enforce-explicit",
+          manifest: () =>
+            JSON.stringify({
+              commands: [{
+                id: "loom.compose",
+                effect: "read",
+                readOnlyGranted: true,
+              }],
+            }),
         });
         const result = await composeOnce(engine, binding);
         const record = (result.runState.policyDecisions ?? []).find((entry) =>

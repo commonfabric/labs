@@ -1,8 +1,8 @@
 /**
- * Runs one `cf-harness` job from plain inputs to a structured result.
+ * Runs one `cf-harness` job from plain inputs to its final answer.
  *
- * A job is a task, the prompt-slot role that task binds as, the schema its
- * result must satisfy, and the tools it may use. Everything a job does in the
+ * A job is a task, the prompt-slot role that task binds as, an optional result
+ * schema, and the tools it may use. Everything a job does in the
  * fabric — a fabric session, its read ceiling, the cells it holds as handles —
  * is the optional `fabric` part of its spec, so a job with none runs with no
  * fabric at all. The caller decides what the result becomes: an agent run's
@@ -14,8 +14,10 @@
  * so a caller never depends on them.
  */
 
-import { join } from "@std/path";
+import { basename, join } from "@std/path";
 
+import type { JSONSchema } from "@commonfabric/api";
+import { readHarnessRunArtifacts } from "@commonfabric/cf-harness/artifacts";
 import {
   type CfHarnessStructuredResultValidation,
   processCfHarnessCliEnv,
@@ -24,15 +26,31 @@ import {
   selectCfHarnessCliSandboxRuntime,
 } from "@commonfabric/cf-harness/cli";
 import type { HarnessBrowserHost } from "@commonfabric/cf-harness/contracts/browser-host";
+import type { HarnessInlineImageAttachment } from "@commonfabric/cf-harness/contracts/image";
 import type { PromptSlotRole } from "@commonfabric/cf-harness/contracts/prompt-slot";
+import type { HarnessRunDepth } from "@commonfabric/cf-harness/contracts/run-depth";
 import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
 import { createHarnessHandleTable } from "@commonfabric/cf-harness/handle-table";
+import { createHarnessImageAttachmentFromBase64 } from "@commonfabric/cf-harness/image-attachments";
+import type {
+  HarnessModelLimits,
+  HarnessModelUsage,
+} from "@commonfabric/cf-harness/model/client";
 import {
   CfHarnessPromptLoop,
   type CreateHarnessPromptLoopOptions,
+  type HarnessModelUsageUpdate,
   type HarnessPromptLoopResult,
+  promptLoopModelTurnsFromError,
+  type RunHarnessPromptOptions,
+  type RunHarnessTranscriptOptions,
 } from "@commonfabric/cf-harness/prompt-loop";
-import type { JSONSchema } from "@commonfabric/api";
+import { sumHarnessModelUsage } from "@commonfabric/cf-harness/model/usage";
+import { canContinueHarnessRun } from "@commonfabric/cf-harness/run-continuation";
+import type {
+  HarnessTaskDomain,
+  HarnessTaskTag,
+} from "@commonfabric/cf-harness/task-classification";
 import {
   type AgentRunErrorCode,
   INVALID_RESULT,
@@ -42,9 +60,6 @@ import {
 import type { CfcObservationMaxConfidentiality } from "@commonfabric/runner/cfc";
 
 import type { AgentRunReport } from "./agent-runner.ts";
-
-/** The workspace file the host writes when the model calls `submit_result`. */
-const RESULT_FILE = "agent-result.json";
 
 /** What a job does in the fabric, when it does anything there. */
 export interface HarnessJobFabric {
@@ -71,9 +86,15 @@ export interface HarnessJobFabric {
 }
 
 /** One job, as plain data. */
-export interface HarnessJobSpec {
+export interface HarnessJobSpec extends HarnessModelLimits {
   /** The task text, given to the model as the prompt. */
   task: string;
+
+  /** The predecessor's run root, whose checkpoint seeds this follow-up. */
+  continueFrom?: { runRoot: string };
+
+  /** Inline host-owned images, snapshotted into this job workspace. */
+  imageAttachments?: readonly HarnessInlineImageAttachment[];
 
   /**
    * The prompt-slot role the task binds as. It is the job's authority: a
@@ -83,10 +104,10 @@ export interface HarnessJobSpec {
    */
   taskRole: PromptSlotRole;
 
-  /** The schema the result the model submits is validated against. */
-  resultSchema: JSONSchema;
+  /** The submitted result schema; absent when the answer is final assistant text. */
+  resultSchema?: JSONSchema;
 
-  /** The tools the job may use; `submit_result` is always added. */
+  /** The tools the job may use; a schema adds `submit_result`. */
   tools: readonly string[];
 
   /**
@@ -105,14 +126,27 @@ export interface HarnessJobSpec {
   /** The most model turns the job may take; the harness's own when absent. */
   maxModelTurns?: number;
 
+  /** How far to take the task; the harness's default when absent. */
+  depth?: HarnessRunDepth;
+
+  /**
+   * The task's kinds of work, in place of the harness's classification; an
+   * empty list states none and leaves them to the harness.
+   */
+  taskTags?: readonly HarnessTaskTag[];
+
+  /** Where the task's work happens, in place of the harness's; `[]` is none. */
+  taskDomains?: readonly HarnessTaskDomain[];
+
+  /** The provider reasoning effort; the provider's default when absent. */
+  reasoningEffort?: string;
+
   /** The host-owned file backing the read-only Loom tools. */
   loomRetrievalConfigPath?: string;
 
   /**
-   * The host-owned file naming the command broker behind `list_commands`
-   * and `run_command`. Those tools, and the harness flag this becomes, come
-   * with labs#8467; a harness without them refuses the flag and the job
-   * fails.
+   * The host-owned file naming the command broker behind `list_commands`,
+   * `run_command`, and `run_read_command`.
    */
   loomCommandsConfigPath?: string;
 
@@ -173,14 +207,37 @@ export const HARNESS_JOB_CFC_ENFORCEMENT_MODE = "enforce-explicit";
 
 /** What a job runs with besides its spec. */
 export interface HarnessJobOptions {
-  /** The directory the job's workspace and artifacts are created under. */
+  /**
+   * The job's artifact parent and default workspace parent. Its basename
+   * identifies the job and names its result file inside `.job-results`.
+   */
   runRoot: string;
+
+  /** The conversation's workspace; a new workspace under `runRoot` by default. */
+  workspace?: string;
+
+  /**
+   * Takes caller messages for the next model turn, in acceptance order.
+   * Each returned string becomes a user message at that turn's boundary.
+   */
+  takeMessages?: (
+    turn: number,
+  ) => readonly string[] | Promise<readonly string[]>;
 
   /** Aborts the job. */
   signal: AbortSignal;
 
   /** Called on each transcript event the harness persists, before it is passed on. */
   onEvent?: (event: HarnessTranscriptEvent) => Promise<void> | void;
+
+  /** Records the artifact root before this job starts its model loop. */
+  onStart?: (runRoot: string) => void;
+
+  /** Cumulative usage after a completed model call, with its accounting scope. */
+  onUsage?: (update: {
+    usage?: HarnessModelUsage;
+    coverage: NonNullable<AgentRunReport["usageCoverage"]>;
+  }) => Promise<void> | void;
 
   /** The harness's own seams; `createPromptLoop` replaces the model loop. */
   harnessDeps?: RunCfHarnessCliDependencies;
@@ -194,12 +251,17 @@ export interface HarnessJobOptions {
 
 /** How a job ended. */
 export type HarnessJobResult =
-  & { report?: AgentRunReport }
+  & {
+    report?: AgentRunReport;
+
+    /** Whether the run left a complete checkpoint a follow-up can use. */
+    recordedRun?: boolean;
+  }
   & (
     | {
       outcome: "completed";
 
-      /** The value the model submitted, read back from the result file. */
+      /** Validated JSON for a schema, or the final assistant text without one. */
       structuredResult: unknown;
 
       /** The handles the job held, for resolving those the result names. */
@@ -231,6 +293,13 @@ const reportOf = (result: HarnessPromptLoopResult): AgentRunReport => {
       }
       : {}),
     modelTurns: result.modelTurns,
+    ...(result.modelResponses !== undefined
+      ? {
+        modelResponses: result.modelResponses,
+        actualModels: result.actualModels,
+        modelAttributionComplete: result.modelAttributionComplete,
+      }
+      : {}),
     toolCalls: result.runState.toolOutputs.length,
     ...(result.runState.artifactRoot !== undefined
       ? { runRef: result.runState.artifactRoot }
@@ -260,12 +329,17 @@ const argvOf = (
   // One word, so that a task starting with `-` still reads as the value
   // rather than as flags of its own.
   `--prompt=${spec.task}`,
+  ...(spec.continueFrom !== undefined
+    ? ["--continue-run", spec.continueFrom.runRoot]
+    : []),
   "--prompt-slot-role",
   spec.taskRole,
-  "--structured-result-path",
-  resultPath,
-  "--structured-result-schema",
-  JSON.stringify(spec.resultSchema),
+  ...(spec.resultSchema === undefined ? [] : [
+    "--structured-result-path",
+    resultPath,
+    "--structured-result-schema",
+    JSON.stringify(spec.resultSchema),
+  ]),
   ...(spec.fabric !== undefined
     ? [
       "--fabric-api-url",
@@ -301,12 +375,26 @@ const argvOf = (
   ...(spec.maxModelTurns !== undefined
     ? ["--max-model-turns", String(spec.maxModelTurns)]
     : []),
+  ...(spec.depth !== undefined ? ["--depth", spec.depth] : []),
+  ...(spec.continueFrom === undefined && spec.taskTags !== undefined &&
+      spec.taskTags.length > 0
+    ? ["--task-tags", spec.taskTags.join(",")]
+    : []),
+  ...(spec.continueFrom === undefined && spec.taskDomains !== undefined
+    ? ["--task-domains", spec.taskDomains.join(",") || "none"]
+    : []),
+  ...(spec.reasoningEffort !== undefined
+    ? ["--reasoning-effort", spec.reasoningEffort]
+    : []),
   ...Object.entries(spec.fabric?.inputs ?? {}).flatMap(([name, ref]) => [
     "--input-cell",
     `${name}=${ref}`,
   ]),
   // The job's tools, and the tool it returns its result through.
-  ...[...spec.tools, "submit_result"].flatMap(
+  ...[
+    ...spec.tools.filter((tool) => tool !== "submit_result"),
+    ...(spec.resultSchema === undefined ? [] : ["submit_result"]),
+  ].flatMap(
     (tool) => ["--allow-tool", tool],
   ),
   ...(spec.subagentProfiles ?? []).flatMap(
@@ -335,25 +423,31 @@ export const selectHarnessJobSandboxRuntime = (
 ) => selectCfHarnessCliSandboxRuntime({ ...harnessDeps, ...SANDBOX_SELECTION });
 
 /**
- * Runs one job. It ends `completed` with the value the model submitted and
+ * Runs one job. It ends `completed` with the submitted value or final text and
  * the handles the job held; `cancelled` when its signal aborted; `failed` as
  * `LIMIT_REACHED` when the model-turn limit ended it, as `INVALID_RESULT`,
  * with the validator's reason, when the loop completed without a result
  * satisfying its schema, and as
  * `PROVIDER_FAILURE` when the model or a tool failed, or when a validated
  * result could not be read back.
+ *
+ * Follow-ups seed a new run from the predecessor's recorded checkpoint.
  */
 export const runHarnessJob = async (
   spec: HarnessJobSpec,
   options: HarnessJobOptions,
 ): Promise<HarnessJobResult> => {
-  const workspace = join(options.runRoot, "workspace");
+  const workspace = options.workspace ?? join(options.runRoot, "workspace");
   await Deno.mkdir(workspace, { recursive: true });
-  const resultPath = join(workspace, RESULT_FILE);
-  try {
-    await Deno.remove(resultPath);
-  } catch (error) {
-    if (!(error instanceof Deno.errors.NotFound)) throw error;
+  const resultDir = join(workspace, ".job-results");
+  const resultPath = join(resultDir, `${basename(options.runRoot)}.json`);
+  if (spec.resultSchema !== undefined) {
+    await Deno.mkdir(resultDir, { recursive: true });
+    try {
+      await Deno.remove(resultPath);
+    } catch (error) {
+      if (!(error instanceof Deno.errors.NotFound)) throw error;
+    }
   }
   const argv = argvOf(
     spec,
@@ -362,12 +456,42 @@ export const runHarnessJob = async (
     resultPath,
   );
 
+  for (const image of spec.imageAttachments ?? []) {
+    const snapshot = await createHarnessImageAttachmentFromBase64({
+      ...image,
+      snapshotDir: join(workspace, ".job-images"),
+    });
+    argv.push("--image", snapshot.hostPath);
+  }
+
   // The harness builds its loop through this seam, so wrapping it is how the
   // job takes its abort signal, tells the caller of each transcript event the
   // harness persists, and hands back the loop's full result.
   let loopResult: HarnessPromptLoopResult | undefined;
   let loopError: unknown;
+  let reportedUsage: HarnessModelUsage | undefined;
+  let reportedUsageCoverage: NonNullable<AgentRunReport["usageCoverage"]> =
+    "direct";
+  const directUsage: (HarnessModelUsage | undefined)[] = [];
+  const onModelUsage = async (update: HarnessModelUsageUpdate) => {
+    directUsage.push(update.usage);
+    reportedUsage = update.totalUsage ??
+      (directUsage.some((usage) => usage !== undefined)
+        ? sumHarnessModelUsage(directUsage)
+        : undefined);
+    reportedUsageCoverage = update.totalUsage === undefined
+      ? "direct"
+      : "including-descendants";
+    await options.onUsage?.({
+      usage: reportedUsage,
+      coverage: reportedUsageCoverage,
+    });
+  };
+  let readRunState:
+    | (() => HarnessPromptLoopResult["runState"] | undefined)
+    | undefined;
   let resultValidation: CfHarnessStructuredResultValidation | undefined;
+  let refusalDetail: string | undefined;
   const createInnerLoop = options.harnessDeps?.createPromptLoop ??
     ((loopOptions: CreateHarnessPromptLoopOptions) =>
       new CfHarnessPromptLoop(loopOptions));
@@ -385,7 +509,10 @@ export const runHarnessJob = async (
       : {}),
     io: {
       stdout: (text) => options.report?.(text.trimEnd()),
-      stderr: (text) => options.report?.(text.trimEnd()),
+      stderr: (text) => {
+        refusalDetail = text.trimEnd();
+        options.report?.(refusalDetail);
+      },
     },
     // The caller owns the process's signals and its exit.
     registerSignalHandler: () => () => {},
@@ -395,25 +522,61 @@ export const runHarnessJob = async (
       options.harnessDeps?.onStructuredResultValidation?.(validation);
     },
     createPromptLoop: (loopOptions) => {
-      const loop = createInnerLoop(loopOptions);
-      return {
-        runPrompt: async (promptOptions) => {
-          try {
-            loopResult = await loop.runPrompt({
-              ...promptOptions,
-              signal: options.signal,
-              onTranscriptEvent: async (event) => {
+      readRunState = () => loopOptions.engine?.getRunState();
+      const runRoot = readRunState()?.artifactRoot;
+      if (runRoot !== undefined) options.onStart?.(runRoot);
+      const loop = createInnerLoop({
+        ...loopOptions,
+        stopOnStructuredResult: true,
+        ...(spec.maxInputBytes !== undefined
+          ? { maxInputBytes: spec.maxInputBytes }
+          : {}),
+        ...(spec.maxOutputTokens !== undefined
+          ? { maxOutputTokens: spec.maxOutputTokens }
+          : {}),
+      });
+      const run = async <
+        T extends RunHarnessPromptOptions | RunHarnessTranscriptOptions,
+      >(
+        runOptions: T,
+        invoke: (runOptions: T) => Promise<HarnessPromptLoopResult>,
+      ) => {
+        const replaying = "transcript" in runOptions;
+        let seedEnd = 0;
+        try {
+          loopResult = await invoke({
+            ...runOptions,
+            signal: options.signal,
+            takeMessages: options.takeMessages,
+            onModelUsage: async (update) => {
+              await onModelUsage(update);
+              await runOptions.onModelUsage?.(update);
+            },
+            onTranscriptEvent: async (event) => {
+              if (!replaying || event.subagent !== undefined) {
                 await options.onEvent?.(event);
-                await promptOptions.onTranscriptEvent?.(event);
-              },
-            });
-            return loopResult;
-          } catch (error) {
-            loopError = error;
-            throw error;
-          }
-        },
-        runTranscript: loop.runTranscript.bind(loop),
+              } else if (event.seed === true) {
+                seedEnd = event.transcript.length;
+              } else {
+                await options.onEvent?.({
+                  ...event,
+                  transcript: event.transcript.slice(seedEnd),
+                });
+              }
+              await runOptions.onTranscriptEvent?.(event);
+            },
+          });
+          return loopResult;
+        } catch (error) {
+          loopError = error;
+          throw error;
+        }
+      };
+      return {
+        runPrompt: (promptOptions) =>
+          run(promptOptions, (wrapped) => loop.runPrompt(wrapped)),
+        runTranscript: (transcriptOptions) =>
+          run(transcriptOptions, (wrapped) => loop.runTranscript(wrapped)),
         // The harness classifies the task before it assembles the prompt; a
         // wrapper without this seam runs every job with full orientation.
         ...(loop.classifyTask !== undefined
@@ -426,38 +589,94 @@ export const runHarnessJob = async (
   };
 
   const exitCode = await runCfHarnessCli(argv, deps);
-  if (options.signal.aborted) return { outcome: "cancelled" };
+  const failedTurns = promptLoopModelTurnsFromError(loopError);
+  const failedState = readRunState?.();
+  // These are partial measurements, not a completeness claim. A failed
+  // provider call may have spent tokens it never reported.
+  const failedReport: AgentRunReport | undefined =
+    failedTurns !== undefined || reportedUsage !== undefined
+      ? {
+        ...(reportedUsage !== undefined
+          ? {
+            usage: { ...reportedUsage },
+            usageCoverage: reportedUsageCoverage,
+          }
+          : {}),
+        ...(failedTurns !== undefined ? { modelTurns: failedTurns } : {}),
+        ...(failedState !== undefined
+          ? { toolCalls: failedState.toolOutputs.length }
+          : {}),
+        ...(failedState?.artifactRoot !== undefined
+          ? { runRef: failedState.artifactRoot }
+          : {}),
+      }
+      : undefined;
+  const runRef = loopResult?.runState.artifactRoot ?? failedState?.artifactRoot;
+  let recordedRun = false;
+  if (runRef !== undefined) {
+    try {
+      recordedRun = canContinueHarnessRun(
+        await readHarnessRunArtifacts(runRef),
+      );
+    } catch (error) {
+      if (!(error instanceof Deno.errors.NotFound)) throw error;
+    }
+  }
+  const report = loopResult !== undefined
+    ? reportOf(loopResult)
+    : failedReport ??
+      (recordedRun ? { runRef } : undefined);
+  if (options.signal.aborted) {
+    return {
+      outcome: "cancelled",
+      recordedRun,
+      ...(report !== undefined ? { report } : {}),
+    };
+  }
   if (loopResult === undefined) {
     const limit = loopError instanceof Error &&
       loopError.message.includes("exceeded max model turns");
     return {
       outcome: "failed",
+      recordedRun,
       errorCode: limit ? LIMIT_REACHED : PROVIDER_FAILURE,
+      ...(loopError === undefined && refusalDetail !== undefined
+        ? { errorDetail: refusalDetail }
+        : {}),
+      ...(report !== undefined ? { report } : {}),
     };
   }
-  const report = reportOf(loopResult);
   if (exitCode !== 0) {
     return resultValidation?.status === "invalid"
       ? {
         outcome: "failed",
+        recordedRun,
         errorCode: INVALID_RESULT,
         ...(resultValidation.validation_error !== undefined
           ? { errorDetail: resultValidation.validation_error }
           : {}),
         report,
       }
-      : { outcome: "failed", errorCode: PROVIDER_FAILURE, report };
+      : { outcome: "failed", errorCode: PROVIDER_FAILURE, report, recordedRun };
   }
 
-  let structuredResult: unknown;
+  let structuredResult: unknown = loopResult.finalAssistantText;
   try {
-    structuredResult = JSON.parse(await Deno.readTextFile(resultPath));
+    if (spec.resultSchema !== undefined) {
+      structuredResult = JSON.parse(await Deno.readTextFile(resultPath));
+    }
   } catch {
     // A result the harness validated became unreadable before it was read.
-    return { outcome: "failed", errorCode: PROVIDER_FAILURE, report };
+    return {
+      outcome: "failed",
+      errorCode: PROVIDER_FAILURE,
+      report,
+      recordedRun,
+    };
   }
   return {
     outcome: "completed",
+    recordedRun,
     structuredResult,
     handleTable: loopResult.runState.handleTable ??
       createHarnessHandleTable(loopResult.runState.runId),

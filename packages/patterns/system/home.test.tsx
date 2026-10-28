@@ -99,7 +99,7 @@ export default pattern(() => {
   const piece = new Writable<{ [NAME]?: string }>({ [NAME]: "Fav Piece" });
 
   const assert_initial_profile_missing = assert(() =>
-    ((home.profiles as unknown[])?.length ?? 0) === 0
+    (home.profiles.get() ?? []).length === 0
   );
 
   // The agent queue is held in a field of its own and starts empty, with no

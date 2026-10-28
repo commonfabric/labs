@@ -17,6 +17,7 @@ import {
 } from "@commonfabric/runner/cfc";
 import { representsPrincipalSubjects } from "@commonfabric/runner/cfc/represents-principal";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { createCompileByteCache } from "@commonfabric/test-support/compile-byte-cache";
 import { EmulatedStorageManager } from "../../runner/src/storage/v2-emulate.ts";
 import { newSharedServer } from "../../runner/test/memory-v2-test-utils.ts";
 
@@ -39,6 +40,10 @@ type Profile = {
   setPicture: Stream<{ picture?: FabricBytes }>;
 };
 
+// One cache for every runtime this file makes, so that a pattern compiles
+// once per file rather than once per case.
+const moduleByteCache = createCompileByteCache();
+
 describe("profile picture ownership", () => {
   let server: MemoryV2Server.Server;
   let served: { contents: string; identity: string };
@@ -59,6 +64,7 @@ describe("profile picture ownership", () => {
   /** A runtime acting as `identity` against the shared server. */
   const open = (identity: Identity): Runtime => {
     const runtime = new Runtime({
+      moduleByteCache,
       apiUrl: new URL("https://profile.test"),
       storageManager: EmulatedStorageManager.connectTo(server, {
         as: identity,
@@ -129,12 +135,13 @@ describe("profile picture ownership", () => {
   };
 
   /**
-   * Sets the picture through the profile's own writer from `writer`, and
-   * returns the message of the error its commit failed with, if it failed.
+   * Sets the picture to `bytes`, or clears it for `"clear"`, through the
+   * profile's own writer from `writer`, and returns the message of the error
+   * its commit failed with, if it failed.
    */
   const setPicture = async (
     writer: Runtime,
-    bytes: number[],
+    bytes: number[] | "clear",
   ): Promise<string | undefined> => {
     const cell = writer.getCellFromLink<Profile>(
       profile.getAsNormalizedFullLink(),
@@ -143,7 +150,9 @@ describe("profile picture ownership", () => {
     const settled = Promise.withResolvers<IExtendedStorageTransaction>();
     writer.scheduler.queueEvent(
       cell.key("setPicture").resolveAsCell().getAsNormalizedFullLink(),
-      { picture: new FabricBytes(new Uint8Array(bytes)) },
+      bytes === "clear"
+        ? { clear: true }
+        : { picture: new FabricBytes(new Uint8Array(bytes)) },
       true,
       settled.resolve,
     );
@@ -234,6 +243,17 @@ describe("profile picture ownership", () => {
     it("attests the owner once the owner sets the picture", async () => {
       expect(await setPicture(runtime, [1, 2, 3])).toBeUndefined();
       expect(await picture()).toEqual([1, 2, 3]);
+      expect(await pictureBy()).toEqual([owner.did()]);
+    });
+
+    it("removes the picture once the owner clears it, and attests the owner's next one", async () => {
+      expect(await setPicture(runtime, [1, 2, 3])).toBeUndefined();
+
+      expect(await setPicture(runtime, "clear")).toBeUndefined();
+      expect(await picture()).toBeUndefined();
+
+      expect(await setPicture(runtime, [4, 5])).toBeUndefined();
+      expect(await picture()).toEqual([4, 5]);
       expect(await pictureBy()).toEqual([owner.did()]);
     });
   });

@@ -62,6 +62,8 @@ const NON_PATTERN_BASENAMES = new Set([
 const NON_PATTERN_PREFIXES = [
   "integration/",
   "tools/",
+  // The Topics board's command-line client, a Deno program beside the pattern.
+  "topics/tools/",
 ];
 
 /** Use repository separators for keys shared across operating systems. */

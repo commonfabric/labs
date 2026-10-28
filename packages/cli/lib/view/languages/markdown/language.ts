@@ -29,6 +29,7 @@ export const markdownLanguage: Language = {
     filenamePatterns: [],
     aliases: ["md"],
     interpreters: [],
+    signatures: [],
     sharedExtensions: [],
   },
 

@@ -25,10 +25,10 @@ function withBoard(
   }
 }
 
-// Rows as the recent-runs tile renders them, each titled with the same pull
+// Rows as the recent commits tile renders them, each titled with the same pull
 // request number, which its title and arrow both link to.
 function runRows(titles: string[]): string {
-  return `<div class="evscroll" data-focus-key="runs" style="height:40px;overflow:auto">${
+  return `<div class="evscroll" data-focus-key="commits" style="height:40px;overflow:auto">${
     titles.map((title) =>
       `<div class="ev" style="height:30px"><span class="evtxt"><a data-focus-key="title-${title}-0" href="https://example.com/${title}">${title} </a><a class="pr" data-focus-key="title-${title}-1" href="https://github.com/o/r/pull/1">(#1)</a></span><a class="evarrow" data-focus-key="pr-arrow-${title}" href="https://github.com/o/r/pull/1">↗</a></div>`
     ).join("")
@@ -86,7 +86,7 @@ Deno.test("an update adds, removes and reorders tiles by label, keeping the elem
 Deno.test("an update keeps focus and scroll position in a tile when a tile before it leaves the page", () => {
   withBoard([
     ["scheduled workflows", { status: "bad", value: "1 failing" }],
-    ["recent main runs", { status: "good", extra: runRows(["c", "b", "a"]) }],
+    ["recent commits", { status: "good", extra: runRows(["c", "b", "a"]) }],
   ], (container) => {
     container.querySelector<HTMLElement>('[data-focus-key="pr-arrow-a"]')
       ?.focus({ preventScroll: true });
@@ -94,7 +94,7 @@ Deno.test("an update keeps focus and scroll position in a tile when a tile befor
     reconcileTiles(
       container,
       rendering([
-        "recent main runs",
+        "recent commits",
         { status: "warn", extra: runRows(["d", "c", "b", "a"]) },
       ]),
     );
@@ -150,7 +150,7 @@ Deno.test("an update keeps focus on a tile's link when the chart under it gains 
 
 Deno.test("an update moves focus inside a replaced tile to the link with the same focus key", () => {
   withBoard([[
-    "recent main runs",
+    "recent commits",
     { status: "good", extra: runRows(["b", "a"]) },
   ]], (container) => {
     container.querySelector<HTMLElement>('[data-focus-key="pr-arrow-a"]')
@@ -158,7 +158,7 @@ Deno.test("an update moves focus inside a replaced tile to the link with the sam
     reconcileTiles(
       container,
       rendering([
-        "recent main runs",
+        "recent commits",
         { status: "good", extra: runRows(["c", "b", "a"]) },
       ]),
     );
@@ -170,7 +170,7 @@ Deno.test("an update moves focus inside a replaced tile to the link with the sam
 
 Deno.test("an update keeps focus on a row's pull request number when other rows link the same pull request", () => {
   withBoard([[
-    "recent main runs",
+    "recent commits",
     { status: "good", extra: runRows(["b", "a"]) },
   ]], (container) => {
     container.querySelector<HTMLElement>('[data-focus-key="title-a-1"]')
@@ -178,7 +178,7 @@ Deno.test("an update keeps focus on a row's pull request number when other rows 
     reconcileTiles(
       container,
       rendering([
-        "recent main runs",
+        "recent commits",
         { status: "warn", extra: runRows(["c", "b", "a"]) },
       ]),
     );
@@ -230,14 +230,14 @@ Deno.test("an update moves focus inside a replaced tile to the link with the sam
 
 Deno.test("an update keeps the scroll position of a replaced tile's list", () => {
   withBoard([[
-    "recent main runs",
+    "recent commits",
     { status: "good", extra: runRows(["c", "b", "a"]) },
   ]], (container) => {
     container.querySelector(".evscroll")!.scrollTop = 25;
     reconcileTiles(
       container,
       rendering([
-        "recent main runs",
+        "recent commits",
         { status: "warn", extra: runRows(["d", "c", "b", "a"]) },
       ]),
     );

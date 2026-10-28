@@ -363,21 +363,26 @@ export function moduleDelegationsFromDocs(
  * transformer pipeline or SES verifier that alters emitted bytes (the source
  * set, keyed by content identity alone, persists across the change).
  *
- * The value is generated from a hash of the compiler inputs defined in
- * `compiler-fingerprint.deno.ts`. Editing those inputs moves the tag and
- * invalidates stale compiled docs. Deno source runs resolve the checked-in
- * source marker to that hash at runtime. Runtimes without repository file access
- * skip the compiled cache until a binary build bakes the hash into
- * `compile-cache-version.ts`. See `getCompileCacheRuntimeVersion()` and
- * `compiler-fingerprint.deno.ts`.
+ * A built artifact carries a version that is a hash of what its compiler
+ * emits for a fixed corpus (`compile-cache-output-version.deno.ts`), baked in
+ * at build time: a compiler change that compiles the corpus to the same
+ * documents keeps the tag, and one that changes any of them (a body, a stored
+ * field, an import edge), or an epoch bump, moves it. A Deno source run
+ * resolves the checked-in source marker instead: to the output version its
+ * tree has recorded for itself, while that memo still matches the tree, and
+ * otherwise to a hash of the compiler inputs, which moves on any edit to them
+ * (`compile-cache-output-memo.deno.ts`). Runtimes without repository file
+ * access skip the compiled cache until a build bakes a version into
+ * `compile-cache-version.ts` or defines one. See
+ * `getCompileCacheRuntimeVersion()`.
  */
 export {
   COMPILE_CACHE_RUNTIME_VERSION,
   SOURCE_COMPILE_CACHE_RUNTIME_VERSION,
 } from "./compile-cache-version.ts";
 
-type CompilerFingerprintModule = {
-  computeCurrentCompilerVersion(): Promise<string>;
+type SourceCompileCacheVersionModule = {
+  computeCurrentSourceCompileCacheVersion(): Promise<string>;
 };
 
 type CompileCacheVersionGlobal = typeof globalThis & {
@@ -433,12 +438,12 @@ async function resolveCompileCacheRuntimeVersion(
     return undefined;
   }
   const specifier = new URL(
-    "./compiler-fingerprint.deno.ts",
+    "./compile-cache-output-memo.deno.ts",
     import.meta.url,
   ).href;
   try {
-    const module = await import(specifier) as CompilerFingerprintModule;
-    return await module.computeCurrentCompilerVersion();
+    const module = await import(specifier) as SourceCompileCacheVersionModule;
+    return await module.computeCurrentSourceCompileCacheVersion();
   } catch (error) {
     if (isUnavailableSourceFingerprint(error)) {
       return undefined;
@@ -952,14 +957,12 @@ export function codeFieldVerifies(
  * transition does by construction, because it stages a module's delegation
  * union on the same transaction that moves the piece's source pointer.
  *
- * A cache document is not on §8.12.5's route 2, whose declaration would be the
- * other answer. Route 2 declares one piece's flow join as the store's policy,
- * so it wants a store keyed on that piece's own nodes. A cache document is
- * keyed on module content: every piece in the space running that module
- * addresses it, and it outlives all of them. What route 2 leaves behind is
- * also permanent — a `declared` entry per measured path, which §8.12.1 does
- * not let back, on a document nothing collects — where the flow stamp this
- * keeps is a per-value component §8.12.8 replaces on overwrite.
+ * A cache document has no piece owner for §8.12.5's runtime-owned-store
+ * enrollment. It is keyed on module content: every piece in the space
+ * running that module addresses it, and it outlives all of them. Its
+ * undeclarable-policy marker exempts local-flow writes from writer-fit at
+ * every rung. It supplies no ownership claim, so neither ownership admission
+ * route applies. The flow stamps record the current value's label.
  *
  * The write stays a flow stamp target, which is where this stops short of
  * §18.6.2's write-side mirror — that section says the same addresses are not

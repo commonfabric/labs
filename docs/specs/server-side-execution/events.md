@@ -79,12 +79,18 @@ Before queuing a durable event, the drain validates both `eventId` and `seq`
 at the stored index in the replica. On a mismatch, it publishes this space's
 pending subscription frames and awaits an ordered response on the serving
 connection. This barrier consumes published input without waiting for sealed
-wave writes to become durable. A drain pass attempts it at most once.
+wave writes to become durable. A drain pass attempts it at most once. Under the
+store read-through posture the serving connection carries no frames for the
+space: the replica learns of a commit when the feed re-reads the documents it
+wrote, and the drain, which lists pending entries from the store, can run ahead
+of that refresh. There the drain reads the entries document from the store into
+the replica instead, with nothing to wait for, on any mismatch.
 
-After the response, the drain reads the stored entries again, finds the same
-immutable identity, and validates its current index in the replica. A consumed
-or compacted entry needs no dispatch. A failed synchronization or a view still
-hidden by a local write defers that entry and every later arrival across streams.
+After the response or the read, the drain reads the stored entries again, finds
+the same immutable identity, and validates its current index in the replica. A
+consumed or compacted entry needs no dispatch. A failed synchronization or a
+view still hidden by a local write defers that entry and every later arrival
+across streams.
 Scheduler quiescence does not establish completion for these unqueued events:
 the space watermark stays below the earliest deferred sequence until a fresh
 scan can process it. The existing input wake and deferral backstop re-arm that
@@ -109,6 +115,22 @@ handler fires
    state now authoritative
 ```
 
+- A client fire made inside a writable transaction (an imperative
+  `send` within `editWithRetry`, say) is work that transaction launched,
+  and it happens only if the transaction commits. Scheduler-v2's I10
+  states that for the work a handler attempt launches; this rule extends
+  it to every writable transaction a client fire goes through. The
+  intent is tracked and the event appended from the transaction's
+  post-commit outbox, at the commit's verdict and only on success. A
+  transaction that fails or is aborted fired nothing: no intent is
+  outstanding for it, no outcome is signaled, and the echo its local run
+  left on the overlay is retired, with the echoes of the cascade that run
+  queued, however late those run. So an attempt run again fires its event once, under the id
+  that attempt minted, or under the caller's own id, which every attempt
+  shares. A fire through a transaction that has already committed
+  happens at once, and one through a transaction that has already failed
+  does not happen. A fire with no transaction, or through a read-only
+  one, happens at once.
 - Server-originated events (`stream.send()` from a handler cascade
   or a served computation, piece-to-piece) enter at "enqueue" and
   are otherwise identical — one path, two producers — but their
@@ -189,7 +211,13 @@ handler fires
   beyond the space's commit sequence — same as today. A consequence
   takes effect at its event's place in the firing session's order: a
   write that session committed after the event supersedes the
-  consequence writes it overwrote (serving-loop.md §3d).
+  consequence writes it overwrote (serving-loop.md §3d). A requeue
+  decided at the wave commit keeps the per-stream order: the later
+  entries of that stream the wave processed requeue with the requeued
+  head and re-drain behind it. It does not reach another stream, so a
+  later entry of another stream the wave consequenced keeps its commit,
+  and across streams the arrival order holds between requeues
+  (PROPOSED 2026-10-23, awaiting ruling; serving-loop.md §3d).
 - **Terminal positions.** An error consequence, a T3 dropped notice,
   and a `needs-attention` notice each complete processing at the event's
   arrival position even when the handler produces no domain writes. A
@@ -202,24 +230,52 @@ handler fires
   question of whether the existing across-stream order binds across
   pieces.
 - **Batching is at the COMMIT level only (D-v2-2, ruled 2026-08-02)**:
-  the wave commits once, at scheduler idle, with `consequenceOf`
-  listing every event processed. Handler-visible semantics are
-  UNCHANGED from today's client: handlers run eagerly, but only after
-  preflight makes any dirty state inputs current (D-v2-2) — the
-  scheduler recomputes a dirty computed input on demand before the
-  handler that reads it runs (`isInvalidNode` in
-  `event-preflight-dependencies.ts` — preflight recomputes an input
-  that is invalid OR has never run, so the lazy-computed case is
-  literally in the code; CT-1795's staleness park is an extra gate on
-  top) — the common case being not rapid-fire but a lazy computed
-  nothing has pulled yet, which the handler must and does see fresh.
-  An earlier proposal to drain all handlers ahead of derivations
-  (handlers reading last-wave state) was REJECTED by the owner: events
-  drain as part of regular execution —
-  the loop is simply not idle until all events are processed. Rapid-
-  fire efficiency falls out of pull-based laziness (superseded
-  intermediates are never demanded, so never computed), with the single
-  derived commit as the only batching.
+  the wave commits once, at scheduler idle, with `consequenceOf` listing
+  every event processed. Handler-visible semantics are UNCHANGED from
+  today's client: handlers run eagerly, but only after preflight makes
+  any dirty state inputs current (D-v2-2) — the scheduler recomputes a
+  dirty computed input on demand before the handler that reads it runs
+  (`isInvalidNode` in `event-preflight-dependencies.ts` — preflight
+  recomputes an input that is invalid OR has never run, so the
+  lazy-computed case is literally in the code; CT-1795's staleness park
+  is an extra gate on top) — the common case being not rapid-fire but a
+  lazy computed nothing has pulled yet, which the handler must and does
+  see fresh. Handlers never read last-wave state: events drain as part
+  of regular execution — the loop is simply not idle until all events
+  are processed — and the preflight ahead of each dispatch makes the
+  inputs a handler reads current. Within that rule the serving
+  scheduler's pass takes every ready event behind the head as well, each
+  through its own preflight, and settles the derivations once behind all
+  of them (`facade.ts`, `#processExecuteEventPhases`): the demanded
+  derivations several events invalidate run once per pass rather than
+  once per event. A head the preflight parks on its loads, behind events
+  the pass already ran, ends the pass without its settle: the pass that
+  the park's end queues dispatches it and settles behind it, and the
+  continuation queues no pass for the work that waits. A pass something
+  else asks for while the park holds defers the same way, so a write
+  from elsewhere waits for the park's end as well. The park ends when
+  its loads settle, when one fails, or when a drop takes the parked head
+  off the queue first, as the flush deadline's purge of an in-process
+  leftover does, and each queues that pass; a head the event phases
+  drop on their own leaves its park to end at its loads' release, which
+  queues it then. A head that
+  parks before the pass ran any handler leaves the settle to run as
+  before. The scheduler is not idle while a head is parked, so a serving
+  cycle whose flush deadline comes before the park ends commits the
+  handlers' writes, consequence marks included, a wave ahead of the
+  derivations over them. That is the deadline's trade (serving-loop.md
+  §3: a consequence is visible while the wave behind it keeps deriving),
+  taken whenever a park outlasts the deadline; W does not cover those
+  inputs until the derivations land. A client that runs the piece
+  derives over the consequence itself; a web client under view-scoped
+  replication, which runs none of it, shows the consequence a wave
+  before the derived view. That window is accepted for the batching it
+  buys: settling at every park instead would run the derivations once
+  per parked event rather than once over the events of a pass. An event
+  whose preflight finds an invalid input ends the run, so the settle
+  recomputes that input before the event dispatches. Undemanded
+  intermediates are skipped by pull-based laziness as before; the wave's
+  single derived commit carries every event the pass took.
 - Server enqueue goes through the scheduler facade (`facade.queueEvent`
   — the wake-shaping entry point), never raw `queueSchedulerEvent`, so
   server-enqueued events get the same shaping as client ones.
@@ -279,7 +335,7 @@ ambient-state one.
   receipt/result write, as that is indeed what i said before"):** the
   subsumption above retires the receipt's EXACTLY-ONCE role only — its
   RESULT-CARRIAGE role (verb contract WS-C/D readback:
-  `tx.handlingReceiptLink`, `plainResultReceipts`, `cf call`'s
+  `tx.handlingReceiptLink`, `plainResultReceipts`, `cf piece call`'s
   `.result`/`.receipt`) is replaced by a SERVING-SIDE write. Every
   served handler completion writes the handling's receipt/result cell —
   even when the declared value is undefined, so the `{}` existence
@@ -552,7 +608,14 @@ loop's duty).
   followers), and a withdrawal landing while a drain pass is mid-
   iteration stops the pass before it queues later arrivals behind the
   barrier's back — else a later arrival's consequence lands ahead of
-  the withdrawn entry's re-drain, the b01 inversion. The piece-start
+  the withdrawn entry's re-drain, the b01 inversion. A requeue decided
+  at the wave commit — a stale recorded read or a semantic rebase
+  conflict (serving-loop.md §3d) — is the barrier's third arm: the
+  later entries of the same stream that sealed into that wave are
+  withdrawn with the requeued head, and the drain holds them, and every
+  later same-space arrival, behind it until its replay commits; a head
+  waiting on §3d's catch-up gate is a deferred head like any other
+  (PROPOSED 2026-10-23, awaiting ruling). The piece-start
   deferral (a served entry whose piece could not be started, or whose
   piece stands registered between pattern graphs — T3) carries
   the same in-queue sweep; cross-space neighbours and LT1 in-process
@@ -642,11 +705,20 @@ loop's duty).
   and ambiguous storage-time or transport outcomes, are not authorized
   for explicit replay.
 - A serving runtime's refusal of a foreign scoped read (protocol.md §2's
-  fail-closed interim) is no load in flight. The read's scope and the
-  runtime's serving posture decide it, so the same read from the same
-  runtime is refused every time, and the storage manager registers no
-  pending load for it, so a served event's preflight never parks on one.
-  What decides the event is what its run reads. A run that reads the
+  grant-scoped read) is no load in flight. The read's scope, the
+  runtime's serving posture and the foreign space's access list decide
+  it, so the same read from the same runtime is refused every time until
+  that list changes, and the storage manager registers no pending load
+  for it, so a served event's preflight never parks on one. While the
+  reading actor's grant is still being asked for, the read is a load in
+  flight like any other: the preflight parks on it, and a run that
+  reaches such a document in its body alone is withdrawn and runs again
+  once the load settles; a refusal settles it as an absence, not as a
+  failure of the load, so the event dispatches and what decides it is
+  what its run reads. A load that fails instead fails the withdrawn
+  event as a load that failed before dispatch does: deferred with the
+  load's typed failure, no consequence written, later same-space
+  arrivals held behind it. A run that reads the
   value of such a document, a user- or session-scoped document in
   another space reached through its declared event or its bound state,
   read an absence that is not the document's state: the run is withdrawn

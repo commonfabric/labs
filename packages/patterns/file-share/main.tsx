@@ -35,7 +35,7 @@ export type UploaderProfileCell = Cell<{ name?: string; avatar?: string }>;
 
 /** The fields this pattern keeps from what `cf-file-input` reports. */
 export interface UploadedFile {
-  /** Hash of the media type and bytes, prefixed `fid1:`. */
+  /** Hash of the file's name, media type and bytes, prefixed `fid1:`. */
   id: string;
   name: string;
   mediaType: string;

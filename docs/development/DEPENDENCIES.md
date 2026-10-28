@@ -232,11 +232,6 @@ through with `gh api repos/OWNER/REPO/git/tags/SHA --jq '.object.sha'`.
 Because the comments name releases, how far behind a pin is reads off the
 line itself, and the releases page says what is newer.
 
-Two actions are in use at two versions, which has to be decided when either is
-rolled: `google-github-actions/auth` at v1.3.0 on the deploy path and v3.0.0
-elsewhere, and `actions/cache` at v4.3.0 in four `deno.yml` steps and v6.1.0
-everywhere else.
-
 The `setup-deno` pin touches the Deno toolchain pin in one place.
 `deno task check-deno-pins` rejects any version literal in
 `.github/actions/deno-setup/action.yml` that disagrees with `mise.toml`, so
@@ -484,6 +479,15 @@ dependencies are the ones `tree-sitter-python` already brings. Roll it with the
 runtime, then run the `cf view` TOML tests and `cf view` against a `.toml`
 file.
 
+HCL reaches its grammar through `packages/cli/lib/view/languages/hcl/hcl.ts`,
+and the CLI pins `@tree-sitter-grammars/tree-sitter-hcl` exactly. That package
+is the grammar's own and ships WebAssembly builds of HCL and of a Terraform
+dialect with the same rules, of which the pager loads the HCL one. Like
+`tree-sitter-python`, it also ships generated C source, native bindings, and an
+install script, which the pager never uses; its dependencies are the two
+`tree-sitter-python` already brings. Roll it with the runtime, then run the
+`cf view` HCL tests and `cf view` against a `.tf` file.
+
 Shell reaches its grammar through `packages/cli/lib/view/languages/shell/shell.ts`,
 and the CLI pins `tree-sitter-bash` exactly. That package is the official Bash
 grammar and ships its WebAssembly build, which the pager loads for Bash and
@@ -596,9 +600,10 @@ fetch-shaped value. Write the signature out instead. `HarnessFetch` in
 `packages/runner/src/runtime.ts` are the package-level contracts. They hold
 whichever version resolves and whichever compiler checks them.
 
-This class of breakage is easy to miss because CI pins Deno 2.9.4 while
-`tasks/check.sh` accepts any 2.8.x or 2.9.x, so a local check and CI can
-disagree about what type checks.
+CI uses the exact Deno pin in `mise.toml`. Setting
+`DENO_CHECK_VERSION_LENIENT=1` lets `tasks/check.sh` accept other releases in its
+supported range, so an off-pin local check and CI can disagree about what type
+checks.
 
 ### Astral
 

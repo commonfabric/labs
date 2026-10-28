@@ -22,6 +22,39 @@ export const HARNESS_TASK_TAGS = [
 export type HarnessTaskTag = typeof HARNESS_TASK_TAGS[number];
 
 /**
+ * Where a task's work happens, besides what kind of work it is. A task
+ * carries each domain the rule finds a positive sign of, and none when it
+ * finds none: a question of general knowledge, or an operation in the
+ * person's application, has no domain.
+ *
+ * - `fabric`: Common Fabric itself — the pieces and patterns the run holds or
+ *   authors, the pattern index, and how the fabric works.
+ * - `personal`: the person's own data — their calendar, mail, messages and
+ *   the rest the host's retrieval reads.
+ * - `web`: pages and facts on the public web.
+ */
+export const HARNESS_TASK_DOMAINS = ["fabric", "personal", "web"] as const;
+
+export type HarnessTaskDomain = typeof HARNESS_TASK_DOMAINS[number];
+
+/** How one part of a classification was chosen. */
+export type HarnessClassificationPath =
+  | "caller"
+  | "rule"
+  | "assumed"
+  | "fallback";
+
+/**
+ * What a run's caller says about its task, each part in place of the
+ * classifier's: the kinds of work it calls for, and where that work happens.
+ * A part the caller leaves out is the classifier's to decide.
+ */
+export interface HarnessTaskShape {
+  tags?: readonly HarnessTaskTag[];
+  domains?: readonly HarnessTaskDomain[];
+}
+
+/**
  * The tags a root task was given before its first model turn, recorded in the
  * run state so a run report can say what orientation the run got and what
  * deciding it cost.
@@ -32,10 +65,23 @@ export interface HarnessTaskClassification {
   tags: HarnessTaskTag[];
 
   /**
-   * What chose the tags: the keyword rule, the assumption made when no rule
-   * applies, or the fallback of every tag when the classifier failed.
+   * What chose the tags: the run's caller, the keyword rule, the assumption
+   * made when no rule applies, or the fallback of every tag when the
+   * classifier failed.
    */
-  path: "rule" | "assumed" | "fallback";
+  path: HarnessClassificationPath;
+
+  /**
+   * Where the work happens; absent from a record written before tasks had
+   * domains, which reads as every domain.
+   */
+  domains?: HarnessTaskDomain[];
+
+  /**
+   * What chose the domains: the caller, the rule, the assumption of none when
+   * the rule found no sign of one, or every domain when the classifier failed.
+   */
+  domainsPath?: HarnessClassificationPath;
 
   /** Wall time the classification took. */
   durationMs: number;
@@ -71,6 +117,27 @@ const ADD_TO = /\badd\b.*\bto (?:the|this)\b(?!\s+loom\b)/;
 /** The action verbs {@link ACT} and {@link WEB_ACT} read, standing alone. */
 const ACTION_VERB =
   /\b(?:deploy|add|move|buy|order|book|purchase|reserve|sign up|fill|check ?out|browse)\b/;
+/**
+ * Signs of the person's own data: something of theirs (`my calendar`), their
+ * own correspondence or meetings (`haven't I replied`, `emailed me`), one they
+ * point at (`that email from`), or what is on a day of theirs. A bare noun such as
+ * "calendar" or "email" is not one: it names a thing anyone may ask about.
+ */
+const PERSONAL =
+  /\b(?:my|our)\s+(?:\w+\s+)?(?:calendar|schedule|meetings?|appointments?|e-?mails?|inbox|messages?|texts?|dms?|contacts?|notes?|files?|documents?|docs|photos?|tasks?|to-?dos?|week|day|weekend|plans?|people|friends|family|next)\b|\b(?:am i|have i|did i|haven't i|do i have|i've)\b.*\b(?:meet|meeting|replied|reply|emailed|messaged|texted|scheduled|booked)\b|\b(?:emailed|messaged|texted|called|wrote to|invited)\s+me\b|\b(?:that|this)\s+(?:e-?mail|message|text|invite|meeting|appointment)\b|^what'?s on\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|tonight|tomorrow|this week|next week|the weekend)\b/;
+/**
+ * Signs of Common Fabric itself, beyond a held or authored piece: the system
+ * by name, the pattern index, or a pattern named beside one of its parts or
+ * a loom, in either order.
+ */
+const FABRIC =
+  /\bcommon fabric\b|\bpattern index\b|\bpatterns?\b.*\b(?:cells?|pieces?|handlers?|verbs?|schemas?|loom|deploy)\b|\b(?:cells?|pieces?|handlers?|verbs?|schemas?|loom|deploy)\b.*\bpatterns?\b/;
+/** Signs of the public web. */
+const WEB =
+  /\b(?:online|on the (?:web|internet)|websites?|web ?pages?|google|news|reviews?|weather|forecast)\b|\blatest\b.*\b(?:version|release|news)\b/;
+/** A request to research or compare, which reads the web when nothing else. */
+const RESEARCH =
+  /^(?:research|compare)\b|\b(?:research|compare)\s+(?:the|into|on|about|how|what|whether)\b/;
 const CONVERSATIONAL =
   /^(?:hi|hey|hello|thanks|thank you|ok|okay|cool|great|nice|yes|no|sure|got it)\b/;
 
@@ -146,6 +213,37 @@ export const classifyTaskByRule = (
   return tags.size === 0 ? undefined : tags;
 };
 
+/**
+ * The domains a task's work happens in, by keyword and by what the run holds.
+ * Only a positive sign adds one: a task about a held or authored piece is in
+ * the fabric, a URL or a web word puts it on the web, and a request to
+ * research or compare reads the web when it names no other domain.
+ */
+export const classifyTaskDomains = (
+  task: string,
+  context: TaskClassificationContext,
+  tags: ReadonlySet<HarnessTaskTag>,
+): Set<HarnessTaskDomain> => {
+  const text = task.trim().toLowerCase();
+  const domains = new Set<HarnessTaskDomain>();
+  const holdsPieces = (context.inputCells?.length ?? 0) > 0;
+  if (
+    tags.has("pieces") || tags.has("author") || FABRIC.test(text) ||
+    (holdsPieces && /\bthis loom\b/.test(text))
+  ) {
+    domains.add("fabric");
+  }
+  if (PERSONAL.test(text)) domains.add("personal");
+  if (
+    URL.test(task) || WEB.test(text) ||
+    (context.browserHost === true && WEB_ACT.test(text)) ||
+    (domains.size === 0 && RESEARCH.test(text))
+  ) {
+    domains.add("web");
+  }
+  return domains;
+};
+
 /** The one-shot prompt the model classifies a task by. */
 const modelPrompt = (task: string, context: TaskClassificationContext) => {
   const held = [
@@ -208,31 +306,66 @@ const assumedTags = (
 };
 
 /**
- * Tags a root task: by rule when one applies, otherwise by assumption. A
- * classifier that throws gives the task every tag, which is all the
- * orientation the run would have had without classification.
+ * Tags a root task and names its domains. Each part the caller states is
+ * taken as it stands; the rest is the classifier's: tags by rule when one
+ * applies, otherwise by assumption, and domains by their signs, or none. A
+ * classifier that throws gives the task every tag and every domain it was not
+ * told, which is all the orientation the run would have had without
+ * classification.
  */
 export const classifyTask = (
   task: string,
   context: TaskClassificationContext,
+  caller: HarnessTaskShape = {},
 ): HarnessTaskClassification => {
   const started = performance.now();
+  const ordered = <T extends string>(
+    all: readonly T[],
+    chosen: Iterable<T>,
+  ): T[] => {
+    const set = new Set(chosen);
+    return all.filter((value) => set.has(value));
+  };
   const classified = (
-    tags: ReadonlySet<HarnessTaskTag>,
-    path: HarnessTaskClassification["path"],
+    tags: { values: Iterable<HarnessTaskTag>; path: HarnessClassificationPath },
+    domains: {
+      values: Iterable<HarnessTaskDomain>;
+      path: HarnessClassificationPath;
+    },
   ): HarnessTaskClassification => ({
     type: "cf-harness.task-classification",
     version: 1,
-    tags: HARNESS_TASK_TAGS.filter((tag) => tags.has(tag)),
-    path,
+    tags: ordered(HARNESS_TASK_TAGS, tags.values),
+    path: tags.path,
+    domains: ordered(HARNESS_TASK_DOMAINS, domains.values),
+    domainsPath: domains.path,
     durationMs: Math.round(performance.now() - started),
   });
   try {
-    const byRule = classifyTaskByRule(task, context);
-    return byRule === undefined
-      ? classified(assumedTags(task, context), "assumed")
-      : classified(byRule, "rule");
+    const byRule = caller.tags === undefined
+      ? classifyTaskByRule(task, context)
+      : undefined;
+    const tags = caller.tags !== undefined
+      ? { values: caller.tags, path: "caller" as const }
+      : byRule === undefined
+      ? { values: assumedTags(task, context), path: "assumed" as const }
+      : { values: byRule, path: "rule" as const };
+    if (caller.domains !== undefined) {
+      return classified(tags, { values: caller.domains, path: "caller" });
+    }
+    const domains = classifyTaskDomains(task, context, new Set(tags.values));
+    return classified(tags, {
+      values: domains,
+      path: domains.size === 0 ? "assumed" : "rule",
+    });
   } catch {
-    return classified(new Set(HARNESS_TASK_TAGS), "fallback");
+    return classified(
+      caller.tags !== undefined
+        ? { values: caller.tags, path: "caller" }
+        : { values: HARNESS_TASK_TAGS, path: "fallback" },
+      caller.domains !== undefined
+        ? { values: caller.domains, path: "caller" }
+        : { values: HARNESS_TASK_DOMAINS, path: "fallback" },
+    );
   }
 };

@@ -16,9 +16,11 @@
  * Neither half is the worker's own report. The runtime client's protocol
  * carries no request that reads a worker's resolved flags back, so the closest
  * available statement of what the page ran is the shell it was served: the
- * shell declares its posture from the build define, and the worker refuses to
- * initialize when its resolved posture disagrees with that declaration, so a
- * page that loaded at all ran the posture its shell declared.
+ * shell declares its posture from the build define where one is baked, and the
+ * worker refuses to initialize when its resolved posture disagrees with that
+ * declaration, so a page that loaded at all ran the posture its shell
+ * declared. A shell without a define runs the arm its deployment publishes,
+ * which this reading does not use: such a bundle states nothing.
  *
  * The shell's half itself has two possible statements, and they are not
  * interchangeable. The bundle served to the browser is the artifact the run
@@ -84,6 +86,17 @@ export interface DeclaredTopicsBrowserPosture {
 
   /** Which statement of the shell's posture `client` was read from. */
   readonly clientFrom: ClientPostureSource;
+
+  /**
+   * Whether the deployment serves its pages' views: view-scoped replication
+   * for the web client, under which a page shows what the serving runtime
+   * delivers and runs none of the derivations' modules itself. Resolved as
+   * the web client resolves it from the posture the toolshed runs at, which
+   * the shell it serves adopts: the web override where the deployment states
+   * one, else the global setting, under server execution. A shell built with
+   * a define pinning either otherwise is one this field does not describe.
+   */
+  readonly servedViews: boolean;
 }
 
 /**
@@ -115,13 +128,17 @@ export type TopicsBrowserPosture =
  */
 export interface PostureMeta {
   /** The flags the deployment serves at, as it resolved them. */
-  readonly experimental?: { readonly serverExecution?: unknown };
+  readonly experimental?: {
+    readonly serverExecution?: unknown;
+    readonly viewScopedReplication?: unknown;
+    readonly webViewScopedReplication?: unknown;
+  };
 
   /**
    * The raw `EXPERIMENTAL_SERVER_EXECUTION` the shell this toolshed serves
    * baked as its build define. `null` covers four situations the field does
    * not tell apart: the value was unset at build time and the shell follows
-   * the first-party default, the toolshed runs from source and serves no
+   * the arm its deployment publishes, the toolshed runs from source and serves no
    * built shell, and the build marker was unreadable or malformed — the last
    * two being the failure posture `readBuildInfoFrom` gives the whole marker.
    */
@@ -219,6 +236,9 @@ export function topicsBrowserPostureOf(
     served,
     client,
     clientFrom,
+    servedViews: served &&
+      (meta.experimental?.webViewScopedReplication ??
+          meta.experimental?.viewScopedReplication) === true,
   };
 }
 

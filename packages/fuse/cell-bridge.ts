@@ -268,6 +268,7 @@ const openSpacePieces: PiecesLoader = async (config) =>
     space: config.space,
     identity: await Identity.fromPkcs8(await Deno.readFile(config.identity)),
     deferSpaceCellSync: config.deferSpaceCellSync,
+    clientBuild: { application: "fuse", gitSha: null },
   });
 
 /** Options for constructing a `CellBridge`. */

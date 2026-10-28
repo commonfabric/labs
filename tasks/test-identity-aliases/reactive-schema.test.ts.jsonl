@@ -1,0 +1,1 @@
+{"date":"2026-10-25","from":{"k":"unit","s":"runner","n":"Reactive Schema Support > Schema Propagation in Proxies > should return undefined schema for properties that aren't allowed by the schema"},"to":{"k":"unit","s":"runner","n":"Reactive Schema Support > Schema Propagation in Proxies > returns a `false` schema for a property the schema does not allow"}}

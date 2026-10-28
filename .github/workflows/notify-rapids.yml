@@ -2,7 +2,7 @@ name: Notify Rapids
 
 on:
   workflow_run:
-    workflows: [CI, Deploy Rapids release]
+    workflows: [CI, Deploy Rapids release, Manual Production Deployment]
     types: [completed]
     branches: [main]
 
@@ -17,7 +17,9 @@ jobs:
         github.event.workflow_run.conclusion == 'success' &&
         github.event.workflow_run.event == 'push') ||
        (github.event.workflow_run.path == '.github/workflows/rapids-release.yml' &&
-        github.event.workflow_run.event == 'workflow_dispatch'))
+        github.event.workflow_run.event == 'workflow_dispatch') ||
+       (github.event.workflow_run.path == '.github/workflows/deploy-production.yml' &&
+         github.event.workflow_run.event == 'workflow_dispatch'))
     runs-on: ubuntu-latest
     steps:
       - name: 📋 Check notification configuration
@@ -55,6 +57,15 @@ jobs:
               repos/commonfabric/infra/actions/workflows/rapids.yml/dispatches \
               -f ref=main -f 'inputs[producer]=commonfabric/labs' \
               -f "inputs[run_id]=$PRODUCER_RUN"
+          elif [[ "$WORKFLOW_PATH" == '.github/workflows/deploy-production.yml' ]]; then
+            now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            if [[ "$now" < '2026-10-19T22:15:16Z' || ! "$now" < '2026-10-22T22:15:16Z' ]]; then
+              echo '::notice::The alex-daily Estuary notification window is closed.'
+              exit 0
+            fi
+            gh api --method POST \
+              repos/commonfabric/infra/actions/workflows/rapids.yml/dispatches \
+              -f ref=main -f 'inputs[channel]=estuary'
           else
             gh api --method POST \
               repos/commonfabric/infra/actions/workflows/rapids.yml/dispatches \

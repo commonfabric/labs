@@ -4,10 +4,13 @@
  *
  * This module is the one definition of a principal claim that both sides use.
  * The runtime's write check (`prepare.ts`) refuses a pattern-authored claim in
- * any spelling a reader could take for one naming a principal, and the readers
- * accept only the canonical spelling: a trusted surface checking an author
- * claim asks this of the claim's label, `cf-cfc-authorship` on the main thread
- * and the HTML renderer's text integrity boundary in the worker. The module
+ * any spelling a reader could take for one naming a principal. A reader of an
+ * `authored-by` claim accepts only the canonical spelling. A reader of a
+ * profile's principal (`profileClaimSubject()`) accepts any object atom of the
+ * kind with a `did:` subject, and skips the rest: a trusted surface checking an
+ * author claim asks this of the author's label, `cf-cfc-authorship` on the
+ * main thread and the HTML renderer's text integrity boundary in the worker.
+ * The module
  * depends on nothing but types from `@commonfabric/api` and the label view,
  * `@commonfabric/utils`, and `@commonfabric/identity/did`, so that either can
  * import it without the rest of the CFC machinery.
@@ -123,19 +126,26 @@ export const representsPrincipalSubjects = (
 /**
  * The DIDs that could be the principal the value labeled by `view` represents,
  * as an author claim is checked against: each distinct DID a
- * `represents-principal` atom names at the root or on a top-level field, in
- * order of first appearance. A profile's owner-protected fields carry their
- * owner's atom at their own top-level paths. Atoms deeper down come from
- * documents the value links, and an entry a link carried (`followRef`) at any
- * path describes the linked document; neither is counted. One DID is the
- * principal.
- * None means the label names no principal. More than one means it names no
- * single principal, and a claim resting on it must not verify.
+ * `represents-principal` atom names, as {@link profileClaimSubject} reads it,
+ * in the entries {@link representsPrincipalEntries} reads, in order of first
+ * appearance.
+ * `nameWritten` says whether the value holds a name its owner wrote, as
+ * {@link isWrittenProfileName} decides it. One DID is the principal. None means
+ * the label names no principal. More than one means it names no single
+ * principal, and a claim resting on it must not verify.
  */
 export const authorPrincipalCandidates = (
   view: CfcLabelView | undefined,
+  nameWritten: boolean,
 ): string[] => [
-  ...new Set(representsPrincipalSubjects(principalClaimEntries(view))),
+  ...new Set(
+    representsPrincipalEntries(view, nameWritten).flatMap((entry) =>
+      (entry.label.integrity ?? []).flatMap((atom) => {
+        const subject = profileClaimSubject(atom);
+        return subject === undefined ? [] : [subject];
+      })
+    ),
+  ),
 ];
 
 /**
@@ -155,23 +165,144 @@ export const principalClaimEntries = (
       entry.path.length <= 1 && entry.observes !== "followRef"
     );
 
+/** The field of a profile whose written value says whose the profile is. */
+export const PROFILE_NAME_FIELD = "name";
+
 /**
- * The principals `view` attests with claims of `kind`, in exactly the form a
- * runtime mints, read from the entries {@link principalClaimEntries} names, or
- * `undefined` when a claim of `kind` there names a principal in another form,
- * or any claim there is in the string form. A runtime binds a
- * `{ kind, subject }` atom's subject to its acting principal and refuses a
- * literal DID only in that form, so the string form, a padded subject, or an
- * atom with another key may have been written by someone other than the
- * principal it names. A caller that must know who wrote the attestation,
- * rather than whom a claim is about, refuses those.
+ * Whether `name`, the value of a profile's `name` field, is a name its owner
+ * wrote: a string holding something besides whitespace. A field left at its
+ * default holds an empty string or nothing.
+ */
+export const isWrittenProfileName = (name: unknown): boolean =>
+  typeof name === "string" && name.trim() !== "";
+
+/**
+ * The entries of `view` a `represents-principal` claim is read from.
+ *
+ * When the value holds a name its owner wrote (`nameWritten`), they are the
+ * entries on its `name` field, of any observation class, and the root's own. A
+ * written name is its owner's own claim about whose the value is. Any other
+ * field still at its default can carry the principal of whichever runtime set
+ * that default up, beside the owner's or in its place, so those fields do not
+ * count.
+ *
+ * Otherwise they are every entry `view` holds: every path at or beneath the
+ * root, and every observation class, an entry a link carried (`followRef`)
+ * among them. A value whose entries name two principals names no single one,
+ * and a value whose own fields name no one represents whoever a deeper or a
+ * link-carried entry names. A view holds payload entries only, so no
+ * label-metadata entry is among them.
+ */
+export const representsPrincipalEntries = (
+  view: CfcLabelView | undefined,
+  nameWritten: boolean,
+): CfcLabelView["entries"] => {
+  // This rule, with `profileClaimSubject()`'s reading of a claim, awaits its
+  // ruling in https://github.com/commonfabric/specs/pull/75.
+  if (view === undefined) return [];
+  if (!nameWritten) return view.entries;
+  return view.entries.filter((entry) =>
+    (entry.path.length === 1 && entry.path[0] === PROFILE_NAME_FIELD) ||
+    (entry.path.length === 0 && entry.observes !== "followRef")
+  );
+};
+
+/**
+ * The DID a `represents-principal` atom names, as every reader of a profile's
+ * principal reads it: an object whose `kind` is `represents-principal` and
+ * whose `subject` is a string beginning `did:`, whatever other keys it holds.
+ * Any other atom, the `<kind>:<subject>` string form among them, names nothing
+ * and is skipped. The runtime's write check refuses a pattern writing a claim
+ * in any spelling but the canonical one, so what this admits beyond that
+ * spelling no honest runtime stores from a pattern.
+ */
+export const profileClaimSubject = (atom: unknown): DID | undefined => {
+  if (!isObjectNotArray(atom)) return undefined;
+  const { kind, subject } = atom as { kind?: unknown; subject?: unknown };
+  return kind === REPRESENTS_PRINCIPAL && typeof subject === "string" &&
+      isDidPrefixed(subject)
+    ? subject
+    : undefined;
+};
+
+/** Helper for `profileClaimSubject()`, which says whether `text` begins `did:`. */
+const isDidPrefixed = (text: string): text is DID => text.startsWith("did:");
+
+/**
+ * The principals `view` attests with claims of `kind`, in order of first
+ * appearance, or `undefined` when the read is refused.
+ *
+ * A `represents-principal` principal is read from the entries
+ * {@link representsPrincipalEntries} chooses for `nameWritten`, which says
+ * whether the value holds a name its owner wrote, each atom read as
+ * {@link profileClaimSubject} reads it: an atom in another form is skipped,
+ * and the read is never refused.
+ *
+ * An `authored-by` principal is read from the entries
+ * {@link principalClaimEntries} names, in exactly the form a runtime mints,
+ * and `nameWritten` has no effect on it. A runtime binds a `{ kind, subject }`
+ * atom's subject to its acting principal and refuses a literal DID only in
+ * that form, so the string form, a padded subject, or an atom with another
+ * key may have been written by someone other than the principal it names. A
+ * caller that must know who wrote the attestation refuses those, so a claim
+ * of `authored-by` in another form, or any claim in the string form, refuses
+ * the read.
  */
 export const exactPrincipalAttestations = (
   view: CfcLabelView | undefined,
   kind: PrincipalClaimKind,
+  nameWritten: boolean,
 ): DID[] | undefined => {
+  if (kind === REPRESENTS_PRINCIPAL) {
+    return [
+      ...new Set(
+        representsPrincipalEntries(view, nameWritten).flatMap((entry) =>
+          (entry.label.integrity ?? []).flatMap((atom) => {
+            const subject = profileClaimSubject(atom);
+            return subject === undefined ? [] : [subject];
+          })
+        ),
+      ),
+    ];
+  }
+  return mintedPrincipals(view, kind, principalClaimEntries(view));
+};
+
+/**
+ * Like {@link exactPrincipalAttestations} for a `represents-principal` claim,
+ * except that it reads the claims as an `authored-by` claim is read: in
+ * exactly the form a runtime mints, a claim in another form on the root, a
+ * top-level field or an entry it counts refusing the read. It is for a surface
+ * that writes the principal where every reader of something else sees it, such
+ * as a custody seal's seats.
+ */
+export const mintedProfilePrincipals = (
+  view: CfcLabelView | undefined,
+  nameWritten: boolean,
+): DID[] | undefined =>
+  mintedPrincipals(
+    view,
+    REPRESENTS_PRINCIPAL,
+    representsPrincipalEntries(view, nameWritten),
+  );
+
+/**
+ * Helper for {@link exactPrincipalAttestations} and
+ * {@link mintedProfilePrincipals}, which returns the principals the claims of
+ * `kind` on `counted` attest, in the order `view` holds them, or `undefined`
+ * when a claim on `counted` or on an entry {@link principalClaimEntries} names
+ * is in any form but the one a runtime mints.
+ */
+const mintedPrincipals = (
+  view: CfcLabelView | undefined,
+  kind: PrincipalClaimKind,
+  counted: CfcLabelView["entries"],
+): DID[] | undefined => {
+  const countedSet = new Set(counted);
+  const checked = new Set([...principalClaimEntries(view), ...counted]);
   const principals = new Set<DID>();
-  for (const entry of principalClaimEntries(view)) {
+  for (const entry of view?.entries ?? []) {
+    if (!checked.has(entry)) continue;
     for (const atom of entry.label.integrity ?? []) {
       const spelling = principalClaimSpelling(atom);
       if (spelling === undefined) continue;
@@ -185,7 +316,7 @@ export const exactPrincipalAttestations = (
       ) {
         return undefined;
       }
-      principals.add(subject);
+      if (countedSet.has(entry)) principals.add(subject);
     }
   }
   return [...principals];

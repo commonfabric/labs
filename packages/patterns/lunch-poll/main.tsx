@@ -1029,11 +1029,16 @@ interface OptionTally {
     initials: string;
 
     /**
-     * Whether this vote is the viewer's own, decided by profile cell.
-     * Resolved here rather than in the view, which has only a display name
-     * to compare — and two participants may share one.
+     * The vote's voter, by profile cell, or `undefined` for a vote that
+     * names none. The view compares it with the viewer's profile, with
+     * `equals`, to ring the viewer's own vote. That comparison happens at the
+     * swatch rather than here so that the tally reads nothing of the viewer
+     * and is one derivation shared by everyone: a tally that marked the
+     * viewer's vote itself would be one derivation per viewer wherever a
+     * server derives it for everyone, and so would the ranking and every
+     * card downstream of it.
      */
-    isSelf: boolean;
+    voter: LunchProfileCell | undefined;
   }>;
 }
 
@@ -1062,10 +1067,6 @@ const tallyOption = (
   option: Option,
   votes: readonly Vote[],
   users: readonly User[],
-  // The union the call site actually has: inside a `computed` the viewer's
-  // profile arrives unwrapped, and `equals` compares either form. Narrowing
-  // to the cell alone would only push a cast to the caller.
-  viewer: LunchProfile | LunchProfileCell | undefined,
 ): OptionTally => {
   // A vote carries its voter's identity, so the display name and swatch color
   // are looked up from the roster by comparison. The roster is read once per
@@ -1093,10 +1094,6 @@ const tallyOption = (
     voter: LunchProfileCell | undefined,
   ): (typeof roster)[number] | undefined =>
     voter === undefined ? undefined : rosterEntryOf(voter);
-  // One comparison per vote. The poll addresses a vote by its voter and
-  // option, so a voter holds at most one vote in the group tallied here.
-  const isSelf = (voter: LunchProfileCell | undefined): boolean =>
-    viewer !== undefined && voter !== undefined && equals(voter, viewer);
   let green = 0;
   let yellow = 0;
   let red = 0;
@@ -1114,7 +1111,7 @@ const tallyOption = (
       color: entry?.color ?? "#888",
       initials: initialsByName.get(name) ??
         getInitials(name, participantNames),
-      isSelf: isSelf(voter),
+      voter,
     };
   });
   return { option, green, yellow, red, voters };
@@ -1486,13 +1483,13 @@ export default pattern<CozyPollInput, CozyPollOutput>(
       clearHistoryConfirmPending.get()
     );
     // Rank from today's votes only — the tallies, swatches, and top choice all
-    // reflect the current day.
+    // reflect the current day. The tallies, the ranking and the cards' ranks
+    // read nothing of the viewer, so each is one derivation shared by every
+    // viewing session; the viewer enters at the swatch that rings their vote.
     const votesByOption = indexVotesByOption({ votes: todaysVotes });
     const optionTallies = options.map((option) => {
       const optionVotes = votesByOption.index.lookup(option.id);
-      return computed(() =>
-        tallyOption(option, optionVotes, users, viewerProfileCell)
-      );
+      return computed(() => tallyOption(option, optionVotes, users));
     });
     const ranked = computed(() =>
       [...optionTallies].sort((a, b) => (a.red - b.red) || (b.green - a.green))
@@ -1825,33 +1822,43 @@ export default pattern<CozyPollInput, CozyPollOutput>(
                                 justifyContent: "flex-end",
                               }}
                             >
-                              {tally.voters.map((voter) => (
-                                <span
-                                  title={voter.name}
-                                  role="img"
-                                  aria-label={`${voter.name}: ${voter.voteType} vote`}
-                                  data-vote-swatch-name={voter.name}
-                                  style={{
-                                    display: "inline-flex",
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                    minWidth: "22px",
-                                    height: "22px",
-                                    padding: "0 6px",
-                                    borderRadius: "9999px",
-                                    backgroundColor:
-                                      VOTE_SWATCH[voter.voteType],
-                                    color: "white",
-                                    fontSize: "11px",
-                                    fontWeight: 700,
-                                    boxShadow: voter.isSelf
-                                      ? "0 0 0 2px white, 0 0 0 3px #111827"
-                                      : "none",
-                                  }}
-                                >
-                                  {voter.initials}
-                                </span>
-                              ))}
+                              {tally.voters.map((voter) => {
+                                // The one per-viewer step: this swatch is
+                                // ringed when its voter is the viewer, by
+                                // profile cell, since two participants may
+                                // share a display name.
+                                const selfRing = computed(() =>
+                                  voter.voter !== undefined &&
+                                    equals(voter.voter, viewerProfileCell)
+                                    ? "0 0 0 2px white, 0 0 0 3px #111827"
+                                    : "none"
+                                );
+                                return (
+                                  <span
+                                    title={voter.name}
+                                    role="img"
+                                    aria-label={`${voter.name}: ${voter.voteType} vote`}
+                                    data-vote-swatch-name={voter.name}
+                                    style={{
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      justifyContent: "center",
+                                      minWidth: "22px",
+                                      height: "22px",
+                                      padding: "0 6px",
+                                      borderRadius: "9999px",
+                                      backgroundColor:
+                                        VOTE_SWATCH[voter.voteType],
+                                      color: "white",
+                                      fontSize: "11px",
+                                      fontWeight: 700,
+                                      boxShadow: selfRing,
+                                    }}
+                                  >
+                                    {voter.initials}
+                                  </span>
+                                );
+                              })}
                             </div>
                           </div>
                         ))}

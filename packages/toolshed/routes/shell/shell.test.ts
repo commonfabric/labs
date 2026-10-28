@@ -296,7 +296,7 @@ describe("a compiled toolshed's shell router", () => {
         { ENV: "production", MEMORY_PUBLIC_URL: "https://router.test" },
         "commit-123",
         undefined,
-        () => ({ sharedMemoryConnection: true, serverExecution: true }),
+        () => ({ sharedMemoryConnection: true, readerSchemaPrecedence: true }),
       ),
     );
     unpublished = createApp().route(
@@ -356,14 +356,14 @@ describe("a compiled toolshed's shell router", () => {
     try {
       for (
         const [posture, experimental] of [
-          [{ sharedMemoryConnection: true, serverExecution: false }, {
+          [{ sharedMemoryConnection: true, readerSchemaPrecedence: false }, {
             sharedMemoryConnection: true,
           }],
           [{ sharedMemoryConnection: false }, {
             sharedMemoryConnection: false,
           }],
           // A flag the Runtime left unresolved is not published as false.
-          [{ serverExecution: true }, {}],
+          [{ readerSchemaPrecedence: true }, {}],
         ] as const
       ) {
         publishExperimentalPosture(null);
@@ -535,7 +535,7 @@ describe("shellDeploymentPage", () => {
   it("carries the flags the shell takes from its deployment, out of the posture", () => {
     expect(
       shellDeploymentPage(environment, {
-        serverExecution: true,
+        readerSchemaPrecedence: true,
         sharedMemoryConnection: true,
       }).experimental,
     ).toEqual({ sharedMemoryConnection: true });
@@ -544,9 +544,16 @@ describe("shellDeploymentPage", () => {
         .experimental,
     ).toEqual({ sharedMemoryConnection: false });
     expect(
-      shellDeploymentPage(environment, { serverExecution: true })
+      shellDeploymentPage(environment, { readerSchemaPrecedence: true })
         .experimental,
     ).toEqual({});
+    expect(
+      shellDeploymentPage(environment, {
+        serverExecution: true,
+        webViewScopedReplication: true,
+        modernCellRep: true,
+      }).experimental,
+    ).toEqual({ serverExecution: true, webViewScopedReplication: true });
   });
 });
 

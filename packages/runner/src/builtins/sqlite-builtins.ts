@@ -88,7 +88,12 @@ import {
 } from "@commonfabric/memory/v2";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 
-import { type Cell, createCell, encodeSqliteParams } from "../cell.ts";
+import {
+  type Cell,
+  convertCellsToLinks,
+  createCell,
+  encodeSqliteParams,
+} from "../cell.ts";
 import { snapshotQueryResult } from "../query-result-proxy.ts";
 import type { CfcConfClause } from "../cfc/clause.ts";
 import { runtimeWritePolicyAuthorization } from "../cfc/types.ts";
@@ -253,16 +258,13 @@ function readDbRef(value: unknown): SqliteDbRef {
     const ref = value as SqliteDbRef;
     return {
       id: ref.id,
-      // Materialize to plain JSON: sqliteDatabase stores the handle value
-      // inline (self-contained), but a handle written before that fix (or a
-      // proxy-carried read) can still hold doc LINKS where the rule's AST
-      // nodes should be — the wire (server provenance gate) and every local
-      // consumer need the resolved spec.
+      // The wire and local label derivation both need every declaration,
+      // including linked rules. Read proxy-backed schemas as a whole so the
+      // copy registers recursive reads for the subtrees it reaches.
       tables: ref.tables
-        ? cloneIfNecessary(
-          ref.tables as Parameters<typeof cloneIfNecessary>[0],
-          { frozen: false },
-        ) as SqliteDbRef["tables"]
+        ? convertCellsToLinks(ref.tables, {
+          doNotConvertCellResults: true,
+        }) as SqliteDbRef["tables"]
         : undefined,
       // Validate at the boundary: an invalid scope value must not flow into
       // query execution / on-disk filename derivation.
@@ -899,6 +901,9 @@ type QueryState = {
   error?: unknown;
   requestHash?: string;
 
+  /** Application key captured when this request was issued. */
+  requestKey?: string;
+
   /** CFC Phase 3.b read-time clearance audit: how many rows the acting reader
    *  could not read were withheld (a declared existence release). Absent when
    *  no clearance was requested. */
@@ -960,8 +965,7 @@ export function sqliteQuery(
 
   // One owner signal covers query work and completion writebacks. Unsent
   // endings also observe it: cancellation releases the result store's
-  // runtime-owned enrollment, so a later write loses its transaction-derived
-  // policy.
+  // runtime-owned enrollment, so a later write must fit its declared policy.
   const cancelled = new AbortController();
   addCancel(() => cancelled.abort());
 
@@ -991,6 +995,7 @@ export function sqliteQuery(
       sql?: string;
       params?: WireParams;
       reactOn?: FabricValue;
+      requestKey?: string;
       // Transformer-injected from `db.query<Row>` / `sqliteQuery<Row>`; absent
       // for untyped queries.
       rowSchema?: unknown;
@@ -1058,15 +1063,14 @@ export function sqliteQuery(
         scope,
       );
       // The control state this node keeps — `/pending`, `/requestHash`,
-      // `/error` — holds whatever the transaction issuing a request read. A
+      // `/requestKey`, `/error` — holds what the issuing transaction read. A
       // request hash is a function of the parameters, so a parameter derived
       // from a labeled read is carried onto those paths, and no `ifc` an
       // author writes into a schema can declare which atoms a given
-      // transaction will bring. Naming the store here is what lets §8.12.5
-      // route 2 declare that policy from the transaction instead of refusing
-      // the write; `docs/specs/cfc-enforcement-matrix.md` §4 states the
-      // route, and the bound the store's own ceiling was carrying by
-      // accident is applied below, before the request is staged.
+      // transaction will bring. Naming the runtime-owned store here admits
+      // the write with the transaction's join in its derived component;
+      // `docs/specs/cfc-enforcement-matrix.md` §4 states the conditions. The
+      // request's egress bound is applied below, before it is staged.
       //
       // The marker names the store for THIS transaction; the enrollment is
       // what reaches the later ones, since a re-issue and a settled
@@ -1158,6 +1162,9 @@ export function sqliteQuery(
 
     if (!inputs?.db || typeof inputs.sql !== "string") return;
 
+    const requestKey = inputs.requestKey;
+    const correlation = typeof requestKey === "string" ? { requestKey } : {};
+
     // A `db` that does not read back as a handle reaches the result cell as
     // this query's error, on the same terms as an unencodable parameter
     // below. The guard above admits any truthy value, and an object read
@@ -1168,7 +1175,11 @@ export function sqliteQuery(
     try {
       db = readDbRef(inputs.db);
     } catch (error) {
-      result.withTx(tx).set({ pending: false, error: errMsg(error) });
+      result.withTx(tx).set({
+        pending: false,
+        error: errMsg(error),
+        ...correlation,
+      });
       return;
     }
     const linkCols = asCellColumnsFromRowSchema(inputs.rowSchema);
@@ -1176,7 +1187,11 @@ export function sqliteQuery(
     try {
       params = encodeSqliteParams(inputs.sql, inputs.params);
     } catch (error) {
-      result.withTx(tx).set({ pending: false, error: errMsg(error) });
+      result.withTx(tx).set({
+        pending: false,
+        error: errMsg(error),
+        ...correlation,
+      });
       return;
     }
     // The acting reader of THIS run (OW53): the run-carried principal on a
@@ -1213,6 +1228,7 @@ export function sqliteQuery(
       sql: inputs.sql,
       params: params ?? null,
       reactOn: reactOn ?? null,
+      ...correlation,
       // The contract a result's labels are written under is part of the
       // identity, so a result stored under another contract cannot stand as
       // a memo hit.
@@ -1316,10 +1332,9 @@ export function sqliteQuery(
     // never meets it.
     if (crossSpace && requestConfidentiality().length > 0) {
       // On the issuing transaction, whose flow join is non-empty by
-      // construction — that is the condition this fires on — so route 2
-      // declares that clause on the control paths this writes. A pattern
-      // rendering "this query was refused" inherits it, as a reader of the
-      // flag a labeled claim raised does.
+      // construction — that is the condition this fires on — so the control
+      // paths this writes carry that join as their derived component. A
+      // pattern rendering "this query was refused" inherits it.
       //
       // `nonReactive`, like the claim below: the write machinery's read of
       // the region it is about to write must not make this action depend on
@@ -1334,6 +1349,7 @@ export function sqliteQuery(
       result.withTx(new TransactionWrapper(tx, { nonReactive: true })).set({
         pending: false,
         error: SQLITE_FOREIGN_SPACE_REFUSAL,
+        ...correlation,
       });
       return;
     }
@@ -1358,10 +1374,14 @@ export function sqliteQuery(
     const requestLabel = requestConfidentiality();
     // Diffing the pending publication likewise observes only its destination.
     // The query's inputs, read above, are what schedule another request.
-    result.withTx(new TransactionWrapper(tx, { nonReactive: true })).set({
+    const pendingState = {
       pending: true,
       requestHash: hash,
-    });
+      ...correlation,
+    };
+    result.withTx(new TransactionWrapper(tx, { nonReactive: true })).set(
+      pendingState,
+    );
 
     const sql = inputs.sql;
     requestStaged = true;
@@ -1443,7 +1463,7 @@ export function sqliteQuery(
               stored as FabricValue,
             ) &&
               !valueEqual(
-                { pending: true, requestHash: hash } as FabricValue,
+                pendingState,
                 stored as FabricValue,
               );
             if (running || writtenSinceStaged) {
@@ -1462,9 +1482,39 @@ export function sqliteQuery(
             // again. Nothing spins on it either — this node reads its own
             // result as a write destination, so writing one schedules no
             // re-run of the action that wrote it.
-            result.withTx(settleTx).set({
+            // The abandoned claim persisted no label. Carry the captured
+            // request's confidentiality on its echoed key (§8.17.6 rule 2),
+            // preserving any declaration this result already holds.
+            let target = result.withTx(settleTx);
+            if (
+              correlation.requestKey !== undefined && requestLabel.length > 0
+            ) {
+              const base = result.getAsNormalizedFullLink();
+              const prior = cfcConfidentialityForObservationNode({
+                labelView: cfcLabelViewFromMetadata(
+                  readStoredCfcMetadata(settleTx, base),
+                  [...base.path, "requestKey"],
+                ),
+              });
+              target = target.asSchema<QueryState>({
+                type: "object",
+                properties: {
+                  requestKey: {
+                    type: "string",
+                    ifc: {
+                      confidentiality: joinCfcObservedConfidentiality([
+                        prior,
+                        requestLabel,
+                      ]),
+                    },
+                  },
+                },
+              });
+            }
+            target.set({
               pending: false,
               error: SQLITE_UNSENT_REFUSAL,
+              ...correlation,
             });
           },
         ).finally(releaseStaging),
@@ -1576,6 +1626,7 @@ export function sqliteQuery(
                   pending: false,
                   error,
                   requestHash: hash,
+                  ...correlation,
                 });
               },
               undefined,
@@ -1981,6 +2032,7 @@ export function sqliteQuery(
                   pending: false,
                   result: storedRows,
                   requestHash: hash,
+                  ...correlation,
                   ...(withheld !== undefined ? { withheld } : {}),
                 });
               },

@@ -15,7 +15,9 @@
  * user. `requestingHome`, `profilelessHome` and `leavingHome` are Homes whose
  * inboxes a client requests, as a loom daemon does: a profile of the first's
  * may be of a vintage without `setInbox`, the second has no profiles, and the
- * third loses its first profile once its inbox is requested. Fixture for
+ * third loses its first profile once its inbox is requested. `racingHome` is
+ * a Home whose one profile two runtimes of the owner's point at inboxes of
+ * their own, each only while it points at none. Fixture for
  * `private-inbox-multi-runtime.test.ts`.
  */
 
@@ -35,7 +37,10 @@ import {
 } from "commonfabric";
 import EarlierProfile from "./earlier-profile.tsx";
 import UserScopedProfile from "./user-scoped-profile.tsx";
-import ProfileCreate from "../../../system/profile-create.tsx";
+import ProfileCreate, {
+  seedProfileName,
+  type SeedProfileNameEvent,
+} from "../../../system/profile-create.tsx";
 import ProfileHome, {
   type ProfileHomeOutput,
 } from "../../../system/profile-home.tsx";
@@ -118,17 +123,23 @@ function asProfile(profile: unknown): unknown {
 
 /**
  * Creates one of the owner's profiles, in a space of its own that grants
- * anyone `WRITE`, as `profile-create.tsx` does.
+ * anyone `WRITE`, and stores its name through `seedName`, as
+ * `profile-create.tsx` does: a profile whose owner wrote no name is no one's
+ * (`profileOwnerOf()`), and the host's inbox decision reads only the owner's
+ * own. `seedName` points the profile at no inbox.
  */
 const createProfile = handler<
   void,
-  { profiles: Writable<ProfileHomeOutput[]> }
->((_event, { profiles }) => {
-  profiles.push(
-    ProfileHome.inSpace(undefined, { grants: { "*": "WRITE" } })({
-      initialName: "Owner",
-    }) as ProfileHomeOutput,
-  );
+  {
+    profiles: Writable<ProfileHomeOutput[]>;
+    seedName: Stream<SeedProfileNameEvent>;
+  }
+>((_event, { profiles, seedName }) => {
+  const profile = ProfileHome.inSpace(undefined, { grants: { "*": "WRITE" } })({
+    initialName: "Owner",
+  }) as ProfileHomeOutput;
+  profiles.push(profile);
+  seedName.send({ name: "Owner", profile });
 });
 
 /**
@@ -244,6 +255,23 @@ const pointProfileAt = handler<
 >((event, { profiles, inbox }) => {
   profiles.key(event.index).resolveAsCell().key("setInbox").send({
     inbox: inbox.get().piece?.resolveAsCell(),
+  });
+});
+
+/**
+ * Points one of the profiles in `profiles` at the inbox `inbox` holds, only
+ * while the profile points at no inbox, as Home and a loom daemon point one.
+ */
+const pointProfileAtIfUnset = handler<
+  PointElsewhereRequest,
+  {
+    profiles: Writable<ProfileHomeOutput[]>;
+    inbox: Writable<PrivateInboxHolder>;
+  }
+>((event, { profiles, inbox }) => {
+  profiles.key(event.index).resolveAsCell().key("setInbox").send({
+    inbox: inbox.get().piece?.resolveAsCell(),
+    replacing: undefined,
   });
 });
 
@@ -439,7 +467,10 @@ const HomeStandIn = pattern<{ label: string }, HomeStandInOutput>(
           profiles: profiles as any,
         }),
       }),
-      createProfile: createProfile({ profiles }),
+      createProfile: createProfile({
+        profiles,
+        seedName: seedProfileName({}),
+      }),
       createEarlierProfile: createEarlierProfile({ profiles }),
     };
   },
@@ -508,7 +539,10 @@ const OlderHomeStandIn = pattern<Record<never, never>, OlderHomeStandInOutput>(
       handled,
       delivered,
       ensurePrivateInbox: ensureAsOlderHome({ handled, delivered }),
-      createProfile: createProfile({ profiles }),
+      createProfile: createProfile({
+        profiles,
+        seedName: seedProfileName({}),
+      }),
     };
   },
 );
@@ -593,6 +627,7 @@ export interface MainOutput {
   creatingHome: HomeStandInOutput;
   readoptingHome: HomeStandInOutput;
   replacingHome: HomeStandInOutput;
+  racingHome: HomeStandInOutput;
   ownSpaceHome: HomeStandInOutput;
   unreadableRefusedHome: HomeStandInOutput;
   olderHome: OlderHomeStandInOutput;
@@ -656,6 +691,21 @@ export interface MainOutput {
 
   /** Replaces the inbox `replacingHome` was refused. */
   replaceReplacingInbox: Stream<void>;
+
+  /** Creates one of `racingHome`'s profiles. */
+  createRacingProfile: Stream<void>;
+
+  /**
+   * Points one of `racingHome`'s profiles at the loom-shaped inbox, only while
+   * it points at none.
+   */
+  pointRacingProfileAtLoomIfUnset: Stream<PointElsewhereRequest>;
+
+  /**
+   * Points one of `racingHome`'s profiles at the other inbox, only while it
+   * points at none.
+   */
+  pointRacingProfileAtOtherIfUnset: Stream<PointElsewhereRequest>;
 
   /** Creates one of `ownSpaceHome`'s profiles. */
   createOwnSpaceProfile: Stream<void>;
@@ -820,6 +870,7 @@ export default pattern<MainInput, MainOutput>((
   const olderHome = OlderHomeStandIn({});
   const readoptingHome = HomeStandIn({ label: "Home adopting again" });
   const replacingHome = HomeStandIn({ label: "Replacing Home" });
+  const racingHome = HomeStandIn({ label: "Home pointed twice at once" });
   const ownSpaceHome = HomeStandIn({ label: "Home refused its own inbox" });
   const unreadableRefusedHome = HomeStandIn({
     label: "Home refused an inbox it cannot read",
@@ -847,6 +898,7 @@ export default pattern<MainInput, MainOutput>((
     creatingHome,
     readoptingHome,
     replacingHome,
+    racingHome,
     ownSpaceHome,
     unreadableRefusedHome,
     olderHome,
@@ -868,7 +920,10 @@ export default pattern<MainInput, MainOutput>((
         profiles: profiles as any,
       }),
     }),
-    createProfile: createProfile({ profiles }),
+    createProfile: createProfile({
+      profiles,
+      seedName: seedProfileName({}),
+    }),
     createEarlierProfile: createEarlierProfile({ profiles }),
     createOtherInbox: createOtherInbox({ otherInbox }),
     pointProfileElsewhere: pointProfileAt({ profiles, inbox: otherInbox }),
@@ -895,6 +950,15 @@ export default pattern<MainInput, MainOutput>((
       inbox: strangerInbox,
     }),
     replaceReplacingInbox: replacingHome.replaceRefusedPrivateInbox,
+    createRacingProfile: racingHome.createProfile,
+    pointRacingProfileAtLoomIfUnset: pointProfileAtIfUnset({
+      profiles: racingHome.profiles,
+      inbox: loomInbox,
+    }),
+    pointRacingProfileAtOtherIfUnset: pointProfileAtIfUnset({
+      profiles: racingHome.profiles,
+      inbox: otherInbox,
+    }),
     createOwnSpaceProfile: ownSpaceHome.createProfile,
     pointOwnSpaceProfileAtPrivateInbox: pointProfileAt({
       profiles: ownSpaceHome.profiles,

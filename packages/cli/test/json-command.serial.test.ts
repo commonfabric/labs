@@ -48,30 +48,25 @@ describe("JSON command contracts", () => {
       true,
     );
     expect(reservesStdoutForCommandOutput(["cell", "set", "path"])).toBe(false);
-    // The superseded spellings answer for as long as they are mounted, so
-    // they reserve stdout on the same terms. A refusal reaching stdout is
-    // what this guards, and it corrupts a caller's parse whichever spelling
-    // they wrote.
-    expect(reservesStdoutForCommandOutput(["get", "path"])).toBe(true);
-    expect(reservesStdoutForCommandOutput(["call", "search"])).toBe(true);
+    // Nothing reserves stdout for a spelling no command answers at: a
+    // leftover entry would suppress the help an unknown command prints.
+    expect(reservesStdoutForCommandOutput(["get", "path"])).toBe(false);
+    expect(reservesStdoutForCommandOutput(["call", "search"])).toBe(false);
     expect(reservesStdoutForCommandOutput(["set", "path"])).toBe(false);
-    // `cf piece get` and `cf piece set` were removed outright rather than
-    // moved, so nothing reserves stdout for them: a leftover entry would
-    // suppress the help an unknown subcommand prints.
+    expect(reservesStdoutForCommandOutput(["piece", "get-label", "path"]))
+      .toBe(false);
+    expect(reservesStdoutForCommandOutput(["piece", "set-label", "path"]))
+      .toBe(false);
     expect(reservesStdoutForCommandOutput(["piece", "get", "path"])).toBe(
       false,
     );
     expect(reservesStdoutForCommandOutput(["piece", "set", "path"])).toBe(
       false,
     );
-    // The label commands reserve it under either noun.
+    // The label commands reserve it.
     expect(reservesStdoutForCommandOutput(["cell", "get-label", "path"]))
       .toBe(true);
     expect(reservesStdoutForCommandOutput(["cell", "set-label", "path"]))
-      .toBe(true);
-    expect(reservesStdoutForCommandOutput(["piece", "get-label", "path"]))
-      .toBe(true);
-    expect(reservesStdoutForCommandOutput(["piece", "set-label", "path"]))
       .toBe(true);
     // The bulk commands write their plan or their report to stdout, so they
     // reserve it whether or not --json is on the line.
@@ -158,9 +153,9 @@ describe("JSON command contracts", () => {
     for (
       const command of [
         argv`check --pattern-json --bogus fixtures/pow-5.tsx`,
-        argv`get --bogus`,
-        argv`piece get-label --bogus`,
-        argv`piece set-label --bogus`,
+        argv`cell get --bogus`,
+        argv`cell get-label --bogus`,
+        argv`cell set-label --bogus`,
         argv`piece --bogus survey`,
         argv`wish --bogus #profile`,
         // Bundled beside unbundled, because cliffy accepts both and only the

@@ -53,7 +53,9 @@ import {
   NAME,
   pattern,
   type PerSession,
+  type PerUser,
   principalOf,
+  profileOwnerOf,
   spaceAccess,
   spaceOf,
   Stream,
@@ -136,13 +138,19 @@ export interface RoomMembership extends ChatIndexEntry {
 /** Explicit membership choices, compared by resolved room identity. */
 export type RoomMembershipCell = Writable<RoomMembership[] | Default<[]>>;
 
+/** The validated catalog fields used to discover and list rooms. */
+type RoomCatalogEntry = Pick<
+  SharedSpaceEntry,
+  "space" | "kind" | "state" | "revision" | "since"
+>;
+
 /**
  * Applies standalone catalog choices to room records, including a removed
  * catalog entry. Container membership keeps its own state and revision.
  */
 const effectiveMemberships = (
   memberships: readonly RoomMembership[],
-  entries: Record<string, SharedSpaceEntry>,
+  entries: Record<string, RoomCatalogEntry>,
 ): RoomMembership[] =>
   memberships.map((membership): RoomMembership => {
     const entry = entries[spaceOf(membership.room) ?? ""];
@@ -221,9 +229,10 @@ export interface ManagerStreamEvent {
   members?: string[];
 
   /**
-   * The profiles of more of a new group room's other members, each naming its
-   * member with its `represents-principal` label, through whose share inbox
-   * the room is offered to them.
+   * The profiles of more of a new group room's other members, each naming the
+   * member whose own profile it is (`profileOwnerOf()`), through whose share
+   * inbox the room is offered to them. A profile that is no one's names no
+   * one, and the request is refused.
    */
   // `Cell<…>` is written out rather than reached through an alias: the
   // event's schema marks a reference position only where the wrapper is
@@ -337,12 +346,15 @@ export interface ManagerActState {
   /** Adds this user's profile to a room's participants. */
   joinRooms: Stream<JoinRoomsEvent>;
 
+  /** Lists a newly created room in the user's catalog. */
+  listRooms: Stream<ListRoomsEvent>;
+
   /**
    * The people this user's rooms list, through whose profiles `offerRoom`
    * offers a room to a member it names by principal alone; absent for every
    * other act.
    */
-  people?: PerSession<Record<string, readonly ManagerProfileCell[]>>;
+  people?: PerUser<Record<string, readonly ManagerProfileCell[]>>;
 
   /** The session's group draft, which a rendered create reads. */
   draft: Writable<GroupDraft>;
@@ -374,8 +386,8 @@ const principalsIn = (text: string): string[] =>
   text.split(/[\s,]+/).filter((part) => part !== "");
 
 /**
- * A member a request names by profile, with the principal the profile's
- * `represents-principal` label attests; absent when it attests none.
+ * A member a request names by profile, with the principal whose own profile
+ * it is (`profileOwnerOf()`); absent when it is no one's.
  */
 interface NamedMember {
   /** The member's profile. */
@@ -709,6 +721,37 @@ const joinRooms = handler<JoinRoomsEvent, Record<PropertyKey, never>>(
   },
 );
 
+/** What listing a new room asks: the room, and what to register with it. */
+export interface ListRoomsEvent {
+  /** The room to list. */
+  // `Cell<…>` is written out rather than reached through an alias: the
+  // event's schema marks a reference position only where the wrapper is
+  // written in the event type.
+  room: Cell<ChatRoomLink>;
+
+  /** A group room's title; absent for a direct room. */
+  title?: string;
+
+  /** When the room was created, in milliseconds since the epoch. */
+  since: number;
+}
+
+/**
+ * Lists a room this user created in their catalog, as `listRoom()` does. It
+ * runs as an event of its own, queued by the one that creates the room, so
+ * that the catalog is read apart from that creation: a transaction's writes
+ * are held to the labels of everything it reads, and the catalog can carry a
+ * label, such as its owner's `PersonalSpace`, that the room's space doesn't
+ * admit. While the room's space is not known, nothing is listed.
+ */
+const listRooms = handler<ListRoomsEvent, { catalog: CatalogCell }>(
+  (event, { catalog }) => {
+    const space = spaceOf(event?.room);
+    if (!isWellFormedDID(space)) return;
+    listRoom(catalog, space, { title: event.title, since: event.since });
+  },
+);
+
 /**
  * A room's result, as the link an index entry holds. The room is created
  * where the link can't be typed as a cell, and stored as a link to it.
@@ -727,6 +770,18 @@ function aboutRecordOf(room: Cell<ChatRoomLink>): Cell<AboutRecord>;
 function aboutRecordOf(room: Cell<ChatRoomLink>): unknown {
   return room.key("about").key("record");
 }
+
+/**
+ * The kind of room `room` is, as its own records say: `direct` or `group`, and
+ * absent for anything they don't say is a room.
+ */
+const roomKindOf = (
+  room: Cell<ChatRoomLink>,
+): "direct" | "group" | undefined => {
+  const kind = aboutRecordOf(room).key("kind").get() ??
+    room.key("about").key("kind").get();
+  return kind === "direct" || kind === "group" ? kind : undefined;
+};
 
 /** How a room `createRoom()` makes differs by its kind. */
 interface RoomOptions {
@@ -748,16 +803,16 @@ interface RoomOptions {
 
 /**
  * Creates a room in a space of its own, as the space's root, and its notices,
- * records its entry, and registers its space in the user's catalog, all in one
- * transaction: the space's grants and its declared kind are part of creating
- * it, so nothing has to commit apart. A notice for each other member not in
- * `offerTo` is queued for a client to deliver, and adding this user to the
- * room's participants, and offering the room to each member in `offerTo`, are
- * queued to follow.
+ * and records its entry, all in one transaction: the space's grants and its
+ * declared kind are part of creating it, so nothing has to commit apart. A
+ * notice for each other member not in `offerTo` is queued for a client to
+ * deliver, and registering the room's space in the user's catalog, adding this
+ * user to the room's participants, and offering the room to each member in
+ * `offerTo`, are queued to follow.
  *
  * The space's name is pending on the first run, which the runtime discards and
- * runs again with the name resolved. Nothing is registered or sent until the
- * name resolves, since a discarded run's sends may still be delivered.
+ * runs again with the name resolved. Nothing is sent until the name resolves,
+ * since a discarded run's sends may still be delivered.
  */
 const createRoom = (
   state: ManagerActState,
@@ -799,7 +854,11 @@ const createRoom = (
   );
   const space = spaceOf(room);
   if (isWellFormedDID(space)) {
-    listRoom(state.catalog, space, { title, since: now });
+    state.listRooms.send({
+      room,
+      ...(title === undefined ? {} : { title }),
+      since: now,
+    });
     if (state.myProfile !== undefined) {
       state.joinRooms.send({ room, profile: state.myProfile });
     }
@@ -845,7 +904,7 @@ const reofferDirect = (
   if (waiting.length === 0 || requestId.length > OFFER_ID_MAX_LENGTH) return;
   if (profile === undefined || inboxPointerOf(profile) === undefined) return;
   const joined = (room.key("roster").get() ?? []).some((member) =>
-    principalOf(member, "represents-principal") === counterpart
+    profileOwnerOf(member) === counterpart
   );
   const space = spaceOf(room);
   const from = currentPrincipal();
@@ -924,13 +983,14 @@ const performManagerAct = (
   }
 
   if (act === "openDirect") {
-    // A participant's chip names the person by their profile, which says
-    // whose it is with its `represents-principal` label. A `name` attesting
-    // no principal names no one, so it is offered nothing either.
+    // A participant's chip names the person by their profile, whose own it
+    // is by the rule every reader of a person's profiles applies
+    // (`profileOwnerOf()`). A `name` that is no one's profile names no one,
+    // so it is offered nothing either.
     const named = event?.target?.name;
     const namedPrincipal = named === undefined
       ? undefined
-      : principalOf(named, "represents-principal");
+      : profileOwnerOf(named);
     // A chip a room rendered before its control named a profile names the
     // person by principal. Such a start finds or creates the room, but offers
     // it to no one, since it carries no profile.
@@ -967,7 +1027,7 @@ const performManagerAct = (
       (namedPrincipal === undefined ? undefined : named);
     if (
       profile !== undefined &&
-      principalOf(profile, "represents-principal") !== counterpart
+      profileOwnerOf(profile) !== counterpart
     ) {
       recordOutcome(state, requestId, {
         status: "refused",
@@ -1055,7 +1115,7 @@ const performManagerAct = (
       profile,
     ): NamedMember => ({
       profile,
-      recipient: principalOf(profile, "represents-principal"),
+      recipient: profileOwnerOf(profile),
     }));
     if (named.some(({ recipient }) => !isPrincipalDID(recipient))) {
       recordOutcome(state, requestId, {
@@ -1220,9 +1280,7 @@ const performManagerAct = (
     // A member named by profile is the principal the profile attests, so a
     // profile attesting none names no one.
     const named = event?.profile;
-    const attested = named === undefined
-      ? undefined
-      : principalOf(named, "represents-principal");
+    const attested = named === undefined ? undefined : profileOwnerOf(named);
     if (named !== undefined && !isPrincipalDID(attested)) {
       recordOutcome(state, requestId, {
         status: "refused",
@@ -1263,10 +1321,11 @@ const performManagerAct = (
     // A member named by principal alone is offered the room through the
     // profiles `people` lists for them, so a person this user shares no room
     // with is offered nothing.
-    // TODO(danfuzz): A served run can't read the session's instance of
-    // `people`, and finds none listed, so under server execution such a
-    // member gets a notice. Offer through `people` there too, once a served
-    // handler can read a per-session instance of its user's.
+    // TODO(danfuzz): Under server execution a served run finds a member in
+    // `people` only where a runtime of this user's, such as a page listing
+    // its rooms, has derived the rooms `people` is drawn from; where none has,
+    // it finds no one, and the member gets a notice. Offer through `people`
+    // there too, once a served run derives what it reads.
     const profiles = named === undefined
       ? [...(state.people?.[member] ?? [])]
       : [named];
@@ -1319,9 +1378,7 @@ const performManagerAct = (
         });
         return;
       }
-      const kind = membership?.kind ??
-        aboutRecordOf(room).key("kind").get() ??
-        room.key("about").key("kind").get();
+      const kind = membership?.kind ?? roomKindOf(room);
       if (kind !== "direct" && kind !== "group") {
         recordOutcome(state, requestId, {
           status: "refused",
@@ -1368,9 +1425,8 @@ const performManagerAct = (
     // The catalog names a room by its space, which holds at most one room,
     // its root; a link to anything else in that space, such as one of the
     // room's messages, names no room to forget.
-    const kind = aboutRecordOf(room).key("kind").get() ??
-      room.key("about").key("kind").get();
-    if (kind !== "direct" && kind !== "group") {
+    const kind = roomKindOf(room);
+    if (kind === undefined) {
       recordOutcome(state, requestId, {
         status: "refused",
         reason: "The request names no room.",
@@ -1418,7 +1474,7 @@ const performManagerAct = (
   // `accept` and `joinRoom`. The kind comes from the record the room's
   // creator wrote, or the view of a container's declared conversation.
   const record = aboutRecordOf(room);
-  const kind = record.key("kind").get() ?? room.key("about").key("kind").get();
+  const kind = roomKindOf(room);
   const space = spaceOf(room);
   if (
     currentPrincipal() === undefined || spaceAccess(room) === "none" ||
@@ -1576,17 +1632,17 @@ interface PickMemberState {
 }
 
 /**
- * Whether two profiles name the same person: they are the same cell, or their
- * `represents-principal` labels attest the same principal.
+ * Whether two profiles name the same person: they are the same cell, or they
+ * are the same principal's own (`profileOwnerOf()`).
  */
 const samePerson = (
   a: Cell<ChatManagerProfile>,
   b: Cell<ChatManagerProfile>,
 ): boolean => {
   if (equals(a, b)) return true;
-  const principal = principalOf(a, "represents-principal");
+  const principal = profileOwnerOf(a);
   return principal !== undefined &&
-    principal === principalOf(b, "represents-principal");
+    principal === profileOwnerOf(b);
 };
 
 /**
@@ -1637,7 +1693,7 @@ export interface FabriChatManagerOutput {
   [UI]: VNode;
 
   /** Every room this user belongs to and hasn't forgotten, newest first. */
-  rooms: PerSession<ChatIndexEntry[]>;
+  rooms: PerUser<ChatIndexEntry[]>;
 
   /**
    * The stored catalog used for standalone membership and container discovery.
@@ -1660,14 +1716,14 @@ export interface FabriChatManagerOutput {
    * other than those whose room's roster lists a profile attesting their
    * recipient.
    */
-  outgoingNotices: ChatManagerNotice[];
+  outgoingNotices: PerUser<ChatManagerNotice[]>;
 
   /**
    * The people this user's rooms list, other than this user: by the principal
    * each one's profile attests, the profiles attesting it, each once, in the
    * order the rooms, newest first, list them.
    */
-  people: PerSession<Record<string, ManagerProfileCell[]>>;
+  people: PerUser<Record<string, ManagerProfileCell[]>>;
 
   /** Finds or creates the direct room with a person. */
   openDirect: Stream<ManagerStreamEvent>;
@@ -1730,7 +1786,7 @@ interface ShownPerson {
 
 /** The opaque revision of a conversation discovered through a catalog entry. */
 const chatRevision = (
-  entry: SharedSpaceEntry,
+  entry: RoomCatalogEntry,
   room: Cell<ChatRoomLink>,
 ): string => {
   const resolved = room.resolveAsCell();
@@ -1755,7 +1811,7 @@ interface FoundRoomInput {
 
 /** A catalog entry's room, once found. */
 interface FoundRoomOutput {
-  /** The room; absent until it resolves. */
+  /** The room; absent until it resolves and its records say it is a room. */
   room?: Cell<ChatRoomLink>;
 }
 
@@ -1773,11 +1829,20 @@ const FoundRoom = pattern<FoundRoomInput, FoundRoomOutput>(
     // it; that document stores no labels, so a link to it gives a labeled
     // list nothing to carry, and the room's own labels are what a link to
     // the room carries.
+    //
+    // It is found once its records say it is a room. A space this replica
+    // can't serve, as one on another host is, leaves those records
+    // unresolved, which holds back this finding alone; the list that reads
+    // every entry's room never reads one that hasn't resolved.
     return {
-      room: computed(() =>
-        (standalone ? root.result : root.result?.key("chatRoom").get())
-          ?.resolveAsCell()
-      ),
+      room: computed(() => {
+        const found =
+          (standalone ? root.result : root.result?.key("chatRoom").get())
+            ?.resolveAsCell();
+        return found !== undefined && roomKindOf(found) !== undefined
+          ? found
+          : undefined;
+      }),
     };
   },
 );
@@ -1843,53 +1908,64 @@ export const FabriChatManagerCore = pattern<
     const roomMembership = new Writable<RoomMembership[]>([]);
     const draft = new Writable.perSession<GroupDraft>(EMPTY_DRAFT);
     const startRefusal = new Writable.perSession<string>("");
+    // Validation depends only on the catalog; room discovery can settle one
+    // source at a time without validating every entry and offer again.
+    const catalogEntries = computed((): Record<string, RoomCatalogEntry> => {
+      const catalog = sharedSpaceCatalog.get();
+      if (!isSharedSpaceCatalog(catalog)) return {};
+      return Object.fromEntries(
+        Object.entries(catalog.entries).map(([key, entry]) => [key, {
+          space: entry.space,
+          kind: entry.kind,
+          state: entry.state,
+          revision: entry.revision,
+          ...(entry.since === undefined ? {} : { since: entry.since }),
+        }]),
+      );
+    });
     // Saved catalog entries are discovery sources; standalone rooms come first.
     // A catalog that doesn't read as one supplies no sources.
-    const savedRooms = computed((): SharedSpaceEntry[] => {
-      const catalog = sharedSpaceCatalog.get();
-      return isSharedSpaceCatalog(catalog)
-        ? Object.values(catalog.entries).filter((entry) =>
-          entry.state === "saved"
-        ).sort((a, b) =>
+    const savedRooms = computed((): RoomCatalogEntry[] =>
+      Object.values(catalogEntries).filter((entry) => entry.state === "saved")
+        .sort((a, b) =>
           Number(b.kind === CHAT_ROOM_OFFER_KIND) -
           Number(a.kind === CHAT_ROOM_OFFER_KIND)
         )
-        : [];
-    });
+    );
     // A room's space is read under the reader's own access, so a principal it
-    // refuses finds nothing there that the others find. Each room is found,
-    // and everything read from it derived, per session: a value stored once
-    // for every reader, which readers derive differently, is one their
-    // runtimes overwrite without end.
-    const found = savedRooms.map((entry) =>
-      FoundRoom.asScope("session")({ space: entry.space, kind: entry.kind })
+    // refuses finds nothing there that the others find. That access is the
+    // principal's, so each room is found, and everything read from it
+    // derived, per user: a value stored once for every reader, which readers
+    // derive differently, is one their runtimes overwrite without end. Each
+    // per-user binding's name here is its value's cause, the identity of the
+    // document that stores it, so renaming one moves its data.
+    const foundForUser = savedRooms.map((entry) =>
+      FoundRoom.asScope("user")({ space: entry.space, kind: entry.kind })
     );
     // Each saved room once it resolves and reads as a room, newest first. The
     // room's own records are read here, beside the entry they belong to, so
-    // they are read in the run that lists them.
-    const newestFirst = computed((): PerSession<ChatIndexEntry[]> => {
-      const self = principalOf(myProfile, "represents-principal");
+    // they are read in the run that lists them; `FoundRoom` has already read
+    // them for each room it found, so none of these reads waits on a space
+    // this replica can't serve. Its binding's name is its cause, as
+    // `foundForUser`'s is.
+    const roomsForUser = computed((): PerUser<ChatIndexEntry[]> => {
+      const self = profileOwnerOf(myProfile);
       const stored = direct.get() ?? {};
-      const catalogValue = sharedSpaceCatalog.get();
-      const catalogEntries = isSharedSpaceCatalog(catalogValue)
-        ? catalogValue.entries
-        : {};
       const memberships = effectiveMemberships(
         roomMembership.get() ?? [],
         catalogEntries,
       );
       const discovered = savedRooms.flatMap(
         (entry, index): ChatIndexEntry[] => {
-          const room = found[index]?.room;
+          const room = foundForUser[index]?.room;
           if (room === undefined) return [];
           const standalone = catalogEntries[spaceOf(room) ?? ""];
           if (
             standalone?.kind === CHAT_ROOM_OFFER_KIND &&
             standalone.state !== "saved"
           ) return [];
-          const kind = aboutRecordOf(room).key("kind").get() ??
-            room.key("about").key("kind").get();
-          if (kind !== "direct" && kind !== "group") return [];
+          const kind = roomKindOf(room);
+          if (kind === undefined) return [];
           const counterpart = kind === "direct"
             ? counterpartOf(stored, room, self)
             : undefined;
@@ -1926,17 +2002,18 @@ export const FabriChatManagerCore = pattern<
     });
     // The people the listed rooms' rosters hold, by the principal each
     // profile's own label attests, read beside the rooms that list them, and
-    // per session, as `newestFirst` is: a profile attests no one to a reader
+    // per user, as `roomsForUser` is: a profile attests no one to a reader
     // its space refuses. A profile attesting no principal, or a DID no
     // principal can have, names no one to offer a room to, and this user's
-    // own are left out.
-    const people = computed(
-      (): PerSession<Record<string, ManagerProfileCell[]>> => {
-        const self = principalOf(myProfile, "represents-principal");
-        return newestFirst.reduce<Record<string, ManagerProfileCell[]>>(
+    // own are left out. Its binding's name is its cause, as `foundForUser`'s
+    // is.
+    const peopleForUser = computed(
+      (): PerUser<Record<string, ManagerProfileCell[]>> => {
+        const self = profileOwnerOf(myProfile);
+        return roomsForUser.reduce<Record<string, ManagerProfileCell[]>>(
           (found, entry) =>
             (entry.room.key("roster").get() ?? []).reduce((known, profile) => {
-              const principal = principalOf(profile, "represents-principal");
+              const principal = profileOwnerOf(profile);
               if (!isPrincipalDID(principal) || principal === self) {
                 return known;
               }
@@ -1959,13 +2036,15 @@ export const FabriChatManagerCore = pattern<
       outgoingNotices,
       offerRooms: offerRooms({ outgoingNotices, joinRooms: joining }),
       joinRooms: joining,
+      listRooms: listRooms({ catalog: sharedSpaceCatalog }),
       draft,
       startRefusal,
     };
-    // Per session, as `newestFirst` is: a room's label is the title its room
-    // holds, which a direct room has only once a member sets one.
-    const shown = computed((): PerSession<ShownEntry[]> =>
-      newestFirst.map((entry) => ({
+    // Per user, as `roomsForUser` is: a room's label is the title its room
+    // holds, which a direct room has only once a member sets one. Its
+    // binding's name is its cause, as `foundForUser`'s is.
+    const shownForUser = computed((): PerUser<ShownEntry[]> =>
+      roomsForUser.map((entry) => ({
         room: entry.room,
         ...(entry.revision === undefined ? {} : { revision: entry.revision }),
         label: entry.room.key("about").get()?.title ??
@@ -1984,10 +2063,10 @@ export const FabriChatManagerCore = pattern<
     );
     // Each person once, by the first profile attesting them, and whether the
     // session's draft has picked them, by any profile of theirs, per session,
-    // as `people` is.
+    // as the draft is.
     const shownPeople = computed((): PerSession<ShownPerson[]> => {
       const picked = draft.get()?.picked ?? [];
-      return Object.values(people).flatMap((profiles): ShownPerson[] => {
+      return Object.values(peopleForUser).flatMap((profiles): ShownPerson[] => {
         const profile = profiles[0];
         if (profile === undefined) return [];
         return [{
@@ -2002,22 +2081,21 @@ export const FabriChatManagerCore = pattern<
       shownPeople.length === 0 ? "none" : "block"
     );
     // A notice whose room's roster lists a profile attesting its recipient
-    // has nothing left to tell them: they are in the room. Per session, as
-    // `newestFirst` is: the roster is read under the reader's access, and a
-    // profile attests no one to a reader its space refuses.
-    const noticeList = computed((): PerSession<ChatManagerNotice[]> =>
+    // has nothing left to tell them: they are in the room. Per user, as
+    // `roomsForUser` is: the roster is read under the reader's access, and a
+    // profile attests no one to a reader its space refuses. Its binding's
+    // name is its cause, as `foundForUser`'s is.
+    const noticesForUser = computed((): PerUser<ChatManagerNotice[]> =>
       ((outgoingNotices.get() ?? []) as ChatManagerNotice[]).filter((notice) =>
         !(notice.room.key("roster").get() ?? []).some((member) =>
-          principalOf(member, "represents-principal") === notice.recipient
+          profileOwnerOf(member) === notice.recipient
         )
       )
     );
     const cannotStart = computed(() => myProfile?.get() === undefined);
     // The principal this user's profile attests, which someone starting a
     // chat with them needs; empty when the profile attests none.
-    const myAddress = computed(() =>
-      principalOf(myProfile, "represents-principal") ?? ""
-    );
+    const myAddress = computed(() => profileOwnerOf(myProfile) ?? "");
     const addressDisplay = computed(
       (): ChatDisplay => (myAddress === "" ? "none" : "block"),
     );
@@ -2029,20 +2107,24 @@ export const FabriChatManagerCore = pattern<
     const streams = {
       openDirect: commitStart({ act: "openDirect", ...records }),
       createGroup: commitStart({ act: "createGroup", ...records }),
-      offerRoom: commitManager({ act: "offerRoom", ...records, people }),
+      offerRoom: commitManager({
+        act: "offerRoom",
+        ...records,
+        people: peopleForUser,
+      }),
       accept: commitManager({ act: "accept", ...records }),
       joinRoom: commitManager({ act: "joinRoom", ...records }),
       forget: commitManager({ act: "forget", ...records }),
       delivered: commitManager({ act: "delivered", ...records }),
     };
     const view = {
-      rooms: newestFirst,
+      rooms: roomsForUser,
       sharedSpaceCatalog,
       roomMembership,
       direct,
       requests,
-      outgoingNotices: noticeList,
-      people,
+      outgoingNotices: noticesForUser,
+      people: peopleForUser,
       ...streams,
     };
 
@@ -2052,7 +2134,7 @@ export const FabriChatManagerCore = pattern<
         <cf-vstack gap="3" style={{ padding: "1rem" }}>
           <cf-heading level={3}>Chats</cf-heading>
           <cf-vstack id="fabrichat-rooms" gap="1">
-            {shown.map((entry) => (
+            {shownForUser.map((entry) => (
               <cf-hstack gap="2" align="center">
                 <cf-cell-link $cell={entry.room} label={entry.label} />
                 <cf-button
@@ -2149,7 +2231,7 @@ export const FabriChatManagerCore = pattern<
               </div>
             </cf-vstack>
           </div>
-          {noticeList.map((notice) => (
+          {noticesForUser.map((notice) => (
             <cf-hstack gap="2" align="center">
               <cf-text variant="caption">
                 {notice.recipient}{" "}

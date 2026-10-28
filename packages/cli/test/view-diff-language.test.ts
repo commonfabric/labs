@@ -26,6 +26,7 @@ import { plainTextLanguage } from "../lib/view/languages/plain-text/language.ts"
 import { pythonLanguage } from "../lib/view/languages/python/language.ts";
 import { shellLanguage } from "../lib/view/languages/shell/language.ts";
 import { typeScriptLanguage } from "../lib/view/languages/typescript/language.ts";
+import { xmlLanguage } from "../lib/view/languages/xml/language.ts";
 import type { Line, TokenClass } from "../lib/view/model.ts";
 
 // Shell and Python color through their synchronous entry points, which show
@@ -121,6 +122,41 @@ describe("diff file languages", () => {
     it("returns shell from a hunk that starts at the first line with no workspace", () => {
       expect(diffLanguages(TOP_DIFF, parseDiff(TOP_DIFF)!)).toEqual([
         { oldLanguage: shellLanguage, newLanguage: shellLanguage },
+      ]);
+    });
+
+    it("returns XML when the workspace file a path no language claims opens with an XML declaration", () => {
+      const path = "App/Base.lproj/Main.storyboard";
+      const body = [
+        `diff --git a/${path} b/${path}`,
+        `--- a/${path}`,
+        `+++ b/${path}`,
+        "@@ -3,2 +3,2 @@",
+        " <scenes>",
+        '-<scene id="old"/>',
+        '+<scene id="new"/>',
+        "",
+      ].join("\n");
+      const workspace = (text: string): DiffWorkspace => ({
+        resolve: (requested) =>
+          requested === path ? `/workspace/${path}` : null,
+        read: (absPath) => absPath === `/workspace/${path}` ? text : null,
+      });
+      expect(
+        diffLanguages(
+          body,
+          parseDiff(body)!,
+          workspace('<?xml version="1.0"?>\n<document>\n<scenes>\n'),
+        ),
+      ).toEqual([{ oldLanguage: xmlLanguage, newLanguage: xmlLanguage }]);
+      expect(
+        diffLanguages(
+          body,
+          parseDiff(body)!,
+          workspace("<document>\n<scenes>\n"),
+        ),
+      ).toEqual([
+        { oldLanguage: plainTextLanguage, newLanguage: plainTextLanguage },
       ]);
     });
 

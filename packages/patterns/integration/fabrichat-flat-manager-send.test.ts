@@ -33,6 +33,7 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import { writeOwnProfile } from "./own-profile-fixture.ts";
 
 const owner = await Identity.fromPassphrase("fabrichat-manager-roles");
 const PATTERNS = fromFileUrl(new URL("..", import.meta.url));
@@ -297,7 +298,12 @@ describe("FabriChat flat manager sends", () => {
    * grants.
    */
   const addBob = async (labeled: boolean) => {
-    const profile = await writeProfile("viewer profile", "Viewer");
+    const profile = await writeOwnProfile(
+      runtime,
+      await runtime.createSpace({}),
+      "viewer profile",
+      "Viewer",
+    );
     const bobProfile = await writeProfile("bob profile", "Bob");
     const { offerRoom } = await writeHome(labeled, profile, {
       [BOB]: [bobProfile],
@@ -338,7 +344,12 @@ describe("FabriChat flat manager sends", () => {
       it(`stores a shared message through a ${labeled ? "root-private" : "public"} manager's ${discovered ? "discovered" : "supplied"} flat bindings`, async () => {
         expect(runtime.cfcEnforcementMode).toBe("enforce-strict");
         const social = await runtime.createSpace({});
-        const profile = await writeProfile("viewer profile", "Viewer");
+        const profile = await writeOwnProfile(
+          runtime,
+          await runtime.createSpace({}),
+          "viewer profile",
+          "Viewer",
+        );
         const { wrapper } = await writeHome(labeled, profile, {});
 
         const program = await resolveLocalProgram(
@@ -371,6 +382,7 @@ describe("FabriChat flat manager sends", () => {
         await runtime.idle();
         await room.pull();
         expect(refusals).toEqual([]);
+        expect(room.key("canSend").get()).toBe(true);
         const click = {
           type: "click",
           requestId: "flat-manager-send",
@@ -423,10 +435,10 @@ describe("FabriChat flat manager sends", () => {
     });
 
     // Everything the room stores of the manager's data lands in the viewer's
-    // own documents: the picker's list of the people `candidates` reads from
-    // the manager, in their session documents, and the `outcomes` that merge
-    // the manager's verdicts into `addRequests`, in their per-user ones. A
-    // user or session document may hold its own principal's personal data
+    // own documents: the picker's list of the people `candidatesForUser`
+    // reads from the manager, and the `outcomes` that merge the manager's
+    // verdicts into `addRequests`, both in their per-user ones. A user or
+    // session document may hold its own principal's personal data
     // (§8.12.4), so the add refuses nothing and is listed as done, as it is
     // through a public manager.
     expect(addRequests).toEqual({ "add-bob": { status: "done" } });

@@ -1,19 +1,23 @@
+import type { TextChange } from "@commonfabric/api";
 import {
   deepFreeze,
   type FabricPlainObject,
   type FabricValue,
   hashOf,
+  hashStringOf,
   type MutableFabricPlainObjectLayer,
   shallowMutableClone,
   taggedHashStringOf,
   valueEqual,
 } from "@commonfabric/data-model";
+import { internSchema } from "@commonfabric/data-model-schema";
 import {
   classifySchemaMeta,
   collectSchemaMetaRefHashes,
   MalformedSchemaMetaError,
   SCHEMA_META_MEMBER,
 } from "@commonfabric/data-model-schema/schema-refs";
+import { isDID } from "@commonfabric/identity/did";
 import { aclDocId } from "@commonfabric/memory/acl";
 import {
   type CommitPrecondition,
@@ -28,12 +32,20 @@ import { isObjectOrArray, isPlainObject } from "@commonfabric/utils/types";
 
 import type { CellScope } from "../builder/types.ts";
 import {
+  type CfcConfidentialityRelease,
+  type CfcConfidentialityReleaseInput,
+  CONFIDENTIALITY_RELEASE_WRITER,
+  planConfidentialityRelease,
+} from "../cfc/confidentiality-release-plan.ts";
+import {
+  canonicalizeCfcMetadata,
   canonicalizeDocumentPath,
   canonicalizeLogicalPath,
   CFC_ENFORCEMENT_MODES,
   CFC_ENFORCING_STRICTNESS,
   CFC_GRANT_ID_PREFIX,
   type CfcAddress,
+  cfcCanonicalClauseDigest,
   type CfcContentAddressedLabels,
   type CfcDeclaredMonotonicityMode,
   type CfcDeclaredWideningExemption,
@@ -48,6 +60,7 @@ import {
   type CfcGrantWriteInput,
   type CfcLabelMetadataObservation,
   type CfcLabelMetadataProtectionMode,
+  type CfcMetadata,
   cfcMetadataPresent,
   type CfcPolicyEvaluationMode,
   type CfcPrefixProvenanceSummary,
@@ -88,13 +101,19 @@ import {
   type WritePolicyInput,
 } from "../cfc/mod.ts";
 import { withoutEnvelopeStabilityToken } from "../cfc/envelope-stability-reason.ts";
-import { prepareBoundaryCommitSteps } from "../cfc/prepare.ts";
+import {
+  ensureSchemaDocument,
+  loadStoredCfcEnvelope,
+  prepareBoundaryCommitSteps,
+  writeStoredCfcEnvelope,
+} from "../cfc/prepare.ts";
 import { CFC_POLICY_MANIFEST_ID_PREFIX } from "../cfc/policy.ts";
 import {
   runtimeOwnedStoreKey,
   type RuntimeOwnedStores,
 } from "../cfc/runtime-owned-stores.ts";
 import {
+  CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE,
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
   CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE,
   type CfcPreparationWork,
@@ -830,6 +849,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * needs no more than this.
    */
   #markedOwnedStores = new Set<string>();
+
+  /** Piece setup stores whose misfits stay derived in this transaction. */
+  #pieceSetupStores = new Set<string>();
 
   /**
    * The stores no schema declares a policy on that a marker named on this
@@ -2329,13 +2351,16 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       // join would put another space's bytes behind this one's promise.
       if (
         frozen.kind === "structural-provenance" &&
-        frozen.claim === CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE &&
+        (frozen.claim === CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE ||
+          frozen.claim === CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE) &&
         canonicalizeLogicalPath(frozen.target.path).length === 0 &&
         frozen.sources?.[0]?.space === frozen.target.space
       ) {
-        this.#markedOwnedStores.add(
-          runtimeOwnedStoreKey(frozen.target.space, frozen.target.id),
-        );
+        const key = runtimeOwnedStoreKey(frozen.target.space, frozen.target.id);
+        this.#markedOwnedStores.add(key);
+        if (frozen.claim === CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE) {
+          this.#pieceSetupStores.add(key);
+        }
       }
       // The same whole-document test, for the same reason: whether a schema
       // could have declared a policy is a question about the document. There
@@ -2424,6 +2449,27 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     const key = runtimeOwnedStoreKey(space, id);
     return this.#markedOwnedStores.has(key) ||
       (this.#runtimeOwnedStores?.has(key) ?? false);
+  }
+
+  isEnrolledRuntimeOwnedStore(
+    space: string,
+    id: string,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): boolean {
+    if (!runtimeWritePolicyAuthorized(authorization)) return false;
+    return this.#runtimeOwnedStores?.has(runtimeOwnedStoreKey(space, id)) ??
+      false;
+  }
+
+  /** @inheritDoc */
+  usesDerivedRuntimeOwnedStoreLabels(
+    space: string,
+    id: string,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): boolean {
+    if (!runtimeWritePolicyAuthorized(authorization)) return false;
+    return this.#pieceSetupStores.has(runtimeOwnedStoreKey(space, id)) ||
+      this.isEnrolledRuntimeOwnedStore(space, id, authorization);
   }
 
   isUndeclarablePolicyStore(
@@ -2604,6 +2650,107 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       }, prepared.value as unknown as FabricValue);
     });
     return { space: prepared.space, id: prepared.id };
+  }
+
+  releaseCfcConfidentiality(
+    input: CfcConfidentialityReleaseInput,
+  ): CfcConfidentialityRelease {
+    this.#assertWritable("releaseCfcConfidentiality()");
+    // A release lowers a stored label in place, which is durable release
+    // state like a grant, so authoring one takes the release writer's own
+    // builtin identity. Pattern and handler code runs under a `verified`
+    // identity or none, and is refused.
+    const identity = this.#cfcState.implementationIdentity;
+    if (
+      identity?.kind !== "builtin" ||
+      identity.builtinId !== CONFIDENTIALITY_RELEASE_WRITER
+    ) {
+      throw new Error(
+        "cfc-confidentiality-release: `releaseCfcConfidentiality()` requires " +
+          `the \`${CONFIDENTIALITY_RELEASE_WRITER}\` builtin implementation ` +
+          "identity",
+      );
+    }
+    const actor = this.#cfcState.trustSnapshot?.actingPrincipal;
+    if (!isDID(actor)) {
+      throw new Error(
+        "cfc-confidentiality-release: lowering confidentiality requires an " +
+          "authenticated acting principal",
+      );
+    }
+    // The space whose DID is the acting principal's is the one space that
+    // principal owns by construction, with no membership to consult.
+    if (input.space !== actor) {
+      throw new Error(
+        `Cannot lower confidentiality in ${input.space}: ${actor} may lower ` +
+          "it only in their own space, the one whose DID is theirs.",
+      );
+    }
+    const target = {
+      space: input.space,
+      id: input.id,
+      scope: normalizeCellScope(input.scope),
+    };
+    const stored = loadStoredCfcEnvelope(this, target);
+    if (stored.status === "unreadable") {
+      throw new Error(
+        `Cannot lower confidentiality in ${input.id}: ${stored.reason}`,
+      );
+    }
+    const existing = stored.status === "loaded" ? stored.metadata : undefined;
+    const storedSchema = stored.status === "loaded" ? stored.schema : undefined;
+    const plan = planConfidentialityRelease({
+      actor,
+      path: input.path,
+      entries: existing?.labelMap.entries ?? [],
+      schema: storedSchema,
+      keep: input.keep,
+    });
+    const priorEnvelopeDigest = hashStringOf(
+      existing === undefined ? null : canonicalizeCfcMetadata(existing),
+    );
+    if (
+      existing === undefined || plan.released.length === 0 ||
+      plan.schema === undefined
+    ) {
+      return {
+        actor,
+        released: [],
+        releasedDigests: [],
+        priorEnvelopeDigest,
+        envelopeDigest: priorEnvelopeDigest,
+      };
+    }
+    const lowered = plan.schema;
+    // Deliberately NOT marked CFC-relevant, like a grant write: the plan above
+    // is the whole of the verification, and a throw leaves nothing written.
+    const metadata = this.#runPrivilegedSystemWrite((): CfcMetadata => {
+      let schemaHash = existing.schemaHash;
+      if (lowered !== storedSchema) {
+        const interned = internSchema(lowered, true);
+        ensureSchemaDocument(
+          this,
+          target.space,
+          interned.taggedHashString,
+          interned.schema,
+        );
+        schemaHash = interned.taggedHashString;
+      }
+      const metadata: CfcMetadata = {
+        ...existing,
+        schemaHash,
+        labelMap: { ...existing.labelMap, entries: [...plan.entries] },
+      };
+      writeStoredCfcEnvelope(this, target, metadata);
+      return metadata;
+    });
+    return {
+      actor,
+      released: plan.released,
+      releasedDigests: plan.released.map(cfcCanonicalClauseDigest),
+      priorEnvelopeDigest,
+      envelopeDigest: hashStringOf(canonicalizeCfcMetadata(metadata)),
+    };
   }
 
   setCfcDeclaredWideningExemption(
@@ -3646,6 +3793,30 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   poisonMergeableOp(link: NormalizedFullLink): void {
     this.#assertWritable("poisonMergeableOp");
     this.tx.poisonMergeableOp?.(toMemorySpaceAddress(link));
+  }
+
+  recordTextChanges(
+    link: NormalizedFullLink,
+    changes: readonly TextChange[],
+  ): string {
+    this.#assertWritable("recordTextChanges");
+    if (!this.tx.recordTextChanges) {
+      throw new Error(
+        "storage transaction does not support recordTextChanges()",
+      );
+    }
+    const address = toMemorySpaceAddress(link);
+    // The same S18 chokepoint a write takes: the changes become a write of
+    // this address, which the caller then makes through `writeOrThrow()`.
+    this.#noteSystemWrite(address);
+    this.#noteCfcActivity();
+    // The intent is held outside the journal the prepared digest is derived
+    // from, and decides how the commit carries the field. One recorded after a
+    // preparation invalidates it, as a write does.
+    if (this.#cfcState.prepare.status === "prepared") {
+      this.invalidateCfc("text-changes-after-prepare");
+    }
+    return this.tx.recordTextChanges(address, changes);
   }
 
   recordSqliteWrite(space: MemorySpace, op: SqliteOperation): void {
@@ -4797,6 +4968,27 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     return this.#wrapped.isRuntimeOwnedStore(space, id, authorization);
   }
 
+  isEnrolledRuntimeOwnedStore(
+    space: string,
+    id: string,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): boolean {
+    return this.#wrapped.isEnrolledRuntimeOwnedStore(space, id, authorization);
+  }
+
+  /** @inheritDoc */
+  usesDerivedRuntimeOwnedStoreLabels(
+    space: string,
+    id: string,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): boolean {
+    return this.#wrapped.usesDerivedRuntimeOwnedStoreLabels(
+      space,
+      id,
+      authorization,
+    );
+  }
+
   isUndeclarablePolicyStore(
     space: string,
     id: string,
@@ -4867,6 +5059,12 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
 
   writeCfcGrant(input: CfcGrantWriteInput): { space: MemorySpace; id: string } {
     return this.#wrapped.writeCfcGrant(input);
+  }
+
+  releaseCfcConfidentiality(
+    input: CfcConfidentialityReleaseInput,
+  ): CfcConfidentialityRelease {
+    return this.#wrapped.releaseCfcConfidentiality(input);
   }
 
   noteCfcSinkReleaseReject(
@@ -4948,6 +5146,18 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
 
   poisonMergeableOp(link: NormalizedFullLink): void {
     this.#wrapped.poisonMergeableOp?.(link);
+  }
+
+  recordTextChanges(
+    link: NormalizedFullLink,
+    changes: readonly TextChange[],
+  ): string {
+    if (!this.#wrapped.recordTextChanges) {
+      throw new Error(
+        "storage transaction does not support recordTextChanges()",
+      );
+    }
+    return this.#wrapped.recordTextChanges(link, changes);
   }
 
   recordSqliteWrite(space: MemorySpace, op: SqliteOperation): void {

@@ -1698,6 +1698,7 @@ describe("opening a space root", () => {
       const tx = runtime.edit();
       try {
         expect(attestedPrincipalsAt(
+          runtime,
           tx,
           root.getAsNormalizedFullLink(),
           "represents-principal",

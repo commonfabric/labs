@@ -14,9 +14,9 @@ import {
   type Runtime,
   sendEvent,
 } from "@commonfabric/runner";
-import { CHAT_ROOM_SPACE_KIND } from "./share-intake.ts";
 import { accessRefused } from "./space-access.ts";
 import {
+  CHAT_ROOM_SPACE_KIND,
   type SpaceRefusal,
   vetSpace,
   vetWritableSpaceRoot,

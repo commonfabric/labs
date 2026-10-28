@@ -70,4 +70,72 @@ describe("CFC unsupported ifc claims fail closed", () => {
       }
     });
   }
+
+  describe("a label list declared as anything but a list", () => {
+    // The specification types these keys as lists (§4.2.1, §8.8). Declared as
+    // anything else, each reader skips the value, so the path would carry no
+    // label, no floor, or no ceiling; a malformed declaration fails instead
+    // (§8.10.3).
+
+    /** Commits a write to a path whose schema declares `ifc`. */
+    const commitWriteUnder = async (ifc: Record<string, unknown>) => {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL("https://example.com"),
+        storageManager,
+        trustSnapshotProvider: () => ({
+          id: "trust-snapshot-label-lists",
+          actingPrincipal: signer.did(),
+        }),
+      });
+      try {
+        const tx = runtime.edit();
+        const schema = {
+          type: "object",
+          properties: { value: { type: "string", ifc } },
+          required: ["value"],
+        } as unknown as JSONSchema;
+        runtime.getCell(signer.did(), "cfc-label-list", schema, tx).set({
+          value: "written",
+        });
+        return await tx.commit().settled;
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    };
+
+    for (
+      const key of [
+        "confidentiality",
+        "integrity",
+        "addIntegrity",
+        "requiredIntegrity",
+        "maxConfidentiality",
+      ]
+    ) {
+      it(`rejects a write to a path declaring ifc.${key} as an object`, async () => {
+        const result = await commitWriteUnder({ [key]: {} });
+        expect(result.error?.message).toContain(`malformed ${key} at /value`);
+      });
+    }
+
+    it("rejects a write to a path whose UI contract declares its event integrity as an object", async () => {
+      const result = await commitWriteUnder({
+        uiContract: {
+          helper: "UiAction",
+          action: "save",
+          requiredEventIntegrity: {},
+        },
+      });
+      expect(result.error?.message).toContain(
+        "malformed uiContract.requiredEventIntegrity at /value",
+      );
+    });
+
+    it("admits a write to a path declaring ifc.confidentiality as a list", async () => {
+      const result = await commitWriteUnder({ confidentiality: ["secret"] });
+      expect(result.error).toBeUndefined();
+    });
+  });
 });

@@ -14,6 +14,7 @@ import {
 } from "@commonfabric/utils/types";
 import { isAbsolute, relative } from "@std/path";
 
+import { isDigestBoundPromptSlot } from "./run-continuation.ts";
 import { PIECE_TARGETING_GUIDANCE } from "./piece-targeting.ts";
 import {
   PATTERN_SOURCE_GUIDANCE,
@@ -78,7 +79,9 @@ import { harnessCredentialOwnersEqual } from "./contracts/run-manifest.ts";
 import {
   createHarnessRunReport,
   type HarnessModelAttempt,
+  type HarnessModelResponse,
   type HarnessModelTurnUsage,
+  type HarnessRunReport,
   type HarnessRunTimelineEntryInput,
   type HarnessToolActivity,
   type HarnessToolInvocationOrigin,
@@ -183,8 +186,10 @@ import {
 import type {
   HarnessModelAttemptDiagnostic,
   HarnessModelClient,
+  HarnessModelLimits,
   HarnessModelUsage,
 } from "./model/client.ts";
+import { limitHarnessModelClient } from "./model/limits.ts";
 import { OpenAICompatibleGatewayModelClient } from "./model/openai-compatible-gateway.ts";
 import { sumHarnessModelUsage } from "./model/usage.ts";
 import {
@@ -199,8 +204,10 @@ import { PIECE_OUTPUT_GUIDANCE } from "./piece-output.ts";
 import { isClosedResearchTask } from "./research/closed-task.ts";
 import { collapseSupersededRunPatternDiagnostics } from "./run-pattern-diagnostic-collapse.ts";
 import { collapseSupersededRunPatternSources } from "./run-pattern-source-collapse.ts";
+import type { HarnessSystemPromptInputs } from "./contracts/system-prompt.ts";
 import {
   type HarnessOpeningResearch,
+  type HarnessRunState,
   isTerminalHarnessRunStatus,
 } from "./run-state.ts";
 import {
@@ -223,7 +230,17 @@ import {
 import {
   classifyTask,
   type HarnessTaskClassification,
+  type HarnessTaskShape,
 } from "./task-classification.ts";
+import {
+  classifiedShape,
+  type RunShape,
+  sendsSection,
+} from "./prompt-sections.ts";
+import {
+  DEFAULT_HARNESS_RUN_DEPTH,
+  type HarnessRunDepth,
+} from "./contracts/run-depth.ts";
 import { createResearchRunner } from "./research/runner.ts";
 import { researchPatternRecords } from "./research/context.ts";
 import { REVISION_VERIFICATION_GUIDANCE } from "./revision-verification.ts";
@@ -277,7 +294,7 @@ export const DEFAULT_MAX_MODEL_TURNS = 32;
 const BASH_CWD_MARKER_PREFIX = "__CF_HARNESS_CWD__";
 
 export interface CreateHarnessPromptLoopOptions
-  extends CreateHarnessEngineOptions {
+  extends CreateHarnessEngineOptions, HarnessModelLimits {
   engine?: CfHarnessEngine;
   gatewayClient?: OpenAICompatibleGatewayClient;
   modelClient?: HarnessModelClient;
@@ -288,6 +305,14 @@ export interface CreateHarnessPromptLoopOptions
 
   /** Reserves the last root model turn for a partial answer without tools. */
   finalizeOnTurnLimit?: boolean;
+
+  /**
+   * Requires `submit_result` alone in its model turn, so a host job's result
+   * never shares the turn that ends the run with another tool call. An
+   * accepted result ends a run unless a pending steer continues it, with or
+   * without this option.
+   */
+  stopOnStructuredResult?: boolean;
 
   /**
    * Requires a library parent to name a UI piece before completing.
@@ -311,6 +336,19 @@ export interface CreateHarnessPromptLoopOptions
 
   promptCacheMode?: "implicit" | "explicit";
   reasoningEffort?: string;
+
+  /**
+   * How far the caller wants the run taken; `standard` when absent. A deep
+   * run in the `fabric` domain gets the opening research pass, as an `author`
+   * task does at any depth.
+   */
+  depth?: HarnessRunDepth;
+
+  /**
+   * What the caller says about a fresh root task: its tags, its domains, or
+   * both, each taken in place of the classifier's.
+   */
+  taskShape?: HarnessTaskShape;
 
   /**
    * Reasoning effort for the `research` tool's private model turns. Research
@@ -340,6 +378,9 @@ export interface HarnessModelUsageUpdate {
 }
 
 export interface RunHarnessPromptOptions {
+  /** Additional instructions retained for a continuation. */
+  systemPromptInputs?: HarnessSystemPromptInputs;
+
   prompt: string;
   /** Trusted driver marker for research before a new root task. */
   openingResearchTask?: string;
@@ -351,6 +392,18 @@ export interface RunHarnessPromptOptions {
   promptSlotBinding?: PromptSlotBinding;
   signal?: AbortSignal;
 
+  /**
+   * Takes root user messages for model turn `turn`, appended verbatim before
+   * its request. Called at a turn's start, including the last permitted turn,
+   * or at a provisional ending when another turn remains. Each turn number is
+   * asked at most once. A call consumes the messages it returns; the host must
+   * not return them again. Never called after the loop ends. Digest-bound
+   * prompts refuse it.
+   */
+  takeMessages?: (
+    turn: number,
+  ) => readonly string[] | Promise<readonly string[]>;
+
   /** Reports each completed model call, including research and descendants. */
   onModelUsage?: (update: HarnessModelUsageUpdate) => void | Promise<void>;
 
@@ -360,6 +413,9 @@ export interface RunHarnessPromptOptions {
 }
 
 export interface RunHarnessTranscriptOptions {
+  /** Additional instructions retained for a continuation. */
+  systemPromptInputs?: HarnessSystemPromptInputs;
+
   transcript: readonly HarnessTranscriptMessage[];
   /** Trusted driver marker for research before a new root task. */
   openingResearchTask?: string;
@@ -367,6 +423,18 @@ export interface RunHarnessTranscriptOptions {
   model?: string;
   promptSlotBinding?: PromptSlotBinding;
   signal?: AbortSignal;
+
+  /**
+   * Takes root user messages for model turn `turn`, appended verbatim before
+   * its request. Called at a turn's start, including the last permitted turn,
+   * or at a provisional ending when another turn remains. Each turn number is
+   * asked at most once. A call consumes the messages it returns; the host must
+   * not return them again. Never called after the loop ends. Digest-bound
+   * prompts refuse it.
+   */
+  takeMessages?: (
+    turn: number,
+  ) => readonly string[] | Promise<readonly string[]>;
 
   /** Host research activity, independent of the model's transcript. */
   onOpeningResearch?: (
@@ -391,7 +459,11 @@ export interface RunHarnessTranscriptOptions {
   ) => void | Promise<void>;
 }
 
-export interface HarnessPromptLoopResult {
+export interface HarnessPromptLoopResult extends
+  Pick<
+    HarnessRunReport,
+    "actualModels" | "modelAttributionComplete" | "modelResponses"
+  > {
   model: string;
   finalAssistantText: string;
 
@@ -575,7 +647,8 @@ const annotatePromptLoopError = (
   }
 };
 
-const promptLoopModelTurnsFromError = (
+/** Turns attempted before a loop failed; absent on errors without that evidence. */
+export const promptLoopModelTurnsFromError = (
   error: unknown,
 ): number | undefined => {
   if (!isObjectOrArray(error)) {
@@ -3049,6 +3122,18 @@ const evaluateToolPolicy = (
         }),
       };
     case "enforce-strict":
+      if (
+        promptSlotBinding?.role === "context" && effectClass === "read" &&
+        descriptor.hostGrantedRead === true
+      ) {
+        // The host owns the catalog and the grant: the tool rechecks both on
+        // a fresh listing before it sends, and the broker again when it
+        // executes.
+        return {
+          allowed: true,
+          reasonCodes: ["cfc_enforce_strict_host_command_read"],
+        };
+      }
       if (directCommand) {
         return {
           allowed: true,
@@ -3072,6 +3157,7 @@ export class CfHarnessPromptLoop {
   readonly #gatewayClient?: OpenAICompatibleGatewayClient;
   readonly #maxModelTurns: number;
   readonly #finalizeOnTurnLimit: boolean;
+  readonly #stopOnStructuredResult: boolean;
   readonly #requirePieceOutput: boolean;
 
   /**
@@ -3088,6 +3174,8 @@ export class CfHarnessPromptLoop {
   readonly #cacheAffinityKey?: string;
   readonly #promptCacheMode?: "implicit" | "explicit";
   readonly #reasoningEffort?: string;
+  readonly #depth: HarnessRunDepth;
+  readonly #taskShape: HarnessTaskShape;
   readonly #researchReasoningEffort?: string;
   readonly #compactThreshold?: number;
   readonly #subagentCompositionGuidance: boolean;
@@ -3146,6 +3234,7 @@ export class CfHarnessPromptLoop {
         this.#gatewayClient!,
       );
     }
+    this.modelClient = limitHarnessModelClient(this.modelClient, options);
     if (
       isHarnessModelProviderId(this.modelClient.providerId) &&
       this.modelClient.providerId !== this.engine.config.modelProvider
@@ -3184,6 +3273,7 @@ export class CfHarnessPromptLoop {
     }
     this.#maxModelTurns = options.maxModelTurns ?? DEFAULT_MAX_MODEL_TURNS;
     this.#finalizeOnTurnLimit = options.finalizeOnTurnLimit ?? false;
+    this.#stopOnStructuredResult = options.stopOnStructuredResult ?? false;
     this.#parentToolAllowanceMode = options.allowedToolIds === undefined
       ? "all-builtins"
       : "restricted";
@@ -3199,8 +3289,8 @@ export class CfHarnessPromptLoop {
     // chat policy, and any library caller, and each of those validates against
     // the tools this build defines. This is the one boundary all of them pass
     // through, so it is where the rule is enforced rather than restated; a
-    // run with a lineage is a subagent, and only a subagent may hold them.
-    const isSubagent = this.engine.getRunState().lineage !== undefined;
+    // subagent run may hold them.
+    const isSubagent = this.engine.getRunState().lineage?.role === "subagent";
     // A host that could back `assign_slug` but left it out of the run's tools
     // has not asked this run for a piece: it could never satisfy the contract,
     // and every final answer it gave would be refused. A resume that cannot
@@ -3235,6 +3325,8 @@ export class CfHarnessPromptLoop {
     this.#cacheAffinityKey = options.cacheAffinityKey;
     this.#promptCacheMode = options.promptCacheMode;
     this.#reasoningEffort = options.reasoningEffort;
+    this.#depth = options.depth ?? DEFAULT_HARNESS_RUN_DEPTH;
+    this.#taskShape = options.taskShape ?? {};
     this.#researchReasoningEffort = options.researchReasoningEffort;
     this.#compactThreshold = options.compactThreshold;
     this.#subagentCompositionGuidance = options.subagentCompositionGuidance ??
@@ -3597,8 +3689,9 @@ export class CfHarnessPromptLoop {
     }
     if (
       options.task === undefined || this.engine.resumedRun ||
-      runState.lineage !== undefined || !this.#allowedToolIds.has("research") ||
-      runState.taskClassification?.tags.includes("author") === false ||
+      runState.lineage?.role === "subagent" ||
+      !this.#allowedToolIds.has("research") ||
+      !sendsSection("opening-research", this.#shapeOf(runState)) ||
       isClosedResearchTask(options.task, runState)
     ) {
       return undefined;
@@ -3721,10 +3814,18 @@ export class CfHarnessPromptLoop {
     return { index: taskIndex, inserted: true };
   }
 
+  /** What decides which sections a run of this loop is sent. */
+  #shapeOf(
+    runState: Pick<HarnessRunState, "taskClassification">,
+  ): RunShape {
+    return classifiedShape(runState.taskClassification, this.#depth);
+  }
+
   /**
-   * Tags a fresh root task with the kinds of work it calls for and records
-   * them on the run, before the host assembles the prompt the tags shape.
-   * The tags gate the opening research pass and the parent's browser
+   * Tags a fresh root task with the kinds of work it calls for and the
+   * domains it happens in, taking each part the caller stated in its task
+   * shape, and records them on the run, before the host assembles the prompt
+   * they shape. They gate the opening research pass and the parent's browser
    * guidance here.
    */
   async classifyTask(task: string): Promise<HarnessTaskClassification> {
@@ -3735,7 +3836,7 @@ export class CfHarnessPromptLoop {
       inputCells: runState.inputCells,
       browserHost: this.engine.browserHost !== undefined &&
         this.#allowedSubagentProfiles.has(BROWSER_SUBAGENT_PROFILE),
-    });
+    }, this.#taskShape);
     await this.engine.recordTaskClassification(classification);
     return classification;
   }
@@ -3761,10 +3862,12 @@ export class CfHarnessPromptLoop {
         },
       ],
       openingResearchTask: options.openingResearchTask,
+      systemPromptInputs: options.systemPromptInputs,
       model: options.model,
       maxModelTurns: options.maxModelTurns,
       promptSlotBinding: options.promptSlotBinding,
       signal: options.signal,
+      takeMessages: options.takeMessages,
       onModelUsage: options.onModelUsage,
       onTranscriptEvent: options.onTranscriptEvent,
     });
@@ -3811,6 +3914,15 @@ export class CfHarnessPromptLoop {
         : "absent";
     const promptSlotBinding = options.promptSlotBinding ??
       initialRunState.promptSlotBinding;
+    if (
+      options.takeMessages !== undefined &&
+      isDigestBoundPromptSlot(promptSlotBinding)
+    ) {
+      throw new Error(
+        "`takeMessages` cannot steer a digest-bound prompt-slot binding: " +
+          "`valueDigest`, `slotDigest`, and `snapshotDigest` bind one exact prompt value.",
+      );
+    }
     if (model === undefined) {
       throw new Error(
         "a model must be configured before running the prompt loop",
@@ -3818,22 +3930,21 @@ export class CfHarnessPromptLoop {
     }
     this.engine.bindRunModel(model);
     const transcript: HarnessTranscriptMessage[] = [...options.transcript];
-    // Keep audit history intact while excluding this loop's own control messages
-    // from session replay. Identity preserves user quotations and host-only
-    // omission annotations; content matching or deep cloning would lose either.
-    const turnNotices = new Set<HarnessTranscriptMessage>();
     const resumableTranscript = () =>
-      transcript.filter((message) => !turnNotices.has(message));
+      transcript.filter((message) =>
+        message.role !== "user" || !message.turnLocal
+      );
     // A host the run cannot delegate to has nothing to brief the parent on.
     const browserHost = this.#allowedSubagentProfiles.has(
         BROWSER_SUBAGENT_PROFILE,
       ) &&
-        initialRunState.taskClassification?.tags.includes("act") !== false
+        sendsSection("browser-host-parent", this.#shapeOf(initialRunState))
       ? this.engine.browserHost
       : undefined;
     if (this.#requirePieceOutput || browserHost !== undefined) {
       const guidance: HarnessTranscriptMessage = {
         role: "user",
+        turnLocal: true,
         content: [
           ...(this.#requirePieceOutput ? [PIECE_OUTPUT_GUIDANCE] : []),
           ...(browserHost !== undefined ? [BROWSER_HOST_PARENT_GUIDANCE] : []),
@@ -3845,7 +3956,6 @@ export class CfHarnessPromptLoop {
         entry.role === "user"
       );
       transcript.splice(taskIndex < 0 ? 0 : taskIndex, 0, guidance);
-      turnNotices.add(guidance);
     }
     // The attachment first, so a search this run also made — which carries
     // the ranking evidence a by-id read has none of — refines it.
@@ -3858,6 +3968,7 @@ export class CfHarnessPromptLoop {
     const maxModelTurns = options.maxModelTurns ?? this.#maxModelTurns;
     const toolActivity: HarnessToolActivity[] = [];
     const modelAttempts: HarnessModelAttempt[] = [];
+    const modelResponses: HarnessModelResponse[] = [];
     const modelUsage: HarnessModelTurnUsage[] = [];
     const allModelUsage: (HarnessModelUsage | undefined)[] = [];
     const totalUsage = () =>
@@ -3896,41 +4007,40 @@ export class CfHarnessPromptLoop {
     const persistRunReport = async (
       finalAssistantText?: string,
       taskOutcome?: HarnessTaskOutcome,
-    ): Promise<void> => {
+    ): Promise<HarnessRunReport> => {
       await this.engine.persistPolicyTrace(await buildPolicyTrace());
-      await this.engine.persistRunReport(
-        createHarnessRunReport({
-          runState: this.engine.getRunState(),
-          model,
-          ...(this.#reasoningEffort !== undefined
-            ? { reasoningEffort: this.#reasoningEffort }
-            : {}),
-          ...(this.#researchReasoningEffort !== undefined
-            ? { researchReasoningEffort: this.#researchReasoningEffort }
-            : {}),
-          ...(this.#promptCacheMode !== undefined
-            ? { promptCacheMode: this.#promptCacheMode }
-            : {}),
-          cacheAffinity: this.#cacheAffinityKey === undefined
-            ? "run"
-            : "custom",
-          modelTurns,
-          ...(finalAssistantText !== undefined ? { finalAssistantText } : {}),
-          ...(taskOutcome !== undefined ? { taskOutcome } : {}),
-          timeline: reportTimeline,
-          toolActivity,
-          modelAttempts,
-          ...(modelUsage.length > 0
-            ? {
-              modelUsage,
-              usage: sumHarnessModelUsage(
-                modelUsage.map((entry) => entry.usage),
-              ),
-            }
-            : {}),
-          totalUsage: totalUsage(),
-        }),
-      );
+      const report = createHarnessRunReport({
+        runState: this.engine.getRunState(),
+        model,
+        ...(this.#reasoningEffort !== undefined
+          ? { reasoningEffort: this.#reasoningEffort }
+          : {}),
+        ...(this.#researchReasoningEffort !== undefined
+          ? { researchReasoningEffort: this.#researchReasoningEffort }
+          : {}),
+        ...(this.#promptCacheMode !== undefined
+          ? { promptCacheMode: this.#promptCacheMode }
+          : {}),
+        cacheAffinity: this.#cacheAffinityKey === undefined ? "run" : "custom",
+        modelTurns,
+        ...(finalAssistantText !== undefined ? { finalAssistantText } : {}),
+        ...(taskOutcome !== undefined ? { taskOutcome } : {}),
+        timeline: reportTimeline,
+        toolActivity,
+        modelAttempts,
+        modelResponses,
+        ...(modelUsage.length > 0
+          ? {
+            modelUsage,
+            usage: sumHarnessModelUsage(
+              modelUsage.map((entry) => entry.usage),
+            ),
+          }
+          : {}),
+        totalUsage: totalUsage(),
+      });
+      await this.engine.persistRunReport(report);
+      return report;
     };
     const recordModelAttempt = (
       attempt: HarnessModelAttemptDiagnostic,
@@ -3957,6 +4067,9 @@ export class CfHarnessPromptLoop {
     this.engine.setResearchRunner(runResearch);
     await this.engine.ensureDiagnosticsInitialized();
     this.engine.startRun();
+    if (options.systemPromptInputs !== undefined) {
+      this.engine.setSystemPromptInputs(options.systemPromptInputs);
+    }
     if (options.promptSlotBinding !== undefined) {
       this.engine.setPromptSlotBinding(options.promptSlotBinding);
     }
@@ -3975,10 +4088,10 @@ export class CfHarnessPromptLoop {
       ));
     }
     for (const message of transcript) {
-      await options.onTranscriptEvent?.({ message, transcript });
+      await options.onTranscriptEvent?.({ message, transcript, seed: true });
     }
     // A normal final answer, an admitted finish_task, or an accepted
-    // submit_result ends the model loop.
+    // submit_result ends the model loop once the driver has no pending steer.
     let finalAssistantText: string | undefined;
     let taskOutcome: HarnessTaskOutcome = { outcome: "completed" };
     try {
@@ -4035,8 +4148,11 @@ export class CfHarnessPromptLoop {
       }
       /** Appends a host notice that answers the turn just taken. */
       const appendHostNotice = async (content: string): Promise<void> => {
-        const notice: HarnessTranscriptMessage = { role: "user", content };
-        turnNotices.add(notice);
+        const notice: HarnessTranscriptMessage = {
+          role: "user",
+          content,
+          turnLocal: true,
+        };
         transcript.push(notice);
         await this.engine.persistTranscript(transcript);
         reportTimeline.push(transcriptTimelineEntry(
@@ -4047,10 +4163,37 @@ export class CfHarnessPromptLoop {
         ));
         await options.onTranscriptEvent?.({ message: notice, transcript });
       };
+
+      let lastMessagesTurn = 0;
+
+      /** Appends the driver's pending messages to ordinary resumable history. */
+      const appendTakenMessages = async (turn: number): Promise<boolean> => {
+        if (options.takeMessages === undefined) return false;
+        options.signal?.throwIfAborted();
+        const messages = await options.takeMessages(turn);
+        lastMessagesTurn = turn;
+        for (const content of messages) {
+          const message: HarnessTranscriptMessage = { role: "user", content };
+          transcript.push(message);
+          await this.engine.persistTranscript(transcript);
+          reportTimeline.push(transcriptTimelineEntry(
+            message,
+            transcript.length - 1,
+            this.engine.getRunState().updatedAt,
+            turn,
+          ));
+          await options.onTranscriptEvent?.({ message, transcript });
+        }
+        return messages.length > 0;
+      };
+
       let emptyTurnNudged = false;
       while (modelTurns < maxModelTurns) {
         options.signal?.throwIfAborted();
         modelTurns += 1;
+        if (lastMessagesTurn !== modelTurns) {
+          await appendTakenMessages(modelTurns);
+        }
         const finalizing = this.#finalizeOnTurnLimit &&
           modelTurns === maxModelTurns;
         // Every run is warned two turns out, so a model can wrap up rather
@@ -4059,6 +4202,7 @@ export class CfHarnessPromptLoop {
         if (finalizing || modelTurns === maxModelTurns - 2) {
           const budgetMessage: HarnessTranscriptMessage = {
             role: "user",
+            turnLocal: true,
             content: finalizing
               ? "Host turn budget: provide your final response now. Tools are unavailable. Report what you established and how, name what remains unchecked or uncertain, and do not claim the task is complete if it is not. This notice applies only to this user turn; subsequent user requests have a fresh budget."
               : this.#finalizeOnTurnLimit
@@ -4070,7 +4214,6 @@ export class CfHarnessPromptLoop {
                   ? " Call submit_result on the next turn; an accepted result ends the run."
                   : ""} This notice applies only to this user turn; subsequent user requests have a fresh budget.`,
           };
-          turnNotices.add(budgetMessage);
           transcript.push(budgetMessage);
           await this.engine.persistTranscript(transcript);
           await options.onTranscriptEvent?.({
@@ -4136,6 +4279,10 @@ export class CfHarnessPromptLoop {
           }
           throw error;
         }
+        modelResponses.push({
+          modelTurn: modelTurns,
+          model: response.observedModel ?? null,
+        });
         if (response.usage !== undefined) {
           modelUsage.push({
             modelTurn: modelTurns,
@@ -4201,6 +4348,15 @@ export class CfHarnessPromptLoop {
                 "Root model turn budget reached; response contains partial findings.",
             };
           }
+          if (
+            modelTurns < maxModelTurns &&
+            options.signal?.aborted !== true &&
+            await appendTakenMessages(modelTurns + 1)
+          ) {
+            finalAssistantText = undefined;
+            taskOutcome = { outcome: "completed" };
+            continue;
+          }
           break;
         }
         const followupMessages: HarnessTranscriptMessage[] = [];
@@ -4262,11 +4418,11 @@ export class CfHarnessPromptLoop {
         // Every invocation has settled, and none rejected: a rejection is
         // the turn's failure and was thrown above.
         const invokedToolCalls = await Promise.all(invocations);
-        // An accepted result is the run's return, so the turn that made it
-        // is the run's last: the model is asked for nothing further, and a
-        // turn it would have spent cannot lose the result. The words written
-        // beside the call are the final answer, which may be empty. A run
-        // that still owes a piece keeps going until it names one.
+        // An accepted result is the run's return unless a pending steer
+        // continues it. The written result stands until another submission
+        // replaces it. The words beside the call are the final answer, which
+        // may be empty. A run that still owes a piece keeps going until it
+        // names one.
         if (
           invokedToolCalls.some((invoked) => invoked.resultAccepted === true) &&
           !this.#pieceOutputOwed()
@@ -4345,6 +4501,15 @@ export class CfHarnessPromptLoop {
           );
         }
         options.signal?.throwIfAborted();
+        if (
+          finalAssistantText !== undefined &&
+          modelTurns < maxModelTurns &&
+          options.signal?.aborted !== true &&
+          await appendTakenMessages(modelTurns + 1)
+        ) {
+          finalAssistantText = undefined;
+          taskOutcome = { outcome: "completed" };
+        }
         await options.onCheckpoint?.({
           transcript: resumableTranscript(),
           runState: this.engine.getRunState(),
@@ -4382,9 +4547,12 @@ export class CfHarnessPromptLoop {
         ? "budget_finalized"
         : "assistant_completed",
     );
-    await persistRunReport(finalAssistantText, taskOutcome);
+    const report = await persistRunReport(finalAssistantText, taskOutcome);
     return {
       model,
+      actualModels: report.actualModels,
+      modelAttributionComplete: report.modelAttributionComplete,
+      modelResponses: report.modelResponses,
       finalAssistantText,
       taskOutcome,
       transcript: resumableTranscript(),
@@ -4898,14 +5066,18 @@ export class CfHarnessPromptLoop {
         recordActivity,
       });
     }
-    if (toolId === "finish_task" && toolCallCount !== 1) {
+    if (
+      toolCallCount !== 1 &&
+      (toolId === "finish_task" ||
+        (this.#stopOnStructuredResult && toolId === "submit_result"))
+    ) {
       return await this.#rejectInvalidToolCall({
         toolCall,
         invalid: {
           reason: "invalid-argument",
           toolId,
           field: "toolCalls",
-          expected: "finish_task as the only tool call in this model turn",
+          expected: `${toolId} as the only tool call in this model turn`,
         },
         sequence,
         startedAt: activityStartedAt,
@@ -5621,10 +5793,15 @@ export class CfHarnessPromptLoop {
       };
     }
     if (toolId === "assign_slug" && isObjectNotArray(output)) {
-      // The slug is the model's own word and the URL is composed from the
-      // session's API URL and space name, so neither is a fabric identifier;
-      // the piece id stays in the artifact, and the error text is scrubbed.
-      const { pieceId: _pieceId, ...publicOutput } = output;
+      // The slug is the model's own word. The piece id, the space's DID, and
+      // the URL that carries it stay in the artifact, where the console reads
+      // the address a person opens; the error text is scrubbed.
+      const {
+        pieceId: _pieceId,
+        space: _space,
+        url: _url,
+        ...publicOutput
+      } = output;
       const scrubbed: Record<string, unknown> = { ...publicOutput };
       if (typeof scrubbed.message === "string") {
         scrubbed.message = scrubBareFabricIdentifiers(scrubbed.message);
@@ -5635,7 +5812,7 @@ export class CfHarnessPromptLoop {
           createHarnessTranscriptOmissionRuleRecord(
             "artifact-only",
             resultRef,
-            presentFieldPointers(output, ["pieceId"]),
+            presentFieldPointers(output, ["pieceId", "space", "url"]),
           ),
           createHarnessTranscriptOmissionRuleRecord(
             "bare-fabric-identifier-scrub",
@@ -5751,7 +5928,10 @@ export class CfHarnessPromptLoop {
         ),
       };
     }
-    if (toolId === "run_command" && isObjectNotArray(output)) {
+    if (
+      (toolId === "run_command" || toolId === "run_read_command") &&
+      isObjectNotArray(output)
+    ) {
       // A command's answer is measured like a retrieval row: the model sees
       // the entry, and the answer's label stays on the artifact as the
       // observation the run's model context accumulates — for a batch, each
@@ -6007,10 +6187,15 @@ export class CfHarnessPromptLoop {
     const childRunId = `${parentRunState.runId}.subagent.${subagentSequence}`;
     const childLineage = {
       role: "subagent" as const,
-      rootRunId: parentRunState.lineage?.rootRunId ?? parentRunState.runId,
+      rootRunId: parentRunState.lineage?.role === "subagent"
+        ? parentRunState.lineage.rootRunId
+        : parentRunState.runId,
       parentRunId: parentRunState.runId,
       parentToolCallId: options.toolCall.id,
-      depth: (parentRunState.lineage?.depth ?? 0) + 1,
+      depth:
+        (parentRunState.lineage?.role === "subagent"
+          ? parentRunState.lineage.depth
+          : 0) + 1,
     };
     // The acquired skill this child may run scripts of: the one its
     // `skillHandle` names, and no other.

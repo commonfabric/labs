@@ -1939,14 +1939,6 @@ describe("Schema: CFC authoring aliases", () => {
       expect(messages[0]).toContain('`readonly [...string[], "b"]`');
     });
 
-    it("reports a label argument that is not a tuple", async () => {
-      const messages = await unreadLabels(`
-        interface SchemaRoot { t: Confidential<string, string[]> }
-      `);
-      expect(messages).toHaveLength(1);
-      expect(messages[0]).toContain("`string[]`");
-    });
-
     it("reports a label list inside a \`Cfc\` payload", async () => {
       const messages = await unreadLabels(`
         interface SchemaRoot {
@@ -2115,6 +2107,133 @@ describe("Schema: CFC authoring aliases", () => {
         }
       `);
       expect(messages).toEqual([]);
+    });
+  });
+
+  describe("a label list that is not a list", () => {
+    // The runtime reads labels only from a list, so one that reads as no list,
+    // as an array type or a union of tuples does, would reach it as no label
+    // at all. The generator reports it as an error, where a list read only in
+    // part is a warning.
+
+    const ALIASES = `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
+      type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+      type Integrity<T, X extends readonly unknown[]> = Cfc<T, { integrity: X }>;
+      type AddIntegrity<T, X extends readonly unknown[]> = Cfc<T, { addIntegrity: X }>;
+      type RequiresIntegrity<T, X extends readonly unknown[]> = Cfc<T, { requiredIntegrity: X }>;
+      type MaxConfidentiality<T, X extends readonly unknown[]> = Cfc<T, { maxConfidentiality: X }>;
+    `;
+
+    /** The severity and type of each label diagnostic `SchemaRoot` reports. */
+    const labelDiagnostics = async (code: string) => {
+      const { type, checker } = await getTypeFromCode(
+        ALIASES + code,
+        "SchemaRoot",
+      );
+      const diagnostics: SchemaGenerationDiagnostic[] = [];
+      new SchemaGenerator().generateSchema(type, checker, undefined, {
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      });
+      return diagnostics.filter((diagnostic) =>
+        diagnostic.type.startsWith("cfc-label:")
+      );
+    };
+    const kinds = (diagnostics: readonly SchemaGenerationDiagnostic[]) =>
+      diagnostics.map((diagnostic) => [diagnostic.severity, diagnostic.type]);
+
+    it("reports an array type as an error, naming it as written", async () => {
+      const diagnostics = await labelDiagnostics(`
+        interface SchemaRoot { t: Confidential<string, string[]> }
+      `);
+      expect(kinds(diagnostics)).toEqual([["error", "cfc-label:not-a-list"]]);
+      expect(diagnostics[0]!.message).toContain(
+        "A label list of `Confidential` is not a list: `string[]`",
+      );
+    });
+
+    for (
+      const alias of [
+        "Confidential",
+        "Integrity",
+        "AddIntegrity",
+        "RequiresIntegrity",
+        "MaxConfidentiality",
+      ]
+    ) {
+      it(`reports \`readonly string[]\` given to \`${alias}\``, async () => {
+        expect(
+          kinds(
+            await labelDiagnostics(`
+              interface SchemaRoot { t: ${alias}<string, readonly string[]> }
+            `),
+          ),
+        ).toEqual([["error", "cfc-label:not-a-list"]]);
+      });
+    }
+
+    it("reports a union of tuples, which reads as no list", async () => {
+      expect(
+        kinds(
+          await labelDiagnostics(`
+            interface SchemaRoot {
+              t: Confidential<string, readonly ["a"] | readonly ["b"]>;
+            }
+          `),
+        ),
+      ).toEqual([["error", "cfc-label:not-a-list"]]);
+    });
+
+    it("reports an array type a generic label parameter is given", async () => {
+      expect(
+        kinds(
+          await labelDiagnostics(`
+            type Labeled<L extends readonly unknown[]> = Confidential<string, L>;
+            interface SchemaRoot { t: Labeled<string[]> }
+          `),
+        ),
+      ).toEqual([["error", "cfc-label:not-a-list"]]);
+    });
+
+    it("reports a label list inside a \`Cfc\` payload", async () => {
+      expect(
+        kinds(
+          await labelDiagnostics(`
+            interface SchemaRoot {
+              t: Cfc<string, { requiredIntegrity: string[] }>;
+            }
+          `),
+        ),
+      ).toEqual([["error", "cfc-label:not-a-list"]]);
+    });
+
+    it("reports a UI contract's event integrity inside a \`Cfc\` payload", async () => {
+      expect(
+        kinds(
+          await labelDiagnostics(`
+            interface SchemaRoot {
+              t: Cfc<string, {
+                uiContract: {
+                  helper: "UiAction";
+                  action: "save";
+                  trustedPattern: "trusted";
+                  requiredEventIntegrity: string[];
+                };
+              }>;
+            }
+          `),
+        ),
+      ).toEqual([["error", "cfc-label:not-a-list"]]);
+    });
+
+    it("reports a list read only in part as a warning, not an error", async () => {
+      expect(
+        kinds(
+          await labelDiagnostics(`
+            interface SchemaRoot { t: Confidential<string, readonly ["a" | "b"]> }
+          `),
+        ),
+      ).toEqual([["warning", "cfc-label:unread"]]);
     });
   });
 
@@ -4205,6 +4324,22 @@ describe("Schema: CFC authoring aliases", () => {
           "a library alias over a named policy alias",
           "{ box: Readonly<Protected> }",
         ],
+        [
+          "a property several members of an intersection declare",
+          "{ a: { value: WriteAuthorizedBy<{ x: string }, typeof save> } } & { a: { value: { x: string; y: number } } }",
+        ],
+        [
+          "the values of a record several members of an intersection declare",
+          "{ a: Record<string, WriteAuthorizedBy<{ x: string }, typeof save>> } & { a: Record<string, { x: string; y: number }> }",
+        ],
+        [
+          "the elements of an array several members of an intersection declare",
+          "{ a: WriteAuthorizedBy<{ x: string }, typeof save>[] } & { a: { x: string; y: number }[] }",
+        ],
+        [
+          "a later declaration of a property several members of an intersection declare",
+          "{ a: { value: { x: string; y: number } } } & { a: { value: WriteAuthorizedBy<{ x: string }, typeof save> } }",
+        ],
       ] as const
     ) {
       it(`keeps a writer reached through ${reach}, which syntax names, in a document and elsewhere`, async () => {
@@ -4250,6 +4385,92 @@ describe("Schema: CFC authoring aliases", () => {
         expect(document.schema).toEqual(view.schema);
       });
     }
+
+    it("keeps a writer and the labels beside it on the members its declaration of a property several members of an intersection declare names", async () => {
+      // The type the checker gives the property names no writer, and a value's
+      // carriers are read in full or not at all, so the property is settled
+      // from the schemas its declarations give it.
+
+      const policy =
+        `{ a: { value: Confidential<WriteAuthorizedBy<{ x: string }, typeof save>, ["secret"]> } }`;
+      const other = "{ a: { value: { x: string; y: number } } }";
+      const first = await generate(`${policy} & ${other}`, false);
+      const later = await generate(`${other} & ${policy}`, false);
+
+      expect(first.diagnostics).toEqual([]);
+      expect(later.diagnostics).toEqual([]);
+      expect(first.schema).toEqual({
+        type: "object",
+        properties: {
+          a: {
+            type: "object",
+            properties: {
+              value: {
+                type: "object",
+                properties: {
+                  x: {
+                    type: "string",
+                    ifc: {
+                      writeAuthorizedBy: {
+                        __ctWriterIdentityOf: {
+                          file: "test.ts",
+                          path: ["save"],
+                        },
+                      },
+                      confidentiality: ["secret"],
+                    },
+                  },
+                  y: { type: "number" },
+                },
+                required: ["x", "y"],
+              },
+            },
+            required: ["value"],
+          },
+        },
+        required: ["a"],
+      });
+      expect(later.schema).toEqual(first.schema);
+    });
+
+    it("admits `undefined` for a property carrying a writer that one declaration makes optional and another admits", async () => {
+      const { schema, diagnostics } = await generate(
+        "{ a: { value?: WriteAuthorizedBy<{ x: string }, typeof save> } } & { a: { value: { x: string } | undefined } }",
+        true,
+      );
+
+      expect(diagnostics).toEqual([]);
+      expect(schema).toEqual({
+        type: "object",
+        properties: {
+          a: {
+            type: "object",
+            properties: {
+              value: {
+                anyOf: [
+                  {
+                    type: "object",
+                    properties: { x: { type: "string" } },
+                    required: ["x"],
+                    ifc: {
+                      writeAuthorizedBy: {
+                        __ctWriterIdentityOf: {
+                          file: "test.ts",
+                          path: ["save"],
+                        },
+                      },
+                    },
+                  },
+                  { type: "undefined" },
+                ],
+              },
+            },
+            required: ["value"],
+          },
+        },
+        required: ["a"],
+      });
+    });
 
     it("names `WritePolicyAnyOf` for a policy set a mapped type folds into an object", async () => {
       const { diagnostics } = await generate(

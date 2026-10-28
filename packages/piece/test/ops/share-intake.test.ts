@@ -58,14 +58,15 @@ type Registration = {
 
 type Result =
   | { status: "registered" | "existing"; space: string }
-  | { status: "conflict"; reason: string };
+  | { status: "conflict"; reason: string; space?: string; registration?: string };
 
 type Acceptance = { room?: Cell<unknown>; keepArchived?: boolean };
 
 // Returns a conflict for a registration titled \`Conflicting\`, as Home's own
-// handler does for a space already registered under another kind, and
+// handler does for a space already registered under another kind,
 // \`existing\` for one titled \`Existing\`, as it does for a space it lists
-// already.
+// already, and a conflict over the profile that admitted a new entry for one
+// titled \`Profile refused\`, as it does for a profile it does not list.
 const registerSharedSpace = handler<
   Registration,
   { registered: Writable<Registration[]> },
@@ -74,6 +75,13 @@ const registerSharedSpace = handler<
   registered.push(event);
   return event.title === "Conflicting"
     ? { status: "conflict", reason: "kind" }
+    : event.title === "Profile refused"
+    ? {
+      status: "conflict",
+      reason: "unknown-profile",
+      space: event.space,
+      registration: "registered",
+    }
     : event.title === "Existing"
     ? { status: "existing", space: event.space }
     : { status: "registered", space: event.space };
@@ -134,6 +142,42 @@ export default pattern(() => {
     messages,
     recentActivity,
     sendMessage: sendMessage({ messages }),
+  };
+});`,
+  }],
+};
+
+/**
+ * A stand-in for a Loom, with the public composition vetting a `loom` space
+ * checks of its root: `panels`, and the `addPanel` and `removePanel` streams.
+ */
+const loomProgram: RuntimeProgram = {
+  main: "/loom.tsx",
+  files: [{
+    name: "/loom.tsx",
+    contents: `
+import { handler, pattern, Writable } from "commonfabric";
+
+type Panel = { title: string };
+
+const addPanel = handler<{ panel: Panel }, { panels: Writable<Panel[]> }>(
+  (event, { panels }) => {
+    panels.push(event.panel);
+  },
+);
+
+const removePanel = handler<{ panel: Panel }, { panels: Writable<Panel[]> }>(
+  (event, { panels }) => {
+    panels.set(panels.get().filter((each) => each.title !== event.panel.title));
+  },
+);
+
+export default pattern(() => {
+  const panels = new Writable<Panel[]>([]).for("panels");
+  return {
+    panels,
+    addPanel: addPanel({ panels }),
+    removePanel: removePanel({ panels }),
   };
 });`,
   }],
@@ -249,17 +293,48 @@ describe("share-intake", () => {
     space: MemorySpace,
     reserved: boolean,
   ): Promise<void> {
+    await placeRoot(space, roomProgram, reserved);
+  }
+
+  /**
+   * A space granting `grants`, owned by the owner, whose genesis commit
+   * declares `spaceKind`, `loom` by default, or no kind for `null`, and whose
+   * root is a Loom stand-in at an address of its own, which no genesis
+   * reservation names.
+   */
+  async function loomSpace(
+    grants: ACL,
+    { spaceKind = "loom" }: { spaceKind?: string | null } = {},
+  ): Promise<MemorySpace> {
+    const space = await runtime.createSpace({
+      grants,
+      ...(spaceKind === null ? {} : { spaceKind }),
+    });
+    await placeRoot(space, loomProgram, false);
+    return space;
+  }
+
+  /**
+   * Runs `program` into `space` and links it as the space's root, at the
+   * address the space's genesis reserves when `reserved`, and at a fresh one
+   * when not.
+   */
+  async function placeRoot(
+    space: MemorySpace,
+    program: RuntimeProgram,
+    reserved: boolean,
+  ): Promise<void> {
     // Disposing a controller disposes the runtime, which `afterEach` does
     // through the Home space's controller.
-    const rooms = new PiecesController(
+    const roots = new PiecesController(
       createSession({ identity, spaceDid: space }),
       runtime,
     );
-    await rooms.synced();
+    await roots.synced();
     await installCustomRoot(
       runtime,
-      rooms,
-      roomProgram,
+      roots,
+      program,
       reserved ? { cause: inSpaceRootCause(space) } : {},
     );
   }
@@ -378,6 +453,41 @@ describe("share-intake", () => {
   function conflictsLogged(): number {
     return getLoggerCountsBreakdown()["piece.share-intake"]
       ?.["registration-conflict"]?.warn ?? 0;
+  }
+
+  /** How many offers the intake has logged as sent to Home. */
+  function sentLogged(): number {
+    return getLoggerCountsBreakdown()["piece.share-intake"]
+      ?.["offer-sent"]?.info ?? 0;
+  }
+
+  /**
+   * Has Home's stand-in hold a receipt for the sender's offer of `space`
+   * keyed `id`, and say, as Home's `sharedSpaces.profiles` does, that the
+   * profile acting in `space` is `profile`.
+   */
+  async function holdReceiptFor(
+    space: MemorySpace,
+    id: string,
+    profile: Row,
+    receipt: Row = {},
+    live: string[] = [],
+  ): Promise<void> {
+    const target = { space, host: HOST, kind: "fabrichat-room" };
+    await setHome("sharedSpaceCatalog", {
+      entries: { [space]: { ...target, state: "saved", revision: "1:x" } },
+      offers: {
+        [JSON.stringify([sender, id])]: {
+          from: sender,
+          id,
+          ...target,
+          ...receipt,
+        },
+      },
+    });
+    await setHome("sharedSpaces", {
+      profiles: { status: "ready", spaces: { [space]: profile }, live },
+    });
   }
 
   /**
@@ -502,6 +612,7 @@ describe("share-intake", () => {
     it("is registered with its sender, `id`, `kind`, `host` and `title`", async () => {
       const space = await offeredSpace({ [sender]: "WRITE" });
       start();
+      const before = sentLogged();
       await deliver([offerOf(space, "first")]);
 
       expect(await registeredThrough("first")).toEqual([{
@@ -511,6 +622,43 @@ describe("share-intake", () => {
         title: "Room first",
         offer: { from: sender, id: "first" },
       }]);
+      expect(sentLogged()).toBe(before + 1);
+    });
+
+    it("is registered with the space of the profile its `toProfile` names as `profile`", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      start();
+      await deliver([
+        offerOf(space, "addressed", { toProfile: { space: someoneElse } }),
+      ]);
+
+      const [registered] = await registeredThrough("addressed");
+      expect(registered).toEqual({
+        space,
+        host: HOST,
+        kind: "fabrichat-room",
+        title: "Room addressed",
+        offer: { from: sender, id: "addressed" },
+        profile: someoneElse,
+      });
+    });
+
+    it("is registered with no `profile` when its `toProfile` is `null`, as one naming none is", async () => {
+      // The inbox stores `null` for an offer whose sender named no profile,
+      // which is to the person.
+
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      start();
+      await deliver([offerOf(space, "to the person", { toProfile: null })]);
+
+      const [registered] = await registeredThrough("to the person");
+      expect(registered).toEqual({
+        space,
+        host: HOST,
+        kind: "fabrichat-room",
+        title: "Room to the person",
+        offer: { from: sender, id: "to the person" },
+      });
     });
 
     it("is registered without a `title` when its title is empty", async () => {
@@ -662,6 +810,67 @@ describe("share-intake", () => {
       );
     });
 
+    it("is registered with `kind` `loom`, and not accepted by Home's chat manager, when it offers a `loom` space", async () => {
+      const space = await loomSpace({ [sender]: "WRITE" });
+      const intake = start();
+
+      const registered = await deliverThenBarrier(
+        offerOf(space, "loom", { kind: "loom" }),
+      );
+
+      expect(registered).toMatchObject([{
+        space,
+        host: HOST,
+        kind: "loom",
+        title: "Room loom",
+        offer: { from: sender, id: "loom" },
+      }, { offer: { id: "barrier" } }]);
+      // The barrier's room is the one acceptance.
+      expect(await acceptedNow(intake)).toEqual([{
+        space: registered[1].space,
+        keepArchived: true,
+      }]);
+    });
+
+    it("is registered when it offers a `loom` space that declares no kind", async () => {
+      const space = await loomSpace({ [sender]: "WRITE" }, {
+        spaceKind: null,
+      });
+      start();
+
+      const registered = await deliverThenBarrier(
+        offerOf(space, "legacy loom", { kind: "loom" }),
+      );
+
+      expect(registeredIds(registered)).toEqual(["legacy loom", "barrier"]);
+    });
+
+    it("is registered when its inbox next changes after its `loom` space's root is linked back to a Loom", async () => {
+      const space = await loomSpace({ [sender]: "WRITE" });
+      const loom = await runtime.getSpaceCell(space).key("defaultPattern")
+        .pull();
+      await placeRoom(space, false);
+      const intake = start();
+      await deliver([offerOf(space, "re-pointed", { kind: "loom" })]);
+      await deliver([offerOf(await offeredSpace({ [sender]: "WRITE" }), "a")]);
+      await registeredThrough("a");
+      expect(intake.accessForTestingOnly.decisionsFor(sender, "re-pointed"))
+        .toEqual(["space-root-mismatch"]);
+
+      await runtime.editWithRetry((tx) =>
+        runtime.getSpaceCell(space).withTx(tx).key("defaultPattern").set(
+          loom as never,
+        )
+      );
+      await deliver([offerOf(await offeredSpace({ [sender]: "WRITE" }), "b")]);
+
+      expect(registeredIds(await registeredThrough("b"))).toEqual([
+        "a",
+        "re-pointed",
+        "b",
+      ]);
+    });
+
     it("is registered when its inbox next changes after its space comes to grant its sender", async () => {
       const space = await offeredSpace({ [someoneElse]: "WRITE" });
       const other = await offeredSpace({ [sender]: "WRITE" });
@@ -685,6 +894,20 @@ describe("share-intake", () => {
       const intake = start();
       await deliver([offerOf(space, "accepted")]);
       await registeredThrough("accepted");
+
+      expect(await acceptedNow(intake)).toEqual([{
+        space,
+        keepArchived: true,
+      }]);
+    });
+
+    it("is accepted once Home's handler admits its space, though it refuses the profile the offer names", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      const intake = start();
+      await deliver([
+        offerOf(space, "refused profile", { title: "Profile refused" }),
+      ]);
+      await registeredThrough("refused profile");
 
       expect(await acceptedNow(intake)).toEqual([{
         space,
@@ -881,6 +1104,7 @@ describe("share-intake", () => {
     it("is sent once, though the inbox changes again after it", async () => {
       const space = await offeredSpace({ [sender]: "WRITE" });
       start();
+      const before = sentLogged();
       await deliver([offerOf(space, "once")]);
       await registeredThrough("once");
       await deliver([offerOf(space, "after")]);
@@ -889,23 +1113,12 @@ describe("share-intake", () => {
         "once",
         "after",
       ]);
+      // One line per send, not per scan that saw the row.
+      expect(sentLogged()).toBe(before + 2);
     });
   });
 
   describe("an offer that is skipped", () => {
-    it("is not registered, nor logged, when its `kind` is `loom`", async () => {
-      const space = await offeredSpace({ [sender]: "WRITE" });
-      start();
-      const before = refusalsLogged();
-
-      const registered = await deliverThenBarrier(
-        offerOf(space, "loom", { kind: "loom" }),
-      );
-
-      expect(registeredIds(registered)).toEqual(["barrier"]);
-      expect(refusalsLogged()).toBe(before);
-    });
-
     it("is not registered, nor logged, when the catalog holds its receipt", async () => {
       const space = await offeredSpace({ [sender]: "WRITE" });
       await runtime.editWithRetry((tx) =>
@@ -934,6 +1147,116 @@ describe("share-intake", () => {
       expect(refusalsLogged()).toBe(before);
       expect(intake.accessForTestingOnly.decisionsFor(sender, "received"))
         .toEqual(["received"]);
+    });
+
+    it("is not registered when the catalog holds its receipt, it names a `toProfile`, and Home records a profile for its space", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await holdReceiptFor(space, "received", {
+        status: "live",
+        profile: someoneElse,
+      });
+      start();
+
+      const registered = await deliverThenBarrier(
+        offerOf(space, "received", { toProfile: { space: someoneElse } }),
+      );
+
+      expect(registeredIds(registered)).toEqual(["barrier"]);
+    });
+  });
+
+  describe("an offer whose receipt Home holds while it records no profile for its space", () => {
+    it("is registered again, with its `profile`, when it names a `toProfile`", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await holdReceiptFor(space, "received", { status: "unrecorded" });
+      start();
+
+      const registered = await deliverThenBarrier(
+        offerOf(space, "received", { toProfile: { space: someoneElse } }),
+      );
+
+      expect(registeredIds(registered)).toEqual(["received", "barrier"]);
+      expect(registered[0].profile).toBe(someoneElse);
+    });
+
+    it("is not registered when its receipt says Home refused the profile it names", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await holdReceiptFor(space, "received", { status: "unrecorded" }, {
+        profileConflict: "unknown-profile",
+      });
+      start();
+
+      const registered = await deliverThenBarrier(
+        offerOf(space, "received", { toProfile: { space: someoneElse } }),
+      );
+
+      expect(registeredIds(registered)).toEqual(["barrier"]);
+    });
+
+    it("is registered again when its receipt says Home did not list the profile it names, which Home now lists as live", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await holdReceiptFor(space, "received", { status: "unrecorded" }, {
+        profileConflict: "unknown-profile",
+      }, [someoneElse]);
+      start();
+
+      const registered = await deliverThenBarrier(
+        offerOf(space, "received", { toProfile: { space: someoneElse } }),
+      );
+
+      expect(registeredIds(registered)).toEqual(["received", "barrier"]);
+      expect(registered[0].profile).toBe(someoneElse);
+    });
+
+    it("is registered again, once, when Home comes to list the profile it names as live, though its inbox does not change", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await holdReceiptFor(space, "received", { status: "unrecorded" }, {
+        profileConflict: "unknown-profile",
+      });
+      const intake = start();
+      const skipped = await deliverThenBarrier(
+        offerOf(space, "received", { toProfile: { space: someoneElse } }),
+      );
+      expect(registeredIds(skipped)).toEqual(["barrier"]);
+
+      await setHome("sharedSpaces", {
+        profiles: {
+          status: "ready",
+          spaces: { [space]: { status: "unrecorded" } },
+          live: [someoneElse],
+        },
+      });
+      await registeredThrough("received");
+      await intake.idle();
+      await runtime.idle();
+
+      const registered = await registeredThrough("received");
+      expect(registeredIds(registered)).toEqual(["barrier", "received"]);
+      expect(registered[1].profile).toBe(someoneElse);
+      expect(intake.accessForTestingOnly.decisionsFor(sender, "received"))
+        .toEqual(["sent"]);
+    });
+
+    it("is not registered when it names no `toProfile`", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await holdReceiptFor(space, "received", { status: "unrecorded" });
+      start();
+
+      const registered = await deliverThenBarrier(offerOf(space, "received"));
+
+      expect(registeredIds(registered)).toEqual(["barrier"]);
+    });
+
+    it("is not registered when its `toProfile` is `null`", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await holdReceiptFor(space, "received", { status: "unrecorded" });
+      start();
+
+      const registered = await deliverThenBarrier(
+        offerOf(space, "received", { toProfile: null }),
+      );
+
+      expect(registeredIds(registered)).toEqual(["barrier"]);
     });
   });
 
@@ -969,6 +1292,43 @@ describe("share-intake", () => {
           logged: 1,
           decisions: ["offer-malformed"],
         });
+    });
+
+    it("is not registered, and is logged, when its `toProfile` names no well-formed DID", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+
+      expect(
+        await refuse(
+          offerOf(space, "bad profile", { toProfile: { space: "profile" } }),
+        ),
+      ).toEqual({
+        ids: ["barrier"],
+        logged: 1,
+        decisions: ["offer-malformed"],
+      });
+    });
+
+    it("is not registered, and is logged, when its `toProfile` names no `space`", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+
+      expect(await refuse(offerOf(space, "bad profile", { toProfile: {} })))
+        .toEqual({
+          ids: ["barrier"],
+          logged: 1,
+          decisions: ["offer-malformed"],
+        });
+    });
+
+    it("is not registered, and is logged, when its `toProfile` is not a record", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+
+      expect(
+        await refuse(offerOf(space, "bad profile", { toProfile: someoneElse })),
+      ).toEqual({
+        ids: ["barrier"],
+        logged: 1,
+        decisions: ["offer-malformed"],
+      });
     });
 
     it("is not registered, and is logged, when `host` is not its own origin", async () => {
@@ -1114,6 +1474,31 @@ describe("share-intake", () => {
         logged: 1,
         decisions: ["space-kind-undeclared"],
       });
+    });
+
+    it("is not registered, and is logged, when it offers as a `loom` a space declaring `fabrichat-room`", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+
+      expect(await refuse(offerOf(space, "room as loom", { kind: "loom" })))
+        .toEqual({
+          ids: ["barrier"],
+          logged: 1,
+          decisions: ["space-kind-mismatch"],
+        });
+    });
+
+    it("is not registered, and is logged, when it offers a `loom` space whose root is no Loom", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" }, {
+        spaceKind: "loom",
+        root: "misplaced",
+      });
+
+      expect(await refuse(offerOf(space, "room in loom", { kind: "loom" })))
+        .toEqual({
+          ids: ["barrier"],
+          logged: 1,
+          decisions: ["space-root-mismatch"],
+        });
     });
 
     it("is not registered, and is logged, when the space's root is not at the address its genesis reserves", async () => {

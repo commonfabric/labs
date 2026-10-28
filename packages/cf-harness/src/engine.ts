@@ -120,7 +120,7 @@ import type {
   HarnessSkillScriptExecution,
 } from "./contracts/skill.ts";
 import type {
-  HarnessSubagentLineage,
+  HarnessRunLineage,
   HarnessSubagentResumeContext,
   HarnessSubagentRunRef,
 } from "./contracts/subagent.ts";
@@ -196,7 +196,10 @@ import type {
   HarnessInputCell,
   HarnessInputCellSpec,
 } from "./contracts/input-cells.ts";
-import { mintInputCellHandles } from "./input-cells.ts";
+import {
+  assertInputCellNamesAvailable,
+  mintInputCellHandles,
+} from "./input-cells.ts";
 import type { HarnessAssignedPiece } from "./contracts/assigned-piece.ts";
 import { resolvePieceAddress } from "@commonfabric/piece";
 import type {
@@ -204,6 +207,7 @@ import type {
   HarnessPatternRefSpec,
 } from "./contracts/pattern-refs.ts";
 import { resolvePatternRefs } from "./pattern-refs.ts";
+import type { HarnessSystemPromptInputs } from "./contracts/system-prompt.ts";
 import {
   addHarnessDocsQueryFailures,
   addHarnessResearchFailures,
@@ -378,6 +382,7 @@ export interface BuiltinToolInputMap {
   loom_profile: LoomProfileInput;
   list_commands: ListCommandsInput;
   run_command: RunCommandInput;
+  run_read_command: RunCommandInput;
   submit_result: SubmitResultInput;
 }
 
@@ -420,6 +425,7 @@ export interface BuiltinToolOutputMap {
   loom_profile: LoomRetrievalToolOutput;
   list_commands: ListCommandsOutput;
   run_command: RunCommandOutput;
+  run_read_command: RunCommandOutput;
   submit_result: SubmitResultOutput;
 }
 
@@ -445,7 +451,7 @@ export interface CreateHarnessEngineOptions
    */
   acquiredSkills?: HarnessAcquiredSkills;
 
-  lineage?: HarnessSubagentLineage;
+  lineage?: HarnessRunLineage;
   subagentResumeContext?: HarnessSubagentResumeContext;
   /**
    * The host directory the sandbox mounts as its workspace. Required where
@@ -763,7 +769,7 @@ export class CfHarnessEngine {
     this.#resumedRun = options.runState !== undefined;
     this.#runModelBound = this.#resumedRun;
     const resumedLineage = options.runState?.lineage;
-    if (resumedLineage !== undefined) {
+    if (resumedLineage?.role === "subagent") {
       const resumeContext = options.subagentResumeContext;
       if (resumeContext === undefined) {
         throw harnessResumeRefusal(
@@ -989,8 +995,8 @@ export class CfHarnessEngine {
         "resumed run structured-result configuration does not match the recorded configuration",
       );
     }
-    this.#structuredResult = options.lineage === undefined &&
-        options.runState?.lineage === undefined
+    this.#structuredResult = options.lineage?.role !== "subagent" &&
+        options.runState?.lineage?.role !== "subagent"
       ? structuredClone(recordedStructuredResult ?? options.structuredResult)
       : undefined;
     this.#inputCells = options.inputCells ?? [];
@@ -1730,6 +1736,13 @@ export class CfHarnessEngine {
     return this.getRunState();
   }
 
+  /** Records additional instructions as the continuation default. */
+  setSystemPromptInputs(systemPromptInputs: HarnessSystemPromptInputs): void {
+    this.#runState = patchHarnessRunState(this.#runState, {
+      systemPromptInputs: structuredClone(systemPromptInputs),
+    }, this.#runState.updatedAt);
+  }
+
   setPromptSlotBinding(
     promptSlotBinding: PromptSlotBinding,
   ): HarnessRunState {
@@ -2014,8 +2027,8 @@ export class CfHarnessEngine {
   /**
    * Establishes the run's input cells: mints tokens for host-supplied attachments
    * or session-retained targets, records them in run state, and returns them.
-   * Idempotent across resume, like the well-known grants: cells already recorded
-   * are returned as they stand.
+   * With no argument, cells already recorded are returned as they stand.
+   * An explicit list adds new attachments, refusing names already held.
    *
    * An input cell names a task target, so failure is closed and loud rather
    * than tolerated: cells configured on a
@@ -2023,32 +2036,34 @@ export class CfHarnessEngine {
    * targeting an unadmitted space, and a named piece address whose slug this
    * space does not hold all throw before anything is recorded.
    */
-  async establishInputCells(): Promise<HarnessInputCell[]> {
-    if (this.#runState.inputCells !== undefined) {
+  async establishInputCells(
+    additionalCells?: readonly HarnessInputCellSpec[],
+  ): Promise<HarnessInputCell[]> {
+    if (
+      additionalCells === undefined && this.#runState.inputCells !== undefined
+    ) {
       return structuredClone(this.#runState.inputCells);
     }
-    if (this.#inputCells.length === 0) {
-      return [];
-    }
+    const specs = additionalCells ?? this.#inputCells;
+    const retained = this.#runState.inputCells ?? [];
+    assertInputCellNamesAvailable(specs, retained.map((cell) => cell.name));
+    if (specs.length === 0) return structuredClone(retained);
     if (this.#fabricSessionFactory === undefined) {
       throw new Error(
         "--input-cell requires a fabric session; configure --fabric-space",
       );
     }
     const session = await this.#fabricSessionFactory();
+    const space = session.pieces.getSpace();
     const minted = await mintInputCellHandles(
       this.handleTable,
       this.#runState.runId,
-      this.#inputCells,
-      session.pieces.getSpace(),
+      specs,
+      space,
       {
-        // The space by NAME, which is the vocabulary a named address speaks;
-        // the mint checks references against the DID beside it. A space
-        // configured by `did:key` has no name, and an address naming a space
-        // is then refused rather than assumed to mean this one.
-        ...(session.pieces.getSpaceName() !== undefined
-          ? { spaceName: session.pieces.getSpaceName() }
-          : {}),
+        // A named address may spell the space by the DID beside it or by the
+        // legacy name the session opened it by.
+        spaceName: session.pieces.getSpaceName(),
         resolvePiece: (slug) => resolvePieceAddress(session.pieces, slug),
         foreignSpaces: session.foreignSpaces,
       },
@@ -2056,11 +2071,11 @@ export class CfHarnessEngine {
     await this.recordHandleTable(minted.table);
     this.#runState = patchHarnessRunState(
       this.#runState,
-      { inputCells: structuredClone(minted.inputCells) },
+      { inputCells: structuredClone([...retained, ...minted.inputCells]) },
       this.#now(),
     );
     await this.persistRunState();
-    return minted.inputCells;
+    return structuredClone(this.#runState.inputCells!);
   }
 
   /**

@@ -1,4 +1,4 @@
-import type { HarnessTaskTag } from "./task-classification.ts";
+import { type RunShape, sendsSection } from "./prompt-sections.ts";
 
 /** What research is, and when a fresh task gets its opening pass. */
 const researchGuidance = (patternIndex: boolean): string =>
@@ -48,39 +48,22 @@ export const DELEGATION_GUIDANCE = [
 /**
  * Shared guidance for finding a feasible path before asking or giving up.
  * A run with no pattern index is not told to search one or to run what it
- * finds there. Given task tags, it carries the paragraphs those kinds of work
- * need and the ones every task needs; without them, all of it.
+ * finds there. It carries the paragraphs the run's shape calls for, as
+ * `PROMPT_SECTION_AUDIENCE` says, and the ones every task needs.
  */
 export const orientationGuidance = (
-  { patternIndex, tags }: {
-    patternIndex: boolean;
-    tags?: ReadonlySet<HarnessTaskTag>;
-  },
-): string => {
-  const tagged = (...wanted: HarnessTaskTag[]) =>
-    tags === undefined || wanted.some((tag) => tags.has(tag));
-  return [
-    ...(tagged("author") ? [researchGuidance(patternIndex)] : []),
+  { patternIndex, shape }: { patternIndex: boolean; shape: RunShape },
+): string =>
+  [
+    ...(sendsSection("research-guidance", shape)
+      ? [researchGuidance(patternIndex)]
+      : []),
     GOAL_GUIDANCE,
-    ...(tagged("pieces", "find") ? [GIVEN_GUIDANCE] : []),
-    ...(tagged("find", "author") ? [findableGuidance(patternIndex)] : []),
+    ...(sendsSection("given", shape) ? [GIVEN_GUIDANCE] : []),
+    ...(sendsSection("findable", shape)
+      ? [findableGuidance(patternIndex)]
+      : []),
     ACTION_PATH_GUIDANCE,
     EVIDENCE_GUIDANCE,
     RELEASE_REFUSAL_GUIDANCE,
   ].join("\n\n");
-};
-
-/** Whether a task with these tags is told how to delegate. */
-export const delegationGuided = (
-  tags: ReadonlySet<HarnessTaskTag> | undefined,
-): boolean =>
-  tags === undefined || tags.has("act") || tags.has("pieces") ||
-  tags.has("author");
-
-/**
- * Whether a task with these tags is framed as code to read and repair: work
- * on held pieces or patterns, and writing one.
- */
-export const codeWorkGuided = (
-  tags: ReadonlySet<HarnessTaskTag> | undefined,
-): boolean => tags === undefined || tags.has("pieces") || tags.has("author");

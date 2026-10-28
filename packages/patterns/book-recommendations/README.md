@@ -13,20 +13,21 @@ ceiling, and its label joins the run's context. The tools the request names are
 `loom_search` and `loom_page_read`. The named book inputs let a model select
 held book handles without a separate tool for traversing the list.
 
-The result has exactly five `picks`, each containing a read-only `book` link and
-an inline `why` string. An optional `sources` array contains read-only links to
-supporting Loom referents. A referenced Loom row becomes a labeled document
-through the harness result writer. The writer also materializes observed rows
-that the result does not reference so their labels contribute to inline text;
-only referenced rows receive links. After the model submits its result with
-`submit_result`, the harness result writer validates the schema and resolves
-held handles.
+The result has exactly five `picks`, each a book the reader has not finished: an
+inline `title`, `author`, and `why`, and, where the pick builds on a finished
+book, a read-only `basedOn` link to that book's cell. An optional `sources`
+array contains read-only links to supporting Loom referents. A referenced Loom
+row becomes a labeled document through the harness result writer. The writer
+also materializes observed rows that the result does not reference so their
+labels contribute to inline text; only referenced rows receive links. After the
+model submits its result with `submit_result`, the harness result writer
+validates the schema and resolves held handles.
 
-`view.tsx` renders pending and error states, each selected book's live title and
-author, and the explanation. It displays available token usage and keeps
-reported and estimated costs separate. Missing usage remains unavailable; zero
-costs remain visible. Sources are exposed through
-`recommendation.result.sources` for inspection.
+`view.tsx` renders pending and error states, each pick's title, author, and
+explanation, and the live title of the finished book it builds on. It displays
+available token usage and keeps reported and estimated costs separate. Missing
+usage remains unavailable; zero costs remain visible. Sources are exposed
+through `recommendation.result.sources` for inspection.
 
 ## Tests
 

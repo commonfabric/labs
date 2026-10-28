@@ -77,6 +77,34 @@ describe("local-jobs/profiles", () => {
       });
     });
 
+    it("retains host model bounds and refuses widening them", async () => {
+      const profile = (await read({
+        ask: { ...ASK, maxInputBytes: 65536, maxOutputTokens: 8192 },
+      })).get("ask")!;
+      expect(profile).toMatchObject({
+        maxInputBytes: 65536,
+        maxOutputTokens: 8192,
+      });
+      expect(narrowLocalJobProfile(profile, { maxInputBytes: 65537 }))
+        .toHaveProperty("refusal");
+      expect(narrowLocalJobProfile(profile, { maxOutputTokens: 8193 }))
+        .toHaveProperty("refusal");
+      expect(
+        narrowLocalJobProfile(profile, {
+          maxInputBytes: 4096,
+          maxOutputTokens: 1024,
+        }),
+      ).toMatchObject({
+        profile: { maxInputBytes: 4096, maxOutputTokens: 1024 },
+      });
+      for (const bad of [0, -1, 1.5, "8192", Number.MAX_SAFE_INTEGER + 1]) {
+        await expect(read({ ask: { ...ASK, maxOutputTokens: bad } })).rejects
+          .toThrow("maxOutputTokens");
+        await expect(read({ ask: { ...ASK, maxInputBytes: bad } })).rejects
+          .toThrow("maxInputBytes");
+      }
+    });
+
     it("reads a browser host grant, and leaves a withheld one out", async () => {
       const profiles = await read({
         ask: { ...ASK, browserHost: true },
@@ -158,6 +186,11 @@ describe("local-jobs/profiles", () => {
         "`loomCommandsConfig`",
       ],
       ["a model that is not a string", { ...ASK, model: 7 }, "`model`"],
+      [
+        "a reasoning effort it does not know",
+        { ...ASK, reasoningEffort: "extreme" },
+        "`reasoningEffort`",
+      ],
       [
         "a browser host grant that is not true or false",
         { ...ASK, browserHost: "yes" },
@@ -462,6 +495,40 @@ describe("local-jobs/profiles", () => {
         ).toEqual({ profile: named });
       });
 
+      it("admits a piece address naming the profile's space by its DID, and refuses a name where the profile names its space by DID", async () => {
+        // A space created with a random key has only its DID, so that is how
+        // an address names it.
+        const named = (await read({
+          carry: { ...CARRY, fabric: { ...CARRY.fabric, space: "my-space" } },
+        })).get("carry")!;
+        const byDid = (await read({ carry: CARRY })).get("carry")!;
+        const own = `pattern:${CARRY.fabric.space}/tracker`;
+
+        expect(narrowLocalJobProfile(byDid, { inputs: { focus: own } }))
+          .toEqual({ profile: byDid });
+        // In the request's own terms, rather than the command line's.
+        expect(
+          narrowLocalJobProfile(byDid, {
+            inputs: { focus: "pattern:my-space/tracker" },
+          }),
+        ).toMatchObject({
+          refusal: expect.stringContaining(
+            "Input `focus` names its space by name",
+          ),
+        });
+        expect(
+          narrowLocalJobProfile(byDid, {
+            inputs: {
+              focus: "pattern:did:key:z6MkforeignSpaceForProfileTest/tracker",
+            },
+          }),
+        ).toMatchObject({ refusal: expect.stringContaining("`focus`") });
+        // Only the session knows the DID a legacy name resolves to, so a
+        // profile naming its space by name leaves a DID to the session.
+        expect(narrowLocalJobProfile(named, { inputs: { focus: own } }))
+          .toEqual({ profile: named });
+      });
+
       it("refuses an input whose name the harness does not admit", async () => {
         const carry = (await read({ carry: CARRY })).get("carry")!;
 
@@ -473,6 +540,29 @@ describe("local-jobs/profiles", () => {
           "name must match",
         );
       });
+    });
+
+    it("lowers the reasoning effort within the profile's, and refuses more than it", async () => {
+      const capped = (await read({ ask: { ...ASK, reasoningEffort: "high" } }))
+        .get("ask")!;
+
+      expect(capped.reasoningEffort).toBe("high");
+      expect(narrowLocalJobProfile(capped, { reasoningEffort: "low" }))
+        .toEqual({ profile: { ...capped, reasoningEffort: "low" } });
+      expect(narrowLocalJobProfile(capped, { reasoningEffort: "high" }))
+        .toEqual({ profile: capped });
+      expect(narrowLocalJobProfile(capped, { reasoningEffort: "xhigh" }))
+        .toEqual({
+          refusal: "The profile allows at most `high` reasoning effort.",
+        });
+    });
+
+    it("refuses a reasoning effort under a profile that sets none", () => {
+      expect(narrowLocalJobProfile(profile, { reasoningEffort: "low" }))
+        .toEqual({
+          refusal:
+            "The profile sets no reasoning effort, so a request may not name one.",
+        });
     });
 
     it("refuses more turns than the profile's cap", () => {

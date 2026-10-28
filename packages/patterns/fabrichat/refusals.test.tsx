@@ -265,7 +265,7 @@ export default pattern(() => {
     expectRuntimeErrors: [
       // Sends.
       "Your profile hasn't loaded yet.",
-      "This send has no text in `body`.",
+      "This send has no text in `body`, and no attachments.",
       // Edits.
       "That message isn't in this chat.",
       "This edit has no text in `body`.",

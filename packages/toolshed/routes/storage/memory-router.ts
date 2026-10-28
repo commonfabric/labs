@@ -93,12 +93,9 @@ function load(path: string): RouterConfig {
     routers.set(did, new Set(peers as string[]));
   }
   requireRouted(routers.size > 0 && routers.size <= 16);
-  // Optional; absent fields take the proof-of-concept defaults, which must
-  // fit every allowed router at once.
+  // Absent quotas take defaults; explicit `null` disables one quota.
   const limits = routedHostLimitsFor(
-    configured === undefined
-      ? {}
-      : routedObject(configured) as Partial<RoutedHostLimits>,
+    configured === undefined ? {} : configured,
     routers.size,
   );
   return { ...fields, routers, limits } as unknown as RouterConfig;

@@ -246,7 +246,7 @@ export const startLocalJobs = async (
     );
     socketOwned = true;
     await (deps.chmod ?? Deno.chmod)(config.socketPath, 0o600);
-    lane.start();
+    await lane.start();
     report(
       `agent runner: serving local jobs on ${config.socketPath} (profiles: ${
         [...profiles.keys()].join(", ")

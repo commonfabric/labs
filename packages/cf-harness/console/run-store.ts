@@ -85,7 +85,10 @@ const runRoot = async (
   return isSafeSegment(runId) && await isDirectory(root) ? root : undefined;
 };
 
-const readJson = async <Value>(path: string): Promise<Value | undefined> => {
+/** The JSON value at `path`, or `undefined` when it is absent or unreadable. */
+export const readJson = async <Value>(
+  path: string,
+): Promise<Value | undefined> => {
   try {
     return JSON.parse(await Deno.readTextFile(path)) as Value;
   } catch {
@@ -613,7 +616,7 @@ export const readConsoleRun = async (
     summary: summarizeConsoleRun(runState, transcript),
     runState: withoutReferents(runState),
     transcript,
-    lens: consoleRunLens(transcript),
+    lens: consoleRunLens(transcript, toolOutputs),
     steps,
     handles: consoleRunHandles(steps, table, labels),
     ...referentDisplay(runState.handleTable?.referents ?? [], display),

@@ -12,10 +12,10 @@
 import { html, LitElement, nothing, type TemplateResult } from "lit";
 import {
   cancelTurn,
+  type ConsoleChatEventEnvelope,
   type ConsoleFlow,
   type ConsoleListedRun,
   type ConsoleRunSource,
-  type HarnessChatEventEnvelope,
   listRuns,
   readRunFlow,
   startTask,
@@ -24,15 +24,10 @@ import { consolePath, pageMount } from "./mount.ts";
 import "./index-view.ts";
 import "./flow-view.ts";
 import "./run-view.ts";
+import type { ConsoleTurnResultPiece } from "../turn-result.ts";
 
 /** Which surface the shell is showing: the runs, or the pattern index. */
 type View = "console" | "index";
-
-/** The address a run named, raised above the timeline once it exists. */
-interface Piece {
-  slug?: string;
-  url: string;
-}
 
 /** A run and the `delegate_task` children it started. */
 interface RunNode {
@@ -80,6 +75,15 @@ export const runTree = (
   }
   return roots;
 };
+
+/**
+ * The piece the page raises once a turn completes: the last one the turn
+ * named, or, when it named none, the one already shown.
+ */
+export const consolePieceAfterTurn = (
+  pieces: readonly ConsoleTurnResultPiece[],
+  shown: ConsoleTurnResultPiece | undefined,
+): ConsoleTurnResultPiece | undefined => pieces.at(-1) ?? shown;
 
 /** Selects a new console parent run to open while a turn is executing. */
 export const freshConsoleRun = (
@@ -137,7 +141,8 @@ export class ConsoleApp extends LitElement {
   /** The last thing the live stream reported, shown while a turn runs. */
   declare activity: string | undefined;
 
-  declare piece: Piece | undefined;
+  /** The last piece a turn named, raised above the timeline. */
+  declare piece: ConsoleTurnResultPiece | undefined;
   declare error: string | undefined;
 
   /** The last sequence rendered; every reconnect resumes from it. */
@@ -289,7 +294,7 @@ export class ConsoleApp extends LitElement {
     });
   }
 
-  #onEvent(envelope: HarnessChatEventEnvelope): void {
+  #onEvent(envelope: ConsoleChatEventEnvelope): void {
     this.#lastSequence = envelope.sequence;
     const event = envelope.event;
     switch (event.kind) {
@@ -306,14 +311,10 @@ export class ConsoleApp extends LitElement {
         break;
       case "tool_completed":
         this.activity = `${event.tool.toolId} ${event.status}`;
-        if (
-          event.tool.toolId === "assign_slug" && event.status === "completed"
-        ) {
-          this.#showPiece(event.resultSummary);
-        }
         void this.#refresh();
         break;
       case "turn_completed":
+        this.piece = consolePieceAfterTurn(event.result.pieces, this.piece);
         this.state = "done";
         this.running = false;
         this.activity = undefined;
@@ -342,27 +343,6 @@ export class ConsoleApp extends LitElement {
       default:
         break;
     }
-  }
-
-  /**
-   * `assign_slug` reports the named address it registered. Its result is the
-   * tool message the model read, so the URL is read from there rather than
-   * composed here — a space configured by DID carries no URL at all.
-   */
-  #showPiece(summary: string | undefined): void {
-    let parsed: { url?: unknown; slug?: unknown };
-    try {
-      parsed = JSON.parse(summary ?? "");
-    } catch {
-      return;
-    }
-    if (typeof parsed?.url !== "string") {
-      return;
-    }
-    this.piece = {
-      url: parsed.url,
-      ...(typeof parsed.slug === "string" ? { slug: parsed.slug } : {}),
-    };
   }
 
   async #start(): Promise<void> {
@@ -474,9 +454,9 @@ export class ConsoleApp extends LitElement {
           </span>
           · ${run.toolCallCount}
           ${run.toolCallCount === 1 ? "call" : "calls"}
-          ${run.pieceUrls.length === 0
+          ${run.pieceSlugs.length === 0
             ? nothing
-            : html`· <span class="ok">${run.pieceUrls.length} piece</span>`}
+            : html`· <span class="ok">${run.pieceSlugs.length} piece</span>`}
           · ${new Date(run.updatedAt).toLocaleString()}
         </div>
       </button>
@@ -561,11 +541,7 @@ export class ConsoleApp extends LitElement {
             <a href=${this.piece.url} rel="noopener" target="_blank">
               Open your piece
             </a>
-            <div class="slug">
-              ${this.piece.slug === undefined
-                ? this.piece.url
-                : `${this.piece.slug} — ${this.piece.url}`}
-            </div>
+            <div class="slug">${this.piece.slug} — ${this.piece.url}</div>
           </div>
         `}
 

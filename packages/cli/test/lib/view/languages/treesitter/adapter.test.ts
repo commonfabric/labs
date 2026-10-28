@@ -193,6 +193,44 @@ describe("adapter", () => {
     });
   });
 
+  describe("structure", () => {
+    const source = [
+      "if ready:",
+      "    def conditional(): pass",
+      "def top(): pass",
+      "class Box:",
+      "    def method(self): pass",
+    ].join("\n");
+
+    it("finds entries inside every node when a grammar names no parents", () => {
+      const document = parseDocument(pythonGrammar, source);
+
+      expect(document.flatStructure.map((node) => node.name)).toEqual([
+        "conditional",
+        "top",
+        "Box",
+        "method",
+      ]);
+    });
+
+    it("finds entries only inside the parents a grammar names", async () => {
+      const grammar: TreeSitterGrammar = {
+        ...pythonGrammar,
+        id: "python-structure-parents",
+        structureParents: new Set(["module", "class_definition", "block"]),
+      };
+      await prepareGrammar(grammar);
+
+      const document = parseDocument(grammar, source);
+
+      expect(document.flatStructure.map((node) => node.name)).toEqual([
+        "top",
+        "Box",
+        "method",
+      ]);
+    });
+  });
+
   describe("incremental coloring", () => {
     it("re-colors the lines below an edit that moves bracket nesting", () => {
       const before = [

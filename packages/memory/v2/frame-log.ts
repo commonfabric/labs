@@ -301,6 +301,10 @@ export function createFrameLog(write: (line: string) => void): FrameLog {
       record.type === "session.watch.set"
     ) {
       summary.watches = summarizeWatches(record.watches);
+    } else if (record.type === "session.watch.remove") {
+      summary.removedWatches = Array.isArray(record.watchIds)
+        ? record.watchIds.length
+        : undefined;
     } else if (record.type === "graph.query") {
       summary.query = summarizeWatches([{ query: record.query }]);
     }

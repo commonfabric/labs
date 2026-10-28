@@ -51,6 +51,7 @@ import type {
   Schema,
 } from "./builder/types.ts";
 import { registerBuiltins } from "./builtins/index.ts";
+import type { Cancel } from "./cancel.ts";
 import {
   type Cell,
   createCell,
@@ -276,6 +277,12 @@ const uiCellWriteLogger = getLogger("runtime.ui-cell-write", {
   level: "error",
 });
 
+// Release passes that failed; see `Runtime.#requestDocumentRelease()`.
+const documentReleaseLogger = getLogger("runtime.document-release", {
+  enabled: true,
+  level: "warn",
+});
+
 export type { IExtendedStorageTransaction, MemorySpace };
 
 export interface ConsoleHandlerOutput {
@@ -430,6 +437,36 @@ export interface ExperimentalOptions {
    * flag. Defaults to off.
    */
   sharedMemoryConnection?: boolean | undefined;
+
+  /**
+   * A reactive computation's write that the space refuses for lack of a
+   * grant is kept as a local fold over the document's confirmed value
+   * (`docs/specs/memory-v2/03-commit-model.md` §3.8.3), where the write sits
+   * directly on the confirmed value it was made over, so that the re-run the
+   * refusal causes reads what the principal computed and settles; a write
+   * over anything else reverts. When false, such a write is reverted like
+   * any other rejection, a refusal the server marks with permanent evidence
+   * takes no retry, and the computation runs again only when an input it did
+   * not write changes. Defaults to off.
+   */
+  localFold?: boolean | undefined;
+
+  /**
+   * Compile a pattern factory call bound to a `const` as a named sub-pattern
+   * instance, whose identity is the binding's name rather than its position
+   * among its parent's anonymous roots
+   * (`docs/specs/computed-cell-identity.md`, "Sub-pattern instance identity").
+   * Defaults to off, which compiles every instance positionally. Turning it on
+   * moves every deployed `const`-bound child from its positional identity to a
+   * named one. The first setup that names an instance carries its deployed
+   * child over where the pattern the parent last set up loads and names it
+   * too, and the parent's setup record, where it has one, numbers its cell as
+   * this runtime's build of that pattern does; otherwise the instance starts
+   * fresh. It needs every runtime that opens the
+   * same space to run the same naming mode first, so no environment variable
+   * reaches it (`docs/development/EXPERIMENTAL_OPTIONS.md#instancenames`).
+   */
+  instanceNames?: boolean | undefined;
 }
 
 /**
@@ -884,6 +921,23 @@ export interface RuntimeOptions {
   cfcReadOnExceed?: CfcReadOnExceed;
 
   /**
+   * The space of the profile `#profile` answers with, among the user's
+   * profiles, for a runtime that acts as one of them (a host keeping one
+   * profile per identity it presents, as the Weaver does with its facets).
+   * When the home does not list that profile, or retired it, `#profile`
+   * fails rather than answer as another profile. The home's own default and
+   * most-recently-used profiles are unchanged. Nothing in the runtime reads
+   * this but `#profile`'s answer, and through `#profile` it reaches every
+   * pattern that reads `#profile`. FabriChat's chat manager is one of them:
+   * there is one per Home, and it keys direct rooms by the counterpart's
+   * principal alone, so two profiles of one person would share a direct room
+   * with the same counterpart, which shows the counterpart that the two are
+   * one person. A host therefore runs the chat manager as one profile, the
+   * default, until the manager keeps its state per profile.
+   */
+  preferredProfileSpace?: MemorySpace;
+
+  /**
    * Deployment policy records for the exchange-rule evaluator (Epic B2a,
    * spec §4.3). Validated, digested, and deep-frozen into a `PolicySnapshot`
    * at construction — malformed records throw at boot (fail-closed config,
@@ -1314,6 +1368,12 @@ export type CommitRetryPullFailure = {
  */
 export class Runtime {
   #tearingDownWrites = false;
+
+  /** The release pass waiting for the scheduler to go idle, if any. */
+  #documentRelease: Promise<void> | undefined;
+
+  /** Undoes what `#installDocumentRelease()` registered. */
+  readonly #documentReleaseCancels: Cancel[] = [];
   readonly #writeTeardown = new AbortController();
   readonly #transactions = new WeakSet<IExtendedStorageTransaction>();
   readonly #derivedInternalCellIds = new DerivedInternalCellIds();
@@ -1348,6 +1408,9 @@ export class Runtime {
 
   /** See `RuntimeOptions.cfcReadOnExceed`; `undefined` leaves `fail` in force. */
   readonly cfcReadOnExceed: CfcReadOnExceed | undefined;
+
+  /** See `RuntimeOptions.preferredProfileSpace`. */
+  readonly preferredProfileSpace: MemorySpace | undefined;
 
   /** Frozen deployment policy snapshot; undefined = no policies configured. */
   readonly cfcPolicySnapshot: PolicySnapshot | undefined;
@@ -1898,6 +1961,11 @@ export class Runtime {
     this.experimental.plainResultReceipts ??= true;
     this.experimental.lazyMaterialization ??= true;
     this.experimental.agentBuiltin ??= true;
+    this.experimental.localFold ??= false;
+    // TODO(danfuzz): Turn this on only once a deployed parent's positional
+    // children are carried over to their names, and a runtime whose naming
+    // mode differs from a space's data is kept away from that space.
+    this.experimental.instanceNames ??= false;
     this.experimental.localSessionDocuments ??= false;
 
     // Propagate experimental flags to their ambient control points, then read
@@ -2106,6 +2174,7 @@ export class Runtime {
       }
       this.cfcReadMaxConfidentiality = readCeiling.maxConfidentiality;
       this.cfcReadOnExceed = readCeiling.onExceed;
+      this.preferredProfileSpace = options.preferredProfileSpace;
       // Validates + digests + deep-freezes; throws on malformed records so a
       // config error surfaces at boot, not as a silently inert rule (same
       // eager-validation posture as the spaceHostMap URLs above).
@@ -2117,6 +2186,8 @@ export class Runtime {
         options.consoleHandler,
         options.errorHandlers,
       );
+
+      this.#installDocumentRelease();
 
       // Register built-in modules with runtime injection
       registerBuiltins(this);
@@ -2260,11 +2331,25 @@ export class Runtime {
    * SWALLOWED and the piece silently ran against stale setup. The
    * SpaceServer installs the observer at activation and counts the
    * failure into §7's `structureLoadFailures` (a demanded-structure
-   * load that failed, asynchronously); the runner's loud error log
-   * rides the same reporting call in every arm.
+   * load that failed, asynchronously), or a refusal of a piece whose
+   * state moved into `structureLoadRefused`. The runner logs a failure
+   * loudly in the same reporting call, and a refusal where it decides
+   * it.
    */
   pieceStartCommitFailureObserver:
-    | ((failure: { actionId: string; error: unknown }) => void)
+    | ((failure: {
+      /** The commit's action identity, which names the piece. */
+      actionId: string;
+
+      /** What cut the commit short. */
+      error: unknown;
+
+      /**
+       * Present, and `true`, where the start refused a piece whose state
+       * moved (`PieceStateMovedError`) rather than failing to load it.
+       */
+      refused?: true;
+    }) => void)
     | undefined;
 
   /**
@@ -2485,6 +2570,7 @@ export class Runtime {
   }
 
   async #disposeInner(closeStorage: boolean): Promise<void> {
+    for (const cancel of this.#documentReleaseCancels.splice(0)) cancel();
     this.#viewReplication?.dispose();
     // Before either drain below, each of which waits for the scheduler to go
     // idle: a queued event waiting for its piece to become startable waits on
@@ -2880,6 +2966,21 @@ export class Runtime {
       (() => undefined);
   }
 
+  /**
+   * Tracks an event this runtime fired until its terminal consequence
+   * arrives, installing the flag-ON client overlay if the fire is the first
+   * thing this runtime does, so that `waitForIntentQuiescence` counts the
+   * event whether or not a speculative edit came before it. Does nothing in
+   * the OFF arm and on a serving runtime, where no overlay exists.
+   */
+  trackEventIntent(
+    space: MemorySpace,
+    sidecarId: string,
+    eventId: string,
+  ): void {
+    this.#speculationDestination()?.trackIntent(space, sidecarId, eventId);
+  }
+
   /** The client-effect channel of a flag-ON non-serving runtime
    * (server-execution v2 Phase 4, protocol.md §5): the overlay's
    * optimistic navigateTo enactment records its nonce here, and the
@@ -3077,6 +3178,65 @@ export class Runtime {
   #missingDocLoadKicks = new Set<string>();
 
   /**
+   * Lets the storage manager release the documents nothing reads (see
+   * `releaseUnreadDocuments()`): it asks the scheduler whether an action
+   * reads a document, and forgets a load kicked for a document it drops, so
+   * that a later read of it kicks the load again.
+   */
+  #installDocumentRelease(): void {
+    const manager = this.storageManager;
+    const cancels = [
+      manager.addDocumentReader?.((address) =>
+        this.scheduler.readsEntity(
+          entityKey(
+            { ...address, scope: normalizeCellScope(address.scope) },
+            this.scopeKeyIdentity,
+          ),
+        )
+      ),
+      manager.subscribeDocumentsDropped?.((space, addresses) => {
+        for (const address of addresses) {
+          this.#missingDocLoadKicks.delete(
+            `${space}\0${
+              address.scopeKey ??
+                resolveScopeKey(address.scope, this.scopeKeyIdentity)
+            }\0${address.id}`,
+          );
+        }
+      }),
+    ];
+    for (const cancel of cancels) {
+      if (cancel !== undefined) this.#documentReleaseCancels.push(cancel);
+    }
+  }
+
+  /**
+   * Releases the documents nothing reads, once the scheduler is next idle
+   * (`IStorageManager.releaseUnreadDocuments()`), and resolves when that
+   * pass has run. Stopping a piece asks for one. A host asks for one when
+   * something that read documents through this runtime has gone, such as a
+   * client whose subscriptions it cancelled. Calls made while a pass waits
+   * for the scheduler share it.
+   */
+  releaseUnreadDocuments(): Promise<void> {
+    this.#documentRelease ??= (async () => {
+      try {
+        await this.scheduler.idle();
+      } finally {
+        // A request made from here on asks for a pass of its own.
+        this.#documentRelease = undefined;
+      }
+      await this.storageManager.releaseUnreadDocuments?.();
+    })().catch((error) => {
+      documentReleaseLogger.warn("release-failed", () => [
+        "releasing the documents nothing reads failed:",
+        error,
+      ]);
+    });
+    return this.#documentRelease;
+  }
+
+  /**
    * Asynchronously load a link target that a read found absent from the
    * local replica. Cross-space targets (CT-1667): per-space server queries
    * cannot follow links across space boundaries, so the client must fetch
@@ -3089,7 +3249,8 @@ export class Runtime {
    * `storageManager.synced()` and `Cell.pull()`'s convergence loop can await
    * it; the absent doc is a tracked read, so the reader re-runs on arrival.
    * Deduped per (space, id): the kicked sync leaves a live subscription
-   * behind, so repeat kicks add nothing.
+   * behind, so repeat kicks add nothing until the storage manager drops the
+   * document, which forgets the kick.
    */
   ensureLinkedDocLoaded(
     link: NormalizedFullLink,

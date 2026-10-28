@@ -25,6 +25,7 @@ const stepSchema = z.object({
 
 const jobSchema = z.object({
   if: z.string().optional(),
+  needs: z.union([z.string(), z.array(z.string())]).optional(),
   environment: z.string().optional(),
   "timeout-minutes": z.number().optional(),
   permissions: z.record(z.string(), z.string()).optional(),
@@ -84,12 +85,14 @@ async function runStep(
       env: {
         PATH: `${dir}:${Deno.env.get("PATH")}`,
         CALLS: `${dir}/calls`,
+        RUNNER_TEMP: dir,
         ...env,
       },
     }).output();
     return {
       code: result.code,
       calls: (await Deno.readTextFile(`${dir}/calls`)).trim(),
+      stdout: new TextDecoder().decode(result.stdout),
       stderr: new TextDecoder().decode(result.stderr),
     };
   } finally {
@@ -101,6 +104,202 @@ const infraSha = "1234567890abcdef1234567890abcdef12345678";
 const readerToken = "${{ steps.reader.outputs.token }}";
 
 describe("rapids-workflows", () => {
+  it("validates an exact production source before environment approval and rechecks the demo window", async () => {
+    const production = await workflow("deploy-production.yml");
+    expect(production.name).toBe("Manual Production Deployment");
+    expect(production.permissions).toEqual({ contents: "read" });
+    expect(production.concurrency).toEqual({
+      group: "estuary-production-deployment",
+      "cancel-in-progress": false,
+    });
+    const validate = production.jobs.validate;
+    const deploy = production.jobs["deploy-estuary"];
+    expect(deploy.needs).toBe("validate");
+    expect(deploy.environment).toBe("estuary");
+    const window = validate.steps[0];
+    expect(deploy.steps[0]).toEqual(window);
+    const deployment = oneStep(
+      deploy.steps,
+      (step) => step.id === "deployment",
+    );
+    expect(deploy.steps[deploy.steps.indexOf(deployment) - 1]).toEqual(window);
+    expect(deployment.if).toBe("${{ !inputs.verify_only }}");
+    const deno = oneStep(
+      deploy.steps,
+      (step) => step.uses === "./.github/actions/deno-setup",
+    );
+    expect(deno.if).toBe("${{ !inputs.verify_only }}");
+    for (
+      const [NOW, allowed] of [
+        ["2026-10-19T22:15:15Z", false],
+        ["2026-10-19T22:15:16Z", true],
+        ["2026-10-22T22:15:15Z", true],
+        ["2026-10-22T22:15:16Z", false],
+      ] as const
+    ) {
+      expect(
+        (await runStep(window, {
+          SOURCE_BRANCH: "alex-daily",
+          WORKFLOW_REF: "refs/heads/main",
+          NOW,
+        }, {
+          date: 'printf "%s\\n" "$NOW"',
+        })).code === 0,
+      ).toBe(allowed);
+    }
+    expect(
+      (await runStep(window, {
+        SOURCE_BRANCH: "main",
+        WORKFLOW_REF: "refs/heads/main",
+      }, {})).code,
+    ).toBe(0);
+    for (
+      const [SOURCE_BRANCH, WORKFLOW_REF] of [["rw_demo", "refs/heads/main"], [
+        "alex-daily",
+        "refs/heads/alex-daily",
+      ], ["main", "refs/pull/1/merge"]]
+    ) {
+      expect((await runStep(window, { SOURCE_BRANCH, WORKFLOW_REF }, {})).code)
+        .not.toBe(0);
+    }
+    const guard = oneStep(validate.steps, (step) => step.id === "resolve");
+    for (const source of ["main", "alex-daily"]) {
+      for (
+        const status of ["ahead", "identical", "behind", "diverged", "", "null"]
+      ) {
+        const result = await runStep(guard, {
+          DEPLOY_SHA: infraSha,
+          SOURCE_BRANCH: source,
+          GITHUB_REPOSITORY: "commonfabric/labs",
+          GITHUB_OUTPUT: "/dev/stdout",
+          STATUS: status,
+        }, { gh: 'printf "%s\\n" "$@" > "$CALLS"\nprintf "%s\\n" "$STATUS"' });
+        expect(result.code === 0).toBe(["ahead", "identical"].includes(status));
+        expect(result.calls).toContain(`compare/${infraSha}...${source}`);
+      }
+    }
+    for (
+      const DEPLOY_SHA of [
+        "",
+        "main",
+        infraSha.slice(1),
+        infraSha.toUpperCase(),
+        `${infraSha}\n`,
+        "$(exit 0)",
+      ]
+    ) {
+      const result = await runStep(guard, { DEPLOY_SHA }, {
+        gh: 'echo called > "$CALLS"',
+      });
+      expect(result.code).not.toBe(0);
+      expect(result.calls).toBe("");
+    }
+    expect(
+      (await runStep(guard, {
+        DEPLOY_SHA: infraSha,
+        SOURCE_BRANCH: "alex-daily",
+        GITHUB_REPOSITORY: "commonfabric/labs",
+      }, { gh: "exit 42" })).code,
+    ).not.toBe(0);
+  });
+
+  it("collects all 21 workers and HTTPS and uploads only a complete bound Estuary receipt", async () => {
+    const { steps } =
+      (await workflow("deploy-production.yml")).jobs["deploy-estuary"];
+    const remote = oneStep(steps, (step) => step.id === "evidence");
+    expect(remote.with.capture_stdout).toBe(true);
+    expect(remote.with.envs).toBe("DEPLOY_SHA");
+    const script = z.string().parse(remote.with.script);
+    expect(script).toContain("deploy@estuary.saga-castor.ts.net python3 -");
+    const python = script.split("<<'PY'\n")[1].split("\nPY")[0];
+    const collect = (fault: string) =>
+      runStep(
+        {
+          ...remote,
+          run: `python3 - <<'PY'\n${
+            `import io, json, sys, urllib.request\nsys.argv = ["verify", "${infraSha}"]\n` +
+            `class Response(io.StringIO):\n` +
+            `    status = 200\n` +
+            `    def __init__(self, url):\n` +
+            `        self.url = url\n` +
+            `        super().__init__(json.dumps({"gitSha": "wrong" if "${fault}" == "sha" and ":8013/" in url else sys.argv[1]}))\n` +
+            `        if "${fault}" == "https" and url.startswith("https:"): self.status = 503\n` +
+            `    def geturl(self): return "https://wrong.invalid" if "${fault}" == "redirect" else self.url\n` +
+            `urllib.request.urlopen = Response\n`
+          }${python}\nPY`,
+        },
+        {},
+        {},
+      );
+    const collected = await collect("");
+    expect(collected.code).toBe(0);
+    for (const fault of ["sha", "https", "redirect"]) {
+      expect((await collect(fault)).code).not.toBe(0);
+    }
+    const save = oneStep(
+      steps,
+      (step) => step.run?.includes("base64.b64decode") ?? false,
+    );
+    const run = {
+      ...save,
+      run: `${save.run}\ncat "$RUNNER_TEMP/receipt.json"`,
+    };
+    const env = {
+      REMOTE_OUTPUT: collected.stdout,
+      DEPLOY_SHA: infraSha,
+      SOURCE_BRANCH: "alex-daily",
+      VERIFY_ONLY: "true",
+      GITHUB_REPOSITORY: "commonfabric/labs",
+      GITHUB_SHA: infraSha,
+      GITHUB_RUN_ID: "123",
+      GITHUB_RUN_ATTEMPT: "2",
+    };
+    const saved = await runStep(run, env, {});
+    expect(saved.code).toBe(0);
+    const receipt = JSON.parse(saved.stdout);
+    expect(receipt.workers).toHaveLength(21);
+    expect(receipt).toMatchObject({
+      repository: "commonfabric/labs",
+      workflow_sha: infraSha,
+      run_id: "123",
+      run_attempt: "2",
+      source_branch: "alex-daily",
+      verify_only: true,
+    });
+    for (
+      const REMOTE_OUTPUT of [
+        "",
+        collected.stdout.repeat(2),
+        "ESTUARY_RECEIPT:bad-base64",
+      ]
+    ) {
+      expect((await runStep(run, { ...env, REMOTE_OUTPUT }, {})).code).not.toBe(
+        0,
+      );
+    }
+    for (
+      const workers of [receipt.workers.slice(1), [
+        ...receipt.workers.slice(1),
+        receipt.workers[1],
+      ]]
+    ) {
+      const REMOTE_OUTPUT = "ESTUARY_RECEIPT:" +
+        btoa(JSON.stringify({ ...receipt, workers }));
+      expect((await runStep(run, { ...env, REMOTE_OUTPUT }, {})).code).not.toBe(
+        0,
+      );
+    }
+    const upload = oneStep(
+      steps,
+      (step) => step.uses?.startsWith("actions/upload-artifact@") ?? false,
+    );
+    expect(steps.indexOf(upload)).toBeGreaterThan(steps.indexOf(save));
+    expect(upload.if).toBeUndefined();
+    expect(upload.with.name).toBe(
+      "estuary-deployment-${{ github.run_id }}-${{ github.run_attempt }}",
+    );
+  });
+
   it("publishes Labs binaries from CI without independently deploying a server", async () => {
     const ci = await workflow("deno.yml");
     expect(ci.jobs["attest-binaries"]).toBeDefined();
@@ -352,7 +551,11 @@ describe("rapids-workflows", () => {
     expect(notify.permissions).toEqual({});
     expect(notify.on).toEqual({
       workflow_run: {
-        workflows: ["CI", "Deploy Rapids release"],
+        workflows: [
+          "CI",
+          "Deploy Rapids release",
+          "Manual Production Deployment",
+        ],
         types: ["completed"],
         branches: ["main"],
       },
@@ -415,6 +618,87 @@ describe("rapids-workflows", () => {
       expect(job.steps.some((step) => step.uses?.includes("checkout@")))
         .toBe(false);
     }
+  });
+
+  it("wakes Estuary for production workflow completions inside the authorization window", async () => {
+    const job = (await workflow("notify-rapids.yml")).jobs["notify-infra"];
+    const accepts = new Function("github", `return (${job.if});`);
+    const run = {
+      path: ".github/workflows/deploy-production.yml",
+      event: "workflow_dispatch",
+      conclusion: "success",
+      head_branch: "main",
+      head_repository: { full_name: "commonfabric/labs" },
+      display_title: "Manual Production Deployment",
+    };
+    const allowed = (changes: Partial<typeof run> = {}) =>
+      accepts({
+        repository: "commonfabric/labs",
+        event: { workflow_run: { ...run, ...changes } },
+      });
+    expect(allowed()).toBe(true);
+    expect(
+      allowed({
+        display_title: `Estuary ${infraSha} from alex-daily (verify=true)`,
+      }),
+    ).toBe(true);
+    for (const conclusion of ["success", "failure", "cancelled", "skipped"]) {
+      expect(allowed({ conclusion })).toBe(true);
+    }
+    expect(
+      allowed({
+        display_title: `Estuary ${infraSha} from main (verify=false)`,
+      }),
+    ).toBe(true);
+    for (
+      const changes of [
+        { head_branch: "alex-daily" },
+        { event: "pull_request" },
+        { head_repository: { full_name: "contributor/labs" } },
+        { path: ".github/workflows/other.yml" },
+      ]
+    ) expect(allowed(changes)).toBe(false);
+    const send = oneStep(
+      job.steps,
+      (step) => step.run?.includes("gh api") ?? false,
+    );
+    for (
+      const [NOW, enabled] of [
+        ["2026-10-19T22:15:15Z", false],
+        ["2026-10-19T22:15:16Z", true],
+        ["2026-10-22T22:15:15Z", true],
+        ["2026-10-22T22:15:16Z", false],
+      ] as const
+    ) {
+      const result = await runStep(send, { WORKFLOW_PATH: run.path, NOW }, {
+        gh: 'printf "%s\\n" "$@" > "$CALLS"',
+        date: 'printf "%s\\n" "$NOW"',
+      });
+      expect(result.code).toBe(0);
+      expect(result.calls.split("\n")).toEqual(
+        enabled
+          ? [
+            "api",
+            "--method",
+            "POST",
+            "repos/commonfabric/infra/actions/workflows/rapids.yml/dispatches",
+            "-f",
+            "ref=main",
+            "-f",
+            "inputs[channel]=estuary",
+          ]
+          : [""],
+      );
+    }
+    expect(
+      (await runStep(send, {
+        WORKFLOW_PATH: run.path,
+        NOW: "2026-10-20T00:00:00Z",
+      }, {
+        gh: "exit 42",
+        date: 'printf "%s\\n" "$NOW"',
+      })).code,
+    ).toBe(42);
   });
 
   it("sends paired producer hints for CI and an empty-input reconciliation for deployment", async () => {

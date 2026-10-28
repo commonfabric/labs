@@ -14,6 +14,7 @@ import {
   isCell,
   parseLink,
   PatternCoverageCollector,
+  profileOwnership,
   Runtime,
   UI,
   writePatternCoverageLcov,
@@ -29,6 +30,7 @@ import {
 } from "../../runner/src/cfc/share-snapshot.ts";
 import { markRendererTrustedEvent } from "../../runner/src/cfc/ui-contract.ts";
 import { seedHomeAgentQueue } from "../../runner/test/support/agent-queue.ts";
+import { writeOwnProfile } from "./own-profile-fixture.ts";
 
 const ROOT = fromFileUrl(new URL("../", import.meta.url));
 
@@ -124,13 +126,17 @@ describe("personalized book invitation", () => {
       const profileSpace = await Identity.fromPassphrase(
         "book originator profile",
       );
-      const profileTx = runtime.edit();
-      const profile = runtime.getCell(profileSpace.did(), "reader-profile", {
-        type: "object",
-        properties: { name: { type: "string" } },
-      }, profileTx);
-      profile.set({ name: "Originator" });
-      expect((await profileTx.commit().settled).error).toBeUndefined();
+      const profile = await writeOwnProfile(
+        runtime,
+        profileSpace.did(),
+        "reader-profile",
+        "Originator",
+      );
+      // The library's `#profile` wish finds only the reader's own profile.
+      const ownership = runtime.edit();
+      expect(profileOwnership(runtime, profile, identity.did(), ownership))
+        .toBe("own");
+      ownership.abort();
       const tx = runtime.edit();
       const factory = await runtime.patternManager.compilePattern(program, {
         space: identity.did(),

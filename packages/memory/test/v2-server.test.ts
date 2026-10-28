@@ -329,6 +329,29 @@ Deno.test("memory v2 server parser ignores transact invocation and authorization
   );
 });
 
+Deno.test("memory v2 server parses a watch removal naming watch ids, and refuses one naming anything else", () => {
+  const request = {
+    type: "session.watch.remove" as const,
+    requestId: "remove-1",
+    space: "did:key:z6Mk-space",
+    sessionId: "session:1",
+  };
+  assertEquals(
+    parseClientMessage(encodeMemoryBoundary({
+      ...request,
+      watchIds: ["watch-a", "watch-b"],
+    })),
+    { ...request, watchIds: ["watch-a", "watch-b"] },
+  );
+  assertEquals(
+    parseClientMessage(encodeMemoryBoundary({
+      ...request,
+      watchIds: ["watch-a", 7],
+    })),
+    { type: "invalid", requestId: "remove-1" },
+  );
+});
+
 Deno.test("memory v2 server parses entity identifier listing requests", () => {
   assertEquals(
     parseClientMessage(encodeMemoryBoundary({
@@ -370,7 +393,7 @@ Deno.test("memory v2 server parses entity identifier listing requests", () => {
       requestId: "entity-list-2",
       space: "did:key:z6Mk-space",
     })),
-    null,
+    { type: "invalid", requestId: "entity-list-2" },
   );
   assertEquals(
     parseClientMessage(encodeMemoryBoundary({
@@ -1681,7 +1704,7 @@ Deno.test("memory v2 server watch sets expand to previously hidden nodes after r
   }
 });
 
-Deno.test("memory v2 server does not emit delayed exact-reconcile removes after shrink retargets", async () => {
+Deno.test("memory v2 server retracts what a shrink retarget stops reaching in the effect frame, and nothing later", async () => {
   const time = new FakeTime();
   const server = createServer(
     "memory://memory-v2-server-watch-shrink-no-reconcile",
@@ -1797,7 +1820,14 @@ Deno.test("memory v2 server does not emit delayed exact-reconcile removes after 
     await time.tickAsync(0);
     await time.runMicrotasks();
     const effect = assertEffect(shiftMessage(messages));
-    assertEquals(effect.effect.removes, []);
+    // The expanded root's `alternate` was the only way to the hidden half;
+    // the cycle its `alternate` targets share with the initial half stays.
+    assertEquals(
+      effect.effect.removes.map((entry) => entry.id),
+      fixture.expandedReachableIds.filter((id) =>
+        !fixture.initialReachableIds.includes(id)
+      ),
+    );
 
     await time.tickAsync(300);
     await time.runMicrotasks();

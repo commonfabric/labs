@@ -8,6 +8,7 @@ import { assert, assertEquals, assertExists, assertRejects } from "@std/assert";
 import { toFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, Signer, URI } from "@commonfabric/memory/interface";
+import { encodeMemoryBoundary } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import {
@@ -24,6 +25,31 @@ import { Runtime } from "../src/runtime.ts";
 
 const TEST_AUDIENCE = "did:key:z6Mk-runner-acl-bootstrap-audience";
 
+/**
+ * A loopback to `server` whose send settles only once every frame the server
+ * sent while handling it has reached the client, as a send over a serving
+ * worker's port does: the server's thread answers the send after handling it,
+ * and the frames it sent meanwhile cross the port first.
+ */
+const portOrderedLoopback = (
+  server: MemoryV2Server.Server,
+): MemoryV2Client.Transport => {
+  const built: {
+    connection?: ReturnType<MemoryV2Server.Server["connect"]>;
+  } = {};
+  const transport = MemoryV2Client.queuedFrameTransport({
+    async receive(payload) {
+      await built.connection!.receive(payload);
+      await transport.delivered!();
+    },
+    close: () => built.connection?.close(),
+  });
+  built.connection = server.connect((message) =>
+    transport.deliver(encodeMemoryBoundary(message))
+  );
+  return transport;
+};
+
 class RecordingLoopbackSessionFactory implements SessionFactory {
   readonly supportsAclBootstrap = true;
   readonly principals: string[] = [];
@@ -35,8 +61,17 @@ class RecordingLoopbackSessionFactory implements SessionFactory {
 
   readonly #server: MemoryV2Server.Server;
 
-  constructor(server: MemoryV2Server.Server) {
+  readonly #transport: (
+    server: MemoryV2Server.Server,
+  ) => MemoryV2Client.Transport;
+
+  constructor(
+    server: MemoryV2Server.Server,
+    transport: (server: MemoryV2Server.Server) => MemoryV2Client.Transport =
+      MemoryV2Client.loopback,
+  ) {
     this.#server = server;
+    this.#transport = transport;
   }
 
   async create(
@@ -46,7 +81,7 @@ class RecordingLoopbackSessionFactory implements SessionFactory {
   ) {
     this.principals.push(signer?.did() ?? "<anonymous>");
     const client = await MemoryV2Client.connect({
-      transport: MemoryV2Client.loopback(this.#server),
+      transport: this.#transport(this.#server),
     });
     const session = await client.mount(
       space,
@@ -379,6 +414,29 @@ Deno.test("createSpace writes its ACL as the new space's first and only commit, 
     const sync = await manager.open(space).sync("of:after-create" as URI);
     assert(!sync.error, sync.error?.message);
     assertEquals(factory.principals, [space, user.did()]);
+  } finally {
+    await manager.close();
+    await server.close();
+  }
+});
+
+Deno.test("createSpace returns the space its genesis created when the creating session's revocation reaches the client before the send settles", async () => {
+  // An ACL that does not name the space's key revokes the creating session
+  // right after the genesis commit's verdict. Over this transport the verdict
+  // and then the revocation reach the client before the commit's send
+  // settles, as they do over a serving worker's port.
+  const user = await Identity.fromPassphrase("acl create port order user");
+  const server = createServer("runner-acl-create-port-order");
+  const manager = TestStorageManager.overServer(
+    { as: user },
+    new RecordingLoopbackSessionFactory(server, portOrderedLoopback),
+  );
+  try {
+    const space = await manager.createSpace({ [user.did()]: "OWNER" });
+    assertEquals(
+      (await server.readDocument(space, `of:${space}`))?.value,
+      { [user.did()]: "OWNER" },
+    );
   } finally {
     await manager.close();
     await server.close();

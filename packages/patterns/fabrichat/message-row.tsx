@@ -1,7 +1,7 @@
 /**
  * One message of a FabriChat room, rendered: `FabriChatMessageRow`, with its
  * reviewed surfaces for reacting, editing, deleting, and obliterating, and the
- * reaction tallies and body text it shows.
+ * reaction tallies, body text and attachments it shows.
  */
 import {
   action,
@@ -11,12 +11,14 @@ import {
   pattern,
   type PerSession,
   principalOf,
+  profileOwnerOf,
   type ReadonlyCell,
   Stream,
   UI,
   type VNode,
   Writable,
 } from "commonfabric";
+import type { FileEntry } from "../fabrifile/schemas.tsx";
 import type { ViewPlace } from "./logic.ts";
 import {
   commitDelete,
@@ -122,6 +124,84 @@ export const bodyText = (record: RepliedMessage | undefined): string =>
 
 /** How a reaction's emoji is drawn. */
 const EMOJI_STYLE = { fontSize: "18px", lineHeight: "1" };
+
+/** What one attachment of a message renders. */
+interface AttachmentInput {
+  /** The file, an entry of the message's space's store. */
+  entry: Cell<FileEntry>;
+}
+
+/**
+ * One file a message attaches: a preview where it is an image, and a link that
+ * downloads it, each read through the entry under the viewer's own access; a
+ * note that the entry was removed from its store, once it is; or a note that
+ * the file can't be shown, to a viewer who can't read the entry. Which of
+ * them shows differs by viewer, so each is in the tree and shown or hidden
+ * through a prop, as the row's own controls are.
+ */
+const FabriChatAttachment = pattern<AttachmentInput, { [UI]: VNode }>(
+  ({ entry }) => {
+    const name = computed(() => entry.get()?.name ?? "");
+    const mediaType = computed(() => entry.get()?.mediaType ?? "");
+    const blob = computed(() => entry.get()?.blob);
+    const shown = computed((): "file" | "removed" | "unreadable" => {
+      const value = entry.get();
+      return value === undefined
+        ? "unreadable"
+        : value.removedAt !== undefined
+        ? "removed"
+        : "file";
+    });
+    const fileDisplay = computed((): ChatDisplay =>
+      shown === "file" ? "flex" : "none"
+    );
+    const imageDisplay = computed((): ChatDisplay =>
+      shown === "file" && (entry.get()?.mediaType ?? "").startsWith("image/")
+        ? "block"
+        : "none"
+    );
+    const removedDisplay = computed((): ChatDisplay =>
+      shown === "removed" ? "block" : "none"
+    );
+    const unreadableDisplay = computed((): ChatDisplay =>
+      shown === "unreadable" ? "block" : "none"
+    );
+    return {
+      [UI]: (
+        <div>
+          <div
+            hidden
+            style={{
+              display: fileDisplay,
+              flexDirection: "column",
+              gap: "0.25rem",
+            }}
+          >
+            <div hidden style={{ display: imageDisplay }}>
+              <cf-image
+                blob={blob}
+                media-type={mediaType}
+                alt={name}
+                style="max-width: 16rem; max-height: 16rem;"
+              />
+            </div>
+            <cf-blob-link blob={blob} name={name}>{name}</cf-blob-link>
+          </div>
+          <div hidden style={{ display: removedDisplay }}>
+            <cf-text variant="caption" style={{ fontStyle: "italic" }}>
+              This file was removed.
+            </cf-text>
+          </div>
+          <div hidden style={{ display: unreadableDisplay }}>
+            <cf-text variant="caption" style={{ fontStyle: "italic" }}>
+              This file can't be shown.
+            </cf-text>
+          </div>
+        </div>
+      ),
+    };
+  },
+);
 
 /** What a message row needs. */
 export interface FabriChatMessageRowInput {
@@ -257,13 +337,12 @@ export const FabriChatMessageRow = pattern<
   const rights = computed(() => {
     if (cannotWrite || myProfile?.get() === undefined) return NO_MESSAGE_RIGHTS;
     const record = message.get();
+    const reader = profileOwnerOf(myProfile);
     return messageRightsOf(
       record === undefined
         ? undefined
         : { authorProfile: record.authorProfile, body: record.body },
-      principalOf(myProfile, "represents-principal") !== undefined &&
-        principalOf(message, "authored-by") ===
-          principalOf(myProfile, "represents-principal"),
+      reader !== undefined && principalOf(message, "authored-by") === reader,
       kind,
       isOwner === true,
       ownersMayObliterate === true,
@@ -274,14 +353,27 @@ export const FabriChatMessageRow = pattern<
     return editing !== undefined && equals(editing, message);
   });
   const text = computed(() => bodyText(message.get()));
+  const attachments = computed((): Cell<FileEntry>[] =>
+    message.get()?.attachments ?? []
+  );
   const isEdited = computed(() => {
     const record = message.get();
     return record?.editedAt !== undefined && typeof record.body === "string";
   });
+  // The message this one answers, in whichever list shows it.
   const quote = computed(() => {
-    const reply = message.get()?.replyTo;
-    return reply?.shownIn === "main" ? bodyText(reply.message.get()) : "";
+    const quoted = message.get()?.replyTo?.quotes;
+    return quoted === undefined ? "" : bodyText(quoted.get());
   });
+  // Whether the message is in a thread: shown in the conversation only when
+  // it was sent to both, where it is marked as in its thread, and opens that
+  // thread rather than starting one of its own.
+  const inAThread = computed(() =>
+    message.get()?.replyTo?.thread?.get() !== undefined
+  );
+  const inThreadMarkerDisplay = computed((): ChatDisplay =>
+    !inThread && inAThread ? "inline-flex" : "none"
+  );
   // How many replies the thread the message roots holds. The room derives
   // every message's place at once, from its messages alone, so whichever
   // runtime runs the room computes them for every viewer. The row reads its
@@ -327,7 +419,19 @@ export const FabriChatMessageRow = pattern<
   );
   const pickerLabel = computed(() => (pickerOpen.get() === true ? "✕" : "☺+"));
   const startReply = action(() => composer.key("replyTo").set(message));
-  const openThread = action(() => composer.key("thread").set(message));
+  const startThreadReply = action(() =>
+    composer.key("threadQuotes").set(message)
+  );
+  const openThread = action(() => {
+    composer.key("thread").set(message);
+    composer.key("threadQuotes").set(undefined);
+  });
+  const openOwnThread = action(() => {
+    const root = message.get()?.replyTo?.thread;
+    if (root?.get() === undefined) return;
+    composer.key("thread").set(root.resolveAsCell());
+    composer.key("threadQuotes").set(undefined);
+  });
   const startEdit = action(() => composer.key("editing").set(message));
   const stopEdit = action(() => composer.key("editing").set(undefined));
 
@@ -439,6 +543,9 @@ export const FabriChatMessageRow = pattern<
                     </cf-text>
                   </cf-cfc-authorship>
                 )}
+              {attachments.map((entry) => (
+                <FabriChatAttachment entry={entry} />
+              ))}
               {isEdited ? <cf-text variant="caption">(edited)</cf-text> : null}
               <div
                 data-ui-pattern={CHAT_EDIT_SURFACE}
@@ -525,6 +632,15 @@ export const FabriChatMessageRow = pattern<
               >
                 {threadLabel}
               </cf-button>
+              <cf-button
+                size="sm"
+                variant="link"
+                hidden
+                style={{ display: inThreadMarkerDisplay }}
+                onClick={openOwnThread}
+              >
+                In a thread
+              </cf-button>
             </cf-vstack>
           </div>
           <cf-hstack slot="actions" gap="1" align="center">
@@ -584,7 +700,14 @@ export const FabriChatMessageRow = pattern<
                   Reply
                 </cf-button>
               )}
-            {isDeletedNow || inThread
+            {isDeletedNow || !inThread
+              ? null
+              : (
+                <cf-button size="sm" variant="ghost" onClick={startThreadReply}>
+                  Reply
+                </cf-button>
+              )}
+            {isDeletedNow || inThread || inAThread
               ? null
               : (
                 <cf-button size="sm" variant="ghost" onClick={openThread}>

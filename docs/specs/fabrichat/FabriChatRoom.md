@@ -16,13 +16,28 @@ The room keeps these `PerSpace` values, shared by everyone the space admits:
   list in the order the room recorded them, each message an object pushed onto
   it and so a document of its own. Each message links a list of its own
   reactions, a document the send that made the message makes, which each
-  reaction is pushed onto.
+  reaction is pushed onto, and links each file it attaches, an entry of its
+  space's store, which the send reads to check it and the room never writes.
 - Those who joined the room: profile links, in the order they were added, a
   roster only `addParticipant` writes
   (`packages/patterns/loom/participants.tsx`).
 - The title a member last set: one keyed record, absent until a member sets
   one, which only `commitSetTitle` writes. `about.title` is computed from it
   and, where it is absent, from the title `about.record` holds.
+- What the room keeps about its threads, `threadInfo`: one keyed record per
+  thread, keyed by its root, absent until a member titles the thread, holding
+  the root's own cell and the thread's `title`. A send that starts a thread with
+  a `threadTitle` writes one, and so does `commitSetThreadTitle`. A thread's
+  summary takes its `title` from it and, where it is absent, from its root's
+  text (see [`ChatThreadSummary`](ChatThreadSummary.md#titles)).
+- Where the room keeps its space's file store, for a room that is its space's
+  root: a `FileStoreRecord`, `{}` until `ensureFileStore` creates the store
+  (see [`FileStore`](../fabrifile/FileStore.md#where-it-lives)), which it
+  offers as `fileStoreRecord`. A room that isn't its space's root keeps none,
+  and reads the record its container offers as `fileStoreRecord` instead.
+  `ensureFileStore` sends the store's own handler only where the container
+  offers one, since its binding to the container's field reads as one whether
+  or not it is there.
 
 `participants` is computed from those who joined, the participants the space's
 root lists when the room is not that root (`wish({ query: "#default" })`), and
@@ -35,20 +50,48 @@ when they're read. Neither is stored. `viewer` and `messageRights` are computed
 for each reader too, `viewer` from their profile and access, and
 `messageRights` from those and the messages, for every message at once.
 
-`participantEntries` is computed from `participants`, reading the
-`represents-principal` label on each profile with `principalOf()`, and
+`participantEntries` is computed from `participants`, reading whose own profile
+each is with `profileOwnerOf()`, and
 `participantPrincipals` is computed from those entries. A profile lives in its
 owner's own space, so a reader that space refuses reads no principal from it.
-Both are derived per session, so each session reads instances of its own,
-derived under its own access.
+Both are derived per user, so each user reads instances of their own, derived
+under their own access, which every session of theirs shares.
 
-The `PerSession` values in the contract are `participantEntries` and
+The contract's derived `PerUser` values are `participantEntries` and
 `participantPrincipals`.
 
-The room's `[UI]` keeps its composer's state, the draft and the reply being
-composed, as a `PerSession` value of its own, so two placements of the same room
-open in one session show the same composer state, as one conversation shown
-twice should.
+The room's `[UI]` keeps its composer's state, the drafts, the reply and the
+attachments being composed, in `PerSession` values of its own, so two
+placements of the same room open in one session show the same composer state,
+as one conversation shown twice should.
+
+The main composer and each thread hold independent drafts, each with the exact
+text and the identity of its latest edit. Each thread composer owns a draft cell,
+under the mapped occurrence identity of its root's cell. Only the selected
+thread's composer is rendered; returning to a thread, including after closing
+its panel, restores its draft. A thread submit captured before the selected
+thread changed is refused, so its text cannot be sent to another thread. A
+refused send keeps its draft. An accepted send clears only the submitted edit,
+in the transaction that appends
+the message; a newer edit survives even when it has the same text. The submit
+gesture carries the text to store, so a pending draft update cannot change a
+message's body. Whitespace-only text is checked separately from the text kept
+in the message.
+
+The main composer attaches files. Its attach control sends the room's
+`ensureFileStore` as it opens its file picker, so that the space has a store by
+the time a file is picked. Each file it stores in the blob store it adds to the
+space's store with `add`, under its own name or a free one
+([FabriFile's clients](../fabrifile/clients.md#adding-a-file)), and keeps in the
+composer as that request, which the composer shows as being attached, attached,
+or refused with the store's reason. A file can be taken out before the send,
+and its entry stays in the store. The composer's send attaches the entries the
+store added, in the order the files were picked, leaves out any the store
+refused, and waits, refusing the send, while a file is still being added; it
+reads each request's outcome by its id alone. A send ends the composer's
+attachments. Picking more files than the room's `maxAttachments`, or picking
+any in a space that still has no store, is refused. The thread composer
+attaches nothing.
 
 ## Writers
 
@@ -66,14 +109,29 @@ Every write goes through one handler per stream:
 | `commitSendReaction` | `sendReaction` | `ChatReactSurface` |
 | `commitDeleteReaction` | `deleteReaction` | `ChatReactSurface` |
 | `commitSetTitle` | `setTitle` | `ChatRetitleSurface` |
+| `commitSetThreadTitle` | `setThreadTitle` | `ChatRetitleSurface` |
 
-The four send handlers differ only in where a send's reply comes from:
+The four send handlers take a send's reply from different sources:
 `commitSend` takes it from the event, `commitComposerSend` from the reply the
 composer is composing, which a sent message ends, `commitThreadSend` from the
-open thread, and `commitReply` from the message its control is bound to. They
-admit and record a send alike, and are called the send handlers below. Each
+open thread and the message of it the thread composer quotes, which a sent
+message ends, and `commitReply` from the message its control is bound to, which
+it quotes, in that message's thread, or the one it roots. They admit and record
+a send alike, and are called the send handlers below. Each checks a send's
+reply before it writes: that its links fit where it is shown, that its
+`thread` is one of the room's messages in no thread, and that its `quotes` is
+one of the room's messages, in that thread where it names one (see
+[`ChatReply`](ChatReply.md#threads)), which reads at most those two messages. Each
 handler is bound to the cells it reads or writes and no others, and reads at
 most the message it acts on: nothing it does grows with the room.
+
+The room's own composer and message-row handlers also check the message they
+quote at send time: it must not be deleted or obliterated, and a main reply
+must quote a message shown in the main conversation. A target deleted after
+composition started therefore refuses the send. A plain post in a thread
+quotes nothing and remains possible when the root is deleted. `commitSend`
+leaves these client responsibilities to its caller, as specified by
+[`sendMessage`](ChatRoomOutput.md#sendmessagebody-string-replyto-chatreply-threadtitle-string-attachments-cellfileentry).
 
 Those who joined the room are the exception. The room's `addParticipant`
 stream is bound to the roster's one writer, also named `addParticipant`, which
@@ -127,6 +185,9 @@ a message another room's rules govern, and what keeps a reply from linking
 the room to a document of another space.
 
 `commitEdit` and `commitDelete` are admitted only for the message's own sender.
+They compare the authenticated event actor with the message's `authored-by`
+attestation. A resolved profile is required, but selecting a profile neither
+grants nor removes the actor's authorship rights.
 `commitEdit` records the new text in place, with the time as `editedAt`.
 `commitDelete` records the deletion, which keeps the author and drops the text
 and the message's link to its reactions, or, when the room's
@@ -139,9 +200,13 @@ room as in a group room or a space's own chat, when the room's policy states
 handler is bound to that setting as a value, the same value that picks which
 policy document `about.policy` links, so a room enforces what it states, and a
 binding without the setting lets no OWNER obliterate. One function,
-`messageRightsOf()`, states who may edit, delete, and obliterate a message: the
-three handlers admit an act by it, and `messageRights` and the rendering's
-controls offer one by it, so what a reader is offered is what the room takes.
+`messageRightsOf()`, states who may edit, delete, and obliterate a message from
+its authorship and moderation facts. Handlers identify the author by the
+authenticated actor. Displayed `messageRights` and controls use the owner of
+the viewer's selected profile, as `profileOwnerOf()` determines from its
+attestation and name-chain ownership. Authenticated actor identity is available
+only inside handlers, so a selected profile can offer a
+control the handler refuses. Obliteration needs no resolved profile.
 `commitObliterate` rewrites the message to its tombstone, which drops its author
 and its link to its reactions. So the message's write policy admits it alongside
 the send handlers, `commitEdit`, and `commitDelete`.
@@ -160,7 +225,9 @@ asked.
 onto it unless the sender already has one there with that emoji.
 `commitDeleteReaction` reads the list, and removes the sender's reaction with
 that emoji by its cell, with `removeByValue()`, the mergeable removal, so a
-reaction added and one removed at the same moment both land. The reactions
+reaction added and one removed at the same moment both land. It checks the
+reaction's `authored-by` attestation against the authenticated actor. Reaction
+addition and tallying identify reactors by profile. The reactions
 are a separately authorized part of the message: the list is a document of
 its own, which the send that made the message made and the message links, so
 the send handlers and `commitEdit` can't write a reaction, and the reaction
@@ -175,7 +242,12 @@ that creates the room, so it is labeled with its creator, and `about` links it.
 own, so it is labeled with that member, and the creator's record keeps its
 label. It records each retitle's outcome in the sender's own `titleRequests`,
 kept `PerUser`, under the event's `requestId`, and a request already there
-changes nothing; a refusal writes nothing else.
+changes nothing; a refusal writes nothing else. A thread's title is stored the
+same way, labeled with the member who last set it, by `commitSetThreadTitle`,
+which records its outcomes in `threadTitleRequests`, and by `commitSend` and
+`commitThreadSend` for a send that titles the thread it starts. Its record's
+policy names those three, and a later schema can neither add a writer to a
+stored policy nor drop one.
 `canSend` is computed for each viewer from their access and whether their
 profile resolves.
 
@@ -197,10 +269,12 @@ each setting at an initial value:
 | How long an entry stays in `recentActivity` | `recentActivityWindowNsec` | 10 minutes |
 | How many of the newest messages `messages.latest` holds | `maxWindowCount` | 100 |
 | The most message windows a session can have open | `maxOpenWindows` | 50 |
+| The most attachments a message may have | `maxAttachments` | 10 |
 
 These are the first build's values. Once the configuration exists, rooms can
 differ from them. The room reads `ownersMayObliterate`,
-`deletionIsObliteration`, and `maxWindowCount`; the other keys are stated for
+`deletionIsObliteration`, `maxWindowCount`, and `maxAttachments`; the other
+keys are stated for
 the policy's shape, which a user's Home carries, and read by nothing. `ownersMayObliterate` is there for a group room with many
 OWNERs; a direct room is set up without it, and its two people each obliterate
 only their own messages. The room's kind picks which policy document

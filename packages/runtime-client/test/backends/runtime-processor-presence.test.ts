@@ -34,6 +34,7 @@ const presenceRuntime = (
     open: () => ({ joinPresenceRoom: join, replica: {} }),
     scopeKeyIdentity: () => identity,
   },
+  releaseUnreadDocuments: () => Promise.resolve(),
 });
 
 const postingClient = (id: number) => {

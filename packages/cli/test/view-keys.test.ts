@@ -43,13 +43,49 @@ Deno.test("decode: SGR mouse wheel reports", () => {
   assertEquals(names(bytes("\x1b[<65;12;7M")), ["wheel-down"]);
   assertEquals(names(bytes("\x1b[<68;12;7M")), ["wheel-up"]);
   assertEquals(names(bytes("\x1b[<69;12;7M")), ["wheel-down"]);
-  assertEquals(names(bytes("\x1b[<0;12;7M")), ["unknown"]);
   assertEquals(names(bytes("\x1b[<65;12;7m")), ["unknown"]);
+});
+
+Deno.test("decode: SGR primary-button presses and releases carry their cell", () => {
+  assertEquals(decodeKeys(bytes("\x1b[<0;12;7M\x1b[<0;13;7m")).keys, [
+    { name: "mouse", mouse: { down: true, x: 11, y: 6 } },
+    { name: "mouse", mouse: { down: false, x: 12, y: 6 } },
+  ]);
+  // A shift-click is still a click.
+  assertEquals(names(bytes("\x1b[<4;1;1M")), ["mouse"]);
+  // The middle and right buttons are not the primary button, and a report of
+  // the pointer moving is not a press.
+  for (const report of ["<1;12;7M", "<1;12;7m", "<2;12;7M", "<2;12;7m"]) {
+    assertEquals(names(bytes(`\x1b[${report}`)), ["unknown"], report);
+  }
+  assertEquals(names(bytes("\x1b[<32;12;7M")), ["unknown"]);
+});
+
+Deno.test("decode: an SGR mouse report missing a number is unknown", () => {
+  for (const report of ["<M", "<0M", "<0;5M", "<;;M", "<0;5;M", "<0;5;7;1M"]) {
+    assertEquals(names(bytes(`\x1b[${report}`)), ["unknown"], report);
+  }
 });
 
 Deno.test("decode: X10 mouse wheel reports", () => {
   assertEquals(names(raw(0x1b, 0x5b, 0x4d, 96, 33, 33)), ["wheel-up"]);
   assertEquals(names(raw(0x1b, 0x5b, 0x4d, 97, 33, 33)), ["wheel-down"]);
+});
+
+Deno.test("decode: X10 presses and releases carry their cell", () => {
+  // Each byte is its value plus 32; the cell is one-based; a release is
+  // button 3.
+  assertEquals(
+    decodeKeys(raw(0x1b, 0x5b, 0x4d, 32, 44, 39, 0x1b, 0x5b, 0x4d, 35, 33, 33))
+      .keys,
+    [
+      { name: "mouse", mouse: { down: true, x: 11, y: 6 } },
+      { name: "mouse", mouse: { down: false, x: 0, y: 0 } },
+    ],
+  );
+  // The right button, and the pointer moving.
+  assertEquals(names(raw(0x1b, 0x5b, 0x4d, 34, 33, 33)), ["unknown"]);
+  assertEquals(names(raw(0x1b, 0x5b, 0x4d, 64, 33, 33)), ["unknown"]);
 });
 
 Deno.test("decode: an incomplete X10 mouse report remains buffered", () => {

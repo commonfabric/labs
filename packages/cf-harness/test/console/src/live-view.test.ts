@@ -4,6 +4,7 @@ import { join } from "@std/path";
 import { spy } from "@std/testing/mock";
 import { FakeTime } from "@std/testing/time";
 import { nothing } from "lit";
+import { urlToAppView } from "@commonfabric/navigation";
 import {
   ConsoleLive,
   consoleLiveAddress,
@@ -70,9 +71,11 @@ describe("console/src/live-view", () => {
       looms: [],
       pieces: [{
         slug: "reading-list",
-        url: "http://localhost:8000/my-space/reading-list",
+        url:
+          "http://localhost:8000/did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK/reading-list",
+        space: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
       }],
-      spaceName: "my-space",
+      spaceName: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
       finalText: "built it",
     },
   };
@@ -364,7 +367,6 @@ describe("console/src/live-view", () => {
         answer: "Bought **cfh:v:22222**.",
         revealed: { "cfh:v:22222": "https://shop.example/item/7" },
         pieces: [],
-        spaceName: "s",
       }]);
     });
 
@@ -447,7 +449,6 @@ describe("console/src/live-view", () => {
         outcome: "completed",
         answer: "built it",
         pieces: [{ slug: "reading-list", url: "http://localhost:8000/s/r" }],
-        spaceName: "s",
       });
     });
 
@@ -628,27 +629,41 @@ describe("console/src/live-view", () => {
   });
 
   describe("consoleLivePieceHref()", () => {
-    const piece = { slug: "reading list", url: "http://localhost:8000/s/r" };
+    const space = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+    const piece = {
+      slug: "reading-list",
+      url: `http://localhost:8000/${space}/reading-list`,
+      space,
+    } as const;
 
     it("returns the address the run recorded when no base is named", () => {
-      expect(consoleLivePieceHref(piece, "my space", undefined)).toBe(
-        "http://localhost:8000/s/r",
-      );
+      expect(consoleLivePieceHref(piece, undefined)).toBe(piece.url);
     });
 
-    it("returns an address under the base a host renders pieces at", () => {
-      expect(consoleLivePieceHref(
-        piece,
-        "my space",
-        "http://localhost:9901/pattern-pane",
-      )).toBe("http://localhost:9901/pattern-pane/my%20space/reading%20list");
+    it("returns the piece's address under the base a host renders pieces at", () => {
+      expect(consoleLivePieceHref(piece, "http://localhost:9901/pattern-pane"))
+        .toBe(`http://localhost:9901/pattern-pane/${space}/reading-list`);
+      // Written as the shell writes it, so the shell reads back this piece.
+      expect(
+        urlToAppView(
+          new URL(consoleLivePieceHref(piece, "http://localhost:9901")),
+        ),
+      ).toEqual({ spaceDid: space, pieceSlug: "reading-list" });
     });
 
-    it("returns the recorded address for a result naming no space", () => {
-      // Without the space there is nothing to compose against, and inventing
-      // one would send the reader to a piece that is not theirs.
-      expect(consoleLivePieceHref(piece, undefined, "http://host.test/p")).toBe(
-        "http://localhost:8000/s/r",
+    it("takes nothing of the recorded address but the space and slug", () => {
+      const queried = {
+        ...piece,
+        url: `http://localhost:8000/api/v1/${space}/reading-list?t=1#top`,
+      };
+      expect(consoleLivePieceHref(queried, "http://host.test/p"))
+        .toBe(`http://host.test/p/${space}/reading-list`);
+    });
+
+    it("returns the recorded address for a piece that recorded no space", () => {
+      const { space: _space, ...unplaced } = piece;
+      expect(consoleLivePieceHref(unplaced, "http://host.test/p")).toBe(
+        piece.url,
       );
     });
   });
@@ -2274,7 +2289,7 @@ describe("console/src/live-view", () => {
       view.entries = consoleLiveEntries(log(COMPLETED_WITH_PIECE));
 
       expect(templateText(view.view())).toContain(
-        "http://localhost:8000/my-space/reading-list",
+        "http://localhost:8000/did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK/reading-list",
       );
     });
 
@@ -2288,9 +2303,11 @@ describe("console/src/live-view", () => {
 
       const text = templateText(view.view());
       expect(text).toContain(
-        "http://localhost:9901/pattern-pane/my-space/reading-list",
+        "http://localhost:9901/pattern-pane/did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK/reading-list",
       );
-      expect(text).not.toContain("http://localhost:8000/my-space/reading-list");
+      expect(text).not.toContain(
+        "http://localhost:8000/did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK/reading-list",
+      );
     });
 
     it("renders why a refused piece base is not being used", () => {
@@ -2553,6 +2570,7 @@ describe("console/src/live-view", () => {
         toolStarted("call-2", "browser"),
         toolStarted("call-3", "browser"),
         toolStarted("call-4", "browser"),
+        toolStarted("call-5", "run_read_command"),
       ));
       view.details = new Map([["turn-1", {
         ...await runDetail(),
@@ -2578,6 +2596,10 @@ describe("console/src/live-view", () => {
             "denied",
             "cfc_enforce_strict_requires_direct_command",
           ),
+          step("call-5", "allowed", "cfc_enforce_strict_host_command_read", {
+            role: "context",
+            surface: "cli",
+          }),
         ],
       }]]);
 
@@ -2593,6 +2615,9 @@ describe("console/src/live-view", () => {
       );
       expect(text).toContain(
         "Blocked</span> Nothing records who asked for this work, so the check could not trace it back to a request from you.",
+      );
+      expect(text).toContain(
+        "The host allows this context task to discover commands and invoke only its granted read commands.",
       );
     });
 

@@ -23,12 +23,13 @@ import {
   markRendererTrustedEvent,
   reviewedActionProvenance,
 } from "@commonfabric/runner/cfc";
-import { setCfcImplementationIdentity } from "@commonfabric/runner/cfc/trust-authority";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+
+import { writeOwnProfile } from "./own-profile-fixture.ts";
 
 const signer = await Identity.fromPassphrase("fabrichat-manager");
 const home = signer.did();
@@ -66,32 +67,14 @@ const startClick = (
   return click;
 };
 
-// A stand-in for this user's `#profile`, labeled, as a Fabric profile is,
-// because a room's participants link only a document that carries a label.
+// A stand-in for this user's `#profile`, labeled because a room's participants
+// link only a document that carries a label. It names no principal, so it is
+// no one's own profile; a test that needs the user's own writes one with
+// `writeOwnProfile()`.
 const profileSchema = {
   type: "object",
   properties: { name: { type: "string" } },
   ifc: { addIntegrity: ["fabrichat-test-profile"] },
-  // deno-lint-ignore no-explicit-any
-} as any;
-
-// The writer that stands in for a profile's own handlers, which a
-// `represents-principal` claim needs.
-const PROFILE_WRITER = "fabrichat-manager-test-profile";
-
-// A profile labeled as representing the principal that writes it, as a
-// Fabric profile is.
-const ownProfileSchema = {
-  type: "object",
-  properties: { name: { type: "string" } },
-  ifc: {
-    addIntegrity: [{
-      kind: "represents-principal",
-      subject: { __ctCurrentPrincipal: true },
-    }],
-    ownerPrincipal: { __ctCurrentPrincipal: true },
-    writeAuthorizedBy: [PROFILE_WRITER],
-  },
   // deno-lint-ignore no-explicit-any
 } as any;
 
@@ -201,14 +184,7 @@ describe("fabrichat-manager", () => {
     const { send, manager } = await startManager();
     // The test's own profile, labeled as representing the principal the
     // manager runs for.
-    const tx = runtime.edit();
-    setCfcImplementationIdentity(tx, {
-      kind: "builtin",
-      builtinId: PROFILE_WRITER,
-    });
-    const own = runtime.getCell(home, "own profile", ownProfileSchema, tx);
-    own.set({ name: "Tester" });
-    expect((await tx.commit().settled).error).toBeUndefined();
+    const own = await writeOwnProfile(runtime, home, "own profile", "Tester");
     const link = own.toSigilLinkOrNull();
     if (link === null) throw new Error("The profile has no link.");
 

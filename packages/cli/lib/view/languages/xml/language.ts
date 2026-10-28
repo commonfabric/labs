@@ -7,8 +7,10 @@ import { xmlDocument, xmlLines } from "./xml.ts";
 /**
  * The XML language for the pager, which covers Android manifests, resources,
  * and layouts, SVG images, and Apple property lists, entitlements, and privacy
- * manifests. It provides syntax highlighting for direct files, diffs, and live
- * edits, and a structure tree of elements. XML has no semantic layer.
+ * manifests. It also covers any file that no name claims whose source starts
+ * with an XML declaration. It provides syntax highlighting for direct files,
+ * diffs, and live edits, and a structure tree of elements. XML has no semantic
+ * layer.
  */
 export const xmlLanguage: Language = {
   id: "xml",
@@ -28,6 +30,7 @@ export const xmlLanguage: Language = {
     filenamePatterns: [],
     aliases: ["svg", "plist"],
     interpreters: [],
+    signatures: ["<?xml"],
     sharedExtensions: [],
   },
 

@@ -277,7 +277,7 @@ function createFlatMapInstance(
   };
 
   const reconcile: Action = (tx: IExtendedStorageTransaction) => {
-    const rollback = trackListSetupRollback(tx, runtime, elementRuns);
+    const rollback = trackListSetupRollback(tx, elementRuns);
     const elementAwaitSync = resumeBatchAwaitSync;
     // The identity-bearing prefix — op, list materialization, scope, the
     // result container — is the plan the resume pre-sync shares, naming the
@@ -403,6 +403,12 @@ function createFlatMapInstance(
       return;
     }
 
+    // Checked first, so that a list builtin that fails leaves its container
+    // holding nothing rather than an empty list.
+    if (list !== undefined && !Array.isArray(list)) {
+      throw new Error("flatMap currently only supports arrays");
+    }
+
     // A fresh (non-resume) reconcile has no container yet; seed [] so the first
     // render has a value. On resume this is unreachable — the defer guard above
     // either holds for the still-loading container or sees the durable value, so
@@ -414,10 +420,6 @@ function createFlatMapInstance(
       probeScoped(() => resultWithLog.set([]));
       releaseRemovedElements(runtime, elementRuns, new Set());
       return;
-    }
-
-    if (!Array.isArray(list)) {
-      throw new Error("flatMap currently only supports arrays");
     }
 
     // The whole current key set has to exist before any element is touched:

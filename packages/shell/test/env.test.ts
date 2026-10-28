@@ -41,9 +41,6 @@ Deno.test({
 
     expect(mod.EXPERIMENTAL).toEqual({
       modernCellRep: true,
-      // Server-execution v2: the first-party default (the landed-dark
-      // constant) when the build define is unset.
-      serverExecution: SERVER_EXECUTION_DEFAULT_ENABLED,
       contentAddressedSchemas: true,
     });
   },
@@ -69,7 +66,7 @@ Deno.test({
 
 Deno.test({
   name:
-    "serverExecution: the build define selects the OFF arm (rollback lever) or forces ON",
+    "serverExecution: the build define selects the OFF arm (rollback lever) or forces ON, and the first-party default governs where nothing says",
   permissions: { read: true },
   async fn() {
     const off = await withPatchedGlobals({
@@ -86,7 +83,10 @@ Deno.test({
       $API_URL: "http://shell.test/",
       $EXPERIMENTAL_SERVER_EXECUTION: undefined,
     }, importFreshEnvModule);
-    expect(unset.EXPERIMENTAL.serverExecution).toBe(
+    expect(unset.EXPERIMENTAL.serverExecution).toBeUndefined();
+    // The worker refuses an arm its host did not declare, so the runtime is
+    // always handed one.
+    expect(unset.experimentalForDeployment({}).serverExecution).toBe(
       SERVER_EXECUTION_DEFAULT_ENABLED,
     );
   },
@@ -245,9 +245,32 @@ Deno.test({
 });
 
 for (
-  const [flag, defineName] of [
-    ["sharedMemoryConnection", "$EXPERIMENTAL_SHARED_MEMORY_CONNECTION"],
-    ["localSessionDocuments", "$EXPERIMENTAL_LOCAL_SESSION_DOCUMENTS"],
+  const [flag, defineName, shellDefault] of [
+    [
+      "sharedMemoryConnection",
+      "$EXPERIMENTAL_SHARED_MEMORY_CONNECTION",
+      undefined,
+    ],
+    [
+      "localSessionDocuments",
+      "$EXPERIMENTAL_LOCAL_SESSION_DOCUMENTS",
+      undefined,
+    ],
+    [
+      "serverExecution",
+      "$EXPERIMENTAL_SERVER_EXECUTION",
+      SERVER_EXECUTION_DEFAULT_ENABLED,
+    ],
+    [
+      "viewScopedReplication",
+      "$EXPERIMENTAL_VIEW_SCOPED_REPLICATION",
+      undefined,
+    ],
+    [
+      "webViewScopedReplication",
+      "$EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION",
+      undefined,
+    ],
   ] as const
 ) {
   Deno.test({
@@ -295,9 +318,12 @@ for (
           const resolved = mod.experimentalForDeployment(
             deployment.experimental,
           );
-          expect(resolved[flag]).toBeUndefined();
+          expect(resolved[flag]).toBe(shellDefault);
           // Nothing else moved.
-          expect(resolved).toEqual(mod.EXPERIMENTAL);
+          expect(resolved).toEqual({
+            ...mod.EXPERIMENTAL,
+            serverExecution: SERVER_EXECUTION_DEFAULT_ENABLED,
+          });
         });
       }
     },
@@ -343,8 +369,14 @@ Deno.test({
     }, importFreshEnvModule);
     // A deployment's word on any other flag does not reach the runtime: the
     // read restricts what it hands over, and this takes what it is handed.
-    expect(mod.experimentalForDeployment({ sharedMemoryConnection: true }))
-      .toEqual({ ...mod.EXPERIMENTAL, sharedMemoryConnection: true });
+    // The define pins serverExecution, so the deployment's word on it does
+    // not move it either.
+    expect(
+      mod.experimentalForDeployment({
+        sharedMemoryConnection: true,
+        serverExecution: true,
+      }),
+    ).toEqual({ ...mod.EXPERIMENTAL, sharedMemoryConnection: true });
     expect(mod.experimentalForDeployment({})).toEqual(mod.EXPERIMENTAL);
   },
 });

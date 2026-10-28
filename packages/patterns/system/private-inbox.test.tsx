@@ -39,6 +39,8 @@ import PrivateInbox, {
 
 /** A well-formed space DID for an offer to name. */
 const ROOM_SPACE = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+const PROFILE_SPACE =
+  "did:key:z6MkrJVnaZkeFzdQyMZu1cgjg7k1pZZ6pvBQ7XJPt4swbTQ2";
 
 /** A well-formed DID of a principal other than the test's. */
 const SOMEONE_ELSE = "did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH";
@@ -309,7 +311,70 @@ export default pattern(() => {
     return offer !== undefined && offer.kind === OFFER_DEFAULT_KIND &&
       offer.id === `${ROOM_SPACE}@${offer.sharedAt}` &&
       offer.sharedAt === offer.receivedAt && offer.ownerOrigin === "" &&
-      offer.title === "";
+      offer.title === "" && offer.toProfile === null;
+  });
+
+  // The profile an offer is for is kept, trimmed, when it names a DID, kept
+  // as `null` when the sender named none, so that the offer is to the person,
+  // and left out when it names something else, whatever its type, since the
+  // inbox cannot read that as naming no one.
+  const action_receive_for_profile = action(() => {
+    inbox.receive.send({
+      id: "for-profile",
+      space: ROOM_SPACE,
+      host: HOST,
+      from: me.get(),
+      toProfile: { space: `  ${PROFILE_SPACE}  ` },
+    });
+    inbox.receive.send({
+      id: "for-no-profile",
+      space: ROOM_SPACE,
+      host: HOST,
+      from: me.get(),
+      toProfile: { space: "not a did" },
+    });
+    inbox.receive.send({
+      id: "for-the-person",
+      space: ROOM_SPACE,
+      host: HOST,
+      from: me.get(),
+      toProfile: null,
+    });
+    inbox.receive.send({
+      id: "for-an-empty-space",
+      space: ROOM_SPACE,
+      host: HOST,
+      from: me.get(),
+      toProfile: { space: "   " },
+    });
+    inbox.receive.send({
+      id: "for-a-number",
+      space: ROOM_SPACE,
+      host: HOST,
+      from: me.get(),
+      toProfile: { space: 123 },
+    });
+    inbox.receive.send({
+      id: "for-a-bare-did",
+      space: ROOM_SPACE,
+      host: HOST,
+      from: me.get(),
+      toProfile: PROFILE_SPACE,
+    });
+  });
+  const assert_offer_keeps_the_profile_it_is_for = assert(() => {
+    const named = offerWithId(inbox.offers, "for-profile");
+    const malformed = offerWithId(inbox.offers, "for-no-profile");
+    const person = offerWithId(inbox.offers, "for-the-person");
+    const empty = offerWithId(inbox.offers, "for-an-empty-space");
+    const numbered = offerWithId(inbox.offers, "for-a-number");
+    const bare = offerWithId(inbox.offers, "for-a-bare-did");
+    return named?.toProfile?.space === PROFILE_SPACE &&
+      malformed !== undefined && !("toProfile" in malformed) &&
+      person !== undefined && person.toProfile === null &&
+      empty !== undefined && empty.toProfile === null &&
+      numbered !== undefined && !("toProfile" in numbered) &&
+      bare !== undefined && !("toProfile" in bare);
   });
 
   // Over-long strings are cut, and a host is cut before it is checked.
@@ -1451,6 +1516,8 @@ export default pattern(() => {
       { assertion: assert_padded_offer_trimmed },
       { action: action_receive_bare },
       { assertion: assert_bare_offer_defaulted },
+      { action: action_receive_for_profile },
+      { assertion: assert_offer_keeps_the_profile_it_is_for },
       { action: action_receive_long },
       { assertion: assert_long_offer_cut },
       { action: action_receive_refused },

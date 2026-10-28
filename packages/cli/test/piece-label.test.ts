@@ -1,14 +1,17 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
-import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
+import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { valueEqual } from "@commonfabric/data-model";
 import {
   FabricBytes,
   FabricEpochNsec,
 } from "@commonfabric/data-model/fabric-primitives";
 import { type Cell, Runtime } from "@commonfabric/runner";
-import { cfcLabelViewForCell } from "@commonfabric/runner/cfc";
+import {
+  cfcLabelViewForCell,
+  readStoredCfcMetadata,
+} from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import {
   getCellCfcLabel,
@@ -17,7 +20,6 @@ import {
 } from "../lib/piece.ts";
 import {
   getCellCfcLabelFromCommand,
-  piece,
   setCellCfcLabelFromCommand,
   setQuietMode,
 } from "../commands/piece.ts";
@@ -124,14 +126,6 @@ describe("cf piece CFC labels", () => {
         | undefined)?.actionHandler;
     expect(actionHandler(cell, "get-label")).toBe(getCellCfcLabelFromCommand);
     expect(actionHandler(cell, "set-label")).toBe(setCellCfcLabelFromCommand);
-    // The superseded mount runs the same function behind the notice, so its
-    // handler is the wrapper rather than the function itself.
-    expect(actionHandler(piece, "get-label")).not.toBe(
-      getCellCfcLabelFromCommand,
-    );
-    expect(actionHandler(piece, "set-label")).not.toBe(
-      setCellCfcLabelFromCommand,
-    );
 
     const options = {
       apiUrl: "https://example.com",
@@ -881,6 +875,393 @@ describe("cf piece CFC labels", () => {
     expect(stored?.label.confidentiality).toEqual(["finance"]);
   });
 
+  describe("lowering confidentiality", () => {
+    // Every clause here names the signer alone unless a case says otherwise,
+    // so the refusals a case pins come from what it varies.
+    const owner = cfcAtom.personalSpace(signer.did());
+    const lower = { lowerConfidentiality: true };
+
+    /** Labels the root's `body` with `confidentiality`, the ordinary way. */
+    const declareOnBody = (confidentiality: unknown[]) =>
+      setCellCfcLabel(
+        pieceConfig,
+        ["body"],
+        { confidentiality, observes: "value" },
+        {},
+        deps as never,
+      );
+
+    /** Writes `body` again in a transaction that reads nothing labeled. */
+    const rewriteBody = async (body: string) => {
+      const tx = runtime.edit();
+      root.withTx(tx).key("body").set(body);
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+    };
+
+    /**
+     * A user-scoped document written in a transaction that read the
+     * signer's personal data, so its root carries the derived `shape` and
+     * `value` entries such a write stamps, and the piece dependencies that
+     * select it.
+     */
+    const derivedQueue = async () => {
+      const secret = runtime.getCell<{ text: string }>(
+        signer.did(),
+        "cf-piece-label-personal-secret",
+        {
+          type: "object",
+          ifc: { confidentiality: [owner] },
+          properties: { text: { type: "string" } },
+        },
+      );
+      const seed = runtime.edit();
+      secret.withTx(seed).set({ text: "personal" });
+      runtime.prepareTxForCommit(seed);
+      expect((await seed.commit().settled).error).toBeUndefined();
+      const schema = {
+        type: "object",
+        properties: { items: { type: "array", items: { type: "string" } } },
+      } as const;
+      const base = runtime.getCell(
+        signer.did(),
+        "cf-piece-label-queue",
+        schema,
+      );
+      const queue = runtime.getCellFromLink(
+        { ...base.getAsNormalizedFullLink(), scope: "user" },
+        schema,
+      );
+      const derive = runtime.edit();
+      const read = secret.withTx(derive).get();
+      queue.withTx(derive).set({ items: [read.text.toUpperCase()] });
+      runtime.prepareTxForCommit(derive);
+      expect((await derive.commit().settled).error).toBeUndefined();
+      const queueDeps = {
+        ...deps,
+        loadPieces: () =>
+          Promise.resolve({
+            runtime,
+            get: () =>
+              Promise.resolve({
+                input: { getCell: () => Promise.resolve(queue) },
+                result: { getCell: () => Promise.resolve(queue) },
+              }),
+            synced: () => Promise.resolve(),
+          }),
+      };
+      return { queue, queueDeps };
+    };
+
+    it("refuses to drop a declared clause without the flag, and keeps it", async () => {
+      await declareOnBody([owner]);
+
+      await expect(setCellCfcLabel(
+        pieceConfig,
+        ["body"],
+        { confidentiality: [] },
+        {},
+        deps as never,
+      )).rejects.toThrow("confidentiality cannot be weakened");
+      expect(
+        await getCellCfcLabel(pieceConfig, ["body"], {}, deps as never),
+      ).toEqual({
+        version: 1,
+        entries: [{
+          path: [],
+          label: { confidentiality: [owner] },
+          observes: "value",
+        }],
+      });
+    });
+
+    it("removes a declared clause with the flag, and a later declaration does not restore it", async () => {
+      await declareOnBody([owner]);
+
+      expect(
+        await setCellCfcLabel(
+          pieceConfig,
+          ["body"],
+          { confidentiality: [] },
+          lower,
+          deps as never,
+        ),
+      ).toBeNull();
+      // A declaration merges into the stored schema and re-mints the label
+      // from the merge, so the clause staying gone shows the stored schema
+      // lost it too.
+      await rewriteBody("rewritten");
+      expect(await declareOnBody([cfcAtom.user(signer.did())])).toEqual({
+        version: 1,
+        entries: [{
+          path: [],
+          label: { confidentiality: [cfcAtom.user(signer.did())] },
+          observes: "value",
+        }],
+      });
+    });
+
+    it("keeps the clauses the input names and removes the others", async () => {
+      await declareOnBody([owner, cfcAtom.user(signer.did())]);
+
+      const updated = await setCellCfcLabel(
+        pieceConfig,
+        ["body"],
+        { confidentiality: [cfcAtom.user(signer.did())] },
+        lower,
+        deps as never,
+      );
+
+      expect(updated).toEqual({
+        version: 1,
+        entries: [{
+          path: [],
+          label: { confidentiality: [cfcAtom.user(signer.did())] },
+          observes: "value",
+        }],
+      });
+    });
+
+    it("refuses the derived shape and value entries without the flag", async () => {
+      const { queueDeps } = await derivedQueue();
+      const stamped = {
+        version: 1,
+        entries: [
+          { path: [], label: { confidentiality: [owner] }, observes: "shape" },
+          { path: [], label: { confidentiality: [owner] }, observes: "value" },
+        ],
+      };
+      expect(await getCellCfcLabel(pieceConfig, [], {}, queueDeps as never))
+        .toEqual(stamped);
+
+      await expect(setCellCfcLabel(
+        pieceConfig,
+        [],
+        { confidentiality: [] },
+        {},
+        queueDeps as never,
+      )).rejects.toThrow("multiple observation classes");
+      await expect(setCellCfcLabel(
+        pieceConfig,
+        [],
+        { confidentiality: [], observes: "value" },
+        {},
+        queueDeps as never,
+      )).rejects.toThrow("already uses a different observation class");
+      expect(await getCellCfcLabel(pieceConfig, [], {}, queueDeps as never))
+        .toEqual(stamped);
+    });
+
+    it("clears the derived shape and value entries with the flag, and keeps the label-metadata templates", async () => {
+      const { queue, queueDeps } = await derivedQueue();
+      const templates = () => {
+        const tx = runtime.edit();
+        try {
+          return readStoredCfcMetadata(tx, queue.getAsNormalizedFullLink())
+            ?.labelMap.documentEntries;
+        } finally {
+          tx.abort();
+        }
+      };
+      const before = templates();
+      expect(before?.length).toBeGreaterThan(0);
+
+      expect(
+        await setCellCfcLabel(
+          pieceConfig,
+          [],
+          { confidentiality: [] },
+          lower,
+          queueDeps as never,
+        ),
+      ).toBeNull();
+      const overwrite = runtime.edit();
+      queue.withTx(overwrite).set({ items: ["clean"] });
+      runtime.prepareTxForCommit(overwrite);
+      expect((await overwrite.commit().settled).error).toBeUndefined();
+      expect(await getCellCfcLabel(pieceConfig, [], {}, queueDeps as never))
+        .toBeNull();
+      expect(templates()).toEqual(before);
+    });
+
+    it("lowers the label in the doc a write redirect lands in", async () => {
+      const linked = runtime.getCell<string>(
+        signer.did(),
+        "cf-piece-label-lowered-redirect-target",
+        { type: "string" },
+      );
+      const seed = runtime.edit();
+      linked.withTx(seed).set("redirected value");
+      root.withTx(seed).key("body").setRawUntyped(
+        linked.getAsWriteRedirectLink({ includeSchema: true }),
+      );
+      runtime.prepareTxForCommit(seed);
+      expect((await seed.commit().settled).error).toBeUndefined();
+      await declareOnBody([owner]);
+      expect(cfcLabelViewForCell(linked)?.entries[0].label.confidentiality)
+        .toEqual([owner]);
+
+      await setCellCfcLabel(
+        pieceConfig,
+        ["body"],
+        { confidentiality: [] },
+        lower,
+        deps as never,
+      );
+
+      await linked.pull();
+      expect(cfcLabelViewForCell(linked)).toBeUndefined();
+    });
+
+    it("refuses a clause that names anyone but the identity, and keeps it", async () => {
+      const other = (await Identity.fromPassphrase("cf-piece-label-other"))
+        .did();
+      // Each round stores one more clause and asks to remove only that one,
+      // so each refusal is that clause's.
+      const stored: unknown[] = [];
+      for (
+        const clause of [
+          "team",
+          cfcAtom.user(other),
+          { anyOf: [cfcAtom.user(signer.did()), cfcAtom.user(other)] },
+        ]
+      ) {
+        const kept = [...stored];
+        stored.push(clause);
+        await declareOnBody(stored);
+
+        await expect(setCellCfcLabel(
+          pieceConfig,
+          ["body"],
+          { confidentiality: kept },
+          lower,
+          deps as never,
+        )).rejects.toThrow(`is not ${signer.did()}'s alone to release`);
+      }
+      expect(
+        (await getCellCfcLabel(pieceConfig, ["body"], {}, deps as never))
+          ?.entries[0].label.confidentiality,
+      ).toHaveLength(3);
+    });
+
+    it("refuses a document in a space whose DID is not the identity's, and keeps its label", async () => {
+      const space = (await Identity.fromPassphrase("cf-piece-label-space"))
+        .did();
+      const elsewhere = runtime.getCell<{ body: string }>(
+        space,
+        "cf-piece-label-elsewhere",
+        {
+          type: "object",
+          properties: {
+            body: { type: "string", ifc: { confidentiality: [owner] } },
+          },
+        },
+      );
+      const seed = runtime.edit();
+      elsewhere.withTx(seed).set({ body: "hello" });
+      runtime.prepareTxForCommit(seed);
+      expect((await seed.commit().settled).error).toBeUndefined();
+      const elsewhereDeps = {
+        ...deps,
+        loadPieces: () =>
+          Promise.resolve({
+            runtime,
+            get: () =>
+              Promise.resolve({
+                input: { getCell: () => Promise.resolve(elsewhere) },
+                result: { getCell: () => Promise.resolve(elsewhere) },
+              }),
+            synced: () => Promise.resolve(),
+          }),
+      };
+      const config = { ...pieceConfig, space };
+
+      await expect(setCellCfcLabel(
+        config,
+        ["body"],
+        { confidentiality: [] },
+        lower,
+        elsewhereDeps as never,
+      )).rejects.toThrow("only in their own space");
+      expect(
+        (await getCellCfcLabel(config, ["body"], {}, elsewhereDeps as never))
+          ?.entries[0].label.confidentiality,
+      ).toEqual([owner]);
+    });
+
+    it("refuses an input naming a clause the path does not store", async () => {
+      await declareOnBody([owner]);
+
+      await expect(setCellCfcLabel(
+        pieceConfig,
+        ["body"],
+        { confidentiality: [owner, cfcAtom.user(signer.did())] },
+        lower,
+        deps as never,
+      )).rejects.toThrow("the path stores no such clause");
+      expect(
+        (await getCellCfcLabel(pieceConfig, ["body"], {}, deps as never))
+          ?.entries[0].label.confidentiality,
+      ).toEqual([owner]);
+    });
+
+    it("refuses a lowering input that is not a confidentiality list alone", async () => {
+      await declareOnBody([owner]);
+
+      for (
+        const input of [
+          { integrity: [] },
+          { confidentiality: [], integrity: [] },
+          { confidentiality: [], observes: "value" },
+        ]
+      ) {
+        await expect(setCellCfcLabel(
+          pieceConfig,
+          ["body"],
+          input,
+          lower,
+          deps as never,
+        )).rejects.toThrow("Lowering confidentiality");
+      }
+      expect(
+        (await getCellCfcLabel(pieceConfig, ["body"], {}, deps as never))
+          ?.entries[0].label.confidentiality,
+      ).toEqual([owner]);
+    });
+
+    it("passes the flag from the command line to the update", async () => {
+      const calls: unknown[][] = [];
+      const run = (options: Record<string, unknown>) =>
+        setCellCfcLabelFromCommand(
+          {
+            apiUrl: "https://example.com",
+            identity: "/identity.key",
+            space: signer.did(),
+            cell: "piece",
+            quiet: true,
+            ...options,
+          },
+          "queue",
+          {
+            drainStdin: () => Promise.resolve({ confidentiality: [] }),
+            setCellCfcLabel: ((...args: unknown[]) => {
+              calls.push(args);
+              return Promise.resolve(null);
+            }) as never,
+            render: () => {},
+          },
+        );
+
+      await run({ dangerouslyAllowLoweringConfidentiality: true });
+      await run({});
+
+      expect(calls.map((call) => call[3])).toEqual([
+        { input: undefined, lowerConfidentiality: true },
+        { input: undefined },
+      ]);
+    });
+  });
+
   it("documents JSON input and output on both commands", async () => {
     const getHelp = await cf(argv`cell get-label --help`);
     expect(getHelp.code).toBe(0);
@@ -894,8 +1275,9 @@ describe("cf piece CFC labels", () => {
     const text = stripAnsi(setHelp.stdout.join("\n"));
     expect(text).toContain("from JSON on stdin");
     expect(text).toMatch(
-      /Confidentiality\s+may only become\s+more restrictive/,
+      /confidentiality\s+may only become\s+more restrictive/,
     );
+    expect(text).toContain("--dangerously-allow-lowering-confidentiality");
     expect(text).toContain("--json");
   });
 });

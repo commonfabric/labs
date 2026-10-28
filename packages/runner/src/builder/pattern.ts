@@ -252,32 +252,40 @@ export function patternFromFrame<T, R>(
   );
 }
 
+/** The top-level record keys no user-supplied cause may carry. */
+const RESERVED_CAUSE_KEYS = ["$generated", "$instance"] as const;
+
 /**
- * Reject user-supplied causes carrying a top-level `$generated` record key.
+ * Rejects a user-supplied cause carrying a top-level `$generated` or
+ * `$instance` record key.
  *
- * That key marks the causes the pattern builder mints itself
- * (`{ $generated: N }`, plus `$kind` on streams and `name` on duplicate-name
- * wraps, and `{ $generated: "instance", name }` for a named sub-pattern
- * instance): a user cause like `Cell.for({ $generated: 0 })` would deliberately
- * mimic that namespace, and keeping the namespaces disjoint is what lets the
- * partial-cause assignment in `factoryFromPattern` skip collision checks for
- * generated causes entirely. `$generated` alone suffices — every builder-minted
- * cause carries it, so a cause without it can never hash-equal one (`$kind`
- * and other sigil-looking keys stay usable). Only the top level matters —
- * causes collide as whole records under the canonical value hash, and every
- * builder-minted cause is a flat record, so a `$generated` nested deeper can
- * never equal one.
+ * Those keys mark the causes the pattern builder mints itself: `$generated`
+ * the anonymous ones (`{ $generated: N }`, plus `$kind` on streams and `name`
+ * on duplicate-name wraps), and `$instance` that of a named sub-pattern
+ * instance (`{ $instance: name }`). A user cause like
+ * `Cell.for({ $generated: 0 })` or `Cell.for({ $instance: "child" })` would
+ * deliberately mimic one of them, and keeping the namespaces disjoint is what
+ * lets the partial-cause assignment in `factoryFromPattern` skip collision
+ * checks for builder-minted causes entirely. The two keys suffice — every
+ * builder-minted cause carries one of them, so a cause carrying neither can
+ * never hash-equal one (`$kind` and other sigil-looking keys stay usable).
+ * Only the top level matters — causes collide as whole records under the
+ * canonical value hash, and every builder-minted cause is a flat record, so a
+ * reserved key nested deeper can never equal one.
  *
  * Enforced at the single intake point (`Cell.for`, the only writer of
  * `_causeContainer.cause`) and re-asserted at the assignment site that relies
  * on it.
  */
 export function assertNoReservedCauseKeys(cause: unknown): void {
-  if (isObjectOrArray(cause) && "$generated" in cause) {
-    throw new Error(
-      debugStr`Cannot use cause $quote${cause}: top-level key "$generated" is reserved\n` +
-        `help: "$generated" marks system-generated cell causes; rename the key`,
-    );
+  if (!isObjectOrArray(cause)) return;
+  for (const key of RESERVED_CAUSE_KEYS) {
+    if (key in cause) {
+      throw new Error(
+        debugStr`Cannot use cause $quote${cause}: top-level key "${key}" is reserved\n` +
+          `help: "${key}" marks causes the pattern builder mints; rename the key`,
+      );
+    }
   }
 }
 
@@ -396,7 +404,7 @@ function factoryFromPattern<T, R>(
   // Canonical keys of the NAMED causes already assigned. Only named causes need
   // collision handling: `.for()` rejects reserved keys at intake
   // (`assertNoReservedCauseKeys`), so no user-supplied cause carries
-  // `$generated` — which makes every cause minted by
+  // `$generated` or `$instance` — which makes every cause minted by
   // `nextAnonymousPartialCause` (per-build-unique counter), every
   // `{name, $generated}` disambiguation wrap, and every instance cause (an
   // instance name given to exactly one root) collision-free by construction:

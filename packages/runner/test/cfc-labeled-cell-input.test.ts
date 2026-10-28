@@ -97,4 +97,25 @@ describe("cfc-labeled-cell-input", () => {
       },
     );
   }
+
+  it("refuses to compile a labeled cell input whose label list is not a list", async () => {
+    // The runtime reads labels only from a list. Compiled, this input would
+    // store no label, and the value read through it would carry none.
+
+    storageManager = StorageManager.emulate({ as: signer });
+    runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "observe",
+    });
+
+    await expect(
+      runtime.patternManager.compilePattern(
+        program("secret: { c: Confidential<Cell<string>, string[]> }"),
+        { space },
+      ),
+    ).rejects.toThrow(
+      "A label list of `Confidential` is not a list: `string[]`",
+    );
+  });
 });

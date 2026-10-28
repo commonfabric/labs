@@ -88,6 +88,7 @@ import {
   settingsForDeployedClient,
   SpaceNotFoundError,
   UI,
+  UnreportedAuthoredBoundaryError,
   VNode,
 } from "@commonfabric/runner";
 import {
@@ -105,7 +106,9 @@ import {
   resolveCfcSchemaRefs,
   validateSchemaValue,
 } from "@commonfabric/runner/cfc";
+import { releaseCellConfidentiality } from "@commonfabric/runner/cfc/confidentiality-release";
 import { entityKindOfIdString } from "@commonfabric/runner/entity-kind";
+import { waitForSettledThroughHead } from "@commonfabric/runner/executor/watermark";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
 import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
 import {
@@ -116,6 +119,7 @@ import {
 import { caseFold } from "unicode-case-folding";
 
 import { isHandlerCell } from "../../fuse/callables.ts";
+import { resolveCliGitSha } from "./build-info.ts";
 import { executeCallableCommand } from "./callable-command.ts";
 import {
   buildPieceDescription,
@@ -658,17 +662,19 @@ export async function loadPieces(
   // it drifts (docs/development/EXPERIMENTAL_OPTIONS.md). The same document
   // names the memory URL, where the deployment has one. Fetched alongside
   // the session rather than before it — neither needs the other.
-  const [session, { experimental, memoryHost }] = await Promise.all([
-    timeCliPhase("loadPieces.makeSession", () => makeSession(config)),
-    timeCliPhase(
-      "loadPieces.serverExperimental",
-      () =>
-        settingsForDeployedClient({
-          apiUrl: new URL(config.apiUrl),
-          env: Deno.env.get,
-        }),
-    ),
-  ]);
+  const [session, { experimental, memoryHost }, clientGitSha] = await Promise
+    .all([
+      timeCliPhase("loadPieces.makeSession", () => makeSession(config)),
+      timeCliPhase(
+        "loadPieces.serverExperimental",
+        () =>
+          settingsForDeployedClient({
+            apiUrl: new URL(config.apiUrl),
+            env: Deno.env.get,
+          }),
+      ),
+      resolveCliGitSha(),
+    ]);
   // A `--space` given as a name has only now resolved to a DID; this is the
   // deferred half of the embedded-space check `normalizeLLMFriendlyRef`
   // performs at parse time when the two spaces are written the same way. A
@@ -689,6 +695,7 @@ export async function loadPieces(
           memoryHost,
           storageManager: StorageManager.open({
             as: session.as,
+            clientBuild: { application: "cf", gitSha: clientGitSha },
             memoryHost,
           }),
           experimental,
@@ -4980,21 +4987,54 @@ export async function getCellCfcLabel(
 }
 
 /**
+ * Helper for {@link setCellCfcLabel}, which returns the clauses a lowering
+ * update keeps: its `confidentiality` list, which a lowering requires and
+ * which is the whole of what one says.
+ */
+const confidentialityToKeep = (
+  update: CellCfcLabelUpdate,
+): NonNullable<CellCfcLabelUpdate["confidentiality"]> => {
+  if (update.confidentiality === undefined) {
+    throw new Error(
+      "Lowering confidentiality needs a `confidentiality` list: it names " +
+        "every clause the path keeps.",
+    );
+  }
+  if (update.integrity !== undefined || update.observes !== undefined) {
+    throw new Error(
+      "Lowering confidentiality takes `confidentiality` alone; set " +
+        "`integrity` or `observes` in an update without " +
+        "`--dangerously-allow-lowering-confidentiality`.",
+    );
+  }
+  return update.confidentiality;
+};
+
+/**
  * Update the declared CFC label at one piece data path.
  *
  * This updates the label through the same checked write path used by ordinary
  * runtime operations. The stored schema merge and CFC preparation rules
  * therefore reject changes that weaken confidentiality or strengthen
- * integrity. Raw label-map metadata is never written by the CLI.
+ * integrity, and raw label-map metadata is not written.
+ *
+ * With `lowerConfidentiality`, the update is instead an owner's release
+ * (`releaseCellConfidentiality()`): every confidentiality clause stored at the
+ * path that `input.confidentiality` does not name is removed from every label
+ * there, which rewrites the stored metadata. The input then holds
+ * `confidentiality` alone, naming only clauses the path already stores.
  */
 export async function setCellCfcLabel(
   config: PieceConfig,
   addressedPath: (string | number)[],
   input: unknown,
-  options: { input?: boolean } = {},
+  options: { input?: boolean; lowerConfidentiality?: boolean } = {},
   deps: PieceOperationDependencies = {},
 ): Promise<CfcLabelView | null> {
   const update = parseCellCfcLabelUpdate(input);
+  const keep = options.lowerConfidentiality === true
+    ? confidentialityToKeep(update)
+    : undefined;
   const pieces = await (deps.loadPieces ?? loadPieces)(config);
   const { config: resolvedConfig, path } = await resolvePieceTargetWithPieces(
     config,
@@ -5022,6 +5062,15 @@ export async function setCellCfcLabel(
   if (value === undefined) {
     const location = path.length === 0 ? "<root>" : path.join("/");
     throw new Error(`Cannot set a CFC label on absent path "${location}".`);
+  }
+
+  if (keep !== undefined) {
+    const release = await releaseCellConfidentiality(targetCell, keep);
+    if (release.receipt !== undefined) {
+      await pieces.synced();
+      noteWroteTo(release.receipt.space);
+    }
+    return cfcLabelViewForCommand(targetCell, path);
   }
 
   const { observes: requestedObserves, ...label } = update;
@@ -5108,6 +5157,32 @@ async function loadPieceForRead(
   );
 }
 
+/**
+ * Waits, under server execution, until the serving runtime has reacted to
+ * every authored commit at or below the server's head as of now, so a read
+ * that follows a send, from this process or another, reads what the serving
+ * runtime stored for it. Resolves at once in the OFF arm, where this runtime
+ * runs what it reads, and against a server that advertises no serving loop.
+ * Against one that serves without reporting authored commit boundaries, the
+ * read goes ahead without the wait, and says so on stderr.
+ */
+async function waitForServedHead(pieces: PiecesController): Promise<void> {
+  if (pieces.runtime.experimental.serverExecution !== true) return;
+  const space = pieces.getSpace();
+  const head = await pieces.runtime.storageManager.open(space)
+    .serverHeadSeq?.();
+  if (head === undefined) return;
+  try {
+    await waitForSettledThroughHead(pieces.runtime, space, head);
+  } catch (error) {
+    if (!(error instanceof UnreportedAuthoredBoundaryError)) throw error;
+    console.warn(
+      `${error.message}; reading without waiting for the serving runtime, ` +
+        "so a run a send just started may not show yet.",
+    );
+  }
+}
+
 export async function getCellValue(
   config: PieceConfig,
   addressedPath: (string | number)[],
@@ -5134,6 +5209,10 @@ export async function getCellValue(
   );
 
   try {
+    await timeCliPhase(
+      "getCellValue.served.settled",
+      () => waitForServedHead(pieces),
+    );
     if (shouldStep) {
       // A nested target pull is itself the demand and storage boundary for
       // the requested cell. Pulling the canonical piece first widens that

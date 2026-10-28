@@ -1034,8 +1034,7 @@ remain readable through the compatibility alias (R12).
    line in `packages/cli/README.md` and `docs/common/verbs/over-the-cli.md`; the
    examples in `docs/tutorial/06-workflow.md`; the doc comment on
    `packages/cli/lib/llm-friendly-ref.ts` and its `splitArgumentSuffix`; the
-   `#argument` paragraphs and completion in `packages/cli/README.md`; the
-   `//my-space/` row in `docs/plans/cli-surface-shape.md`; and
+   `#argument` paragraphs and completion in `packages/cli/README.md`; and
    `docs/plans/shuttle/grammar.md`, which quotes the forms `pwd` and `ls` print.
    Tests and pattern baselines that hold a rendered reference follow the writer.
 4. **The specifier's pin.** [Pattern imports](pattern-imports/README.md) keep

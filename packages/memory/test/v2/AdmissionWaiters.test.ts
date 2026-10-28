@@ -130,5 +130,72 @@ describe("AdmissionWaiters", () => {
         expect(waiters.take(OTHER_SPACE, everyone)).toEqual([]);
       });
     });
+
+    describe("hold()", () => {
+      it("moves the connection's entries to held ones, which take() returns without a connection", () => {
+        const waiters = new AdmissionWaiters();
+        waiters.add("one", SPACE, GUEST);
+        waiters.add("one", OTHER_SPACE, CAROL);
+        waiters.add("two", SPACE, GUEST);
+        waiters.hold("one");
+
+        expect(waiters.heldPrincipals()).toEqual([GUEST, CAROL]);
+        expect(waiters.take(SPACE, everyone)).toEqual([
+          { connectionId: "two", principal: GUEST },
+          { connectionId: undefined, principal: GUEST },
+        ]);
+        expect(waiters.take(OTHER_SPACE, everyone)).toEqual([
+          { connectionId: undefined, principal: CAROL },
+        ]);
+        expect(waiters.heldPrincipals()).toEqual([]);
+      });
+
+      it("keeps one held entry per space and principal, however many connections held it", () => {
+        const waiters = new AdmissionWaiters();
+        waiters.add("one", SPACE, GUEST);
+        waiters.add("two", SPACE, GUEST);
+        waiters.hold("one");
+        waiters.hold("two");
+
+        expect(waiters.take(SPACE, everyone)).toEqual([
+          { connectionId: undefined, principal: GUEST },
+        ]);
+      });
+    });
+
+    describe("removeHeld()", () => {
+      it("drops the principal's held entry for the space, and no other", () => {
+        const waiters = new AdmissionWaiters();
+        waiters.add("one", SPACE, GUEST);
+        waiters.add("one", OTHER_SPACE, GUEST);
+        waiters.add("two", SPACE, GUEST);
+        waiters.hold("one");
+        waiters.removeHeld(SPACE, GUEST);
+
+        expect(waiters.take(SPACE, everyone)).toEqual([
+          { connectionId: "two", principal: GUEST },
+        ]);
+        expect(waiters.take(OTHER_SPACE, everyone)).toEqual([
+          { connectionId: undefined, principal: GUEST },
+        ]);
+      });
+    });
+
+    describe("releaseHeld()", () => {
+      it("drops every held entry of the principal, and no other", () => {
+        const waiters = new AdmissionWaiters();
+        waiters.add("one", SPACE, GUEST);
+        waiters.add("one", OTHER_SPACE, GUEST);
+        waiters.add("one", SPACE, CAROL);
+        waiters.hold("one");
+        waiters.releaseHeld(GUEST);
+
+        expect(waiters.heldPrincipals()).toEqual([CAROL]);
+        expect(waiters.take(SPACE, everyone)).toEqual([
+          { connectionId: undefined, principal: CAROL },
+        ]);
+        expect(waiters.take(OTHER_SPACE, everyone)).toEqual([]);
+      });
+    });
   });
 });

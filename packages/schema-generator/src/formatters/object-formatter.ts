@@ -7,7 +7,6 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 import ts from "typescript";
 
 import {
-  attachDocTags,
   extractDocFromSymbolAndDecls,
   getDeclDocs,
   symbolHasDeprecatedTag,
@@ -52,6 +51,7 @@ import {
 } from "../typescript/value-annotation.ts";
 import { usesParameterUnreachably } from "../type-parameter-bindings.ts";
 import { CFC_CARRIER_PROPERTY } from "../typescript/cfc-carrier.ts";
+import { withIndexKeys, withValueRecordsOf } from "../schema-origins.ts";
 import { attachUiContract, getUiContractHint } from "../ui-contract.ts";
 
 const logger = getLogger("schema-generator.object", {
@@ -107,8 +107,8 @@ export function classifyCallableProperty(
 }
 
 /**
- * Attach a property's JSDoc description (and its lowered tags) to the schema
- * about to be emitted for it. Both emission paths go through this — the
+ * Attach a property's JSDoc description to the schema about to be emitted
+ * for it. Both emission paths go through this — the
  * ordinary delegated path and the callable-wrapper early return — so a doc
  * written on a factory-typed verb property survives exactly like one on a
  * data property.
@@ -123,7 +123,6 @@ function attachPropertyDoc(
   if (!text) return;
   const conflicts = all.filter((s) => s && s !== text);
   schema.description = text;
-  attachDocTags(schema, text);
   if (conflicts.length > 0) {
     const comment = typeof schema.$comment === "string"
       ? (schema.$comment as string)
@@ -495,7 +494,6 @@ export class ObjectFormatter implements TypeFormatter {
       }
       if (foundDocs.length > 0 && isObjectOrArray(apSchema)) {
         (apSchema as Record<string, unknown>).description = foundDocs[0]!;
-        attachDocTags(apSchema as Record<string, unknown>, foundDocs[0]!);
         if (foundDocs.length > 1) {
           const comment = typeof apSchema.$comment === "string"
             ? (apSchema.$comment as string)
@@ -511,6 +509,7 @@ export class ObjectFormatter implements TypeFormatter {
       }
       (schema as Record<string, unknown>).additionalProperties =
         apSchema as MutableJSONSchemaObj;
+      withIndexKeys(schema, stringIndex ? "string" : "number", context);
       // A number index signature beside a string one is lowered as the string
       // one alone, so a writer policy only its values hold is lost. A document
       // stored that way would admit any writer to them. A string side whose
@@ -538,10 +537,14 @@ export class ObjectFormatter implements TypeFormatter {
     if (required.length > 0) schema.required = required;
 
     return carrier
-      ? this.#schemaGenerator.withLabelsCarriedBy(
+      ? withValueRecordsOf(
+        this.#schemaGenerator.withLabelsCarriedBy(
+          schema,
+          type,
+          carrier,
+          context,
+        ),
         schema,
-        type,
-        carrier,
         context,
       )
       : schema;

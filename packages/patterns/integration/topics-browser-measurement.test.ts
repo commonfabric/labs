@@ -49,6 +49,12 @@ describe("topics-browser-measurement", () => {
   let fixture: TopicBoardFixture;
   let identity: Identity;
   let posture: TopicsBrowserPosture;
+  /**
+   * Whether the deployment serves the board's view: its page shows what the
+   * serving runtime delivers and runs no lift's module, so no sample taken on
+   * it can attribute a run by position, and the samplers refuse one whole.
+   */
+  let servedViews: boolean;
   let program: TopicsProgram;
   let session: BoardSession;
 
@@ -56,6 +62,7 @@ describe("topics-browser-measurement", () => {
   // cites the other, so the pivot has a row to build and a backlink to find.
   beforeAll(async () => {
     posture = await readTopicsBrowserPosture(env.API_URL, env.FRONTEND_URL);
+    servedViews = posture.declared && posture.servedViews;
     program = await prepareTopicsProgram();
     identity = await seedIdentity(
       `topics browser measurement ${crypto.randomUUID()}`,
@@ -86,6 +93,16 @@ describe("topics-browser-measurement", () => {
       throw error;
     }
   }
+
+  /**
+   * The refusal `measureTopicsReads()` gives a sample declared to run nothing
+   * on a served board, whose page runs no lift's module. The declaration
+   * waives the one failure of completing no authored run, which an undeclared
+   * sample on such a board is refused for first, and reaches no further.
+   */
+  const SERVED_BOARD_REFUSAL =
+    "`crossrefTable`'s module `/topics/main.tsx` is not running, but a " +
+    "sample is taken on a page showing the board";
 
   /** Tokens of the samples `page` still holds. */
   async function samplesLeftInPage(
@@ -209,21 +226,32 @@ describe("topics-browser-measurement", () => {
   }
 
   describe("measureTopicsReads()", () => {
-    it("returns a run with reads of each named lift, attributed to its own implementation, over opening a topic and returning to the board", async () => {
+    it("returns a run with reads of each named lift, attributed to its own implementation, over opening a topic and returning to the board, or refuses the sample where a served page runs no lift", async () => {
       // The implementation each row carries is the graph's own text for the
       // action counted there. Checking its parameters against the lift's
       // declaration here pins each row to its lift, independently of how the
-      // helper located and confirmed the lift.
+      // helper located and confirmed the lift. A served page completes no
+      // authored run, so an undeclared sample on it is refused for that.
 
-      const sample = await measureTopicsReads(session.page, {
-        label: "open topic and return",
-        posture,
-        program,
-        operation: async () => {
-          await openTopmostTopic();
-          await returnToBoard();
-        },
-      });
+      const measure = () =>
+        measureTopicsReads(session.page, {
+          label: "open topic and return",
+          posture,
+          program,
+          operation: async () => {
+            await openTopmostTopic();
+            await returnToBoard();
+          },
+        });
+      if (servedViews) {
+        await expect(measure()).rejects.toThrow(
+          "open topic and return: the measured operation completed no run " +
+            "carrying an authored source location",
+        );
+        expect(await samplesLeftInPage()).toEqual([]);
+        return;
+      }
+      const sample = await measure();
 
       checkSample(sample, () => {
         expect(
@@ -234,11 +262,6 @@ describe("topics-browser-measurement", () => {
         ).toEqual([
           ["crossrefTable", "({ sources })"],
           ["backlinksOf", "({ table, self })"],
-          ["presentCommentCountOf", "({ comments })"],
-          [
-            "lastActivityOf",
-            "({ comments, links, createdAt, bodyUpdatedAt, titleUpdatedAt })",
-          ],
         ]);
         expect(
           sample.lifts.filter((lift) =>
@@ -269,46 +292,63 @@ describe("topics-browser-measurement", () => {
       expect(await samplesLeftInPage()).toEqual([]);
     });
 
-    it("returns a sample recording no authored runs for an operation declared to run nothing", async () => {
+    it("returns a sample recording no authored runs for an operation declared to run nothing, or refuses the sample where a served page runs no lift, whatever the declaration", async () => {
       // The declaration permits the operation to complete no authored run.
       // Runtime work without an authored source remains in `remaining`. The
       // case below checks the other half, that an operation which does run is
-      // attributed as usual under the same declaration.
+      // attributed as usual under the same declaration. On a served page the
+      // declaration waives nothing: it reaches the one failure of completing
+      // no run, and a producer lift that is not running is another.
 
-      const sample = await measureTopicsReads(session.page, {
-        label: "undemanded, declared",
-        posture,
-        program,
-        operation: () => Promise.resolve(),
-        mayRunNothing: true,
-      });
+      const measure = () =>
+        measureTopicsReads(session.page, {
+          label: "undemanded, declared",
+          posture,
+          program,
+          operation: () => Promise.resolve(),
+          mayRunNothing: true,
+        });
+      if (servedViews) {
+        await expect(measure()).rejects.toThrow(SERVED_BOARD_REFUSAL);
+        expect(await samplesLeftInPage()).toEqual([]);
+        return;
+      }
+      const sample = await measure();
 
       checkSample(sample, () => {
         expect(sample.mayRunNothing).toBe(true);
-        expect(sample.lifts.map((lift) => lift.runs)).toEqual([0, 0, 0, 0]);
+        expect(sample.lifts.map((lift) => lift.runs)).toEqual([0, 0]);
         expect(sample.remaining.runs).toBe(sample.runsWithoutSource);
         expect(sample.graph.after.nodes).toBeGreaterThan(0);
       });
     });
 
-    it("attributes the runs of an operation that does run, under the same declaration", async () => {
+    it("attributes the runs of an operation that does run, under the same declaration, or refuses the sample where a served page runs no lift", async () => {
       // A browser of its own, in which no other case has opened a topic: an
       // operation already run in a page can run nothing, which is the very
       // thing the declaration permits, and this case is about the other
-      // half — that declaring it does not suppress runs it does complete.
+      // half — that declaring it does not suppress runs it does complete. A
+      // served page completes none, declared or not, and is refused.
 
       const fresh = await openFreshSession();
       try {
-        const sample = await measureTopicsReads(fresh.page, {
-          label: "open topic and return, declared",
-          posture,
-          program,
-          operation: async () => {
-            await openTopmostTopic(fresh);
-            await returnToBoard(fresh);
-          },
-          mayRunNothing: true,
-        });
+        const measure = () =>
+          measureTopicsReads(fresh.page, {
+            label: "open topic and return, declared",
+            posture,
+            program,
+            operation: async () => {
+              await openTopmostTopic(fresh);
+              await returnToBoard(fresh);
+            },
+            mayRunNothing: true,
+          });
+        if (servedViews) {
+          await expect(measure()).rejects.toThrow(SERVED_BOARD_REFUSAL);
+          expect(await samplesLeftInPage(fresh.page)).toEqual([]);
+          return;
+        }
+        const sample = await measure();
 
         checkSample(sample, () => {
           expect(sample.mayRunNothing).toBe(true);
@@ -345,27 +385,35 @@ describe("topics-browser-measurement", () => {
       expect(await samplesLeftInPage()).toEqual([]);
     });
 
-    it("counts a run carrying no source location apart, and waives it only when declared", async () => {
+    it("counts a run carrying no source location apart, and waives it only when declared, or refuses the declared sample too where a served page runs no lift", async () => {
       // The branch that tells the two apart, driven with the one marker shape
       // that reaches it. Without this the counter is only ever read as zero:
       // the declared-to-run-nothing case completes no run at all, and the
-      // unparseable case above delivers a `src`.
+      // unparseable case above delivers a `src`. The waiver admits the run on
+      // a page that derives the board; on a served page the sample is refused
+      // past it, for the lift that is not running.
 
-      const sample = await measureTopicsReads(session.page, {
-        label: "no source location",
-        posture,
-        program,
-        operation: () => deliverRun(undefined),
-        mayRunNothing: true,
-      });
-
-      checkSample(sample, () => {
-        expect(sample.runsWithoutSource).toBe(1);
-        // Counted apart for reporting, and still part of `remaining`, which
-        // is every run the sample could not place against a named lift.
-        expect(sample.remaining.runs).toBe(1);
-        expect(sample.lifts.map((lift) => lift.runs)).toEqual([0, 0, 0, 0]);
-      });
+      const measureDeclared = () =>
+        measureTopicsReads(session.page, {
+          label: "no source location",
+          posture,
+          program,
+          operation: () => deliverRun(undefined),
+          mayRunNothing: true,
+        });
+      if (servedViews) {
+        await expect(measureDeclared()).rejects.toThrow(SERVED_BOARD_REFUSAL);
+        expect(await samplesLeftInPage()).toEqual([]);
+      } else {
+        const sample = await measureDeclared();
+        checkSample(sample, () => {
+          expect(sample.runsWithoutSource).toBe(1);
+          // Counted apart for reporting, and still part of `remaining`, which
+          // is every run the sample could not place against a named lift.
+          expect(sample.remaining.runs).toBe(1);
+          expect(sample.lifts.map((lift) => lift.runs)).toEqual([0, 0]);
+        });
+      }
 
       // The same run undeclared: the waiver is what admits it.
       await expect(
@@ -475,9 +523,16 @@ describe("topics-browser-measurement", () => {
           { args: [runCounts] },
         );
 
-        expect(reported.ran).toBeGreaterThan(0);
-        expect(reported.withReadSample).toBe(0);
-        expect(reported.markers).toBe(0);
+        if (servedViews) {
+          // A served page runs nothing of its own, so what the replaced
+          // client reports is that nothing ran and no marker arrived; that
+          // accounting was turned off on it has no run here to show it by.
+          expect(reported).toEqual({ ran: 0, withReadSample: 0, markers: 0 });
+        } else {
+          expect(reported.ran).toBeGreaterThan(0);
+          expect(reported.withReadSample).toBe(0);
+          expect(reported.markers).toBe(0);
+        }
       } finally {
         await restoreRuntimeClient(fresh.page);
         await fresh.close();
@@ -490,7 +545,9 @@ describe("topics-browser-measurement", () => {
       // A browser of its own, in which no other case has opened a topic, so
       // the timed interval runs work in the worker whichever cases ran first.
       // An operation already run in a page can run nothing, and a count of
-      // delivered markers over it would be zero whatever the sampler did.
+      // delivered markers over it would be zero whatever the sampler did. A
+      // served page's worker runs nothing either, so there the operation is
+      // declared to run nothing, and the sample records that it did.
 
       const fresh = await openFreshSession();
       try {
@@ -519,6 +576,7 @@ describe("topics-browser-measurement", () => {
             await openTopmostTopic(fresh);
             await returnToBoard(fresh);
           },
+          mayRunNothing: servedViews,
         });
         const delivered = await fresh.page.evaluate(() => {
           const scope = globalThis as typeof globalThis & {
@@ -531,8 +589,9 @@ describe("topics-browser-measurement", () => {
         checkSample(sample, () => {
           expect(sample.readAccounting).toBe(false);
           expect(sample.accountingTurnedOff).toBe(true);
-          expect(sample.mayRunNothing).toBe(false);
-          expect(sample.workerRuns).toBeGreaterThan(0);
+          expect(sample.mayRunNothing).toBe(servedViews);
+          if (servedViews) expect(sample.workerRuns).toBe(0);
+          else expect(sample.workerRuns).toBeGreaterThan(0);
           expect(delivered).toBe(0);
           expect(sample.elapsedMs).toBeGreaterThan(0);
           expect(sample.graph.after.nodes).toBeGreaterThan(0);

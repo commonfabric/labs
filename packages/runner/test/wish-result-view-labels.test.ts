@@ -18,6 +18,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedProfileOwner,
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
@@ -250,6 +251,7 @@ describe("wish-result-view-labels", () => {
         title: "pinned",
       })),
     });
+    seedProfileOwner(tx, profile.getAsNormalizedFullLink(), owner.did());
     expect((await tx.commit().settled).error).toBeUndefined();
     const homeTx = runtime.edit();
     const homeDefault = runtime.getCell(

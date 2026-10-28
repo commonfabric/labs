@@ -293,6 +293,8 @@ const DIRECTIVE_CASES: Array<[string, string, string | undefined]> = [
   ["cf piece new --input-file ", "files", undefined],
   ["cf view ", "files", undefined],
   ["cf exec ", "files", undefined],
+  ["cf profile set-picture x0 ", "files", undefined],
+  ["cf profile get-picture x0 ", "files", undefined],
   ["cf space clone --to ", "dirs", undefined],
   ["cf space clone x --from ", "files", undefined],
   ["cf space verify ", "dirs", undefined],
@@ -446,9 +448,8 @@ Deno.test("provider keys report which commands each option provider answers on",
   // name positions in a verb's result, and the piece's root is a different
   // value — so offering its fields there would offer plausible names for
   // something else, which is worse than offering none.
-  // Both mounts: the superseded spelling still completes its own projection.
-  assertEquals(options.get("select"), ["cell get", "get"]);
-  assertEquals(options.get("schema"), ["cell get", "get"]);
+  assertEquals(options.get("select"), ["cell get"]);
+  assertEquals(options.get("schema"), ["cell get"]);
   assertEquals(options.get("root"), [
     "check",
     "piece new",
@@ -465,7 +466,7 @@ Deno.test("provider keys report which commands each option provider answers on",
   assertFalse(options.has("accept-unretained"));
   // A positional entry is keyed by command path already, so it carries no
   // command list of its own.
-  assert(positionals.has("call:callable"));
+  assert(positionals.has("piece call:callable"));
   assertFalse(positionals.has("callable"));
 });
 

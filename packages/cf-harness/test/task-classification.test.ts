@@ -2,7 +2,10 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import type { HarnessPatternRef } from "../src/contracts/pattern-refs.ts";
-import { PLAYTEST_2026_10_13_TASKS } from "./task-classification-cases.ts";
+import {
+  DOMAIN_TASKS,
+  PLAYTEST_2026_10_13_TASKS,
+} from "./task-classification-cases.ts";
 import {
   classifyTask,
   classifyTaskByModel,
@@ -207,9 +210,17 @@ describe("task-classification", () => {
       expect(classification.tags).toEqual([...HARNESS_TASK_TAGS]);
     });
 
-    it("records only the tags, the path, and the wall time", () => {
+    it("records only the tags, the domains, what chose each, and the wall time", () => {
       expect(Object.keys(classifyTask("weather in Brisbane", {})).sort())
-        .toEqual(["durationMs", "path", "tags", "type", "version"]);
+        .toEqual([
+          "domains",
+          "domainsPath",
+          "durationMs",
+          "path",
+          "tags",
+          "type",
+          "version",
+        ]);
     });
   });
 
@@ -291,6 +302,131 @@ describe("task-classification", () => {
       }
 
       expect(performance.now() - started).toBeLessThan(100);
+    });
+  });
+
+  describe("domains", () => {
+    // Where each ask's work happens: the playtest asks, and asks that reach
+    // past the pieces a job holds. Only a positive sign names a domain.
+    for (
+      const { task, context, expected, domains } of [
+        ...PLAYTEST_2026_10_13_TASKS,
+        ...DOMAIN_TASKS,
+      ]
+    ) {
+      it(
+        `places ${JSON.stringify(task)} in ${
+          domains.join(", ") || "no domain"
+        }`,
+        () => {
+          const classification = classifyTask(task, context);
+
+          expect(classification.domains).toEqual(domains);
+          expect(classification.domainsPath).toBe(
+            domains.length === 0 ? "assumed" : "rule",
+          );
+          expect([...classification.tags].sort()).toEqual([...expected].sort());
+        },
+      );
+    }
+
+    it("reads the fabric in a pattern named beside one of its parts in either order", () => {
+      expect(classifyTask("How do pattern handlers work?", {}).domains)
+        .toEqual(["fabric"]);
+      expect(classifyTask("How do handlers in a pattern work?", {}).domains)
+        .toEqual(["fabric"]);
+      expect(classifyTask("knit a scarf in a herringbone pattern", {}).domains)
+        .toEqual([]);
+      expect(classifyTask("which loom holds the timer pattern?", {}).domains)
+        .toEqual(["fabric"]);
+    });
+
+    it("needs a sign the data is the person's own, not a bare noun", () => {
+      expect(classifyTask("What is a calendar?", {}).domains).toEqual([]);
+      expect(classifyTask("How can I meet the deadline?", {}).domains)
+        .toEqual([]);
+      expect(classifyTask("what is the message of the Gospel?", {}).domains)
+        .toEqual([]);
+      expect(classifyTask("Compare email providers", {}).domains).toEqual([
+        "web",
+      ]);
+      expect(classifyTask("what's on my work calendar?", {}).domains).toEqual([
+        "personal",
+      ]);
+    });
+
+    it("puts a web purchase on the web only when the run can drive a browser", () => {
+      expect(classifyTask("buy the cheapest oat milk", {}).domains).toEqual([]);
+      expect(
+        classifyTask("buy the cheapest oat milk", { browserHost: true })
+          .domains,
+      ).toEqual(["web"]);
+    });
+
+    it("reads a request to research as the web's only when it names no other domain", () => {
+      expect(classifyTask("research how my week went", {}).domains).toEqual([
+        "personal",
+      ]);
+      expect(classifyTask("research heat pumps", {}).domains).toEqual(["web"]);
+    });
+  });
+
+  describe("a caller's task shape", () => {
+    it("takes the caller's tags in place of the rule's, and still names domains by their signs", () => {
+      const classification = classifyTask(
+        "What's on my calendar tomorrow?",
+        {},
+        {
+          tags: ["act"],
+        },
+      );
+
+      expect(classification).toMatchObject({
+        tags: ["act"],
+        path: "caller",
+        domains: ["personal"],
+        domainsPath: "rule",
+      });
+    });
+
+    it("takes the caller's domains in place of the rule's, and still tags by rule", () => {
+      const classification = classifyTask(
+        "What's on my calendar tomorrow?",
+        {},
+        {
+          domains: ["web"],
+        },
+      );
+
+      expect(classification).toMatchObject({
+        tags: ["find"],
+        path: "rule",
+        domains: ["web"],
+        domainsPath: "caller",
+      });
+    });
+
+    it("takes an empty list from the caller as no domain at all", () => {
+      expect(
+        classifyTask("make me a pomodoro timer", {}, { domains: [] }),
+      ).toMatchObject({
+        tags: ["author"],
+        domains: [],
+        domainsPath: "caller",
+      });
+    });
+
+    it("classifies exactly as without a caller when the caller states nothing", () => {
+      for (const { task, context } of DOMAIN_TASKS) {
+        const { durationMs: _alone, ...alone } = classifyTask(task, context);
+        const { durationMs: _empty, ...empty } = classifyTask(
+          task,
+          context,
+          {},
+        );
+
+        expect(empty).toEqual(alone);
+      }
     });
   });
 });

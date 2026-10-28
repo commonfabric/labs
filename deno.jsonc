@@ -56,6 +56,7 @@
     "check-test-shuffle": "deno run --allow-read --allow-run=git ./tasks/check-test-shuffle.ts",
     "check-control-characters": "deno run --allow-read --allow-run=git ./tasks/check-control-characters.ts",
     "check-local-program": "deno run --allow-read --allow-env --allow-run=git ./tasks/check-local-program.ts",
+    "compile-cache-version": "deno run --allow-read --allow-write=packages/runner/src/compilation-cache --allow-env --allow-ffi --allow-net=127.0.0.1 ./tasks/compile-cache-version.ts",
     "check-docs-history-index": "deno run --allow-read ./tasks/check-docs-history-index.ts",
     "check-unused-deps": "deno run --allow-read --allow-run=git ./tasks/check-unused-deps.ts",
     "check-deno-pins": "deno run --allow-read ./tasks/check-deno-pins.ts",
@@ -66,6 +67,7 @@
     "pattern-compat": "deno run -A ./tasks/pattern-compat.ts",
     "pattern-vintage": "deno run -A ./tasks/pattern-vintage.ts",
     "check-baselines-append-only": "deno run --allow-read --allow-run=git ./tasks/check-baselines-append-only.ts",
+    "check-cause-assignments": "deno run -A ./tasks/check-cause-assignments.ts",
     "check-bench-workflow": "deno run --allow-read ./tasks/check-bench-workflow.ts",
     "check-test-aliases": "deno run --allow-read --allow-run=git ./tasks/check-test-aliases.ts",
     "check-test-topology": "deno run --allow-read --allow-env --allow-net --allow-run=git ./tasks/check-test-topology.ts",
@@ -90,6 +92,8 @@
     // Reports the docs/ link graph; --allow-write serves its --out flag.
     "docs-links": "deno run --allow-read --allow-write ./scripts/docs-links.ts",
     "cf": "deno run --allow-run --allow-env --allow-read ./packages/cli/launcher.ts",
+    // The team's Topics board from the command line; see skills/topics.
+    "topics": "deno run --allow-net --allow-read --allow-write --allow-env --allow-run ./packages/patterns/topics/tools/topics.ts",
     "agents-host": "deno run -A ./packages/connectors/agents/host/main.ts",
     "github-host": "deno run -A ./packages/connectors/github/host/main.ts",
     "test": "./tasks/test.ts",

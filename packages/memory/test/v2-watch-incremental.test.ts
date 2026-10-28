@@ -3,13 +3,16 @@ import { describe, it } from "@std/testing/bdd";
 
 import { ChangeSet } from "@codemirror/state";
 
+import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
+
 import {
+  decodeMemoryBoundary,
   type GraphWatchSpec,
   toDirtyKey,
   toValuePath,
   type WatchSpec,
 } from "../v2.ts";
-import { connect, loopback } from "../v2/client.ts";
+import { connect, loopback, type Transport } from "../v2/client.ts";
 import { createBranch } from "../v2/engine.ts";
 import {
   CODEMIRROR_CHANGESET_CODEC,
@@ -97,6 +100,7 @@ async function openFixture(size: number) {
     server,
     writer,
     reader,
+    readerClient,
     state,
     ids,
     space,
@@ -396,6 +400,111 @@ describe("Server", () => {
           ).toBe(true);
           await fixture.reader.watchRemoveSync(["operations"]);
           expect(fixture.state.trackedIds.has(toDirtyKey("of:x"))).toBe(false);
+        } finally {
+          await fixture.close();
+        }
+      });
+
+      for (const removeById of [true, false]) {
+        it(
+          `removes a watch and the documents only it covered, by ${
+            removeById ? "id" : "replacing the set"
+          }`,
+          async () => {
+            const fixture = await openFixture(0);
+            try {
+              if (!removeById) {
+                fixture.readerClient.serverFlags!.watchRemoveV1 = false;
+              }
+              await fixture.writer.transact({
+                localSeq: 2,
+                reads: { confirmed: [], pending: [] },
+                operations: [
+                  {
+                    op: "set",
+                    id: "of:a",
+                    value: { value: { child: link(fixture.space, "of:x") } },
+                  },
+                  {
+                    op: "set",
+                    id: "of:b",
+                    value: {
+                      value: {
+                        child: link(fixture.space, "of:x"),
+                        second: link(fixture.space, "of:y"),
+                      },
+                    },
+                  },
+                  { op: "set", id: "of:x", value: { value: { name: "x" } } },
+                  { op: "set", id: "of:y", value: { value: { name: "y" } } },
+                ],
+              });
+              await fixture.server.flushSessions();
+              await fixture.reader.watchAddSync([
+                linkedWatch("of:a"),
+                linkedWatch("of:b"),
+              ]);
+              await fixture.reader.ack(2);
+              const removal = await fixture.reader.watchRemoveSync(["of:b"]);
+              const ids = (entries: readonly { id: string }[]) =>
+                entries.map((entry) => entry.id).toSorted();
+              expect(ids(removal.sync.removes)).toEqual(["of:b", "of:y"]);
+              // A removal by id resends nothing the session still holds; a
+              // replacement without holdings resends the whole union.
+              expect(ids(removal.sync.upserts)).toEqual(
+                removeById ? [] : ["of:a", "of:x"],
+              );
+              expect(fixture.state.watches.map((watch) => watch.id)).toEqual([
+                "of:a",
+              ]);
+              expect([...fixture.state.entities.keys()].toSorted()).toEqual(
+                [
+                  cacheKeyForEntity("", "of:a"),
+                  cacheKeyForEntity("", "of:x"),
+                ].toSorted(),
+              );
+            } finally {
+              await fixture.close();
+            }
+          },
+        );
+      }
+
+      it("reads removal by id from the server, and leaves it out of the client's own hello", async () => {
+        // An older routed host refuses a `hello` carrying a flag it does not
+        // know, so the capability travels only in `hello.ok`.
+        const fixture = await openFixture(0);
+        try {
+          const inner = loopback(fixture.server);
+          const sent: unknown[] = [];
+          const transport: Transport = Object.assign(Object.create(inner), {
+            send: (payload: string) => {
+              sent.push(decodeMemoryBoundary(payload));
+              return inner.send(payload);
+            },
+          });
+          const client = await connect({ transport });
+          const hello = sent.find((frame) =>
+            (frame as { type?: unknown }).type === "hello"
+          ) as { flags: Record<string, unknown> } | undefined;
+          expect(hello).toBeDefined();
+          expect(hello!.flags).not.toHaveProperty("watchRemoveV1");
+          expect(client.serverFlags?.watchRemoveV1).toBe(true);
+          await client.close();
+        } finally {
+          await fixture.close();
+        }
+      });
+
+      it("ignores a removal naming a watch the session does not hold", async () => {
+        const fixture = await openFixture(1);
+        try {
+          const removal = await fixture.reader.watchRemoveSync(["unknown"]);
+          expect(removal.sync.upserts).toEqual([]);
+          expect(removal.sync.removes).toEqual([]);
+          expect(fixture.state.watches.map((watch) => watch.id)).toEqual([
+            fixture.ids[0],
+          ]);
         } finally {
           await fixture.close();
         }
@@ -865,6 +974,914 @@ describe("Server", () => {
           }
         });
       }
+    });
+
+    describe("watchRemove()", () => {
+      // `of:a` links to `of:x` and `of:y`. A `true` schema on `of:a` reaches
+      // both, and a schema naming `child` alone reaches `of:x` alone, so the
+      // narrower watch added after the permissive one is covered by the
+      // permissive one's record rather than walked.
+
+      const permissive = (id: string): GraphWatchSpec => ({
+        id: `${id}:all`,
+        kind: "graph",
+        query: { roots: [{ id, selector: { path: [], schema: true } }] },
+      });
+
+      const narrow = (id: string): GraphWatchSpec => ({
+        id,
+        kind: "graph",
+        query: {
+          roots: [{
+            id,
+            selector: {
+              path: [],
+              schema: {
+                type: "object",
+                properties: {
+                  child: {
+                    type: "object",
+                    properties: { name: { type: "string" } },
+                  },
+                },
+              },
+            },
+          }],
+        },
+      });
+
+      const ids = (entries: readonly { id: string }[]) =>
+        entries.map((entry) => entry.id).toSorted();
+
+      /** A link to `id` whose schema position carries `$ref: cid:<hash>`. */
+      const linkWithSchemaRef = (id: string, hash: string) => ({
+        "/": {
+          "link@1": { id, path: [], schema: { $ref: `cid:${hash}` } },
+        },
+      });
+
+      /** A watch on `id` whose selector schema is `$ref: cid:<hash>`. */
+      const selectorWatch = (id: string, hash: string): GraphWatchSpec => ({
+        id,
+        kind: "graph",
+        query: {
+          roots: [{
+            id,
+            selector: { path: [], schema: { $ref: `cid:${hash}` } },
+          }],
+        },
+      });
+
+      /** A schema document naming `title`, and one referring to it. */
+      const schemaPair = (title: string) => {
+        const leaf = { type: "string", title } as const;
+        const leafHash = internSchemaAsTaggedHashString(leaf);
+        const outer = {
+          type: "object",
+          properties: { x: { $ref: `cid:${leafHash}` } },
+        } as const;
+        const outerHash = internSchemaAsTaggedHashString(outer);
+        return {
+          leafHash,
+          outerHash,
+          ids: [`cid:${leafHash}`, `cid:${outerHash}`],
+          operations: [
+            {
+              op: "set" as const,
+              id: `cid:${leafHash}`,
+              value: { value: leaf },
+            },
+            {
+              op: "set" as const,
+              id: `cid:${outerHash}`,
+              value: { value: outer },
+            },
+          ],
+        };
+      };
+
+      /** Opens a session watching `of:a` permissively, then narrowly. */
+      async function openCoveredFixture() {
+        const fixture = await openFixture(0);
+        await fixture.writer.transact({
+          localSeq: 2,
+          reads: { confirmed: [], pending: [] },
+          operations: [
+            {
+              op: "set",
+              id: "of:a",
+              value: {
+                value: {
+                  child: link(fixture.space, "of:x"),
+                  second: link(fixture.space, "of:y"),
+                },
+              },
+            },
+            { op: "set", id: "of:x", value: { value: { name: "x" } } },
+            { op: "set", id: "of:y", value: { value: { name: "y" } } },
+          ],
+        });
+        await fixture.server.flushSessions();
+        await fixture.reader.watchAddSync([permissive("of:a")]);
+        await fixture.reader.watchAddSync([narrow("of:a")]);
+        await fixture.reader.ack(2);
+        return fixture;
+      }
+
+      it("leaves the graph as it stands when a covered watch is removed", async () => {
+        const fixture = await openCoveredFixture();
+        try {
+          const graph = fixture.state.graphs.get("")!;
+          const before = snapshot(fixture.state);
+          const removal = await fixture.reader.watchRemoveSync(["of:a"]);
+          expect(removal.sync.upserts).toEqual([]);
+          expect(removal.sync.removes).toEqual([]);
+          expect(fixture.state.graphs.get("")).toBe(graph);
+          const after = snapshot(fixture.state);
+          expect(after.graphs).toEqual(before.graphs);
+          expect(after.entities).toEqual(before.entities);
+          expect(after.trackedIds).toEqual(before.trackedIds);
+          expect(fixture.state.watches.map((watch) => watch.id)).toEqual([
+            "of:a:all",
+          ]);
+        } finally {
+          await fixture.close();
+        }
+      });
+
+      it("walks a covered watch when the watch covering it is removed, and removes what only the removed watch reached", async () => {
+        const fixture = await openCoveredFixture();
+        try {
+          const removal = await fixture.reader.watchRemoveSync(["of:a:all"]);
+          expect(ids(removal.sync.removes)).toEqual(["of:y"]);
+          expect(removal.sync.upserts).toEqual([]);
+          expect(ids([...fixture.state.entities.values()])).toEqual([
+            "of:a",
+            "of:x",
+          ]);
+          expect(fixture.state.watches.map((watch) => watch.id)).toEqual([
+            "of:a",
+          ]);
+          expect(fixture.state.trackedIds.has(toDirtyKey("of:x"))).toBe(true);
+          expect(fixture.state.trackedIds.has(toDirtyKey("of:y"))).toBe(
+            false,
+          );
+        } finally {
+          await fixture.close();
+        }
+      });
+
+      it("keeps a watch covered while any walked watch still covers it", async () => {
+        // `of:b` links to `of:a`, so a `true` schema on `of:b` covers the
+        // narrow watch on `of:a` as the permissive watch on `of:a` does.
+        const fixture = await openCoveredFixture();
+        try {
+          await fixture.writer.transact({
+            localSeq: 3,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set",
+              id: "of:b",
+              value: { value: { child: link(fixture.space, "of:a") } },
+            }],
+          });
+          await fixture.server.flushSessions();
+          await fixture.reader.watchAddSync([permissive("of:b")]);
+          const first = await fixture.reader.watchRemoveSync(["of:a:all"]);
+          expect(first.sync.removes).toEqual([]);
+          expect(ids([...fixture.state.entities.values()])).toEqual([
+            "of:a",
+            "of:b",
+            "of:x",
+            "of:y",
+          ]);
+          const second = await fixture.reader.watchRemoveSync(["of:b:all"]);
+          expect(ids(second.sync.removes)).toEqual(["of:b", "of:y"]);
+          expect(ids([...fixture.state.entities.values()])).toEqual([
+            "of:a",
+            "of:x",
+          ]);
+        } finally {
+          await fixture.close();
+        }
+      });
+
+      it("retracts, at the refresh, a document a link no longer reaches, and keeps one a watch of its own names", async () => {
+        // The permissive watch on `of:a` covers a watch on `of:x` while the
+        // link stands. Once the link is gone, the watch on `of:x` is what
+        // keeps `of:x` delivered, and nothing keeps `of:y`.
+        const fixture = await openFixture(0);
+        try {
+          await fixture.writer.transact({
+            localSeq: 2,
+            reads: { confirmed: [], pending: [] },
+            operations: [
+              {
+                op: "set",
+                id: "of:a",
+                value: {
+                  value: {
+                    child: link(fixture.space, "of:x"),
+                    second: link(fixture.space, "of:y"),
+                  },
+                },
+              },
+              { op: "set", id: "of:x", value: { value: { name: "x" } } },
+              { op: "set", id: "of:y", value: { value: { name: "y" } } },
+            ],
+          });
+          await fixture.server.flushSessions();
+          await fixture.reader.watchAddSync([permissive("of:a")]);
+          const { view } = await fixture.reader.watchAddSync([watch("of:x")]);
+          const frames = view.subscribeSync();
+          const pushed = frames.next();
+          await fixture.writer.transact({
+            localSeq: 3,
+            reads: { confirmed: [], pending: [] },
+            operations: [{ op: "set", id: "of:a", value: { value: {} } }],
+          });
+          await fixture.server.flushSessions();
+          const { value: frame } = await pushed;
+          expect(ids(frame!.removes)).toEqual(["of:y"]);
+          expect(ids(frame!.upserts)).toEqual(["of:a"]);
+          expect(ids([...fixture.state.entities.values()])).toEqual([
+            "of:a",
+            "of:x",
+          ]);
+          const removal = await fixture.reader.watchRemoveSync(["of:x"]);
+          expect(ids(removal.sync.removes)).toEqual(["of:x"]);
+          expect(ids([...fixture.state.entities.values()])).toEqual(["of:a"]);
+        } finally {
+          await fixture.close();
+        }
+      });
+
+      it("delivers a root added again after its removal with what it reaches, at the version stored", async () => {
+        // Removing the watch retires `of:a` and `of:x`, and the graph's
+        // read cache and traversal memo let go of both: adding the watch
+        // again reads `of:a` as it was written in between, and walks
+        // `of:x` below it. The watch on `of:b` keeps the graph throughout.
+        const fixture = await openFixture(0);
+        const rootValue = (n: number) => ({
+          value: { child: link(fixture.space, "of:x"), n },
+        });
+        try {
+          await fixture.writer.transact({
+            localSeq: 2,
+            reads: { confirmed: [], pending: [] },
+            operations: [
+              { op: "set", id: "of:a", value: rootValue(1) },
+              { op: "set", id: "of:x", value: { value: { name: "x" } } },
+              { op: "set", id: "of:b", value: { value: { name: "b" } } },
+            ],
+          });
+          await fixture.server.flushSessions();
+          await fixture.reader.watchAddSync([
+            permissive("of:a"),
+            watch("of:b"),
+          ]);
+          const removal = await fixture.reader.watchRemoveSync(["of:a:all"]);
+          expect(ids(removal.sync.removes)).toEqual(["of:a", "of:x"]);
+          await fixture.writer.transact({
+            localSeq: 3,
+            reads: { confirmed: [], pending: [] },
+            operations: [{ op: "set", id: "of:a", value: rootValue(2) }],
+          });
+          await fixture.server.flushSessions();
+          const added = await fixture.reader.watchAddSync([permissive("of:a")]);
+          expect(ids(added.sync.upserts)).toEqual(["of:a", "of:x"]);
+          expect(
+            added.sync.upserts.find((entry) => entry.id === "of:a")?.doc,
+          ).toEqual(rootValue(2));
+          expect(ids([...fixture.state.entities.values()])).toEqual([
+            "of:a",
+            "of:b",
+            "of:x",
+          ]);
+        } finally {
+          await fixture.close();
+        }
+      });
+
+      it("retracts, with a removed root, the schema documents only its own refs reach", async () => {
+        // `of:a` and `of:b` are walked in one evaluation, each linking
+        // under a `$ref` schema of its own. Each keeps the closure its own
+        // refs reach and no other, so removing `of:a` retracts its schema
+        // document and leaves the one `of:b` refers to delivered.
+        const onlyA = { type: "string", title: "only-a" } as const;
+        const onlyAHash = internSchemaAsTaggedHashString(onlyA);
+        const onlyB = { type: "string", title: "only-b" } as const;
+        const onlyBHash = internSchemaAsTaggedHashString(onlyB);
+        const fixture = await openFixture(0);
+        try {
+          await fixture.writer.transact({
+            localSeq: 2,
+            reads: { confirmed: [], pending: [] },
+            operations: [
+              { op: "set", id: `cid:${onlyAHash}`, value: { value: onlyA } },
+              { op: "set", id: `cid:${onlyBHash}`, value: { value: onlyB } },
+              { op: "set", id: "of:t", value: { value: { n: 1 } } },
+              {
+                op: "set",
+                id: "of:a",
+                value: { value: { x: linkWithSchemaRef("of:t", onlyAHash) } },
+              },
+              {
+                op: "set",
+                id: "of:b",
+                value: { value: { x: linkWithSchemaRef("of:t", onlyBHash) } },
+              },
+            ],
+          });
+          await fixture.server.flushSessions();
+          await fixture.reader.watchAddSync([watch("of:a"), watch("of:b")]);
+          expect(ids([...fixture.state.entities.values()])).toEqual(
+            [`cid:${onlyAHash}`, `cid:${onlyBHash}`, "of:a", "of:b"].toSorted(),
+          );
+          const removal = await fixture.reader.watchRemoveSync(["of:a"]);
+          expect(ids(removal.sync.removes)).toEqual(
+            [`cid:${onlyAHash}`, "of:a"].toSorted(),
+          );
+          expect(ids([...fixture.state.entities.values()])).toEqual(
+            [`cid:${onlyBHash}`, "of:b"].toSorted(),
+          );
+        } finally {
+          await fixture.close();
+        }
+      });
+
+      it("walks, for a root added later, a document a refresh retired, at the version that refresh read", async () => {
+        // One write unlinks `of:x` from `of:a` and relinks `of:x` to a new
+        // `of:y`. The refresh reads the new `of:x` and then retires it,
+        // and the graph's cache lets go of it when the refresh's reads are
+        // merged in, so a watch on `of:x` added afterwards walks it and
+        // reaches `of:y`.
+        const fixture = await openFixture(0);
+        try {
+          await fixture.writer.transact({
+            localSeq: 2,
+            reads: { confirmed: [], pending: [] },
+            operations: [
+              {
+                op: "set",
+                id: "of:a",
+                value: { value: { child: link(fixture.space, "of:x") } },
+              },
+              { op: "set", id: "of:x", value: { value: { name: "x" } } },
+              { op: "set", id: "of:b", value: { value: { name: "b" } } },
+            ],
+          });
+          await fixture.server.flushSessions();
+          const { view } = await fixture.reader.watchAddSync([
+            permissive("of:a"),
+            watch("of:b"),
+          ]);
+          const frames = view.subscribeSync();
+          const pushed = frames.next();
+          await fixture.writer.transact({
+            localSeq: 3,
+            reads: { confirmed: [], pending: [] },
+            operations: [
+              { op: "set", id: "of:a", value: { value: {} } },
+              {
+                op: "set",
+                id: "of:x",
+                value: { value: { child: link(fixture.space, "of:y") } },
+              },
+              { op: "set", id: "of:y", value: { value: { name: "y" } } },
+            ],
+          });
+          await fixture.server.flushSessions();
+          const { value: frame } = await pushed;
+          expect(ids(frame!.removes)).toEqual(["of:x"]);
+          const added = await fixture.reader.watchAddSync([permissive("of:x")]);
+          expect(ids(added.sync.upserts)).toEqual(["of:x", "of:y"]);
+          expect(ids([...fixture.state.entities.values()])).toEqual([
+            "of:a",
+            "of:b",
+            "of:x",
+            "of:y",
+          ]);
+        } finally {
+          await fixture.close();
+        }
+      });
+
+      it("keeps, at the refresh, a schema document the selector needs when the content stops referring to it", async () => {
+        // The watch's selector is `outer`, which refers to `leaf`, and the
+        // document's link carries the same ref. Replacing the document
+        // with a value carrying no ref releases what the content kept and
+        // nothing the selector's walk keeps, so both stay delivered.
+        const leaf = { type: "string", title: "selector-leaf" } as const;
+        const leafHash = internSchemaAsTaggedHashString(leaf);
+        const outer = {
+          type: "object",
+          properties: { x: { $ref: `cid:${leafHash}` } },
+        } as const;
+        const outerHash = internSchemaAsTaggedHashString(outer);
+        const selectorWatch: GraphWatchSpec = {
+          id: "of:a",
+          kind: "graph",
+          query: {
+            roots: [{
+              id: "of:a",
+              selector: { path: [], schema: { $ref: `cid:${outerHash}` } },
+            }],
+          },
+        };
+        const fixture = await openFixture(0);
+        try {
+          await fixture.writer.transact({
+            localSeq: 2,
+            reads: { confirmed: [], pending: [] },
+            operations: [
+              { op: "set", id: `cid:${leafHash}`, value: { value: leaf } },
+              { op: "set", id: `cid:${outerHash}`, value: { value: outer } },
+              { op: "set", id: "of:t", value: { value: { n: 1 } } },
+              {
+                op: "set",
+                id: "of:a",
+                value: { value: { x: linkWithSchemaRef("of:t", outerHash) } },
+              },
+            ],
+          });
+          await fixture.server.flushSessions();
+          const { view } = await fixture.reader.watchAddSync([selectorWatch]);
+          const delivered = () => ids([...fixture.state.entities.values()]);
+          expect(delivered()).toEqual(
+            [`cid:${leafHash}`, `cid:${outerHash}`, "of:a", "of:t"].toSorted(),
+          );
+          const frames = view.subscribeSync();
+          const pushed = frames.next();
+          await fixture.writer.transact({
+            localSeq: 3,
+            reads: { confirmed: [], pending: [] },
+            operations: [{ op: "set", id: "of:a", value: { value: {} } }],
+          });
+          await fixture.server.flushSessions();
+          const { value: frame } = await pushed;
+          expect(ids(frame!.removes)).toEqual(["of:t"]);
+          expect(ids(frame!.upserts)).toEqual(["of:a"]);
+          expect(delivered()).toEqual(
+            [`cid:${leafHash}`, `cid:${outerHash}`, "of:a"].toSorted(),
+          );
+        } finally {
+          await fixture.close();
+        }
+      });
+
+      it("delivers a link target born after the watch reaching it was removed, once that watch is added again", async () => {
+        // `of:a` links to `of:x`, which does not exist. Removing the watch
+        // retires the miss, and the graph's cache lets go of the absence
+        // with it; `of:x` written in between is read when the watch is
+        // added again. The watch on `of:b` keeps the graph throughout.
+        const fixture = await openFixture(0);
+        try {
+          await fixture.writer.transact({
+            localSeq: 2,
+            reads: { confirmed: [], pending: [] },
+            operations: [
+              {
+                op: "set",
+                id: "of:a",
+                value: { value: { child: link(fixture.space, "of:x") } },
+              },
+              { op: "set", id: "of:b", value: { value: { name: "b" } } },
+            ],
+          });
+          await fixture.server.flushSessions();
+          await fixture.reader.watchAddSync([
+            permissive("of:a"),
+            watch("of:b"),
+          ]);
+          const removal = await fixture.reader.watchRemoveSync(["of:a:all"]);
+          expect(ids(removal.sync.removes)).toEqual(["of:a"]);
+          await fixture.writer.transact({
+            localSeq: 3,
+            reads: { confirmed: [], pending: [] },
+            operations: [
+              { op: "set", id: "of:x", value: { value: { name: "x" } } },
+            ],
+          });
+          await fixture.server.flushSessions();
+          const added = await fixture.reader.watchAddSync([permissive("of:a")]);
+          expect(ids(added.sync.upserts)).toEqual(["of:a", "of:x"]);
+          expect(ids([...fixture.state.entities.values()])).toEqual([
+            "of:a",
+            "of:b",
+            "of:x",
+          ]);
+        } finally {
+          await fixture.close();
+        }
+      });
+
+      it("retracts, at the refresh, the schema documents a followed link's schema reached, when the link goes", async () => {
+        // A permissive walk of `of:a` follows its link to `of:t` and loads
+        // the link schema's closure, `outer` and `leaf`, which the content
+        // keeps as well. Replacing `of:a` with a value holding no link
+        // retracts all three: a schema document keeps the ones it refers
+        // to, never itself.
+        const leaf = { type: "string", title: "followed-leaf" } as const;
+        const leafHash = internSchemaAsTaggedHashString(leaf);
+        const outer = {
+          type: "object",
+          properties: { x: { $ref: `cid:${leafHash}` } },
+        } as const;
+        const outerHash = internSchemaAsTaggedHashString(outer);
+        const fixture = await openFixture(0);
+        try {
+          await fixture.writer.transact({
+            localSeq: 2,
+            reads: { confirmed: [], pending: [] },
+            operations: [
+              { op: "set", id: `cid:${leafHash}`, value: { value: leaf } },
+              { op: "set", id: `cid:${outerHash}`, value: { value: outer } },
+              { op: "set", id: "of:t", value: { value: { x: "t" } } },
+              {
+                op: "set",
+                id: "of:a",
+                value: { value: { x: linkWithSchemaRef("of:t", outerHash) } },
+              },
+            ],
+          });
+          await fixture.server.flushSessions();
+          const { view } = await fixture.reader.watchAddSync([
+            permissive("of:a"),
+          ]);
+          const delivered = () => ids([...fixture.state.entities.values()]);
+          expect(delivered()).toEqual(
+            [`cid:${leafHash}`, `cid:${outerHash}`, "of:a", "of:t"].toSorted(),
+          );
+          const frames = view.subscribeSync();
+          const pushed = frames.next();
+          await fixture.writer.transact({
+            localSeq: 3,
+            reads: { confirmed: [], pending: [] },
+            operations: [{ op: "set", id: "of:a", value: { value: {} } }],
+          });
+          await fixture.server.flushSessions();
+          const { value: frame } = await pushed;
+          expect(ids(frame!.removes)).toEqual(
+            [`cid:${leafHash}`, `cid:${outerHash}`, "of:t"].toSorted(),
+          );
+          expect(ids(frame!.upserts)).toEqual(["of:a"]);
+          expect(delivered()).toEqual(["of:a"]);
+        } finally {
+          await fixture.close();
+        }
+      });
+
+      it("delivers a schema document again to a watch needing it after a refresh retracted it", async () => {
+        // The watch on `of:a` is added while the write of `of:a` and its
+        // schema document is still to be refreshed, so the refresh that
+        // follows the write dropping the ref reads the schema document
+        // again as well as retiring it. What it retired leaves the graph,
+        // and a watch on `of:b`, which refers to the schema document, is
+        // delivered the document with it.
+        const only = { type: "string", title: "redelivered" } as const;
+        const onlyHash = internSchemaAsTaggedHashString(only);
+        const fixture = await openFixture(0);
+        try {
+          await fixture.writer.transact({
+            localSeq: 2,
+            reads: { confirmed: [], pending: [] },
+            operations: [
+              { op: "set", id: `cid:${onlyHash}`, value: { value: only } },
+              { op: "set", id: "of:t", value: { value: { n: 1 } } },
+              {
+                op: "set",
+                id: "of:a",
+                value: { value: { x: linkWithSchemaRef("of:t", onlyHash) } },
+              },
+            ],
+          });
+          const { view } = await fixture.reader.watchAddSync([watch("of:a")]);
+          const delivered = () => ids([...fixture.state.entities.values()]);
+          expect(delivered()).toEqual([`cid:${onlyHash}`, "of:a"].toSorted());
+          const frames = view.subscribeSync();
+          const pushed = frames.next();
+          await fixture.writer.transact({
+            localSeq: 3,
+            reads: { confirmed: [], pending: [] },
+            operations: [{ op: "set", id: "of:a", value: { value: {} } }],
+          });
+          await fixture.server.flushSessions();
+          const { value: frame } = await pushed;
+          expect(ids(frame!.removes)).toEqual([`cid:${onlyHash}`]);
+          expect(delivered()).toEqual(["of:a"]);
+          await fixture.writer.transact({
+            localSeq: 4,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set",
+              id: "of:b",
+              value: { value: { x: linkWithSchemaRef("of:t", onlyHash) } },
+            }],
+          });
+          await fixture.server.flushSessions();
+          const added = await fixture.reader.watchAddSync([watch("of:b")]);
+          expect(ids(added.sync.upserts)).toEqual(
+            [`cid:${onlyHash}`, "of:b"].toSorted(),
+          );
+          expect(delivered()).toEqual(
+            [`cid:${onlyHash}`, "of:a", "of:b"].toSorted(),
+          );
+        } finally {
+          await fixture.close();
+        }
+      });
+
+      it("retracts, at the refresh, the whole closure of a schema ref a document no longer carries", async () => {
+        // `of:a` links under `outer`, which refers to `leaf`. Replacing
+        // `of:a` with a value carrying no ref releases the closure the old
+        // version kept whole, `leaf` with `outer`.
+        const leaf = { type: "string", title: "closure-leaf" } as const;
+        const leafHash = internSchemaAsTaggedHashString(leaf);
+        const outer = {
+          type: "object",
+          properties: { x: { $ref: `cid:${leafHash}` } },
+        } as const;
+        const outerHash = internSchemaAsTaggedHashString(outer);
+        const fixture = await openFixture(0);
+        try {
+          await fixture.writer.transact({
+            localSeq: 2,
+            reads: { confirmed: [], pending: [] },
+            operations: [
+              { op: "set", id: `cid:${leafHash}`, value: { value: leaf } },
+              { op: "set", id: `cid:${outerHash}`, value: { value: outer } },
+              { op: "set", id: "of:t", value: { value: { n: 1 } } },
+              {
+                op: "set",
+                id: "of:a",
+                value: { value: { x: linkWithSchemaRef("of:t", outerHash) } },
+              },
+            ],
+          });
+          await fixture.server.flushSessions();
+          const { view } = await fixture.reader.watchAddSync([watch("of:a")]);
+          expect(ids([...fixture.state.entities.values()])).toEqual(
+            [`cid:${leafHash}`, `cid:${outerHash}`, "of:a"].toSorted(),
+          );
+          const frames = view.subscribeSync();
+          const pushed = frames.next();
+          await fixture.writer.transact({
+            localSeq: 3,
+            reads: { confirmed: [], pending: [] },
+            operations: [{ op: "set", id: "of:a", value: { value: {} } }],
+          });
+          await fixture.server.flushSessions();
+          const { value: frame } = await pushed;
+          expect(ids(frame!.removes)).toEqual(
+            [`cid:${leafHash}`, `cid:${outerHash}`].toSorted(),
+          );
+          expect(ids(frame!.upserts)).toEqual(["of:a"]);
+          expect(ids([...fixture.state.entities.values()])).toEqual(["of:a"]);
+        } finally {
+          await fixture.close();
+        }
+      });
+
+      it("keeps a schema document delivered while any delivered document refers to it", async () => {
+        // Two roots link under one `$ref` schema. The schema documents are
+        // walked in once, for the first root, and every later document
+        // referring to them is attributed to them too, so they leave only
+        // with the last of those documents.
+        const leafSchema = { type: "string", title: "shared-leaf" } as const;
+        const leafHash = internSchemaAsTaggedHashString(leafSchema);
+        const refSchema = {
+          type: "object",
+          properties: { x: { $ref: `cid:${leafHash}` } },
+        } as const;
+        const refHash = internSchemaAsTaggedHashString(refSchema);
+        const refLink = (id: string) => linkWithSchemaRef(id, refHash);
+        const fixture = await openFixture(0);
+        try {
+          await fixture.writer.transact({
+            localSeq: 2,
+            reads: { confirmed: [], pending: [] },
+            operations: [
+              {
+                op: "set",
+                id: `cid:${leafHash}`,
+                value: { value: leafSchema },
+              },
+              { op: "set", id: `cid:${refHash}`, value: { value: refSchema } },
+              { op: "set", id: "of:t", value: { value: { n: 1 } } },
+              {
+                op: "set",
+                id: "of:p",
+                value: { value: { x: refLink("of:t") } },
+              },
+              {
+                op: "set",
+                id: "of:q",
+                value: { value: { x: refLink("of:t") } },
+              },
+            ],
+          });
+          await fixture.server.flushSessions();
+          await fixture.reader.watchAddSync([watch("of:p")]);
+          await fixture.reader.watchAddSync([watch("of:q")]);
+          const schemaIds = [`cid:${leafHash}`, `cid:${refHash}`].toSorted();
+          const delivered = () =>
+            [...fixture.state.entities.values()].map((entry) => entry.id)
+              .filter((id) => id.startsWith("cid:")).toSorted();
+          expect(delivered()).toEqual(schemaIds);
+          const first = await fixture.reader.watchRemoveSync(["of:p"]);
+          expect(first.sync.removes.map((entry) => entry.id)).toEqual([
+            "of:p",
+          ]);
+          expect(delivered()).toEqual(schemaIds);
+          const second = await fixture.reader.watchRemoveSync(["of:q"]);
+          expect(
+            second.sync.removes.map((entry) => entry.id).toSorted(),
+          ).toEqual(["of:q", ...schemaIds].toSorted());
+          expect(delivered()).toEqual([]);
+        } finally {
+          await fixture.close();
+        }
+      });
+
+      it("pushes no update for a document a removal retracted, and still pushes for one a remaining watch keeps", async () => {
+        // Frames arrive in order, so the first frame after the removal is
+        // the one the write to the kept document earns, and a frame for the
+        // write to the retracted document would have come before it.
+        const fixture = await openFixture(0);
+        try {
+          await fixture.writer.transact({
+            localSeq: 2,
+            reads: { confirmed: [], pending: [] },
+            operations: [
+              {
+                op: "set",
+                id: "of:a",
+                value: { value: { child: link(fixture.space, "of:x") } },
+              },
+              { op: "set", id: "of:x", value: { value: { name: "x" } } },
+              { op: "set", id: "of:b", value: { value: { name: "b" } } },
+            ],
+          });
+          await fixture.server.flushSessions();
+          const { view } = await fixture.reader.watchAddSync([
+            permissive("of:a"),
+            watch("of:b"),
+          ]);
+          const removal = await fixture.reader.watchRemoveSync(["of:a:all"]);
+          expect(ids(removal.sync.removes)).toEqual(["of:a", "of:x"]);
+          const frames = view.subscribeSync();
+          const pushed = frames.next();
+          await fixture.writer.transact({
+            localSeq: 3,
+            reads: { confirmed: [], pending: [] },
+            operations: [
+              { op: "set", id: "of:x", value: { value: { name: "x2" } } },
+            ],
+          });
+          await fixture.server.flushSessions();
+          await fixture.writer.transact({
+            localSeq: 4,
+            reads: { confirmed: [], pending: [] },
+            operations: [
+              { op: "set", id: "of:b", value: { value: { name: "b2" } } },
+            ],
+          });
+          await fixture.server.flushSessions();
+          const { value: frame } = await pushed;
+          expect(ids(frame!.upserts)).toEqual(["of:b"]);
+          expect(frame!.removes).toEqual([]);
+          expect(ids([...fixture.state.entities.values()])).toEqual(["of:b"]);
+        } finally {
+          await fixture.close();
+        }
+      });
+
+      it("keeps the schema documents two watches' selectors share when one watch is removed", async () => {
+        // Both selectors name `outer`, which refers to `leaf`, and the two
+        // watches are evaluated in one walk, which loads the closure once.
+        // Each watch is attributed the closure all the same, so removing
+        // one leaves the schema documents to the other.
+        const { outerHash, ids: schemaIds } = schemaPair("shared-selector");
+        const fixture = await openFixture(0);
+        try {
+          await fixture.writer.transact({
+            localSeq: 2,
+            reads: { confirmed: [], pending: [] },
+            operations: [
+              ...schemaPair("shared-selector").operations,
+              { op: "set", id: "of:a", value: { value: { x: "a" } } },
+              { op: "set", id: "of:b", value: { value: { x: "b" } } },
+            ],
+          });
+          await fixture.server.flushSessions();
+          await fixture.reader.watchAddSync([
+            selectorWatch("of:a", outerHash),
+            selectorWatch("of:b", outerHash),
+          ]);
+          const delivered = () => ids([...fixture.state.entities.values()]);
+          expect(delivered()).toEqual(
+            [...schemaIds, "of:a", "of:b"].toSorted(),
+          );
+          const removal = await fixture.reader.watchRemoveSync(["of:a"]);
+          expect(ids(removal.sync.removes)).toEqual(["of:a"]);
+          expect(delivered()).toEqual([...schemaIds, "of:b"].toSorted());
+        } finally {
+          await fixture.close();
+        }
+      });
+
+      it("delivers, and does not retract, a schema document a refresh retires and reaches again in one pass", async () => {
+        // `of:a` links to `of:x`, whose `schema` member names the schema
+        // document, which only the content closure attributes; the write
+        // relinks `of:a` to `of:y`, whose `schema` member names it too. The
+        // refresh retires `of:x` and with it the schema document, then
+        // delivers `of:y` and reaches the schema document again. The
+        // frame retracts `of:x` alone.
+        const { leafHash, ids: schemaIds, operations } = schemaPair(
+          "readmitted",
+        );
+        const labeled = (n: number) => ({
+          value: { n },
+          schema: { $ref: `cid:${leafHash}` },
+        });
+        const fixture = await openFixture(0);
+        try {
+          await fixture.writer.transact({
+            localSeq: 2,
+            reads: { confirmed: [], pending: [] },
+            operations: [
+              ...operations,
+              { op: "set", id: "of:x", value: labeled(1) },
+              { op: "set", id: "of:y", value: labeled(2) },
+              {
+                op: "set",
+                id: "of:a",
+                value: { value: { child: link(fixture.space, "of:x") } },
+              },
+            ],
+          });
+          await fixture.server.flushSessions();
+          const { view } = await fixture.reader.watchAddSync([
+            permissive("of:a"),
+          ]);
+          const delivered = () => ids([...fixture.state.entities.values()]);
+          expect(delivered()).toEqual(
+            [schemaIds[0], "of:a", "of:x"].toSorted(),
+          );
+          const frames = view.subscribeSync();
+          const pushed = frames.next();
+          await fixture.writer.transact({
+            localSeq: 3,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set",
+              id: "of:a",
+              value: { value: { child: link(fixture.space, "of:y") } },
+            }],
+          });
+          await fixture.server.flushSessions();
+          const { value: frame } = await pushed;
+          expect(ids(frame!.removes)).toEqual(["of:x"]);
+          expect(ids(frame!.upserts)).toContain("of:y");
+          expect(delivered()).toEqual(
+            [schemaIds[0], "of:a", "of:y"].toSorted(),
+          );
+        } finally {
+          await fixture.close();
+        }
+      });
+
+      it("keeps the graph of a branch the removal does not touch", async () => {
+        const fixture = await openCoveredFixture();
+        try {
+          const engine = await fixture.server.engineForSpace(fixture.space);
+          createBranch(engine, "feature");
+          await fixture.server.flushSessions();
+          const base = linkedWatch("of:a");
+          await fixture.reader.watchAddSync([{
+            ...base,
+            id: "feature",
+            query: { ...base.query, branch: "feature" },
+          }]);
+          const feature = fixture.state.graphs.get("feature")!;
+          const removal = await fixture.reader.watchRemoveSync([
+            "of:a:all",
+            "of:a",
+          ]);
+          expect(fixture.state.graphs.get("feature")).toBe(feature);
+          expect(fixture.state.graphs.has("")).toBe(false);
+          expect(
+            removal.sync.removes.map((entry) => [entry.branch, entry.id])
+              .toSorted(),
+          ).toEqual([["", "of:a"], ["", "of:x"], ["", "of:y"]]);
+          expect(fixture.state.watches.map((watch) => watch.id)).toEqual([
+            "feature",
+          ]);
+        } finally {
+          await fixture.close();
+        }
+      });
     });
   });
 });

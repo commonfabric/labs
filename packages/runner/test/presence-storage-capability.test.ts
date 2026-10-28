@@ -45,7 +45,7 @@ const buildStorage = () => {
               close: () => Promise.resolve(),
             } as unknown as MemoryV2Client.Client;
             const session = {
-              subscribeAccessLoss: () => () => {},
+              subscribeTermination: () => () => {},
               close: () => Promise.resolve(),
               joinPresenceRoom: (
                 room: string,
@@ -213,7 +213,7 @@ describe("presence storage capability", () => {
                 close: () => Promise.resolve(),
               } as unknown as MemoryV2Client.Client;
               const session = {
-                subscribeAccessLoss: () => () => {},
+                subscribeTermination: () => () => {},
                 close: () => Promise.resolve(),
                 joinPresenceRoom: (
                   _room: string,

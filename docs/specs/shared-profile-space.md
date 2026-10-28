@@ -254,6 +254,7 @@ type ProfileInbox = {
 
 type SetProfileInboxEvent = {
   inbox?: Cell<ShareInboxPiece>;
+  replacing?: Cell<ShareInboxPiece> | undefined;
 };
 ```
 
@@ -308,8 +309,16 @@ uses the host it read the profile from. The pointer holds no secret, since it
 only says where to knock and the inbox decides what it keeps, and it is
 owner-protected, written only through `setInbox`, which takes the link alone
 (`{ inbox: <link> }`) and stores it as `piece`, or nothing (`{}`) to clear the
-pointer. A profile with no inbox holds a pointer without `piece`; a stored
-profile predating the pointer has no `inbox` property.
+pointer. An optional `replacing` makes the write conditional, checked in the
+transaction that writes it: present and `undefined`, it sets the pointer only
+while the profile points at no inbox, and a link, only while the profile
+points at the inbox that link names. An event without the property writes
+unconditionally, so `{ inbox, replacing: undefined }` and `{ inbox }` are
+different events. A link to an inbox holding nothing is a link, and names it.
+A sender that points a profile only when it has no pointer sends
+`replacing: undefined`, since its own read of the pointer is a transaction of
+its own and guards nothing. A profile with no inbox holds a pointer without
+`piece`; a stored profile predating the pointer has no `inbox` property.
 
 The link sits under `piece` rather than being the stored value itself because
 a write to a cell whose document root holds a link goes through the link into

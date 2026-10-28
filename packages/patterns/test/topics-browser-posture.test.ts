@@ -69,6 +69,28 @@ describe("topicsBrowserPostureOf()", () => {
     expect(posture.clientFrom).toBe("meta");
   });
 
+  it("reports served views where the toolshed runs view-scoped replication for the web client beside server execution, the web override outranking the global setting", () => {
+    const served = (experimental: Record<string, boolean>) =>
+      declared(topicsBrowserPostureOf({
+        experimental,
+        shellServerExecutionDefine: String(experimental.serverExecution),
+      })).servedViews;
+    expect(served({ serverExecution: true, webViewScopedReplication: true }))
+      .toBe(true);
+    expect(served({ serverExecution: true, webViewScopedReplication: false }))
+      .toBe(false);
+    expect(served({ serverExecution: true })).toBe(false);
+    expect(served({ serverExecution: true, viewScopedReplication: true }))
+      .toBe(true);
+    expect(served({
+      serverExecution: true,
+      viewScopedReplication: true,
+      webViewScopedReplication: false,
+    })).toBe(false);
+    expect(served({ serverExecution: false, webViewScopedReplication: true }))
+      .toBe(false);
+  });
+
   it("reads the shell's posture from the bundle when the toolshed reports no baked define", () => {
     const posture = declared(topicsBrowserPostureOf(
       {

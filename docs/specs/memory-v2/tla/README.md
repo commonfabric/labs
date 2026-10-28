@@ -265,7 +265,10 @@ a live session (`SpaceReplica.reset()` on route replacement, `AllowReset`), the
 session can EXPIRE while disconnected (a re-establishing reconnect instead of a
 resume), and the watch union can SHRINK — a lossy `Unwatch` whose removal frame
 the client may fail to absorb, down to the zero-watch union, so a reconnect can
-face a declared holding the union no longer covers (union growth is not
+face a declared holding the union no longer covers. The union is what the
+watches reach, so `Unwatch` stands both for a watch removed and for a refresh
+whose re-walk no longer reaches a document (`04-protocol.md` §4.6.3), whose
+removal frame is lossy the same way (union growth is not
 modeled: a grown union's never-held documents are ordinary deliveries,
 indistinguishable from initial delivery). `Mode` selects the diff base:
 `memory` is the server's own memory on resume and nothing on re-establishment

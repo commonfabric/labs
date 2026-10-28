@@ -30,6 +30,7 @@ import { vnodeSchema } from "../src/schemas.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
+  seedProfileOwner,
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
@@ -342,6 +343,7 @@ describe("condition-builtin-reads", () => {
           title: "pinned",
         }],
       });
+      seedProfileOwner(tx, profile.getAsNormalizedFullLink(), owner.did());
       expect((await tx.commit().settled).error).toBeUndefined();
       const homeTx = runtime.edit();
       const homeDefault = runtime.getCell(

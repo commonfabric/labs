@@ -4,7 +4,11 @@
  */
 
 import { action, assert, pattern, TESTS, Writable } from "commonfabric";
-import Topic, { type TopicAuthor, type TopicComment } from "./topic.tsx";
+import Topic, {
+  TOPIC_STATE_VERSION,
+  type TopicAuthor,
+  type TopicComment,
+} from "./topic.tsx";
 
 /** Comment storage visible to the fixture's data-preservation assertions. */
 interface StoredComment extends TopicComment {
@@ -77,7 +81,7 @@ export default pattern(() => {
       body: "Untouched",
       sentAt: 1,
     }],
-    topicStateVersion: 1,
+    topicStateVersion: TOPIC_STATE_VERSION,
   });
 
   const assert_creator_migrated_on_run = assert(() =>
@@ -90,7 +94,9 @@ export default pattern(() => {
     subject.comments[1].author?.name === "Gideon" &&
     subject.comments[1].author?.kind === "legacy"
   );
-  const assert_completed_durably = assert(() => migrated.get() === 1);
+  const assert_completed_durably = assert(() =>
+    migrated.get() === TOPIC_STATE_VERSION
+  );
   const assert_existing_author_wins = assert(() =>
     subject.comments[2].author?.name === "Current name" &&
     subject.comments[2].author?.kind === "agent" &&
@@ -132,7 +138,7 @@ export default pattern(() => {
   const assert_nonstring_names_complete_without_authors = assert(() =>
     unusable.createdBy?.name === "" &&
     unusable.comments[0].author === undefined &&
-    unusableMigrated.get() === 1
+    unusableMigrated.get() === TOPIC_STATE_VERSION
   );
   const action_change_legacy_names = action(() => {
     legacyCreator.set("Changed legacy creator");
@@ -142,12 +148,13 @@ export default pattern(() => {
   const assert_completed_migration_stays_inert = assert(() =>
     creator.get()?.name === "" &&
     subject.comments[0].author?.name === "Fable" &&
-    migrated.get() === 1
+    migrated.get() === TOPIC_STATE_VERSION
   );
   const action_replay_migration = action(() => migrated.set(0));
   const assert_replay_fills_only_missing_author = assert(() =>
     creator.get()?.name === "Changed legacy creator" &&
-    subject.comments[0].author?.name === "Fable" && migrated.get() === 1
+    subject.comments[0].author?.name === "Fable" &&
+    migrated.get() === TOPIC_STATE_VERSION
   );
   const action_edit_migrated_comment = action(() => {
     subject.editComment.send({

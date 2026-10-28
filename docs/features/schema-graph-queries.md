@@ -65,11 +65,23 @@ caller keeps them, walks them under a schema, and records what it reached.
   fire for them changes which documents a traversal re-walks and what
   consumers of traversed values observe; see the OFF-ARM NEUTRALITY note at
   that site for what gates enabling it.
+- A walk reports each tracker record it makes, or finds the tracker already
+  holding, to the `onTrackedDoc` hook of its options, with the document whose
+  walk needed it: the document holding the link that was followed, the
+  document whose schema or `cfc` envelope named a schema document, or the
+  referrer `visit()` was given for a root. `memory` attributes its tracker
+  with that, so a document nothing reaches any more can leave a session's
+  result (`../specs/memory-v2/04-protocol.md`, section 4.6.3). A visit a
+  memory server's incremental passes make to a document it already tracks,
+  for a root added again, a covered root walked on its own, or a document
+  walked again for its attributions, asks for a `rewalk`, which traverses
+  the document itself even where the shared memo holds it, so that its links
+  are reported again; a graph's first evaluation does not.
 - The rest is vocabulary the two sides name in common:
   `MapSetStringToPathSelectors` (the tracker), `schemaTrackerCoversSelector`
-  (whether a tracker already covers a selector), `createSchemaMemo` and
-  `SchemaMemo` (traversal results reused across walks), and the address and
-  selector types.
+  and `coveringSelector` (whether a tracker already covers a selector, and
+  which record does), `createSchemaMemo` and `SchemaMemo` (traversal results
+  reused across walks), and the address and selector types.
 
 Everything else about a query — the engine reads, the entity snapshots, the
 watch bookkeeping, the branch and sequence handling — stays in `memory`.

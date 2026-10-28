@@ -35,6 +35,7 @@ import {
   readEnv,
   RECORD_SCHEMA_VERSION,
   type RunContext,
+  shippedArtifact,
   type TestRecord,
 } from "@commonfabric/test-support/records";
 import { isObjectOrArray } from "@commonfabric/utils/types";
@@ -254,11 +255,11 @@ export async function relayArtifacts(options: RelayOptions): Promise<string[]> {
   const names: string[] = [];
   for await (const entry of Deno.readDir(options.artifactsDir)) {
     if (!entry.isDirectory) continue;
-    const attempt = entry.name.match(/-a(\d+)$/)?.[1];
+    const attempt = shippedArtifact(entry.name)?.attempt;
     if (attempt === undefined) {
       console.error(`test records: ${entry.name} names no attempt`);
       failed.push(entry.name);
-    } else if (Number(attempt) === options.run.runAttempt) {
+    } else if (attempt === options.run.runAttempt) {
       names.push(entry.name);
     } else {
       console.log(`test records: ${entry.name} is another attempt's`);

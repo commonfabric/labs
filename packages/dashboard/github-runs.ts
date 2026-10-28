@@ -43,8 +43,30 @@
  * A `RunLists` given a file keeps its heads there as well, with the readers
  * each is held for, so that a dashboard that restarts reads each list from the
  * top only until it reaches a run it held before, as any reading does.
+ *
+ * A `RunLists` also takes in the runs the GitHub webhook relay delivers
+ * (github-webhooks.ts). A delivered run that a head holds replaces the copy
+ * held, when it is no older, and counts as read since the top of the list
+ * was. A delivered run newer than every run a head holds means the top of
+ * the list has runs the head lacks, and each reading reads the top again,
+ * however recently it was read, until the top shows the run or a newer one.
+ * A read of the top keeps the head's copy of a run when the list's copy is
+ * older, and a delivered copy unless the list's copy is newer. While the relay vouches for the connection the top of a list was
+ * last read under, every change to the runs there since has been delivered,
+ * so a reading does not read the top again unless a run has landed on it;
+ * the same holds for a filtered list and the connection it was last read
+ * under. A reading still reads further down the list, and reads again by its
+ * id an unfinished run it wants that has not been read or delivered since
+ * the top was read.
  */
 
+import {
+  type GitHubWebhooks,
+  githubWebhooks,
+  type RelayStream,
+  sameRepo,
+  workflowRunOf,
+} from "./github-webhooks.ts";
 import {
   type GitHubRequestOptions,
   GitHubStatusError,
@@ -168,14 +190,37 @@ class Head {
   /** When the top of the list was last read, and how many runs that read. */
   readAt = -Infinity;
   readSize = 0;
-  /** The runs read from GitHub since the top of the list was last read. */
+  /** The relay connection the top of the list was last read under. */
+  readUnder: RelayStream | undefined;
+  /**
+   * The runs read from GitHub or delivered by the relay since the top of the
+   * list was last read.
+   */
   fresh = new Set<number>();
-  /** When each filtered list was last read, by its query. */
-  rechecked = new Map<string, number>();
+  /**
+   * When each filtered list was last read, and the relay connection it was
+   * read under, by its query.
+   */
+  rechecked = new Map<string, { at: number; under?: RelayStream }>();
+  /**
+   * The newest copy of each run the relay delivered that the head has not
+   * yet taken in, by id.
+   */
+  delivered = new Map<number, GitHubRun>();
+  /**
+   * The newest delivered copy of each delivered run the head does not hold
+   * that is newer than the oldest run it holds, by id: runs the list has that
+   * the head lacks.
+   */
+  unlisted = new Map<number, GitHubRun>();
+  /** The runs whose copy held is one the relay delivered, by id. */
+  deliveredCopies = new Set<number>();
   /** The oldest run each reader last read, and when. */
   reach = new Map<string, { id: number; at: number }>();
   /** When a reading last asked for this head. */
   usedAt = Date.now();
+  /** How many tasks given to `exclusive()` have not finished. */
+  pending = 0;
   #queue: Promise<void> = Promise.resolve();
 
   /** Constructs an instance holding none of `repo`'s `workflow` runs. */
@@ -204,7 +249,10 @@ class Head {
 
   /** Runs `task` once every task given before it has finished. */
   exclusive<T>(task: () => Promise<T>): Promise<T> {
-    const result = this.#queue.then(task);
+    this.pending++;
+    const result = this.#queue.then(task).finally(() => {
+      this.pending--;
+    });
     this.#queue = result.then(() => {}, () => {});
     return result;
   }
@@ -292,15 +340,31 @@ class RunList {
 export class RunLists {
   #heads = new Map<string, Head>();
   #file: RunListFile | undefined;
+  #webhooks: GitHubWebhooks;
   #saving: Promise<void> = Promise.resolve();
   #unsaved = false;
 
   /**
    * Constructs an instance that keeps its heads in the file at `file`, when
-   * given, starting from the heads it holds, and in memory alone otherwise.
+   * given, starting from the heads it holds, and in memory alone otherwise,
+   * and that takes in the runs `webhooks` delivers.
    */
-  constructor(file?: string) {
+  constructor(file?: string, webhooks: GitHubWebhooks = githubWebhooks) {
     this.#file = file === undefined ? undefined : new RunListFile(file);
+    this.#webhooks = webhooks;
+    webhooks.listen((delivery) => {
+      const activity = workflowRunOf(delivery);
+      if (activity === undefined) return;
+      const now = Date.now();
+      for (const head of this.#heads.values()) {
+        if (
+          now - head.usedAt <= READER_TTL_MS &&
+          sameRepo(head.repo, activity.repo) &&
+          (head.workflow === activity.workflowId ||
+            head.workflow === activity.workflowFile)
+        ) deliver(head, narrow(activity.run));
+      }
+    });
   }
 
   /**
@@ -348,9 +412,14 @@ export class RunLists {
     const list = new RunList(request, repo, workflow);
     try {
       return await held.exclusive(async () => {
-        await readTop(list, held, newest);
-        await recheck(list, held, reading);
+        takeDelivered(held);
+        await readTop(list, held, newest, this.#webhooks);
+        await recheck(list, held, reading, this.#webhooks);
+        // What was delivered while the top and the filtered lists were read
+        // is taken in before the reader's runs are chosen.
+        takeDelivered(held);
         const count = await readDown(list, held, reading);
+        takeDelivered(held);
         if (count > 0) {
           held.reach.set(reading.reader, {
             id: held.runs[count - 1].id,
@@ -398,6 +467,52 @@ export class RunLists {
 }
 
 /**
+ * Helper for `RunLists`, which takes in a delivered `run` for `head` at once
+ * when nothing is reading the head, and otherwise keeps it for the reading
+ * to take in, unless a newer copy of it is kept already.
+ */
+function deliver(head: Head, run: GitHubRun): void {
+  if (head.pending === 0) takeIn(head, run);
+  else keepNewest(head.delivered, run);
+}
+
+/** Puts `run` in `runs`, unless `runs` holds a newer copy of it. */
+function keepNewest(runs: Map<number, GitHubRun>, run: GitHubRun): void {
+  const kept = runs.get(run.id);
+  if (kept === undefined || !isOlder(run, kept)) runs.set(run.id, run);
+}
+
+/** Returns whether `run` was updated before `than`. */
+function isOlder(run: GitHubRun, than: GitHubRun): boolean {
+  return Date.parse(run.updated_at) < Date.parse(than.updated_at);
+}
+
+/**
+ * Helper for `RunLists.runs()`, which takes in the runs the relay delivered
+ * for `head`: a run held is replaced by a delivered copy no older than it,
+ * and a delivered run the head does not hold, newer than the oldest run it
+ * holds, is kept as unlisted until the next read of the top of the list.
+ */
+function takeDelivered(head: Head): void {
+  for (const run of head.delivered.values()) takeIn(head, run);
+  head.delivered.clear();
+}
+
+/** Helper for `takeDelivered()` and `deliver()`, which takes in one run. */
+function takeIn(head: Head, run: GitHubRun): void {
+  const index = head.runs.findIndex((held) => held.id === run.id);
+  if (index === -1) {
+    if (run.id > (head.runs.at(-1)?.id ?? -Infinity)) {
+      keepNewest(head.unlisted, run);
+    }
+  } else if (!isOlder(run, head.runs[index])) {
+    head.runs[index] = run;
+    head.fresh.add(run.id);
+    head.deliveredCopies.add(run.id);
+  }
+}
+
+/**
  * Helper for `RunLists.runs()`, which drops `head`'s readers that have not
  * read for READER_TTL_MS, and its runs below the oldest run any remaining
  * reader read.
@@ -413,6 +528,9 @@ function trim(head: Head): void {
   if (below !== -1) {
     head.runs.length = below;
     head.complete = false;
+    for (const id of head.deliveredCopies) {
+      if (id < deepest) head.deliveredCopies.delete(id);
+    }
   }
 }
 
@@ -424,11 +542,29 @@ function trim(head: Head): void {
  * having been deleted, is dropped. When they pass the newest held run without
  * reaching any, every held run that was in their way is gone, and the head
  * starts again from them. A top read that leaves out the newest held run is
- * rejected as behind unless that run has been deleted.
+ * rejected as behind unless that run has been deleted. A run read that the
+ * head holds a newer copy of, read or delivered, keeps that copy, and so does
+ * one whose delivered copy is as new. The top is
+ * not read again while `webhooks` vouches for the connection it was last read
+ * under, or within REUSE_MS of the last read, unless the head has an unlisted
+ * run. Each unlisted run the read leaves out is read by its id: one that is
+ * gone is dropped, one older than the newest run listed is placed among the
+ * runs held, and one newer is a run the list is served behind, which keeps
+ * the head reading the top until the list shows it.
  */
-async function readTop(list: RunList, head: Head, size: number): Promise<void> {
-  if (Date.now() - head.readAt < REUSE_MS && head.readSize >= size) return;
+async function readTop(
+  list: RunList,
+  head: Head,
+  size: number,
+  webhooks: GitHubWebhooks,
+): Promise<void> {
+  if (
+    head.unlisted.size === 0 &&
+    (webhooks.vouchesFor(head.readUnder, head.readAt) ||
+      Date.now() - head.readAt < REUSE_MS && head.readSize >= size)
+  ) return;
   const readAt = Date.now();
+  const readUnder = webhooks.stream;
   const held = new Set(head.runs.map((run) => run.id));
   const newestHeld = head.runs[0]?.id ?? Infinity;
   const top = await list.page(1, size);
@@ -452,14 +588,57 @@ async function readTop(list: RunList, head: Head, size: number): Promise<void> {
   // A top read that reaches the end of the list is the whole list.
   const joins = reaches() && !ended;
   const last = top.at(-1)?.id ?? Infinity;
+  const known = new Map(head.unlisted);
+  for (const run of head.runs) known.set(run.id, run);
+  // A delivered copy updated at the same moment as the list's is kept, since
+  // the list can be served behind the delivery.
+  const listed = top.map((run) => {
+    const copy = known.get(run.id);
+    const delivered = head.unlisted.has(run.id) ||
+      head.deliveredCopies.has(run.id);
+    if (
+      copy !== undefined &&
+      (isOlder(run, copy) || delivered && !isOlder(copy, run))
+    ) return copy;
+    head.deliveredCopies.delete(run.id);
+    return run;
+  });
   head.runs = joins
-    ? [...top, ...head.runs.filter((run) => run.id < last)]
-    : top;
+    ? [...listed, ...head.runs.filter((run) => run.id < last)]
+    : listed;
   if (!joins) head.drift = 0;
   head.complete = ended || (joins && head.complete);
   head.readAt = readAt;
   head.readSize = size;
-  head.fresh = new Set(top.map((run) => run.id));
+  head.readUnder = readUnder;
+  head.fresh = new Set(listed.map((run) => run.id));
+  const newest = listed[0]?.id ?? -Infinity;
+  for (const [id, copy] of head.unlisted) {
+    if (head.runs.some((run) => run.id === id)) {
+      head.unlisted.delete(id);
+      continue;
+    }
+    const run = await list.run(id);
+    if (run === undefined) head.unlisted.delete(id);
+    else if (id < newest) {
+      head.unlisted.delete(id);
+      if (isOlder(copy, run)) place(head, run);
+      else {
+        place(head, copy);
+        head.deliveredCopies.add(id);
+      }
+    }
+  }
+}
+
+/**
+ * Helper for `readTop()`, which puts `run` among `head`'s runs in its place
+ * by id, as read since the top of the list was.
+ */
+function place(head: Head, run: GitHubRun): void {
+  const index = head.runs.findIndex((held) => held.id < run.id);
+  head.runs.splice(index === -1 ? head.runs.length : index, 0, run);
+  head.fresh.add(run.id);
 }
 
 /**
@@ -467,13 +646,15 @@ async function readTop(list: RunList, head: Head, size: number): Promise<void> {
  * `reading` wants that a list in `reading.recheck` shows updated after the
  * copy held, unless it has been read since the top of the list was. Each list
  * is read down to the oldest run held, or to runs too old to start again, and
- * one read within REUSE_MS is not read again. A list that cannot be read is
- * logged and passed over.
+ * one read within REUSE_MS, or under a connection `webhooks` still vouches
+ * for, is not read again. A list that cannot be read is logged and passed
+ * over.
  */
 async function recheck(
   list: RunList,
   head: Head,
   reading: RunReading,
+  webhooks: GitHubWebhooks,
 ): Promise<void> {
   const held = new Map(head.runs.map((run) => [run.id, run]));
   const oldest = head.runs.at(-1)?.id ?? Infinity;
@@ -481,7 +662,13 @@ async function recheck(
   const changed = new Set<number>();
   await Promise.all(reading.recheck.map(async (filter) => {
     const key = JSON.stringify(filter);
-    if (Date.now() - (head.rechecked.get(key) ?? -Infinity) < REUSE_MS) return;
+    const previous = head.rechecked.get(key);
+    if (
+      previous !== undefined &&
+      (webhooks.vouchesFor(previous.under, previous.at) ||
+        Date.now() - previous.at < REUSE_MS)
+    ) return;
+    const under = webhooks.stream;
     for (let page = 1;; page++) {
       let listed: GitHubRun[];
       try {
@@ -508,7 +695,7 @@ async function recheck(
         Date.parse(last.created_at) < since
       ) break;
     }
-    head.rechecked.set(key, Date.now());
+    head.rechecked.set(key, { at: Date.now(), under });
   }));
   await Promise.all([...changed].map((id) => readAgain(list, head, id)));
 }
@@ -594,6 +781,7 @@ async function readAgain(
     return false;
   }
   if (index !== -1) head.runs[index] = run;
+  head.deliveredCopies.delete(id);
   return index !== -1;
 }
 

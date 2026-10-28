@@ -6,6 +6,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import type { Cell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
+import { seedProfileOwner } from "./cfc-seed-envelope.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 
 /** One roster entry: a profile that loads, or one whose load fails. */
@@ -47,6 +48,7 @@ async function makeRoster(label: string, roster: Roster) {
       const tx = runtime.edit();
       const cell = runtime.getCell(space, "profile", undefined, tx);
       cell.set(profileValue(`Profile ${index}`));
+      seedProfileOwner(tx, cell.getAsNormalizedFullLink(), signer.did());
       const reference = distinct
         ? runtime.getCell(space, "profile result", undefined, tx)
         : cell;
@@ -85,6 +87,7 @@ async function makeRoster(label: string, roster: Roster) {
   return {
     runtime,
     profiles,
+    owner: signer.did(),
     async wish(query: string, scope?: ("~" | "." | "profile")[]) {
       const { commonfabric } = createTrustedBuilder(runtime);
       const pattern = commonfabric.pattern(() => ({
@@ -295,6 +298,11 @@ describe("wish-profile-unavailable", () => {
 
       const arrive = fixture.runtime.edit();
       fixture.profiles[1].withTx(arrive).set(profileValue("Profile 1"));
+      seedProfileOwner(
+        arrive,
+        fixture.profiles[1].getAsNormalizedFullLink(),
+        fixture.owner,
+      );
       expect((await arrive.commit().settled).error).toBeUndefined();
       await settle(fixture.runtime);
       expect(found.key("candidates").get()).toHaveLength(2);

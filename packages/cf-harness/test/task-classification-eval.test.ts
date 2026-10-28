@@ -5,8 +5,18 @@ import { codexEvalModel, main } from "../scripts/task-classification-eval.ts";
 import type { TaskClassificationCase } from "./task-classification-cases.ts";
 
 const cases: TaskClassificationCase[] = [
-  { task: "what's on Thursday?", context: {}, expected: ["find"] },
-  { task: "make me a pomodoro timer", context: {}, expected: ["author"] },
+  {
+    task: "what's on Thursday?",
+    context: {},
+    expected: ["find"],
+    domains: ["personal"],
+  },
+  {
+    task: "make me a pomodoro timer",
+    context: {},
+    expected: ["author"],
+    domains: ["fabric"],
+  },
 ];
 
 /** Runs the eval with `args`, returning its exit code and what it logged. */

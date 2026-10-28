@@ -6,6 +6,7 @@ import type {
   GroupIndex,
   KeyIndex,
   ReadonlyCell,
+  TextChange,
 } from "@commonfabric/api";
 import {
   assertValidFabricValueLayer,
@@ -34,6 +35,7 @@ import {
 import {
   deepFrozenCloneAndInternSchema,
   internSchema,
+  internSchemaAsTaggedHashString,
   isInternedSchema,
 } from "@commonfabric/data-model-schema";
 import type { MemorySpace } from "@commonfabric/memory/interface";
@@ -77,6 +79,7 @@ import {
   type HKT,
   type ICell,
   isReactiveMarker,
+  isStreamValue,
   type IsThisObject,
   type IStreamable,
   type JSONSchema,
@@ -100,6 +103,7 @@ import { checkSqliteRowLabelWrite } from "./builtins/sqlite/row-label-write.ts";
 import { checkSqliteWriteCeiling } from "./builtins/sqlite/write-ceiling.ts";
 import { type Cancel, isCancel, useCancelGroup } from "./cancel.ts";
 import { ContextualFlowControl, declaredSchemaScope } from "./cfc.ts";
+import { cfcSchemaGivesNoShape } from "./cfc/schema-primitives.ts";
 import {
   cfcAcquisitionViewForDereferenceTraces,
   type CfcLabelView,
@@ -137,8 +141,17 @@ import {
 import { actingForEmission, waveRunContextOf } from "./executor/wave.ts";
 import { immutableCellsFor, pinImmutableCell } from "./immutable-cell.ts";
 import { areLinksSame } from "./link-equality.ts";
-import { type LastNode, resolveLink } from "./link-resolution.ts";
-import { areNormalizedLinksSame, isPrimitiveCellLink } from "./link-types.ts";
+import {
+  type LastNode,
+  resolveLink,
+  resolveLinkTracingDereferences,
+} from "./link-resolution.ts";
+import {
+  addressKey,
+  areNormalizedLinksSame,
+  isPrimitiveCellLink,
+  isSigilLink,
+} from "./link-types.ts";
 import {
   createSigilLinkFromParsedLink,
   declareStreamSchema,
@@ -155,6 +168,8 @@ import {
   createQueryResultProxy,
   getCellOrThrow,
   isCellResultForDereferencing,
+  type ViewReadOut,
+  viewReadOut,
 } from "./query-result-proxy.ts";
 import type { Runtime } from "./runtime.ts";
 import { isRuntime } from "./runtime-brand.ts";
@@ -406,40 +421,11 @@ const schemaDeclaresArray = (schema: JSONSchema | undefined): boolean =>
     (Array.isArray(schema.type) && schema.type.includes("array")) ||
     schema.items !== undefined || schema.prefixItems !== undefined);
 
-/** Keywords that annotate a schema and constrain no value. */
-const SCHEMA_ANNOTATION_KEYWORDS: ReadonlySet<string> = new Set([
-  "title",
-  "description",
-  "$comment",
-  "examples",
-  "deprecated",
-  "readOnly",
-  "writeOnly",
-]);
-
-/**
- * Whether `schema` gives a value no shape: it is absent, or admits every value
- * once its annotations are set aside, so it holds nothing but what the runtime
- * reads for itself (a label, a cell kind, a scope), a default and definitions
- * besides them (`ContextualFlowControl.isTrueSchema`).
- */
-const schemaGivesNoShape = (schema: JSONSchema | undefined): boolean =>
-  schema === undefined ||
-  ContextualFlowControl.isTrueSchema(
-    isObjectOrArray(schema)
-      ? Object.fromEntries(
-        Object.entries(schema).filter(([key]) =>
-          !SCHEMA_ANNOTATION_KEYWORDS.has(key)
-        ),
-      )
-      : schema,
-  );
-
 /**
  * Whether an item write under a missing parent, which the stored envelope
  * describes as `schema`, writes an item of an array. The storage write creates
  * an array for a missing container an index addresses, and that answers where
- * the envelope gives the parent no shape ({@link schemaGivesNoShape}): no
+ * the envelope gives the parent no shape (`cfcSchemaGivesNoShape()`): no
  * envelope, no declaration there, or one holding only a label and annotations.
  * Where the envelope declares an array, it agrees. Any other declaration is
  * taken as written, whether by type, by the members of an object, by a
@@ -447,7 +433,89 @@ const schemaGivesNoShape = (schema: JSONSchema | undefined): boolean =>
  * the envelope's checks of the member it declares there apply to the write.
  */
 const missingParentIsArray = (schema: JSONSchema | undefined): boolean =>
-  schemaGivesNoShape(schema) || schemaDeclaresArray(schema);
+  cfcSchemaGivesNoShape(schema) || schemaDeclaresArray(schema);
+
+/** The kinds of value {@link schemaAdmitsLength} tells apart. */
+type ValueKind = "array" | "string" | "object" | "other";
+
+const allValueKinds: readonly ValueKind[] = [
+  "array",
+  "string",
+  "object",
+  "other",
+];
+
+const valueKindsOfType = (type: string): readonly ValueKind[] =>
+  type === "array" || type === "string" || type === "object"
+    ? [type]
+    : type === "unknown"
+    ? allValueKinds
+    : ["other"];
+
+const valueKindOf = (value: unknown): ValueKind =>
+  typeof value === "string"
+    ? "string"
+    : Array.isArray(value)
+    ? "array"
+    : isObjectOrArray(value)
+    ? "object"
+    : "other";
+
+/**
+ * Whether a `length` key the parent `schema` refuses reads with no schema: the
+ * schema admits an array or a string, the two values whose `length` the store
+ * reads as a value rather than holding as a child, and admits no object. An
+ * object it admits refuses `length` as a key, and a keyed cell cannot tell
+ * which value it will meet, so that refusal stands.
+ *
+ * A schema declaring no type admits every kind of value, and an `enum` or
+ * `const` beside no `type` admits the kinds of its members. A `false` schema,
+ * however it is written, admits none. A conjunction admits what every part
+ * does, and an `anyOf` or a `oneOf` what some arm does; `oneOf` is read as
+ * `anyOf`, so arms that overlap are not checked for exclusivity. A reference
+ * resolves against the document it sits in.
+ */
+const schemaAdmitsLength = (schema: JSONSchema): boolean => {
+  const visiting = new Set<JSONSchema>();
+  const kindsOf = (schema: JSONSchema): readonly ValueKind[] => {
+    if (typeof schema === "boolean") return schema ? allValueKinds : [];
+    const resolved = ContextualFlowControl.resolveSchemaRefsOrThrow(schema);
+    if (typeof resolved === "boolean") return resolved ? allValueKinds : [];
+    // A reference cycle reaches the schema again before deciding anything.
+    if (
+      ContextualFlowControl.isFalseSchema(resolved) || visiting.has(resolved)
+    ) return [];
+    visiting.add(resolved);
+    try {
+      const kindsOfPart = (part: JSONSchema) =>
+        kindsOf(cfcSchemaWithInheritedDefs(part, resolved.$defs));
+      const members = Array.isArray(resolved.enum)
+        ? resolved.enum
+        : "const" in resolved
+        ? [resolved.const]
+        : undefined;
+      let kinds = resolved.type !== undefined
+        ? (Array.isArray(resolved.type) ? resolved.type : [resolved.type])
+          .flatMap(valueKindsOfType)
+        : members !== undefined
+        ? members.map(valueKindOf)
+        : allValueKinds;
+      const narrowTo = (admitted: readonly ValueKind[]) => {
+        kinds = kinds.filter((kind) => admitted.includes(kind));
+      };
+      for (const part of resolved.allOf ?? []) narrowTo(kindsOfPart(part));
+      for (const arms of [resolved.anyOf, resolved.oneOf]) {
+        if (arms !== undefined) narrowTo(arms.flatMap(kindsOfPart));
+      }
+      return kinds;
+    } finally {
+      visiting.delete(resolved);
+    }
+  };
+  const kinds = kindsOf(schema);
+  return (kinds.includes("array") || kinds.includes("string")) &&
+    !kinds.includes("object");
+};
 
 /**
  * The schema write-policy input for a write landing at an item of an array:
@@ -980,6 +1048,7 @@ const cellMethods = new Set<
   "pushAll",
   "addUnique",
   "increment",
+  "applyChanges",
   "remove",
   "removeAll",
   "removeByValue",
@@ -1024,6 +1093,11 @@ const cellMethods = new Set<
   "keys",
   "keyEntries",
 ]);
+
+/** Whether `changes` is a list of text changes rather than a single one. */
+const isTextChangeList = (
+  changes: TextChange | readonly TextChange[],
+): changes is readonly TextChange[] => Array.isArray(changes);
 
 /** Whether `schema` admits `value` and nothing else. */
 function schemaPinsLiteral(
@@ -1248,6 +1322,9 @@ export function encodeSqliteParams(
   ) as SqliteParamsWire;
 }
 
+/** What a cell holds when its storage manager hands out no document hold. */
+const NO_DOCUMENT_HOLD = {};
+
 export function createCell<T>(
   runtime: Runtime,
   link?: NormalizedLink,
@@ -1404,8 +1481,63 @@ export class CellImpl<T extends FabricValue>
     hash: string;
   };
 
-  #synced: boolean;
+  /**
+   * How many documents the storage manager had dropped when this cell's
+   * document was loaded, or `undefined` when it has not been.
+   */
+  #loadedAtDrops: number | undefined;
   #cfcLabelView?: CfcLabelView;
+
+  /**
+   * Keeps this cell's document loaded for as long as this cell can read it
+   * (`IStorageManager.holdDocument()`), once the cell has loaded it.
+   */
+  #documentHold: object | undefined;
+
+  /**
+   * Whether this cell's document is loaded: it was, and the storage manager
+   * has not dropped it since.
+   */
+  get #synced(): boolean {
+    if (this.#loadedAtDrops === undefined) return false;
+    this.#holdDocument();
+    const drops = this.#droppedDocuments();
+    if (this.#loadedAtDrops === drops) return true;
+    const { space, id, scope } = this.#link;
+    if (
+      this.#runtime.storageManager.open(space).replica
+        .hasLocalDocumentCoverage?.(
+          id,
+          scope,
+          this.#tx?.tx?.scopeKeyIdentity,
+        ) !==
+        true
+    ) {
+      return false;
+    }
+    this.#loadedAtDrops = drops;
+    return true;
+  }
+
+  set #synced(loaded: boolean) {
+    this.#loadedAtDrops = loaded ? this.#droppedDocuments() : undefined;
+    if (loaded) this.#holdDocument();
+  }
+
+  /** Takes this cell's document hold, once the cell's link is complete. */
+  #holdDocument(): void {
+    if (this.#documentHold !== undefined || !this.#hasFullLink()) return;
+    const { space, id, scope } = this.#link;
+    this.#documentHold = this.#runtime.storageManager.holdDocument?.(
+      { space, id, scope },
+      this.#tx?.tx?.scopeKeyIdentity,
+    ) ?? NO_DOCUMENT_HOLD;
+  }
+
+  /** How many documents the storage manager has dropped. */
+  #droppedDocuments(): number {
+    return this.#runtime.storageManager.droppedDocuments?.() ?? 0;
+  }
 
   /**
    * Constructs a cell bound to `runtime` and, when given, to `tx`. Pattern code
@@ -1426,7 +1558,8 @@ export class CellImpl<T extends FabricValue>
     }
     this.#runtime = runtime;
     this.#tx = requireTransaction(tx);
-    this.#synced = synced;
+    // The hold is taken on the first read, once the link is complete.
+    this.#loadedAtDrops = synced ? this.#droppedDocuments() : undefined;
     this.#cfcLabelView = _cfcLabelView;
     this.#frame = getTopFrame();
 
@@ -1516,7 +1649,20 @@ export class CellImpl<T extends FabricValue>
     if (cached?.link === link && cached.cfcLabelView === cfcLabelView) {
       return cached.hash;
     }
-    const hash = hashStringOf({ link, cfcLabelView } satisfies CellViewRef);
+    // An interned schema stands in by its interned hash, which is already
+    // computed, where hashing the schema's structure again costs as much as
+    // the whole of a small read. A schema that is not interned is hashed
+    // whole, as interning it here would freeze a schema its caller owns.
+    // Either way two view refs hash alike only when their links, schemas
+    // included, and their label views agree; the two forms never meet, since
+    // a schema is never a string.
+    const { schema, ...rest } = link;
+    const hash = schema !== undefined && isInternedSchema(schema)
+      ? hashStringOf({
+        link: { ...rest, schema: internSchemaAsTaggedHashString(schema) },
+        cfcLabelView,
+      })
+      : hashStringOf({ link, cfcLabelView } satisfies CellViewRef);
     this.#viewRefHashCache = { link, cfcLabelView, hash };
     return hash;
   }
@@ -1533,8 +1679,8 @@ export class CellImpl<T extends FabricValue>
    * This affects all sibling cells (created via .key(), .asSchema(), .withTx()) since they
    * share the same container.
    *
-   * Record causes may not use the top-level key `$generated` — it is
-   * reserved for system-generated causes.
+   * Record causes may not use the top-level key `$generated` or `$instance` —
+   * they are reserved for the causes the pattern builder mints.
    * @param cause - The cause to associate with this cell
    * @param allowIfSet - If true, treat as suggestion and silently ignore if cause already set. If false (default), throw error if cause already set.
    * @returns This cell for method chaining
@@ -1554,8 +1700,8 @@ export class CellImpl<T extends FabricValue>
     }
 
     // Reject reserved keys before the cause can take effect: a user cause
-    // carrying a top-level `$generated` key would mimic the pattern builder's
-    // generated-cause namespace.
+    // carrying a top-level `$generated` or `$instance` key would mimic a cause
+    // the pattern builder mints.
     assertNoReservedCauseKeys(cause);
 
     // Store the cause in the shared container - all siblings will see this
@@ -2299,42 +2445,129 @@ export class CellImpl<T extends FabricValue>
           );
         }
         {
-          const overlay = this.#runtime.speculationOverlay;
-          overlay?.trackIntent(space, sidecarId, firedEventId);
           const eventId = firedEventId;
-          const outcome = replica.enqueueEventAppend({
-            sidecarId,
-            stream,
-            eventId,
-            payload: event as never,
-            ...(mintedKeys !== undefined
-              ? { runtimeInjectedEventKeys: [...mintedKeys] }
-              : {}),
-            // The renderer-trust attestation (fan-out stage B, OW34):
-            // the runtime — never the pattern — records that the sent
-            // event carried the process-local renderer-trust mark, so the
-            // SERVED handler run can re-mark the payload and record the
-            // trusted-event policy input its UI-contract-gated writes
-            // need. The sister of the injected-keys carriage above, same
-            // trust argument (see StreamEventEntry.rendererTrusted).
-            ...(isRendererTrustedEvent(event) ? { rendererTrusted: true } : {}),
-          }).then((delivery) => {
-            if (!delivery.delivered) {
-              // Deterministic admission refusal: the intent is dead —
-              // un-render the echo and signal (events.md §5).
-              overlay?.resolveIntent(space, sidecarId, eventId, {
-                kind: "refused",
-                reason: delivery.refused,
+          let fired = false;
+          const fire = (): Promise<EventAppendDeliveryOutcome> => {
+            fired = true;
+            this.#runtime.trackEventIntent(space, sidecarId, eventId);
+            // Read after the tracking call, which installs the overlay when
+            // this fire is the first thing the runtime does.
+            const overlay = this.#runtime.speculationOverlay;
+            const appended = replica.enqueueEventAppend!({
+              sidecarId,
+              stream,
+              eventId,
+              payload: event as never,
+              ...(mintedKeys !== undefined
+                ? { runtimeInjectedEventKeys: [...mintedKeys] }
+                : {}),
+              // The renderer-trust attestation (fan-out stage B, OW34):
+              // the runtime — never the pattern — records that the sent
+              // event carried the process-local renderer-trust mark, so
+              // the SERVED handler run can re-mark the payload and record
+              // the trusted-event policy input its UI-contract-gated
+              // writes need. The sister of the injected-keys carriage
+              // above, same trust argument (see
+              // StreamEventEntry.rendererTrusted).
+              ...(isRendererTrustedEvent(event)
+                ? { rendererTrusted: true }
+                : {}),
+            }).then((delivery) => {
+              if (!delivery.delivered) {
+                // Deterministic admission refusal: the intent is dead —
+                // un-render the echo and signal (events.md §5).
+                overlay?.resolveIntent(space, sidecarId, eventId, {
+                  kind: "refused",
+                  reason: delivery.refused,
+                });
+              }
+              return delivery;
+            });
+            // The durability barrier (`synced()`) covers undischarged
+            // intents: an event queued offline is an unacked write.
+            this.#runtime.storageManager.trackPendingCommit(
+              appended as Promise<unknown>,
+              () => ({ kind: "event-intent", spaces: [space] }),
+            );
+            return appended;
+          };
+          // A fire made inside a writable transaction is work that
+          // transaction launched, and it happens only if the transaction
+          // commits (events.md §2): the intent is tracked and the event
+          // appended at the commit's verdict. The append is an external
+          // effect, so it runs from the transaction's post-commit outbox,
+          // which flushes at the verdict and only on success. A transaction
+          // that fails or is aborted, as `editWithRetry` aborts an attempt
+          // it runs again, flushes nothing, so no intent is outstanding for
+          // it and no outcome is signaled; its commit callback retires what
+          // the fire's local run left in the overlay, the in-memory
+          // compensation that hook is for. So an attempt run again fires its
+          // event once, and one run again under the caller's own event id,
+          // as `PieceController.edit()` runs it, is not reported refused
+          // before it fires.
+          //
+          // The scheduler's lineage gate (`queueEvent(…, { originTx })`)
+          // decides the same commit-or-drop question for the events this
+          // runtime queues, and the local echo below goes through it. The
+          // append cannot: it is not an event this runtime runs, and a
+          // client that runs nothing of the piece drops its echo at dispatch
+          // for want of a handler, while the append has to happen all the
+          // same.
+          //
+          // A fire through a transaction that already committed happens at
+          // once, and one through a transaction that already failed does
+          // not happen. A read-only transaction commits nothing and so
+          // launches nothing: a fire through one happens at once, as one
+          // with none does.
+          const unfired = (
+            error: { message: string },
+          ): EventAppendDeliveryOutcome => {
+            this.#runtime.speculationOverlay?.retireUnfiredEcho(
+              space,
+              eventId,
+            );
+            return {
+              delivered: false,
+              refused: "the transaction that sent the event did not " +
+                `commit: ${error.message}`,
+            };
+          };
+          const originTx = this.#tx;
+          const origin = originTx?.isReadOnly?.() === true
+            ? undefined
+            : originTx?.status();
+          let outcome: Promise<EventAppendDeliveryOutcome>;
+          if (
+            originTx === undefined || origin === undefined ||
+            origin.status === "done"
+          ) {
+            outcome = fire();
+          } else if (origin.status === "error") {
+            outcome = Promise.resolve(unfired(origin.error));
+          } else {
+            outcome = new Promise((resolve) => {
+              originTx.enqueuePostCommitEffect({
+                // Unique per fire. Two sends of one caller event id inside
+                // one transaction both append, each settled by its own
+                // entry: the outbox's deduplication by id would drop the
+                // second entry and leave that fire's outcome unsettled once
+                // the transaction commits. The server's receipt is what
+                // collapses them (scheduler-v2 I11: at most one handling of
+                // an event id commits), and both sends wait on the same
+                // intent's consequence.
+                id: `event-append:${eventId}:${crypto.randomUUID()}`,
+                kind: "event-append",
+                flush: () => {
+                  resolve(fire());
+                },
               });
-            }
-            return delivery;
-          });
-          // The durability barrier (`synced()`) covers undischarged
-          // intents: an event queued offline is an unacked write.
-          this.#runtime.storageManager.trackPendingCommit(
-            outcome as Promise<unknown>,
-            () => ({ kind: "event-intent", spaces: [space] }),
-          );
+              originTx.addCommitCallback((_tx, result) => {
+                if (result.error !== undefined) {
+                  resolve(unfired(result.error));
+                }
+              });
+            });
+          }
           // The durable-ack coupling (verdict blocker, 2026-08-12): the
           // caller's settle callback must NEVER settle from the
           // speculative local run — under events-down the local
@@ -2353,6 +2586,14 @@ export class CellImpl<T extends FabricValue>
             const callerOnCommit = onCommit;
             onCommit = (echoTx: IExtendedStorageTransaction) => {
               void outcome.then(async (delivery) => {
+                // A send whose transaction did not commit never happened,
+                // and the sender hears nothing of it: the attempt that
+                // commits sends again and reports for itself, so a sender
+                // retrying its edit, as the webhook forwarder does, is told
+                // of the event once.
+                if (!fired) {
+                  return;
+                }
                 // An echo that withdrew aborted without the handler
                 // failing, so its append is reported as a clean one; the
                 // served handling decides the outcome below.
@@ -2375,6 +2616,9 @@ export class CellImpl<T extends FabricValue>
                   ));
                   return;
                 }
+                // A delivered append was fired, and the fire's tracking
+                // call installed the overlay if the runtime has one.
+                const overlay = this.#runtime.speculationOverlay;
                 const consequence = overlay === undefined
                   ? { kind: "consequenced" as const }
                   : await overlay.waitForIntentConsequence(space, eventId);
@@ -3233,6 +3477,67 @@ export class CellImpl<T extends FabricValue>
   }
 
   /**
+   * Applies `changes` to this string cell, each position referring to the
+   * value this transaction read. The commit carries them as an edit, which a
+   * collaborative editor merges with its own typing, and which applies only
+   * while the field still holds the value read here: a field that moved on
+   * refuses the commit, and the transaction runs again against the new value.
+   *
+   * @throws when called outside a transaction, when the cell holds no string,
+   *   when a change does not fit the string, or when the transaction already
+   *   wrote the field another way.
+   */
+  applyChanges(changes: TextChange | readonly TextChange[]): void {
+    if (!this.#tx) {
+      throw new Error(
+        "Cell.applyChanges() requires a transaction and a string value\n" +
+          "help: use in handlers only, ensure cell is typed as string",
+      );
+    }
+    if (!this.#tx.recordTextChanges) {
+      throw new Error(
+        "Cell.applyChanges() requires a transaction that records text changes",
+      );
+    }
+    if (!this.#synced) this.#startLoad();
+
+    const resolvedLink = resolveLink(
+      this.#runtime,
+      this.#tx,
+      this.#link,
+      "value",
+      {
+        markIfcCrossings: true,
+      },
+    );
+    recordRelevantSchemaWritePolicyInput(
+      this.#tx,
+      resolvedLink,
+      resolvedLink.schema ?? this.schema,
+    );
+    // An ordinary read, so that it reaches the commit as a confirmed read of
+    // the field: the precondition that refuses the edit once the field moves.
+    const currentValue = this.#tx.readValueOrThrow(resolvedLink);
+    if (typeof currentValue !== "string") {
+      throw new Error(
+        "Cell.applyChanges() requires a transaction and a string value\n" +
+          "help: use in handlers only, ensure cell is typed as string",
+      );
+    }
+    const list: readonly TextChange[] = isTextChangeList(changes)
+      ? changes
+      : [changes];
+    const next = this.#tx.recordTextChanges(resolvedLink, list);
+    diffAndUpdate(
+      this.#runtime,
+      this.#tx,
+      resolvedLink,
+      next,
+      this.#frame?.cause,
+    );
+  }
+
+  /**
    * Removes every element of this array equal to `ref` by stored value. A cell
    * ref matches by its (deterministic) link, so the membership entry is removed
    * without depending on the list's prior contents — concurrent removes of
@@ -3487,12 +3792,25 @@ export class CellImpl<T extends FabricValue>
     if (keys.length > 0) recordCap(currentLink.path.length, currentLink.schema);
 
     for (const key of keys) {
-      // Get child schema if we have one
-      childSchema = currentLink.schema
-        ? ContextualFlowControl.getSchemaAtPath(currentLink.schema, [
-          key.toString(),
-        ])
-        : undefined;
+      // A position the parent schema refuses keeps `false`, so the child reads
+      // nothing, the same as under `{ not: true }`. A child with no schema
+      // would read the raw value instead, and adopt the schema of a link
+      // stored there. `length` under a parent admitting an array or a string
+      // and no object is the exception: the store reads it as a value, so it
+      // reads with no schema (`schemaAdmitsLength()`).
+      // `getSchemaAtPath()` returns `undefined` for a schema where narrowing
+      // refuses the position, and also where it cannot read a child out of
+      // an `allOf` declaring no type. The second keeps `false` too, so a key
+      // under such a conjunction selects nothing even where a read of the
+      // parent, which evaluates the conjunction whole, reaches it.
+      const parentSchema = currentLink.schema;
+      const segment = key.toString();
+      childSchema = parentSchema === undefined
+        ? undefined
+        : ContextualFlowControl.getSchemaAtPath(parentSchema, [segment]) ??
+          (segment === "length" && schemaAdmitsLength(parentSchema)
+            ? undefined
+            : false);
 
       // Create a child link with an extended path. schemaAtPath retains the
       // reachable $defs closure needed for later key() calls while dropping
@@ -4248,13 +4566,20 @@ export class CellImpl<T extends FabricValue>
     options?: {
       params?: ReadonlyArray<unknown> | Record<string, unknown>;
       reactOn?: unknown;
+      requestKey?: string;
       maxConfidentiality?: ReadonlyArray<unknown>;
       onExceed?: "fail" | "skip";
       readClearance?: boolean;
       scope?: CellScope;
     },
   ): Reactive<
-    { pending: boolean; result?: Row[]; error?: unknown; withheld?: number }
+    {
+      pending: boolean;
+      result?: Row[];
+      error?: unknown;
+      withheld?: number;
+      requestKey?: string;
+    }
   > {
     // The scope binds the node the way `.asScope` binds the builder export:
     // the runner folds the node's default scope into the result cell's link.
@@ -4272,6 +4597,7 @@ export class CellImpl<T extends FabricValue>
       sql,
       params: options?.params,
       reactOn: options?.reactOn,
+      requestKey: options?.requestKey,
       // CFC Phase 3 read surface: the declared output ceiling + exceed mode.
       maxConfidentiality: options?.maxConfidentiality,
       onExceed: options?.onExceed,
@@ -4282,7 +4608,13 @@ export class CellImpl<T extends FabricValue>
       // columns. Read loosely — it is not part of the public options type.
       rowSchema: (options as { rowSchema?: unknown } | undefined)?.rowSchema,
     }) as Reactive<
-      { pending: boolean; result?: Row[]; error?: unknown; withheld?: number }
+      {
+        pending: boolean;
+        result?: Row[];
+        error?: unknown;
+        withheld?: number;
+        requestKey?: string;
+      }
     >;
   }
 
@@ -4974,7 +5306,13 @@ function subscribeToReferencedDocs<T>(
       const newValue = validateAndTransform(runtime, wrappedTx, ref, [], {
         synced: true,
       });
-      if (needsTraversal && newValue !== undefined && newValue !== null) {
+      // A projection reads what it delivers, and those reads are this sink's
+      // dependencies. A sink delivering the value itself hears every change
+      // under it, so the whole of the value is read.
+      if (
+        project === undefined && needsTraversal && newValue !== undefined &&
+        newValue !== null
+      ) {
         deepTraverse(newValue);
       }
       // Read the label on the SINK's transaction (`tx`), not the child `extraTx`,
@@ -4997,8 +5335,11 @@ function subscribeToReferencedDocs<T>(
       // cover what it reads: a field the schema leaves untyped holds a value
       // that reads what it holds only once it is looked at.
       const delivered = project === undefined ? newValue : project(newValue);
+      // Each consumed document's labels are read so that this sink sees
+      // them, as the label above is: a write of a label alone, the value
+      // left as it was, runs the sink again with what it then consumes.
       const consumed = options.includeConsumedLabel
-        ? collectConsumedLabel(tx)
+        ? collectConsumedLabel(tx, { subscribe: true })
         : undefined;
       sink.cleanup = callback(delivered, cfcLabel, consumed);
 
@@ -5517,7 +5858,9 @@ export function readProjected<R>(
  * to the value: `callback` runs with the projection of each value, and the
  * labels of everything the read and the projection consumed, read on the
  * sink's own transaction so that a write to anything the projection reached,
- * labels included, runs it again. A stream holds no value to project, and is
+ * labels included, runs it again. What the projection reaches is what the
+ * subscription depends on: a part of the value it never reads is a part
+ * whose change does not run it. A stream holds no value to project, and is
  * refused.
  */
 export function sinkProjected<R>(
@@ -5652,12 +5995,17 @@ function convertOneToLinks(
         // subclass would return a subclass instance.
         container = value as unknown[] | Record<string, unknown>;
       } else {
-        // A query-result proxy serves the symbol from a trap rather than as
-        // an own property, and a subclass fails the prototype check. Either
-        // is read out into a plain copy first, which is a valid
-        // `FabricValueLayer` already and so wants no further conversion.
-        // Objects need this as much as arrays do -- the annotation goes on
-        // either (see `schema.ts`).
+        // A query-result view serves the symbol from a trap rather than as an
+        // own property. Its document is read out directly rather than member
+        // by member through its traps, each of which would build a view of
+        // its own, resolve its link and derive its label view for a member
+        // that is then only copied.
+        const readOut = viewReadOut(value);
+        if (readOut !== undefined) return readOutView(readOut, options, stack);
+        // A subclass fails the prototype check, and is read out into a plain
+        // copy first, which is a valid `FabricValueLayer` already and so wants
+        // no further conversion. Objects need this as much as arrays do -- the
+        // annotation goes on either (see `schema.ts`).
         container = (isArray
           ? shallowCleanArray(value, false)
           : shallowCleanPlainObject(value as object, false)) as
@@ -5757,6 +6105,133 @@ function convertOneToLinks(
     // elsewhere in the code.
     ancestors.popExpect(original);
   }
+}
+
+/**
+ * Reads the document a view describes out as the data the view reads, in
+ * place of walking the view member by member: the stored value is frozen,
+ * and copying it from there costs no view, link resolution or label view per
+ * member.
+ *
+ * The document is read once, whole, through the view's own checked read, so
+ * a document that no longer holds what the view was built over refuses as
+ * every access through the view does; the read registers every position
+ * under it, where reading through the view registers each as it is reached. A stored link is followed where it sits, as the view follows
+ * one on access, with the same resolution, so the dereference traces and
+ * labeled crossings it records are the ones the view's reads record. A link
+ * that returns to a position the walk is inside yields a back-link to it, as
+ * a cycle does elsewhere in the walk. A stream position yields the link to
+ * the stream, carrying the label view a view of it would carry.
+ *
+ * `stack` is the path to the view from the walk's root, pushed to and popped
+ * from as {@link convertOneToLinks} does, so a back-link made here names a
+ * path from that same root.
+ */
+function readOutView(
+  view: ViewReadOut,
+  options: CellLinkOptions,
+  stack: string[],
+): FabricValue {
+  const { runtime } = view;
+  return view.atEpoch(() => {
+    const tx = view.readTx();
+    // The depth the walk entered each container it is inside, keyed by the
+    // container's document position, so that a link back to one yields a
+    // back-link to that depth.
+    const entered = new Map<string, number>();
+
+    const streamLink = (
+      link: NormalizedFullLink,
+      cfcLabelView: CfcLabelView | undefined,
+    ): FabricValue =>
+      linkToCell(
+        createCell(runtime, link, view.tx, false, "stream", cfcLabelView),
+        options,
+      );
+
+    // What `stored` holds, which sits at `position` inside the document
+    // `document` names, under the label view `cfcLabelView` carries for that
+    // document position. `position` is pushed to and popped from in step with
+    // `stack`.
+    const walk = (
+      stored: unknown,
+      document: NormalizedFullLink,
+      position: string[],
+      cfcLabelView: CfcLabelView | undefined,
+    ): FabricValue => {
+      if (isSigilLink(stored)) {
+        const resolved = resolveLinkTracingDereferences(
+          runtime,
+          tx,
+          { ...document, path: [...document.path, ...position] },
+          "value",
+          { markIfcCrossings: true },
+        );
+        const target = resolved.link;
+        const targetView = mergeCfcLabelViews([
+          rebaseCfcLabelView(cfcLabelView, position),
+          cfcAcquisitionViewForDereferenceTraces(tx, resolved.traces),
+        ]);
+        if (ContextualFlowControl.declaresStream(target.schema)) {
+          return streamLink(target, targetView);
+        }
+        const depth = entered.get(addressKey(target));
+        if (depth !== undefined) {
+          return deepFreeze(linkRefFrom({ path: stack.slice(0, depth) }));
+        }
+        return walk(tx.readValueOrThrow(target), target, [], targetView);
+      }
+      if (isStreamValue(stored)) {
+        return streamLink(
+          { ...document, path: [...document.path, ...position] },
+          rebaseCfcLabelView(cfcLabelView, position),
+        );
+      }
+      if (!isObjectOrArray(stored) || stored instanceof FabricPrimitive) {
+        return stored as FabricValue;
+      }
+      if (stored instanceof FabricInstance) {
+        // A view over an instance reports no own keys, so what a copy of one
+        // holds is an empty record; the marker above the view construction in
+        // `query-result-proxy.ts` says what closes this.
+        return Object.freeze({});
+      }
+      const member = (key: string, value: unknown): FabricValue => {
+        stack.push(key);
+        position.push(key);
+        try {
+          return walk(value, document, position, cfcLabelView);
+        } finally {
+          position.pop();
+          stack.pop();
+        }
+      };
+      // The container is an ancestor of everything below it for as long as
+      // the walk is inside it, and nothing else: a value reached again on
+      // another branch is shared, and is read out again there.
+      const here = addressKey({
+        ...document,
+        path: [...document.path, ...position],
+      });
+      entered.set(here, stack.length);
+      try {
+        if (Array.isArray(stored)) {
+          return Object.freeze(
+            stored.map((element, index) => member(String(index), element)),
+          );
+        }
+        return Object.freeze(Object.fromEntries(
+          Object.entries(stored).map((
+            [key, value],
+          ) => [key, member(key, value)]),
+        ));
+      } finally {
+        entered.delete(here);
+      }
+    };
+
+    return walk(view.readDocument(), view.link, [], view.cfcLabelView);
+  });
 }
 
 /**

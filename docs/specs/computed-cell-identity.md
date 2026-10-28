@@ -116,9 +116,71 @@ a single chokepoint (`packages/data-model/src/value-hash/ValueHasher.ts`). The U
 (`packages/runner/src/uri-utils.ts`, `toURI`/`fromURI`) prefixes an entity
 scheme onto the tagged hash — historically always `of:`.
 
-The manifest of materialized internal cells is stored in result-cell
-metadata and matched by partial cause plus kind
-(`packages/runner/src/runner.ts`, `materializeDerivedInternalCells`).
+The manifest of materialized internal cells is stored in result-cell metadata
+and matched by partial cause plus kind (`packages/runner/src/runner.ts`,
+`materializeDerivedInternalCells`). Setup also stamps `patternSetupBuild`, a
+record of the build it staged (`packages/runner/src/stored-setup-build.ts`): the
+pattern identity it describes, a digest of the level's positional cells by
+number and description, the cells holding state by number and description, and a
+digest of the projection map, each result path that links a positional cell with
+the cell's number. A named instance counts as a positional cell at the number
+of its `legacyPartialCause`, in the cells and in the projection map alike, so a
+build's record is the same whether or not it names instances. The descriptions
+are the schema-free ones of
+`packages/runner/src/cause-assignment.ts`, so a schema-generator change that
+moves no cell changes no record. A sub-pattern child is described by its
+pattern identity and the least of the names its module gives it, so a child
+its module exports under several names is described alike whichever of them a
+load registers first. A record of another version than the one setup writes
+reads as no record. Because a positional cause is a place in the
+build, two builds of one pattern source can name different cells by one cause,
+and the result projection links each slot to the cell of the build that wrote
+it. A start therefore holds the stored setup against the build it loads
+(`Runner.#storedSetupVerdict`): where the manifest misses one of the build's
+cells or names one the build lacks, or the record describes another build, it
+re-stages the internal cells and the projection when every cell that moved is
+one recomputing restores. Where the record says a cell holding state moved, or
+that cells holding state of one description changed so that which went where
+cannot be told (`ambiguousDescriptions`), the start refuses the piece with
+`PieceStateMovedError`, which names those cells: running it would instantiate
+its children, and read its other cells holding state, at the loaded build's
+numbers, where another cell's state sits. The refusal comes before any of the
+piece's nodes are installed and before any transaction is opened, so no child
+runs and nothing is written, and it leaves no in-memory registration, so the
+next start judges the piece again. The start rejects with the refusal, and
+`startWithCommit()` does so whether the first round of its setup commit or a
+retry's reached it. A setup of the version the record names
+refuses the same way, before staging anything. A child's record is judged when
+the child is set up, as part of instantiating its parent's graph, and a refused
+child stops its parent's start, naming the child (`PieceStateMovedError`'s
+`piece`). `runSynced()` and `runSyncedWithCommit()` start the piece after their
+setup commits and report that refusal to their caller, the second as the cause
+of a `PatternSetupPostCommitError`, which a source update's receipt reports as
+a failed refresh. A bare `run(tx)` whose start comes only after its commit, with
+the child's record not yet loaded, cannot judge the child before it returns: the
+piece is left not running, and the refusal is logged. The stored setup and its
+record stay as evidence of what moved, until a build that numbers those cells as
+the record does, or a migration that moves their state and re-stamps the
+record, lets the piece run. A serving runtime counts a refusal into its
+`structureLoadRefused` stat and parks the refused root until a commit to it
+(`docs/specs/server-side-execution/serving-loop.md`). A document with no record
+of the pattern it runs is judged by its manifest alone: it is re-staged on a
+disagreement only when the build has no cell holding state, and otherwise runs
+over its stored setup as it stands, a hold that reports the disagreement,
+since nothing says any cell moved.
+
+A `{ $generated: N }` cause moves with the compiler as well as with the
+source: a transformer change that adds or removes an anonymous cell ahead of
+another renumbers it under a pattern identity that did not change, and a
+deployed piece then reads the moved cell's state from the document another
+cell wrote. `deno task check-cause-assignments` holds the compiler to the
+base revision's numbering of every in-tree pattern whose source is unchanged
+(`docs/development/automated-gates.md`). It matches the cells of one level
+across the two builds by a description that holds across compilers, and by
+their order among cells of one description
+(`packages/runner/src/cause-assignment.ts`). So where cells holding state share
+a description and their count or their numbers change, which cell went where
+cannot be told, and the gate fails on that as well.
 
 ### Sub-pattern instance identity
 
@@ -128,12 +190,16 @@ parent's internal cell for the instance's partial cause. Everything the child
 holds hangs off that result cell, so the partial cause is the child's
 identity.
 
-An instance given a name by `nameInstance(Child(...), "child")`
-(`packages/runner/src/builder/instance-name.ts`) is a **named instance**. The
-builder takes that name as the instance's partial cause,
-`{ $generated: "instance", name: "child" }`, wherever no result key, node
-input or authored `.for()` names it already. The name sits under the
-reserved `$generated` key, so no authored cause can equal it. An instance
+In a runtime with the `instanceNames` experimental flag on
+(`docs/development/EXPERIMENTAL_OPTIONS.md`, off by default), an instance bound
+to a `const` is a **named instance**. The transformer wraps it in
+`__cfHelpers.nameInstance(Child(...), "child")`
+(`docs/specs/ts-transformer/ts_transformers_current_behavior_spec.md` §13.2),
+and the builder takes that name as the instance's partial cause,
+`{ $instance: "child" }`, wherever no result key, node input or authored
+`.for()` names it already. The name sits under the reserved `$instance` key,
+so no authored cause can equal it, and the cause carries no `$generated`, the
+key of the causes the builder mints for anonymous roots. An instance
 name given to more than one root in a pattern names none of them, and each
 keeps a positional cause. A stream root never takes an instance name, and a
 name given to one does not count toward another root's. A named instance's
@@ -146,6 +212,47 @@ A named instance also records, as its descriptor's `legacyPartialCause`, the
 number, so every other anonymous root keeps the number it would have without
 instance names.
 
+A parent's `instanceChildren` meta lists, as `{ name, child }` entries, the
+child a named instance runs in place of the one minted at its own spot, with
+`child` a link (`{ space, id, scope }`). The name is a value rather than a
+record key, since an instance may take any name a `const` can, among them
+names a stored record may not use as a key, such as `constructor` and
+`__proto__`; an entry repeating an earlier entry's name is ignored. Binding reads it on every setup and start: a named
+instance it records a child for runs that child, and any other named instance
+runs the child at its own spot. The record is how a deployed parent's
+positional child becomes a named instance's child without moving to a new
+document.
+
+A parent set up under a pattern that did not name an instance holds that
+instance's child at the positional spot. The first setup of the parent under a
+pattern that names the instance carries that child over
+(`planInstanceCarryOver` in `packages/runner/src/runner.ts`) and records it in
+`instanceChildren`, so carrying a child over is a one-time transition for each
+deployed parent. The child carried over is the one at the
+`legacyPartialCause` that the pattern the parent last set up gives the same
+instance name, where that pattern is loaded and names the instance. The
+pattern last set up is the one the parent's setup record describes, or, with
+no record of the current version, the one its setup marker names: a start
+repair re-stamps the record and leaves the marker alone, and the children sit
+at the numbers of the build the record describes. That build was made by the
+runtime that set the parent up, and the cause is one this runtime's build of
+the same pattern gives, so the record is held against this runtime's build
+(`compareStoredSetupBuild`): an instance whose cell the record shows holding
+state at another number, or whose description the record's cells cannot be
+matched with, carries nothing over. With no record, this runtime's build
+places the instance. A child is carried over by one instance at most. A start
+loads the pattern last set up by its identity, and syncs the children at the
+positional causes it gives the instances it names, before setup reads them.
+
+An instance that carries nothing over starts fresh, and the setup logs
+`instance-carry-over` naming it: one the pattern last set up does not name,
+which is new or was positional there; one whose parent's pattern last set up
+does not load, or that the record numbers otherwise; and one whose child at
+that cause another instance already carries. Whatever a version without the
+name set up for it is left where it is. An instance the parent ran under a
+name the pattern no longer gives is reported the same way, and its child is
+left behind.
+
 A sub-pattern instance with a positional cause moves to another child's state
 when a cell is added ahead of it, since its child is the one minted from
 whatever number it now takes. A parent's setup refuses
@@ -155,6 +262,9 @@ naming whichever of the two pattern identities it knows, to set up a child:
 - at a positional spot or a named instance's spot, over a stored child stamped
   with another instance's name, whatever the two pattern identities, and
   whether or not the stored child records one;
+- at a positional spot or a named instance's spot, over a stored child the
+  parent's `instanceChildren` records for another named instance, whatever the
+  two pattern identities;
 - at a positional spot, over a stored child of another pattern identity, when a
   child of the incoming pattern identity runs at another positional spot of the
   parent; or
@@ -169,7 +279,9 @@ whenever its own source does, so none of the rules blocks an ordinary update of
 a child's source. Only positional spots are judged by the last two: a spot a
 result key, a node input, `.for()` or an instance name names does not shift. A
 spot a result key, a node input or `.for()` names is not judged at all, since
-only a named instance stamps the child it sets up. No rule judges a child that
+only a named instance stamps a child or has one recorded for it. For a named
+instance, the guard judges the child `instanceChildren` records for it, where it
+records one, rather than the one at its own spot. No rule judges a child that
 is its space's root, which its space's genesis places whatever its cause, or a
 child managed independently in a space of its own, which its parent resumes
 rather than sets up. A spot whose node sets up a space's root is not counted as
@@ -184,8 +296,9 @@ move. A parent that runs whichever pattern a computation returns, such as a
 pointer does not yet name, and an unrelated pattern there is no sign that its
 children moved. The guard reads a child only at a positional spot or a named
 instance's spot that the parent's stored manifest of internal cells records,
-since no child can be set up at any other, so a fresh parent's setup reads no
-child at all.
+or a child the parent's `instanceChildren` records for a named instance, since
+no child can be set up at any other, so a fresh parent's setup reads no child
+at all.
 
 The refusal comes before anything the setup stages commits, so a refused
 update changes none of the piece's state. A live update the guard refuses

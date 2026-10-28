@@ -21,6 +21,7 @@ import type {
   PresenceFacets,
   PresenceRecord,
 } from "@commonfabric/memory/v2";
+import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
 import type { MetaField, RuntimeSizes } from "@commonfabric/runner";
 import type {
   CfcConfClause,
@@ -458,6 +459,11 @@ export enum RequestType {
    * otherwise failing as a confusing server 404.
    */
   UploadBlob = "runtime:uploadBlob",
+  /**
+   * Returns the URL the named space's host serves a blob at, so a host can
+   * show or offer a blob it holds a reference to.
+   */
+  BlobUrl = "runtime:blobUrl",
 
   // Piece operations (main -> worker)
 
@@ -593,6 +599,18 @@ export enum NotificationType {
   /** Reports authoritative loss of the runtime principal's access to a space. */
   SpaceAccessLost = "callback:space-access-lost",
 
+  /**
+   * Reports that a space which refused the runtime principal has admitted it
+   * again, so a load that the refusal failed may succeed if asked again.
+   */
+  SpaceAccessRestored = "callback:space-access-restored",
+
+  /**
+   * Reports that a connection to a memory server came back after it was
+   * lost, so a load that failed while it was down may succeed if asked again.
+   */
+  ConnectionRestored = "callback:connection-restored",
+
   /** Carries one telemetry marker, sent only while telemetry is enabled. */
   Telemetry = "callback:telemetry",
 
@@ -686,6 +704,9 @@ export type IPCClientMessage = {
  * only by its message.
  */
 export enum RuntimeErrorCode {
+  /** The memory server requires replacing this runtime before it can mount. */
+  ClientUpdateRequired = "client-update-required",
+
   /**
    * The worker could not load its compiler stack, so nothing it was asked to
    * compile can run. Distinguished because the client's remedy is a reload
@@ -796,6 +817,12 @@ export type BaseRequest = {
  * lifetime -- nothing here can be changed by a later request.
  */
 export type InitializationData = {
+  /**
+   * Application name and loaded labs commit reported by the embedder. When
+   * absent, the runtime reports `runtime-client` with an unknown Git SHA.
+   */
+  clientBuild?: ClientBuild;
+
   /**
    * The backend server. It serves the HTTP APIs, patterns, LLM requests and
    * the health check, and is the default storage host when `memoryUrl` is
@@ -946,6 +973,14 @@ export type InitializationData = {
    * which is `fail`.
    */
   cfcReadOnExceed?: "fail" | "skip";
+
+  /**
+   * The space of the profile the worker's runtime answers `#profile` with,
+   * among the user's profiles (`RuntimeOptions.preferredProfileSpace`): the
+   * one a host keeping a profile per identity it presents acts as. Absent
+   * answers as the home orders them.
+   */
+  preferredProfileSpace?: DID;
 
   /**
    * The deployment trust configuration the worker's runtime evaluates concept
@@ -1106,6 +1141,7 @@ export type RuntimeSecurityContext =
     | "cfcFlowLabels"
     | "cfcReadMaxConfidentiality"
     | "cfcReadOnExceed"
+    | "preferredProfileSpace"
     | "cfcTrustConfig"
     | "renderDeclassificationPolicy"
     | "renderConfidentialityCeiling"
@@ -2377,10 +2413,44 @@ export type UploadBlobRequest = BaseRequest & {
   body: FabricBytes;
 
   /**
-   * The extension the stored blob is served under, defaulting to `bin`.
-   * A leading dot is stripped.
+   * The name of the file the bytes came from, if they have one. The stored blob
+   * keeps it, hashed into the blob's id with the media type and the bytes, and
+   * a download of the blob is offered under it.
+   */
+  name?: string;
+
+  /**
+   * The extension the stored blob is served under. A leading dot is stripped.
+   * With none, the store chooses one: the extension of `name`, or else one for
+   * the media type, or else `bin`.
    */
   suffix?: string;
+};
+
+/**
+ * The {@link RequestType.BlobUrl} request: a blob, named by its space and its
+ * id there.
+ */
+export type BlobUrlRequest = BaseRequest & {
+  type: RequestType.BlobUrl;
+
+  /** The space whose blob store holds the blob. */
+  space: DID;
+
+  /** The blob's id, `fid1:` and the hash of its record. */
+  id: string;
+
+  /**
+   * Whether the URL is one to save the blob from: its host then serves it as
+   * an attachment, which a browser saves from any origin, rather than shows.
+   */
+  download?: boolean;
+};
+
+/** Where a blob is served from. */
+export type BlobUrlResponse = {
+  /** The absolute URL the blob's space's host serves it at. */
+  url: string;
 };
 
 /** The stored blob's id, and the URL it is served from. */
@@ -3469,7 +3539,8 @@ export type IPCClientRequest =
   | DetectNonIdempotentRequest
   | GetPatternSourcesRequest
   | SetBreakpointsRequest
-  | UploadBlobRequest;
+  | UploadBlobRequest
+  | BlobUrlRequest;
 
 /**
  * The requests naming a piece by id, read off {@link IPCClientRequest} rather
@@ -4056,48 +4127,79 @@ export type SpaceAccessLostNotification = {
 };
 
 /**
- * An error with no request to fail -- a renderer error, or one a pattern
- * raised between requests. Every field but `message` is context that the
- * raising site may or may not have had.
+ * The runtime principal admitted again to one space that had refused it, as
+ * a retry of the space's access decides: one the memory server's
+ * `session/admissible` notice started, or one a client asked for.
  */
-export type ErrorNotification = {
-  type: NotificationType.ErrorReport;
-
-  /**
-   * What went wrong.
-   */
-  message: string;
-
-  /**
-   * Names the kind of failure where one is named.
-   */
-  code?: RuntimeErrorCode;
-
-  /**
-   * The piece it happened in, where that is known.
-   */
-  pieceId?: string;
-
-  /**
-   * The space it happened in, where that is known.
-   */
-  space?: string;
-
-  /**
-   * The pattern it happened in, where that is known.
-   */
-  patternId?: string;
-
-  /**
-   * The spell it happened in, where that is known.
-   */
-  spellId?: string;
-
-  /**
-   * The stack as raised, where one survived.
-   */
-  stackTrace?: string;
+export type SpaceAccessRestoredNotification = {
+  type: NotificationType.SpaceAccessRestored;
+  space: DID;
 };
+
+/**
+ * A connection of the worker's to a memory server, back after it was lost.
+ * It names no space: a load reads from more than the space it asks about, so
+ * which connection it failed on is not something a client could match.
+ */
+export type ConnectionRestoredNotification = {
+  type: NotificationType.ConnectionRestored;
+};
+
+/**
+ * An error with no request to fail -- a renderer error, or one a pattern
+ * raised between requests. Update-required reports include write uncertainty;
+ * other context is included when the raising site has it.
+ */
+export type ErrorNotification =
+  & {
+    type: NotificationType.ErrorReport;
+
+    /**
+     * What went wrong.
+     */
+    message: string;
+
+    /**
+     * The piece it happened in, where that is known.
+     */
+    pieceId?: string;
+
+    /**
+     * The space it happened in, where that is known.
+     */
+    space?: string;
+
+    /**
+     * The pattern it happened in, where that is known.
+     */
+    patternId?: string;
+
+    /**
+     * The spell it happened in, where that is known.
+     */
+    spellId?: string;
+
+    /**
+     * The stack as raised, where one survived.
+     */
+    stackTrace?: string;
+  }
+  & (
+    | {
+      /** Runtime replacement is required. */
+      code: RuntimeErrorCode.ClientUpdateRequired;
+
+      /** Writes were unconfirmed at refusal or attempted afterward. */
+      unconfirmedWrites: boolean;
+    }
+    | {
+      /** Names another kind of failure where one is named. */
+      code?: Exclude<RuntimeErrorCode, RuntimeErrorCode.ClientUpdateRequired>;
+
+      /** Write uncertainty belongs to update-required reports. */
+      unconfirmedWrites?: never;
+    }
+  );
 
 /** One telemetry marker. Sent only while telemetry is enabled. */
 export type TelemetryNotification = {
@@ -4328,6 +4430,7 @@ export type RemoteResponse =
   | DetectNonIdempotentResponse
   | PatternSourcesResponse
   | UploadBlobResponse
+  | BlobUrlResponse
   | OperationCapabilitiesResponse
   | OperationFieldResponse
   | OperationApplyResponse
@@ -4346,6 +4449,8 @@ export type IPCRemoteNotification =
   | ErrorNotification
   | EventIntentOutcomeNotification
   | SpaceAccessLostNotification
+  | SpaceAccessRestoredNotification
+  | ConnectionRestoredNotification
   | TelemetryNotification
   | VDomBatchNotification
   | PendingWritesNotification
@@ -4723,6 +4828,10 @@ export type Commands = {
   [RequestType.UploadBlob]: {
     request: UploadBlobRequest;
     response: UploadBlobResponse;
+  };
+  [RequestType.BlobUrl]: {
+    request: BlobUrlRequest;
+    response: BlobUrlResponse;
   };
   // VDOM requests
   [RequestType.VDomMount]: {

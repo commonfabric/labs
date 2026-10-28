@@ -5,6 +5,7 @@ import { stub } from "@std/testing/mock";
 import {
   type Client,
   connect,
+  connectionError,
   loopback,
   type SpaceSession,
   type Transport,
@@ -31,32 +32,69 @@ const graphWatch = (id: string) => ({
   },
 });
 
+/** A frame the client sends, as `outageTransport()` decodes it. */
+type SentFrame = {
+  type: string;
+  requestId?: string;
+  watches?: { id: string }[];
+  watchIds?: string[];
+};
+
+/** Whether `frame` is a `session.watch.add` naming the watch `id`. */
+const addsWatch = (frame: SentFrame, id: string): boolean =>
+  frame.type === "session.watch.add" &&
+  (frame.watches ?? []).some((watch) => watch.id === id);
+
 /**
  * A transport whose host can be taken down and brought back as a different
- * server process. While the host is down every send rejects, as a WebSocket to
- * a closed port does, so the client's reconnect loop keeps retrying its
- * handshake until `comeBack()`. `onSend` sees each decoded frame after it has
- * been handed to the live server, and `watchSets` holds the watch ids of each
- * `session.watch.set` frame handed to one, in wire order.
+ * server process. While the host is down every send rejects with a
+ * `ConnectionError`, as a WebSocket transport's does on a closed port, so the
+ * client's reconnect loop keeps retrying its handshake until `comeBack()`.
+ * `onSend` sees each decoded frame after it has been handed to the live
+ * server, and `onDeliver` each request id the client receives a response to.
+ * `watchSets` holds the watch ids of each `session.watch.set` frame handed to
+ * one, in wire order, and `watchRemovals` holds the ids each
+ * `session.watch.remove` frame names. The client never receives the response
+ * to a frame `losesResponse` picks out.
  */
 function outageTransport(server: Server) {
   let host = server;
-  let active: Transport | null = loopback(server);
   let receiver = (_payload: string) => {};
   let disconnected = (_error?: Error) => {};
   const sent: string[] = [];
   const watchSets: string[][] = [];
-  let onSend = (_message: { type: string }) => {};
+  const watchRemovals: string[][] = [];
+  const lostResponses = new Set<string>();
+  let onSend = (_message: SentFrame) => {};
+  let onDeliver = (_requestId: string) => {};
+  let losesResponse = (_message: SentFrame) => false;
+  const deliver = (payload: string) => {
+    const { requestId } = decodeMemoryBoundary(payload) as {
+      requestId?: string;
+    };
+    if (requestId !== undefined && lostResponses.has(requestId)) return;
+    receiver(payload);
+    if (requestId !== undefined) onDeliver(requestId);
+  };
+  const connect = (next: Server): Transport => {
+    const connection = loopback(next);
+    connection.setReceiver(deliver);
+    return connection;
+  };
+  let active: Transport | null = connect(server);
   const transport: Transport = {
     async send(payload) {
-      if (active === null) throw new Error("connection refused");
-      const message = decodeMemoryBoundary(payload) as {
-        type: string;
-        watches?: { id: string }[];
-      };
+      if (active === null) throw connectionError("connection refused");
+      const message = decodeMemoryBoundary(payload) as SentFrame;
+      if (message.requestId !== undefined && losesResponse(message)) {
+        lostResponses.add(message.requestId);
+      }
       sent.push(message.type);
       if (message.type === "session.watch.set") {
         watchSets.push((message.watches ?? []).map((watch) => watch.id));
+      }
+      if (message.type === "session.watch.remove") {
+        watchRemovals.push(message.watchIds ?? []);
       }
       await active.send(payload);
       onSend(message);
@@ -65,12 +103,10 @@ function outageTransport(server: Server) {
     reset() {
       if (active === null) return;
       void active.close();
-      active = loopback(host);
-      active.setReceiver(receiver);
+      active = connect(host);
     },
     setReceiver(next) {
       receiver = next;
-      active?.setReceiver(next);
     },
     setCloseReceiver(next) {
       disconnected = next;
@@ -80,8 +116,15 @@ function outageTransport(server: Server) {
     transport,
     sent,
     watchSets,
-    set onSend(next: (message: { type: string }) => void) {
+    watchRemovals,
+    set onSend(next: (message: SentFrame) => void) {
       onSend = next;
+    },
+    set onDeliver(next: (requestId: string) => void) {
+      onDeliver = next;
+    },
+    set losesResponse(next: (message: SentFrame) => boolean) {
+      losesResponse = next;
     },
     async goDown(): Promise<void> {
       const down = active;
@@ -91,8 +134,7 @@ function outageTransport(server: Server) {
     },
     comeBack(next: Server): void {
       host = next;
-      active = loopback(next);
-      active.setReceiver(receiver);
+      active = connect(next);
     },
   };
 }
@@ -195,7 +237,7 @@ describe("v2-client-reconnect-watch", () => {
         }
       });
 
-      it("completes the reconnect when a mutation was queued behind one the drop rejected", async () => {
+      it("completes the reconnect when a mutation was queued behind one the drop caught on the wire", async () => {
         // The removal is queued behind an acquisition whose request is on the
         // wire when the connection drops, so its turn comes only after the
         // drop, with the connection already down.
@@ -217,26 +259,30 @@ describe("v2-client-reconnect-watch", () => {
             graphWatch("kept"),
           ]);
 
-          let dropped: Promise<void> | undefined;
+          const dropped = Promise.withResolvers<void>();
           host.onSend = (message) => {
-            if (dropped === undefined && message.type === "session.watch.add") {
-              dropped = host.goDown();
+            if (addsWatch(message, "on-the-wire")) {
+              host.onSend = () => {};
+              dropped.resolve(host.goDown());
             }
           };
           const onTheWire = session.watchAddSync([graphWatch("on-the-wire")]);
           // A removal sends only after every earlier mutation has applied, in
           // both chain modes.
           const queued = session.watchRemoveSync(["removed"]);
-          await expect(onTheWire).rejects.toThrow();
-          await dropped;
+          await dropped.promise;
           expect(client.isConnected()).toBe(false);
           host.comeBack(after);
           host.sent.length = 0;
 
           await client.restoreConnection();
+          await onTheWire;
           await queued;
           expect(client.connectionState).toBe("connected");
           expect(host.sent).toContain("session.watch.set");
+          expect(
+            after.demandedInstancesForSpace(SPACE).map((row) => row.id).sort(),
+          ).toEqual(["of:kept", "of:on-the-wire"]);
         } finally {
           await client.close();
           await before.close();
@@ -430,8 +476,9 @@ describe("v2-client-reconnect-watch", () => {
 
           await client.restoreConnection();
           await removal;
-          // The restore's `watch.set`, then the removal's.
-          expect(host.watchSets).toEqual([["kept"], ["kept"]]);
+          // The restore's `watch.set`, then the removal.
+          expect(host.watchSets).toEqual([["kept"]]);
+          expect(host.watchRemovals).toEqual([["removed"]]);
         } finally {
           await client.close();
           await before.close();
@@ -478,55 +525,179 @@ describe("v2-client-reconnect-watch", () => {
         }
       });
 
-      it("re-establishes a watch whose request was on the wire when the restore began", async () => {
-        // `restore()` runs on a live connection while an acquisition's request
-        // is on the wire and its response is held back. The response is let
-        // through as the restore builds the watch set it re-establishes, so
-        // that set holds the acquisition only if the restore waits for the
-        // response to be applied before sending it.
+      for (const firstResponseArrives of [true, false]) {
+        it(
+          firstResponseArrives
+            ? "re-establishes a watch whose request was on the wire when the restore began"
+            : "re-establishes a watch whose request was on the wire when the restore began, its first response never arriving",
+          async () => {
+            // `restore()` runs on a live connection while an acquisition's request
+            // is on the wire and its response is held back. The response is let
+            // through as the restore builds the watch set it re-establishes, or
+            // never. That set replaces whatever the response installed, so the
+            // server keeps the acquisition only if the restore sends it again
+            // afterwards, and the acquisition completes only on the response to
+            // that send.
 
-        const server = new Server({
-          ...testSessionOpenServerOptions,
-          store: new URL("memory://reconnect-watch-in-flight"),
-        });
-        const inner = loopback(server);
-        let inFlightRequestId: string | undefined;
-        let heldResponse: string | undefined;
-        let deliver = (_payload: string) => {};
-        const transport: Transport = {
-          send(payload) {
-            const message = decodeMemoryBoundary(payload) as {
-              type: string;
-              requestId?: string;
-              watches?: { id: string }[];
-            };
-            if (
-              message.type === "session.watch.add" &&
-              message.watches?.some((watch) => watch.id === "in-flight")
-            ) {
-              inFlightRequestId = message.requestId;
-            }
-            return inner.send(payload);
-          },
-          close: () => inner.close(),
-          setReceiver(next) {
-            deliver = next;
-            inner.setReceiver((payload) => {
-              const { requestId } = decodeMemoryBoundary(payload) as {
-                requestId?: string;
-              };
-              if (requestId !== undefined && requestId === inFlightRequestId) {
-                heldResponse = payload;
-                responseHeld.resolve();
-                return;
-              }
-              next(payload);
+            const server = new Server({
+              ...testSessionOpenServerOptions,
+              store: new URL(
+                `memory://reconnect-watch-in-flight-${firstResponseArrives}`,
+              ),
             });
+            const inner = loopback(server);
+            let inFlightRequestId: string | undefined;
+            let heldResponse: string | undefined;
+            let deliver = (_payload: string) => {};
+            const transport: Transport = {
+              send(payload) {
+                const message = decodeMemoryBoundary(payload) as {
+                  type: string;
+                  requestId?: string;
+                  watches?: { id: string }[];
+                };
+                if (
+                  inFlightRequestId === undefined &&
+                  message.type === "session.watch.add" &&
+                  message.watches?.some((watch) => watch.id === "in-flight")
+                ) {
+                  inFlightRequestId = message.requestId;
+                }
+                return inner.send(payload);
+              },
+              close: () => inner.close(),
+              setReceiver(next) {
+                deliver = next;
+                inner.setReceiver((payload) => {
+                  const { requestId } = decodeMemoryBoundary(payload) as {
+                    requestId?: string;
+                  };
+                  if (
+                    requestId !== undefined && requestId === inFlightRequestId
+                  ) {
+                    heldResponse = payload;
+                    responseHeld.resolve();
+                    return;
+                  }
+                  next(payload);
+                });
+              },
+              setCloseReceiver() {},
+            };
+            const responseHeld = Promise.withResolvers<void>();
+            const client = await connect({ transport });
+            try {
+              const session = await client.mount(
+                SPACE,
+                {},
+                testSessionOpenAuthFactory,
+              );
+              session.setConcurrentWatchRefresh(concurrentWatchRefresh);
+              await session.watchAddSync([graphWatch("before")]);
+              const inFlight = session.watchAddSync([graphWatch("in-flight")]);
+              await responseHeld.promise;
+
+              let restoring = false;
+              let holdingsRequests = 0;
+              session.holdingsProvider = () => {
+                // The first request is the reopen's, the second the
+                // re-establishment's.
+                if (
+                  restoring && ++holdingsRequests === 2 && firstResponseArrives
+                ) {
+                  deliver(heldResponse!);
+                }
+                return [];
+              };
+              const open = client.openSession.bind(client);
+              const reopened = stub(client, "openSession", async (...args) => ({
+                ...await open(...args),
+                resumed: false,
+              }));
+              try {
+                restoring = true;
+                await session.restore();
+              } finally {
+                reopened.restore();
+              }
+              await inFlight;
+
+              expect(holdingsRequests).toBe(2);
+              expect(
+                server.demandedInstancesForSpace(SPACE).map((row) => row.id),
+              ).toContain("of:in-flight");
+            } finally {
+              await client.close();
+              await server.close();
+            }
           },
-          setCloseReceiver() {},
-        };
-        const responseHeld = Promise.withResolvers<void>();
-        const client = await connect({ transport });
+        );
+      }
+
+      for (const reopen of [false, true]) {
+        const how = reopen ? "re-opened" : "resumed";
+
+        it(`establishes a watch whose response the drop lost when the session is ${how}`, async () => {
+          // The server handles the acquisition, and the connection drops
+          // before its response reaches the client. The case then writes the
+          // watched document from a second client and reads the update back,
+          // which it can only do if the server holds the watch.
+
+          const { before, after } = restartedServers(`lost-${how}`);
+          const server = reopen ? after : before;
+          const host = outageTransport(before);
+          const client = await connect({ transport: host.transport });
+          const writerClient = await connect({ transport: loopback(server) });
+          try {
+            const session = await client.mount(
+              SPACE,
+              {},
+              testSessionOpenAuthFactory,
+            );
+            session.setConcurrentWatchRefresh(concurrentWatchRefresh);
+            await session.watchAddSync([graphWatch("before")]);
+
+            host.losesResponse = (message) => addsWatch(message, "lost");
+            const dropped = Promise.withResolvers<void>();
+            host.onSend = (message) => {
+              if (addsWatch(message, "lost")) {
+                host.onSend = () => {};
+                dropped.resolve(host.goDown());
+              }
+            };
+            const lost = session.watchAddSync([graphWatch("lost")]);
+            await dropped.promise;
+            host.losesResponse = () => false;
+            host.comeBack(server);
+            host.sent.length = 0;
+
+            await client.restoreConnection();
+            await lost;
+            expect(host.sent).toContain("session.watch.add");
+            expect(
+              await idsInNextUpdateAfterWrite(
+                session,
+                writerClient,
+                SPACE,
+                "lost",
+              ),
+            ).toContain("of:lost");
+          } finally {
+            await client.close();
+            await writerClient.close();
+            await before.close();
+            await after.close();
+          }
+        });
+      }
+
+      it("rejects a watch request the drop caught on the wire with the error the server answers it with after the reconnect", async () => {
+        // The acquisition names a watch id the session already holds for
+        // another document, which the server refuses.
+
+        const { before, after } = restartedServers("refused");
+        const host = outageTransport(before);
+        const client = await connect({ transport: host.transport });
         try {
           const session = await client.mount(
             SPACE,
@@ -535,41 +706,102 @@ describe("v2-client-reconnect-watch", () => {
           );
           session.setConcurrentWatchRefresh(concurrentWatchRefresh);
           await session.watchAddSync([graphWatch("before")]);
-          const inFlight = session.watchAddSync([graphWatch("in-flight")]);
-          await responseHeld.promise;
 
-          let restoring = false;
-          let holdingsRequests = 0;
-          session.holdingsProvider = () => {
-            // The first request is the reopen's, the second the
-            // re-establishment's.
-            if (restoring && ++holdingsRequests === 2) {
-              deliver(heldResponse!);
+          const dropped = Promise.withResolvers<void>();
+          host.onSend = (message) => {
+            if (addsWatch(message, "before")) {
+              host.onSend = () => {};
+              dropped.resolve(host.goDown());
             }
-            return [];
           };
-          const open = client.openSession.bind(client);
-          const reopened = stub(client, "openSession", async (...args) => ({
-            ...await open(...args),
-            resumed: false,
-          }));
-          try {
-            restoring = true;
-            await session.restore();
-          } finally {
-            reopened.restore();
-          }
-          await inFlight;
+          const refused = session.watchAddSync([{
+            ...graphWatch("other"),
+            id: "before",
+          }]);
+          // Awaited below; observed here so that a rejection before then
+          // fails the case rather than surfacing as unhandled.
+          refused.catch(() => {});
+          await dropped.promise;
+          host.comeBack(after);
+          host.sent.length = 0;
 
-          expect(holdingsRequests).toBe(2);
+          await client.restoreConnection();
+          await expect(refused).rejects.toThrow(
+            "session.watch.add may not replace an existing watch id",
+          );
+          expect(host.sent).toContain("session.watch.add");
           expect(
-            server.demandedInstancesForSpace(SPACE).map((row) => row.id),
-          ).toContain("of:in-flight");
+            after.demandedInstancesForSpace(SPACE).map((row) => row.id),
+          ).toEqual(["of:before"]);
         } finally {
           await client.close();
-          await server.close();
+          await before.close();
+          await after.close();
         }
       });
+
+      if (concurrentWatchRefresh) {
+        for (const reopen of [false, true]) {
+          const how = reopen ? "re-opened" : "resumed";
+
+          it(`keeps a watch whose response arrived behind a lost watch set when the session is ${how}`, async () => {
+            // Both requests are on the wire together. The watch set's response
+            // is lost, and the acquisition's arrives before the drop, so it
+            // waits to be applied behind the set. The watch set replaces the
+            // server's whole set, so the server keeps the acquisition only if
+            // it is sent again after the set.
+
+            const { before, after } = restartedServers(`behind-lost-${how}`);
+            const server = reopen ? after : before;
+            const host = outageTransport(before);
+            const client = await connect({ transport: host.transport });
+            try {
+              const session = await client.mount(
+                SPACE,
+                {},
+                testSessionOpenAuthFactory,
+              );
+              session.setConcurrentWatchRefresh(true);
+              await session.watchAddSync([graphWatch("before")]);
+
+              host.losesResponse = (message) =>
+                message.type === "session.watch.set" &&
+                (message.watches ?? []).some((watch) => watch.id === "lost");
+              let answeredRequestId: string | undefined;
+              const answered = Promise.withResolvers<void>();
+              host.onSend = (message) => {
+                if (addsWatch(message, "answered")) {
+                  answeredRequestId = message.requestId;
+                }
+              };
+              host.onDeliver = (requestId) => {
+                if (requestId === answeredRequestId) answered.resolve();
+              };
+              const lost = session.watchSetSync([
+                graphWatch("before"),
+                graphWatch("lost"),
+              ]);
+              const behind = session.watchAddSync([graphWatch("answered")]);
+              await answered.promise;
+              await host.goDown();
+              host.losesResponse = () => false;
+              host.comeBack(server);
+
+              await client.restoreConnection();
+              await lost;
+              await behind;
+              expect(
+                server.demandedInstancesForSpace(SPACE).map((row) => row.id)
+                  .sort(),
+              ).toEqual(["of:answered", "of:before", "of:lost"]);
+            } finally {
+              await client.close();
+              await before.close();
+              await after.close();
+            }
+          });
+        }
+      }
 
       it("keeps out a watch removed while the restore's watch set is on the wire", async () => {
         // The removal's turn comes after the restore has sent the watch set it
@@ -638,7 +870,8 @@ describe("v2-client-reconnect-watch", () => {
             await session.watchAddSync([graphWatch("before")]);
 
             const mutation = session.watchAddSync([graphWatch("queued")]);
-            // Rejected when the drop catches its request on the wire.
+            // Awaited below; observed here so that a rejection before then
+            // fails the case rather than surfacing as unhandled.
             mutation.catch(() => {});
             for (let tick = 0; tick < delay; tick++) await Promise.resolve();
             await host.goDown();
@@ -646,8 +879,12 @@ describe("v2-client-reconnect-watch", () => {
             host.sent.length = 0;
 
             await client.restoreConnection();
+            await mutation;
             expect(client.connectionState).toBe("connected");
             expect(host.sent).toContain("session.watch.set");
+            expect(
+              after.demandedInstancesForSpace(SPACE).map((row) => row.id),
+            ).toContain("of:queued");
           } finally {
             await client.close();
             await before.close();

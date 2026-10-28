@@ -1,7 +1,7 @@
 /**
- * Measures the Topics board's mention pivot, each topic's backlink lookup, and
- * a topic's comment and link aggregates over the headless Topics fixture,
- * across topic counts, mention graphs, thread lengths, and demand workloads.
+ * Measures the Topics board's mention pivot and each topic's backlink lookup
+ * over the headless Topics fixture, across topic counts, mention graphs, and
+ * demand workloads.
  * The "Topics computation cost probe" section of
  * `docs/development/BENCHMARKS.md` documents the matrix, the options, and the
  * output.
@@ -371,7 +371,7 @@ async function measureCase(
     progress: (line) => console.error(line),
     variant: variant === undefined
       ? undefined
-      : READ_BUDGET_VARIANTS[variant](probeCase),
+      : READ_BUDGET_VARIANTS[variant](),
   });
   await Deno.writeTextFile(
     sampleFile,

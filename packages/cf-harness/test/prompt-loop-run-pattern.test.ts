@@ -278,7 +278,7 @@ describe("prompt-loop run_pattern model boundary", () => {
     }
   });
 
-  it("shows the model a named piece's slug and URL while keeping the piece id out of the tool message", async () => {
+  it("shows the model a named piece's slug while keeping its URL and piece id out of the tool message", async () => {
     const signer = await Identity.fromPassphrase("run-pattern registration");
     const storageManager = StorageManager.emulate({ as: signer });
     const spaceName = `run-pattern-register-${crypto.randomUUID()}`;
@@ -411,21 +411,25 @@ describe("prompt-loop run_pattern model boundary", () => {
       // The second tool message is assign_slug's.
       const toolMessage = toolMessages[1];
       expect(toolMessage?.content).toContain("doubling-report");
-      expect(toolMessage?.content).toContain(
-        `http://toolshed.test/${spaceName}/doubling-report`,
-      );
-      // The address a person opens is the slug, and the piece id it stands in
-      // for stays on the trusted side as it always has.
+      // The URL carries the space's DID, and the piece id is a bare fabric
+      // identifier, so both stay on the trusted side; the artifact keeps them.
       const registered = await pieces.getRegisteredPieces();
       expect(registered.length).toBe(1);
       expect(toolMessage?.content).not.toContain(registered[0].id);
       expect(toolMessage?.content).not.toContain("pieceId");
+      expect(toolMessage?.content).not.toContain("url");
+      expect(toolMessage?.content).not.toContain("did:key:");
       expect(
         artifactStore.toolOutputs.find((entry) =>
           entry.toolId === "assign_slug"
         )?.output,
       )
-        .toMatchObject({ slug: "doubling-report", pieceId: registered[0].id });
+        .toMatchObject({
+          slug: "doubling-report",
+          pieceId: registered[0].id,
+          space: pieces.getSpace(),
+          url: `http://toolshed.test/${pieces.getSpace()}/doubling-report`,
+        });
       const named = result.runState.toolOutputs.find((entry) =>
         entry.toolId === "assign_slug"
       );
@@ -439,6 +443,12 @@ describe("prompt-loop run_pattern model boundary", () => {
           locations: [{
             artifactPath: named?.artifactPath,
             jsonPointer: "/pieceId",
+          }, {
+            artifactPath: named?.artifactPath,
+            jsonPointer: "/space",
+          }, {
+            artifactPath: named?.artifactPath,
+            jsonPointer: "/url",
           }],
         }]);
     } finally {

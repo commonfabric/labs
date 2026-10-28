@@ -8,7 +8,6 @@ import { Runtime as RuntimeClass } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
-import type { Runtime } from "../src/runtime.ts";
 import {
   type ElementRun,
   type SetupRecord,
@@ -52,29 +51,6 @@ function createSettleableTx(): SettleableTx {
   return tx as unknown as SettleableTx;
 }
 
-function createStoppingRuntime(): {
-  runtime: Runtime;
-  stopped: Cell<any>[];
-  failOn(cell: Cell<any>, error: Error): void;
-} {
-  const stopped: Cell<any>[] = [];
-  const failures = new Map<Cell<any>, Error>();
-  const runtime = {
-    runner: {
-      stop(cell: Cell<any>) {
-        stopped.push(cell);
-        const failure = failures.get(cell);
-        if (failure) throw failure;
-      },
-    },
-  };
-  return {
-    runtime: runtime as unknown as Runtime,
-    stopped,
-    failOn: (cell, error) => failures.set(cell, error),
-  };
-}
-
 function elementCell(name: string): Cell<any> {
   return { toString: () => name } as unknown as Cell<any>;
 }
@@ -101,16 +77,15 @@ describe("list element rollback", () => {
   it("registers nothing until a reconcile installs something", () => {
     const tx = createSettleableTx();
     const elementRuns = new Map<string, ElementRun>();
-    trackListSetupRollback(tx, createStoppingRuntime().runtime, elementRuns);
+    trackListSetupRollback(tx, elementRuns);
 
     expect(tx.callbackCount()).toBe(0);
   });
 
-  it("drops a created entry and stops its piece when the setup aborts", () => {
+  it("drops a created entry when the setup aborts", () => {
     const tx = createSettleableTx();
-    const { runtime, stopped } = createStoppingRuntime();
     const elementRuns = new Map<string, ElementRun>();
-    const rollback = trackListSetupRollback(tx, runtime, elementRuns);
+    const rollback = trackListSetupRollback(tx, elementRuns);
 
     const entry: ElementRun = {
       resultCell: elementCell("a"),
@@ -123,14 +98,12 @@ describe("list element rollback", () => {
     tx.settle(aborted);
 
     expect(elementRuns.has("a")).toBe(false);
-    expect(stopped).toEqual([entry.resultCell]);
   });
 
   it("keeps everything when the setup commits", () => {
     const tx = createSettleableTx();
-    const { runtime, stopped } = createStoppingRuntime();
     const elementRuns = new Map<string, ElementRun>();
-    const rollback = trackListSetupRollback(tx, runtime, elementRuns);
+    const rollback = trackListSetupRollback(tx, elementRuns);
 
     const entry: ElementRun = {
       resultCell: elementCell("a"),
@@ -143,7 +116,6 @@ describe("list element rollback", () => {
     tx.settle(committed);
 
     expect(elementRuns.get("a")).toBe(entry);
-    expect(stopped).toEqual([]);
   });
 
   for (
@@ -154,9 +126,8 @@ describe("list element rollback", () => {
   ) {
     it(`keeps everything through ${label}, which re-runs instead`, () => {
       const tx = createSettleableTx();
-      const { runtime, stopped } = createStoppingRuntime();
       const elementRuns = new Map<string, ElementRun>();
-      const rollback = trackListSetupRollback(tx, runtime, elementRuns);
+      const rollback = trackListSetupRollback(tx, elementRuns);
 
       const entry: ElementRun = {
         resultCell: elementCell("a"),
@@ -180,7 +151,6 @@ describe("list element rollback", () => {
       expect(elementRuns.get("a")).toBe(entry);
       expect(entry.lastIndex).toBe(5);
       expect(entry.needsSetup).toBe(true);
-      expect(stopped).toEqual([]);
       expect(restored).toBe(false);
     });
   }
@@ -190,7 +160,6 @@ describe("list element rollback", () => {
     const elementRuns = new Map<string, ElementRun>();
     const rollback = trackListSetupRollback(
       tx,
-      createStoppingRuntime().runtime,
       elementRuns,
     );
 
@@ -213,7 +182,6 @@ describe("list element rollback", () => {
     const elementRuns = new Map<string, ElementRun>();
     const rollback = trackListSetupRollback(
       tx,
-      createStoppingRuntime().runtime,
       elementRuns,
     );
 
@@ -234,9 +202,8 @@ describe("list element rollback", () => {
     const older = createSettleableTx();
     const newer = createSettleableTx();
     const elementRuns = new Map<string, ElementRun>();
-    const { runtime } = createStoppingRuntime();
-    const olderRollback = trackListSetupRollback(older, runtime, elementRuns);
-    const newerRollback = trackListSetupRollback(newer, runtime, elementRuns);
+    const olderRollback = trackListSetupRollback(older, elementRuns);
+    const newerRollback = trackListSetupRollback(newer, elementRuns);
 
     const entry: ElementRun = {
       resultCell: elementCell("a"),
@@ -261,9 +228,8 @@ describe("list element rollback", () => {
     const older = createSettleableTx();
     const newer = createSettleableTx();
     const elementRuns = new Map<string, ElementRun>();
-    const { runtime } = createStoppingRuntime();
-    const olderRollback = trackListSetupRollback(older, runtime, elementRuns);
-    const newerRollback = trackListSetupRollback(newer, runtime, elementRuns);
+    const olderRollback = trackListSetupRollback(older, elementRuns);
+    const newerRollback = trackListSetupRollback(newer, elementRuns);
 
     const entry: ElementRun = {
       resultCell: elementCell("a"),
@@ -284,9 +250,8 @@ describe("list element rollback", () => {
 
   it("leaves an entry a later reconcile replaced", () => {
     const tx = createSettleableTx();
-    const { runtime, stopped } = createStoppingRuntime();
     const elementRuns = new Map<string, ElementRun>();
-    const rollback = trackListSetupRollback(tx, runtime, elementRuns);
+    const rollback = trackListSetupRollback(tx, elementRuns);
 
     const entry: ElementRun = {
       resultCell: elementCell("a"),
@@ -306,7 +271,6 @@ describe("list element rollback", () => {
     tx.settle(aborted);
 
     expect(elementRuns.get("a")).toBe(replacement);
-    expect(stopped).toEqual([]);
   });
 
   it("restores an index it moved", () => {
@@ -314,7 +278,6 @@ describe("list element rollback", () => {
     const elementRuns = new Map<string, ElementRun>();
     const rollback = trackListSetupRollback(
       tx,
-      createStoppingRuntime().runtime,
       elementRuns,
     );
 
@@ -337,7 +300,6 @@ describe("list element rollback", () => {
     const elementRuns = new Map<string, ElementRun>();
     const rollback = trackListSetupRollback(
       tx,
-      createStoppingRuntime().runtime,
       elementRuns,
     );
 
@@ -362,7 +324,6 @@ describe("list element rollback", () => {
     const elementRuns = new Map<string, ElementRun>();
     const rollback = trackListSetupRollback(
       tx,
-      createStoppingRuntime().runtime,
       elementRuns,
     );
 
@@ -394,7 +355,6 @@ describe("list element rollback", () => {
       const tx = createSettleableTx();
       const rollback = trackListSetupRollback(
         tx,
-        createStoppingRuntime().runtime,
         new Map<string, ElementRun>(),
       );
 
@@ -414,7 +374,6 @@ describe("list element rollback", () => {
     const tx = createSettleableTx();
     const rollback = trackListSetupRollback(
       tx,
-      createStoppingRuntime().runtime,
       new Map<string, ElementRun>(),
     );
 
@@ -430,9 +389,8 @@ describe("list element rollback", () => {
     const older = createSettleableTx();
     const newer = createSettleableTx();
     const elementRuns = new Map<string, ElementRun>();
-    const { runtime } = createStoppingRuntime();
-    const olderRollback = trackListSetupRollback(older, runtime, elementRuns);
-    const newerRollback = trackListSetupRollback(newer, runtime, elementRuns);
+    const olderRollback = trackListSetupRollback(older, elementRuns);
+    const newerRollback = trackListSetupRollback(newer, elementRuns);
 
     // The shape of the container install in map/filter/flatMap: each reconcile
     // captures the container it replaced and the one it installed, and gives
@@ -462,7 +420,6 @@ describe("list element rollback", () => {
     const tx = createSettleableTx();
     const rollback = trackListSetupRollback(
       tx,
-      createStoppingRuntime().runtime,
       new Map<string, ElementRun>(),
     );
 
@@ -479,9 +436,8 @@ describe("list element rollback", () => {
 
   it("does not restore an index belonging to an entry it dropped", () => {
     const tx = createSettleableTx();
-    const { runtime } = createStoppingRuntime();
     const elementRuns = new Map<string, ElementRun>();
-    const rollback = trackListSetupRollback(tx, runtime, elementRuns);
+    const rollback = trackListSetupRollback(tx, elementRuns);
 
     const entry: ElementRun = {
       resultCell: elementCell("a"),
@@ -501,31 +457,10 @@ describe("list element rollback", () => {
     expect(entry.lastIndex).toBe(6);
   });
 
-  it("surfaces a single failing stop", () => {
-    const tx = createSettleableTx();
-    const { runtime, failOn } = createStoppingRuntime();
-    const elementRuns = new Map<string, ElementRun>();
-    const rollback = trackListSetupRollback(tx, runtime, elementRuns);
-
-    const entry: ElementRun = {
-      resultCell: elementCell("a"),
-      lastIndex: 0,
-      needsSetup: false,
-    };
-    elementRuns.set("a", entry);
-    rollback.created("a", entry);
-    const failure = new Error("stop failed");
-    failOn(entry.resultCell, failure);
-
-    expect(() => tx.settle(aborted)).toThrow(failure);
-    expect(elementRuns.has("a")).toBe(false);
-  });
-
   it("surfaces a failing container restore", () => {
     const tx = createSettleableTx();
     const rollback = trackListSetupRollback(
       tx,
-      createStoppingRuntime().runtime,
       new Map<string, ElementRun>(),
     );
 
@@ -539,9 +474,28 @@ describe("list element rollback", () => {
 
   it("runs the remaining rollbacks after a container restore throws", () => {
     const tx = createSettleableTx();
-    const { runtime, stopped } = createStoppingRuntime();
+    const rollback = trackListSetupRollback(
+      tx,
+      new Map<string, ElementRun>(),
+    );
+
+    rollback.resultReplaced(() => {
+      throw new Error("first restore failed");
+    });
+    let secondRestored = false;
+    rollback.resultReplaced(() => {
+      secondRestored = true;
+    });
+
+    expect(() => tx.settle(aborted)).toThrow();
+
+    expect(secondRestored).toBe(true);
+  });
+
+  it("aggregates several failing rollbacks and still runs them all", () => {
+    const tx = createSettleableTx();
     const elementRuns = new Map<string, ElementRun>();
-    const rollback = trackListSetupRollback(tx, runtime, elementRuns);
+    const rollback = trackListSetupRollback(tx, elementRuns);
 
     const entry: ElementRun = {
       resultCell: elementCell("a"),
@@ -553,39 +507,9 @@ describe("list element rollback", () => {
     rollback.resultReplaced(() => {
       throw new Error("first restore failed");
     });
-    let secondRestored = false;
     rollback.resultReplaced(() => {
-      secondRestored = true;
+      throw new Error("second restore failed");
     });
-
-    expect(() => tx.settle(aborted)).toThrow();
-
-    expect(stopped).toEqual([entry.resultCell]);
-    expect(secondRestored).toBe(true);
-  });
-
-  it("aggregates several failing rollbacks and still runs them all", () => {
-    const tx = createSettleableTx();
-    const { runtime, failOn, stopped } = createStoppingRuntime();
-    const elementRuns = new Map<string, ElementRun>();
-    const rollback = trackListSetupRollback(tx, runtime, elementRuns);
-
-    const first: ElementRun = {
-      resultCell: elementCell("a"),
-      lastIndex: 0,
-      needsSetup: false,
-    };
-    const second: ElementRun = {
-      resultCell: elementCell("b"),
-      lastIndex: 1,
-      needsSetup: false,
-    };
-    elementRuns.set("a", first);
-    elementRuns.set("b", second);
-    rollback.created("a", first);
-    rollback.created("b", second);
-    failOn(first.resultCell, new Error("first stop failed"));
-    failOn(second.resultCell, new Error("second stop failed"));
 
     let thrown: unknown;
     try {
@@ -596,7 +520,6 @@ describe("list element rollback", () => {
 
     expect(thrown).toBeInstanceOf(AggregateError);
     expect((thrown as AggregateError).errors.length).toBe(2);
-    expect(stopped.length).toBe(2);
     expect(elementRuns.size).toBe(0);
   });
 });

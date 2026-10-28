@@ -274,7 +274,7 @@ describe("callFromCommand()", () => {
       await expect(
         callFromCommand(
           { ...options, select: "topic.title" },
-          "call",
+          "piece call",
           "addTopic",
           [],
           ["--cell", PIECE, "--select", "topic.title", "addTopic"],
@@ -282,7 +282,7 @@ describe("callFromCommand()", () => {
           { executePieceCallable: stubExecutor(dispatches) },
         ),
       ).rejects.toThrow(
-        `write:    cf call --cell ${PIECE} addTopic -- --select topic.title`,
+        `write:    cf piece call --cell ${PIECE} addTopic -- --select topic.title`,
       );
       expect(dispatches).toEqual([]);
     });

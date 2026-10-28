@@ -257,6 +257,35 @@ describe("prompt-loop with a browser host", () => {
     expect(classification).toMatchObject({ tags: ["act"], path: "rule" });
   });
 
+  it("briefs the parent of an acting task on the browser and not the parent of a task that only replies", async () => {
+    const firstMessages = async (task: string) => {
+      const requestBodies: unknown[] = [];
+      const loop = new CfHarnessPromptLoop({
+        apiKey: "test-key",
+        engine: new CfHarnessEngine({
+          sandboxRuntime: new FakeSandboxRuntime(),
+          runId: "run-browser-host-briefing",
+          model: "gpt-5.4",
+          cfcEnforcementMode: "disabled",
+          browserHost: new RecordingBrowserHost(),
+        }),
+        allowedToolIds: ["delegate_task"],
+        allowedSubagentProfiles: ["browser"],
+        fetchFn: scriptedFetch([finalTurn("Done.")], requestBodies),
+      });
+      await loop.classifyTask(task);
+      await loop.runPrompt({ prompt: task });
+      return JSON.stringify(chatViewOfRequest(requestBodies[0]).messages);
+    };
+
+    expect(await firstMessages("buy the cheapest oat milk")).toContain(
+      "this run has a browser the owner watches",
+    );
+    expect(await firstMessages("thanks!")).not.toContain(
+      "this run has a browser the owner watches",
+    );
+  });
+
   it("briefs a resumed run's parent on the browser, since a resumed run is never classified", async () => {
     const requestBodies: unknown[] = [];
     const loop = new CfHarnessPromptLoop({

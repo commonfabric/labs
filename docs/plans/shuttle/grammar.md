@@ -990,7 +990,7 @@ Three spellings, and no fourth:
   payload from stdin. The verb name opens the callable's section, so its
   schema-derived flags follow bare — `call topics/3 search --query milk` —
   and `--` closes the section. That is
-  [`../cli-surface-shape.md`](../cli-surface-shape.md) step 10's form, which
+  [`../../history/plans/cli-surface-shape.md`](../../history/plans/cli-surface-shape.md) step 10's form, which
   `cf` speaks as well, so the two surfaces read one grammar rather than two.
 - `call <piece-handle> <name> [input]` — a piece handle stands wherever a
   typed reference stands, so this is the typed form with the receiver

@@ -165,13 +165,13 @@ export default pattern(() => {
       },
       { assertion: assert(() => composerDisabled(pending[UI]) === true) },
       { assertion: assert(() => composerDisabled(alice[UI]) === false) },
-      // The conversation's composer and a thread's start out disabled, before
-      // whether the viewer may send has computed.
+      // The main composer starts disabled before permission has computed; no
+      // thread composer is mounted until a thread is selected.
       {
         assertion: assert(() =>
           composerDisabledDefault(alice[UI], "fabrichat-message") === true &&
-          composerDisabledDefault(alice[UI], "fabrichat-thread-message") ===
-            true
+          findNodeByProp(alice[UI], "inputId", "fabrichat-thread-message") ===
+            undefined
         ),
       },
       {
@@ -184,7 +184,7 @@ export default pattern(() => {
       // resolved, are refused.
       {
         action: alice.sendMessage,
-        event: typed("Hello, team"),
+        event: typed("  Hello, team  "),
         trustedUi: sendGesture,
       },
       {
@@ -197,7 +197,7 @@ export default pattern(() => {
         event: typed("From nobody"),
         trustedUi: sendGesture,
       },
-      { assertion: assert(() => bodies(messages) === "Hello, team") },
+      { assertion: assert(() => bodies(messages) === "  Hello, team  ") },
       {
         assertion: assert(() =>
           equals(stored(messages)[0]?.authorProfile, aliceProfile) &&
@@ -218,7 +218,7 @@ export default pattern(() => {
       },
       {
         assertion: assert(() =>
-          bodies(messages) === "Hello, team | Hi, Alice | Hi, Alice"
+          bodies(messages) === "  Hello, team   | Hi, Alice | Hi, Alice"
         ),
       },
       { assertion: assert(() => alice.messages.count === 3) },
@@ -230,16 +230,26 @@ export default pattern(() => {
         ),
       },
 
-      // The sender edits the message.
+      // Whitespace-only edits are refused; the sender's exact text is kept.
       {
         action: aliceOnFirst.editMessage,
-        event: typed("Hello, everyone"),
+        event: typed(" \t "),
+        trustedUi: editGesture,
+      },
+      {
+        assertion: assert(() =>
+          stored(messages)[0]?.body === "  Hello, team  "
+        ),
+      },
+      {
+        action: aliceOnFirst.editMessage,
+        event: typed("  Hello, everyone  "),
         trustedUi: editGesture,
       },
       {
         assertion: assert(() => {
           const first = stored(messages)[0];
-          return first?.body === "Hello, everyone" &&
+          return first?.body === "  Hello, everyone  " &&
             first?.editedAt !== undefined;
         }),
       },
@@ -305,7 +315,7 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           mainTexts(alice.messages.latest.messages) ===
-            "Hello, everyone | <gone> | <gone> | In both | Quoting you"
+            "  Hello, everyone   | <gone> | <gone> | In both | Quoting you"
         ),
       },
       {
@@ -323,38 +333,18 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           stored(messages).length === 6 &&
-          stored(messages)[0]?.body === "Hello, everyone"
+          stored(messages)[0]?.body === "  Hello, everyone  "
         ),
       },
-      // Replies must name a live target, and a main reply quotes a message
-      // that appears in the main conversation.
-      {
-        action: alice.sendMessage,
-        event: {
-          body: "Reply to a deleted message",
-          replyTo: { message: messageOf(messages.key(1)), shownIn: "thread" },
-        },
-        trustedUi: sendGesture,
-      },
-      {
-        action: alice.sendMessage,
-        event: {
-          body: "Quote a thread-only message",
-          replyTo: { message: messageOf(messages.key(3)), shownIn: "main" },
-        },
-        trustedUi: sendGesture,
-      },
-      { assertion: assert(() => stored(messages).length === 6) },
     ],
     expectRuntimeErrors: [
       // The blank send, and the send from a viewer whose profile hasn't
       // resolved.
-      "This send has no text in `body`.",
+      "This send has no text in `body`, and no attachments.",
       "Your profile hasn't loaded yet.",
-      // An edit of a deleted message and the two invalid reply targets.
+      "This edit has no text in `body`.",
+      // The edit of a deleted message.
       "That message was deleted.",
-      "That message was deleted.",
-      "A main reply must quote a message in the main conversation.",
     ],
   };
 });

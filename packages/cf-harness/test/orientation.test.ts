@@ -263,9 +263,19 @@ describe("orientation", () => {
     it("keeps the Weaver's commands for a find task and withholds them from a respond task", () => {
       const messages = ["input cells", WEAVER_COMMAND_GUIDANCE];
 
-      expect(orientContextMessages(messages, new Set(["find"])))
+      expect(
+        orientContextMessages(messages, {
+          tags: new Set(["find"]),
+          depth: "standard",
+        }),
+      )
         .toEqual(messages);
-      expect(orientContextMessages(messages, new Set(["respond"])))
+      expect(
+        orientContextMessages(messages, {
+          tags: new Set(["respond"]),
+          depth: "standard",
+        }),
+      )
         .toEqual(["input cells"]);
     });
 
@@ -277,19 +287,34 @@ describe("orientation", () => {
       ];
 
       it("gives a pieces task the held-pieces block in place of piece targeting and revision verification", () => {
-        expect(orientContextMessages(messages, new Set(["pieces"])))
+        expect(
+          orientContextMessages(messages, {
+            tags: new Set(["pieces"]),
+            depth: "standard",
+          }),
+        )
           .toEqual(["input cells", HELD_PIECES_GUIDANCE]);
       });
 
       it("gives a respond, find, or act task one sentence about held handles", () => {
         for (const tag of ["respond", "find", "act"] as const) {
-          expect(orientContextMessages(messages, new Set([tag])))
+          expect(
+            orientContextMessages(messages, {
+              tags: new Set([tag]),
+              depth: "standard",
+            }),
+          )
             .toEqual(["input cells", MAY_HOLD_PIECES_GUIDANCE]);
         }
       });
 
       it("keeps piece targeting and revision verification for an author task", () => {
-        expect(orientContextMessages(messages, new Set(["author"])))
+        expect(
+          orientContextMessages(messages, {
+            tags: new Set(["author"]),
+            depth: "standard",
+          }),
+        )
           .toEqual([
             "input cells",
             MAY_HOLD_PIECES_GUIDANCE,
@@ -297,7 +322,10 @@ describe("orientation", () => {
             REVISION_VERIFICATION_GUIDANCE,
           ]);
         expect(
-          orientContextMessages(messages, new Set(["pieces", "author"])),
+          orientContextMessages(messages, {
+            tags: new Set(["pieces", "author"]),
+            depth: "standard",
+          }),
         ).toEqual([
           "input cells",
           HELD_PIECES_GUIDANCE,

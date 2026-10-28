@@ -80,6 +80,7 @@ import {
   type SnapshotShareAudienceRef,
   type SnapshotSharePreview,
   type SpaceAccessLostNotification,
+  type SpaceAccessRestoredNotification,
   type SpaceAclCapability,
   type SpaceAclView,
   TelemetryNotification,
@@ -169,6 +170,21 @@ export type RuntimeClientEvents = {
   navigaterequest: [{ cell: CellHandle }];
   error: [ErrorNotification];
   spaceaccesslost: [{ space: DID }];
+
+  /**
+   * A space that refused the runtime principal admitted it again. A load the
+   * refusal failed may succeed if asked again, and this is the word to ask
+   * on for that space.
+   */
+  spaceaccessrestored: [{ space: DID }];
+
+  /**
+   * A connection of the worker's to a memory server came back after it was
+   * lost. A load that failed while it was down may succeed if asked again,
+   * and this is the word to ask on: nothing else says when.
+   */
+  connectionrestored: [];
+
   telemetry: [RuntimeTelemetryMarkerResult];
   pendingwriteschange: [{ pending: boolean }];
   eventneedsattention: [EventAttentionNotice];
@@ -207,6 +223,7 @@ export function attachOptionsFrom(
     cfcFlowLabels: options.cfcFlowLabels,
     cfcReadMaxConfidentiality: options.cfcReadMaxConfidentiality,
     cfcReadOnExceed: options.cfcReadOnExceed,
+    preferredProfileSpace: options.preferredProfileSpace,
     cfcTrustConfig: options.cfcTrustConfig,
     renderDeclassificationPolicy: options.renderDeclassificationPolicy,
     renderConfidentialityCeiling: options.renderConfidentialityCeiling,
@@ -433,6 +450,8 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     this.#conn.on("navigaterequest", this.#onNavigateRequest);
     this.#conn.on("error", this.#onError);
     this.#conn.on("spaceaccesslost", this.#onSpaceAccessLost);
+    this.#conn.on("spaceaccessrestored", this.#onSpaceAccessRestored);
+    this.#conn.on("connectionrestored", this.#onConnectionRestored);
     this.#conn.on("eventintentoutcome", this.#onEventIntentOutcome);
     this.#conn.on("telemetry", this.#onTelemetry);
     this.#conn.on("pendingwriteschange", this.#onPendingWritesChange);
@@ -854,6 +873,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       cfcFlowLabels: options.cfcFlowLabels,
       cfcReadMaxConfidentiality: options.cfcReadMaxConfidentiality,
       cfcReadOnExceed: options.cfcReadOnExceed,
+      preferredProfileSpace: options.preferredProfileSpace,
       cfcTrustConfig: options.cfcTrustConfig,
       renderDeclassificationPolicy: options.renderDeclassificationPolicy,
       renderConfidentialityCeiling: options.renderConfidentialityCeiling,
@@ -882,6 +902,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     // field added to that type is a type error here until this literal names
     // it. `initialize()` checks the values.
     const data = {
+      clientBuild: options.clientBuild,
       apiUrl: options.apiUrl.toString(),
       memoryUrl: options.memoryUrl?.toString(),
       spaceHostMap: options.spaceHostMap,
@@ -892,6 +913,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       cfcFlowLabels: options.cfcFlowLabels,
       cfcReadMaxConfidentiality: options.cfcReadMaxConfidentiality,
       cfcReadOnExceed: options.cfcReadOnExceed,
+      preferredProfileSpace: options.preferredProfileSpace,
       cfcTrustConfig: options.cfcTrustConfig,
       renderDeclassificationPolicy: options.renderDeclassificationPolicy,
       renderConfidentialityCeiling: options.renderConfidentialityCeiling,
@@ -1758,12 +1780,14 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   /**
    * Uploads a blob to the given space. `body` is given as a view or as a whole
    * buffer, and is copied into the immutable value that crosses, so the caller
-   * may keep using it.
+   * may keep using it. `name`, when given, is the name of the file the bytes
+   * came from, which the stored blob keeps (see `UploadBlobRequest`).
    */
   async uploadBlob(options: {
     space: DID;
     contentType: string;
     body: Uint8Array | ArrayBufferLike;
+    name?: string;
     suffix?: string;
   }): Promise<UploadBlobResponse> {
     return await this.#conn.request<RequestType.UploadBlob>({
@@ -1771,8 +1795,27 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       space: options.space,
       contentType: options.contentType,
       body: new FabricBytes(options.body),
+      name: options.name,
       suffix: options.suffix,
     });
+  }
+
+  /**
+   * Returns the URL the host of `options.space` serves the blob `options.id`
+   * at: the URL `uploadBlob()` returns for a blob it stores, without the file
+   * suffix it appends. With `options.download`, the URL is one to save the
+   * blob from, which its host serves as an attachment.
+   */
+  async blobUrl(
+    options: { space: DID; id: string; download?: boolean },
+  ): Promise<string> {
+    const response = await this.#conn.request<RequestType.BlobUrl>({
+      type: RequestType.BlobUrl,
+      space: options.space,
+      id: options.id,
+      ...(options.download === true ? { download: true } : {}),
+    });
+    return response.url;
   }
 
   async detectNonIdempotent(
@@ -1820,6 +1863,16 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
 
   #onSpaceAccessLost = ({ space }: SpaceAccessLostNotification): void => {
     this.emit("spaceaccesslost", { space });
+  };
+
+  #onSpaceAccessRestored = (
+    { space }: SpaceAccessRestoredNotification,
+  ): void => {
+    this.emit("spaceaccessrestored", { space });
+  };
+
+  #onConnectionRestored = (): void => {
+    this.emit("connectionrestored");
   };
 
   #onTelemetry = (data: TelemetryNotification): void => {

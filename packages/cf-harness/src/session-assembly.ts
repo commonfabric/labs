@@ -64,6 +64,13 @@ import {
 import { REVISION_VERIFICATION_GUIDANCE } from "./revision-verification.ts";
 import { WEAVER_COMMAND_GUIDANCE } from "./tools/weaver-action.ts";
 import type { CreateHarnessPromptLoopOptions } from "./prompt-loop.ts";
+import {
+  type PromptSection,
+  type RunShape,
+  sendsSection,
+} from "./prompt-sections.ts";
+import type { HarnessRunDepth } from "./contracts/run-depth.ts";
+import type { HarnessTaskShape } from "./task-classification.ts";
 import type {
   SandboxAdditionalMountConfig,
   SandboxRuntimeChoice,
@@ -71,7 +78,6 @@ import type {
 } from "./sandbox/types.ts";
 import { loadHarnessSkillContext } from "./skills/registry.ts";
 import { persistHarnessRunSkillRegistry } from "./skills/run-registry.ts";
-import type { HarnessTaskTag } from "./task-classification.ts";
 import {
   AUTHOR_TOOL_GUIDANCE,
   LOOM_COMMANDS_TOOL_GUIDANCE,
@@ -200,6 +206,12 @@ export interface HarnessSessionConfig {
   allowedSubagentProfiles: readonly HarnessSubagentProfile[];
   browserAccess?: HarnessBrowserAccessLease;
   reasoningEffort?: string;
+
+  /** How far the caller wants the run taken; `standard` when absent. */
+  depth?: HarnessRunDepth;
+
+  /** What the caller says about the task, in place of the classifier. */
+  taskShape?: HarnessTaskShape;
 
   /** Reasoning effort for the `research` tool's own model turns. */
   researchReasoningEffort?: string;
@@ -400,6 +412,8 @@ export const harnessSessionEngineOptions = (
     ...(config.reasoningEffort !== undefined
       ? { reasoningEffort: config.reasoningEffort }
       : {}),
+    ...(config.depth !== undefined ? { depth: config.depth } : {}),
+    ...(config.taskShape !== undefined ? { taskShape: config.taskShape } : {}),
     ...(config.researchReasoningEffort !== undefined
       ? { researchReasoningEffort: config.researchReasoningEffort }
       : {}),
@@ -534,49 +548,42 @@ const establishContextMessages = async (
   return messages;
 };
 
+/** The section each context message that some tasks go without belongs to. */
+const CONTEXT_MESSAGE_SECTIONS: ReadonlyMap<string, PromptSection> = new Map([
+  [REVISION_VERIFICATION_GUIDANCE, "revision-verification"],
+  [WEAVER_COMMAND_GUIDANCE, "weaver-commands"],
+  [AUTHOR_TOOL_GUIDANCE, "author-tools"],
+  [RESEARCH_TOOL_GUIDANCE, "research-tools"],
+  [PIECES_TOOL_GUIDANCE, "pieces-tools"],
+  [RESOLVE_PIECE_TOOL_GUIDANCE, "resolve-piece-tools"],
+  [LOOM_COMMANDS_TOOL_GUIDANCE, "loom-commands-tools"],
+  [LOOM_RETRIEVAL_TOOL_GUIDANCE, "loom-retrieval-tools"],
+]);
+
 /**
- * Fits a run's context messages to its task tags. In the piece-targeting
- * guidance's place, a task about the pieces it holds is told how to read and
- * act on them, and any other task that it may hold some. Piece targeting
- * itself belongs to authoring, as does revision verification, where a
- * pattern's output can be inspected; the Weaver's commands, which read as well
- * as change the person's application, belong to finding and acting. So does
- * each block of tool guidance: writing and running patterns to authoring,
- * building on research to authoring, finding and work on pieces,
- * reading and acting on pieces to work on them, and the host's commands and
- * retrieval to finding and acting; resolving a named piece belongs to
- * finding, acting and work on pieces. Every other message passes through.
+ * Fits a run's context messages to its shape, as
+ * `PROMPT_SECTION_AUDIENCE` says. Piece targeting is replaced by the blocks
+ * that stand in for it (how to work on held pieces, or that the run may hold
+ * some) and kept beside them only where the task is sent it. A message that
+ * belongs to no section passes through, and a task that was never classified
+ * keeps every message as it is.
  */
 export const orientContextMessages = (
   messages: readonly string[],
-  tags: ReadonlySet<HarnessTaskTag>,
-): string[] => {
-  const author = tags.has("author");
-  const findsOrActs = tags.has("act") || tags.has("find");
-  const withheld = new Set([
-    ...(author ? [] : [REVISION_VERIFICATION_GUIDANCE, AUTHOR_TOOL_GUIDANCE]),
-    ...(tags.has("pieces") ? [] : [PIECES_TOOL_GUIDANCE]),
-    ...(author || tags.has("find") || tags.has("pieces")
-      ? []
-      : [RESEARCH_TOOL_GUIDANCE]),
-    // Authoring carries the same rule inside piece targeting.
-    ...(!author && (findsOrActs || tags.has("pieces"))
-      ? []
-      : [RESOLVE_PIECE_TOOL_GUIDANCE]),
-    ...(findsOrActs ? [] : [
-      WEAVER_COMMAND_GUIDANCE,
-      LOOM_COMMANDS_TOOL_GUIDANCE,
-      LOOM_RETRIEVAL_TOOL_GUIDANCE,
-    ]),
-  ]);
-  return messages.flatMap((message) =>
-    message === PIECE_TARGETING_GUIDANCE
-      ? [
-        tags.has("pieces") ? HELD_PIECES_GUIDANCE : MAY_HOLD_PIECES_GUIDANCE,
-        ...(author ? [PIECE_TARGETING_GUIDANCE] : []),
-      ]
-      : withheld.has(message)
-      ? []
-      : [message]
-  );
-};
+  shape: RunShape,
+): string[] =>
+  messages.flatMap((message) => {
+    if (message === PIECE_TARGETING_GUIDANCE) {
+      return [
+        ...(sendsSection("held-pieces", shape) ? [HELD_PIECES_GUIDANCE] : []),
+        ...(sendsSection("may-hold-pieces", shape)
+          ? [MAY_HOLD_PIECES_GUIDANCE]
+          : []),
+        ...(sendsSection("piece-targeting", shape) ? [message] : []),
+      ];
+    }
+    const section = CONTEXT_MESSAGE_SECTIONS.get(message);
+    return section === undefined || sendsSection(section, shape)
+      ? [message]
+      : [];
+  });

@@ -11,6 +11,8 @@ import { EngineWaveCommitSink } from "../../src/executor/engine-wave-sink.ts";
 import {
   stampWaveRunContext,
   WaveAccumulator,
+  type WaveCommitOutcome,
+  type WaveCommitSink,
   type WaveRunContext,
   waveRunContextOf,
 } from "../../src/executor/wave.ts";
@@ -86,6 +88,11 @@ export class ServingWaves {
     return this.#space;
   }
 
+  /** The memory engine holding the space, which the waves commit to. */
+  get engine(): Engine.Engine {
+    return this.#engine;
+  }
+
   /** The wave the next seal joins, if one is open. */
   get current(): WaveAccumulator | undefined {
     return this.#current;
@@ -147,18 +154,30 @@ export class ServingWaves {
     });
   }
 
-  /** Commits the open wave, and waits for the runtime to settle after it. */
-  async commitWave(): Promise<void> {
+  /**
+   * The sink a wave commits through: the engine sink under the lease
+   * holder's session, sharing this instance's commit counter.
+   */
+  sink(): EngineWaveCommitSink {
+    return new EngineWaveCommitSink({
+      engineFor: () => this.#engine,
+      sessionId: executionLeaseHolder(`service:${this.#space}`),
+      localSeqRef: this.#localSeqRef,
+    });
+  }
+
+  /**
+   * Commits the open wave through `sink`, waits for the runtime to settle
+   * after it, and returns how the wave disposed of what sealed into it.
+   */
+  async commitWave(
+    sink: WaveCommitSink = this.sink(),
+  ): Promise<WaveCommitOutcome> {
     const wave = this.#take();
-    await wave.commitWave(
-      new EngineWaveCommitSink({
-        engineFor: () => this.#engine,
-        sessionId: executionLeaseHolder(`service:${this.#space}`),
-        localSeqRef: this.#localSeqRef,
-      }),
-    );
+    const outcome = await wave.commitWave(sink);
     await wave.settled();
     await this.#runtime.scheduler.idleWithPendingCommits();
+    return outcome;
   }
 
   /**
