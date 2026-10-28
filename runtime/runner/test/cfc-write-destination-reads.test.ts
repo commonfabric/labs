@@ -751,12 +751,13 @@ describe("CFC write-destination reads", () => {
       });
     });
 
-    it("refuses copying out an element's content where the element's own label observes only its membership", async () => {
+    it("refuses a confidential write into an element whose own label observes only its membership", async () => {
       await withStrictRuntime(async (runtime) => {
-        // The array's label still covers the element's content, so it must
-        // stay covering on the element's own document: scoped to the
-        // element's membership, a read of that content would leave it out,
-        // and the content could be copied anywhere.
+        // The element's own label observes one class, so it keeps that label
+        // and inherits none of the array's: one label cannot carry both. Its
+        // document's ceiling then admits no confidential content, which is
+        // what keeps that content from being stored where a read of it would
+        // not be labeled.
 
         const listSchema = {
           type: "object",
@@ -793,30 +794,10 @@ describe("CFC write-destination reads", () => {
           items: [{ note: text }],
         });
         tx.prepareCfc();
-        expect(refusalOf(await tx.commit().settled)).toBeUndefined();
-        await runtime.storageManager.synced();
 
-        const holder = runtime.getCell<{ items: unknown[] }>(
-          space,
-          "scoped-element",
-          undefined,
-          runtime.edit(),
-        ).getRaw();
-        const element = parseLink(holder?.items[0]);
-        expect(element).toBeDefined();
-        const copy = runtime.edit();
-        const note = runtime.getCellFromLink<{ note: string }>(
-          { ...element!, space, path: [] } as Parameters<
-            typeof runtime.getCellFromLink
-          >[0],
-          undefined,
-          copy,
-        ).key("note").get();
-        runtime.getCell(space, "scoped-copy", undefined, copy).set({ note });
-        copy.prepareCfc();
-
-        expect(note).toBe("confidential");
-        expect(refusalOf(await copy.commit().settled)).toContain(SECRET_ATOM);
+        const refusal = refusalOf(await tx.commit().settled);
+        expect(refusal).toContain("writer-fit confidentiality misfit");
+        expect(refusal).toContain(SECRET_ATOM);
       });
     });
   });

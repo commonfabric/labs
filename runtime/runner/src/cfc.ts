@@ -719,17 +719,15 @@ export class ContextualFlowControl {
     const joined = (extraConfidentiality !== undefined)
       ? new Set<unknown>(extraConfidentiality)
       : new Set<unknown>();
-    // Whether a container's label read with its content was passed down
-    // (`childInheritedConfidentiality()`). That label covers whatever the
-    // path reaches, so the result cannot keep a narrower `observes` of its
-    // own.
-    let inheritsCovering = false;
-    const inheritFrom = (ifc: JSONSchemaObj["ifc"]) => {
-      const atoms = childInheritedConfidentiality(ifc);
-      if (atoms === undefined || atoms.length === 0) return;
-      ContextualFlowControl.addIfcAtoms(joined, atoms);
-      inheritsCovering = true;
-    };
+    // The covering labels containers on the path pass down to what it
+    // reaches (`childInheritedConfidentiality()`), kept apart from `joined`
+    // until the result's own label says whether they can join it.
+    const inherited = new Set<unknown>();
+    const inheritFrom = (ifc: JSONSchemaObj["ifc"]) =>
+      ContextualFlowControl.addIfcAtoms(
+        inherited,
+        childInheritedConfidentiality(ifc),
+      );
     let cursor = schema;
     // Whether the path descended through a wildcard: a true schema is what
     // every child below it narrows to, markers and all, but its `default`
@@ -894,6 +892,15 @@ export class ContextualFlowControl {
     if (isObjectOrArray(cursor) && cursor.ifc !== undefined) {
       ContextualFlowControl.addIfcAtoms(joined, cursor.ifc.confidentiality);
     }
+    // One label carries one observation class, and neither a covering class
+    // nor `followRef` contains the other (`readConsumesEntry()`). So the
+    // covering labels passed down join the result only where its own label
+    // is covering too. A result whose own label is narrower keeps it as it
+    // is: no single label could carry both obligations, and dropping either
+    // would leave the read it governs unlabeled.
+    if (!isObjectOrArray(cursor) || cursor.ifc?.observes === undefined) {
+      for (const atom of inherited) joined.add(atom);
+    }
     if (typeof cursor === "boolean") {
       if (!cursor) {
         return false; // no need to attach tags -- we'll never match
@@ -903,17 +910,10 @@ export class ContextualFlowControl {
       cursor = {}; // change to use the empty object schema, so we can attach ifc.
     }
     // If we've encountered any confidentiality atoms while walking down the
-    // schema, we need to add them to the returned object. One label carries
-    // one observation class, so where an inherited covering label joins a
-    // narrower one, the joined label is covering, as merging two scopes that
-    // disagree makes it.
-    let ifc = (joined.size !== 0)
+    // schema, we need to add them to the returned object.
+    const ifc = (joined.size !== 0)
       ? { ...cursor.ifc, confidentiality: ContextualFlowControl.lub(joined) }
       : cursor.ifc;
-    if (inheritsCovering && ifc?.observes !== undefined) {
-      const { observes: _narrower, ...covering } = ifc;
-      ifc = covering;
-    }
     const selectedDefs = selectReferencedCfcSchemaDefs(cursor, defs);
     const result = { ...cursor, ...(ifc && { ifc }) } as Record<
       string,
