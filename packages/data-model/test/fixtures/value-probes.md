@@ -8,6 +8,8 @@ paired with what a reader finds there. Values are written only as `fvj1:` text.
 The one escape is for a string holding a lone surrogate, which a JSON reader may
 not keep, where it stands outside a text, as a key in a path or a symbol's
 description in a patch: `{"utf16": [...]}` writes it as its UTF-16 code units.
+An entry of either fixture may also state what a reader must support to read it
+at all, as [Requirements](#requirements) describes.
 [`fvj1-conformance.md`](fvj1-conformance.md) and
 [`hash-conformance.md`](hash-conformance.md) describe the fixtures themselves,
 and `src/conformance-fixtures.ts`, in `packages/data-model`, writes and reads
@@ -146,6 +148,36 @@ way, and have no probe.
 A path has one probe. A node's probe comes before the probes of what it holds:
 an array's elements and runs of holes in index order, a record's keys in UTF-8
 order, and an instance's fields in the order of the table above.
+
+## Requirements
+
+An entry may carry `requires`, naming what a reader must support for the entry
+to apply to it. A reader that does not meet every requirement an entry names
+skips the entry: the case is not applicable to it, which is neither a pass nor a
+divergence. An entry with no `requires` applies to every reader. The fields are
+these, each present only where the case needs it:
+
+- `flavors`: a list of regular-expression flavors whose patterns the reader must
+  construct, as section 3 of
+  [`3-json-encoding.md`](../../../../docs/specs/space-model-formal-spec/3-json-encoding.md)
+  describes for `RegExp@1`, for a case whose outcome depends on constructing
+  one, such as a pattern that fails to construct. The format requires no flavor,
+  and a reader that does not construct a flavor stores its patterns unvalidated,
+  so the outcome differs. Cases are marked by hand.
+- `arrayLength`: the length of the longest array the entry's text writes,
+  counting each hole a run stands for, which the reader's limit on array length
+  must reach.
+- `propertyCount`: the member count of the largest record the entry's text
+  writes, any object in the JSON body counting, which the reader's limit on
+  record members must reach.
+
+`arrayLength` and `propertyCount` are computed from the text, and are present
+only where they are past the floors section 12 of `3-json-encoding.md` sets,
+2^24 elements and 2^14 members, which every conforming reader meets.
+
+This package meets every requirement either fixture names: it constructs
+`es2025` patterns, holds an array of up to 2^32 - 1 elements, and sets no limit
+on a record.
 
 ## Checking with a codec of known behavior
 

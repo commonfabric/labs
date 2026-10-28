@@ -14,8 +14,12 @@ import {
 import { FabricError, FabricLink, FabricMap } from "@/fabric-instances";
 import { FabricBytes, FabricKeyPair } from "@/fabric-primitives";
 import {
+  ARRAY_LENGTH_FLOOR_FOR_TESTING_ONLY,
   fabricValueOfTextWithModsForTestingOnly,
+  meetsRequirementsForTestingOnly,
   probesOfForTestingOnly,
+  PROPERTY_COUNT_FLOOR_FOR_TESTING_ONLY,
+  requirementsOfForTestingOnly,
   type TextWithMods,
   textWithModsOfForTestingOnly,
 } from "@/for-testing-only.ts";
@@ -45,6 +49,18 @@ class OtherInstance extends BaseFabricInstance {
   protected [SHALLOW_UNFROZEN_CLONE](): FabricInstance {
     return new OtherInstance();
   }
+}
+
+/**
+ * Returns the JSON text of a record of `count` members, their keys in UTF-8
+ * order.
+ */
+function recordBodyOf(count: number): string {
+  const members = Array.from(
+    { length: count },
+    (_, i) => `"k${String(i).padStart(6, "0")}":${i}`,
+  );
+  return `{${members.join(",")}}`;
 }
 
 describe("conformance-fixtures", () => {
@@ -648,6 +664,89 @@ describe("conformance-fixtures", () => {
           ],
         })
       ).toThrow('No path ["a","a"] through arrays, records and instances');
+    });
+  });
+
+  describe("requirementsOfForTestingOnly()", () => {
+    const arrayFloor = ARRAY_LENGTH_FLOOR_FOR_TESTING_ONLY;
+    const recordFloor = PROPERTY_COUNT_FLOOR_FOR_TESTING_ONLY;
+
+    it("returns `undefined` for a text whose arrays and records are at their floors", () => {
+      expect(
+        requirementsOfForTestingOnly(
+          `fvj1:[{"/hole":${arrayFloor}}]`,
+        ),
+      ).toBeUndefined();
+      expect(
+        requirementsOfForTestingOnly(`fvj1:${recordBodyOf(recordFloor)}`),
+      ).toBeUndefined();
+    });
+
+    it("returns the length of the longest array past the floor, counting each hole a run stands for", () => {
+      const text = `fvj1:[[1,{"/hole":${arrayFloor}}],[1]]`;
+
+      expect(requirementsOfForTestingOnly(text)).toEqual({
+        arrayLength: arrayFloor + 1,
+      });
+    });
+
+    it("returns the member count of the largest record past the floor, wherever it is", () => {
+      const text = `fvj1:[{"a":1},${recordBodyOf(recordFloor + 1)}]`;
+
+      expect(requirementsOfForTestingOnly(text)).toEqual({
+        propertyCount: recordFloor + 1,
+      });
+    });
+
+    it("returns the member count of a type's state as a record's", () => {
+      const text = `fvj1:{"/Error@1":${recordBodyOf(recordFloor + 1)}}`;
+
+      expect(requirementsOfForTestingOnly(text)).toEqual({
+        propertyCount: recordFloor + 1,
+      });
+    });
+
+    it("returns the flavors given, beside the sizes past their floors", () => {
+      const text = `fvj1:[{"/hole":${arrayFloor + 1}}]`;
+
+      expect(requirementsOfForTestingOnly(text, ["es2025"])).toEqual({
+        flavors: ["es2025"],
+        arrayLength: arrayFloor + 1,
+      });
+    });
+
+    it("counts a malformed hole run as one element", () => {
+      const text = `fvj1:[{"/hole":${arrayFloor + 1.5}}]`;
+
+      expect(requirementsOfForTestingOnly(text)).toBeUndefined();
+    });
+
+    it("returns `undefined` for a text that is not `fvj1:` JSON", () => {
+      expect(requirementsOfForTestingOnly("fvj1:[")).toBeUndefined();
+      expect(requirementsOfForTestingOnly("[1]")).toBeUndefined();
+    });
+  });
+
+  describe("meetsRequirementsForTestingOnly()", () => {
+    it("returns `true` for no requirements, or ones this package meets", () => {
+      expect(meetsRequirementsForTestingOnly(undefined)).toBe(true);
+      expect(
+        meetsRequirementsForTestingOnly({
+          flavors: ["es2025"],
+          arrayLength: 2 ** 32 - 1,
+          propertyCount: 2 ** 30,
+        }),
+      ).toBe(true);
+    });
+
+    it("returns `false` for a flavor this package does not construct", () => {
+      expect(meetsRequirementsForTestingOnly({ flavors: ["es2025", "other"] }))
+        .toBe(false);
+    });
+
+    it("returns `false` for an array longer than a JavaScript array can be", () => {
+      expect(meetsRequirementsForTestingOnly({ arrayLength: 2 ** 32 }))
+        .toBe(false);
     });
   });
 });

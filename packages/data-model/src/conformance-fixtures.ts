@@ -18,6 +18,7 @@ import { utf8Compare } from "@commonfabric/utils/utf8";
 
 import type { FabricPlainObject, FabricValue } from "@/interface.ts";
 import { ProblematicValue, UnknownValue } from "@/codec-common";
+import { CODEC_META_TAGS } from "@/codec-interface/codec-meta-tags.ts";
 import { createBaseJsonRegistry, JsonCodecEngine } from "@/codec-json";
 import { deepFreeze } from "@/deep-freeze.ts";
 import {
@@ -27,6 +28,7 @@ import {
   FabricMap,
   FabricSet,
 } from "@/fabric-instances";
+import { FabricRegExp } from "@/fabric-primitives";
 import { isFabricArray, isFabricPlainObject } from "@/types";
 import { createDefaultJsonRegistry, jsonFromFabricValue } from "./codecs.ts";
 import { codecClasses as instanceClasses } from "./fabric-instances/impl.ts";
@@ -103,6 +105,18 @@ export type TextWithMods = {
 
   /** Changes made to what decoding returns. */
   readonly patches?: readonly ValuePatch[];
+};
+
+/**
+ * What a reader must support to read a fixture entry, a reader that does not
+ * skipping the entry: the flavors of regular expression whose patterns it must
+ * construct, and the longest array and the largest record it must hold, each
+ * only where it is past the floor `3-json-encoding.md` section 12 sets.
+ */
+export type FixtureRequirements = {
+  readonly flavors?: readonly string[];
+  readonly arrayLength?: number;
+  readonly propertyCount?: number;
 };
 
 /** Makers of examples of each class in one of the class tables. */
@@ -213,6 +227,135 @@ function asciiJsonOf(value: FixtureJson): string {
     /[\u007f-￿]/g,
     (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`,
   );
+}
+
+//
+// Requirements
+//
+
+/**
+ * The floor `3-json-encoding.md` section 12 sets on an implementation's limit
+ * on the length of an array.
+ */
+export const ARRAY_LENGTH_FLOOR = 2 ** 24;
+
+/**
+ * The floor `3-json-encoding.md` section 12 sets on an implementation's limit
+ * on the number of members of a record.
+ */
+export const PROPERTY_COUNT_FLOOR = 2 ** 14;
+
+/**
+ * This package's limit on the length of an array, which its README states: the
+ * most a JavaScript array can hold. It sets no limit on a record.
+ */
+const ARRAY_LENGTH_LIMIT = 2 ** 32 - 1;
+
+/**
+ * Returns what a reader must support to read the entry for `text`: `flavors`,
+ * which a case marks by hand, and the length of the longest array and the
+ * member count of the largest record the text writes, where each is past its
+ * floor. Returns `undefined` where a reader need support nothing beyond the
+ * floors.
+ */
+export function requirementsOf(
+  text: string,
+  flavors?: readonly string[],
+): FixtureRequirements | undefined {
+  const { arrayLength, propertyCount } = largestContainersOf(text);
+  const requires: {
+    flavors?: readonly string[];
+    arrayLength?: number;
+    propertyCount?: number;
+  } = {};
+  if (flavors !== undefined) {
+    requires.flavors = flavors;
+  }
+  if (arrayLength > ARRAY_LENGTH_FLOOR) {
+    requires.arrayLength = arrayLength;
+  }
+  if (propertyCount > PROPERTY_COUNT_FLOOR) {
+    requires.propertyCount = propertyCount;
+  }
+  return (Object.keys(requires).length === 0) ? undefined : requires;
+}
+
+/**
+ * Indicates whether this package meets `requires`: that it constructs each
+ * flavor named, which it does for exactly the flavors a `FabricRegExp` can
+ * give a JavaScript `RegExp` of, and holds an array and a record of the sizes
+ * named.
+ */
+export function meetsRequirements(
+  requires: FixtureRequirements | undefined,
+): boolean {
+  if (requires === undefined) {
+    return true;
+  }
+  const { flavors = [], arrayLength = 0 } = requires;
+  return arrayLength <= ARRAY_LENGTH_LIMIT &&
+    flavors.every((flavor) => {
+      try {
+        new FabricRegExp(flavor, "", "").value;
+        return true;
+      } catch {
+        return false;
+      }
+    });
+}
+
+/**
+ * Returns the length of the longest array and the member count of the largest
+ * record `text` writes, wherever they are in it, a `/hole` run counting toward
+ * its array's length every hole it stands for. Each is zero for a text that is
+ * not `fvj1:` JSON.
+ */
+function largestContainersOf(
+  text: string,
+): { arrayLength: number; propertyCount: number } {
+  const largest = { arrayLength: 0, propertyCount: 0 };
+  let body: unknown;
+  try {
+    body = JSON.parse(JsonCodecEngine.unwrapEncodedValueForTesting(text, true));
+  } catch {
+    return largest;
+  }
+
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      let length = 0;
+      for (const entry of node) {
+        length += holeCountOf(entry) ?? 1;
+        visit(entry);
+      }
+      largest.arrayLength = Math.max(largest.arrayLength, length);
+    } else if (typeof node === "object" && node !== null) {
+      const values = Object.values(node);
+      largest.propertyCount = Math.max(largest.propertyCount, values.length);
+      values.forEach(visit);
+    }
+  };
+  visit(body);
+  return largest;
+}
+
+/**
+ * Returns the count of holes `entry`, an array entry, stands for, or
+ * `undefined` where it is not a well-formed `/hole` run.
+ */
+function holeCountOf(entry: unknown): number | undefined {
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+    return undefined;
+  }
+  const [member, ...others] = Object.entries(entry);
+  if (member === undefined || others.length !== 0) {
+    return undefined;
+  }
+  const [key, count] = member;
+  return (key === `/${CODEC_META_TAGS.hole}` && typeof count === "number" &&
+      Number.isInteger(count) && count > 0)
+    ? count
+    : undefined;
 }
 
 //

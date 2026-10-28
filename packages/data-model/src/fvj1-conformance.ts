@@ -48,10 +48,12 @@ import {
   type ExampleMakers,
   fabricValueOfTextWithMods,
   type FixtureJson,
+  type FixtureRequirements,
   fixtureTextOf,
   plainJsonTextOf,
   probedPathsOf,
   probesOf,
+  requirementsOf,
   sparseArrayOf,
   STUB_CODEC_EXCLUSION,
   type TextWithMods,
@@ -89,6 +91,9 @@ export type Fvj1Outcome =
  * decoded, and what it decodes to is re-encoded.
  *
  * `section` names the part of the formal spec the case exercises.
+ * `requires` names the flavors of regular expression whose construction the
+ * case's outcome depends on; the fixture entry adds the sizes of array and
+ * record the case needs past the floors.
  * `divergence` is a note on what the format requires, for a case where this
  * package does not do it. The format's outcome is never typed here. For a
  * value, it is the value's own probes, and the text {@link plainJsonTextOf}
@@ -103,6 +108,7 @@ export type Fvj1ConformanceCase =
   & {
     readonly name: string;
     readonly section: string;
+    readonly requires?: Pick<FixtureRequirements, "flavors">;
     readonly divergence?: string;
   }
   & (
@@ -681,6 +687,7 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     name: "regular expression that does not construct",
     section: "3-json-encoding.md section 3, `RegExp@1`",
     text: 'fvj1:{"/RegExp@1":{"flags":"","flavor":"es2025","source":"("}}',
+    requires: { flavors: ["es2025"] },
   },
   {
     name: "unavailable pairing an error kind with a transient reason",
@@ -967,6 +974,7 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     name: "regular expression with a flag es2025 lacks",
     section: SECTION_REGEXP,
     text: 'fvj1:{"/RegExp@1":{"flags":"z","flavor":"es2025","source":"a"}}',
+    requires: { flavors: ["es2025"] },
   },
   {
     name: "regular expression with no flags",
@@ -1265,9 +1273,14 @@ function fixtureEntryOf(
     }
   }
 
+  const requires = requirementsOf(
+    stated.text,
+    conformanceCase.requires?.flavors,
+  );
   const entry: Record<string, FixtureJson> = {
     name,
     section,
+    ...(requires === undefined ? {} : { requires }),
     ...stated,
     ...specDecoded,
   };
