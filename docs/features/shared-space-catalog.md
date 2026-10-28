@@ -236,7 +236,8 @@ been deleted, as [Deleted spaces](#deleted-spaces) describes. Stored states are
 extensible nonempty strings of at most 32 characters. Readers retain `left` and
 other unfamiliar states without listing them as saved, archived, or deleted.
 `changeMembership` applies only saved and archived choices, and `markDeleted`
-only `deleted`; an action on an entry in another state returns
+moves only a saved or archived entry to `deleted`; an action on an entry in
+another state returns
 `conflict: unsupported-state`, including an attempted confirmation. A future
 writer must define the additional state's transitions.
 

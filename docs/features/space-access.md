@@ -7,10 +7,10 @@ person, such as whether to show the controls only an owner can use, or whether
 a room it lists is one they belong to. The implementation is
 `packages/runner/src/builder/space-access.ts`, which also holds
 `spaceMembers(target)`, the principals that space's access list names,
-described [below](#a-spaces-members), `spaceOf(target)`, the DID of that
-same space, described [below](#the-spaces-own-did), and
-`spaceDeleted(target)`, whether that space is deleted, described
-[below](#a-deleted-space).
+described [below](#a-spaces-members), and `spaceOf(target)`, the DID of that
+same space, described [below](#the-spaces-own-did). `spaceDeleted(target)`,
+whether that space is deleted, is planned beside them and not implemented yet;
+[below](#a-deleted-space) says what it will return.
 
 The answer is advisory. A memory server in `enforce` mode, which is toolshed's
 default (`MEMORY_ACL_MODE`), checks every read and write against the space's
@@ -219,8 +219,12 @@ appears once access is granted, without a reload.
 
 A deleted space
 ([random space identities](../specs/random-space-identities.md#deleting-a-space))
-has a tombstone where its access list was, and the memory server refuses it
-to every principal for good, with a refusal marked `deleted`. To the access
+has a tombstone where its access list was. A memory server that checks access,
+in `observe` or `enforce` mode, refuses it to every principal for good, with a
+refusal marked `deleted`; in `off` mode it checks nothing, tombstones included,
+and serves a deleted space like any other
+([INV-15](../specs/memory-v2/09-invariants.md#inv-15--space-deletion)), so
+there `spaceDeleted(target)` never returns `true`. To the access
 calls that is a refusal like any other permanent one: `spaceAccess(target)`
 returns `"none"`, `spaceMembers(target)` returns `undefined`, and
 `retrySpaceAccess(space)` is refused again. A tombstone is not a list, so
