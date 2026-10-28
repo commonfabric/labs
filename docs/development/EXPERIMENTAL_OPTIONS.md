@@ -1007,12 +1007,13 @@ holds the measurements and the conditions for revisiting.
   positional identity. A deployed parent's positional child is carried over to
   its name on the first setup that names it, and recorded in the parent's
   `instanceChildren` meta. Where the parent's setup record numbers the pattern
-  the parent last set up otherwise than this runtime's build of it, no
-  instance takes the child at its own positional spot, and one whose cell or
-  spot is at a number the record cannot vouch for takes a child only as the
-  one positional child of its pattern identity; otherwise it starts fresh.
-  With the flag off, carry-over, `instanceChildren` and the start's pre-sync
-  have nothing to act on.
+  the parent last set up otherwise than this runtime's build of it, an
+  instance whose cell, or whose spot by order, the record vouches for is
+  carried over as before; one at a number the record cannot vouch for is
+  carried over only as the one positional child of its pattern identity, and
+  otherwise starts fresh; and no instance of that parent takes the child at
+  its own positional spot. With the flag off, carry-over, `instanceChildren`
+  and the start's pre-sync have nothing to act on.
 - **Current default and planned end state.** Off by default. The end state is
   on, with the flag and the positional compile of `const`-bound instances
   deleted. Turning it on is one-way for the data it writes: a parent whose

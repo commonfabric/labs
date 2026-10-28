@@ -15508,10 +15508,12 @@ export class Runner {
     );
     const previous = this.#previouslySetUpPattern(parent, pattern);
     const previousRef = this.#lastSetUpRef(parent);
-    // Where the record disagrees, the numbers this runtime's builds give are
-    // not where the parent's children sit: the steps that read a child at
-    // such a number pass over it, and the step by pattern identity, which
-    // reads none, is the one left.
+    // Where the record disagrees, a number this runtime's builds give may not
+    // be where the parent's children sit. The exact match and order matching
+    // pass over an instance or a spot at a number the record cannot vouch
+    // for, which goes on to the match by pattern identity, which reads no
+    // number; the rest are placed as ever. The step at an instance's own spot
+    // is skipped for every instance, below.
     const disagreement = previous === undefined || previousRef === undefined
       ? undefined
       : this.#recordDisagreement(parent, previous, previousRef);
@@ -15684,8 +15686,10 @@ export class Runner {
     }
     // What is left takes the child at its own positional spot, which is where
     // the child runs with no instance names, unless the parent shows the
-    // children have moved spots. Where the record disagrees, that spot's
-    // number is not one the record vouches for, so what is left starts fresh.
+    // children have moved spots. That spot is a number of this runtime's
+    // build of `pattern`, which the record does not describe, so where the
+    // record disagrees at all, nothing left takes its own spot, and it starts
+    // fresh.
     for (const { name, module, descriptor } of unmatched) {
       if (disagreement !== undefined) {
         uncarried.push({ name, recordDisagrees: true });
