@@ -122,8 +122,10 @@ detection first; then the default library's generic aliases — `Readonly`,
 name binds through the node or, for an unbindable synthetic reference,
 resolves lexically (`checker.resolveName`) to a library declaration, so an
 authored or imported shadow of the name keeps the general path, with `Pick`
-and `Omit` over a type literal written in place reading only the members they
-keep, so that a member they drop, and a recursion through it, is not read; then an
+and `Omit` over a type literal written in place, where the literal is read by
+its syntax, reading only the members they keep, and `Pick` none of its index
+signatures where every key it names is a member's, so that a member they
+drop, and a recursion through it, is not read; then an
 alias whose whole body is one of its own type parameters
 (`type Reactive<T> = T`), read as the argument the reference supplies for that
 parameter, since the reference denotes exactly that argument — except a scope

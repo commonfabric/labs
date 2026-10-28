@@ -1852,6 +1852,52 @@ describe("Schema: CFC authoring aliases", () => {
       });
     }
 
+    it("reports nothing for a recursion through an index signature `Pick` drops", async () => {
+      for (
+        const { schema, diagnostics } of await bothPaths(
+          `type Data<T> =
+             | Pick<{ [key: string]: Data<T>; value: T }, "value">
+             | Secret;`,
+          "Data<string>",
+        )
+      ) {
+        expect(schema.properties.a).toEqual({
+          anyOf: [
+            {
+              type: "object",
+              properties: { value: { type: "string" } },
+              required: ["value"],
+            },
+            SECRET,
+          ],
+        });
+        expect(diagnostics).toEqual([]);
+      }
+    });
+
+    it("keeps the index signature `Pick` reads a key only it holds from", async () => {
+      for (
+        const { schema, diagnostics } of await bothPaths(
+          `type Data<T> =
+             | Pick<{ [key: string]: T; value: T }, "other">
+             | Secret;`,
+          "Data<string>",
+        )
+      ) {
+        expect(schema.properties.a).toEqual({
+          anyOf: [
+            {
+              type: "object",
+              properties: { other: { type: "string" } },
+              required: ["other"],
+            },
+            SECRET,
+          ],
+        });
+        expect(diagnostics).toEqual([]);
+      }
+    });
+
     it("reports `cfc-schema:recursive-alias-of-any` for a recursion through a member `Omit` keeps", async () => {
       for (
         const { diagnostics } of await bothPaths(

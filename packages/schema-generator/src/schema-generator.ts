@@ -5270,19 +5270,37 @@ export class SchemaGenerator {
         if (second === undefined) return undefined;
         const keys = literalKeys(second, context);
         if (keys === undefined) return undefined;
-        // An operand written in place as a type literal is read for the
-        // members kept alone, so a member the alias drops is not read, nor a
-        // recursion through it, as `parent` in
-        // `Omit<{ parent: Data<T>; value: T }, "parent">` is not.
+        // An operand written in place as a type literal, read by its syntax,
+        // is read for the members kept alone, so a member the alias drops is
+        // not read, nor a recursion through it, as `parent` in
+        // `Omit<{ parent: Data<T>; value: T }, "parent">` is not. `Pick` drops
+        // an index signature too where every key it names is a member's. An
+        // operand read by its type keeps that reading, and the metadata it
+        // gives each member.
         const written = unwrapTypeParentheses(first);
+        const members = ts.isTypeLiteralNode(written) ? written.members : [];
+        const declared = new Set(
+          members.flatMap((member) => {
+            const key = ts.isPropertySignature(member)
+              ? getPropertyNameText(member.name, checker)
+              : undefined;
+            return key === undefined ? [] : [key];
+          }),
+        );
         const kept = (member: ts.TypeElement): boolean => {
+          if (ts.isIndexSignatureDeclaration(member)) {
+            return name === "Omit" ||
+              [...keys].some((key) => !declared.has(key));
+          }
           const key = ts.isPropertySignature(member)
             ? getPropertyNameText(member.name, checker)
             : undefined;
           return key === undefined || keys.has(key) === (name === "Pick");
         };
         // The picked members are the labelled value's, so its label stays.
-        const operand = ts.isTypeLiteralNode(written)
+        const operand = ts.isTypeLiteralNode(written) &&
+            ((readBoundTypeNode(written, context).flags & ts.TypeFlags.Any) !==
+                0 || this.#readsBySyntax(written, context))
           ? this.#analyzeTypeNodeStructure(
             ts.factory.updateTypeLiteralNode(
               written,
