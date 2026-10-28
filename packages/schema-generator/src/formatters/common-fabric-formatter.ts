@@ -2840,7 +2840,10 @@ export class CommonFabricFormatter implements TypeFormatter {
    * CFC metadata carrier the object holds as one of its members, attaches:
    * one per policy it records, folded into it by a mapped type or a spread
    * (`carrierStamps()`), each placed on the part of the object its policy
-   * names.
+   * names. A mapped type over a union, which the checker did not distribute
+   * over it, folds every member's carrier into one, though the object maps
+   * only whichever member the value is: its labels are those members',
+   * joined (`#mappedMembers()`, `#withMemberLabels()`).
    */
   withLabelsCarriedBy(
     schema: MutableJSONSchema,
@@ -2856,6 +2859,8 @@ export class CommonFabricFormatter implements TypeFormatter {
     );
     const stamps = carrierStamps(value, checker);
     this.#reportCarriedWriter(stamps.map((stamp) => stamp.meta), context);
+    const members = this.#mappedMembers(type, context);
+    if (members) return this.#withMemberLabels(schema, type, members, context);
     return this.#withPlacedLabels(
       schema,
       type,
@@ -2922,6 +2927,29 @@ export class CommonFabricFormatter implements TypeFormatter {
       )
       ? labels as Record<string, unknown>[]
       : undefined;
+  }
+
+  /**
+   * The members a mapped type `type` maps, where it maps over a union the
+   * checker did not distribute it over, as `{ [K in keyof (A | B)]: … }`
+   * does, read as an operand of a default-library alias is
+   * (`#operandView()`), several of them; `undefined` for any other type.
+   */
+  #mappedMembers(
+    type: ts.Type,
+    context: GenerationContext,
+  ): readonly LabeledMember[] | undefined {
+    if (((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Mapped) === 0) {
+      return undefined;
+    }
+    const source = (type as MappedTypeWithInternals).modifiersType;
+    if (!source?.isUnion()) return undefined;
+    const view = this.#operandView(
+      source,
+      context.boundTypeParameters,
+      context,
+    );
+    return view && view.members.length > 1 ? view.members : undefined;
   }
 
   /**

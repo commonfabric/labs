@@ -1678,7 +1678,12 @@ Mechanics:
   (`{ readonly [K in keyof Sec<X>]: Sec<X>[K] }`), is labeled by it, each
   metadata the carrier's type holds read in full or none and placed by the
   payload it records (above), and never holds the carrier as a member: no
-  value does.
+  value does. A mapped type over a union that the checker does not distribute
+  over it, as `{ [K in keyof (A | B)]: (A | B)[K] }`, folds every member's
+  carrier into one, though it maps only whichever member the value is, so it
+  is labeled with the members' labels joined, as `Pick` and `Omit` over a
+  union are: `{ [K in keyof (Integrity<X, L> | Sec<X>)]: … }` carries `Sec`'s
+  label and not `L`.
 - User alias chains are followed with type-parameter node substitution until a
   canonical name is reached (`#resolveAliasChainFromDeclaration` /
   `substituteTypeNode`), and the labels read the substituted argument nodes.

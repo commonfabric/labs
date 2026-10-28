@@ -3330,6 +3330,11 @@ describe("Schema: CFC authoring aliases", () => {
           { confidentiality: ["a"] },
         ],
         [
+          '{ [K in keyof (Integrity<T, readonly ["i"]> | Sec<T>)]: (Integrity<T, readonly ["i"]> | Sec<T>)[K] }',
+          "{ x: string }",
+          { confidentiality: ["a"] },
+        ],
+        [
           'Pick<Sec<T>, "x">',
           "Labeled | { x: string; z: 1 }",
           { confidentiality: ["a", "c"] },
@@ -3892,6 +3897,16 @@ describe("Schema: CFC authoring aliases", () => {
             undefined,
           ],
           ['Pick<One | Two, "x">', undefined],
+          // A mapped type an author writes over a union, which the checker
+          // does not distribute, maps whichever member the value is too.
+          [
+            '{ [K in keyof (Integrity<One, readonly ["i"]> | Sec<One>)]: (Integrity<One, readonly ["i"]> | Sec<One>)[K] }',
+            secret,
+          ],
+          [
+            '{ readonly [K in keyof (Integrity<One, readonly ["i"]> | Integrity<Sec<One>, readonly ["i"]>)]: (Integrity<One, readonly ["i"]> | Integrity<Sec<One>, readonly ["i"]>)[K] }',
+            { integrity: ["i"], confidentiality: ["a"] },
+          ],
         ] as const
       ) {
         it(`reads \`${value}\` ${ifc ? "with its members' labels joined" : "unlabeled"}`, async () => {

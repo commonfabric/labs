@@ -2670,6 +2670,19 @@ type SelectSec<T extends { x: string }> = Pick<Sec<T>, "x">;`;
           });
         }
 
+        it("reads `Mapped<One>`, a mapped type over a union, with its members' labels joined, on both sides", async () => {
+          // The checker does not distribute `keyof (A | B)`, so the object
+          // maps whichever member the value is, as `Pick` and `Omit` do, and
+          // carries none of the integrity only one member holds.
+          const read = await schemasOf(
+            `import type { Integrity } from "commonfabric";
+${DECLARATIONS}
+type Mapped<T> = { [K in keyof (Integrity<T, readonly ["i"]> | Sec<T>)]: (Integrity<T, readonly ["i"]> | Sec<T>)[K] };`,
+            "Mapped<One>",
+          );
+          expect(read).toEqual({ input: picked(["a"]), output: picked(["a"]) });
+        });
+
         for (
           const [inner, argument] of [
             ['Pick<Sec<T>, "x">', 'Confidential<One, readonly ["c"]> | Two'],
