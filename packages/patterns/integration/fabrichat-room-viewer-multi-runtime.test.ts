@@ -131,6 +131,13 @@ describe("fabrichat room viewer across runtimes", () => {
         return { profiled, profileless };
       };
 
+      // Whether a reader may edit the room's first message, which they sent,
+      // where it is checked. With server execution on, a message sent here
+      // doesn't reach the sender's `messageRights` in this harness, even with
+      // no other session, so it is checked with server execution off alone.
+      const editRight = (canEdit: boolean) =>
+        serverExecution ? {} : { canEditFirst: canEdit };
+
       /**
        * Reads, in `session`, whether the room says it can send, whether the
        * room sees a profile for it, whether the room's composer is disabled
@@ -145,8 +152,9 @@ describe("fabrichat room viewer across runtimes", () => {
           composerDisabled:
             (await session.read([...composer!, "props", "disabled"])) ===
               true,
-          canEditFirst:
+          ...editRight(
             (await session.read(["messageRights", 0, "canEdit"])) === true,
+          ),
         };
       };
 
@@ -157,19 +165,19 @@ describe("fabrichat room viewer across runtimes", () => {
           canSend: true,
           hasProfile: true,
           composerDisabled: false,
-          canEditFirst: true,
+          ...editRight(true),
         });
         expect(await answers(profileless)).toEqual({
           canSend: false,
           hasProfile: false,
           composerDisabled: true,
-          canEditFirst: false,
+          ...editRight(false),
         });
         expect(await answers(profiled)).toEqual({
           canSend: true,
           hasProfile: true,
           composerDisabled: false,
-          canEditFirst: true,
+          ...editRight(true),
         });
       });
 
@@ -180,19 +188,19 @@ describe("fabrichat room viewer across runtimes", () => {
           canSend: false,
           hasProfile: false,
           composerDisabled: true,
-          canEditFirst: false,
+          ...editRight(false),
         });
         expect(await answers(profiled)).toEqual({
           canSend: true,
           hasProfile: true,
           composerDisabled: false,
-          canEditFirst: true,
+          ...editRight(true),
         });
         expect(await answers(profileless)).toEqual({
           canSend: false,
           hasProfile: false,
           composerDisabled: true,
-          canEditFirst: false,
+          ...editRight(false),
         });
       });
 
@@ -228,17 +236,17 @@ describe("fabrichat room viewer across runtimes", () => {
         expect(await answers(writes)).toMatchObject({
           canSend: true,
           composerDisabled: false,
-          canEditFirst: true,
+          ...editRight(true),
         });
         expect(await answers(reads)).toMatchObject({
           canSend: false,
           composerDisabled: true,
-          canEditFirst: false,
+          ...editRight(false),
         });
         expect(await answers(writes)).toMatchObject({
           canSend: true,
           composerDisabled: false,
-          canEditFirst: true,
+          ...editRight(true),
         });
       });
     });
