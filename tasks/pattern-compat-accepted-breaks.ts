@@ -1735,11 +1735,16 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.sendMessage.replyTo.message",
       "result.sendReaction.message.replyTo.message",
       "result.sendReaction.replyTo.message",
+      // The reader's answers, declared per session, which
+      // `fabrichat-room-viewer-per-session-break.md` records.
+      "result.$VIEWS.room.canSend",
+      "result.canSend",
     ],
     reason:
       "a room's messages are objects pushed onto the list under a policy naming the new handlers, and its activity log is gone; rooms holding the keyed records are left behind" +
       "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
-      "; the reply split's paths are recorded in docs/history/fabrichat-reply-split-break.md",
+      "; the reply split's paths are recorded in docs/history/fabrichat-reply-split-break.md" +
+      "; and the room's answers about its reader are declared per session (docs/history/fabrichat-room-viewer-per-session-break.md)",
     record: "docs/history/fabrichat-pushed-messages-break.md",
   },
   {
@@ -1872,11 +1877,18 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.sendMessage.replyTo.message",
       "result.sendReaction.message.replyTo.message",
       "result.sendReaction.replyTo.message",
+      // The reader's answers, declared per session, which
+      // `fabrichat-room-viewer-per-session-break.md` records.
+      "result.$VIEWS.room.canAdd",
+      "result.$VIEWS.room.canSend",
+      "result.canAdd",
+      "result.canSend",
     ],
     reason:
       "a room's messages are objects pushed onto the list under a policy naming the new handlers, and its activity log is gone; rooms holding the keyed records are left behind" +
       "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
-      "; the reply split's paths are recorded in docs/history/fabrichat-reply-split-break.md",
+      "; the reply split's paths are recorded in docs/history/fabrichat-reply-split-break.md" +
+      "; and the room's answers about its reader are declared per session (docs/history/fabrichat-room-viewer-per-session-break.md)",
     record: "docs/history/fabrichat-pushed-messages-break.md",
   },
   {
@@ -1994,11 +2006,18 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.sendMessage.replyTo.message",
       "result.sendReaction.message.replyTo.message",
       "result.sendReaction.replyTo.message",
+      // The reader's answers, declared per session, which
+      // `fabrichat-room-viewer-per-session-break.md` records.
+      "result.$VIEWS.room.canAdd",
+      "result.$VIEWS.room.canSend",
+      "result.canAdd",
+      "result.canSend",
     ],
     reason:
       "a room's messages are objects pushed onto the list under a policy naming the new handlers, and its per-user act outcomes are gone; rooms holding the keyed records are left behind" +
       "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
-      "; the reply split's paths are recorded in docs/history/fabrichat-reply-split-break.md",
+      "; the reply split's paths are recorded in docs/history/fabrichat-reply-split-break.md" +
+      "; and the room's answers about its reader are declared per session (docs/history/fabrichat-room-viewer-per-session-break.md)",
     record: "docs/history/fabrichat-pushed-messages-break.md",
   },
   {
@@ -2148,11 +2167,22 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.sendMessage.replyTo.message",
       "result.sendReaction.message.replyTo.message",
       "result.sendReaction.replyTo.message",
+      // The reader's answers, declared per session, which
+      // `fabrichat-room-viewer-per-session-break.md` records.
+      "result.$VIEWS.room.canAdd",
+      "result.$VIEWS.room.canSend",
+      "result.$VIEWS.room.messageRights",
+      "result.$VIEWS.room.viewer",
+      "result.canAdd",
+      "result.canSend",
+      "result.messageRights",
+      "result.viewer",
     ],
     reason:
       "a room's messages are objects pushed onto the list under a policy naming the new handlers, and its message windows are gone; rooms holding the keyed records are left behind" +
       "; the further paths it names are recorded in docs/history/pattern-compat-every-issue-paths.md" +
-      "; the reply split's paths are recorded in docs/history/fabrichat-reply-split-break.md",
+      "; the reply split's paths are recorded in docs/history/fabrichat-reply-split-break.md" +
+      "; and the room's answers about its reader are declared per session (docs/history/fabrichat-room-viewer-per-session-break.md)",
     record: "docs/history/fabrichat-pushed-messages-break.md",
   },
   {
@@ -2229,9 +2259,20 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.sendMessage.replyTo.message",
       "result.sendReaction.message.replyTo.message",
       "result.sendReaction.replyTo.message",
+      // The reader's answers, declared per session, which
+      // `fabrichat-room-viewer-per-session-break.md` records.
+      "result.$VIEWS.room.canAdd",
+      "result.$VIEWS.room.canSend",
+      "result.$VIEWS.room.messageRights",
+      "result.$VIEWS.room.viewer",
+      "result.canAdd",
+      "result.canSend",
+      "result.messageRights",
+      "result.viewer",
     ],
     reason:
-      "a message's reply names its thread and its quote apart, in place of the one message a reply named; stored replies are left as they are, counted and shown as replying to nothing",
+      "a message's reply names its thread and its quote apart, in place of the one message a reply named; stored replies are left as they are, counted and shown as replying to nothing" +
+      "; and the room's answers about its reader are declared per session (docs/history/fabrichat-room-viewer-per-session-break.md)",
     record: "docs/history/fabrichat-reply-split-break.md",
   },
   {
@@ -2275,9 +2316,20 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.sendMessage.replyTo.message",
       "result.sendReaction.message.replyTo.message",
       "result.sendReaction.replyTo.message",
+      // The reader's answers, declared per session, which
+      // `fabrichat-room-viewer-per-session-break.md` records.
+      "result.$VIEWS.room.canAdd",
+      "result.$VIEWS.room.canSend",
+      "result.$VIEWS.room.messageRights",
+      "result.$VIEWS.room.viewer",
+      "result.canAdd",
+      "result.canSend",
+      "result.messageRights",
+      "result.viewer",
     ],
     reason:
-      "a message's reply names its thread and its quote apart, in place of the one message a reply named; stored replies are left as they are, counted and shown as replying to nothing",
+      "a message's reply names its thread and its quote apart, in place of the one message a reply named; stored replies are left as they are, counted and shown as replying to nothing" +
+      "; and the room's answers about its reader are declared per session (docs/history/fabrichat-room-viewer-per-session-break.md)",
     record: "docs/history/fabrichat-reply-split-break.md",
   },
   {
@@ -2292,9 +2344,20 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.$VIEWS.room.participantPrincipals",
       "result.participantEntries",
       "result.participantPrincipals",
+      // The reader's answers, declared per session, which
+      // `fabrichat-room-viewer-per-session-break.md` records.
+      "result.$VIEWS.room.canAdd",
+      "result.$VIEWS.room.canSend",
+      "result.$VIEWS.room.messageRights",
+      "result.$VIEWS.room.viewer",
+      "result.canAdd",
+      "result.canSend",
+      "result.messageRights",
+      "result.viewer",
     ],
     reason:
-      "a message's reply names its thread and its quote apart, in place of the one message a reply named; stored replies are left as they are, counted and shown as replying to nothing",
+      "a message's reply names its thread and its quote apart, in place of the one message a reply named; stored replies are left as they are, counted and shown as replying to nothing" +
+      "; and the room's answers about its reader are declared per session (docs/history/fabrichat-room-viewer-per-session-break.md)",
     record: "docs/history/fabrichat-reply-split-break.md",
   },
   {
@@ -2310,9 +2373,13 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.$VIEWS.chat.messages.windows",
       "result.room.recentActivity",
       "result.room.messages.windows",
+      // The reader's answers, declared per session, which
+      // `fabrichat-room-viewer-per-session-break.md` records.
+      "result.$VIEWS.chat.canSend",
     ],
     reason:
-      "the room keeps no activity log, so the placement's data face no longer carries one",
+      "the room keeps no activity log, so the placement's data face no longer carries one" +
+      "; and the room's answers about its reader are declared per session (docs/history/fabrichat-room-viewer-per-session-break.md)",
     record: "docs/history/fabrichat-pushed-messages-break.md",
   },
   {
@@ -2330,10 +2397,81 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.placement.$VIEWS.chat.messages.windows",
       "result.placement.room.recentActivity",
       "result.placement.room.messages.windows",
+      // The reader's answers, declared per session, which
+      // `fabrichat-room-viewer-per-session-break.md` records.
+      "argument.placement.$VIEWS.chat.canSend",
+      "result.$VIEWS.chat.canSend",
+      "result.placement.$VIEWS.chat.canSend",
     ],
     reason:
-      "the room keeps no activity log, so the data face the adapter re-exports no longer carries one",
+      "the room keeps no activity log, so the data face the adapter re-exports no longer carries one" +
+      "; and the room's answers about its reader are declared per session (docs/history/fabrichat-room-viewer-per-session-break.md)",
     record: "docs/history/fabrichat-pushed-messages-break.md",
+  },
+  {
+    // The baselines recorded since the last of the room's earlier breaks
+    // report only that its answers about its reader are declared per
+    // session.
+    pattern: "fabrichat/room.tsx",
+    baselines: [
+      "20261024T215428Z-OB5p3uKh1vVNgq0F",
+      "20261024T223204Z-nS9vA4RlHSSD3G6J",
+      "20261024T230022Z-yAwp7uYHz1TyAyyv",
+      "20261025T003055Z-rOPmNMMdlAbCDp3v",
+      "20261025T013725Z-neuFvaZDXrUo1FGz",
+      "20261026T165401Z-Uel_NmJsInhCtBrt",
+      "20261026T184808Z--YRISan7C7c5o5ZI",
+      "20261028T155145Z-rE-pK_F3W7r4IwLj",
+      "20261028T163306Z-aQm34ZycjBuU36Y3",
+      "20261028T165634Z-L_O4sJyHaHg-9QZ1",
+      "20261028T175424Z-LiJN31dbfVdHylpd",
+      "20261028T195604Z-BRJVNeaIksGaegMg",
+    ],
+    paths: [
+      "result.$VIEWS.room.canAdd",
+      "result.$VIEWS.room.canSend",
+      "result.$VIEWS.room.messageRights",
+      "result.$VIEWS.room.viewer",
+      "result.canAdd",
+      "result.canSend",
+      "result.messageRights",
+      "result.viewer",
+    ],
+    reason:
+      "a room's answers about its reader, `canSend`, `canAdd`, `viewer` and `messageRights`, are declared per session, so one session's answer is not another's",
+    record: "docs/history/fabrichat-room-viewer-per-session-break.md",
+  },
+  {
+    // A placement's `canSend` is declared per session, as the room's is.
+    pattern: "fabrichat/placement.tsx",
+    baselines: [
+      "20261015T183227Z-1SJt2XCxddAoN2vt",
+      "20261015T201316Z-Gxmw-PP95cYaf4iF",
+      "20261024T000755Z-CxTyYbuvPXW02_ha",
+    ],
+    paths: [
+      "result.$VIEWS.chat.canSend",
+    ],
+    reason: "a placement's `canSend` is declared per session, as the room's is",
+    record: "docs/history/fabrichat-room-viewer-per-session-break.md",
+  },
+  {
+    // The adapter re-exports the placement's data face, so it reports the
+    // same scope.
+    pattern: "fabrichat/adapter.tsx",
+    baselines: [
+      "20261015T183227Z-n_Yqcggff9X_vtXl",
+      "20261015T201314Z-TR5TLvdbxAVDCGs6",
+      "20261024T000754Z-mmzAvEZBUS-Z6iFQ",
+    ],
+    paths: [
+      "argument.placement.$VIEWS.chat.canSend",
+      "result.$VIEWS.chat.canSend",
+      "result.placement.$VIEWS.chat.canSend",
+    ],
+    reason:
+      "the placement's data face the adapter re-exports declares `canSend` per session",
+    record: "docs/history/fabrichat-room-viewer-per-session-break.md",
   },
   {
     // A pick was a required link to a held finished book, so every valid
