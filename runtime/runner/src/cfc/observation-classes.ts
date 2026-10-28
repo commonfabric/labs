@@ -74,6 +74,19 @@ export const readObservationShapes = (): ReadObservationShape[] =>
   Object.keys(CONSUMED_CLASSES) as ReadObservationShape[];
 
 /**
+ * The observation class a declared label's `observes` names, or `undefined`
+ * for a covering label: one whose `observes` is absent, or names no class,
+ * which reads as covering (over-taint, fail-safe).
+ */
+export const declaredObservationClass = (
+  observes: unknown,
+): LabelObservationClass | undefined =>
+  observes === "value" || observes === "shape" ||
+    observes === "enumerate" || observes === "followRef"
+    ? observes
+    : undefined;
+
+/**
  * The consumption class of a persisted entry; `undefined` means covering
  * (consumed by every content read class). Implements the C0 §3 carve-out: a
  * legacy `origin:"link"` entry with absent `observes` is implicitly

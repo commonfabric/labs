@@ -382,6 +382,24 @@ describe("ContextualFlowControl.schemaAtPath", () => {
       "own",
       "sec",
     ]);
+
+    // An `observes` that names no class reads as covering, so a child
+    // declaring one joins the inherited label as a covering child does.
+    const unnamed = ContextualFlowControl.schemaAtPath(
+      {
+        type: "array",
+        items: {
+          type: "string",
+          ifc: { confidentiality: ["own"], observes: "legacy" },
+        },
+        ifc: { confidentiality: ["sec"] },
+      } as unknown as JSONSchema,
+      ["0"],
+    ) as JSONSchemaObj;
+    expect([...(unnamed.ifc?.confidentiality ?? [])].sort()).toEqual([
+      "own",
+      "sec",
+    ]);
   });
 
   it("keeps a label observing only a container's shape, membership or reference off its children", () => {

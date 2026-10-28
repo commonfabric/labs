@@ -21,6 +21,7 @@ import type {
 import { BranchListWalk, REACHED_AGAIN } from "./cfc/branch-list-walk.ts";
 import type { CfcConfClause } from "./cfc/clause.ts";
 import { uniqueCfcAtoms } from "./cfc/observation.ts";
+import { declaredObservationClass } from "./cfc/observation-classes.ts";
 import {
   cfcSchemaDocumentOf,
   cfcSchemaIsFalse,
@@ -336,7 +337,7 @@ const schemaAtPathKey = (
 function childInheritedConfidentiality(
   ifc: JSONSchemaObj["ifc"],
 ): NonNullable<JSONSchemaObj["ifc"]>["confidentiality"] {
-  const observes = ifc?.observes;
+  const observes = declaredObservationClass(ifc?.observes);
   return observes === "shape" || observes === "enumerate" ||
       observes === "followRef"
     ? undefined
@@ -898,7 +899,10 @@ export class ContextualFlowControl {
     // is covering too. A result whose own label is narrower keeps it as it
     // is: no single label could carry both obligations, and dropping either
     // would leave the read it governs unlabeled.
-    if (!isObjectOrArray(cursor) || cursor.ifc?.observes === undefined) {
+    if (
+      !isObjectOrArray(cursor) ||
+      declaredObservationClass(cursor.ifc?.observes) === undefined
+    ) {
       for (const atom of inherited) joined.add(atom);
     }
     if (typeof cursor === "boolean") {
