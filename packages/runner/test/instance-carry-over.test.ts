@@ -263,6 +263,47 @@ const NAMED_NODE_CHILD = parentProgram(
   COUNTER_WITH_NODE,
 );
 
+// The parent as deployed by a build that numbered an `Other` child `x` ahead
+// of two `Counter` children, `a` and `b`.
+const OTHER_THEN_TWO = parentProgram([
+  "  const [x, a, b] = [",
+  "    Other({ label: 'x' }),",
+  "    Counter({ label: 'a' }),",
+  "    Counter({ label: 'b' }),",
+  "  ];",
+  "  return {",
+  "    views: [x, a, b],",
+  "    xCount: x.count,",
+  "    aCount: a.count,",
+  "    bCount: b.count,",
+  "  };",
+].join("\n"));
+
+// The parent as deployed by a build that numbered an `Other` child `x` ahead
+// of one `Counter` child, `a`.
+const OTHER_THEN_ONE = parentProgram([
+  "  const [x, a] = [Other({ label: 'x' }), Counter({ label: 'a' })];",
+  "  return { views: [x, a], xCount: x.count, aCount: a.count };",
+].join("\n"));
+
+// A parent of one positional `Other` child.
+const ONLY_OTHER = parentProgram([
+  "  const [x] = [Other({ label: 'x' })];",
+  "  return { views: [x], xCount: x.count };",
+].join("\n"));
+
+/**
+ * `stamped` as the build that set the parent up stamped it, where that build
+ * numbered each positional cell `renumber(N)` and today's numbers it `N`.
+ */
+const renumberedRecord =
+  (renumber: (n: number) => number) =>
+  (stamped: StoredSetupBuild): StoredSetupBuild => ({
+    ...stamped,
+    cells: "a build that numbered its cells otherwise",
+    state: stamped.state.map(([n, description]) => [renumber(n), description]),
+  });
+
 describe("instance-carry-over", () => {
   // Every runtime here names instances, through the experimental flag that
   // turns naming on, unless a case says otherwise.
@@ -1163,6 +1204,66 @@ describe("instance-carry-over", () => {
 
       expect(reopened.getMetaRaw("instanceChildren")).toBeUndefined();
       expect(freshStarts() - before).toBe(0);
+    });
+  });
+
+  describe("a named instance, where the parent's setup record numbers the pattern last set up otherwise", () => {
+    // The parent's children sit where a build of the pattern last set up that
+    // numbered its cells otherwise put them, so a spot this runtime's build
+    // of that pattern, or of the incoming one, names may hold another child.
+
+    it("starts fresh, rather than take the children at the spots the pattern last set up gives them by order", async () => {
+      // Today's build of the pattern last set up puts its two `Counter`
+      // spots at 0 and 1, where `x` and `a` sit. Two `Counter` children
+      // leave matching by pattern identity undecided.
+
+      const cell = await deployedParent("renumbered-order", {
+        deployed: OTHER_THEN_TWO,
+        named: DEPLOYED_TWO,
+        counts: { xCount: 5, aCount: 7, bCount: 9 },
+        record: renumberedRecord((n) => n + 1),
+      });
+
+      const result = await update(cell, NAMED_TWO);
+
+      expect({ aCount: result.aCount, bCount: result.bCount }).toEqual({
+        aCount: 0,
+        bCount: 0,
+      });
+    });
+
+    it("keeps its deployed child's state through its pattern identity, rather than take the child at the spot the pattern last set up gives it by order", async () => {
+      const cell = await deployedParent("renumbered-identity", {
+        deployed: OTHER_THEN_ONE,
+        named: DEPLOYED,
+        counts: { xCount: 5, aCount: 7 },
+        record: renumberedRecord((n) => n + 1),
+      });
+
+      const result = await update(cell, NAMED);
+
+      expect(result.aCount).toBe(7);
+    });
+
+    it("starts fresh, rather than take the child at its own positional spot", async () => {
+      // The pattern last set up sets up no `Counter`, so order matching places
+      // neither instance, and two `Counter` children leave matching by
+      // pattern identity undecided. `b`'s own positional spot, by today's
+      // numbering, holds `a`'s child.
+
+      const cell = await deployedParent("renumbered-own-spot", {
+        deployed: OTHER_THEN_TWO,
+        named: ONLY_OTHER,
+        counts: { xCount: 5, aCount: 7, bCount: 9 },
+        record: renumberedRecord((n) => n + 2),
+      });
+
+      const result = await update(cell, NAMED_TWO);
+
+      expect({ aCount: result.aCount, bCount: result.bCount }).toEqual({
+        aCount: 0,
+        bCount: 0,
+      });
     });
   });
 
