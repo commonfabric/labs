@@ -7,7 +7,7 @@ function __cfHardenFn(fn: Function) {
     return fn;
 }
 import { __cfHelpers } from "commonfabric";
-import { pattern, wish } from "commonfabric";
+import { pattern, wish, type WishState } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
@@ -15,6 +15,7 @@ const __cfAmdHooks = undefined;
 // Verifies: an untyped wish() takes the schema of the T inferred for it, never of the WishState<T> it returns
 //   { profile: wish({ query }) } in a pattern's result → T is unknown → { type: "unknown" }, as wish<unknown>() gets
 //   const bare = wish({ query }) → no contextual type → no schema
+// The result type is written out, since an inferred one holding WishState<unknown> is refused.
 export default pattern(() => {
     const bare = wish({ query: "#bare" }).for("bare", true);
     return {
@@ -23,7 +24,11 @@ export default pattern(() => {
         } as const satisfies __cfHelpers.JSONSchema).for(["__patternResult", "profile"], true),
         bare
     };
-}, false as const satisfies __cfHelpers.JSONSchema, {
+}, {
+    type: "object",
+    properties: {},
+    additionalProperties: false
+} as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
         profile: {

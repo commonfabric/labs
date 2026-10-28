@@ -142,11 +142,14 @@ present; no stage handles a missing one.
      idempotency guards. It uses a plain presence check with **no**
      `getOriginalNode` fallback (it tags synthetic nodes whose original is the
      pre-injection user call).
-   - `patternResultAnchor` — for a `toSchema` call SchemaInjection created to
+   - `patternResult` — for a `toSchema` call SchemaInjection created to
      describe a pattern's **result**, the authored node a diagnostic about that
-     schema points at. It is what tells SchemaGeneration which of a file's
-     `toSchema` calls is a result rather than an argument, a handler's event or
-     a nested claim; §6.12 is the rule that reads it. Like `schemaInjected` it
+     schema points at, and which of the result's positions an author
+     declared, all of them for a result type written as
+     `pattern<Input, Output>()`. It is what tells SchemaGeneration
+     which of a file's `toSchema` calls is a result rather than an argument, a
+     handler's event or a nested claim; §6.6 and §6.12 are the rules that read
+     it. Like `schemaInjected` it
      is a plain identity lookup with **no** `getOriginalNode` fallback: the
      marker sits on the synthetic call SchemaInjection built, and that node
      reaches SchemaGeneration as the same object.
@@ -942,14 +945,16 @@ structurally representable.
   expressions
 - direct top-level `any` / `unknown` result inference emits
   `pattern:any-result-schema`
-- individual inferred-result **fields** whose type is `unknown`, at any depth of
-  object types, array elements, tuple elements, `readonly` types, and the
-  members of a union, emit **Error** `pattern-result:unknown-type`, naming the
-  offending paths (`a.b`, `items[]`, `pair[0]`, and `pair[1...]` for a tuple's
-  rest element; a union member's path is the union's) — the schema would
-  carry `{ type: "unknown" }` there, which a consumer does not materialize: it
-  reads the field back as an opaque reference carrying no properties
-  (`reportUnknownPatternResult()` in `schema-injection.ts`). Under
+- positions of an inferred result whose schema is `{ type: "unknown" }`, at
+  any depth, and which no author declared, emit **Error**
+  `pattern-result:unknown-type`, naming the offending paths (`a.b` for a
+  property, `items[]` for an array's items and a tuple's slots, which the
+  schema holds as an array, and `a.*` for an index signature's values; an arm
+  of a union or an intersection reports under the path of its position) — a
+  consumer does not materialize such a position: it reads it back as an opaque
+  reference carrying no properties, which only a field declared `unknown`
+  means (`reportUnknownResultFields()` in `unknown-result-fields.ts`, called
+  from `schema-generator.ts`). Under
   `TransformationOptions.storedSource` it reports as a **Warning**: a reload of
   stored source reconstructs what was admitted when it was deployed, which may
   hold a shape this check covers only since
@@ -963,30 +968,179 @@ holding `[]` anywhere is printed whole. A result type the checker prints no node
 for, such as the instance type of an anonymous class expression, and that no
 recovery reads, stands as an `unknown` placeholder recorded as printed from it,
 as `typeToTypeNodeWithRegistry()` records one, and schema generation reads it
-as that type (§12). Both checks above read such a placeholder by its type:
-whether the type is `any` or `unknown`, and which of its fields are `unknown`.
-The field walk descends each object type with no name, each instance of a class
-expression with no name, each array element, each tuple element, and each
-member of a union, as the node walk descends a printed type literal, array,
-tuple, union, and `readonly` operand. It skips a member schema generation leaves
-out of an object's schema, a symbol-keyed member or a cell's internal marker
-(`isInternalMemberName()` in the schema generator), since no consumer receives
-it as a field. It stops at a type it is already inside, since a type with no
-name can hold itself through `typeof`, and walks a type reached again by
-another path under that path.
+as that type (§12). The `pattern:any-result-schema` check reads such a
+placeholder by its type: whether the type is `any` or `unknown`.
 
-Neither walk descends a named type: an alias, whether it names an object, an
-array, a tuple, or a union; an interface; a class; or an instance of a named
-class. A named type is a declaration, and `unknown` in a declaration is the form
-for a reference to another piece
-([`unknown.md`](../../common/concepts/types-and-schemas/unknown.md)). So an
-`unknown` reached only through a name is the declaration's, and the check
-leaves it alone. A pattern that returns another pattern's instance, whose
-declared result holds such references, passes them on without a report. The
-schema carries `{ type: "unknown" }` at those fields as it does at any
-reference. An alias of `unknown` itself is the exception: the checker keeps no
-name on `unknown`, so a field declared through `type Ref = unknown` is `unknown`
-to both walks, and is reported.
+The field check reads each of its two halves where it is known. Which
+positions are `{ type: "unknown" }` is read from the schema the result
+generated, in SchemaGeneration, so the check sees what a consumer receives,
+whichever inference path produced the schema. The walk reads through
+properties, array items, `prefixItems` slots, `additionalProperties` values,
+and the arms of `anyOf`, `oneOf` and `allOf`, built on `subschemaEdges()` from
+`@commonfabric/data-model-schema/schema-walk`. It follows every `$ref` into
+`$defs` once per path, passes by a position marked `asCell`, which holds a cell
+or stream handle, and leaves out the root.
+
+Which positions an author declared is read in SchemaInjection from the pattern
+callback's authored return expression (`collectDeclaredResultPositions()`) and
+recorded on the result's schema call (§2.2's `patternResult`). A result type
+written as `pattern<Input, Output>()` declares every position. A field declared
+`unknown` holds a reference to another piece
+([`unknown.md`](../../common/concepts/types-and-schemas/unknown.md)); `unknown`
+as the type of a whole value, written or inferred, says only that the type is
+not known, and declares nothing. So these are declared:
+
+- a field of the pattern's input, taken whole or destructured, as its type
+  declares it by the rule for a type written out, through an alias of `unknown`
+  as much as any other type
+- a field of a type written out: in a local's or a parameter's annotation, a
+  cast other than `as const`, a call's type argument, or the return type of a
+  callback or a signature; a callback whose return type names a type parameter
+  is read from its body. A written type is read from the nodes that write it.
+  A field declares what its own declaration writes. A type parameter it names
+  stands for what the reading binds it to: a type argument written out, the
+  arguments a call or a construction infers it from, or, where none can, its
+  written default; one nothing binds declares nothing. `typeof x` reads `x`'s
+  type by provenance, below, and `ReturnType<typeof f>` reads what `f` returns.
+  The mapped types that keep a type's parts, as `Partial<…>`, `Readonly<…>` and
+  `Pick<…>` do, or that give every key one type, as `Record<…>` does, are read
+  by their structure. Any other computed type, as a conditional one, is read
+  through the type it denotes, as written only where it names no type
+  parameter and no `typeof`, and otherwise by the rule for an inferred type. A
+  field whose declaration writes no type, as an object literal's members and a
+  class field with an initializer, declares what the type of its initializer
+  declares, read by provenance below, and otherwise only what its inferred
+  type's written parts do. A type that holds itself, or that instantiates its
+  own declaration more than three deep, as `Nest<T[]>` inside `Nest<T>` does,
+  is read as declared where it repeats
+- what a member's own declaration writes for it, read by the rule for a type
+  written out, when that declaration writes its type without naming a type
+  parameter
+- what a class instance's field declares by its declaration's written type, as
+  a property, a parameter property, or a getter's return type, with the class's
+  type parameters bound for the construction: to its written type arguments,
+  or to the arguments its constructor infers each from, an inherited
+  constructor's matched in terms of the class declaring it and carried down
+  each `extends` clause, or, where no argument can supply one, to its written
+  default. A spread argument supplies as many parameters as its tuple type
+  holds, or every one after it. An inherited field reads the parameters of the
+  class above as the `extends` clause binds them, followed through a
+  constructor's aliases and class expressions. A field whose type is inferred
+  from its initializer declares what its initializer's type does by
+  provenance, and otherwise only what its type's written parts do
+- what a value's own type declares by its provenance, however the value was
+  made: the type's written parts, each member, and each index signature, whose
+  declaration writes its type without naming a type parameter declaring what
+  that type does, read by the rule for a type written out, and an intersection
+  counting only as far as every one of its parts does. Provenance reads a type
+  from where it was written: a cast, an annotation, a signature's written
+  return type, or a call's or a construction's type arguments, written or
+  inferred. A type inferred from something else is read from that: a
+  literal's from its parts, a binding's from its initializer, a parameter's
+  with no type written from its default, and a call's whose return type is
+  inferred from what the function's body returns, read with the call's type
+  parameters bound. A call's type parameters are inferred as the checker
+  infers them (`inferTypeArguments()` and `inferTypes()` in TypeScript's
+  checker): the receiver against the `this` parameter, each argument against
+  the type of the parameter at its position, a tagged template's strings and
+  then each of its substitutions as its arguments, a tuple spread slot by slot
+  and any other spread against every parameter after it, and the arguments a
+  rest parameter collects as a tuple, those after a spread of unknown length
+  included. A parameter's type is read as the checker reads it: a type
+  parameter takes the argument whole, `NoInfer<T>` nothing, a union's or an
+  intersection's members each, a conditional type's branches each, a
+  homomorphic mapped type backwards, each of the argument's members read
+  against its template, an array or an iterable through its elements, which a
+  rest that collects no argument supplies nothing, a tuple slot by slot, the
+  slots after a variable one from the end, an instance of a class or an
+  interface the argument instantiates too by its type arguments, and any other
+  object type by its properties, inherited ones included, its signatures, and
+  its index signatures; a type a declaration file declares is read by its type
+  arguments, its signatures, and the properties the argument writes out. A
+  union's lone type parameter takes the argument at the normal priority where
+  no other member takes it, and at a lower one where a member closely matches
+  the argument or takes it. Only the candidates found at the best priority
+  count, as the checker ranks them, and those from a callback's parameters
+  only where none other is found; a type parameter with none takes its written
+  default, or else its written constraint, unless that denotes `unknown` or
+  `any`, however it is written. The argument is followed to where each of its
+  parts was written: an object literal's members, an array literal's elements
+  by slot, a binding's annotation or its initializer, a member of a value it
+  reads, a function's result and written parameters, what an iterable yields,
+  as the type argument its iteration takes, and the type arguments of an
+  instance a construction or a call makes. A function the argument cannot be
+  followed to returns what the declaration of its type's signature writes or
+  returns, and a function made inside another function's call is read with
+  that call's type parameters bound. A candidate that is a field's or a
+  type argument's written type stands for that type, so its `unknown`
+  declares a reference wherever the type parameter is a field's type; any
+  other candidate stands for its provenance. A method's call also binds the
+  type parameters of the class or the interface declaring it, as its receiver
+  instantiates them. A part read by a key whose type is no literal may be any
+  part, and a key whose type is a literal, or a union of them, reads each part
+  it names, in an element access and in an indexed access type alike, where a
+  key that is a type parameter reads as what the reading binds it to
+- another pattern's result, which passed this check in its own compile; a
+  cell; a literal, a function, or JSX
+
+The trace follows a local's initializer, the elements of an array literal, the
+properties and spreads of an object literal, and the callback of `computed()`, a
+lift, and an array's `map()`, `filter()`, `slice()`, `toSorted()`,
+`toReversed()`, `find()`, `findLast()` and `at()`, called as a member or by a
+literal key, each callback's parameter bound to the value it is called with. A
+callback is written in place or named, and a lift may be held in a binding and
+applied by its name. A name is followed through the bindings nothing writes, to
+a function declaration or to what a binding was initialized with; a callback or
+a lift read from an object, as a member or by destructuring, is not followed. A
+callback the trace does not follow, read from an object or reassigned, returns
+what its type declares by provenance: the return type its declaration writes, or
+what the function that gave it its type returns. Nothing else is declared: an
+untyped `wish()`, `generateObject()` or `generateText()`, whose type argument is
+inferred; another generic call with no type argument written, beyond what
+provenance reads of its result's type; a helper whose written return type is
+`unknown`; `x as unknown` and a tuple of `unknown`. A pattern that returns
+another pattern's instance passes the references its declared result holds
+without a report, and an untyped `wish()` returned whole is reported.
+
+A value that is one of several alternatives — the arms of a conditional, of
+`??`, `||` and `&&`, and of `ifElse()`, `when()` and `unless()`, or the returns
+of a callback — has a position undeclared when any alternative leaves it
+undeclared. A part only one alternative has takes that alternative's verdict:
+the others have no value there, so they contribute nothing undeclared, and
+`flag ? { note: note() } : {}` declares `note` when `note()` does. A
+destructuring or a parameter default is an alternative to the value it
+destructures, and an optional member of an object spread is an alternative to
+what the literal held under that key before it, which a required member
+replaces. A part an object holds under a key the trace cannot name, a computed
+key or a spread value's index signature, may be under any name: it is an
+alternative under every name the object held before it, a name written after
+it replaces it, and a name the object does not otherwise hold reads it. A key
+the trace cannot read takes every part as an alternative. The positions of an
+array's elements and of these unnamed parts are kept under symbols, so no
+property's name is taken for either.
+
+A binding holds a value something may change through it, so what the trace reads
+of a binding's value is only what holds whatever is done through it: a written
+type, which any change must satisfy, and a reactive value — another pattern's
+result, a `computed()`'s, a lift's, `ifElse()`'s, or that of an array method a
+pattern's body calls on a reactive value — which only the runtime recomputes.
+The structure of a literal the binding holds declares nothing; the literals
+above it on the way to a destructured part, which the binding only reads its
+part out of, still do, and so does the structure of a literal written inline
+into the result. The same holds for a lift's parameter, which holds its
+argument, and for the elements of a plain array whose method is called, which
+the method may hand to a callback whose parameter holds each one. An array
+method called anywhere else makes a plain array, which declares nothing held in
+a binding; inside the callback of `computed()` or of a lift, even the pattern's
+input is a plain array. A literal whose getter or setter uses `this` can change
+itself, so its structure declares nothing anywhere. A binding keeps what its own
+type declares by provenance, its annotation or else its initializer, position by
+position alongside what the trace reads of its value; the bindings of the
+pattern's input keep what the input's type declares. A binding something
+reassigns declares nothing more, and a callback or a lift is followed through a
+binding only when nothing reassigns it. Reassignment is read from the uses of
+the binding in the file that declares it, where a mention in a type, such as
+`typeof x`, is not a use.
 
 ### 6.7 Lowerable Expression-Site Categories
 
@@ -1341,8 +1495,8 @@ report these through the same collector (deduplicated via §2.2's
 - **Error** `pattern-context:inline-reactive-root-access`
   (`pattern-body-reactive-root-lowering.ts:1467`) — an inline tracked
   reactive-root read at a position that stage cannot lower
-- **Error** `pattern-result:unknown-type` (`reportUnknownPatternResult()` in
-  `schema-injection.ts`) — see §6.6; demoted to a **Warning** under
+- **Error** `pattern-result:unknown-type` (`unknown-result-fields.ts`, called
+  from `schema-generator.ts`) — see §6.6; demoted to a **Warning** under
   `TransformationOptions.storedSource`
 - **Error** `pattern-result:opaque-reserved-key`
   (`reserved-result-keys.ts`, called from `schema-generator.ts`) — a pattern's
@@ -1397,7 +1551,7 @@ to fix the shape. It runs from SchemaGeneration, which is the
 one place a declared result exists as the schema it generated — whatever type
 the author named, and whichever inference path §10.2 took to reach it.
 SchemaInjection records the result schema calls and the node to point at
-(§2.2's `patternResultAnchor`).
+(§2.2's `patternResult`).
 
 The rule reaches the root of a result schema and nothing else. Two shapes stay
 legal, and a rule written without them breaks working patterns:
@@ -3081,7 +3235,10 @@ Behavior:
 6. report `pattern-result:opaque-reserved-key` when this call describes a
    pattern's result and the generated schema leaves a reserved key opaque at
    its root (§6.12)
-7. emit literal as:
+7. report `pattern-result:unknown-type` when this call describes a pattern's
+   result and the generated schema is `{ type: "unknown" }` below its root at a
+   position no author declared (§6.6)
+8. emit literal as:
    - `<schemaAst> as const satisfies __cfHelpers.JSONSchema`
 
 Special path:
