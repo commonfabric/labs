@@ -111,28 +111,33 @@ export class RealmDecodeAct
       }
     }
 
+    let decoded: FabricValue;
     try {
       const unwrapped = this.#unwrapTag(data);
 
       if (unwrapped !== null) {
-        return this.decodeTagged(unwrapped.tag, unwrapped.state);
+        decoded = this.decodeTagged(unwrapped.tag, unwrapped.state);
       } else if (Array.isArray(data)) {
-        return this.#decodeArray(data);
+        decoded = this.#decodeArray(data);
       } else if (isPlainObject(data)) {
-        return this.#decodePlainObject(data);
+        decoded = this.#decodePlainObject(data);
+      } else {
+        // Cloning carries a good deal this format never emits -- a bare
+        // `Uint8Array`, a `Date`, a multi-entry `Map` -- all of which reach
+        // here if the far side is a different build.
+        decoded = this.reportMalformed(
+          "",
+          data,
+          debugStr`Cannot decode $quote${data}: not a form this format emits.`,
+        );
       }
-
-      // Cloning carries a good deal this format never emits -- a bare
-      // `Uint8Array`, a `Date`, a multi-entry `Map` -- all of which reach here
-      // if the far side is a different build.
-      return this.reportMalformed(
-        "",
-        data,
-        debugStr`Cannot decode $quote${data}: not a form this format emits.`,
-      );
-    } finally {
-      this.leave(data);
+    } catch (e) {
+      this.abandon(data);
+      throw e;
     }
+
+    this.leave(data);
+    return decoded;
   }
 
   /**

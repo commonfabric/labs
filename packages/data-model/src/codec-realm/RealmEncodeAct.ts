@@ -98,10 +98,12 @@ export class RealmEncodeAct
           result[i] = encoded;
         }
       }
-    } finally {
-      this.leave(value);
+    } catch (e) {
+      this.abandon(value);
+      throw e;
     }
 
+    this.leave(value);
     return result ?? (value as RealmCodecValue);
   }
 
@@ -148,10 +150,12 @@ export class RealmEncodeAct
           result[key] = encoded;
         }
       }
-    } finally {
-      this.leave(value);
+    } catch (e) {
+      this.abandon(value);
+      throw e;
     }
 
+    this.leave(value);
     return result ?? (value as RealmCodecValue);
   }
 

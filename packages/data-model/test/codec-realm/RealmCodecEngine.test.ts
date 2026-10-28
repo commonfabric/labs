@@ -339,6 +339,39 @@ describe("RealmCodecEngine", () => {
     });
   });
 
+  describe("nesting past what the call stack holds", () => {
+    // Deep enough to exhaust any host's call stack, which gives out at a few
+    // thousand levels of these walks, and quick to build all the same.
+    const depth = 100_000;
+
+    /** Returns an array of arrays `depth` deep, around `1`. */
+    function nestedArray(): FabricValue {
+      let value: FabricValue = 1;
+      for (let i = 0; i < depth; i++) {
+        value = [value];
+      }
+      return value;
+    }
+
+    it("throws the host's `RangeError` when encoding, and leaves the act able to encode again", () => {
+      const act = new RealmEncodeAct(
+        newDefaultRealmCodecEngine(),
+        NULL_LIVE_ENVIRONMENT,
+      );
+      const value = nestedArray();
+
+      expect(() => act.encodeValue(value)).toThrow(RangeError);
+      expect(() => act.encodeValue(value)).toThrow(RangeError);
+      expect(act.encodeValue([[1]])).toEqual([[1]]);
+    });
+
+    it("throws the host's `RangeError` when decoding", () => {
+      expect(() => fabricFromRealmValue(wire(nestedArray()))).toThrow(
+        RangeError,
+      );
+    });
+  });
+
   describe("decode()", () => {
     it("returns a plain payload as it stands", () => {
       // With no tagged form anywhere in it, an ordinary value decodes to

@@ -32,12 +32,14 @@ import {
   BaseNonterminalCodec,
   BaseTerminalCodec,
   CodecRegistry,
+  NULL_LIVE_ENVIRONMENT,
   ProblematicStateError,
   ProblematicValue,
   UnknownValue,
 } from "@/codec-common";
 import { JsonCodecEngine, SlotLimitError } from "@/codec-json";
 import { JSON_FORMAT, type JsonCodecValue } from "@/codec-json/interface.ts";
+import { JsonEncodeAct } from "@/codec-json/JsonEncodeAct.ts";
 import {
   createDefaultJsonRegistry,
   jsonFromFabricValue,
@@ -324,6 +326,60 @@ describe("JsonCodecEngine", () => {
       expect(() =>
         newDefaultJsonCodecEngine().decode(text, new TestLiveEnvironment())
       ).toThrow("Malformed JSON");
+    });
+  });
+
+  describe("nesting past what the call stack holds", () => {
+    // Deep enough to exhaust any host's call stack, which gives out at a few
+    // thousand levels of this walk, and quick to build all the same.
+    const depth = 100_000;
+
+    /** Returns `leaf` wrapped `depth` times, each time by `wrap`. */
+    function nested(
+      leaf: FabricValue,
+      wrap: (inner: FabricValue) => FabricValue,
+    ): FabricValue {
+      let value = leaf;
+      for (let i = 0; i < depth; i++) {
+        value = wrap(value);
+      }
+      return value;
+    }
+
+    it("throws the host's `RangeError` when encoding, not one about the walk's own stack", () => {
+      const engine = newDefaultJsonCodecEngine();
+      const values: Record<string, FabricValue> = {
+        array: nested(1, (inner) => [inner]),
+        record: nested(1, (inner) => ({ a: inner })),
+        "`/`-keyed record": nested(1n, (inner) => ({ "/a": inner })),
+        instance: nested(1, (inner) => new UnknownValue("Future@1", inner)),
+      };
+      for (const [kind, value] of Object.entries(values)) {
+        let thrown: unknown;
+        try {
+          engine.encode(value, new TestLiveEnvironment());
+        } catch (e) {
+          thrown = e;
+        }
+        expect({
+          kind,
+          thrown: (thrown instanceof RangeError)
+            ? "RangeError"
+            : String(thrown),
+        }).toEqual({ kind, thrown: "RangeError" });
+      }
+    });
+
+    it("leaves the act able to encode again once the throw has passed", () => {
+      const act = new JsonEncodeAct(
+        newDefaultJsonCodecEngine(),
+        NULL_LIVE_ENVIRONMENT,
+      );
+      const value = nested(1, (inner) => [inner]);
+
+      expect(() => act.encodeValue(value)).toThrow(RangeError);
+      expect(() => act.encodeValue(value)).toThrow(RangeError);
+      expect(act.encodeValue([[1], { a: 2 }])).toEqual([[1], { a: 2 }]);
     });
   });
 

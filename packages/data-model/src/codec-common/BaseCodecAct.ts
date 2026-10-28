@@ -60,6 +60,34 @@ export abstract class BaseCodecAct<Encoded> {
     this.#seen?.popExpect(value);
   }
 
+  /**
+   * Leaves the given value as an error thrown from its walk passes through:
+   * whatever the walk entered and left behind is left with it, and the stack
+   * goes unchecked, so that the error a caller sees is the one in flight. A
+   * stack overflow is the case in point, which can strike between entering a
+   * value and the code that would leave it. A value the error came before
+   * entering is not left, nor anything else.
+   *
+   * This never throws. Near the top of an exhausted call stack, so close that
+   * this has no room to run, the frames enclosing this one leave their own
+   * values in turn, and so leave what this did not.
+   */
+  abandon(value: object): void {
+    const seen = this.#seen;
+    if (seen === undefined) {
+      return;
+    }
+
+    try {
+      const at = seen.lastIndexOf(value);
+      while (at >= 0 && seen.depth > at) {
+        seen.popElseUndefined();
+      }
+    } catch {
+      // The error in flight is the one to report; see above.
+    }
+  }
+
   /** The configuration of the engine that minted this act. */
   protected get config(): CodecEngineConfig<Encoded> {
     return this.#config;

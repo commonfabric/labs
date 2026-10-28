@@ -137,10 +137,12 @@ export class JsonEncodeAct extends BaseEncodeAct<JsonCodecValue, string> {
           i++;
         }
       }
-    } finally {
-      this.leave(value);
+    } catch (e) {
+      this.abandon(value);
+      throw e;
     }
 
+    this.leave(value);
     return result;
   }
 
@@ -207,12 +209,16 @@ export class JsonEncodeAct extends BaseEncodeAct<JsonCodecValue, string> {
           JsonEncodeAct.#deferUnwrap(tracking, result, key);
         }
       }
+    } catch (e) {
+      this.abandon(value);
+      throw e;
     } finally {
       if (escaped !== undefined) {
         escaped.depth--;
       }
-      this.leave(value);
     }
+
+    this.leave(value);
 
     if (escaped === undefined) {
       return result;

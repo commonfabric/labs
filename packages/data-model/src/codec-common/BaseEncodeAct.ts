@@ -182,16 +182,20 @@ export abstract class BaseEncodeAct<Encoded, SerializedForm = Encoded>
         : this.encodeValue(
           (matched as NonterminalCodec).encode(value, this.env),
         );
-    } finally {
-      // Left in a `finally` because `tagForValue()` and a codec's `encode()`
+    } catch (e) {
+      // Left on a throw too, because `tagForValue()` and a codec's `encode()`
       // can both throw. The act outlives a throw -- it belongs to the call,
       // not to this node -- so an entry left behind would make a later visit
       // to the same value report a cycle that is not there.
       if (isObject) {
-        this.leave(value as object);
+        this.abandon(value as object);
       }
+      throw e;
     }
 
+    if (isObject) {
+      this.leave(value as object);
+    }
     return this.wrapTag(tag, state);
   }
 
