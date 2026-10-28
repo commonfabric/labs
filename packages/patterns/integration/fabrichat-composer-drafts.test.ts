@@ -1,6 +1,6 @@
 /**
  * FabriChat retains a refused composer's exact text for a keyboard retry,
- * and keeps the main conversation's draft separate from a thread's draft.
+ * and keeps drafts separate across the conversation and its threads.
  */
 
 import { expect } from "@std/expect";
@@ -9,16 +9,24 @@ import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 
 import { ConsoleEvent } from "@astral/astral";
 import { type DID, Identity } from "@commonfabric/identity";
-import { createTestSpace, env } from "@commonfabric/integration";
+import {
+  createTestSpace,
+  env,
+  type Page,
+  waitForCondition,
+} from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { withStuckNet } from "@commonfabric/test-support/stuck-net";
 
 import {
+  clickMarked,
   clickTrustedAction,
   fillCfInput,
+  markTargetsArgs,
   readCfInputValue,
+  settleAndMarkTargets,
   settleView,
   submitViaEnter,
   waitForSettledText,
@@ -124,11 +132,24 @@ describe("fabrichat-composer-drafts", () => {
       { stuckLabel: "the accepted message retains its exact submitted text" },
     );
 
+    const otherRoot = "Another thread's root";
+    await fillCfInput(page, MAIN_INPUT, otherRoot);
+    await submitViaEnter(page, MAIN_INPUT);
+    await waitForSettledText(page, "#fabrichat-messages", otherRoot);
+
     const mainDraft = "  Still writing in the conversation.  ";
+    const firstThreadDraft = "  Keep this in the first thread.  ";
     const threadBody = "  A separate thread reply.  ";
     await fillCfInput(page, MAIN_INPUT, mainDraft);
-    await clickButtonWithExactText(page, "Thread");
+    await openThread(page, body);
+    await fillCfInput(page, THREAD_INPUT, firstThreadDraft);
+    await openThread(page, otherRoot);
+    expect(await readCfInputValue(page, THREAD_INPUT)).toBe("");
     await fillCfInput(page, THREAD_INPUT, threadBody);
+    await openThread(page, body);
+    expect(await readCfInputValue(page, THREAD_INPUT)).toBe(firstThreadDraft);
+    await openThread(page, otherRoot);
+    expect(await readCfInputValue(page, THREAD_INPUT)).toBe(threadBody);
     await submitViaEnter(page, THREAD_INPUT);
     await waitForSettledText(page, "#fabrichat-thread", threadBody.trim());
     expect(await readCfInputValue(page, THREAD_INPUT)).toBe("");
@@ -141,5 +162,47 @@ describe("fabrichat-composer-drafts", () => {
       (value) => value === threadBody,
       { stuckLabel: "the thread reply retains its exact submitted text" },
     );
+    await openThread(page, body);
+    expect(await readCfInputValue(page, THREAD_INPUT)).toBe(firstThreadDraft);
+    expect(await readCfInputValue(page, MAIN_INPUT)).toBe(mainDraft);
   });
 });
+
+/** Opens the thread whose main-conversation root has `body`. */
+async function openThread(page: Page, body: string): Promise<void> {
+  const token = `fabrichat-thread-${crypto.randomUUID()}`;
+  const args = markTargetsArgs(
+    (probe, body: string) => {
+      const within = (node: Node, ancestor: Node): boolean => {
+        for (
+          let at: Node | null = node;
+          at;
+          at = at.parentNode ?? (at instanceof ShadowRoot ? at.host : null)
+        ) {
+          if (at === ancestor) return true;
+        }
+        return false;
+      };
+      const messages = probe.collect("#fabrichat-messages")[0];
+      if (!messages) return undefined;
+      const row = probe.collect("cf-hover-reveal").find((candidate) =>
+        within(candidate, messages) &&
+        probe.deepText(candidate).includes(body.trim())
+      );
+      if (!row) return undefined;
+      const button = probe.collect("cf-button").find((candidate) =>
+        within(candidate, row) && candidate.textContent?.trim() === "Thread"
+      );
+      const control = button?.shadowRoot?.querySelector("[data-cf-button]");
+      return control instanceof HTMLElement ? [control] : undefined;
+    },
+    [body],
+    [token],
+  );
+  await waitForCondition(page, settleAndMarkTargets, { args });
+  await clickMarked(page, {
+    token,
+    remark: { predicate: settleAndMarkTargets, args },
+  });
+  await waitForSettledText(page, "#fabrichat-thread cf-heading", body.trim());
+}

@@ -7,6 +7,7 @@ import {
   type AddIntegrity,
   assert,
   type Cell,
+  equals,
   pattern,
   TESTS,
   UI,
@@ -14,10 +15,13 @@ import {
 } from "commonfabric";
 import {
   clickButton,
+  clickInRow,
+  findNodeById,
   findNodeByProp,
   hasText,
   propsOf,
   propValue,
+  readValue,
 } from "../test/vnode-helpers.ts";
 import { type MessageRecord, type MessagesValue } from "./room-records.tsx";
 import { FabriChatRoomCore } from "./room.tsx";
@@ -45,6 +49,20 @@ const typed = (text: string, revision?: string) => ({
   target: { value: text, dataset: { draftRevision: revision } },
 });
 
+/** Resolves the draft reference as the renderer does for a bound input. */
+const draftBinding = (root: unknown, inputId: string): unknown => {
+  const input = findNodeByProp(root, "inputId", inputId);
+  if (input === undefined) return undefined;
+  const binding = propsOf(input)?.["$draft"];
+  if (
+    typeof binding !== "object" || binding === null ||
+    !("resolveAsCell" in binding) || typeof binding.resolveAsCell !== "function"
+  ) {
+    throw new Error("The composer has no draft binding.");
+  }
+  return binding.resolveAsCell();
+};
+
 /** Writes the binding the main or thread input edits. */
 const fillDraft = (
   root: unknown,
@@ -52,19 +70,17 @@ const fillDraft = (
   value: string,
   revision: string,
 ): void => {
-  const binding = propsOf(findNodeByProp(root, "inputId", inputId))?.["$draft"];
+  const binding = draftBinding(root, inputId);
   if (
     typeof binding !== "object" || binding === null || !("set" in binding) ||
     typeof binding.set !== "function"
-  ) {
-    throw new Error("The composer has no writable draft binding.");
-  }
+  ) throw new Error("The composer has no writable draft binding.");
   binding.set({ value, revision });
 };
 
 /** The text the main or thread input reads through its draft binding. */
 const draftText = (root: unknown, inputId: string): unknown => {
-  const draft = propValue(findNodeByProp(root, "inputId", inputId), "$draft");
+  const draft = readValue(draftBinding(root, inputId));
   return typeof draft === "object" && draft !== null && "value" in draft
     ? draft.value
     : undefined;
@@ -90,6 +106,19 @@ export default pattern(() => {
     about: { kind: "group" as const },
     messages,
   } as RoomArg);
+  const capturedThreadKey = Writable.of("");
+  const staleThreadSend = action(() => {
+    const event = {
+      target: {
+        value: "newer reply",
+        dataset: {
+          draftRevision: "next",
+          threadKey: capturedThreadKey.get(),
+        },
+      },
+    };
+    alice.threadComposerSend.send(event);
+  });
 
   return {
     [TESTS]: [
@@ -110,6 +139,14 @@ export default pattern(() => {
       // "Thread" opens the message's thread, where the thread composer
       // replies.
       { action: action(() => clickButton(alice[UI], "Thread")) },
+      {
+        assertion: assert(() =>
+          (propsOf(
+            findNodeByProp(alice[UI], "inputId", "fabrichat-thread-message"),
+          )?.disabled as { schema?: { default?: unknown } } | undefined)?.schema
+            ?.default === true
+        ),
+      },
       {
         action: alice.threadComposerSend,
         event: typed("In the thread"),
@@ -231,7 +268,121 @@ export default pattern(() => {
           draftText(alice[UI], "fabrichat-message") === "submitted text"
         ),
       },
+      {
+        action: action(() => {
+          const key = propValue(
+            findNodeByProp(alice[UI], "inputId", "fabrichat-thread-message"),
+            "data-thread-key",
+          );
+          capturedThreadKey.set(typeof key === "string" ? key : "");
+          clickInRow(
+            findNodeById(alice[UI], "fabrichat-messages"),
+            "Plain",
+            "Thread",
+          );
+        }),
+      },
+      {
+        assertion: assert(() =>
+          draftText(alice[UI], "fabrichat-thread-message") === ""
+        ),
+      },
+      {
+        action: action(() =>
+          fillDraft(
+            alice[UI],
+            "fabrichat-thread-message",
+            "B draft",
+            "thread-b",
+          )
+        ),
+      },
+      {
+        action: action(() =>
+          clickInRow(
+            findNodeById(alice[UI], "fabrichat-messages"),
+            "Hello",
+            "Thread",
+          )
+        ),
+      },
+      {
+        assertion: assert(() =>
+          draftText(alice[UI], "fabrichat-thread-message") === "newer reply"
+        ),
+      },
+      {
+        action: action(() =>
+          clickButton(findNodeById(alice[UI], "fabrichat-thread"), "Close")
+        ),
+      },
+      { action: staleThreadSend, trustedUi: sendGesture },
+      { assertion: assert(() => messages.get().length === 9) },
+      {
+        action: action(() =>
+          clickInRow(
+            findNodeById(alice[UI], "fabrichat-messages"),
+            "Hello",
+            "Thread",
+          )
+        ),
+      },
+      {
+        assertion: assert(() =>
+          draftText(alice[UI], "fabrichat-thread-message") === "newer reply"
+        ),
+      },
+      {
+        action: action(() =>
+          clickInRow(
+            findNodeById(alice[UI], "fabrichat-messages"),
+            "Plain",
+            "Thread",
+          )
+        ),
+      },
+      { action: staleThreadSend, trustedUi: sendGesture },
+      {
+        assertion: assert(() =>
+          messages.get().length === 9 &&
+          draftText(alice[UI], "fabrichat-thread-message") === "B draft"
+        ),
+      },
+      {
+        action: alice.threadComposerSend,
+        event: typed("B draft", "thread-b"),
+        trustedUi: sendGesture,
+      },
+      {
+        assertion: assert(() =>
+          draftText(alice[UI], "fabrichat-thread-message") === "" &&
+          (messages.get() as MessageRecord[])[9]?.body === "B draft" &&
+          equals(
+            (messages.get() as MessageRecord[])[9]?.replyTo?.thread,
+            messages.key(3),
+          )
+        ),
+      },
+      {
+        action: action(() =>
+          clickInRow(
+            findNodeById(alice[UI], "fabrichat-messages"),
+            "Hello",
+            "Thread",
+          )
+        ),
+      },
+      {
+        assertion: assert(() =>
+          draftText(alice[UI], "fabrichat-thread-message") === "newer reply" &&
+          draftText(alice[UI], "fabrichat-message") === "submitted text"
+        ),
+      },
     ],
-    expectRuntimeErrors: ["Your profile hasn't loaded yet."],
+    expectRuntimeErrors: [
+      "Your profile hasn't loaded yet.",
+      "The open thread changed. Reopen the thread before sending this draft.",
+      "The open thread changed. Reopen the thread before sending this draft.",
+    ],
   };
 });

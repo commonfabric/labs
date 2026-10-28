@@ -719,7 +719,10 @@ export interface RoomStreamEvent {
   /** A rendered control's text. */
   readonly target?: {
     readonly value?: string;
-    readonly dataset?: { readonly draftRevision?: string };
+    readonly dataset?: {
+      readonly draftRevision?: string;
+      readonly threadKey?: string;
+    };
   };
 }
 
@@ -738,9 +741,6 @@ export interface ComposerAttachment {
 export interface ComposerState {
   /** The main composer's exact text and the edit that produced it. */
   draft?: { value: string; revision: string };
-
-  /** The thread composer's independent draft. */
-  threadDraft?: { value: string; revision: string };
 
   /** The message the next send replies to in the main conversation. */
   replyTo?: MessageCell;
@@ -860,6 +860,9 @@ export interface EventSendState extends SendState, TitlingState {}
 
 /** What a rendered thread composer's send is bound to. */
 export interface ThreadSendState extends ComposerSendState, TitlingState {
+  /** The selected thread composer's own draft, absent for a direct send. */
+  draft?: Writable<{ value: string; revision: string } | undefined>;
+
   /** Where the reply is shown. */
   shownIn: ShownIn;
 }
@@ -1377,7 +1380,7 @@ export const commitComposerSend = handler<RoomStreamEvent, ComposerSendState>(
       reply === undefined ? undefined : { quotes: reply, shownIn: "main" },
       joined,
     );
-    clearSubmittedDraft(event, composer, "draft");
+    clearSubmittedDraft(event, composer.key("draft"));
     if (reply !== undefined) composer.key("replyTo").set(undefined);
     if (attaching.length > 0) composer.key("attaching").set(undefined);
   },
@@ -1386,16 +1389,16 @@ export const commitComposerSend = handler<RoomStreamEvent, ComposerSendState>(
 /** Clears only the submitted edit, within the accepted send's transaction. */
 const clearSubmittedDraft = (
   event: RoomStreamEvent,
-  composer: ComposerCell,
-  key: "draft" | "threadDraft",
+  cell: Writable<{ value: string; revision: string } | undefined>,
 ): void => {
-  const draft = composer.key(key).get();
+  const target = cell.resolveAsCell();
+  const draft = target.get();
   const revision = event.target?.dataset?.draftRevision;
   if (
     revision !== undefined && draft?.revision === revision &&
     draft.value === textOf(event)
   ) {
-    composer.key(key).set({ value: "", revision });
+    target.set({ value: "", revision });
   }
 };
 
@@ -1522,10 +1525,30 @@ export const dropAttachment = handler<unknown, DropAttachmentState>(
  * still identifies the submitted edit.
  */
 export const commitThreadSend = handler<RoomStreamEvent, ThreadSendState>(
-  (event, { myProfile, messages, composer, shownIn, threadInfo, joined }) => {
+  (
+    event,
+    {
+      myProfile,
+      messages,
+      composer,
+      draft,
+      shownIn,
+      threadInfo,
+      joined,
+    },
+  ) => {
     // A cleared link still reads back as a cell, holding nothing.
     const root = composer.get()?.thread;
     const thread = root?.get() === undefined ? undefined : root;
+    const threadKey = thread === undefined
+      ? undefined
+      : threadInfoKeyOf(thread);
+    const submittedThreadKey = event.target?.dataset?.threadKey;
+    if (submittedThreadKey !== undefined && submittedThreadKey !== threadKey) {
+      throw new Error(
+        "The open thread changed. Reopen the thread before sending this draft.",
+      );
+    }
     const link = composer.get()?.threadQuotes;
     const quotes = link?.get() === undefined ? undefined : link;
     if (quotes !== undefined) checkComposedQuote(quotes, shownIn);
@@ -1542,7 +1565,7 @@ export const commitThreadSend = handler<RoomStreamEvent, ThreadSendState>(
       joined,
       threadInfo,
     );
-    clearSubmittedDraft(event, composer, "threadDraft");
+    if (draft !== undefined) clearSubmittedDraft(event, draft);
     if (quotes !== undefined) composer.key("threadQuotes").set(undefined);
   },
 );

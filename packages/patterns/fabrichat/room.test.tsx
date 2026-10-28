@@ -165,13 +165,13 @@ export default pattern(() => {
       },
       { assertion: assert(() => composerDisabled(pending[UI]) === true) },
       { assertion: assert(() => composerDisabled(alice[UI]) === false) },
-      // The conversation's composer and a thread's start out disabled, before
-      // whether the viewer may send has computed.
+      // The main composer starts disabled before permission has computed; no
+      // thread composer is mounted until a thread is selected.
       {
         assertion: assert(() =>
           composerDisabledDefault(alice[UI], "fabrichat-message") === true &&
-          composerDisabledDefault(alice[UI], "fabrichat-thread-message") ===
-            true
+          findNodeByProp(alice[UI], "inputId", "fabrichat-thread-message") ===
+            undefined
         ),
       },
       {
