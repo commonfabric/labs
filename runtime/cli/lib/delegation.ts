@@ -15,6 +15,7 @@ import {
   isCanonicalEd25519DID,
   issueDelegation,
 } from "@commonfabric/identity";
+import { MAX_PROOF_CHAIN_LENGTH } from "@commonfabric/memory/v2/session-open-auth";
 import { DelegationStore } from "@commonfabric/runner/storage/delegation-store";
 
 /** The command every chain the CLI issues covers: a whole space. */
@@ -55,8 +56,10 @@ export interface IssueDelegationChainOptions {
  * the signer acts under.
  *
  * @throws A `DelegationError` for an audience that is not an ed25519
- *   `did:key` or is the signer itself, an expiry already past, or a held
- *   chain that does not decode or does not end at the signer.
+ *   `did:key` or is the signer itself, an expiry already past, a held
+ *   chain that does not decode or does not end at the signer, or a held
+ *   chain already as long as a holder may present, which another link
+ *   would make one no holder could present.
  */
 export async function issueDelegationChain(
   options: IssueDelegationChainOptions,
@@ -71,6 +74,11 @@ export async function issueDelegationChain(
   }
   if (expiresAt !== undefined && expiresAt <= now) {
     throw new DelegationError("the expiry is not after now");
+  }
+  if (held.length >= MAX_PROOF_CHAIN_LENGTH) {
+    throw new DelegationError(
+      `the chain would be longer than ${MAX_PROOF_CHAIN_LENGTH} delegations, which no holder presents`,
+    );
   }
   if (held.length > 0) {
     const last = await decodeDelegation(held[held.length - 1]);

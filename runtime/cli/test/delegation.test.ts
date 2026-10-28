@@ -10,6 +10,7 @@ import {
   issueDelegation,
   verifyDelegation,
 } from "@commonfabric/identity";
+import { MAX_PROOF_CHAIN_LENGTH } from "@commonfabric/memory/v2/session-open-auth";
 
 import { parseSpaceOptions } from "../commands/piece.ts";
 import {
@@ -153,6 +154,46 @@ describe("delegation", () => {
         to: other.did(),
         held: [rootToCore.bytes],
       })).rejects.toThrow("the held chain does not end at the signer");
+    });
+
+    it("throws for a held chain already as long as a holder may present, signing nothing", async () => {
+      // A chain of the longest length a holder presents, from the space's
+      // key through intermediaries to the signer.
+      const keys = await Promise.all(
+        Array.from(
+          { length: MAX_PROOF_CHAIN_LENGTH - 1 },
+          (_, i) => Identity.fromPassphrase(`cli delegation link ${i}`),
+        ),
+      );
+      const held: Uint8Array[] = [];
+      let issuer = spaceKey;
+      for (const next of [...keys, core]) {
+        const link = await issueDelegation(issuer, {
+          aud: next.did(),
+          sub: space,
+          cmd: "/memory",
+          pol: [],
+        });
+        held.push(link.bytes);
+        issuer = next;
+      }
+      expect(held).toHaveLength(MAX_PROOF_CHAIN_LENGTH);
+      await expect(issueDelegationChain({
+        signer: core,
+        space,
+        to: agent.did(),
+        held,
+      })).rejects.toThrow(
+        `the chain would be longer than ${MAX_PROOF_CHAIN_LENGTH} delegations`,
+      );
+      // One link shorter, the chain's last key issues onward.
+      const chain = await issueDelegationChain({
+        signer: keys[keys.length - 1],
+        space,
+        to: agent.did(),
+        held: held.slice(0, -1),
+      });
+      expect(chain).toHaveLength(MAX_PROOF_CHAIN_LENGTH);
     });
 
     it("throws for a held chain whose last link does not decode", async () => {
