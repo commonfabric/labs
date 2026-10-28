@@ -275,8 +275,8 @@ export class AliasResolver {
   constructor(aliases: readonly AliasLine[]) {
     for (const { date, from, to } of aliases) {
       const key = aliasKeyOf(from);
-      if ("p" in from) {
-        if ("p" in to && !this.#byPath.has(from.p)) {
+      if ("p" in from || "p" in to) {
+        if ("p" in from && "p" in to && !this.#byPath.has(from.p)) {
           this.#byPath.set(from.p, {
             date,
             from: pathOccurrences(from.p),
@@ -285,7 +285,6 @@ export class AliasResolver {
         }
         continue;
       }
-      if ("p" in to) continue;
       const map = from.n === undefined ? this.#byScope : this.#byIdentity;
       if (!map.has(key)) map.set(key, { date, to });
     }

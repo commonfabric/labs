@@ -57,6 +57,13 @@ describe("aliases", () => {
       );
     });
 
+    it("returns an error when a path maps to a bare string", () => {
+      const line = JSON.stringify({ ...MOVED, to: "bakery/oven" });
+      expect(parseAliasLine(line)).toBe(
+        "maps a path to something other than one",
+      );
+    });
+
     it("returns an error for malformed JSON", () => {
       expect(parseAliasLine("{oops")).toBe("is not JSON");
     });
