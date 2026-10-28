@@ -24,7 +24,7 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { spy } from "@std/testing/mock";
+import { spy, stub } from "@std/testing/mock";
 
 import { FabricInstance, type FabricValue, isDeepFrozen } from "@";
 import {
@@ -32,12 +32,14 @@ import {
   BaseNonterminalCodec,
   BaseTerminalCodec,
   CodecRegistry,
+  NULL_LIVE_ENVIRONMENT,
   ProblematicStateError,
   ProblematicValue,
   UnknownValue,
 } from "@/codec-common";
 import { JsonCodecEngine, SlotLimitError } from "@/codec-json";
 import { JSON_FORMAT, type JsonCodecValue } from "@/codec-json/interface.ts";
+import { JsonEncodeAct } from "@/codec-json/JsonEncodeAct.ts";
 import {
   createDefaultJsonRegistry,
   jsonFromFabricValue,
@@ -61,6 +63,7 @@ import {
   FabricUnavailable,
   UNAVAILABLE_PENDING,
 } from "@/fabric-primitives";
+import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
 import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 
 /**
@@ -324,6 +327,123 @@ describe("JsonCodecEngine", () => {
       expect(() =>
         newDefaultJsonCodecEngine().decode(text, new TestLiveEnvironment())
       ).toThrow("Malformed JSON");
+    });
+  });
+
+  describe("nesting past what the call stack holds", () => {
+    // Deep enough to exhaust any host's call stack, which gives out at a few
+    // thousand levels of this walk, and quick to build all the same.
+    const depth = 100_000;
+
+    /**
+     * Calls `body` with the `push()` of every `IndexTrackingStack` made to
+     * throw a `RangeError` once it has pushed for the `nth` time, as an
+     * exhausted call stack can: between a walk entering a container and the
+     * code that would leave it. A real overflow strikes there or elsewhere,
+     * as the engine's code happens to be compiled, which this pins down.
+     *
+     * Fails unless the stub took effect, `push()` having been called `nth`
+     * times and thrown, so that a walk which stops pushing there cannot let a
+     * test pass without reaching the window it is about.
+     */
+    function overflowingAtPush<T>(nth: number, body: () => T): T {
+      const push = IndexTrackingStack.prototype.push;
+      let pushes = 0;
+      let threw = false;
+      const pushStub = stub(
+        IndexTrackingStack.prototype,
+        "push",
+        function (this: IndexTrackingStack<unknown>, value: unknown): void {
+          push.call(this, value);
+          pushes++;
+          if (pushes === nth) {
+            threw = true;
+            throw new RangeError("Maximum call stack size exceeded");
+          }
+        },
+      );
+      try {
+        return body();
+      } finally {
+        pushStub.restore();
+        expect({ pushes: Math.min(pushes, nth), threw })
+          .toEqual({ pushes: nth, threw: true });
+      }
+    }
+
+    /** Returns `leaf` wrapped `depth` times, each time by `wrap`. */
+    function nested(
+      leaf: FabricValue,
+      wrap: (inner: FabricValue) => FabricValue,
+    ): FabricValue {
+      let value = leaf;
+      for (let i = 0; i < depth; i++) {
+        value = wrap(value);
+      }
+      return value;
+    }
+
+    it("throws the host's `RangeError` when encoding, not one about the walk's own stack", () => {
+      const engine = newDefaultJsonCodecEngine();
+      const values: Record<string, FabricValue> = {
+        array: nested(1, (inner) => [inner]),
+        record: nested(1, (inner) => ({ a: inner })),
+        "`/`-keyed record": nested(1n, (inner) => ({ "/a": inner })),
+        instance: nested(1, (inner) => new UnknownValue("Future@1", inner)),
+      };
+      for (const [kind, value] of Object.entries(values)) {
+        let thrown: unknown;
+        try {
+          engine.encode(value, new TestLiveEnvironment());
+        } catch (e) {
+          thrown = e;
+        }
+        expect({
+          kind,
+          thrown: (thrown instanceof RangeError)
+            ? "RangeError"
+            : String(thrown),
+        }).toEqual({ kind, thrown: "RangeError" });
+      }
+    });
+
+    it("throws the `RangeError` that strikes just after a container is entered, not one about the walk's own stack", () => {
+      const engine = newDefaultJsonCodecEngine();
+      const values: Record<string, FabricValue> = {
+        array: [[1]],
+        record: { a: { b: 1 } },
+        "`/`-keyed record": { "/a": { "/b": 1n } },
+        instance: new UnknownValue("Future@1", [1]),
+      };
+      for (const [kind, value] of Object.entries(values)) {
+        let thrown: unknown;
+        try {
+          overflowingAtPush(
+            2,
+            () => engine.encode(value, new TestLiveEnvironment()),
+          );
+        } catch (e) {
+          thrown = e;
+        }
+        expect({
+          kind,
+          thrown: (thrown instanceof RangeError)
+            ? "RangeError"
+            : String(thrown),
+        }).toEqual({ kind, thrown: "RangeError" });
+      }
+    });
+
+    it("leaves the act able to encode again once the throw has passed", () => {
+      const act = new JsonEncodeAct(
+        newDefaultJsonCodecEngine(),
+        NULL_LIVE_ENVIRONMENT,
+      );
+      const value = nested(1, (inner) => [inner]);
+
+      expect(() => act.encodeValue(value)).toThrow(RangeError);
+      expect(() => act.encodeValue(value)).toThrow(RangeError);
+      expect(act.encodeValue([[1], { a: 2 }])).toEqual([[1], { a: 2 }]);
     });
   });
 

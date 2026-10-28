@@ -59,10 +59,15 @@ import {
 import {
   fabricValueOfTextWithMods,
   type FixtureJson,
+  type FixtureRequirements,
   type FixtureString,
+  meetsRequirements,
   type PathStep,
   type ProbeForm,
   probesOf,
+  requirementsOf,
+  SIZE_FLOORS,
+  type SizeMeasure,
   type TextWithMods,
   textWithModsOf,
   type ValuePatch,
@@ -283,6 +288,7 @@ export const FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY: {
 
 export type {
   FixtureJson,
+  FixtureRequirements,
   FixtureString,
   Fvj1ConformanceCase,
   Fvj1Outcome,
@@ -291,11 +297,40 @@ export type {
   HashOutcome,
   PathStep,
   ProbeForm,
+  SizeMeasure,
   TextWithMods,
   ValuePatch,
   ValuePath,
   ValueProbe,
 };
+
+/**
+ * The floor `3-json-encoding.md` section 12 sets by each measure of a value's
+ * size, past which a fixture entry states the guarantee it requires.
+ */
+export const SIZE_FLOORS_FOR_TESTING_ONLY: {
+  readonly [Measure in SizeMeasure]: number;
+} = SIZE_FLOORS;
+
+/**
+ * `requirementsOf()` from `conformance-fixtures.ts`, which returns what a
+ * reader must support to read the fixture entry for a text and mods: the
+ * flavors a case marks, and by each measure the size of the value the text
+ * writes, past the floors.
+ */
+export const requirementsOfForTestingOnly: (
+  stated: TextWithMods,
+  flavors?: readonly string[],
+) => FixtureRequirements | undefined = requirementsOf;
+
+/**
+ * `meetsRequirements()` from `conformance-fixtures.ts`, which indicates
+ * whether this package meets what a fixture entry requires, a reader skipping
+ * an entry whose requirements it does not meet.
+ */
+export const meetsRequirementsForTestingOnly: (
+  requires: FixtureRequirements | undefined,
+) => boolean = meetsRequirements;
 
 /**
  * `probesOf()` from `conformance-fixtures.ts`, which returns a value's probes,

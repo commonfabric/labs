@@ -28,7 +28,7 @@ source lists for each destination. Each topic's `backlinksOf` scans the
 resulting table to find its own row. Topic rendering separately derives active
 comments, active links, presence booleans, and link-resolution inputs.
 A topic's comment count and last activity are stored values its verbs keep in
-the write that changes them (labs #9256).
+the write that changes them.
 
 Let N be board topic occurrences, E be total mention occurrences, C be comments
 in a topic, and L be links in a topic. These are work hypotheses to test, not
@@ -39,8 +39,8 @@ latency predictions or unconditional complexity guarantees.
 | Shared keyed backlink-row lookup                            | Remove each demanding topic's repeated search through N cross-reference rows. With N consumers, eliminate a potential N-by-N lookup stage. | The pivot producer remains. Index maintenance and consumer demand can add graph work; putting an index inside every topic would duplicate maintenance. |
 | Reuse active counts/views                                   | Avoid duplicate C- and L-sized filtering for presence and link resolution.                                                                 | Likely a modest constant-factor benefit; sharing a broader view can increase demand.                                                                   |
 | Maintain source-to-destination edges grouped by destination | On a local mention edit, update affected edges and destination buckets instead of rescanning all source lists for every destination.       | Building all edges afresh retains producer cost. Ordering, duplicate occurrences, membership reconciliation, and large buckets require work.           |
-| Maintained comment count                                    | Reduce repeated predicate work for large threads when one independently linked comment changes.                                            | Shared captures or broad source edits can invalidate many predicates; small threads may not benefit.                                                   |
-| Maintained activity maxima                                  | Reduce full comment/link timestamp scans on localized activity edits.                                                                      | Must include edit and removal timestamps; score production and public Cell typing can dominate the benefit.                                            |
+| Maintained comment count                                    | Adopted as a stored input (`commentCount`) the topic's verbs keep; T4 closed on it.                                                        | Reliable once every writer runs the current topic module and legacy writers are retired.                                                               |
+| Maintained activity maxima                                  | Adopted as a stored input (`lastActivityAt`) the topic's verbs keep, counting stamped removals; T4 closed on it.                           | Reliable once every writer runs the current topic module and legacy writers are retired.                                                               |
 
 A reduction in reads can coexist with increased startup cost, graph size,
 storage, or latency. Do not promise a percentage speedup before matched
@@ -167,16 +167,14 @@ implementation and prototypes can begin earlier.
       retargets update only the required relation work where supported,
       complete-workload costs justify adoption, or a report explains deferral.
       Depends on T0 and T2's boundary decisions; T1 need not block it.
-- [ ] **T4 — Evaluate large-thread aggregates.** Compare a maintained active
-      comment count and activity maxima with the T1 implementation. Use explicit
-      Cell receivers and measure score/predicate production; do not rely on
-      unsupported ordinary-array `.map(...).sum()` chains. Write the aggregates
-      as `.count(predicate)`, `.minBy(score)` and `.maxBy(score)`: the
-      argument-free `count()` takes no callback and so hoists nothing, which
-      leaves nothing to measure. A maintained count or activity maximum
-      carrying a callback is a new operator, so it too lives in a pattern in a
-      module of its own, instantiated the same way. Exit: adopt only the
-      candidates with justified end-to-end tradeoffs. Depends on T0 and T1.
+- [x] **T4 — Evaluate large-thread aggregates.** Closed without a candidate:
+      a topic's comment count and last activity are stored inputs its verbs
+      keep in the write that changes them, so there is no per-thread
+      derivation left to maintain or to measure, and the thread cases that
+      would have measured one are gone from the headless tier. The stored
+      values are reliable once every writer runs the current topic module and
+      legacy writers are retired
+      ([rollout](../../packages/patterns/topics/state-upgrades.md#rollout-and-rollback)).
 - [ ] **T5 — Harden accepted changes and prepare release artifacts.** Add
       regression read budgets, run all relevant authored/package/integration
       tests, preserve compatibility baselines, pass the
@@ -243,11 +241,11 @@ derivation inside a pattern body registers under a name that can differ between
 the baseline and a candidate, so the tier measures it through the pattern that
 holds it rather than by registered name. It runs at 32, 128, and 512 topics,
 with low-degree and high-degree mention graphs, and varies E independently of N.
-Exercise a single large inbound bucket as well as distributed links. Test
-threads at 10, 100, and 1,000 comments, varying L separately. The headless
-read-budget test runs in CI at 4 and 32 topics and at threads of up to 100
-comments or 100 links; 128 and 512 topics and threads of 1,000 comments or
-1,000 links run only from this tier's probe script.
+Exercise a single large inbound bucket as well as distributed links. The
+headless read-budget test runs in CI at 4 and 32 topics; 128 and 512 topics run
+only from this tier's probe script. Thread length is not a dimension of this
+tier: a topic's comment count and last activity are stored inputs its verbs
+keep, so no per-thread derivation remains to scale.
 T0 builds this tier's fixture; if a size cannot be built, T0 records the
 measured limit and the tier runs at the largest size it builds.
 
@@ -268,10 +266,9 @@ Three demand workloads are distinct: the board alone, the board with one topic
 open, and all backlink outputs. The browser tier runs the board-alone and
 board-with-one-topic workloads and not the all-backlinks one. In a browser
 measurement with client execution and stored card values, a board loaded before
-any topic was opened ran none of the pivot, backlinks, comment-count, or
-last-activity lifts. Opening a topic ran the pivot, that topic's backlinks, and
-its comment count. Returning to the board afterward ran that topic's
-last-activity lift once. The measurement is one small sample, taken with
+any topic was opened ran neither the pivot nor the backlinks lift. Opening a
+topic ran the pivot and that topic's backlinks. The measurement is one small
+sample, taken with
 [lazy materialization](../development/EXPERIMENTAL_OPTIONS.md#lazymaterialization)
 on and with client execution.
 
@@ -313,8 +310,8 @@ demands the pivot and every topic's backlinks at once, which no browser workload
 does. The probe records the board-alone workload as not measured, because a
 board loaded before any topic is opened runs neither the pivot nor the backlinks
 lift, so there is no work of theirs to measure headlessly. A topic's comment
-count and last activity are stored values since labs #9256, so the tier has no
-thread cases. Measure cold initialization, warm updates, and reopen
+count and last activity are stored values, so the tier has no thread cases.
+Measure cold initialization, warm updates, and reopen
 or reconnect separately. T0 measured reopen in the browser tier and not
 reconnect: inducing a transport reconnect needs a storage relay the Benchmarks
 workflow does not run, so the browser tier's `reopen` series re-opens a topic
@@ -334,7 +331,7 @@ multi-user tests are part of acceptance, not replaced by benchmarks.
 be held to one.** A topic's rendering derivations — active comments, active
 links, the presence booleans, and the link-resolution inputs — are `computed`
 expressions in the topic's body or lifts neither instrument names. The headless
-tier starts the four Topics lifts directly and instantiates no pattern body, so
+tier starts the two Topics lifts directly and instantiates no pattern body, so
 they never run there; in the browser they run and fall into the sample's
 aggregated `remaining` row, which keeps no run's identity. Closing this needs
 the browser helper to retain something per source-less run and its timing rows
@@ -349,10 +346,9 @@ or memory measurements. The browser tier records body reads, graph size, and
 timings; attempt reads come from the headless tier, because the runtime client's
 read-stats request enables body accounting only. Count producer and consumer
 work separately but decide on the complete settled operation. T0 measured the
-browser tier's reopen workload to run none of the pivot, backlink,
-comment-count, or last-activity lifts, so that one has no producer or consumer
-work to separate. Network claims require bytes/subscription measurements in
-addition to read accounting.
+browser tier's reopen workload to run neither the pivot nor the backlinks lift,
+so that one has no producer or consumer work to separate. Network claims
+require bytes/subscription measurements in addition to read accounting.
 
 T0 must set numeric baseline-derived acceptance limits before tuning candidates.
 Read budgets are total and per-run, with explicit output/UI demand. Read and

@@ -145,9 +145,29 @@ describe("stored-setup-build", () => {
         },
       };
 
-      expect(projectionMap(result)).toEqual([
+      expect(projectionMap(result, {})).toEqual([
         ["$UI/children/0", 1, ""],
         ["$UI/children/2", 0, "label"],
+      ]);
+    });
+
+    it("lists a slot linking a named instance at the instance's legacy number", () => {
+      const named = { $instance: "a" };
+      const result = {
+        aCount: { $alias: { partialCause: named, path: ["count"] } },
+        bCount: { $alias: { partialCause: { $instance: "b" }, path: [] } },
+        sCount: { $alias: { partialCause: { $generated: 0 }, path: [] } },
+      };
+      const level = {
+        derivedInternalCells: [
+          { partialCause: { $generated: 0 } },
+          { partialCause: named, legacyPartialCause: { $generated: 1 } },
+        ],
+      };
+
+      expect(projectionMap(result, level)).toEqual([
+        ["aCount", 1, "count"],
+        ["sCount", 0, ""],
       ]);
     });
   });

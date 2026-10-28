@@ -84,6 +84,32 @@ for (const fromBase64 of [fromBase64url, fromBase64Polyfill]) {
       });
     });
 
+    describe("padding", () => {
+      // Exactly RFC 4648's (section 3.2): two `=` after a final group of two
+      // characters, one after a final group of three, and none after whole
+      // groups. The accepted forms are the padded cases above.
+
+      const REFUSED: readonly string[] = [
+        "=",
+        "==",
+        "AA=",
+        "AQ=",
+        "AQ===",
+        "AAA==",
+        "AQI==",
+        "AAAA=",
+        "AQID=",
+        "AAAA====",
+        "A=Q=",
+      ];
+
+      for (const encoded of REFUSED) {
+        it(`throws on \`${encoded}\``, () => {
+          expect(() => fromBase64(encoded)).toThrow();
+        });
+      }
+    });
+
     describe("a final group of one character", () => {
       // Six bits, which hold no whole byte.
 

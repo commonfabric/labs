@@ -44,16 +44,38 @@ Two things follow for a class written here:
 - `test/frozen-classes.test.ts` walks `src/` and fails for any exported class
   that is not frozen, so a new class cannot leave the block out unnoticed.
 
-## The `fvj1:` codec's array limit
+## Size guarantees
 
-The format lets an implementation limit how long an array may be, provided it
-states the limit
+The format has an implementation state how large a value it guarantees to
+handle, by six measures, each guarantee at least a floor the format sets
 ([`3-json-encoding.md`](../../docs/specs/space-model-formal-spec/3-json-encoding.md)
-Section 3, "Maximum array length"). This package's limit is 2^32 - 1
-(4,294,967,295) elements, the most a JavaScript array can hold. An array of that
-length is within it even when every element is a hole, so
-`fvj1:[{"/hole":4294967295}]` decodes, and `fvj1:[{"/hole":4294967296}]` is
-refused.
+Section 12). This package encodes, decodes, hashes and compares any value within
+the figures below. Past one, it may refuse a value or may handle it. Most of the
+figures are set by the host rather than by a check in this package's code, and
+each says where its bound comes from.
+
+- **Arrays:** 2^26 (67,108,864) elements. An array of that length is within it
+  even when every element is a hole: `fvj1:[{"/hole":67108864}]` decodes, and
+  the array it stands for encodes, hashes and compares, in about a second each.
+  The bound is this package's own: encoding, hashing and comparing walk every
+  index, holes included, so a very sparse array past this figure is slow. The
+  JSON decoder accepts a longer array, up to 2^32 - 1 elements, the most a
+  JavaScript array can hold, but past 2^26 this package promises nothing.
+- **Records:** no figure. A record is built as a JavaScript object, so its size
+  is bounded only by memory and by how many properties the JavaScript engine
+  lets one object hold, which is far above the floor: a record of 2^22 members
+  decodes and re-encodes.
+- **Strings:** 2^26 (67,108,864) code points. The bound is the host's: V8 holds
+  a string of at most 2^29 - 24 UTF-16 code units, the `fvj1:` text is itself
+  such a string, and an escaped code unit takes six characters of it.
+- **Byte sequences:** 2^27 (134,217,728) bytes. The bound is the host's: V8 runs
+  out of memory in `JSON.stringify()` writing the base64url state of a 2^28-byte
+  buffer.
+- **Registered symbol keys:** 2^26 code points, as for any other string.
+  `Symbol.for()` and this package's codec set no smaller bound.
+- **Depth:** 2^11 (2,048). The bound is the host's stack, which the codec, the
+  hasher and `valueEqual()` each use up recursing through a value. On Deno's
+  default stack the first of them to fail does so past about 3,000 levels.
 
 ## Conformance fixtures
 

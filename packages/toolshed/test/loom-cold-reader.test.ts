@@ -132,6 +132,33 @@ type StuckRefreshSnapshot = Pick<
 >;
 
 /**
+ * Reports whether `owner`, a runtime of the loom's owner with a replica of
+ * its own, reads the refreshed source in the root's view, once synced. Printed
+ * on a stuck refresh only, and never throws: a failure to read is reported as
+ * such, since the wait's own error is the one the test raises.
+ */
+const reportOwnerView = async (owner: Runtime, root: Cell<unknown>) => {
+  try {
+    const view = owner.getCellFromLink(root.getAsLink()).asSchema(
+      debugVDOMSchema,
+    );
+    await view.sync();
+    const text = visibleText(view.get());
+    console.error(
+      `served refresh stuck: the owner's own replica reads the root's view ` +
+        `with "Refreshed source": ${text.includes("Refreshed source")}; ` +
+        `with "Original source": ${text.includes("Original source")}`,
+    );
+  } catch (cause) {
+    console.error(
+      "served refresh stuck: the owner's own replica could not read the " +
+        "root's view:",
+      cause,
+    );
+  }
+};
+
+/**
  * Reports what the serving loop and the runtimes did while a served refresh
  * was awaited: the host's §7 counters that name a refused, deferred, or
  * failed structure load, a seal the loop refused, a lost lease, or a park,
@@ -439,9 +466,12 @@ describe("loom-cold-reader", () => {
       ui,
       (value) => visibleText(value).includes("Refreshed source"),
       { stuckLabel: `published source refresh in ${access} view` },
-    ).catch((error) => {
+    ).catch(async (error) => {
       // The wait's own report renders the stale view and nothing of why it
-      // is stale; this says what the loop and the runtimes did meanwhile.
+      // is stale; this says what the loop and the runtimes did meanwhile,
+      // and whether the owner's runtime, whose replica is its own, reads the
+      // refreshed view: if it does, the viewer never received it; if not,
+      // the served derivation never produced it.
       if (served) {
         reportStuckServedRefresh(
           statsAtEdits,
@@ -449,6 +479,7 @@ describe("loom-cold-reader", () => {
           markers,
           editsAt,
         );
+        await reportOwnerView(updater, viewedRoot);
       }
       throw error;
     });

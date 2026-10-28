@@ -170,7 +170,8 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
 
       /** @inheritDoc */
       canDecode(state: FabricValue): state is FabricHashState {
-        return isPlainObject(state) && (typeof state.tag === "string") &&
+        return isPlainObject(state) && Object.hasOwn(state, "tag") &&
+          Object.hasOwn(state, "hash") && (typeof state.tag === "string") &&
           (typeof state.hash === "string");
       }
 
@@ -223,7 +224,8 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
       canDecode(
         state: RealmCodecValue,
       ): state is { readonly tag: string; readonly hash: ArrayBuffer } {
-        return isPlainObject(state) &&
+        return isPlainObject(state) && Object.hasOwn(state, "tag") &&
+          Object.hasOwn(state, "hash") &&
           (typeof (state as { tag?: unknown }).tag === "string") &&
           ((state as { hash?: unknown }).hash instanceof ArrayBuffer);
       }

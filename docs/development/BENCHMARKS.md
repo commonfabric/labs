@@ -1544,7 +1544,7 @@ everything a case's process prints.
   that mode pins, the arguments, the V8 flags each case's process starts with,
   the `repeat` count, and the selected case IDs.
 - A `sample` line is one case in one `round`: its `mode`, the case, its `family`
-  (`pivot` or `thread`), its series, the `size` its series scales, its
+  (always `pivot`), its series, the `size` its series scales, its
   `workload`, the fixture's options with its mention count, the `focusTopic` and
   its `focusMentioners` count, and `demandedActions`, how many actions of each
   lift the workload starts. A measured sample adds `measured: true`, the heap
@@ -1571,9 +1571,8 @@ A measured phase records:
 - `bodies`, the completed-body reads that
   [read accounting](../features/read-accounting.md) defines, attributed to a
   lift by the authored source each run reports and grouped by role: `producer`
-  holds the pivot, `consumer` the backlink lookup, `aggregate` the comment count
-  and last activity, and `other` every remaining run, sinks and builtins
-  included. `total` sums them all. Each entry counts runs, actions, proxy
+  holds the pivot, `consumer` the backlink lookup, and `other` every remaining
+  run, sinks and builtins included. `total` sums them all. Each entry counts runs, actions, proxy
   accesses, link resolutions, and per-run sums of distinct documents and
   registered dependencies, with the most proxy accesses of any one run;
 - `attempts`, the transaction-attempt reads through settlement, of every kind,

@@ -3,8 +3,8 @@
 This document specifies the JSON-compatible wire format used to represent
 `FabricValue`s, including the `fvj1:` encoding prefix, the tagged-object
 convention, escaping mechanisms, codec engine responsibilities, the
-reservation rules for `/`-prefixed keys, and the canonical text an encoder
-writes.
+reservation rules for `/`-prefixed keys, the canonical text an encoder writes,
+and the floors on the guarantees an implementation states.
 
 ## Status
 
@@ -44,7 +44,7 @@ a string is sufficient to tell whether it carries a `FabricValue` payload.
   to the largest double. It refuses the number `-0` too: negative zero is
   written only as `SpecialNumber@1` (Section 3). Short of those refusals, it
   accepts any JSON text, not only the canonical text an encoder writes
-  (Section 11.4).
+  (Section 11.4), for a value within the guarantees it states (Section 12).
 - A short detection helper (`JsonCodecEngine.seemsLikeEncoded()`) tests for
   the prefix without parsing — useful for routing arbitrary input through the
   right decode path.
@@ -344,15 +344,9 @@ See `1-fabric-values.md` Section 3.5.
 > - A very sparse array like `a = []; a[1000000] = 'x'` encodes as `[{ "/hole":
 >   1000000 }, "x"]`.
 
-> **Maximum array length.** An implementation **may** limit the length of an
-> array, and one that does **must** state its limit. Whatever the limit, an
-> array of exactly that length is within it even when every element is a hole:
-> an implementation whose limit is `n` decodes `[{ "/hole": n }]`, and encodes
-> the array it stands for. A text standing for a longer array, counting each
-> hole a run stands for, is refused. The limit is a property of the
-> implementation, the same for every decode, and is distinct from the slot
-> limit below, which a caller sets for one decode to bound what reading a text
-> costs.
+> **Maximum array length.** How long an array an implementation handles is
+> one of the guarantees of Section 12, which also says how a run of holes counts
+> toward it.
 
 > **Bounding a decode of untrusted text.** Parsing JSON text builds every
 > value the text writes, and because a `hole` run carries its length as a
@@ -364,7 +358,9 @@ See `1-fabric-values.md` Section 3.5.
 > stands for. The elements and members can be counted by scanning the text
 > without parsing it, so a decoder can refuse text before building any of it.
 > The format itself sets no slot limit, and a decoder reading text it wrote
-> itself sets none.
+> itself sets none. A slot limit is distinct from the guarantees of Section 12:
+> it belongs to one decode rather than to the implementation, and the floors
+> that section sets do not bind it.
 
 ## 4. Detection
 
@@ -742,3 +738,72 @@ can differ from the text that arrived even though the value does not.
 > equal text, which lets content addressing, deduplication, and diffing work on
 > the text directly, and lets a conformance case state the exact text an
 > encoder must produce.
+
+## 12. Implementation Guarantees
+
+An implementation states how large a value it guarantees to handle, by each of
+the measures below. A stated figure is a guarantee rather than a limit: the
+implementation encodes and decodes any value within it. Past the figure, the
+implementation may refuse the value or may handle it, and the format says
+neither, so a conformance test asks nothing of a value past a stated
+guarantee, and in particular does not ask that one be refused. An implementation
+that states no figure for a measure guarantees every size by it.
+
+Each measure has a floor, the smallest guarantee an implementation may state:
+
+| Measure | Floor |
+|---------|-------|
+| Length of an array | 2^24 (16,777,216) elements |
+| Members of a record | 2^14 (16,384) members |
+| Length of a string | 2^24 (16,777,216) code points |
+| Length of a byte sequence | 2^24 (16,777,216) bytes |
+| Length of a registered symbol's key | 2^10 (1,024) code points |
+| Depth | 2^10 (1,024) containers |
+
+A guarantee covers one measure taken alone. The format sets no floor on a
+value's size as a whole, and an implementation may fail a value that is within
+each of its guarantees but too large in total for it to hold.
+
+**Arrays.** An array's length counts every hole a `hole` run stands for
+(Section 3), not just the members the text writes. An array of exactly the
+guaranteed length is within the guarantee even when every element is a hole:
+an implementation guaranteeing a length of `n` decodes `[{ "/hole": n }]`, and
+encodes the array it stands for.
+
+**Records.** A record is any object the JSON body writes: a plain object,
+including one wrapped in `/object` or `/quote` (Section 6), and equally a
+type's state, such as an `Error@1` state with its custom properties. The
+single-key object that wraps a tagged value has one member.
+
+**Strings.** A string's length is its count of Unicode code points. A surrogate
+pair is one code point, and so is a lone surrogate, which the format treats as
+a code point of its own value (`1-fabric-values.md` Section 6.7, and the WTF-8
+encoding of `2-hash-byte-format.md` Section 4.4). The guarantee covers every
+string the value holds: string values, record keys, and the strings in a
+type's state, such as an `Error@1` message or a `RegExp@1` source. It is about
+the value, not the text: a string's JSON text can be several times as long as
+its count of code points, an escaped code unit taking six characters.
+
+**Byte sequences.** The guarantee covers every byte sequence the value holds: a
+`Bytes@1` value, the hash of a `Hash@1`, and each key of a `KeyPair@1`. It
+counts the bytes, not the base64url characters of the state that writes them.
+
+**Registered symbol keys.** The key a `Symbol@1` state carries is measured as a
+string is, but has its own, smaller floor. For that one string, the
+implementation's guarantee for symbol keys takes the place of its guarantee for
+strings.
+
+**Depth.** A value's depth is the greatest number of containers enclosing any
+point in it, counted as `2-hash-byte-format.md` Section 4.19 counts the path:
+arrays, plain objects, and instances, with an instance and its state as two
+where the state is an array or a plain object. A value that is not a container
+has depth 0, `[]` has depth 1, `[[]]` has depth 2, and an `Error` whose state
+holds no container has depth 2. Depth is the value's, not the text's: an escape
+wrapper, `/object` or `/quote`, adds nothing, and nor does a `hole` entry; the
+single-key object wrapping an instance is the instance; and a primitive adds
+nothing, whatever the shape of its state in the text.
+
+**What the floors do not bind.** The floors bind only the guarantees an
+implementation states. A caller reading untrusted text may set a lower bound
+for one decode, the slot limit of Section 3, and refusing text under that bound
+is no failure to meet a guarantee.

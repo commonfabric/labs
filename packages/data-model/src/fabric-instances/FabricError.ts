@@ -483,16 +483,20 @@ export class FabricError extends FabricNativeWrapper<Error>
       /**
        * @inheritDoc
        *
-       * Beyond being a plain object, the state is held to the types of the
-       * four fields the public getters are typed by: `type`, `message` and
-       * `stack` each a string where present, and `name` a string or `null`.
-       * The fields are checked here rather than by the constructor because the
-       * constructor does no validation, so an unchecked field reaches a getter
-       * typed `string` as whatever it arrived as. `cause` and the extras are
-       * arbitrary `FabricValue`s and are not constrained.
+       * Beyond being a plain object, the state is held to the four fields
+       * the public getters are typed by: `type` and `message` present and
+       * each a string, `stack` a string where present, and `name` a string or
+       * `null` where present. The fields are checked here rather than by the
+       * constructor because the constructor does no validation, so an
+       * unchecked field reaches a getter typed `string` as whatever it arrived
+       * as. `cause` and the extras are arbitrary `FabricValue`s and are not
+       * constrained.
        */
       canDecode(state: FabricValue): state is FabricPlainObject {
-        if (!isPlainObject(state)) {
+        if (
+          !isPlainObject(state) || !Object.hasOwn(state, "type") ||
+          !Object.hasOwn(state, "message")
+        ) {
           return false;
         }
 
@@ -520,13 +524,16 @@ export class FabricError extends FabricNativeWrapper<Error>
         _env: LiveEnvironment,
         mutable = false,
       ): FabricValue {
-        const type = (state.type as string) ?? (state.name as string) ??
-          "Error";
-        // `null` `name` means "same as `type`" (the wire-level optimization).
-        const name = (state.name as string | null | undefined) ?? type;
-        const message = (state.message as string) ?? "";
-        const stack = state.stack as string | undefined;
-        const cause = state.cause;
+        // Each optional field is read as an own property, so that nothing
+        // inherited stands in for one.
+        const own = (key: string): FabricValue =>
+          Object.hasOwn(state, key) ? state[key] : undefined;
+        const type = state.type as string;
+        // A `name` that is `null` or absent means "same as `type`".
+        const name = (own("name") as string | null | undefined) ?? type;
+        const message = state.message as string;
+        const stack = own("stack") as string | undefined;
+        const cause = own("cause");
 
         const extras: Array<[string, FabricValue]> = [];
         for (const key of Object.keys(state)) {

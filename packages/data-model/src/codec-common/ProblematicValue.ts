@@ -196,8 +196,9 @@ export class ProblematicValue extends BaseFabricInstance {
         // not write -- and accepting one would put it back on the wire with
         // the property filled in, which is a silent reshaping rather than a
         // report.
-        return isPlainObject(state) && (typeof state.tag === "string") &&
-          (typeof state.error === "string") && Object.hasOwn(state, "state");
+        return isPlainObject(state) && Object.hasOwn(state, "tag") &&
+          Object.hasOwn(state, "error") && Object.hasOwn(state, "state") &&
+          (typeof state.tag === "string") && (typeof state.error === "string");
       }
 
       /**
