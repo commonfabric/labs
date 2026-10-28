@@ -76,16 +76,16 @@ describe("bulk-diff", () => {
       const plan: PiecePlan = {
         header,
         rows: [
-          retargetRow("of:fid1:aaa", "old", "new"),
-          retargetRow("of:fid1:bbb", "old", "new"),
+          retargetRow("of:fid1:aaY", "old", "new"),
+          retargetRow("of:fid1:bbY", "old", "new"),
           retargetRow("of:fid1:ccc", "old", "new"),
         ],
       };
       const after: PiecePlan = {
         header,
         rows: [
-          surveyRow("of:fid1:aaa", "new"),
-          surveyRow("of:fid1:bbb", "old"),
+          surveyRow("of:fid1:aaY", "new"),
+          surveyRow("of:fid1:bbY", "old"),
           surveyRow("of:fid1:ccc", "other"),
         ],
       };
@@ -98,16 +98,16 @@ describe("bulk-diff", () => {
       const plan: PiecePlan = {
         header,
         rows: [
-          restoreRow("of:fid1:aaa", "new", "old"),
-          restoreRow("of:fid1:bbb", "new", "old"),
+          restoreRow("of:fid1:aaY", "new", "old"),
+          restoreRow("of:fid1:bbY", "new", "old"),
           restoreRow("of:fid1:ccc", "new", "old"),
         ],
       };
       const after: PiecePlan = {
         header,
         rows: [
-          surveyRow("of:fid1:aaa", "old"),
-          surveyRow("of:fid1:bbb", "new"),
+          surveyRow("of:fid1:aaY", "old"),
+          surveyRow("of:fid1:bbY", "new"),
           surveyRow("of:fid1:ccc", "other"),
         ],
       };
@@ -119,11 +119,11 @@ describe("bulk-diff", () => {
     it("returns moved-elsewhere for a piece on the identity but another symbol", () => {
       const plan: PiecePlan = {
         header,
-        rows: [retargetRow("of:fid1:aaa", "old", "new")],
+        rows: [retargetRow("of:fid1:aaY", "old", "new")],
       };
       const after: PiecePlan = {
         header,
-        rows: [surveyRow("of:fid1:aaa", "new", "Other")],
+        rows: [surveyRow("of:fid1:aaY", "new", "Other")],
       };
       expect(diffPlan(plan, after).rows[0].status).toBe("moved-elsewhere");
     });
@@ -132,16 +132,16 @@ describe("bulk-diff", () => {
       const plan: PiecePlan = {
         header,
         rows: [
-          surveyRow("of:fid1:aaa", "same"),
-          surveyRow("of:fid1:bbb", "a"),
+          surveyRow("of:fid1:aaY", "same"),
+          surveyRow("of:fid1:bbY", "a"),
           surveyRow("of:fid1:ccc", "a"),
         ],
       };
       const after: PiecePlan = {
         header,
         rows: [
-          surveyRow("of:fid1:aaa", "same"),
-          surveyRow("of:fid1:bbb", "b"),
+          surveyRow("of:fid1:aaY", "same"),
+          surveyRow("of:fid1:bbY", "b"),
           surveyRow("of:fid1:ccc", "a", "Other"),
         ],
       };
@@ -151,17 +151,17 @@ describe("bulk-diff", () => {
     });
 
     it("returns missing for a plan row the after-survey lacks", () => {
-      const plan: PiecePlan = { header, rows: [surveyRow("of:fid1:aaa", "x")] };
+      const plan: PiecePlan = { header, rows: [surveyRow("of:fid1:aaY", "x")] };
       const diff = diffPlan(plan, { header, rows: [] });
       expect(diff.rows[0].status).toBe("missing");
       expect(diff.rows[0].after).toBeUndefined();
     });
 
     it("returns pieces only the after-survey holds as unplanned", () => {
-      const plan: PiecePlan = { header, rows: [surveyRow("of:fid1:aaa", "x")] };
+      const plan: PiecePlan = { header, rows: [surveyRow("of:fid1:aaY", "x")] };
       const after: PiecePlan = {
         header,
-        rows: [surveyRow("of:fid1:aaa", "x"), surveyRow("of:fid1:new", "x")],
+        rows: [surveyRow("of:fid1:aaY", "x"), surveyRow("of:fid1:new", "x")],
       };
       expect(diffPlan(plan, after).unplanned).toEqual(["of:fid1:new"]);
     });
@@ -169,14 +169,14 @@ describe("bulk-diff", () => {
     it("returns the references each verdict was decided from", () => {
       const plan: PiecePlan = {
         header,
-        rows: [retargetRow("of:fid1:aaa", "old", "new")],
+        rows: [retargetRow("of:fid1:aaY", "old", "new")],
       };
       const after: PiecePlan = {
         header,
-        rows: [surveyRow("of:fid1:aaa", "other")],
+        rows: [surveyRow("of:fid1:aaY", "other")],
       };
       expect(diffPlan(plan, after).rows[0]).toEqual({
-        piece: "of:fid1:aaa",
+        piece: "of:fid1:aaY",
         phase: "topics",
         status: "moved-elsewhere",
         before: { patternIdentity: "old", symbol: "default" },
@@ -189,14 +189,14 @@ describe("bulk-diff", () => {
       const plan: PiecePlan = {
         header,
         rows: [
-          retargetRow("of:fid1:aaa", "old", "new"),
-          retargetRow("of:fid1:bbb", "old", "new"),
+          retargetRow("of:fid1:aaY", "old", "new"),
+          retargetRow("of:fid1:bbY", "old", "new"),
           surveyRow("of:fid1:ccc", "x"),
         ],
       };
       const after: PiecePlan = {
         header,
-        rows: [surveyRow("of:fid1:aaa", "new"), surveyRow("of:fid1:ccc", "x")],
+        rows: [surveyRow("of:fid1:aaY", "new"), surveyRow("of:fid1:ccc", "x")],
       };
       const { counts } = diffPlan(plan, after);
       expect(counts).toEqual({
@@ -210,10 +210,10 @@ describe("bulk-diff", () => {
     });
 
     it("throws for plans from different spaces", () => {
-      const plan: PiecePlan = { header, rows: [surveyRow("of:fid1:aaa", "x")] };
+      const plan: PiecePlan = { header, rows: [surveyRow("of:fid1:aaY", "x")] };
       const elsewhere: PiecePlan = {
         header: { ...header, space: "did:key:other" },
-        rows: [surveyRow("of:fid1:aaa", "x")],
+        rows: [surveyRow("of:fid1:aaY", "x")],
       };
       expect(() => diffPlan(plan, elsewhere)).toThrow("different spaces");
     });
@@ -221,19 +221,19 @@ describe("bulk-diff", () => {
     it("throws for a plan listing one piece twice, on either side", () => {
       const twice: PiecePlan = {
         header,
-        rows: [surveyRow("of:fid1:aaa", "x"), surveyRow("of:fid1:aaa", "x")],
+        rows: [surveyRow("of:fid1:aaY", "x"), surveyRow("of:fid1:aaY", "x")],
       };
       const once: PiecePlan = {
         header,
-        rows: [surveyRow("of:fid1:aaa", "x")],
+        rows: [surveyRow("of:fid1:aaY", "x")],
       };
       expect(() => diffPlan(twice, once)).toThrow("more than once");
       expect(() => diffPlan(once, twice)).toThrow("more than once");
     });
 
     it("folds the of: alias when matching plan and after-survey rows", () => {
-      const plan: PiecePlan = { header, rows: [surveyRow("of:fid1:aaa", "x")] };
-      const after: PiecePlan = { header, rows: [surveyRow("fid1:aaa", "x")] };
+      const plan: PiecePlan = { header, rows: [surveyRow("of:fid1:aaY", "x")] };
+      const after: PiecePlan = { header, rows: [surveyRow("fid1:aaY", "x")] };
       const diff = diffPlan(plan, after);
       expect(diff.rows[0].status).toBe("unchanged");
       expect(diff.unplanned).toEqual([]);
@@ -255,9 +255,9 @@ describe("bulk-diff", () => {
     it("throws for an alias-spelled duplicate", () => {
       const twice: PiecePlan = {
         header,
-        rows: [surveyRow("fid1:aaa", "x"), surveyRow("of:fid1:aaa", "x")],
+        rows: [surveyRow("fid1:aaY", "x"), surveyRow("of:fid1:aaY", "x")],
       };
-      const once: PiecePlan = { header, rows: [surveyRow("fid1:aaa", "x")] };
+      const once: PiecePlan = { header, rows: [surveyRow("fid1:aaY", "x")] };
       expect(() => diffPlan(twice, once)).toThrow("more than once");
     });
   });

@@ -63,7 +63,7 @@ class DeniedStorageManager extends StorageManager {
 }
 
 const FID_A = `fid1:${"A".repeat(43)}`;
-const FID_B = `fid1:${"B".repeat(43)}`;
+const FID_B = `fid1:${"B".repeat(42)}A`;
 
 const surfacedErrorCount = (): number =>
   (getLoggerCountsBreakdown() as Record<

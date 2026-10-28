@@ -32,8 +32,8 @@ import { isObjectNotArray } from "@commonfabric/utils/types";
 export function canonicalPieceAddress(address: string): string {
   const bare = hashStringForEntityAddress(address);
   try {
-    // The parsed hash's own spelling, not the input's: padded and other
-    // non-canonical base64 spellings of one hash must land on one key.
+    // The parsed hash's own spelling, not the input's: a padded spelling of
+    // one hash must land on the same key as the unpadded one.
     return FabricHash.fromString(bare).taggedHashString;
   } catch {
     throw new Error(`Not a piece address: ${JSON.stringify(address)}.`);
