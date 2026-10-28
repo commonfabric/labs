@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 import type { JSONSchema } from "../src/builder/types.ts";
+import { parseLink } from "../src/link-utils.ts";
 import { sendValueToBinding } from "../src/pattern-binding.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -121,6 +122,22 @@ const derivedValueClauses = (
   );
   // This runtime stores its labels inline, so a reference here would mean
   // the reading, not the label, went wrong.
+  if (entry === undefined || isCfcLabelReference(entry.label)) return [];
+  return entry.label.confidentiality ?? [];
+};
+
+/** The confidentiality the stored declared entry at `path` carries. */
+const declaredConfidentiality = (
+  runtime: Runtime,
+  id: string,
+  path: string,
+): readonly unknown[] => {
+  const replica = runtime.storageManager.open(space).replica as unknown as {
+    getDocument(id: string): { cfc?: StoredCfcMetadata } | undefined;
+  };
+  const entry = replica.getDocument(id)?.cfc?.labelMap.entries.find((e) =>
+    e.origin === "declared" && e.path.join("/") === path
+  );
   if (entry === undefined || isCfcLabelReference(entry.label)) return [];
   return entry.label.confidentiality ?? [];
 };
@@ -641,32 +658,40 @@ describe("CFC write-destination reads", () => {
       });
     });
 
-    it("refuses an element anchored out of a labeled array", async () => {
+    /** A document whose `items` array carries `ifc`, holding one element. */
+    const anchoredListSchema = (ifc: {
+      confidentiality: string[];
+      observes?: "enumerate";
+    }) =>
+      ({
+        type: "object",
+        properties: {
+          items: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { note: { type: "string" } },
+            },
+            ifc,
+          },
+        },
+        required: ["items"],
+      }) as const satisfies JSONSchema;
+
+    it("refuses an element anchored out of an array whose label observes its membership", async () => {
       await withStrictRuntime(async (runtime) => {
         // Each element becomes an entity document of its own, under an
         // identity derived from how far the enclosing arrays reach. Reading
-        // the parent to settle that is what the anchored document's own
-        // ceiling, which declares nothing, then has to admit.
+        // the parent to settle that consumes the array's membership label,
+        // which its elements do not inherit, so the anchored document's own
+        // ceiling declares nothing that admits it.
         //
         // What this pins is that the parent read's label reaches the
-        // anchored document: mark that read and the write commits. Whether
-        // a labeled array should be rewritable whole at this rung is a
-        // question about the write ceiling an anchored document resolves,
-        // which this case neither settles nor blesses.
-        const listSchema = {
-          type: "object",
-          properties: {
-            items: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: { note: { type: "string" } },
-              },
-              ifc: { confidentiality: [SECRET_ATOM] },
-            },
-          },
-          required: ["items"],
-        } as const satisfies JSONSchema;
+        // anchored document: mark that read and the write commits.
+        const listSchema = anchoredListSchema({
+          confidentiality: [SECRET_ATOM],
+          observes: "enumerate",
+        });
 
         const seed = runtime.edit();
         runtime.getCell(space, "anchored", listSchema, seed).set({
@@ -685,6 +710,44 @@ describe("CFC write-destination reads", () => {
         const refusal = refusalOf(await tx.commit().settled);
         expect(refusal).toContain("writer-fit confidentiality misfit");
         expect(refusal).toContain(SECRET_ATOM);
+      });
+    });
+
+    it("commits an element anchored out of an array whose label it inherits, and labels the element's own document", async () => {
+      await withStrictRuntime(async (runtime) => {
+        // A label read with the array's content labels its elements, so the
+        // anchored document declares it, and the parent read's label fits
+        // there.
+
+        const listSchema = anchoredListSchema({
+          confidentiality: [SECRET_ATOM],
+        });
+
+        const seed = runtime.edit();
+        runtime.getCell(space, "inheriting", listSchema, seed).set({
+          items: [{ note: "a" }],
+        });
+        seed.prepareCfc();
+        expect(refusalOf(await seed.commit().settled)).toBeUndefined();
+        await runtime.storageManager.synced();
+
+        const tx = runtime.edit();
+        runtime.getCell(space, "inheriting", listSchema, tx).set({
+          items: [{ note: "b" }],
+        });
+        tx.prepareCfc();
+        expect(refusalOf(await tx.commit().settled)).toBeUndefined();
+
+        const holder = runtime.getCell<{ items: unknown[] }>(
+          space,
+          "inheriting",
+          undefined,
+          runtime.edit(),
+        ).getRaw();
+        const element = parseLink(holder?.items[0]);
+        expect(element).toBeDefined();
+        expect(declaredConfidentiality(runtime, element!.id!, ""))
+          .toContain(SECRET_ATOM);
       });
     });
   });

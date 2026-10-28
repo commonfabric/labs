@@ -327,6 +327,23 @@ const schemaAtPathKey = (
 };
 
 /**
+ * The confidentiality a container's `ifc` passes to the children narrowing
+ * reaches below it: that of a label read with the container's content, which
+ * an absent or unrecognized `observes` declares as a covering label does, and
+ * `observes: "value"` does too. A label observing only the container's shape,
+ * its membership or the reference held there stays on the container.
+ */
+function childInheritedConfidentiality(
+  ifc: JSONSchemaObj["ifc"],
+): NonNullable<JSONSchemaObj["ifc"]>["confidentiality"] {
+  const observes = ifc?.observes;
+  return observes === "shape" || observes === "enumerate" ||
+      observes === "followRef"
+    ? undefined
+    : ifc?.confidentiality;
+}
+
+/**
  * The JSON types of the values an `enum` or `const` schema names, each once,
  * in the order the members declare them; `undefined` where the schema names
  * no values. Narrowing reads an enumeration for these types and no more.
@@ -760,15 +777,13 @@ export class ContextualFlowControl {
           typeless)
       ) {
         // A label beside the union is on the value whichever arm admits it,
-        // so it labels that value's children, as an object's label labels
-        // its properties: the arms of an `anyOf` or a `oneOf` are narrowed
-        // without the keywords beside them.
-        if (cursor.ifc !== undefined) {
-          ContextualFlowControl.addIfcAtoms(
-            joined,
-            cursor.ifc.confidentiality,
-          );
-        }
+        // so it labels that value's children as a container's label does
+        // (`childInheritedConfidentiality()`): the arms of an `anyOf` or a
+        // `oneOf` are narrowed without the keywords beside them.
+        ContextualFlowControl.addIfcAtoms(
+          joined,
+          childInheritedConfidentiality(cursor.ifc),
+        );
         // A type-list arm replaces its type with a scalar, and a schema
         // declaring no type is read as an object and as an array. Only a
         // compound can recur here without consuming a path segment, so only
@@ -846,6 +861,12 @@ export class ContextualFlowControl {
           cursor = true;
         }
       } else if (cursor.type === "array") {
+        // An array's label labels its elements, unless it observes only the
+        // array's shape, membership or reference.
+        ContextualFlowControl.addIfcAtoms(
+          joined,
+          childInheritedConfidentiality(cursor.ifc),
+        );
         if (isArrayIndexPropertyName(part)) {
           const index = Number(part);
           if (cursor.prefixItems && index < cursor.prefixItems.length) {

@@ -327,6 +327,46 @@ describe("ContextualFlowControl.schemaAtPath", () => {
     }
   });
 
+  it("carries an array's label to its elements, whether the array is a type or one of a type list", () => {
+    for (const type of ["array", ["array", "null"]] as const) {
+      const schema = {
+        type,
+        items: { type: "string" },
+        ifc: { confidentiality: ["sec"] },
+      } as JSONSchema;
+
+      expect(ContextualFlowControl.schemaAtPath(schema, ["0"])).toEqual({
+        type: "string",
+        ifc: { confidentiality: ["sec"] },
+      });
+    }
+  });
+
+  it("keeps a label observing only a container's shape, membership or reference off its children", () => {
+    // Such a label is read with the container's structure, not with what
+    // its children hold, as a query result's membership floor is.
+
+    for (const observes of ["shape", "enumerate", "followRef"] as const) {
+      const ifc = { confidentiality: ["structure"], observes };
+
+      expect(
+        ContextualFlowControl.schemaAtPath(
+          { type: "array", items: { type: "string" }, ifc } as JSONSchema,
+          ["0"],
+        ),
+      ).toEqual({ type: "string" });
+      expect(
+        ContextualFlowControl.schemaAtPath({
+          anyOf: [
+            { type: "object", properties: { a: { type: "string" } } },
+            { type: "null" },
+          ],
+          ifc,
+        } as JSONSchema, ["a"]),
+      ).toEqual({ type: "string" });
+    }
+  });
+
   it("returns each key's own narrowing of a frozen schema that omits `type`, whichever key is narrowed first", () => {
     // Such a schema narrows as an object and as an array, so a key the
     // object reading leaves open and a key it declares do not share the

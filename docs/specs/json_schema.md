@@ -513,7 +513,9 @@ what the cursor declares about its type decides how:
   and omits `additionalProperties` reports an unnamed key as a missing
   property, which a read drops rather than admits.
 - `type: "array"` narrows an index to its `prefixItems` entry, else to
-  `items`, else to `true`, and a segment that is not an index to `false`.
+  `items`, else to `true`, and a segment that is not an index to `false`. The
+  array's label labels the element, unless it observes only the array's
+  shape, membership or reference (`observes`).
 - `type: "unknown"` narrows to `unknown`.
 - Any other declared type holds no children: the segment narrows to `false`,
   and nothing has been turned down.
@@ -521,7 +523,7 @@ what the cursor declares about its type decides how:
   results; an arm that narrows to `false` drops out, and one that narrows to a
   true schema makes the union `true`. The arms of an `anyOf` or a `oneOf` are
   read without the keywords beside them, but a label beside the union labels
-  every child it narrows to, as an object's label labels its properties.
+  every child it narrows to, as an array's label labels its elements.
   Returning to the same `anyOf` or `oneOf`
   branch list in the same definition scope without consuming a path segment
   contributes `false`: the other arms already describe the children it can

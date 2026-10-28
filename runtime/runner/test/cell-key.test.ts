@@ -184,6 +184,29 @@ describe("Cell", () => {
         });
       });
 
+      describe("under an array with a label", () => {
+        it("carries the label to an element, as narrowing the whole path does", () => {
+          const cell = cellHolding(
+            "labeled array",
+            {
+              type: "object",
+              properties: {
+                list: {
+                  type: "array",
+                  items: { type: "string" },
+                  ifc: { confidentiality: ["sec"] },
+                },
+              },
+            },
+            { list: ["s"] },
+          );
+          const labeled = { type: "string", ifc: { confidentiality: ["sec"] } };
+
+          expect(linkSchemaOf(cell.key("list").key(0))).toEqual(labeled);
+          expect(linkSchemaOf(cell.key("list", 0))).toEqual(labeled);
+        });
+      });
+
       describe("for `length`", () => {
         it("returns no schema, and reads the length, on an array", () => {
           const cell = cellHolding(
