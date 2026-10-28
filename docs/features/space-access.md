@@ -213,6 +213,19 @@ loads of that space it remembered as failed, a piece's or the space root's, and
 runs again each one a view is showing, so a refused space's home or piece
 appears once access is granted, without a reload.
 
+## A retired space
+
+A retired space
+([random space identities](../specs/random-space-identities.md#retiring-a-space))
+has a retirement record where its access list was, and the memory server
+refuses it to every principal for good, with a refusal that says the space is
+retired. On a client that is a refusal like any other permanent one:
+`spaceAccess(target)` returns `"none"`, `spaceMembers(target)` returns
+`undefined`, and `retrySpaceAccess(space)` is refused again. A record is not a
+list, so `spaceReaderRole()` finds no role in it for anyone. Retirement is not
+implemented yet; until it is, the memory server refuses the commit that would
+retire a space.
+
 ## Changing the level
 
 `spaceAccess(target)` only reads. A handler changes a principal's entry with

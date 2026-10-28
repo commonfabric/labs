@@ -2,7 +2,8 @@
 
 ## Status
 
-Implemented in this repository. The
+Implemented in this repository, except for retirement, which is specified and
+not yet implemented: "Retiring a space" below says what it does. The
 [implementation plan](../plans/random-space-identities.md) says what is built
 and the deployment steps that remain.
 
@@ -154,6 +155,43 @@ run and resolves before it is retried, and a name that has resolved once must
 resolve again without suspending, for as long as the run is being retried.
 A resolver that can forget a name it has resolved, or that can leave a name
 unresolved after an attempt, turns the retry into a loop with no bound.
+
+## Retiring a space
+
+A space lives from its genesis commit until it is retired, and retirement ends
+it for everyone, for good. Nothing else a principal does ends a space:
+removing members, forgetting it in a list, or losing every reference to it
+leaves it in place.
+
+- Only the space's sole member retires it, holding OWNER: the access list's
+  one entry has to be the retiring principal. A space with other members is
+  retired once an OWNER has removed them, each removal an ordinary access-list
+  change of its own.
+- Retirement is one access-list-only commit, which replaces the access list
+  with a retirement record naming the retiring principal.
+- A Home space is never retired. Its DID is its user's identity DID.
+- From that commit on, the space refuses every principal, a deployment's
+  service identities included, and takes no further commit, so retirement is
+  not undone. The refusal says that the space is retired, which a reader can
+  tell apart from a refusal of access to a space that goes on.
+
+Retirement removes nothing by itself. A retired space's contents become
+unreadable at once, and its storage is the operator's to reclaim, which leaves
+the retirement record in place. A store removed outright would leave a DID
+with no history, and that DID would then be a space its key could create
+again: no one holds the key of a space created under this specification, but a
+legacy space's key can be recomputed from its name.
+
+References to a retired space keep their DID: a Home list entry, a link stored
+in another space, an `inSpace` allocation record. They reach the refusal.
+Removing them is the work of whatever holds them, and an allocation record,
+being immutable, is never removed.
+
+The admission rule and the refusal are
+[INV-15](memory-v2/09-invariants.md#inv-15--space-retirement) and
+[the Memory protocol's access-control section](memory-v2/04-protocol.md#451-current-pass).
+Retirement is not implemented yet: the Memory server refuses a retirement
+record as it refuses any access-control document that is not an access list.
 
 ## Routing across provider processes
 

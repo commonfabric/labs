@@ -458,13 +458,13 @@ Checked by: engine and reconnect unit tests.
 ### INV-12 — ACL mutation commit shape
 
 > A commit that touches a space's ACL document (entity id `of:<space>`) is
-> admitted only if it is, all at once: the **only** operation in the commit;
-> an `op: "set"` on exactly that id, with `scope` `"space"` or absent; on the
-> default branch (`branch` absent or `""`); and carrying a value that
-> satisfies `isACL` and retains at least one **concrete** (non-`"*"`) OWNER.
-> Every other shape — a patch, a delete, a different scope, a mixed ACL/data
-> commit, a non-default branch, an ownerless or malformed result — is a
-> `ProtocolError`.
+> admitted only if it is, all at once: the **only** operation in the commit; an
+> `op: "set"` on exactly that id, with `scope` `"space"` or absent; on the
+> default branch (`branch` absent or `""`); and carrying a value that satisfies
+> `isACL` and retains at least one **concrete** (non-`"*"`) OWNER, or a
+> retirement record, which INV-15 holds to its own rule. Every other shape — a
+> patch, a delete, a different scope, a mixed ACL/data commit, a non-default
+> branch, an ownerless or malformed result — is a `ProtocolError`.
 
 This is `04-protocol.md` §4.5.1's normative sentence ("A valid ACL mutation is
 a whole-document, space-scoped replacement on the default branch and must
@@ -490,6 +490,10 @@ carrying a distinct message (so a message identifies the clause):
 | exactly one operation | `ACL mutations must be an ACL-only commit` |
 | whole-document `set` on `of:<space>`, scope space-or-absent | `ACL mutations must replace the space-scoped ACL document` |
 | result is a valid ACL with a concrete OWNER | `ACL must be valid and retain at least one concrete OWNER` |
+
+The last clause admits a retirement record too, once the server implements
+INV-15; until then it refuses one with that clause's message, since a
+retirement record is not an access list.
 
 It holds in **both** `observe` and `enforce`, and is skipped only when
 `MEMORY_ACL_MODE` is `off`. The code states its own reason for keeping it
@@ -619,8 +623,9 @@ a key generated for that one commit, which no one holds afterwards.
 The precedence clause binds only at server sequence 0. A *populated* space that
 never had an ACL is not forced through genesis; it falls under the temporary
 pre-launch compatibility rule in `04-protocol.md` §4.5.1 (authenticated
-READ/WRITE, never OWNER). Retracted, malformed, and ownerless ACL state is not
-equivalent to missing state — it fails closed rather than reopening genesis.
+READ/WRITE, never OWNER). Retracted, malformed, ownerless, and retired ACL state
+is not equivalent to missing state — it fails closed rather than reopening
+genesis.
 
 Layer: server admission (`#validateAclCommit`). The operator `writeDocument`
 path enforces the same precedence separately and additionally refuses *any*
@@ -701,6 +706,65 @@ the wire-boundary parse, and the zero-watch retraction by
 `packages/memory/test/v2-session-holdings.test.ts`; the declaration on both
 reconnect paths and the terminal restore against a server that cannot take
 one by `packages/memory/test/v2-client-holdings.test.ts`.
+
+### INV-15 — Space retirement
+
+> A commit that replaces a space's ACL document with a retirement record,
+> `{ "retired": { "by": <principal> } }`, is admitted only if it satisfies
+> INV-12's shape clauses; the record holds nothing else and its `by` is the
+> committing principal; the space is not that principal's Home, whose DID is
+> the principal's own; and the stored ACL is valid and has exactly one entry,
+> the committing principal at OWNER. Once one is admitted the space is
+> retired: every command any principal sends it, a service DID's included, is
+> refused, and no commit to it is admitted again, an ACL commit included.
+
+Retirement ends a space for everyone. The sole-member clause asks no authority
+an OWNER lacks, since an OWNER may already remove every other entry, one
+ordinary ACL commit at a time. What it adds is that each other member's loss
+of access is a commit of its own, made before the space is retired, rather
+than a side effect of retiring it. A service DID's implicit OWNER does not
+satisfy it: the stored list has to name the principal. The Home clause keeps
+a principal from retiring the space its own identity names, which nothing could
+then replace.
+
+The clauses are checked after INV-12's shape clauses, in this order:
+
+| Clause | Rejection |
+| --- | --- |
+| the record holds `by` alone, naming the committing principal | `ProtocolError`: `A retirement record must name the retiring principal and nothing else` |
+| the space is not the principal's Home | `AuthorizationError`: `A Home space cannot be retired` |
+| the stored ACL's one entry is the committing principal at OWNER | `AuthorizationError`: `Only the sole member of <space> may retire it` |
+
+A command sent to a retired space is refused with an `AuthorizationError`,
+`Space <space> is retired`, carrying `retired: true`, `permanentEvidence`, and
+the `aclRevision` of the retirement commit. What follows the retirement commit
+revokes every session open on the space, as what follows any ACL commit revokes
+the sessions it deauthorizes, and sends no `session/admissible`. A served run's
+`grantSpaceAccess()` or `revokeSpaceAccess()` against a retired space is refused
+like any other commit to it.
+
+Like INV-12 it holds in `observe` and `enforce`. In `off` the server checks no
+access, so it neither tests a retirement record against these clauses nor
+refuses a retired space.
+
+Retirement removes nothing by itself. An operator may reclaim a retired space's
+storage only by leaving a store that still holds the retirement record at a
+nonzero server sequence. A store removed outright leaves a DID with no history,
+and INV-13 lets that DID's own key write a new genesis there. A space created
+under [random space identities](../random-space-identities.md) has no such key
+left, but a legacy space's key can be recomputed from its name.
+
+Layer: server admission (`#validateAclCommit` and the capability check in
+`packages/memory/v2/server.ts`, with the ACL state a retirement record gives
+in `readAclState`); client emission (`writeAcl()` in
+`packages/runner/src/acl-manager.ts`).
+
+Soundness direction: none — exact. Over-acceptance destroys a space a member
+other than the retiring principal still holds, or lets a retired space take
+writes again. Over-rejection leaves its sole member no way to retire it.
+
+Checked by: nothing yet. The server does not implement retirement, and
+refuses a retirement record under INV-12's validity clause.
 
 ## Change discipline
 
