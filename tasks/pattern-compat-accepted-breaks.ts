@@ -86,47 +86,6 @@ export interface RequiredPatternOverride {
 
 export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
-    "pattern": "fabrichat/main.tsx",
-    "baselines": [
-      "20260924T175254Z-lVPuvyO2neYxy2fr",
-      "20260924T182554Z-N3p-f7YPbqOkTZYM",
-      "20260924T225103Z-YjE9_Hki8UCUTFpT",
-      "20260924T230240Z-uI7tdMbhqscACz7z",
-      "20260924T232405Z-TEJvpSwlmDpuRRiN",
-      "20260924T234624Z-jlyRd4GdKsxMivd8",
-    ],
-    "paths": [
-      "argument",
-      "result.$UI",
-      "result.messages",
-      "result.sendMessage",
-    ],
-    "reason":
-      "The standalone starter adopts the upstream room protocol at the retired example path. These snapshots were published on main before that example was retired; its input shape, direct outputs, and rendering are intentionally replaced without migrating old message storage.",
-    "record": "docs/history/fabrichat-independent-behavior-integration.md",
-  },
-  {
-    "pattern": "fabrichat/main.tsx",
-    "baselines": [
-      "20260925T003944Z-G5oUMsfWQHE_IsdJ",
-      "20260925T010354Z-I1gvu92zRWpwqeGC",
-      "20260925T024902Z-cnnWs44Auqp7mCiB",
-      "20260925T153146Z-TdaJ74eecwaKd76W",
-      "20260925T155413Z-A_iQ8cehCGOyaBlJ",
-      "20260925T161227Z-Q_coiTXjbDNnn1pD",
-    ],
-    "paths": [
-      "argument",
-      "result.$UI",
-      "result.messages",
-      "result.reactions",
-      "result.sendMessage",
-    ],
-    "reason":
-      "The standalone starter adopts the upstream room protocol at the retired example path. These snapshots were published on main before that example was retired; its input shape, direct outputs, and rendering are intentionally replaced without migrating old message storage.",
-    "record": "docs/history/fabrichat-independent-behavior-integration.md",
-  },
-  {
     // The profile gained its owner-protected share inbox pointer (`inbox`,
     // optional, undefaulted). The picker consumes a stored profile, and the
     // proof compares the new property's `ifc` label against a baseline that

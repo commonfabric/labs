@@ -52,38 +52,22 @@ UI support patch. The live implementation contract is
 documented in `packages/patterns/fabrichat/README.md` and
 `docs/specs/fabrichat/FabriChatRoom.md`.
 
-## Contracts retained from main
+## Contract boundary
 
-The restored starter path previously named a simple example. Its twelve
-September 24 and 25 snapshots appeared in `main` before commit `4d098c6818`
-(#8412) retired that example and its baselines as part of the room-and-manager
-protocol. The proposed starter adopts that upstream protocol; it does not
-restore the example's direct message and reaction outputs or old input shape.
+The standalone starter establishes its current room-based contract. The simple
+example that previously occupied `fabrichat/main.tsx` and its baselines were
+retired on `main` by commit `4d098c6818` (#8412). Reusing that path does not
+restore the example's input shape, direct message and reaction outputs, or
+migration obligations. The proposed starter provides no automatic translation
+of old example messages into protocol records and invents no author
+attestations.
 
-All twelve historical contracts are retained as evidence. Two accepted-break
-entries name their exact labels and reported paths:
+This PR adds two snapshots: one for the current starter contract and one for
+the current room contract, both recorded on October 28. Neither has an
+accepted-break exemption, so the next change is checked against each normally.
+Obsolete intermediate branch contracts and the retired example's snapshots
+are not part of this integration.
 
-* The six September 24 snapshots: `argument`, `result.$UI`,
-  `result.messages`, and `result.sendMessage`.
-* The six September 25 snapshots: those four paths and `result.reactions`.
-
-The argument shape and direct outputs belong to the retired example. The
-starter's reviewed screen and room projection supply the new interface. This
-is an intentional replacement, consistent with adopting the upstream
-protocol. It provides no automatic translation of old example messages into
-protocol records and invents no author attestations. Existing pieces need to
-retain their old source or start a new conversation to use the replacement.
-
-The two October 28 snapshots record the current starter and room contracts.
-Neither has an accepted-break exemption, so the next change is checked
-against both normally. Existing upstream exceptions remain unchanged. The
-proposed integration adds no required-pattern override for Home.
-
-## Unmerged contracts
-
-Under Dan's direction, the proposed merge excludes 42 obsolete snapshots of
-unmerged intermediate contracts and their associated accepted-break entries.
-It retains every main-published contract in scope, including the twelve
-retired example snapshots, and both current snapshots. This branch-specific
-cleanup changes no general baseline-retention policy and adds no exception
-for the current contracts.
+Every baseline in current `main` remains intact. The accepted-break registry
+matches `main` exactly: this integration adds no compatibility exception or
+required-pattern override.
