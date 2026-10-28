@@ -719,6 +719,17 @@ export class ContextualFlowControl {
     const joined = (extraConfidentiality !== undefined)
       ? new Set<unknown>(extraConfidentiality)
       : new Set<unknown>();
+    // Whether a container's label read with its content was passed down
+    // (`childInheritedConfidentiality()`). That label covers whatever the
+    // path reaches, so the result cannot keep a narrower `observes` of its
+    // own.
+    let inheritsCovering = false;
+    const inheritFrom = (ifc: JSONSchemaObj["ifc"]) => {
+      const atoms = childInheritedConfidentiality(ifc);
+      if (atoms === undefined || atoms.length === 0) return;
+      ContextualFlowControl.addIfcAtoms(joined, atoms);
+      inheritsCovering = true;
+    };
     let cursor = schema;
     // Whether the path descended through a wildcard: a true schema is what
     // every child below it narrows to, markers and all, but its `default`
@@ -780,10 +791,7 @@ export class ContextualFlowControl {
         // so it labels that value's children as a container's label does
         // (`childInheritedConfidentiality()`): the arms of an `anyOf` or a
         // `oneOf` are narrowed without the keywords beside them.
-        ContextualFlowControl.addIfcAtoms(
-          joined,
-          childInheritedConfidentiality(cursor.ifc),
-        );
+        inheritFrom(cursor.ifc);
         // A type-list arm replaces its type with a scalar, and a schema
         // declaring no type is read as an object and as an array. Only a
         // compound can recur here without consuming a path segment, so only
@@ -863,10 +871,7 @@ export class ContextualFlowControl {
       } else if (cursor.type === "array") {
         // An array's label labels its elements, unless it observes only the
         // array's shape, membership or reference.
-        ContextualFlowControl.addIfcAtoms(
-          joined,
-          childInheritedConfidentiality(cursor.ifc),
-        );
+        inheritFrom(cursor.ifc);
         if (isArrayIndexPropertyName(part)) {
           const index = Number(part);
           if (cursor.prefixItems && index < cursor.prefixItems.length) {
@@ -898,10 +903,17 @@ export class ContextualFlowControl {
       cursor = {}; // change to use the empty object schema, so we can attach ifc.
     }
     // If we've encountered any confidentiality atoms while walking down the
-    // schema, we need to add them to the returned object.
-    const ifc = (joined.size !== 0)
+    // schema, we need to add them to the returned object. One label carries
+    // one observation class, so where an inherited covering label joins a
+    // narrower one, the joined label is covering, as merging two scopes that
+    // disagree makes it.
+    let ifc = (joined.size !== 0)
       ? { ...cursor.ifc, confidentiality: ContextualFlowControl.lub(joined) }
       : cursor.ifc;
+    if (inheritsCovering && ifc?.observes !== undefined) {
+      const { observes: _narrower, ...covering } = ifc;
+      ifc = covering;
+    }
     const selectedDefs = selectReferencedCfcSchemaDefs(cursor, defs);
     const result = { ...cursor, ...(ifc && { ifc }) } as Record<
       string,

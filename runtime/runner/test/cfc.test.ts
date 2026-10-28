@@ -342,6 +342,39 @@ describe("ContextualFlowControl.schemaAtPath", () => {
     }
   });
 
+  it("makes a child's label covering where it joins the label it inherits, and keeps its own observation class where it inherits none", () => {
+    // One label carries one observation class. Scoped to the child's own
+    // class, the inherited label would no longer reach a read of the
+    // child's content.
+
+    const element = {
+      type: "object",
+      properties: { note: { type: "string" } },
+      ifc: { confidentiality: ["own"], observes: "enumerate" },
+    } as const;
+
+    const inherited = ContextualFlowControl.schemaAtPath(
+      {
+        type: "array",
+        items: element,
+        ifc: { confidentiality: ["sec"] },
+      } as JSONSchema,
+      ["0"],
+    ) as JSONSchemaObj;
+    expect(inherited.ifc?.observes).toBeUndefined();
+    expect([...(inherited.ifc?.confidentiality ?? [])].sort()).toEqual([
+      "own",
+      "sec",
+    ]);
+
+    expect(
+      ContextualFlowControl.schemaAtPath(
+        { type: "array", items: element } as JSONSchema,
+        ["0"],
+      ),
+    ).toEqual(element);
+  });
+
   it("keeps a label observing only a container's shape, membership or reference off its children", () => {
     // Such a label is read with the container's structure, not with what
     // its children hold, as a query result's membership floor is.

@@ -750,6 +750,75 @@ describe("CFC write-destination reads", () => {
           .toContain(SECRET_ATOM);
       });
     });
+
+    it("refuses copying out an element's content where the element's own label observes only its membership", async () => {
+      await withStrictRuntime(async (runtime) => {
+        // The array's label still covers the element's content, so it must
+        // stay covering on the element's own document: scoped to the
+        // element's membership, a read of that content would leave it out,
+        // and the content could be copied anywhere.
+
+        const listSchema = {
+          type: "object",
+          properties: {
+            items: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: { note: { type: "string" } },
+                ifc: { confidentiality: [], observes: "enumerate" },
+              },
+              ifc: { confidentiality: [SECRET_ATOM] },
+            },
+          },
+          required: ["items"],
+        } as const satisfies JSONSchema;
+        const sourceSchema = rootSchemaOf(SECRET_ATOM);
+
+        const seed = runtime.edit();
+        runtime.getCell(space, "scoped-element", listSchema, seed).set({
+          items: [{ note: "a" }],
+        });
+        runtime.getCell(space, "scoped-source", sourceSchema, seed).set({
+          text: "confidential",
+        });
+        seed.prepareCfc();
+        expect(refusalOf(await seed.commit().settled)).toBeUndefined();
+        await runtime.storageManager.synced();
+
+        const tx = runtime.edit();
+        const text = runtime.getCell(space, "scoped-source", sourceSchema, tx)
+          .key("text").get();
+        runtime.getCell(space, "scoped-element", listSchema, tx).set({
+          items: [{ note: text }],
+        });
+        tx.prepareCfc();
+        expect(refusalOf(await tx.commit().settled)).toBeUndefined();
+        await runtime.storageManager.synced();
+
+        const holder = runtime.getCell<{ items: unknown[] }>(
+          space,
+          "scoped-element",
+          undefined,
+          runtime.edit(),
+        ).getRaw();
+        const element = parseLink(holder?.items[0]);
+        expect(element).toBeDefined();
+        const copy = runtime.edit();
+        const note = runtime.getCellFromLink<{ note: string }>(
+          { ...element!, space, path: [] } as Parameters<
+            typeof runtime.getCellFromLink
+          >[0],
+          undefined,
+          copy,
+        ).key("note").get();
+        runtime.getCell(space, "scoped-copy", undefined, copy).set({ note });
+        copy.prepareCfc();
+
+        expect(note).toBe("confidential");
+        expect(refusalOf(await copy.commit().settled)).toContain(SECRET_ATOM);
+      });
+    });
   });
 
   describe("the stream marker", () => {
