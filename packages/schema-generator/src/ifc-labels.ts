@@ -537,8 +537,9 @@ const emittedAnyValues = (
   bySchema: WeakMap<object, AnyValueBesideUnwritten>,
 ): Map<AnyValueBesideUnwritten, IfcLabels[]> => {
   const emitted = new Map<AnyValueBesideUnwritten, IfcLabels[]>();
-  if (!isObjectOrArray(schema)) return emitted;
-  const definitions = isObjectOrArray(schema.$defs) ? schema.$defs : {};
+  const definitions = isObjectOrArray(schema) && isObjectOrArray(schema.$defs)
+    ? schema.$defs
+    : {};
 
   const visited = new Set<MutableJSONSchema>();
   const visit = (node: MutableJSONSchema, emits: boolean): void => {
