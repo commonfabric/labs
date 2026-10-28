@@ -16,6 +16,7 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
+import { toMemorySpaceAddress } from "../src/link-types.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { RuntimeTelemetryEvent } from "../src/telemetry.ts";
@@ -235,6 +236,61 @@ describe("read-repair: stale read after cross-replica conflict", () => {
     expect(resB.error?.name).toBe("ConflictError");
     expect(commitCallbackFired, "commit callback fired at promise settlement")
       .toBe(true);
+  });
+
+  it("settles a rejected commit from a replica that watches nothing once its session catches up", async () => {
+    const CAUSE = "unwatched-writer-doc";
+
+    const docA = rtA.getCell<{ v: string }>(space, CAUSE, undefined);
+    {
+      const tx = rtA.edit();
+      docA.withTx(tx).set({ v: "v0" });
+      rtA.prepareTxForCommit(tx);
+      const res = await tx.commit({ holdSyncedUntilCovered: false }).verdict;
+      expect(res.error, `seed v0: ${JSON.stringify(res.error)}`)
+        .toBeUndefined();
+    }
+
+    // B has synced nothing, so it holds no watch view. It writes a field of
+    // the document without loading it, which bases the write on the
+    // document's absence, and the server rejects it against that basis.
+    const txB = rtB.edit();
+    const address = toMemorySpaceAddress(
+      rtB.getCell<{ v: string }>(space, CAUSE, undefined, txB)
+        .getAsNormalizedFullLink(),
+    );
+    txB.writeOrThrow({ ...address, path: ["value", "v"] }, "vB");
+    let promiseSettled = false;
+    const receipt = txB.commit();
+    const commitP = receipt.settled.then((result) => {
+      promiseSettled = true;
+      return result;
+    });
+
+    // The session's catch-up frame rides the fan-out this manual server
+    // withholds, so the promise is still held at the settle() fixpoint.
+    expect((await receipt.verdict).error?.name).toBe("ConflictError");
+    await clock.settle();
+    expect(promiseSettled, "commit promise held until the session catches up")
+      .toBe(false);
+
+    // Once the frame reaches the session, the promise settles and the retry
+    // gate opens, with no frame left for B's replica to wait on.
+    await server.flushSessions([space]);
+    await clock.settle();
+    expect(promiseSettled, "commit promise settles once the session catches up")
+      .toBe(true);
+    const resB = await commitP;
+    expect(resB.error?.name).toBe("ConflictError");
+    let pullFailures: unknown;
+    rtB.awaitCommitRetryReadiness(resB.error).then((failures) => {
+      pullFailures = failures;
+    });
+    await clock.settle();
+    expect(pullFailures, "the retry gate opens and pulls the conflict")
+      .toEqual([]);
+    expect(rtB.getCell<{ v: string }>(space, CAUSE, undefined).get())
+      .toEqual({ v: "v0" });
   });
 
   it("reports rejection through the verdict while its commit callback waits for repair", async () => {
