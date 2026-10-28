@@ -901,6 +901,9 @@ type QueryState = {
   error?: unknown;
   requestHash?: string;
 
+  /** Application key captured when this request was issued. */
+  requestKey?: string;
+
   /** CFC Phase 3.b read-time clearance audit: how many rows the acting reader
    *  could not read were withheld (a declared existence release). Absent when
    *  no clearance was requested. */
@@ -992,6 +995,7 @@ export function sqliteQuery(
       sql?: string;
       params?: WireParams;
       reactOn?: FabricValue;
+      requestKey?: string;
       // Transformer-injected from `db.query<Row>` / `sqliteQuery<Row>`; absent
       // for untyped queries.
       rowSchema?: unknown;
@@ -1059,7 +1063,7 @@ export function sqliteQuery(
         scope,
       );
       // The control state this node keeps — `/pending`, `/requestHash`,
-      // `/error` — holds whatever the transaction issuing a request read. A
+      // `/requestKey`, `/error` — holds what the issuing transaction read. A
       // request hash is a function of the parameters, so a parameter derived
       // from a labeled read is carried onto those paths, and no `ifc` an
       // author writes into a schema can declare which atoms a given
@@ -1158,6 +1162,10 @@ export function sqliteQuery(
 
     if (!inputs?.db || typeof inputs.sql !== "string") return;
 
+    const correlation = inputs.requestKey === undefined
+      ? {}
+      : { requestKey: inputs.requestKey };
+
     // A `db` that does not read back as a handle reaches the result cell as
     // this query's error, on the same terms as an unencodable parameter
     // below. The guard above admits any truthy value, and an object read
@@ -1168,7 +1176,11 @@ export function sqliteQuery(
     try {
       db = readDbRef(inputs.db);
     } catch (error) {
-      result.withTx(tx).set({ pending: false, error: errMsg(error) });
+      result.withTx(tx).set({
+        pending: false,
+        error: errMsg(error),
+        ...correlation,
+      });
       return;
     }
     const linkCols = asCellColumnsFromRowSchema(inputs.rowSchema);
@@ -1176,7 +1188,11 @@ export function sqliteQuery(
     try {
       params = encodeSqliteParams(inputs.sql, inputs.params);
     } catch (error) {
-      result.withTx(tx).set({ pending: false, error: errMsg(error) });
+      result.withTx(tx).set({
+        pending: false,
+        error: errMsg(error),
+        ...correlation,
+      });
       return;
     }
     // The acting reader of THIS run (OW53): the run-carried principal on a
@@ -1213,6 +1229,7 @@ export function sqliteQuery(
       sql: inputs.sql,
       params: params ?? null,
       reactOn: reactOn ?? null,
+      ...correlation,
       // The contract a result's labels are written under is part of the
       // identity, so a result stored under another contract cannot stand as
       // a memo hit.
@@ -1333,6 +1350,7 @@ export function sqliteQuery(
       result.withTx(new TransactionWrapper(tx, { nonReactive: true })).set({
         pending: false,
         error: SQLITE_FOREIGN_SPACE_REFUSAL,
+        ...correlation,
       });
       return;
     }
@@ -1357,10 +1375,14 @@ export function sqliteQuery(
     const requestLabel = requestConfidentiality();
     // Diffing the pending publication likewise observes only its destination.
     // The query's inputs, read above, are what schedule another request.
-    result.withTx(new TransactionWrapper(tx, { nonReactive: true })).set({
+    const pendingState = {
       pending: true,
       requestHash: hash,
-    });
+      ...correlation,
+    };
+    result.withTx(new TransactionWrapper(tx, { nonReactive: true })).set(
+      pendingState,
+    );
 
     const sql = inputs.sql;
     requestStaged = true;
@@ -1442,7 +1464,7 @@ export function sqliteQuery(
               stored as FabricValue,
             ) &&
               !valueEqual(
-                { pending: true, requestHash: hash } as FabricValue,
+                pendingState,
                 stored as FabricValue,
               );
             if (running || writtenSinceStaged) {
@@ -1464,6 +1486,7 @@ export function sqliteQuery(
             result.withTx(settleTx).set({
               pending: false,
               error: SQLITE_UNSENT_REFUSAL,
+              ...correlation,
             });
           },
         ).finally(releaseStaging),
@@ -1575,6 +1598,7 @@ export function sqliteQuery(
                   pending: false,
                   error,
                   requestHash: hash,
+                  ...correlation,
                 });
               },
               undefined,
@@ -1980,6 +2004,7 @@ export function sqliteQuery(
                   pending: false,
                   result: storedRows,
                   requestHash: hash,
+                  ...correlation,
                   ...(withheld !== undefined ? { withheld } : {}),
                 });
               },

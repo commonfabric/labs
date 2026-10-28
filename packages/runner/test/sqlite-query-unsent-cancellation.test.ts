@@ -43,11 +43,12 @@ interface QueryState {
   pending?: boolean;
   error?: unknown;
   requestHash?: string;
+  requestKey?: string;
 }
 
 describe("sqlite-query-unsent-cancellation", () => {
   const drive = async (
-    options: { cancel?: "before-abandon" },
+    options: { cancel?: "before-abandon"; requestKey?: string },
   ) => {
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({
@@ -63,6 +64,9 @@ describe("sqlite-query-unsent-cancellation", () => {
         {
           db: { id: "of:unsent-cancelled-query" },
           sql: "SELECT content FROM messages",
+          ...(options.requestKey === undefined
+            ? {}
+            : { requestKey: options.requestKey }),
         },
         undefined,
         setup,
@@ -124,5 +128,12 @@ describe("sqlite-query-unsent-cancellation", () => {
     const state = await drive({});
     expect(String(state?.error)).toContain("refused before it started");
     expect(state?.pending).toBe(false);
+  });
+
+  it("correlates an unsent refusal with the request that was abandoned", async () => {
+    const state = await drive({ requestKey: "abandoned search" });
+    expect(String(state?.error)).toContain("refused before it started");
+    expect(state?.pending).toBe(false);
+    expect(state?.requestKey).toBe("abandoned search");
   });
 });

@@ -3220,6 +3220,10 @@ export interface ISqliteQueryable {
       params?: ReadonlyArray<unknown> | Record<string, unknown>;
       reactOn?: unknown;
 
+      /** Application key echoed on this request's pending and settled states.
+       * Changing it issues a new request even when SQL and params match. */
+      requestKey?: string;
+
       /** CFC Phase 3: declared output ceiling (see SqliteQueryParams). */
       maxConfidentiality?: ReadonlyArray<unknown>;
 
@@ -3246,6 +3250,9 @@ export interface ISqliteQueryable {
       result?: SqliteQueryRow<Row>[];
       error?: any;
       withheld?: number;
+
+      /** Application key of the request that produced this state. */
+      requestKey?: string;
     }
   >;
 }
@@ -3294,6 +3301,10 @@ export type SqliteQueryParams = {
   params?: ReadonlyArray<unknown> | Record<string, unknown>;
   reactOn?: unknown;
 
+  /** Application key echoed on this request's pending and settled states.
+   * Changing it issues a new request even when SQL and params match. */
+  requestKey?: string;
+
   /** CFC Phase 3: the declared output ceiling — the maximum confidentiality
    *  the RESULT may carry (a consumer contract, not reader clearance).
    *  Placeholder atoms `{__ctCurrentPrincipal: true}` (the acting user) and
@@ -3323,6 +3334,9 @@ export type SqliteQueryFunction = {
       result?: SqliteQueryRow<Row>[];
       error?: any;
       withheld?: number;
+
+      /** Application key of the request that produced this state. */
+      requestKey?: string;
     }
   >;
 
