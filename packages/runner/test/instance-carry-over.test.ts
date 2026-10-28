@@ -97,6 +97,14 @@ const NAMED_TWO = parentProgram([
   "  return { views: [a, b], aCount: a.count, bCount: b.count };",
 ].join("\n"));
 
+// `NAMED_TWO` with a change to the parent's own source alone, so an update to
+// it moves the parent's pointer while every child keeps its identity.
+const NAMED_TWO_EDITED = parentProgram([
+  "  const a = Counter({ label: 'a' });",
+  "  const b = Counter({ label: 'b' });",
+  "  return { views: [a, b], aCount: a.count, bCount: b.count, edited: 1 };",
+].join("\n"));
+
 // An unrelated sibling `s` inserted ahead of `a`.
 const NAMED_WITH_SIBLING = parentProgram([
   "  const s = Other({ label: 's' });",
@@ -530,6 +538,33 @@ describe("instance-carry-over", () => {
         sCount: 0,
       });
       expect(freshStarts() - before).toBe(2);
+    });
+
+    it("starts fresh, where the parent's setup record holds cells of its description that this runtime's build cannot be matched with", async () => {
+      // The record is of a build with a third `Counter` child, so which of
+      // its cells went where cannot be told, though none of `a`'s or `b`'s
+      // numbers changed.
+
+      const cell = await deployedParent("record-unmatched", {
+        deployed: DEPLOYED_TWO,
+        named: NAMED_TWO,
+        counts: { aCount: 7, bCount: 9 },
+        record: (stamped) => ({
+          ...stamped,
+          cells: "a build with a third child",
+          state: [...stamped.state, [
+            stamped.state.length,
+            stamped.state[0][1],
+          ]],
+        }),
+      });
+
+      const result = await update(cell, NAMED_TWO_EDITED);
+
+      expect({ aCount: result.aCount, bCount: result.bCount }).toEqual({
+        aCount: 0,
+        bCount: 0,
+      });
     });
 
     it("keeps its deployed child's state, where the parent's setup record numbers only another instance's cell otherwise", async () => {
