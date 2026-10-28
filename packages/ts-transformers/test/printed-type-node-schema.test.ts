@@ -2673,6 +2673,50 @@ type View<T> = Omit<${alias}<${wrapper} & { y: number }, readonly ["${atom}"]>, 
         });
       }
 
+      it("labels the whole of an `Omit` over a union of `Integrity<Readonly<T> & { y: number }, …>` and a member with its keys, at `T = { x: string }`, on both sides", async () => {
+        // Evidence lands only where the payload's data must be: `Readonly<T>`
+        // read as `T` bound to its argument is where `x` must be, so `i`
+        // reaches all of the object in each member.
+        const read = await schemasOf(
+          `import type { Integrity } from "commonfabric";
+type View<T> = Omit<
+  | Integrity<Readonly<T> & { y: number }, readonly ["i"]>
+  | Integrity<{ x: string; y: number }, readonly ["i"]>,
+  never
+>;`,
+          "View<{ x: string }>",
+        );
+        for (const side of [read.input, read.output]) {
+          expect((side as Schema).ifc).toEqual({ integrity: ["i"] });
+        }
+      });
+
+      it("labels the whole of an `Omit` over a union a member of which renames the keys of `T`, at `T = { x: string }`, on both sides", async () => {
+        // The bindings name the keys of `T`, not those the `as` clause
+        // gives the member, so its restriction reaches all of the object.
+        const read = await schemasOf(
+          `type View<T> = Omit<
+  | Confidential<{ [K in keyof T as \`get_\${K & string}\`]: T[K] } & { y: number }, readonly ["c"]>
+  | Sec<{ get_x: string; y: number }>,
+  never
+>;`,
+          "View<{ x: string }>",
+        );
+        for (const side of [read.input, read.output]) {
+          const { confidentiality } = (side as Schema).ifc as {
+            confidentiality: string[];
+          };
+          expect([...confidentiality].sort()).toEqual(["a", "c"]);
+          for (
+            const property of Object.values(
+              (side as Schema).properties as Record<string, Schema>,
+            )
+          ) {
+            expect(property.ifc).toBeUndefined();
+          }
+        }
+      });
+
       it("labels the whole of a `Pick` under bindings that selects a key the payload's index signature supplies, on both sides", async () => {
         // The payload may hold its data under `y` through its index
         // signature, so the restriction reaches `y` as well as `x`.

@@ -700,7 +700,13 @@ type Payload = readonly (readonly ts.Type[])[];
  * The payload `metadata`'s carrier recorded, read under the bindings its
  * metadata is read under (`Payload`): a type parameter they bind is its
  * argument, as the checker would instantiate it, alone or in a union or an
- * intersection, which distributes over a union its argument is.
+ * intersection, which distributes over a union its argument is. A mapped
+ * type over one is what it maps where it keeps every key of that
+ * (`mapsEveryKeyOf()`), and itself where it lists its keys
+ * (`listsItsKeys()`), as `Pick<T, "x">` does. `undefined` where the payload
+ * is not read: none was recorded, or it holds a mapped type over a bound
+ * parameter whose keys the bindings alone cannot name, as one renaming them
+ * with an `as` clause has.
  */
 const boundPayloadOf = (
   metadata: CarriedMetadata,
@@ -710,24 +716,31 @@ const boundPayloadOf = (
 
 /**
  * Helper for {@link boundPayloadOf}, which returns `type` read under `bound`
- * as a payload (`Payload`). An alternative that intersects `null`,
- * `undefined` or `never` with anything else holds nothing, and drops out.
+ * as a payload (`Payload`), or `undefined` where it is not read. An
+ * alternative that intersects `null`, `undefined` or `never` with anything
+ * else holds nothing, and drops out.
  */
 const payloadUnder = (
   type: ts.Type,
   bound: BoundTypeParameters | undefined,
   checker: ts.TypeChecker,
-): Payload => {
+): Payload | undefined => {
   const argument = boundArgumentOfType(type, bound);
   if (argument) return payloadUnder(argument.type, argument.bound, checker);
   const source = mappedSourceOf(type, checker);
   if (source !== undefined && holdsBoundParameter(source, bound, checker)) {
-    return payloadUnder(source, bound, checker);
+    if (mapsEveryKeyOf(type, source)) {
+      return payloadUnder(source, bound, checker);
+    }
+    if (!listsItsKeys(type)) return undefined;
   }
   if (type.isUnion()) {
-    return type.types.flatMap((alternative) =>
+    const read = type.types.map((alternative) =>
       payloadUnder(alternative, bound, checker)
     );
+    return read.every((alternatives) => alternatives !== undefined)
+      ? read.flat()
+      : undefined;
   }
   if (
     !type.isIntersection() ||
@@ -738,6 +751,7 @@ const payloadUnder = (
   let alternatives: (readonly ts.Type[])[] = [[]];
   for (const part of type.types) {
     const read = payloadUnder(part, bound, checker);
+    if (read === undefined) return undefined;
     alternatives = alternatives.flatMap((parts) =>
       read.map((more) => [...parts, ...more])
     );
@@ -786,6 +800,36 @@ const mappedSourceOf = (
 };
 
 /**
+ * Whether `type`, a mapped type over `source` (`mappedSourceOf()`), has
+ * every key of `source` and no other, as `Readonly<T>` and
+ * `Pick<T, keyof T>` do: it maps `keyof source`, and gives no key a name of
+ * its own with an `as` clause.
+ */
+const mapsEveryKeyOf = (type: ts.Type, source: ts.Type): boolean => {
+  const { constraintType, declaration } = type as MappedTypeWithInternals;
+  return declaration?.nameType === undefined &&
+    constraintType !== undefined &&
+    (constraintType.flags & ts.TypeFlags.Index) !== 0 &&
+    (constraintType as ts.IndexType).type === source;
+};
+
+/**
+ * Whether `type`, a mapped type, lists its keys, as `Pick<T, "x" | "y">`
+ * does: each is a literal, and none gets a name of its own with an `as`
+ * clause.
+ */
+const listsItsKeys = (type: ts.Type): boolean => {
+  const { constraintType, declaration } = type as MappedTypeWithInternals;
+  return declaration?.nameType === undefined &&
+    constraintType !== undefined &&
+    alternativesOf(constraintType).every((key) =>
+      (key.flags &
+        (ts.TypeFlags.StringLiteral | ts.TypeFlags.NumberLiteral |
+          ts.TypeFlags.UniqueESSymbol)) !== 0
+    );
+};
+
+/**
  * The declarations of each member `of`, a payload, holds as data, by name
  * (`dataMemberDeclarations()`): those of every part of every alternative
  * that is no primitive value, each name holding the declarations of each
@@ -812,12 +856,16 @@ const payloadMemberDeclarations = (
 };
 
 /**
- * A mapped type as the checker holds it, with the type it maps over:
- * `modifiersType` is `T` in `{ readonly [K in keyof T]: T[K] }`, which the
- * checker sets once it resolves the mapped type's members.
+ * A mapped type as the checker holds it once it resolves the mapped type's
+ * members: in `{ readonly [K in keyof T as N]: T[K] }`, `modifiersType` is
+ * `T`, the type it maps over, `constraintType` is `keyof T`, the keys it
+ * maps, and `declaration` is the node that writes it, whose `nameType` is
+ * `N`.
  */
 type MappedTypeWithInternals = ts.ObjectType & {
   readonly modifiersType?: ts.Type;
+  readonly constraintType?: ts.Type;
+  readonly declaration?: ts.MappedTypeNode;
 };
 
 /**
@@ -1414,6 +1462,47 @@ export function lowersFromReferenceArguments(
       checker,
       new Set([declaration]),
     );
+}
+
+/**
+ * Whether `node` writes, in any of its parts or of the alias declarations they
+ * reference, each read once, a kind of wrapper the checker erases around
+ * `any`: a CFC alias or a scope wrapper this formatter lowers, or a `Default`.
+ * The checker reads `any` beside anything as `any`, so `Confidential<any, C>`
+ * is `any` to it, and only the written node holds the label.
+ */
+export function writesWrapperErasedByAny(
+  node: ts.TypeNode,
+  checker: ts.TypeChecker,
+): boolean {
+  const read = new Set<ts.TypeAliasDeclaration>();
+  const writes = (node: ts.Node): boolean => {
+    if (ts.isTypeReferenceNode(node)) {
+      if (
+        resolveScopeWrapperNode(node) ||
+        detectWrapperViaNode(node, checker) === "Default"
+      ) return true;
+      const symbol = checker.getSymbolAtLocation(
+        entityNameRight(node.typeName),
+      );
+      const declaration = symbol &&
+        resolveAliasedSymbol(symbol, checker).declarations?.find(
+          ts.isTypeAliasDeclaration,
+        );
+      if (declaration && !read.has(declaration)) {
+        read.add(declaration);
+        // A canonical alias this formatter lowers from the type the checker
+        // resolves it to (`lowersFromSyntax()`) is no wrapper read from its
+        // syntax, and nor is what its declaration resolves to.
+        if (CFC_ALIAS_NAMES.has(declaration.name.text)) {
+          if (lowersFromSyntax(declaration.name.text)) return true;
+        } else if (writes(declaration.type)) return true;
+      }
+    }
+    return ts.forEachChild(node, (child) => writes(child) || undefined) ??
+      false;
+  };
+  return writes(node);
 }
 
 /**
@@ -3642,8 +3731,17 @@ export class CommonFabricFormatter implements TypeFormatter {
           this.#refersToCfcAlias(payloadNode, context),
         context.typeChecker,
       );
+    // A payload that is a parameter no binding reaches is the alias's own,
+    // read from its declared type, as a reference the checker reads as `any`
+    // is: `Integrity<Confidential<any, C>, I>` is `any` to the checker. The
+    // payload is then the argument as written, whose labels only its node
+    // holds.
+    const payloadType = payloadNode && baseType.isTypeParameter() &&
+        !this.#boundArgumentFor(typeParameterOfType(baseType), context)
+      ? this.#writtenArgumentType(payloadNode, context)
+      : baseType;
     return this.#schemaGenerator.formatChildType(
-      baseType,
+      payloadType,
       context,
       payloadNode,
       instantiatedPayload,
