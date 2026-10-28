@@ -1162,9 +1162,8 @@ export function sqliteQuery(
 
     if (!inputs?.db || typeof inputs.sql !== "string") return;
 
-    const correlation = inputs.requestKey === undefined
-      ? {}
-      : { requestKey: inputs.requestKey };
+    const requestKey = inputs.requestKey;
+    const correlation = typeof requestKey === "string" ? { requestKey } : {};
 
     // A `db` that does not read back as a handle reaches the result cell as
     // this query's error, on the same terms as an unencodable parameter
@@ -1483,7 +1482,36 @@ export function sqliteQuery(
             // again. Nothing spins on it either — this node reads its own
             // result as a write destination, so writing one schedules no
             // re-run of the action that wrote it.
-            result.withTx(settleTx).set({
+            // The abandoned claim persisted no label. Carry the captured
+            // request's confidentiality on its echoed key (§8.17.6 rule 2),
+            // preserving any declaration this result already holds.
+            let target = result.withTx(settleTx);
+            if (
+              correlation.requestKey !== undefined && requestLabel.length > 0
+            ) {
+              const base = result.getAsNormalizedFullLink();
+              const prior = cfcConfidentialityForObservationNode({
+                labelView: cfcLabelViewFromMetadata(
+                  readStoredCfcMetadata(settleTx, base),
+                  [...base.path, "requestKey"],
+                ),
+              });
+              target = target.asSchema<QueryState>({
+                type: "object",
+                properties: {
+                  requestKey: {
+                    type: "string",
+                    ifc: {
+                      confidentiality: joinCfcObservedConfidentiality([
+                        prior,
+                        requestLabel,
+                      ]),
+                    },
+                  },
+                },
+              });
+            }
+            target.set({
               pending: false,
               error: SQLITE_UNSENT_REFUSAL,
               ...correlation,

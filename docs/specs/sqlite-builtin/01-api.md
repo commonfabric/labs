@@ -288,6 +288,9 @@ Changing it changes the memo identity even when SQL and parameters match. A
 consumer compares it with its current application key before using the state;
 updating an input does not synchronously replace the query's previous state.
 The key does not change row identities and is absent for an untagged request.
+Keep it stable for unchanged search and source inputs; unrelated rendering state
+in the key causes another database request. A source registration generation
+belongs in the key only when a new registration requires a fresh request.
 
 SQLite permits result aliases that Fabric records reserve against prototype
 pollution. A reactive query carries a row containing `constructor` or
