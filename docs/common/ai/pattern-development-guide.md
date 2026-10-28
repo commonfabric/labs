@@ -64,6 +64,11 @@ to the active user, and which state is local to one session.
 
 ## Reusing CFC Helpers
 
+Before designing anything that handles labeled data, trusted UI, or events
+from `cf-*` components, read
+`docs/common/concepts/cfc-surprising-implications.md`: it lists the
+consequences of Contextual Flow Control that designs most often get wrong.
+
 For CFC policy code, check `packages/patterns/cfc/README.md` before copying
 from an existing demo. Reuse the shared helpers there for common admin
 registries, trusted UI actions, trusted surfaces, and prompt-injection
