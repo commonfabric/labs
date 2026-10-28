@@ -1040,6 +1040,10 @@ const NOT_A_ROOT = "That message is in a thread, so it can't start one.";
 const QUOTE_OUTSIDE_THREAD =
   "A reply in a thread can quote only a message of that thread.";
 
+/** Why a quote in the conversation cannot name a thread-only message. */
+const QUOTE_OUTSIDE_MAIN =
+  "A reply in the conversation can quote only a message shown there.";
+
 /** Why a thread's title with no text in it is refused. */
 const NO_THREAD_TITLE_TEXT = "A thread's title needs some text.";
 
@@ -1092,6 +1096,24 @@ const checkedReply = (
     ...(quoted === undefined ? {} : { quotes: quoted }),
     shownIn: reply.shownIn,
   };
+};
+
+/**
+ * Checks a quote made by the room's own controls at send time. The quoted
+ * message must still be live and, for a main reply, shown in the conversation.
+ * A thread's root is checked only when it is itself being quoted.
+ *
+ * @throws If the quoted message is deleted or outside the main conversation.
+ */
+const checkComposedQuote = (
+  message: MessageCell,
+  shownIn: StoredReply["shownIn"],
+): void => {
+  const record = message.get();
+  if (isDeleted(record)) throw new Error(DELETED);
+  if (shownIn === "main" && record?.replyTo?.shownIn === "thread") {
+    throw new Error(QUOTE_OUTSIDE_MAIN);
+  }
 };
 
 /**
@@ -1337,6 +1359,7 @@ export const commitComposerSend = handler<RoomStreamEvent, ComposerSendState>(
     // A cleared link still reads back as a cell, holding nothing.
     const link = composer.get()?.replyTo;
     const reply = link?.get() === undefined ? undefined : link;
+    if (reply !== undefined) checkComposedQuote(reply, "main");
     const attaching = composer.get()?.attaching ?? [];
     sendInto(
       event,
@@ -1479,6 +1502,7 @@ export const commitThreadSend = handler<RoomStreamEvent, ThreadSendState>(
     const thread = root?.get() === undefined ? undefined : root;
     const link = composer.get()?.threadQuotes;
     const quotes = link?.get() === undefined ? undefined : link;
+    if (quotes !== undefined) checkComposedQuote(quotes, shownIn);
     sendInto(
       event,
       undefined,
@@ -1503,6 +1527,7 @@ export const commitThreadSend = handler<RoomStreamEvent, ThreadSendState>(
  */
 export const commitReply = handler<RoomStreamEvent, ReplyState>(
   (event, { myProfile, messages, message, shownIn, joined }) => {
+    checkComposedQuote(message, shownIn);
     const own = message.get()?.replyTo?.thread;
     const thread = own?.get() === undefined ? message : own;
     sendInto(

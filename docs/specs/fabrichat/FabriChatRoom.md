@@ -98,7 +98,7 @@ Every write goes through one handler per stream:
 | `commitSetTitle` | `setTitle` | `ChatRetitleSurface` |
 | `commitSetThreadTitle` | `setThreadTitle` | `ChatRetitleSurface` |
 
-The four send handlers differ only in where a send's reply comes from:
+The four send handlers take a send's reply from different sources:
 `commitSend` takes it from the event, `commitComposerSend` from the reply the
 composer is composing, which a sent message ends, `commitThreadSend` from the
 open thread and the message of it the thread composer quotes, which a sent
@@ -111,6 +111,14 @@ one of the room's messages, in that thread where it names one (see
 [`ChatReply`](ChatReply.md#threads)), which reads at most those two messages. Each
 handler is bound to the cells it reads or writes and no others, and reads at
 most the message it acts on: nothing it does grows with the room.
+
+The room's own composer and message-row handlers also check the message they
+quote at send time: it must not be deleted or obliterated, and a main reply
+must quote a message shown in the main conversation. A target deleted after
+composition started therefore refuses the send. A plain post in a thread
+quotes nothing and remains possible when the root is deleted. `commitSend`
+leaves these client responsibilities to its caller, as specified by
+[`sendMessage`](ChatRoomOutput.md#sendmessagebody-string-replyto-chatreply-threadtitle-string-attachments-cellfileentry).
 
 Those who joined the room are the exception. The room's `addParticipant`
 stream is bound to the roster's one writer, also named `addParticipant`, which
