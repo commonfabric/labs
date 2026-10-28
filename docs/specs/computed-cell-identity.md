@@ -220,9 +220,38 @@ names a stored record may not use as a key, such as `constructor` and
 `__proto__`; an entry repeating an earlier entry's name is ignored. Binding reads it on every setup and start: a named
 instance it records a child for runs that child, and any other named instance
 runs the child at its own spot. The record is how a deployed parent's
-positional child can become a named instance's child without moving to a new
-document. No part of the runtime writes it yet: carrying a deployed parent's
-positional children over to their names is what will.
+positional child becomes a named instance's child without moving to a new
+document.
+
+A parent set up under a pattern that did not name an instance holds that
+instance's child at the positional spot. The first setup of the parent under a
+pattern that names the instance carries that child over
+(`planInstanceCarryOver` in `packages/runner/src/runner.ts`) and records it in
+`instanceChildren`, so carrying a child over is a one-time transition for each
+deployed parent. The child carried over is the one at the
+`legacyPartialCause` that the pattern the parent last set up gives the same
+instance name, where that pattern is loaded and names the instance. The
+pattern last set up is the one the parent's setup record describes, or, with
+no record of the current version, the one its setup marker names: a start
+repair re-stamps the record and leaves the marker alone, and the children sit
+at the numbers of the build the record describes. That build was made by the
+runtime that set the parent up, and the cause is one this runtime's build of
+the same pattern gives, so the record is held against this runtime's build
+(`compareStoredSetupBuild`): an instance whose cell the record shows holding
+state at another number, or whose description the record's cells cannot be
+matched with, carries nothing over. With no record, this runtime's build
+places the instance. A child is carried over by one instance at most. A start
+loads the pattern last set up by its identity, and syncs the children at the
+positional causes it gives the instances it names, before setup reads them.
+
+An instance that carries nothing over starts fresh, and the setup logs
+`instance-carry-over` naming it: one the pattern last set up does not name,
+which is new or was positional there; one whose parent's pattern last set up
+does not load, or that the record numbers otherwise; and one whose child at
+that cause another instance already carries. Whatever a version without the
+name set up for it is left where it is. An instance the parent ran under a
+name the pattern no longer gives is reported the same way, and its child is
+left behind.
 
 A sub-pattern instance with a positional cause moves to another child's state
 when a cell is added ahead of it, since its child is the one minted from
