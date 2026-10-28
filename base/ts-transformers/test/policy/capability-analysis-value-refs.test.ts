@@ -508,6 +508,18 @@ export default lift(({ rows }: { rows: Row[] }): Row[] =>
       expect(fields).toEqual(["id", "name", "note"]);
     });
 
+    it("keeps every field of a returned sorted copy a callback passed by name filters through a conditional", async () => {
+      const fields = await liftRowFields(`
+import { lift } from "commonfabric";
+interface Row { id: number; name: string; note: string }
+const keep = (row: Row) => row.name === "A";
+export default lift(({ rows, enabled }: { rows: Row[]; enabled: boolean }): Row[] =>
+  (enabled ? [...rows].sort((a, b) => a.id - b.id) : []).filter(keep)
+);
+`);
+      expect(fields).toEqual(["id", "name", "note"]);
+    });
+
     it("keeps comparing the elements of a copy the body only splices and writes back", async () => {
       const state = await stateProperties(`
 import { equals, handler, Writable } from "commonfabric";

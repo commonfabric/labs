@@ -241,6 +241,21 @@ export default pattern<{
       });
     });
 
+    it("reaches the input schema whole from a callback passed by name over a conditional of arrays", async () => {
+      const schema = await liftInputSchema(
+        `table.filter((row) => row.topic !== undefined).length > 0
+  ? (self ? table : []).filter(mentioned)
+  : []`,
+        `const mentioned = (row: { mentionedBy: unknown }) =>
+  row.mentionedBy !== undefined;`,
+      );
+
+      expect(elementProperties(schema)).toEqual({
+        topic: { type: "unknown" },
+        mentionedBy: { type: "unknown" },
+      });
+    });
+
     it("reaches the input schema through the array a callback is handed", async () => {
       const schema = await liftInputSchema(
         `table.filter((row, index, all) =>

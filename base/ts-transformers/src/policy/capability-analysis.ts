@@ -1307,6 +1307,31 @@ function outermostValueForwarder(node: ts.Expression): ts.Expression {
 }
 
 /**
+ * Returns the operands whose value `expression` forwards unchanged, as
+ * {@link outermostValueForwarder} climbs them: both branches of a
+ * conditional, both operands of `??` and `||`, and the right operand of `&&`
+ * or a comma. Any other expression forwards none.
+ */
+function forwardedOperands(
+  expression: ts.Expression,
+): readonly ts.Expression[] | undefined {
+  if (ts.isConditionalExpression(expression)) {
+    return [expression.whenTrue, expression.whenFalse];
+  }
+  if (!ts.isBinaryExpression(expression)) return undefined;
+  switch (expression.operatorToken.kind) {
+    case ts.SyntaxKind.QuestionQuestionToken:
+    case ts.SyntaxKind.BarBarToken:
+      return [expression.left, expression.right];
+    case ts.SyntaxKind.AmpersandAmpersandToken:
+    case ts.SyntaxKind.CommaToken:
+      return [expression.right];
+    default:
+      return undefined;
+  }
+}
+
+/**
  * Returns the expression whose value holds the elements of the array literal
  * `literal`: the literal, or the copy a `filter`, `sort`, `toSorted` or
  * `slice` called on it makes, however many are chained.
@@ -3206,6 +3231,19 @@ export function analyzeFunctionCapabilities(
       expression: ts.Expression,
     ): AliasBinding | undefined => {
       const current = unwrapExpression(expression);
+      // An array a fallback or a conditional yields holds the elements of
+      // whichever operand it yields.
+      const operands = forwardedOperands(current);
+      if (operands) {
+        let binding: AliasBinding | undefined;
+        for (const operand of operands) {
+          const next = resolveArrayElementBinding(operand);
+          if (!next) continue;
+          binding = binding ? eitherBinding(binding, next) : next;
+          if (!binding) return undefined;
+        }
+        return binding;
+      }
       if (ts.isCallExpression(current)) {
         const target = unwrapExpression(current.expression);
         const receiverExpr = ts.isPropertyAccessExpression(target) ||

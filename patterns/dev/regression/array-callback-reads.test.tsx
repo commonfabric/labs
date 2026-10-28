@@ -8,7 +8,8 @@
  * callback second, and the element `reduce` or `reduceRight` starts its
  * accumulator at when given no initial value all read `name` where the
  * narrowing would not see it, so the callback would read `undefined` and a
- * filter would drop every row.
+ * filter would drop every row. The named callback reads the same through a
+ * conditional or a fallback around the copy it filters.
  *
  * Run: deno task cf test packages/patterns/regression/array-callback-reads.test.tsx
  */
@@ -32,6 +33,15 @@ const sortedCopyThroughArray = lift(({ rows }: { rows: Row[] }): Row[] =>
   [...rows].sort((a, b) => a.id - b.id).filter((_, index, all) =>
     all[index].name === "A"
   )
+);
+
+const conditionalCopyByName = lift(
+  ({ rows, enabled }: { rows: Row[]; enabled: boolean }): Row[] =>
+    (enabled ? [...rows].sort((a, b) => a.id - b.id) : []).filter(isA),
+);
+
+const fallbackCopyByName = lift(({ rows }: { rows: Row[] }): Row[] =>
+  ([...rows].sort((a, b) => a.id - b.id) ?? []).filter(isA)
 );
 
 const filteredByName = lift(({ rows }: { rows: Row[] }): Row[] =>
@@ -62,6 +72,10 @@ export default pattern(() => {
   ]);
   const byName = names({ rows: sortedCopyByName({ rows }) });
   const throughArray = names({ rows: sortedCopyThroughArray({ rows }) });
+  const conditional = names({
+    rows: conditionalCopyByName({ rows, enabled: true }),
+  });
+  const fallback = names({ rows: fallbackCopyByName({ rows }) });
   const filtered = names({ rows: filteredByName({ rows }) });
   const reduced = anyNamedA({ rows });
   const first = firstName({ rows });
@@ -69,6 +83,12 @@ export default pattern(() => {
 
   const assert_named_callback_reads_name = assert(() => byName === "A");
   const assert_array_parameter_reads_name = assert(() => throughArray === "A");
+  const assert_conditional_copy_callback_reads_name = assert(() =>
+    conditional === "A"
+  );
+  const assert_fallback_copy_callback_reads_name = assert(() =>
+    fallback === "A"
+  );
   const assert_named_callback_on_filter_reads_name = assert(() =>
     filtered === "A"
   );
@@ -80,6 +100,8 @@ export default pattern(() => {
     [TESTS]: [
       { assertion: assert_named_callback_reads_name },
       { assertion: assert_array_parameter_reads_name },
+      { assertion: assert_conditional_copy_callback_reads_name },
+      { assertion: assert_fallback_copy_callback_reads_name },
       { assertion: assert_named_callback_on_filter_reads_name },
       { assertion: assert_reduce_element_reads_name },
       { assertion: assert_reduce_accumulator_reads_name },

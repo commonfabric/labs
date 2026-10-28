@@ -2444,7 +2444,10 @@ adjustments:
   unread item fields. Each method binds the parameters it hands elements to:
   the first for `map`, `filter`, `find`, `some`, `every`, `forEach`, `flatMap`
   and the index lookups, the second for `reduce` and `reduceRight`, whose
-  first is the accumulator, and the first two for `sort` and `toSorted`. The
+  first is the accumulator, and the first as well when either is given no
+  initial value, which starts the accumulator at an element, and the first
+  two for `sort` and `toSorted`. A receiver that is a fallback or a
+  conditional holds the elements of each operand it may yield. The
   parameter the method hands the array itself to binds the receiver's own ref.
   Where the callback runs over the elements unseen — a function passed by
   name, a rest parameter, a function expression reading `arguments`, or an
