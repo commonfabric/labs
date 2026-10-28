@@ -376,10 +376,13 @@ instead of the flow join:
   everything that resolves at the slot, whatever its class, wildcard
   templates included (spec §18.6.2 `referenceLabel`), as one class-less entry
   at the view's root. That holds for `resolveAsCell()`, a lazy read's hop, a
-  query-result proxy, and every link an eager schema read crosses. A rebase
-  keeps a class-less ancestor entry, so every position reached through the
-  link carries them, as spec §4.6.3 and §8.2.4 require, where the slot's own
-  `followRef` entry is dropped below the target. No path carries anything
+  query-result proxy, and every link an eager schema read crosses. Eager
+  materialization also journals the pointer observation and its dereference
+  trace at each crossing. The transaction's flow join therefore consumes the
+  reference restrictions even when the returned primitive carries no label
+  view. A rebase keeps a class-less ancestor entry, so every position reached
+  through the link carries them, as spec §4.6.3 and §8.2.4 require, where the
+  slot's own `followRef` entry is dropped below the target. No path carries anything
   else from the slot: the handle's view is confidentiality alone, since the
   slot's integrity endorses the selection the slot holds and not a copy of
   the handle (spec §3.7.2), and the labels of the document the handle names

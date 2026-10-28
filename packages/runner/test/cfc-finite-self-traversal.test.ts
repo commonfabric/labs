@@ -44,12 +44,13 @@ describe("cfc-finite-self-traversal", () => {
     await storageManager.close();
   });
 
-  // Schema parity covers public and leaf-confidential content; keyed reads
-  // also exercise restrictions carried by the reference.
   for (
     const { route, labels } of [
       { route: "keyed", labels: ["neither", "reference", "leaf", "both"] },
-      { route: "schema-selected", labels: ["neither", "leaf"] },
+      {
+        route: "schema-selected",
+        labels: ["neither", "reference", "leaf", "both"],
+      },
     ] as const
   ) {
     describe(route, () => {
