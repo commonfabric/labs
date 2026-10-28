@@ -3,8 +3,8 @@
 This document specifies the JSON-compatible wire format used to represent
 `FabricValue`s, including the `fvj1:` encoding prefix, the tagged-object
 convention, escaping mechanisms, codec engine responsibilities, the
-reservation rules for `/`-prefixed keys, and the canonical text an encoder
-writes.
+reservation rules for `/`-prefixed keys, the canonical text an encoder writes,
+and the floors on an implementation's limits.
 
 ## Status
 
@@ -42,9 +42,9 @@ a string is sufficient to tell whether it carries a `FabricValue` payload.
   in which an object names one member twice, and a number too large in
   magnitude for an IEEE 754 double, which it does not round to an infinity or
   to the largest double. It refuses the number `-0` too: negative zero is
-  written only as `SpecialNumber@1` (Section 3). Short of those refusals, it
-  accepts any JSON text, not only the canonical text an encoder writes
-  (Section 11.4).
+  written only as `SpecialNumber@1` (Section 3). Short of those refusals, and
+  of the implementation's own limits (Section 12), it accepts any JSON text,
+  not only the canonical text an encoder writes (Section 11.4).
 - A short detection helper (`JsonCodecEngine.seemsLikeEncoded()`) tests for
   the prefix without parsing — useful for routing arbitrary input through the
   right decode path.
@@ -344,15 +344,9 @@ See `1-fabric-values.md` Section 3.5.
 > - A very sparse array like `a = []; a[1000000] = 'x'` encodes as `[{ "/hole":
 >   1000000 }, "x"]`.
 
-> **Maximum array length.** An implementation **may** limit the length of an
-> array, and one that does **must** state its limit. Whatever the limit, an
-> array of exactly that length is within it even when every element is a hole:
-> an implementation whose limit is `n` decodes `[{ "/hole": n }]`, and encodes
-> the array it stands for. A text standing for a longer array, counting each
-> hole a run stands for, is refused. The limit is a property of the
-> implementation, the same for every decode, and is distinct from the slot
-> limit below, which a caller sets for one decode to bound what reading a text
-> costs.
+> **Maximum array length.** An implementation may limit the length of an
+> array, within the bounds Section 12 sets, which also say how a run of holes
+> counts against the limit.
 
 > **Bounding a decode of untrusted text.** Parsing JSON text builds every
 > value the text writes, and because a `hole` run carries its length as a
@@ -364,7 +358,9 @@ See `1-fabric-values.md` Section 3.5.
 > stands for. The elements and members can be counted by scanning the text
 > without parsing it, so a decoder can refuse text before building any of it.
 > The format itself sets no slot limit, and a decoder reading text it wrote
-> itself sets none.
+> itself sets none. A slot limit is distinct from the limits of Section 12: it
+> belongs to one decode rather than to the implementation, and the floors that
+> section sets do not bind it.
 
 ## 4. Detection
 
@@ -742,3 +738,36 @@ can differ from the text that arrived even though the value does not.
 > equal text, which lets content addressing, deduplication, and diffing work on
 > the text directly, and lets a conformance case state the exact text an
 > encoder must produce.
+
+## 12. Implementation Limits
+
+An implementation **may** limit the length of an array and the number of
+members of a record. These limits are properties of the implementation, the
+same for every value it encodes or decodes, and an implementation that sets one
+**must** state it. Each has a floor, which no implementation's limit may be
+below, so that every implementation can read what any other writes within the
+floors:
+
+| Limit | Floor |
+|-------|-------|
+| Length of an array | 2^24 (16,777,216) elements |
+| Members of a record | 2^14 (16,384) members |
+
+A text writing an array or a record past an implementation's limit is refused.
+
+**Arrays.** An array's length counts every hole a `hole` run stands for
+(Section 3), not just the members the text writes. Whatever the limit, an array
+of exactly that length is within it even when every element is a hole: an
+implementation whose limit is `n` decodes `[{ "/hole": n }]`, and encodes the
+array it stands for.
+
+**Records.** A record is any object the JSON body writes: a plain object,
+including one wrapped in `/object` or `/quote` (Section 6), and equally a
+type's state, such as an `Error@1` state with its custom properties. The
+single-key object that wraps a tagged value has one member, and is always
+within the limit.
+
+**What the floors do not bind.** The floors bind only an implementation's own
+limits. A caller reading untrusted text may set a lower bound for one decode,
+the slot limit of Section 3, and refusing text under that bound is no failure
+to meet a floor.

@@ -44,16 +44,21 @@ Two things follow for a class written here:
 - `test/frozen-classes.test.ts` walks `src/` and fails for any exported class
   that is not frozen, so a new class cannot leave the block out unnoticed.
 
-## The `fvj1:` codec's array limit
+## The `fvj1:` codec's limits
 
-The format lets an implementation limit how long an array may be, provided it
-states the limit
+The format lets an implementation limit the length of an array and the number of
+members of a record, provided it states each limit and keeps it at or above the
+format's floor
 ([`3-json-encoding.md`](../../docs/specs/space-model-formal-spec/3-json-encoding.md)
-Section 3, "Maximum array length"). This package's limit is 2^32 - 1
-(4,294,967,295) elements, the most a JavaScript array can hold. An array of that
-length is within it even when every element is a hole, so
-`fvj1:[{"/hole":4294967295}]` decodes, and `fvj1:[{"/hole":4294967296}]` is
-refused.
+Section 12). This package's limits are these:
+
+- **Arrays:** 2^32 - 1 (4,294,967,295) elements, the most a JavaScript array can
+  hold. An array of that length is within it even when every element is a hole,
+  so `fvj1:[{"/hole":4294967295}]` decodes, and `fvj1:[{"/hole":4294967296}]` is
+  refused.
+- **Records:** none of its own. A record is built as a JavaScript object, so in
+  practice its size is bounded only by memory and by how many properties the
+  JavaScript engine lets one object hold, which is far above the floor.
 
 ## Conformance fixtures
 

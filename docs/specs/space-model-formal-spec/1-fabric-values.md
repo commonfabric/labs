@@ -3844,8 +3844,9 @@ The implementation is split across several files for separation of concerns:
 ## 5. JSON Encoding for Special Types
 
 The JSON encoding for `FabricValue`s — the `/<Type>@<Version>` wire format,
-type encodings, escaping mechanisms, the `/`-key reservation rule, and the
-canonical text an encoder writes — is specified in a dedicated document:
+type encodings, escaping mechanisms, the `/`-key reservation rule, the
+canonical text an encoder writes, and the floors on an implementation's limits
+— is specified in a dedicated document:
 
 **See [`3-json-encoding.md`](./3-json-encoding.md)**
 
