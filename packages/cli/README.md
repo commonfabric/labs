@@ -2086,10 +2086,12 @@ remaining message opens one follow-up and publishes
 `{key, delivery: "follow-up", jobId}`; the rest publish
 `{key, delivery: "moved", jobId}` on the old job and `pending` on the new job.
 Each such outcome precedes the old job's terminal state event. A run takes
-messages in acceptance order up to the first instruction replacement or message
-accepted after that holder's cancel request. Messages behind it wait with it. A
-moved message loses the old holder's cancellation restriction, but an
-instruction replacement still waits to open its own follow-up.
+messages in acceptance order up to the first message only a follow-up can
+answer, one carrying `instructions`, `imageAttachments` or `inputs`, or the
+first message accepted after that holder's cancel request. Messages behind it
+wait with it. A moved message loses the old holder's cancellation restriction,
+but a message carrying instructions or attachments still waits to open its own
+follow-up.
 
 Cancellation drops waiting messages accepted before the request as
 `{key, delivery: "dropped", reason: "cancelled"}`. Later messages wait for the
@@ -2150,10 +2152,13 @@ first, and a repeated answer reads as a duplicate. `GET /jobs/<id>` shows the
 host as `browser {state, attached, outstanding, withdrawn}`.
 
 `resultSchema` is optional. With a schema, a job ends `completed` with its
-validated JSON result as soon as the harness accepts the model's
-`submit_result`; nothing the model does after an accepted result can fail it,
-since the run asks the model for nothing further. Without a schema, the job has
-no structured-result contract, result file or `submit_result` tool, and its
+validated JSON result once the harness accepts the model's `submit_result` and
+no message is waiting to be taken; the run then asks the model for nothing
+further, so nothing after the accepted result can fail it. When a message is
+waiting and a model turn remains, the run takes it and continues, and that later
+work decides how the job ends: a later `submit_result` replaces the result, and
+a later failure or cancellation is the job's outcome. Without a schema, the job
+has no structured-result contract, result file or `submit_result` tool, and its
 `result` is the final assistant text as a plain string. Follow-ups inherit the
 absence of a schema. An empty assistant answer with no tool calls fails under
 the harness's existing `PROVIDER_FAILURE` handling; exhausting its turn budget
