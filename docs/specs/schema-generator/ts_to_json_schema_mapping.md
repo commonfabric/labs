@@ -159,7 +159,20 @@ that denote other nodes nests only as deep as those arguments, and keeps the
 label at each level: `Box<Box<string>>`, and `Wrap<Wrap<string>>` where
 `type Wrap<T> = Box<T>`, whose one reference to `Box` is read at each level.
 A recursion through a named definition is not one either: the definition's
-`$ref` ends it, and the alias is read afresh inside the definition. A plain generic declaration is read under
+`$ref` ends it, and the alias is read afresh inside the definition. The same
+wrapper written as a record's value or a tuple's element is lost to a reading
+by type, which holds `any` there and keeps no declaration naming it:
+`Record<string, Confidential<any, C>>` is a record of `any` to the checker,
+and `[Secret]` a tuple of `any`. So a reference to one of the default
+library's aliases above, or a tuple, with a part the checker reads as `any`
+that writes such a wrapper (`#holdsWrapperErasedByAny()`) is read by its
+syntax, from the type path as well: `{ a: Record<string, Secret> }` gives `a`
+`{ type: "object", properties: {}, additionalProperties: { ifc: … } }`,
+through `Readonly` and `Partial` too, and a tuple's items keep the wrapper. A
+tuple written in place is read so wherever it is; one an alias declares is
+read so inside the alias's definition, whose `$ref` ends a recursion through
+it, as in `type List = [Secret, List?]`. Where the alias's rules do not apply,
+as to `Omit` with keys no literal names, the reference is read by its type. A plain generic declaration is read under
 bindings for every required parameter, taken from the reference's written
 arguments or preceding-parameter defaults (§4.1). A member the bindings cannot
 read, such as an indexed access with no checker-created instantiation, remains

@@ -3610,7 +3610,11 @@ export class SchemaGenerator {
       if (formatter.supportsType(type, context)) {
         const result = formatter !== this.#commonFabricFormatter &&
             context.typeNode && !ts.isTypeLiteralNode(context.typeNode) &&
-            this.#readsBySyntax(context.typeNode, context)
+            (this.#readsBySyntax(context.typeNode, context) ||
+              this.#namesTupleHoldingWrapperErasedByAny(
+                context.typeNode,
+                context,
+              ))
           ? this.#analyzeTypeNodeStructure(
             context.typeNode!,
             context.typeChecker,
@@ -4228,7 +4232,8 @@ export class SchemaGenerator {
     // `#readsBySyntax()` sends it here to be.
     const behind = this.#tupleBehind(typeNode, context);
     const tuple = ts.isTupleTypeNode(typeNode) ||
-        (behind && this.#holdsWriterQuery(behind, context))
+        (behind && (this.#holdsWriterQuery(behind, context) ||
+          this.#holdsWrapperErasedByAny(behind, context)))
       ? behind
       : undefined;
     if (tuple) {
@@ -4437,10 +4442,16 @@ export class SchemaGenerator {
       }
       if (resolved) {
         const { boundTypeParameters: _, ...unbound } = context;
+        const library = this.#namesLibraryAlias(typeNode, context);
+        // One read by its syntax for a wrapper the checker erases around
+        // `any` (`#readsBySyntax()`), whose rules do not apply, is read by its
+        // type, with no node to send it back to its syntax.
+        const readByType = library &&
+          this.#holdsWrapperErasedByAny(typeNode, context);
         return this.formatChildType(
           resolved,
-          this.#namesLibraryAlias(typeNode, context) ? unbound : context,
-          typeNode,
+          library ? unbound : context,
+          readByType ? undefined : typeNode,
           context.instantiatedAs,
         );
       }
@@ -5034,7 +5045,11 @@ export class SchemaGenerator {
    * writer as a `typeof` query is read by its syntax under no bindings too,
    * written out or declared by a non-generic alias a reference names
    * (`#tupleBehind()`): the checker's element types hold no declaration to
-   * name that writer by.
+   * name that writer by. So is a tuple written in place, or a default-library
+   * alias the node-based analyzer applies, with a part that writes a wrapper
+   * the checker erases around `any` (`#holdsWrapperErasedByAny()`), whose type
+   * holds `any` there; a tuple an alias declares is read so inside its
+   * definition (`#namesTupleHoldingWrapperErasedByAny()`).
    */
   #readsBySyntax(
     typeNode: ts.TypeNode | undefined,
@@ -5045,6 +5060,15 @@ export class SchemaGenerator {
     const written = unwrapTypeParentheses(typeNode);
     const tuple = this.#tupleBehind(written, context);
     if (tuple && this.#holdsWriterQuery(tuple, context)) return true;
+    const inPlace = unwrapTypeNode(written);
+    if (
+      ts.isTupleTypeNode(inPlace) &&
+      this.#holdsWrapperErasedByAny(inPlace, context)
+    ) return true;
+    if (
+      this.#namesLibraryAlias(written, context) &&
+      this.#holdsWrapperErasedByAny(written, context)
+    ) return true;
     if (!bound) return false;
     const structural = ts.isUnionTypeNode(written) ||
       ts.isIntersectionTypeNode(written) || ts.isTypeLiteralNode(written) ||
@@ -5201,6 +5225,52 @@ export class SchemaGenerator {
       }
     };
     return visit(node, context);
+  }
+
+  /**
+   * Whether a part of `node` the checker reads as `any` writes a wrapper the
+   * checker erases around `any` (`writesWrapperErasedByAny()`), as the value
+   * of `Record<string, Confidential<any, C>>` and the element of
+   * `[Confidential<any, C>]` do. The type of `node` then holds `any` there,
+   * and no declaration a member keeps, so only the written part holds the
+   * wrapper. A part read as anything else is looked into for one.
+   */
+  #holdsWrapperErasedByAny(
+    node: ts.TypeNode,
+    context: GenerationContext,
+  ): boolean {
+    const checker = context.typeChecker;
+    const holds = (part: ts.Node): boolean => {
+      if (part !== node && ts.isTypeNode(part)) {
+        const type = context.typeRegistry?.get(part) ??
+          checker.getTypeFromTypeNode(part);
+        if ((type.flags & ts.TypeFlags.Any) !== 0) {
+          return writesWrapperErasedByAny(part, checker);
+        }
+      }
+      return ts.forEachChild(part, (child) => holds(child) || undefined) ??
+        false;
+    };
+    return holds(node);
+  }
+
+  /**
+   * Whether `typeNode` is a reference to an alias declaring a tuple that holds
+   * a wrapper the checker erases around `any` (`#holdsWrapperErasedByAny()`).
+   * Such a reference is read by its syntax inside the definition its name
+   * gives it (`#formatType()`), whose `$ref` ends a recursion through it, as
+   * `type List = [Secret, List?]` recurs; a tuple written in place has no
+   * name, and is read by its syntax wherever it is (`#readsBySyntax()`).
+   */
+  #namesTupleHoldingWrapperErasedByAny(
+    typeNode: ts.TypeNode,
+    context: GenerationContext,
+  ): boolean {
+    const written = unwrapTypeParentheses(typeNode);
+    if (!ts.isTypeReferenceNode(written)) return false;
+    const tuple = this.#tupleBehind(written, context);
+    return tuple !== undefined &&
+      this.#holdsWrapperErasedByAny(tuple, context);
   }
 
   /**

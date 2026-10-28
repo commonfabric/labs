@@ -72,6 +72,30 @@ describe("alias-of-any-schema", () => {
         "Mine",
         { scope: "user" },
       ],
+      [
+        "a record's value",
+        `type Secret = Confidential<any, ["secret"]>;`,
+        "Record<string, Secret>",
+        {
+          type: "object",
+          properties: {},
+          additionalProperties: { ifc: { confidentiality: ["secret"] } },
+        },
+      ],
+      [
+        "a tuple's element",
+        `type Secret = Confidential<any, ["secret"]>;`,
+        "[string, Secret]",
+        {
+          type: "array",
+          items: {
+            anyOf: [
+              { type: "string" },
+              { ifc: { confidentiality: ["secret"] } },
+            ],
+          },
+        },
+      ],
     ] as const
   ) {
     it(`keeps what ${written} wraps around \`any\` in a pattern's input`, async () => {
