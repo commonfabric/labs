@@ -16,7 +16,7 @@ import {
 } from "../src/ensure-space-root.ts";
 import { isSigilLink, type NormalizedLink } from "../src/link-types.ts";
 import { parseLink } from "../src/link-utils.ts";
-import { inSpaceRootCause } from "../src/runner.ts";
+import { inSpaceRootCause } from "../src/in-space-root-cause.ts";
 import { Runtime, type RuntimeFetch } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
 import {

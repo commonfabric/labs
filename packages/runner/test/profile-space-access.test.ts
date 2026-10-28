@@ -20,7 +20,7 @@ import { principalOf } from "../src/builder/principal-of.ts";
 import { getEntityId } from "../src/create-ref.ts";
 import { resolveSpaceRootPattern } from "../src/ensure-space-root.ts";
 import type { NormalizedFullLink } from "../src/link-utils.ts";
-import { inSpaceRootCause } from "../src/runner.ts";
+import { inSpaceRootCause } from "../src/in-space-root-cause.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace, URI } from "../src/storage/interface.ts";
 import { TestStorageManager } from "./memory-v2-test-utils.ts";

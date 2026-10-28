@@ -50,7 +50,7 @@ import {
   getCellOrThrow,
   isCellResultForDereferencing,
 } from "../query-result-proxy.ts";
-import { inSpaceRootCause } from "../runner.ts";
+import { inSpaceRootCause } from "../in-space-root-cause.ts";
 import { getContentAddressedSchemasConfig } from "../schema-doc-config.ts";
 import { Runtime } from "../runtime.ts";
 import { hardenVerifiedFunction } from "../sandbox/function-hardening.ts";
