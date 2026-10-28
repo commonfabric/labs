@@ -6452,12 +6452,12 @@ describe("verb event required-field transitions", () => {
 });
 
 describe("listing marks are annotation-class", () => {
-  // `tier: "wrapper"` and standard `deprecated: true` shape only what
-  // `cf piece verbs` shows by default (verb contract WS-F); neither
-  // constrains a value, so both must ADD and REMOVE freely across pattern
-  // updates. Classified before the generator emits them — the checker
-  // equality-compares unknown keywords, so an unclassified mark would be
-  // refused in both directions: the C3 append-only lesson.
+  // Standard `deprecated: true` shapes only what `cf piece verbs` shows by
+  // default (verb contract WS-F), and the retired `tier: "wrapper"` mark is
+  // still carried by recorded schemas and baselines; neither constrains a
+  // value, so both must ADD and REMOVE freely across pattern updates. The
+  // checker equality-compares unknown keywords, so an unclassified mark would
+  // be refused in both directions: the C3 append-only lesson.
 
   const verbArgument = (marks: Record<string, unknown>): Pattern =>
     pattern(

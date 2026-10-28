@@ -160,10 +160,9 @@ const DESCRIPTIVE_ANNOTATION_KEYS: ReadonlySet<string> = new Set([
   "examples",
   // Persisted schemas can carry discovery tags as annotation metadata.
   "tags",
-  // Listing-tier extension (`tier: "wrapper"`): a UI affordance outside the
-  // headless contract, inferred from session-scoped handler bindings.
-  // Validation-neutral by construction — it shapes only what `cf piece
-  // verbs` shows by default; `cf piece call` never consults it.
+  // A retired verb listing mark (`tier: "wrapper"`) that recorded schemas and
+  // pattern baselines still carry. Nothing emits or reads it any more; it
+  // stays classified so a pattern update that drops it is not refused.
   "tier",
   "title",
 ]);

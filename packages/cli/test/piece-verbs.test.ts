@@ -303,7 +303,7 @@ describe("listPieceCallables", () => {
           saveBody: {
             asCell: ["stream", "opaque"],
             description: "UI wrapper: publish the draft.",
-            tier: "wrapper",
+            deprecated: true,
           },
         },
       },
@@ -315,7 +315,7 @@ describe("listPieceCallables", () => {
       on: "result",
       inputSchema: {},
       description: "UI wrapper: publish the draft.",
-      tier: "wrapper",
+      deprecated: true,
     }]);
   });
 
@@ -758,22 +758,33 @@ describe("listPieceCallables", () => {
     expect(listing.incomplete).toBeUndefined();
   });
 
-  it("carries the listing marks off the declared result type", async () => {
-    // The generator emits `tier: "wrapper"` (session-scope inference) and
-    // `deprecated: true` (@deprecated JSDoc) onto stream properties; the
-    // listing surfaces them so the verbs command can hide marked rows by
-    // default. `cf piece call` never consults them — everything stays
-    // callable, which is why the marks ride the LISTING rather than the
-    // dispatcher.
+  it("carries the listing marks off the handler graph and the declared result type", async () => {
+    // The wrapper tier is read off the handler graph (a void event over a
+    // session-scoped binding) and `deprecated: true` off the declared result
+    // type (@deprecated JSDoc); the listing surfaces both so the verbs
+    // command can hide marked rows by default. `cf piece call` never consults
+    // them — everything stays callable, which is why the marks ride the
+    // LISTING rather than the dispatcher.
+    const submitNode = handlerNode("submitTopic", { event: false });
     const listing = await listPattern(compiledPattern({
       resultSchema: {
         type: "object",
         properties: {
           addTopic: { asCell: ["stream"], ...ADD_TOPIC_EVENT },
-          submitTopic: { asCell: ["stream"], type: "object", tier: "wrapper" },
+          submitTopic: { asCell: ["stream"], type: "object" },
           setMyName: { asCell: ["stream"], type: "object", deprecated: true },
         },
       },
+      result: { submitTopic: streamAlias("submitTopic") },
+      nodes: [{
+        ...submitNode,
+        inputs: {
+          ...submitNode.inputs,
+          $ctx: {
+            draft: { $alias: { partialCause: "draft", scope: "session" } },
+          },
+        },
+      }],
     }));
     const byName = new Map(listing.verbs.map((verb) => [verb.name, verb]));
     expect(byName.get("addTopic")?.tier).toBeUndefined();

@@ -10,7 +10,6 @@ export { JsxExpressionSiteRouterTransformer } from "./jsx-expression-site-router
 export { MergeablePushValidationTransformer } from "./mergeable-push-validation.ts";
 export { IndirectBuilderCallbackValidationTransformer } from "./indirect-builder-callback-validation.ts";
 export { VerbReturnValidationTransformer } from "./verb-return-validation.ts";
-export { VerbTierMarkTransformer } from "./verb-tier-mark.ts";
 export { ModuleScopeCfDataTransformer } from "./module-scope-cf-data.ts";
 export { ModuleScopeFunctionHardeningTransformer } from "./module-scope-function-hardening.ts";
 export { ModuleScopeShadowingTransformer } from "./module-scope-shadowing.ts";

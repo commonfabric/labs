@@ -2858,10 +2858,11 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     // `cfcSchemaGivesNoShape()` sets aside, among them the Common Fabric
     // extensions stored schemas carry.
     const legacyTags: JSONSchema & { tags: string[] } = { tags: ["list"] };
+    const retiredTier: JSONSchema & { tier: string } = { tier: "wrapper" };
     const annotations: Record<string, JSONSchema> = {
       description: { description: "labeled, shapeless" },
       tags: legacyTags,
-      tier: { tier: "wrapper" },
+      tier: retiredTier,
       $schema: { $schema: "https://json-schema.org/draft/2020-12/schema" },
     };
     for (const [name, annotation] of Object.entries(annotations)) {

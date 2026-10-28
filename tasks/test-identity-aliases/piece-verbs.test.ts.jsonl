@@ -1,0 +1,1 @@
+{"date": "2026-10-26", "from": {"k": "unit", "s": "cli", "n": "listPieceCallables > carries the listing marks off the declared result type"}, "to": {"k": "unit", "s": "cli", "n": "listPieceCallables > carries the listing marks off the handler graph and the declared result type"}}

@@ -52,9 +52,9 @@ export interface PieceCallableListing {
    */
   description?: string;
 
-  /** Listing mark: a UI affordance outside the headless contract (inferred
-   * from session-scoped handler bindings at compile time). Hidden from the
-   * default listing; always callable. */
+  /** Listing mark: a UI affordance outside the headless contract, read off
+   * the handler graph — a void event over a session-scoped binding
+   * (`handlerVerbTiers`). Hidden from the default listing; always callable. */
   tier?: "wrapper";
 
   /** Listing mark: `@deprecated` JSDoc on the verb, lowered to the standard
@@ -114,8 +114,10 @@ function declaresStream(property: Record<string, unknown>): boolean {
 
 /**
  * The keys of a declared verb property that describe the verb rather than
- * its event: the stream marker that makes it a verb at all, and the prose and
- * listing marks a row publishes as fields of its own.
+ * its event: the stream marker that makes it a verb at all, the prose and
+ * deprecation mark a row publishes as fields of its own, and the retired
+ * `tier` mark that patterns compiled before the wrapper tier moved to the
+ * handler graph still carry.
  */
 const VERB_PROPERTY_KEYS: readonly string[] = [
   "asCell",
@@ -163,15 +165,16 @@ function declaredVerbInput(
   });
 }
 
-/** The listing marks and prose a declared property carries. */
+/** The prose and deprecation mark a declared property carries. The wrapper
+ * tier is not among them: it is read off the handler graph
+ * (`handlerVerbTiers`). */
 function declaredVerbAnnotations(
   property: Record<string, unknown>,
-): Pick<PieceCallableListing, "description" | "tier" | "deprecated"> {
+): Pick<PieceCallableListing, "description" | "deprecated"> {
   return {
     ...(typeof property.description === "string"
       ? { description: property.description }
       : {}),
-    ...(property.tier === "wrapper" ? { tier: "wrapper" as const } : {}),
     ...(property.deprecated === true ? { deprecated: true } : {}),
   };
 }
@@ -301,6 +304,116 @@ export function handlerVerbEvents(
   return verbs;
 }
 
+/** The verbs a compiled pattern drives from a result property whose handler
+ * is a UI affordance outside the headless contract — wrapper-tier — matched to
+ * their handler node by the same `$event`-input comparison
+ * `handlerVerbEvents` makes.
+ *
+ * A handler is wrapper-tier when its event is void and its bound state
+ * reaches a session-scoped cell: a composer wrapper's input IS the session
+ * draft, so its event carries nothing. A verb with a real payload that also
+ * touches a session cell is doing its job, not wrapping a UI — the board's
+ * `addTopic` clears the composer draft after a create and stays headless.
+ *
+ * Sessionness is read off the links the node binds, not off the module's
+ * state schema, which the builder sanitizes down to cell markers. An internal
+ * cell's link carries its scope; an argument cell's link names a path into
+ * the pattern's declared argument, where `PerSession<…>` lowers to a scope on
+ * the property or on its cell marker. A stream two handler nodes share names
+ * no single handler and is never wrapper-tier. */
+export function handlerVerbTiers(
+  pattern:
+    | {
+      argumentSchema?: unknown;
+      result?: unknown;
+      nodes?: unknown;
+    }
+    | null
+    | undefined,
+): Set<string> {
+  const wrappers = new Set<string>();
+  const result = pattern?.result;
+  if (!isObjectOrArray(result)) return wrappers;
+  const nodes = Array.isArray(pattern?.nodes) ? pattern.nodes : [];
+  for (const [name, link] of Object.entries(result)) {
+    const matched = nodes.filter((node) =>
+      isObjectOrArray(node) && isObjectOrArray(node.inputs) &&
+      samePatternLink(link, node.inputs.$event)
+    );
+    if (matched.length !== 1) continue;
+    const { module, inputs } = matched[0] as {
+      module?: unknown;
+      inputs: Record<string, unknown>;
+    };
+    const argumentSchema = isObjectOrArray(module)
+      ? module.argumentSchema
+      : undefined;
+    const event = isObjectOrArray(argumentSchema) &&
+        isObjectOrArray(argumentSchema.properties)
+      ? argumentSchema.properties.$event
+      : undefined;
+    if (!eventSchemaIsVoid(event)) continue;
+    const { $event: _event, ...bound } = inputs;
+    if (bindsSessionCell(bound, pattern?.argumentSchema)) wrappers.add(name);
+  }
+  return wrappers;
+}
+
+/** A void event as the compiler lowers one: `false` for an `action` that
+ * takes no event, an opaque cell marker with no properties for a declared
+ * `handler<void, …>`. */
+function eventSchemaIsVoid(schema: unknown): boolean {
+  if (schema === false) return true;
+  if (!isObjectNotArray(schema) || "properties" in schema) return false;
+  return Array.isArray(schema.asCell) && schema.asCell.includes("opaque");
+}
+
+/** Whether any link inside a node's bound inputs addresses a session-scoped
+ * cell. */
+function bindsSessionCell(value: unknown, argumentSchema: unknown): boolean {
+  if (!isObjectOrArray(value)) return false;
+  const alias = (value as Record<string, unknown>).$alias;
+  if (isObjectNotArray(alias)) {
+    if (alias.scope === "session") return true;
+    return alias.cell === "argument" && Array.isArray(alias.path) &&
+      argumentPathIsSessionScoped(argumentSchema, alias.path);
+  }
+  return Object.values(value).some((entry) =>
+    bindsSessionCell(entry, argumentSchema)
+  );
+}
+
+/** Whether the declared argument schema marks any property along `path`
+ * session-scoped, on the property itself or on its cell marker. */
+function argumentPathIsSessionScoped(
+  argumentSchema: unknown,
+  path: readonly unknown[],
+): boolean {
+  if (!isObjectOrArray(argumentSchema)) return false;
+  const root = argumentSchema as JSONSchema;
+  let schema: unknown = argumentSchema;
+  for (const key of path) {
+    if (isObjectOrArray(schema) && typeof schema.$ref === "string") {
+      schema = resolveCfcSchemaRefs(schema, root);
+    }
+    if (!isObjectOrArray(schema) || !isObjectOrArray(schema.properties)) {
+      return false;
+    }
+    schema = schema.properties[String(key)];
+    if (schemaIsSessionScoped(schema)) return true;
+  }
+  return false;
+}
+
+function schemaIsSessionScoped(schema: unknown): boolean {
+  if (!isObjectOrArray(schema)) return false;
+  if (schema.scope === "session") return true;
+  return Array.isArray(schema.asCell) &&
+    schema.asCell.some((entry) =>
+      isObjectNotArray(entry) && entry.scope === "session"
+    );
+}
+
 /**
  * Every verb a compiled pattern exposes, read from the pattern alone: its
  * declared result type, its result graph, and its declared argument type. No
@@ -348,6 +461,7 @@ export function verbsFromCompiledPattern(
     : {};
   const handlerEvents = handlerVerbEvents(pattern);
   const handlerResults = handlerVerbResults(pattern);
+  const handlerTiers = handlerVerbTiers(pattern);
 
   const resultNames = new Set([
     ...Object.keys(declaredResult?.properties ?? {}),
@@ -401,6 +515,7 @@ export function verbsFromCompiledPattern(
         : handlerEvents.get(name) ?? true,
       ...(outputSchema !== undefined ? { outputSchema } : {}),
       ...(declared !== undefined ? declaredVerbAnnotations(declared) : {}),
+      ...(handlerTiers.has(name) ? { tier: "wrapper" as const } : {}),
     });
   }
 

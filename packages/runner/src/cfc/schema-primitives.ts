@@ -50,8 +50,8 @@ export const cfcSchemaIsTrue = (schema: JSONSchema): boolean => {
 
 /**
  * Keywords that annotate a schema and constrain no value: JSON Schema's own
- * annotations, the legacy discovery `tags` stored schemas can carry, and
- * the Common Fabric `tier` verb listing mark.
+ * annotations, and the legacy discovery `tags` and retired `tier` verb
+ * listing mark that stored schemas can carry.
  */
 export const CFC_SCHEMA_ANNOTATION_KEYWORDS: ReadonlySet<string> = new Set([
   "title",

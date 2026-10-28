@@ -34,14 +34,14 @@ The authoritative field inventory is the `JSONSchema` type in
   of runner utilities still tolerate it on stored data.)
 - **`scope`**: storage-partition selector emitted for `PerSpace<T>` /
   `PerUser<T>` / `PerSession<T>` wrappers.
-- **`tier`**: verb listing mark on stream properties. `tier: "wrapper"` names
-  a UI affordance outside the headless contract, inferred at compile time
-  from session-scoped handler bindings plus a void event
-  (ts-transformers current-behavior spec §12.1). `cf piece verbs` hides
-  marked verbs by default; everything stays callable, and `cf piece call`
-  never consults the mark. Annotation-class in the piece compat checker
-  (adds and removes freely). Standard `deprecated: true` is the companion
-  mark on the other axis, produced from `@deprecated` JSDoc.
+- **`tier`**: no longer emitted. Stored schemas and pattern baselines from
+  earlier compiles carry `tier: "wrapper"` on stream properties, so every
+  reader still treats it as an annotation that constrains nothing: the piece
+  compat checker lets it leave freely, and the verb listing strips it from a
+  verb's input schema. Nothing reads its value. The wrapper tier `cf piece
+  verbs` reports is read off the compiled handler graph instead
+  (`handlerVerbTiers`, `packages/piece/src/verb-listing.ts`): a void event
+  over a binding to a session-scoped cell.
 - **`ifc`**: Information Flow Control (IFC) annotations (see [IFC](#ifc))
 
 ### Streams are declarations, not views

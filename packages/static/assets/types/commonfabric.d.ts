@@ -2842,11 +2842,6 @@ export type JSONSchemaObj = {
 
   // Common Fabric extensions
   readonly scope?: SchemaScope;
-  // Verb listing mark on stream properties: a UI affordance outside the
-  // headless contract (inferred at compile time from session-scoped handler
-  // bindings + a void event). Hidden from the default `cf piece verbs`
-  // listing; always callable; never consulted by `cf piece call`.
-  readonly tier?: "wrapper";
   // makes it so that your handler gets a Cell object for that property. So you can call .set()/.update()/.push()/etc on it.
   readonly asCell?: readonly AsCellType[];
   // temporarily used to assign labels like "confidential"

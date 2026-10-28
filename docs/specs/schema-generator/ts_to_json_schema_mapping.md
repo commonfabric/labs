@@ -2007,16 +2007,17 @@ producing alias in this package as of this writing.
   Fixtures: descriptions-hashtag-tags, descriptions-index-signature-tags,
   descriptions-root-with-tags.
 
-- **`@deprecated` on a stream-valued property → `deprecated: true`** (verb
-  listing marks, producer 2 — verb contract WS-F): the standard JSON Schema
-  annotation, emitted only where the property schema is stream-marked
+- **`@deprecated` on a stream-valued property → `deprecated: true`** (the
+  verb listing's deprecation mark — verb contract WS-F): the standard JSON
+  Schema annotation, emitted only where the property schema is stream-marked
   (`symbolHasDeprecatedTag` + `attachDeprecatedStreamMark`,
   `doc-utils.ts` / `object-formatter.ts`; both the declared-`Stream` and
   callable-valued property paths). A deprecated DATA property is compat
   surface, not a verb, and stays unmarked. Annotation-class in the piece
-  compat checker, so the mark adds and removes freely. The companion mark
-  `tier: "wrapper"` is stamped post-generation by ts-transformers'
-  `VerbTierMarkTransformer` (current-behavior spec §12.1), not here.
+  compat checker, so the mark adds and removes freely. The listing's other
+  mark, the wrapper tier, is no schema keyword: `cf piece verbs` reads it off
+  the compiled handler graph (`handlerVerbTiers`,
+  `packages/piece/src/verb-listing.ts`).
   Fixture: stream-deprecated-mark.
 
 ## 13. The Hints Channel (`schemaHints`)
