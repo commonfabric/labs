@@ -286,6 +286,11 @@ const ELEMENT_LOOKUP_METHODS = new Set(["find", "findLast", "at"]);
  */
 interface ArrayCallbackParameters {
   readonly elements: readonly number[];
+  /**
+   * Where the elements go when the call passes no initial value: `reduce`
+   * and `reduceRight` then start the accumulator at an element.
+   */
+  readonly elementsWithoutInitialValue?: readonly number[];
   readonly array?: number;
 }
 
@@ -310,8 +315,15 @@ const ARRAY_CALLBACK_PARAMETERS: ReadonlyMap<string, ArrayCallbackParameters> =
     ["forEach", ELEMENT_INDEX_ARRAY],
     ["map", ELEMENT_INDEX_ARRAY],
     ["some", ELEMENT_INDEX_ARRAY],
-    ["reduce", { elements: [1], array: 3 }],
-    ["reduceRight", { elements: [1], array: 3 }],
+    ["reduce", {
+      elements: [1],
+      elementsWithoutInitialValue: [0, 1],
+      array: 3,
+    }],
+    [
+      "reduceRight",
+      { elements: [1], elementsWithoutInitialValue: [0, 1], array: 3 },
+    ],
     ["sort", { elements: [0, 1] }],
     ["toSorted", { elements: [0, 1] }],
   ]);
@@ -3855,7 +3867,10 @@ export function analyzeFunctionCapabilities(
 
       const paramBindings = new Map<number, AliasBinding>();
       if (itemBinding && receiverExpr) {
-        for (const index of parameters.elements) {
+        const elementParameters = call.arguments.length < 2
+          ? parameters.elementsWithoutInitialValue ?? parameters.elements
+          : parameters.elements;
+        for (const index of elementParameters) {
           if (callbackArg.parameters[index]) {
             paramBindings.set(index, itemBinding);
           }

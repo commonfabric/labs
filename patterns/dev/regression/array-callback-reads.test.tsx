@@ -4,9 +4,11 @@
  *
  * The builder's input schema is narrowed to the members its body reads, and
  * another callback here reads only `id`. A callback passed by name, a read
- * through the array a callback is handed, and the element `reduce` hands its
- * callback second all read `name` where the narrowing would not see it, so
- * the callback would read `undefined` and a filter would drop every row.
+ * through the array a callback is handed, the element `reduce` hands its
+ * callback second, and the element `reduce` or `reduceRight` starts its
+ * accumulator at when given no initial value all read `name` where the
+ * narrowing would not see it, so the callback would read `undefined` and a
+ * filter would drop every row.
  *
  * Run: deno task cf test packages/patterns/regression/array-callback-reads.test.tsx
  */
@@ -41,6 +43,16 @@ const anyNamedA = lift(({ rows }: { rows: Row[] }): boolean =>
   rows.reduce((seen, row) => seen || row.name === "A", false)
 );
 
+const firstName = lift(({ rows }: { rows: Row[] }): string =>
+  rows.reduce((first, row) => ({ id: first.id + row.id, name: first.name }))
+    .name
+);
+
+const lastName = lift(({ rows }: { rows: Row[] }): string =>
+  rows.reduceRight((last, row) => ({ id: last.id + row.id, name: last.name }))
+    .name
+);
+
 const names = lift(({ rows }: { rows: Row[] }): string => namesOf(rows));
 
 export default pattern(() => {
@@ -52,6 +64,8 @@ export default pattern(() => {
   const throughArray = names({ rows: sortedCopyThroughArray({ rows }) });
   const filtered = names({ rows: filteredByName({ rows }) });
   const reduced = anyNamedA({ rows });
+  const first = firstName({ rows });
+  const last = lastName({ rows });
 
   const assert_named_callback_reads_name = assert(() => byName === "A");
   const assert_array_parameter_reads_name = assert(() => throughArray === "A");
@@ -59,6 +73,8 @@ export default pattern(() => {
     filtered === "A"
   );
   const assert_reduce_element_reads_name = assert(() => reduced === true);
+  const assert_reduce_accumulator_reads_name = assert(() => first === "B");
+  const assert_reduce_right_accumulator_reads_name = assert(() => last === "A");
 
   return {
     [TESTS]: [
@@ -66,6 +82,8 @@ export default pattern(() => {
       { assertion: assert_array_parameter_reads_name },
       { assertion: assert_named_callback_on_filter_reads_name },
       { assertion: assert_reduce_element_reads_name },
+      { assertion: assert_reduce_accumulator_reads_name },
+      { assertion: assert_reduce_right_accumulator_reads_name },
     ],
   };
 });

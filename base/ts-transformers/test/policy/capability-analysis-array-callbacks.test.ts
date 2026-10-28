@@ -268,6 +268,20 @@ export default pattern<{
       });
     });
 
+    it("reaches the input schema from the element `reduce` starts its accumulator at, given no initial value", async () => {
+      const schema = await liftInputSchema(
+        `table.reduce((first, row) => ({
+  topic: row.topic,
+  mentionedBy: first.mentionedBy,
+})).mentionedBy`,
+      );
+
+      expect(elementProperties(schema)).toEqual({
+        topic: { type: "unknown" },
+        mentionedBy: { type: "unknown" },
+      });
+    });
+
     it("reaches the input schema whole from an element a `reduce` puts in the map it hands back", async () => {
       // `set` returns its map, so the callback's result carries the element
       // on to the read after `reduce`.
