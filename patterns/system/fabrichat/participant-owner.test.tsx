@@ -26,7 +26,7 @@ import {
   isButton,
   propValue,
   readValue,
-} from "../test/vnode-helpers.ts";
+} from "../../tools/test-support/vnode-helpers.ts";
 import { testRoomStorage } from "./room-test-fixture.ts";
 import { FabriChatRoomCore, participantEntriesOf } from "./room.tsx";
 
