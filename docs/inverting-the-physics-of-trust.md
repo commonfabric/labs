@@ -2,6 +2,9 @@
 
 The runtime, and why it is shaped the way it is.
 
+The essay of the same name, for readers outside the team, is at
+[commonfabric.com/notes/inverting-the-physics-of-trust](https://commonfabric.com/notes/inverting-the-physics-of-trust/).
+
 ## The inverted rule
 
 Data is viral: free to replicate at perfect fidelity, and once given to
