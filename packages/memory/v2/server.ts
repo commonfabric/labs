@@ -54,6 +54,7 @@ import {
   type GraphQueryRequest,
   type GraphQueryResult,
   type HelloMessage,
+  identityOfScopeKey,
   isScopeKey,
   MAX_ENTITY_ID_PAGE_SIZE,
   MAX_UNTRUSTED_MESSAGE_SLOTS,
@@ -257,6 +258,17 @@ export {
  * `foreignWriteAuthorityFor` has to ask.
  */
 const WELL_FORMED_SPACE_DID = /^did:[^:]+:[^:]+$/;
+
+/** What a foreign authority probe answers: a grant, or a refusal with the
+ * reason the serving loop logs. */
+export type ForeignAuthorityVerdict =
+  | { granted: true }
+  | { granted: false; reason: string };
+
+/** The capability a foreign authority probe resolves: WRITE for a
+ * provisioning write under the carried actor's grant (protocol.md §2b),
+ * READ for a scoped read of the actor's own instance (protocol.md §2). */
+type ForeignAuthorityRequirement = "READ" | "WRITE";
 
 // Global OTel API tracer. Interface-only and inert when no provider is
 // registered, so this is a no-op unless the host process (toolshed) has an
@@ -10001,7 +10013,8 @@ export class Server {
     const identity = this.#sessionScopeIdentity(session);
     const instanceByAddress = new Map<string, string>();
     let collapse: V2Error | undefined;
-    for (const { branch, root } of entries) {
+    const rows = [...entries];
+    for (const { branch, root } of rows) {
       if (root.entityScopeKey !== undefined) {
         named = true;
         if (!isScopeKey(root.entityScopeKey)) {
@@ -10065,6 +10078,34 @@ export class Server {
           "hold a live execution_lease on this memory server " +
           "(protocol.md §2's read row)",
       );
+    }
+    if (!holdsReadSpace) {
+      // The grant-scoped read (protocol.md §2, RULED 2026-10-27): a holder
+      // reading a space whose lease it does not hold names an instance of
+      // an actor that space's own ACL grants READ — the actor's own
+      // instance under the actor's own grant, the read twin of §2b's
+      // write grant — or is refused. Resolved against the engine already
+      // open, mode-independently, as the write probe resolves its grant:
+      // this is the serving plane's rule, not the client ACL rollout, so
+      // neither the service-DID blanket nor the missing-ACL compat arm
+      // applies, and a key naming no actor grants nothing.
+      for (const { root } of rows) {
+        const key = root.entityScopeKey;
+        if (key === undefined || key === "space") continue;
+        const actor = identityOfScopeKey(key)?.principal;
+        const verdict = actor === undefined
+          ? { granted: false as const, reason: `"${key}" names no actor` }
+          : this.#foreignGrantOn(engine, space, actor, "READ");
+        if (!verdict.granted) {
+          return toError(
+            "ProtocolError",
+            `read naming entity_scope_key "${key}" on root ${root.id} ` +
+              `rejected: ${verdict.reason} — a foreign scoped instance is ` +
+              "read under its actor's own READ grant on the space " +
+              "(protocol.md §2's grant-scoped read)",
+          );
+        }
+      }
     }
     session.leaseHolderReads = true;
     return undefined;
@@ -10721,40 +10762,95 @@ export class Server {
   async foreignWriteAuthorityFor(
     space: string,
     principal: string | undefined,
-  ): Promise<{ granted: true } | { granted: false; reason: string }> {
+  ): Promise<ForeignAuthorityVerdict> {
+    return await this.#foreignAuthorityFor(space, principal, "WRITE");
+  }
+
+  /**
+   * The structural read grant for a FOREIGN scoped read made on a carried
+   * actor's behalf (protocol.md §2's grant-scoped read; serving-loop.md
+   * §3b): whether `principal` — the actor whose instance a serving
+   * runtime's read of another space names — holds READ on `space`. The
+   * serving runtime's storage plane asks this before such a read leaves
+   * it, and admission asks the same question of the engine it has open
+   * (`#denyExplicitInstanceReads`), so a producer that skipped the probe
+   * is refused at the wire.
+   *
+   * Everything `foreignWriteAuthorityFor` says of its grant holds here
+   * with READ in place of WRITE: the target's own ACL document is the one
+   * grant, checked mode-independently, with neither the service-DID
+   * blanket nor the missing-ACL compat arm, and a malformed space name or
+   * a space no store holds grants nothing.
+   */
+  async foreignReadAuthorityFor(
+    space: string,
+    principal: string | undefined,
+  ): Promise<ForeignAuthorityVerdict> {
+    return await this.#foreignAuthorityFor(space, principal, "READ");
+  }
+
+  /**
+   * The two foreign authority probes' shared body: the checks on the space
+   * name, the actor and the store's existence, then
+   * `#foreignGrantOn` against the space's engine.
+   */
+  async #foreignAuthorityFor(
+    space: string,
+    principal: string | undefined,
+    requirement: ForeignAuthorityRequirement,
+  ): Promise<ForeignAuthorityVerdict> {
+    const rule = requirement === "WRITE" ? "protocol.md §2b" : "protocol.md §2";
     if (!WELL_FORMED_SPACE_DID.test(space)) {
       return {
         granted: false,
         reason: `"${space}" is not a space DID — refusing to resolve (or ` +
-          "provision) a store for a malformed space name (protocol.md §2b)",
+          `provision) a store for a malformed space name (${rule})`,
       };
     }
     if (principal === undefined || principal === "") {
       return {
         granted: false,
-        reason: "no acting principal — a foreign provisioning write is " +
-          "admitted only under a carried actor's grant (protocol.md §2b)",
+        reason: requirement === "WRITE"
+          ? "no acting principal — a foreign provisioning write is " +
+            "admitted only under a carried actor's grant (protocol.md §2b)"
+          : "no acting principal — a foreign scoped read is admitted only " +
+            "under the carried actor's own grant (protocol.md §2)",
       };
     }
     if (!(await this.#spaceStoreExists(space))) {
       return {
         granted: false,
         reason: `no space has the DID ${space} — a space exists once its ` +
-          "genesis ACL commit lands (protocol.md §2b)",
+          `genesis ACL commit lands (${rule})`,
       };
     }
     const engine = await this.#openEngine(space);
+    return this.#foreignGrantOn(engine, space, principal, requirement);
+  }
+
+  /**
+   * Whether the ACL `engine` stores for `space` grants `principal` (or
+   * `ANYONE`) `requirement`: the one structural grant both foreign
+   * authority probes and the read admission resolve, fail-closed for a
+   * missing, malformed, ownerless or retracted list.
+   */
+  #foreignGrantOn(
+    engine: Engine.Engine,
+    space: string,
+    principal: string,
+    requirement: ForeignAuthorityRequirement,
+  ): ForeignAuthorityVerdict {
     const state = this.#aclState(engine, space);
     if (state.kind === "valid") {
       const capability = state.acl[principal] ?? state.acl[ANYONE_USER] ??
         null;
-      if (capability !== null && isCapable(capability, "WRITE")) {
+      if (capability !== null && isCapable(capability, requirement)) {
         return { granted: true };
       }
       return {
         granted: false,
         reason: `the ACL of ${space} grants ${principal} ` +
-          `${capability ?? "nothing"} (WRITE required)`,
+          `${capability ?? "nothing"} (${requirement} required)`,
       };
     }
     return {

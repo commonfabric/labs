@@ -105,6 +105,7 @@ import { minOf } from "@commonfabric/utils/math";
 import type { Runtime, ServerRunInfo } from "../runtime.ts";
 import type {
   CommitError,
+  ForeignScopedReadGrant,
   IExtendedStorageTransaction,
   ISpaceReplica,
   IStorageTransaction,
@@ -409,6 +410,14 @@ export type RuntimeFactoryContext = {
    * `SpaceServerPolicy.storeReadThrough`, for a factory to install on its
    * storage manager before any home-space read it performs itself. */
   storeReadThrough?: StoreReadThrough;
+
+  /** The co-hosted memory server's read authority probe, which the serving
+   * manager resolves a foreign scoped read's grant with (protocol.md §2's
+   * grant-scoped read), for a factory to hand its storage manager. A
+   * SpaceServer always supplies one and installs it on the returned
+   * runtime's manager either way; a factory run with none builds a manager
+   * that refuses every foreign scoped read until one is installed. */
+  foreignScopedReadGrant?: ForeignScopedReadGrant;
 };
 
 export type SpaceServerOptions = {
@@ -1558,9 +1567,18 @@ export class SpaceServer implements TransactionSealDestination {
         }),
       )
       : undefined;
-    const { runtime, dispose } = await this.#options.createRuntime(
-      storeReadThrough === undefined ? {} : { storeReadThrough },
-    );
+    // The read authority probe (protocol.md §2's grant-scoped read): a
+    // foreign scoped read the serving runtime makes on a demander's behalf
+    // is admitted on that demander's own READ grant in the target space's
+    // access list, which the co-hosted memory server resolves.
+    const foreignScopedReadGrant: ForeignScopedReadGrant = (
+      foreignSpace,
+      principal,
+    ) => this.#options.server.foreignReadAuthorityFor(foreignSpace, principal);
+    const { runtime, dispose } = await this.#options.createRuntime({
+      foreignScopedReadGrant,
+      ...(storeReadThrough === undefined ? {} : { storeReadThrough }),
+    });
     this.#runtime = runtime;
     this.#disposeRuntime = dispose;
     this.#renew();
@@ -1583,6 +1601,9 @@ export class SpaceServer implements TransactionSealDestination {
     if (storeReadThrough !== undefined) {
       runtime.storageManager.installStoreReadThrough?.(space, storeReadThrough);
     }
+    runtime.storageManager.installForeignScopedReadGrant?.(
+      foreignScopedReadGrant,
+    );
     // MINOR-2: fold from where this runtime's demand-root counters stand —
     // 0 on a fresh runtime, and wherever the last tenure folded them to on
     // one retained across an idle park.

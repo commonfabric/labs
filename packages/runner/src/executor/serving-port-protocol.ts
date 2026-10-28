@@ -168,6 +168,10 @@ export type PlaneRequests = {
     params: { space: string; principal: string | undefined };
     result: Awaited<ReturnType<Server["foreignWriteAuthorityFor"]>>;
   };
+  "server.foreignReadAuthorityFor": {
+    params: { space: string; principal: string | undefined };
+    result: Awaited<ReturnType<Server["foreignReadAuthorityFor"]>>;
+  };
   "server.checkServedAclChange": {
     params: { change: ServedAclChangeData };
     result: ServedAclChangeVerdict;

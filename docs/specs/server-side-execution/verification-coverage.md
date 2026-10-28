@@ -3300,6 +3300,33 @@ Delta 2026-08-15 — Phase 6 independent-review fixes (same PR):
   source of contention, but not an unrecovered one-shot loss: deferred
   client starts catch up and dropped serving-instantiation contributions
   retry once under exact lifecycle guards (residual x).**
+- OW35 — the grant-scoped read's two gaps (protocol §2, RULED
+  2026-10-27). (a) REVOCATION of a standing read: the serving manager
+  asks about every actor again on word of the foreign space's
+  access-list change (`noteSpaceAclChanged`), so a revoked actor's
+  standing turns refused as soon as the probe answers and any run that
+  then reads the instance is withdrawn, and admission re-decides at the
+  next watch registration; but a watch the serving session already
+  holds on an admitted instance keeps delivering until the replica next
+  pulls it, a derivation that read the instance before the revocation
+  keeps its output until another input runs it again, and the memory
+  server's push pass re-keys lease-holder deliveries on CURRENT
+  holdership (`#currentLeaseHolderExemption`) and not on the named
+  actor's current grant. Owed: a per-pass grant re-check on keyed foreign instances, or
+  a retraction of them on the access-list commit, with a test that a
+  revoked actor's instance stops arriving at the serving replica
+  without a re-pull. (b) DEMAND: a granted read is a service-session
+  read and registers no identity-bearing demand in the foreign space,
+  so the instance it reads is as that space's own loop last derived it
+  for the actor; a derivation the actor nothing of theirs demands there
+  goes stale. Owed: a cross-space demand rule — a foreign read under a
+  carried actor counts as that actor's demand in the foreign space —
+  which touches the (d′) demand model and the memory server's demand
+  rows, with its own ruling. Trigger for both: the first pattern whose
+  correctness rests on a revocation taking effect without a re-pull, or
+  on a foreign per-actor derivation staying current with no demand of
+  the actor's own in that space; FabriChat's add-member candidates read
+  under the actor's open manager and are exposed to neither today.
 - OW34 — a CFC-serving POLICY item: served handler runs carry NO
   renderer-trusted event mark, so a per-user served handler's write to a
   UI-contract-gated (owner-protected) cell is refused by CFC at prepare
@@ -3945,7 +3972,57 @@ Delta 2026-10-15 — a late echo is dropped before its commit is prepared:
   button …") holds the click-marked replacement to no refusal in the
   owner's runtime or the serving loop.
 
-Delta 2026-10-13 — an echo sealed into a space other than its intent's:
+Delta 2026-10-27 — the grant-scoped read's resolution (protocol §2's
+grant-scoped read, RULED 2026-10-27; the read twin of §2b's write
+grant):
+
+- The interim that refused every foreign scoped read at both ends is
+  replaced by the grant: a serving runtime's read naming the carried
+  actor's instance in a foreign space is admitted when that space's own
+  access list grants the actor READ, as `Server.foreignReadAuthorityFor`
+  resolves it (the write probe's body, with READ for WRITE), and refused
+  otherwise — unnamed, ungranted, or in a space with no list. The
+  serving manager keeps the verdict per (space, actor), asks about every
+  actor again on `noteSpaceAclChanged` with the last verdict standing
+  meanwhile, and pulls a newly granted actor's refused reads again;
+  admission resolves the same grant for a named root in a space whose
+  lease the requester does not hold. → COVERED,
+  impl-gate, red-first. `memory/test/v2-server-acl.test.ts`
+  ("foreignReadAuthorityFor()": no store, no actor, READ or more in
+  every ACL mode, a missing list); `memory/test/v2-explicit-read.test.ts`
+  (the FP2 case now admits on alice's OWNER entry; a holder naming an
+  ungranted actor's instance, or one in a space with no list, is
+  refused); `runner/test/executor-cross-space.test.ts` ("admits a scoped
+  read naming an actor's own instance the space grants READ …": unnamed
+  refused, the actor's instance unresolved then admitted with one probe
+  per actor, an ungranted actor refused with the list's reason,
+  re-asked and admitted after the list changes, the F3 batch isolation
+  and the home scoped read unchanged; "a serving manager with no read
+  authority probe refuses every foreign scoped read …");
+  `runner/test/scheduler-event-refused-read.test.ts` (the standing and
+  the transaction's identity reach `refusedReadIn`). End to end,
+  `patterns/integration/fabrichat-join.test.ts` ("offers a group to
+  someone its owner adds from the room, through the owner's manager")
+  under the ON arm with web view-scoped replication: the room space's
+  server reads the viewer's per-user candidates in the viewer's home
+  space on the viewer's own grant.
+- The preflight parks on a read whose actor's grant is still being
+  asked for and dispatches once it is answered; a refusal settles the
+  load as an absence, never a failure, so a document only the preflight
+  reaches still does not stop dispatch (events §5) — pinned by the
+  existing "settles a served event whose declared argument reaches a
+  foreign scoped document without a budgeted connection deferral" case.
+  A run that reaches such a document in its body alone runs again once
+  the load settles, and a load that fails fails the event as the
+  preflight's park fails a head, the later same-space arrivals held
+  behind it (`runner/test/scheduler-event-unresolved-read.test.ts`).
+- OW17's owed leg (replica-level per-instance read keying) now has its
+  trigger: a foreign scoped instance producer exists. The exposure is
+  bounded to the admitted instances, each keyed by its `scope_key` on
+  the lease holder's wire (stage A), which is what the collapsed view
+  never saw.
+- OW35 opened: the two gaps this grant leaves, below.
+
 
 - speculation §4 step 2's sentence that the space an entry sealed into
   is no part of the retirement's scope ELABORATES the step's own rule,
