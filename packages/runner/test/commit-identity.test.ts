@@ -2,8 +2,10 @@ import { expect } from "@std/expect";
 import {
   getCommitLocalSeq,
   getCommitSeq,
+  getCoveringCommitLocalSeq,
   recordCommitLocalSeq,
   recordCommitSeq,
+  recordSplitCommitSpaces,
 } from "../src/storage/commit-identity.ts";
 import type { IStorageTransaction } from "../src/storage/interface.ts";
 
@@ -32,4 +34,19 @@ Deno.test("commit store sequence records values per source and space", () => {
   expect(getCommitSeq(tx, "did:key:space")).toBe(42);
   expect(getCommitSeq(tx, "did:key:other")).toBeUndefined();
   expect(getCommitLocalSeq(tx, "did:key:space")).toBeUndefined();
+});
+
+Deno.test("a commit to one space covers its source; a split commit covers none", () => {
+  const single = {} as IStorageTransaction;
+  recordSplitCommitSpaces(single, ["did:key:space"]);
+  recordCommitLocalSeq(single, "did:key:space", 3);
+  expect(getCoveringCommitLocalSeq(single, "did:key:space")).toBe(3);
+
+  const split = {} as IStorageTransaction;
+  recordSplitCommitSpaces(split, ["did:key:child", "did:key:space"]);
+  recordCommitLocalSeq(split, "did:key:child", 4);
+  recordCommitLocalSeq(split, "did:key:space", 5);
+  expect(getCoveringCommitLocalSeq(split, "did:key:child")).toBeUndefined();
+  expect(getCoveringCommitLocalSeq(split, "did:key:space")).toBeUndefined();
+  expect(getCommitLocalSeq(split, "did:key:space")).toBe(5);
 });
