@@ -155,25 +155,22 @@ describe("profile-space-access", () => {
       const profileLink = await createProfileThroughHome(ownerRuntime, "Ada");
       const profileSpace = profileLink.space as MemorySpace;
 
-      // The link in Home's list names the profile through a slot that links
-      // on to it, and a host holding that link resolves it there.
-      const listed = visitorRuntime.getCellFromLink(profileLink);
-      await listed.sync();
-      const profile = listed.resolveAsCell().getAsNormalizedFullLink();
+      // The link in Home's list names the profile itself, at the address the
+      // space's genesis commit reserved for its root.
+      const reserved = visitorRuntime.getCell(
+        profileSpace,
+        inSpaceRootCause(profileSpace),
+      ).getAsNormalizedFullLink();
+      expect(profileLink).toMatchObject({ id: reserved.id, path: [] });
 
       // What the visitor holds here is the space's DID and nothing else. The
-      // space's genesis commit reserved the root's address, and the space
-      // cell links the profile, at that address, as the root.
+      // space cell links the profile, at that address, as the root.
       const root = await resolveSpaceRootPattern(visitorRuntime, profileSpace);
       expect(root?.getAsNormalizedFullLink()).toMatchObject({
         space: profileSpace,
-        id: profile.id,
+        id: reserved.id,
         path: [],
       });
-      expect(profile.id).toBe(
-        visitorRuntime.getCell(profileSpace, inSpaceRootCause(profileSpace))
-          .getAsNormalizedFullLink().id,
-      );
       expect(
         readGenesisRoot(await server.engineForSpace(profileSpace)),
       ).toEqual({ cause: inSpaceRootCause(profileSpace) });

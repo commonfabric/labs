@@ -309,9 +309,10 @@ const PROFILE_LIST_SCHEMA = {
 
 /**
  * Returns the address of every profile the Home at the controller's space
- * lists in another space, each as the list stores it: the slot the profile was
- * appended through, which links on to the profile. The reads are of the live
- * store, through the controller's runtime, and write nothing.
+ * lists in another space, each as the list stores it: the profile itself, for
+ * one created as its space's root, or else the slot it was appended through,
+ * which links on to it. The reads are of the live store, through the
+ * controller's runtime, and write nothing.
  *
  * @throws Error when the space's root is not a Home, one with a `profiles`
  *   list.
