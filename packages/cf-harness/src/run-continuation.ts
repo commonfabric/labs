@@ -239,6 +239,9 @@ export interface PrepareNextHarnessRunOptions {
   imageAttachments?: readonly HarnessImageAttachment[];
   imageSnapshotDir?: string;
   inputCells?: readonly HarnessInputCellSpec[];
+
+  /** Names retained by a session whose history spans multiple runs. */
+  heldInputNames?: readonly string[];
   runId?: string;
   artifactRoot?: string;
   structuredResult?: HarnessRunState["structuredResult"];
@@ -247,6 +250,18 @@ export interface PrepareNextHarnessRunOptions {
     state: HarnessRunState,
   ) => HarnessNextRunContext | Promise<HarnessNextRunContext>;
 }
+
+/** Attachment, assignment, and grant names already bound to held handles. */
+export const inputNamesHeldByHarnessRun = (
+  state: Pick<
+    HarnessRunState,
+    "inputCells" | "assignedPieces" | "wellKnownGrants"
+  >,
+): string[] => [
+  ...(state.inputCells ?? []).map((cell) => cell.name),
+  ...(state.assignedPieces ?? []).map((piece) => piece.slug),
+  ...(state.wellKnownGrants ?? []).map((grant) => grant.name),
+];
 
 /**
  * Cuts history to its complete checkpoint, retains explicitly classified
@@ -265,9 +280,8 @@ export const prepareNextHarnessRun = async (
     assertValidHarnessHandleTable(prior.handleTable);
   }
   assertInputCellNamesAvailable(options.inputCells ?? [], [
-    ...(prior.inputCells ?? []).map((cell) => cell.name),
-    ...(prior.assignedPieces ?? []).map((piece) => piece.slug),
-    ...(prior.wellKnownGrants ?? []).map((grant) => grant.name),
+    ...inputNamesHeldByHarnessRun(prior),
+    ...(options.heldInputNames ?? []),
   ]);
   const source = options.transcript ?? [];
   const boundary = inspectHarnessTranscriptPairing(source).safeBoundary;
