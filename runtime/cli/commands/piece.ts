@@ -1556,20 +1556,21 @@ export function targetOptions(
   option("-a,--api-url <url:string>", "URL of the fabric server instance.");
   env("CF_IDENTITY=<path:string>", "Path to an identity keyfile.");
   option("-i,--identity <path:string>", "Path to an identity keyfile.");
-  // A chain file is what `cf delegation issue` writes for the identity: the
-  // delegations its sessions present to open a space another key owns.
-  env(
-    "CF_DELEGATIONS=<path:string>",
-    "Path to a delegation chain file the identity holds.",
-  );
-  const delegations = [
-    "--delegations <path:string>",
-    "Path to a delegation chain file the identity holds. Repeatable.",
-    { collect: true },
-  ] as const;
-  if (opts.global) cmd.globalOption(...delegations);
-  else cmd.option(...delegations);
   if (space) {
+    // A chain file is what `cf delegation issue` writes for the identity:
+    // the delegations its sessions present to open a space another key
+    // owns. A command that acts on no existing space holds none.
+    env(
+      "CF_DELEGATIONS=<path:string>",
+      "Path to a delegation chain file the identity holds.",
+    );
+    const delegations = [
+      "--delegations <path:string>",
+      "Path to a delegation chain file the identity holds. Repeatable.",
+      { collect: true },
+    ] as const;
+    if (opts.global) cmd.globalOption(...delegations);
+    else cmd.option(...delegations);
     env("CF_SPACE=<space:string>", "The space name or DID.");
     option("-s,--space <space:string>", "The space name or DID");
   }

@@ -448,6 +448,21 @@ describe("delegation", () => {
         }]);
       });
 
+      it("prints an expiry beyond what a date represents as its unix second", async () => {
+        const far = 10 ** 14;
+        const [bytes] = await issueDelegationChain({
+          signer: core,
+          space,
+          to: agent.did(),
+          held: [],
+          expiresAt: far,
+        });
+        const path = await chainFile("far.json", [[bytes]]);
+        const { code, stdout } = await cf(argv`delegation show ${path}`);
+        expect(code).toBe(0);
+        expect(stdout.map(stripAnsi).join("\n")).toContain(String(far));
+      });
+
       it("exits non-zero naming a file that is not a chain file", async () => {
         const path = join(dir, "other.json");
         await Deno.writeTextFile(path, "[]");
@@ -483,6 +498,16 @@ describe("delegation", () => {
 
     it("is absent when none is given", () => {
       expect(parseSpaceOptions(target).delegations).toBeUndefined();
+    });
+
+    it("is refused by a command that acts on no existing space", async () => {
+      const { code, stderr } = await cf(
+        argv`space create --delegations a.json`,
+      );
+      expect(code).not.toBe(0);
+      expect(stderr.map(stripAnsi).join("\n")).toContain(
+        'Unknown option "--delegations"',
+      );
     });
   });
 });

@@ -85,6 +85,16 @@ async function issue(options: IssueOptions): Promise<void> {
   }
 }
 
+/**
+ * An expiry as a date, or as the unix second it is where that is beyond
+ * what a `Date` represents: a chain file is described whatever it holds.
+ */
+const expiryText = (expires: number | null): string => {
+  if (expires === null) return "never";
+  const date = new Date(expires * 1000);
+  return Number.isNaN(date.getTime()) ? String(expires) : date.toISOString();
+};
+
 /** `cf delegation show`: each delegation of each chain `file` holds. */
 async function show(
   options: { json?: boolean },
@@ -121,9 +131,7 @@ async function show(
       row.audience,
       row.subject ?? "(any)",
       row.command,
-      row.expires === null
-        ? "never"
-        : new Date(row.expires * 1000).toISOString(),
+      expiryText(row.expires),
       row.verified === true ? "yes" : row.verified,
     ]))
     .border(true)

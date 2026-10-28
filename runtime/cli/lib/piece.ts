@@ -762,6 +762,22 @@ export async function loadPieces(
           memoryHostNote(memoryHost, new URL(config.apiUrl)),
       );
     }
+    // The chains the caller named are held before anything opens a space,
+    // Home included, and a file that holds none the identity can present
+    // fails the connection: the caller named it, so it is not best effort.
+    if (config.delegations !== undefined && config.delegations.length > 0) {
+      const paths = config.delegations;
+      await timeCliPhase(
+        "loadPieces.delegationFiles",
+        () =>
+          holdDelegationChainFiles(
+            runtime.storageManager,
+            paths,
+            session.as.did(),
+          ),
+      );
+    }
+
     // The delegations Home records for the user's profiles, so a profile
     // space that owns itself opens under its own grant. Best effort: a
     // runtime that cannot read them opens the space on its key's own grant.
@@ -777,22 +793,6 @@ export async function loadPieces(
         }`,
       );
     }
-    // The chains the caller named are held before anything opens a space,
-    // and a file that holds none the identity can present fails the
-    // connection: the caller named it, so it is not best effort.
-    if (config.delegations !== undefined && config.delegations.length > 0) {
-      const paths = config.delegations;
-      await timeCliPhase(
-        "loadPieces.delegationFiles",
-        () =>
-          holdDelegationChainFiles(
-            runtime.storageManager,
-            paths,
-            session.as.did(),
-          ),
-      );
-    }
-
     const deferSpaceCellSync = config.deferSpaceCellSync !== false;
     const pieces = await timeCliPhase(
       "loadPieces.controller",

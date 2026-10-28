@@ -16,6 +16,9 @@ import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import { DelegationError } from "./delegation.ts";
 
+/** The unpadded base64url alphabet, and nothing else. */
+const BASE64URL = /^[A-Za-z0-9_-]*$/;
+
 /**
  * What a chain file names itself, in its `format` field. A name rather than
  * a version: a reader tolerates fields it does not know, and a change it
@@ -77,11 +80,22 @@ export function decodeDelegationChains(text: string): Uint8Array[][] {
       if (typeof link !== "string") {
         throw new DelegationError(`chain ${i} link ${j} is not a string`);
       }
+      // The one spelling of the bytes: the unpadded base64url alphabet,
+      // with every bit of the last character accounted for. A decoder
+      // that skips whitespace or ignores trailing bits would otherwise
+      // read a text another decoder refuses.
+      let bytes: Uint8Array;
       try {
-        return fromBase64url(link);
+        bytes = fromBase64url(link);
       } catch {
         throw new DelegationError(`chain ${i} link ${j} is not base64url`);
       }
+      if (!BASE64URL.test(link) || toUnpaddedBase64url(bytes) !== link) {
+        throw new DelegationError(
+          `chain ${i} link ${j} is not canonical unpadded base64url`,
+        );
+      }
+      return bytes;
     });
   });
 }

@@ -3437,10 +3437,10 @@ The format is this repository's own rather than the UCAN working group's
 container, which bundles tokens in no order for the recipient to link; reading
 and writing a container is a later feature, for tooling that speaks it.
 
-A `cf` command that opens spaces holds the chains in the files
-`--delegations <path>` names, repeatable, or the one `CF_DELEGATIONS` names,
-before it opens any, so a session on a space a chain is over presents it. A file
-that cannot be read, a chain in it that ends at a key other than the identity,
-or one the runtime refuses, fails the command rather than warning: the caller
-named the file. The delegations your own Home records for your profiles are held
-without naming anything.
+The `cf piece` and `cf cell` commands, which carry these options, hold the
+chains in the files `--delegations <path>` names, repeatable, or the one
+`CF_DELEGATIONS` names, before they open any space, Home included, so a session
+on a space a chain is over presents it. A file that cannot be read, a chain in
+it that ends at a key other than the identity, or one the runtime refuses, fails
+the command rather than warning: the caller named the file. The delegations your
+own Home records for your profiles are held without naming anything.

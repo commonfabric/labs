@@ -57,6 +57,25 @@ Deno.test("delegation-chain-text: throws a DelegationError for an empty chain", 
   );
 });
 
+Deno.test("delegation-chain-text: throws a DelegationError for a link spelled other than canonical unpadded base64url", () => {
+  // Padding, whitespace, and nonzero trailing bits are spellings a lenient
+  // decoder reads and a strict one refuses; the text admits neither.
+  for (const link of ["AQI=", "AQ I", "AQJ"]) {
+    const text = JSON.stringify({
+      format: DELEGATION_CHAIN_FORMAT,
+      chains: [[link]],
+    });
+    expect(() => decodeDelegationChains(text)).toThrow(
+      "chain 0 link 0 is not canonical unpadded base64url",
+    );
+  }
+  const canonical = JSON.stringify({
+    format: DELEGATION_CHAIN_FORMAT,
+    chains: [["AQI"]],
+  });
+  expect(decodeDelegationChains(canonical)).toEqual([[bytes(1, 2)]]);
+});
+
 Deno.test("delegation-chain-text: throws a DelegationError for a link that is not base64url", () => {
   const text = JSON.stringify({
     format: DELEGATION_CHAIN_FORMAT,
