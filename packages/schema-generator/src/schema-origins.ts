@@ -15,6 +15,7 @@ import type {
 import type { FabricValue } from "@commonfabric/data-model";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
+import { combineIfcLabels, restrictionsAndEvidence } from "./ifc-labels.ts";
 import type { GenerationContext, IndexKeys } from "./interface.ts";
 import { dedupeByValueEqual } from "./value-equality.ts";
 
@@ -123,6 +124,20 @@ export function withValueRecordsOf(
     : undefined;
   if (origin?.kind === "union" && isObjectOrArray(copy) && copy !== original) {
     context.schemaOrigins?.set(copy, origin);
+  }
+  // A fallback left to be checked once generation is done keeps the
+  // restrictions a wrapper places on its copy, which is where it is emitted.
+  const pending = isObjectOrArray(original)
+    ? context.anyValuesBySchema?.get(original)
+    : undefined;
+  if (pending && isObjectOrArray(copy) && copy !== original) {
+    const restrictions = isObjectOrArray(copy.ifc)
+      ? restrictionsAndEvidence(copy.ifc).restrictions
+      : undefined;
+    if (restrictions) {
+      pending.kept = combineIfcLabels(pending.kept ?? {}, restrictions);
+    }
+    context.anyValuesBySchema?.set(copy, pending);
   }
   return withIndexKeysOf(copy, original, context);
 }

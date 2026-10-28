@@ -1457,6 +1457,32 @@ describe("SchemaGenerator", () => {
       expect(byNode).toThrow(message);
     });
 
+    it("keeps a fallback a wrapper labels where it meets a definition before it is written", async () => {
+      // The wrapper's labels go on a copy of the fallback, where it is
+      // emitted, so they count as kept.
+
+      const { byType, byNode } = await schemasOfBothPaths(
+        `
+          interface Node {
+            secret: Confidential<string, readonly ["s"]>;
+            child?: Confidential<Node & string[], readonly ["s"]>;
+          }
+        `,
+        "Node",
+      );
+      for (const read of [byType, byNode]) {
+        const schema = read() as {
+          $defs?: { Node?: { properties: Record<string, JSONSchema> } };
+          properties?: Record<string, JSONSchema>;
+        };
+        const node = schema.$defs?.Node ?? schema;
+        expect(node.properties?.child).toEqual({
+          ...UNSUPPORTED_INDEX_SIGNATURE as object,
+          ifc: labelS,
+        });
+      }
+    });
+
     it("keeps a value where `any` meets a definition before it is written with its labels", async () => {
       const { byType, byNode } = await schemasOfBothPaths(
         `

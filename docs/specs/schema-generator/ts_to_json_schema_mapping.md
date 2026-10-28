@@ -1137,7 +1137,9 @@ Default paths of §7:
   generation is done, and refused where it kept fewer restrictions than that
   definition states ("An intersection whose constituents cannot be merged
   keeps the labels of its constituents, but it meets `Node` inside the
-  definition of `Node` …").
+  definition of `Node` …"). The restrictions a wrapper places on it count as
+  kept, so `child?: Confidential<Node & string[], C>` inside `Node` is read
+  where `Node` states `C`.
 - A property several constituents declare takes the schema of its type in
   the intersection, which the checker gives as the intersection of the
   declared types: `{ a: unknown } & { a: string }` and

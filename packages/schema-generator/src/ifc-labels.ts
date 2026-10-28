@@ -466,13 +466,15 @@ export const labelsBesideAnyValue = (
  * definitions not yet written (`unwritten`) in `definitions`, and the labels
  * it kept (`labelsBesideAnyValue()`): one an intersection the checker gives
  * `any` settled to (`"any"`), or one an intersection this generator cannot
- * merge falls back to (`"unsupported"`).
+ * merge falls back to (`"unsupported"`). A fallback's `kept` takes in the
+ * restrictions a wrapper places on a copy of it, where it is emitted
+ * (`GenerationContext.anyValuesBySchema`).
  */
 export type AnyValueBesideUnwritten = {
   readonly from: "any" | "unsupported";
   readonly definitions: Readonly<Record<string, MutableJSONSchema>>;
   readonly unwritten: readonly string[];
-  readonly kept: IfcLabels | undefined;
+  kept: IfcLabels | undefined;
 };
 
 /**

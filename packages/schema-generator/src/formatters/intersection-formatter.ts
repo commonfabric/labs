@@ -178,7 +178,7 @@ export function anyValueSchema(
   },
   context: GenerationContext,
 ): MutableJSONSchema {
-  const labels = labelsKeptBesideAnyValue(constituents, "any", context);
+  const { labels } = labelsKeptBesideAnyValue(constituents, "any", context);
   const schema: MutableJSONSchemaObj = {
     ...(labels !== undefined ? { ifc: labels } : {}),
     ...(stated.scope !== undefined ? { scope: stated.scope } : {}),
@@ -200,45 +200,50 @@ export function unsupportedIntersectionSchema(
   constituents: readonly MutableJSONSchema[],
   context: GenerationContext,
 ): MutableJSONSchemaObj {
-  const labels = labelsKeptBesideAnyValue(
+  const { labels, value } = labelsKeptBesideAnyValue(
     constituents,
     "unsupported",
     context,
   );
-  return {
+  const schema: MutableJSONSchemaObj = {
     type: "object",
     additionalProperties: true,
     $comment: `Unsupported intersection pattern: ${reason}`,
     ...(labels !== undefined ? { ifc: labels } : {}),
   };
+  if (value) context.anyValuesBySchema?.set(schema, value);
+  return schema;
 }
 
 /**
  * The labels kept of `constituents` beside a value that may hold their data
  * anywhere (`labelsBesideAnyValue()`), a value `from` the reading it names,
- * with a definition met before it is written left to be checked once
- * generation is done (`anyValuesBesideUnwritten`).
+ * and the value left to be checked once generation is done, where it met a
+ * definition before that definition was written (`anyValuesBesideUnwritten`).
  */
 function labelsKeptBesideAnyValue(
   constituents: readonly MutableJSONSchema[],
   from: AnyValueBesideUnwritten["from"],
   context: GenerationContext,
-): Record<string, unknown> | undefined {
+): {
+  labels: Record<string, unknown> | undefined;
+  value: AnyValueBesideUnwritten | undefined;
+} {
   const unwritten = new Set<string>();
   const labels = labelsBesideAnyValue(
     constituents,
     context.definitions,
     unwritten,
   );
-  if (unwritten.size > 0) {
-    context.anyValuesBesideUnwritten.push({
-      from,
-      definitions: context.definitions,
-      unwritten: [...unwritten],
-      kept: labels,
-    });
-  }
-  return labels;
+  if (unwritten.size === 0) return { labels, value: undefined };
+  const value: AnyValueBesideUnwritten = {
+    from,
+    definitions: context.definitions,
+    unwritten: [...unwritten],
+    kept: labels,
+  };
+  context.anyValuesBesideUnwritten.push(value);
+  return { labels, value };
 }
 
 export class IntersectionFormatter implements TypeFormatter {

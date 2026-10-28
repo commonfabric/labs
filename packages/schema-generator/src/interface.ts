@@ -233,6 +233,13 @@ export interface GenerationContext {
    */
   anyValuesBesideUnwritten: AnyValueBesideUnwritten[];
 
+  /**
+   * Each fallback in `anyValuesBesideUnwritten` by its schema and by each copy
+   * of it a wrapper makes (`withValueRecordsOf()`), so the restrictions the
+   * wrapper places on a copy count as kept.
+   */
+  anyValuesBySchema?: WeakMap<object, AnyValueBesideUnwritten>;
+
   // Stack state (push/pop during recursion)
 
   /** Current recursion path for cycle detection */

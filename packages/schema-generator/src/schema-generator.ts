@@ -2065,6 +2065,7 @@ export class SchemaGenerator {
       nameAnonymousDefinition: () =>
         `AnonymousType_${++this.#anonymousNameCounter}`,
       anyValuesBesideUnwritten: [],
+      anyValuesBySchema: new WeakMap(),
       uninterpretedTypeNodes: unread,
 
       // Stack state
