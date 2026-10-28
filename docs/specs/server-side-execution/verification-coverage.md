@@ -4012,6 +4012,10 @@ grant):
   reaches still does not stop dispatch (events §5) — pinned by the
   existing "settles a served event whose declared argument reaches a
   foreign scoped document without a budgeted connection deferral" case.
+  A run that reaches such a document in its body alone runs again once
+  the load settles, and a load that fails fails the event as the
+  preflight's park fails a head, the later same-space arrivals held
+  behind it (`runner/test/scheduler-event-unresolved-read.test.ts`).
 - OW17's owed leg (replica-level per-instance read keying) now has its
   trigger: a foreign scoped instance producer exists. The exposure is
   bounded to the admitted instances, each keyed by its `scope_key` on

@@ -715,7 +715,10 @@ loop's duty).
   reaches such a document in its body alone is withdrawn and runs again
   once the load settles; a refusal settles it as an absence, not as a
   failure of the load, so the event dispatches and what decides it is
-  what its run reads. A run that reads the
+  what its run reads. A load that fails instead fails the withdrawn
+  event as a load that failed before dispatch does: deferred with the
+  load's typed failure, no consequence written, later same-space
+  arrivals held behind it. A run that reads the
   value of such a document, a user- or session-scoped document in
   another space reached through its declared event or its bound state,
   read an absence that is not the document's state: the run is withdrawn

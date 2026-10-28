@@ -39,6 +39,7 @@ import type {
   IStorageTransaction,
   MemorySpace,
 } from "../storage/interface.ts";
+import { ReplicaLoadFailureError } from "../storage/interface.ts";
 import {
   localReadFailure,
   releaseLocalReadBasis,
@@ -2648,15 +2649,59 @@ export async function dispatchQueuedEvent(state: {
         const manager = state.runtime.storageManager;
         const identity = tx.tx.scopeKeyIdentity ??
           state.runtime.scopeKeyIdentity;
-        void (manager.loadsSettled?.([
-          entityKey(refusedRead.address, identity),
-        ]) ??
-          Promise.resolve())
-          .catch(() => undefined)
-          .then(() => {
+        const key = entityKey(refusedRead.address, identity);
+        void (manager.loadsSettled?.([key]) ?? Promise.resolve()).then(
+          () => {
             delete requeued.retryReadinessPending;
             state.queueExecution();
-          });
+          },
+          (cause: unknown) => {
+            // The load failed — a transport, session or authorization
+            // failure, never the grant's refusal, which settles the load as
+            // an absence. A re-run would dispatch against a replica whose
+            // required load failed, which the preflight's park never does,
+            // so the entry fails as it does there: deferred with the typed
+            // failure on its checkpoint, no consequence written, a later
+            // drain re-delivering it, and the later same-space arrivals held
+            // behind it. The drop settles the requeued entry's callback; a
+            // failed origin that dropped it meanwhile left nothing to drop.
+            delete requeued.retryReadinessPending;
+            const detail = cause instanceof Error
+              ? cause.message
+              : String(cause);
+            const failure = cause instanceof ReplicaLoadFailureError
+              ? cause.failure
+              : {
+                failureClass: "unknown" as const,
+                recoveryEpoch: "untyped",
+                permanentEvidence: false,
+              };
+            dropQueuedEvent(
+              state,
+              requeued,
+              `Event deferred: the load of ${refusedRead.document}, read ` +
+                `under a grant then unresolved, failed before the re-run ` +
+                `(${key}: ${detail}); the entry stays pending and a later ` +
+                `drain re-delivers it`,
+              "deferred",
+              {
+                quiet: true,
+                servedOutcome: {
+                  kind: "deferred",
+                  cause: "load-park",
+                  role: "failed-head",
+                  failure,
+                },
+              },
+            );
+            deferLaterSameSpaceServedEvents(
+              state,
+              requeued,
+              `whose served run's load of ${refusedRead.document} failed`,
+            );
+            state.queueExecution();
+          },
+        );
         runFinalCommitCallback();
         tx.abandonStagedWork(
           eventAbandonError(
