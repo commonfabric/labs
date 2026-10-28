@@ -101,9 +101,9 @@ cell that has stored a link to a narrower instance of itself keeps writing
 behind that link, so an update that broadens a deployed cell's scope gives the
 cell a new name. The FabriChat manager is the worked case: its rooms, people and
 found rooms are derived per user in documents named for it
-(`packages/patterns/fabrichat/manager.tsx`), and
-`packages/patterns/integration/fabrichat-manager-sessions-multi-runtime.test.ts`
-pins that a later session's session-scoped writes do not grow with the rooms.
+(`patterns/system/fabrichat/manager.tsx`), and
+`patterns/integration/fabrichat-manager-sessions-multi-runtime.test.ts` pins
+that a later session's session-scoped writes do not grow with the rooms.
 
 `PerAny<T>` is rare. Use it only when an inner value must override an outer
 scope declaration and may validly come from any concrete scope:

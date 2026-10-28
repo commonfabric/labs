@@ -226,7 +226,7 @@ document.
 A parent set up under a pattern that did not name an instance holds that
 instance's child at the positional spot. The first setup of the parent under a
 pattern that names the instance carries that child over
-(`planInstanceCarryOver` in `packages/runner/src/runner.ts`) and records it in
+(`planInstanceCarryOver` in `runtime/runner/src/runner.ts`) and records it in
 `instanceChildren`, so carrying a child over is a one-time transition for each
 deployed parent. The child carried over is the one at the
 `legacyPartialCause` that the pattern the parent last set up gives the same

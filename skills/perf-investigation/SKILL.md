@@ -392,9 +392,9 @@ that resolves them.
   derivation was made from, which a load repeats either way — so measure both
   before promising a faster load. The FabriChat manager's per-user rooms and
   people are the worked case, and
-  `packages/patterns/integration/fabrichat-manager-sessions-multi-runtime.test.ts`
-  is the check that pins it: a later session's session-scoped writes are the
-  same with one room and with three.
+  `patterns/integration/fabrichat-manager-sessions-multi-runtime.test.ts` is the
+  check that pins it: a later session's session-scoped writes are the same with
+  one room and with three.
 - **An append re-walks the list against its element schema.** Appending to a
   growing array is free, and so is appending a piece to one. Appending a piece
   whose declared shape is wide re-walks every element already there, once per
