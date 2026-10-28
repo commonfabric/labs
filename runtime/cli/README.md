@@ -1969,12 +1969,13 @@ holds as a handle from its first turn. An address naming another space by DID
 space, under the profile's identity, and may call the verbs of the piece it was
 handed. An input in another space with no host, a `foreignSpaces` entry no input
 names, or a slug address naming another space is refused at enqueue as
-`beyond_profile`. It may set nothing else. A job runs through the same
-`cf-harness` path as an agent run, with the fabric session its profile names, if
-any. Every tool call, including delegated calls, produces progress, as does its
-return. A `step` carries `{turn, tool}`, and the same step again with
-`returned: true` once the calls of that turn have returned and the loop's model
-has the turn. A `command` records each command the host ran for it. Children add
+`beyond_profile`. A request may also narrow `hostMounts` as described below, and
+may set no other profile fields. A job runs through the same `cf-harness` path
+as an agent run, with the fabric session its profile names, if any. Every tool
+call, including delegated calls, produces progress, as does its return. A `step`
+carries `{turn, tool}`, and the same step again with `returned: true` once the
+calls of that turn have returned and the loop's model has the turn. A `command`
+records each command the host ran for it. Children add
 `child: {profile, childRunId, parentToolCallId, depth}` to either body. The
 harness admits one level of delegation, so depth is `1`. Only a child's
 `browser` tool steps carry `action` (such as `click` or `snapshot`), without the
