@@ -1840,7 +1840,7 @@ describe("Schema: CFC authoring aliases", () => {
     ) {
       it(`reports nothing for a recursion through a member \`${alias}\` drops`, async () => {
         for (
-          const { schema, diagnostics } of await bothPaths(
+          const { schema, diagnostics } of await schemasOfBothPaths(
             `type Data<T> =
                | ${alias}<{ parent: Data<T>; value: T }, ${keys}>
                | Secret;`,
@@ -1864,7 +1864,7 @@ describe("Schema: CFC authoring aliases", () => {
 
     it("reports nothing for a recursion through an index signature `Pick` drops", async () => {
       for (
-        const { schema, diagnostics } of await bothPaths(
+        const { schema, diagnostics } of await schemasOfBothPaths(
           `type Data<T> =
              | Pick<{ [key: string]: Data<T>; value: T }, "value">
              | Secret;`,
@@ -1887,7 +1887,7 @@ describe("Schema: CFC authoring aliases", () => {
 
     it("keeps the index signature `Pick` reads a key only it holds from", async () => {
       for (
-        const { schema, diagnostics } of await bothPaths(
+        const { schema, diagnostics } of await schemasOfBothPaths(
           `type Data<T> =
              | Pick<{ [key: string]: T; value: T }, "other">
              | Secret;`,
@@ -1910,7 +1910,7 @@ describe("Schema: CFC authoring aliases", () => {
 
     it("reports `cfc-schema:recursive-alias-of-any` for a recursion through a member `Omit` keeps", async () => {
       for (
-        const { diagnostics } of await bothPaths(
+        const { diagnostics } of await schemasOfBothPaths(
           `type Data<T> = Omit<{ parent: Data<T>; value: T }, "value"> | Secret;`,
           "Data<string>",
         )
@@ -2063,6 +2063,30 @@ describe("Schema: CFC authoring aliases", () => {
           "readonly [string, Secret]",
           { type: "array", items: { anyOf: [{ type: "string" }, SECRET] } },
         ],
+        ...(["Partial", "Readonly", "Required", "Omit"] as const).map((
+          alias,
+        ) =>
+          [
+            `the object \`${alias}\` maps it to, of any values on every key`,
+            alias === "Omit" ? `Omit<Secret, "x">` : `${alias}<Secret>`,
+            {
+              type: "object",
+              properties: {},
+              additionalProperties: true,
+              ...SECRET,
+            },
+          ] as const
+        ),
+        [
+          "the object `Pick` maps it to, of any values on the keys it names",
+          `Pick<Secret, "x">`,
+          {
+            type: "object",
+            properties: { x: true },
+            required: ["x"],
+            ...SECRET,
+          },
+        ],
       ] as const
     ) {
       it(`keeps the wrapper on ${written} on both paths`, async () => {
@@ -2102,6 +2126,63 @@ describe("Schema: CFC authoring aliases", () => {
             anyOf: [SECRET, { $ref: "#/$defs/List" }, { type: "undefined" }],
           },
         });
+        expect(diagnostics).toEqual([]);
+      }
+    });
+
+    for (
+      const [written, declarations, value] of [
+        ["a named key union", `type Keys = "x" | "y";`, "Record<Keys, Secret>"],
+        [
+          "the keys `keyof` an object type names",
+          "type Obj = { x: string; y: number };",
+          "Record<keyof Obj, Secret>",
+        ],
+      ] as const
+    ) {
+      it(`keeps the wrapper on the values of a record on ${written} on both paths`, async () => {
+        for (
+          const { schema, diagnostics } of await schemasOfBothPaths(
+            declarations,
+            value,
+          )
+        ) {
+          expect(schema.properties.a).toEqual({
+            type: "object",
+            properties: { x: SECRET, y: SECRET },
+            required: ["x", "y"],
+          });
+          expect(diagnostics).toEqual([]);
+        }
+      });
+    }
+
+    it("keeps the wrapper on the values of a record an alias declares, in the alias's definition", async () => {
+      for (
+        const { schema, diagnostics } of await schemasOfBothPaths(
+          "type Dict = Record<string, Secret>;",
+          "Dict",
+        )
+      ) {
+        expect(schema.properties.a).toEqual({ $ref: "#/$defs/Dict" });
+        expect(schema.$defs.Dict).toEqual({
+          type: "object",
+          properties: {},
+          additionalProperties: SECRET,
+        });
+        expect(diagnostics).toEqual([]);
+      }
+    });
+
+    it("keeps the wrapper on the element of a tuple an alias declares, under `Readonly`", async () => {
+      for (
+        const { schema, diagnostics } of await schemasOfBothPaths(
+          "type Pair = [Secret];",
+          "Readonly<Pair>",
+        )
+      ) {
+        expect(schema.properties.a).toEqual({ $ref: "#/$defs/Pair" });
+        expect(schema.$defs.Pair).toEqual({ type: "array", items: SECRET });
         expect(diagnostics).toEqual([]);
       }
     });
