@@ -12,6 +12,7 @@ import {
   computed,
   NAME,
   pattern,
+  type PerSession,
   spaceAccess,
   VIEWS,
   wish,
@@ -62,8 +63,8 @@ export interface PlacedRoom {
   /** The room's messages. */
   messages?: PlacedMessageList;
 
-  /** Whether the reader can send. */
-  canSend?: boolean;
+  /** Whether the reader can send, which each session reads for itself. */
+  canSend?: PerSession<boolean>;
 }
 
 /** Whether the viewer can read a placed room. */
@@ -84,7 +85,7 @@ export interface FabriChatPlacementView {
   messages?: PlacedMessageList;
 
   /** Whether the viewer can send. */
-  canSend: boolean;
+  canSend: PerSession<boolean>;
 
   /** The room's participants. */
   participants: ProfileCell[];
@@ -125,7 +126,8 @@ const FabriChatPlacement = pattern<
 >(({ room }) => {
   // Wished for as a cell, which the tallies compare reactors against; the
   // placement never tests it for absence, which a cell's handle would defeat.
-  const profileWish = wish<ProfileCell>({ query: "#profile" });
+  // Each session finds its own profile, as the room's does.
+  const profileWish = wish<PerSession<ProfileCell>>({ query: "#profile" });
   const viewer = profileWish.result;
   const about = computed(() => room.get()?.about);
   // The viewer's access to the room's space decides: `"none"` is not a
@@ -148,11 +150,16 @@ const FabriChatPlacement = pattern<
       tallies: reactionTalliesOf(message.get()?.reactions ?? [], viewer),
     }));
   });
+  // Whether this reader can send differs by session, as the room's own
+  // `canSend` does.
+  const canSendForSession = computed((): PerSession<boolean> =>
+    isMember && room.get()?.canSend === true
+  );
   const chat = {
     state,
     about: computed(() => (isMember ? about : undefined)),
     messages,
-    canSend: computed(() => isMember && room.get()?.canSend === true),
+    canSend: canSendForSession,
     participants: computed(() =>
       isMember ? [...(room.get()?.participants ?? [])] : []
     ),
