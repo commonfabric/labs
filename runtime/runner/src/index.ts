@@ -149,6 +149,7 @@ export {
   isCell,
   isReadableCell,
   isStream,
+  pullProjected,
   readProjected,
   sendEvent,
   setCell,
