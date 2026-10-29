@@ -420,7 +420,7 @@ flags it adopts from the deployment it runs against.
   - **Access.** Under ON, toolshed lists its process identity, the service
     identity, as the memory server's one delegating principal
     (`memoryAclPrincipalsFor` in
-    [`packages/toolshed/lib/server-execution-flag.ts`](../../packages/toolshed/lib/server-execution-flag.ts)),
+    [`runtime/toolshed/lib/server-execution-flag.ts`](../../runtime/toolshed/lib/server-execution-flag.ts)),
     and every session a serving runtime opens carries the delegated read
     binding `actingAs: "space-owner"`. The memory server resolves the binding
     to the owner the space's access list names, and makes the session's `READ`
