@@ -713,9 +713,12 @@ one by `packages/memory/test/v2-client-holdings.test.ts`.
 > A commit that replaces a space's ACL document with a tombstone,
 > `{ "deleted": { "by": <principal> } }`, is admitted only if it satisfies
 > INV-12's shape clauses; the tombstone holds nothing else and its `by` is the
-> committing principal; the space is not that principal's Home, whose DID is
-> the principal's own; and the stored ACL is valid and has exactly one entry,
-> the committing principal at OWNER. Once one is admitted the space is
+> committing principal; the space is the Home neither of that principal nor of
+> the principal its session's capability resolves to, a Home's DID being its
+> principal's own; and the stored ACL is valid and its one entry is at OWNER and
+> is either the committing principal or the principal the session's capability
+> resolves to through a proof chain. `by` names the committing principal in both
+> cases. Once one is admitted the space is
 > deleted: every command any principal sends it, a service DID's included, is
 > refused, and no commit to it is admitted again, an ACL commit included.
 
@@ -727,15 +730,30 @@ that each other member's loss of access is a commit of its own, made before the
 space is deleted, rather than a side effect of deleting it. A service DID's
 implicit OWNER does not satisfy it: the stored list has to name the principal.
 The Home clause keeps a principal from deleting the space its own identity
-names, which nothing could then replace.
+names, which nothing could then replace, whether it acts as itself or through a
+chain.
+
+The chain clause serves a self-owned space, whose list names the space's own DID
+at OWNER and whose owner acts through a delegation the space issued. A session
+presenting a verified proof chain resolves its capability from the chain's root
+issuer, and that is the test the server applies to every OWNER act on such a
+space, replacing its list included; deleting it takes the same test and no
+detour through a list naming the deleting principal. It is a different rule from
+the sole-member clause, and deliberately so. A delegation is a proof the owner
+hands out, not an entry in the list, so the server cannot see whether the owner
+also delegated to other identities, and a clause that required it to would leave
+any such space impossible to delete. Those other holders lose access with no
+commit of their own first, as they do when an owner replaces the list. `by`
+names the committing principal, not the root issuer, so for such a space the
+tombstone is the one place the identity that acted for the space appears.
 
 The clauses are checked after INV-12's shape clauses, in this order:
 
 | Clause | Rejection |
 | --- | --- |
 | the tombstone holds `by` alone, naming the committing principal | `ProtocolError`: `A tombstone must name the deleting principal and nothing else` |
-| the space is not the principal's Home | `AuthorizationError`: `A Home space cannot be deleted` |
-| the stored ACL's one entry is the committing principal at OWNER | `AuthorizationError`: `Only the sole member of <space> may delete it` |
+| the space is the Home neither of the committing principal nor of the principal its capability resolves to | `AuthorizationError`: `A Home space cannot be deleted` |
+| the stored ACL's one entry is at OWNER, and is the committing principal or the principal its capability resolves to through a proof chain | `AuthorizationError`: `Only the sole member of <space> may delete it` |
 
 A command sent to a deleted space is refused with an `AuthorizationError`,
 `Space <space> is deleted`, carrying `deleted: true`, `permanentEvidence`, and
@@ -763,8 +781,9 @@ Layer: server admission (`#validateAclCommit` and the capability check in
 `packages/runner/src/acl-manager.ts`).
 
 Soundness direction: none — exact. Over-acceptance destroys a space a member
-other than the deleting principal still holds, or lets a deleted space take
-writes again. Over-rejection leaves its sole member no way to delete it.
+the list names other than the deleting principal or its chain's root issuer
+still holds, or lets a deleted space take writes again. Over-rejection leaves
+the space's owner no way to delete it.
 
 Checked by: nothing yet. The server does not implement deleting a space, and
 refuses a tombstone under INV-12's validity clause.
