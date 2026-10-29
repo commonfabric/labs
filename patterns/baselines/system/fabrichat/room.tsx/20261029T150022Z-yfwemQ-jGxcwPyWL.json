@@ -624,7 +624,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/fabrichat/room-records.tsx",
-                  "moduleIdentity": "HVBvHAs-X7xpm_sPJiePCQHqZAp493YYHdLew1kLOm4",
+                  "moduleIdentity": "xYnQM0D-guegjjpozJfcnb0gBEUzwKkidOTso-SR1eA",
                   "path": [
                     "commitSend"
                   ]
@@ -643,7 +643,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/fabrichat/room-records.tsx",
-                  "moduleIdentity": "HVBvHAs-X7xpm_sPJiePCQHqZAp493YYHdLew1kLOm4",
+                  "moduleIdentity": "xYnQM0D-guegjjpozJfcnb0gBEUzwKkidOTso-SR1eA",
                   "path": [
                     "commitComposerSend"
                   ]
@@ -662,7 +662,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/fabrichat/room-records.tsx",
-                  "moduleIdentity": "HVBvHAs-X7xpm_sPJiePCQHqZAp493YYHdLew1kLOm4",
+                  "moduleIdentity": "xYnQM0D-guegjjpozJfcnb0gBEUzwKkidOTso-SR1eA",
                   "path": [
                     "commitThreadSend"
                   ]
@@ -681,7 +681,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/fabrichat/room-records.tsx",
-                  "moduleIdentity": "HVBvHAs-X7xpm_sPJiePCQHqZAp493YYHdLew1kLOm4",
+                  "moduleIdentity": "xYnQM0D-guegjjpozJfcnb0gBEUzwKkidOTso-SR1eA",
                   "path": [
                     "commitReply"
                   ]
@@ -700,7 +700,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/fabrichat/room-records.tsx",
-                  "moduleIdentity": "HVBvHAs-X7xpm_sPJiePCQHqZAp493YYHdLew1kLOm4",
+                  "moduleIdentity": "xYnQM0D-guegjjpozJfcnb0gBEUzwKkidOTso-SR1eA",
                   "path": [
                     "commitEdit"
                   ]
@@ -719,7 +719,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/fabrichat/room-records.tsx",
-                  "moduleIdentity": "HVBvHAs-X7xpm_sPJiePCQHqZAp493YYHdLew1kLOm4",
+                  "moduleIdentity": "xYnQM0D-guegjjpozJfcnb0gBEUzwKkidOTso-SR1eA",
                   "path": [
                     "commitDelete"
                   ]
@@ -738,7 +738,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/fabrichat/room-records.tsx",
-                  "moduleIdentity": "HVBvHAs-X7xpm_sPJiePCQHqZAp493YYHdLew1kLOm4",
+                  "moduleIdentity": "xYnQM0D-guegjjpozJfcnb0gBEUzwKkidOTso-SR1eA",
                   "path": [
                     "commitObliterate"
                   ]
@@ -772,7 +772,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/fabrichat/room-records.tsx",
-                  "moduleIdentity": "HVBvHAs-X7xpm_sPJiePCQHqZAp493YYHdLew1kLOm4",
+                  "moduleIdentity": "xYnQM0D-guegjjpozJfcnb0gBEUzwKkidOTso-SR1eA",
                   "path": [
                     "commitSendReaction"
                   ]
@@ -791,7 +791,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/fabrichat/room-records.tsx",
-                  "moduleIdentity": "HVBvHAs-X7xpm_sPJiePCQHqZAp493YYHdLew1kLOm4",
+                  "moduleIdentity": "xYnQM0D-guegjjpozJfcnb0gBEUzwKkidOTso-SR1eA",
                   "path": [
                     "commitDeleteReaction"
                   ]
@@ -830,7 +830,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/fabrichat/manager.tsx",
-              "moduleIdentity": "msQConxqPorzMJ1L8XHEBKlh2VlN9JPFaCFXn6mR-mE",
+              "moduleIdentity": "Jgf94odSiWa1VjYNCd2PDvIGARPIdsJGMwFHNCJDIQU",
               "path": [
                 "commitStart"
               ]
@@ -888,7 +888,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/fabrichat/room-records.tsx",
-                  "moduleIdentity": "HVBvHAs-X7xpm_sPJiePCQHqZAp493YYHdLew1kLOm4",
+                  "moduleIdentity": "xYnQM0D-guegjjpozJfcnb0gBEUzwKkidOTso-SR1eA",
                   "path": [
                     "commitSend"
                   ]
@@ -907,7 +907,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/fabrichat/room-records.tsx",
-                  "moduleIdentity": "HVBvHAs-X7xpm_sPJiePCQHqZAp493YYHdLew1kLOm4",
+                  "moduleIdentity": "xYnQM0D-guegjjpozJfcnb0gBEUzwKkidOTso-SR1eA",
                   "path": [
                     "commitThreadSend"
                   ]
@@ -926,7 +926,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/fabrichat/room-records.tsx",
-                  "moduleIdentity": "HVBvHAs-X7xpm_sPJiePCQHqZAp493YYHdLew1kLOm4",
+                  "moduleIdentity": "xYnQM0D-guegjjpozJfcnb0gBEUzwKkidOTso-SR1eA",
                   "path": [
                     "commitSetThreadTitle"
                   ]
@@ -958,7 +958,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/fabrichat/room-records.tsx",
-              "moduleIdentity": "HVBvHAs-X7xpm_sPJiePCQHqZAp493YYHdLew1kLOm4",
+              "moduleIdentity": "xYnQM0D-guegjjpozJfcnb0gBEUzwKkidOTso-SR1eA",
               "path": [
                 "commitSetTitle"
               ]
@@ -1453,10 +1453,12 @@
           },
           "canAdd": {
             "description": "Whether this reader can add someone: an OWNER of a group room in a space\nof its own.",
+            "scope": "session",
             "type": "boolean"
           },
           "canSend": {
             "description": "Whether this reader can send, edit, delete, and react.",
+            "scope": "session",
             "type": "boolean"
           },
           "deleteMessage": {
@@ -1500,6 +1502,7 @@
             "items": {
               "$ref": "#/$defs/ChatMessageRights"
             },
+            "scope": "session",
             "type": "array"
           },
           "messages": {
@@ -1596,7 +1599,8 @@
           },
           "viewer": {
             "$ref": "#/$defs/ChatRoomViewer",
-            "description": "Who is reading the room: their profile, its principal, and their access."
+            "description": "Who is reading the room: their profile, its principal, and their access.",
+            "scope": "session"
           }
         },
         "required": [
@@ -2182,7 +2186,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/fabrichat/room-records.tsx",
-                  "moduleIdentity": "HVBvHAs-X7xpm_sPJiePCQHqZAp493YYHdLew1kLOm4",
+                  "moduleIdentity": "xYnQM0D-guegjjpozJfcnb0gBEUzwKkidOTso-SR1eA",
                   "path": [
                     "commitSendReaction"
                   ]
@@ -2201,7 +2205,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/fabrichat/room-records.tsx",
-                  "moduleIdentity": "HVBvHAs-X7xpm_sPJiePCQHqZAp493YYHdLew1kLOm4",
+                  "moduleIdentity": "xYnQM0D-guegjjpozJfcnb0gBEUzwKkidOTso-SR1eA",
                   "path": [
                     "commitDeleteReaction"
                   ]
@@ -2447,10 +2451,12 @@
       },
       "canAdd": {
         "description": "Whether this reader can add someone: an OWNER of a group room in a space\nof its own.",
+        "scope": "session",
         "type": "boolean"
       },
       "canSend": {
         "description": "Whether this reader can send, edit, delete, and react.",
+        "scope": "session",
         "type": "boolean"
       },
       "deleteMessage": {
@@ -2494,6 +2500,7 @@
         "items": {
           "$ref": "#/$defs/ChatMessageRights"
         },
+        "scope": "session",
         "type": "array"
       },
       "messages": {
@@ -2590,7 +2597,8 @@
       },
       "viewer": {
         "$ref": "#/$defs/ChatRoomViewer",
-        "description": "Who is reading the room: their profile, its principal, and their access."
+        "description": "Who is reading the room: their profile, its principal, and their access.",
+        "scope": "session"
       }
     },
     "required": [

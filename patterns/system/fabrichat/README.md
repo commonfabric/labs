@@ -43,6 +43,10 @@ therefore offer controls the handler refuses; view rights cannot fully identify
 the authenticated viewer yet. Participant presentation does not determine
 membership; access to the space does.
 
+The room's viewer, send availability, message rights, and add-member
+availability are scoped to each session, so one session's unresolved profile
+does not disable another session's controls.
+
 The room offers the latest 100 main-conversation messages and derives thread
 summaries in one pass through the messages. Its UI has thread and older-message
 navigation, retitling, and a composer shared by placements in the same session.
