@@ -41,7 +41,7 @@ by the server, beside the client-supplied display name.
 
 `cf-code-editor` joins only while collaborative editing is active and a
 `participantName` is set, through `RuntimeClient.joinPresenceRoom()`
-([`../../packages/runtime-client/README.md`](../../packages/runtime-client/README.md)).
+([`../../runtime/runtime-client/README.md`](../../runtime/runtime-client/README.md)).
 A room belongs to a field, not to a person: each editor joins the room of the
 field it is bound to, and everyone editing that field meets there, with one
 entry per browser tab. A tab with editors for two different fields is in both
@@ -91,7 +91,7 @@ stamps on a record does not cross into the guest. A relay's refusal of the
 guest's join or of its publication reaches the guest in the relay's words,
 since it concerns what the guest did, and any other failure reaches it as a
 category alone.
-[`../../packages/iframe-sandbox/README.md`](../../packages/iframe-sandbox/README.md)
+[`../../base/iframe-sandbox/README.md`](../../base/iframe-sandbox/README.md)
 covers the guest API, and
 [`../common/ai/iframe-pattern-guide.md`](../common/ai/iframe-pattern-guide.md)
 the authoring contract.
@@ -103,6 +103,22 @@ versioned codec id, durable submission id, field cursor, and codec payload. The
 same transaction stores the submitted projection, appends canonical integrated
 operations, advances the field cursor, and writes the ordinary materialized
 revision.
+
+Pattern code edits a collaborative field with `Writable<string>.applyChanges()`,
+which takes changes in the shape of a CodeMirror change spec against the value
+the handler read. The handler's commit carries them as an `apply-op` with no
+base, carrying the hash of the value read, beside the handler's read of the
+field. The edit lands only while the field still holds the value the handler
+read, at the field's current version with nothing to rebase over. Otherwise
+the read refuses the commit as an ordinary conflict, and the scheduler runs the
+handler again against the new text. Under server execution a wave drops the
+reads of what it seals, and the hash is what refuses a stale edit there.
+
+The commit's ordinary patch of the document leaves the edited field as it was,
+so that only the `apply-op` changes it, and Memory writes the field's new value
+when it integrates the edit. The handler's own view and the replica's pending
+layer show the changed text from the start. An `applyChanges()` on a field no
+editor has opened activates it from the value read.
 
 `cf-code-editor` submits every unconfirmed local update in one apply, and
 edits made while that apply is in flight go out in the next one, until none

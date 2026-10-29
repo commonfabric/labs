@@ -64,8 +64,20 @@ function saw(
   };
 }
 
+/**
+ * States for `tests`, as the default branch's earlier records would have
+ * left them: only those records add an identity, so a record from
+ * anywhere else is folded only into an identity one of these holds.
+ */
+function holding(
+  tests: readonly TestIdentity[] = [TEST],
+): Map<string, IdentityState> {
+  return new Map(tests.map((test) => [testIdentityKey(test), emptyState()]));
+}
+
+/** The state `observations` fold `TEST` into, starting from `holding()`. */
 function stateFrom(observations: readonly Observation[]) {
-  const state = foldObservations(observations).get(KEY);
+  const state = foldObservations(observations, { prior: holding() }).get(KEY);
   expect(state).toBeDefined();
   return state!;
 }
@@ -770,7 +782,7 @@ describe("score", () => {
           place: "pr",
           source: "branch",
         }),
-      ]);
+      ], { prior: holding([TEST, marked]) });
       const markedKey = JSON.stringify([
         marked.k,
         marked.s,
@@ -779,6 +791,130 @@ describe("score", () => {
       ]);
       expect(folded.get(KEY)!.prCatches).toBe(1);
       expect(folded.get(markedKey)!.prCatches).toBe(0);
+    });
+  });
+
+  describe("which records add an identity", () => {
+    for (const place of ["pr", "local"] as const) {
+      it(`adds none for a record from ${place}`, () => {
+        const failed = saw("fail", { place, source: "branch" });
+        expect(foldObservations([failed]).has(KEY)).toBe(false);
+        expect(stateFrom([failed]).failuresByDay["2026-08-20"]).toBe(1);
+      });
+    }
+
+    it("adds one for a record from the default branch", () => {
+      const folded = foldObservations([saw("pass")]);
+      expect(folded.get(KEY)?.runsByDay).toEqual({ "2026-08-20": 1 });
+    });
+
+    /** A failure on a branch of its own, at a commit of its own. */
+    function branchFailure(source: string, hour: number): Observation {
+      return saw("fail", {
+        place: "pr",
+        source,
+        commit: `c-${source}`,
+        startedAt: `2026-08-20T${String(hour).padStart(2, "0")}:00:00.000Z`,
+      });
+    }
+
+    it("reads no failure from before the default branch recorded the test as the environment", () => {
+      // Four branches failing the test before it lands would make a fifth
+      // failure after it lands the environment's, were they counted.
+      const folded = foldObservations([
+        ...["a", "b", "c", "d"].map((source, at) => branchFailure(source, at)),
+        saw("pass", { startedAt: "2026-08-20T05:00:00.000Z" }),
+        branchFailure("e", 6),
+      ]);
+      expect(folded.get(KEY)?.prCatches).toBe(1);
+      // The same four after it landed are the environment.
+      const landed = foldObservations([
+        saw("pass"),
+        ...["a", "b", "c", "d"].map((source, at) =>
+          branchFailure(source, at + 1)
+        ),
+        branchFailure("e", 6),
+      ]);
+      expect(landed.get(KEY)?.prCatches).toBe(0);
+    });
+
+    it("reads no pass from before the default branch recorded the test as a flake", () => {
+      // A branch passing and then failing at one commit disagreed with
+      // itself, but its pass came before the test was recorded.
+      const at = (hour: number) => `2026-08-20T0${hour}:00:00.000Z`;
+      const branch = { place: "pr" as const, source: "branch", commit: "c9" };
+      const folded = foldObservations([
+        saw("pass", { ...branch, startedAt: at(0) }),
+        saw("pass", { startedAt: at(1) }),
+        saw("fail", { ...branch, startedAt: at(2) }),
+      ]);
+      expect(folded.get(KEY)?.flakesByDay).toEqual({});
+      expect(folded.get(KEY)?.prCatches).toBe(1);
+      const landed = foldObservations([
+        saw("pass", { startedAt: at(0) }),
+        saw("pass", { ...branch, startedAt: at(1) }),
+        saw("fail", { ...branch, startedAt: at(2) }),
+      ]);
+      expect(landed.get(KEY)?.flakesByDay).toEqual({ "2026-08-20": 1 });
+    });
+
+    it("keeps no older commit's outcomes for a failure from before the test was recorded", () => {
+      // A commit that slides out of reach keeps the outcomes of a test
+      // that has failed, so a rerun there in a later batch can still
+      // disagree with them. The branch's failure before the default branch
+      // recorded the test is not one of its failures, so the pass at `p` is
+      // let go, and the rerun failing there is a failure, not a flake.
+      const at = (minute: number) =>
+        `2026-08-20T10:${String(minute).padStart(2, "0")}:00.000Z`;
+      const branch = { place: "pr" as const, source: "branch" };
+      const flakesAfter = (first: readonly Observation[]) => {
+        const context = emptyContext();
+        const prior = foldObservations([
+          ...first,
+          saw("pass", { ...branch, commit: "p", startedAt: at(2) }),
+          ...Array.from(
+            { length: FLAKE_COMMIT_REACH + 1 },
+            (_, index) =>
+              saw("pass", { commit: `m${index}`, startedAt: at(index + 3) }),
+          ),
+        ], { context });
+        return foldObservations([
+          saw("fail", { ...branch, commit: "p", startedAt: at(50) }),
+        ], { context, prior }).get(KEY)?.flakesByDay;
+      };
+      expect(flakesAfter([
+        saw("fail", { ...branch, commit: "c0", startedAt: at(0) }),
+        saw("pass", { commit: "m", startedAt: at(1) }),
+      ])).toEqual({});
+      // Recorded first, the same failure is one of the test's, and the
+      // pass is kept.
+      expect(flakesAfter([
+        saw("pass", { commit: "m", startedAt: at(0) }),
+        saw("fail", { ...branch, commit: "c0", startedAt: at(1) }),
+      ])).toEqual({ "2026-08-20": 1 });
+    });
+
+    it("folds a record from elsewhere once the default branch has recorded the test", () => {
+      // In time order: the branch's run before the default branch's first
+      // record of the test adds nothing, and its run after it is folded.
+      const branch = { place: "pr" as const, source: "branch" };
+      const folded = foldObservations([
+        saw("fail", {
+          ...branch,
+          day: "2026-08-19",
+          startedAt: "2026-08-19T00:00:00.000Z",
+        }),
+        saw("pass"),
+        saw("fail", {
+          ...branch,
+          day: "2026-08-21",
+          startedAt: "2026-08-21T00:00:00.000Z",
+        }),
+      ]);
+      expect(folded.get(KEY)?.runsByDay).toEqual({
+        "2026-08-20": 1,
+        "2026-08-21": 1,
+      });
     });
   });
 
@@ -1551,6 +1687,7 @@ describe("a failure seen from many places at once", () => {
       sources.map((source) =>
         saw("fail", { source, place: "pr", commit: `c-${source}` })
       ),
+      { prior: holding() },
     );
     const state = folded.get(KEY)!;
     expect(state.prCatches).toBe(0);
@@ -1562,6 +1699,7 @@ describe("a failure seen from many places at once", () => {
       sources.map((source) =>
         saw("fail", { source, place: "pr", commit: `c-${source}` })
       ),
+      { prior: holding() },
     );
     expect(folded.get(KEY)!.prCatches).toBe(sources.length);
   });
@@ -1584,7 +1722,7 @@ describe("a failure seen from many places at once", () => {
       day: "2026-08-01",
       startedAt: "2026-08-01T00:00:00.000Z",
     });
-    const folded = foldObservations([far, ...near]);
+    const folded = foldObservations([far, ...near], { prior: holding() });
     const state = folded.get(KEY)!;
     expect(state.failuresByDay["2026-08-01"]).toBe(1);
     expect(state.failuresByDay["2026-08-20"]).toBe(3);
@@ -1744,7 +1882,7 @@ describe("a run that newly breaks a crowd of tests", () => {
     // Whichever of them a change runs sees the breakage, so it says
     // nothing about any one of them.
     const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES);
-    const folded = foldObservations(failing(crowd));
+    const folded = foldObservations(failing(crowd), { prior: holding(crowd) });
     expect(newRealTestFailuresOf(folded, crowd)).toEqual(crowd.map(() => 0));
     for (const test of crowd) {
       const state = folded.get(testIdentityKey(test))!;
@@ -1756,7 +1894,12 @@ describe("a run that newly breaks a crowd of tests", () => {
 
   it("credits each of them when the crowd is one short", () => {
     const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES - 1);
-    expect(newRealTestFailuresOf(foldObservations(failing(crowd)), crowd))
+    expect(
+      newRealTestFailuresOf(
+        foldObservations(failing(crowd), { prior: holding(crowd) }),
+        crowd,
+      ),
+    )
       .toEqual(
         crowd.map(() => 1),
       );
@@ -1767,7 +1910,7 @@ describe("a run that newly breaks a crowd of tests", () => {
     const folded = foldObservations([
       ...failing(crowd),
       ...failing(crowd.slice(0, 1)),
-    ]);
+    ], { prior: holding(crowd) });
     expect(newRealTestFailuresOf(folded, crowd)).toEqual(crowd.map(() => 1));
   });
 
@@ -1779,7 +1922,7 @@ describe("a run that newly breaks a crowd of tests", () => {
     const folded = foldObservations([
       ...red.map((test) => saw("fail", { test, commit: "m1" })),
       ...failing([...red, ...fresh], { commit: "c2" }),
-    ]);
+    ], { prior: holding(fresh) });
     expect(newRealTestFailuresOf(folded, fresh)).toEqual([1]);
     expect(newRealTestFailuresOf(folded, red)).toEqual(red.map(() => 0));
   });
@@ -1792,7 +1935,7 @@ describe("a run that newly breaks a crowd of tests", () => {
         saw("pass", { test, place: "pr", source: "branch" })
       ),
       ...failing([...flaky, ...fresh]),
-    ]);
+    ], { prior: holding([...flaky, ...fresh]) });
     expect(newRealTestFailuresOf(folded, fresh)).toEqual([1]);
   });
 
@@ -1804,7 +1947,7 @@ describe("a run that newly breaks a crowd of tests", () => {
     const folded = foldObservations([
       ...failing(crowd.slice(0, half)),
       ...failing(crowd.slice(half), { place: "local", source: "someone" }),
-    ]);
+    ], { prior: holding(crowd) });
     expect(newRealTestFailuresOf(folded, crowd)).toEqual(crowd.map(() => 1));
   });
 
@@ -1816,7 +1959,7 @@ describe("a run that newly breaks a crowd of tests", () => {
     const folded = foldObservations([
       ...failing(crowd, { ...local, startedAt: "2026-08-20T01:00:00.000Z" }),
       ...failing(later, { ...local, startedAt: "2026-08-20T09:00:00.000Z" }),
-    ]);
+    ], { prior: holding([...crowd, ...later]) });
     expect(newRealTestFailuresOf(folded, [...crowd, ...later])).toEqual(
       [...crowd, ...later].map(() => 1),
     );
@@ -1833,7 +1976,7 @@ describe("a run that newly breaks a crowd of tests", () => {
     const folded = foldObservations([
       ...elsewhere,
       ...failing([...shared, ...fresh]),
-    ]);
+    ], { prior: holding([...shared, ...fresh]) });
     expect(newRealTestFailuresOf(folded, fresh)).toEqual([1]);
   });
 
@@ -1843,14 +1986,30 @@ describe("a run that newly breaks a crowd of tests", () => {
     const folded = foldObservations([
       ...failing(crowd.slice(0, half), { commit: "c1" }),
       ...failing(crowd.slice(half), { commit: "c2" }),
-    ]);
+    ], { prior: holding(crowd) });
     expect(newRealTestFailuresOf(folded, crowd)).toEqual(crowd.map(() => 1));
+  });
+
+  it("counts a test the default branch has not recorded toward the crowd", () => {
+    // The run broke a crowd of tests, one of them a test only its branch
+    // holds. That one is kept by no state, and is still part of the
+    // breakage every test in the crowd sees.
+    const held = crowdOf(MASS_FAILURE_MIN_IDENTITIES - 1);
+    const added = crowdOf(1, "added");
+    const folded = foldObservations(failing([...held, ...added]), {
+      prior: holding(held),
+    });
+    expect(newRealTestFailuresOf(folded, held)).toEqual(held.map(() => 0));
+    expect(folded.has(testIdentityKey(added[0]!))).toBe(false);
   });
 
   it("reaches the part of a run that arrives in a later batch", () => {
     const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES + 1);
     const context = emptyContext();
-    const first = foldObservations(failing(crowd.slice(0, -1)), { context });
+    const first = foldObservations(failing(crowd.slice(0, -1)), {
+      context,
+      prior: holding(crowd),
+    });
     const last = crowd.slice(-1);
     const second = foldObservations(failing(last), {
       context: parseContext(serializeContext(context)),
@@ -2355,7 +2514,7 @@ describe("renameInContext()", () => {
     const context = emptyContext();
     foldObservations([
       saw("fail", { day: "2026-08-10", place: "pr", source: "branch" }),
-    ], { context });
+    ], { context, prior: holding() });
     return context;
   }
 
@@ -2368,7 +2527,7 @@ describe("renameInContext()", () => {
         place: "pr",
         source: "branch",
       }),
-    ], { context }).get(TO)!;
+    ], { context, prior: holding([RENAMED]) }).get(TO)!;
   }
 
   it("carries what a fold remembers of a test to its new name", () => {

@@ -58,8 +58,8 @@ source DID for that reason.
 Two consequences worth holding on to:
 
 - **A legacy space name resolves to the same DID everywhere**, from the name
-  alone (`legacySpaceDid` in `packages/identity/src/legacy-space.ts`, which
-  `resolveSpace` in `packages/state-inspector/discover.ts` uses for a name).
+  alone (`legacySpaceDid` in `base/identity/src/legacy-space.ts`, which
+  `resolveSpace` in `runtime/state-inspector/discover.ts` uses for a name).
   Open the same name on rapids and you reach the copy. This is what makes the
   copy of a legacy space usable without anyone typing a DID. A space created
   with a random DID has no name that resolves to it, so its copy is opened by
@@ -97,8 +97,8 @@ that matter here are:
 The store location the env names is not the directory the per-space files live
 in. A server composes the realized path from two functions —
 `resolveMemoryEngineStoreRootUrl` in
-`packages/toolshed/routes/storage/memory-path.ts` and `resolveSpaceStoreUrl` in
-`packages/memory/v2/storage-path.ts` — and each appends `engine-v3`, so in
+`runtime/toolshed/routes/storage/memory-path.ts` and `resolveSpaceStoreUrl` in
+`runtime/memory/v2/storage-path.ts` — and each appends `engine-v3`, so in
 directory mode the file is:
 
 ```
@@ -114,7 +114,7 @@ percent-encoding rather than reading as literal DIDs.
 
 Reading either function on its own gives a different answer than the server
 gets. The server is constructed with the root the first one returns
-(`packages/toolshed/routes/storage/memory.ts` passes it as `store`), so the
+(`runtime/toolshed/routes/storage/memory.ts` passes it as `store`), so the
 second composes on `<stem>.engine-v3/` rather than on `DB_PATH`, which is where
 the second dot comes from. Check the composition, not the parts.
 

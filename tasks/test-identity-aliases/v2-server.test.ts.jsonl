@@ -1,0 +1,1 @@
+{"date":"2026-10-21","from":{"k":"unit","s":"memory","n":"memory v2 server does not emit delayed exact-reconcile removes after shrink retargets"},"to":{"k":"unit","s":"memory","n":"memory v2 server retracts what a shrink retarget stops reaching in the effect frame, and nothing later"}}

@@ -1,8 +1,8 @@
 # CFC Authoring Contract
 
 **Status:** Implemented direct-authoring contract
-**Scope:** `packages/api`, `packages/ts-transformers`,
-`packages/schema-generator`
+**Scope:** `base/api`, `base/ts-transformers`,
+`base/schema-generator`
 
 This document specifies the compile-time contract for CFC-aware TypeScript
 authoring. It is intentionally narrower than the runner CFC specs: the concern
@@ -164,6 +164,10 @@ These aliases lower to direct `ifc` keys:
 - `RequiresIntegrity<T, X>` -> `ifc.requiredIntegrity = X`
 - `MaxConfidentiality<T, X>` -> `ifc.maxConfidentiality = X`
 - `ExactCopy<T, P>` -> `ifc.exactCopyOf = P`
+
+`X` must read as a list of atoms, a tuple such as `readonly ["secret"]`. One
+that reads as no list, as an array type or a union of tuples does, is an error
+(`cfc-label:not-a-list`), since the runtime reads labels only from a list.
 
 ### `AnyOf<X>`
 
@@ -401,6 +405,7 @@ Required diagnostic type:
 - `cfc-write-authorized-by`
 - `cfc-policy-authoring`
 - `cfc-policy-of`
+- `cfc-label:not-a-list`
 
 Required failure modes:
 
@@ -410,6 +415,8 @@ Required failure modes:
 - policy declarations contain dynamic content, unsupported fields, unbound
   variables, missing guards, invalid exports, or rule reuse
 - `PolicyOf` does not directly query an exported `exchangeRules` binding
+- a label list, a simple wrapper alias's `X`, a `Cfc` payload's label key, or a
+  UI contract's `requiredEventIntegrity`, that reads as no list
 
 ## Current Limits
 
@@ -434,7 +441,7 @@ Required failure modes:
 The contract is not fully implemented until these tests pass or equivalent
 coverage exists:
 
-- `packages/ts-transformers/test/cfc-authoring.test.ts`
-- `packages/schema-generator/test/schema/cfc-authoring.test.ts`
-- `packages/schema-generator/test/schema/write-policy-any-of.test.ts`
-- `packages/runner/test/cfc-write-policy-any-of.test.ts`
+- `base/ts-transformers/test/cfc-authoring.test.ts`
+- `base/schema-generator/test/schema/cfc-authoring.test.ts`
+- `base/schema-generator/test/schema/write-policy-any-of.test.ts`
+- `runtime/runner/test/cfc-write-policy-any-of.test.ts`

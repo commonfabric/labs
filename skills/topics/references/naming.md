@@ -36,7 +36,7 @@ address is taken — `deno task cf cell get //<space>/top/42 title`,
 one segment reaches a member, so `//<space>/top/42/title` is that Topic's
 `title` field. A name with no member after it is refused, naming the piece
 holding the collection; and `no member 999 in top` is the refusal for a member
-the board does not hold. `packages/cli/README.md` is the whole grammar, and
+the board does not hold. `runtime/cli/README.md` is the whole grammar, and
 `docs/specs/collection-naming.md` the design.
 
 A member name is the board's, not the fabric's: it means something only through

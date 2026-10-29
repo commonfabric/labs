@@ -68,7 +68,7 @@ different entry point, and server-execution v2 keys its basis index by the
 same restart-stable identity
 ([serving-loop.md §3b](server-side-execution/serving-loop.md)).
 
-The iframe sandbox path (`packages/iframe-sandbox`) is entirely independent of
+The iframe sandbox path (`base/iframe-sandbox`) is entirely independent of
 this work and is out of scope.
 
 ## Goals
@@ -97,7 +97,7 @@ this work and is out of scope.
   invocation-isolation guarantees described in
   [SES_SANDBOXING_SPEC.md](sandboxing/SES_SANDBOXING_SPEC.md). This governs how
   modules are *named and loaded*, not what authority they receive.
-- Do not change the `packages/iframe-sandbox` DOM-iframe path. Confirmed
+- Do not change the `base/iframe-sandbox` DOM-iframe path. Confirmed
   independent.
 - Do not change the ts-transformer pipeline's semantics. Only the emitted module
   packaging and the identity computation are in scope.
@@ -146,7 +146,10 @@ It:
 4. Wraps each emitted body in a module record keyed `cf:module/<identity>`
    ([`compileSourcesToRecords`][c7]) and security-classifies it
    ([`verifyCompiledModuleBody`][c8], called from the Engine) before it can be
-   loaded or cached.
+   loaded or cached. A record imports exactly the modules its body's
+   `require()` calls name. A compile scans the body for them; a cache hit takes
+   the list from the cached artifact when it carries one, as a compiled
+   document and a byte-cache entry do, and does not parse the body for it.
 
 5. Validates the assembled graph's shape and wiring
    ([`verifyModuleGraph`][c8]). Both verifications belong to the compile path:
@@ -187,7 +190,7 @@ lazy `compartment.importNow` inside `execute`.
   the authored position the compiler recorded for it in that module's
   builder-source-site sidecar.
 - The scheduler's durable implementation fingerprint is stamped from that
-  provenance at action creation (`applyImplementationHash`, `packages/runner/src/runner.ts`)
+  provenance at action creation (`applyImplementationHash`, `runtime/runner/src/runner.ts`)
   and read back by [`schedulerImplementationFingerprint`][c12]. It is a content
   hash, not a source location: `.src` is served lazily from the debug-only
   [`authored-debug-source`][c16] map, through accessors
@@ -270,7 +273,7 @@ order, which is exactly the bottom-up order the Merkle hash needs.
 
 **Import-edge completeness.** Every `import`, `import type`, `export … from`, and
 inline `import("./mod").Type` edge is collected
-([`collectImportSpecifiers`][c5]); there is no value/type filtering and no
+([`scanModuleDeclarations`][c5]); there is no value/type filtering and no
 dependence on emit elision. `export * from` barrel edges are counted as ordinary
 edges, so a barrel does not collapse distinct modules into one hash. Missing a
 type edge would silently treat a behavior-changing type edit as a no-op, which is
@@ -281,22 +284,25 @@ The executable runtime fingerprint comes from one authoritative provider,
 `getExecutableRuntimeFingerprint()`. Its version-1 value is a domain-separated
 hash with the tag `cf/executable-runtime-fingerprint/v1`. The hash includes:
 
-- the value returned by [`getCompileCacheRuntimeVersion()`][c14];
+- the compiler-input fingerprint (`computeCompilerFingerprint()` in
+  `compiler-fingerprint.deno.ts`);
 - [`schedulerRuntimeFingerprint()`][c12];
 - an automatically generated catalog hash of the implementations and export
   surfaces of every pattern-facing runtime module; and
 - an automatically generated catalog hash of the sandbox and execution-policy
   inputs that can change pattern behavior.
 
-The existing compile-cache runtime version intentionally hashes a broad set of
-compiler, transformer, schema, harness, sandbox, API, compiler-option, and
-dependency inputs. Version 1 uses that value as a mandatory input even though it
-can over-invalidate executable identities. A later design may split
-representation-only cache inputs from executable semantics. Such a split may
-roll `runtimeVersion` alone only for an input proven unable to affect compiled
-behavior. A compiler, transformer, generated-schema, runtime-module, sandbox,
-execution-policy, or scheduler-semantics change must roll the executable runtime
-fingerprint.
+The compiler-input fingerprint intentionally hashes a broad set of compiler,
+transformer, schema, harness, sandbox, API, compiler-option, and dependency
+inputs. Version 1 uses that value as a mandatory input even though it can
+over-invalidate executable identities. It is deliberately not the compile-cache
+`runtimeVersion` a built artifact carries, which
+[`getCompileCacheRuntimeVersion()`][c14] resolves: that version is a hash of
+what the compiler emits for a fixed corpus, so it stays put across a compiler
+change that compiles the corpus to the same documents, and a cache keyed by it survives such a
+change while the executable fingerprint still rolls. A compiler, transformer,
+generated-schema, runtime-module, sandbox, execution-policy, or
+scheduler-semantics change must roll the executable runtime fingerprint.
 
 The provider and its input catalogs are required production work. Once the
 provider is enabled, inability to calculate its value fails closed. The empty
@@ -408,7 +414,7 @@ never be trusted against changed code. The reference machinery that carries
 [content-addressed-action-identity.md](content-addressed-action-identity.md).
 
 The instance binding hash computed in `schedulerJavaScriptActionName` /
-`schedulerRawActionName` (`packages/runner/src/runner.ts`, over process cell +
+`schedulerRawActionName` (`runtime/runner/src/runner.ts`, over process cell +
 read/write links) is orthogonal: it distinguishes multiple instances of the same
 implementation. Identity is the pair
 *(implementation hash, instance binding hash)*.
@@ -428,7 +434,7 @@ or inline `import("cf:…").Type` reference cannot remain mutable in deployed
 source. If it could, a later type change could alter generated schemas and
 executable behavior without changing the importing pattern's stored source. The
 current `rewriteFabricPins` visitor already rewrites import declarations, export
-declarations, and inline import-type nodes. [`collectImportSpecifiers`][c5]
+declarations, and inline import-type nodes. [`scanModuleDeclarations`][c5]
 already includes these edges in module identity. Automatic piece deployment still
 uses an ordinary local resolver before invoking the rewriter. It therefore
 rejects every fabric import or export declaration at that stage, including an
@@ -509,12 +515,30 @@ linked data:
    check, so no separate label is needed.
 2. **Compiled set — `compileCache:<runtimeVersion>/<identity>`.** Compiled and
    verified JS, keyed by `(runtimeVersion, identity)` ([`compiledDocKey`][c14]).
-   Under the version-1 executable-fingerprint rule, the existing broad
-   compiler-input fingerprint rolls both `runtimeVersion` and
-   `runtimeFingerprint`. That creates a new executable identity for an affected
-   module and writes a new source set. A future representation-only cache change
-   may roll `runtimeVersion` alone only after the fingerprint inputs distinguish
-   it from executable semantics.
+   `runtimeVersion` is the compile-cache version
+   [`getCompileCacheRuntimeVersion()`][c14] resolves. A built artifact — a
+   binary or the worker bundle — carries a version that is a hash of what its
+   compiler emits for a fixed corpus (each compiled document's body, stored
+   fields and import edges), under every persisted cache variant, computed by
+   the build and baked in (`compile-cache-output-version.deno.ts`). A Deno
+   source run takes the compiler-input fingerprint instead, unless its tree
+   records the output version for itself: `deno task compile-cache-version
+   --memo` writes it to a file git ignores, beside a fingerprint of everything
+   it depends on, the compiler inputs and the corpus among them, and a source
+   run takes it only while that fingerprint still matches the tree
+   (`compile-cache-output-memo.deno.ts`). That is how a checkout that runs as
+   it stands, loom's vendored copy of the runtime among them, keeps the output
+   version without a tracked file that could outlive its compiler. A compiler
+   change that compiles the
+   corpus to the same documents keeps a built artifact's `runtimeVersion`, or a
+   memo's, and with it
+   the compiled documents of every construct the corpus exercises; one that
+   moves a byte, or an epoch bump, moves it, and the compiled set misses and
+   recompiles from the source set. A construct the corpus lacks is the
+   version's blind spot, which the corpus's breadth and the epoch answer. Under the version-1
+   executable-fingerprint rule the compiler-input fingerprint rolls
+   `runtimeFingerprint` either way, which creates a new executable identity for
+   an affected module and writes a new source set.
 
 A source or compiled document is written whole, and only when the stored
 document differs. Its `imports` elements are stored inline in the document,
@@ -557,13 +581,22 @@ for its identity. Their link sets are different. A source document stores intern
 authored-import links, including links to authored declarations. It omits fabric
 edges so one program's source closure does not absorb another program.
 Synthetic retention links may keep other source roots alive, but they are
-excluded from the identity hash and executable graph traversal. Separately, an
-entry source document stores one identity-only link per member of its source
-package that no import reaches: [`SOURCE_ROOT_SPECIFIER`][c7]
-(`cf:source-root/`) for an attached source entry point such as a test, and
-[`DATA_FILE_SPECIFIER`][c7] (`cf:data-file/`) for an attached data file. Unlike
-a retention link, these participate in the entry module's identity, so changing
-the package changes the revision. Neither resolves a module record. A data
+excluded from the identity hash and executable graph traversal. Separately, a
+source document stores one identity-only link per member of its source package
+that no import reaches and that its module owns: [`SOURCE_ROOT_SPECIFIER`][c7]
+(`cf:source-root/`) for an attached source entry point such as a test, owned
+by the entry, and [`DATA_FILE_SPECIFIER`][c7] (`cf:data-file/`) for an attached
+data file, owned by the module whose `dataFile()` call names it. The entry owns
+a data file that no module's source names, such as one read by a computed path
+([`sourcePackageOwners`][c17] assigns the owners). Unlike a retention
+link, these participate in the owning module's identity, and through it in the
+identity of every module that reaches the owner, so changing the package
+changes the revision. A load entered at a module that reads a data file, by
+its own identity, as a sub-pattern referenced by `{ identity, symbol }` is
+loaded, therefore reaches the file. Whether that module is a program's entry
+or a child of it changes its identity only by what the entry alone owns: the
+program's source roots and the data files no module's source names. Neither
+link resolves a module record. A data
 document is hashed as a leaf over its own bytes and filename rather than through
 a parse of its contents, which is what lets a data file hold bytes that are not
 TypeScript. Both namespaces are reserved against authored imports. The compiled
@@ -632,7 +665,7 @@ matched), and additionally under the root substitution the two entry names
 define: when the entries end the same way, the roots each sits under read as
 the same authored tree grounded at two places — the program the toolshed
 serves under `/api/patterns` and the same checkout supplied from a repository
-root under `/packages/patterns` — and a module matches the previous module
+root under `/patterns` — and a module matches the previous module
 named by its own name under the previous root. For every unambiguous match,
 the successor inherits the direct predecessor plus the predecessor's
 cumulative delegation list ([`deriveModuleDelegations`][c14]). Each setup
@@ -731,7 +764,7 @@ helper with a different body is therefore just an ordinary function, and the
 module fails on its call sites. The rules are byte-level and the classifier does
 not interpret a wrapper's payload; load-time enforcement of the module-safe data
 subset is the runtime freezer (`freezeVerifiedPlainData`,
-`packages/runner/src/sandbox/plain-data.ts`; see
+`runtime/runner/src/sandbox/plain-data.ts`; see
 [SES_SANDBOXING_SPEC.md](sandboxing/SES_SANDBOXING_SPEC.md) §4.2.3, §4.2.6).
 
 Write-once module exports neutralize side effects smuggled into an accepted
@@ -826,12 +859,22 @@ cell's contents. The cache is designed around this:
   space (`Factory.inSpace(...)`), the runner replicates the child pattern's
   source + compiled closures into the child's space so the piece is
   independently loadable there (`PatternManager.replicatePatternToSpace`).
+  The same replication runs for a load the runner's in-memory artifact
+  index serves: the index is cross-space, so a space whose loads of an
+  identity are all served from it never receives the compiled closure, and
+  compiles cold in its next session. When the runner has written that
+  closure into another space in the same session, such a load copies it
+  into its own space from there; when it compiled the closure in the same
+  session and the write-back was deferred by a preview or failed, the load
+  writes that compile back instead of compiling again.
   Chain-of-custody holds — compiled docs are read through the integrity-gated
   loader ([`loadCompiledClosure`][c14]; only docs already carrying the compiler
   stamp replicate) and re-stamped on the child-space write by a legitimate
   child-space writer. Module-update authority does not cross that boundary:
   `delegatedModuleIdentities` from the origin is omitted during replication,
-  while any entries already authenticated in the destination are preserved.
+  and a retained compile written back into a space other than the one whose
+  source closure authenticated its delegations carries none of them, while
+  any entries already authenticated in the destination are preserved.
   Note for the server-compilation end state: a client can then no longer stamp
   replicated compiled docs, so child spaces will need server-side replication
   or by-identity source recovery instead.
@@ -923,10 +966,11 @@ index's restart-stable `action` column,
   integrity label is treated as a miss and recompiled from the self-verifying
   source document; only integrity-valid documents are reused without
   re-verification.
-- A future representation-only compile-cache `runtimeVersion` bump with an
-  unchanged runtime fingerprint misses the compiled set and recompiles while
-  the source set (`pattern:<identity>`) persists. Version 1 treats the current
-  broad compiler-input version as executable and therefore rolls both values.
+- A compile-cache `runtimeVersion` move misses the compiled set and recompiles
+  while the source set (`pattern:<identity>`) persists; a compiler change that
+  emits the same corpus bytes keeps a built artifact's `runtimeVersion`, and
+  the compiled set serves warm loads across it. Version 1 rolls the executable
+  runtime fingerprint on the compiler-input fingerprint either way.
 - A `runtimeFingerprint` bump gives an affected entry module a new executable
   identity and writes a new source set. The prior source set remains retained
   for history. Tests compare the runtime-neutral digest to classify this as a
@@ -934,22 +978,23 @@ index's restart-stable `action` column,
 
 ## Appendix: Pipeline Reference
 
-[c1]: ../../packages/runner/src/harness/engine.ts
-[c2]: ../../packages/runner/src/harness/pretransform.ts
-[c3]: ../../packages/runner/src/harness/module-identity.ts
-[c4]: ../../packages/js-compiler/typescript/options.ts
-[c5]: ../../packages/js-compiler/typescript/resolver.ts
-[c6]: ../../packages/runner/src/sandbox/esm-module-loader.ts
-[c7]: ../../packages/runner/src/sandbox/module-record-compiler.ts
-[c8]: ../../packages/runner/src/sandbox/module-record-verifier.ts
-[c9]: ../../packages/runner/src/sandbox/compiled-bundle-verifier.ts
-[c10]: ../../packages/runner/src/sandbox/ses-runtime.ts
-[c11]: ../../packages/runner/src/builder/module.ts
-[c12]: ../../packages/runner/src/scheduler/run.ts
-[c13]: ../../packages/data-model/src/value-hash/impl.ts
-[c14]: ../../packages/runner/src/compilation-cache/cell-cache.ts
-[c15]: ../../packages/runner/src/sandbox/runtime-module-policy.ts
-[c16]: ../../packages/runner/src/harness/authored-debug-source.ts
+[c1]: ../../runtime/runner/src/harness/engine.ts
+[c2]: ../../runtime/runner/src/harness/pretransform.ts
+[c3]: ../../runtime/runner/src/harness/module-identity.ts
+[c4]: ../../base/js-compiler/typescript/options.ts
+[c5]: ../../base/js-compiler/typescript/resolver.ts
+[c6]: ../../runtime/runner/src/sandbox/esm-module-loader.ts
+[c7]: ../../runtime/runner/src/sandbox/module-record-compiler.ts
+[c8]: ../../runtime/runner/src/sandbox/module-record-verifier.ts
+[c9]: ../../runtime/runner/src/sandbox/compiled-bundle-verifier.ts
+[c10]: ../../runtime/runner/src/sandbox/ses-runtime.ts
+[c11]: ../../runtime/runner/src/builder/module.ts
+[c12]: ../../runtime/runner/src/scheduler/run.ts
+[c13]: ../../base/data-model/src/value-hash/impl.ts
+[c14]: ../../runtime/runner/src/compilation-cache/cell-cache.ts
+[c15]: ../../runtime/runner/src/sandbox/runtime-module-policy.ts
+[c16]: ../../runtime/runner/src/harness/authored-debug-source.ts
+[c17]: ../../runtime/runner/src/harness/declared-data-files.ts
 
 - Compile and evaluate entry points: [`Engine.compileToRecordGraph`][c1],
   [`Engine.compileResolvedToRecordGraph`][c1],
@@ -961,10 +1006,14 @@ index's restart-stable `action` column,
 - Module identity: [`computeModuleHashes`][c3] and [`resolveModuleImports`][c3],
   with [`findInternalTarget`][c3] deciding what counts as an internal edge, and
   the Engine-facing wrappers [`computeModuleIdentities`][c7] and
-  [`computeFabricModuleIdentities`][c7].
+  [`computeFabricModuleIdentities`][c7]. [`sourcePackageOwners`][c17] assigns
+  each source-package edge to the module that owns it.
 - Emit configuration: [`getCompilerOptions`][c4] / [`MODULE_KIND`][c4].
-- Import-graph discovery, including `export * from` and inline import types:
-  [`collectImportSpecifiers`][c5].
+- Import-graph discovery, including `export * from` and inline import types,
+  and the `dataFile()` reads that decide which module owns a data file's edge:
+  [`scanModuleDeclarations`][c5], one parse per module, shared across a
+  compile through [`scanModules`][c3]. [`collectImportSpecifiers`][c5] and
+  [`collectDataFileNames`][c5] each return one half of that scan.
 - Record assembly and the warm-load rebuild: [`compileSourcesToRecords`][c7],
   [`deriveModuleRecordFields`][c7], [`buildRecordsFromCompiled`][c7].
 - Loading: [`loadModuleGraph`][c6] / [`importModuleGraphNow`][c6] over

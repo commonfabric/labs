@@ -3,7 +3,7 @@
 Server deployments run through the bastion using binaries that CI has built
 and published. Rapids releases coordinate Labs, Loom, Weaver, gVisor, and infra
 at verified green `main` revisions. Estuary takes a manually selected Labs
-revision.
+revision from `main` or the time-limited `alex-daily` demo branch.
 
 Two browser shells reach users, and they are configured in different places.
 The toolshed binary carries one and serves it from its own origin, so it is
@@ -16,7 +16,7 @@ The server deployment entrypoints are:
 | Job | Workflow | Bastion command | Trigger |
 | --- | --- | --- | --- |
 | `deploy` | `.github/workflows/rapids-release.yml` | `/opt/cf/deploy-rapids.sh "$INFRA_SHA"` | infra dispatch on Labs `main`, naming the candidate's infra commit |
-| `deploy-estuary` | `.github/workflows/deploy-production.yml` | `/opt/cf/deploy.sh <environment> <Labs SHA>` | manual dispatch, naming the ref to deploy |
+| `deploy-estuary` | `.github/workflows/deploy-production.yml` | `/opt/cf/deploy.sh <environment> <Labs SHA>` | manual dispatch on `main`, naming a full SHA and source branch |
 
 The production job reads the environment name from a repository variable rather
 than naming it, because the variable is defined on the GitHub environment the
@@ -26,6 +26,54 @@ The Rapids job declares GitHub's `toolshed` environment, which holds
 `BASTION_HOST` and `BASTION_SSH_PRIVATE_KEY`. It connects as `bastion`. The
 production job downloads the selected commit's artifacts itself and fails with
 a message naming that commit if they are absent.
+
+## Estuary demo deployment and verification
+
+**Manual Production Deployment** (`deploy-production.yml`) runs from `main`
+and takes these inputs:
+
+- `ref`: the full lowercase Labs commit SHA to deploy or verify.
+- `source_branch`: `main` (default) or `alex-daily`. The selected SHA must be
+  an ancestor of this branch, verified through GitHub before the protected job
+  can start.
+- `verify_only`: `false` (default) deploys through the existing bastion wrapper;
+  `true` checks the running backend without deploying or downloading artifacts.
+
+`alex-daily` is authorized from `2026-10-19T22:15:16Z` inclusive until
+`2026-10-22T22:15:16Z` exclusive. The workflow checks the window before requesting
+environment approval, after approval, and immediately before deployment.
+Concurrent Estuary runs serialize without cancelling an in-progress run.
+
+The `estuary` environment retains its required reviewers. An hourly coordinator
+must arrange approval by an existing required reviewer; dispatch alone does not
+make a release active. A temporary reviewer credential used for automation must
+be restricted by the coordinator to the exact selected run and authorization
+window, and removed at expiry.
+
+After deployment, or immediately in verification-only mode, the workflow uses
+the existing bastion connection to read `/api/meta` from all 21 Estuary workers
+on ports 8001–8021 and from `https://estuary.saga-castor.ts.net/api/meta`. Every
+response must be HTTP 200 at the requested URL and report the selected SHA.
+The verification makes one request per endpoint and fails on an unavailable or
+mismatched endpoint.
+
+Successful verification uploads `receipt.json` in the GitHub artifact
+`estuary-deployment-<run_id>-<run_attempt>`. It records `repository`,
+`workflow_sha`, `run_id`, `run_attempt`, `source_branch`, `verify_only`,
+`labs_sha`, `verified_at`, `expected_workers`, `workers`, and `https`.
+Each worker has `host`, `port`, and `git_sha`; `https` has `url` and `git_sha`.
+The receipt is uploaded only after the complete worker set and HTTPS result
+have been validated. The coordinator must verify the successful workflow
+identity, run attempt, artifact digest, selected SHA, and receipt freshness
+before advancing the Estuary channel in infra.
+
+Production deployment and verification-only completions wake infra's
+`rapids.yml` on `main` with `channel=estuary` while the authorization window is
+open. `.github/workflows/notify-rapids.yml` selects the production workflow by
+its path, main branch, repository, and dispatch event. It uses the existing
+infra-only App token. Every completion is a reconciliation hint, including a
+failed or cancelled run; the coordinator still validates the selected source,
+successful run, and receipt before publishing.
 
 ## Coordinated Rapids releases
 
@@ -58,11 +106,18 @@ command has a 45-minute limit. The receiver performs these steps in order:
    is an ancestor of infra `main`, before checking out or executing infra code.
 2. Check out `commonfabric/infra` at that exact SHA, with full history and no
    persisted credentials. Install `jsonschema[format]==4.23.0` for validation.
+   Exchange the job's GitHub OIDC identity for a short-lived, read-only Google
+   access token using `RAPIDS_ARTIFACT_WORKLOAD_IDENTITY_PROVIDER` and
+   `RAPIDS_ARTIFACT_SERVICE_ACCOUNT`. Infra manages those repository variables
+   and the main-workflow trust in `tofu/weaver-dev-builds`.
 3. Run `releases/rapids_deploy.py <infra_sha> --validate-only`. The infra
    validator requires a clean exact checkout, main ancestry, a candidate equal
    to the current main candidate, green infra checks, green producer pins, and
    the exact Labs archive and attestation. The candidate file supplies artifact
-   selections.
+   selections. `RAPIDS_ARTIFACT_ACCESS_TOKEN` lets this step read the selected
+   Weaver completion manifest through the authenticated GCS API. The validator
+   verifies its pinned checksum against the downloaded bytes. The token is
+   scoped to manifest reads and is passed only to this validation step.
 4. Call `/opt/cf/deploy-rapids.sh "$INFRA_SHA"` on the bastion. The wrapper
    locks deployments, verifies the infra checkout and producer main ancestry,
    and invokes infra's `rapids_release.yml` playbook. Deployment is forward-only;
@@ -145,8 +200,14 @@ alongside the binary it starts. A host restarts its instances one after another,
 so for a while some serve the release being replaced and some the one replacing
 it; the time is what tells a piece which of the two to keep. A value kept with
 the release the instances run from gives that pairing by construction. A
-toolshed whose environment does not set the time advertises identities alone,
-and a piece it serves then follows whichever identity it was offered last.
+toolshed whose environment does not set the time advertises identities alone.
+A piece it serves then follows whichever identity it was offered last, unless
+the source the piece runs carries a time from another release, adopted or
+confirmed: an offer with no time is earlier than that one, and the piece keeps
+its source unless it has nothing it can start. Without times, a host partway through a deploy and a deliberate
+rollback offer a piece the same earlier identity, so a piece cannot be kept
+from moving back and forth between the two releases until every instance runs
+one of them.
 
 The time has to be the deploy's own. A time from the future would stamp every
 release a piece adopts from that deploy, and every correct release after it
@@ -187,7 +248,7 @@ entrypoint so queued CI runs cannot race the coordinated release.
 `toolshed` serves a browser shell from the `shell-frontend` directory beside
 it, so <https://estuary.saga-castor.ts.net/> and
 <https://rapids.saga-castor.ts.net/> each serve the shell that the binary they
-run was built with. `tasks/build-binaries.ts` builds `packages/shell` as part
+run was built with. `tasks/build-binaries.ts` builds `runtime/shell` as part
 of the toolshed build and moves the output there. Configuring this shell is
 therefore something the `build-toolshed` job does, and a deploy carries
 whatever that build baked in. It needs no API host: it is served from the same
@@ -197,7 +258,7 @@ origin as the API it calls, which is what the shell falls back to.
 
 The `deploy-shell-staging` job in `.github/workflows/deno.yml` publishes the
 shell on every push to `main`. It does not touch the bastion: it builds
-`packages/shell` and copies the result into the `staging-commontools-dev`
+`runtime/shell` and copies the result into the `staging-commontools-dev`
 bucket, which is served at <https://staging.commontools.dev/>. Each build also
 lands under `builds/<commit>/` so a page that is already open keeps the exact
 module graph it started with.

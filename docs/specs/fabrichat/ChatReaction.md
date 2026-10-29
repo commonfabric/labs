@@ -33,7 +33,7 @@ and removed only through its `deleteReaction` stream, on the same surface (see
 - **`emoji`** is any single emoji: exactly one emoji sequence that [Unicode
   Technical Standard #51](https://www.unicode.org/reports/tr51/) recommends for
   general interchange (`RGI_Emoji`), with its modifiers and joiners included.
-  The room drops anything else, including text, and two emoji written as one.
+  The room refuses anything else, including text, and two emoji written as one.
   A room has no fixed list. Which emoji a client puts within easy reach is the
   client's choice.
 - **`sentAt`** is the handler clock when the room recorded the reaction, at

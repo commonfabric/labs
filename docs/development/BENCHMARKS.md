@@ -32,12 +32,13 @@ cannot establish retained memory cost.
 
 The Benchmarks workflow (`.github/workflows/benchmarks.yml`) runs every four
 hours on a schedule, on the dedicated runner group. It runs `deno bench --json`
-over `packages/runner/test/*.bench.ts` plus explicitly listed benchmarks in
-`packages/utils`, `packages/fuse`, `packages/memory`, `packages/data-model`,
-`packages/piece`, `packages/dashboard`, and `packages/patterns`. It uploads JSON
-stdout and a copy of stderr in the `bench-results` artifact with 90-day
-retention. A bench file outside those paths does not run in CI until it is added
-to the workflow. The workflow's manual trigger measures a specific commit.
+over `runtime/runner/test/*.bench.ts` plus explicitly listed benchmarks in
+`base/utils`, `runtime/fuse`, `runtime/memory`,
+`base/data-model`, `runtime/piece`, `dashboard`, and
+`patterns`. It uploads JSON stdout and a copy of stderr in the `bench-results`
+artifact with 90-day retention. A bench file outside those paths does not run in
+CI until it is added to the workflow. The workflow's manual trigger measures a
+specific commit.
 
 The team ops dashboard charts benchmark trends on its `/bench` page, and its
 trend reads one completed run per four-hour window from those artifacts. Each
@@ -87,7 +88,7 @@ only goes part of the way. Over a forty-five day stretch the group served six
 processor models, and within one model two runs have measured a fifth apart on
 work that touches no repository code, because a run gets whatever share of a
 shared host the other tenants leave it. So every run also measures the machine,
-through the benchmarks in `packages/dashboard/machine-calibration.bench.ts`,
+through the benchmarks in `dashboard/machine-calibration.bench.ts`,
 which call no repository code. The dashboard divides their geometric mean out of
 each step of its index, and leaves them out of the index, the benchmark count
 and the drill-down. See
@@ -122,16 +123,22 @@ regression shows up as trend drift on the dashboard rather than as a failing
 check.
 
 Most packages with benches define a `bench` task for running them locally
-(see `packages/runner/deno.jsonc`); otherwise invoke `deno bench` on a
+(see `runtime/runner/deno.jsonc`); otherwise invoke `deno bench` on a
 single file.
 
-`packages/runner/test/view-replication.bench.ts` measures view selection through
+`runtime/state-inspector/test/reconstruct-range.bench.ts` is a local replay
+benchmark. It holds the replay suffix fixed while growing the preceding history
+from 100 to 10,000 revisions, covering snapshot-backed reads and exact-row reads
+within a multi-operation commit. Fixture construction and output assertions are
+outside the timed interval. Run it with `deno bench -A` and the file path.
+
+`runtime/runner/test/view-replication.bench.ts` measures view selection through
 chains of 100, 300, and 1,000 computations, each mixed with an equally large
 unrelated chain. Fixture construction stays outside timing; index construction
 and selection are measured together. The selected action count and exclusion of
 the unrelated chain are checked outside the timed interval.
 
-`packages/runner/test/demand-pass.bench.ts` measures the demand read a serving
+`runtime/runner/test/demand-pass.bench.ts` measures the demand read a serving
 loop's demand pass makes, for one client session whose watch reaches 1,000,
 5,000, and 20,000 documents: the memory server's `demandForSpace()` and the
 fold of its result into the loop's `DemandMirror`. `unchanged` reads demand
@@ -140,13 +147,13 @@ nothing has written since the last read, and stays flat across the sizes;
 key, and grows with the session's closure. The fixture's watch evaluation stays
 outside timing.
 
-`packages/runner/test/view-producer-proof.bench.ts` measures a client's currency
+`runtime/runner/test/view-producer-proof.bench.ts` measures a client's currency
 proof over 10, 14, 18, and 36 producers, where each producer reads the preceding
 two outputs. This shared ancestry exercises repeated paths to the same upstream
 value. Replica setup and plan indexing stay outside timing; the timed interval
 covers one proof against unchanged values.
 
-`packages/runner/test/eager-link-read.bench.ts` measures an eager schema read of
+`runtime/runner/test/eager-link-read.bench.ts` measures an eager schema read of
 a list of 200 and of 2,000 links to row documents, each row linking to one
 shared subject that the schema reads as a handle, so each row crosses two
 links. Nothing in the fixture is labeled, so the timing includes the read of
@@ -154,7 +161,7 @@ each crossed document's stored labels that a read makes whether or not any
 exist. Fixture construction and opening the transaction stay outside timing;
 the timed interval is the one `get()`.
 
-`packages/runner/test/executor-sustained-input.bench.ts` measures how long the
+`runtime/runner/test/executor-sustained-input.bench.ts` measures how long the
 serving watermark takes to cover an input while input keeps arriving. Each
 iteration opens a fresh served space outside the timed interval, then starts a
 stream that commits one input at every settle barrier and stops after eight wave
@@ -164,7 +171,7 @@ per-input admission-to-coverage times and cycle counts, summarized as P50, P90
 and maximum over every streamed input, and the loop's exhaustion counters, to
 stderr.
 
-`packages/runner/test/materializer-writers.bench.ts` measures
+`runtime/runner/test/materializer-writers.bench.ts` measures
 `collectMaterializerWritersForLog()` over logs of 100, 1,000, and 3,500 deep
 reads of one document, the entity eight materializers write, each materializer
 overlapping only a read near the end of the log. Index registration and log
@@ -207,18 +214,18 @@ say, is rejected rather than let through. Inside a benchmark body it rejects any
 calls, however many hops away. A helper in another module is past what one
 file's syntax tree shows, so write those with `Deno.stderr` too. The runner's
 benchmarks do that through `benchDiagnostic()` in
-`packages/runner/test/bench-diagnostics.ts`.
+`runtime/runner/test/bench-diagnostics.ts`.
 
 **Read a transaction's journal before it commits.** A benchmark that reports
 what it wrote reads `tx.journal.novelty(space)`, and a transaction holds that
 journal only while it is open: `commit()` releases it on the way to settling,
 and the same call afterwards reports nothing. A benchmark that times the commit
 cannot afford the read inside its timed window either.
-`packages/runner/test/cell-set-flat-index-list.bench.ts` shows the arrangement.
+`runtime/runner/test/cell-set-flat-index-list.bench.ts` shows the arrangement.
 Each of its write scenarios takes a callback and hands it the transaction just
 before committing; the benchmark itself passes no callback, and instead runs the
 same scenario once more, untimed, to fill in a report it writes once.
-`packages/runner/test/bench-write-accounting.ts` turns those attestations into a
+`runtime/runner/test/bench-write-accounting.ts` turns those attestations into a
 document count and a byte count — one attestation per written path is not one
 document and not one value, so adding them up directly counts some bytes twice
 and misses others.
@@ -227,7 +234,7 @@ and misses others.
 origin file, group, and verbatim name. Renaming a bench or its group breaks
 the series: history stays under the old name and the renamed bench starts
 over. Two of those keys are written out in `KEY_BENCHMARKS` in
-`packages/dashboard/bench-report.ts`, and the key benchmarks tile trends those
+`dashboard/bench-report.ts`, and the key benchmarks tile trends those
 and nothing else, so moving or renaming one of them costs that tile half of
 what it reads and both of them leave it nothing at all. Two things hold that
 in place: `deno task check-bench-workflow` fails a change that leaves one of
@@ -247,7 +254,7 @@ to a red check or one red run instead of a hole in the history. So:
   results array holds one entry per duplicate. A consumer reading one result
   per group and name silently drops the rest.
 
-`packages/runner/test/esm-verifier.bench.ts` shows the pattern: short stable
+`runtime/runner/test/esm-verifier.bench.ts` shows the pattern: short stable
 names, per-module labels derived from source paths, sizes logged to stderr.
 
 **Time only the operation the name promises.** `Deno.bench` times the whole
@@ -257,7 +264,7 @@ manager, or a fixture of documents, and then measures without that bracket,
 reports the fixture as though it were the operation. Two costs follow. The
 first is that the benchmark cannot see what it is named for: before its
 measurement was bracketed, `Cell equals - comparison operations (100x)` in
-`packages/runner/test/cell.bench.ts` spent 93% of its reported time building
+`runtime/runner/test/cell.bench.ts` spent 93% of its reported time building
 and tearing down a runtime, so doubling the cost of `Cell.equals()` would have
 moved it by 7%. The second is the reverse — a change to runtime construction or
 to commit moves every benchmark shaped like that one, which reads on the chart
@@ -271,7 +278,7 @@ dashboard reads as a one-off step in that benchmark's line; the name stays the
 same, so the series continues rather than restarting.
 
 **The calibration bodies stay as they are.** The bodies in
-`packages/dashboard/machine-calibration.bench.ts` are the ruler every other
+`dashboard/machine-calibration.bench.ts` are the ruler every other
 benchmark is measured against, so editing one moves its timings and the
 dashboard reads that move as the machine changing under a processor that did
 not change. Adding a benchmark to that file is safe, and so is removing one:
@@ -286,7 +293,7 @@ settling happens before the timings start.
 
 ## The end-to-end navigation benchmark
 
-`packages/patterns/integration/topic-board-navigation.bench.ts` measures what a
+`patterns/integration/topic-board-navigation.bench.ts` measures what a
 person waits for rather than what a component costs: a browser loading a topic
 board carrying dozens of topics, signing in, the cards appearing, opening a
 topic, and following a crossref to a sibling. Its `topic board` group charts
@@ -306,15 +313,25 @@ measurement.
   its own, in its own space, because sending a comment is a durable write that
   makes the commented topic the board's first card, which would leave `crossref`
   and `journey` opening a card with no citation to follow. Each iteration
-  comments on a topic that has none, so every iteration measures the same thing;
-  how cost grows with thread length is the headless probe's question, and its
-  thread cases run at 10, 100, and 1,000 comments.
+  comments on a topic that has none, so every iteration measures the same
+  thing.
 - `backlink` opens the topic the most siblings cite and waits for every row the
   topic's backlink derivation produces. `crossref` cannot measure that: it
   follows a citation outward from the board's first card, which is the newest
   topic, and nothing cites the newest topic. The segment reaches its topic
   through the shell's own navigation rather than by clicking, because a topic in
   the middle of the board is on no card or link the page is showing.
+
+Under server execution the serving runtime computes those derivations, and with
+web view-scoped replication on the page shows what it delivers without running
+any of them, so the browser's worker may complete no run at all during either
+operation. Both segments' timed samples declare `mayRunNothing` when the
+deployment serves with server execution on, which permits that zero rather than
+asserting it; with server execution off the browser computes the derivations,
+and the guard stays. Neither segment takes its read-accounted sample under
+server execution, and each writes a line saying so instead: the sample
+attributes the browser's reads to the derivations, and what the browser runs
+there is its echo of them, or nothing.
 
 The comment segment needs the viewer to have a Profile, since the composer's
 send button is disabled until `#profile` resolves to a named one. The field
@@ -362,7 +379,7 @@ Three things follow from it being an end-to-end measurement:
   segment scales; CI leaves it unset, and the size in force is written to
   stderr and so into `diagnostics.log`.
 
-`packages/patterns/integration/topic-board-seed.ts` builds a board on its own,
+`patterns/integration/topic-board-seed.ts` builds a board on its own,
 which is how to get one for a profiling session without running the benchmark.
 The seeder holds a subscription to the board's index using its durable result
 schema. This keeps the current list demanded without subscribing to each
@@ -378,7 +395,7 @@ pull their result to complete, and citation creation addresses the topics.
 One board of one size catches a regression but says nothing about shape: a
 change that is flat at thirty topics and quadratic at three hundred looks the
 same on the navigation benchmark's `board` series.
-`packages/patterns/integration/topic-board-scale.bench.ts` measures that same
+`patterns/integration/topic-board-scale.bench.ts` measures that same
 thing — a signed-in cold load, timed until every card has rendered — across
 board sizes of 100, 1000, and 10000, in a `topic board scale` group whose
 series are named for the sizes. The boards carry no crossrefs, so the numbers
@@ -426,11 +443,11 @@ is the distinction `mayRunNothing` is scoped to.
 
 Widening the interval would not recover a lift run worth having. Of those four
 boundaries only the whole round trip yields one, and for the return leg:
-measuring the return to the board on its own records that same single
-`lastActivityOf` run with the same counters, while the reopen beside it records
-none. Charging this series for a board render is what widening that far would
-do, and the `<size>` series already measures it, at a hundred topics costing an
-order of magnitude more than the reopen.
+measuring the return to the board on its own records no run of a topic's own,
+since a topic's last activity is a stored value the board reads, while the
+reopen beside it records none. Charging this series for a board render is what
+widening that far would do, and the `<size>` series already measures it, at a
+hundred topics costing an order of magnitude more than the reopen.
 
 The sample reports `runsWithoutSource` beside its zero so that a zero taken
 next to such runs does not print identically to one taken next to no runs at
@@ -492,7 +509,7 @@ the two skipped sizes should be enabled as part of whatever lowers it.
 
 ## Topics browser measurement
 
-`packages/patterns/integration/topics-browser-measurement.ts` is a helper that
+`patterns/integration/topics-browser-measurement.ts` is a helper that
 measures one operation a caller drives in a Topics board's browser page, for the
 browser tier of [the Topics computation
 plan](../plans/topics-computation-cost.md). A caller invokes it around the
@@ -507,7 +524,10 @@ Each charts the interval `timeTopicsOperation()` brackets, and each writes a
 alongside it. `reopen` declares `mayRunNothing` on that sample, because a reopen
 completes no run for the call to attribute and the zero is what it has to
 record; it writes its timed sample as well, for the graph and timing the
-read-accounted half's elapsed time cannot speak for.
+read-accounted half's elapsed time cannot speak for. Under a deployment serving
+with server execution on, the two navigation series declare it on their timed
+samples instead and write no read-accounted sample, for the reasons their
+section gives.
 
 ### The posture a sample is labeled with
 
@@ -519,7 +539,9 @@ run was started. `topics-browser-posture.ts` reads it from the deployment
 rather than from the benchmark process's own `EXPERIMENTAL_SERVER_EXECUTION`,
 which would label whatever it was told: the toolshed reports the posture it
 serves at on `/api/meta`, and the shell it serves states its own through the
-build define. The worker refuses to initialize when its resolved posture
+build define, where one is baked; without one, the shell runs the arm its
+deployment publishes, and the reading below treats that bundle as stating
+nothing. The worker refuses to initialize when its resolved posture
 disagrees with the shell's declaration, so a page that loaded at all ran the
 posture its shell declared.
 
@@ -572,9 +594,8 @@ shell's runtime client, runs the operation, waits until the view has settled and
 the runtime is idle, and turns both off again. From the `scheduler.run.complete`
 markers it sums runs, `durationMs`, proxy accesses, the largest single run's
 accesses, link resolutions, distinct documents, and registered dependencies, in
-one row for the board's pivot (`crossrefTable`, the producer), one for each
-per-topic consumer (`backlinksOf`, `presentCommentCountOf`, and
-`lastActivityOf`), and one for every other run. It also records the scheduler
+one row for the board's pivot (`crossrefTable`, the producer), one for the
+per-topic consumer (`backlinksOf`), and one for every other run. It also records the scheduler
 graph's node and edge counts before and after, the operation's elapsed time, and
 the timing statistics the main thread and the worker accumulated over it, less
 the helper's own requests. A timing row sums spans that can overlap, so its
@@ -591,7 +612,7 @@ client it enabled them on.
 
 A measured sample is taken against a program that `prepareTopicsProgram()`
 compiles from the sources the board was seeded from, on an emulated runtime and
-with `packages/patterns` as the program root, as the topic board fixture deploys
+with `patterns` as the program root, as the topic board fixture deploys
 it. The compile takes about a second, so a caller prepares one program and
 passes it to each measurement. A lift is found by name: the helper parses the
 module with the TypeScript compiler's parser, finds the one
@@ -673,7 +694,7 @@ a runtime client replaced during a measured operation fails it after telemetry
 and read accounting are turned off on the client they were turned on in; and the
 timed sampler turns off telemetry a caller left on. The decisions that need no
 browser live in `topics-browser-measurement-core.ts` beside the helper, and
-`packages/patterns/test/topics-browser-measurement-core.test.ts` tests them
+`patterns/dev/test/topics-browser-measurement-core.test.ts` tests them
 under a plain `deno test`, partly against compiled text, previews, and module
 identities recorded from the Topics sources in a fixture beside that test.
 That fixture is a recording, and nothing recompiles the Topics sources to check
@@ -682,8 +703,8 @@ again by hand, when a case needs material the recording does not hold. The
 compiled half comes from one command:
 
 ```bash
-deno task cf check packages/patterns/topics/main.tsx --json --no-check \
-  --root packages/patterns
+deno task cf check patterns/apps/topics/main.tsx --json --no-check \
+  --root patterns
 ```
 
 It prints a JSON document, and the whole compiled program is the string at
@@ -695,7 +716,7 @@ in that text, and what the fixture records is the function the declaration
 passes, which is what `compiledLiftText()` returns and what a preview begins.
 The fixture's shifted identity is what the same command reports for
 `/topics/main.tsx` after adding lines at the top of
-`packages/patterns/topics/main.tsx`, as many as the case that reads that
+`patterns/apps/topics/main.tsx`, as many as the case that reads that
 identity names; the added lines come back out once the command has run.
 
 No command prints a preview. A preview is what a running board reports for the
@@ -710,7 +731,7 @@ all the cases reading that preview ask of it.
 
 ## The Topics board demo
 
-`packages/patterns/integration/topic-board-demo.test.ts` is not a benchmark. It
+`patterns/integration/topic-board-demo.test.ts` is not a benchmark. It
 is the browser demonstration the [Topics computation
 plan](../plans/topics-computation-cost.md) asks T0 for and T5 records before and
 after a change, so it sits beside that plan's browser tier rather than in the
@@ -744,52 +765,73 @@ which it may not; read that before weakening an assertion in it.
 
 ## The multiplayer contention benchmark
 
-`packages/patterns/integration/lunch-poll-vote-burst.bench.ts` measures what
+`patterns/integration/lunch-poll-vote-burst.bench.ts` measures what
 several people editing one thing at the same moment cost each other: ten voters
 each cast a vote on each of ten lunch-poll options, all hundred dispatched
 before any settles, timed until every one of the ten clients holds the whole
-result. Its `lunch poll` group carries one series, `vote burst 10x10`.
+result. Its `lunch poll` group carries one series, `vote burst 10x10 rendered`,
+named for the views its clients hold.
 
 It is the only benchmark in the repository with a second writer. Every other
 bench file drives one runtime against storage it alone holds, so a write
 conflict cannot arise in one, and the cost of a contended write — the rejected
 commit, the rolled-back optimistic write, the re-run — is invisible to all of
 them. This one runs ten runtimes, each in its own Deno worker, through
-`packages/patterns/integration/multi-runtime-harness.ts`. The benchmark passes
-the harness no `apiUrl`, so it hosts an in-process storage server whether or
-not `API_URL` is set, matching the resolved posture: a plain one when server
+`patterns/integration/multi-runtime-harness.ts`. The benchmark passes
+the harness no `apiUrl`, so it hosts an in-process storage server whether or not
+`API_URL` is set, matching the resolved posture: a plain one when server
 execution resolves OFF, and one with a serving loop attached when it resolves
-ON, by `EXPERIMENTAL_SERVER_EXECUTION=true` or by the first-party default.
-Both modes use ordinary worker
-clients, without a browser or renderer mounts. The view-scoped web-client flag
-therefore does not activate selective replication in this benchmark. Use the
-browser Topics benchmarks to measure that mode, and hold server execution
-constant when comparing replication flags.
+ON, by `EXPERIMENTAL_SERVER_EXECUTION=true` or by the first-party default. Both
+modes use ordinary worker clients with no browser, each holding the worker
+reconciler's demand over the piece's view for the run, as a mounted tab does
+(`renderView` on the session, with the fixture showing the poll's own view under
+its `renderPoll` input), so a client that derives the tallies and cards it would
+show has derived them by the measured end. Each client is a web client
+(`clientClass: "web"` on the session), so under
+`EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION` its view registers as a view interest
+and the server selects what it receives, as it does for a browser tab; hold that
+flag and server execution constant when comparing arms. Such a client derives
+none of the poll itself, and the tallies the server derives from a burst's votes
+can reach it a wave after the votes do, which the measured end below does not
+wait for, so with that flag and server execution on the end is the votes'
+arrival rather than the view's.
 
-Each burst waits for every writer's event consequences to arrive before the
-replica barriers. The harness's budgeted `settle()` alone can return with pending
-consequences, so it cannot define a successful measurement. Outside the timed
-interval, every replica must contain the expected vote count and color
-distribution for every option; a mismatch fails the run.
+A burst's measured interval ends when every client's own vote list, read at
+that runtime's quiescence and woken by the list's own changes, holds exactly
+the round's rows: each voter's vote on each option at the value cast this
+round, and no other row. The predicate runs after that client's `idle()` inside
+the timed burst. The rows are locally visible and may include speculation; this
+endpoint is not a proof of durable serving coverage. Outside the interval,
+`afterBurst()` runs the harness's `settle()`, which waits for every writer's
+event consequences to arrive before the replica barriers. Then every replica
+must contain the expected vote count and color distribution for every option,
+or the run fails.
 
 Four things follow from that shape:
 
 - **Setup runs once, at module scope.** Ten workers, ten joins, ten options and
-  two warm-up bursts cost around twelve seconds, so paying it per iteration
-  would leave a run with almost no samples. Each iteration recolors every vote,
-  so all hundred are real changes and the poll holds a hundred votes throughout;
-  no iteration leaves a state the next one starts from differently.
-- **Few samples.** An iteration runs in about 450ms on a developer machine and
-  2.6 seconds on a four-core CI host, which puts this benchmark at the end of
-  the distribution where the 75th percentile buys least — it discards the
-  slowest quarter of a dozen samples, so two stalls in a run reach the figure
-  the trend reads. Read it across several windows.
+  two warm-up bursts took four and a half minutes with the loop off on a
+  four-core container, the first warm-up burst two and a half of them, so
+  paying it per iteration would leave a run with almost no samples. Each
+  iteration recolors every vote, so all hundred are real changes and the poll
+  holds a hundred votes throughout; no iteration leaves a state the next one
+  starts from differently.
+- **Few samples.** An iteration took 35.5 seconds on average with the loop off
+  on a four-core container, from 29.3 to 40.9, which puts this benchmark at the
+  end of the distribution where the 75th percentile buys least — it discards
+  the slowest quarter of a dozen samples, so two stalls in a run reach the
+  figure the trend reads. Read it across several windows.
 - **The wall-clock is half of what it measures.** A contended write is also
   work thrown away, and that half does not appear in a timing. The file writes a
   contention accounting — rejected commits and rolled-back writes over one
-  untimed burst — to stderr, and so into `diagnostics.log`. On the keyed vote
-  write both are zero; the same burst over a whole-list write measured 430 and
-  558.
+  untimed burst — to stderr, and so into `diagnostics.log`. None of the
+  commits a burst's sessions refuse writes the vote list, so with the loop off
+  what the accounting counts is the clients' derivations: each derives what its
+  view shows and commits it, and those commits contend. One burst at 10x10
+  counted 1,460 rejected commits and 2,356 rolled-back writes on a four-core
+  container, most of the refused commits writing derived documents alone. Over
+  clients that hold no view the keyed write's burst counts zero of both, and
+  the same burst over a whole-list write measured 430 and 558.
 - **The size names the series.** `CF_LUNCH_POLL_VOTERS` and
   `CF_LUNCH_POLL_OPTIONS` resize it for a local run asking how the burst scales.
   Changing either starts a new line rather than continuing this one, exactly as
@@ -797,18 +839,17 @@ Four things follow from that shape:
   is written to stderr.
 
 Ten runtimes is a large footprint, and the cost is worth knowing before adding
-a voter to it. **Measured on a default hosted
-runner — four cores, 15.6GB — the file takes 89 seconds and peaks at 4.76GB
-resident**, under a third of that host with around 9GB still free. The runner
-group this workflow uses is a larger machine than that one, so the share it
-takes there is smaller again.
+a voter to it. **Measured with the loop off on a four-core container, the file
+takes 1,044 seconds and peaks at 8.73GB resident**, more than half of a default
+hosted runner's 15.6GB. The runner group this workflow uses is a larger machine
+than that one, so the share it takes there is smaller.
 
-Read that peak as a working set rather than as a requirement. The same run
-under `--max-old-space-size=512` completes in 3.5GB at roughly double the
-per-iteration time, and a developer machine with far more memory peaks higher,
-at 5.4GB. So the absolute figure rises with the headroom the heap is offered
-while the fraction of the host falls, and it is the fraction that decides
-whether this belongs beside the other benchmarks.
+Read that peak as a working set rather than as a requirement. A run over
+clients that hold no view completed in 3.5GB under `--max-old-space-size=512`,
+at roughly double the per-iteration time, and peaked higher, at 5.4GB, on a
+developer machine with far more memory. So the absolute figure rises with the
+headroom the heap is offered while the fraction of the host falls, and it is
+the fraction that decides whether this belongs beside the other benchmarks.
 
 That peak is a floor under everything measured after it. The workers are
 released at process exit — `Deno.bench` offers no seam for "this file's
@@ -817,14 +858,48 @@ Which benchmarks that floor sits under is therefore a question of where
 `deno bench` places this file, and the pipeline section above says that is not
 a question the workflow's list answers.
 
-`packages/patterns/integration/lunch-poll-keyed-votes.test.ts` is the assertion
-half of the same property: it counts rolled-back writes instead of timing them,
-and requires none, so a regression that this benchmark shows as trend drift
-also fails a test.
+`patterns/integration/lunch-poll-keyed-votes.test.ts` is the assertion
+half of the same property: over clients that hold no view it counts rolled-back
+writes instead of timing them, bounds them below one a vote, and requires that
+no refused commit wrote the vote list, so a regression that this benchmark
+shows as trend drift also fails a test.
+
+### The browser copy of the vote burst
+
+`patterns/integration/lunch-poll-vote-burst.browser.ts` measures the
+same burst through real browsers, and is a separate series from the worker
+benchmark above: the production lunch poll rather than the keyed-votes fixture,
+five independent Chromium profiles that create a profile, join the poll and add
+its options through the UI, votes cast as trusted CDP clicks, and an endpoint
+that is every page's rendered swatches. A burst ends when every page holds the
+exact option, name and color tuple for every voter on every option, with no
+duplicate row, and two animation frames have passed since the last change, so
+the endpoint is a paint opportunity in every browser rather than a runtime's
+quiescence. Both are timed from the moment every page's runtime is idle, before
+the clicks are prepared and dispatched. The driver's own completion, until it
+has seen every page converge, is reported apart from that headline, and the
+browsers' teardown comes after both and is not timed. Two warmup bursts precede
+the measured rounds.
+
+It is a `deno run -A` script rather than a `Deno.bench` file, so the Benchmarks
+workflow does not run it and the dashboard carries no series for it; it is run
+by hand, against a source toolshed and a shell build whose
+`EXPERIMENTAL_SERVER_EXECUTION`, `SERVER_EXECUTION_WORKER` and
+`SERVER_EXECUTION_STORE_READ_THROUGH` match the arm under measurement, with
+`API_URL` and `FRONTEND_URL` naming them. `CF_LUNCH_POLL_VOTERS` and
+`CF_LUNCH_POLL_OPTIONS` size the poll (five and five unless set),
+`CF_LUNCH_POLL_BROWSER_ROUNDS` sets the measured rounds (three unless set), and
+`CF_LUNCH_POLL_BROWSER_OUT` names a JSON file for the samples, every client's
+logger rows and the server's health snapshots, all captured outside the timed
+intervals. The rows a page shows may include that page's own speculation, so a
+converged DOM is not a proof of durable serving coverage, and the script, unlike
+the worker benchmark, checks none after a burst: the next waits only for every
+page's runtime to go idle. Arms compare only within one sitting, for the reason
+the worker benchmark gives.
 
 ## Rendered lunch-poll read scaling
 
-`packages/patterns/integration/lunch-poll-read-scale.bench.ts` measures a vote
+`patterns/integration/lunch-poll-read-scale.bench.ts` measures a vote
 change with the production lunch poll's cards and summary demanded by a browser.
 Its three series hold 74, 296, and 1184 votes over 14 options, with 8, 24, and 87
 voters respectively. `CF_READ_SCALE_PROFILE_LOCATION` selects `same-space`
@@ -863,7 +938,7 @@ EXPERIMENTAL_SERVER_EXECUTION=false \
 API_URL=http://localhost:8000 FRONTEND_URL=http://localhost:5173 \
 CF_LOG_LEVEL=silent \
 deno bench --json -A \
-  packages/patterns/integration/lunch-poll-read-scale.bench.ts \
+  patterns/integration/lunch-poll-read-scale.bench.ts \
   > /tmp/lunch-read-scale.json 2> /tmp/lunch-read-scale.log
 ```
 
@@ -882,7 +957,7 @@ posture, data, and cross-space links.
 ### Headless render read limits
 
 The fixture's `main.test.tsx`, `296-votes.test.tsx`, and `1184-votes.test.tsx`
-under `packages/patterns/integration/fixtures/lunch-poll-read-scale/` enforce
+under `patterns/integration/fixtures/lunch-poll-read-scale/` enforce
 read budgets for two headless rendering windows: the seeded poll's first render,
 and a render after changing one vote to yellow. The harness recursively demands
 VDOM cells during each window and removes that demand before the next step.
@@ -918,7 +993,7 @@ on every run.
 Run them all from the repository root:
 
 ```sh
-deno task cf test packages/patterns/integration/fixtures/lunch-poll-read-scale --verbose
+deno task cf test patterns/integration/fixtures/lunch-poll-read-scale --verbose
 ```
 
 The command reports measured totals and per-run maxima for every interval. Keep
@@ -928,7 +1003,7 @@ reads before changing the limit.
 
 ## A piece grid of stopped pieces
 
-`packages/patterns/integration/piece-grid-stopped.bench.ts` measures what a
+`patterns/integration/piece-grid-stopped.bench.ts` measures what a
 display costs when it starts the piece it shows. `cf-render` opens every piece
 it displays, so a `piece-grid` of note tiles starts each note in the viewer's
 runtime. Each size, 13 and 60 notes, seeds a space of its own, starts the notes
@@ -948,19 +1023,19 @@ as described in [Local dev servers](LOCAL_DEV_SERVERS.md), then run:
 
 ```sh
 API_URL=http://localhost:8000/ FRONTEND_URL=http://localhost:5173/ \
-deno bench -A packages/patterns/integration/piece-grid-stopped.bench.ts
+deno bench -A patterns/integration/piece-grid-stopped.bench.ts
 ```
 
 ## The FabriChat room benchmarks
 
 Three bench files measure a FabriChat group room, on the pattern in
-`packages/patterns/fabrichat/`. Two drive a browser against a running toolshed
+`patterns/system/fabrichat/`. Two drive a browser against a running toolshed
 as the Topics benchmarks do, and one runs many runtimes against one storage
 server as the lunch-poll contention benchmark does.
 
 ### The seeded room
 
-`packages/patterns/integration/fabrichat-room-fixture.ts` builds a room the way
+`patterns/integration/fabrichat-room-fixture.ts` builds a room the way
 people come to have one, and `fabrichat-room-seed.ts` runs it in a child Deno so
 that the members' runtimes do not stay with the process that drives the
 browser. Each member is an identity derived from a passphrase, with a real Home
@@ -990,6 +1065,15 @@ all stayed open would cost one recompute per member per message. A second member
 stays open throughout, to add a reaction to every third message while it is the
 newest, and to write the thread's replies alongside the last writer.
 
+Each act is followed by a wait for its effect in the acting member's copy of
+the room. A room handler refuses an act by throwing, which writes nothing, so a
+refused act's effect never arrives. The member's runtime reports the handler's
+error, and that report ends the pending wait instead: the seed fails with an
+error naming the member, the act, and the handler's message, and the child
+exits non-zero. The child writes to the benchmark's own stderr as it runs, so
+its progress and the reason for a failure reach the workflow log as they
+happen, not only once the child has exited.
+
 Every body is derived from its index, so two rooms of one size carry the same
 text. Each benchmark process derives its members from a passphrase new to that
 process, so each starter's Home lists only that process's room, and a toolshed
@@ -1001,7 +1085,7 @@ untimed, before any benchmark visits it.
 
 ### The fixed-size room
 
-`packages/patterns/integration/fabrichat-room.bench.ts` measures a visit to a
+`patterns/integration/fabrichat-room.bench.ts` measures a visit to a
 room of twelve members and thirty messages, with one thread of five replies,
 signed in as the starter. Its `fabrichat room` group has one series per
 segment: `load` (until the shell has routed to the room), `sign in` (until the
@@ -1017,23 +1101,26 @@ benchmark's do.
 and neither changes what another segment measures. Each `send` adds one message
 to its room, so the room holds thirty messages before the first send and
 thirty-six before the last; each `react` adds one reaction, to a different
-message each time, and leaves the messages as they were. One read-accounted sample each of
-`messages` and `send`, taken in a browser of its own, goes to stderr with the
-same counters the rendered lunch-poll benchmark records.
+message each time, and leaves the messages as they were. The three rooms seed
+together, each in a child of its own, and all three finish before the first
+segment starts, so no seed child is alive and no setup work runs in a measured
+interval. One read-accounted sample each of `messages` and `send`, taken in a
+browser of its own, goes to stderr with the same counters the rendered
+lunch-poll benchmark records.
 
 `react` adds to an existing reaction's tally rather than picking one from the
 row's reaction picker. At the shell's 1024-pixel viewport, the picker the row
 opens lays its quick reactions out under the row's author avatar, which takes
 the click.
 
-`CF_FABRICHAT_MEMBERS` and `CF_FABRICHAT_MESSAGES` resize both rooms for a
+`CF_FABRICHAT_MEMBERS` and `CF_FABRICHAT_MESSAGES` resize all three rooms for a
 local run. The `react` segment needs one seeded reaction per invocation, which
 a room of fewer than nineteen messages does not carry, and the file says so
 before it seeds anything.
 
 ### Room size
 
-`packages/patterns/integration/fabrichat-room-scale.bench.ts` measures two of
+`patterns/integration/fabrichat-room-scale.bench.ts` measures two of
 those segments across rooms of 10, 30, 100 and 300 messages, all with twelve
 members, in a `fabrichat room scale` group: `<size>` is `messages`, and
 `send <size>` is `send`. A room renders a row for every message of its main
@@ -1057,7 +1144,7 @@ fails the run.
 
 ### Concurrent sends
 
-`packages/patterns/integration/fabrichat-send-burst.bench.ts` has four members,
+`patterns/integration/fabrichat-send-burst.bench.ts` has four members,
 each a `MultiRuntimeHarness` session with a profile, send two messages each
 into one room, all eight dispatched before any settles, timed until every
 member's runtime holds every message. Its `fabrichat` group carries one series,
@@ -1107,7 +1194,7 @@ EXPERIMENTAL_SERVER_EXECUTION=false \
 API_URL=http://localhost:8000 FRONTEND_URL=http://localhost:5173 \
 CF_LOG_LEVEL=silent \
 deno bench --json -A \
-  packages/patterns/integration/fabrichat-room.bench.ts \
+  patterns/integration/fabrichat-room.bench.ts \
   > /tmp/fabrichat-room.json 2> /tmp/fabrichat-room.log
 ```
 
@@ -1119,7 +1206,7 @@ gives the flags.
 
 ## Consumed CFC source collection
 
-`packages/runner/test/cfc-consumed-source-dedup.bench.ts` calls
+`runtime/runner/test/cfc-consumed-source-dedup.bench.ts` calls
 `collectConsumedLabel()` over real emulated-storage transaction reads at 128,
 458, 916, 1,832, and 2,668 consumed sources. Each address contributes two
 distinct confidentiality atoms; all addresses share one document and have
@@ -1140,7 +1227,7 @@ cleanup are also outside timing. Exact counts go to stderr, and stdout remains
 the benchmark JSON report:
 
 ```sh
-deno bench --no-lock -A --json packages/runner/test/cfc-consumed-source-dedup.bench.ts
+deno bench --no-lock -A --json runtime/runner/test/cfc-consumed-source-dedup.bench.ts
 ```
 
 The [local measurement report](../history/development/performance/2026-09-14-cfc-consumed-source-dedup.md)
@@ -1151,7 +1238,7 @@ lookup. Index construction remains inside the collector timer.
 
 ## Prepared CFC digests
 
-`packages/runner/test/cfc-prepared-digest.bench.ts` records 5, 50, or 200
+`runtime/runner/test/cfc-prepared-digest.bench.ts` records 5, 50, or 200
 write policy inputs with 1 or 10 KiB payloads, plus 300 read activities and
 dereference traces. Each sample uses a fresh emulated-storage transaction.
 Construction, initial hashing for warm cases, validation, and abort are outside
@@ -1172,7 +1259,7 @@ hash-cache hits during the measured interval for the series that hash; an
 epoch-memo hit performs no hashing. Stdout remains the benchmark JSON report.
 
 ```sh
-deno bench --no-lock -A --json packages/runner/test/cfc-prepared-digest.bench.ts
+deno bench --no-lock -A --json runtime/runner/test/cfc-prepared-digest.bench.ts
 ```
 
 Prepared digests are process-local equality tokens over canonical activity.
@@ -1195,7 +1282,7 @@ probe live keys and discarded graphs separately across garbage collection.
 
 ## CFC path index queries
 
-`packages/runner/test/cfc-path-index.bench.ts` measures `PathPrefixIndex` and
+`runtime/runner/test/cfc-path-index.bench.ts` measures `PathPrefixIndex` and
 `ConsumedLabelIndex` over 50, 250, and 1,000 sources with wildcard fractions
 of 0, 0.05, and 0.3 (rounded down to a whole source count). Templates end in
 `"*"` at segment depths 2–5. Concrete queries have 2–7 segments and mix hits,
@@ -1209,11 +1296,11 @@ across distinct container prefixes; wildcard tails sharing one prefix still
 require a scan of that bucket, and overlap queries returning many entries
 still pay for collecting and ordering them. The wildcard-query scan fallback
 and index construction are measured separately in
-`packages/runner/test/cfc-dereference-coverage.bench.ts`.
+`runtime/runner/test/cfc-dereference-coverage.bench.ts`.
 
 ## CFC flow-join lookup
 
-`packages/runner/test/cfc-flow-join.bench.ts` measures one `deriveFlowJoin`
+`runtime/runner/test/cfc-flow-join.bench.ts` measures one `deriveFlowJoin`
 pass at every combination of 100, 300, and 1,000 label entries and 50, 200,
 and 800 read activities. Concrete paths have three to six segments. Each
 map also carries the three value, shape, and followRef wildcard templates
@@ -1233,7 +1320,7 @@ consume the whole map; the grid measures narrow concrete reads.
 
 ## CFC authoritative label coverage
 
-`packages/runner/test/cfc-authoritative-cover.bench.ts` compares a plain scan
+`runtime/runner/test/cfc-authoritative-cover.bench.ts` compares a plain scan
 with the prefix-only `ConsumedLabelIndex` lookup used to protect carried link
 labels from longest-prefix shadowing. It uses the path-index source grid and
 8,192 concrete queries per sample. Each query selects all deepest matching
@@ -1248,7 +1335,7 @@ number of queries per write.
 
 ## Scoped snapshot memo reuse
 
-`packages/runner/test/snapshot-memo.bench.ts` measures repeated CFC label-view
+`runtime/runner/test/snapshot-memo.bench.ts` measures repeated CFC label-view
 requests within an ambient metadata scope, both at the current instant and at a
 historical read epoch. Each sample opens a fresh transaction and makes 74, 296,
 or 1,184 requests for one labeled address. Setup and transaction cleanup are
@@ -1263,7 +1350,7 @@ cost of repeated derivation in this fixture, not a whole-pattern speedup.
 Untimed diagnostics verify one metadata read with reuse and one per request
 with clearing. These are transaction read activities, not proxy-access counts
 or storage network requests. Run with `deno bench -A --json
-packages/runner/test/snapshot-memo.bench.ts`; the JSON timing report goes to
+runtime/runner/test/snapshot-memo.bench.ts`; the JSON timing report goes to
 stdout and the exact read counts go to stderr.
 
 ## Index maintenance count probe
@@ -1296,12 +1383,13 @@ records the validated local count matrix and its limits.
 ## Topics computation cost probe
 
 Run `deno run -A --frozen scripts/topics-computation-cost.ts` from the
-repository root to measure the Topics board's mention pivot, each topic's
-backlink lookup, and a topic's comment and link aggregates over the headless
-fixture in `packages/patterns/integration/topics-headless-fixture.ts`. The
-fixture writes synthetic topics straight to emulated storage and runs the
-unmodified Topics lifts — `crossrefTable`, `backlinksOf`,
-`presentCommentCountOf`, and `lastActivityOf` — with no browser and no server.
+repository root to measure the Topics board's mention pivot and each topic's
+backlink lookup over the headless fixture in
+`patterns/integration/topics-headless-fixture.ts`. The fixture writes synthetic
+topics straight to emulated storage and runs the unmodified Topics lifts —
+`crossrefTable` and `backlinksOf` — with no browser and no server. A topic's
+comment count and last activity are stored values its verbs keep in the write
+that changes them, so there is no derivation of theirs to measure.
 Each case runs in a process of its own, started with `--frozen` as well, so no
 process in a run writes `deno.lock`.
 
@@ -1375,46 +1463,28 @@ small pivot cases hold 4 topics, with as many mentions per source, up to four,
 as each graph allows. The fixture's documentation of
 `MentionGraph` says how each graph spreads its mentions.
 
-The thread cases hold four topics, each with 10, 100, or 1,000 comments and
-three links, then with 10, 100, or 1,000 links and three comments. The small
-thread case gives each topic one comment and one link.
-
 The pivot cases are recorded under three demand workloads. The first topic is
 the focus topic: the one `topic-open` opens. The mention phases change which
 topics mention it, and the comment and link phases edit it; the unrelated
 sibling edit changes a different topic, the last one.
 
-- `board`: a board loaded before any topic is opened, which demands none of the
-  four lifts. The probe does not measure it: each `board` case writes a sample
+- `board`: a board loaded before any topic is opened, which demands neither
+  lift. The probe does not measure it: each `board` case writes a sample
   recording `measured: false` and the reason, and starts no process.
-- `topic-open`: the board with the focus topic open, which demands the pivot,
-  the focus topic's backlinks, and its present comment count, but not its last
-  activity.
+- `topic-open`: the board with the focus topic open, which demands the pivot
+  and the focus topic's backlinks.
 - `all-backlinks`: the pivot and every topic's backlinks. This is a scaling
   probe, not what a board in use demands.
 
 The `board` and `topic-open` definitions come from one browser measurement of a
 small Topics board, with client execution, lazy materialization on, and card
-values already stored. Loading the board, before any topic was opened, ran none
-of the four lifts, since the cards read their stored values. Opening a topic ran
-the pivot and that topic's backlinks and comment count, but not its last
-activity. Returning to the board afterward ran that topic's last activity once;
-a board returned to after opening a topic is not one of the probe's workloads.
-That is one small sample. Server execution, and lazy materialization off, were
-not measured.
-
-The thread cases are measured under one workload, `aggregates`, which demands
-every topic's present comment count and last activity and nothing else. Those
-are the lifts that read a topic's comments, which the thread cases scale, and of
-the two the last activity reads the topic's links as well; no pivot workload
-demands a topic's last activity. The browser ran them only for the topic it
-opened, the comment count on opening that topic and its last activity on
-returning to the board; `aggregates` runs every topic's, so it is not what a
-board in use demands either.
+values already stored. Loading the board, before any topic was opened, ran
+neither lift, since the cards read their stored values. Opening a topic ran the
+pivot and that topic's backlinks. That is one small sample. Server execution,
+and lazy materialization off, were not measured.
 
 A case's ID names all of that, as
-`pivot/<graph>/mentions-<count>/topics-<count>/<workload>` or
-`thread/comments-<count>/links-<count>/aggregates`.
+`pivot/<graph>/mentions-<count>/topics-<count>/<workload>`.
 
 ### The phases
 
@@ -1435,9 +1505,7 @@ each measured from the start of its edit through settlement:
 - comment append, edit, and retraction on the focus topic;
 - link removal, which stamps the focus topic's first present link as removed;
 - an unrelated sibling edit, which writes the last topic's `title` and nothing
-  else. None of the measured lifts reads a title. A rename through a topic also
-  stamps `titleUpdatedAt`, which `lastActivityOf` reads, so this phase is not a
-  rename.
+  else. Neither measured lift reads a title.
 
 Where nothing mentions the focus topic, as in the `none` graph, mention removal
 is not measured and insertion starts from the second topic. The warm updates
@@ -1477,7 +1545,7 @@ everything a case's process prints.
   that mode pins, the arguments, the V8 flags each case's process starts with,
   the `repeat` count, and the selected case IDs.
 - A `sample` line is one case in one `round`: its `mode`, the case, its `family`
-  (`pivot` or `thread`), its series, the `size` its series scales, its
+  (always `pivot`), its series, the `size` its series scales, its
   `workload`, the fixture's options with its mention count, the `focusTopic` and
   its `focusMentioners` count, and `demandedActions`, how many actions of each
   lift the workload starts. A measured sample adds `measured: true`, the heap
@@ -1504,9 +1572,8 @@ A measured phase records:
 - `bodies`, the completed-body reads that
   [read accounting](../features/read-accounting.md) defines, attributed to a
   lift by the authored source each run reports and grouped by role: `producer`
-  holds the pivot, `consumer` the backlink lookup, `aggregate` the comment count
-  and last activity, and `other` every remaining run, sinks and builtins
-  included. `total` sums them all. Each entry counts runs, actions, proxy
+  holds the pivot, `consumer` the backlink lookup, and `other` every remaining
+  run, sinks and builtins included. `total` sums them all. Each entry counts runs, actions, proxy
   accesses, link resolutions, and per-run sums of distinct documents and
   registered dependencies, with the most proxy accesses of any one run;
 - `attempts`, the transaction-attempt reads through settlement, of every kind,
@@ -1531,7 +1598,7 @@ The read-budget tests hold a fixed set of probe cases to limits on their read
 and graph counts, in continuous integration. Each case is measured in the test's
 own process through the same fixture, phases, checks, and phase records the
 probe uses, with no browser and no server.
-`packages/patterns/integration/topics-read-budget.ts` names the cases and holds
+`patterns/integration/topics-read-budget.ts` names the cases and holds
 the rules below, and `topics-read-budget-limits.ts` beside it holds the limits.
 The cases are divided into groups, and each group runs in a test file of its
 own, `topics-read-budget-<group>.test.ts`, so that no one file takes too large a
@@ -1542,15 +1609,14 @@ The gated cases are:
 - the 4-topic `low-degree` pivot cases under `topic-open` and `all-backlinks`;
 - the 32-topic pivot cases under both workloads for the `high-degree` and
   `single-bucket` graphs at four mentions per source, and for the `low-degree`
-  graph at 16;
-- the thread cases with one comment and one link, with 100 comments, and with
-  100 links.
+  graph at 16.
 
-No `board` case is gated, since the probe measures none. Every gated pivot
-case holds 32 topics or the small case's 4, and no gated thread case holds more
-than 100 comments or links; the larger sizes run only from the probe. A
+No `board` case is gated, since the probe measures none. Every gated case holds
+32 topics or the small case's 4; the larger sizes run only from the probe. A
 regression that appears only above 32 topics is one the probe finds, not
-continuous integration.
+continuous integration. The `small-and-threads` group keeps the name its test
+file has carried: the thread cases it once held measured a topic's
+comment-count and last-activity lifts, which stored values replaced.
 
 Every measured phase of a gated case has a limit on each of five counts, read
 from its phase record:
@@ -1565,11 +1631,11 @@ from its phase record:
 
 The two read boundaries are the attempt and body boundaries that
 [read accounting](../features/read-accounting.md#execution-boundary) defines,
-and each count covers the complete settled operation: the pivot, lookup,
-aggregate, and every other run together. A limit is the largest count five runs
+and each count covers the complete settled operation: the pivot, lookup, and
+every other run together. A limit is the largest count five runs
 of the case observed, plus 10%, rounded up to an integer. A phase in which the
 case read nothing has a limit of zero on that count: the unrelated sibling edit
-is such a phase in every gated case, since no measured lift reads a title. A
+is such a phase in every gated case, since neither measured lift reads a title. A
 change that adds any read there exceeds the limit.
 
 Each limit has a negative control: a regression variant that grows the count the
@@ -1583,16 +1649,14 @@ lifts, in the same transaction:
   topic's title, the titles of the topics it mentions, and every stamp on its
   comments and links. Each warm update writes one of those, so the scan runs
   again in every phase.
-- `duplicate-demand`, assigned the graph counts of the pivot cases, starts a
-  second instance of each demanded lift, the pivot among them.
-- `per-record`, assigned the graph counts of the thread cases, starts a lift
-  for each comment position and each link position on every topic.
+- `duplicate-demand`, assigned the graph counts, starts a second instance of
+  each demanded lift, the pivot among them.
 
 Every limit is an upper bound, so the budget catches a change that reads more
 and is blind to one that reads differently. Lazy materialization turned back
 into eager traversal is the case that matters: it makes fewer proxy accesses,
 not more, while every topic's `backlinksOf` runs again on each mention edit.
-`packages/patterns/integration/topics-lazy-lookup-reruns.test.ts` holds that
+`patterns/integration/topics-lazy-lookup-reruns.test.ts` holds that
 property directly, on the 32-topic `high-degree` `all-backlinks` case under
 lazy materialization: a mention edit re-runs the lookups of the topics whose
 pivot row changed, and no other.
@@ -1600,7 +1664,7 @@ pivot row changed, and no other.
 A case's test fails when a count exceeds its limit, when a measured count has no
 limit, or when a limit names a phase the case did not record. The failure names
 the workload, case, phase, count, observed value, and limit. Run one group from
-`packages/patterns` with:
+`patterns` with:
 
 ```sh
 deno test --v8-flags=--max-old-space-size=4096 -A \
@@ -1617,7 +1681,7 @@ To derive the limits again, run from the repository root:
 deno run -A --frozen scripts/topics-computation-cost.ts --derive-limits \
   > topics-read-budget-limits.derived &&
   mv topics-read-budget-limits.derived \
-    packages/patterns/integration/topics-read-budget-limits.ts
+    patterns/integration/topics-read-budget-limits.ts
 ```
 
 The command runs every gated case five times, in rounds, each run in a process
@@ -1647,7 +1711,7 @@ Nothing here limits startup time or latency.
 
 ## Engine current-state reads
 
-`packages/memory/test/v2-engine-read.bench.ts` measures reading 256 documents
+`runtime/memory/test/v2-engine-read.bench.ts` measures reading 256 documents
 through the memory engine, once each, when every decoded revision is already in
 the engine's document cache. What a read costs past that cache is resolving its
 branch and finding its revision row in SQLite, so the case tracks the per-read
@@ -1657,12 +1721,12 @@ as of the fork point. The fixture is written once per run, and checking what the
 reads returned is outside the timed interval. Run with:
 
 ```sh
-deno bench --no-lock -A packages/memory/test/v2-engine-read.bench.ts
+deno bench --no-lock -A runtime/memory/test/v2-engine-read.bench.ts
 ```
 
 ## JSON Pointer encoding
 
-`packages/memory/test/v2-path.bench.ts` measures encoding 256 distinct paths and
+`runtime/memory/test/v2-path.bench.ts` measures encoding 256 distinct paths and
 looking each result up in a prebuilt Map. The lookup consumes the encoded
 string, including hashing or flattening deferred by string construction. Fixture
 construction and checksum validation are outside the timed interval.
@@ -1673,7 +1737,7 @@ synthetic controls distinguish segment traversal from character scanning and
 escaping; their proportions do not estimate a deployed workload. Run with:
 
 ```sh
-deno bench --no-lock --json packages/memory/test/v2-path.bench.ts
+deno bench --no-lock --json runtime/memory/test/v2-path.bench.ts
 ```
 
 The
@@ -1682,7 +1746,7 @@ records interleaved comparisons and their limits.
 
 ## Refresh schema-closure walk
 
-`packages/memory/test/v2-refresh-schema-closure.bench.ts` measures a push
+`runtime/memory/test/v2-refresh-schema-closure.bench.ts` measures a push
 refresh of a tracked graph after a commit to a tally document whose one link
 schema references a schema document the graph already holds, for a graph
 already delivered 10, 100, or 1,000 schema documents through a carrier whose
@@ -1699,12 +1763,12 @@ fixture — one, the tally, at every size — which is the count to compare when
 timing moves. Run with:
 
 ```sh
-deno bench -A --json packages/memory/test/v2-refresh-schema-closure.bench.ts
+deno bench -A --json runtime/memory/test/v2-refresh-schema-closure.bench.ts
 ```
 
 ## String tuple keys
 
-`packages/utils/test/string-tuple-key.bench.ts` measures encoding 256 distinct
+`base/utils/test/string-tuple-key.bench.ts` measures encoding 256 distinct
 string tuples and looking up their values in a prebuilt Map. The cases cover
 two-field document identities, three-field cache slots, five-field consumed
 sources, and fields containing escape characters or Unicode. Construction and
@@ -1720,17 +1784,18 @@ boundaries; structured or nullable identities need their own encoding contract.
 Existing persisted and wire key formats keep their protocol-defined encoding.
 
 The collector and scheduler effects are tracked by
-`packages/runner/test/cfc-consumed-source-dedup.bench.ts` and
-`packages/runner/test/scheduler-invalid-causes.bench.ts` respectively.
+`runtime/runner/test/cfc-consumed-source-dedup.bench.ts` and
+`runtime/runner/test/scheduler-invalid-causes.bench.ts` respectively.
 
 ## JSON codec escapes over linked inputs
 
-The `links` groups of `packages/data-model/bench/codec-json.bench.ts` measure
-encoding and decoding the inputs of a computation bound to 1, 10, and 100
-links. Each link is written the way a `data:` document carries one: a plain
-object under a `/` key, holding its schema inline. A link comes to about 470
-values, eight of them further `/`-keyed objects nested inside it. Every subject
-is built before any measurement, so the timed interval is the one call.
+The `links` groups of
+`base/data-model/bench/codec-json.bench.ts` measure encoding
+and decoding the inputs of a computation bound to 1, 10, and 100 links. Each
+link is written the way a `data:` document carries one: a plain object under a
+`/` key, holding its schema inline. A link comes to about 470 values, eight of
+them further `/`-keyed objects nested inside it. Every subject is built before
+any measurement, so the timed interval is the one call.
 
 The JSON format escapes a `/`-keyed object, and here each escape covers a large
 plain subtree, where the other subjects of that file escape objects of a
@@ -1743,17 +1808,18 @@ replaces a nested escape where it sits, so a `links` row is expected within
 about a tenth of its control. A `links` row well above that means the encoder
 is walking an escaped subtree more than once.
 
-The `realm-links` groups of `packages/data-model/bench/codec-realm.bench.ts`
-measure the `links` subjects under the format that carries a `/` key as an
-ordinary key. Run with:
+The `realm-links` groups of
+`base/data-model/bench/codec-realm.bench.ts` measure the
+`links` subjects under the format that carries a `/` key as an ordinary key. Run
+with:
 
 ```sh
-deno bench --no-check --allow-read packages/data-model/bench/codec-json.bench.ts --filter links
+deno bench --no-check --allow-read base/data-model/bench/codec-json.bench.ts --filter links
 ```
 
 ## Cold-runtime piece operations
 
-`packages/piece/test/piece-cold-runtime.bench.ts` measures two
+`runtime/piece/test/piece-cold-runtime.bench.ts` measures two
 `PiecesController` calls on a runtime that has never run the space it opens.
 Each sample first seeds a fresh emulated store: one runtime compiles a default
 pattern into a new space, runs it, links it as the space's default pattern, and
@@ -1777,12 +1843,12 @@ default app. The 128 pieces are never added to the registry, so the root starts
 with an empty one. Run with:
 
 ```sh
-deno bench -A --json packages/piece/test/piece-cold-runtime.bench.ts
+deno bench -A --json runtime/piece/test/piece-cold-runtime.bench.ts
 ```
 
 ## Labeled pattern-test mapped render
 
-`packages/cli/test/fixtures/cfc-flow-labels/mapped-render.test.tsx` is the shared
+`runtime/cli/test/fixtures/cfc-flow-labels/mapped-render.test.tsx` is the shared
 headless regression fixture for CFC preparation over mapped SQLite rows. It
 seeds 150 rows with a confidential title column, queries 11, 50, and 150 rows,
 and demands each full mapped VDOM through the worker reconciler. It needs no
@@ -1794,10 +1860,10 @@ only the runtime flags change:
 
 ```sh
 # Arm A: enforcement disabled, flow labels off.
-deno task cf test packages/cli/test/fixtures/cfc-flow-labels/mapped-render.test.tsx --cfc-enforcement-mode disabled --cfc-flow-labels off --verbose --stats-threshold 0 --no-idempotency-check
+deno task cf test runtime/cli/test/fixtures/cfc-flow-labels/mapped-render.test.tsx --cfc-enforcement-mode disabled --cfc-flow-labels off --verbose --stats-threshold 0 --no-idempotency-check
 
 # Arm B: shell enforcement and flow-label posture.
-deno task cf test packages/cli/test/fixtures/cfc-flow-labels/mapped-render.test.tsx --cfc-shell-posture --verbose --stats-threshold 0 --no-idempotency-check
+deno task cf test runtime/cli/test/fixtures/cfc-flow-labels/mapped-render.test.tsx --cfc-shell-posture --verbose --stats-threshold 0 --no-idempotency-check
 ```
 
 The output names the resolved posture and each N. `render_1`, `render_2`, and
@@ -1834,5 +1900,5 @@ not CPU attribution.
 
 This `cf test` probe runs on demand, outside the scheduled `deno bench` suite.
 Keep its source and step order stable across the optimizations it measures.
-The [CLI guide](../../packages/cli/README.md#pattern-test-cfc-posture-and-labeled-fixtures)
+The [CLI guide](../../runtime/cli/README.md#pattern-test-cfc-posture-and-labeled-fixtures)
 documents the dials, labeled table declaration, and reporting boundaries.

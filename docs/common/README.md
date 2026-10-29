@@ -14,10 +14,10 @@ on the Common Fabric runtime.
   events. Reactivity comes from subscribing to queries defined by schemas/type
   signatures.
 - A pattern returns a result cell containing `[UI]` (JSX rendered with the
-  `cf-*` components from `packages/ui`) plus any named key-value outputs. A
+  `cf-*` components from `runtime/ui`) plus any named key-value outputs. A
   running, instantiated pattern is called a **piece**.
 - Patterns compose freely: import another pattern, instantiate it, link cells.
-  Working examples live in `packages/patterns/`. Compile and typecheck with
+  Working examples live in `patterns/`. Compile and typecheck with
   the `cf` CLI (`deno task cf`).
 
 ## Start Here by Task
@@ -73,7 +73,7 @@ on the Common Fabric runtime.
 ### components/ — the UI library
 
 - [components/COMPONENTS.md](components/COMPONENTS.md) — index of all `cf-*` components, bindable props, usage narrative
-- [components/forms.md](components/forms.md) — stub; form authoring lives in COMPONENTS.md, internals in `packages/ui/docs/`
+- [components/forms.md](components/forms.md) — stub; form authoring lives in COMPONENTS.md, internals in `runtime/ui/docs/`
 
 ### conventions/ — system integration
 
@@ -108,7 +108,7 @@ answer narrower questions, and the README says which is which.
 - [verbs/README.md](verbs/README.md) — which of the five to read, by the question you are asking
 - [verbs/the-verb-session.md](verbs/the-verb-session.md) — the tour: what a pattern, piece, space and verb are, and a whole session driven through `cf` in thirteen acts. Assumes nothing; read it first
 - [verbs/agents-over-the-cli.md](verbs/agents-over-the-cli.md) — reaching a piece with no id in hand: the discovery surfaces and what bounds each, orienting on an unfamiliar piece, and the conclusions an empty answer does not support
-- [verbs/session-walkthrough.md](verbs/session-walkthrough.md) — the same session priced: byte measurements, the code behind each answer, the caveats, and what the surface still owes. Its companion script under `packages/cli/integration/` runs every step
+- [verbs/session-walkthrough.md](verbs/session-walkthrough.md) — the same session priced: byte measurements, the code behind each answer, the caveats, and what the surface still owes. Its companion script under `runtime/cli/integration/` runs every step
 - [verbs/over-the-cli.md](verbs/over-the-cli.md) — what a verb hands back: declared results, piece references, idempotent retries, and a runnable walkthrough
 - [verbs/prose-over-the-cli.md](verbs/prose-over-the-cli.md) — how an author's doc comments reach a caller, and which of the two documents `cf` reads carries what
 

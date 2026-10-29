@@ -30,13 +30,13 @@ import {
 } from "./suite.ts";
 
 /** Where the scripts live, repository-relative. */
-const CLI_DIR = "packages/cli/integration";
+const CLI_DIR = "runtime/cli/integration";
 
 /** The one record surface all three suites share. */
 const SURFACE = [{ kind: "integration", scope: "cli" }] as const;
 
 /** Where a script's dispatch runs, repository-relative. */
-const PACKAGE_DIR = "packages/cli";
+const PACKAGE_DIR = "runtime/cli";
 
 /**
  * The arms of a script's `case "$SECTION" in` table, against whatever the
@@ -323,14 +323,14 @@ function cliDenoSuite(): Suite {
     id: "cli-deno",
     needs: ["deno", "toolshed", "cf"],
     parts: [{
-      packageDir: "packages/cli",
+      packageDir: "runtime/cli",
       flags: ["-A"],
       junit: {
         kind: "integration",
         scope: "cli",
-        filePrefix: "packages/cli",
+        filePrefix: "runtime/cli",
       },
-      files: ["packages/cli/test/piece-integration.test.ts"],
+      files: ["runtime/cli/test/piece-integration.test.ts"],
     }],
   });
 }

@@ -152,6 +152,9 @@ export interface Collected {
    * list above and nothing ships them.
    */
   hooks: TestRecord[];
+
+  /** The message each failing record its JUnit reports name failed with. */
+  failures: Map<TestRecord, string>;
 }
 
 /**
@@ -172,6 +175,7 @@ export async function collectRecords(
   }
   const records: TestRecord[] = [];
   const hooks: TestRecord[] = [];
+  const failures = new Map<TestRecord, string>();
   // The registration preload leaves a name-to-file map in the spool.
   // Where it installed, every class name names the wrapper it put in
   // front of `Deno.test`, so the map is the only thing that can tell a
@@ -208,6 +212,9 @@ export async function collectRecords(
           const read = readJUnit(xml, ingestOptions);
           for (const record of read.records) records.push(record);
           for (const record of read.hooks) hooks.push(record);
+          for (const [record, message] of read.failures) {
+            failures.set(record, message);
+          }
         } catch (error) {
           console.warn(
             `test records: ingesting ${entry.path} failed: ${error}`,
@@ -241,7 +248,7 @@ export async function collectRecords(
   if (options.variant !== undefined) {
     for (const record of hooks) record.test.v = options.variant;
   }
-  return { records, conflicts, hooks };
+  return { records, conflicts, hooks, failures };
 }
 
 export interface GatherOptions {

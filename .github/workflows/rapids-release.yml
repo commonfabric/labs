@@ -23,6 +23,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: toolshed
+    permissions:
+      contents: read
+      id-token: write
     env:
       INFRA_SHA: ${{ inputs.infra_sha }}
       # The validator requires a clean checkout, including untracked files.
@@ -72,10 +75,20 @@ jobs:
       - name: 📦 Install candidate validation dependencies
         run: python3 -m pip install 'jsonschema[format]==4.23.0'
 
+      - name: 🔑 Authenticate read-only artifact access
+        id: artifacts
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.RAPIDS_ARTIFACT_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.RAPIDS_ARTIFACT_SERVICE_ACCOUNT }}
+          token_format: access_token
+          create_credentials_file: false
+
       - name: 🔎 Validate the candidate and producer evidence
         working-directory: infra
         env:
           GH_TOKEN: ${{ steps.reader.outputs.token }}
+          RAPIDS_ARTIFACT_ACCESS_TOKEN: ${{ steps.artifacts.outputs.access_token }}
         run: python3 releases/rapids_deploy.py "$INFRA_SHA" --validate-only
 
       - name: 🚀 Deploy the coordinated Rapids candidate

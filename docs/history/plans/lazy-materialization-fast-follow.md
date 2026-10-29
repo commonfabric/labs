@@ -22,7 +22,7 @@ authorize a live lunch-poll update.
 The [lazy materialization design](lazy-cell-materialization.md)
 defines the schema-observing view and snapshot contracts. Lift arguments use
 that view under the default-on `lazyMaterialization` flag. The handler path in
-[`runner.ts`](../../../packages/runner/src/runner.ts) still reads its argument
+[`runner.ts`](../../../runtime/runner/src/runner.ts) still reads its argument
 without marking the transaction for lazy materialization. Its closed-world event
 validation, cold-input handling, receipts, and effects make it a separate
 integration problem.

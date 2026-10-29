@@ -3,8 +3,9 @@
 The **read layer** and **calls**, two of the three concerns in
 [Reading Fabric data](fabric-read-model.md): the shared layer that turns a cell
 into structured output, and what calling a verb adds on top. Read that document
-first — this one uses its vocabulary. The third concern, the command surface, is
-[CLI surface shape](cli-surface-shape.md).
+first — this one uses its vocabulary. The third concern, the command surface,
+was settled by [CLI surface shape](../history/plans/cli-surface-shape.md), an
+executed plan now archived.
 
 ## The shared read layer
 
@@ -63,7 +64,7 @@ unsupported. Both restrictions hold whichever syntax the reader writes in.
 ### What a shape can say today
 
 There are two syntaxes, each on its own flag
-(`packages/cli/README.md`, "Output Conventions"):
+(`runtime/cli/README.md`, "Output Conventions"):
 
 ```bash
 --select 'title,createdBy.name'                       # concise: a list of paths
@@ -73,7 +74,7 @@ There are two syntaxes, each on its own flag
 
 The concise form is sugar for the flat case; the full form is a JSON Schema
 object and is what expresses nested structure. [CLI surface
-shape](cli-surface-shape.md) is where the split between them is reasoned out.
+shape](../history/plans/cli-surface-shape.md) is where the split between them is reasoned out.
 The measured facts at the end write `--schema` for both, because that is the
 flag the measurements were taken against.
 
@@ -94,7 +95,7 @@ than each item.
 
 There are two kinds of thing a reader's schema may **not** contain, for two
 different reasons (`FORBIDDEN_PROJECTION_KEYS` and
-`UNSUPPORTED_PROJECTION_KEYS`, `packages/cli/lib/cell-selection.ts`). Both
+`UNSUPPORTED_PROJECTION_KEYS`, `runtime/cli/lib/cell-selection.ts`). Both
 are checked when a full schema is parsed — the inline and `@file` forms. The
 concise form reaches neither check; what keeps it from expressing them is its
 identifier grammar, which has no way to write a keyword at all. So the two
@@ -140,7 +141,7 @@ position neither declares nor admits, a field named below a scalar, one below
 a verb, which dispatches rather than holding a value. The refusal names the
 position, the vocabulary that position declares, and — where the vocabulary has
 a name close enough — the one the path is a typo of, the wording every other
-misspelled name gets (`packages/piece/src/refusal.ts`). Everything the
+misspelled name gets (`runtime/piece/src/refusal.ts`). Everything the
 schema leaves open passes: an open `additionalProperties`, a `patternProperties`
 map that names a pattern, a disjunction, an untyped position, a position that
 only may hold an array rather than proving it, a tuple-shaped array, a
@@ -373,7 +374,7 @@ second one.
 
 A receipt is an ordinary cell, and like any other it says what it holds — for
 a plain result. `handleJavaScriptHandlerResult`
-(`packages/runner/src/runner.ts`) derives a structural description from the
+(`runtime/runner/src/runner.ts`) derives a structural description from the
 value it has just written and stores it in the durable schema metadata —
 `setMetaRaw("schema", …)`, the field `cf cell get` reads back through
 `asSchema`, not the schema argument to `getCell`, which seeds the link scope
@@ -401,7 +402,7 @@ contract: compared across pattern versions by the schema compatibility gate, and
 permanent once shipped. A receipt's schema is per-invocation and describes what
 that one receipt holds. The gate compares only a pattern's argument and result
 schemas between two versions (`assertPatternSchemasBackwardCompatible`,
-`packages/piece/src/schema-compatibility.ts`) and never reaches a receipt, so no
+`runtime/piece/src/schema-compatibility.ts`) and never reaches a receipt, so no
 permanence obligation attaches. When declared result schemas do arrive, the same
 slot takes a better-sourced value — a change to one argument, not a migration.
 
@@ -429,7 +430,7 @@ unless noted.
 **Addressing**
 
 - The function that fetches a piece's result returns the piece unchanged
-  (`PiecesController.getResult`, `packages/piece/src/ops/pieces-controller.ts`)
+  (`PiecesController.getResult`, `runtime/piece/src/ops/pieces-controller.ts`)
   — a piece *is* its result cell, and the read path checks nothing
   piece-specific. Its counterpart `getArgument` follows a link stored in the
   document and throws when absent, making it the only piece-shaped operation of

@@ -1,7 +1,7 @@
 # CFC Helper Authoring Guide
 
 Use this guide when creating or promoting shared CFC helpers under
-`packages/patterns/cfc/`.
+`patterns/system/cfc/`.
 
 This guide documents the authoring patterns used by the current shared helpers
 so pattern authors can add new helpers without first learning every part of the
@@ -78,8 +78,13 @@ Private declarations behind local or external schema references merge at their
 value paths. Reusing one definition at two fields does not combine their stored
 creators. Unchanged IFC policy and reference structure retain recursive
 references through public value-shape changes, including optional fields inside
-private objects. Changed recursive policy graphs that require expansion are
-refused; unrelated recursive schemas remain supported.
+private objects. A level one side writes out and the other names resolves at
+that level. Where the two name a recursive definition differently, the merge
+names a merged definition of the two, which holds the stored write claims at
+every level, so a writer whose schema reaches the recursion sooner than the
+stored envelope does is not refused for it. Changed recursive confidentiality
+graphs that require expansion are refused; unrelated recursive schemas remain
+supported.
 Held references derive their labels from the source's creator binding during
 commit, including when the source is created in that transaction. A later writer
 holding the reference does not replace the source's bound principal.
@@ -139,7 +144,7 @@ export type ProtectedText = Confidential<
 two. To release what one function of the policy's own module computed, match
 the runtime-minted `TransformedBy` atom and name the module with
 `THIS_POLICY.moduleIdentity` rather than a pasted hash; see
-`packages/patterns/cfc-exchange-rules/blessed-computation.tsx`. The runtime
+`patterns/examples/cfc-exchange-rules/blessed-computation.tsx`. The runtime
 mints that atom only when every write of a transaction comes from one verified
 function, and the pattern's `symbol` must be that function's export name — the
 function exported under that one name — or the rule never fires. The compiler
@@ -148,7 +153,7 @@ declarations, and reused rules. At label creation the runtime
 binds the owning space and durably installs the exact digest-addressed manifest
 in the destination; an unresolved or mismatched artifact fails closed.
 
-See `packages/patterns/cfc-exchange-rules/` for the copyable example and native
+See `patterns/examples/cfc-exchange-rules/` for the copyable example and native
 test.
 
 ## Start With The Boundary
@@ -254,7 +259,7 @@ names a writer, and a member that names an action still requires its gesture.
 ## Authoring Trusted Surfaces
 
 Put one reusable surface per file under
-`packages/patterns/cfc/trusted-surfaces/`, and export it from
+`patterns/system/cfc/trusted-surfaces/`, and export it from
 `trusted-surfaces/mod.ts`.
 
 A trusted surface should contain four pieces:
@@ -397,7 +402,7 @@ import {
   type AdminRoleAssignment,
   type EmptyAdminRegistryValue,
   subjectHasAdminRole,
-} from "../cfc/admin/mod.ts";
+} from "../../system/cfc/admin/mod.ts";
 
 const PROJECT_ADMIN = "project-admin" as const;
 
@@ -468,7 +473,7 @@ captain", "grant room moderator", or "assign project owner" beside the owning
 pattern, because those actions define domain policy.
 
 The five rules that make a floored registry work, and the failure each one
-produces when it is broken, are in `packages/patterns/cfc/README.md` under
+produces when it is broken, are in `patterns/system/cfc/README.md` under
 "Floor An Admin Registry". The parking coordinator, the lobby, the lot watch
 and the group-chat demo have each had to be repaired for breaking one of them,
 so read that section before writing a new registry.
@@ -505,7 +510,7 @@ import {
   promptSlotBoundAtom,
   trustedAgentKernelAtom,
   userSurfaceInputAtom,
-} from "../cfc/prompt-injection/mod.ts";
+} from "../../system/cfc/prompt-injection/mod.ts";
 
 const kernel = trustedAgentKernelAtom("agent-kernel-v1");
 const sourceRisk = promptInjectionRiskAtom(sourceRef);
@@ -526,7 +531,7 @@ Prefer required parameters over optional defaults unless the default is an
 official concept URI or a stable shared profile value.
 
 Common atom type URLs and generic builders live in the public
-`commonfabric/cfc` module. Shared helpers under `packages/patterns/cfc/` should
+`commonfabric/cfc` module. Shared helpers under `patterns/system/cfc/` should
 import that module instead of spelling atom `type` URLs by hand.
 
 ### Schema Builders
@@ -539,7 +544,7 @@ needs them.
 import {
   confidentialMessagesSchema,
   sendMailInputSchema,
-} from "../cfc/prompt-injection/mod.ts";
+} from "../../system/cfc/prompt-injection/mod.ts";
 
 const sendSchema = sendMailInputSchema([kernel, userInput, slot]);
 const messageSchema = confidentialMessagesSchema([
@@ -584,13 +589,13 @@ Keep code local when it contains:
 - demo data, hostile or benign fixtures, model choices, or UI copy
 - domain-specific role transitions or workflow decisions
 
-Before moving code into `packages/patterns/cfc/`:
+Before moving code into `patterns/system/cfc/`:
 
 1. Name the boundary the helper supports.
 2. Verify the helper does not choose local policy for callers.
 3. Migrate at least one existing caller.
-4. Add the helper to `packages/patterns/cfc/INDEX.md`.
-5. Add a usage note to `packages/patterns/cfc/README.md` if it creates a new
+4. Add the helper to `patterns/system/cfc/INDEX.md`.
+5. Add a usage note to `patterns/system/cfc/README.md` if it creates a new
    helper category.
 
 ## Verification
@@ -598,8 +603,8 @@ Before moving code into `packages/patterns/cfc/`:
 Use the narrowest meaningful checks:
 
 ```sh
-deno task cf test packages/patterns/<pattern>/main.test.tsx --root packages/patterns
-deno task cf check packages/patterns/<pattern>/main.tsx --no-run
+deno task cf test patterns/<category>/<pattern>/main.test.tsx --root patterns
+deno task cf check patterns/<category>/<pattern>/main.tsx --no-run
 deno fmt --check <touched files>
 ```
 

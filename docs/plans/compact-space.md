@@ -4,7 +4,9 @@
 the dry run, the write path with its verification, the documentation and
 inspector); stage 6, the rehearsal, ran on 2026-10-12 and passed its
 verification, and its last acceptance check, the served edit, closed on
-2026-10-13 with the server-side instrument; stages 7–8 open. Design
+2026-10-13 with the server-side instrument; stage 7 is complete on Estuary
+([production record](../history/topics-board-compaction-2026-10-18.md));
+stage 8 remains open. Design
 written 2026-10-08 against
 the shared Topics space after
 [the October write storm](../history/development/performance/2026-10-07-topics-space-write-storm.md):
@@ -43,7 +45,7 @@ which gains one audit revision — so nothing a client or the serving loop
 holds goes stale; what changes is that a read older than the cut conflicts
 where it might once have been confirmed, and history below the cut is read
 from the pre-compaction archive rather than the live store. The tool is `cf space compact`, built on a module in
-`packages/memory/v2` beside `dump.ts`, rehearsed on a clone first, and run on
+`runtime/memory/v2` beside `dump.ts`, rehearsed on a clone first, and run on
 Estuary against a copy while the instance that owns the space is stopped.
 
 The server-side change that matters most is not a cadence change, and it
@@ -59,15 +61,15 @@ done, and the compaction tool comes after it.
 
 | Fact | Where |
 | --- | --- |
-| A space is one SQLite file. `commit` is the write log (`seq` primary key; `session_id` + `local_seq` unique; `original` holds the whole client commit, operations and reads; `resolution`; `class`). `revision` holds one row per operation on one document instance, keyed `(branch, id, scope_key, seq, op_index)`, with `op` in `set`, `patch`, `delete` and a foreign key to `commit`. `head` points at each instance's newest revision. `snapshot` holds a materialized document at a seq. `op_submission`, `op_integrated` and `op_checkpoint` hold collaborative operation fields with foreign keys to `commit`; `op_field_epoch` keeps a `commit_seq` column without one. `branch`, `execution_lease`, `scheduler_basis`, `execution_outbox`, `blob_store`, `invocation`, `authorization` complete the schema; patterns add their own tables through the SQLite builtin. | `packages/memory/v2/engine.ts`, the `INIT` statement |
+| A space is one SQLite file. `commit` is the write log (`seq` primary key; `session_id` + `local_seq` unique; `original` holds the whole client commit, operations and reads; `resolution`; `class`). `revision` holds one row per operation on one document instance, keyed `(branch, id, scope_key, seq, op_index)`, with `op` in `set`, `patch`, `delete` and a foreign key to `commit`. `head` points at each instance's newest revision. `snapshot` holds a materialized document at a seq. `op_submission`, `op_integrated` and `op_checkpoint` hold collaborative operation fields with foreign keys to `commit`; `op_field_epoch` keeps a `commit_seq` column without one. `branch`, `execution_lease`, `scheduler_basis`, `execution_outbox`, `blob_store`, `invocation`, `authorization` complete the schema; patterns add their own tables through the SQLite builtin. | `runtime/memory/v2/engine.ts`, the `INIT` statement |
 | A read resolves the head row by joining `head` to `revision`, so a head whose revision row is missing reads as absent. A `set` decodes directly; a `patch` reconstructs from the newer of the last `set`/`delete` and the newest snapshot, replaying the patches after it. | `readStateForScopeKey`, `reconstructPatchedDocument` |
 | The engine writes a snapshot when a document has accumulated `snapshotInterval` (10) patches since its base or newest snapshot, and keeps the newest `snapshotRetention` (2) per instance. So a replay chain is at most ten rows. | `maybeMaterializeSnapshot`, `DEFAULT_SNAPSHOT_INTERVAL` |
 | Finding the base runs `selectLatestBase`, which walks the instance's revision index backward from the head until it finds a `set` or `delete`, no further back than the newest snapshot's seq. The index does not cover `op`, so each row the walk visits costs a table fetch; the bound keeps the walk within one snapshot interval of patches. Reconstruction, the commit-time snapshot check and the schema-reference probe run it through `latestBaseAndSnapshot`. | `SELECT_LATEST_BASE`, `latestBaseAndSnapshot` |
 | A confirmed read is validated by scanning for a `set`/`delete` after its basis seq, then for an overlapping patch. A pending read whose basis the engine cannot reconstruct keeps the staleness refusal it arrived with. A pending read names the own-session layers its view included, and the conflict scan excludes rows whose commit carries that session and one of those `local_seq`s. A resubmitted commit is recognized by `(session_id, local_seq)` alone, answered from its stored result when its bytes match the stored `original`, refused as a replay mismatch when they do not, and applied as a fresh commit when no row is found. An `origin-committed` precondition looks up the origin commit by the same key. A revision's `commit_seq` is joined to `commit.seq` everywhere it is used; nothing requires it to equal the revision's own `seq`. | `findConflictSeq`, the pending-read `basisOf`, `selectExistingCommit`, `selectPendingResolution` |
-| A resumed session's catch-up is a full watch evaluation diffed against the holdings the client sent, not a replay of commits since a seq. The serving loop's commit feed reads from the seq its index scan ran against, in-process. | `packages/memory/v2/server.ts` (`forceFullResync`), `selectCommitsSince` |
+| A resumed session's catch-up is a full watch evaluation diffed against the holdings the client sent, not a replay of commits since a seq. The serving loop's commit feed reads from the seq its index scan ran against, in-process. | `runtime/memory/v2/server.ts` (`forceFullResync`), `selectCommitsSince` |
 | The decoded-document cache keys an entry by the revision's address plus its `op` and data length, on the premise that the engine only appends revisions. The per-space bound is 128 MB and 65,536 entries; the Server bounds the total. | `documentCacheKey`, `DEFAULT_DOCUMENT_CACHE_*` |
-| `VACUUM INTO` from a read-only connection is the sanctioned way to take a crash-consistent single-file copy of a live store. | `packages/memory/v2/dump.ts` |
-| `cf space clone`, `verify`, `reset`, `fingerprint` and `cf inspect churn` are the rehearsal tooling; the state inspector reconstructs any entity at any seq with its own replay, independent of the engine's. | `packages/state-inspector/clone.ts`, `reconstruct.ts`; [`space-clone-rehearsal.md`](../development/space-clone-rehearsal.md) |
+| `VACUUM INTO` from a read-only connection is the sanctioned way to take a crash-consistent single-file copy of a live store. | `runtime/memory/v2/dump.ts` |
+| `cf space clone`, `verify`, `reset`, `fingerprint` and `cf inspect churn` are the rehearsal tooling; the state inspector reconstructs any entity at any seq with its own replay, independent of the engine's. | `runtime/state-inspector/clone.ts`, `reconstruct.ts`; [`space-clone-rehearsal.md`](../development/space-clone-rehearsal.md) |
 | A production space is copied with `VACUUM INTO` on the host and installed by placing the file beside its neighbors while every instance is stopped; the recipe, the WAL trap and the rollback shape are written down. | [`staging-space-copy.md`](../development/staging-space-copy.md) |
 | The storage spec says the revision log is append-only, is the audit trail, and is not deleted during ordinary garbage collection; retain-all is the default policy. Snapshots are the only sanctioned collection target. | [`memory-v2/02-storage.md`](../specs/memory-v2/02-storage.md) §7 |
 
@@ -327,7 +329,7 @@ Each is something a reader relies on today, with the code that relies on it.
 
   "Nothing references it" is not the same as "only history reads it". The
   genesis receipt — commit 1's `original` — is read directly by
-  `readGenesisRoot` and `readSpaceKind` in `packages/memory/v2/genesis-root.ts`
+  `readGenesisRoot` and `readSpaceKind` in `runtime/memory/v2/genesis-root.ts`
   for the root reservation and the declared space kind, with no revision or
   foreign key naming it; session opening and root initialization depend on
   both (Astra's review reproduced `Invalid genesis receipt` after hollowing
@@ -567,7 +569,7 @@ never runs against a file any server has open:
   a replaced database is recovered onto the replacement;
 - the tool refuses a path inside the directories the environment says a
   local server serves, the same rail `cf space clone` applies
-  (`liveStoreDirs` in `packages/cli/commands/space.ts`). This catches a
+  (`liveStoreDirs` in `runtime/cli/commands/space.ts`). This catches a
   laptop mistake, not a host one; the host rule is the first bullet.
 
 ### Backup first
@@ -588,9 +590,12 @@ the backup (the current size), the result (the compacted size), and WAL
 headroom for the run; `df -h /data` before starting, and the staging copy
 document's note that `/tmp` has no room applies here too.
 
-### Verification, in order
+### Verification obligations
 
-Each check fails differently and the order goes from cheap to expensive:
+The checks below define the verification obligations. Head comparison and
+fingerprinting share primary reconstructions within each file; each fingerprint
+independently enumerates revision addresses and resolves related documents in
+its own file.
 
 1. `PRAGMA integrity_check` and `PRAGMA foreign_key_check` on the result.
 2. **Heads unchanged, one excepted.** `SELECT branch, id, scope_key, seq,
@@ -604,17 +609,16 @@ Each check fails differently and the order goes from cheap to expensive:
    boundary is byte-identical to the backup's, op and `commit_seq` included.
    Every head must still join to a revision row.
 3. **Every document reads back identical, one excepted.** Reconstruct every
-   selected instance at its head on both files with the state inspector's
-   replay (`packages/state-inspector/reconstruct.ts`), which is a second
+   non-ACL instance with a default-branch head on both files with the inspector's
+   replay (`runtime/state-inspector/reconstruct.ts`), which is a second
    implementation of the engine's rule, and compare canonical encodings. All
-   of them, not a sample: it is offline and runs in minutes, and "every head
-   identical" is the claim the operator wants to make. For the ACL document
+   of them, not a sample: "every head identical" is the claim the operator wants
+   to make. For the ACL document
    the comparison is: `value` byte-identical, and the only root member that
    differs is `compaction`, holding what the dry run said it would.
    `--verify-sample <n>` exists for a quick pass during rehearsal.
 4. `cf space fingerprint` on both files must agree. The fingerprint excludes
-   generated cells, so it is necessary rather than sufficient, and it is
-   cheap.
+   generated cells, so it is necessary rather than sufficient.
 5. **The compaction commit is recorded**: one `system` row at the seq the dry
    run named; the rows pointing at it are exactly every boundary this run
    re-attributed — materialized or already a `set` or `delete` — plus the
@@ -784,7 +788,7 @@ stopped before `cf space reset`.
 
 ### The command
 
-Two homes were considered. A `deno task` under `packages/memory` keeps the
+Two homes were considered. A `deno task` under `runtime/memory` keeps the
 tool beside the engine whose schema it rewrites, but a task needs a checkout
 and `deno` on the machine that runs it, and the host runs a built binary. A
 `cf space` subcommand is the operator's existing surface for a store file:
@@ -792,10 +796,10 @@ and `deno` on the machine that runs it, and the host runs a built binary. A
 carry the live-store rail, already serialize under `--json`, and `cf` ships as
 a single built binary that can be copied to a host. `check-command-docs` then
 requires the command be described in a live document, which is the
-`packages/cli/README.md` section this plan's stage 5 writes.
+`runtime/cli/README.md` section this plan's stage 5 writes.
 
-So: **`cf space compact`** in `packages/cli/commands/space.ts`, over a module
-`packages/memory/v2/compact.ts` exported as `./v2/compact` beside `./v2/dump`.
+So: **`cf space compact`** in `runtime/cli/commands/space.ts`, over a module
+`runtime/memory/v2/compact.ts` exported as `./v2/compact` beside `./v2/dump`.
 The module owns the algorithm and the report; it opens the store through the
 engine's `open` so the schema it sees is the one the server writes and so
 reconstruction is an engine export that returns the document at an exact
@@ -1026,7 +1030,8 @@ operator took.
 ## Stages
 
 Each stage is a pull request. Stages 1 through 5 have landed, stage 6 has
-run and closed its acceptance checks, and stage 7 onward is open. Two engine changes came first, and both have landed: the
+run and closed its acceptance checks, and stage 7 is complete on Estuary.
+Stage 8 remains open. Two engine changes came first, and both have landed: the
 base search, because it preserves history, helps the uncompacted store from
 the deploy that carries it, and is the measurement the compaction decision
 was made against; and the basis guard, because no store may be compacted
@@ -1049,7 +1054,7 @@ until the engine can tell compacted history from absence.
    the tool will transform them, red on the engine before and green after;
    an uncompacted instance's genuine absence still proves identity as
    today, and so does a basis at the boundary itself.
-3. **Dry run and report** — done ([labs#8649](https://github.com/commonfabric/labs/pull/8649)). `packages/memory/v2/compact.ts`
+3. **Dry run and report** — done ([labs#8649](https://github.com/commonfabric/labs/pull/8649)). `runtime/memory/v2/compact.ts`
    with the selection, the cut, and the report, read-only; `cf space compact
    --dry-run` over it, which refuses to run without the flag until stage 4.
    Tests: a store built with the engine, patched past the snapshot interval,
@@ -1080,7 +1085,7 @@ until the engine can tell compacted history from absence.
    compaction commits.
 5. **Documentation and the spec amendment** — done ([labs#8786](https://github.com/commonfabric/labs/pull/8786),
    merged 2026-10-13). The `cf space
-   compact` section of `packages/cli/README.md` (the command-docs gate
+   compact` section of `runtime/cli/README.md` (the command-docs gate
    requires it; landed with stage 4), the §7.1 paragraph in `02-storage.md`,
    the state inspector learning the `compaction` member (the ACL document's
    classification carries it) and the compaction commit and the hollowed
@@ -1107,8 +1112,11 @@ until the engine can tell compacted history from absence.
    board page costs the server, which the `cf` instrument understates five
    times over; that is recorded in the runbook and taken up outside this
    plan.
-7. **The production run**, by the operator, from the rehearsed flag set, with
-   the owner's agreement. Stage 1's measurement left disk as the reason:
+7. **The production run** — complete on Estuary with the owner's agreement,
+   `--documents computed: --keep-payloads 7d`, and full verification before
+   installation; see the
+   [production record](../history/topics-board-compaction-2026-10-18.md).
+   Stage 1's measurement left disk as the reason:
    22.7 GB, of which 13.6 GB is commit payloads that I6 reaches outside the
    window, and 1.2 GB revision rows that truncation removes.
 8. **Faithful replay of hollowed commits and explicit refusal of reads

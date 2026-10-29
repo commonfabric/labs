@@ -105,7 +105,7 @@ never re-reads them. The scheduler is part of the information-flow surface.
 
 **P1 — One change channel.** All invalidation flows from the storage
 notification stream: local commits (emitted synchronously at local apply,
-value-bearing — see `packages/runner/src/storage/v2.ts` `notifyOptimistic`),
+value-bearing — see `runtime/runner/src/storage/v2.ts` `notifyOptimistic`),
 remote pulls/integrations, and reverts. The scheduler never propagates changes
 through a second, in-process side channel. (v1 has both, plus watermark
 machinery to reconcile them.)
@@ -501,9 +501,14 @@ Nothing else happens at invalidation time. No transitive marking, no effect
 scheduling, no history append. A dormant node accumulates `invalid` + causes
 and sits there at zero cost (D5).
 
-Reverts need no special handling: a revert's changes transition values back,
-the comparison fires, affected readers re-invalidate, and the optimistic
-chain re-settles.
+Reverts take the channel like any other notification: a revert's changes
+transition values back, the comparison fires, affected readers re-invalidate,
+and the optimistic chain re-settles. One revert is self-suppressed for one
+reader under P5: the revert of a write the space refused for lack of a grant
+(an `AuthorizationError` carrying the server's permanent evidence) does not
+invalidate the writer whose transaction it reverts, since that writer read the
+restored value before it wrote and would recompute the refused write. Every
+other reader of the reverted document re-invalidates as usual.
 
 ### 6.2 First-run dependencies — no prefetch
 
@@ -634,10 +639,17 @@ runnable(N) = N.status ∈ {invalid, never-ran} ∧ live(N) ∧ eligible(N)
    with a bounded retry policy for transient failure classes.
 7. Under persistence, attach the observation to the transaction (§9.3).
 
-Retry counters belong to the action across registrations. A successful commit
-or a permanent or terminal refusal clears them even if its registration has
-retired; terminal refusals still reach the error channel. Waking consumers on
-success requires the committing run's registration to remain active.
+Retry counters belong to the action across registrations. A successful commit,
+a permanent or terminal refusal, or a refusal for lack of a grant (an
+`AuthorizationError` carrying the server's permanent evidence) of a write the
+replica reverted clears them even if its registration has retired; terminal
+refusals still reach the error channel. Such a grant refusal takes no attempt
+beyond the one refused, and the revert of the refused write is self-suppressed
+for its writer as P5 suppresses the writer's own commit, so the writer runs
+again when another input changes rather than against the same refusal. A grant
+refusal of a write the replica kept as a local fold takes the bounded retry,
+whose run reads the kept value. Waking consumers on success requires the
+committing run's registration to remain active.
 
 The run path refreshes live subscriptions incrementally, including during
 retry recovery, without tearing them down and recreating them. The change
@@ -709,7 +721,7 @@ event in telemetry.
 An external ingress id never enters the queue raw. The send surface binds
 the caller's `{id, session}` pair to the resolved stream link with a
 type-tagged content hash (`scopeCallerEventId`,
-`packages/runner/src/scheduler/event-identity.ts`), and the scoped result is
+`runtime/runner/src/scheduler/event-identity.ts`), and the scoped result is
 the durable delivery id. The session is required — a send naming an id
 without one is refused — because the id is the caller's own word and only
 the pair names one invocation: the same pair on the same stream is the same
@@ -718,7 +730,10 @@ another session, or on another stream, is a different one. The receipt
 address a caller can be handed is therefore a function of the pair, which is
 what makes it safe to publish before the outcome exists.
 
-Per pass, for each lane's head event:
+Per pass, for each lane's head event (and, under the serving posture, for
+each ready event behind it in turn, the handlers running back to back ahead
+of the pass's one settle, so that derivations several events invalidate run
+once; an event the gate below holds ends that run, and the settle serves it):
 
 1. **Preflight.** Compute the handler's read closure in a read-only,
    commit-as-no-op transaction (CFC-inert, as today): declared writable-input

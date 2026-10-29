@@ -1,0 +1,1473 @@
+/** Exercises CellHandle capability adaptation, including scoped resources. */
+
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
+
+import {
+  BRIDGE_READ_REFUSED,
+  type FabricBridge,
+  FabricBridgeHost,
+  IPC,
+} from "@commonfabric/iframe-sandbox";
+import {
+  connectFabric,
+  type FabricClient,
+} from "@commonfabric/iframe-sandbox/guest";
+import {
+  $conn,
+  $onCellRefused,
+  $onCellUpdate,
+  CellHandle,
+  type CellRef,
+  type PresenceRoomHandle,
+  RequestType,
+  type RuntimeClient,
+} from "@commonfabric/runtime-client";
+
+import {
+  createCellContextBridge,
+  resolveCellContextBridge,
+} from "./cell-bridge.ts";
+
+describe("cf-iframe cell bridge", () => {
+  const ref: CellRef = {
+    id: "of:context" as CellRef["id"],
+    space: "did:key:test" as CellRef["space"],
+    scope: "space",
+    path: [],
+    schema: {
+      type: "object",
+      properties: {
+        count: { type: "number", description: "Shared counter" },
+        locked: {
+          type: "string",
+          asCell: ["readonly"],
+          description: "Read-only value",
+        },
+        events: {
+          type: "object",
+          asCell: ["stream"],
+          description: "Application events",
+        },
+        database: {
+          type: "object",
+          asCell: ["sqlite"],
+          description: "Notes database",
+        },
+      },
+    },
+  };
+
+  const runtimeStub = <T extends object>(runtime: T): RuntimeClient =>
+    Object.assign(runtime, {
+      cellInstanceId: (cell: CellRef) =>
+        JSON.stringify({
+          id: cell.id,
+          path: cell.path,
+          scope: cell.scope,
+          space: cell.space,
+        }),
+    }) as unknown as RuntimeClient;
+
+  it("turns context properties into described cell capabilities", async () => {
+    const requests: unknown[] = [];
+    const runtime = runtimeStub({
+      [$conn]: () => ({
+        request: (request: { type: RequestType }) => {
+          requests.push(request);
+          if (
+            request.type === RequestType.CellGet ||
+            request.type === RequestType.CellPull
+          ) {
+            return Promise.resolve({ value: 2 });
+          }
+          if (request.type === RequestType.CellInitialize) {
+            return Promise.resolve({ value: 1 });
+          }
+          return Promise.resolve({});
+        },
+        subscribe: () => Promise.resolve(),
+        unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
+        signal: { aborted: false },
+      }),
+    });
+    const context = new CellHandle(runtime, ref, {
+      value: {
+        count: 1,
+        database: { id: "db-1" },
+      },
+    });
+
+    const bridge = createCellContextBridge(context);
+    const count = bridge.resources.count;
+    expect(count.kind).toBe("cell");
+    expect(count.description).toBe("Shared counter");
+    await expect(count.cell!.pull()).resolves.toBe(2);
+    await expect(count.cell!.initialize!(0)).resolves.toBe(1);
+    await count.cell!.set!(3);
+    expect(requests).toEqual([{
+      type: RequestType.CellPull,
+      awaitDurability: false,
+      cell: {
+        ...ref,
+        path: ["count"],
+        schema: { type: "number", description: "Shared counter" },
+      },
+    }, {
+      type: RequestType.CellInitialize,
+      cell: {
+        ...ref,
+        path: ["count"],
+        schema: { type: "number", description: "Shared counter" },
+      },
+      value: 0,
+    }, {
+      type: RequestType.CellSet,
+      cell: {
+        ...ref,
+        path: ["count"],
+        schema: { type: "number", description: "Shared counter" },
+      },
+      value: 3,
+      awaitCommit: true,
+    }]);
+  });
+
+  it("derives path sinks, resolves stable identities, and sends push intent", async () => {
+    const requests: Array<
+      { type: RequestType; cell: CellRef; values?: unknown[] }
+    > = [];
+    const subscriptions: CellRef[] = [];
+    const itemsRef: CellRef = {
+      ...ref,
+      schema: {
+        type: "object",
+        properties: {
+          items: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { title: { type: "string" } },
+            },
+          },
+        },
+      },
+    };
+    const runtime = runtimeStub({
+      [$conn]: () => ({
+        request: (
+          request: { type: RequestType; cell: CellRef; values?: unknown[] },
+        ) => {
+          requests.push(request);
+          if (request.type === RequestType.CellResolveAsCell) {
+            return Promise.resolve({
+              cell: {
+                ...request.cell,
+                id: "of:item-a",
+                path: [],
+              },
+            });
+          }
+          if (request.type === RequestType.CellPull) {
+            return Promise.resolve({ value: "A" });
+          }
+          return Promise.resolve({});
+        },
+        subscribe: (cell: CellHandle<unknown>) => {
+          subscriptions.push(cell.ref());
+          return Promise.resolve();
+        },
+        unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
+        signal: { aborted: false },
+      }),
+    });
+    const context = new CellHandle(runtime, itemsRef, {
+      value: {
+        items: [{ title: "A" }],
+      },
+    });
+    const items = createCellContextBridge(context).resources.items.cell!;
+
+    const positionalTitle = items.key!(0).key!("title");
+    const cancel = positionalTitle.sink!(() => {}, () => {});
+    expect(subscriptions.at(-1)?.path).toEqual(["items", "0", "title"]);
+    cancel();
+
+    const stable = await items.key!(0).resolve!();
+    expect(stable.identity).toMatchObject({
+      id: "of:item-a",
+      instanceId: JSON.stringify({
+        id: "of:item-a",
+        path: [],
+        scope: "space",
+        space: "did:key:test",
+      }),
+      scope: "space",
+      path: [],
+    });
+    await expect(stable.key!("title").pull()).resolves.toBe("A");
+    await items.push!([{ title: "B" }]);
+
+    expect(
+      requests.find(({ type }) => type === RequestType.CellPull)?.cell,
+    ).toMatchObject({ id: "of:item-a", path: ["title"] });
+    expect(
+      requests.find(({ type }) => type === RequestType.CellPush),
+    ).toMatchObject({
+      cell: { id: "of:context", path: ["items"] },
+      values: [{ title: "B" }],
+    });
+  });
+
+  it("subscribes a keyed path of a resource with the resource's schema for the worker to narrow", () => {
+    const subscriptions: CellRef[] = [];
+    const stateSchema = {
+      type: "object",
+      properties: {
+        shapes: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: { x: { type: "number" }, y: { type: "number" } },
+          },
+        },
+      },
+    } as const;
+    const runtime = runtimeStub({
+      [$conn]: () => ({
+        request: () => Promise.resolve({}),
+        subscribe: (cell: CellHandle<unknown>) => {
+          subscriptions.push(cell.ref());
+          return Promise.resolve();
+        },
+        unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
+        signal: { aborted: false },
+      }),
+    });
+    const context = new CellHandle(runtime, {
+      ...ref,
+      schema: {
+        type: "object",
+        properties: { state: stateSchema },
+      },
+    }, { value: { state: { shapes: [] } } });
+    const state = createCellContextBridge(context).resources.state.cell!;
+
+    const cancel = state.key!("shapes").sink!(() => {}, () => {});
+    cancel();
+
+    expect(subscriptions.at(-1)).toMatchObject({
+      path: ["state", "shapes"],
+      keyedFrom: { depth: 1, schema: stateSchema },
+    });
+  });
+
+  it("adapts plain object properties without a runtime connection", async () => {
+    const runtime = runtimeStub({
+      [$conn]: () => ({
+        request: () => Promise.reject(new Error("request should not be used")),
+        subscribe: () => Promise.resolve(),
+        unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
+        signal: { aborted: false },
+      }),
+    });
+    const linked = new CellHandle(runtime, ref);
+    const marker = new Date(0);
+    const inherited = { hidden: "prototype" };
+    const record = Object.assign(Object.create(inherited), {
+      visible: "own",
+    }) as Record<string, unknown>;
+    const context = {
+      count: 1,
+      nested: { linked },
+      marker,
+      record,
+    };
+
+    const bridge = createCellContextBridge(context);
+
+    expect(Object.keys(bridge.resources)).toEqual([
+      "count",
+      "nested",
+      "marker",
+      "record",
+    ]);
+    expect(bridge.resources.nested.cell!.get()).toEqual({
+      linked: linked.toJSON(),
+    });
+    expect(bridge.resources.marker.cell!.get()).toBe(marker);
+    await bridge.resources.count.cell!.set!(2);
+    expect(context.count).toBe(2);
+    const hidden = bridge.resources.record.cell!.key!("hidden");
+    expect(await hidden.pull()).toBeUndefined();
+    await hidden.set!("own");
+    expect(record.hidden).toBe("own");
+    expect(inherited.hidden).toBe("prototype");
+  });
+
+  it("discovers context properties that materialize after bridge creation", async () => {
+    const requests: unknown[] = [];
+    const runtime = runtimeStub({
+      [$conn]: () => ({
+        request: (request: { type: RequestType }) => {
+          requests.push(request);
+          return Promise.resolve({});
+        },
+        subscribe: () => Promise.resolve(),
+        unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
+        signal: { aborted: false },
+      }),
+    });
+    const lateRef: CellRef = {
+      ...ref,
+      schema: { type: "object" },
+    };
+    const context = new CellHandle<Record<string, unknown>>(
+      runtime,
+      lateRef,
+      { value: {} },
+    );
+    const bridge = createCellContextBridge(context);
+
+    expect(Object.keys(bridge.resources)).toEqual([]);
+    await context.setStrict({ command: "" });
+    context[$onCellUpdate]({ command: "" });
+
+    expect(Object.keys(bridge.resources)).toEqual(["command"]);
+    expect(bridge.resources.missing).toBeUndefined();
+    expect(bridge.resources.constructor).toBeUndefined();
+    expect(bridge.resources.__proto__).toBeUndefined();
+    expect(
+      Object.getOwnPropertyDescriptor(
+        bridge.resources,
+        Symbol.iterator,
+      ),
+    ).toBeUndefined();
+    const command = bridge.resources.command;
+    expect(command.kind).toBe("cell");
+    await command.cell!.set!("next");
+    const write = requests.at(-1) as {
+      type: RequestType;
+      cell: CellRef;
+      value: unknown;
+    };
+    expect(write.type).toBe(RequestType.CellSet);
+    expect(write.cell.path).toEqual(["command"]);
+    expect(write.value).toBe("next");
+  });
+
+  it("resolves sparse scoped aliases before exposing resources", async () => {
+    const requests: Array<{ type: RequestType; cell: CellRef }> = [];
+    const resolved = {
+      command: {
+        scope: "session" as const,
+        schema: { type: "string" },
+      },
+      database: {
+        scope: "space" as const,
+        schema: { type: "object", properties: {} },
+      },
+    };
+    const databaseSchema = { $ref: "cid:fid1:sqlite-schema" };
+    let idleCalls = 0;
+    const runtime = runtimeStub({
+      idle: () => {
+        idleCalls++;
+        return Promise.resolve();
+      },
+      [$conn]: () => ({
+        request: (request: { type: RequestType; cell: CellRef }) => {
+          requests.push(request);
+          if (request.type === RequestType.CellGet) {
+            if (request.cell.id === "of:database") {
+              return Promise.resolve({
+                value: {
+                  id: "fid1:database",
+                  tables: { notes: { type: "object" } },
+                  scope: "space",
+                },
+              });
+            }
+            return Promise.resolve({
+              value: {
+                command: undefined,
+                database: {
+                  id: "fid1:database",
+                  tables: { notes: { type: "object" } },
+                  scope: "space",
+                },
+              },
+            });
+          }
+          if (request.type === RequestType.CellPull) {
+            return Promise.resolve({
+              value: request.cell.path[0] === "database" ||
+                  request.cell.id === "of:database"
+                ? {
+                  id: "fid1:database",
+                  tables: { notes: { type: "object" } },
+                  scope: "space",
+                }
+                : undefined,
+            });
+          }
+          if (request.type === RequestType.SqliteQuery) {
+            return Promise.resolve({ rows: [] });
+          }
+          if (request.type === RequestType.CellResolveAsCell) {
+            if (request.cell.path.length === 0) {
+              return Promise.resolve({
+                cell: {
+                  ...request.cell,
+                  id: "of:resolved-context",
+                  schema: {
+                    type: "object",
+                    properties: {
+                      command: resolved.command.schema,
+                      database: databaseSchema,
+                    },
+                  },
+                },
+              });
+            }
+            const name = request.cell.path[0] as keyof typeof resolved;
+            return Promise.resolve({
+              cell: {
+                ...request.cell,
+                id: `of:${name}`,
+                scope: resolved[name].scope,
+                path: [],
+                schema: resolved[name].schema,
+              },
+            });
+          }
+          return Promise.resolve({});
+        },
+        subscribe: () => Promise.resolve(),
+        unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
+        signal: { aborted: false },
+      }),
+    });
+    const context = new CellHandle<Record<string, unknown>>(runtime, {
+      ...ref,
+      schema: true,
+    });
+
+    const bridge = await resolveCellContextBridge(context, {
+      database: "sqlite",
+    });
+
+    expect(Object.keys(bridge.resources)).toEqual(["command", "database"]);
+    expect(bridge.resources.command.kind).toBe("cell");
+    expect(bridge.resources.database.kind).toBe("sqlite");
+    await expect(
+      bridge.resources.database.methods!.query({ sql: "SELECT 1" }),
+    ).resolves.toEqual({ rows: [] });
+    expect(idleCalls).toBe(0);
+    expect(
+      requests.filter(({ type }) => type === RequestType.CellPull).map(
+        ({ cell }) => cell.path,
+      ),
+    ).toEqual([[], [], ["database"], ["database"]]);
+    expect(
+      requests.filter(({ type, cell }) =>
+        type === RequestType.CellResolveAsCell && cell.path.length > 0
+      ).map(({ cell }) => ({
+        path: cell.path,
+        scope: cell.scope,
+        schema: cell.schema,
+      })),
+    ).toEqual([
+      { path: ["command"], scope: "space", schema: undefined },
+      {
+        path: ["database"],
+        scope: "space",
+        schema: undefined,
+      },
+      {
+        path: ["database"],
+        scope: "space",
+        schema: undefined,
+      },
+    ]);
+  });
+
+  it("holds lazy scoped SQLite demand through backend readiness", async () => {
+    const subscriptions: CellRef[] = [];
+    const idle = Promise.withResolvers<void>();
+    const reachedIdle = Promise.withResolvers<void>();
+    const databaseValue = {
+      id: "fid1:user-database",
+      scope: "user",
+      owner: "did:key:user",
+      tables: {},
+    };
+    let materialized = false;
+    let retargeted = false;
+    let sqliteQueries = 0;
+    let demandedSource: CellHandle<unknown> | undefined;
+    const runtime = runtimeStub({
+      idle: () => {
+        reachedIdle.resolve();
+        return idle.promise;
+      },
+      [$conn]: () => ({
+        request: async (request: { type: RequestType; cell: CellRef }) => {
+          if (request.type === RequestType.CellGet) {
+            return Promise.resolve({
+              value: request.cell.id === "of:user-database" && materialized
+                ? databaseValue
+                : { database: undefined },
+            });
+          }
+          if (request.type === RequestType.CellPull) {
+            if (request.cell.path[0] === "database" && !materialized) {
+              reachedIdle.resolve();
+              await idle.promise;
+            }
+            return {
+              value: request.cell.id === "of:user-database" && materialized
+                ? databaseValue
+                : undefined,
+            };
+          }
+          if (request.type === RequestType.CellResolveAsCell) {
+            return Promise.resolve({
+              cell: request.cell.path.length === 0
+                ? {
+                  ...request.cell,
+                  id: "of:resolved-context",
+                  schema: {
+                    type: "object",
+                    properties: {
+                      database: { type: "object", properties: {} },
+                    },
+                  },
+                }
+                : {
+                  ...request.cell,
+                  id: retargeted
+                    ? "of:other-user-database"
+                    : "of:user-database",
+                  scope: "user",
+                  path: [],
+                  schema: { type: "object", properties: {} },
+                },
+            });
+          }
+          if (request.type === RequestType.SqliteQuery) {
+            sqliteQueries++;
+            if (!demandedSource) {
+              return Promise.reject(
+                new TypeError("SQLite source demand ended before the query."),
+              );
+            }
+            if (!materialized) {
+              return Promise.reject(
+                new TypeError(
+                  "SQLite query ran before its authority was ready.",
+                ),
+              );
+            }
+            return Promise.resolve({ rows: [] });
+          }
+          return Promise.resolve({});
+        },
+        subscribe: (cell: CellHandle<unknown>) => {
+          subscriptions.push(cell.ref());
+          if (cell.ref().path[0] === "database") {
+            demandedSource = cell;
+          }
+          return Promise.resolve();
+        },
+        unsubscribe: (cell: CellHandle<unknown>) => {
+          if (demandedSource === cell) demandedSource = undefined;
+          return Promise.resolve();
+        },
+        peersOf: () => [],
+        signal: { aborted: false },
+      }),
+    });
+    const context = new CellHandle<Record<string, unknown>>(runtime, {
+      ...ref,
+      schema: true,
+    });
+
+    const resolving = resolveCellContextBridge(context, {
+      database: "sqlite",
+    });
+    await reachedIdle.promise;
+    expect(sqliteQueries).toBe(0);
+    materialized = true;
+    idle.resolve();
+    const bridge = await resolving;
+    await expect(
+      bridge.resources.database.methods!.query({ sql: "SELECT 1" }),
+    ).resolves.toEqual({ rows: [] });
+    expect(materialized).toBe(true);
+    expect(demandedSource).toBeUndefined();
+    expect(subscriptions.map(({ path }) => path)).toContainEqual(["database"]);
+    expect(
+      subscriptions.find(({ path }) => path[0] === "database")?.schema,
+    ).toEqual({ asCell: ["sqlite"] });
+    retargeted = true;
+    await expect(
+      bridge.resources.database.methods!.query({ sql: "SELECT 2" }),
+    ).rejects.toThrow("resolved outside its granted capability");
+    expect(sqliteQueries).toBe(1);
+  });
+
+  it("ignores inherited resource-kind hints", async () => {
+    const requests: Array<{ type: RequestType; cell: CellRef }> = [];
+    const runtime = runtimeStub({
+      [$conn]: () => ({
+        request: (request: { type: RequestType; cell: CellRef }) => {
+          requests.push(request);
+          if (request.type === RequestType.CellGet) {
+            return Promise.resolve({ value: { database: "ordinary" } });
+          }
+          if (request.type === RequestType.CellResolveAsCell) {
+            return Promise.resolve({
+              cell: {
+                ...request.cell,
+                id: request.cell.path.length === 0
+                  ? "of:resolved-context"
+                  : "of:database",
+                path: [],
+                schema: request.cell.path.length === 0
+                  ? { type: "object", properties: { database: true } }
+                  : true,
+              },
+            });
+          }
+          return Promise.resolve({});
+        },
+        subscribe: () => Promise.resolve(),
+        unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
+        signal: { aborted: false },
+      }),
+    });
+    const context = new CellHandle<Record<string, unknown>>(runtime, {
+      ...ref,
+      schema: true,
+    });
+    const inheritedHints = Object.create({ database: "sqlite" }) as Record<
+      string,
+      "sqlite"
+    >;
+
+    const bridge = await resolveCellContextBridge(context, inheritedHints);
+
+    expect(bridge.resources.database.kind).toBe("cell");
+    expect(bridge.resources.database.methods).toBeUndefined();
+    expect(
+      requests.some(({ type, cell }) =>
+        type === RequestType.CellPull && cell.path.length > 0
+      ),
+    ).toBe(false);
+  });
+
+  describe("a context name of kind `presence`", () => {
+    // The context holds one field, `cursors`, which resolves to the cell
+    // `of:canvas`. `join` stands in for the runtime's presence rooms.
+    const presenceContext = (
+      join: (cell: CellHandle<unknown>) => Promise<PresenceRoomHandle>,
+    ): CellHandle<Record<string, unknown>> => {
+      const runtime = runtimeStub({
+        joinPresenceRoom: join,
+        [$conn]: () => ({
+          request: (request: { type: RequestType; cell: CellRef }) => {
+            if (request.type === RequestType.CellGet) {
+              return Promise.resolve({ value: { cursors: { shapes: [] } } });
+            }
+            if (request.type === RequestType.CellResolveAsCell) {
+              return Promise.resolve({
+                cell: {
+                  ...request.cell,
+                  id: request.cell.path.length === 0
+                    ? "of:resolved-context"
+                    : "of:canvas",
+                  path: [],
+                  schema: request.cell.path.length === 0
+                    ? { type: "object", properties: { cursors: true } }
+                    : true,
+                },
+              });
+            }
+            return Promise.resolve({});
+          },
+          subscribe: () => Promise.resolve(),
+          unsubscribe: () => Promise.resolve(),
+          peersOf: () => [],
+          signal: { aborted: false },
+        }),
+      });
+      return new CellHandle<Record<string, unknown>>(runtime, {
+        ...ref,
+        schema: true,
+      });
+    };
+
+    const room = (
+      overrides: Partial<PresenceRoomHandle> = {},
+    ): PresenceRoomHandle => ({
+      participantId: "self",
+      room: "room",
+      participants: [],
+      setName: () => {},
+      setFacet: () => {},
+      clearFacet: () => {},
+      setFocused: () => {},
+      subscribe: () => () => {},
+      leave: () => Promise.resolve(),
+      ...overrides,
+    });
+
+    it("grants the room of the resolved cell's field, and none of the cell's data", async () => {
+      const joined: CellRef[] = [];
+      const published: unknown[][] = [];
+      const context = presenceContext((cell) => {
+        joined.push(cell.ref());
+        return Promise.resolve(room({
+          participants: [{
+            participantId: "ada",
+            principal: "did:key:ada",
+            revision: 3,
+            name: "Ada",
+            facets: { pointer: { x: 1, y: 2 } },
+          }],
+          setName: (name) => void published.push(["setName", name]),
+          setFacet: (facet, value) =>
+            void published.push(["setFacet", facet, value]),
+        }));
+      });
+
+      const bridge = await resolveCellContextBridge(context, {
+        cursors: "presence",
+      });
+      const cursors = bridge.resources.cursors;
+      expect(cursors.kind).toBe("presence");
+      expect(cursors.cell).toBeUndefined();
+      expect(joined).toEqual([]);
+
+      const snapshot = Promise.withResolvers<unknown>();
+      const cancel = cursors.sink!(
+        (value) => snapshot.resolve(value),
+        () => {},
+      );
+      await expect(snapshot.promise).resolves.toEqual({
+        kind: "snapshot",
+        participantId: "self",
+        participants: [{
+          participantId: "ada",
+          name: "Ada",
+          facets: { pointer: { x: 1, y: 2 } },
+        }],
+      });
+      expect(joined.map(({ id, path }) => ({ id, path }))).toEqual([
+        { id: "of:canvas", path: [] },
+      ]);
+
+      cursors.methods!.setName("Grace");
+      cursors.methods!.setFacet({ facet: "pointer", value: { x: 3, y: 4 } });
+      expect(published).toEqual([
+        ["setName", "Grace"],
+        ["setFacet", "pointer", { x: 3, y: 4 }],
+      ]);
+      cancel();
+    });
+
+    it("grants a cell, not a room, for a schema that declares `presence` with no kind given", () => {
+      let joins = 0;
+      const runtime = runtimeStub({
+        joinPresenceRoom: () => {
+          joins++;
+          return Promise.reject(new Error("unreachable"));
+        },
+        [$conn]: () => ({
+          request: () => Promise.resolve({}),
+          subscribe: () => Promise.resolve(),
+          unsubscribe: () => Promise.resolve(),
+          peersOf: () => [],
+          signal: { aborted: false },
+        }),
+      });
+      // A stored schema is data, and nothing holds one to the cell kinds the
+      // builder's types allow.
+      const stored: unknown = {
+        type: "object",
+        properties: {
+          cursors: { type: "object", asCell: ["presence"] },
+        },
+      };
+      const context = new CellHandle<Record<string, unknown>>(runtime, {
+        ...ref,
+        schema: stored as CellRef["schema"],
+      }, { value: { cursors: {} } });
+
+      const cursors = createCellContextBridge(context).resources.cursors;
+
+      expect(cursors.kind).toBe("cell");
+      expect(cursors.sink).toBeUndefined();
+      expect(joins).toBe(0);
+    });
+
+    it("tells a guest a relay's refusal in the relay's words, and any other failure by category alone", async () => {
+      const failures = [
+        [
+          Object.assign(new Error("Presence record exceeds 8192 bytes"), {
+            name: "PresenceError",
+          }),
+          {
+            code: "presence-refused",
+            message: "Presence record exceeds 8192 bytes",
+          },
+        ],
+        [
+          Object.assign(new Error("memory server does not support presence"), {
+            name: "ProtocolError",
+          }),
+          {
+            code: "presence-unsupported",
+            message: "The host has no presence relay to join.",
+          },
+        ],
+        [
+          new Error("memory session did:key:secret closed"),
+          {
+            code: "presence-disconnected",
+            message: "The host lost the presence room.",
+          },
+        ],
+      ] as const;
+
+      for (const [cause, told] of failures) {
+        const context = presenceContext(() => Promise.reject(cause));
+        const bridge = await resolveCellContextBridge(context, {
+          cursors: "presence",
+        });
+        const failed = Promise.withResolvers<unknown>();
+        const cancel = bridge.resources.cursors.sink!(
+          () => {},
+          (error) => failed.resolve(error),
+        );
+        await expect(failed.promise).resolves.toEqual(told);
+        cancel();
+      }
+    });
+  });
+
+  it("reports a cell write the runtime refuses", async () => {
+    const runtime = runtimeStub({
+      [$conn]: () => ({
+        request: () => Promise.reject(new Error("write refused")),
+        subscribe: () => Promise.resolve(),
+        unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
+        signal: { aborted: false },
+      }),
+    });
+    const context = new CellHandle(runtime, ref, {
+      value: {
+        count: 1,
+        database: { id: "db-1" },
+      },
+    });
+
+    const count = createCellContextBridge(context).resources.count;
+
+    await expect(count.cell!.set!(3)).rejects.toThrow("write refused");
+  });
+
+  it("omits writes from read-only cell capabilities", async () => {
+    const runtime = runtimeStub({
+      [$conn]: () => ({
+        request: (request: { type: RequestType }) =>
+          request.type === RequestType.CellPull
+            ? Promise.resolve({ value: "fixed" })
+            : Promise.resolve({}),
+        subscribe: () => Promise.resolve(),
+        unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
+        signal: { aborted: false },
+      }),
+    });
+    const context = new CellHandle(runtime, ref, {
+      value: { locked: "fixed" },
+    });
+
+    const locked = createCellContextBridge(context).resources.locked;
+
+    expect(locked.kind).toBe("cell");
+    expect(locked.description).toBe("Read-only value");
+    await expect(locked.cell!.pull()).resolves.toBe("fixed");
+    expect(locked.cell!.set).toBeUndefined();
+  });
+
+  it("sinks the current value synchronously before later changes", () => {
+    let subscribed: CellHandle<number> | undefined;
+    const runtime = runtimeStub({
+      [$conn]: () => ({
+        request: () => Promise.resolve({}),
+        subscribe: (cell: CellHandle<number>) => {
+          subscribed = cell;
+          return Promise.resolve();
+        },
+        unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
+        signal: { aborted: false },
+      }),
+    });
+    const context = new CellHandle(runtime, ref, {
+      value: {
+        count: 1,
+        database: { id: "db-1" },
+      },
+    });
+    const count = createCellContextBridge(context).resources.count;
+    const changes: unknown[] = [];
+
+    const unsubscribe = count.cell!.sink!(
+      (value) => changes.push(value),
+      () => {},
+    );
+    subscribed?.[$onCellUpdate](2);
+
+    expect(changes).toEqual([1, 2]);
+    unsubscribe();
+  });
+
+  describe("a read the worker refuses", () => {
+    // A guest is told of a refused read with an error of its own code, never
+    // handed an empty value: one that read the refusal as empty would show
+    // nothing for a cell that holds something, or initialize over it.
+    const refusal = { refusedBy: "display-ceiling" } as const;
+
+    /** A runtime that answers every read with a refusal, keeping requests. */
+    const refusing = () => {
+      let subscribed: CellHandle<unknown> | undefined;
+      const requests: { type: RequestType }[] = [];
+      const runtime = runtimeStub({
+        [$conn]: () => ({
+          request: (request: { type: RequestType }) => {
+            requests.push(request);
+            return Promise.resolve({ refused: refusal });
+          },
+          subscribe: (cell: CellHandle<unknown>) => {
+            subscribed = cell;
+            return Promise.resolve();
+          },
+          unsubscribe: () => Promise.resolve(),
+          peersOf: () => [],
+          signal: { aborted: false },
+        }),
+      });
+      return { runtime, requests, subscribed: () => subscribed };
+    };
+
+    it("tells a sink of a refusal as a failure, and hands it no value", () => {
+      const { runtime, subscribed } = refusing();
+      const context = new CellHandle(runtime, ref, { value: { count: 1 } });
+      const count = createCellContextBridge(context).resources.count;
+      const values: unknown[] = [];
+      const failures: { code: string }[] = [];
+
+      const cancel = count.cell!.sink!(
+        (value) => values.push(value),
+        (error) => failures.push(error),
+      );
+      const before = values.length;
+      subscribed()?.[$onCellRefused](refusal);
+
+      expect(values.length).toBe(before);
+      expect(failures).toEqual([
+        expect.objectContaining({ code: BRIDGE_READ_REFUSED }),
+      ]);
+      cancel();
+    });
+
+    for (const operation of ["pull", "initialize", "set", "push"] as const) {
+      it(`rejects a guest's \`${operation}()\` with the refusal's own code`, async () => {
+        const { runtime, requests } = refusing();
+        const context = new CellHandle(runtime, ref, { value: { count: 1 } });
+        const count = createCellContextBridge(context).resources.count.cell!;
+        if (operation === "set" || operation === "push") {
+          // A read refused first, as a guest learns it before it writes.
+          await expect(count.pull()).rejects.toMatchObject({
+            code: BRIDGE_READ_REFUSED,
+          });
+          requests.length = 0;
+        }
+
+        const attempt = operation === "pull"
+          ? count.pull()
+          : operation === "initialize"
+          ? count.initialize!(0)
+          : operation === "set"
+          ? count.set!(2)
+          : count.push!([2]);
+
+        await expect(attempt).rejects.toMatchObject({
+          code: BRIDGE_READ_REFUSED,
+        });
+        if (operation === "set" || operation === "push") {
+          expect(requests).toEqual([]);
+        }
+      });
+    }
+
+    it("resolves a refused context to the resources its schema declares", async () => {
+      const runtime = runtimeStub({
+        [$conn]: () => ({
+          request: (request: { type: RequestType; cell: CellRef }) =>
+            Promise.resolve(
+              request.type === RequestType.CellResolveAsCell
+                ? { cell: request.cell }
+                : { refused: refusal },
+            ),
+          subscribe: () => Promise.resolve(),
+          unsubscribe: () => Promise.resolve(),
+          peersOf: () => [],
+          signal: { aborted: false },
+        }),
+      });
+      const context = new CellHandle<Record<string, unknown>>(runtime, ref);
+
+      const bridge = await resolveCellContextBridge(context, {
+        database: "cell",
+      });
+
+      expect(Object.keys(bridge.resources).sort()).toEqual(
+        ["count", "database", "events", "locked"],
+      );
+    });
+
+    it("resolves a refused context with an interned schema to the fields the worker lists", async () => {
+      const interned: CellRef = {
+        ...ref,
+        schema: { $ref: "cid:fid1:interned-context-schema" },
+      };
+      const listed = (name: string): CellRef => ({
+        id: ref.id,
+        space: ref.space,
+        scope: ref.scope,
+        path: [name],
+      });
+      const runtime = runtimeStub({
+        [$conn]: () => ({
+          request: (request: { type: RequestType; cell: CellRef }) =>
+            Promise.resolve(
+              request.type === RequestType.CellResolveAsCell
+                ? { cell: request.cell }
+                : request.type === RequestType.CellFields
+                ? { fields: { notes: listed("notes"), count: listed("count") } }
+                : { refused: refusal },
+            ),
+          subscribe: () => Promise.resolve(),
+          unsubscribe: () => Promise.resolve(),
+          peersOf: () => [],
+          signal: { aborted: false },
+        }),
+      });
+      const context = new CellHandle<Record<string, unknown>>(
+        runtime,
+        interned,
+      );
+
+      const bridge = await resolveCellContextBridge(context);
+
+      expect(Object.keys(bridge.resources).sort()).toEqual(["count", "notes"]);
+    });
+
+    /**
+     * Serves `bridge` to a guest, as `cf-iframe` does, and runs `use` with the
+     * guest's client.
+     */
+    const asGuest = async (
+      bridge: FabricBridge,
+      use: (client: FabricClient) => Promise<void>,
+    ) => {
+      const channel = new MessageChannel();
+      const host = new FabricBridgeHost(bridge, channel.port1);
+      const client = connectFabric();
+      globalThis.dispatchEvent(
+        new MessageEvent("message", {
+          data: IPC.GUEST_PORT_HANDOFF,
+          ports: [channel.port2],
+        }),
+      );
+      try {
+        await use(client);
+      } finally {
+        client.disconnect();
+        host.disconnect();
+      }
+    };
+
+    for (const reached of ["by name", "resolved"] as const) {
+      for (const answer of ["admitted", "refused"] as const) {
+        it(`computes no write from a field of a refused context, reached ${reached}, until the worker answers its read, which it ${answer}`, async () => {
+          // The field's handle has read nothing: its context's refusal says
+          // nothing of the field. Before, the guest was handed that nothing
+          // as a value, and an increment of it wrote 1.
+          const writes: unknown[] = [];
+          const asked = Promise.withResolvers<RequestType>();
+          const pulled = Promise.withResolvers<unknown>();
+          const runtime = runtimeStub({
+            [$conn]: () => ({
+              request: (request: {
+                type: RequestType;
+                cell: CellRef;
+                value?: unknown;
+              }) => {
+                if (request.type === RequestType.CellResolveAsCell) {
+                  return Promise.resolve({ cell: request.cell });
+                }
+                asked.resolve(request.type);
+                if (request.type === RequestType.CellSet) {
+                  writes.push(request.value);
+                  return Promise.resolve({});
+                }
+                return pulled.promise;
+              },
+              subscribe: () => Promise.resolve(),
+              unsubscribe: () => Promise.resolve(),
+              peersOf: () => [],
+              signal: { aborted: false },
+            }),
+          });
+          const context = new CellHandle<Record<string, unknown>>(runtime, ref);
+          context[$onCellRefused](refusal);
+
+          await asGuest(createCellContextBridge(context), async (client) => {
+            const named = client.cell<number | undefined>("count");
+            const count = reached === "by name" ? named : await named.resolve();
+            const stop = count.sink(() => {});
+            // Behind the sink's opening, so anything it delivers has arrived.
+            await client.describe();
+
+            const updated = count.update((current) => (current ?? 0) + 1);
+
+            // The worker is asked for the field's value before anything is
+            // written, and nothing is written while it has not answered.
+            expect(await asked.promise).toBe(RequestType.CellPull);
+            expect(writes).toEqual([]);
+
+            pulled.resolve(
+              answer === "admitted" ? { value: 4 } : { refused: refusal },
+            );
+            if (answer === "admitted") {
+              await updated;
+              expect(writes).toEqual([5]);
+            } else {
+              await expect(updated).rejects.toMatchObject({
+                code: BRIDGE_READ_REFUSED,
+              });
+              expect(writes).toEqual([]);
+            }
+            stop();
+          });
+        });
+      }
+    }
+
+    for (const built of ["named", "resolved"] as const) {
+      it(`refuses a guest's write through a path whose read was refused, in a ${built} context`, async () => {
+        const requests: { type: RequestType }[] = [];
+        const runtime = runtimeStub({
+          [$conn]: () => ({
+            request: (request: { type: RequestType; cell: CellRef }) => {
+              requests.push(request);
+              return Promise.resolve(
+                request.type === RequestType.CellResolveAsCell
+                  ? { cell: request.cell }
+                  : { refused: refusal },
+              );
+            },
+            subscribe: () => Promise.resolve(),
+            unsubscribe: () => Promise.resolve(),
+            peersOf: () => [],
+            signal: { aborted: false },
+          }),
+        });
+        const context = new CellHandle<Record<string, unknown>>(runtime, ref);
+        const bridge = built === "named"
+          ? createCellContextBridge(context)
+          : await resolveCellContextBridge(context, { database: "cell" });
+
+        await asGuest(bridge, async (client) => {
+          const detail = client.cell<Record<string, unknown>>("count").key(
+            "detail",
+          );
+          await expect(detail.pull()).rejects.toMatchObject({
+            code: BRIDGE_READ_REFUSED,
+          });
+          requests.length = 0;
+
+          await expect(detail.set("written blind")).rejects.toMatchObject({
+            code: BRIDGE_READ_REFUSED,
+          });
+          expect(requests).toEqual([]);
+        });
+      });
+    }
+
+    it("refuses a guest's write through a refused path when a refusal of the context changes the cell that answers for it", async () => {
+      const writes: CellRef[] = [];
+      const runtime = runtimeStub({
+        [$conn]: () => ({
+          request: (request: { type: RequestType; cell: CellRef }) => {
+            if (request.type === RequestType.CellSet) {
+              writes.push(request.cell);
+              return Promise.resolve({});
+            }
+            return Promise.resolve({ refused: refusal });
+          },
+          subscribe: () => Promise.resolve(),
+          unsubscribe: () => Promise.resolve(),
+          peersOf: () => [],
+          signal: { aborted: false },
+        }),
+      });
+      const context = new CellHandle<Record<string, unknown>>(runtime, ref);
+      // While the context is admitted, `count`, which its schema declares,
+      // is the cell the link it holds names.
+      context[$onCellUpdate]({
+        count: {
+          "/": {
+            "link@1": {
+              id: "of:counter",
+              space: ref.space,
+              scope: "space",
+              path: [],
+            },
+          },
+        },
+      });
+      const bridge = createCellContextBridge(context);
+
+      await asGuest(bridge, async (client) => {
+        const detail = client.cell<Record<string, unknown>>("count").key(
+          "detail",
+        );
+        await expect(detail.pull()).rejects.toMatchObject({
+          code: BRIDGE_READ_REFUSED,
+        });
+
+        // One rise of a label refuses the context too, so `count` is now
+        // reached through the context rather than through its link: another
+        // handle, which has read nothing.
+        context[$onCellRefused](refusal);
+
+        await expect(detail.set("written blind")).rejects.toMatchObject({
+          code: BRIDGE_READ_REFUSED,
+        });
+        expect(writes).toEqual([]);
+      });
+    });
+
+    it("names the resources a refused context's schema declares", () => {
+      const { runtime } = refusing();
+      const context = new CellHandle<Record<string, unknown>>(runtime, ref);
+
+      const bridge = createCellContextBridge(context);
+
+      expect(Object.keys(bridge.resources).sort()).toEqual(
+        ["count", "database", "events", "locked"],
+      );
+    });
+  });
+
+  it("sends a stream event that waits for the handler's run", async () => {
+    const requests: unknown[] = [];
+    const runtime = runtimeStub({
+      [$conn]: () => ({
+        request: (request: unknown) => {
+          requests.push(request);
+          return Promise.resolve({});
+        },
+        subscribe: () => Promise.resolve(),
+        unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
+        signal: { aborted: false },
+      }),
+    });
+    const context = new CellHandle(runtime, ref, {
+      value: {
+        count: 1,
+        database: { id: "db-1" },
+      },
+    });
+
+    const events = createCellContextBridge(context).resources.events;
+    await events.methods!.send({ type: "refresh" });
+
+    expect(requests).toEqual([{
+      type: RequestType.CellSend,
+      cell: {
+        ...ref,
+        path: ["events"],
+        schema: {
+          type: "object",
+          asCell: ["stream"],
+          description: "Application events",
+        },
+      },
+      event: { type: "refresh" },
+      awaitCommit: true,
+      awaitHandling: true,
+    }]);
+  });
+
+  it("reports a stream event the runtime refuses", async () => {
+    const runtime = runtimeStub({
+      [$conn]: () => ({
+        request: () => Promise.reject(new Error("event refused")),
+        subscribe: () => Promise.resolve(),
+        unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
+        signal: { aborted: false },
+      }),
+    });
+    const context = new CellHandle(runtime, ref, {
+      value: {
+        count: 1,
+        database: { id: "db-1" },
+      },
+    });
+
+    const events = createCellContextBridge(context).resources.events;
+
+    await expect(events.methods!.send({ type: "refresh" })).rejects.toThrow(
+      "event refused",
+    );
+  });
+
+  it("exposes SQLite query and exec as methods on one database resource", async () => {
+    const requests: unknown[] = [];
+    let subscribed: CellHandle<Record<string, unknown>> | undefined;
+    const runtime = runtimeStub({
+      [$conn]: () => ({
+        request: (request: { type: RequestType }) => {
+          requests.push(request);
+          if (request.type === RequestType.SqliteQuery) {
+            return Promise.resolve({
+              rows: [Object.fromEntries([
+                ["title", "One"],
+                ["constructor", "safe-constructor"],
+                ["__proto__", "safe-prototype"],
+              ])],
+            });
+          }
+          return Promise.resolve({});
+        },
+        subscribe: (cell: CellHandle<Record<string, unknown>>) => {
+          subscribed = cell;
+          return Promise.resolve();
+        },
+        unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
+        signal: { aborted: false },
+      }),
+    });
+    const context = new CellHandle(runtime, ref, {
+      value: {
+        count: 1,
+        database: { id: "db-1" },
+      },
+    });
+
+    const database = createCellContextBridge(context).resources.database;
+    expect(database.kind).toBe("sqlite");
+    let invalidations = 0;
+    const unsubscribe = database.sink!(() => invalidations++, () => {});
+    expect(subscribed?.ref().schema).toEqual({
+      type: "object",
+      additionalProperties: true,
+    });
+    subscribed?.[$onCellUpdate]({ id: "db-1", rev: 1 });
+    expect(invalidations).toBe(1);
+    unsubscribe();
+    await expect(database.methods!.query({
+      sql: "SELECT title FROM notes WHERE id = ?",
+      params: [1],
+    })).resolves.toEqual({
+      rows: [[
+        ["title", "One"],
+        ["constructor", "safe-constructor"],
+        ["__proto__", "safe-prototype"],
+      ]],
+    });
+    await database.methods!.exec({
+      sql: "SELECT :constructor, :__proto__",
+      namedParams: [["constructor", "New"], ["__proto__", "Prototype"]],
+    });
+
+    const databaseRef = {
+      ...ref,
+      path: ["database"],
+      schema: {
+        type: "object",
+        asCell: ["sqlite"],
+        description: "Notes database",
+      },
+    };
+    expect(requests).toEqual([{
+      type: RequestType.SqliteQuery,
+      cell: databaseRef,
+      sql: "SELECT title FROM notes WHERE id = ?",
+      params: {
+        kind: "positional",
+        values: [1],
+      },
+    }, {
+      type: RequestType.SqliteExec,
+      cell: databaseRef,
+      sql: "SELECT :constructor, :__proto__",
+      params: {
+        kind: "named",
+        entries: [
+          ["constructor", "New"],
+          ["__proto__", "Prototype"],
+        ],
+      },
+    }]);
+  });
+
+  it("rejects malformed SQLite operation inputs before sending a request", async () => {
+    const runtime = runtimeStub({
+      [$conn]: () => ({
+        request: () => {
+          throw new Error("request should not be sent");
+        },
+        subscribe: () => Promise.resolve(),
+        unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
+        signal: { aborted: false },
+      }),
+    });
+    const context = new CellHandle(runtime, ref, {
+      value: {
+        database: { id: "db-1" },
+      },
+    });
+    const query = createCellContextBridge(context).resources.database.methods!
+      .query;
+
+    await expect(query(undefined)).rejects.toThrow("object input");
+    await expect(query({ params: [] })).rejects.toThrow("string `sql`");
+    await expect(query({ sql: "SELECT 1", params: 1 })).rejects.toThrow(
+      "array or object",
+    );
+    await expect(
+      query({ sql: "SELECT 1", namedParams: [[1, "bad"]] }),
+    ).rejects.toThrow("key-value entries");
+  });
+});

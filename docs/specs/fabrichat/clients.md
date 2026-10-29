@@ -63,8 +63,8 @@ a container holds re-exports, or a room's `room` group for a room shown outside
 any container, and drives the manager through its `chats` group. It reads a
 room's newest messages from its `messages`
 ([`ChatMessageList`](ChatMessageList.md)), and the rest from the room's stored
-messages themselves, each a cell, deriving a thread from their `replyTo` (see
-[reading the rest](ChatMessageList.md#reading-the-rest)). Both are in `[VIEWS]`
+messages themselves, each a cell, each naming the thread it joins in its
+`replyTo` (see [reading the rest](ChatMessageList.md#reading-the-rest)). Both are in `[VIEWS]`
 (see [views a host draws
 itself](../../common/components/COMPONENTS.md#views-a-host-draws-itself)). A
 client that renders VDOM shows the adapter's `[UI]`.
@@ -99,20 +99,39 @@ A client that draws natively MUST:
   ones the client wouldn't offer itself.
 - **Follow the room through its messages**: `messages.latest` and
   `messages.count`, which stay current as messages arrive.
-- **Use each message's cell as its identity**, compared with `equals()`, and
-  never its `sentAt`, which is not unique (see
-  [times](ChatMessage.md#times)).
+- **Use each message's cell as its identity**, and never its `sentAt`, which
+  is not unique (see [times](ChatMessage.md#times)). Every field of the room
+  that names a message holds the link to that message's own cell, never to its
+  place in the room's messages, so two such links name the same message
+  exactly when they are equal, whether a client compares them as links or with
+  `equals()`.
 - **Show edits and deletions.** A client shows a deleted message as deleted,
   and marks a message with `editedAt` as edited. A message keeps no earlier
   text.
 - **Show obliterated messages as removed**, by whoever the tombstone is labeled
   with, and drop anything the client had kept of the message: its text, its
-  sender, and its reactions.
+  sender, its attachments, and its reactions.
+- **Show attachments through their entries.** A client reads each attachment's
+  name, media type and blob through its link, under the reader's own access,
+  shows an entry removed from its store as removed, and fetches and shows the
+  bytes as FabriFile's clients do (see [showing a
+  file](../fabrifile/clients.md#showing-a-file)).
+- **Send a reply in the shape the room takes**, which its `replyShape` names
+  (see [`ChatRoomOutput`](ChatRoomOutput.md)). A client that sends to rooms
+  whose view offers no `replyShape` as well sends both shapes in one
+  `replyTo`: `thread` and `quotes`, and beside them `message`, holding the
+  message it `quotes` or, for a plain post in a thread, the `thread`'s root.
+  Each room stores the fields it reads and drops the others.
 - **Show replies where they say they are shown**: the main conversation and each
   thread, derived from `replyTo` as [`ChatReply`](ChatReply.md#the-two-views)
-  states, with flat threads. A thread's reply count and latest reply time are
-  the room's `messages.threads` (see
+  states, with flat threads, each message showing the message it `quotes`. A
+  `"both"` message in the main conversation is shown as a message of its thread,
+  which a reader can open from it. A thread's title, reply count, latest reply
+  time and newest messages are the room's `messages.threads` (see
   [`ChatThreadSummary`](ChatThreadSummary.md)).
+- **Say how many messages lost what they replied to**, while the room's
+  `messages.legacyReplies` isn't 0 (see
+  [`ChatReply`](ChatReply.md#a-reply-naming-neither)).
 - **Show a room it can't read as unreadable**, and nothing more (see
   [`FabriChatPlacement.md`](FabriChatPlacement.md#viewers-who-arent-members)).
 
@@ -140,7 +159,7 @@ gesture on the reviewed surface its policy names:
 Which of editing, deleting, and obliterating the room takes on each message,
 from the reader, is in the room's `messageRights`, decided by the same rules the
 room admits those acts by. A client reads it there rather than deciding for
-itself, since the room refuses any other silently.
+itself, since the room refuses any other.
 
 A client that draws natively sends `addMember` through
 [the sanctioned issuing path](#the-sanctioned-issuing-path) on
@@ -173,10 +192,14 @@ direct one, but not a space's own chat, which is shown by its space's name.
 A client sends to the room's own streams, never through a placement or an
 adapter.
 
-A room drops a message act outside its stream's rules without a word, so a
-client MUST check each event against those rules before sending it: a
-non-empty body, a reply whose target is in the room, not deleted, and allowed
-for its `shownIn`, a single emoji (see
+A room refuses a message act outside its stream's rules, and a send that
+awaits its handling is rejected with the room's reason. A client MUST still
+check each event against those rules before sending it: a
+non-empty body, or one or more attachments, entries of the store of the room's
+space and no more of them than the room's `maxAttachments`, a reply whose
+links fit its `shownIn`, whose `thread` is a message of the room in no thread,
+and whose `quotes` is a message of the room, not deleted, in its `thread` where
+it names one, a single emoji (see
 [`ChatRoomOutput`](ChatRoomOutput.md#streams)), and it offers an act only
 where `messageRights` and `canSend` allow it.
 
@@ -186,7 +209,8 @@ refused, and getting an event to the room is its runtime's job: a runtime
 re-submits an event it can't tell was appended, with its trusted mark and the
 same event id, which the room's runtime deduplicates, and runs an appended
 event once. A client sees a send take effect when the message appears in the
-room's `messages`; nothing else is owed, and a client offers no retry of its
+room's `messages`, and sees it refused when the send is rejected, the room's
+reason with it. Nothing else is owed, and a client offers no retry of its
 own, since a person who sends again sends another message.
 
 A client that resumes an interrupted `createGroup` MUST resend it with its
@@ -258,7 +282,8 @@ native reviewed act as it admits a gesture on the room's rendered add control.
 
 Until a pattern can deliver to a principal it shares no space with, delivering a
 notice is the client's job. A client finds the notices waiting in its user's
-manager and reports each one once it's delivered (see
+manager's `outgoingNotices`, which lists none whose recipient is already on the
+room's roster, and reports each one once it's delivered (see
 [`ChatManagerOutput`](ChatManagerOutput.md#delivering-notices)). A client MUST
 deliver only the notice: which room, and who sent it. It MUST NOT deliver any of
 the room's contents.

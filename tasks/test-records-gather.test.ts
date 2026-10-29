@@ -30,12 +30,12 @@ describe("test-records-gather", () => {
     it("returns the four fields of a full specification", () => {
       expect(
         parseJUnitSpec(
-          "kind=unit,scope=cli,prefix=packages/cli,glob=out/*.xml",
+          "kind=unit,scope=cli,prefix=runtime/cli,glob=out/*.xml",
         ),
       ).toEqual({
         kind: "unit",
         scope: "cli",
-        prefix: "packages/cli",
+        prefix: "runtime/cli",
         glob: "out/*.xml",
       });
     });
@@ -120,7 +120,7 @@ describe("test-records-gather", () => {
         junit: [{
           kind: "unit",
           scope: "cli",
-          prefix: "packages/cli",
+          prefix: "runtime/cli",
           glob: join(dir, "*.xml"),
         }],
         spoolDir: held.dir,
@@ -150,7 +150,7 @@ describe("test-records-gather", () => {
         },
         outcome: "pass",
         durationMs: 250,
-        file: "packages/cli/test/alpha.test.ts",
+        file: "runtime/cli/test/alpha.test.ts",
       });
     });
 
@@ -325,7 +325,7 @@ describe("test-records-gather", () => {
           junit: [{
             kind: "integration",
             scope: "bakery",
-            prefix: "packages/bakery",
+            prefix: "runtime/bakery",
             glob: join(dir, "*.xml"),
           }],
           variant: "wood-fired",
@@ -338,8 +338,38 @@ describe("test-records-gather", () => {
           test: { k: "integration", s: "bakery", n: "oven", v: "wood-fired" },
           outcome: "pass",
           durationMs: 3500,
-          file: "packages/bakery/oven.test.ts",
+          file: "runtime/bakery/oven.test.ts",
         }]);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+
+    it("returns the message each failing record failed with, in the declared variant", async () => {
+      const dir = await Deno.makeTempDir({ prefix: "test-records-gather-" });
+      try {
+        await Deno.writeTextFile(
+          join(dir, "results.xml"),
+          `<testsuites>
+  <testsuite name="./oven.test.ts">
+    <testcase name="bakes" classname="./oven.test.ts" time="1.000"/>
+    <testcase name="burns" classname="./oven.test.ts" time="1.000">
+      <failure message="Uncaught Error: smoke">stack</failure>
+    </testcase>
+  </testsuite>
+</testsuites>`,
+        );
+        const { records, failures } = await collectRecords({
+          junit: [{
+            kind: "unit",
+            scope: "bakery",
+            glob: join(dir, "*.xml"),
+          }],
+          variant: "wood-fired",
+        });
+        const burns = records.find((record) => record.test.n === "burns")!;
+        expect(burns.test.v).toBe("wood-fired");
+        expect([...failures]).toEqual([[burns, "Uncaught Error: smoke"]]);
       } finally {
         await Deno.remove(dir, { recursive: true });
       }

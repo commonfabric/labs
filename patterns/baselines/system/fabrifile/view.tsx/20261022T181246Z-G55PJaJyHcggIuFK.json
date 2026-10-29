@@ -1,0 +1,591 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "AddFileEvent": {
+        "properties": {
+          "blob": {
+            "$ref": "#/$defs/BlobRef",
+            "description": "The blob holding the bytes."
+          },
+          "mediaType": {
+            "description": "The media type the blob was stored with.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The new entry's name, the name its blob was stored under.",
+            "type": "string"
+          },
+          "onConflict": {
+            "$ref": "#/$defs/NameConflict",
+            "description": "What to do when `name` is taken; `refuse` when absent."
+          },
+          "requestId": {
+            "description": "Chosen by the sender; the event's own key when there is none.",
+            "type": "string"
+          },
+          "size": {
+            "description": "The size of the file, in bytes.",
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "BlobRef": {
+        "properties": {
+          "id": {
+            "description": "The blob's id: `fid1:` and the hash of its name, media type and bytes.",
+            "type": "string"
+          },
+          "space": {
+            "description": "The DID of the space whose blob store holds the bytes.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "space",
+          "id"
+        ],
+        "type": "object"
+      },
+      "FileEntry": {
+        "properties": {
+          "addedAt": {
+            "description": "When the file was added.",
+            "type": "FabricEpochNsec"
+          },
+          "addedBy": {
+            "$ref": "#/$defs/FileProfile",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The profile of whoever added it."
+          },
+          "blob": {
+            "$ref": "#/$defs/BlobRef",
+            "description": "The blob holding the bytes."
+          },
+          "mediaType": {
+            "description": "The media type of the bytes.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The name the store finds this file by, and its blob's name.",
+            "type": "string"
+          },
+          "removedAt": {
+            "description": "When the file was removed from its store, if it has been.",
+            "type": "FabricEpochNsec"
+          },
+          "size": {
+            "description": "The size of the file, in bytes.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "mediaType",
+          "blob",
+          "size",
+          "addedAt",
+          "addedBy"
+        ],
+        "type": "object"
+      },
+      "FileProfile": {
+        "properties": {
+          "avatar": {
+            "description": "A URL of their picture.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The name the person goes by.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "FileRefusalCode": {
+        "enum": [
+          "invalid-request",
+          "invalid-name",
+          "name-taken",
+          "other-space",
+          "no-blob",
+          "not-found",
+          "not-permitted"
+        ]
+      },
+      "FileRequestOutcome": {
+        "anyOf": [
+          {
+            "properties": {
+              "entry": {
+                "$ref": "#/$defs/FileEntry",
+                "asCell": [
+                  "cell"
+                ],
+                "description": "The entry the request added or changed."
+              },
+              "name": {
+                "description": "The name the request gave the entry.",
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "done"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "entry",
+              "name"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "code": {
+                "$ref": "#/$defs/FileRefusalCode",
+                "description": "Why, as a code a client can act on."
+              },
+              "reason": {
+                "description": "Why, as prose for a person.",
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "refused"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "reason",
+              "code"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "FileStoreFiles": {
+        "properties": {
+          "add": {
+            "$ref": "#/$defs/AddFileEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Adds a file, for a blob already in the store's space."
+          },
+          "byName": {
+            "additionalProperties": {
+              "$ref": "#/$defs/FileEntry",
+              "asCell": [
+                "cell"
+              ]
+            },
+            "description": "The same files, by name.",
+            "properties": {},
+            "type": "object"
+          },
+          "entries": {
+            "description": "Every file in the store, in the order they were added.",
+            "items": {
+              "$ref": "#/$defs/FileEntry",
+              "asCell": [
+                "cell"
+              ]
+            },
+            "type": "array"
+          },
+          "remove": {
+            "$ref": "#/$defs/RemoveFileEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Takes a file out of the store, and marks it removed."
+          },
+          "rename": {
+            "$ref": "#/$defs/RenameFileEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Changes a file's name, and its blob with it."
+          },
+          "requests": {
+            "additionalProperties": {
+              "$ref": "#/$defs/FileRequestOutcome"
+            },
+            "description": "The outcome of each request, by its `requestId`.",
+            "properties": {},
+            "type": "object"
+          }
+        },
+        "required": [
+          "entries",
+          "byName",
+          "requests",
+          "add",
+          "remove",
+          "rename"
+        ],
+        "type": "object"
+      },
+      "NameConflict": {
+        "enum": [
+          "refuse",
+          "rename"
+        ]
+      },
+      "RemoveFileEvent": {
+        "properties": {
+          "entry": {
+            "$ref": "#/$defs/FileEntry",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The entry to remove."
+          },
+          "requestId": {
+            "description": "Chosen by the sender; the event's own key when there is none.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RenameFileEvent": {
+        "properties": {
+          "entry": {
+            "$ref": "#/$defs/FileEntry",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The entry to rename."
+          },
+          "name": {
+            "description": "The entry's new name.",
+            "type": "string"
+          },
+          "onConflict": {
+            "$ref": "#/$defs/NameConflict",
+            "description": "What to do when `name` is taken; `refuse` when absent."
+          },
+          "requestId": {
+            "description": "Chosen by the sender; the event's own key when there is none.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "description": "What a view renders: a store's files group.",
+    "properties": {
+      "store": {
+        "$ref": "#/$defs/FileStoreFiles",
+        "description": "The store."
+      }
+    },
+    "required": [
+      "store"
+    ],
+    "type": "object"
+  },
+  "pattern": "fabrifile/view.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AddFileEvent": {
+        "properties": {
+          "blob": {
+            "$ref": "#/$defs/BlobRef",
+            "description": "The blob holding the bytes."
+          },
+          "mediaType": {
+            "description": "The media type the blob was stored with.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The new entry's name, the name its blob was stored under.",
+            "type": "string"
+          },
+          "onConflict": {
+            "$ref": "#/$defs/NameConflict",
+            "description": "What to do when `name` is taken; `refuse` when absent."
+          },
+          "requestId": {
+            "description": "Chosen by the sender; the event's own key when there is none.",
+            "type": "string"
+          },
+          "size": {
+            "description": "The size of the file, in bytes.",
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "BlobRef": {
+        "properties": {
+          "id": {
+            "description": "The blob's id: `fid1:` and the hash of its name, media type and bytes.",
+            "type": "string"
+          },
+          "space": {
+            "description": "The DID of the space whose blob store holds the bytes.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "space",
+          "id"
+        ],
+        "type": "object"
+      },
+      "FileEntry": {
+        "properties": {
+          "addedAt": {
+            "description": "When the file was added.",
+            "type": "FabricEpochNsec"
+          },
+          "addedBy": {
+            "$ref": "#/$defs/FileProfile",
+            "description": "The profile of whoever added it."
+          },
+          "blob": {
+            "$ref": "#/$defs/BlobRef",
+            "description": "The blob holding the bytes."
+          },
+          "mediaType": {
+            "description": "The media type of the bytes.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The name the store finds this file by, and its blob's name.",
+            "type": "string"
+          },
+          "removedAt": {
+            "description": "When the file was removed from its store, if it has been.",
+            "type": "FabricEpochNsec"
+          },
+          "size": {
+            "description": "The size of the file, in bytes.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "mediaType",
+          "blob",
+          "size",
+          "addedAt",
+          "addedBy"
+        ],
+        "type": "object"
+      },
+      "FileProfile": {
+        "properties": {
+          "avatar": {
+            "description": "A URL of their picture.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The name the person goes by.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "FileRefusalCode": {
+        "enum": [
+          "invalid-request",
+          "invalid-name",
+          "name-taken",
+          "other-space",
+          "no-blob",
+          "not-found",
+          "not-permitted"
+        ]
+      },
+      "FileRequestOutcome": {
+        "anyOf": [
+          {
+            "properties": {
+              "entry": {
+                "$ref": "#/$defs/FileEntry",
+                "description": "The entry the request added or changed."
+              },
+              "name": {
+                "description": "The name the request gave the entry.",
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "done"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "entry",
+              "name"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "code": {
+                "$ref": "#/$defs/FileRefusalCode",
+                "description": "Why, as a code a client can act on."
+              },
+              "reason": {
+                "description": "Why, as prose for a person.",
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "refused"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "reason",
+              "code"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "FileStoreFiles": {
+        "properties": {
+          "add": {
+            "$ref": "#/$defs/AddFileEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Adds a file, for a blob already in the store's space."
+          },
+          "byName": {
+            "additionalProperties": {
+              "$ref": "#/$defs/FileEntry"
+            },
+            "description": "The same files, by name.",
+            "properties": {},
+            "type": "object"
+          },
+          "entries": {
+            "description": "Every file in the store, in the order they were added.",
+            "items": {
+              "$ref": "#/$defs/FileEntry"
+            },
+            "type": "array"
+          },
+          "remove": {
+            "$ref": "#/$defs/RemoveFileEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Takes a file out of the store, and marks it removed."
+          },
+          "rename": {
+            "$ref": "#/$defs/RenameFileEvent",
+            "asCell": [
+              "stream"
+            ],
+            "description": "Changes a file's name, and its blob with it."
+          },
+          "requests": {
+            "additionalProperties": {
+              "$ref": "#/$defs/FileRequestOutcome"
+            },
+            "description": "The outcome of each request, by its `requestId`.",
+            "properties": {},
+            "type": "object"
+          }
+        },
+        "required": [
+          "entries",
+          "byName",
+          "requests",
+          "add",
+          "remove",
+          "rename"
+        ],
+        "type": "object"
+      },
+      "NameConflict": {
+        "enum": [
+          "refuse",
+          "rename"
+        ]
+      },
+      "RemoveFileEvent": {
+        "properties": {
+          "entry": {
+            "$ref": "#/$defs/FileEntry",
+            "description": "The entry to remove."
+          },
+          "requestId": {
+            "description": "Chosen by the sender; the event's own key when there is none.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RenameFileEvent": {
+        "properties": {
+          "entry": {
+            "$ref": "#/$defs/FileEntry",
+            "description": "The entry to rename."
+          },
+          "name": {
+            "description": "The entry's new name.",
+            "type": "string"
+          },
+          "onConflict": {
+            "$ref": "#/$defs/NameConflict",
+            "description": "What to do when `name` is taken; `refuse` when absent."
+          },
+          "requestId": {
+            "description": "Chosen by the sender; the event's own key when there is none.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "description": "What a view offers: its rendering, the store it renders, and that store's\nfiles group as its own, so that a host asking the piece a container holds\nfor its view groups finds the store's.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "$VIEWS": {
+        "properties": {
+          "files": {
+            "$ref": "#/$defs/FileStoreFiles"
+          }
+        },
+        "required": [
+          "files"
+        ],
+        "type": "object"
+      },
+      "store": {
+        "$ref": "#/$defs/FileStoreFiles",
+        "description": "The store the view renders."
+      }
+    },
+    "required": [
+      "store",
+      "$NAME",
+      "$UI",
+      "$VIEWS"
+    ],
+    "type": "object"
+  }
+}

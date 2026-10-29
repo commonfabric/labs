@@ -15,7 +15,7 @@ explicit migration or hybrid.
 Keep the authored sources beside generated `main.tsx`:
 
 ```text
-packages/patterns/phaser-shared-targets/
+patterns/examples/phaser-shared-targets/
 ├── contract.ts
 ├── guest.ts
 ├── guest.html   # optional; useful for a canvas parent and status UI
@@ -259,6 +259,13 @@ anything two players must agree on stays a Cell write.
 [Optional presence](./iframe-pattern-guide.md#optional-presence) in the
 iframe pattern guide is the contract.
 
+An action the pattern exposes as a verb, or work only the pattern can start,
+such as a request to `agent()` or another LLM built-in, goes through a verb the
+pattern passes in as a stream where it can; the guest sends it an event with
+`fabric.stream(name).send(event)`.
+[Optional streams](./iframe-pattern-guide.md#optional-streams) in the iframe
+pattern guide is the contract.
+
 Generate textures and simple audio locally when practical. The iframe CSP does
 not allow arbitrary network fetches, so do not load assets from a CDN. For
 larger assets, include data files through the supported pattern program rather
@@ -334,15 +341,15 @@ destroy the game, remove global listeners, and disconnect the bridge.
 ## Generate and validate
 
 ```bash
-deno run -A tools/write-iframe-wrapper.ts \
-  --contract packages/patterns/phaser-shared-targets/contract.ts \
-  --guest packages/patterns/phaser-shared-targets/guest.ts \
-  --html packages/patterns/phaser-shared-targets/guest.html \
-  --out packages/patterns/phaser-shared-targets/main.tsx
+deno run -A scripts/write-iframe-wrapper.ts \
+  --contract patterns/examples/phaser-shared-targets/contract.ts \
+  --guest patterns/examples/phaser-shared-targets/guest.ts \
+  --html patterns/examples/phaser-shared-targets/guest.html \
+  --out patterns/examples/phaser-shared-targets/main.tsx
 
-deno fmt packages/patterns/phaser-shared-targets
-deno check packages/patterns/phaser-shared-targets/guest.ts
-deno task cf check packages/patterns/phaser-shared-targets/main.tsx --no-run
+deno fmt patterns/examples/phaser-shared-targets
+deno check patterns/examples/phaser-shared-targets/guest.ts
+deno task cf check patterns/examples/phaser-shared-targets/main.tsx --no-run
 ```
 
 Launch the pattern with the steps under

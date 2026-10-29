@@ -1,8 +1,9 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
-import { dirname, relative } from "@std/path";
+import { dirname, fromFileUrl, relative } from "@std/path";
 import { parse as parseYaml } from "@std/yaml";
 import { getBinary } from "@astral/astral";
 import { COVERAGE_ARTIFACT } from "@commonfabric/test-support/records";
+import { BuildConfig } from "./build-binaries.ts";
 import { commandWords, withoutComments } from "./ci-workflow.ts";
 import { phaseOf } from "./ci-step-phases.ts";
 import {
@@ -160,6 +161,58 @@ Deno.test("every workflow and composite action is valid YAML", async () => {
     "these files under .github do not parse as YAML — the runner will " +
       "schedule NO jobs from them, and every text-level check in this file " +
       "stays green while it does",
+  );
+});
+
+Deno.test("cache-only binary builders install their entrypoint graphs", async () => {
+  const installAction = await Deno.readTextFile(
+    new URL("../.github/actions/deno-install/action.yml", import.meta.url),
+  );
+  const toolshedDockerfile = await Deno.readTextFile(
+    new URL("../runtime/toolshed/Dockerfile", import.meta.url),
+  );
+  const root = fromFileUrl(new URL("../", import.meta.url));
+  const config = new BuildConfig({ root, toolshedFlags: [] });
+  const expectedEntrypoints = [
+    config.toolshedEntryPath(),
+    config.cliEntryPath(),
+  ].map((entrypoint) => relative(root, entrypoint).replaceAll("\\", "/"));
+  const listedEntrypoints = installAction.match(
+    /binary_entrypoints=\(\n(?<paths>(?: +\S+\n)+) +\)/,
+  )?.groups?.paths.trim().split(/\s+/);
+  const dockerEntrypoints = toolshedDockerfile.match(
+    /deno install --entrypoint --frozen (?<entrypoints>\S+(?: +\S+)*)/,
+  )?.groups?.entrypoints.split(/ +/);
+  const dockerBuilds = toolshedDockerfile.match(
+    /deno task build-binaries (?<binaries>\S+(?: +\S+)*)/,
+  )?.groups?.binaries.split(/ +/);
+
+  assertEquals(listedEntrypoints, expectedEntrypoints);
+  assertStringIncludes(
+    installAction,
+    'deno install --entrypoint --cached-only "${frozen_arg[@]}"',
+  );
+  assertStringIncludes(
+    installAction,
+    'deno install --entrypoint "${frozen_arg[@]}"',
+  );
+  assertEquals(dockerEntrypoints, [expectedEntrypoints[0]]);
+  assertEquals(dockerBuilds, ["toolshed"]);
+});
+
+Deno.test("the test-selection publisher installs only what it runs", async () => {
+  const publisher = (await parsedWorkflow("test-selection.yml")).jobs.publish;
+
+  assertEquals(
+    publisher.steps?.filter((step) =>
+      step.uses === "./.github/actions/deno-install"
+    ),
+    [],
+  );
+  assertEquals(
+    namedStep(publisher, "📦 Cache publisher dependencies").run,
+    "deno cache --frozen tasks/test-selection-publish.ts " +
+      "tasks/step-summary.ts",
   );
 });
 
@@ -779,7 +832,7 @@ Deno.test("a lane uploads what Status and a reader of a failure need", async () 
   const root = paths[0]!.replace(/\/$/, "");
   const set = measuredSetDirectory({
     suite: "workspace-unit",
-    set: { member: "packages/bakery", reachedBy: [], units: [] },
+    set: { member: "runtime/bakery", reachedBy: [], units: [] },
   });
   const written = [
     DEFAULT_COVERAGE_DIR,
@@ -980,7 +1033,7 @@ Deno.test("Status judges the coverage gates of every run", async () => {
       GITHUB_SHA: "c".repeat(40),
       JOB_RESULTS: JSON.stringify({ tests: { result: tests } }),
       PR_NUMBER: "42",
-      DESCRIPTION: "ACCEPT_COVERAGE_DEBT: packages/memory +1 lines",
+      DESCRIPTION: "ACCEPT_COVERAGE_DEBT: runtime/memory +1 lines",
     }, {
       deno: 'printf "%s\\n" "$@"',
       gh: `case "$2" in\n` +
@@ -998,7 +1051,7 @@ Deno.test("Status judges the coverage gates of every run", async () => {
     "-A",
     "tasks/coverage-gate.ts",
     "--body",
-    "ACCEPT_COVERAGE_DEBT: packages/memory +1 lines",
+    "ACCEPT_COVERAGE_DEBT: runtime/memory +1 lines",
     "--comment",
     "coverage-comment.json",
     "--pr",
@@ -1051,7 +1104,7 @@ Deno.test("Status judges the coverage gates of every run", async () => {
       "tasks/coverage-gate.ts",
       "--default-branch",
       "--body",
-      "ACCEPT_COVERAGE_DEBT: packages/memory +1 lines",
+      "ACCEPT_COVERAGE_DEBT: runtime/memory +1 lines",
       "--of",
       "7",
       "--full",
@@ -1259,7 +1312,7 @@ Deno.test("the Dashboard workflow records no tests", async () => {
   const dashboard = withoutComments(await workflow("dashboard-image.yml"));
   const relay = withoutComments(await workflow("test-records-relay.yml"));
 
-  // CI runs `packages/dashboard`'s test task on the same commit and records
+  // CI runs `dashboard`'s test task on the same commit and records
   // what it runs. Recording the same task again here would file each of those
   // tests twice against one commit, so this workflow takes no part in test
   // records at either end: it spools nothing, and the relay does not follow

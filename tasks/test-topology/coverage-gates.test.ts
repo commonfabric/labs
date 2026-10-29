@@ -32,15 +32,15 @@ function suite(
 }
 
 const bakery: MeasuredSet = {
-  member: "packages/bakery",
-  reachedBy: ["packages/bakery/"],
-  units: ["packages/bakery/glaze.test.ts", "packages/bakery/proof.test.ts"],
+  member: "runtime/bakery",
+  reachedBy: ["runtime/bakery/"],
+  units: ["runtime/bakery/glaze.test.ts", "runtime/bakery/proof.test.ts"],
 };
 
 const cellar: MeasuredSet = {
-  member: "packages/cellar",
-  reachedBy: ["packages/cellar/"],
-  units: ["packages/cellar/rack.test.ts"],
+  member: "runtime/cellar",
+  reachedBy: ["runtime/cellar/"],
+  units: ["runtime/cellar/rack.test.ts"],
 };
 
 describe("coverage-gates", () => {
@@ -51,48 +51,48 @@ describe("coverage-gates", () => {
     it("holds one gate for each measured set, each a whole unit", () => {
       expect(gates.id).toBe(COVERAGE_GATE_SUITE);
       expect(gates.units).toEqual([
-        "workspace-unit/packages/bakery",
-        "workspace-unit/packages/cellar",
+        "workspace-unit/runtime/bakery",
+        "workspace-unit/runtime/cellar",
       ]);
       expect(gates.whole).toEqual(gates.units);
     });
 
     it("is reached by the paths its set declares, and by nothing else", () => {
-      expect(gates.unitsForChange!(new Set(["packages/bakery/src/oven.ts"])))
-        .toEqual(["workspace-unit/packages/bakery"]);
+      expect(gates.unitsForChange!(new Set(["runtime/bakery/src/oven.ts"])))
+        .toEqual(["workspace-unit/runtime/bakery"]);
       expect(gates.unitsForChange!(new Set(["docs/README.md"]))).toEqual([]);
     });
 
     it("keeps two suites over one member apart", () => {
       const other = suite("bakery-integration", [{
         ...bakery,
-        units: ["packages/bakery/e2e.ts"],
+        units: ["runtime/bakery/e2e.ts"],
       }]);
       const both = coverageGateSuite([unit, other]);
-      expect(both.unitsForChange!(new Set(["packages/bakery/src/oven.ts"])))
+      expect(both.unitsForChange!(new Set(["runtime/bakery/src/oven.ts"])))
         .toEqual([
-          "bakery-integration/packages/bakery",
-          "workspace-unit/packages/bakery",
+          "bakery-integration/runtime/bakery",
+          "workspace-unit/runtime/bakery",
         ]);
-      expect(both.judges!.get("bakery-integration/packages/bakery")?.units)
-        .toEqual(["packages/bakery/e2e.ts"]);
+      expect(both.judges!.get("bakery-integration/runtime/bakery")?.units)
+        .toEqual(["runtime/bakery/e2e.ts"]);
     });
 
     it("judges the units of its set that this configuration runs", () => {
       const partial = coverageGateSuite([suite("workspace-unit", [bakery], [
         {
-          unit: "packages/bakery/proof.test.ts",
+          unit: "runtime/bakery/proof.test.ts",
           reason: "it needs an oven nobody has",
         },
         {
-          unit: "packages/bakery/glaze.test.ts",
+          unit: "runtime/bakery/glaze.test.ts",
           leafName: "sets twice",
           reason: "it is slow on this configuration",
         },
       ])]);
-      expect(partial.judges!.get("workspace-unit/packages/bakery")).toEqual({
+      expect(partial.judges!.get("workspace-unit/runtime/bakery")).toEqual({
         suite: "workspace-unit",
-        units: ["packages/bakery/glaze.test.ts"],
+        units: ["runtime/bakery/glaze.test.ts"],
         identity: { k: "gate", s: "bakery", n: "coverage-gate workspace-unit" },
       });
     });
@@ -101,7 +101,7 @@ describe("coverage-gates", () => {
       const none = coverageGateSuite([suite(
         "workspace-unit",
         [cellar],
-        [{ unit: "packages/cellar/rack.test.ts", reason: "no cellar here" }],
+        [{ unit: "runtime/cellar/rack.test.ts", reason: "no cellar here" }],
       )]);
       expect(none.units).toEqual([]);
     });
@@ -110,7 +110,7 @@ describe("coverage-gates", () => {
       const ref = measuredSets([unit])[0]!;
       expect(gates.locate({ test: coverageGateIdentity(ref) })).toEqual({
         level: "unit",
-        unit: "workspace-unit/packages/bakery",
+        unit: "workspace-unit/runtime/bakery",
       });
     });
 
@@ -132,7 +132,7 @@ describe("coverage-gates", () => {
 
     it("refuses to build a command, since no lane runs a gate", async () => {
       await expect(
-        gates.command([{ unit: "workspace-unit/packages/bakery", skip: [] }], {
+        gates.command([{ unit: "workspace-unit/runtime/bakery", skip: [] }], {
           root: "/repo",
           outputDir: "/out",
           spoolDir: "/spool",
@@ -147,9 +147,9 @@ describe("coverage-gates", () => {
       expect(
         reachedSets(
           suites,
-          new Set(["packages/cellar/x.ts", "packages/bakery/y.ts"]),
+          new Set(["runtime/cellar/x.ts", "runtime/bakery/y.ts"]),
         ).map((ref) => `${ref.suite}/${ref.set.member}`),
-      ).toEqual(["a-unit/packages/bakery", "z-unit/packages/cellar"]);
+      ).toEqual(["a-unit/runtime/bakery", "z-unit/runtime/cellar"]);
     });
   });
 

@@ -14,7 +14,7 @@ you are migrating an existing guest and need to compare the two source styles.
 Keep these authored files beside the generated wrapper:
 
 ```text
-packages/patterns/iframe-react-quick-notes/
+patterns/examples/iframe-react-quick-notes/
 ├── contract.ts  # input, durable state, output, scopes, optional databases
 ├── guest.tsx    # React application and Fabric bridge client
 ├── guest.html   # optional document shell
@@ -341,6 +341,7 @@ in progress. Divide state by the lifecycle that owns it:
 | --- | --- | --- |
 | Durable collaborative data | Fabric Cell or SQLite | records, committed positions, shared edges |
 | Live status others see and nobody keeps | A presence room | pointers, a peer's drag in flight, who is here |
+| Actions the pattern exposes as verbs, or work only it can start | A verb the pattern passes in as a stream | adding to a list through the pattern's `addItem`, asking `agent()` or an LLM built-in |
 | Local user intent not yet committed | React state or refs | a text draft, open menu, active drag, pending selection |
 | Third-party interaction state | The library's local component state | `dragging`, measured bounds, viewport, focus, selection handles |
 | Pure presentation | Derived during render | labels, colors, filtered rows |
@@ -376,6 +377,15 @@ A presence room is declared in the contract and read through
 component renders from them in state or an external store.
 [Optional presence](./iframe-pattern-guide.md#optional-presence) in the
 iframe pattern guide is the contract.
+
+A verb is declared in the contract's `streams`, and the guest sends it an event
+through `fabric.stream(name).send(event)` from the event handler where the user
+acted, which is how a guest calls `agent()` and the other LLM built-ins in a
+user-triggered way. When the pattern exposes an action as a verb, prefer
+sending that verb an event over making the same change through Cell writes. Keep the draft that produced the event, and show any error
+the send rejects with, until the send settles.
+[Optional streams](./iframe-pattern-guide.md#optional-streams) in the iframe
+pattern guide is the contract.
 
 ### Reconcile asynchronous gestures by identity
 
@@ -640,10 +650,10 @@ through the `React` instance imported by `guest.tsx`; without it, repository JSX
 settings target the Common Fabric host runtime instead.
 
 ```bash
-deno run -A tools/write-iframe-wrapper.ts \
-  --contract packages/patterns/iframe-react-quick-notes/contract.ts \
-  --guest packages/patterns/iframe-react-quick-notes/guest.tsx \
-  --out packages/patterns/iframe-react-quick-notes/main.tsx \
+deno run -A scripts/write-iframe-wrapper.ts \
+  --contract patterns/examples/iframe-react-quick-notes/contract.ts \
+  --guest patterns/examples/iframe-react-quick-notes/guest.tsx \
+  --out patterns/examples/iframe-react-quick-notes/main.tsx \
   --react
 ```
 
@@ -656,9 +666,9 @@ must contain `<!-- PATTERN_IFRAME_SCRIPT -->` exactly once.
 Format and compile both realms:
 
 ```bash
-deno fmt packages/patterns/iframe-react-quick-notes
-deno check packages/patterns/iframe-react-quick-notes/guest.tsx
-deno task cf check packages/patterns/iframe-react-quick-notes/main.tsx --no-run
+deno fmt patterns/examples/iframe-react-quick-notes
+deno check patterns/examples/iframe-react-quick-notes/guest.tsx
+deno task cf check patterns/examples/iframe-react-quick-notes/main.tsx --no-run
 ```
 
 Launch against local servers, starting them first:
@@ -686,7 +696,7 @@ test -e .cf/iframe-pattern.key || \
 export CF_API_URL=http://localhost:8000
 export CF_IDENTITY=.cf/iframe-pattern.key
 export CF_SPACE="$(deno task cf space create --label "Iframe React notes")"
-deno task cf piece new packages/patterns/iframe-react-quick-notes/main.tsx \
+deno task cf piece new patterns/examples/iframe-react-quick-notes/main.tsx \
   --root . --slug react-notes
 ```
 

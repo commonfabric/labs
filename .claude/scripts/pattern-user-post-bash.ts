@@ -628,18 +628,12 @@ function pieceNewMain(commandWords: string[]): string | undefined {
  * whichever noun precedes it advises on `cf piece set` and `cf cell new`,
  * neither of which the CLI accepts. A pair joins this set when it gains a
  * branch below.
- *
- * The bare `set` is a superseded spelling that still answers, and the guidance
- * is the same one its blessed spelling gets. `get` and `call` are spelled two
- * ways too but carry no guidance, so listing them would widen what the hook
- * accepts without changing what it answers.
  */
 const GUIDED_COMMANDS = new Set([
   "piece new",
   "piece setsrc",
   "piece inspect",
   "cell set",
-  "set",
 ]);
 
 /** The nouns those pairs sit under, which is what a `cf` is recognized by. */

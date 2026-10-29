@@ -1,0 +1,4224 @@
+import type { FabricValue, TextChange } from "@commonfabric/api";
+import {
+  cloneIfNecessary,
+  cloneWithValueAtPath,
+  debugStr,
+  deepFreeze,
+  isDeepFrozen,
+  isFabricPlainContainer,
+  missingContainerIsArray,
+  valueEqual,
+  valueEqualByWalk,
+} from "@commonfabric/data-model";
+import {
+  applyTextChanges,
+  canResolveScopeKey,
+  CODEMIRROR_CHANGESET_CODEC,
+  codeMirrorTextChangesPayload,
+  type CommitPrecondition,
+  getCommitPreconditionsConfig,
+  operationBaselineHash,
+  type PatchOp,
+  resolveScopeKey,
+  type ScopeKey,
+  type ScopeKeyIdentity,
+  type SqliteOperation,
+  toDocumentPath,
+  toValuePath,
+} from "@commonfabric/memory/v2";
+import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
+import { getLogger } from "@commonfabric/utils/logger";
+import { PathKeyMap } from "@commonfabric/utils/path-key-map";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+
+import { readStatsActive, recordDocumentRead } from "../read-stats.ts";
+import {
+  emptyEntityDocument,
+  patchOpIsStructural,
+  patchOpPointerFields,
+} from "../../../memory/v2/patch.ts";
+import {
+  encodePointer,
+  parsePointer,
+  pathsOverlap,
+  prefixPointers,
+} from "../../../memory/v2/path.ts";
+import type { CellScope } from "../builder/types.ts";
+import { normalizeCellScope } from "../scope.ts";
+import { getCommitLocalSeq, getCommitSeq } from "./commit-identity.ts";
+import { createTransactionCommitReceipt } from "./commit-receipt.ts";
+import { diagnosticPrefix, type PendingCommitContext } from "./diagnostics.ts";
+import type {
+  Activity,
+  ChangeGroup,
+  CommitError,
+  IAttestation,
+  IMemoryAddress,
+  IMemorySpaceAddress,
+  InactiveTransactionError,
+  IReadActivity,
+  IReadOptions,
+  IStorageManager,
+  IStorageTransaction,
+  IStorageTransactionInconsistent,
+  ITransactionJournal,
+  ITransactionSealSink,
+  ITransactionWriteRequest,
+  IWriteAttempt,
+  IWriteOptions,
+  MediaType,
+  MemorySpace,
+  NativeCommitOptions,
+  NativeStorageCommit,
+  NativeStorageCommitOperation,
+  NativeTextEdit,
+  ReadError,
+  Result,
+  StorageTransactionFailed,
+  StorageTransactionRejected,
+  StorageTransactionStatus,
+  TransactionCommitOptions,
+  TransactionCommitReceipt,
+  TransactionReactivityLog,
+  TransactionReadDetail,
+  TransactionWriteDetail,
+  Unit,
+  URI,
+  WriteError,
+  WriterError,
+} from "./interface.ts";
+import { createReadOnlyTransactionError } from "./interface.ts";
+import {
+  assertLocalReadAvailable,
+  endLocalReadValidationStretch,
+  releaseLocalReadBasis,
+  usesLocalReads,
+  validateLocalReadBasis,
+} from "./local-read-policy.ts";
+import {
+  buildMergeableIntent,
+  foldMergeableIntent,
+  isNoopMergeableDelta,
+  type MergeableBuildContext,
+  type MergeableOpDelta,
+  type MergeableOpIntent,
+  mergeableOpPayloadContains,
+  type OpSuppression,
+} from "./mergeable-ops.ts";
+import {
+  getBlindStructuralTarget,
+  ignoreReadForCommit,
+  ignoreReadForScheduling,
+  isDurableReadTx,
+  isInternalVerifierRead,
+  isMutableTransactionReadAllowed,
+  isReadIgnoredForScheduling,
+  isReadMarkedAsAttemptedWrite,
+  isUiInputBlindWriteTx,
+  pendingWriteElisionRead,
+  registerCommitRejectionListener,
+  stableInternalVerifierRead,
+  takeCoverageWaits,
+  writeDestinationRead,
+} from "./reactivity-log.ts";
+import {
+  ReadOnlyAddressError,
+  TransactionAborted,
+  TransactionCompleteError,
+  WriteIsolationError,
+} from "./transaction-errors.ts";
+import {
+  claim,
+  load as loadInline,
+  read as readAttestation,
+  StateInconsistency,
+} from "./transaction/attestation.ts";
+import {
+  type MutableWriteResult,
+  planMutablePathWrite,
+  type PlannedPathWrite,
+} from "./transaction/mutable-path-write.ts";
+import { toTransactionDocumentValue } from "./v2-document.ts";
+import { hasValueAtPath, readValueAtPath } from "./v2-path.ts";
+import { recordWriteStackTrace } from "./write-stack-trace.ts";
+import { hasInlineCellScheme } from "../immutable-cell.ts";
+
+type RootAttestation = IAttestation;
+
+const DOCUMENT_MIME = "application/json" as const;
+
+/**
+ * A root this transaction replaced, and the epoch it stood until.
+ *
+ * `root` is the document's value for every read epoch at or below `until`; the
+ * write that moved the epoch past `until` is the one that displaced it.
+ */
+type DisplacedRoot = {
+  until: number;
+  root: RootAttestation;
+};
+
+type ReadDocumentEntry = {
+  initial: RootAttestation;
+  validated: boolean;
+  current?: RootAttestation;
+  frozenReads?: PathKeyMap<FabricValue | undefined>;
+  writeDetails?: Map<string, TransactionWriteDetail>;
+  patchDetails?: Map<string, TransactionWriteDetail>;
+  // Oldest first, and only for epochs a reader was actually handed. Absent on
+  // the overwhelming majority of documents: one is created the first time a
+  // write displaces a root some materialized read may still describe.
+  displaced?: DisplacedRoot[];
+  // As on `WritableDocumentEntry`. Held here too because a whole-value write
+  // that changes nothing leaves its document read-only, and still poisons.
+  mergeableOpsPoisoned?: Set<string>;
+};
+
+type WritableDocumentEntry = {
+  initial: RootAttestation;
+  current: RootAttestation;
+  validated: boolean;
+  frozenReads: PathKeyMap<FabricValue | undefined>;
+  writeDetails: Map<string, TransactionWriteDetail>;
+  patchDetails: Map<string, TransactionWriteDetail>;
+  displaced?: DisplacedRoot[];
+
+  /**
+   * The paths this transaction's writes to the document report for
+   * reactivity, from `buildReactivityPathsForChanges()`, kept so that every
+   * build of the reactivity log during one commit shares them. They depend
+   * only on `initial`, `current` and `patchDetails`, so a read leaves them
+   * standing. `V2StorageTransaction.#invalidateWrittenState()` drops them
+   * wherever `current` or `patchDetails` may change: ahead of every in-place
+   * write to the working root, which all go through
+   * `V2StorageTransaction.#writeWorkingRoot()`, and wherever the root or the
+   * recorded patch details are replaced.
+   */
+  reactivityPaths?: readonly (readonly string[])[];
+
+  // Mergeable-write intents recorded by recordMergeableOp, keyed by document
+  // path. The commit emits these as the corresponding mergeable op (which the
+  // server resolves against durable state) instead of a value diffed against a
+  // possibly-stale base, and drops the op's path from the commit's conflict read
+  // set. See ./mergeable-ops.ts.
+  mergeableOps?: Map<string, MergeableOpIntent>;
+  // Paths where a mergeable intent cannot faithfully carry the transaction's
+  // local change — a second mergeable op of a different kind was recorded, a
+  // foreign write (a reshape such as sort/splice, or a whole-value set) wrote
+  // the path, or the commit-time builder abandoned the intent because it no
+  // longer described the local value. A poisoned path abandons the mergeable
+  // fast path, at that path and everywhere beneath it, and commits the
+  // whole-value diff, which reflects the correct combined local value. It
+  // stays poisoned for the rest of the transaction, so an op recorded after
+  // the write is refused as one recorded ahead of it is dropped: a `set()`
+  // says what the value is, and an op landing on whatever the store holds
+  // would add to a value the transaction replaced. Keyed like mergeableOps.
+  mergeableOpsPoisoned?: Set<string>;
+
+  /**
+   * Whether the commit has recorded its read of the document root, the one
+   * a whole-document `set` from an absent base goes out with (see
+   * `V2StorageTransaction.#recordDocumentRootRead()`).
+   */
+  documentRootRead?: boolean;
+};
+
+type DocumentEntry = ReadDocumentEntry | WritableDocumentEntry;
+
+/**
+ * The text changes a transaction recorded at one string field, which its
+ * commit carries as one `apply-op` against the transaction's read of it.
+ */
+type TextChangeIntent = {
+  /** The field's document path, `value` first. */
+  path: readonly string[];
+
+  /** The value the transaction read at the field, which the edit is against. */
+  baseline: string;
+
+  /** The recorded batches, each against the value the one before it left. */
+  batches: (readonly TextChange[])[];
+
+  /** The field's value with every batch applied. */
+  expected: string;
+
+  /** The id the `apply-op` is submitted under. */
+  submissionId: string;
+};
+
+type SpaceBranch = {
+  space: MemorySpace;
+  replica: ReturnType<IStorageManager["open"]>["replica"];
+  docs: Map<string, DocumentEntry>;
+};
+
+type ReadyState = {
+  status: "ready";
+};
+
+type PendingState = {
+  status: "pending";
+  promise: Promise<Result<Unit, StorageTransactionRejected>>;
+};
+
+type DoneState = {
+  status: "done";
+  result: Result<Unit, StorageTransactionFailed>;
+};
+
+type TxState = ReadyState | DoneState | PendingState;
+
+const logger = getLogger("storage.v2.transaction", {
+  enabled: false,
+  level: "error",
+});
+
+const createOnlyMarkKey = (
+  id: string,
+  scope?: unknown,
+): string => `${normalizeCellScope(scope as CellScope | undefined)}\0${id}`;
+
+// Enabled so cross-space partial-commit failures (no rollback) are visible.
+const multiSpaceCommitLogger = getLogger("storage.v2.multi-space-commit", {
+  enabled: true,
+  level: "error",
+});
+
+const toStoreError = (error: unknown): StorageTransactionRejected => {
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    name: "StoreError" as const,
+    message,
+    cause: { name: "StoreError", message },
+  };
+};
+
+function withCommitTiming<T>(
+  keys: string[],
+  fn: () => T,
+): T {
+  logger.timeStart(...keys);
+  try {
+    return fn();
+  } finally {
+    logger.timeEnd(...keys);
+  }
+}
+
+const currentDocument = (doc: DocumentEntry): RootAttestation =>
+  doc.current ?? doc.initial;
+
+/**
+ * The root a read at `epoch` describes.
+ *
+ * The displaced roots are oldest first and short — one per epoch actually
+ * handed to a reader — so the first one still standing at `epoch` is the
+ * answer. Falling off the end means no write has displaced anything this
+ * reader could still be describing, which is the ordinary case.
+ */
+const documentAtEpoch = (
+  doc: DocumentEntry,
+  epoch: number,
+): RootAttestation => {
+  const displaced = doc.displaced;
+  if (displaced !== undefined) {
+    for (let index = 0; index < displaced.length; index++) {
+      if (displaced[index].until >= epoch) return displaced[index].root;
+    }
+  }
+  return doc.current ?? doc.initial;
+};
+
+const isWritableDocument = (
+  doc: DocumentEntry,
+): doc is WritableDocumentEntry =>
+  doc.current !== undefined &&
+  doc.frozenReads !== undefined &&
+  doc.writeDetails !== undefined &&
+  doc.patchDetails !== undefined;
+
+const ensureWritableDocument = (
+  doc: DocumentEntry,
+): WritableDocumentEntry => {
+  if (isWritableDocument(doc)) {
+    return doc;
+  }
+  doc.current = doc.initial;
+  doc.frozenReads = new PathKeyMap();
+  doc.writeDetails = new Map();
+  doc.patchDetails = new Map();
+  return doc as WritableDocumentEntry;
+};
+
+/**
+ * Drops `doc.frozenReads` entries on the chain of `writtenPath` -- both
+ * ancestors (whose containers were rebuilt by a plan's `apply()`)
+ * and descendants (the subtree at the write target is gone). Sibling
+ * subtrees off divergent ancestors are preserved: structural sharing
+ * leaves their values reference-identical to the consumer's cached
+ * snapshot.
+ *
+ * Additionally drops the synthetic `<parent>/length` sibling: writing to
+ * `array[N]` can change `array.length`, and that pointer is a true sibling
+ * of `array[N]` in the trie (not on its chain), so it needs its own
+ * targeted invalidation.
+ *
+ * Both operations are O(D) in `writtenPath.length` thanks to the
+ * `PathKeyMap` tree-walk -- no per-cache-entry sweep.
+ */
+const invalidateFrozenReadsOnChain = (
+  doc: WritableDocumentEntry,
+  writtenPath: readonly string[],
+): void => {
+  const map = doc.frozenReads;
+  map.invalidateChain(writtenPath);
+  // The chain walk already cleared every ancestor's value AND dropped the
+  // subtree at `writtenPath`. Now also drop the parent's `length` child for
+  // the JS-array-index case. For a root write this is a no-op; the chain
+  // walk already cleared everything.
+  if (writtenPath.length > 0) {
+    const parent = writtenPath.slice(0, -1);
+    map.invalidateChain([...parent, "length"]);
+  }
+};
+
+const freezeReadValue = <T extends FabricValue | undefined>(value: T): T => {
+  if (!isObjectOrArray(value)) {
+    return value;
+  }
+  // What isolates a read from later mutation of its source is frozen-ness,
+  // and `isDeepFrozen()` answers that question alone: a deep-frozen value
+  // goes back by identity, and anything else is deep-cloned and frozen by
+  // `cloneIfNecessary()`.
+  //
+  // `cloneIfNecessary()` decides its own identity fast path with
+  // `isValidDeepFrozenFabricValue()`, which conjoins the frozen-ness question
+  // with a membership walk of every node in the value. That walk is uncached,
+  // so the first read of a stored document runs it in full, and for a list it
+  // costs several times what the rest of the read does. Membership is settled
+  // before a value reaches the replica: the write paths below hand every value
+  // to `cloneIfNecessary()`, which either accepts it as a deep-frozen
+  // `FabricValue` or rebuilds it as one.
+  return (isDeepFrozen(value) ? value : cloneIfNecessary(value)) as T;
+};
+
+const collapseEmptyJsonDocumentEnvelope = (
+  value: FabricValue | undefined,
+): FabricValue | undefined => {
+  if (
+    value === undefined ||
+    !isObjectNotArray(value) ||
+    Object.keys(value).length > 0
+  ) {
+    return value;
+  }
+  return undefined;
+};
+
+const EMPTY_META = Object.freeze({});
+
+/** One op a document's commit may send, before `selectPatchOps()` chooses. */
+export type PatchDraftCandidate = {
+  /** The op itself. */
+  patch: PatchOp;
+
+  /** The document path the op writes. */
+  path: readonly string[];
+
+  /**
+   * Whether the op replaces everything beneath `path`, so that a candidate at
+   * or below it is redundant. Value ops do; an array's element splice does not.
+   */
+  coversDescendants: boolean;
+
+  /**
+   * For a splice that adds or removes an array's tail, the first index it
+   * touches: a candidate at an element index at or past it is subsumed.
+   */
+  tailSpliceStartIndex?: number;
+};
+
+/**
+ * Returns the path of the array a write at `path` is diffed as a change to,
+ * given the document the commit started from and the one it leaves. Returns
+ * `null` where the write is diffed at `path` itself.
+ *
+ * Where every prefix of `path` is in both documents, that array is the deepest
+ * one above `path`. Where a prefix is in one document alone, everything
+ * beneath it arrived or left with it, and the array is the shallowest one at
+ * or below that prefix's parent: the array the prefix is an element of, which
+ * gained or lost the element, or else the first array inside what arrived. An
+ * array any deeper would be named through an element the stored document does
+ * not hold, or would be an element itself, added by its index. Where no array
+ * sits that far down, it is the deepest one above the prefix.
+ *
+ * With no array above `path` the write is diffed at `path` itself: a segment
+ * written as an index, or as `length`, is then a key of the plain object that
+ * holds it. In one case the path of a plain object is returned in an array's
+ * place. The server creates a container the starting document lacks as it
+ * applies an `add` beneath it, and shapes it by the segment that follows: an
+ * array where `missingContainerIsArray()` says so. The commit holds a plain
+ * object there, so where such a segment follows a container the starting
+ * document lacks, that container's path is returned and it is sent whole.
+ */
+const findArrayPatchPath = (
+  before: FabricValue | undefined,
+  after: FabricValue | undefined,
+  path: readonly string[],
+): readonly string[] | null => {
+  const options = { allowArrayLength: true };
+  let arrayDepth = -1;
+  // Length of the shortest prefix of `path` that is in one document alone,
+  // once one has been found.
+  let divergedDepth: number | undefined;
+
+  for (let depth = 0; depth < path.length; depth += 1) {
+    const prefix = path.slice(0, depth);
+    const isArray = Array.isArray(readValueAtPath(before, prefix, options)) ||
+      Array.isArray(readValueAtPath(after, prefix, options));
+    if (isArray) {
+      arrayDepth = depth;
+      if (divergedDepth !== undefined) {
+        break;
+      }
+    }
+    if (divergedDepth === undefined) {
+      const child = path.slice(0, depth + 1);
+      if (
+        hasValueAtPath(before, child, options) !==
+          hasValueAtPath(after, child, options)
+      ) {
+        divergedDepth = depth + 1;
+        if (isArray) {
+          break;
+        }
+      }
+    }
+  }
+
+  if (arrayDepth !== -1) {
+    return path.slice(0, arrayDepth);
+  }
+
+  // No prefix is missing from the starting document, so the server has no
+  // container to create.
+  if (
+    divergedDepth === undefined ||
+    hasValueAtPath(before, path.slice(0, divergedDepth), options)
+  ) {
+    return null;
+  }
+  for (let index = divergedDepth; index < path.length; index += 1) {
+    if (missingContainerIsArray(path[index]!)) {
+      return path.slice(0, index);
+    }
+  }
+  return null;
+};
+
+/**
+ * Builds a patch op from before/after state at `path`. Presence (slot
+ * exists) is distinct from value: a slot holding `undefined` is present,
+ * so add/remove are chosen from presence transitions, and a stored
+ * `undefined` travels as a `replace`/`add` whose value is `undefined`.
+ * When presence flags are omitted they are inferred from value
+ * definedness (legacy callers in the array fast-path, where presence
+ * parity was already established via `in` checks).
+ */
+const buildValuePatchCandidate = (
+  path: readonly string[],
+  value: FabricValue | undefined,
+  previousValue: FabricValue | undefined,
+  valuePresent: boolean = value !== undefined,
+  previousPresent: boolean = previousValue !== undefined,
+): PatchDraftCandidate | null => {
+  if (valuePresent === previousPresent && valueEqual(value, previousValue)) {
+    return null;
+  }
+
+  const pointer = encodePointer(path);
+  if (!valuePresent) {
+    if (!previousPresent) {
+      return null;
+    }
+    return {
+      patch: { op: "remove", path: pointer },
+      path,
+      coversDescendants: true,
+    };
+  }
+  if (!previousPresent) {
+    return {
+      patch: { op: "add", path: pointer, value },
+      path,
+      coversDescendants: true,
+    };
+  }
+  return {
+    patch: { op: "replace", path: pointer, value },
+    path,
+    coversDescendants: true,
+  };
+};
+
+const arrayTailIsDense = (
+  value: readonly FabricValue[],
+  start: number,
+): boolean => {
+  for (let index = start; index < value.length; index += 1) {
+    if (!(index in value)) {
+      return false;
+    }
+  }
+  return true;
+};
+
+const buildArrayPatchCandidates = (
+  path: readonly string[],
+  before: FabricValue | undefined,
+  after: FabricValue | undefined,
+  beforePresent: boolean = before !== undefined,
+  afterPresent: boolean = after !== undefined,
+): PatchDraftCandidate[] => {
+  if (beforePresent === afterPresent && valueEqual(before, after)) {
+    return [];
+  }
+
+  if (!Array.isArray(before) || !Array.isArray(after)) {
+    const candidate = buildValuePatchCandidate(
+      path,
+      after,
+      before,
+      afterPresent,
+      beforePresent,
+    );
+    return candidate ? [candidate] : [];
+  }
+
+  // Both sides are arrays from here on, so the array slot itself is present
+  // in both states; fallbacks below replace the whole array.
+  const overlappingLength = Math.min(before.length, after.length);
+  for (let index = 0; index < overlappingLength; index += 1) {
+    if ((index in before) !== (index in after)) {
+      const fallback = buildValuePatchCandidate(
+        path,
+        after,
+        before,
+        true,
+        true,
+      );
+      return fallback ? [fallback] : [];
+    }
+  }
+
+  if (after.length > before.length && !arrayTailIsDense(after, before.length)) {
+    const fallback = buildValuePatchCandidate(path, after, before, true, true);
+    return fallback ? [fallback] : [];
+  }
+
+  const candidates: PatchDraftCandidate[] = [];
+  for (let index = 0; index < overlappingLength; index += 1) {
+    if (!(index in before)) {
+      continue;
+    }
+
+    const nextValue = after[index] as FabricValue | undefined;
+    const previousValue = before[index] as FabricValue | undefined;
+    if (valueEqual(nextValue, previousValue)) {
+      continue;
+    }
+
+    candidates.push({
+      patch: {
+        op: "replace",
+        path: encodePointer([...path, index.toString()]),
+        value: nextValue,
+      },
+      path: [...path, index.toString()],
+      coversDescendants: true,
+    });
+  }
+
+  if (after.length > before.length) {
+    candidates.push({
+      patch: {
+        op: "splice",
+        path: encodePointer(path),
+        index: before.length,
+        remove: 0,
+        add: after.slice(before.length),
+      },
+      path,
+      coversDescendants: false,
+      tailSpliceStartIndex: before.length,
+    });
+  } else if (after.length < before.length) {
+    candidates.push({
+      patch: {
+        op: "splice",
+        path: encodePointer(path),
+        index: after.length,
+        remove: before.length - after.length,
+        add: [],
+      },
+      path,
+      coversDescendants: false,
+      tailSpliceStartIndex: after.length,
+    });
+  }
+
+  if (candidates.length === 0) {
+    const fallback = buildValuePatchCandidate(path, after, before, true, true);
+    return fallback ? [fallback] : [];
+  }
+
+  return candidates;
+};
+
+// A concrete RFC 6901 array-index segment: a non-negative integer with no
+// leading zeros. Mirrors `isArraySegment` in memory/v2/patch.ts. The `-` append
+// marker is intentionally NOT an index — appending never shifts existing
+// elements, so a leaf-only matcher handles it conservatively via the array path.
+const ARRAY_INDEX_SEGMENT = /^(0|[1-9]\d*)$/;
+
+/**
+ * Indicates whether `pointer` names an array element by its index: its last
+ * segment is written as an index, and the path above that segment holds an
+ * array in `before` or in `after`. Beneath a plain object the same segment is
+ * a key of that object.
+ */
+const pointerNamesArrayElement = (
+  pointer: string,
+  before: FabricValue | undefined,
+  after: FabricValue | undefined,
+): boolean => {
+  const segments = parsePointer(pointer);
+  const last = segments[segments.length - 1];
+  if (last === undefined || !ARRAY_INDEX_SEGMENT.test(last)) {
+    return false;
+  }
+  const parent = segments.slice(0, -1);
+  return Array.isArray(readValueAtPath(before, parent)) ||
+    Array.isArray(readValueAtPath(after, parent));
+};
+
+/**
+ * Throws where `patches` holds an indexed-array structural op: an `add`, a
+ * `remove` or a `move` that names an element of an array by its index.
+ * `before` and `after` are the document the patches were diffed from and the
+ * one they were diffed to, and they decide what an index is: a pointer's last
+ * segment names an element only where the path above it holds an array in one
+ * of the two. A structural op at a key of a plain object passes, however the
+ * key is written.
+ *
+ * The commit-conflict matcher and the scheduler's reader-dirty index match a
+ * recursive read against a patch's leaf paths alone. A structural op at an
+ * array index shifts the elements after it, and its leaf path names only the
+ * index it was given, so neither matcher would see that a reader of a shifted
+ * element is stale. A change to an array therefore travels as a `replace` at
+ * an index, a `splice` on the array's path, or a `replace` of the whole array,
+ * and this is the check that the diff produced nothing else. A key added to or
+ * removed from a plain object shifts no sibling, so the leaf path of that op
+ * is the whole of what it changed. See "Array writes and the leaf-only
+ * matcher" in `docs/specs/memory-v2/08-conflict-granularity.md`.
+ *
+ * Exported for direct unit testing.
+ */
+export const assertNoIndexedArrayStructuralOps = (
+  patches: readonly PatchOp[],
+  before: FabricValue | undefined,
+  after: FabricValue | undefined,
+): void => {
+  // The structural ops and their pointer fields are read off the wire-op
+  // registry (`patchOpIsStructural()`, `patchOpPointerFields()`), so an op
+  // added there is checked here with no list of its own to extend.
+  for (const patch of patches) {
+    if (!patchOpIsStructural(patch)) {
+      continue;
+    }
+    const pointers = patchOpPointerFields(patch).map((field) =>
+      (patch as unknown as Record<string, string>)[field]
+    );
+    if (
+      !pointers.some((pointer) =>
+        pointerNamesArrayElement(pointer, before, after)
+      )
+    ) {
+      continue;
+    }
+    throw new Error(
+      `v2 patch generator invariant violation: emitted an indexed-array ` +
+        `${patch.op} (${pointers.join(" -> ")}). Array element ` +
+        `insert/remove/reorder must be a splice on the array path or a ` +
+        `whole-array replace; an indexed add/remove/move shifts siblings that ` +
+        `the leaf-only conflict and reader-dirty matchers cannot track (see ` +
+        `docs/specs/memory-v2/08-conflict-granularity.md).`,
+    );
+  }
+};
+
+const isPrefixPath = (
+  prefix: readonly string[],
+  path: readonly string[],
+): boolean => prefix.length <= path.length && pathsOverlap(prefix, path);
+
+const isSubsumedByTailSplice = (
+  spliceCandidate: PatchDraftCandidate,
+  candidatePath: readonly string[],
+): boolean => {
+  if (spliceCandidate.tailSpliceStartIndex === undefined) {
+    return false;
+  }
+  if (
+    !isPrefixPath(spliceCandidate.path, candidatePath) ||
+    candidatePath.length <= spliceCandidate.path.length
+  ) {
+    return false;
+  }
+  const childSegment = candidatePath[spliceCandidate.path.length];
+  return childSegment !== undefined &&
+    isArrayIndexPropertyName(childSegment) &&
+    Number(childSegment) >= spliceCandidate.tailSpliceStartIndex;
+};
+
+/**
+ * The ops a document's commit sends, chosen from its patch candidates. A
+ * covering candidate is dropped when a tail splice subsumes it, or when a
+ * covering candidate already kept sits at or above its path, shorter paths
+ * being kept first. A non-covering candidate is dropped when a kept covering
+ * candidate or a tail splice covers it. And either kind is dropped when
+ * `suppress` names it, since a mergeable op carries that change instead.
+ *
+ * Every one of those checks asks which of a set of paths prefix a candidate's
+ * path, and a transaction writing `K` keys yields `K` candidates. So each set
+ * is indexed by pointer and a candidate looks up its own prefixes, which keeps
+ * the work per candidate to the depth of its path rather than the number of
+ * candidates.
+ *
+ * Exported for direct unit testing.
+ */
+export const selectPatchOps = (
+  fullCoverCandidates: readonly PatchDraftCandidate[],
+  nonCoverCandidates: readonly PatchDraftCandidate[],
+  suppress: readonly OpSuppression[],
+): PatchOp[] => {
+  const tailSplicesByPointer = new Map<string, PatchDraftCandidate[]>();
+  for (const candidate of nonCoverCandidates) {
+    if (candidate.tailSpliceStartIndex === undefined) continue;
+    const pointer = encodePointer(candidate.path);
+    const splices = tailSplicesByPointer.get(pointer);
+    if (splices === undefined) {
+      tailSplicesByPointer.set(pointer, [candidate]);
+    } else {
+      splices.push(candidate);
+    }
+  }
+  // A tail splice subsumes only what sits strictly beneath it, so a
+  // candidate's own pointer, the last of its prefixes, is not looked up.
+  const isSubsumedByAnyTailSplice = (
+    candidatePath: readonly string[],
+  ): boolean =>
+    prefixPointers(candidatePath).slice(0, -1).some((pointer) =>
+      tailSplicesByPointer.get(pointer)?.some((spliceCandidate) =>
+        isSubsumedByTailSplice(spliceCandidate, candidatePath)
+      ) ?? false
+    );
+
+  const retainedCoverCandidates = fullCoverCandidates
+    .filter((candidate) => !isSubsumedByAnyTailSplice(candidate.path))
+    .sort((left, right) => left.path.length - right.path.length);
+  // Shortest first, so a candidate overlaps one already kept exactly when
+  // that one's path is a prefix of its own.
+  const nonOverlappingCoverCandidates: typeof retainedCoverCandidates = [];
+  const coverPointers = new Set<string>();
+  const isUnderCover = (path: readonly string[]): boolean =>
+    prefixPointers(path).some((pointer) => coverPointers.has(pointer));
+  for (const detail of retainedCoverCandidates) {
+    if (isUnderCover(detail.path)) {
+      continue;
+    }
+    nonOverlappingCoverCandidates.push(detail);
+    coverPointers.add(encodePointer(detail.path));
+  }
+
+  const retainedNonCoverCandidates = nonCoverCandidates.filter((detail) =>
+    !isUnderCover(detail.path) && !isSubsumedByAnyTailSplice(detail.path)
+  );
+
+  // Drop the candidates the append op replaces: the whole-array op at the
+  // append path, and element candidates in the appended tail (index >= start).
+  // Edits to existing elements (index < start) and unrelated sibling/ancestor
+  // candidates are kept.
+  const suppressionsByPointer = new Map<string, OpSuppression[]>();
+  for (const suppression of suppress) {
+    const pointer = encodePointer(suppression.path);
+    const suppressions = suppressionsByPointer.get(pointer);
+    if (suppressions === undefined) {
+      suppressionsByPointer.set(pointer, [suppression]);
+    } else {
+      suppressions.push(suppression);
+    }
+  }
+  const isSuppressed = (candidatePath: readonly string[]): boolean =>
+    prefixPointers(candidatePath).some((pointer, length) =>
+      suppressionsByPointer.get(pointer)?.some(({ tailStart, subtree }) => {
+        // Any suppression at the candidate's own path suppresses it.
+        if (length === candidatePath.length) {
+          return true;
+        }
+        // A remove-by-value suppresses the whole subtree (any descendant); a
+        // tail op suppresses only appended-tail element candidates; an
+        // increment suppresses only the exact scalar path.
+        if (subtree) {
+          return true;
+        }
+        if (tailStart === undefined) {
+          return false;
+        }
+        const childSegment = candidatePath[length]!;
+        return isArrayIndexPropertyName(childSegment) &&
+          Number(childSegment) >= tailStart;
+      }) ?? false
+    );
+
+  return [
+    ...nonOverlappingCoverCandidates
+      .filter((candidate) => !isSuppressed(candidate.path))
+      .map((candidate) => candidate.patch),
+    ...retainedNonCoverCandidates
+      .filter((candidate) => !isSuppressed(candidate.path))
+      .map((candidate) => candidate.patch),
+  ];
+};
+
+// A `FabricSpecialObject` on either side falls to the `valueEqual` comparison
+// below rather than being compared by key set: its state sits behind no key,
+// so two distinct ones would compare by their empty key sets and report
+// "unchanged", leaving an in-place fabric change at an ancestor prefix with no
+// reactivity path. `differential.ts` guards its sibling walk the same way.
+//
+// That covers a `FabricInstance` too. `buildReactivityPathsForChanges` calls
+// this with the value at every proper ancestor prefix of a written path, read
+// from the document as it stood when the transaction opened, so a write
+// anywhere below a stored `FabricError` arrives here at commit time.
+const shallowStructureChanged = (
+  before: FabricValue | undefined,
+  after: FabricValue | undefined,
+): boolean => {
+  if (Object.is(before, after)) {
+    return false;
+  }
+  if (isFabricPlainContainer(before) && isFabricPlainContainer(after)) {
+    const beforeKeys = Object.keys(before);
+    const afterKeys = Object.keys(after);
+    if (beforeKeys.length !== afterKeys.length) {
+      return true;
+    }
+    if (Array.isArray(before) !== Array.isArray(after)) {
+      return true;
+    }
+    if (Array.isArray(before) && before.length !== after.length) {
+      return true;
+    }
+    return !beforeKeys.every((key) => Object.hasOwn(after, key));
+  }
+
+  return !valueEqual(before, after);
+};
+
+const compareDocPaths = (
+  left: readonly string[],
+  right: readonly string[],
+): number => {
+  if (left.length !== right.length) {
+    return left.length - right.length;
+  }
+
+  const leftPointer = encodePointer(left);
+  const rightPointer = encodePointer(right);
+  return leftPointer < rightPointer ? -1 : leftPointer > rightPointer ? 1 : 0;
+};
+
+/**
+ * The paths one document's writes report for reactivity, sorted by
+ * `compareDocPaths()` and free of duplicates: each written path whose value
+ * differs between `beforeRoot` and `afterRoot`, and each proper ancestor of
+ * such a path whose shallow structure differs (see `shallowStructureChanged()`),
+ * so that a shape-only reader of the ancestor wakes when a key comes or goes
+ * and not when a value beneath it changes.
+ *
+ * Comparing an ancestor's shallow structure reads its whole key set, and every
+ * written path beneath it shares the answer, so each ancestor is compared once
+ * per call however many written paths sit beneath it. `K` writes under one
+ * `N`-key object then list its keys once, not `K` times.
+ *
+ * Exported for direct unit testing.
+ */
+export const buildReactivityPathsForChanges = (
+  beforeRoot: FabricValue | undefined,
+  afterRoot: FabricValue | undefined,
+  writtenPaths: Iterable<readonly string[]>,
+): readonly (readonly string[])[] => {
+  const paths = new Map<string, readonly string[]>();
+  // Keyed by the ancestor's pointer, which `paths` shares.
+  const ancestorChanged = new Map<string, boolean>();
+  for (const path of writtenPaths) {
+    const beforeValue = readValueAtPath(beforeRoot, path, {
+      allowArrayLength: true,
+    });
+    const afterValue = readValueAtPath(afterRoot, path, {
+      allowArrayLength: true,
+    });
+    if (valueEqual(beforeValue, afterValue)) {
+      continue;
+    }
+
+    const pointers = prefixPointers(path);
+    for (let prefixLength = 1; prefixLength < path.length; prefixLength += 1) {
+      const pointer = pointers[prefixLength];
+      let changed = ancestorChanged.get(pointer);
+      if (changed === undefined) {
+        const prefix = path.slice(0, prefixLength);
+        changed = shallowStructureChanged(
+          readValueAtPath(beforeRoot, prefix, {
+            allowArrayLength: true,
+          }),
+          readValueAtPath(afterRoot, prefix, {
+            allowArrayLength: true,
+          }),
+        );
+        ancestorChanged.set(pointer, changed);
+      }
+      if (changed && !paths.has(pointer)) {
+        paths.set(pointer, path.slice(0, prefixLength));
+      }
+    }
+    paths.set(pointers[path.length], path);
+  }
+  return [...paths.values()].sort(compareDocPaths);
+};
+
+class V2TransactionJournal implements ITransactionJournal {
+  readonly #tx: V2StorageTransaction;
+
+  constructor(tx: V2StorageTransaction) {
+    this.#tx = tx;
+  }
+
+  activity(): Iterable<Activity> {
+    throw new Error(
+      "V2 transactions do not support journal.activity(); " +
+        "use getReadActivities(), getReactivityLog(), or getWriteDetails().",
+    );
+  }
+
+  novelty(space: MemorySpace): Iterable<IAttestation> {
+    return (function* (tx: V2StorageTransaction) {
+      for (const detail of tx.getWriteDetails(space) ?? []) {
+        yield {
+          address: {
+            id: detail.address.id,
+            path: detail.address.path,
+          },
+          value: detail.value,
+        };
+      }
+    })(this.#tx);
+  }
+
+  history(space: MemorySpace): Iterable<IAttestation> {
+    return (function* (tx: V2StorageTransaction) {
+      for (const detail of tx.getWriteDetails(space) ?? []) {
+        yield {
+          address: {
+            id: detail.address.id,
+            path: detail.address.path,
+          },
+          value: detail.previousValue,
+        };
+      }
+    })(this.#tx);
+  }
+}
+
+export class V2StorageTransaction implements IStorageTransaction {
+  changeGroup?: ChangeGroup;
+  immediate?: boolean;
+
+  /**
+   * The scope INSTANCE identity this transaction's scoped reads and
+   * writes resolve against (IStorageTransaction.scopeKeyIdentity —
+   * server-execution v2 stage A, OW17's tx→replica identity seam). Set
+   * ONCE by the wave run stamp before the first read; a later different
+   * value throws, and a change after a document was loaded throws too:
+   * the transaction's document cache is name-keyed, so one transaction
+   * serves exactly one identity (the runner mints one per instance run).
+   */
+  get scopeKeyIdentity(): ScopeKeyIdentity | undefined {
+    return this.#scopeKeyIdentity;
+  }
+
+  set scopeKeyIdentity(identity: ScopeKeyIdentity | undefined) {
+    if (identity === undefined) return;
+    const current = this.#scopeKeyIdentity;
+    if (current !== undefined) {
+      if (
+        current.principal !== identity.principal ||
+        current.sessionId !== identity.sessionId
+      ) {
+        throw new Error(
+          "storage transaction already carries a different scope-key " +
+            "identity: one transaction serves one identity (server-execution " +
+            "v2 stage A, OW17's tx→replica seam — mint one transaction per " +
+            "instance run)",
+        );
+      }
+      return;
+    }
+    if (this.#loadedUnderIdentity) {
+      throw new Error(
+        "storage transaction already loaded documents under the storage " +
+          "manager's own identity; a scope-key identity must be set before " +
+          "the first read (server-execution v2 stage A, OW17's tx→replica " +
+          "seam)",
+      );
+    }
+    this.#scopeKeyIdentity = identity;
+  }
+  #scopeKeyIdentity: ScopeKeyIdentity | undefined;
+  #loadedUnderIdentity = false;
+
+  readonly journal = new V2TransactionJournal(this);
+
+  #state: TxState = { status: "ready" };
+
+  /**
+   * The attempt's fate — server verdict or local rejection — ahead of the
+   * subscription coverage or read repair its settlement waits for. Durability
+   * callbacks observe this signal through the receipt's `verdict` stage.
+   */
+  readonly #verdict = Promise.withResolvers<Result<Unit, CommitError>>();
+
+  #branches = new Map<MemorySpace, SpaceBranch>();
+  #readActivities: IReadActivity[] = [];
+  #potentiallyExternalReadActivities: IReadActivity[] = [];
+
+  /**
+   * Per-transaction monotonic activity clock, shared between read activities
+   * and write attempts so their relative order (the read/write interleaving) is
+   * recoverable without a journal scan — V2 journals don't support
+   * `activity()`. Stamped at the two record points: the `read()` activity push
+   * and `#recordPatchIntent()`. Consumed by CFC write-prefix provenance
+   * (`docs/specs/cfc-write-prefix-provenance.md` §4/§6).
+   */
+  #activityClock = 0;
+
+  /**
+   * How many times this transaction has replaced a document root. A read taken
+   * at epoch E describes the state after E replacements, which is what lets a
+   * materialized read keep answering for the moment it was taken while the
+   * reader goes on writing. Zero writes means every document still stands at
+   * its `initial` attestation, so every epoch describes the same state and
+   * nothing below has to run.
+   */
+  #writeEpoch = 0;
+
+  /**
+   * The epoch reads resolve against while a materialized read is walking, or
+   * `undefined` for the transaction's current state.
+   */
+  #readEpoch: number | undefined;
+
+  /**
+   * The newest epoch handed to a reader, or `undefined` where none has been. A
+   * replacement keeps the root it displaces only when a reader could still ask
+   * for it, and this is what decides that.
+   */
+  #lastIssuedEpoch: number | undefined;
+
+  #writeAttemptLog: IWriteAttempt[] = [];
+  #reactivityLogCache?: TransactionReactivityLog;
+  #commitPreconditions = new Map<MemorySpace, CommitPrecondition[]>();
+  #createOnlyMarks = new Map<
+    MemorySpace,
+    Map<string, { id: string; scope: CellScope }>
+  >();
+
+  /**
+   * Folded SQLite write ops per space, applied in the same commit as cell ops.
+   */
+  #sqliteOps = new Map<MemorySpace, SqliteOperation[]>();
+
+  /**
+   * Text changes per space, keyed by document and then by the field's
+   * document pointer (`recordTextChanges()`).
+   */
+  #textChanges = new Map<
+    MemorySpace,
+    Map<string, Map<string, TextChangeIntent>>
+  >();
+
+  #writeSpace?: MemorySpace;
+
+  /**
+   * Whether multi-space writes are enabled (see `enableMultiSpaceWrites()`).
+   * When disabled the transaction rejects writes to a second space; when
+   * enabled `commit()` splits into one per-space commit.
+   */
+  #multiSpaceWrites = false;
+
+  /**
+   * Whether authoritative-writes mode is on (see
+   * `IStorageTransaction.markAuthoritativeWrites()` and the rationale there):
+   * value writes are recorded and committed even when equal to the
+   * currently-visible state — the no-op elision in
+   * `#writeWithinBranch()`/`#writeBatchRun()` yields, the doc-level elision
+   * in `getNativeCommit()` yields, and the commit is emitted as a _whole-doc_
+   * set/delete rather than patches (a patch base extrapolated over a doomed
+   * sealed overlay can name ancestors durable state never had, and `replace`
+   * cannot create them). Set by effect-completion writebacks under the serving
+   * posture; one-way.
+   */
+  #authoritativeWrites = false;
+
+  /**
+   * Whether whole-document-writes mode is on (see
+   * `IStorageTransaction.markWholeDocumentWrites()`): the emission half of
+   * authoritative mode on its own — set/delete rather than patches and
+   * mergeable ops — with the no-op elision left in place. Set by the client
+   * speculation overlay's seal, whose entries layer their ops over a confirmed
+   * value that moves under them. One-way.
+   */
+  #wholeDocumentWrites = false;
+
+  #commitOrder?: readonly MemorySpace[];
+
+  /**
+   * Spaces written to, in first-write order. Used as the default commit order.
+   */
+  #writtenSpaces: MemorySpace[] = [];
+
+  #readOnlySource?: string;
+  #lastDocument?: {
+    branch: SpaceBranch;
+    id: URI;
+    type: MediaType;
+    scope: CellScope;
+    doc: DocumentEntry;
+  };
+
+  /**
+   * Complete the transaction, keeping its result and releasing the state that
+   * only an open transaction needs: the materialized branches, the read and
+   * write activity, and the cached reactivity log. Those are consumed while
+   * the transaction is open — the scheduler takes the reactivity log when the
+   * action that opened the transaction finishes, and the commit path takes the
+   * write details before the result is known. Whatever holds a completed
+   * transaction afterwards, such as a cell bound to it or a cleanup closure
+   * that captured it, would otherwise also hold every address that
+   * transaction read.
+   *
+   * Only a commit that ran ends here. A transaction that never reached storage
+   * — aborted, or rejected by validation — keeps its activity, because the
+   * scheduler retries the action that opened it and re-establishes that
+   * action's dependencies from those reads.
+   */
+  #finish(result: Result<Unit, StorageTransactionFailed>): void {
+    // A rejected scheduler attempt retains eligibility that expired while its
+    // commit waited, so finalization can stop a retry and release the basis.
+    if (
+      (this as IStorageTransaction).sourceAction === undefined ||
+      result.error === undefined || validateLocalReadBasis(this) === undefined
+    ) {
+      releaseLocalReadBasis(this);
+    }
+    this.#state = { status: "done", result };
+    this.#branches.clear();
+    this.#readActivities.length = 0;
+    this.#potentiallyExternalReadActivities.length = 0;
+    this.#writeAttemptLog.length = 0;
+    this.#reactivityLogCache = undefined;
+    this.#lastDocument = undefined;
+  }
+
+  readonly #storage: IStorageManager;
+
+  constructor(storage: IStorageManager) {
+    this.#storage = storage;
+  }
+
+  setReadOnly(reason = "runtime.readTx()"): void {
+    this.#readOnlySource = reason;
+  }
+
+  clearReadOnly(): void {
+    this.#readOnlySource = undefined;
+  }
+
+  isReadOnly(): boolean {
+    return this.#readOnlySource !== undefined;
+  }
+
+  enableMultiSpaceWrites(order?: readonly MemorySpace[]): void {
+    this.#assertWritable("enableMultiSpaceWrites()");
+    this.#multiSpaceWrites = true;
+    if (order !== undefined) {
+      this.#commitOrder = order;
+    }
+  }
+
+  markAuthoritativeWrites(): void {
+    this.#assertWritable("markAuthoritativeWrites()");
+    this.#authoritativeWrites = true;
+  }
+
+  isAuthoritativeWrites(): boolean {
+    return this.#authoritativeWrites;
+  }
+
+  markWholeDocumentWrites(): void {
+    this.#assertWritable("markWholeDocumentWrites()");
+    this.#wholeDocumentWrites = true;
+  }
+
+  /** Whether a document's write is emitted as a whole-document set/delete.
+   * Authoritative mode implies it; whole-document mode is that half alone. */
+  get #emitsWholeDocuments(): boolean {
+    return this.#authoritativeWrites || this.#wholeDocumentWrites;
+  }
+
+  /**
+   * Whether a text-changed field rides its document's whole-document `set`,
+   * which carries the changed text, rather than an `apply-op`. A
+   * whole-document transaction that is not authoritative is the client
+   * speculation overlay's seal, which stays in this process; a store would
+   * refuse such a `set` over an active field rather than take it.
+   */
+  get #textChangesAsWholeDocuments(): boolean {
+    return this.#wholeDocumentWrites && !this.#authoritativeWrites;
+  }
+
+  static create(manager: IStorageManager): IStorageTransaction {
+    return new this(manager);
+  }
+
+  retainPendingWriteElision(target: IMemorySpaceAddress): void {
+    const { space, ...address } = target;
+    this.#retainPendingWriteElision(this.#branch(space), space, address);
+  }
+
+  isContentAddressedDocPersisted(space: MemorySpace, hash: string): boolean {
+    return this.#storage.isContentAddressedDocPersisted?.(space, hash) ?? false;
+  }
+
+  status(): StorageTransactionStatus {
+    if (this.#state.status === "done") {
+      if (this.#state.result.error) {
+        return {
+          status: "error",
+          journal: this.journal,
+          error: this.#state.result.error,
+        };
+      }
+      return { status: "done", journal: this.journal };
+    }
+    if (this.#state.status === "pending") {
+      return { status: "pending", journal: this.journal };
+    }
+    return { status: "ready", journal: this.journal };
+  }
+
+  committedSeq(space: MemorySpace): number | undefined {
+    return getCommitSeq(this, space);
+  }
+
+  getReadActivities(): readonly IReadActivity[] {
+    return this.#readActivities;
+  }
+
+  /** @inheritDoc */
+  getPotentiallyExternalReadActivities(): readonly IReadActivity[] {
+    return this.#potentiallyExternalReadActivities;
+  }
+
+  getWriteAttemptLog(): readonly IWriteAttempt[] {
+    return this.#writeAttemptLog;
+  }
+
+  getWriteTargetSpaces(): readonly MemorySpace[] {
+    return this.#orderedCommitSpaces();
+  }
+
+  getReactivityLog() {
+    this.#reactivityLogCache ??= this.#buildReactivityLog();
+    return this.#reactivityLogCache;
+  }
+
+  addCommitPrecondition(
+    space: MemorySpace,
+    precondition: CommitPrecondition,
+  ): void {
+    this.#assertWritable("addCommitPrecondition()");
+    const ready = this.#editable();
+    if (ready.error) {
+      throw ready.error;
+    }
+    // Claim `space` as a write target (sets #writeSpace, enforces single-space
+    // write isolation) so a precondition-only commit is still sent and
+    // validated instead of resolving ok without a write space.
+    const claimed = this.#claimWriteSpace(space);
+    if (claimed.error) {
+      throw claimed.error;
+    }
+    const preconditions = this.#commitPreconditions.get(space);
+    if (preconditions) {
+      preconditions.push(precondition);
+    } else {
+      this.#commitPreconditions.set(space, [precondition]);
+    }
+  }
+
+  getCommitPreconditions(
+    space: MemorySpace,
+  ): readonly CommitPrecondition[] | undefined {
+    return this.#commitPreconditions.get(space);
+  }
+
+  /**
+   * Every precondition `space`'s commit carries: the ones a caller attached
+   * and the ones its create-only marks stand for. This is what the commit
+   * sends and what the claim check reads to see which documents the server
+   * judges for itself, so the two cannot drift apart.
+   */
+  #commitPreconditionsFor(space: MemorySpace): CommitPrecondition[] {
+    const attached = this.#commitPreconditions.get(space);
+    const createOnlyMarks = this.#createOnlyMarks.get(space);
+    // Most commits pin nothing, and this runs on every one of them.
+    if (attached === undefined && createOnlyMarks === undefined) return [];
+    return [
+      ...(attached ?? []),
+      ...[...(createOnlyMarks?.values() ?? [])].map(({ id, scope }) => ({
+        kind: "entity-absent" as const,
+        id,
+        scope,
+      })),
+    ];
+  }
+
+  markCreateOnly(
+    link: { space: MemorySpace; id: string; scope?: unknown },
+  ): void {
+    this.#assertWritable("markCreateOnly()");
+    const ready = this.#editable();
+    if (ready.error) {
+      throw ready.error;
+    }
+    const claim = this.#claimWriteSpace(link.space);
+    if (claim.error) {
+      throw claim.error;
+    }
+    let marks = this.#createOnlyMarks.get(link.space);
+    if (!marks) {
+      marks = new Map();
+      this.#createOnlyMarks.set(link.space, marks);
+    }
+    const scope = normalizeCellScope(link.scope as CellScope | undefined);
+    marks.set(createOnlyMarkKey(link.id, scope), {
+      id: link.id,
+      scope,
+    });
+  }
+
+  /**
+   * Records one mergeable-op delta at a path. Which ops exist, whether a delta
+   * records nothing, how repeated deltas fold into one intent, and how an
+   * intent becomes wire ops are all defined once in `./mergeable-ops.ts` — this
+   * method just accumulates, deferring the per-op questions to that registry.
+   */
+  recordMergeableOp(
+    address: IMemorySpaceAddress,
+    delta: MergeableOpDelta,
+  ): void {
+    this.#assertWritable("recordMergeableOp()");
+    const ready = this.#editable();
+    if (ready.error) throw ready.error;
+    if (isNoopMergeableDelta(delta)) {
+      return;
+    }
+    const doc = this.#writableMergeableTarget(address);
+    if (!doc) throw new Error(`${delta.op} target is not writable`);
+    const pathKey = encodePointer(address.path);
+    // A poisoned path has already fallen back to the whole-value diff, which
+    // carries everything beneath it; a further op at or beneath it does not
+    // revive the fast path.
+    const poisoned = doc.mergeableOpsPoisoned;
+    if (
+      poisoned !== undefined &&
+      prefixPointers(address.path).some((pointer) => poisoned.has(pointer))
+    ) {
+      return;
+    }
+    const existing = doc.mergeableOps?.get(pathKey);
+    // A different mergeable op kind at the same path in one transaction cannot be
+    // carried alongside the first: the intent map holds one op per path, so the
+    // second would replace the first and the diff-suppression would then drop the
+    // first op's element changes from the commit — silent data loss. Poison the
+    // path instead so the whole-array diff carries both changes.
+    if (existing !== undefined && existing.op !== delta.op) {
+      doc.mergeableOps?.delete(pathKey);
+      (doc.mergeableOpsPoisoned ??= new Set()).add(pathKey);
+      return;
+    }
+    doc.mergeableOps ??= new Map();
+    doc.mergeableOps.set(
+      pathKey,
+      foldMergeableIntent(existing, address.path, delta),
+    );
+  }
+
+  /**
+   * Abandons the mergeable fast path for `address`, for the rest of the
+   * transaction: a foreign write (a reshape that is not itself a mergeable op)
+   * has written the value there whole. Drops any covered intent and marks the
+   * written path poisoned, so that the commit emits the whole-value diff (the
+   * correct local value) and an op recorded after the write is refused. The
+   * write says what the value is, where an op resolves against whatever the
+   * store holds: a `set([])` and then a `push()` sent as an append would add
+   * to a list another session filled, where the transaction meant one element.
+   *
+   * The reshape reaches every intent _at_ or _beneath_ the written path: a
+   * write to an enclosing object (`doc.set({rows})`) rewrites the array inside
+   * it just as surely as a write to the array itself. Intents _above_ the
+   * write are untouched, which is what keeps an element edit
+   * (`cell.key(i).set(...)`, a write beneath the array) composing with a push,
+   * and leaves a write to a sibling field alone.
+   *
+   * A write that does not come through here — one made straight to the
+   * transaction — poisons nothing, and each builder's own check at commit
+   * that its intent still describes the local value is what catches it (see
+   * `./mergeable-ops.ts`). The same goes for an element edit, which is
+   * beneath the array and so passes through here untouched: harmless to a
+   * tail op, fatal to a remove-by-value, and the builders are what tell them
+   * apart.
+   */
+  poisonMergeableOp(address: IMemorySpaceAddress): void {
+    // Only ever called right after a write on this transaction, so the tx is
+    // editable — no editable() re-check. The written path is poisoned whether
+    // or not the write changed anything: a write of the value already there
+    // leaves its document read-only, and says what the value is all the same.
+    const branch = this.#branch(address.space);
+    const { doc } = this.#document(branch, address);
+    (doc.mergeableOpsPoisoned ??= new Set()).add(encodePointer(address.path));
+    if (!isWritableDocument(doc) || !doc.mergeableOps?.size) {
+      return;
+    }
+    for (const [pathKey, intent] of [...doc.mergeableOps.entries()]) {
+      if (isPrefixPath(address.path, intent.path)) {
+        doc.mergeableOps.delete(pathKey);
+      }
+    }
+  }
+
+  /**
+   * Returns the writable document entry for `address`, or `undefined` when it
+   * is not writable. The caller wrote through this same transaction, so the
+   * entry is writable; a missing writable entry is an invariant violation the
+   * record methods throw on rather than silently dropping the operation.
+   */
+  #writableMergeableTarget(
+    address: IMemorySpaceAddress,
+  ): WritableDocumentEntry | undefined {
+    const branch = this.#branch(address.space);
+    const { doc } = this.#document(branch, address);
+    return isWritableDocument(doc) ? doc : undefined;
+  }
+
+  *getMergeableOpAddresses(): Iterable<IMemorySpaceAddress> {
+    for (const [space, branch] of this.#branches.entries()) {
+      for (const [key, doc] of branch.docs.entries()) {
+        if (!isWritableDocument(doc) || !doc.mergeableOps) {
+          continue;
+        }
+        const { id, scope } = this.#parseDocKey(key);
+        for (const intent of doc.mergeableOps.values()) {
+          yield { space, id, scope, path: intent.path };
+        }
+      }
+    }
+  }
+
+  recordSqliteWrite(space: MemorySpace, op: SqliteOperation): void {
+    this.#assertWritable("recordSqliteWrite()");
+    const ready = this.#editable();
+    if (ready.error) {
+      throw ready.error;
+    }
+    // Claim `space` as a write target (sets #writeSpace, enforces single-space
+    // write isolation) so a sqlite-only commit still resolves a write space.
+    const claimed = this.#claimWriteSpace(space);
+    if (claimed.error) {
+      throw claimed.error;
+    }
+    const existing = this.#sqliteOps.get(space);
+    if (existing) {
+      existing.push(op);
+    } else {
+      this.#sqliteOps.set(space, [op]);
+    }
+  }
+
+  recordTextChanges(
+    address: IMemorySpaceAddress,
+    changes: readonly TextChange[],
+  ): string {
+    this.#assertWritable("recordTextChanges()");
+    const ready = this.#editable();
+    if (ready.error) throw ready.error;
+    const claimed = this.#claimWriteSpace(address.space);
+    if (claimed.error) throw claimed.error;
+    if (address.path[0] !== "value") {
+      throw new Error(
+        debugStr`text changes need a path under \`value\`, not $quote${address.path}`,
+      );
+    }
+    const { doc } = this.#document(this.#branch(address.space), address);
+    const current = readValueAtPath(
+      (doc.current ?? doc.initial).value,
+      address.path,
+    );
+    if (typeof current !== "string") {
+      throw new TypeError(
+        debugStr`text changes need a string, and the field holds $quote${current}`,
+      );
+    }
+    const docKey = this.#docKey(address);
+    const pathKey = encodePointer(address.path);
+    const intent = this.#textChanges.get(address.space)?.get(docKey)?.get(
+      pathKey,
+    );
+    const unchangedSoFar = intent === undefined
+      ? current === readValueAtPath(doc.initial.value, address.path)
+      : current === intent.expected;
+    if (!unchangedSoFar) {
+      throw new Error(
+        "text changes describe edits to the value this transaction read, and " +
+          "the transaction already wrote the field another way",
+      );
+    }
+    // The payload is encoded at commit, so the changes are copied now: a
+    // caller changing its list afterward must not change what the commit
+    // sends from the value this call returned.
+    const recorded: readonly TextChange[] = changes.map((
+      { from, to, insert },
+    ) => ({ from, to: to ?? from, insert: insert ?? "" }));
+    const next = applyTextChanges(current, recorded);
+    if (next === current) return next;
+    if (intent !== undefined) {
+      intent.batches.push(recorded);
+      intent.expected = next;
+      return next;
+    }
+    let byDocument = this.#textChanges.get(address.space);
+    if (byDocument === undefined) {
+      byDocument = new Map();
+      this.#textChanges.set(address.space, byDocument);
+    }
+    let byPath = byDocument.get(docKey);
+    if (byPath === undefined) {
+      byPath = new Map();
+      byDocument.set(docKey, byPath);
+    }
+    byPath.set(pathKey, {
+      path: address.path,
+      baseline: current,
+      batches: [recorded],
+      expected: next,
+      submissionId: crypto.randomUUID(),
+    });
+    return next;
+  }
+
+  getNativeCommit(space: MemorySpace): NativeStorageCommit | undefined {
+    const branch = this.#branches.get(space);
+    const nativePreconditions = this.#commitPreconditionsFor(space);
+    const sqliteOps = this.#sqliteOps.get(space);
+    if (
+      !branch &&
+      nativePreconditions.length === 0 && !sqliteOps?.length
+    ) {
+      return undefined;
+    }
+
+    const operations: NativeStorageCommitOperation[] = [];
+    // Unconfirmed schema documents whose staged write nets to no visible
+    // change (#mustDeliverSchemaDoc; the visible copy sits on a layer the
+    // wire never carries, such as a client speculation overlay entry).
+    // They ride a commit that exports real content — whose references
+    // they back — and are dropped from one that exports nothing: a
+    // no-op-net transaction ships no references, so re-delivering there
+    // would mint a commit, and its exported read set with it, where none
+    // existed.
+    const redeliveries: NativeStorageCommitOperation[] = [];
+    for (const [key, doc] of branch?.docs.entries() ?? []) {
+      if (!isWritableDocument(doc)) {
+        continue;
+      }
+      if (doc.writeDetails.size === 0) {
+        continue;
+      }
+      const { id, type, scope } = this.#parseDocKey(key);
+      const textChanges = this.#textChangesAsWholeDocuments
+        ? undefined
+        : this.#pendingTextChanges(space, key);
+      // Doc-level no-op elision — except for authoritative transactions
+      // (markAuthoritativeWrites): `doc.initial` is the transaction-START
+      // view, which may extrapolate over a DOOMED sealed overlay, so a
+      // written doc that "ends where it started" may still differ from
+      // the store — the completion asserts it anyway (the forced
+      // full-cover path in buildPatchOperation). An unconfirmed schema
+      // document steps out to the re-delivery set instead — as a
+      // whole-doc set: content addressing makes any visible copy the
+      // whole document. Writes reach the working root by copy-on-write from
+      // `doc.initial`, so the two share every subtree no write replaced, and
+      // comparing them by walk costs the written spine.
+      if (
+        !this.#authoritativeWrites &&
+        valueEqualByWalk(doc.current.value, doc.initial.value)
+      ) {
+        if (
+          this.#mustDeliverSchemaDoc(space, id) &&
+          doc.current.value !== undefined
+        ) {
+          redeliveries.push({
+            op: "set",
+            id,
+            type,
+            scope,
+            value: doc.current.value,
+          });
+        }
+        continue;
+      }
+      // Authoritative transactions (markAuthoritativeWrites —
+      // effect-completion writebacks under the serving posture) commit
+      // WHOLE-DOC set/delete, never patches (round-2 thread 17): their
+      // patch base (`doc.initial`) is the tx-start OPTIMISTIC view,
+      // which can extrapolate over a DOOMED sealed overlay — including
+      // ancestors the overlay CREATED that durable state never had. A
+      // patch op against such a base fails engine-side with
+      // "missing path" (`replace` upserts only the terminal member),
+      // rejecting the completion commit; the retry re-reads the same
+      // poisoned view and burns its budget deterministically, wedging
+      // the claim (the F2 wedge through a different crack). The
+      // whole-doc set is the always-applicable full-cover assert — the
+      // earlier per-path forced-assert machinery this replaces could
+      // not create missing ancestors. Footprint: completion docs are
+      // the builtins' own result/pending/error/internal cells (one doc
+      // each, builtin-owned); completions already carry basisSeq=NOW
+      // (no per-doc CAS — the hash guards arbitrate), so doc-level
+      // last-writer-wins is the ruled posture, not a widening. The
+      // mergeable fast path is skipped too: folding a mergeable op with
+      // a whole-doc set would apply its delta twice. A completion
+      // writeback can record one — llm-dialog's marked update pushes
+      // onto the message list — so the intents it recorded are
+      // abandoned below with the ops they would have produced.
+      //
+      // A whole-document transaction (markWholeDocumentWrites — the
+      // client speculation overlay's seal) takes the same emission,
+      // for the reason on that declaration.
+      //
+      // A write to the document root takes the same emission. No patch
+      // expresses one, so the set is what carries it, and a mergeable op
+      // sent in its place would leave the root write out of the commit.
+      const diffed = !this.#emitsWholeDocuments &&
+        !this.#writesDocumentRoot(doc);
+      if (textChanges !== undefined && !diffed) {
+        throw new Error(
+          "text changes cannot ride a whole-document write: the document's " +
+            "commit would carry the changed field outside the `apply-op`",
+        );
+      }
+      // The patch leaves every text-changed field to its `apply-op`, and the
+      // operation's `value` keeps the changed text for the local view.
+      const patchedValue = textChanges === undefined
+        ? doc.current.value
+        : this.#valueBeforeTextChanges(doc, textChanges);
+      if (diffed) {
+        const mergeable = this.#buildMergeableOps(doc);
+        // A document with no base goes whole, as a `set`. Mergeable ops that
+        // are the transaction's only writes to it are the exception: they
+        // resolve against whatever the store holds, so a write from a session
+        // that has not loaded the document lands on durable state instead of
+        // replacing it. Any other write to the document was computed from
+        // its absence, the label envelope among them, and is sound only where
+        // the store holds no document either. Ops beside such a write are
+        // abandoned for the `set`, which the store refuses where it holds the
+        // document (see below), and the transaction runs again with the
+        // document loaded. The diff against the empty document is what finds
+        // those other writes, holding nothing when the ops' suppressions
+        // cover every write.
+        const hasBase = doc.initial.value !== undefined;
+        const base = doc.initial.value ??
+          (mergeable.ops.length > 0 ? emptyEntityDocument() : undefined);
+        const patch = this.#buildPatchOperation(
+          id,
+          type,
+          scope,
+          doc,
+          base,
+          mergeable.suppress,
+          patchedValue,
+        );
+        if (mergeable.ops.length > 0) {
+          if (hasBase || patch === null) {
+            operations.push({
+              op: "patch",
+              id,
+              type,
+              scope,
+              patches: [...mergeable.ops, ...(patch?.patches ?? [])],
+              value: doc.current.value,
+            });
+            continue;
+          }
+          this.#abandonMergeableOps(doc);
+        } else if (patch) {
+          operations.push(patch);
+          continue;
+        } else if (textChanges !== undefined) {
+          // Only text-changed fields moved, so the patch is empty, and the
+          // operation is still what carries the changed text to the local
+          // view.
+          operations.push({
+            op: "patch",
+            id,
+            type,
+            scope,
+            patches: [],
+            value: doc.current.value,
+          });
+          continue;
+        }
+      } else {
+        this.#abandonMergeableOps(doc);
+      }
+
+      if (doc.current.value === undefined) {
+        operations.push({ op: "delete", id, type, scope });
+        continue;
+      }
+      // A `set` that the diff above fell through to, for a document with no
+      // base, replaces the whole of a document the transaction saw as
+      // absent. It goes out with a read of the document root, so that the
+      // store refuses it where it holds the document.
+      if (diffed && doc.initial.value === undefined) {
+        this.#recordDocumentRootRead(space, id, scope, doc);
+      }
+      operations.push({
+        op: "set",
+        id,
+        type,
+        scope,
+        value: doc.current.value,
+      });
+    }
+
+    if (
+      redeliveries.length > 0 && (operations.length > 0 || sqliteOps?.length)
+    ) {
+      for (const redelivery of redeliveries) operations.push(redelivery);
+    }
+
+    const applyOps = this.#textChangesAsWholeDocuments
+      ? []
+      : this.#textChangeOperations(space);
+    return {
+      operations,
+      ...(nativePreconditions.length
+        ? { preconditions: nativePreconditions }
+        : {}),
+      ...(sqliteOps?.length ? { sqliteOps: [...sqliteOps] } : {}),
+      ...(applyOps.length ? { applyOps } : {}),
+    };
+  }
+
+  /**
+   * Helper for `getNativeCommit()`, which returns the text changes recorded
+   * against the document at `docKey` in `space` that change its text, or
+   * `undefined` where there are none.
+   */
+  #pendingTextChanges(
+    space: MemorySpace,
+    docKey: string,
+  ): TextChangeIntent[] | undefined {
+    const intents = [
+      ...this.#textChanges.get(space)?.get(docKey)?.values() ?? [],
+    ].filter((intent) => intent.expected !== intent.baseline);
+    return intents.length > 0 ? intents : undefined;
+  }
+
+  /**
+   * Helper for `getNativeCommit()`, which returns `doc`'s working value with
+   * each text-changed field put back to the value the transaction read there:
+   * the value its patch is diffed from, so that the patch leaves those fields
+   * to their `apply-op`s. Throws when a field does not hold what its recorded
+   * changes produced, because something wrote it after them.
+   */
+  #valueBeforeTextChanges(
+    doc: WritableDocumentEntry,
+    intents: readonly TextChangeIntent[],
+  ): FabricValue | undefined {
+    let value = doc.current.value;
+    for (const intent of intents) {
+      if (readValueAtPath(value, intent.path) !== intent.expected) {
+        throw new Error(
+          debugStr`the field at $quote${intent.path} was written after its ` +
+            "text changes, which the commit cannot carry as an edit",
+        );
+      }
+      value = cloneWithValueAtPath(value, intent.path, intent.baseline);
+    }
+    return value;
+  }
+
+  /**
+   * Helper for `getNativeCommit()`, which builds one `apply-op` per field the
+   * transaction changed the text of in `space`. None names a base: each
+   * carries the hash of the value the transaction read at the field, and
+   * applies at the version the field holds only while the field still holds
+   * that value, so the server has nothing to merge it over.
+   */
+  #textChangeOperations(space: MemorySpace): NativeTextEdit[] {
+    const operations: NativeTextEdit[] = [];
+    for (const docKey of this.#textChanges.get(space)?.keys() ?? []) {
+      const { id, scope } = this.#parseDocKey(docKey);
+      const doc = this.#branches.get(space)?.docs.get(docKey);
+      for (const intent of this.#pendingTextChanges(space, docKey) ?? []) {
+        // The edit reaches the store only beside the ordinary write of the
+        // text it produces, which is what CFC and reactivity judged.
+        const written = doc === undefined ? undefined : readValueAtPath(
+          (doc.current ?? doc.initial).value,
+          intent.path,
+        );
+        if (written !== intent.expected) {
+          throw new Error(
+            debugStr`the field at $quote${intent.path} does not hold the text ` +
+              "its recorded changes produce; text changes are recorded with " +
+              "the write of that text, as `applyChanges()` makes",
+          );
+        }
+        operations.push({
+          op: "apply-op",
+          id,
+          scope,
+          path: toValuePath(intent.path.slice(1)),
+          codec: CODEMIRROR_CHANGESET_CODEC,
+          submissionId: intent.submissionId,
+          // TODO(ubik2): Drop the hash once a served handler's reads reach
+          // its wave commit. The transaction's read of the field, which a
+          // direct commit carries, already refuses a stale edit; a wave drops
+          // that read, and the hash is what still refuses one there.
+          baselineHash: operationBaselineHash(intent.baseline),
+          payload: codeMirrorTextChangesPayload(
+            intent.baseline,
+            intent.batches,
+            intent.submissionId,
+          ),
+        });
+      }
+    }
+    return operations;
+  }
+
+  *getWriteDetails(space: MemorySpace): Iterable<TransactionWriteDetail> {
+    const branch = this.#branches.get(space);
+    if (!branch) {
+      return;
+    }
+    for (const entry of branch.docs.values()) {
+      if (!isWritableDocument(entry)) {
+        continue;
+      }
+      yield* entry.writeDetails.values();
+    }
+  }
+
+  *getWriteDetailsForTarget(target: {
+    space: MemorySpace;
+    id: URI;
+    scope?: CellScope;
+    path?: readonly PropertyKey[];
+  }): Iterable<TransactionWriteDetail> {
+    const branch = this.#branches.get(target.space);
+    const entry = branch?.docs.get(this.#docKey(target));
+    if (!entry || !isWritableDocument(entry)) {
+      return;
+    }
+    yield* entry.writeDetails.values();
+  }
+
+  *getReadDetails(space: MemorySpace): Iterable<TransactionReadDetail> {
+    const branch = this.#branches.get(space);
+    if (!branch) {
+      return;
+    }
+    for (const [key, entry] of branch.docs) {
+      const frozenReads = entry.frozenReads;
+      if (!frozenReads) {
+        continue;
+      }
+      const { id, scope } = this.#parseDocKey(key);
+      for (const [path, value] of frozenReads.entries()) {
+        yield {
+          address: { space, scope, id, path: [...path] },
+          value: value as TransactionReadDetail["value"],
+        };
+      }
+    }
+  }
+
+  /**
+   * Records `space` as a write target. Without the multi-space opt-in, rejects a
+   * second space with a write-isolation error (preserving the default
+   * single-space guarantee). With it enabled, tracks the space in first-write
+   * order for commit() to split on.
+   */
+  #claimWriteSpace(space: MemorySpace): Result<Unit, WriterError> {
+    if (
+      !this.#multiSpaceWrites &&
+      this.#writeSpace !== undefined &&
+      this.#writeSpace !== space
+    ) {
+      return {
+        error: WriteIsolationError({
+          open: this.#writeSpace,
+          requested: space,
+        }),
+      };
+    }
+    if (this.#writeSpace === undefined) {
+      this.#writeSpace = space;
+    }
+    if (!this.#writtenSpaces.includes(space)) {
+      this.#writtenSpaces.push(space);
+    }
+    return { ok: {} };
+  }
+
+  read(
+    address: IMemorySpaceAddress,
+    options?: IReadOptions,
+  ): Result<IAttestation, ReadError> {
+    const ready = this.#editable();
+    if (ready.error) {
+      return { error: ready.error };
+    }
+
+    const branch = this.#branch(address.space);
+    const { doc } = this.#document(branch, address);
+    if (readStatsActive && !hasInlineCellScheme(address.id)) {
+      recordDocumentRead(this, doc);
+    }
+    // The one place a read chooses which root it is reading. A materialized
+    // read walking under an epoch describes the state that epoch names; every
+    // other read describes the transaction's current state. The epoch is only
+    // ever set on a transaction that has written, because before that the two
+    // are the same root.
+    const current = this.#readEpoch === undefined
+      ? currentDocument(doc)
+      : documentAtEpoch(doc, this.#readEpoch);
+    const readMeta = options?.meta ?? EMPTY_META;
+    // In a UI-input blind-leaf-write tx (a scalar `$value` overwrite), every read
+    // is recorded for CFC/scheduling but carries no value-equality commit
+    // precondition: tag each activity with `ignoreReadForCommit` (so buildReads
+    // downgrades it to a nonRecursive entity-root existence read instead of a
+    // leaf-value precondition) and skip marking the doc `validated` (so the client
+    // validate()/claim() pass skips it too). The mode is scoped to the user
+    // `set()` call only — CFC boundary-commit reads run after the tx is unmarked
+    // and keep their preconditions.
+    const skipCommitPrecondition = isUiInputBlindWriteTx(this);
+    const { space: _, ...memoryAddress } = address;
+
+    if (!hasInlineCellScheme(address.id)) {
+      const readActivity = {
+        space: address.space,
+        scope: normalizeCellScope(address.scope),
+        id: address.id,
+        path: toDocumentPath(address.path),
+        meta: skipCommitPrecondition
+          ? { ...readMeta, ...ignoreReadForCommit }
+          : readMeta,
+        ...(options?.nonRecursive === true ? { nonRecursive: true } : {}),
+        journalIndex: this.#activityClock++,
+      };
+      // A sealed record is frozen with metadata that has the scheduler
+      // ignore the read and marks no attempted write, so the log never lists
+      // it and stands across it. Any other record's metadata can be replaced
+      // or changed after the read, whatever it says now, and with it what
+      // the log says of the read, so such a read retires the log.
+      const sealed = this.#recordReadActivity(readActivity);
+      if (!sealed) this.#invalidateReactivityLog();
+    }
+    if (options?.trackReadWithoutLoad === true) {
+      if (!hasInlineCellScheme(address.id) && !skipCommitPrecondition) {
+        doc.validated = true;
+      }
+      return { ok: { address, value: undefined } };
+    }
+
+    if (usesLocalReads(this) && !hasInlineCellScheme(address.id)) {
+      // `patchDetails` is keyed by each write's pointer.
+      const patchDetails = doc.patchDetails;
+      const written = this.#readEpoch === undefined &&
+        patchDetails !== undefined && patchDetails.size > 0 &&
+        prefixPointers(address.path).some((pointer) =>
+          patchDetails.has(pointer)
+        );
+      const replica = branch.replica;
+      const identity = this.#scopeKeyIdentity;
+      assertLocalReadAvailable(
+        this,
+        address,
+        () =>
+          written || replica.hasLocalDocumentCoverage?.(
+              address.id,
+              address.scope,
+              identity,
+            ) === true,
+      );
+    }
+
+    if (isMutableTransactionReadAllowed(readMeta)) {
+      if (
+        !hasInlineCellScheme(address.id) &&
+        !doc.validated &&
+        !skipCommitPrecondition
+      ) {
+        doc.validated = true;
+      }
+      return {
+        ok: {
+          address: memoryAddress,
+          value: readValueAtPath(current.value, memoryAddress.path, {
+            allowArrayLength: true,
+          }),
+        },
+      };
+    }
+
+    // A CFC internal-verifier read of a blind UI-input write transaction
+    // bases on the doc's NON-speculative stack (RULED 2026-08-21;
+    // verification-coverage.md OW47, second producer — the name-draft
+    // triage): the verifier verifies the durable policy state the server
+    // will enforce against — a client speculation layer never reaches
+    // the wire, so deriving from it verified state the server can never
+    // see, and the basis it contributed made the §6 export refusal
+    // terminal on the user's own typed input. `SpaceReplica.#buildReads`
+    // (storage/v2.ts) names the same durable layer set for these reads,
+    // so verify-durable and name-durable travel together. Scoped tight:
+    // only the blind-write tx shape (the structural target survives the
+    // unmark), and only reads issued AFTER the blind window closes —
+    // CFC prepare's own reads. In-window reads keep the transaction's
+    // ordinary view (they are machinery reads the commit set drops via
+    // `ignoreReadForCommit`), value-consuming reads keep their overlay
+    // view and the ruled §6 refusal, and every other transaction is
+    // byte-identical to before. CFC prepare consults the transaction's
+    // own writes through its write set (`writeValueForTarget`) before
+    // falling back to this read, so serving replica state here loses
+    // nothing the verifier needs. Served fresh and cache-bypassed: the
+    // frozen-reads cache describes the transaction's checkout view, and
+    // a durable-view value must neither take from it nor land in it.
+    if (
+      !skipCommitPrecondition &&
+      isInternalVerifierRead(readMeta) &&
+      !hasInlineCellScheme(address.id) &&
+      // Content-addressed documents are EXEMPT from durable serving:
+      // their content is identical on every layer (the replica refuses
+      // a cid: doc whose content does not hash to its id), so the
+      // ordinary view IS the durable content — while the client's own
+      // durable copy may not exist yet during an echo's arrival window
+      // (the echo's staging carries the schema docs its writes
+      // reference, and the covering SERVED commit already persisted the
+      // same docs server-side). Serving "durably absent" here turned
+      // the user's fill into the silent stored-schemaHash-missing
+      // prepare failure. Their layers stay excluded from the blind tx's
+      // verifier basis in `SpaceReplica.#buildReads` — consistent by
+      // construction: the value equals the durable content whichever layer
+      // serves it.
+      !address.id.startsWith("cid:") &&
+      getBlindStructuralTarget(this) !== undefined &&
+      // A replica without a speculation overlay serves no separate
+      // durable view — fall through then: the ordinary read IS it.
+      branch.replica.getNonSpeculativeDocument !== undefined
+    ) {
+      const durable = branch.replica.getNonSpeculativeDocument(
+        address.id,
+        address.scope,
+        this.#scopeKeyIdentity,
+      );
+      if (!doc.validated) {
+        doc.validated = true;
+      }
+      const durableRoot: IAttestation = {
+        address: {
+          id: address.id,
+          type: address.type ?? DOCUMENT_MIME,
+          scope: address.scope,
+          path: [],
+        },
+        // Served DIRECTLY, never through the empty-collapse
+        // (`toTransactionDocumentValue` maps a PRESENT-but-empty
+        // document to `undefined`): the verifier must see the doc's
+        // durable state as it is — a present-empty envelope reads as
+        // `{}` at the root and as no-metadata under `["cfc"]`, not as
+        // a deleted document.
+        value: durable as unknown as FabricValue | undefined,
+      };
+      const result = readAttestation(durableRoot, memoryAddress);
+      if (result.error) {
+        return { error: result.error.from(address.space) };
+      }
+      return {
+        ok: {
+          ...result.ok,
+          value: freezeReadValue(result.ok.value),
+        },
+      };
+    }
+
+    // The frozen-reads cache describes the current root — writes invalidate it
+    // along the chain they touch — so a read resolving against an earlier epoch
+    // neither takes from it nor adds to it.
+    const cacheable = this.#readEpoch === undefined;
+    const frozenReads = cacheable ? doc.frozenReads : undefined;
+    if (frozenReads?.has(memoryAddress.path)) {
+      return {
+        ok: {
+          address: memoryAddress,
+          value: frozenReads.get(memoryAddress.path),
+        },
+      };
+    }
+
+    const result = readAttestation(current, memoryAddress);
+    if (
+      !hasInlineCellScheme(address.id) &&
+      !doc.validated &&
+      !skipCommitPrecondition
+    ) {
+      doc.validated = true;
+    }
+    if (result.error) {
+      return { error: result.error.from(address.space) };
+    }
+
+    const frozenValue = freezeReadValue(result.ok.value);
+    if (cacheable) {
+      (doc.frozenReads ??= new PathKeyMap()).set(
+        memoryAddress.path,
+        frozenValue,
+      );
+    }
+    return {
+      ok: {
+        ...result.ok,
+        value: frozenValue,
+      },
+    };
+  }
+
+  hasWrites(): boolean {
+    return this.#writeEpoch > 0;
+  }
+
+  /**
+   * The epoch a materialized read taken now should describe.
+   *
+   * Handing one out is what tells a later write that the root it displaces is
+   * still being described, so a reader that never asks costs the write path
+   * nothing.
+   */
+  issueReadEpoch(): number {
+    // A read taken while another is already walking is part of that walk — a
+    // view building the child a reader just touched — so it describes the same
+    // instant. Handing it a fresh epoch would let a subtree resolved after a
+    // write describe a later moment than the value it hangs off.
+    if (this.#readEpoch !== undefined) return this.#readEpoch;
+    this.#lastIssuedEpoch = this.#writeEpoch;
+    return this.#writeEpoch;
+  }
+
+  /**
+   * Resolve reads against `epoch` until the matching {@link exitReadEpoch}.
+   *
+   * Paired rather than wrapped around a callback so a reader on the hot path
+   * allocates no closure per property it touches. Returns the epoch that was
+   * in force, which the caller hands back to restore it.
+   */
+  enterReadEpoch(epoch: number | undefined): number | undefined {
+    const previous = this.#readEpoch;
+    this.#readEpoch = epoch;
+    return previous;
+  }
+
+  exitReadEpoch(previous: number | undefined): void {
+    this.#readEpoch = previous;
+  }
+
+  /**
+   * Move `doc` to a new root, keeping the one it displaces if a reader may
+   * still be describing it.
+   *
+   * Every write funnels here, so the epoch counts root replacements and
+   * nothing else.
+   *
+   * The root about to be displaced has stood since this document's last
+   * displacement, so it answers for every epoch in between. It is worth keeping
+   * exactly when a reader was handed one of those — which is the newest issued
+   * epoch, since an older one is answered by the same root. A run of writes
+   * with no read taken between them therefore keeps one root, not one per
+   * write, and a document nobody has read against keeps none.
+   *
+   * Keeping one means freezing it, and freezing it before the write starts.
+   * A write descends through `cloneForMutation` with `force: false`, which
+   * thaws a frozen container by shallow-cloning it and leaves an already-
+   * mutable one alone — so the root a first write leaves behind is mutable, and
+   * the next write edits it where it stands rather than replacing it. Freezing
+   * first puts that write on the cloning path, which is what makes the kept
+   * root stay the value it was. `deepFreeze` short-circuits on what is already
+   * deep-frozen, so this costs only what this transaction has thawed by
+   * writing.
+   *
+   * Called before the write reads the root it is about to descend, which is why
+   * this is separate from {@link V2StorageTransaction.#replaceCurrent}.
+   */
+  #preserveForReaders(doc: DocumentEntry): void {
+    const issued = this.#lastIssuedEpoch;
+    if (issued === undefined) return;
+    if (issued <= (doc.displaced?.at(-1)?.until ?? -1)) return;
+    const standing = currentDocument(doc);
+    deepFreeze(standing.value);
+    (doc.displaced ??= []).push({ until: this.#writeEpoch, root: standing });
+  }
+
+  #replaceCurrent(doc: WritableDocumentEntry, next: RootAttestation): void {
+    this.#writeEpoch++;
+    doc.current = next;
+    this.#invalidateWrittenState(doc);
+  }
+
+  trackReadPaths(
+    address: Omit<IMemorySpaceAddress, "path">,
+    paths: readonly (readonly string[])[],
+    options?: Omit<IReadOptions, "trackReadWithoutLoad">,
+  ): Result<Unit, ReadError> {
+    if (paths.length === 0) return { ok: {} };
+    const ready = this.#editable();
+    if (ready.error) return { error: ready.error };
+
+    const branch = this.#branch(address.space);
+    const { doc } = this.#document(branch, address);
+    if (hasInlineCellScheme(address.id)) return { ok: {} };
+    if (readStatsActive) recordDocumentRead(this, doc);
+
+    const readMeta = options?.meta ?? EMPTY_META;
+    const skipCommitPrecondition = isUiInputBlindWriteTx(this);
+    const activityMeta = skipCommitPrecondition
+      ? { ...readMeta, ...ignoreReadForCommit }
+      : readMeta;
+    const scope = normalizeCellScope(address.scope);
+    if (options?.nonRecursive === true) {
+      for (let index = 0; index < paths.length; index++) {
+        this.#recordReadActivity({
+          space: address.space,
+          scope,
+          id: address.id,
+          path: toDocumentPath(paths[index]),
+          meta: activityMeta,
+          nonRecursive: true,
+          journalIndex: this.#activityClock++,
+        });
+      }
+    } else {
+      for (let index = 0; index < paths.length; index++) {
+        this.#recordReadActivity({
+          space: address.space,
+          scope,
+          id: address.id,
+          path: toDocumentPath(paths[index]),
+          meta: activityMeta,
+          journalIndex: this.#activityClock++,
+        });
+      }
+    }
+    if (!skipCommitPrecondition) doc.validated = true;
+    this.#invalidateReactivityLog();
+    return { ok: {} };
+  }
+
+  write(
+    address: IMemorySpaceAddress,
+    value?: FabricValue,
+    options?: IWriteOptions,
+  ): Result<IAttestation, WriterError | WriteError> {
+    const ready = this.#prepareWriteSpace(address.space);
+    if (ready.error) {
+      return { error: ready.error };
+    }
+    return this.#writeWithinBranch(
+      ready.ok,
+      address.space,
+      address,
+      value,
+      options,
+    );
+  }
+
+  writeBatch(
+    writes: Iterable<ITransactionWriteRequest>,
+  ): Result<Unit, WriterError | WriteError> {
+    let run: ITransactionWriteRequest[] = [];
+    let runKey: string | undefined;
+
+    const flushRun = (): Result<Unit, WriterError | WriteError> => {
+      if (run.length === 0) {
+        return { ok: {} };
+      }
+      const [{ address }] = run;
+      const ready = this.#prepareWriteSpace(address.space);
+      if (ready.error) {
+        return { error: ready.error };
+      }
+      const result = this.#writeBatchRun(address.space, ready.ok, run);
+      run = [];
+      runKey = undefined;
+      return result;
+    };
+
+    for (const write of writes) {
+      // The run is flushed against a single document, fetched from the first
+      // write's address (see `#writeBatchRun`). Documents are keyed by scope as
+      // well as id (`makeDocKey`), so the run key must include scope: otherwise
+      // writes to different scoped instances of the same id would be merged into
+      // one run and applied to whichever instance came first, corrupting both.
+      const key = `${write.address.space}|${
+        normalizeCellScope(write.address.scope)
+      }|${write.address.id}`;
+      if (runKey === undefined || key === runKey) {
+        run.push(write);
+        runKey = key;
+        continue;
+      }
+      const flushed = flushRun();
+      if (flushed.error) {
+        return flushed;
+      }
+      run.push(write);
+      runKey = key;
+    }
+
+    return flushRun();
+  }
+
+  #writeWithinSpace(
+    space: MemorySpace,
+    address: IMemoryAddress,
+    value?: FabricValue,
+    options?: IWriteOptions,
+  ): Result<IAttestation, WriteError> {
+    this.#assertWritable("write()");
+    return this.#writeWithinBranch(
+      this.#branch(space),
+      space,
+      address,
+      value,
+      options,
+    );
+  }
+
+  /**
+   * Whether a write to `id` must be recorded — and, in a commit that
+   * exports content, re-delivered — even when its value equals the
+   * currently-visible state. True for a `cid:` schema document the
+   * space's server has not confirmed: the visible copy may sit on a
+   * layer that never reaches the wire — a client speculation overlay
+   * entry, or a sibling commit still awaiting its verdict — so
+   * visibility is no evidence the server holds the document, and a
+   * commit whose content references it would be rejected with the
+   * document neither included nor stored (the write-side delivery
+   * guarantee, `docs/specs/content-addressed-schemas.md`). Only
+   * server-confirmed persistence makes a re-delivery redundant, and
+   * content addressing makes the confirmed copy immutable, so that
+   * elision cannot race a change. A storage without persistence
+   * tracking confirms nothing and always delivers — redundant `cid:`
+   * re-sets apply as no-ops. The write layer records such writes
+   * (`#writeWithinBranch`'s elisions yield) so commit assembly can decide;
+   * getNativeCommit emits them only alongside real content, keeping a
+   * no-op-net transaction's commit empty.
+   */
+  #mustDeliverSchemaDoc(space: MemorySpace, id: string): boolean {
+    return id.startsWith("cid:") &&
+      !this.isContentAddressedDocPersisted(space, id.slice("cid:".length));
+  }
+
+  /**
+   * Unified write entry. Handles simple writes, root writes, refusals, and
+   * create-missing-intermediates in one path: `planMutablePathWrite()` decides
+   * whether the write is refused and reads what it finds, and the plan's
+   * `apply()` carries it out. `cloneForMutation()` beneath that shallow-thaws
+   * only the containers on the write spine; off-spine subtrees stay
+   * deep-frozen and structurally shared with the prior `doc.current.value`.
+   *
+   * No-op short-circuits (presence-aware: a stored `undefined` is a real
+   * state, distinct from an absent slot):
+   *   - For a value write, if the leaf exists and is already deep-equal to
+   *     `value`, return the unchanged attestation. A write of `undefined`
+   *     to an absent leaf is NOT a no-op — it stores `undefined`,
+   *     materializing intermediates if needed.
+   *   - For a delete (`options.delete`), if the leaf doesn't exist —
+   *     whether the leaf slot is absent, an intermediate is missing, or the
+   *     path runs through a value that cannot hold it — return the unchanged
+   *     attestation; don't allocate intermediate containers just to delete a
+   *     slot that wasn't there.
+   */
+  #writeWithinBranch(
+    branch: SpaceBranch,
+    space: MemorySpace,
+    address: IMemoryAddress,
+    value?: FabricValue,
+    options?: IWriteOptions,
+  ): Result<IAttestation, WriteError> {
+    if (hasInlineCellScheme(address.id)) {
+      return { error: ReadOnlyAddressError(address).from(space) };
+    }
+    const isDelete = options?.delete === true;
+
+    const { doc: readDoc } = this.#document(branch, address);
+    const doc = ensureWritableDocument(readDoc);
+    this.#preserveForReaders(doc);
+    const current = doc.current;
+    // Everything the write needs to know about the document before it is
+    // changed is read BEFORE the write, by the plan and by `apply()` ahead of
+    // its mutation: the write mutates `current.value` in place on the
+    // second-and-later write to this doc within a transaction
+    // (`cloneForMutation({ force: false })` short-circuits to identity on an
+    // already-mutable root), so a read of `current.value` after it would
+    // observe the post-write state and silently mis-report the previous
+    // values to the reactivity log. For create-parents writes, the activity
+    // path `apply()` reports is the materialization point (deepest
+    // pre-existing parent on the write path), where the observable change
+    // happens for subscribers watching a parent.
+    const plan = planMutablePathWrite(
+      current.value,
+      address,
+      value,
+      isDelete ? { delete: true } : undefined,
+    );
+    if (plan.error) {
+      return { error: plan.error.from(space) };
+    }
+    const planned = plan.ok;
+    // Authoritative mode (markAuthoritativeWrites) disables the
+    // equal-VALUE elision only: the visible state being diffed against
+    // may be an extrapolation over a doomed sealed overlay, so "already
+    // equal" is not evidence the store holds the value. An unconfirmed
+    // schema document (#mustDeliverSchemaDoc) disables it the same way:
+    // its visible copy may sit on a speculation layer the wire never
+    // carries. Deletes of absent slots stay no-ops — there is nothing
+    // to assert.
+    if (
+      isDelete
+        ? !planned.present
+        : (planned.present && valueEqualByWalk(planned.previousValue, value) &&
+          !this.#authoritativeWrites &&
+          !this.#mustDeliverSchemaDoc(space, address.id))
+    ) {
+      this.#retainPendingWriteElision(branch, space, address);
+      return { ok: current };
+    }
+
+    const result = this.#writeWorkingRoot(doc, planned);
+    // Authoritative mode records the (value-unchanged) write anyway so it
+    // reaches the commit as a full-cover re-assert, and an unconfirmed
+    // schema document is recorded for the same delivery reason; delete
+    // no-ops still return (see above).
+    if (
+      !result.changed &&
+      (isDelete ||
+        (!this.#authoritativeWrites &&
+          !this.#mustDeliverSchemaDoc(space, address.id)))
+    ) {
+      this.#retainPendingWriteElision(branch, space, address);
+      return { ok: current };
+    }
+
+    const collapsedNext: RootAttestation = {
+      ...current,
+      value: collapseEmptyJsonDocumentEnvelope(result.root),
+    };
+
+    this.#replaceCurrent(doc, collapsedNext);
+    invalidateFrozenReadsOnChain(doc, address.path);
+    this.#recordPatchIntent(
+      space,
+      address,
+      readValueAtPath(collapsedNext.value, address.path, {
+        allowArrayLength: true,
+      }),
+      cloneIfNecessary(planned.previousValue) as FabricValue | undefined,
+      doc,
+      planned.present,
+    );
+    this.#recordWriteActivity(
+      space,
+      { ...address, path: result.activityPath },
+      readValueAtPath(collapsedNext.value, result.activityPath, {
+        allowArrayLength: true,
+      }),
+      result.previousActivityValue,
+      doc,
+      result.previousActivityPresent,
+    );
+
+    return { ok: collapsedNext };
+  }
+
+  /** Elision over a pending document retains its commit basis. */
+  #retainPendingWriteElision(
+    branch: SpaceBranch,
+    space: MemorySpace,
+    address: IMemoryAddress,
+  ): void {
+    if (
+      isUiInputBlindWriteTx(this) ||
+      !branch.replica.hasPendingWrite(
+        address.id,
+        address.scope,
+        this.#scopeKeyIdentity,
+      )
+    ) return;
+    // Keep the commit dependency without subscribing the writer to itself or
+    // consuming the output's CFC label. Validation still checks the original
+    // document; the transaction's own unsealed writes are never a pending layer.
+    // This document-wide check conservatively retains the older layer even
+    // when a preceding write in this transaction supplied the elided value.
+    const read = this.read({ ...address, space }, {
+      trackReadWithoutLoad: true,
+      meta: pendingWriteElisionRead,
+    });
+    if (read.error) throw read.error;
+  }
+
+  /**
+   * Helper for `writeBatch()`, which applies `writes`, all addressing one
+   * document, in order. The run stops at the first write that fails, whether it
+   * returns an error or throws, and leaves the writes before it applied.
+   */
+  #writeBatchRun(
+    space: MemorySpace,
+    branch: SpaceBranch,
+    writes: readonly ITransactionWriteRequest[],
+  ): Result<Unit, WriteError> {
+    if (
+      writes.length <= 1 ||
+      writes.some(({ address }) => hasInlineCellScheme(address.id))
+    ) {
+      // Singleton-batch / inline-cell fallback: route each write through the
+      // unified single-write entry, which itself handles
+      // create-missing-intermediates.
+      for (const { address, value, delete: isDelete } of writes) {
+        const result = this.#writeWithinSpace(
+          space,
+          address,
+          value,
+          isDelete ? { delete: true } : undefined,
+        );
+        if (result.error) {
+          return { error: result.error };
+        }
+      }
+      return { ok: {} };
+    }
+
+    const { doc: readDoc } = this.#document(branch, writes[0]!.address);
+    const doc = ensureWritableDocument(readDoc);
+    this.#preserveForReaders(doc);
+    let nextRoot = doc.current.value;
+
+    // No explicit mutable-root prelude here: a plan's `apply()` calls
+    // `cloneForMutation()` with `force: false`, which shallow-thaws the
+    // root container on the first write (if it was frozen) and is an
+    // identity short-circuit on subsequent writes (since the root is
+    // mutable from then on). That gives us "mutate in place on the same
+    // freshly-thawed spine across the whole batch" without ever needing a
+    // deep clone of off-spine subtrees.
+    //
+    // Read-before-mutate ordering is load-bearing: the previous value comes
+    // from the plan, and the activity path and previous activity value from
+    // `apply()`, both read from `nextRoot` BEFORE it is changed. Applying
+    // mutates `nextRoot` in place from the second iteration onward, so a
+    // read after it would observe the post-write state. (See
+    // `#writeWithinBranch` for the same invariant and a regression test.)
+    for (const { address, value, delete: isDelete } of writes) {
+      const plan = planMutablePathWrite(
+        nextRoot,
+        address,
+        value,
+        isDelete ? { delete: true } : undefined,
+      );
+      if (plan.error) {
+        return { error: plan.error.from(space) };
+      }
+      const planned = plan.ok;
+      // Presence-aware no-op detection. Authoritative mode records
+      // equal-VALUE writes anyway, and an unconfirmed schema document is
+      // recorded for its delivery guarantee (see `#writeWithinBranch` for
+      // both); delete no-ops still skip.
+      if (
+        isDelete ? !planned.present : (planned.present &&
+          valueEqualByWalk(planned.previousValue, value) &&
+          !this.#authoritativeWrites &&
+          !this.#mustDeliverSchemaDoc(space, address.id))
+      ) {
+        this.#retainPendingWriteElision(branch, space, address);
+        continue;
+      }
+      const result = this.#writeWorkingRoot(doc, planned);
+      nextRoot = result.root;
+      if (
+        !result.changed &&
+        (isDelete ||
+          (!this.#authoritativeWrites &&
+            !this.#mustDeliverSchemaDoc(space, address.id)))
+      ) {
+        this.#retainPendingWriteElision(branch, space, address);
+        continue;
+      }
+      // Only a write of the whole root, or a delete of one of its keys, can
+      // leave the root empty, so only those pay for counting its keys. The
+      // run goes on from the collapsed root, as the next of separate writes
+      // would.
+      if (
+        address.path.length === 0 || (isDelete && address.path.length === 1)
+      ) {
+        nextRoot = collapseEmptyJsonDocumentEnvelope(nextRoot);
+      }
+      // Installed before the next write begins, as `#writeWithinBranch`
+      // installs its one write, so a run that stops at a later write, by
+      // returning an error or by throwing, leaves nothing about this one
+      // undone: reads, the epoch, and the commit all see it, as its patch
+      // intent says.
+      this.#replaceCurrent(doc, { ...doc.current, value: nextRoot });
+      invalidateFrozenReadsOnChain(doc, address.path);
+      this.#recordPatchIntent(
+        space,
+        address,
+        readValueAtPath(nextRoot, address.path, {
+          allowArrayLength: true,
+        }),
+        cloneIfNecessary(planned.previousValue) as FabricValue | undefined,
+        doc,
+        planned.present,
+      );
+      this.#recordWriteActivity(
+        space,
+        { ...address, path: result.activityPath },
+        readValueAtPath(nextRoot, result.activityPath, {
+          allowArrayLength: true,
+        }),
+        result.previousActivityValue,
+        doc,
+        result.previousActivityPresent,
+      );
+    }
+    return { ok: {} };
+  }
+
+  #recordWriteActivity(
+    space: MemorySpace,
+    address: IMemoryAddress,
+    value: FabricValue | undefined,
+    previousValue: FabricValue | undefined,
+    doc: WritableDocumentEntry,
+    previousPresent?: boolean,
+  ): void {
+    recordWriteStackTrace(
+      {
+        space,
+        id: address.id,
+        path: address.path,
+      },
+      value,
+      {
+        scopeId: (this as { writeTraceScopeId?: string }).writeTraceScopeId,
+        writerActionId: (this as { debugActionId?: string }).debugActionId,
+      },
+    );
+
+    this.#upsertWriteDetail(
+      doc.writeDetails,
+      space,
+      address,
+      value,
+      previousValue,
+      previousPresent,
+    );
+    this.#invalidateReactivityLog();
+  }
+
+  #recordPatchIntent(
+    space: MemorySpace,
+    address: IMemoryAddress,
+    value: FabricValue | undefined,
+    previousValue: FabricValue | undefined,
+    doc: WritableDocumentEntry,
+    previousPresent?: boolean,
+  ): void {
+    // The per-attempt order stamp. recordPatchIntent runs once per applied
+    // write in both the single-write and batch paths, with the EXACT write
+    // address (unlike recordWriteActivity's materialized-parent activity
+    // path) and only after the value-equal elision checks — so the attempt
+    // log carries exactly the write set the rest of the inspection surface
+    // (writeDetails/reactivity) sees, in temporal order. Raw path on
+    // purpose: the CFC consumer distinguishes `["value",...]` user writes
+    // from `["cfc"]`/`["source"]` runtime surfaces.
+    this.#writeAttemptLog.push({
+      space,
+      scope: normalizeCellScope(address.scope),
+      id: address.id,
+      path: toDocumentPath(address.path),
+      journalIndex: this.#activityClock++,
+    });
+    this.#upsertWriteDetail(
+      doc.patchDetails,
+      space,
+      address,
+      value,
+      previousValue,
+      previousPresent,
+    );
+    this.#invalidateWrittenState(doc);
+  }
+
+  #upsertWriteDetail(
+    details: Map<string, TransactionWriteDetail>,
+    space: MemorySpace,
+    address: IMemoryAddress,
+    value: FabricValue | undefined,
+    previousValue: FabricValue | undefined,
+    previousPresent?: boolean,
+  ): void {
+    const writeActivity = {
+      space,
+      scope: normalizeCellScope(address.scope),
+      id: address.id,
+      path: toDocumentPath(address.path),
+    };
+    const key = encodePointer(address.path);
+    const existing = details.get(key);
+    if (existing) {
+      // Only update the latest value — previousValue (and its presence
+      // flag) intentionally stays as the pre-transaction state so that
+      // journal.history() reports the correct before-snapshot for reverts
+      // and conflict detection.
+      existing.value = value;
+      return;
+    }
+
+    details.set(key, {
+      address: writeActivity,
+      value,
+      previousValue,
+      ...(previousPresent !== undefined ? { previousPresent } : {}),
+    });
+  }
+
+  abort(reason?: unknown): Result<Unit, InactiveTransactionError> {
+    this.#assertWritable("abort()");
+    const ready = this.#editable();
+    if (ready.error) {
+      return { error: ready.error };
+    }
+    // Aborted before reaching storage, so the activity stays: the scheduler
+    // rebuilds this action's dependencies from it and retries.
+    this.#state = {
+      status: "done",
+      result: { error: TransactionAborted(reason) },
+    };
+    if ((this as IStorageTransaction).sourceAction === undefined) {
+      releaseLocalReadBasis(this);
+    }
+    return { ok: {} };
+  }
+
+  commit(
+    options?: TransactionCommitOptions,
+  ): TransactionCommitReceipt {
+    const ready = this.status().status === "ready";
+    // A rejection seals the commit's fate before the promise resolves — the
+    // promise additionally waits out the read-repair gate so a retry runs
+    // against the repaired base. The verdict must not: finalizeRejection
+    // notifies this listener at rejection receipt, ahead of the gate.
+    registerCommitRejectionListener(
+      this,
+      (rejection) => this.#verdict.resolve({ error: rejection }),
+    );
+    const promise = this.#commitImpl(
+      options?.holdSyncedUntilCovered === false
+        ? { resolveAt: "verdict" }
+        : undefined,
+    );
+    // Backstop for the verdict signal: paths that never reach a push (zero
+    // writes, pre-storage rejections) determine their fate exactly when the
+    // commit promise resolves. The push path resolves #verdict earlier —
+    // at the verdict — and this second resolve is then a no-op. An
+    // internally REJECTED commit promise resolves the verdict with the
+    // error: the verdict never rejects, and a waiter must not hang on a
+    // commit whose fate is known.
+    if (ready) {
+      promise.then(
+        (result) => this.#verdict.resolve(result),
+        (reason) => this.#verdict.resolve({ error: toStoreError(reason) }),
+      );
+    }
+    // Synchronous registration with the manager's durability barrier: by the
+    // time commit() returns, the in-flight commit is visible to
+    // hasPendingCommits(), so a quiescence check started in the same turn
+    // cannot miss it. The entry spans the full commit promise — coverage
+    // included — so the barrier also covers follow-on commits issued from a
+    // continuation chained on the promise. (The scheduler's event path
+    // registers its own entry spanning its disposition handling, which
+    // chains on the WRAPPER's promise and trails this one by the
+    // verdict-time effect run.)
+    this.#storage.trackPendingCommit(
+      promise,
+      () => this.#pendingCommitContext("transaction"),
+    );
+    return createTransactionCommitReceipt(
+      promise,
+      ready ? this.#verdict.promise : undefined,
+    );
+  }
+
+  #pendingCommitContext(
+    kind: "transaction" | "transaction-seal",
+  ): PendingCommitContext {
+    const spaces = diagnosticPrefix(this.#writtenSpaces);
+    return {
+      kind,
+      spaces,
+      spacesOmitted: this.#writtenSpaces.length - spaces.length,
+      transactionStatus: this.status().status,
+      commits: spaces.map((space) => ({
+        space,
+        localSeq: getCommitLocalSeq(this, space),
+        seq: getCommitSeq(this, space),
+      })),
+    };
+  }
+
+  async #commitImpl(
+    options?: NativeCommitOptions,
+  ): Promise<Result<Unit, CommitError>> {
+    this.#assertWritable("commit()");
+    const unavailable = validateLocalReadBasis(this);
+    if (unavailable !== undefined && this.#state.status === "ready") {
+      this.abort(unavailable);
+    }
+    const ready = this.#editable();
+    if (ready.error) {
+      return { error: ready.error };
+    }
+
+    // Genuine cross-space commits split into one per-space commit. A
+    // single-space transaction (the common case, even with the opt-in set) stays
+    // on the proven path below.
+    if (this.#multiSpaceWrites && this.#writtenSpaces.length > 1) {
+      return this.#commitMultiSpace(options);
+    }
+
+    const writeSpace = this.#writeSpace;
+    if (!writeSpace) {
+      return this.#finishEmptyCommit();
+    }
+
+    const native = withCommitTiming(
+      ["commit", "getNativeCommit"],
+      () => this.getNativeCommit(writeSpace),
+    );
+    const operations = native?.operations ?? [];
+    const hasCommitPreconditions = (native?.preconditions?.length ?? 0) > 0;
+    const hasSqliteOps = (native?.sqliteOps?.length ?? 0) > 0;
+    if (
+      operations.length === 0 &&
+      !hasCommitPreconditions && !hasSqliteOps
+    ) {
+      return this.#finishEmptyCommit();
+    }
+
+    const validation = withCommitTiming(
+      ["commit", "validate"],
+      () => this.#validate(),
+    );
+    if (validation.error) {
+      // Rejected before reaching storage, so the activity stays: the scheduler
+      // rebuilds this action's dependencies from it and retries.
+      this.#state = {
+        status: "done",
+        result: { error: validation.error },
+      };
+      return { error: validation.error };
+    }
+
+    const replica = this.#replicaForCommit(writeSpace);
+    if (!replica.commitNative) {
+      throw new Error("memory v2 replica does not support commitNative()");
+    }
+    const commitNative = replica.commitNative.bind(replica);
+    // The replica takes the writes now, and they can change what a local read
+    // validation before them proved.
+    endLocalReadValidationStretch();
+    const promise = withCommitTiming(
+      ["commit", "commitNative"],
+      () => commitNative(native!, this, options),
+    );
+    this.#state = { status: "pending", promise };
+    try {
+      const result = await promise;
+      this.#finish(result);
+      this.#verdict.resolve(result);
+      // CT-1950: the caller's `receipt.settled` resolves at coverage — the
+      // subscribed view reflects the committed write — while the verdict
+      // above already released durability-gated effects. Drained on EVERY
+      // settlement, not only success: waits are recorded per accepted
+      // space, so a multi-space commit rejected on a later space still
+      // holds its settlement (and commit callbacks) until the earlier
+      // accepted spaces' parked writes reach the view.
+      {
+        const waits = takeCoverageWaits(this);
+        if (waits.length > 0) {
+          await Promise.all(waits);
+        }
+      }
+      return result;
+    } catch (error) {
+      const result: Result<Unit, StorageTransactionRejected> = {
+        error: toStoreError(error),
+      };
+      this.#finish(result);
+      return result;
+    }
+  }
+
+  /**
+   * Commits a multi-space transaction as one per-space commit each, in commit
+   * order (explicit or first-write). Commits run sequentially with no
+   * cross-space atomicity: a later failure does not roll back earlier spaces; it
+   * is logged and surfaced as the overall result.
+   */
+  async #commitMultiSpace(
+    options?: NativeCommitOptions,
+  ): Promise<Result<Unit, CommitError>> {
+    const commits: { space: MemorySpace; native: NativeStorageCommit }[] = [];
+    for (const space of this.#orderedCommitSpaces()) {
+      const native = this.getNativeCommit(space);
+      const operations = native?.operations ?? [];
+      const hasCommitPreconditions = (native?.preconditions?.length ?? 0) > 0;
+      const hasSqliteOps = (native?.sqliteOps?.length ?? 0) > 0;
+      if (
+        !native ||
+        (operations.length === 0 &&
+          !hasCommitPreconditions && !hasSqliteOps)
+      ) {
+        continue;
+      }
+      commits.push({ space, native });
+    }
+
+    if (commits.length === 0) {
+      return this.#finishEmptyCommit();
+    }
+
+    const validation = this.#validate();
+    if (validation.error) {
+      // Rejected before reaching storage, so the activity stays: the scheduler
+      // rebuilds this action's dependencies from it and retries.
+      this.#state = {
+        status: "done",
+        result: { error: validation.error },
+      };
+      return { error: validation.error };
+    }
+
+    const promise = this.#runSplitCommits(commits, options);
+    this.#state = { status: "pending", promise };
+    try {
+      const result = await promise;
+      this.#finish(result);
+      this.#verdict.resolve(result);
+      // Same split as the single-space path: verdicts (all spaces) release
+      // effects; the commit promise waits for every space's coverage —
+      // including on a partial failure, where the waits recorded by the
+      // earlier ACCEPTED spaces still gate settlement.
+      {
+        const waits = takeCoverageWaits(this);
+        if (waits.length > 0) {
+          await Promise.all(waits);
+        }
+      }
+      return result;
+    } catch (error) {
+      // Mirror the single-space path: a rejected commit must still transition
+      // the transaction to "done" with an error rather than leaving it stuck
+      // at "pending" (e.g. if a replica lacks commitNative()).
+      const result: Result<Unit, StorageTransactionRejected> = {
+        error: toStoreError(error),
+      };
+      this.#finish(result);
+      this.#verdict.resolve(result);
+      const waits = takeCoverageWaits(this);
+      if (waits.length > 0) await Promise.all(waits);
+      return result;
+    }
+  }
+
+  /**
+   * The written spaces in commit order: the explicit order first (restricted to
+   * spaces actually written), then any remaining spaces in first-write order.
+   */
+  #orderedCommitSpaces(): MemorySpace[] {
+    if (this.#commitOrder === undefined) {
+      return [...this.#writtenSpaces];
+    }
+    const ordered: MemorySpace[] = [];
+    const seen = new Set<MemorySpace>();
+    for (const space of this.#commitOrder) {
+      if (!seen.has(space) && this.#writtenSpaces.includes(space)) {
+        ordered.push(space);
+        seen.add(space);
+      }
+    }
+    for (const space of this.#writtenSpaces) {
+      if (!seen.has(space)) {
+        ordered.push(space);
+        seen.add(space);
+      }
+    }
+    return ordered;
+  }
+
+  async #runSplitCommits(
+    commits: { space: MemorySpace; native: NativeStorageCommit }[],
+    options?: NativeCommitOptions,
+  ): Promise<Result<Unit, StorageTransactionRejected>> {
+    for (let i = 0; i < commits.length; i++) {
+      const { space, native } = commits[i];
+      // The claim check that admitted the transaction ran before the first
+      // space's round trip, which this loop has since awaited; this space's
+      // read set is built inside the call below, from its replica as it is
+      // now, so the check runs again for this space right here.
+      if (i > 0) {
+        const revalidation = this.#revalidateLaterSpace(space, i);
+        if (revalidation.error) {
+          return revalidation;
+        }
+      }
+      const replica = this.#replicaForCommit(space);
+      if (!replica.commitNative) {
+        throw new Error("memory v2 replica does not support commitNative()");
+      }
+      const commitNative = replica.commitNative.bind(replica);
+      // Stop at the first per-space failure rather than committing the
+      // remaining spaces. The commit order is meaningful (e.g. a child space
+      // before the parent that links to it), so once an earlier space fails we
+      // must not durably apply later ones: doing so would violate the order and
+      // double-apply those writes if the transaction is retried. Spaces already
+      // committed before the failure are not rolled back (logged); the failing
+      // space and everything after it are left uncommitted.
+      try {
+        endLocalReadValidationStretch();
+        const result = await commitNative(native, this, options);
+        if (result.error) {
+          multiSpaceCommitLogger.error(
+            "multi-space-commit-failed",
+            `Cross-space commit to ${space} failed after ${i} space(s); ` +
+              `earlier spaces are not rolled back and later spaces are skipped`,
+            result.error,
+          );
+          return { error: result.error };
+        }
+      } catch (error) {
+        multiSpaceCommitLogger.error(
+          "multi-space-commit-rejected",
+          `Cross-space commit to ${space} rejected after ${i} space(s); ` +
+            `earlier spaces are not rolled back and later spaces are skipped`,
+          error,
+        );
+        return { error: toStoreError(error) };
+      }
+    }
+    return { ok: {} };
+  }
+
+  /**
+   * Helper for the per-space close loops, which re-runs the claim check on
+   * `space`, the `index`th space to close. A failure is logged the way any
+   * later space's rejected close is: the earlier spaces stay closed, and
+   * this one and the rest are left unclosed.
+   */
+  #revalidateLaterSpace(
+    space: MemorySpace,
+    index: number,
+  ): Result<Unit, IStorageTransactionInconsistent> {
+    const branch = this.#branches.get(space);
+    if (branch === undefined) return { ok: {} };
+    const result = this.#validateBranch(space, branch);
+    if (result.error) {
+      multiSpaceCommitLogger.error(
+        "multi-space-commit-stale",
+        `Cross-space close of ${space} found a document changed after ` +
+          `${index} space(s) closed; earlier spaces are not rolled back and ` +
+          `later spaces are skipped`,
+        result.error,
+      );
+    }
+    return result;
+  }
+
+  /**
+   * Helper for `#validateBranch()`, which names the documents `space`'s
+   * commit pins for the server to evaluate against durable state before it
+   * applies anything.
+   *
+   * Such a document needs no local claim check, and must not get one: an
+   * `entity-absent` pin fails as `PreconditionFailedError`, which callers
+   * treat as decided on the committed data's own merits rather than as a
+   * basis a re-run repairs, so a local retryable rejection in its place
+   * turns a settled outcome into a retry. Skipping loses no soundness,
+   * because each pin is the stronger claim: a commit naming a document that
+   * exists, or whose value no longer hashes to the pinned one, is refused
+   * outright.
+   *
+   * The bound is the `commitPreconditions` flag. With it off, the commit
+   * carries only its `entity-value-hash` pins — an `entity-absent` pin is
+   * filtered out before the wire and the server never evaluates it — so
+   * only the pins that survive that filter earn the exemption. Naming the
+   * exempt kinds rather than the ineligible ones is what keeps a kind added
+   * later from being exempted before anyone decides it should be.
+   */
+  #serverJudgedDocuments(space: MemorySpace): ReadonlySet<string> {
+    const judged = new Set<string>();
+    const absencePinsActive = getCommitPreconditionsConfig() === true;
+    for (const precondition of this.#commitPreconditionsFor(space)) {
+      const pinned = precondition.kind === "entity-value-hash" ||
+        (precondition.kind === "entity-absent" && absencePinsActive);
+      if (!pinned) continue;
+      judged.add(
+        this.#docKey({
+          id: precondition.id as URI,
+          type: DOCUMENT_MIME,
+          scope: precondition.scope,
+        }),
+      );
+    }
+    return judged;
+  }
+
+  /**
+   * Close by sealing (server-execution v2, serving-loop.md §3d): the same
+   * close work commit() runs — per-space native commit construction in
+   * commit order, validation, terminal state transition — with each space's
+   * native commit handed to `sink` instead of its replica. Multi-space
+   * transactions hand over in the same children-first order the split
+   * commit path uses (protocol.md §2b), stopping at the first failure.
+   */
+  sealInto(
+    sink: ITransactionSealSink,
+  ): Promise<Result<Unit, CommitError>> {
+    const promise = this.#sealImpl(sink);
+    // Same durability-barrier registration as commit(): by the time
+    // sealInto() returns, the in-flight close is visible to
+    // hasPendingCommits().
+    this.#storage.trackPendingCommit(
+      promise,
+      () => this.#pendingCommitContext("transaction-seal"),
+    );
+    return promise;
+  }
+
+  async #sealImpl(
+    sink: ITransactionSealSink,
+  ): Promise<Result<Unit, CommitError>> {
+    this.#assertWritable("sealInto()");
+    const unavailable = validateLocalReadBasis(this);
+    if (unavailable !== undefined && this.#state.status === "ready") {
+      this.abort(unavailable);
+    }
+    const ready = this.#editable();
+    if (ready.error) {
+      return { error: ready.error };
+    }
+
+    const commits: { space: MemorySpace; native: NativeStorageCommit }[] = [];
+    for (const space of this.#orderedCommitSpaces()) {
+      const native = this.getNativeCommit(space);
+      const operations = native?.operations ?? [];
+      const hasCommitPreconditions = (native?.preconditions?.length ?? 0) > 0;
+      const hasSqliteOps = (native?.sqliteOps?.length ?? 0) > 0;
+      if (
+        !native ||
+        (operations.length === 0 &&
+          !hasCommitPreconditions && !hasSqliteOps)
+      ) {
+        continue;
+      }
+      commits.push({ space, native });
+    }
+
+    if (commits.length === 0) {
+      return this.#finishEmptyCommit();
+    }
+
+    const validation = this.#validate();
+    if (validation.error) {
+      // Rejected before sealing, so the activity stays: the scheduler
+      // rebuilds this action's dependencies from it and retries.
+      this.#state = {
+        status: "done",
+        result: { error: validation.error },
+      };
+      return { error: validation.error };
+    }
+
+    // Read-only spaces' read sets (stage F, discharging a stage-D bound):
+    // spaces this tx read but wrote nothing to produce no native commit,
+    // so their reads would never reach the accumulator — and a withdrawn
+    // writer there could not fold this reader into the withdrawal. Hand
+    // them over explicitly, before the space commits, inside the same
+    // seal call.
+    if (sink.sealSpaceReads !== undefined) {
+      const writtenSpaces = new Set(commits.map((commit) => commit.space));
+      const readOnlyReads = new Map<MemorySpace, IMemorySpaceAddress[]>();
+      const log = this.#buildReactivityLog();
+      // Both read classes: a shallow (nonRecursive) read of withdrawn
+      // state makes a derived write exactly as blind as a deep one, and
+      // the withdrawal closure folds by DOC identity anyway.
+      const pendingElisions = this.#readActivities.filter((read) =>
+        read.meta === pendingWriteElisionRead
+      ).map(({ space, id, scope, path }) => ({ space, id, scope, path }));
+      // These internal reads are absent from the scheduling log, but the
+      // publication they reuse must survive even when it is in another space.
+      for (
+        const read of [...log.reads, ...log.shallowReads, ...pendingElisions]
+      ) {
+        if (writtenSpaces.has(read.space)) continue;
+        let reads = readOnlyReads.get(read.space);
+        if (reads === undefined) {
+          reads = [];
+          readOnlyReads.set(read.space, reads);
+        }
+        reads.push(read);
+      }
+      for (const [space, reads] of readOnlyReads) {
+        sink.sealSpaceReads(space, reads);
+      }
+    }
+
+    const promise = this.#runSealHandoffs(sink, commits);
+    this.#state = { status: "pending", promise };
+    try {
+      const result = await promise;
+      this.#finish(result);
+      return result;
+    } catch (error) {
+      const result: Result<Unit, StorageTransactionRejected> = {
+        error: toStoreError(error),
+      };
+      this.#finish(result);
+      return result;
+    }
+  }
+
+  async #runSealHandoffs(
+    sink: ITransactionSealSink,
+    commits: { space: MemorySpace; native: NativeStorageCommit }[],
+  ): Promise<Result<Unit, StorageTransactionRejected>> {
+    for (let i = 0; i < commits.length; i++) {
+      const { space, native } = commits[i];
+      // Same re-check as runSplitCommits: the sink builds this space's read
+      // set inside the call below, after the earlier spaces' handoffs were
+      // awaited.
+      if (i > 0) {
+        const revalidation = this.#revalidateLaterSpace(space, i);
+        if (revalidation.error) {
+          return revalidation;
+        }
+      }
+      // Stop at the first per-space failure, exactly like runSplitCommits:
+      // spaces already sealed are not unwound here — the wave accumulator
+      // owns the sealed writes' lifecycle from the moment it accepts them.
+      try {
+        endLocalReadValidationStretch();
+        const result = await sink.sealSpaceCommit(space, native, this);
+        if (result.error) {
+          multiSpaceCommitLogger.error(
+            "seal-space-commit-failed",
+            `Seal into wave for ${space} failed after ${i} space(s); ` +
+              `later spaces are skipped`,
+            result.error,
+          );
+          return { error: result.error as StorageTransactionRejected };
+        }
+      } catch (error) {
+        multiSpaceCommitLogger.error(
+          "seal-space-commit-rejected",
+          `Seal into wave for ${space} rejected after ${i} space(s); ` +
+            `later spaces are skipped`,
+          error,
+        );
+        return { error: toStoreError(error) };
+      }
+    }
+    return { ok: {} };
+  }
+
+  #editable(): Result<Unit, InactiveTransactionError> {
+    if (this.#state.status === "ready") {
+      return { ok: {} };
+    }
+    return {
+      error: this.#state.status === "done" && this.#state.result.error
+        ? this.#state.result.error
+        : TransactionCompleteError(),
+    };
+  }
+
+  #invalidateReactivityLog(): void {
+    this.#reactivityLogCache = undefined;
+  }
+
+  /**
+   * Drops what the reactivity log derives from `doc`'s written state: the
+   * paths kept on the document, and the log built from them. Called by
+   * `#writeWorkingRoot()` ahead of every in-place write to the working root,
+   * and wherever the root or the recorded patch details are replaced.
+   */
+  #invalidateWrittenState(doc: WritableDocumentEntry): void {
+    doc.reactivityPaths = undefined;
+    this.#invalidateReactivityLog();
+  }
+
+  /**
+   * Carries out `planned`, a write to `doc`'s working root. The plan's
+   * `apply()` mutates that root in place when it is already mutable. What
+   * the reactivity log derives from the document is dropped first, so
+   * nothing built before the write outlives it; every in-place write to a
+   * working root goes through here for that reason. A write that changes the
+   * document drops it again when it replaces the root, so this first drop is
+   * defensive: it covers an in-place change that no replacement follows.
+   */
+  #writeWorkingRoot(
+    doc: WritableDocumentEntry,
+    planned: PlannedPathWrite,
+  ): MutableWriteResult {
+    this.#invalidateWrittenState(doc);
+    return planned.apply();
+  }
+
+  /**
+   * The explicit instance a logged scoped address names when this
+   * transaction carries a run identity (server-execution v2 stage A):
+   * the scheduler's dependency/trigger keys then key the read to THAT
+   * instance (`entityKey` prefers it), so one node's N instance runs
+   * register N distinct reads of one doc and a change to one instance
+   * wakes exactly its readers. Absent for space-scope addresses (one
+   * instance) and for every transaction without a run identity — the
+   * logged address is then byte-identical to before.
+   */
+  #instanceOf(scope: CellScope | undefined): ScopeKey | undefined {
+    const identity = this.#scopeKeyIdentity;
+    if (identity === undefined) return undefined;
+    const name = normalizeCellScope(scope);
+    if (name === "space" || !canResolveScopeKey(name, identity)) {
+      return undefined;
+    }
+    return resolveScopeKey(name, identity);
+  }
+
+  #buildReactivityLog(): TransactionReactivityLog {
+    const reads: IMemorySpaceAddress[] = [];
+    const shallowReads: IMemorySpaceAddress[] = [];
+    let attemptedWrites: IMemorySpaceAddress[] | undefined;
+
+    for (const read of this.#readActivities) {
+      const meta = read.meta ?? EMPTY_META;
+      const ignored = isReadIgnoredForScheduling(meta);
+      const attempted = isReadMarkedAsAttemptedWrite(meta);
+      if (ignored && !attempted) continue;
+
+      const instance = this.#instanceOf(read.scope);
+      const address = {
+        space: read.space,
+        scope: read.scope,
+        id: read.id,
+        ...(instance !== undefined ? { scopeKey: instance } : {}),
+        path: read.path,
+      };
+
+      if (attempted) {
+        attemptedWrites ??= [];
+        attemptedWrites.push(address);
+      }
+      if (ignored) continue;
+      if (read.nonRecursive === true) {
+        shallowReads.push(address);
+      } else {
+        reads.push(address);
+      }
+    }
+
+    const writes: IMemorySpaceAddress[] = [];
+    for (const [space, branch] of this.#branches.entries()) {
+      for (const [key, doc] of branch.docs.entries()) {
+        if (!isWritableDocument(doc)) {
+          continue;
+        }
+
+        const { id, scope } = this.#parseDocKey(key);
+        const instance = this.#instanceOf(scope);
+        doc.reactivityPaths ??= buildReactivityPathsForChanges(
+          doc.initial.value,
+          doc.current.value,
+          doc.patchDetails.values().map((detail) => detail.address.path),
+        );
+        for (const path of doc.reactivityPaths) {
+          writes.push({
+            space,
+            scope,
+            id,
+            ...(instance !== undefined ? { scopeKey: instance } : {}),
+            path,
+          });
+        }
+      }
+    }
+
+    return {
+      reads,
+      shallowReads,
+      writes,
+      ...(attemptedWrites && attemptedWrites.length > 0
+        ? { attemptedWrites }
+        : {}),
+    };
+  }
+
+  /**
+   * Records every read and retains mutable classifications for later checks.
+   * Returns whether the record is sealed: one carrying the sealed verifier
+   * metadata is frozen with it, so its classification is permanent.
+   */
+  #recordReadActivity(read: IReadActivity): boolean {
+    const sealed = read.meta === stableInternalVerifierRead;
+    if (sealed) {
+      Object.freeze(read);
+    } else {
+      this.#potentiallyExternalReadActivities.push(read);
+    }
+    this.#readActivities.push(read);
+    return sealed;
+  }
+
+  #prepareWriteSpace(
+    space: MemorySpace,
+  ): Result<SpaceBranch, InactiveTransactionError | WriterError> {
+    this.#assertWritable("write()");
+    const ready = this.#editable();
+    if (ready.error) {
+      return { error: ready.error };
+    }
+    const claim = this.#claimWriteSpace(space);
+    if (claim.error) {
+      return { error: claim.error };
+    }
+    return { ok: this.#branch(space) };
+  }
+
+  #assertWritable(method: string): void {
+    if (this.#readOnlySource === undefined) {
+      return;
+    }
+    throw createReadOnlyTransactionError(method, this.#readOnlySource);
+  }
+
+  #branch(space: MemorySpace): SpaceBranch {
+    let branch = this.#branches.get(space);
+    if (!branch) {
+      branch = {
+        space,
+        replica: this.#storage.open(space).replica,
+        docs: new Map(),
+      };
+      this.#branches.set(space, branch);
+    }
+    return branch;
+  }
+
+  #replicaForCommit(
+    space: MemorySpace,
+  ): ReturnType<IStorageManager["open"]>["replica"] {
+    return this.#branches.get(space)?.replica ??
+      this.#storage.open(space).replica;
+  }
+
+  #document(
+    branch: SpaceBranch,
+    address: Pick<IMemoryAddress, "id" | "type" | "scope">,
+  ): { doc: DocumentEntry } {
+    const scope = normalizeCellScope(address.scope);
+    if (
+      this.#lastDocument?.branch === branch &&
+      this.#lastDocument.id === address.id &&
+      this.#lastDocument.type === (address.type ?? DOCUMENT_MIME) &&
+      this.#lastDocument.scope === scope
+    ) {
+      return { doc: this.#lastDocument.doc };
+    }
+
+    const key = this.#docKey(address);
+    let doc = branch.docs.get(key);
+    if (!doc) {
+      const loaded = this.#loadRoot(branch, address);
+      doc = {
+        initial: loaded,
+        validated: false,
+      };
+      branch.docs.set(key, doc);
+    }
+    this.#lastDocument = {
+      branch,
+      id: address.id,
+      type: address.type ?? DOCUMENT_MIME,
+      scope,
+      doc,
+    };
+    return { doc };
+  }
+
+  #loadRoot(
+    branch: SpaceBranch,
+    address: Pick<IMemoryAddress, "id" | "type" | "scope">,
+  ): RootAttestation {
+    const type = address.type ?? DOCUMENT_MIME;
+    if (hasInlineCellScheme(address.id)) {
+      const loaded = loadInline({ id: address.id, type });
+      if (loaded.error) {
+        throw loaded.error;
+      }
+      return loaded.ok as RootAttestation;
+    }
+
+    // The tx→replica identity seam (server-execution v2 stage A, OW17):
+    // a served per-instance run reads ITS instance of a scoped doc — the
+    // replica holds one local doc per instance. Absent (every client,
+    // the OFF arm) the replica resolves its own, exactly as before.
+    this.#loadedUnderIdentity = true;
+    const identity = this.#scopeKeyIdentity;
+    const value = toTransactionDocumentValue(
+      isDurableReadTx(this) && branch.replica.getNonSpeculativeDocument
+        ? branch.replica.getNonSpeculativeDocument(
+          address.id,
+          address.scope,
+          identity,
+        )
+        : branch.replica.getDocument(address.id, address.scope, identity),
+    );
+    // The runner's explicit-instance read, transaction layer (stage A): a
+    // per-instance run's read of a scoped instance the replica has NEVER
+    // seen kicks an instance-named load — the serving replica only ever
+    // receives the SERVICE's instances through its own watches (the
+    // memory server resolves a root's scoped links against the loopback
+    // session), so a demander's instance arrives only when a read names
+    // it. The read itself stays absent; the read is logged under that
+    // instance, so the reader re-runs when the doc lands. Reserved once
+    // per (space, instance, id) per manager (`shouldPullDoc`), like the
+    // link-target kick in `Runtime.ensureLinkedDocLoaded`. Never on the
+    // OFF arm (no identity) — byte-identical read path.
+    if (
+      !usesLocalReads(this) &&
+      value === undefined && identity !== undefined &&
+      normalizeCellScope(address.scope) !== "space" &&
+      typeof this.#storage.syncInstance === "function" &&
+      this.#storage.shouldPullDoc?.(
+          branch.space,
+          address.id,
+          address.scope,
+          identity,
+        ) === true
+    ) {
+      this.#storage.trackUntilSettled(
+        this.#storage.syncInstance(
+          { space: branch.space, id: address.id, scope: address.scope },
+          identity,
+        ).catch(() => {
+          // A failed load surfaces through the sync-failure log and the
+          // pending-load ledger; the kick reservation was handed back.
+        }),
+      );
+    }
+
+    // The root address names the loaded INSTANCE (stage A) so the
+    // commit-time claim re-reads exactly it (`claim` → `replica.get`);
+    // absent for the manager's own identity — byte-identical address.
+    const instance = this.#instanceOf(address.scope);
+    return {
+      address: {
+        id: address.id,
+        type,
+        path: [],
+        scope: normalizeCellScope(address.scope),
+        ...(instance !== undefined ? { scopeKey: instance } : {}),
+      },
+      value,
+    };
+  }
+
+  validateReplicaRoutes(): Result<Unit, IStorageTransactionInconsistent> {
+    for (const [space, branch] of this.#branches) {
+      const route = this.#validateReplicaRoute(space, branch);
+      if (route.error) return route;
+    }
+    return { ok: {} };
+  }
+
+  #validateReplicaRoute(
+    space: MemorySpace,
+    branch: SpaceBranch,
+    emptyReactiveCommit?: true,
+  ): Result<Unit, IStorageTransactionInconsistent> {
+    const currentReplica = this.#storage.open(space).replica;
+    if (currentReplica === branch.replica) return { ok: {} };
+    const firstDocument = branch.docs.values().next().value;
+    if (firstDocument === undefined) return { ok: {} };
+    const { address, value: expected } = firstDocument.initial;
+    const actual = toTransactionDocumentValue(
+      isDurableReadTx(this) &&
+        currentReplica.getNonSpeculativeDocument
+        ? currentReplica.getNonSpeculativeDocument(
+          address.id as URI,
+          address.scope,
+          this.#scopeKeyIdentity,
+        )
+        : currentReplica.getDocument(
+          address.id as URI,
+          address.scope,
+          this.#scopeKeyIdentity,
+        ),
+    );
+    return {
+      error: StateInconsistency({
+        address,
+        expected,
+        actual,
+        space,
+        emptyReactiveCommit,
+      }),
+    };
+  }
+
+  /**
+   * Validates a reactive run before accepting its unchanged output. An input
+   * can change before the scheduler installs the run's read subscriptions;
+   * rejecting that stale snapshot lets its normal retry observe the change.
+   */
+  #finishEmptyCommit(): Result<Unit, CommitError> {
+    if ((this as IStorageTransaction).validateReactiveReads) {
+      const validation = this.#validateReactiveReads();
+      if (validation.error) {
+        // Retain the read activity so the scheduler can subscribe and retry.
+        this.#state = { status: "done", result: validation };
+        return validation;
+      }
+    }
+    const result = { ok: {} } satisfies Result<Unit, CommitError>;
+    this.#finish(result);
+    return result;
+  }
+
+  /** Checks exactly the deep and shallow reads that wake a reactive run. */
+  #validateReactiveReads(): Result<Unit, StorageTransactionFailed> {
+    for (const [space, branch] of this.#branches) {
+      const route = this.#validateReplicaRoute(space, branch, true);
+      if (route.error) return route;
+    }
+    const log = this.getReactivityLog();
+    // Each document's current value, fetched once however many reads name it;
+    // the replica does not change while this synchronous check runs.
+    const currentByDocument = new Map<DocumentEntry, FabricValue | undefined>();
+    for (
+      const [reads, shallow] of [
+        [log.reads, false],
+        [log.shallowReads, true],
+      ] as const
+    ) {
+      // The log keeps a read each time one was taken, and a reader walking a
+      // large value takes the same shallow read of its root once per child.
+      // A read whose value is still the one it was given passes in constant
+      // time. One whose value moved is checked once per document and path,
+      // since checking it again gives the same answer, where comparing a
+      // large container once per copy of the read would cost its size once
+      // per copy.
+      const checked = new Map<DocumentEntry, Set<string>>();
+      for (const address of reads) {
+        const branch = this.#branches.get(address.space);
+        const doc = branch?.docs.get(this.#docKey(address));
+        // Read recording creates both before adding activity. If a future
+        // read path violates that invariant, fail closed before storage.
+        if (branch === undefined || doc === undefined) {
+          return {
+            error: TransactionAborted(
+              `Reactive read has no transaction snapshot: ${address.space}/${address.id}`,
+            ),
+          };
+        }
+        let current: FabricValue | undefined;
+        if (currentByDocument.has(doc)) {
+          current = currentByDocument.get(doc);
+        } else {
+          const replica = branch.replica;
+          current = toTransactionDocumentValue(
+            isDurableReadTx(this) && replica.getNonSpeculativeDocument
+              ? replica.getNonSpeculativeDocument(
+                address.id,
+                address.scope,
+                this.#scopeKeyIdentity,
+              )
+              : replica.getDocument(
+                address.id,
+                address.scope,
+                this.#scopeKeyIdentity,
+              ),
+          );
+          currentByDocument.set(doc, current);
+        }
+        const expected = readValueAtPath(doc.initial.value, address.path, {
+          allowArrayLength: true,
+        });
+        const actual = readValueAtPath(current, address.path, {
+          allowArrayLength: true,
+        });
+        // A value present on both sides and the very same one passes every
+        // check below.
+        if (expected !== undefined && Object.is(expected, actual)) continue;
+        const pointer = encodePointer(address.path);
+        let checkedPaths = checked.get(doc);
+        if (checkedPaths === undefined) {
+          checkedPaths = new Set();
+          checked.set(doc, checkedPaths);
+        }
+        if (checkedPaths.has(pointer)) continue;
+        checkedPaths.add(pointer);
+        if (
+          hasValueAtPath(doc.initial.value, address.path, {
+              allowArrayLength: true,
+            }) !== hasValueAtPath(current, address.path, {
+              allowArrayLength: true,
+            }) ||
+          (shallow
+            ? shallowStructureChanged(expected, actual)
+            : !valueEqual(expected, actual))
+        ) {
+          return {
+            error: StateInconsistency({
+              address,
+              space: address.space,
+              expected,
+              actual,
+              emptyReactiveCommit: true,
+            }),
+          };
+        }
+      }
+    }
+    return { ok: {} };
+  }
+
+  /**
+   * The commit-time claim check over every space this transaction touched:
+   * each snapshotted document is re-read from its replica, and a value that
+   * differs from the snapshot rejects the transaction before its read set
+   * is built (03-commit-model.md §3.3.4).
+   */
+  #validate(): Result<Unit, IStorageTransactionInconsistent> {
+    for (const [space, branch] of this.#branches) {
+      const result = this.#validateBranch(space, branch);
+      if (result.error) {
+        return result;
+      }
+    }
+    return { ok: {} };
+  }
+
+  /**
+   * Like `#validate()`, except over one space. A transaction closed as one
+   * commit per space runs this again for each space after the first, right
+   * before that space's read set is built, because the earlier spaces'
+   * round trips are awaited in between and a frame can change this space's
+   * documents while they are.
+   */
+  #validateBranch(
+    space: MemorySpace,
+    branch: SpaceBranch,
+  ): Result<Unit, IStorageTransactionInconsistent> {
+    const route = this.#validateReplicaRoute(space, branch);
+    if (route.error) return route;
+    const serverJudged = this.#serverJudgedDocuments(space);
+    for (const [key, doc] of branch.docs) {
+      if (!doc.validated || serverJudged.has(key)) {
+        continue;
+      }
+      const result = claim(
+        doc.initial,
+        branch.replica,
+        this.#scopeKeyIdentity,
+        isDurableReadTx(this),
+      );
+      if (result.error) {
+        return { error: result.error };
+      }
+    }
+    return { ok: {} };
+  }
+
+  #docKey(
+    address: Pick<IMemoryAddress, "id" | "type" | "scope">,
+  ): string {
+    return `${normalizeCellScope(address.scope)}\0${address.id}`;
+  }
+
+  #parseDocKey(
+    key: string,
+  ): { id: URI; type: MediaType; scope: CellScope } {
+    const separator = key.indexOf("\0");
+    if (separator === -1) {
+      return { id: key as URI, type: DOCUMENT_MIME, scope: "space" };
+    }
+    return {
+      scope: normalizeCellScope(key.slice(0, separator) as CellScope),
+      id: key.slice(separator + 1) as URI,
+      type: DOCUMENT_MIME,
+    };
+  }
+
+  /**
+   * Builds the patch operation carrying a document's writes as a diff of
+   * `patchedValue`, its working value unless the caller holds some writes back,
+   * against `base`, leaving out the candidates `suppress` names. The
+   * operation's `value` is the working value either way. Returns `null` when
+   * there is no patch to send: `base` or `patchedValue` is absent, or nothing
+   * differs. No patch expresses a write to the document root, so `doc` must
+   * hold none (see `#writesDocumentRoot()`).
+   */
+  #buildPatchOperation(
+    id: URI,
+    type: MediaType,
+    scope: CellScope,
+    doc: WritableDocumentEntry,
+    base: FabricValue | undefined,
+    suppress: readonly OpSuppression[],
+    patchedValue: FabricValue | undefined = doc.current.value,
+  ): Extract<NativeStorageCommitOperation, { op: "patch" }> | null {
+    if (base === undefined || patchedValue === undefined) {
+      return null;
+    }
+
+    const details = [...doc.patchDetails.values()];
+
+    const patchDetails = new Map<string, {
+      path: readonly string[];
+      value: FabricValue | undefined;
+      previousValue: FabricValue | undefined;
+      valuePresent: boolean;
+      previousPresent: boolean;
+    }>();
+    const arrayGroups = new Map<string, readonly string[]>();
+    for (const detail of details) {
+      const value = readValueAtPath(
+        patchedValue,
+        detail.address.path,
+        { allowArrayLength: true },
+      );
+      const previousValue = readValueAtPath(
+        base,
+        detail.address.path,
+        { allowArrayLength: true },
+      );
+      // Presence-aware change detection: present-but-undefined and absent
+      // both read as `undefined`, but transitions between them are real
+      // changes (add/remove of an `undefined`-valued slot).
+      const valuePresent = hasValueAtPath(
+        patchedValue,
+        detail.address.path,
+        { allowArrayLength: true },
+      );
+      const previousPresent = hasValueAtPath(
+        base,
+        detail.address.path,
+        { allowArrayLength: true },
+      );
+      if (
+        valuePresent === previousPresent && valueEqual(value, previousValue)
+      ) {
+        // Equal-value elision. Authoritative transactions never reach
+        // this builder (getNativeCommit routes them to whole-doc
+        // set/delete — round-2 thread 17: the per-path forced asserts
+        // that used to live here could not create ancestors a doomed
+        // overlay minted, failing the completion commit engine-side).
+        continue;
+      }
+
+      const arrayPatchPath = findArrayPatchPath(
+        base,
+        patchedValue,
+        detail.address.path,
+      );
+      if (arrayPatchPath) {
+        arrayGroups.set(arrayPatchPath.join("\0"), arrayPatchPath);
+        continue;
+      }
+
+      patchDetails.set(detail.address.path.join("\0"), {
+        path: detail.address.path,
+        value,
+        previousValue,
+        valuePresent,
+        previousPresent,
+      });
+    }
+
+    const fullCoverCandidates: PatchDraftCandidate[] = [];
+    for (const detail of patchDetails.values()) {
+      const candidate = buildValuePatchCandidate(
+        detail.path,
+        detail.value,
+        detail.previousValue,
+        detail.valuePresent,
+        detail.previousPresent,
+      );
+      if (candidate) {
+        fullCoverCandidates.push(candidate);
+      }
+    }
+
+    const nonCoverCandidates: PatchDraftCandidate[] = [];
+    for (const arrayPath of arrayGroups.values()) {
+      const beforeValue = readValueAtPath(base, arrayPath, {
+        allowArrayLength: true,
+      });
+      const afterValue = readValueAtPath(patchedValue, arrayPath, {
+        allowArrayLength: true,
+      });
+      for (
+        const candidate of buildArrayPatchCandidates(
+          arrayPath,
+          beforeValue,
+          afterValue,
+          hasValueAtPath(base, arrayPath, {
+            allowArrayLength: true,
+          }),
+          hasValueAtPath(patchedValue, arrayPath, {
+            allowArrayLength: true,
+          }),
+        )
+      ) {
+        if (candidate.coversDescendants) {
+          fullCoverCandidates.push(candidate);
+        } else {
+          nonCoverCandidates.push(candidate);
+        }
+      }
+    }
+
+    const patches = selectPatchOps(
+      fullCoverCandidates,
+      nonCoverCandidates,
+      suppress,
+    );
+
+    if (patches.length === 0) {
+      return null;
+    }
+    assertNoIndexedArrayStructuralOps(patches, base, patchedValue);
+
+    return { op: "patch", id, type, scope, patches, value: doc.current.value };
+  }
+
+  /**
+   * Records a read of the whole of `doc`, for a commit about to replace it
+   * with a `set` computed from its absence. The reads the transaction made on
+   * the way are per path, so they refuse the commit only where another
+   * session wrote one of those paths: the `set` would still replace a field
+   * that session created anywhere else in the document. A read at the
+   * document root conflicts with every revision since the transaction's view
+   * of it, which is the claim the `set` rests on.
+   *
+   * The read is the write machinery's, like the diff's read of each path it
+   * writes, and it is taken at commit: it joins no flow label and schedules
+   * nothing.
+   */
+  #recordDocumentRootRead(
+    space: MemorySpace,
+    id: URI,
+    scope: CellScope,
+    doc: WritableDocumentEntry,
+  ): void {
+    // Building the commit more than once records the read once.
+    if (doc.documentRootRead) {
+      return;
+    }
+    doc.documentRootRead = true;
+    this.#recordReadActivity({
+      space,
+      scope,
+      id,
+      path: toDocumentPath([]),
+      meta: { ...writeDestinationRead, ...ignoreReadForScheduling },
+      journalIndex: this.#activityClock++,
+    });
+    doc.validated = true;
+  }
+
+  /**
+   * Returns whether the transaction wrote `doc` at its root, replacing the
+   * whole document.
+   */
+  #writesDocumentRoot(doc: WritableDocumentEntry): boolean {
+    for (const detail of doc.patchDetails.values()) {
+      if (detail.address.path.length === 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Builds the mergeable ops for a document's recorded intents, plus the paths
+   * each covers so the diff candidates the op replaces can be suppressed. The
+   * per-op payload/suppression rules live in `./mergeable-ops.ts`; here we only
+   * supply each intent the working/initial array state its builder needs.
+   *
+   * A builder can also abandon its intent — the recorded op no longer describes
+   * the transaction's local value (see `buildTailOp()` /
+   * `buildRemoveByValue()`). Abandoning must poison the path here rather than
+   * just skip the op, because a surviving intent still narrows the op's reads
+   * out of the commit's conflict set (`v2.ts`) and would hand the replacing
+   * whole-value diff a read set it has not earned. This runs inside
+   * `getNativeCommit()`, which precedes that narrowing, so both sides see the
+   * same intents.
+   *
+   * One intent is also abandoned for what its _siblings_ carry, which is why
+   * the contexts are computed for all of them before any is built: a tail op's
+   * payload is live values read out of the working document, so an intent whose
+   * target sits inside that payload has already had its change applied by the
+   * covering op, and sending it too would apply it twice (see
+   * `mergeableOpPayloadContains()`). Coverage is judged on what each intent
+   * _recorded_, not on which ops survived — an intent contained by an op that
+   * is itself abandoned must fall back with it, so that the whole-value diff is
+   * the only thing carrying that region.
+   */
+  #buildMergeableOps(
+    doc: WritableDocumentEntry,
+  ): { ops: PatchOp[]; suppress: OpSuppression[] } {
+    const ops: PatchOp[] = [];
+    const suppress: OpSuppression[] = [];
+    if (!doc.mergeableOps || doc.current.value === undefined) {
+      return { ops, suppress };
+    }
+    const pending = [...doc.mergeableOps.values()].map((intent) => ({
+      intent,
+      ctx: this.#mergeableBuildContext(doc, intent),
+    }));
+
+    const abandoned: string[] = [];
+    for (const { intent, ctx } of pending) {
+      const built = pending.some(({ intent: other, ctx: otherCtx }) =>
+          mergeableOpPayloadContains(other, otherCtx, intent.path)
+        )
+        ? { abandon: true, ops: [], suppress: [] }
+        : buildMergeableIntent(intent, ctx);
+      if (built.abandon) {
+        abandoned.push(encodePointer(intent.path));
+        continue;
+      }
+      for (const op of built.ops) {
+        ops.push(op);
+      }
+      for (const suppression of built.suppress) {
+        suppress.push(suppression);
+      }
+    }
+    for (const pathKey of abandoned) {
+      doc.mergeableOps.delete(pathKey);
+      (doc.mergeableOpsPoisoned ??= new Set()).add(pathKey);
+    }
+    return { ops, suppress };
+  }
+
+  /**
+   * Abandons every mergeable intent a document recorded, for a commit that
+   * emits the document whole. An intent narrows the reads incidental to its op
+   * out of the commit's read set (`SpaceReplica.#commitReadActivities` in
+   * `./v2.ts`), which is sound only while the op is what carries that region: a
+   * mergeable op resolves against durable state, so the value it read does not
+   * constrain it. A whole-document set carries the region instead, and it is
+   * the value the run computed from what it read — so those reads are real
+   * dependencies and have to stay. Abandoning is the delete-and-poison shape
+   * `poisonMergeableOp()` uses, and it runs inside `getNativeCommit()`, which
+   * precedes the narrowing, so both sides see the same intents.
+   *
+   * For a speculative seal the read set is what the entry's retirement floor
+   * and its pending-read documents are built from, so an intent surviving here
+   * retires the entry against a watermark that never covered what the run read.
+   */
+  #abandonMergeableOps(doc: WritableDocumentEntry): void {
+    if (!doc.mergeableOps?.size) {
+      return;
+    }
+    for (const pathKey of [...doc.mergeableOps.keys()]) {
+      doc.mergeableOps.delete(pathKey);
+      (doc.mergeableOpsPoisoned ??= new Set()).add(pathKey);
+    }
+  }
+
+  /**
+   * Returns the working/initial state at one intent's path, which its builder
+   * turns into wire ops.
+   */
+  #mergeableBuildContext(
+    doc: WritableDocumentEntry,
+    intent: MergeableOpIntent,
+  ): MergeableBuildContext {
+    const working = readValueAtPath(doc.current.value, intent.path, {
+      allowArrayLength: true,
+    });
+    const initial = doc.initial.value === undefined ? undefined : (
+      readValueAtPath(doc.initial.value, intent.path, {
+        allowArrayLength: true,
+      })
+    );
+    return {
+      workingArray: Array.isArray(working) ? working : undefined,
+      hadInitialArray: Array.isArray(initial),
+      // Presence, not definedness: an already-present slot (even holding
+      // `undefined`) does not add a key to its parent, so the op does not
+      // materialize a path and must not stamp `createsKey`.
+      hadInitialValue: doc.initial.value !== undefined &&
+        hasValueAtPath(doc.initial.value, intent.path, {
+          allowArrayLength: true,
+        }),
+      initialArray: Array.isArray(initial)
+        ? initial as readonly FabricValue[]
+        : undefined,
+    };
+  }
+}

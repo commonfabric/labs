@@ -1,0 +1,181 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Placement": {
+        "properties": {
+          "col": {
+            "type": "number"
+          },
+          "dCol": {
+            "type": "number"
+          },
+          "dRow": {
+            "type": "number"
+          },
+          "label": {
+            "description": "The word as it was written, for the list a solver reads.",
+            "type": "string"
+          },
+          "row": {
+            "type": "number"
+          },
+          "word": {
+            "description": "The letters in the grid, from `normalizeWord`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "word",
+          "label",
+          "row",
+          "col",
+          "dRow",
+          "dCol"
+        ],
+        "type": "object"
+      },
+      "Skipped": {
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "reason": {
+            "description": "`too-short`: fewer than `MIN_WORD_LENGTH` letters A–Z after normalizing.\n`no-room`: no run of the grid could take it without repeating a word.",
+            "enum": [
+              "too-short",
+              "no-room"
+            ]
+          }
+        },
+        "required": [
+          "label",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "WordSearch": {
+        "properties": {
+          "cols": {
+            "type": "number"
+          },
+          "grid": {
+            "description": "One string of `cols` letters per row.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "placements": {
+            "items": {
+              "$ref": "#/$defs/Placement"
+            },
+            "type": "array"
+          },
+          "rows": {
+            "type": "number"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/$defs/Skipped"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "rows",
+          "cols",
+          "grid",
+          "placements",
+          "skipped"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "What WordSearchPlay plays, and where each player's finds are kept.",
+    "properties": {
+      "found": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "user"
+          }
+        ],
+        "default": [],
+        "description": "Each player's found words, by `placementKey`.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "puzzle": {
+        "$ref": "#/$defs/WordSearch",
+        "default": {
+          "cols": 0,
+          "grid": [],
+          "placements": [],
+          "rows": 0,
+          "skipped": []
+        },
+        "description": "The puzzle to play, as `WordSearch` or `generateWordSearch` makes it."
+      },
+      "title": {
+        "default": "Word Search",
+        "description": "Heading, as on the puzzle it plays.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "wordsearch/play.tsx",
+  "resultSchema": {
+    "description": "A player's progress, and the two things a player does.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "foundCount": {
+        "description": "How many of the puzzle's hidden words this player has found.",
+        "type": "number"
+      },
+      "restart": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Forget this player's finds.",
+        "tier": "wrapper"
+      },
+      "solved": {
+        "description": "Whether every hidden word is found.",
+        "type": "boolean"
+      },
+      "tap": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Tap the cell at `index` (row * cols + col); an index off the grid is refused.",
+        "properties": {
+          "index": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "index"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "foundCount",
+      "solved",
+      "tap",
+      "restart",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

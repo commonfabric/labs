@@ -11,7 +11,7 @@ binds every implementation.
 // Shown for illustration only.
 interface ChatManagerOutput {
   /** Every room this user belongs to and hasn't forgotten, newest first. */
-  rooms: PerSession<ChatIndexEntry[]>;
+  rooms: PerUser<ChatIndexEntry[]>;
 
   /** The direct room this user shares with each counterpart, by principal. */
   direct: Record<string, ChatIndexEntry>;
@@ -43,14 +43,14 @@ interface ChatManagerOutput {
   >;
 
   /** Notices this user's requests have produced that no one has delivered. */
-  outgoingNotices: {
+  outgoingNotices: PerUser<{
     id: string;
     room: Cell<ChatRoomOutput>;
     recipient: string;
-  }[];
+  }[]>;
 
   /** The people this user's rooms list, by principal. */
-  people: PerSession<Record<string, Cell<ChatProfile>[]>>;
+  people: PerUser<Record<string, Cell<ChatProfile>[]>>;
 
   openDirect: Stream<{ requestId: string; counterpart: string }>;
   createGroup: Stream<{
@@ -142,17 +142,20 @@ Everything a manager stores is `PerSpace` in the user's home space (see
 user, so `PerSpace` there means one instance for that user, which is why nothing
 it stores needs to be `PerUser` or `PerSession`.
 
-`rooms`, which the manager doesn't store, is `PerSession` all the same, and so
-is `people`, which is drawn from it, though each room's `roster` is shared by
-everyone the room's space admits: a profile lives in its owner's own space, and
-attests no principal to a reader that space refuses, so two readers can key the
-same roster differently. Each room in it is read under the reader's own access,
-so a manager more than one principal reads, as one outside a home space can be,
-lists different rooms to a principal a room's space refuses than to its members.
-Stored once for every reader, a value readers derive differently is one their
-runtimes overwrite without end. A stream reads neither, except `offerRoom`,
-which reads `people` for the session that sends it: every other request names a
-room's members by principal or by profile itself.
+`rooms`, which the manager doesn't store, is `PerUser` all the same, and so are
+`people`, which is drawn from it, and `outgoingNotices`, which leaves out a
+notice whose room's roster attests its recipient, though each room's `roster` is
+shared by everyone the room's space admits: a profile lives in its owner's own
+space, and attests no principal to a reader that space refuses, so two readers
+can key the same roster differently. Each room in it is read under the reader's
+own access, so a manager more than one principal reads, as one outside a home
+space can be, lists different rooms to a principal a room's space refuses than
+to its members. Stored once for every reader, a value readers derive differently
+is one their runtimes overwrite without end. Read access is a property of the
+principal, so every session of one user derives the same values, and one
+instance per user serves them all. A stream reads none of them, except
+`offerRoom`, which reads `people` for the user that sends it: every other
+request names a room's members by principal or by profile itself.
 
 ## Facts
 
@@ -194,11 +197,12 @@ room's members by principal or by profile itself.
   request sent again after that starts afresh: an `openDirect` still finds the
   existing room, but a `createGroup` creates another.
 - **`outgoingNotices`** holds each notice this user's requests have produced,
-  until a client reports it delivered.
+  until a client reports it delivered or the room's roster lists a profile
+  attesting its recipient, who then needs no telling.
 - **`people`** holds the people this user shares a room with: for each
   principal, the profiles attesting it, read from the roster of each room in
-  `rooms` (see [`ChatRoomOutput`](ChatRoomOutput.md#facts)) and keyed by each
-  profile's own `represents-principal` label, never by what a roster claims
+  `rooms` (see [`ChatRoomOutput`](ChatRoomOutput.md#facts)) and keyed by whose
+  own each profile is (`profileOwnerOf()`), never by what a roster claims
   about it. Each profile is listed once, in the order the rooms list them:
   newest room first, and within a room in its roster's order. So a person's
   first profile is a fixed choice for a given list of rooms. A profile that
@@ -257,10 +261,11 @@ These rules hold for every stream:
   with it resumes the request rather than starting another.
 - `counterpart: string` — The DID of the other person. Must not be this user's
   own.
-- `profile?: Cell<ChatProfile>` — The other person's profile, whose
-  `represents-principal` label must name `counterpart`. A new room, or a found
-  one that was offered them nothing, is offered to them through the share inbox
-  it points at (see [offers](#offers)).
+- `profile?: Cell<ChatProfile>` — The other person's profile, which must be
+  `counterpart`'s own (`profileOwnerOf()` names them; see
+  [`ChatProfile`](ChatProfile.md)). A new room, or a found one that was offered
+  them nothing, is offered to them through the share inbox it points at (see
+  [offers](#offers)).
 
 Finds the direct room this user shares with a person, or creates it. This is an
 outward act when it creates a room, or offers one it finds.
@@ -306,9 +311,10 @@ conversation from splitting.
   be empty, which creates a group room of one, and people can be added later
   from the room's add control.
 - `profiles?: Cell<ChatProfile>[]` — The profiles of more people to admit, as
-  `people` lists them. Each names the principal its `represents-principal`
-  label attests, who is admitted as a member, and the room is offered to them
-  through the share inbox the profile points at (see [offers](#offers)). A
+  `people` lists them. Each names the person whose own profile it is
+  (`profileOwnerOf()`), who is admitted as a member, and a profile that is no
+  one's refuses the request. The room is offered to them through the share
+  inbox the profile points at (see [offers](#offers)). A
   person named by more than one profile is offered the room through each
   distinct inbox those profiles point at, once per inbox, and added to the
   room's participants once. Profiles of two different people must not point at
@@ -349,9 +355,9 @@ Creates a group room. This is an outward act: it grants other people access.
 - `room: Cell<ChatRoomOutput>` — A link to the room, one this user may add
   people to.
 - `member?: string` — The DID of the person to tell of the room.
-- `profile?: Cell<ChatProfile>` — The person's profile, whose
-  `represents-principal` label must name `member`, or names the person when
-  `member` is absent.
+- `profile?: Cell<ChatProfile>` — The person's profile, which must be
+  `member`'s own (`profileOwnerOf()` names them), or names the person whose
+  own it is when `member` is absent.
 
 Tells someone this user has added to a room of the room. The room's
 `addMember` sends it, once it has granted the person access, and reads its
@@ -362,7 +368,7 @@ outcome back as the add's `delivery`.
 - **Effect:** offers the room to the person (see [offers](#offers)): through
   the share inbox `profile` points at, or, with no `profile`, through each
   distinct inbox the profiles `people` lists for `member` point at, once per
-  inbox, as this session reads `people`. The first profile the room is offered
+  inbox, as this user reads `people`. The first profile the room is offered
   through is added to the room's participants. A person offered nothing, since
   no profile known for them points at an inbox, gets a notice instead. It
   grants nobody anything.
@@ -524,7 +530,8 @@ the entry. It never creates a second room.
 A notice has to reach a principal who may share no space with this user. Until a
 pattern can deliver one itself (see [first
 contact](FabriChatManager.md#first-contact)), the manager lists notices in
-`outgoingNotices` and a client delivers them. A notice says which room, and who
+`outgoingNotices` and a client delivers them. The list leaves out a notice whose
+recipient the room's roster already lists. A notice says which room, and who
 sent it: this user. A client MUST deliver only that, and MUST NOT deliver any of
 the room's contents. It then sends `delivered` with the notice's `id`.
 

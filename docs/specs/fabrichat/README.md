@@ -20,9 +20,10 @@ departs from this design.
   - [`ChatMessage`](ChatMessage.md)
   - [`ChatMessageList`](ChatMessageList.md): a room's messages: facts, the
     newest, and its threads.
-  - [`ChatReply`](ChatReply.md): what a reply replies to, and where it's shown.
-  - [`ChatThreadSummary`](ChatThreadSummary.md): a thread's reply count and
-    latest reply time.
+  - [`ChatReply`](ChatReply.md): the thread a message joins, the message it
+    quotes, and where it's shown.
+  - [`ChatThreadSummary`](ChatThreadSummary.md): a thread's title, reply count,
+    latest reply time, and newest messages.
   - [`ChatReaction`](ChatReaction.md)
   - [`ChatRoomAbout`](ChatRoomAbout.md)
   - [`ChatRoomPolicy`](ChatRoomPolicy.md): a room's policy, stated correctly.
@@ -119,15 +120,18 @@ provide, the document says so, under the heading "Prerequisites".
 - **Room.** One conversation: a `FabriChatRoom` piece, the chat of a social
   space, which is either created for it, with the room as its root, or an
   existing one.
-- **Member.** A principal the room space's access list admits. A member with
-  READ reads only the newest messages; WRITE or OWNER is needed to act. Who is
-  a member changes through the space's own tools, such as the CLI's `cf acl`,
-  and, for a group room in a space of its own, through the room's add control.
+- **Member.** A principal the room space's access list names, with an entry
+  of its own at READ, WRITE, or OWNER. The list's `*` entry names no one, so
+  it makes no one a member, though whoever it admits can use the room as its
+  level allows. A member with READ reads only the newest messages; WRITE or
+  OWNER is needed to act. Who is a member changes through the space's own
+  tools, such as the CLI's `cf acl`, and, for a group room in a space of its
+  own, through the room's add control.
 - **Direct room.** A room created for exactly two members, found by the manager
   from either member's side by the other member's principal.
 - **Group room.** Any other room. Two group rooms can have the same members.
 - **Container.** A space that shows chats among other things, such as a space
-  whose root is the `loom` pattern (`packages/patterns/loom/`). A container
+  whose root is the `loom` pattern (`patterns/system/loom/`). A container
   may name its own chat, a room in its space, as the `loom` pattern's root
   does with its `chatRoom` link, and its `ensureChatRoom` creates that room,
   with no panel showing it.
@@ -197,8 +201,9 @@ for a container, which decides who could see a room placed there. A space
 offers two halves of that:
 
 - **Its access list** says who can read and write. A pattern reads its own
-  principal's level (`spaceAccess()`), and the space's own tools change it.
-  No pattern can list the whole access list.
+  principal's level (`spaceAccess()`), and, for a principal the list
+  admits, the principals it names, with the `*` entry apart
+  (`spaceMembers()`). The space's own tools change it.
 - **Its participants**, the profiles its root lists (`participants`, which a
   pattern in the space reads through `wish({ query: "#default" })`), name
   people, but each entry is a claim: any participant can add any profile, by
@@ -206,9 +211,10 @@ offers two halves of that:
   room in a space of its own is that root, and keeps them itself.
 
 A **member set**, the participants whose profile represents a principal the
-access list admits, plus any admitted principal with no entry, would combine
-the two. It is a property of the space, the same for every pattern in it. Until
-a space offers one, a reader shows the participants as claims.
+access list names, plus any named principal with no entry, would combine the
+two. The `*` entry adds no one to it. It is a property of the space, the same
+for every pattern in it. Until a space offers one, a reader shows the
+participants as claims.
 
 With a member set:
 
@@ -236,6 +242,8 @@ names the ones it needs, and they are gathered here:
 
 - **A member set for a social space**, readable by the space's members and by
   patterns running there (see [Social spaces](#social-spaces)).
+  `spaceMembers()` gives its principals; pairing each with a participant's
+  profile is still to come.
 - **Creating a private space from a pattern.** `Factory.inSpace()` creates a
   space with a random DID whose genesis document grants only its creator
   (`{ [creator]: "OWNER" }`), or the grants `inSpace(name, { grants })` names
@@ -257,7 +265,7 @@ names the ones it needs, and they are gathered here:
 
 ## Implementation status
 
-The four patterns are in `packages/patterns/fabrichat/`: `room.tsx`,
+The four patterns are in `patterns/system/fabrichat/`: `room.tsx`,
 `manager.tsx`, `placement.tsx`, and `adapter.tsx`, with the contracts' records
 in `schemas.tsx`. The room's stored records and the handlers that write them are
 in `room-records.tsx`, and one message's rendering in `message-row.tsx`. The
@@ -285,7 +293,7 @@ design, as below.
   [`clients.md`](clients.md#the-sanctioned-issuing-path)).
 - **A room keeps its own participants.** A room in a space of its own keeps
   the space's participants through `addParticipant`, the roster's one writer
-  (`packages/patterns/loom/participants.tsx`): the manager that creates or
+  (`patterns/system/loom/participants.tsx`): the manager that creates or
   accepts the room adds its user, from an event that follows. As a stop-gap, a
   member whose manager has done neither is not on the roster, and is shown
   among the participants only once they write, as an author. A room in an
@@ -332,8 +340,9 @@ design, as below.
   click to the viewer's manager's `openDirect` itself, since a reviewed gesture
   does not carry across a `send` from another handler. It names the participant
   by their profile, bound as its control's `name`, which crosses into the
-  click's event as the profile's cell; the manager reads the counterpart from
-  the profile's `represents-principal` label, and offers the room through the
+  click's event as the profile's cell; the manager reads the counterpart as
+  the principal whose own profile it is (`profileOwnerOf()`), and offers the
+  room through the
   share inbox the profile points at. A chip a room rendered before its control
   named a profile names the participant's principal instead, as
   `target.dataset.counterpart`, which the manager still reads.
@@ -358,8 +367,9 @@ design, as below.
   guarantees, so the room keeps no memory of the events it has acted on, and
   a rendered control sends no `requestId`.
 - **Thread summaries.** `messages.threads` is derived in the pass that places
-  each message in the views, which walks each reply chain once for the whole
-  room. So the summaries together cost one walk of the messages rather than one
+  each message in the views, which groups the messages by the thread each one
+  names, once for the whole room. So the summaries together, with each one's
+  newest messages and title, cost one pass over the messages rather than one
   per message, and no stored counter can drift from the threads it counts. A
   change to the messages derives them again, as it does `latest`.
 - **Notices and offers.** A manager's notice id is `[recipient, requestId]` as
@@ -383,7 +393,8 @@ design, as below.
   Nothing delivers a notice yet (see
   [first contact](FabriChatManager.md#first-contact)), so the manager's
   rendering shows each queued notice with a link to its room, for the room's
-  creator to send on. Whoever opens the room's link, and whoever forgot the
+  creator to send on, until it is reported delivered or the room's roster
+  lists its recipient. Whoever opens the room's link, and whoever forgot the
   room, joins it by writing in it: the room sends the writer's manager
   `joinRoom`, which lists the room, or lists a forgotten one again.
 - **The index discovers rooms and keeps individual choices.** The manager

@@ -29,6 +29,8 @@ a line for each new document to the index below.
 - [`view-scoped-client-replication.md`](view-scoped-client-replication.md) —
   visible renderer demand, server-observed input selection, and guarded local
   previews
+- [`document-release.md`](document-release.md) — when a runtime stops watching
+  a document nothing reads, what it drops, and how a later read loads it again
 
 - [`collaborative-fields.md`](collaborative-fields.md) — operation-based fields,
   CodeMirror's opt-in editor path, retained cursors and reset behavior, and
@@ -103,8 +105,9 @@ a line for each new document to the index below.
 - [`space-access.md`](space-access.md) — what `spaceAccess(target)` tells a pattern
   about the access its principal holds in a space: where the level comes from,
   who the principal is, when the answer is `"none"` and when it is not known,
-  and how it stays current; and what `spaceOf(target)` returns, the DID of
-  that space
+  and how it stays current; what `spaceMembers(target)` lists, the principals
+  the space's access list names; and what `spaceOf(target)` returns, the DID
+  of that space
 - [`private-inbox.md`](private-inbox.md) — the one inbox per identity where
   others deliver offers: where it lives, who creates it, what access its space
   grants, the offer envelope it shares with loom's share inbox, what `receive`

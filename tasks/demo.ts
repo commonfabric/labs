@@ -3,6 +3,7 @@
 import { dirname, join, resolve } from "@std/path";
 import { findFfmpeg } from "@commonfabric/integration";
 import { findIntegrationTestFiles } from "./integration.ts";
+import { packageDirNamed } from "./package-layout.ts";
 
 export type DemoOptions = {
   packageName: "patterns" | "shell";
@@ -84,8 +85,7 @@ export async function resolveDemoTest(
 ): Promise<string> {
   const integrationDir = join(
     rootDir,
-    "packages",
-    packageName,
+    packageDirNamed(rootDir, packageName),
     "integration",
   );
   const matches = await findIntegrationTestFiles(
