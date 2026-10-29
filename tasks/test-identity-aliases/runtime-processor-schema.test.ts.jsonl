@@ -1,0 +1,2 @@
+{"date":"2026-10-24","from":{"k":"unit","s":"runtime-client","n":"hasExplicitSubscriptionSchema > rejects missing, false, and empty object schemas"},"to":{"k":"unit","s":"runtime-client","n":"subscriptionSchemaGivesShape > gives no shape for a missing schema, `true`, or an empty object"}}
+{"date":"2026-10-24","from":{"k":"unit","s":"runtime-client","n":"hasExplicitSubscriptionSchema > accepts non-empty object schemas"},"to":{"k":"unit","s":"runtime-client","n":"subscriptionSchemaGivesShape > gives a shape for a schema that constrains its value"}}

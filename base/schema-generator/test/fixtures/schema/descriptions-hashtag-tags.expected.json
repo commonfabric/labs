@@ -1,0 +1,21 @@
+{
+  "description": "A #note the user took, discoverable via #quickCapture.",
+  "properties": {
+    "annotations": {
+      "description": "Linked #annotation entries.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "content": {
+      "description": "The note body.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "annotations",
+    "content"
+  ],
+  "type": "object"
+}

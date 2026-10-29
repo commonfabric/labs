@@ -7,16 +7,17 @@
  * anything — which would leave a broken compile to be found on `main`,
  * after the change that broke it has merged. These suites keep it a
  * pull-request signal by making the build a test like any other: it has
- * an identity, it accumulates a record of what it has caught, and the
- * packer can choose it.
+ * an identity, it accumulates a record of its new real test failures,
+ * and the packer can choose it.
  *
  * Nothing forces one to run. A binary the store has never seen is
  * unknown and therefore mandatory, so each is built once; after that it
- * sits at the value floor until it catches something. When a compile
- * does break, `main` catches it, and a `main` catch is weighted half
- * again for being exactly the escape this system exists to stop — one of
- * them lifts a build from the floor to several times it, which is enough
- * to be chosen against a corpus where almost nothing has ever failed.
+ * sits at the value floor until it has a new real test failure. When a
+ * compile does break, `main` catches it, and a new real test failure on
+ * `main` is weighted half again for being exactly the escape this system
+ * exists to stop — one of them lifts a build from the floor to several
+ * times it, which is enough to be chosen against a corpus where almost
+ * nothing has ever failed.
  * That feedback loop is the mechanism. A hand-maintained map from
  * changed paths to binaries would be the kind of transcribed table this
  * design exists to delete, and it would go stale the first time an
@@ -96,7 +97,15 @@ function binarySuite(
               request.unit,
             ],
             cwd: context.root,
-            ...(options.env === undefined ? {} : { env: options.env }),
+            // A lane is packed to finish inside `LANE_BOUND_SECONDS`, which
+            // the corpus compile a shipped build pays for would take this
+            // build past, so it keeps the compiler-input fingerprint and
+            // stays a test of the compile itself: the import graph, the
+            // shell bundle, the included assets. That the corpus compiles
+            // under the current compiler is for
+            // `compile-cache-output-version.test.ts` to show, one entry at
+            // a time.
+            env: { CF_COMPILE_CACHE_VERSION: "inputs", ...options.env },
           })),
       );
     },
@@ -105,16 +114,17 @@ function binarySuite(
 
 /**
  * The binary suites. The server-execution shell is the same build under
- * a different compile-time define, which is what a variant is: one test,
+ * different compile-time defines, which is what a variant is: one test,
  * two configurations, two histories that never stand in for each other.
  */
 export function loadBinarySuites(): Suite[] {
+  const defaults = serverExecutionCiLane("default");
   const opposite = serverExecutionCiLane("opposite");
   return [
-    binarySuite("binaries", BINARY_NAMES),
+    binarySuite("binaries", BINARY_NAMES, { env: { ...defaults.environment } }),
     binarySuite("binaries-opposite", ["toolshed"], {
       variant: opposite.recordVariant,
-      env: { EXPERIMENTAL_SERVER_EXECUTION: String(opposite.enabled) },
+      env: { ...opposite.environment },
     }),
   ];
 }

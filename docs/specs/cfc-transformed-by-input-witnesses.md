@@ -15,13 +15,13 @@ This document specifies the input witnesses the runtime retains on
 `TransformedBy`, so that a rule can require that the endorsed code was fed by
 specific code, and says what they do not cover. The mint lives in
 `deriveFlowJoinImpl` and `observationInputWitnesses`
-(`packages/runner/src/cfc/prepare.ts`) over the helpers in
-`packages/runner/src/cfc/input-witness.ts`. The cases are in
-`packages/runner/test/cfc-transformed-by-input-witness.test.ts`, and, run as
+(`runtime/runner/src/cfc/prepare.ts`) over the helpers in
+`runtime/runner/src/cfc/input-witness.ts`. The cases are in
+`runtime/runner/test/cfc-transformed-by-input-witness.test.ts`, and, run as
 compiled patterns, in
-`packages/runner/test/cfc-transformed-by-input-witness-compiled.test.ts`,
-`packages/runner/test/cfc-transformed-by-input-witness-references.test.ts` and
-`packages/patterns/cfc-exchange-rules/witnessed-chain.test.tsx`.
+`runtime/runner/test/cfc-transformed-by-input-witness-compiled.test.ts`,
+`runtime/runner/test/cfc-transformed-by-input-witness-references.test.ts` and
+`patterns/examples/cfc-exchange-rules/witnessed-chain.test.tsx`.
 
 ## What the specification asks for
 
@@ -183,7 +183,9 @@ included. A destination qualifies only when all of these hold:
 - no reference sits anywhere in its final value, because a pointer the diff
   found in place, such as a write redirect it writes through, is not one the
   writer supplied;
-- the join fits every ceiling declared at or beneath it;
+- the join fits every ceiling declared at or beneath it, each joined with the
+  document's residency clauses (§8.12.4, as `cfc-enforcement-matrix.md` §4
+  describes them);
 - the transaction created the destination, or read no content at or beneath
   it, nor recursively above it. A writer that read its destination can carry a
   value it found there into what it sets, and the diff leaves that value in
@@ -216,7 +218,7 @@ Pattern code that puts a plain object in an array does not store it inline.
 The diff anchors it: it writes the object into an entity document of its own,
 at an id the runtime derives, and stores a reference to that document at the
 object's slot (`anchorValueAsEntity` in
-`packages/runner/src/data-updating.ts`). A list of objects is a list of
+`runtime/runner/src/data-updating.ts`). A list of objects is a list of
 references, and a reader reaches each object in two steps: it reads the slot,
 then the entity the reference names.
 

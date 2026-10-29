@@ -91,14 +91,14 @@ descriptor state:
 One factory kind carries that state without declaring it. `lift`'s declared
 return type is its call signature alone — a bare function type, which is what
 lets a generic implementation carry its caller's element type through the
-builder (see `LiftFunction` in `packages/api/index.ts`). The object it returns
+builder (see `LiftFunction` in `base/api/index.ts`). The object it returns
 is an ordinary `ModuleFactory` with the whole protocol on it, so everything this
 document specifies about module factories holds for a lift's; only TypeScript
 declines to name it. Code that needs the record rather than the call reaches it
 through `isModule()`.
 
 The existing `toEncodableForm()` path is a one-way conversion. The runtime's
-artifact walk (`packages/runner/src/encodable-form.ts`) replaces each factory
+artifact walk (`runtime/runner/src/encodable-form.ts`) replaces each factory
 with inert plain data before the value reaches the data model, which has no
 route to a function of its own. Generic reads do not recreate a callable
 factory. Pattern-valued list builtins
@@ -980,27 +980,27 @@ Each stage is independently testable and revertible.
 
 ## Implementation Areas
 
-- `packages/data-model`: FabricFactory type arm and brand, `FactoryCodec`, codec
-  registry function dispatch, conversion, freeze/clone, equality/hash, JSON
-  cycle tracking, and formal type declarations.
-- `packages/memory` and runner storage/update paths: treat branded factories as
+- `base/data-model`: FabricFactory type arm and brand,
+  `FactoryCodec`, codec registry function dispatch, conversion, freeze/clone,
+  equality/hash, JSON cycle tracking, and formal type declarations.
+- `runtime/memory` and runner storage/update paths: treat branded factories as
   atomic codec values at storage boundaries, preserve them through patches and
   diffs, and reject unbranded functions.
-- `packages/api`: mirrored FabricFactory and `asFactory` schema declarations;
+- `base/api`: mirrored FabricFactory and `asFactory` schema declarations;
   keep `.curry` out of the public `PatternFactory` type.
-- `packages/runner/src/builder`: brand/state attachment for every factory,
+- `runtime/runner/src/builder`: brand/state attachment for every factory,
   pre-construction callback params-schema metadata, pattern params root,
   internal curry derivation, symbolic invocation helper, modifier persistence,
   root-token provenance, and live-to-canonical protocol traversal.
-- `packages/runner`: params pseudo-alias types and binding functions, hidden
+- `runtime/runner`: params pseudo-alias types and binding functions, hidden
   params-cell metadata/lifecycle, dynamic-module supervision, generic artifact
   resolution/loading, runner materialization, and compatibility adapters.
-- `packages/schema-generator`: recognize all factory kinds before generic
+- `base/schema-generator`: recognize all factory kinds before generic
   callable handling and emit public factory schemas.
-- `packages/ts-transformers`: capture analysis, nested-pattern closure rewrite,
+- `base/ts-transformers`: capture analysis, nested-pattern closure rewrite,
   `withPatternParamsSchema` emission, deterministic hoisting, symbolic call
   lowering, framework-input threading, list callback lowering, and diagnostics.
-- `packages/llm`, CLI, FUSE, and schema formatting: consume Factory values
+- `base/llm`, CLI, FUSE, and schema formatting: consume Factory values
   directly and retain legacy reads during migration.
 - pattern sources: replace `patternTool` with inline patterns.
 

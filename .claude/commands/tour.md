@@ -271,7 +271,7 @@ In the chat, type: "Please launch the counter pattern with an initial value of 5
 1. Use `fetchAndRunPattern` to compile and run the counter
 2. Use `navigateTo` to navigate to the new pattern
 
-The counter view shows: a heading "Simple Counter", a large number (5), text like "Counter is the 5th number", and "- Decrement" / "+ Increment" buttons. Take a screenshot. Note: the counter pattern may not appear in `listPatternIndex`, but the LLM can still launch it via `fetchAndRunPattern` using the path `counter/counter.tsx`.
+The counter view shows: a heading "Simple Counter", a large number (5), text like "Counter is the 5th number", and "- Decrement" / "+ Increment" buttons. Take a screenshot. Note: the counter pattern may not appear in `listPatternIndex`, but the LLM can still launch it via `fetchAndRunPattern` using the path `examples/counter/counter.tsx`.
 
 **Testing interactivity:** The `cf-button` component wraps a native `<button>` inside its shadow root. Use this approach:
 ```js

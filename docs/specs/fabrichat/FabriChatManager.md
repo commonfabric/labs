@@ -8,14 +8,14 @@ This document says how this implementation does it.
 ## Where it lives
 
 `FabriChatManager` is a field of the home pattern
-(`packages/patterns/system/home.tsx`), which is what gives each user exactly
+(`patterns/system/home/home.tsx`), which is what gives each user exactly
 one. The home target `#chatManager` resolves to that field. The spelling follows
 the camel case of the other multi-word targets (`#learnedSummary`,
 `#pieceRegistry`, `#profileName`).
 
 Adding the target takes the same steps `#agent_queue` took: the field and child
 piece in `home.tsx`, a case in `getResolutionKind` and in
-`resolveHomeSpaceTarget` (`packages/runner/src/builtins/wish.ts`), tests beside
+`resolveHomeSpaceTarget` (`runtime/runner/src/builtins/wish.ts`), tests beside
 each, and a row in the built-in targets table of
 [`wish`](../../common/conventions/wish.md) and in
 [`HOME_SPACE.md`](../../common/conventions/HOME_SPACE.md).
@@ -23,7 +23,7 @@ each, and a row in the built-in targets table of
 ## State
 
 The manager keeps `direct`, `requests`, `outgoingNotices`, and
-`roomMembership` in the home space. `rooms` is derived per session from those
+`roomMembership` in the home space. `rooms` is derived per user from those
 membership choices and the user's shared-space catalog, Home's, which Home
 hands the manager
 ([`shared-space-catalog.md`](../../features/shared-space-catalog.md)).
@@ -33,7 +33,10 @@ For each saved catalog entry, the manager resolves the space's root with
 a standalone room at that root. Every other kind uses the root's explicit
 `chatRoom` link. An unknown kind uses that same declaration; the absence of a
 kind says nothing about whether the space has a chat. A declaration can appear
-or change after a space is saved, and discovery follows it reactively.
+or change after a space is saved, and discovery follows it reactively. Each
+entry is found on its own, and lists its room once the room's records say it
+is one. An entry whose space this replica can't serve, as a space on another
+host is, lists nothing until it can be served, and holds back no other entry.
 
 Each entry links the room itself, so opening it displays the full conversation.
 Resolved room identity, compared with `equals()`, deduplicates a conversation
@@ -61,7 +64,7 @@ catalog entry, that entry's revision, and the resolved room identity. Clients pa
 unchanged to `forget`; they need supply no container. A direct room's
 `counterpart` is the one `direct` holds the resolved room under, or else the
 room's labeled creator. `people` is drawn from listed rooms' rosters per
-session, keyed by the principal each profile attests.
+user, keyed by the principal each profile attests.
 
 The manager's rendering labels each listed room with its `about.title`, read
 through the room's link, so a retitle shows there once the room records it. A
@@ -71,19 +74,27 @@ catalog, which neither the rendering nor `rooms` reads. Registration takes the
 room's title, whatever its kind. Whenever the manager handles `accept` or
 `joinRoom` for a room its catalog lists, it reads the room's `about`, and
 retitles the entry (`retitleSharedSpaceIn()`) where the room's title differs
-from the entry's, moving neither its revision nor its membership. A join of an
-already-listed room arrives with every write in the room, so that is all it
-reads of the room, and it writes the catalog only on a mismatch. The member who
-retitles a room tells their manager at once; another member's entry follows on
-their manager's next event for that room: their next message, reaction, or
-retitle, an acceptance, or a client's `joinRoom` when they open it.
+from the entry's, moving neither its revision nor its membership. That is all a
+join of an already-listed room reads of the room, and it writes the catalog
+only on a mismatch. The one exception is a `joinRoom` marked `messageAct`,
+which a room sends with every message and reaction: none of those changes the
+title, so the manager reads nothing of the room's `about` for one. The member
+who retitles a room tells their manager at once; another member's entry follows
+on their manager's next event for that room other than a message or a
+reaction: their own retitle, an acceptance, or a client's `joinRoom` when they
+open it.
 
 `direct` holds one entry per counterpart, including forgotten rooms, for direct
 rooms this manager created or accepted. `openDirect` finds a direct room there
-and restores its membership. A room another manager created and offered the
-user is there too once the host's share intake accepts it on the user's behalf.
-`rooms` can also hold a second direct room with the same counterpart, after
-crossing creations.
+and restores its membership. A room found there that has a notice for its
+counterpart still waiting in `outgoingNotices`, since the room was offered them
+nothing, is offered to them, as step 3 of [creating a room](#creating-a-room)
+offers a new room, once a request names a profile of theirs that points at an
+inbox, and the notice is removed. A counterpart the room's roster already lists
+has joined the room, and is offered nothing. A room another manager created and
+offered the user is there too once the host's share intake accepts it on the
+user's behalf. `rooms` can also hold a second direct room with the same
+counterpart, after crossing creations.
 
 `direct`'s entries, and the entry a `done` outcome in `requests` carries, hold a
 room as `FabriChatRoom.inSpace(…)` returned it at creation, or as `accept` was
@@ -102,7 +113,9 @@ acceptance made on the user's behalf, with `keepArchived`, leaves it archived.
 the user's own choice, so it restores an archived entry whatever it says of
 `keepArchived`, and it lists a direct room this user created, which `accept`
 refuses, without changing `direct`. A join of a room the catalog keeps as saved
-that names no `requestId` changes nothing and records nothing. A room offered to the
+that names no `requestId` changes no membership and records nothing; it brings
+the entry's title up to the room's, as described below, unless it is marked
+`messageAct`. A room offered to the
 user is registered by the host that vets the offer (see [first
 contact](#first-contact)). Accepting or joining a container's declared chat supplies `container`, a link
 to the root declaring it. The manager checks that its `chatRoom` resolves to
@@ -142,9 +155,13 @@ create a space for the conversation, with the room as its root, in four steps:
    points at no inbox.
 4. Record the entry in `rooms`, and in `direct` for a direct room, register the
    room's space in the user's catalog, and mark the request `done`. The
-   registration waits for the space's name to resolve, and adding this user to
-   the room's participants follows then: the run that sees the name pending is
-   discarded and run again, and its sends could still be delivered.
+   registration, like adding this user to the room's participants, is an
+   event of its own that follows the room's creation, so the catalog is read
+   apart from it: a transaction's writes are held to the labels of everything
+   it reads, and the catalog can carry its owner's `PersonalSpace` label,
+   which the room's space doesn't admit. Both wait for the space's name to
+   resolve: the run that sees the name pending is discarded and run again, and
+   its sends could still be delivered.
 
 Each step is recorded under the request's `requestId` as it completes, which is
 how a repeated request resumes where the last attempt stopped instead of
@@ -165,7 +182,7 @@ the room's `addMember` sends once it has granted them access. It runs as an
 event of its own, after the add has committed, and offers the room through the
 same steps as step 3: through the profile the add named, or, for an add naming
 only an address, through the profiles `people` lists for that person, as the
-session sending it reads `people`. It records `offered` or `noticed` under the
+user sending it reads `people`. It records `offered` or `noticed` under the
 request's id, which the room reads back as the add's `delivery`.
 
 ## Prerequisites
@@ -174,10 +191,10 @@ request's id, which the room reads back as the add's `delivery`.
   [`FabriChatRoom.md`](FabriChatRoom.md#prerequisites)).
 - **A principal from a profile.** A client that starts a direct room from a
   person's profile needs that profile's principal, since `openDirect` and
-  `createGroup` take principals. A profile's value carries a
-  `represents-principal` label, which
-  `principalOf(profile, "represents-principal")` reads
-  ([reading the principal a label attests](../../features/principal-of.md)).
+  `createGroup` take principals. Whose own profile a profile is,
+  `profileOwnerOf(profile)` reads, by the rule every reader of a person's
+  profiles applies
+  ([whose own profile a profile is](../../features/principal-of.md#whose-own-profile-a-profile-is)).
   A social space's member set pairs each principal with a profile (see [social
   spaces](README.md#social-spaces)), so starting a conversation with someone
   found in one needs nothing more.
@@ -186,14 +203,14 @@ request's id, which the room reads back as the add's `delivery`.
 
 A notice has to reach a principal who may share no space with the sender. Its
 route is the recipient's profile share inbox: a profile's `inbox` field
-(`inbox.piece`, `packages/patterns/system/profile-home.tsx`) points at an inbox
-piece in a space of its own. That is either the private inbox the recipient's
-Home creates ([the private inbox](../../features/private-inbox.md)) or another
-share inbox the profile points at, and both take the same offer envelope. Any
-principal may write to the inbox's space, and its offers are labeled readable by
-the owner alone, a label that binds only an honest runtime. When a request names
-a member's profile, as `openDirect` does with its `profile` and `createGroup`
-with its `profiles`, step 3 offers the
+(`inbox.piece`, `patterns/system/profile-home/profile-home.tsx`) points at an
+inbox piece in a space of its own. That is either the private inbox the
+recipient's Home creates ([the private inbox](../../features/private-inbox.md))
+or another share inbox the profile points at, and both take the same offer
+envelope. Any principal may write to the inbox's space, and its offers are
+labeled readable by the owner alone, a label that binds only an honest runtime.
+When a request names a member's profile, as `openDirect` does with its `profile`
+and `createGroup` with its `profiles`, step 3 offers the
 room there, in that envelope, from an event of its own that follows the room's
 creation, since the offer names the room's space (see
 [`ChatManagerOutput`](ChatManagerOutput.md#offers)). The same event reads the

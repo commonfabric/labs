@@ -1,6 +1,6 @@
 ---
 name: pattern-test-to-integration
-description: Convert Common Fabric pattern unit tests (`*.test.tsx` driven by actions and assertions) into browser integration tests (`packages/patterns/integration/*.test.ts`) that exercise the rendered UI, scale to a chosen size, and can be recorded with `deno task demo`. Use when asked to promote, mirror, spot-check, browser-test, or make a video demo from an existing pattern test, including multi-user pattern tests.
+description: Convert Common Fabric pattern unit tests (`*.test.tsx` driven by actions and assertions) into browser integration tests (`patterns/integration/*.test.ts`) that exercise the rendered UI, scale to a chosen size, and can be recorded with `deno task demo`. Use when asked to promote, mirror, spot-check, browser-test, or make a video demo from an existing pattern test, including multi-user pattern tests.
 ---
 
 # Pattern Test to Integration
@@ -15,45 +15,44 @@ Read the source test, the pattern it instantiates, and these current references:
 
 - `docs/common/ai/pattern-testing-guide.md` — pattern-test semantics, including
   multi-user participants.
-- `packages/patterns/deno.jsonc` — the three test lanes and their CI/coverage
-  roles.
+- `patterns/deno.jsonc` — the three test lanes and their CI/coverage roles.
 - `docs/development/UI_TESTING.md` — shadow DOM, semantic locators, presentation
   behavior, and browser interaction rules.
 - `docs/development/TESTING.md` — integration and `deno task demo` commands.
 - `docs/development/waiting-in-tests.md` — required reading before introducing
   any polling.
-- `packages/patterns/integration/cfc-browser-helpers.ts` — shared interaction,
-  settling, effect-wait, and `StepTimer` seams.
-- `packages/patterns/integration/pieces-controller.ts` — the local
-  `PiecesController` initializer with the shared compile-byte cache.
+- `patterns/integration/cfc-browser-helpers.ts` — shared interaction, settling,
+  effect-wait, and `StepTimer` seams.
+- `patterns/integration/pieces-controller.ts` — the local `PiecesController`
+  initializer with the shared compile-byte cache.
 
 Use working integration tests as executable examples:
 
-- `packages/patterns/integration/nested-counter.test.ts` for a small
-  single-browser interaction.
-- `packages/patterns/integration/cfc-render-policy-demo.test.ts` for a concise,
-  captioned demo.
-- `packages/patterns/integration/lunch-poll-vote.test.ts` for two independent
-  identities, browsers, and recordings on one shared timeline.
+- `patterns/integration/nested-counter.test.ts` for a small single-browser
+  interaction.
+- `patterns/integration/cfc-render-policy-demo.test.ts` for a concise, captioned
+  demo.
+- `patterns/integration/lunch-poll-vote.test.ts` for two independent identities,
+  browsers, and recordings on one shared timeline.
 
 Prefer the nearest current test with the same topology over copying a generic
 fixture. Tests are authoritative when a prose example has drifted.
 
-Before choosing a destination, search `packages/patterns/integration/` for the
-pattern name, source path, and intended scenario. Extend current browser
-coverage when it already owns the story. If a separate scenario is clearer, give
-it a specific filename and selector; never overwrite or duplicate an existing
-test merely because the unit test has the shorter name.
+Before choosing a destination, search `patterns/integration/` for the pattern
+name, source path, and intended scenario. Extend current browser coverage when
+it already owns the story. If a separate scenario is clearer, give it a specific
+filename and selector; never overwrite or duplicate an existing test merely
+because the unit test has the shorter name.
 
 ## Preserve both test contracts
 
 Keep the original colocated `*.test.tsx`. Pattern tests are the authored-pattern
 coverage lane; a browser integration test does not replace that coverage.
 
-Add the browser test under `packages/patterns/integration/` as `*.test.ts`. The
-new test covers boundaries the pattern test intentionally omits: shell
-navigation, rendering, shadow DOM, real event dispatch, browser identity, and
-cross-client propagation.
+Add the browser test under `patterns/integration/` as `*.test.ts`. The new test
+covers boundaries the pattern test intentionally omits: shell navigation,
+rendering, shadow DOM, real event dispatch, browser identity, and cross-client
+propagation.
 
 Do not call the conversion complete if the browser test still performs the
 primary scenario by sending the same output streams and reading the same result
@@ -119,11 +118,11 @@ Build from the closest fixture, retaining the local invariants it demonstrates:
 - Navigate with `ShellIntegration.goto(...)` and the generated identity.
 - Dispose controllers and let bound shell lifecycles close browsers.
 
-Use the helpers in `packages/patterns/integration/cfc-browser-helpers.ts` where
-they already encode shadow traversal, one trusted interaction, view settling,
-commit semantics, or an effect wait. Prefer accessible names and stable
-product-facing selectors. Do not select by transient DOM structure when the UI
-offers a semantic role, label, or explicit stable id.
+Use the helpers in `patterns/integration/cfc-browser-helpers.ts` where they
+already encode shadow traversal, one trusted interaction, view settling, commit
+semantics, or an effect wait. Prefer accessible names and stable product-facing
+selectors. Do not select by transient DOM structure when the UI offers a
+semantic role, label, or explicit stable id.
 
 ## Make the scenario's scale a knob
 
@@ -155,9 +154,9 @@ Emit measurements as parseable single lines carrying the size they were taken
 at, rather than only as step durations, so a sweep across sizes can be collected
 without re-reading logs by eye.
 
-`packages/patterns/integration/topic-board-scale.bench.ts` is the same idea in
-the benchmark lane, including how it declares sizes it cannot yet run. When the
-task is measurement rather than conversion, `skills/perf-investigation/SKILL.md`
+`patterns/integration/topic-board-scale.bench.ts` is the same idea in the
+benchmark lane, including how it declares sizes it cannot yet run. When the task
+is measurement rather than conversion, `skills/perf-investigation/SKILL.md`
 picks up from here.
 
 ## Keep correctness timing separate from presentation
@@ -189,14 +188,14 @@ Run the original pattern test before conversion to establish a clean baseline,
 and again after any source/interface change:
 
 ```bash
-deno task cf test packages/patterns/<pattern>/<name>.test.tsx
+deno task cf test patterns/<pattern>/<name>.test.tsx
 ```
 
 If the test imports sibling modules above its own directory, pass their common
 source root just as the CLI error suggests, for example:
 
 ```bash
-deno task cf test packages/patterns/<pattern>/<name>.test.tsx --root packages/patterns
+deno task cf test patterns/<pattern>/<name>.test.tsx --root patterns
 ```
 
 Run the browser test through the integration selector, using its exact filename

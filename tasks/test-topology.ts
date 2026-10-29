@@ -23,6 +23,7 @@ import {
 import type { CapabilityId } from "./ci-capabilities.ts";
 import { loadBinarySuites } from "./test-topology/binaries.ts";
 import { loadCliSuites } from "./test-topology/cli.ts";
+import { coverageGateSuite } from "./test-topology/coverage-gates.ts";
 import { loadGateSuites } from "./test-topology/gates.ts";
 import { loadPackageIntegrationSuites } from "./test-topology/package-integration.ts";
 import { loadPatternSuites } from "./test-topology/patterns.ts";
@@ -55,7 +56,7 @@ export { claimsIdentity, fileSuite } from "./test-topology/suite.ts";
 export async function loadTopology(
   root: string = Deno.cwd(),
 ): Promise<Suite[]> {
-  return [
+  const suites = [
     ...await loadGateSuites(root),
     ...await loadUnitSuites(root, RUNS_WHOLE),
     ...await loadPatternSuites(root),
@@ -63,6 +64,8 @@ export async function loadTopology(
     ...await loadCliSuites(root),
     ...loadBinarySuites(),
   ];
+  // Built from the measured sets the suites above declare.
+  return [...suites, coverageGateSuite(suites)];
 }
 
 /** One suite by its identifier, or undefined for a name nothing declares. */

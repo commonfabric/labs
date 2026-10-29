@@ -206,19 +206,27 @@ a **link to that profile cell** in the shared entry and render every participant
 with a live, visitable `<cf-profile-badge $profile={p.profile} />` — cross-space
 reads resolve for any authorized viewer (CT-1667/1687), so the badge stays
 current, carries the verified-identity seal, and links to each contributor's
-profile. Snapshotting the `#profileName` / `#profileAvatar` strings instead is
-the self-containment fallback (renders with remote profile spaces offline). See
+profile. Snapshotting the `#profileName` value and the `#profilePicture` bytes
+(or, for a profile with no picture, the `#profileAvatar` text) instead is the
+self-containment fallback (renders with remote profile spaces offline);
+`profileLook()` in `patterns/system/profile-look/profile-look.ts` picks which to
+copy. See
 the [shared-profile roster guide](../../specs/shared-profile-rosters.md);
 canonical live-link demo:
-`packages/patterns/profile-roster-live-demo.tsx`; worked examples:
-`packages/patterns/profile-group-chat/main.tsx`,
-`packages/patterns/scrabble/scrabble.tsx`,
-`packages/patterns/battleship/multiplayer/lobby.tsx`,
-`packages/patterns/lunch-poll/main.tsx`.
+`patterns/examples/profile-roster-live-demo/profile-roster-live-demo.tsx`;
+worked examples: `patterns/examples/profile-group-chat/main.tsx`,
+`patterns/showcase/scrabble/scrabble.tsx`,
+`patterns/showcase/battleship/multiplayer/lobby.tsx`,
+`patterns/apps/lunch-poll/main.tsx`.
 
 **`<cf-profile-badge>` is the one idiomatic way to render an identity** — avatar +
-name + the runtime-attested generative seal (a DID-derived aura ring + cursor
-glint; there is no shield icon), navigable to the person's profile. Prefer it
+name + the runtime-attested generative seal (an aura ring derived from the
+owner's DID and, for a profile, the profile's space, + cursor glint; there is no
+shield icon), navigable to the person's profile. Verification attests the
+principal; the seal tells their profiles apart, so two profiles of one person
+look like two people. A document that carries the person's claim without being
+a profile, such as a room's record of them, wears the person's seal alone, the
+same in every space. Prefer it
 anywhere an identity appears (rosters, message authors, "playing as",
 scoreboards); inline a name into a string only as an explicit fallback. Four
 variants, all carrying the same seal (CT-1761):
@@ -275,9 +283,9 @@ user's home space):
 // Shown inside a pattern body.
 const profileWish = wish({ query: "#profile" });            // the viewer's profile CELL
 const profileNameWish = wish<string>({ query: "#profileName" });
-const profileAvatarWish = wish<string>({ query: "#profileAvatar" });
+const profilePictureWish = wish<FabricBytes>({ query: "#profilePicture" });
 const myName = computed(() => (profileNameWish.result ?? "").trim());
-const myAvatar = computed(() => (profileAvatarWish.result ?? "").trim());
+const myPicture = computed(() => profilePictureWish.result); // image bytes, or undefined
 const hasProfile = computed(() => (profileNameWish.result ?? "").trim() !== "");
 ```
 
@@ -298,7 +306,7 @@ The viewer is whoever the runtime says they are; `#profile` is how you read it.
 `cf-profile-badge` renders **any** participant, not just the viewer: bind the live
 profile cell you stored for them on join. Cross-space profile reads resolve for
 every authorized viewer (CT-1667/1687), so each badge stays current and carries the
-verified seal. Fall back to `<cf-avatar src={p.avatar} name={p.name} />` only when
+verified seal. Fall back to `<cf-avatar bytes={p.picture} src={p.avatar} name={p.name} />` only when
 you deliberately hold just a snapshot — a self-contained piece, or a participant
 whose remote profile space is offline.
 
@@ -308,23 +316,25 @@ whose remote profile space is offline.
 > and the renderer throws *"Bidirectionally bound property $profile is not
 > reactive"*, blanking the whole pattern. Build each view as static JSX and switch
 > with `ifElse(cond, staticA, staticB)` as a child of a static wrapper; gate only
-> *siblings* reactively. Repro: `packages/patterns/scope-bug-computed-vnode-blank/`.
+> *siblings* reactively. Repro: `patterns/dev/scope-bug-computed-vnode-blank/`.
 
 ### Build the roster by join
 
 There is no "list everyone's profiles" primitive. Each viewer contributes their
 own identity on join: push their live `#profile` **cell** into the shared
-`PerSpace` roster (plus a `{ displayName, avatar }` snapshot for the offline
+`PerSpace` roster (plus a `{ displayName, ...profileLook(picture, avatar) }`
+snapshot for the offline
 fallback), and keep a `PerUser` pointer that is a **cell reference** to their own
 entry (see [Shared Directories And "Me"](#shared-directories-and-me)). Decide "is
 this me?" with `equals()` on the stored profile cell (or the entry reference) —
 never by comparing the mutable, non-unique display name. The live demo
-`packages/patterns/profile-roster-live-demo.tsx` is the reference implementation.
+`patterns/examples/profile-roster-live-demo/profile-roster-live-demo.tsx` is the reference implementation.
 
 ### Ownership and authorship
 
 "Who created this / who wrote this" is identity too. For display, snapshot the
-actor's `{ displayName, avatar }`. For an *attested* claim the user cannot forge,
+actor's name and `profileLook(picture, avatar)`: the picture, or the avatar
+text for a profile with no picture. For an *attested* claim the user cannot forge,
 use the CFC wrappers `AuthoredByCurrentUser<T>` / `RepresentsCurrentUser<T>` and
 render with `cf-cfc-authorship`. Read-only display works today; note that
 owner-protected profile *writes* are currently constrained (see CT-1665).
@@ -407,7 +417,10 @@ const inviteBaker = handler<
   { baker: Writable<{ name: string }> },
   { invited: Writable<DID[]> }
 >(({ baker }, { invited }) => {
-  const principal = principalOf(baker, "represents-principal");
+  // Whose own profile `baker` is, by the rule every reader of a person's
+  // profiles applies, which `principalOf(baker, "represents-principal")`
+  // alone does not decide.
+  const principal = profileOwnerOf(baker);
   if (principal === undefined || principal === currentPrincipal()) return;
   invited.push(principal);
 });
@@ -431,6 +444,20 @@ const inviteBaker = handler<
 - `principalsOf(target, kind)` returns every principal the label attests: `[]`
   for none, several for a contested one. Read it where a value nobody attests
   is fine but one someone else attests is not.
+- `profileOwnerOf(profile)` returns the person whose own profile `profile` is,
+  by the rule Home and `#profile` apply ("Profile" in
+  [`HOME_SPACE.md`](../conventions/HOME_SPACE.md)), or `undefined`. Read it,
+  not `principalOf(profile, "represents-principal")`, to ask whether a profile
+  is someone's, since it also refuses a profile whose name is borrowed from
+  another document.
+- `resultOwnerOf(cell, field)` names the pattern whose result owns the
+  document `cell` is in, as `space/id`, when that result's own `field` is that
+  document, or `undefined` otherwise and for a document no pattern's setup
+  derived. A handler that decides by several cells of one pattern, as a guard
+  over Home's lists does, checks each by the field it must be, so that a
+  binding of another pattern's cells, or of the right pattern's cells in the
+  wrong places, is refused; a pattern cannot forge the answer. Without
+  `field` it says only whose the document is, which is not enough for that.
 - A field that links a document has its own label, separate from the linked
   document's. `principalOf(field, kind, { label: "written" })` reads the
   field's claim of `kind`, such as who wrote the link, while the default reads
@@ -516,7 +543,7 @@ If a multi-user pattern has admins, moderators, managers, or protected writes:
    the reason given below.
 3. Define role names, subjects, and the integrity string beside the owning
    pattern.
-4. Reuse `packages/patterns/cfc/admin/mod.ts` for the registry shape and lookup
+4. Reuse `patterns/system/cfc/admin/mod.ts` for the registry shape and lookup
    helpers.
 5. Name one reviewed handler in the roster's write contract, and send every
    roster change to it as an event.
@@ -537,7 +564,7 @@ import {
   adminRegistryEntries,
   type EmptyAdminRegistryValue,
   subjectHasAdminRole,
-} from "../cfc/admin/mod.ts";
+} from "../../system/cfc/admin/mod.ts";
 import {
   type AddIntegrity,
   type Default,
@@ -661,15 +688,15 @@ silent, so a roster that can take one admin and never a second looks exactly
 like one that works. A test that changes the roster once cannot tell the
 difference. One that changes it twice can.
 
-`packages/patterns/cfc/README.md` gives the full set of rules under "Floor An
+`patterns/system/cfc/README.md` gives the full set of rules under "Floor An
 Admin Registry", with the failure each one produces when it is broken, and says
 what choosing a cell rather than a name as the role's subject costs and saves.
 
 For protected writes that must come from reviewed UI, check the shared CFC
 helper docs before copying from a demo:
 
-- `packages/patterns/cfc/README.md`
-- `packages/patterns/cfc/INDEX.md`
+- `patterns/system/cfc/README.md`
+- `patterns/system/cfc/INDEX.md`
 - `docs/common/ai/cfc-helper-authoring-guide.md`
 
 Shared CFC helpers provide reusable policy structure. The pattern still owns its
@@ -705,6 +732,39 @@ regardless, and a rule a pattern enforces only by consulting
 `spaceAccess(target)` holds among honest runtimes and nowhere else. For a write
 that must be refused, use a write policy as described above.
 [`space-access.md`](../../features/space-access.md) has the details.
+
+### A space's members
+
+`spaceMembers(target)` returns the principals the access list of `target`'s
+space names: `principals` maps each one's DID to its level, `"OWNER"`,
+`"WRITE"`, or `"READ"`. The list's `"*"` entry names nobody, so it makes no one
+a member; it is reported apart, as `anyone`, the level it grants whoever the
+list does not name.
+
+```tsx
+// Shown inside a pattern body.
+const board = new Writable.perSpace<string[]>([]);
+const memberCount = computed(() => {
+  const members = spaceMembers(board);
+  return members === undefined
+    ? undefined
+    : Object.keys(members.principals).length;
+});
+```
+
+Only a viewer the access list grants access gets the list, whether through
+their own entry or through `"*"`. Anyone else gets `undefined`, which also
+means "not known yet", as it does for `spaceAccess(target)`; the result is never
+an empty list. Call it where `spaceAccess(target)` can be called. In a
+computation the value is the viewer's own, and updates when the access list
+changes.
+
+It lists principals, not people. To show each member by the profile they joined
+with, match the space's roster against it with `principalOf()` (see
+[Build the roster by join](#build-the-roster-by-join)), and show a member with
+no matching profile by their DID.
+[`space-access.md`](../../features/space-access.md#a-spaces-members) has the
+details.
 
 ### Granting and revoking access to a space
 
@@ -805,6 +865,51 @@ const roomButtons = conversation.rooms.map((room) => (
 For editable nested objects, pass a writable item reference and use `.key(...)`
 inside the child pattern or handler.
 
+## Per-Viewer Work
+
+Under server execution one runtime derives for every viewer. A computed that
+reads user-scoped state, such as the viewer's profile, runs once for each user
+who demands it, one that reads session-scoped state runs once for each such
+session, and so does everything downstream of either
+([cell scopes](../../specs/server-side-execution/scopes.md), §2). Two sessions
+of one user share that user's instance and have separate session instances. The
+runtime learns what a node reads by running it, so nothing in the source says
+which derivations fan out, and a client runtime, which derives only its own
+viewer's instances, shows none of the cost.
+
+### Keep the viewer out of shared derivations
+
+A tally of shared votes that also marks which entry is the viewer's turns the
+tally, the ranking over it, and every card that reads the ranking into
+per-viewer work: five copies of each for five users. Derive shared data from
+shared inputs alone, and decide what is the viewer's at the leaf, from one small
+per-viewer value:
+
+```tsx
+// Shown for illustration only.
+// `board.entries` reads nothing of the viewer; `me` is their profile cell.
+{board.entries.map((entry) => {
+  const outline = computed(() =>
+    entry.owner !== undefined && equals(entry.owner, me)
+      ? "2px solid currentColor"
+      : "none"
+  );
+  return <span style={{ outline }}>{entry.title}</span>;
+})}
+```
+
+The lunch poll's self ring (`patterns/apps/lunch-poll/main.tsx`) takes this
+shape over rows a `computed()` produced, reading the viewer's per-user profile,
+and its pattern test checks that the ring lands on the viewer's own swatch and
+no other. A per-session read in the same place can fail to resolve; see
+[per-session reads in mapped computations](../../development/debugging/gotchas/persession-read-in-mapped-computed.md),
+which also says what does.
+
+The shared derivations then run once per change, and only the comparison at the
+leaf runs per viewer. The same holds for any "is this me", "my entry", or "can
+I" read: carry the identity-free data through the shared derivations and apply
+the viewer's identity where it is displayed or acted on.
+
 ## Concurrent Edits Without Clobbering
 
 When several users edit the same shared data at once, a handler written as
@@ -833,7 +938,7 @@ See [Writable → Mergeable writes](../concepts/types-and-schemas/writable.md#me
 for the full method list and the
 [mergeable](../../features/mergeable-collection-writes.md) /
 [keyed](../../features/keyed-collection-writes.md) collection-write design
-notes. The lunch poll (`packages/patterns/lunch-poll/`) is a worked example: its
+notes. The lunch poll (`patterns/apps/lunch-poll/`) is a worked example: its
 votes and options are keyed, mergeable, multi-user state.
 
 ## Testing Multi-User Behavior
@@ -849,9 +954,9 @@ Three escalating options:
    each participant pattern runs in its own isolated runtime against one
    shared space, coordinating via `{ label }` / `{ await }` markers. See the
    "Multi-User Tests" section of `docs/common/ai/pattern-testing-guide.md`
-   and the example `packages/patterns/cfc-group-chat-demo/multi-user.test.tsx`.
+   and the example `patterns/examples/cfc-group-chat-demo/multi-user.test.tsx`.
 2. **Multi-runtime integration harness**
-   (`packages/patterns/integration/multi-runtime-harness.ts`): opens an
+   (`patterns/integration/multi-runtime-harness.ts`): opens an
    existing piece in several worker-isolated runtimes (distinct identities,
    or one identity in two sessions); supports trusted-surface CFC events
    headlessly. It serves the authored patterns tree beside its in-process
@@ -893,22 +998,22 @@ See:
 
 ## Good Examples
 
-- `packages/patterns/scoped-group-chat/main-plain-inputs.tsx`: data-shaped
+- `patterns/examples/scoped-group-chat/main-plain-inputs.tsx`: data-shaped
   scoped inputs.
-- `packages/patterns/scoped-group-chat/main-with-writable-inputs.tsx`: scoped
+- `patterns/examples/scoped-group-chat/main-with-writable-inputs.tsx`: scoped
   writable aliases for mutation-heavy UI.
-- `packages/patterns/scoped-user-directory/`: per-user pointer into a shared
+- `patterns/examples/scoped-user-directory/`: per-user pointer into a shared
   directory.
-- `packages/patterns/battleship/multiplayer/`: shared match state with per-user
+- `patterns/showcase/battleship/multiplayer/`: shared match state with per-user
   player identity.
-- `packages/patterns/cfc-group-chat-demo/`: multi-user chat with CFC-backed
+- `patterns/examples/cfc-group-chat-demo/`: multi-user chat with CFC-backed
   authorship and admin-protected room creation.
-- `packages/patterns/profile-roster-live-demo.tsx`: the canonical identity
-  presentation — `#profile` viewer resolution, join stores each participant's live
-  profile cell, and **every** member renders with
-  `<cf-profile-badge $profile={p.profile}>`. `packages/patterns/scrabble/scrabble.tsx`
+- `patterns/examples/profile-roster-live-demo/profile-roster-live-demo.tsx`: the
+  canonical identity presentation — `#profile` viewer resolution, join stores
+  each participant's live profile cell, and **every** member renders with
+  `<cf-profile-badge $profile={p.profile}>`. `patterns/showcase/scrabble/scrabble.tsx`
   is the worked multi-user example (object-wrapped roster, per-player live badges).
-- `packages/patterns/fair-share/`: the snapshot-fallback style — a
+- `patterns/examples/fair-share/`: the snapshot-fallback style — a
   `cf-profile-badge` "You" card with `cf-avatar` for other members (use only when a
   live profile cell is not stored).
 
@@ -926,6 +1031,8 @@ See:
 - Every participant is rendered with `cf-profile-badge` bound to their profile cell
   (`cf-avatar` + snapshot only as an offline fallback), never a bare name string.
 - The current viewer is resolved via `#profile`, not a self-typed name field.
+- Derivations over shared data read no viewer state; what is the viewer's is
+  decided at the leaf.
 - Rosters are built by join (each viewer contributes their live profile cell); "me"
   is a cell reference, not a name.
 - Authorization is modeled with CFC/IFC policy, not scopes.

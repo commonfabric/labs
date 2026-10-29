@@ -1,0 +1,28 @@
+import { type Cell } from "../cell.ts";
+import type { RawBuiltinResult, RawNodeCause } from "../module.ts";
+import { type Runtime } from "../runtime.ts";
+import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import { forwardReference } from "./forward-reference.ts";
+
+/**
+ * `unless(condition, fallback)`, the `||` of a pattern: forwards a reference
+ * to the condition when it is truthy, and to `fallback` otherwise.
+ */
+export function unless(
+  inputsCell: Cell<{ condition: any; fallback: any }>,
+  sendResult: (tx: IExtendedStorageTransaction, result: any) => void,
+  _addCancel: (cancel: () => void) => void,
+  cause: RawNodeCause,
+  parentCell: Cell<any>,
+  runtime: Runtime,
+): RawBuiltinResult {
+  return forwardReference({
+    name: "unless",
+    inputsCell,
+    sendResult,
+    cause,
+    parentCell,
+    runtime,
+    select: (truthy) => truthy ? "condition" : "fallback",
+  });
+}

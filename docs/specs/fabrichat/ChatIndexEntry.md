@@ -33,9 +33,9 @@ interface ChatIndexEntry {
   Those are what the room's space shares with every member, and cost little to
   read: the first two are derived from the room's messages alone, and `roster`
   holds each profile as a link, which the declaration doesn't follow. The rest
-  of the room's output, its `canSend` decided per reader, its `messages.windows`
-  kept per session, its `messages.latest`, which holds up to `maxWindowCount`
-  messages, and its `participants`, which reads every message for its authors,
+  of the room's output, its `canSend` decided per reader, its
+  `messages.latest`, which holds up to `maxWindowCount` messages, and its
+  `participants`, which reads every message for its authors,
   is read from the room itself: the link's schema is part of every manager
   handler's declared reads, and a served handler whose declared reads reach a
   member's own documents never runs.

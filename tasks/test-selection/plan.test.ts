@@ -7,7 +7,8 @@ import {
   crowdingLine,
   fixedCharges,
   foldWholeUnits,
-  fullLaneCount,
+  type GateChoice,
+  laneCount,
   placedOnlyMandatory,
   plan,
   type PlanInput,
@@ -25,11 +26,20 @@ import {
   FULL_LANE_BOUND_SECONDS,
   FULL_LANE_BUDGET_SECONDS,
   LANE_BUDGET_SECONDS,
-  LANES,
 } from "./policy.ts";
 
 const NO_CAPABILITIES = new Map<string, readonly string[]>();
 const NO_WHOLE_UNITS: ReadonlySet<string> = new Set();
+
+/** How many lanes the plans below are packed into unless they say. */
+const LANES = 5;
+
+/**
+ * What the plans below give the passes choosing by score unless they say:
+ * all of their lanes' budgets, so that what limits those passes is the
+ * lanes and their shares rather than the target.
+ */
+const ROOM = LANES * LANE_BUDGET_SECONDS;
 
 /** `count` identities of one suite, each in its own invocation unit. */
 function entries(
@@ -40,7 +50,7 @@ function entries(
     { length: count },
     (_, i) =>
       sampleEntry({ k: "unit", s: "memory", n: `case ${i}` }, {
-        unit: `packages/memory/test/case-${i}.test.ts`,
+        unit: `runtime/memory/test/case-${i}.test.ts`,
         ...fields(i),
       }),
   );
@@ -55,6 +65,8 @@ function run(
     mandatory: new Map(),
     capabilities: NO_CAPABILITIES,
     wholeUnits: NO_WHOLE_UNITS,
+    lanes: LANES,
+    discretionarySeconds: ROOM,
     ...overrides,
   });
 }
@@ -121,21 +133,6 @@ describe("plan", () => {
       const result = run(manifest, { mandatory });
       const taken = selected(result).find((s) => s.entry.test.n === "case 7");
       expect(taken?.reason).toBe("changed");
-    });
-
-    it("keeps the repeats of an identity the coverage gate pulled in", () => {
-      // Measuring a set is not a reason to run one of its tests fewer
-      // times than a lane that never measured it would have.
-      const manifest = sampleManifest({
-        entries: entries(3, () => ({ repeats: 3 })),
-      });
-      const mandatory = new Map([[
-        testIdentityKey(manifest.entries[0]!.test),
-        "coverage-gate" as const,
-      ]]);
-      const result = run(manifest, { mandatory });
-      const taken = selected(result).find((s) => s.entry.test.n === "case 0");
-      expect(taken?.repeats).toBe(3);
     });
 
     it("charges a lane for every run of a repeated mandatory identity", () => {
@@ -946,13 +943,350 @@ describe("plan", () => {
     });
   });
 
+  describe("gates", () => {
+    /** A gate judging `members`, scoring `score`. */
+    function gateOver(
+      members: readonly ManifestEntry[],
+      score: number,
+      fields: Partial<GateChoice> = {},
+    ): GateChoice {
+      return {
+        entry: sampleEntry(
+          { k: "gate", s: "memory", n: "coverage-gate workspace-unit" },
+          {
+            suite: "coverage-gate",
+            unit: "workspace-unit/runtime/memory",
+            score,
+          },
+        ),
+        judges: "workspace-unit",
+        members: members.map((entry) => testIdentityKey(entry.test)),
+        reached: true,
+        ...fields,
+      };
+    }
+
+    /** What the plan put in lanes for the gate it chose. */
+    function forGate(result: ReturnType<typeof plan>): Selection[] {
+      return selected(result).filter((s) => s.reason === "coverage-gate");
+    }
+
+    it("chooses a gate the change reaches by its score, running all it judges", () => {
+      // Thirty units of twenty seconds are more than one lane holds, so
+      // choosing the gate spreads what it runs over several lanes.
+      const members = entries(30, () => ({ cost: 20 }));
+      const gate = gateOver(members, 0.9);
+      const result = run(sampleManifest({ entries: members }), {
+        gates: [gate],
+      });
+      expect(result.gates.map((s) => [s.entry.test.n, s.reason])).toEqual([[
+        "coverage-gate workspace-unit",
+        "value",
+      ]]);
+      expect(forGate(result).map((s) => testIdentityKey(s.entry.test)).sort())
+        .toEqual([...gate.members].sort());
+      const holding = result.lanes.filter((lane) =>
+        lane.selections.some((s) => s.reason === "coverage-gate")
+      );
+      expect(holding.length).toBeGreaterThan(1);
+      for (const lane of result.lanes) {
+        expect(lane.projectedSeconds).toBeLessThanOrEqual(LANE_BUDGET_SECONDS);
+      }
+      expect(placedOnlyMandatory(result)).toBe(false);
+    });
+
+    it("charges a gate what running what it judges adds to the lanes", () => {
+      const members = entries(30, () => ({ cost: 20 }));
+      const result = run(sampleManifest({ entries: members }), {
+        gates: [gateOver(members, 0.9)],
+      });
+      const projected = result.lanes.reduce(
+        (total, lane) => total + lane.projectedSeconds,
+        0,
+      );
+      expect(projected).toBeCloseTo(600);
+    });
+
+    it("never chooses a gate the change does not reach", () => {
+      const members = entries(30, () => ({ cost: 20 }));
+      const result = run(sampleManifest({ entries: members }), {
+        gates: [gateOver(members, 0.9, { reached: false })],
+      });
+      expect(result.gates).toEqual([]);
+      expect(forGate(result)).toEqual([]);
+    });
+
+    it("chooses no gate whose whole set no run can hold", () => {
+      // Sixty-five units of twenty seconds are past the five lanes of the
+      // run together, so no share of it holds them, and nothing of the set
+      // is placed for the gate's sake.
+      const members = entries(65, () => ({ cost: 20 }));
+      const result = run(sampleManifest({ entries: members }), {
+        gates: [gateOver(members, 0.9)],
+      });
+      expect(result.gates).toEqual([]);
+      expect(forGate(result)).toEqual([]);
+    });
+
+    it("chooses no gate one of whose tests fits in no lane", () => {
+      const members = [
+        ...entries(3, () => ({ cost: 20 })),
+        sampleEntry({ k: "unit", s: "memory", n: "too long" }, {
+          unit: "runtime/memory/test/too-long.test.ts",
+          cost: LANE_BUDGET_SECONDS * 2,
+        }),
+      ];
+      const result = run(sampleManifest({ entries: members }), {
+        gates: [gateOver(members, 0.9)],
+      });
+      expect(result.gates).toEqual([]);
+      expect(forGate(result)).toEqual([]);
+    });
+
+    it("weighs a gate against tests by score in the value pass", () => {
+      // The value pass holds six hundred and ninety seconds. The test
+      // scoring above the gate goes first, the gate fits after it, and the
+      // test scoring below the gate no longer fits.
+      const members = entries(30, () => ({ cost: 20 }));
+      const above = sampleEntry({ k: "unit", s: "cellar", n: "above" }, {
+        unit: "runtime/cellar/above.test.ts",
+        cost: 50,
+        score: 0.95,
+      });
+      const below = sampleEntry({ k: "unit", s: "cellar", n: "below" }, {
+        unit: "runtime/cellar/below.test.ts",
+        cost: 100,
+        score: 0.8,
+      });
+      const result = run(
+        sampleManifest({ entries: [...members, above, below] }),
+        { gates: [gateOver(members, 0.9)] },
+      );
+      expect(result.gates.map((s) => s.reason)).toEqual(["value"]);
+      const reasonOf = (name: string) =>
+        selected(result).find((s) => s.entry.test.n === name)?.reason;
+      expect(reasonOf("above")).toBe("value");
+      expect(reasonOf("below")).not.toBe("value");
+    });
+
+    it("chooses a gate in the density pass where the value pass had no room", () => {
+      // Three tests scoring above the gate take six hundred and seventy-five
+      // of the value pass's six hundred and ninety seconds, which leaves no
+      // room for the gate's three hundred, nor for any one of its tests.
+      // The density pass's share holds the gate, which is denser than any
+      // one of the tests it runs.
+      const members = entries(15, () => ({ cost: 20 }));
+      const above = ["first", "second", "third"].map((name, at) =>
+        sampleEntry({ k: "unit", s: "cellar", n: name }, {
+          unit: `runtime/cellar/${name}.test.ts`,
+          cost: 225,
+          score: 0.99 - at / 100,
+        })
+      );
+      const result = run(
+        sampleManifest({ entries: [...members, ...above] }),
+        { gates: [gateOver(members, 0.9)] },
+      );
+      expect(result.gates.map((s) => s.reason)).toEqual(["density"]);
+      expect(forGate(result)).toHaveLength(15);
+    });
+
+    it("chooses at no cost a gate whose whole set is already placed", () => {
+      // The tests a gate judges each ran for some other reason, so the
+      // verdict over them takes nothing more.
+      const members = entries(3);
+      const result = run(sampleManifest({ entries: members }), {
+        mandatory: everything(sampleManifest({ entries: members })),
+        gates: [gateOver(members, 0.05)],
+      });
+      expect(result.gates.map((s) => s.reason)).toEqual(["value"]);
+      expect(forGate(result)).toEqual([]);
+    });
+
+    it("counts a test already placed as part of the gate's set", () => {
+      // A test the change made mandatory runs whatever the gate does, so
+      // choosing the gate places only the rest of the set.
+      const members = entries(30, () => ({ cost: 20 }));
+      const mandatory = new Map([[
+        testIdentityKey(members[0]!.test),
+        "changed" as const,
+      ]]);
+      const result = run(sampleManifest({ entries: members }), {
+        mandatory,
+        gates: [gateOver(members, 0.9)],
+      });
+      expect(result.gates).toHaveLength(1);
+      expect(forGate(result)).toHaveLength(29);
+      expect(
+        selected(result).filter((s) => s.entry.test.n === "case 0")
+          .map((s) => s.reason),
+      ).toEqual(["changed"]);
+    });
+
+    it("keeps the repeats of an identity a gate runs", () => {
+      // Measuring a set is not a reason to run one of its tests fewer
+      // times than a lane that never measured it would have.
+      const members = entries(3, () => ({ repeats: 3 }));
+      const result = run(sampleManifest({ entries: members }), {
+        gates: [gateOver(members, 0.9)],
+      });
+      expect(forGate(result).map((s) => s.repeats)).toEqual([3, 3, 3]);
+    });
+
+    it("runs a held-back test its gate judges, and does not fail for it", () => {
+      // The set is measured whole, and the held-back test's failure says
+      // nothing the change's author can act on.
+
+      const members = entries(3);
+      const held = {
+        test: members[0]!.test,
+        suite: "workspace-unit",
+        reason: "flaky" as const,
+      };
+      const manifest = sampleManifest({
+        entries: members.map((entry, at) =>
+          at === 0 ? { ...entry, flakeRate: 0.5 } : entry
+        ),
+        withheld: [held],
+      });
+      const result = run(manifest, { gates: [gateOver(members, 0.9)] });
+      expect(forGate(result)).toHaveLength(3);
+      expect(result.nonGating).toEqual([held]);
+      expect(run(manifest).nonGating).toEqual([]);
+    });
+
+    it("leaves no test a chosen gate ran among those held back with their unit", () => {
+      const members = ["w0", "w1", "w2"].map((name) =>
+        sampleEntry({ k: "unit", s: "memory", n: name }, {
+          unit: "runtime/memory/test/whole.test.ts",
+        })
+      );
+      const manifest = sampleManifest({
+        entries: members,
+        withheld: [{
+          test: members[0]!.test,
+          suite: "workspace-unit",
+          reason: "flaky",
+        }],
+      });
+      const wholeUnits = new Set([
+        "workspace-unit\truntime/memory/test/whole.test.ts",
+      ]);
+      expect(run(manifest, { wholeUnits }).heldWithUnit).toHaveLength(2);
+      expect(
+        run(manifest, { wholeUnits, gates: [gateOver(members, 0.9)] })
+          .heldWithUnit,
+      ).toEqual([]);
+    });
+
+    it("gives up repeats of a gate's tests to fit the pass's share", () => {
+      // Eight tests of thirty seconds run three times each take seven
+      // hundred and twenty seconds, past the value pass's six hundred and
+      // ninety; with some of them run fewer times, the whole set fits.
+      const members = entries(8, () => ({ cost: 30, repeats: 3 }));
+      const result = run(sampleManifest({ entries: members }), {
+        gates: [gateOver(members, 0.9)],
+      });
+      expect(result.gates.map((s) => s.reason)).toEqual(["value"]);
+      const repeats = forGate(result).map((s) => s.repeats);
+      expect(repeats).toHaveLength(8);
+      expect(repeats.some((count) => count < 3)).toBe(true);
+    });
+
+    it("lists the gates of the full policy in the order of their keys", () => {
+      const members = entries(3);
+      const named = (n: string, s: string) => ({
+        ...gateOver(members, 0.05),
+        entry: sampleEntry({ k: "gate", s, n }, {
+          suite: "coverage-gate",
+          unit: `workspace-unit/runtime/${s}`,
+        }),
+      });
+      const gates = [named("g", "memory"), named("g", "cellar")];
+      const order = (given: GateChoice[]) =>
+        run(sampleManifest({ entries: members }), {
+          policy: "everything",
+          gates: given,
+        }).gates.map((s) => s.entry.test.s);
+      expect(order(gates)).toEqual(["cellar", "memory"]);
+      expect(order([...gates].reverse())).toEqual(["cellar", "memory"]);
+    });
+
+    it("says it placed nothing past the mandatory pass where a gate cost nothing", () => {
+      // A gate whose whole set the change already runs places nothing, so a
+      // plan that chose only such a gate is one the mandatory work crowded.
+
+      const members = entries(3);
+      const result = run(sampleManifest({ entries: members }), {
+        mandatory: everything(sampleManifest({ entries: members })),
+        gates: [gateOver(members, 0.9)],
+        lanes: 1,
+        budgetSeconds: 0.15,
+      });
+      expect(result.gates).toHaveLength(1);
+      expect(placedOnlyMandatory(result)).toBe(true);
+    });
+
+    it("holds back a gate the manifest withholds", () => {
+      const members = entries(3);
+      const gate = gateOver(members, 0.9);
+      const result = run(
+        sampleManifest({
+          entries: members,
+          withheld: [{
+            test: gate.entry.test,
+            suite: "coverage-gate",
+            reason: "flaky",
+          }],
+        }),
+        { gates: [gate] },
+      );
+      expect(result.gates).toEqual([]);
+    });
+
+    it("places a gate's own entry in no lane", () => {
+      const members = entries(3);
+      const gate = gateOver(members, 0.9);
+      const result = run(
+        sampleManifest({ entries: [...members, gate.entry] }),
+        { gates: [gate] },
+      );
+      expect(selected(result).some((s) => s.entry.suite === "coverage-gate"))
+        .toBe(false);
+      expect(result.gates).toHaveLength(1);
+    });
+
+    it("chooses every gate under the full policy, reached or not", () => {
+      const members = entries(3);
+      const result = run(sampleManifest({ entries: members }), {
+        policy: "everything",
+        gates: [gateOver(members, 0.05, { reached: false })],
+      });
+      expect(result.gates.map((s) => s.reason)).toEqual(["full"]);
+      expect(selected(result).map((s) => s.reason)).toEqual([
+        "full",
+        "full",
+        "full",
+      ]);
+    });
+
+    it("refuses a gate that runs something the corpus does not carry", () => {
+      const members = entries(3);
+      expect(() =>
+        run(sampleManifest({ entries: members.slice(1) }), {
+          gates: [gateOver(members, 0.9)],
+        })
+      ).toThrow("does not carry it");
+    });
+  });
+
   describe("capabilities", () => {
     it("charges a lane for setup it has not opened yet", () => {
       const manifest = sampleManifest({
         entries: [
           sampleEntry({ k: "integration", s: "patterns", n: "one" }, {
             suite: "pattern-integration",
-            unit: "packages/patterns/integration/one.test.ts",
+            unit: "patterns/integration/one.test.ts",
             cost: 1,
           }),
         ],
@@ -974,7 +1308,7 @@ describe("plan", () => {
       const manifest = sampleManifest({
         entries: entries(4, (i) => ({
           suite: "pattern-integration",
-          unit: `packages/patterns/integration/case-${i}.test.ts`,
+          unit: `patterns/integration/case-${i}.test.ts`,
           cost: 1,
         })),
         calibration: {
@@ -1042,7 +1376,7 @@ describe("plan", () => {
         entries: entries(1, () => ({
           cost: 200,
           suite: "pattern-integration",
-          unit: "packages/patterns/one.test.ts",
+          unit: "patterns/one.test.ts",
         })),
         calibration: {
           setupCost: { toolshed: 60 },
@@ -1273,7 +1607,7 @@ describe("plan", () => {
       const manifest = sampleManifest({
         entries: entries(3, (i) => ({
           cost: 1,
-          unit: `packages/memory/test/${i}.test.ts`,
+          unit: `runtime/memory/test/${i}.test.ts`,
         })),
         calibration: {
           setupCost: {},
@@ -1297,7 +1631,7 @@ describe("plan", () => {
           entries(40, (i) => ({
             suite,
             cost: 1 + ((i * 7 + s) % 11),
-            unit: `packages/${suite}/${i % 9}.test.ts`,
+            unit: `runtime/${suite}/${i % 9}.test.ts`,
             repeats: i % 13 === 0 ? 2 : 1,
           })).map((entry) => ({
             ...entry,
@@ -1312,8 +1646,8 @@ describe("plan", () => {
               correction: 0.8,
               unitOverhead: 2,
               unitHooks: {
-                "packages/workspace-unit/0.test.ts": 6,
-                "packages/workspace-unit/4.test.ts": 2.5,
+                "runtime/workspace-unit/0.test.ts": 6,
+                "runtime/workspace-unit/4.test.ts": 2.5,
               },
             },
             "runner-unit": { overhead: 4, correction: 0.4, unitOverhead: 1 },
@@ -1321,7 +1655,7 @@ describe("plan", () => {
               overhead: 21,
               correction: 1.2,
               unitOverhead: 0,
-              unitHooks: { "packages/cli-core/3.test.ts": 11 },
+              unitHooks: { "runtime/cli-core/3.test.ts": 11 },
             },
           },
           prologue: 0,
@@ -1360,7 +1694,7 @@ describe("plan", () => {
       const manifest = sampleManifest({
         entries: entries(3, (i) => ({
           cost: 1,
-          unit: `packages/memory/test/${i}.test.ts`,
+          unit: `runtime/memory/test/${i}.test.ts`,
         })),
         calibration: {
           setupCost: {},
@@ -1370,8 +1704,8 @@ describe("plan", () => {
               correction: 2,
               unitOverhead: 1,
               unitHooks: {
-                "packages/memory/test/0.test.ts": 4,
-                "packages/memory/test/1.test.ts": 3,
+                "runtime/memory/test/0.test.ts": 4,
+                "runtime/memory/test/1.test.ts": 3,
               },
             },
           },
@@ -1447,7 +1781,7 @@ describe("plan", () => {
       const manifest = sampleManifest({
         entries: entries(3, () => ({
           cost: 1,
-          unit: "packages/memory/test/one.test.ts",
+          unit: "runtime/memory/test/one.test.ts",
         })),
         calibration: {
           setupCost: {},
@@ -1477,7 +1811,7 @@ describe("plan", () => {
             }, {
               cost: 1,
               suite,
-              unit: "packages/patterns/integration/all.test.ts",
+              unit: "patterns/integration/all.test.ts",
             }),
         ),
         calibration: {
@@ -1531,8 +1865,8 @@ describe("plan", () => {
         // runs once adds none.
         expect(
           repeated({ overhead: 10, correction: 1, unitOverhead: 0 }, [
-            { cost: 1, repeats: 3, unit: "packages/memory/test/a.test.ts" },
-            { cost: 1, repeats: 1, unit: "packages/memory/test/b.test.ts" },
+            { cost: 1, repeats: 3, unit: "runtime/memory/test/a.test.ts" },
+            { cost: 1, repeats: 1, unit: "runtime/memory/test/b.test.ts" },
           ]),
         ).toBeCloseTo(30 + 4, 6);
       });
@@ -1540,8 +1874,8 @@ describe("plan", () => {
       it("charges a unit's overhead once for each pass that opens it", () => {
         expect(
           repeated({ overhead: 0, correction: 1, unitOverhead: 5 }, [
-            { cost: 1, repeats: 2, unit: "packages/memory/test/a.test.ts" },
-            { cost: 1, repeats: 1, unit: "packages/memory/test/b.test.ts" },
+            { cost: 1, repeats: 2, unit: "runtime/memory/test/a.test.ts" },
+            { cost: 1, repeats: 1, unit: "runtime/memory/test/b.test.ts" },
           ]),
         ).toBeCloseTo(15 + 3, 6);
       });
@@ -1551,12 +1885,12 @@ describe("plan", () => {
         // come to 0.4 of 40 and 200, where the floor is 20 and 20.
         expect(
           repeated({ overhead: 0, correction: 0.4, unitOverhead: 0 }, [
-            { cost: 10, repeats: 2, unit: "packages/memory/test/a.test.ts" },
-            { cost: 10, repeats: 1, unit: "packages/memory/test/a.test.ts" },
+            { cost: 10, repeats: 2, unit: "runtime/memory/test/a.test.ts" },
+            { cost: 10, repeats: 1, unit: "runtime/memory/test/a.test.ts" },
             ...Array.from({ length: 10 }, (_, i) => ({
               cost: 20,
               repeats: 1,
-              unit: `packages/memory/test/${i}.test.ts`,
+              unit: `runtime/memory/test/${i}.test.ts`,
             })),
           ]),
         ).toBeCloseTo(96, 6);
@@ -1569,12 +1903,12 @@ describe("plan", () => {
         // other files of 20 the loads come to 0.4 of 375.
         expect(
           repeated({ overhead: 0, correction: 0.4, unitOverhead: 0 }, [
-            { cost: 40, repeats: 1, unit: "packages/memory/test/a.test.ts" },
-            { cost: 5, repeats: 3, unit: "packages/memory/test/a.test.ts" },
+            { cost: 40, repeats: 1, unit: "runtime/memory/test/a.test.ts" },
+            { cost: 5, repeats: 3, unit: "runtime/memory/test/a.test.ts" },
             ...Array.from({ length: 12 }, (_, i) => ({
               cost: 20,
               repeats: 1,
-              unit: `packages/memory/test/${i}.test.ts`,
+              unit: `runtime/memory/test/${i}.test.ts`,
             })),
           ]),
         ).toBeCloseTo(150, 6);
@@ -1585,8 +1919,8 @@ describe("plan", () => {
         // 60, which is the only one still running.
         expect(
           repeated({ overhead: 0, correction: 0.4, unitOverhead: 0 }, [
-            { cost: 100, repeats: 1, unit: "packages/memory/test/a.test.ts" },
-            { cost: 60, repeats: 2, unit: "packages/memory/test/b.test.ts" },
+            { cost: 100, repeats: 1, unit: "runtime/memory/test/a.test.ts" },
+            { cost: 60, repeats: 2, unit: "runtime/memory/test/b.test.ts" },
           ]),
         ).toBeCloseTo(160, 6);
       });
@@ -1596,7 +1930,7 @@ describe("plan", () => {
           entries: entries(3, (i) => ({
             cost: [100, 60, 30][i]!,
             repeats: [1, 2, 3][i]!,
-            unit: `packages/memory/test/${i}.test.ts`,
+            unit: `runtime/memory/test/${i}.test.ts`,
           })),
           calibration: {
             setupCost: {},
@@ -1645,7 +1979,7 @@ describe("plan", () => {
         fields: Partial<ManifestEntry> = {},
       ): ManifestEntry {
         return sampleEntry({ k: "unit", s: "memory", n }, {
-          unit: "packages/memory/test/hooks.test.ts",
+          unit: "runtime/memory/test/hooks.test.ts",
           cost,
           ...fields,
         });
@@ -1748,7 +2082,7 @@ describe("plan", () => {
         // and in the other to 0.6.
         const corpus = entries(3, (i) => ({
           cost: [0.1, 0.2, 0.3][i]!,
-          unit: "packages/memory/test/one.test.ts",
+          unit: "runtime/memory/test/one.test.ts",
         }));
         const around = aroundIn(corpus);
         const selections = corpus.map((entry) => ({ entry, repeats: 1 }));
@@ -1786,7 +2120,7 @@ describe("plan", () => {
         const manifest = sampleManifest({
           entries: entries(3, () => ({
             cost: 40,
-            unit: "packages/memory/test/one.test.ts",
+            unit: "runtime/memory/test/one.test.ts",
           })),
           calibration: sideBySide,
         });
@@ -1801,7 +2135,7 @@ describe("plan", () => {
           entries: entries(2, (i) => ({
             cost: 10,
             repeats: i === 0 ? 2 : 1,
-            unit: "packages/memory/test/one.test.ts",
+            unit: "runtime/memory/test/one.test.ts",
           })),
           calibration: sideBySide,
         });
@@ -1828,7 +2162,7 @@ describe("plan", () => {
             6,
             (i) =>
               i < 2
-                ? { cost: 40, unit: "packages/memory/test/one.test.ts" }
+                ? { cost: 40, unit: "runtime/memory/test/one.test.ts" }
                 : { cost: 10 },
           ),
           calibration: sideBySide,
@@ -1919,7 +2253,7 @@ describe("a unit its runner runs whole", () => {
   // A lane that picks any test in such a unit runs every test in it. The packer
   // places the unit as one choice, and the plan lists its tests.
 
-  const HALF = "packages/ui#browser-test";
+  const HALF = "runtime/ui#browser-test";
   const WHOLE = new Set([`workspace-unit\t${HALF}`]);
 
   /** Three tests of the browser half, and five ordinary ones beside it. */
@@ -2032,7 +2366,7 @@ describe("a unit its runner runs whole", () => {
         k: "browser",
         s: "ui",
         n: `whole workspace-unit ${HALF}`,
-      }, { unit: "packages/ui/test/other.test.ts" }),
+      }, { unit: "runtime/ui/test/other.test.ts" }),
     );
     expect(() => foldWholeUnits(manifest, WHOLE)).toThrow(
       "another entry in the corpus already has",
@@ -2145,7 +2479,7 @@ describe("an identity a manifest carries twice", () => {
     // scores, and which of them a plan followed would depend on where the
     // manifest listed them.
     const first = sampleEntry({ k: "unit", s: "memory", n: "case 0" }, {
-      unit: "packages/memory/test/case-0.test.ts",
+      unit: "runtime/memory/test/case-0.test.ts",
       score: 0.9,
     });
     const rest = entries(3).slice(1);
@@ -2179,12 +2513,12 @@ describe("running everything", () => {
       entries: [
         ...entries(6, (i) => ({ cost: 1 + i, score: 0.9 - i / 10 })),
         sampleEntry({ k: "unit", s: "memory", n: "flaky" }, {
-          unit: "packages/memory/test/flaky.test.ts",
+          unit: "runtime/memory/test/flaky.test.ts",
           flakeRate: 0.9,
           cost: 2,
         }),
         sampleEntry({ k: "unit", s: "memory", n: "worthless" }, {
-          unit: "packages/memory/test/worthless.test.ts",
+          unit: "runtime/memory/test/worthless.test.ts",
           score: 0,
           cost: 2,
         }),
@@ -2306,7 +2640,7 @@ describe("running everything", () => {
       entries: [
         ...entries(40, (i) => ({ cost: i % 7 === 0 ? 5_000 : i / 10 })),
         sampleEntry({ k: "unit", s: "memory", n: "flaky" }, {
-          unit: "packages/memory/test/flaky.test.ts",
+          unit: "runtime/memory/test/flaky.test.ts",
           flakeRate: 1,
         }),
       ],
@@ -2333,10 +2667,12 @@ describe("how many lanes the full run needs", () => {
     overrides: Partial<PlanInput> = {},
     most?: number,
   ) {
-    return fullLaneCount({
+    return laneCount({
       manifest,
+      mandatory: new Map(),
       capabilities,
       wholeUnits: NO_WHOLE_UNITS,
+      policy: "everything",
       ...overrides,
     }, most);
   }
@@ -2389,7 +2725,7 @@ describe("how many lanes the full run needs", () => {
       entries: [
         ...entries(20, () => ({ cost: 1, repeats: 10 })),
         sampleEntry({ k: "unit", s: "memory", n: "vast" }, {
-          unit: "packages/memory/test/vast.test.ts",
+          unit: "runtime/memory/test/vast.test.ts",
           cost: 4_000,
         }),
       ],
@@ -2568,7 +2904,7 @@ describe("how many lanes the full run needs", () => {
       entries: [
         ...entries(20, () => ({ cost: 100 })),
         sampleEntry({ k: "unit", s: "memory", n: "vast" }, {
-          unit: "packages/memory/test/vast.test.ts",
+          unit: "runtime/memory/test/vast.test.ts",
           cost: FULL_LANE_BUDGET_SECONDS * 3,
         }),
       ],
@@ -2603,7 +2939,7 @@ describe("how many lanes the full run needs", () => {
           cost: Math.floor(FULL_LANE_BUDGET_SECONDS / 5.3),
         })),
         sampleEntry({ k: "unit", s: "memory", n: "vast" }, {
-          unit: "packages/memory/test/vast.test.ts",
+          unit: "runtime/memory/test/vast.test.ts",
           cost: FULL_LANE_BUDGET_SECONDS * 1.7,
         }),
       ],
@@ -2628,5 +2964,129 @@ describe("how many lanes the full run needs", () => {
 
   it("takes one lane for a corpus of nothing", () => {
     expect(count(sampleManifest({ entries: [] }))).toBe(1);
+  });
+});
+
+describe("how many lanes a pull request needs", () => {
+  /**
+   * A thousand one-second tests in lanes of a hundred seconds, the first
+   * 250 of which the change makes mandatory.
+   */
+  function change(overrides: Partial<PlanInput> = {}) {
+    const manifest = sampleManifest({
+      entries: entries(1000, () => ({ cost: 1 })),
+    });
+    const mandatory = new Map(
+      manifest.entries.slice(0, 250).map((entry) => [
+        testIdentityKey(entry.test),
+        "changed" as const,
+      ]),
+    );
+    return {
+      manifest,
+      mandatory,
+      capabilities: NO_CAPABILITIES,
+      wholeUnits: NO_WHOLE_UNITS,
+      budgetSeconds: 100,
+      ...overrides,
+    };
+  }
+
+  /** Seconds a plan placed by score, rather than because it must run. */
+  function chosenSeconds(laid: ReturnType<typeof plan>): number {
+    return selected(laid).filter((selection) => selection.reason !== "changed")
+      .length;
+  }
+
+  it("takes the fewest lanes that hold its mandatory work and its target", () => {
+    const input = change({ discretionarySeconds: 300 });
+    expect(laneCount(input)).toEqual({ lanes: 6, capped: false });
+    expect(plan({ ...input, lanes: 6 }).discretionarySeconds).toBe(300);
+    expect(plan({ ...input, lanes: 5 }).discretionarySeconds).toBe(250);
+  });
+
+  it("takes more lanes for a larger target", () => {
+    expect(laneCount(change({ discretionarySeconds: 600 })).lanes).toBe(9);
+    expect(laneCount(change({ discretionarySeconds: 150 })).lanes).toBe(4);
+  });
+
+  it("runs the mandatory work and nothing else under a target of nothing", () => {
+    const input = change({ discretionarySeconds: 0 });
+    expect(laneCount(input)).toEqual({ lanes: 3, capped: false });
+    const laid = plan(input);
+    expect(placedOnlyMandatory(laid)).toBe(true);
+    expect(selected(laid).length).toBe(250);
+    expect(placedOnlyMandatory(plan(change({ discretionarySeconds: 1 }))))
+      .toBe(false);
+  });
+
+  it("spends its target and no more, however many lanes it has", () => {
+    const input = change({ discretionarySeconds: 300 });
+    expect(chosenSeconds(plan({ ...input, lanes: 20 }))).toBe(300);
+    expect(chosenSeconds(plan({ ...input, lanes: 6 }))).toBe(300);
+    expect(chosenSeconds(plan({ ...input, lanes: 5 }))).toBe(250);
+  });
+
+  it("gives tests chosen by score the room left where the cap binds", () => {
+    const input = change({ discretionarySeconds: 10_000 });
+    expect(laneCount(input, 8)).toEqual({ lanes: 8, capped: true });
+    expect(plan({ ...input, lanes: 8 }).discretionarySeconds).toBe(550);
+  });
+
+  it("asks for no more room than everything it could choose would take", () => {
+    // 750 one-second tests to choose from, against a target of far more.
+    const input = change({ discretionarySeconds: 1_000_000 });
+    expect(laneCount(input)).toEqual({ lanes: 10, capped: false });
+    expect(selected(plan({ ...input, lanes: 10 })).length).toBe(1000);
+    expect(selected(plan({ ...input, lanes: 9 })).length).toBeLessThan(1000);
+  });
+
+  it("counts its own lanes where it is given none", () => {
+    const input = change({ discretionarySeconds: 300 });
+    expect(plan(input).lanes.length).toBe(6);
+  });
+
+  it("opens no lane its tests chosen by score could not fill", () => {
+    // Each lane holding any of these pays the suite's twenty seconds, so
+    // charging each test as though it ran alone would ask for a lane per
+    // twenty or so of them.
+    const manifest = sampleManifest({
+      entries: entries(1000, () => ({ cost: 1 })),
+      calibration: {
+        setupCost: {},
+        suites: {
+          "workspace-unit": { overhead: 20, correction: 1, unitOverhead: 0 },
+        },
+        prologue: 0,
+      },
+    });
+    const input = {
+      manifest,
+      mandatory: new Map(),
+      capabilities: NO_CAPABILITIES,
+      wholeUnits: NO_WHOLE_UNITS,
+      budgetSeconds: 230,
+      discretionarySeconds: 10_000,
+    };
+    expect(laneCount(input)).toEqual({ lanes: 5, capped: false });
+    const laid = plan({ ...input, lanes: 5 });
+    expect(selected(laid).length).toBe(1000);
+    expect(laid.lanes.every((lane) => lane.selections.length > 0)).toBe(true);
+  });
+
+  it("chooses nothing by score in a full run, whatever its target", () => {
+    const input = {
+      ...change({ policy: "everything", discretionarySeconds: 300 }),
+      mandatory: new Map(),
+    };
+    expect(laneCount(input).lanes).toBe(10);
+    const laid = plan({ ...input, lanes: 20 });
+    expect(laid.discretionarySeconds).toBe(0);
+    expect(laid.discretionaryTargetSeconds).toBe(0);
+    // A budgeted plan given the same room spends its target.
+    expect(
+      plan({ ...input, policy: "budgeted", lanes: 20 }).discretionarySeconds,
+    )
+      .toBe(300);
   });
 });

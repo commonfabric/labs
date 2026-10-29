@@ -15,7 +15,7 @@ of those styles.
 Keep the authored contract and guest beside the generated wrapper:
 
 ```text
-packages/patterns/d3-shared-bars/
+patterns/examples/d3-shared-bars/
 ├── contract.ts  # input, durable state, output, scopes, optional databases
 ├── guest.ts     # D3 application and Fabric bridge client
 ├── guest.html   # optional document shell
@@ -264,6 +264,13 @@ through a presence room instead of a Cell.
 [Optional presence](./iframe-pattern-guide.md#optional-presence) in the
 iframe pattern guide is the contract.
 
+An action the pattern exposes as a verb, or work only the pattern can start,
+such as a request to `agent()` or another LLM built-in, goes through a verb the
+pattern passes in as a stream where it can; the guest sends it an event with
+`fabric.stream(name).send(event)`.
+[Optional streams](./iframe-pattern-guide.md#optional-streams) in the iframe
+pattern guide is the contract.
+
 When an interaction starts from an array position, resolve that position to a
 stable Cell before subscribing or writing. The returned handle remains attached
 to the same item even when it moves:
@@ -334,19 +341,19 @@ font; see
 Generate the wrapper without the React flag:
 
 ```bash
-deno run -A tools/write-iframe-wrapper.ts \
-  --contract packages/patterns/d3-shared-bars/contract.ts \
-  --guest packages/patterns/d3-shared-bars/guest.ts \
-  --html packages/patterns/d3-shared-bars/guest.html \
-  --out packages/patterns/d3-shared-bars/main.tsx
+deno run -A scripts/write-iframe-wrapper.ts \
+  --contract patterns/examples/d3-shared-bars/contract.ts \
+  --guest patterns/examples/d3-shared-bars/guest.ts \
+  --html patterns/examples/d3-shared-bars/guest.html \
+  --out patterns/examples/d3-shared-bars/main.tsx
 ```
 
 Then validate the authored guest and generated pattern:
 
 ```bash
-deno fmt packages/patterns/d3-shared-bars
-deno check packages/patterns/d3-shared-bars/guest.ts
-deno task cf check packages/patterns/d3-shared-bars/main.tsx --no-run
+deno fmt patterns/examples/d3-shared-bars
+deno check patterns/examples/d3-shared-bars/guest.ts
+deno task cf check patterns/examples/d3-shared-bars/main.tsx --no-run
 ```
 
 Launch the pattern with the steps under

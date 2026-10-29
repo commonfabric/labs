@@ -70,12 +70,12 @@ CT-2489 item 3 requires no work here.
 Checkpoint 1 is about two to three agent-days in labs plus about one and a half
 in the Weaver. Checkpoint 2 is about three to five, landed as two pull requests:
 persistence and read behavior first, then the move into `handles/`, which
-touches about 64 importers plus `packages/cli`. Checkpoint 3 is several days.
+touches about 64 importers plus `runtime/cli`. Checkpoint 3 is several days.
 Checkpoint 4 is multi-day as written.
 
 ## Code organization
 
-Paths below are relative to `packages/cf-harness/src/`, unless qualified.
+Paths below are relative to `runtime/cf-harness/src/`, unless qualified.
 Proposed extraction names are implementation choices; their responsibilities and
 single ownership are the constraints.
 
@@ -175,26 +175,31 @@ otherwise, is refused with 409 `action_resolved`; 404 `unknown_action` is kept
 for an id the session never issued. Do not promise exactly-once mutation across a lost command
 response.
 
-**Attribution.** A read on the Weaver's reviewed read-only list runs
-automatically and is attributed to the agent; a mutation waits for the person's
-approval tap and is attributed to the user, because the tap is the person's own
-act. The invocation names the approval the console asks for (copied from the
+**Attribution.** The Weaver classifies commands by whether they require
+interactive confirmation, independently of whether they read or mutate. An
+automatic command runs as the agent; a command the person approves runs as the
+user. The Weaver's policy owns which mutations may run automatically. The
+invocation names the approval the console asks for (copied from the
 catalog), the Weaver applies the stricter of that and its own list, and the
 settlement names the approval, actor, and executor actor it applied, so neither
 the executor nor Loom infers it. The Weaver sends Loom `actor: "user"` for an
-approved command and `actor: "agent:cf-harness"` for an automatic read, the
+approved command and `actor: "agent:cf-harness"` for an automatic command, the
 target as `context.loom_id`, and a version precondition as
-`context.expected_version`. The read-only list is a static Weaver-side list,
-since Loom's registry carries no query/action flag.
+`context.expected_version`. The confirmation policy is a static Weaver-side
+list. A console advertises
+`automatic_mutations` when its catalog reader accepts that combination; a host
+uses person approval for mutations on consoles without that feature.
 
 **Loom's actor rules admit the first query.** `loom.inspect` declares neither
 `actors` nor `origins_refused`, so an `agent:<slug>` actor is admitted; nor do
 `loom.add`, `loom.move`, `page.write`, or `create.note`. The Weaver calls
 `POST /command` directly without the `X-Loom-Agent-Run-Id` header, so its origin
 is never derived as `session`. No CFS change is needed for this checkpoint's
-query, or for the candidate mutations, which run as `user` after approval.
+query or mutations. `loom.set-style` is the only mutation currently admitted
+automatically and runs as `agent:cf-harness`; other mutations run as `user`
+after approval.
 
-**Contract.** `packages/cf-harness/src/contracts/client-command.ts` and
+**Contract.** `runtime/cf-harness/src/contracts/client-command.ts` and
 `shared/WeaverClientCommand.swift` define the invocation, catalog, settlement
 (`executed`, `declined`, `failed_to_deliver` with `landed: no | unknown`,
 `interrupted` as `canceled`, `timeout`, `restart`, or `delivery_failed` for a
@@ -208,7 +213,7 @@ the field, so a Weaver that requires a feature beyond `client_actions` reads the
 console's `protocol` from `GET /api/status` before its first task there, and
 treats a console that publishes none, or an accepted task that echoes none, as
 one that cannot serve it. The JSON files under
-`packages/cf-harness/test/fixtures/client-command-wire/` pin the wire for both
+`runtime/cf-harness/test/fixtures/client-command-wire/` pin the wire for both
 languages; the Weaver holds a byte-identical copy.
 
 **Gate:** a deterministic Swift-to-console fixture executes a Loom query and
@@ -371,8 +376,8 @@ correctly. Standalone `/patterns`/`/feedback` endpoint resolution, whitespace in
 code is touched here; they do not gate the unified session flow.
 
 Now expand the command adapter to the required Loom operations. Use a small
-reviewed allowlist to run queries automatically and route actions through
-existing approval controls. Loom's registry carries no query/action or read-only
+reviewed allowlist to run queries and `loom.set-style` automatically; other
+mutations use the existing approval controls. Loom's registry carries no query/action or read-only
 flag (it records `reversible`, `locality`, `tier`, `grant`, `actors`, and
 `origins_refused`), so the allowlist is a static reviewed list. 106 verbs refuse
 the `session` origin and an omitted actor defaults to `user`; the adapter sends
@@ -390,6 +395,7 @@ Use these candidate implementations to begin hands-on verification:
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | List/find/open Looms        | Weaver listing and native open; no new search backend. `/looms-find` is a GET route, not a Loom command, and Loom has no list or find command for looms.                                                                   |
 | Inspect layout              | `loom.inspect` returns manifest, component IDs, and version.                                                                                                                                                               |
+| Change loom style           | `loom.set-style` runs automatically as the agent, using the captured target and version. Verify the confirmed style, unchanged view and draft, and no Run/Decline prompt. Other mutations still require a tap. |
 | Read contents               | Add a structured query resolving a selected component through the page/source reader or a Fabric handle. Manifest inspection is insufficient; `search.run` creates a panel and is not a read query.                        |
 | Add pages/panels; rearrange | `page.write` supplies page contents, `loom.add` attaches a component, and `loom.move` rearranges it. Verify the complete create-and-place flow; use `create.note` where its behavior fits. Preserve version preconditions. |
 
@@ -430,7 +436,7 @@ integration.
 **Question resolved:** can improvements be measured against the complete product
 flow without changing its communication architecture each time?
 
-`packages/cf-harness/scripts/run-measurement-batch.ts` is a single-turn HTTP
+`runtime/cf-harness/scripts/run-measurement-batch.ts` is a single-turn HTTP
 client that starts a fresh session per task and has no host seam. The host seams
 are the browser-host channel and the client-action callbacks this plan builds
 on. Extend it and its existing cell-spec/preflight machinery with multi-turn

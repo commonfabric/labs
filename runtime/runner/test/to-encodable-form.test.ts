@@ -1,0 +1,491 @@
+/**
+ * The walk that puts a value into the form storage takes, which owes two
+ * things that pull in different directions.
+ *
+ * Structure has to survive. An object reached twice is written once and
+ * aliased afterward, so sharing is preserved rather than duplicated, and the
+ * same bookkeeping is what lets a cycle be caught instead of followed. Where
+ * the walk converts a value in place, the sharing around it still has to
+ * hold.
+ *
+ * And nothing may be laundered. A value that is not inert is refused outright
+ * rather than copied into something that would look inert on the far side, and
+ * a `FabricInstance` is refused rather than flattened into its parts for the
+ * same reason.
+ */
+
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
+
+import { deepFreeze, isDeepFrozen } from "@commonfabric/data-model";
+import { Identity } from "@commonfabric/identity";
+import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  FabricBytes,
+  FabricEpochNsec,
+} from "@commonfabric/data-model/fabric-primitives";
+import { FabricError } from "@commonfabric/data-model/fabric-instances";
+
+import {
+  moduleWithAliasBindings,
+  withAliasBindings,
+} from "../src/builder/to-encodable-form.ts";
+import type { Module } from "../src/builder/types.ts";
+import { Runtime } from "../src/runtime.ts";
+import { createCell, exportCell } from "../src/cell.ts";
+
+const signer = await Identity.fromPassphrase("test operator");
+const space = signer.did();
+
+describe("to-encodable-form", () => {
+  let runtime: Runtime;
+  let storageManager: ReturnType<typeof StorageManager.emulate>;
+
+  beforeEach(() => {
+    storageManager = StorageManager.emulate({ as: signer });
+
+    runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+  });
+
+  afterEach(async () => {
+    await runtime?.dispose();
+    await storageManager?.close();
+  });
+
+  describe("withAliasBindings", () => {
+    it("keeps the holes of a sparse array, at the array's length", () => {
+      // The data model tells a hole from a stored `undefined`, so a bound
+      // array has exactly the holes its input has.
+      const sparse: unknown[] = [];
+      sparse[0] = 1;
+      sparse[2] = { nested: [3] };
+      const result = withAliasBindings({ list: sparse }) as {
+        list: unknown[];
+      };
+      expect(result.list.length).toBe(3);
+      expect(1 in result.list).toBe(false);
+      expect(result.list[0]).toBe(1);
+      expect(result.list[2]).toEqual({ nested: [3] });
+    });
+
+    it("should serialize shared object references correctly", () => {
+      // Regression test: shared style objects used across siblings in .map()
+      // should all serialize with full data, not {} for the 3rd+ occurrence.
+      const sharedStyle = {
+        background: "white",
+        borderRadius: "8px",
+        padding: "16px",
+      };
+
+      // Simulate a VNode-like tree where multiple siblings share the same style
+      const tree = {
+        type: "vnode",
+        children: [
+          { type: "vnode", props: { style: sharedStyle }, children: ["A"] },
+          { type: "vnode", props: { style: sharedStyle }, children: ["B"] },
+          { type: "vnode", props: { style: sharedStyle }, children: ["C"] },
+          { type: "vnode", props: { style: sharedStyle }, children: ["D"] },
+          { type: "vnode", props: { style: sharedStyle }, children: ["E"] },
+        ],
+      };
+
+      const result = withAliasBindings(tree) as any;
+
+      // All 5 children should have the full style object
+      for (let i = 0; i < 5; i++) {
+        expect(result.children[i].props.style).toEqual({
+          background: "white",
+          borderRadius: "8px",
+          padding: "16px",
+        });
+      }
+    });
+
+    it("should still guard against circular references", () => {
+      const circular: any = { name: "root", child: {} };
+      circular.child.parent = circular; // true circular reference
+
+      const result = withAliasBindings(circular) as any;
+
+      // The root should serialize, but the circular back-reference should be {}
+      expect(result.name).toEqual("root");
+      expect(result.child.parent).toEqual({});
+    });
+
+    it("should handle shared nested objects at different depths", () => {
+      const sharedMeta = { author: "test", version: 1 };
+      const tree = {
+        items: [
+          { data: "a", meta: sharedMeta },
+          { data: "b", meta: sharedMeta },
+          { data: "c", nested: { deep: { meta: sharedMeta } } },
+        ],
+      };
+
+      const result = withAliasBindings(tree) as any;
+
+      expect(result.items[0].meta).toEqual({ author: "test", version: 1 });
+      expect(result.items[1].meta).toEqual({ author: "test", version: 1 });
+      expect(result.items[2].nested.deep.meta).toEqual({
+        author: "test",
+        version: 1,
+      });
+    });
+
+    it("should preserve false schema", () => {
+      const cellWithFalseSchema = createCell(runtime, {
+        space,
+        schema: false,
+        path: [],
+      });
+
+      const result = withAliasBindings(
+        cellWithFalseSchema,
+        (cell) => {
+          const { schema, scope } = exportCell(cell);
+          return {
+            "$alias": {
+              partialCause: "placeholder", // we have no way to represent an alias binding to this fake cell
+              path: ["path", "to", "cell"],
+              ...(schema !== undefined && { schema }),
+              ...(scope !== undefined && { scope }),
+            },
+          };
+        },
+      );
+
+      expect(result).toEqual({
+        "$alias": {
+          partialCause: "placeholder",
+          path: [
+            "path",
+            "to",
+            "cell",
+          ],
+          schema: false,
+          scope: "space",
+        },
+      });
+    });
+
+    it("passes a nested FabricPrimitive through as an atomic value", () => {
+      // A `FabricBytes` (a `FabricPrimitive`) keeps its state in private fields
+      // and exposes zero enumerable own-props, so the `for...in` copy branch
+      // flattens it to `{}`, silently dropping its bytes. It is atomic and must
+      // pass through unchanged.
+      const bytes = new FabricBytes(new Uint8Array([1, 2, 3]));
+
+      const result = withAliasBindings({ payload: bytes }) as any;
+
+      expect(result.payload).toBe(bytes);
+    });
+
+    it("converts a native to its canonical fabric form", () => {
+      // A `Uint8Array` is NOT a `FabricValue`. Left to the `for...in` copy it
+      // is rebuilt by property name into `{"0":7,"1":9}` -- which IS an inert
+      // plain object and so passes `isValidFabricValue()`. That is the hazard:
+      // not a lost value, but a legal one meaning something else, stored with
+      // no trace of what it was. A `Date` goes the same way, to `{}`.
+      const fromBytes = withAliasBindings(new Uint8Array([7, 9])) as any;
+      expect(fromBytes).toBeInstanceOf(FabricBytes);
+      expect([...fromBytes.slice()]).toEqual([7, 9]);
+
+      const fromDate = withAliasBindings(new Date(0)) as any;
+      expect(fromDate).toBeInstanceOf(FabricEpochNsec);
+
+      const nested = withAliasBindings(
+        { v: new Uint8Array([4, 5]) },
+      ) as any;
+      expect(nested.v).toBeInstanceOf(FabricBytes);
+      expect([...nested.v.slice()]).toEqual([4, 5]);
+    });
+
+    it("refuses a FabricInstance rather than flattening it", () => {
+      // A `FabricInstance` is a CONTAINER reached by its codec contents, not by
+      // property name. The `for...in` copy would rebuild it from zero
+      // enumerable own-props as `{}`, so it refuses instead -- the same
+      // disposition the sibling binding walk uses.
+      const err = FabricError.fromNativeError(new Error("boom"));
+      expect(() => withAliasBindings(err)).toThrow("FabricError");
+      expect(() => withAliasBindings({ e: err })).toThrow("FabricError");
+
+      // ...including one the conversion itself mints, from a JS `Error`.
+      expect(() => withAliasBindings({ e: new Error("x") })).toThrow(
+        "FabricError",
+      );
+    });
+
+    it("keeps shared and circular structure intact around a converted native", () => {
+      // The conversion can hand back a DIFFERENT object than it was given (it
+      // clones in order to freeze), and this walk keys circularity on object
+      // identity. So conversion and the `seen` bookkeeping have to agree, or a
+      // cycle stops being detected and recurses until the stack dies. This
+      // pins the two working together rather than each alone.
+      const shared = { tag: "s" };
+      const tree: Record<string, unknown> = {
+        a: shared,
+        b: shared,
+        blob: new Uint8Array([1, 2]),
+      };
+      tree.self = tree;
+
+      const out = withAliasBindings(tree) as any;
+
+      // the native converted...
+      expect(out.blob).toBeInstanceOf(FabricBytes);
+      expect([...out.blob.slice()]).toEqual([1, 2]);
+      // ...a shared (non-circular) reference still serializes at each site...
+      expect(out.a).toEqual({ tag: "s" });
+      expect(out.b).toEqual({ tag: "s" });
+      // ...and the cycle is still caught rather than followed.
+      expect(out.self).toEqual({});
+    });
+
+    it("rejects a plain object that is not inert, rather than laundering it", () => {
+      // These are the cases that separate `isInertPlainObject()` from a plain
+      // `isPlainObject()` at the routing test above. Were they excluded from
+      // the conversion, the `for...in` rebuild would silently drop the symbol
+      // key, EVALUATE the accessor into a data property, and reparent the
+      // null-prototype object -- each producing a plain object that satisfies
+      // `isValidFabricValue()` while meaning something else, with nothing
+      // downstream able to notice. They must be refused here.
+      const sym = Symbol("s");
+      expect(() => withAliasBindings({ a: 1, [sym]: "x" })).toThrow(
+        "Not representable",
+      );
+      expect(() =>
+        withAliasBindings({
+          a: 1,
+          get live() {
+            return 42;
+          },
+        })
+      ).toThrow("Not representable");
+      expect(() =>
+        withAliasBindings(
+          Object.assign(Object.create(null), { a: 1 }),
+        )
+      ).toThrow("Not representable");
+
+      // ...while an ordinary inert plain object still walks through untouched.
+      expect(withAliasBindings({ a: 1 })).toEqual({ a: 1 });
+    });
+
+    it("throws given an array that is not inert, rather than laundering it", () => {
+      // The array analog of the plain-object case above, and it matters for
+      // the same reason: `.map()` rebuilds by index, so a named property is
+      // dropped and an accessor-backed index is EVALUATED into a data
+      // property, each yielding an array that satisfies `isValidFabricValue()`
+      // while meaning something else. An `Array` subclass is worse than
+      // laundered -- `.map()` honors `Symbol.species`, so the result is still
+      // a subclass instance, carrying a live prototype that `isInertArray()`
+      // exists to reject.
+      // Each names the ARRAY refusal specifically. "Not representable" alone is
+      // shared with the plain-object refusal, so it would still pass if one of
+      // these were classified as an object instead -- which is exactly the
+      // regression that would make the reported reason wrong.
+      expect(() => withAliasBindings(Object.assign([1, 2], { extra: "x" })))
+        .toThrow("array that is not an inert array");
+      const accessorIndexed = [1, 2];
+      Object.defineProperty(accessorIndexed, 0, {
+        get: () => 42,
+        enumerable: true,
+        configurable: true,
+      });
+      expect(() => withAliasBindings(accessorIndexed)).toThrow(
+        "array that is not an inert array",
+      );
+      class Subclassed extends Array {}
+      expect(() => withAliasBindings(Subclassed.from([1, 2]))).toThrow(
+        "array that is not an inert array",
+      );
+      expect(() => withAliasBindings(Object.setPrototypeOf([1, 2], null)))
+        .toThrow("array that is not an inert array");
+
+      // ...while an ordinary inert array still walks through untouched.
+      expect(withAliasBindings([1, 2])).toEqual([1, 2]);
+    });
+
+    it("refuses a function that is not a builder artifact, at the top and nested", () => {
+      // The only function an execution graph holds is a builder artifact; a
+      // module's own functions are bound through the module instead.
+      expect(() => withAliasBindings(() => 1)).toThrow(
+        "not a builder artifact",
+      );
+      expect(() => withAliasBindings({ f: () => 1 })).toThrow(
+        "not a builder artifact",
+      );
+    });
+
+    it("returns a builder artifact function as itself, at the top and nested", () => {
+      const artifact = Object.assign(() => {}, {
+        toEncodableForm: () => ({ type: "javascript" }),
+      });
+
+      expect(withAliasBindings(artifact)).toBe(artifact);
+      expect((withAliasBindings({ a: artifact }) as any).a).toBe(artifact);
+    });
+
+    it("binds a graph node's module through the module's members", () => {
+      // The module's `implementation` is a plain function, which the walk
+      // refuses anywhere but in a module; reaching it here without a refusal
+      // is what shows the node's `module` went through the module binding.
+      const implementation = () => 1;
+      const graph = {
+        argumentSchema: {},
+        resultSchema: {},
+        nodes: [{
+          module: { type: "javascript", implementation },
+          inputs: { x: 1 },
+          outputs: {},
+        }],
+      };
+
+      const out = withAliasBindings(graph) as any;
+      expect(out.nodes[0].module.implementation).toBe(implementation);
+      expect(out.nodes[0].module.type).toBe("javascript");
+      expect(out.nodes[0].inputs).toEqual({ x: 1 });
+    });
+
+    it("refuses a graph node's module that is not an inert plain object, rather than rebuilding it", () => {
+      // Rebuilt member by member, a getter would run and be stored as a data
+      // property. The node's `module` goes to the module binding only once it
+      // is known to be inert; anything else is walked as a value, which
+      // refuses it.
+      let reads = 0;
+      const module = {
+        type: "javascript",
+        get live() {
+          reads++;
+          return 1;
+        },
+      };
+      const graph = {
+        argumentSchema: {},
+        resultSchema: {},
+        nodes: [{ module, inputs: {}, outputs: {} }],
+      };
+
+      expect(() => withAliasBindings(graph)).toThrow("Not representable");
+      expect(reads).toBe(0);
+    });
+
+    it("returns a graph holding deep-frozen copies of a pattern's schemas, leaving the pattern's as they were", () => {
+      const graph = {
+        argumentSchema: {
+          type: "object",
+          properties: { title: { type: "string" } },
+          required: ["title"],
+        },
+        resultSchema: { type: "object", properties: {} },
+        result: {},
+        nodes: [],
+      };
+
+      const out = withAliasBindings(graph) as typeof graph;
+      expect(out.argumentSchema).toEqual(graph.argumentSchema);
+      expect(out.resultSchema).toEqual(graph.resultSchema);
+      expect(isDeepFrozen(out.argumentSchema)).toBe(true);
+      expect(isDeepFrozen(out.resultSchema)).toBe(true);
+      expect(Object.isFrozen(out)).toBe(false);
+      expect(Object.isFrozen(out.result)).toBe(false);
+
+      expect(out.argumentSchema).not.toBe(graph.argumentSchema);
+      expect(Object.isFrozen(graph.argumentSchema)).toBe(false);
+      expect(Object.isFrozen(graph.argumentSchema.properties)).toBe(false);
+      expect(Object.isFrozen(graph.argumentSchema.required)).toBe(false);
+      expect(Object.isFrozen(graph.resultSchema)).toBe(false);
+    });
+
+    it("returns a graph holding a deep-frozen manifest of derived internal cells, leaving the pattern's as it was", () => {
+      // The runtime keeps the id a partial cause names by the cause's
+      // identity only where the cause is deep-frozen, and the walk has just
+      // rebuilt the manifest's records.
+      const graph = {
+        argumentSchema: {},
+        resultSchema: {},
+        derivedInternalCells: [
+          { partialCause: { $generated: 0 } },
+          { partialCause: { stream: ["a", 1] }, schema: { type: "object" } },
+        ],
+        nodes: [],
+      };
+
+      const out = withAliasBindings(graph) as typeof graph;
+      expect(out.derivedInternalCells).toEqual(graph.derivedInternalCells);
+      expect(isDeepFrozen(out.derivedInternalCells)).toBe(true);
+      expect(out.derivedInternalCells).not.toBe(graph.derivedInternalCells);
+      expect(Object.isFrozen(graph.derivedInternalCells)).toBe(false);
+      expect(Object.isFrozen(graph.derivedInternalCells[0]!.partialCause))
+        .toBe(false);
+    });
+
+    it("returns a graph holding boolean schemas as they are", () => {
+      const graph = { argumentSchema: false, resultSchema: true, nodes: [] };
+      const out = withAliasBindings(graph) as typeof graph;
+      expect(out.argumentSchema).toBe(false);
+      expect(out.resultSchema).toBe(true);
+    });
+
+    it("returns a copy of a deep-frozen value at each place it is reached", () => {
+      // `createRef()` hashes an object it reaches twice in one cause as
+      // `null`, so a bound tree sharing one object between two places would
+      // derive other ids than a tree holding a copy at each.
+      const shared = deepFreeze({ type: "object", properties: {} });
+      const out = withAliasBindings({ a: shared, b: shared }) as {
+        a: object;
+        b: object;
+      };
+      expect(out.a).toEqual(shared);
+      expect(out.b).toEqual(shared);
+      expect(out.a).not.toBe(shared);
+      expect(out.b).not.toBe(out.a);
+    });
+
+    it("leaves ordinary containers alone", () => {
+      // The conversion above must not reach an inert plain object or an array;
+      // those are already `FabricValue`s and are walked, not converted.
+      const obj = withAliasBindings({ a: 1, b: "x" }) as any;
+      expect(obj).toEqual({ a: 1, b: "x" });
+      expect(obj.constructor).toBe(Object);
+
+      const arr = withAliasBindings([1, "x"]) as any;
+      expect(arr).toEqual([1, "x"]);
+      expect(Array.isArray(arr)).toBe(true);
+    });
+  });
+
+  describe("moduleWithAliasBindings", () => {
+    it("keeps a module's function members as themselves and binds the rest", () => {
+      // `bound` is a member the walk visibly changes: binding an alias
+      // record raises its `defer`, where a member merely copied would not.
+
+      const implementation = () => 1;
+      const toJSON = () => ({});
+      const module: Module & { toJSON: () => unknown; bound: unknown } = {
+        type: "javascript",
+        implementation,
+        toJSON,
+        argumentSchema: { type: "object" },
+        bound: { $alias: { cell: "argument", path: ["a"] } },
+      };
+
+      const out = moduleWithAliasBindings(module) as Module & {
+        toJSON?: unknown;
+        bound?: unknown;
+      };
+
+      expect(out).not.toBe(module);
+      expect(out.implementation).toBe(implementation);
+      expect(out.toJSON).toBe(toJSON);
+      expect(out.type).toBe("javascript");
+      expect(out.argumentSchema).toEqual({ type: "object" });
+      expect(out.bound).toEqual({
+        $alias: { cell: "argument", path: ["a"], defer: 1 },
+      });
+    });
+  });
+});

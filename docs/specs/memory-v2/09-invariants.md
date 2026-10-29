@@ -30,14 +30,14 @@ where those properties are stated once.
 Checkers referenced below:
 
 - the **durable-history oracle**: `staleReadAnomalies` in
-  `packages/state-inspector/oracle.ts`, which replays the engine's own
+  `runtime/state-inspector/oracle.ts`, which replays the engine's own
   admission predicate over a space DB's commit history
-  (`packages/state-inspector/test/engine-oracle.test.ts` proves it detects
+  (`runtime/state-inspector/test/engine-oracle.test.ts` proves it detects
   seeded corruption);
 - the **differential harness**:
-  `packages/memory/test/v2-differential-consistency.test.ts`, which runs
+  `runtime/memory/test/v2-differential-consistency.test.ts`, which runs
   seeded random commit schedules against the engine and a naive reference
-  validator (`packages/memory/test/naive-admission.ts`);
+  validator (`runtime/memory/test/naive-admission.ts`);
 - the **TLA+ model**: `docs/specs/memory-v2/tla/PendingStacks.tla`, which
   model-checks INV-1/INV-3/INV-4/INV-5 over all small interleavings for each
   dependency-recording, staleness-basis, and identity-acceptance variant,
@@ -68,8 +68,8 @@ This is the master invariant. It forbids both failure directions at once:
   recorded basis, and admission did not scan it. This is the CT-1910 shape.
 
 Layer: server admission (`validateConfirmedReads`, `resolvePendingReads` in
-`packages/memory/v2/engine.ts`) together with client dependency recording
-(`packages/runner/src/storage/v2.ts`, `v2-transaction.ts`).
+`runtime/memory/v2/engine.ts`) together with client dependency recording
+(`runtime/runner/src/storage/v2.ts`, `v2-transaction.ts`).
 
 Soundness direction: admission MAY reject a commit whose observation is in
 fact coherent (over-rejection costs a retry). It MUST NOT accept a commit
@@ -92,7 +92,7 @@ admitted out of submission order or omitted while durably integrated
 (03-commit-model.md §3.6.3) — the shape current clients always emit. The TLA+ config
 `PendingStacks_Current.cfg` reproduces the legacy-shape violation (kept as a
 regression witness, alongside the legacy-shape engine test in
-`packages/memory/test/v2-pending-read-basis-overadvance.test.ts`) and
+`runtime/memory/test/v2-pending-read-basis-overadvance.test.ts`) and
 `PendingStacks_Repaired.cfg` certifies the repaired shape in the bounded
 model. The residual deviation retires when clients that omit `basisSeq`
 fall below the support floor.
@@ -168,11 +168,11 @@ Soundness direction: toward precision only from above; never below exact.
 Checked by: the differential harness (engine-accept must imply
 naive-accept, where the naive validator implements exact overlap); the
 generator test asserting the runner's array-op discipline
-(`packages/runner/test/memory-v2-native-commit.test.ts`); the tests holding
+(`runtime/runner/test/memory-v2-native-commit.test.ts`); the tests holding
 `TouchedPathIndex` to `isPrefixPath` and `pathsOverlap`, and the engine's
 check to `patchOverlapsRead` and `patchOverlapsNonRecursiveRead`
-(`packages/memory/test/v2/TouchedPathIndex.test.ts` and
-`packages/memory/test/v2/engine-conflicts.test.ts` respectively).
+(`runtime/memory/test/v2/TouchedPathIndex.test.ts` and
+`runtime/memory/test/v2/engine-conflicts.test.ts` respectively).
 
 Known deviations: **Topic 544** on the team's Topics board
 (`of:fid1:mccA4KBv8PYXLwRiqvDu51Bcm1CP57iy9z0Aosa7Y64`), a shallow read that
@@ -185,7 +185,7 @@ writes it back as a `replace` or an unflagged mergeable op; the engine creates
 the key, and a shallow read of the container taken after the removal is
 accepted (`08-conflict-granularity.md` §2). The engine test "accepts a shallow
 read of a container whose key a writer with an older base re-created" in
-`packages/memory/test/v2/engine-conflicts.test.ts` records the accept. The
+`runtime/memory/test/v2/engine-conflicts.test.ts` records the accept. The
 deviation retires when the engine records, at apply time, whether an op created
 a key.
 
@@ -244,7 +244,7 @@ there still names the dead layer and is refused by the dead-dependency
 admission rule, while a commit built after the processed drop records the
 sparse survivor set and is admitted.
 
-Layer: client dependency recording (`packages/runner/src/storage/v2.ts`
+Layer: client dependency recording (`runtime/runner/src/storage/v2.ts`
 pending-stack bookkeeping); server resolution (`resolvePendingReads`).
 
 Soundness direction: MAY record more layers than semantically necessary;
@@ -265,9 +265,9 @@ delayed-delivery configs) for recording completeness and sparse-omission
 reachability — its `Build` always names the view's full layer set, so the
 declared-set scan's VALIDATION half (a buggy omission of a durably
 integrated layer) is outside its reach and is checked instead by the
-engine unit tests (`packages/memory/test/v2-sparse-pending-dependencies.test.ts`),
+engine unit tests (`runtime/memory/test/v2-sparse-pending-dependencies.test.ts`),
 the differential harness's sparse mutation, and stacked-commit unit
-tests (`packages/runner/test/memory-v2-stacked-commit.test.ts`); see the
+tests (`runtime/runner/test/memory-v2-stacked-commit.test.ts`); see the
 TLA README's "Canonical dependency arrays" note for the coincidence
 argument and the `SkipLayers` refinement that would bring it in scope.
 
@@ -291,7 +291,7 @@ dependency sets it walks (INV-3). A complete cascade over incomplete
 dependencies still admits phantoms.
 
 Layer: server (`resolvePendingReads` rejection path); client drop cascade
-and pre-send refusal (`packages/runner/src/storage/v2.ts`).
+and pre-send refusal (`runtime/runner/src/storage/v2.ts`).
 
 Soundness direction: MAY drop commits that name a rejected layer they did
 not semantically depend on (over-coupling, a wasted retry); MUST NOT leave a
@@ -374,7 +374,7 @@ Soundness direction: MAY surface a failure for a write that would have
 eventually succeeded; MUST NOT drop one without surfacing.
 
 Checked by: backpressure and convergence-storm tests
-(`packages/patterns/integration/convergence-storm.test.ts` asserts all 2K
+(`patterns/integration/convergence-storm.test.ts` asserts all 2K
 contended writes land).
 
 ### INV-8 — Transaction atomicity
@@ -407,7 +407,7 @@ comparison (a torn apply diverges from the naive fold).
 > have integrated the same prefix compute identical values, and a stored
 > snapshot equals the replay of its prefix (`01-data-model.md` §7.3).
 
-Layer: patch application (`packages/memory/v2/patch.ts` server-side, the
+Layer: patch application (`runtime/memory/v2/patch.ts` server-side, the
 client apply path in `v2-document.ts`); snapshot materialization.
 
 Soundness direction: none — exact. Note this requires client and server
@@ -416,7 +416,7 @@ coalesces ops differently is a violation even if each side is internally
 consistent.
 
 Checked by: the differential harness (engine `read` versus naive fold);
-`packages/state-inspector` convergence verdicts
+`runtime/state-inspector` convergence verdicts
 (`multispace.ts`) and `reconstruct-parity.test.ts`.
 
 ### INV-10 — Single-snapshot reads
@@ -436,7 +436,7 @@ Soundness direction: MAY reject a transaction whose reads are in fact coherent
 (a local rejection costs a re-run); MUST NOT export a read set that mixes two
 prefixes.
 
-Checked by: `packages/runner/test/commit-read-basis.test.ts` for the claim
+Checked by: `runtime/runner/test/commit-read-basis.test.ts` for the claim
 check (a document that lands under an open transaction rejects the commit
 locally); the durable-history oracle would surface a resulting incoherent
 acceptance as an INV-1 hit.
@@ -479,7 +479,7 @@ publishes cache and watch changes only after durable commit. Its only public
 document operation remains the whole-document ACL `set` described here. Private
 invitation metadata is not part of `ClientCommit` and cannot be submitted through
 `session.transact`. See the
-[invitation service contract](../../../packages/toolshed/README.md#space-invitations).
+[invitation service contract](../../../runtime/toolshed/README.md#space-invitations).
 
 The clauses are checked in this order, each rejecting with a `ProtocolError`
 carrying a distinct message (so a message identifies the clause):
@@ -527,16 +527,16 @@ separately stated motivation, and no spec gives one. Anyone proposing to relax
 it owes the argument #4670 did not record.
 
 Layer: server admission (`#validateAclCommit` in
-`packages/memory/v2/server.ts`, for a session's transact and, with the carried
+`runtime/memory/v2/server.ts`, for a session's transact and, with the carried
 actor as the principal, for a served run's change through
 `commitServedAclChange()` and `checkServedAclChange()`); client emission
 (`writeAcl()` in
-`packages/runner/src/acl-manager.ts`, which `ACLManager` and a handler's
+`runtime/runner/src/acl-manager.ts`, which `ACLManager` and a handler's
 `grantSpaceAccess()` and `revokeSpaceAccess()` both write through, and which
 satisfies the rule by addressing the whole document at path `[]` — a write
 through the ordinary value surface decomposes into per-key `op: "patch"`
 details and is refused). The self-removal exception to the capability check
-is `#isSelfRemoval` in `packages/memory/v2/server.ts`, and `cf acl leave` is
+is `#isSelfRemoval` in `runtime/memory/v2/server.ts`, and `cf acl leave` is
 the client that sends one.
 
 The served plane writes the ACL document only through the memory server. A
@@ -551,10 +551,10 @@ principal
 ([`space-access-changes.md`](../../features/space-access-changes.md#serving-runtimes)).
 The wave's seal refuses a run that writes `of:<space>` of any space, failing
 that run alone
-(`packages/runner/src/executor/wave.ts`); the engine's `derived` admission
-refuses a commit carrying such an operation (`packages/memory/v2/engine.ts`);
+(`runtime/runner/src/executor/wave.ts`); the engine's `derived` admission
+refuses a commit carrying such an operation (`runtime/memory/v2/engine.ts`);
 and the wave sink refuses a foreign batch carrying one
-(`packages/runner/src/executor/engine-wave-sink.ts`). What the refusal does to
+(`runtime/runner/src/executor/engine-wave-sink.ts`). What the refusal does to
 the run is in
 [`serving-loop.md` §3d](../server-side-execution/serving-loop.md#3d-transactions-the-action-tx-seals-into-the-wave).
 
@@ -567,7 +567,7 @@ carries could not be removed. Over-acceptance lets the ACL document reach a stat
 no admission check ever validated.
 
 Checked by: example-based server tests only — no oracle, TLA+, or differential
-coverage. `packages/memory/test/v2-server-acl.test.ts`: "ACL mutations must
+coverage. `runtime/memory/test/v2-server-acl.test.ts`: "ACL mutations must
 preserve a concrete owner" (rejects `delete`, `patch`, `scope: "user"`, and
 empty / wildcard-only-owner / downgraded-owner / invalid-capability values) and
 "ACL mutations are default-branch ACL-only commits" (rejects a non-default
@@ -577,16 +577,16 @@ entry" in the same file (admits a READ or WRITE member's own removal, in
 `observe` too; refuses one that also removes, changes or adds another entry,
 adds a document field, keeps its own entry at another level, removes someone
 else's entry, or is sent under a `"*"` entry).
-Client side, `packages/runner/test/memory-v2-acl-mutation.test.ts` asserts the
+Client side, `runtime/runner/test/memory-v2-acl-mutation.test.ts` asserts the
 emitted operation *shape and count* against a real server, not just the
 resulting value. Served plane,
-`packages/runner/test/executor-acl-document-write.test.ts` drives a served
+`runtime/runner/test/executor-acl-document-write.test.ts` drives a served
 handler's cell-shaped and whole-document writes under `off` and `enforce`,
-and `packages/runner/test/executor-wave.test.ts` hands the engine and the
+and `runtime/runner/test/executor-wave.test.ts` hands the engine and the
 sink batches built directly, past the seal. The served change's admission is
 "checkServedAclChange() and commitServedAclChange()" in
-`packages/memory/test/v2-server-acl.test.ts`, and
-`packages/runner/test/executor-space-access-change.test.ts` drives served
+`runtime/memory/test/v2-server-acl.test.ts`, and
+`runtime/runner/test/executor-space-access-change.test.ts` drives served
 handlers' grants and revokes, and their refusals, under `off` and `enforce`.
 
 ### INV-13 — ACL genesis precedence and authority
@@ -629,7 +629,7 @@ direct write to the ACL document, so genesis cannot be performed off-protocol.
 Soundness direction: none — exact.
 
 Checked by: example-based server tests only.
-`packages/memory/test/v2-server-acl.test.ts`: "an ordinary opener cannot claim
+`runtime/memory/test/v2-server-acl.test.ts`: "an ordinary opener cannot claim
 or write a new space", "the space identity initializes a private space",
 "service DIDs have implicit OWNER and do not claim spaces", "acl observe:
 fresh-space genesis remains a hard invariant", "direct writes cannot create or
@@ -667,10 +667,10 @@ DELIVERED at, never from a locally promoted confirmed seq the server never
 sent.
 
 Layer: server (`holdingsToCacheEntries` and the resumed-open reconcile in
-`packages/memory/v2/server.ts`; `buildDiffSync` against the declaration in
+`runtime/memory/v2/server.ts`; `buildDiffSync` against the declaration in
 `watchSet`); client (`SpaceSession.holdingsProvider`, `reopen`/`restore` in
-`packages/memory/v2/client.ts`; `SpaceReplica.holdings()` in
-`packages/runner/src/storage/v2.ts`).
+`runtime/memory/v2/client.ts`; `SpaceReplica.holdings()` in
+`runtime/runner/src/storage/v2.ts`).
 
 Soundness direction: the server MAY deliver a document the replica already
 holds (a redundant frame is tolerated — the replica's monotonic seq guard makes
@@ -696,11 +696,11 @@ model certifies the SERVER's diff rule against a truthful declaration —
 `tla/README.md` states the assumption set — and each CLIENT construction
 obligation is pinned by a unit test instead: delivered-not-promoted seqs and
 the end-to-end declaration by
-`packages/runner/test/memory-v2-reconnect-holdings.test.ts`; branch identity,
+`runtime/runner/test/memory-v2-reconnect-holdings.test.ts`; branch identity,
 the wire-boundary parse, and the zero-watch retraction by
-`packages/memory/test/v2-session-holdings.test.ts`; the declaration on both
+`runtime/memory/test/v2-session-holdings.test.ts`; the declaration on both
 reconnect paths and the terminal restore against a server that cannot take
-one by `packages/memory/test/v2-client-holdings.test.ts`.
+one by `runtime/memory/test/v2-client-holdings.test.ts`.
 
 ## Change discipline
 

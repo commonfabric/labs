@@ -13,6 +13,7 @@ import {
 import {
   buildManifest,
   CI_SOURCE,
+  coldStart,
   dayOf,
   departed,
   emptyAggregate,
@@ -20,6 +21,7 @@ import {
   firstDay,
   Fold,
   foldReports,
+  lastReadDay,
   lastRun,
   localReporter,
   locateSurfaces,
@@ -28,6 +30,7 @@ import {
   readReport,
   recordSurface,
   reportFromText,
+  resolveHistory,
 } from "./build.ts";
 import {
   MANIFEST_SCHEMA_VERSION,
@@ -40,16 +43,19 @@ import {
   hooksMeasurementName,
 } from "../lane-measurement.ts";
 import {
-  CATCH_RULE,
   COST_RULE,
   costSeconds,
   daysBetween,
+  emptyContext,
   emptyState,
   flakeRate,
   type IdentityState,
   lastMainIn,
+  NEW_REAL_TEST_FAILURE_RULE,
+  parseContext,
   samplesOf,
   sealDay,
+  serializeContext,
   value,
 } from "./score.ts";
 import {
@@ -126,7 +132,7 @@ function stored(
 
 const KEY = testIdentityKey({ k: "unit", s: "memory", n: "space > writes" });
 /** The file a record of that identity names. */
-const UNIT = "packages/memory/test/space.test.ts";
+const UNIT = "runtime/memory/test/space.test.ts";
 const CI_NAME = "labs/test-records/submissions/ci/v1/2026/08/20/run-1-a.ndjson";
 const LOCAL_NAME =
   "labs/test-records/submissions/local/ianh/v1/2026/08/20/01K3-branch.ndjson";
@@ -209,8 +215,9 @@ describe("build", () => {
     });
 
     it("declines a continuous-integration run that names no branch", () => {
-      // The branch is the source a catch is attributed to, so a run with
-      // none cannot be told apart from any other run with none.
+      // The branch is the source a new real test failure is attributed
+      // to, so a run with none cannot be told apart from any other run
+      // with none.
       const nameless = context();
       delete nameless.branch;
       expect(provenance(nameless, CI_NAME)).toBeUndefined();
@@ -248,21 +255,21 @@ describe("build", () => {
       expect(
         recordSurface(
           { k: "unit", s: "memory", n: "a" },
-          "packages/memory/test/space.test.ts",
+          "runtime/memory/test/space.test.ts",
         ).unit,
-      ).toBe("packages/memory/test/space.test.ts");
+      ).toBe("runtime/memory/test/space.test.ts");
     });
 
     it("keeps a file-backed unit when a later record has none", () => {
       const read = readReport(
         stored(CI_NAME, context(), [
-          record({ file: "packages/memory/test/space.test.ts" }),
+          record({ file: "runtime/memory/test/space.test.ts" }),
           record(),
         ]),
         NO_ALIASES,
       );
       expect([...read.surfaces.values()][0]!.unit).toEqual(
-        "packages/memory/test/space.test.ts",
+        "runtime/memory/test/space.test.ts",
       );
     });
 
@@ -324,8 +331,13 @@ describe("build", () => {
         ]),
         NO_ALIASES,
       );
-      const byDay = [...read.durations.values()][0]!;
-      expect(byDay.get("2026-08-20")).toEqual([10, 90]);
+      expect(read.observations.map((seen) => seen.durationMs)).toEqual([
+        10,
+        90,
+        undefined,
+        undefined,
+      ]);
+      expect([...read.durations.keys()]).toEqual([]);
     });
 
     it("keeps no duration from a workstation, and its observations all the same", () => {
@@ -338,7 +350,7 @@ describe("build", () => {
         NO_ALIASES,
       );
       expect(read.observations.map((seen) => seen.place)).toEqual(["local"]);
-      expect([...read.durations.keys()]).toEqual([]);
+      expect(read.observations[0]!.durationMs).toBeUndefined();
     });
 
     it("keeps a failed execution as an observation all the same", () => {
@@ -352,7 +364,7 @@ describe("build", () => {
         NO_ALIASES,
       );
       expect(read.observations.map((seen) => seen.outcome)).toEqual(["fail"]);
-      expect([...read.durations.keys()]).toEqual([]);
+      expect(read.observations[0]!.durationMs).toBeUndefined();
     });
 
     it("reads nothing from a group whose start time is not a time", () => {
@@ -409,7 +421,8 @@ describe("build", () => {
         "space > writes",
       ]);
       expect([...read.surfaces.keys()]).toEqual([KEY]);
-      expect([...read.durations.keys()]).toEqual([KEY]);
+      expect(read.observations[0]!.durationMs).toBe(40);
+      expect([...read.durations.keys()]).toEqual([]);
     });
 
     it("asks the alias file nothing about a lane measuring itself", () => {
@@ -767,16 +780,17 @@ describe("build", () => {
     it("does not fold a day it took from a rollup", () => {
       // A rollup carries the day's reports whole, so its raw objects
       // never reach `folded`; a later run over a wide window has to ask
-      // about the day or it folds the day twice and doubles its catches.
+      // about the day or it folds the day twice and doubles its new real
+      // test failures.
       const fold = new Fold(
         emptyAggregate("2026-08-20"),
         NO_ALIASES,
         "2026-08-20",
       );
-      expect(fold.settled(CI_SOURCE, "2026/08/10")).toBe(false);
-      fold.markSettled(CI_SOURCE, "2026/08/10");
-      expect(fold.settled(CI_SOURCE, "2026/08/10")).toBe(true);
-      expect(fold.finish().aggregate.compacted).toEqual(["ci\t2026/08/10"]);
+      expect(fold.settled(CI_SOURCE, "2026/08/18")).toBe(false);
+      fold.markSettled(CI_SOURCE, "2026/08/18");
+      expect(fold.settled(CI_SOURCE, "2026/08/18")).toBe(true);
+      expect(fold.finish().aggregate.compacted).toEqual(["ci\t2026/08/18"]);
     });
 
     it("leaves a local source of a settled day still owing", () => {
@@ -852,8 +866,8 @@ describe("build", () => {
     it("carries what the cross-run rules saw into the next run", () => {
       // A commit's runs can arrive in two publisher runs. Without the
       // context, the second would not see that the identity had already
-      // passed at that commit, and would read the failure as a catch
-      // rather than as the test disagreeing with itself.
+      // passed at that commit, and would read the failure as a new real
+      // test failure rather than as the test disagreeing with itself.
       const first = new Fold(
         emptyAggregate("2026-08-20"),
         NO_ALIASES,
@@ -1090,11 +1104,36 @@ describe("build", () => {
     it("is absent for an aggregate that has folded nothing", () => {
       expect(firstDay(emptyAggregate("2026-08-20"))).toBeUndefined();
     });
+
+    it("survives a fold that closes it", () => {
+      // Every publisher reads the day a whole history starts on from the
+      // names, so closing a day keeps the first day's and drops the rest.
+      const aggregate = {
+        ...emptyAggregate("2026-08-19"),
+        folded: [
+          "labs/test-records/submissions/ci/v1/2026/08/05/run-1-a.ndjson",
+          "labs/test-records/submissions/ci/v1/2026/08/06/run-2-a.ndjson",
+        ],
+        compacted: [`${CI_SOURCE}\t2026/08/05`, `${CI_SOURCE}\t2026/08/07`],
+      };
+      const after = new Fold(aggregate, NO_ALIASES, "2026-08-20").finish({
+        from: "2026/08/19",
+        through: "2026/08/20",
+      }).aggregate;
+      expect(after.closed).toBe("2026/08/13");
+      expect(after.folded).toEqual([
+        "labs/test-records/submissions/ci/v1/2026/08/05/run-1-a.ndjson",
+      ]);
+      expect(after.compacted).toEqual([`${CI_SOURCE}\t2026/08/05`]);
+      expect(firstDay(after)).toBe("2026-08-05");
+    });
   });
 
-  describe("the rules an aggregate's catches were credited under", () => {
+  describe("the rules an aggregate's new real test failures were credited under", () => {
     it("are the ones in force for a fresh aggregate", () => {
-      expect(emptyAggregate("2026-08-20").catchRule).toBe(CATCH_RULE);
+      expect(emptyAggregate("2026-08-20").catchRule).toBe(
+        NEW_REAL_TEST_FAILURE_RULE,
+      );
     });
 
     it("are carried through a fold and a stored copy", () => {
@@ -1104,13 +1143,14 @@ describe("build", () => {
         "2026-08-20",
       ).finish().aggregate;
       expect(parseAggregate(JSON.stringify(stamped))?.catchRule).toBe(
-        CATCH_RULE,
+        NEW_REAL_TEST_FAILURE_RULE,
       );
     });
 
     it("are none for an aggregate written before the stamps began", () => {
-      // A fold onto it adds catches under the rules in force to ones
-      // credited under others, which is still not a stamp's worth.
+      // A fold onto it adds new real test failures under the rules in
+      // force to ones credited under others, which is still not a
+      // stamp's worth.
       const older = { ...emptyAggregate("2026-08-19") } as Record<
         string,
         unknown
@@ -1189,17 +1229,21 @@ describe("build", () => {
       expect(costSeconds(state, "2026-08-20")).toBe(8.192);
     });
 
+    /** Four new real test failures on the default branch, on one day. */
+    const FOUR_ON_MAIN = { local: 0, pr: 0, main: 4, sources: ["main"] };
+
     it("drops an identity whose state is not one, and reads the rest", () => {
-      // The aggregate holds the catches, which no window of records
-      // rebuilds, so one identity nothing can be read out of must not
-      // cost every other identity its history. The one dropped is then
-      // read as a test with no history, which is mandatory, so it runs.
+      // The aggregate holds the new real test failures, which no window
+      // of records rebuilds, so one identity nothing can be read out of
+      // must not cost every other identity its history. The one dropped
+      // is then read as a test with no history, which is mandatory, so it
+      // runs.
       for (const held of ["oops", 7, null, []]) {
         const aggregate = JSON.parse(
           JSON.stringify(emptyAggregate("2026-08-20")),
         );
         const kept = emptyState();
-        kept.mainCatches = 4;
+        kept.newRealTestFailureDays["2026-08-19"] = FOUR_ON_MAIN;
         aggregate.states["broken"] = held;
         aggregate.states[KEY] = kept;
         const read = parseAggregate(JSON.stringify(aggregate));
@@ -1209,14 +1253,14 @@ describe("build", () => {
     });
 
     it("reads an aggregate written in an earlier shape forward", () => {
-      // An aggregate holds every catch a test has ever been credited
-      // with, over unbounded history, and a window of records cannot
-      // give them back. Refusing one written before the newest shape
-      // would cost all of them and leave nothing to publish from until
-      // an operator ran a bootstrap by hand.
+      // An aggregate holds every new real test failure a test has ever
+      // been credited with, over unbounded history, and a window of
+      // records cannot give them back. Refusing one written before the
+      // newest shape would cost all of them and leave nothing to publish
+      // from until an operator ran a bootstrap by hand.
       const aggregate = emptyAggregate("2026-08-20");
       const held = emptyState();
-      held.mainCatches = 4;
+      held.newRealTestFailureDays["2026-08-19"] = FOUR_ON_MAIN;
       aggregate.states[KEY] = held;
       const older = {
         ...JSON.parse(JSON.stringify(aggregate)),
@@ -1252,10 +1296,84 @@ describe("build", () => {
       // A reader asking this and `writtenAhead` about one body parses it
       // once, and an aggregate is the whole corpus.
       const aggregate = emptyAggregate("2026-08-20");
-      aggregate.states[KEY] = { ...emptyState(), mainCatches: 4 };
+      aggregate.states[KEY] = {
+        ...emptyState(),
+        mainCatches: 4,
+        lastCatch: "2026-08-19",
+        newRealTestFailureDays: {
+          "2026-08-19": { local: 0, pr: 0, main: 4, sources: [] },
+        },
+      };
       const text = JSON.stringify(aggregate);
       expect(parseAggregate(JSON.parse(text))).toEqual(aggregate);
       expect(parseAggregate(text)).toEqual(aggregate);
+    });
+
+    /** The one state an aggregate holding it, as stored, is read back as. */
+    function storedState(state: Record<string, unknown>) {
+      const aggregate = parseAggregate(JSON.stringify({
+        ...emptyAggregate("2026-08-20"),
+        states: { [KEY]: { ...emptyState(), ...state } },
+      }));
+      return aggregate!.states[KEY]!;
+    }
+
+    it("counts new real test failures from their days alone", () => {
+      // A state stored without days was credited under other rules, and a
+      // fold of the whole history counts it again.
+      const { newRealTestFailureDays: _, ...withoutDays } = emptyState();
+      const state = storedState({
+        ...withoutDays,
+        prCatches: 3,
+        lastCatch: "2026-08-12",
+        sources: ["main"],
+      });
+      expect(state.newRealTestFailureDays).toEqual({});
+      expect(state.prCatches).toBe(0);
+      expect(state.lastCatch).toBeUndefined();
+      expect(state.sources).toEqual([]);
+    });
+
+    it("drops a day that is not a count of new real test failures, and totals the rest", () => {
+      const state = storedState({
+        prCatches: 1,
+        lastCatch: "2026-08-10",
+        newRealTestFailureDays: {
+          "2026-08-10": { local: 0, pr: 1, main: 0, sources: ["a"] },
+          "2026-08-11": { local: -1, pr: "two", main: 0, sources: [] },
+        },
+      });
+      expect(Object.keys(state.newRealTestFailureDays)).toEqual(["2026-08-10"]);
+      expect(state.prCatches).toBe(1);
+    });
+
+    it("drops new real test failures held against something that is not a day", () => {
+      // Taken as the day of the most recent one, it would leave freshness
+      // nothing to age from.
+      const state = storedState({
+        newRealTestFailureDays: {
+          "2026-08-10": { local: 0, pr: 1, main: 0, sources: ["a"] },
+          "someday": { local: 0, pr: 1, main: 0, sources: ["b"] },
+          "2026-02-31": { local: 0, pr: 1, main: 0, sources: ["c"] },
+        },
+      });
+      expect(Object.keys(state.newRealTestFailureDays)).toEqual(["2026-08-10"]);
+      expect(state.lastCatch).toBe("2026-08-10");
+      expect(state.prCatches).toBe(1);
+    });
+
+    it("refuses a closed day that is not a day", () => {
+      // Read as later than it is, it would close days nothing has read.
+      const stored = { ...emptyAggregate("2026-08-20"), closed: "yesterday" };
+      expect(parseAggregate(JSON.stringify(stored))).toBeUndefined();
+      // Shaped like a day and not one the calendar has.
+      expect(
+        parseAggregate(JSON.stringify({ ...stored, closed: "2026/99/99" })),
+      ).toBeUndefined();
+      expect(
+        parseAggregate(JSON.stringify({ ...stored, closed: "2026/08/10" }))
+          ?.closed,
+      ).toBe("2026/08/10");
     });
 
     it("refuses a value that is not a body at all", () => {
@@ -1574,9 +1692,9 @@ describe("build", () => {
     });
 
     it("drops an identity whose history is older than the window", () => {
-      // The counters are aged before this reads them, so a state with
-      // catches and no days is a test that stopped running long enough
-      // ago for every window to have passed over it.
+      // The counters are aged before this reads them, so a state with new
+      // real test failures and no days is a test that stopped running
+      // long enough ago for every window to have passed over it.
       const old = { ...emptyState(), mainCatches: 4, lastCatch: "2026-01-02" };
       expect(departed(
         [empty()],
@@ -1635,17 +1753,17 @@ describe("build", () => {
       const { placed } = locateSurfaces(
         [claiming("workspace-unit", () => ({
           level: "unit",
-          unit: "packages/memory/test/space.test.ts",
+          unit: "runtime/memory/test/space.test.ts",
         }))],
         new Map([[KEY, {
           suite: "unit:memory",
-          unit: "packages/memory/test/space.test.ts",
+          unit: "runtime/memory/test/space.test.ts",
           fromFile: true,
         }]]),
       );
       expect(placed.get(KEY)).toEqual({
         suite: "workspace-unit",
-        unit: "packages/memory/test/space.test.ts",
+        unit: "runtime/memory/test/space.test.ts",
         fromFile: true,
       });
     });
@@ -1737,6 +1855,202 @@ describe("build", () => {
       // the tree has lost must not be done about one it holds.
       expect(unplaced.unclaimed).toEqual([]);
       expect(unplaced.contested).toEqual([KEY]);
+    });
+  });
+
+  describe("what records from off the default branch may change", () => {
+    /** Where a branch that reorganizes the tree puts the same test. */
+    const MOVED = "runtime/memory/test/space.test.ts";
+
+    /** A test only a branch holds. */
+    const ADDED = { k: "unit", s: "memory", n: "space > forgets" };
+
+    /** A workstation's run of a branch, the hour after `context()`. */
+    function workstation(): RunContext {
+      const local = context({
+        env: "local",
+        branch: "reorganize",
+        commit: "c9",
+        startedAt: "2026-08-20T01:00:00.000Z",
+      });
+      delete local.ci;
+      return local;
+    }
+
+    /** A pull request's run of a branch, the hour after `context()`. */
+    function pullRequest(): RunContext {
+      return context({
+        branch: "reorganize",
+        commit: "c9",
+        startedAt: "2026-08-20T01:00:00.000Z",
+      });
+    }
+
+    /** The aggregate holding the identity, under `UNIT`. */
+    function carrying() {
+      const aggregate = emptyAggregate("2026-08-20");
+      aggregate.states[KEY] = emptyState();
+      aggregate.files[KEY] = UNIT;
+      return aggregate;
+    }
+
+    const fold = (aggregate = carrying()) =>
+      new Fold(aggregate, NO_ALIASES, "2026-08-20");
+
+    for (
+      const { name, objectName, runContext } of [
+        {
+          name: "a workstation",
+          objectName: LOCAL_NAME,
+          runContext: workstation,
+        },
+        {
+          name: "a pull request",
+          objectName: `${CI_NAME}2`,
+          runContext: pullRequest,
+        },
+      ]
+    ) {
+      it(`keeps the file main named when ${name} names another`, () => {
+        const folding = fold();
+        folding.add([
+          stored(objectName, runContext(), [record({ file: MOVED })]),
+        ]);
+        const folded = folding.finish();
+        expect(folded.aggregate.files[KEY]).toBe(UNIT);
+        expect(folded.surfaces.get(KEY)?.unit).toBe(UNIT);
+        // The record is still evidence about the test.
+        expect(folded.states.get(KEY)?.runsByDay["2026-08-20"]).toBe(1);
+      });
+
+      it(`adds no identity that only ${name} recorded`, () => {
+        const folding = fold();
+        folding.add([
+          stored(objectName, runContext(), [
+            record({ test: ADDED, file: UNIT }),
+          ]),
+        ]);
+        const folded = folding.finish();
+        const added = testIdentityKey(ADDED);
+        expect(folded.states.has(added)).toBe(false);
+        expect(folded.surfaces.has(added)).toBe(false);
+        expect(folded.aggregate.files[added]).toBeUndefined();
+      });
+    }
+
+    it("takes the file main names once a move lands", () => {
+      const folding = fold();
+      folding.add([stored(CI_NAME, context(), [record({ file: MOVED })])]);
+      const folded = folding.finish();
+      expect(folded.aggregate.files[KEY]).toBe(MOVED);
+      expect(folded.surfaces.get(KEY)?.unit).toBe(MOVED);
+    });
+
+    /**
+     * A pull request's run of the added test, main's first record of it,
+     * and a pull request's run after that, an hour apart and in time
+     * order, each in an object of its own.
+     */
+    function landing() {
+      const at = (hour: number) => `2026-08-20T0${hour}:00:00.000Z`;
+      return [
+        stored(
+          `${CI_NAME}1`,
+          context({ branch: "feature", startedAt: at(0) }),
+          [record({ test: ADDED, durationMs: 90_000 })],
+        ),
+        stored(`${CI_NAME}2`, context({ startedAt: at(1) }), [
+          record({ test: ADDED, file: UNIT, durationMs: 40 }),
+        ]),
+        stored(
+          `${CI_NAME}3`,
+          context({ branch: "feature", startedAt: at(2) }),
+          [record({ test: ADDED, outcome: "fail" })],
+        ),
+      ];
+    }
+
+    it("folds what else said about an added test once main recorded it", () => {
+      const folding = fold(emptyAggregate("2026-08-20"));
+      folding.add(landing());
+      const state = folding.finish().states.get(testIdentityKey(ADDED));
+      // The first pull request's run came before main's record, and is
+      // not counted; the second came after it, and is.
+      expect(state?.runsByDay).toEqual({ "2026-08-20": 2 });
+      expect(state?.failuresByDay).toEqual({ "2026-08-20": 1 });
+    });
+
+    it("decides the same way however the records are batched", async () => {
+      const whole = fold(emptyAggregate("2026-08-20"));
+      whole.add(landing());
+      const expected = whole.finish().states.get(testIdentityKey(ADDED));
+
+      const apart = fold(emptyAggregate("2026-08-20"));
+      for (const object of landing()) apart.add([object]);
+      expect(apart.finish().states.get(testIdentityKey(ADDED)))
+        .toEqual(expected);
+
+      const aside = fold(emptyAggregate("2026-08-20"));
+      await aside.addUnordered(replaying(landing().reverse()));
+      expect(aside.finish().states.get(testIdentityKey(ADDED)))
+        .toEqual(expected);
+    });
+
+    it("costs an added test only by runs it counts", () => {
+      // The pull request's ninety seconds came before main recorded the
+      // test, earlier the same day, so they are not its cost.
+      const folding = fold(emptyAggregate("2026-08-20"));
+      folding.add([
+        stored(`${CI_NAME}1`, context({ branch: "feature" }), [
+          record({ test: ADDED, durationMs: 90_000 }),
+        ]),
+        stored(
+          `${CI_NAME}2`,
+          context({ startedAt: "2026-08-20T01:00:00.000Z" }),
+          [record({ test: ADDED, file: UNIT, durationMs: 40 })],
+        ),
+      ]);
+      const state = folding.finish().states.get(testIdentityKey(ADDED))!;
+      expect(costSeconds(state, "2026-08-20")).toBeLessThan(1);
+    });
+
+    it("costs an added test by a pull request's runs after main recorded it", async () => {
+      const objects = () => [
+        stored(`${CI_NAME}1`, context(), [
+          record({ test: ADDED, file: UNIT, durationMs: 40 }),
+        ]),
+        stored(
+          `${CI_NAME}2`,
+          context({
+            branch: "feature",
+            startedAt: "2026-08-20T01:00:00.000Z",
+          }),
+          [record({ test: ADDED, durationMs: 90_000 })],
+        ),
+      ];
+      const folding = fold(emptyAggregate("2026-08-20"));
+      folding.add(objects());
+      const state = folding.finish().states.get(testIdentityKey(ADDED))!;
+      expect(costSeconds(state, "2026-08-20")).toBeGreaterThan(80);
+      const aside = fold(emptyAggregate("2026-08-20"));
+      await aside.addUnordered(replaying(objects()));
+      expect(aside.finish().states.get(testIdentityKey(ADDED))?.costByDay)
+        .toEqual(state.costByDay);
+    });
+
+    it("keeps main's file, and adds no identity, for a batch read aside", async () => {
+      const added = testIdentityKey(ADDED);
+      const moved = fold();
+      await moved.addUnordered(replaying([
+        stored(LOCAL_NAME, workstation(), [
+          record({ file: MOVED }),
+          record({ test: ADDED, file: MOVED }),
+        ]),
+      ]));
+      const kept = moved.finish();
+      expect(kept.aggregate.files[KEY]).toBe(UNIT);
+      expect(kept.states.get(KEY)?.runsByDay["2026-08-20"]).toBe(1);
+      expect(kept.states.has(added)).toBe(false);
     });
   });
 
@@ -1946,8 +2260,9 @@ describe("a batch whose reports interleave in time", () => {
   it("folds a day's shards in the order the runs happened", () => {
     // A rollup holds a whole day, and its shards are read concurrently,
     // so the order they arrive in is not the order they ran in. The
-    // rules that decide whether a failure is a catch look backwards and
-    // forwards along that order, so it has to be the real one.
+    // rules that decide whether a failure is a new real test failure look
+    // backwards and forwards along that order, so it has to be the real
+    // one.
     const broke = run("c1", "fail", "2026-08-20T01:00:00.000Z");
     const fixed = run("c2", "pass", "2026-08-20T02:00:00.000Z");
     expect(foldedIn([broke, fixed]).mainCatches).toBe(1);
@@ -2402,5 +2717,223 @@ describe("the days a fold measures cost over", () => {
     expect(costsAfterFolding([old, "2026-08-20"])).toEqual(
       costsAfterFolding(["2026-08-20"]),
     );
+  });
+});
+
+describe("history held under a name an alias has since replaced", () => {
+  const OLD = { k: "unit", s: "memory", n: "space > writes" };
+  const NEW = { k: "unit", s: "memory", n: "space > records a write" };
+  const LATEST = { k: "unit", s: "memory", n: "space > records" };
+  const RENAMED = new AliasResolver([
+    { date: "2026-08-15", from: OLD, to: NEW },
+  ]);
+
+  /**
+   * A state with a new real test failure and a run on each of two days
+   * either side.
+   */
+  function either(): IdentityState {
+    return {
+      ...emptyState(),
+      newRealTestFailureDays: {
+        "2026-08-10": { local: 0, pr: 1, main: 0, sources: ["fix"] },
+        "2026-08-16": { local: 0, pr: 1, main: 0, sources: ["late"] },
+      },
+      prCatches: 2,
+      lastCatch: "2026-08-16",
+      sources: ["fix", "late"],
+      runsByDay: { "2026-08-10": 3, "2026-08-16": 1 },
+    };
+  }
+
+  it("moves the days before the alias's date to the new name", () => {
+    const states = new Map([[testIdentityKey(OLD), either()]]);
+    expect(resolveHistory(states, {}, RENAMED)).toBe(1);
+    const moved = states.get(testIdentityKey(NEW))!;
+    expect(moved.newRealTestFailureDays).toEqual({
+      "2026-08-10": { local: 0, pr: 1, main: 0, sources: ["fix"] },
+    });
+    expect(moved.runsByDay).toEqual({ "2026-08-10": 3 });
+    expect(moved.prCatches).toBe(1);
+    // A record of that day under the old name stays the old name's, and
+    // so does the history of that day.
+    const kept = states.get(testIdentityKey(OLD))!;
+    expect(Object.keys(kept.newRealTestFailureDays)).toEqual(["2026-08-16"]);
+    expect(kept.prCatches).toBe(1);
+  });
+
+  it("adds to the history the new name already holds", () => {
+    const states = new Map([
+      [testIdentityKey(OLD), { ...either(), newRealTestFailureDays: {} }],
+      [testIdentityKey(NEW), {
+        ...emptyState(),
+        runsByDay: { "2026-08-10": 2, "2026-08-17": 5 },
+      }],
+    ]);
+    resolveHistory(states, {}, RENAMED);
+    expect(states.get(testIdentityKey(NEW))!.runsByDay).toEqual({
+      "2026-08-10": 5,
+      "2026-08-17": 5,
+    });
+  });
+
+  it("drops the old name once it holds nothing, and gives its file on", () => {
+    const old = either();
+    old.newRealTestFailureDays = {
+      "2026-08-10": { local: 0, pr: 1, main: 0, sources: ["fix"] },
+    };
+    old.runsByDay = { "2026-08-10": 3 };
+    const states = new Map([[testIdentityKey(OLD), old]]);
+    const files = { [testIdentityKey(OLD)]: UNIT };
+    resolveHistory(states, files, RENAMED);
+    expect([...states.keys()]).toEqual([testIdentityKey(NEW)]);
+    expect(files).toEqual({ [testIdentityKey(NEW)]: UNIT });
+  });
+
+  it("moves what the fold context remembers of the days it moves", () => {
+    const context = emptyContext();
+    context.credited.set(`${testIdentityKey(OLD)} c1 fix`, "2026-08-10");
+    context.credited.set(`${testIdentityKey(OLD)} c2 late`, "2026-08-16");
+    const after = new Fold(
+      { ...emptyAggregate("2026-08-19"), context: serializeContext(context) },
+      RENAMED,
+      "2026-08-20",
+    ).finish().aggregate;
+    expect([...parseContext(after.context).credited.keys()].sort()).toEqual(
+      [
+        `${testIdentityKey(NEW)} c1 fix`,
+        `${testIdentityKey(OLD)} c2 late`,
+      ].sort(),
+    );
+  });
+
+  it("keeps the file the new name's own records named", () => {
+    const states = new Map([[testIdentityKey(OLD), either()]]);
+    const files = {
+      [testIdentityKey(OLD)]: UNIT,
+      [testIdentityKey(NEW)]: "runtime/memory/test/write.test.ts",
+    };
+    resolveHistory(states, files, RENAMED);
+    expect(files[testIdentityKey(NEW)]).toBe(
+      "runtime/memory/test/write.test.ts",
+    );
+  });
+
+  it("follows a chain of renames to the name each day ends at", () => {
+    const resolver = new AliasResolver([
+      { date: "2026-08-12", from: OLD, to: NEW },
+      { date: "2026-08-20", from: NEW, to: LATEST },
+    ]);
+    const states = new Map([[testIdentityKey(OLD), either()]]);
+    resolveHistory(states, {}, resolver);
+    // The day before the first rename went through both of them. The day
+    // after it was recorded under a name the first rename had already
+    // retired, which no alias gives on.
+    expect(
+      Object.keys(states.get(testIdentityKey(LATEST))!.newRealTestFailureDays),
+    )
+      .toEqual(["2026-08-10"]);
+    expect(
+      Object.keys(states.get(testIdentityKey(OLD))!.newRealTestFailureDays),
+    )
+      .toEqual(["2026-08-16"]);
+    expect(states.has(testIdentityKey(NEW))).toBe(false);
+  });
+
+  it("moves nothing for a name no alias replaces", () => {
+    const states = new Map([[testIdentityKey(NEW), either()]]);
+    expect(resolveHistory(states, {}, RENAMED)).toBe(0);
+    expect([...states.keys()]).toEqual([testIdentityKey(NEW)]);
+  });
+
+  it("is what a fold does with the aggregate it starts from", () => {
+    // The history a run carries forward is resolved the way every record
+    // it reads is, so a run after an alias line lands puts the new real
+    // test failures folded before it under the new name.
+    const aggregate = emptyAggregate("2026-08-20");
+    aggregate.states[testIdentityKey(OLD)] = either();
+    const fold = new Fold(aggregate, RENAMED, "2026-08-20");
+    expect(fold.resolved).toBe(1);
+    const { states } = fold.finish();
+    expect(states.get(testIdentityKey(NEW))?.prCatches).toBe(1);
+    expect(states.get(testIdentityKey(OLD))?.prCatches).toBe(1);
+  });
+});
+
+describe("the days a fold closes", () => {
+  const TODAY = "2026-08-20";
+
+  /** A continuous-integration object of one day, by its partition. */
+  const on = (day: string, run = "1") =>
+    `labs/test-records/submissions/ci/v1/${day}/run-${run}-a.ndjson`;
+
+  it("drops the objects and receipts of a read day past the lag", () => {
+    const aggregate: ReturnType<typeof emptyAggregate> = {
+      ...emptyAggregate("2026-08-19"),
+      folded: [on("2026/08/10"), on("2026/08/14"), on("2026/08/19")],
+      compacted: ["ci\t2026/08/09", "ci\t2026/08/18"],
+    };
+    const after = new Fold(aggregate, NO_ALIASES, TODAY).finish({
+      from: "2026/08/19",
+      through: "2026/08/20",
+    }).aggregate;
+    // Seven days behind the twentieth is the thirteenth. The ninth is
+    // the first day the history holds, so its receipt stays.
+    expect(after.closed).toBe("2026/08/13");
+    expect(after.folded).toEqual([on("2026/08/14"), on("2026/08/19")]);
+    expect(after.compacted).toEqual(["ci\t2026/08/09", "ci\t2026/08/18"]);
+  });
+
+  it("knows an object of a closed day without holding its name", () => {
+    const fold = new Fold(
+      { ...emptyAggregate("2026-08-19"), closed: "2026/08/13" },
+      NO_ALIASES,
+      TODAY,
+    );
+    // A run over a wide window lists it again, and must not fold it again.
+    expect(fold.knows(on("2026/08/13"))).toBe(true);
+    expect(fold.knows(LOCAL_NAME.replace("2026/08/20", "2026/08/12")))
+      .toBe(true);
+    expect(fold.settled(CI_SOURCE, "2026/08/13")).toBe(true);
+    expect(fold.knows(on("2026/08/14"))).toBe(false);
+    expect(fold.settled(CI_SOURCE, "2026/08/14")).toBe(false);
+  });
+
+  it("closes no day while a day before it is unread", () => {
+    // A window that starts after the last day the aggregate read leaves
+    // the days between unread, so nothing after them closes.
+    const aggregate: ReturnType<typeof emptyAggregate> = {
+      ...emptyAggregate("2026-08-05"),
+      closed: "2026/07/29",
+      folded: [on("2026/08/05")],
+    };
+    const after = new Fold(aggregate, NO_ALIASES, TODAY).finish({
+      from: "2026/08/19",
+      through: "2026/08/20",
+    }).aggregate;
+    expect(after.closed).toBe("2026/07/29");
+    expect(after.folded).toEqual([on("2026/08/05")]);
+  });
+
+  it("closes nothing where it was not told what was read", () => {
+    const after = new Fold(emptyAggregate("2026-08-19"), NO_ALIASES, TODAY)
+      .finish().aggregate;
+    expect(after.closed).toBeUndefined();
+  });
+});
+
+describe("lastReadDay()", () => {
+  it("is the day an aggregate was written on", () => {
+    expect(lastReadDay(emptyAggregate("2026-08-19"))).toBe("2026/08/19");
+  });
+});
+
+describe("coldStart()", () => {
+  it("holds nothing and closes the days before the window", () => {
+    const start = coldStart("2026/08/10", "2026-08-20");
+    expect(start.states).toEqual({});
+    expect(start.folded).toEqual([]);
+    expect(start.closed).toBe("2026/08/09");
+    expect(start.day).toBe("2026-08-20");
   });
 });

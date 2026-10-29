@@ -1,0 +1,2 @@
+{"date":"2026-10-22","from":{"k":"unit","s":"memory","n":"view interests > re-evaluates the watch set for a plan that drops a delivered root"},"to":{"k":"unit","s":"memory","n":"view interests > rebuilds only the support graphs for a plan that drops a delivered root"}}
+{"date":"2026-10-22","from":{"k":"unit","s":"memory","n":"view interests > re-evaluates the watch set for a plan that keeps a root under another selector"},"to":{"k":"unit","s":"memory","n":"view interests > rebuilds only the support graphs for a plan that keeps a root under another selector"}}

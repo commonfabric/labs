@@ -10,7 +10,7 @@ half of Phase 3. Assumes [README.md](README.md) §3.2 and
   speculation engine — it REDIRECTS the existing run's writes into an
   overlay instead of a storage transaction.
 - Overlay substrate: the storage stack's transaction/journal layering in
-  `packages/runner/src/storage/` (`extended-storage-transaction.ts`,
+  `runtime/runner/src/storage/` (`extended-storage-transaction.ts`,
   `cache.ts`). The v1 branch validated "drop authority, keep the run"
   against this stack; the concept ports, the code does not.
 
@@ -148,8 +148,9 @@ currency. The existing overlay and retirement rules below still apply.
   whose schema promised a value would crash on the `undefined` (the
   OW51 `splitDefinitions` TypeError, observed on BOTH the client and
   the serving runtime because the read path is shared code). Instead
-  the lazy read REFUSES (when the reader's schema PROMISES a value —
-  see the carve-outs below): it registers the dead-end doc's read (the
+  the lazy read REFUSES (when the reader's schema declares NO default,
+  whether or not its type admits `undefined` — see the carve-outs
+  below): it registers the dead-end doc's read (the
   dependency that re-triggers the run when the doc arrives) and the run
   is disposed as a non-event — **output `undefined`, no action failure,
   re-triggered when any of its reads so far change, exactly like a
@@ -196,6 +197,19 @@ currency. The existing overlay and retirement rules below still apply.
      takes main's interim-undefined-then-heal. No shipped pattern
      routes link chains through user-scoped docs (the #6179 review's
      population audit).
+     A serving runtime's commit reads one such row differently (a
+     corollary that narrows the ruling above and awaits the owner's
+     ruling): an absent user- or session-scoped instance of a document
+     that another derivation registered in the same serving runtime
+     declares as a write — its output, or a store a builtin keeps
+     (scheduler-v2 README §4.3) — is one the serving loop owes and has
+     not produced yet, so it is transit for that runtime, not knowledge.
+     The read still reads `undefined`, but the served run that read it
+     commits nothing (serving-loop.md §3d) and runs again once the
+     instance is produced. A writer that never produces a principal's
+     instance therefore holds back its served readers' commits for that
+     instance indefinitely; the client's own echo of it persists (§4's
+     arrival gate).
   2. **A lift that THROWS the error takes the same disposition.** The
      refusal propagates out of the lift body (the body did not catch
      it) and produces an undefined result through the ordinary result
@@ -239,7 +253,7 @@ currency. The existing overlay and retirement rules below still apply.
   crossed no hop, one starting at a handle minted from a stored link,
   asks for its dead-end document itself, as a same-space hop's target
   is asked for, so the withdrawal has a load to wait on. Pinned in
-  `packages/runner/test/executor-cross-space.test.ts` (a served
+  `runtime/runner/test/executor-cross-space.test.ts` (a served
   handler resolving a foreign cell through a document the serving
   runtime has not loaded keeps the document the chain reaches).
 
@@ -247,7 +261,7 @@ currency. The existing overlay and retirement rules below still apply.
   `viaLinkHop`), `schema.ts`'s lazy branch, `schema-view.ts`
   (`UnresolvedInputError`), `cell.ts`'s `resolveAsCell()` with
   `scheduler/handler-load-wait.ts` for the handler withdrawal; pinned in
-  `packages/runner/test/unresolved-input-lift.test.ts` (the hop-target
+  `runtime/runner/test/unresolved-input-lift.test.ts` (the hop-target
   dead-end disposes and re-triggers on arrival; the stated-null
   control still flows; its case has no previous result, so it does not
   pin that one is overwritten), with the serving-runtime match
@@ -542,7 +556,7 @@ scheduler treats the flip of an action's own output like its own
 commit and does not re-run the writer for it (a divergent
 authoritative value would otherwise re-derive, re-speculate, retire,
 and flip forever); downstream readers are unaffected. Impl:
-`packages/runner/src/speculation/overlay-destination.ts` (`#sweep`'s
+`runtime/runner/src/speculation/overlay-destination.ts` (`#sweep`'s
 gate, `#supersedeOlderEntries`), the replica's superseded flip
 (`finalizeSupersededSpeculation` — `IIntegrateNotification.source`),
 and the scheduler's own-source skip (`scheduler/invalidation.ts`);
@@ -682,6 +696,12 @@ carries the durable-read mark below; `speculation-overlay.test.ts`
 pins the export, the scoping, the verify-durable consistency, the
 content-addressed exemption, and the durable-read mark on both a
 direct transaction and a piece start.
+
+The echo a blind write lands over is the speculation of an event whose
+authoritative consequence commits later, and that consequence does not
+land over the write in turn: serving-loop.md §3d supersedes every
+consequence write that a later write of the event's firing session
+overwrote.
 
 ### The durable-read mark, and the piece start that needs it
 

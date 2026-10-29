@@ -45,11 +45,11 @@ deno task cf test <pattern>.test.tsx
 ```
 
 Imports resolve from the nearest ancestor directory whose `deno.json(c)`
-declares a package name (`packages/patterns` for this repository's patterns),
+declares a package name (`patterns` for this repository's patterns),
 so imports that span the package — shared helpers, `cfc/` modules — work
 without a flag. A failure naming an import that "escapes the program root"
 means the file imports from above that root; pass `--root` naming a common
-ancestor. CI runs these tests with `--root packages/patterns`.
+ancestor. CI runs these tests with `--root patterns`.
 
 If `cf test` fails, treat that as repair work. Preserve the failing command and
 relevant output, isolate the smallest failing action/assertion when useful, fix
@@ -253,8 +253,14 @@ return {
 In multi-user tests the flags are per participant: one participant opting out
 does not mask another participant's errors. (The same applies to the
 pre-existing `allowRuntimeErrors` flag for scheduler-level errors; use
-`expectRuntimeErrors: true | <count>` when the errors are the point — it
-REQUIRES them, failing the run if none fire.)
+`expectRuntimeErrors: true | <count> | ["<message>", …]` when the errors are
+the point — it REQUIRES them: `true` fails the run if none fire, a `<count>` if
+a different number fire, and a list unless the fired errors pair off one for
+each listed message, each error containing its message, in any order. Leaving
+the flag out, or setting it to `false`, requires nothing; any other value fails
+the run, `0` and `[]` among them, since a test that raises no errors needs no
+flag. In a multi-user test each participant's expectation counts and tolerates
+its own errors only.)
 
 ## Multi-User Tests
 
@@ -338,10 +344,10 @@ Key points:
   empty rack before joining); assert pre-join isolation via normalized
   primitives (`myName === ""`) instead.
 - The example to copy:
-  `packages/patterns/cfc-group-chat-demo/multi-user.test.tsx`; for the
+  `patterns/examples/cfc-group-chat-demo/multi-user.test.tsx`; for the
   output-snapshot and inline-read idioms see
-  `packages/patterns/scrabble/multi-user.test.tsx` and
-  `packages/patterns/lunch-poll/multi-user.test.tsx`. The scope model
+  `patterns/showcase/scrabble/multi-user.test.tsx` and
+  `patterns/apps/lunch-poll/multi-user.test.tsx`. The scope model
   background: `docs/common/patterns/multi-user-patterns.md` and
   `docs/development/debugging/gotchas/scoped-cell-pitfalls.md`.
 

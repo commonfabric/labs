@@ -2,11 +2,11 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
-  byDayThenName,
-  chunksByRun,
+  CHUNK,
   dayPartitions,
   inputChoice,
   livePrevious,
+  liveStore,
   namingSurfaces,
   parseArgs,
   partitionOf,
@@ -32,9 +32,14 @@ import {
   parseAggregate,
   reportFromText,
 } from "./test-selection/build.ts";
-import { CATCH_RULE, emptyState } from "./test-selection/score.ts";
-import { CATCH_WEIGHT_MAIN } from "./test-selection/policy.ts";
+import {
+  emptyState,
+  type IdentityState,
+  NEW_REAL_TEST_FAILURE_RULE,
+} from "./test-selection/score.ts";
+import { NEW_REAL_TEST_FAILURE_WEIGHT_MAIN } from "./test-selection/policy.ts";
 import { stateObjectName, statePrefix } from "./test-selection/store.ts";
+import { coverageGateSuite } from "./test-topology/coverage-gates.ts";
 import { MANIFEST_SCHEMA_VERSION } from "./test-selection/manifest.ts";
 import {
   batchMeasurementName,
@@ -55,12 +60,12 @@ const TOPOLOGY: Suite[] = [{
   id: "workspace-unit",
   recordSurfaces: [{ kind: "unit", scope: "memory" }],
   needs: ["deno"],
-  units: ["packages/memory/test/space.test.ts"],
+  units: ["runtime/memory/test/space.test.ts"],
   unavailable: [],
   whole: [],
   locate: (record) =>
     record.test.k === "unit" && record.test.s === "memory"
-      ? { level: "unit", unit: "packages/memory/test/space.test.ts" }
+      ? { level: "unit", unit: "runtime/memory/test/space.test.ts" }
       : undefined,
   command: () => Promise.resolve([]),
 }];
@@ -75,7 +80,7 @@ const suites = () => Promise.resolve(TOPOLOGY);
 const noPrevious = () => Promise.resolve(undefined);
 
 /** The one unit that topology holds. */
-const UNIT = "packages/memory/test/space.test.ts";
+const UNIT = "runtime/memory/test/space.test.ts";
 
 /**
  * A topology whose one suite places a record by the file it carries, the
@@ -133,6 +138,13 @@ const lostUnit = () =>
     locate: () => undefined,
   }]);
 
+/** The newest manifest a run created. */
+async function newestPublished(created: Map<string, Uint8Array>) {
+  const newest = [...created.keys()].filter((one) => one.includes("/manifest-"))
+    .sort().at(-1)!;
+  return parseManifest(await gunzipToText(created.get(newest)!))!;
+}
+
 /** The identities the newest manifest a run created holds. */
 async function newestManifest(
   created: Map<string, Uint8Array>,
@@ -186,6 +198,15 @@ describe("test-selection-publish", () => {
       expect(parseArgs(["--days"])).toBeUndefined();
       expect(parseArgs(["--concurrency", "x"])).toBeUndefined();
       expect(parseArgs(["--out"])).toBeUndefined();
+      expect(parseArgs(["--create"])).toBeUndefined();
+    });
+
+    it("takes a directory to create from, and nothing beside it", () => {
+      expect(parseArgs(["--create", "/tmp/out"])?.create).toBe("/tmp/out");
+      expect(parseArgs(["--create", "/tmp/out", "--bootstrap"]))
+        .toBeUndefined();
+      expect(parseArgs(["--dry-run", "--create", "/tmp/out"]))
+        .toBeUndefined();
     });
   });
 
@@ -290,64 +311,21 @@ describe("test-selection-publish", () => {
     });
   });
 
-  describe("byDayThenName()", () => {
-    it("interleaves the two areas by the day they recorded", () => {
-      // Sorted by name alone, every local object lands after every
-      // continuous-integration one, and the fold would judge a
-      // workstation's failure against a state from days later.
-      const ordered = [
-        LOCAL("2026/08/20", "ianh"),
-        CI("2026/08/18", "1"),
-        LOCAL("2026/08/19", "ianh"),
-        CI("2026/08/20", "2"),
-      ].sort(byDayThenName);
-      expect(ordered.map(partitionOf)).toEqual([
-        "2026/08/18",
-        "2026/08/19",
-        "2026/08/20",
-        "2026/08/20",
-      ]);
-    });
+  describe("liveStore()", () => {
+    it("asks Cloud Storage to decode an aggregate before Deno reads it", async () => {
+      const requests: Request[] = [];
+      const fetchImpl = (
+        input: string | URL | Request,
+        init?: RequestInit,
+      ): Promise<Response> => {
+        requests.push(new Request(input, init));
+        return Promise.resolve(new Response('{"complete":true}'));
+      };
+      const store = liveStore("bucket", fetchImpl);
 
-    it("falls back to the name inside one day", () => {
-      const ordered = [CI("2026/08/20", "2"), CI("2026/08/20", "1")]
-        .sort(byDayThenName);
-      expect(ordered[0]).toBe(CI("2026/08/20", "1"));
-    });
-  });
-
-  describe("chunksByRun()", () => {
-    const lane = (run: string, n: number) =>
-      `labs/test-records/submissions/ci/v1/2026/08/20/run-${run}-tests-${n}-a1.ndjson`;
-
-    it("holds a workflow run's objects in one chunk", () => {
-      // The second chunk would otherwise begin part way through run 2,
-      // and the fold would judge what that run broke in two halves.
-      const names = [lane("1", 1), lane("2", 1), lane("2", 2), lane("3", 1)];
-      expect([...chunksByRun(names, 2)]).toEqual([
-        [lane("1", 1), lane("2", 1), lane("2", 2)],
-        [lane("3", 1)],
-      ]);
-    });
-
-    it("cuts at the size where a run ends there", () => {
-      const names = [lane("1", 1), lane("1", 2), lane("2", 1), lane("3", 1)];
-      expect([...chunksByRun(names, 2)]).toEqual([
-        [lane("1", 1), lane("1", 2)],
-        [lane("2", 1), lane("3", 1)],
-      ]);
-    });
-
-    it("reads each workstation object as a run of its own", () => {
-      const names = [
-        LOCAL("2026/08/20", "a"),
-        LOCAL("2026/08/20", "b"),
-        LOCAL("2026/08/20", "c"),
-      ];
-      expect([...chunksByRun(names, 2)]).toEqual([
-        names.slice(0, 2),
-        names.slice(2),
-      ]);
+      expect(await store.readText("state.json.gz")).toBe('{"complete":true}');
+      expect(requests.length).toBe(1);
+      expect(requests[0]!.headers.get("accept-encoding")).toBe("identity");
     });
   });
 });
@@ -398,10 +376,30 @@ function object(
   file?: string,
   name = "space > writes",
 ): string {
-  const context: RunContext = {
+  const record: TestRecord = {
+    line: "record",
+    test: { k: "unit", s: "memory", n: name },
+    outcome,
+    durationMs: 40,
+    ...(file === undefined ? {} : { file }),
+  };
+  return buildObjectBody(
+    ciContext(`report-${commit}-${outcome}`, commit, at, branch),
+    [record],
+  );
+}
+
+/** The context of one CI report, at one commit. */
+function ciContext(
+  reportId: string,
+  commit: string,
+  at: string,
+  branch = "main",
+): RunContext {
+  return {
     schema: 1,
     line: "context",
-    reportId: `report-${commit}-${outcome}`,
+    reportId,
     repo: "commonfabric/labs",
     commit,
     dirty: false,
@@ -419,14 +417,6 @@ function object(
     denoVersion: "2.9.4",
     startedAt: at,
   };
-  const record: TestRecord = {
-    line: "record",
-    test: { k: "unit", s: "memory", n: name },
-    outcome,
-    durationMs: 40,
-    ...(file === undefined ? {} : { file }),
-  };
-  return buildObjectBody(context, [record]);
 }
 
 /** One object holding one run of one test on somebody's workstation. */
@@ -536,7 +526,7 @@ function laneObject(
         hooksMeasurementName(
           "workspace-unit",
           measured,
-          "packages/memory/test/space.test.ts",
+          "runtime/memory/test/space.test.ts",
         ),
         hooks * 1000,
       ),
@@ -601,13 +591,52 @@ describe("publish()", () => {
     // dropped for naming a suite that does not exist.
     expect(manifest!.entries[0]!.suite).toBe("workspace-unit");
     expect(manifest!.entries[0]!.unit).toBe(
-      "packages/memory/test/space.test.ts",
+      "runtime/memory/test/space.test.ts",
     );
-    // The failure at c1 that c2 went on to fix is a catch on main, and
-    // a catch there is weighted by where it happened. The 1.5 is
-    // `CATCH_WEIGHT_MAIN` written out: comparing against the dial would
-    // hold just as well for a dial of zero and a catch never counted.
+    // The failure at c1 that c2 went on to fix is a new real test failure
+    // on main, and one there is weighted by where it happened. The 1.5 is
+    // `NEW_REAL_TEST_FAILURE_WEIGHT_MAIN` written out. Comparing against
+    // the dial would hold just as well for a dial of zero and a new real
+    // test failure never counted.
     expect(manifest!.entries[0]!.inputs.catches).toBe(1.5);
+  });
+
+  it("scores a coverage gate's record and packs it in no lane", async () => {
+    // A gate is a verdict the job joining the lanes reaches, so the
+    // publisher scores it like a test and leaves it out of the lanes it
+    // packs for reference.
+
+    const measured: Suite = {
+      ...TOPOLOGY[0]!,
+      measured: [{
+        member: "runtime/memory",
+        reachedBy: ["runtime/memory/"],
+        units: [UNIT],
+      }],
+    };
+    const gate = { k: "gate", s: "memory", n: "coverage-gate workspace-unit" };
+    const objects = seed();
+    objects[CI(DAY, "3")] = buildObjectBody(
+      ciContext("report-c2-gate", "c2", "2026-08-20T02:00:00.000Z"),
+      [{ line: "record", test: gate, outcome: "pass", durationMs: 3 }],
+    );
+    const { store, created } = fakeStore(objects);
+    await publish(
+      ["--bootstrap", "--days", "1"],
+      store,
+      NOW,
+      () => Promise.resolve([measured, coverageGateSuite([measured])]),
+      noPrevious,
+    );
+    const manifest = await publishedManifest(created);
+    expect(
+      manifest.entries.filter((entry) => entry.suite === "coverage-gate")
+        .map((entry) => [entry.test, entry.unit]),
+    ).toEqual([[gate, "workspace-unit/runtime/memory"]]);
+    expect(manifest.lanes.flatMap((lane) => lane.batches.map((b) => b.suite)))
+      .not.toContain("coverage-gate");
+    expect(manifest.lanes.flatMap((lane) => lane.batches.map((b) => b.suite)))
+      .toContain("workspace-unit");
   });
 
   it("publishes what a lane costs beyond the tests it runs", async () => {
@@ -648,7 +677,7 @@ describe("publish()", () => {
     const manifest = await publishedManifest(created);
     expect(
       manifest.calibration.suites["workspace-unit"]?.unitHooks?.[
-        "packages/memory/test/space.test.ts"
+        "runtime/memory/test/space.test.ts"
       ],
     ).toBeCloseTo(7.5, 0);
     const state = [...created.keys()].find((name) => name.includes("/state/"));
@@ -657,7 +686,7 @@ describe("publish()", () => {
       hooksMeasurementName(
         "workspace-unit",
         false,
-        "packages/memory/test/space.test.ts",
+        "runtime/memory/test/space.test.ts",
       ),
     ]);
   });
@@ -1075,7 +1104,7 @@ describe("publish()", () => {
           ...TOPOLOGY[0]!,
           variant: "server-execution",
           unavailable: [{
-            unit: "packages/memory/test/space.test.ts",
+            unit: "runtime/memory/test/space.test.ts",
             leafName: "space > writes a fact",
             phase: "phase-2",
             reason: "the ON arm cannot run it yet",
@@ -1092,7 +1121,7 @@ describe("publish()", () => {
     expect(manifest!.unavailable).toEqual([{
       suite: "workspace-unit",
       variant: "server-execution",
-      unit: "packages/memory/test/space.test.ts",
+      unit: "runtime/memory/test/space.test.ts",
       leafName: "space > writes a fact",
       phase: "phase-2",
       reason: "the ON arm cannot run it yet",
@@ -1213,6 +1242,90 @@ describe("publish()", () => {
     );
     expect(created.size).toBe(0);
     expect(code).toBe(0);
+  });
+
+  describe("--create", () => {
+    /** A directory a dry run of a bootstrap wrote, and what it wrote. */
+    async function staged() {
+      const dir = await Deno.makeTempDir();
+      const { store, created } = fakeStore(seed());
+      const code = await publish(
+        ["--bootstrap", "--days", "1", "--dry-run", "--out", dir],
+        store,
+        NOW,
+        suites,
+        noPrevious,
+      );
+      expect(code).toBe(0);
+      expect(created.size).toBe(0);
+      return {
+        dir,
+        manifest: await Deno.readTextFile(join(dir, "manifest.json")),
+        state: await Deno.readTextFile(join(dir, "state.json")),
+      };
+    }
+
+    it("creates the manifest and the state a dry run wrote", async () => {
+      const { dir, manifest, state } = await staged();
+      const { store, created } = fakeStore({});
+      try {
+        expect(await publish(["--create", dir], store)).toBe(0);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+      const names = [...created.keys()];
+      expect(names.length).toBe(2);
+      // The two share the identifier that pairs a manifest with the
+      // aggregate it was built from, and the state is filed under the day
+      // the manifest was generated.
+      const id = names[0]!.match(/-([0-9A-Z]{26})\.json\.gz$/)?.[1];
+      expect(id).toBeDefined();
+      expect(names[0]).toContain(
+        `/manifest-${NOW.toISOString()}-${id}.json.gz`,
+      );
+      expect(names[1]).toBe(stateObjectName("2026-08-20", id!));
+      // Compared as written rather than as parsed, so a field the parse
+      // would drop is one this notices.
+      expect(JSON.parse(await gunzipToText(created.get(names[0]!)!)))
+        .toEqual(JSON.parse(manifest));
+      expect(await gunzipToText(created.get(names[1]!)!)).toBe(state);
+    });
+
+    it("creates nothing from a directory it did not write", async () => {
+      const { dir } = await staged();
+      const { store, created } = fakeStore({});
+      try {
+        await Deno.writeTextFile(join(dir, "manifest.json"), "{}");
+        expect(await publish(["--create", dir], store)).toBe(1);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+      expect(created.size).toBe(0);
+    });
+
+    it("creates nothing from an aggregate it cannot read", async () => {
+      const { dir } = await staged();
+      const { store, created } = fakeStore({});
+      try {
+        await Deno.writeTextFile(join(dir, "state.json"), "[]");
+        expect(await publish(["--create", dir], store)).toBe(1);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+      expect(created.size).toBe(0);
+    });
+
+    it("creates nothing without a credential", async () => {
+      const { dir } = await staged();
+      const { store, created } = fakeStore({});
+      const anonymous: StoreAccess = { ...store, token: () => undefined };
+      try {
+        expect(await publish(["--create", dir], anonymous)).toBe(0);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+      expect(created.size).toBe(0);
+    });
   });
 
   it("reports a malformed command line rather than publishing", async () => {
@@ -1340,8 +1453,8 @@ describe("publish() over a day that has been compacted", () => {
   it("takes a rollup on an incremental run over a day it has not seen", async () => {
     // One rule, so a run catching up after an outage or a widened window
     // reaches a day the same way a bootstrap does. A flag is permission
-    // to start from an empty aggregate and a wider window, not a second
-    // way to choose inputs.
+    // to start from the new real test failures alone and a wider window,
+    // not a second way to choose inputs.
     const older = "2026/08/19";
     const olderRollup =
       `labs/test-records/aggregated/v1/${older}/shard-0.ndjson`;
@@ -1350,13 +1463,14 @@ describe("publish() over a day that has been compacted", () => {
       [CI(older, "9")]: object("c9", "pass", "2026-08-19T01:00:00.000Z"),
       [olderRollup]: object("c9", "pass", "2026-08-19T01:00:00.000Z"),
     }, { [older]: [olderRollup] });
-    // The first run's window holds only the newer day, so the older one
-    // is a day the aggregate has never seen.
+    // The first run's window holds only the day before the older one, so
+    // the older one is a day the aggregate has never seen, and the next
+    // run's window starts on it.
     expect(
       await publish(
         ["--bootstrap", "--days", "1"],
         store,
-        NOW,
+        new Date("2026-08-18T12:00:00.000Z"),
         suites,
         noPrevious,
       ),
@@ -1748,7 +1862,7 @@ describe("publish() over an aggregate holding tests the tree has lost", () => {
     return JSON.stringify({
       schema: MANIFEST_SCHEMA_VERSION,
       day: "2026-08-19",
-      catchRule: CATCH_RULE,
+      catchRule: NEW_REAL_TEST_FAILURE_RULE,
       folded: [],
       compacted: [],
       states: {
@@ -1760,8 +1874,8 @@ describe("publish() over an aggregate holding tests the tree has lost", () => {
         [SILENT]: { ...emptyState(), runsByDay: { "2026-08-20": 3 } },
       },
       files: {
-        [DELETED]: "packages/memory/test/erase.test.ts",
-        [SILENT]: "packages/memory/test/unreported.test.ts",
+        [DELETED]: "runtime/memory/test/erase.test.ts",
+        [SILENT]: "runtime/memory/test/unreported.test.ts",
       },
     });
   }
@@ -1859,20 +1973,30 @@ describe("publish() over a state written further ahead than it reads", () => {
   const KEPT = JSON.stringify(["unit", "memory", "space > writes"]);
   const AHEAD = MANIFEST_SCHEMA_VERSION + 1;
 
-  /** A state carrying one identity's catches, in the shape given. */
+  /**
+   * A state carrying one identity's new real test failures, in the shape
+   * given.
+   */
   function carrying(schema: number, day: string): string {
     return JSON.stringify({
       schema,
       day,
-      catchRule: CATCH_RULE,
+      catchRule: NEW_REAL_TEST_FAILURE_RULE,
       folded: [],
       compacted: [],
-      states: { [KEPT]: { ...emptyState(), mainCatches: 2 } },
-      files: { [KEPT]: "packages/memory/test/space.test.ts" },
+      states: {
+        [KEPT]: {
+          ...emptyState(),
+          newRealTestFailureDays: {
+            [day]: { local: 0, pr: 0, main: 2, sources: ["main"] },
+          },
+        },
+      },
+      files: { [KEPT]: "runtime/memory/test/space.test.ts" },
     });
   }
 
-  it("folds onto the newest state behind it and keeps its catches", async () => {
+  it("folds onto the newest state behind it and keeps its new real test failures", async () => {
     const behind = stateObjectName("2026-08-20", "0");
     const over = stateObjectName("2026-08-20", "1");
     const { store, created } = fakeStore({
@@ -1890,11 +2014,11 @@ describe("publish() over a state written further ahead than it reads", () => {
     const entry = (await publishedManifest(created)).entries.find((one) =>
       testIdentityKey(one.test) === KEPT
     );
-    // Two main catches stood in the state that was folded onto, and the
-    // window holds one more. A run that had lost that state would carry
-    // the window's alone, and one that folded the window twice would
+    // Two new real test failures on main stood in the state that was folded
+    // onto, and the window holds one more. A run that had lost that state would
+    // carry the window's alone, and one that folded the window twice would
     // carry four.
-    expect(entry?.inputs.catches).toBe(CATCH_WEIGHT_MAIN * 3);
+    expect(entry?.inputs.catches).toBe(NEW_REAL_TEST_FAILURE_WEIGHT_MAIN * 3);
   });
 
   it("names both shapes and what to deploy when nothing behind it reads", async () => {
@@ -1913,9 +2037,12 @@ describe("publish() over a state written further ahead than it reads", () => {
     expect(said).toContain(
       `deploy a publisher that reads shape ${AHEAD} or above`,
     );
-    // The remedy that would lose the history the state holds is named as
-    // the one not to reach for.
-    expect(said).toContain("do not bootstrap");
+    // A bootstrap stops at a state written further ahead too, rather than
+    // starting from nothing past it, and the refusal says so.
+    expect(said).toContain(
+      "a bootstrap reads every stored state, of any day, and refuses where " +
+        "one reads or one is written in a shape from further ahead",
+    );
     expect(created.size).toBe(0);
   });
 
@@ -1941,7 +2068,7 @@ describe("publish() over a state written further ahead than it reads", () => {
     const entry = (await publishedManifest(created)).entries.find((one) =>
       testIdentityKey(one.test) === KEPT
     );
-    expect(entry?.inputs.catches).toBe(CATCH_WEIGHT_MAIN * 3);
+    expect(entry?.inputs.catches).toBe(NEW_REAL_TEST_FAILURE_WEIGHT_MAIN * 3);
   });
 
   it("refuses a state the store names and will not give", async () => {
@@ -2025,11 +2152,345 @@ describe("publish() over a state written further ahead than it reads", () => {
     );
     // The state named for a day the wider window reaches carried two of
     // these, and the window carries the third.
-    expect(entry?.inputs.catches).toBe(CATCH_WEIGHT_MAIN * 3);
+    expect(entry?.inputs.catches).toBe(NEW_REAL_TEST_FAILURE_WEIGHT_MAIN * 3);
   });
 });
 
-describe("publish() over an aggregate other catch rules credited", () => {
+describe("publish() --bootstrap over a store that holds a state", () => {
+  // A bootstrap starts from nothing, and a test's new real test failures
+  // accumulate over unbounded history that no window of records rebuilds. These
+  // turn on where it may do that.
+
+  const NOW = new Date("2026-08-20T12:00:00.000Z");
+  const KEPT = JSON.stringify(["unit", "memory", "space > writes"]);
+
+  /** A state whose one identity has had three new real test failures. */
+  function holding(schema = MANIFEST_SCHEMA_VERSION, day = "2026-08-20") {
+    return JSON.stringify({
+      schema,
+      day,
+      catchRule: NEW_REAL_TEST_FAILURE_RULE,
+      folded: [],
+      compacted: [],
+      states: {
+        [KEPT]: {
+          ...emptyState(),
+          mainCatches: 3,
+          lastCatch: day,
+          newRealTestFailureDays: {
+            [day]: { local: 0, pr: 0, main: 3, sources: ["main"] },
+          },
+        },
+      },
+      files: { [KEPT]: UNIT },
+    });
+  }
+
+  it("refuses over a state it can read, and says how to fold onto it", async () => {
+    const { store, created } = fakeStore({
+      ...seed(),
+      [stateObjectName("2026-08-20", "0")]: holding(),
+    });
+    const said = await saying(
+      () =>
+        publish(["--bootstrap", "--days", "1"], store, NOW, suites, noPrevious),
+      "warn",
+    );
+    expect(said).toContain(
+      `${stateObjectName("2026-08-20", "0")} is an aggregate this ` +
+        "publisher can read",
+    );
+    expect(said).toContain("Run without --bootstrap to fold onto it.");
+    expect(created.size).toBe(0);
+  });
+
+  it("names no window for the newest state, which every run reads", async () => {
+    const { store, created } = fakeStore({
+      ...seed(),
+      [stateObjectName("2026-08-05", "0")]: holding(
+        MANIFEST_SCHEMA_VERSION,
+        "2026-08-05",
+      ),
+    });
+    const said = await saying(
+      () =>
+        publish(["--bootstrap", "--days", "1"], store, NOW, suites, noPrevious),
+      "warn",
+    );
+    expect(said).toContain("Run without --bootstrap to fold onto it.");
+    expect(said).not.toContain("--days 16");
+    expect(created.size).toBe(0);
+  });
+
+  it("refuses over a readable state of any day, past every one it cannot read", async () => {
+    // The incremental walk stops at the first day it reads; a bootstrap
+    // looks at every state, and names the window that reaches this one.
+    const { store, created } = fakeStore({
+      ...seed(),
+      [stateObjectName("2026-08-05", "0")]: holding(
+        MANIFEST_SCHEMA_VERSION,
+        "2026-08-05",
+      ),
+      [stateObjectName("2026-08-20", "1")]: "{not json at all",
+    });
+    const said = await saying(
+      () =>
+        publish(["--bootstrap", "--days", "1"], store, NOW, suites, noPrevious),
+      "warn",
+    );
+    expect(said).toContain("with --days 16 to reach it");
+    expect(created.size).toBe(0);
+    // And the window it names is one an incremental run folds onto it
+    // with, keeping the three new real test failures it holds.
+    expect(await publish(["--days", "16"], store, NOW, suites, noPrevious))
+      .toBe(0);
+    const entry = (await publishedManifest(created)).entries.find((one) =>
+      testIdentityKey(one.test) === KEPT
+    );
+    expect(entry?.inputs.catches).toBe(NEW_REAL_TEST_FAILURE_WEIGHT_MAIN * 4);
+  });
+
+  it("starts from nothing where no state any publisher can read is stored", async () => {
+    const { store, created } = fakeStore({
+      ...seed(),
+      [stateObjectName("2026-08-20", "1")]: "{not json at all",
+    });
+    const said = await saying(() =>
+      publish(["--bootstrap", "--days", "1"], store, NOW, suites, noPrevious)
+    );
+    expect(said).toContain("no stored aggregate can be read by any publisher");
+    expect((await publishedManifest(created)).entries[0]!.inputs.catches)
+      .toBe(NEW_REAL_TEST_FAILURE_WEIGHT_MAIN);
+  });
+
+  it("refuses where the only states are written further ahead", async () => {
+    // Those are history a publisher reads once it is deployed, and
+    // starting from nothing past them would throw it away.
+    const { store, created } = fakeStore({
+      ...seed(),
+      [stateObjectName("2026-08-20", "1")]: holding(
+        MANIFEST_SCHEMA_VERSION + 1,
+      ),
+    });
+    const said = await saying(
+      () =>
+        publish(["--bootstrap", "--days", "1"], store, NOW, suites, noPrevious),
+      "warn",
+    );
+    expect(said).toContain("deploy a publisher that reads shape");
+    expect(created.size).toBe(0);
+  });
+
+  it("refuses where a state will not arrive", async () => {
+    const { store, created } = fakeStore({
+      ...seed(),
+      [stateObjectName("2026-08-20", "0")]: holding(),
+    });
+    const refusing: StoreAccess = {
+      ...store,
+      readText: () => Promise.reject(new Error("HTTP 503")),
+    };
+    expect(
+      await publish(
+        ["--bootstrap", "--days", "1"],
+        refusing,
+        NOW,
+        suites,
+        noPrevious,
+      ),
+    ).toBe(1);
+    expect(created.size).toBe(0);
+  });
+});
+
+describe("publish() over days it has read and closed", () => {
+  const FIRST = "2026/08/10";
+
+  /** A failure on the tenth and its fix, then today's two runs. */
+  function store() {
+    return fakeStore({
+      ...seed(),
+      [CI(FIRST, "8")]: object("c8", "fail", "2026-08-10T01:00:00.000Z"),
+      [CI(FIRST, "9")]: object("c9", "pass", "2026-08-10T02:00:00.000Z"),
+    });
+  }
+
+  /** The newest state a run created, read back. */
+  async function newestState(created: Map<string, Uint8Array>) {
+    const name = [...created.keys()].filter((one) => one.includes("/state/"))
+      .sort().at(-1)!;
+    return parseAggregate(await gunzipToText(created.get(name)!))!;
+  }
+
+  it("keeps the names of a week of objects and of the first day", async () => {
+    const { store: held, created } = store();
+    expect(
+      await publish(
+        ["--bootstrap", "--days", "11"],
+        held,
+        new Date("2026-08-20T12:00:00.000Z"),
+        suites,
+        noPrevious,
+      ),
+    ).toBe(0);
+    const state = await newestState(created);
+    expect(state.closed).toBe("2026/08/13");
+    expect(state.folded).toEqual([
+      CI(FIRST, "8"),
+      CI(FIRST, "9"),
+      CI(DAY, "1"),
+      CI(DAY, "2"),
+    ]);
+  });
+
+  it("counts a closed day once, however wide a later window is", async () => {
+    const { store: held, created } = store();
+    await publish(
+      ["--bootstrap", "--days", "11"],
+      held,
+      new Date("2026-08-20T12:00:00.000Z"),
+      suites,
+      noPrevious,
+    );
+    const once = (await publishedManifest(created)).entries[0]!.inputs.catches;
+    expect(once).toBe(NEW_REAL_TEST_FAILURE_WEIGHT_MAIN * 2);
+    expect(
+      await publish(
+        ["--days", "20"],
+        held,
+        new Date("2026-08-20T13:00:00.000Z"),
+        suites,
+        noPrevious,
+      ),
+    ).toBe(0);
+    const manifest = await newestPublished(created);
+    expect(manifest.entries[0]!.inputs.catches).toBe(once);
+  });
+
+  it("reads what arrived on the last day it read after that run", async () => {
+    const objects: Record<string, string> = {
+      [CI(FIRST, "8")]: object("c8", "fail", "2026-08-10T01:00:00.000Z"),
+    };
+    const { store: held, created } = fakeStore(objects);
+    await publish(
+      ["--bootstrap", "--days", "1"],
+      held,
+      new Date("2026-08-10T01:30:00.000Z"),
+      suites,
+      noPrevious,
+    );
+    // The fix of the tenth's breakage lands after the run that read the
+    // tenth, and the next run comes three days later.
+    objects[CI(FIRST, "9")] = object("c9", "pass", "2026-08-10T02:00:00.000Z");
+    expect(
+      await publish(
+        [],
+        held,
+        new Date("2026-08-13T12:00:00.000Z"),
+        suites,
+        noPrevious,
+      ),
+    ).toBe(0);
+    const manifest = await newestPublished(created);
+    expect(manifest.entries[0]!.inputs.catches).toBe(
+      NEW_REAL_TEST_FAILURE_WEIGHT_MAIN,
+    );
+  });
+
+  it("reads from the last day the aggregate read, however far back", async () => {
+    // A publisher stopped for nine days catches up on the run after, so no
+    // day is left unread behind the days it folds.
+    const { store: held, created } = store();
+    await publish(
+      ["--bootstrap", "--days", "1"],
+      held,
+      new Date("2026-08-10T12:00:00.000Z"),
+      suites,
+      noPrevious,
+    );
+    const said = await saying(() =>
+      publish(
+        [],
+        held,
+        new Date("2026-08-20T12:00:00.000Z"),
+        suites,
+        noPrevious,
+      )
+    );
+    expect(said).toContain(
+      "reading from 2026/08/10, the last day the aggregate read",
+    );
+    expect((await newestState(created)).closed).toBe("2026/08/13");
+    // The tenth's new real test failure and the twentieth's, each once.
+    expect((await newestPublished(created)).entries[0]!.inputs.catches)
+      .toBe(NEW_REAL_TEST_FAILURE_WEIGHT_MAIN * 2);
+  });
+
+  it("widens a window somebody asked for to the last day the aggregate read", async () => {
+    // A narrower window would leave days unread behind the ones it
+    // folds, which a later run could fold only after them.
+    const { store: held, created } = store();
+    await publish(
+      ["--bootstrap", "--days", "1"],
+      held,
+      new Date("2026-08-10T12:00:00.000Z"),
+      suites,
+      noPrevious,
+    );
+    await publish(
+      ["--days", "1"],
+      held,
+      new Date("2026-08-20T12:00:00.000Z"),
+      suites,
+      noPrevious,
+    );
+    expect((await newestState(created)).closed).toBe("2026/08/13");
+  });
+
+  it("folds no object that arrives late for a day before its window", async () => {
+    // Folded after the days that follow it, a late pass would end a
+    // breakage that began after it and be credited with the fix.
+    const objects: Record<string, string> = {
+      [CI("2026/08/12", "1")]: object("c0", "pass", "2026-08-12T01:00:00.000Z"),
+    };
+    const { store: held, created } = fakeStore(objects);
+    await publish(
+      ["--bootstrap", "--days", "1"],
+      held,
+      new Date("2026-08-12T12:00:00.000Z"),
+      suites,
+      noPrevious,
+    );
+    objects[CI("2026/08/15", "1")] = object(
+      "c2",
+      "fail",
+      "2026-08-15T01:00:00.000Z",
+    );
+    await publish(
+      [],
+      held,
+      new Date("2026-08-15T12:00:00.000Z"),
+      suites,
+      noPrevious,
+    );
+    objects[CI("2026/08/12", "2")] = object(
+      "c1",
+      "pass",
+      "2026-08-12T02:00:00.000Z",
+    );
+    await publish(
+      [],
+      held,
+      new Date("2026-08-16T12:00:00.000Z"),
+      suites,
+      noPrevious,
+    );
+    expect((await newestPublished(created)).entries[0]!.inputs.catches)
+      .toBe(0);
+  });
+});
+
+describe("publish() over an aggregate other new real test failure rules credited", () => {
   const NOW = new Date("2026-08-20T12:00:00.000Z");
   const STATE = stateObjectName("2026-08-19", "0");
   const KEPT = JSON.stringify(["unit", "memory", "space > writes"]);
@@ -2038,9 +2499,19 @@ describe("publish() over an aggregate other catch rules credited", () => {
   /**
    * The store a state that folded the two runs of an earlier day stands
    * in: a failure on the default branch, then its fix. The state holds
-   * more catches than those runs give, which is what a state credited
-   * under other rules looks like to the rules in force.
+   * more new real test failures than those runs give, which is what a
+   * state credited under other rules looks like to the rules in force.
    */
+  /** A state with five new real test failures, on the earlier day. */
+  function fiveOnMain(): IdentityState {
+    return {
+      ...emptyState(),
+      newRealTestFailureDays: {
+        "2026-08-18": { local: 0, pr: 0, main: 5, sources: ["main"] },
+      },
+    };
+  }
+
   function storeWith(catchRule?: number) {
     return fakeStore({
       ...seed(),
@@ -2052,17 +2523,41 @@ describe("publish() over an aggregate other catch rules credited", () => {
         ...(catchRule === undefined ? {} : { catchRule }),
         folded: [CI(EARLY, "1"), CI(EARLY, "2")],
         compacted: [],
-        states: { [KEPT]: { ...emptyState(), mainCatches: 5 } },
+        states: { [KEPT]: fiveOnMain() },
         files: {},
       }),
     });
   }
 
-  async function catchesOf(created: Map<string, Uint8Array>) {
+  async function newRealTestFailuresOf(created: Map<string, Uint8Array>) {
     return (await publishedManifest(created)).entries.find((one) =>
       testIdentityKey(one.test) === KEPT
     )?.inputs.catches;
   }
+
+  it("folds again from the first day an aggregate holds, though that day is closed", async () => {
+    const { store, created } = fakeStore({
+      ...seed(),
+      [CI(EARLY, "1")]: object("e1", "fail", "2026-08-18T01:00:00.000Z"),
+      [CI(EARLY, "2")]: object("e2", "pass", "2026-08-18T02:00:00.000Z"),
+      [STATE]: JSON.stringify({
+        schema: MANIFEST_SCHEMA_VERSION,
+        day: "2026-08-19",
+        closed: "2026/08/18",
+        folded: [CI(EARLY, "1")],
+        compacted: [],
+        states: { [KEPT]: fiveOnMain() },
+        files: {},
+      }),
+    });
+    const said = await saying(() =>
+      publish(["--days", "1"], store, NOW, suites, noPrevious)
+    );
+    expect(said).toContain("so this run folds every day from 2026-08-18 again");
+    expect(await newRealTestFailuresOf(created)).toBe(
+      NEW_REAL_TEST_FAILURE_WEIGHT_MAIN * 2,
+    );
+  });
 
   it("folds every day the aggregate holds again", async () => {
     const { store, created } = storeWith();
@@ -2070,27 +2565,33 @@ describe("publish() over an aggregate other catch rules credited", () => {
       publish(["--days", "1"], store, NOW, suites, noPrevious)
     );
     expect(said).toContain(
-      `${STATE} credited its catches under other rules, so this run ` +
-        `folds every day from 2026-08-18 again`,
+      `${STATE} credited its new real test failures under other rules, ` +
+        `so this run folds every day from 2026-08-18 again`,
     );
-    // One catch from the earlier day and one from the window, and none
-    // of the five the state held.
-    expect(await catchesOf(created)).toBe(CATCH_WEIGHT_MAIN * 2);
+    // One new real test failure from the earlier day and one from the
+    // window, and none of the five the state held.
+    expect(await newRealTestFailuresOf(created)).toBe(
+      NEW_REAL_TEST_FAILURE_WEIGHT_MAIN * 2,
+    );
     const written = [...created.keys()].find((name) =>
       name.startsWith(statePrefix())
     )!;
     const after = parseAggregate(await gunzipToText(created.get(written)!))!;
-    expect(after.catchRule).toBe(CATCH_RULE);
+    expect(after.catchRule).toBe(NEW_REAL_TEST_FAILURE_RULE);
     expect(after.folded).toContain(CI(EARLY, "1"));
   });
 
   it("folds onto an aggregate the rules in force credited", async () => {
-    const { store, created } = storeWith(CATCH_RULE);
+    const { store, created } = storeWith(NEW_REAL_TEST_FAILURE_RULE);
     const said = await saying(() =>
       publish(["--days", "1"], store, NOW, suites, noPrevious)
     );
-    expect(said).not.toContain("credited its catches under other rules");
-    expect(await catchesOf(created)).toBe(CATCH_WEIGHT_MAIN * 6);
+    expect(said).not.toContain(
+      "credited its new real test failures under other rules",
+    );
+    expect(await newRealTestFailuresOf(created)).toBe(
+      NEW_REAL_TEST_FAILURE_WEIGHT_MAIN * 6,
+    );
   });
 });
 
@@ -2178,8 +2679,8 @@ describe("publish() reporting what measured sets cost", () => {
     Promise.resolve<Suite[]>([{
       ...TOPOLOGY[0]!,
       measured: [{
-        member: "packages/memory",
-        reachedBy: ["packages/memory/"],
+        member: "runtime/memory",
+        reachedBy: ["runtime/memory/"],
         units: [UNIT],
       }],
     }]);
@@ -2202,7 +2703,7 @@ describe("publish() reporting what measured sets cost", () => {
       )
     );
     expect(said).toContain(
-      "test selection: workspace-unit/packages/memory costs 52s with " +
+      "test selection: workspace-unit/runtime/memory costs 52s with " +
         "coverage on, past LOCAL_COVERAGE_MAX_SECONDS",
     );
   });
@@ -2359,7 +2860,7 @@ describe("the baselines a publish carries", () => {
       object(commit, "pass", at, branch) +
       coverageRecords({
         groups: new Map([["workspace", 900]]),
-        sets: new Map([["workspace-unit/packages/memory", 40]]),
+        sets: new Map([["workspace-unit/runtime/memory", 40]]),
         cold: false,
       }).map(serializeRecordLine).join("");
     const { store, created } = fakeStore({
@@ -2368,7 +2869,7 @@ describe("the baselines a publish carries", () => {
     });
     const carried = {
       suite: "workspace-unit",
-      member: "packages/memory",
+      member: "runtime/memory",
       commit: "c0",
       createdAt: "2026-08-19T23:00:00.000Z",
       uncoveredLines: 41,
@@ -2385,12 +2886,68 @@ describe("the baselines a publish carries", () => {
     expect((await publishedManifest(created)).coverageBaselines).toEqual([
       {
         suite: "workspace-unit",
-        member: "packages/memory",
+        member: "runtime/memory",
         commit: "c1",
         createdAt: "2026-08-20T01:00:00.000Z",
         uncoveredLines: 40,
       },
       carried,
     ]);
+  });
+});
+
+describe("publish() over a day read from its raw objects", () => {
+  const NOW = new Date("2026-08-20T23:00:00.000Z");
+
+  /**
+   * The failures of the test the aggregate holds once a day of raw
+   * objects is folded: main's first record of the test at 14:00, a
+   * chunk's worth of main's runs of another test, and a workstation's
+   * failure of the test at `at`. The workstation's object sorts after
+   * every other by name, whenever it ran, so it is read in a later chunk.
+   */
+  async function failuresWith(at: string) {
+    const others = Object.fromEntries(
+      Array.from({ length: CHUNK }, (_, index) => [
+        CI(DAY, `2${index}`),
+        object(
+          `o${index}`,
+          "pass",
+          "2026-08-20T13:00:00.000Z",
+          "main",
+          undefined,
+          "another",
+        ),
+      ]),
+    );
+    const { store, created } = fakeStore({
+      [CI(DAY, "1")]: object("c1", "pass", "2026-08-20T14:00:00.000Z"),
+      ...others,
+      [LOCAL(DAY, "ianh")]: localObject("c9", at),
+    });
+    expect(
+      await publish(
+        ["--bootstrap", "--days", "1"],
+        store,
+        NOW,
+        suites,
+        noPrevious,
+      ),
+    ).toBe(0);
+    const written = [...created.keys()].find((name) =>
+      name.startsWith(statePrefix())
+    )!;
+    return parseAggregate(await gunzipToText(created.get(written)!))!
+      .states[JSON.stringify(["unit", "memory", "space > writes"])]!
+      .failuresByDay;
+  }
+
+  it("counts a workstation's failure from after main recorded the test", async () => {
+    expect(await failuresWith("2026-08-20T15:00:00.000Z"))
+      .toEqual({ "2026-08-20": 1 });
+  });
+
+  it("counts none from before it, though its object is read after", async () => {
+    expect(await failuresWith("2026-08-20T09:00:00.000Z")).toEqual({});
   });
 });

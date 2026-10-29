@@ -103,9 +103,14 @@ logger.timeEnd("cell", "get");
 // Direct measurement
 logger.time(startTimestamp, "ipc", "CellGet");
 
+// Either form with a detail naming this one measurement: it reaches the
+// slowest measurements the key keeps and the emitted measure, not the key
+logger.timeDetailed("the cell's id", startTimestamp, "ipc", "CellGet");
+
 // Read stats
 logger.getTimeStats("cell/get");
-// { count, min, max, average, p50, p95, lastTime, cdf, ... }
+// { count, min, max, average, p50, p95, lastTime, slowest, cdf, ... }
+// `slowest` holds the longest few, each with when it ended and its detail
 
 logger.timeStats; // all timing stats for this logger
 ```

@@ -6,7 +6,7 @@ it already claims, and extends it to the pattern-owned vocabulary it does not
 yet reach.
 
 The design is unchanged and is not restated here.
-[`packages/cli/README.md`](../../packages/cli/README.md#shell-completion) is
+[`runtime/cli/README.md`](../../runtime/cli/README.md#shell-completion) is
 the reference for what completion covers and how it is installed;
 [Verbs over the CLI](../common/verbs/over-the-cli.md) is the caller-facing
 surface most of this plan serves. Read those for reasoning; read this for
@@ -101,7 +101,7 @@ read before picking one up; this table is the roll-up.
 | 19 | A gate that fails when a new slot has no decision | mechanism | done |
 
 **What can be picked up today.** Items 4 and 6. Step 10 of
-[CLI surface shape](cli-surface-shape.md) has landed, so the position each of
+[CLI surface shape](../history/plans/cli-surface-shape.md) has landed, so the position each of
 them fills is settled and neither is waiting on anything. Items 8 and 11 hold
 decisions; item 5's `wish` half is declined, because resolving a wish writes.
 
@@ -180,13 +180,13 @@ server, `CF_IDENTITY` at a keyfile, deploy a fixture, and complete against it.
 An empty result from a provider proves nothing until the same target answers
 the equivalent `cf` command.
 
-**Where the tests go.** `packages/cli/test/completion-*.test.ts` hold the pure
+**Where the tests go.** `runtime/cli/test/completion-*.test.ts` hold the pure
 half — line resolution, candidate shaping, the degrade-to-empty path — and are
 the right home for anything answerable without a fabric.
 [`unit-test-coding-style.md`](../development/unit-test-coding-style.md) governs
 their shape and is worth reading first, since not every file in that directory
 follows it. Anything that needs a fabric belongs beside
-`packages/cli/integration/verbs-over-the-cli.sh`, which is item 18.
+`runtime/cli/integration/verbs-over-the-cli.sh`, which is item 18.
 
 **Two traps in the parsing layer.** A throwaway Cliffy command used to parse a
 token list needs `.noExit()`, or a bad flag ends the process instead of
@@ -220,7 +220,7 @@ third command becoming `stopEarly()` needs no edit in the completion layer.
 
 The position belongs to the callable: the verb opens its section, and a `cf`
 flag written there is refused with the section it belongs to named — see
-[Naming the target](cli-surface-shape.md#naming-the-target). So declining to
+[Naming the target](../history/plans/cli-surface-shape.md#naming-the-target). So declining to
 offer one there is correct. It leaves the position offering nothing until item
 4 fills it, which is what a position whose vocabulary the command cannot yet
 name should offer.
@@ -338,7 +338,7 @@ The same flags on a call shape the verb's result, whose vocabulary is the verb's
 `outputSchema` — carried by the same listing item 4 reads.
 
 This one is not really a completion item, because the surface settles most of
-it. [Naming the target](cli-surface-shape.md#naming-the-target) puts a
+it. [Naming the target](../history/plans/cli-surface-shape.md#naming-the-target) puts a
 projection past the `--` that closes the callable's section, and therefore
 always after the verb it shapes:
 
@@ -400,7 +400,7 @@ directory looking for a store, so completion offers spaces in a checkout that
 holds one and nothing in a worktree that does not — while both talk to the same
 server.
 
-[Naming the target](cli-surface-shape.md#naming-the-target) settles where the
+[Naming the target](../history/plans/cli-surface-shape.md#naming-the-target) settles where the
 *command* gets a space it was not given: `CF_SPACE`, with the flag overriding
 it. Two candidate sources follow from that and need no further decision — the
 ambient value itself, and the identity's home space, which is derivable from
@@ -456,7 +456,7 @@ two items are what a caller feels on slots that are otherwise working.
 both start on every Tab. Measured against a local server from a warm checkout: a
 purely static completion — subcommand names, no I/O at all — settles in about
 0.34s, and a completion that reaches the fabric takes 0.44s to 1.2s. This agrees
-with the figure `packages/cli/README.md` already records for the source path
+with the figure `runtime/cli/README.md` already records for the source path
 against the compiled binary.
 
 The compiled binary is declined for a reason that has nothing to do with
@@ -570,7 +570,7 @@ candidates as internal. Item 19's gate is the same subtraction made permanent.
 
 ### 17. The README table omits the top-level spellings
 
-The completion table in `packages/cli/README.md` names `call`, `get` and `set`,
+The completion table in `runtime/cli/README.md` names `call`, `get` and `set`,
 which are the spellings the surface leads with, and says that the `piece `
 spellings complete identically. It is the document each item updates as it
 lands, which is the obligation rather than the one edit.
@@ -579,7 +579,7 @@ lands, which is the obligation rather than the one edit.
 
 ### 18. A live-provider test seam
 
-`packages/cli/integration/completion-over-the-cli.sh` is where every provider
+`runtime/cli/integration/completion-over-the-cli.sh` is where every provider
 that reads state is exercised — the four that reach a fabric, the one that
 reads local stores, the one that reads the environment, and the pattern-file
 glob — at one of the slots it answers. The rest of the table hands the shell a

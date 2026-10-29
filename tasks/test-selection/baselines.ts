@@ -16,6 +16,7 @@
 
 import {
   type CoverageBaseline,
+  type CoverageFigures,
   coverageFiguresOf,
   isMainRun,
   type StoredReportGroup,
@@ -49,17 +50,28 @@ export function splitMeasuredSet(
 export function baselinesOf(report: StoredReportGroup): CoverageBaseline[] {
   const context = report.context;
   if (context === undefined || !isMainRun(context)) return [];
-  return [...coverageFiguresOf(report.records).sets].flatMap(
-    ([name, uncoveredLines]) => {
-      const set = splitMeasuredSet(name);
-      return set === undefined ? [] : [{
-        ...set,
-        commit: context.commit,
-        createdAt: context.startedAt,
-        uncoveredLines,
-      }];
-    },
+  return baselinesFrom(
+    coverageFiguresOf(report.records),
+    context.commit,
+    context.startedAt,
   );
+}
+
+/**
+ * The baselines a run's coverage figures hold: each measured set's count,
+ * against the commit the run measured, started at `createdAt`.
+ */
+export function baselinesFrom(
+  figures: CoverageFigures,
+  commit: string,
+  createdAt: string,
+): CoverageBaseline[] {
+  return [...figures.sets].flatMap(([name, uncoveredLines]) => {
+    const set = splitMeasuredSet(name);
+    return set === undefined
+      ? []
+      : [{ ...set, commit, createdAt, uncoveredLines }];
+  });
 }
 
 /**

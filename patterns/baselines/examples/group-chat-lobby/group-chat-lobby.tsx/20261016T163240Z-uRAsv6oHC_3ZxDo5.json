@@ -1,0 +1,287 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Message": {
+        "properties": {
+          "author": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "imageUrl": {
+            "type": "string"
+          },
+          "reactions": {
+            "items": {
+              "$ref": "#/$defs/Reaction"
+            },
+            "type": "array"
+          },
+          "timestamp": {
+            "type": "number"
+          },
+          "type": {
+            "enum": [
+              "chat",
+              "system",
+              "image"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "author",
+          "content",
+          "timestamp",
+          "type",
+          "reactions"
+        ],
+        "type": "object"
+      },
+      "Reaction": {
+        "properties": {
+          "emoji": {
+            "type": "string"
+          },
+          "userNames": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "emoji",
+          "userNames"
+        ],
+        "type": "object"
+      },
+      "User": {
+        "properties": {
+          "avatar": {
+            "description": "Avatar text, snapshotted instead when the joiner's profile has no\npicture.",
+            "type": "string"
+          },
+          "joinedAt": {
+            "type": "number"
+          },
+          "name": {
+            "description": "Display name shown in the room. Unique within this roster (the lobby\ndisambiguates collisions) because messages/reactions key on it.",
+            "type": "string"
+          },
+          "picture": {
+            "description": "Picture bytes, snapshotted from the joiner's shared profile.",
+            "type": "FabricBytes"
+          },
+          "profile": {
+            "asCell": [
+              "cell"
+            ],
+            "description": "Link to the joiner's profile cell — the stable identity key (optional so\nrosters written before the profile migration still load).",
+            "properties": {
+              "avatar": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "name",
+          "joinedAt"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "Group Chat Lobby Pattern\n\nApple iOS-style lobby where unlimited users can join. Identity comes from\nthe viewer's shared profile (`wish({ query: \"#profile\" })`): the wish's\nbuilt-in UI lets the viewer pick one of their existing profiles or create a\nnew one, and joining snapshots the resolved name/picture into the shared\nuser roster (see docs/specs/shared-profile-rosters.md).",
+    "properties": {
+      "chatName": {
+        "default": "Group Chat",
+        "type": "string"
+      },
+      "messages": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Message"
+        },
+        "type": "array"
+      },
+      "sessionId": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "users": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/User"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "chatName",
+      "messages",
+      "users",
+      "sessionId"
+    ],
+    "tags": [
+      "profile"
+    ],
+    "type": "object"
+  },
+  "pattern": "group-chat-lobby.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Message": {
+        "properties": {
+          "author": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "imageUrl": {
+            "type": "string"
+          },
+          "reactions": {
+            "items": {
+              "$ref": "#/$defs/Reaction"
+            },
+            "type": "array"
+          },
+          "timestamp": {
+            "type": "number"
+          },
+          "type": {
+            "enum": [
+              "chat",
+              "system",
+              "image"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "author",
+          "content",
+          "timestamp",
+          "type",
+          "reactions"
+        ],
+        "type": "object"
+      },
+      "Reaction": {
+        "properties": {
+          "emoji": {
+            "type": "string"
+          },
+          "userNames": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "emoji",
+          "userNames"
+        ],
+        "type": "object"
+      },
+      "User": {
+        "properties": {
+          "avatar": {
+            "description": "Avatar text, snapshotted instead when the joiner's profile has no\npicture.",
+            "type": "string"
+          },
+          "joinedAt": {
+            "type": "number"
+          },
+          "name": {
+            "description": "Display name shown in the room. Unique within this roster (the lobby\ndisambiguates collisions) because messages/reactions key on it.",
+            "type": "string"
+          },
+          "picture": {
+            "description": "Picture bytes, snapshotted from the joiner's shared profile.",
+            "type": "FabricBytes"
+          },
+          "profile": {
+            "description": "Link to the joiner's profile cell — the stable identity key (optional so\nrosters written before the profile migration still load).",
+            "properties": {
+              "avatar": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "name",
+          "joinedAt"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "chatName": {
+        "default": "Group Chat",
+        "type": "string"
+      },
+      "messages": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Message"
+        },
+        "type": "array"
+      },
+      "sessionId": {
+        "default": "",
+        "type": "string"
+      },
+      "users": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/User"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "chatName",
+      "messages",
+      "users",
+      "sessionId",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

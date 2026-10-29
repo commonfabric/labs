@@ -1,17 +1,17 @@
 #!/usr/bin/env -S deno run --allow-read --allow-write --allow-run=git
 /**
  * Refreshes the "before" release that the FabriChat update rehearsal
- * (`packages/patterns/integration/fabrichat-update-rehearsal.test.ts`) serves:
+ * (`patterns/integration/fabrichat-update-rehearsal.test.ts`) serves:
  * a copy of FabriChat's pattern source as a git revision holds it, `origin/main`
  * unless another is named.
  *
  *   deno task refresh-fabrichat-rehearsal              # from `origin/main`
  *   deno task refresh-fabrichat-rehearsal <revision>   # from another revision
  *
- * The copy is every non-test module under `packages/patterns/fabrichat/`, and
- * `packages/patterns/loom/participants.tsx`, whose roster type is part of what a
+ * The copy is every non-test module under `patterns/system/fabrichat/`, and
+ * `patterns/system/loom/participants.tsx`, whose roster type is part of what a
  * room stores. Each is written beside the test, under
- * `fixtures/fabrichat-update-rehearsal/`, at its path below `packages/patterns/`
+ * `fixtures/fabrichat-update-rehearsal/`, at its path below `patterns/`
  * with `.txt` appended, so that no checker compiles it as a module of this
  * tree. `SOURCE.txt` there records the commit the copy came from. The whole
  * directory is replaced, so a module the revision no longer has goes too.
@@ -26,11 +26,11 @@ const REPO = fromFileUrl(new URL("..", import.meta.url));
 
 const FIXTURES = join(
   REPO,
-  "packages/patterns/integration/fixtures/fabrichat-update-rehearsal",
+  "patterns/integration/fixtures/fabrichat-update-rehearsal",
 );
 
 /** The modules outside `fabrichat/` that the copy holds. */
-const ALSO = ["packages/patterns/loom/participants.tsx"];
+const ALSO = ["patterns/system/loom/participants.tsx"];
 
 /** Runs git in the repository, and returns its standard output. */
 const git = async (...args: string[]): Promise<string> => {
@@ -60,7 +60,7 @@ if (import.meta.main) {
     "ls-tree",
     "--name-only",
     commit,
-    "packages/patterns/fabrichat/",
+    "patterns/system/fabrichat/",
   );
   const paths = [
     ...listed.split("\n").filter((path) => path !== "" && isCopied(path)),
@@ -70,7 +70,7 @@ if (import.meta.main) {
   // one leaves the old copy as it was.
   const modules = await Promise.all(
     paths.map(async (path) => ({
-      target: join(FIXTURES, `${path.slice("packages/patterns/".length)}.txt`),
+      target: join(FIXTURES, `${path.slice("patterns/".length)}.txt`),
       text: await git("show", `${commit}:${path}`),
     })),
   );

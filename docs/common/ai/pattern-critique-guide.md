@@ -81,7 +81,7 @@ has been explicitly verified as problematic.
 | `$checked={item}` | `$checked={item.done}` |
 | wrong event name | Use `oncf-send`, `oncf-input`, or `oncf-change` |
 | cell-bound control (for example `$value={status}`) with `oncf-change` writing `status.set(...)` | Let the binding own the control value; use the handler only for dependent state or side effects |
-| any `$`-binding (`$value`/`$checked`/`$profile`/…) inside a `computed(() => …)` subtree → throws *"Bidirectionally bound property … is not reactive"* and **blanks the whole render** | Hoist the `$`-binding to a **static** `[UI]` position; switch views with `ifElse(cond, staticA, staticB)` as a child of a static wrapper, or lift behind a `pattern<{…}>` sub-pattern. Repro: `packages/patterns/scope-bug-computed-vnode-blank/` |
+| any `$`-binding (`$value`/`$checked`/`$profile`/…) inside a `computed(() => …)` subtree → throws *"Bidirectionally bound property … is not reactive"* and **blanks the whole render** | Hoist the `$`-binding to a **static** `[UI]` position; switch views with `ifElse(cond, staticA, staticB)` as a child of a static wrapper, or lift behind a `pattern<{…}>` sub-pattern. Repro: `patterns/dev/scope-bug-computed-vnode-blank/` |
 
 ### 6. Custom Component Props and Styling Affordances
 
@@ -125,6 +125,7 @@ than guessing at unsupported internals.
 
 | Violation | Fix |
 |-----------|-----|
+| a derivation over shared data that also reads the viewer's identity to mark what is theirs, feeding derivations over shared data or the view's shared parts | Derive the shared data from shared inputs alone, and decide what is the viewer's at the leaf (`docs/common/patterns/multi-user-patterns.md#keep-the-viewer-out-of-shared-derivations`); `minor`, since each viewer sees the right result at a cost that grows with what the derivation feeds times the viewers |
 | handler created per item inside a loop | Create a shared handler and bind per item |
 | expensive computation embedded directly in render loops | Pre-compute outside the loop |
 
@@ -249,9 +250,9 @@ Applies only to patterns with multiple people or a "current user" concept. **N/A
 |-------|----------------|-----|
 | people rendered as data | a person shown as `{name}` text or a raw `<img>` | render **every** participant with `cf-profile-badge` bound to their profile cell; `cf-avatar` + snapshot only as an explicit offline fallback |
 | others rendered as `cf-avatar` when a live cell exists | `cf-avatar` used for co-participants even though their `#profile` cell is (or could be) stored on join | store each joiner's profile cell in the shared roster and badge it — cross-space reads resolve (CT-1667/1687). `cf-avatar` is only for snapshot-only cases |
-| current viewer | a "type your name" / "who am I" text field used as the viewer's identity | resolve via `wish({ query: "#profile" })` (+ `#profileName` / `#profileAvatar`) |
+| current viewer | a "type your name" / "who am I" text field used as the viewer's identity | resolve via `wish({ query: "#profile" })` (+ `#profileName` / `#profilePicture`, with `#profileAvatar` as the fallback when there is no picture) |
 | per-user isolation | stored DIDs / user-ids / name strings used to fake isolation | use `PerUser` / `PerSpace` scope; let the scope select the instance |
-| roster construction | a participant list built from typed names | join by profile cell: each viewer pushes their own live `#profile` cell (plus a `{ displayName, avatar }` snapshot fallback) into the shared roster |
+| roster construction | a participant list built from typed names | join by profile cell: each viewer pushes their own live `#profile` cell (plus a snapshot of the name and `profileLook(picture, avatar)` as a fallback) into the shared roster |
 | identity comparison | dedup or "is this me?" by display-name equality | compare a cell reference with `equals()`, never the mutable name |
 | ownership / authorship | "who created / wrote this" stored as a bare name | snapshot the actor's profile, or attest with CFC `AuthoredByCurrentUser` / `RepresentsCurrentUser` |
 
@@ -288,7 +289,7 @@ unnecessary live-cell and stream bindings, and let patterns migrate
 independently. An extra required field whose value is unavailable or
 incompatible invalidates its object; when that object is an array element, one
 invalid element voids the entire array read. See
-`packages/runner/test/traverse-required-links.test.ts` and
+`runtime/runner/test/traverse-required-links.test.ts` and
 `docs/common/patterns/composition.md#keep-external-data-contracts-narrow`.
 
 Do not flag a genuinely shared protocol (for example, a stream event or enum),

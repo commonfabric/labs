@@ -70,9 +70,24 @@ None of these reads tells confirmed state from what the replica holds locally.
 `readConfirmed(runtime, space, read)` runs `read` synchronously in one
 read-only transaction that reads past any speculation overlay, so every
 document it consumes is read at one instant, and reports whether each of those
-documents is confirmed: watched and delivered, with no pending local write and
-no value the replica made up locally. Every read counts, a `sample()` as much
-as a `get()`. When they all are confirmed and the replica can say, it also
+documents is confirmed: no local write is pending, no refused write or
+incomplete wave is folded into the value, and the replica has evidence of a
+stored version. A server delivery or an accepted whole-document set or deletion
+establishes that version, and so does an accepted patch that the server elided
+because the stored document already matched what the commit computed from its
+read. A patch that did not read the document does not establish the complete
+result, since it may merge with content this replica has never loaded. Verified
+content under a content-addressed id in space scope also establishes a stored
+version: the server ships a schema document only with a document that refers to
+it, so the replica whose own commit stored one may never be sent it.
+
+Confirmation alone does not establish freshness. An accepted mutable document
+that has never been delivered can remain at that accepted version while other
+sessions change it. Such a read returns `confirmed: true` without a `seq`:
+loading the document with `sync()` establishes its watch and brings in current
+state. Immutable content needs no continuing watch. Every read counts, a
+`sample()` as much as a `get()`. When they all are confirmed and the replica
+can say, it also
 returns the commit sequence the read is complete through: the `toSeq` of the
 last server push the replica applied whole, so that every commit at or below it
 that touched a document the read consumed is reflected in what it read. A read

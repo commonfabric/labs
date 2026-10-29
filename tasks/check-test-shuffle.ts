@@ -68,12 +68,12 @@ const RUNNERS: readonly Runner[] = [
   {
     command: "deno-web-test/cli.ts",
     kind: "shuffles",
-    implementation: "packages/deno-web-test/runner.ts",
+    implementation: "runtime/deno-web-test/runner.ts",
   },
   {
     command: "cf test",
     kind: "shuffles",
-    implementation: "packages/cli/lib/test-runner.ts",
+    implementation: "runtime/cli/lib/test-runner.ts",
   },
 ];
 
@@ -92,19 +92,19 @@ interface Exemption {
  */
 const EXEMPTIONS: readonly Exemption[] = [
   {
-    path: "packages/cli/integration/integration.sh",
+    path: "runtime/cli/integration/integration.sh",
     reason:
       "one scenario driven end to end: it creates a space, writes to it, " +
       "and reads back what it wrote, so every step acts on what the step " +
       "before it left",
   },
   {
-    path: "packages/cli/integration/acl.sh",
+    path: "runtime/cli/integration/acl.sh",
     reason: "one scenario driven end to end: each grant it checks is one an " +
       "earlier step made",
   },
   {
-    path: "packages/cli/integration/fuse-exec.sh",
+    path: "runtime/cli/integration/fuse-exec.sh",
     reason:
       "one scenario driven end to end, in phases that mount a filesystem " +
       "and then act through the mount",

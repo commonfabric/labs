@@ -1,26 +1,29 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import {
-  coverageGateFor,
+  coverageGateSelection,
   measuredCost,
   measuredCostLines,
   measuredMembersOf,
+} from "./coverage.ts";
+import {
+  COVERAGE_GATE_SUITE,
   measuredSetDirectory,
   measuredSetName,
   measuredSets,
-  measuredUnitKeys,
-} from "./coverage.ts";
+} from "../test-topology/coverage-gates.ts";
+import type { GateChoice } from "./plan.ts";
 import type { Calibration, ManifestEntry, SuiteFit } from "./manifest.ts";
 import {
   COST_WINDOW_DAYS,
   LANE_BUDGET_SECONDS,
-  LANES,
+  LANES_MAX,
   LOCAL_COVERAGE_MAX_SECONDS,
-  LOCAL_COVERAGE_MAX_SETS,
 } from "./policy.ts";
 import { duration } from "./duration.ts";
 import { sampleEntry, sampleManifest } from "./testing.ts";
 import type { MeasuredSet, Suite } from "../test-topology/suite.ts";
+import { withoutPackageParent } from "../package-layout.ts";
 
 /** A suite carrying only what the coverage selection reads. */
 function suite(
@@ -42,15 +45,15 @@ function suite(
 }
 
 const bakery: MeasuredSet = {
-  member: "packages/bakery",
-  reachedBy: ["packages/bakery/"],
-  units: ["packages/bakery/glaze.test.ts", "packages/bakery/proof.test.ts"],
+  member: "runtime/bakery",
+  reachedBy: ["runtime/bakery/"],
+  units: ["runtime/bakery/glaze.test.ts", "runtime/bakery/proof.test.ts"],
 };
 
 const cellar: MeasuredSet = {
-  member: "packages/cellar",
-  reachedBy: ["packages/cellar/"],
-  units: ["packages/cellar/rack.test.ts"],
+  member: "runtime/cellar",
+  reachedBy: ["runtime/cellar/"],
+  units: ["runtime/cellar/rack.test.ts"],
 };
 
 describe("coverage", () => {
@@ -58,8 +61,8 @@ describe("coverage", () => {
     it("lists every set the topology declares, suite then member", () => {
       const suites = [suite("z-unit", [cellar]), suite("a-unit", [bakery])];
       expect(measuredSets(suites).map(measuredSetName)).toEqual([
-        "a-unit/packages/bakery",
-        "z-unit/packages/cellar",
+        "a-unit/runtime/bakery",
+        "z-unit/runtime/cellar",
       ]);
     });
 
@@ -71,13 +74,13 @@ describe("coverage", () => {
 
     it("names a directory that a member's own slashes cannot break", () => {
       const nested: MeasuredSet = {
-        member: "packages/connectors/github",
-        reachedBy: ["packages/connectors/github/"],
-        units: ["packages/connectors/github/issue.test.ts"],
+        member: "connectors/github",
+        reachedBy: ["connectors/github/"],
+        units: ["connectors/github/issue.test.ts"],
       };
       const ref = measuredSets([suite("workspace-unit", [nested])])[0]!;
       expect(measuredSetDirectory(ref))
-        .toBe("workspace-unit/packages__connectors__github");
+        .toBe("workspace-unit/connectors__github");
     });
 
     it("leaves out a set nothing in this configuration runs", () => {
@@ -103,158 +106,69 @@ describe("coverage", () => {
   });
 
   describe("the coverage gate's selection", () => {
-    it("reaches a set through the paths it declares", () => {
-      const suites = [suite("workspace-unit", [bakery, cellar])];
-      const gate = coverageGateFor(
-        suites,
-        new Set(["packages/bakery/src/oven.ts"]),
-      );
-      expect(gate.sets.map(measuredSetName))
-        .toEqual(["workspace-unit/packages/bakery"]);
-      expect(gate.off).toBeUndefined();
-    });
-
-    it("reaches nothing where the change is somewhere else", () => {
-      const suites = [suite("workspace-unit", [bakery, cellar])];
-      const gate = coverageGateFor(suites, new Set(["docs/README.md"]));
-      expect(gate.sets).toEqual([]);
-      expect(gate.reached).toEqual([]);
-      expect(gate.off).toBeUndefined();
-    });
-
-    it("keeps two suites over one member apart", () => {
-      const other: MeasuredSet = {
-        ...bakery,
-        units: ["packages/bakery/e2e.ts"],
+    /** A gate over `set`, as the census offers it. */
+    function gateOf(set: MeasuredSet, reached: boolean): GateChoice {
+      return {
+        entry: sampleEntry(
+          { k: "gate", s: withoutPackageParent(set.member), n: "g" },
+          {
+            suite: COVERAGE_GATE_SUITE,
+            unit: `workspace-unit/${set.member}`,
+          },
+        ),
+        judges: "workspace-unit",
+        members: [],
+        reached,
       };
-      const suites = [
-        suite("workspace-unit", [bakery]),
-        suite("bakery-integration", [other]),
-      ];
-      const gate = coverageGateFor(
-        suites,
-        new Set(["packages/bakery/src/oven.ts"]),
-      );
-      expect(gate.sets.map(measuredSetName)).toEqual([
-        "bakery-integration/packages/bakery",
-        "workspace-unit/packages/bakery",
-      ]);
-    });
+    }
 
-    it("turns the gate off past the cap, and says what it reached", () => {
-      const many = Array.from(
-        { length: LOCAL_COVERAGE_MAX_SETS + 1 },
-        (_, index): MeasuredSet => ({
-          member: `packages/p${index}`,
-          reachedBy: [`packages/p${index}/`],
-          units: [`packages/p${index}/one.test.ts`],
-        }),
-      );
-      const suites = [suite("workspace-unit", many)];
-      const changed = new Set(many.map((set) => `${set.member}/src/main.ts`));
-      const gate = coverageGateFor(suites, changed);
-      expect(gate.sets).toEqual([]);
-      expect(gate.reached).toHaveLength(LOCAL_COVERAGE_MAX_SETS + 1);
-      expect(gate.off).toContain(
-        `${LOCAL_COVERAGE_MAX_SETS + 1} measured sets`,
-      );
-    });
-
-    it("still gates a change that reaches exactly the cap", () => {
+    it("names the sets of the gates a plan chose, apart from those it reached", () => {
       const suites = [suite("workspace-unit", [bakery, cellar])];
-      const gate = coverageGateFor(
-        suites,
-        new Set(["packages/bakery/src/oven.ts", "packages/cellar/src/rack.ts"]),
-      );
-      expect(gate.sets).toHaveLength(2);
-      expect(gate.off).toBeUndefined();
+      const gates = [gateOf(bakery, true), gateOf(cellar, true)];
+      const selection = coverageGateSelection(suites, gates, [gates[1]!]);
+      expect(selection.sets.map(measuredSetName))
+        .toEqual(["workspace-unit/runtime/cellar"]);
+      expect(selection.reached.map(measuredSetName)).toEqual([
+        "workspace-unit/runtime/bakery",
+        "workspace-unit/runtime/cellar",
+      ]);
     });
 
-    it("makes every unit of a gated set mandatory", () => {
+    it("names a gate the full run chose that the change did not reach", () => {
       const suites = [suite("workspace-unit", [bakery, cellar])];
-      const gate = coverageGateFor(
-        suites,
-        new Set(["packages/bakery/oven.ts"]),
-      );
-      expect([...measuredUnitKeys(suites, gate)].sort()).toEqual([
-        "workspace-unit\tpackages/bakery/glaze.test.ts",
-        "workspace-unit\tpackages/bakery/proof.test.ts",
-      ]);
+      const gates = [gateOf(bakery, false), gateOf(cellar, false)];
+      const selection = coverageGateSelection(suites, gates, gates);
+      expect(selection.sets).toHaveLength(2);
+      expect(selection.reached).toEqual([]);
     });
 
-    it("leaves a unit the suite declares unavailable out of the mandatory set", () => {
-      const suites = [suite("workspace-unit", [bakery], [{
-        unit: "packages/bakery/proof.test.ts",
-        reason: "it needs an oven nobody has",
-      }])];
-      const gate = coverageGateFor(
-        suites,
-        new Set(["packages/bakery/oven.ts"]),
-      );
-      expect([...measuredUnitKeys(suites, gate)]).toEqual([
-        "workspace-unit\tpackages/bakery/glaze.test.ts",
-      ]);
-    });
-
-    it("keeps a unit whose unavailability names one leaf", () => {
-      const suites = [suite("workspace-unit", [bakery], [{
-        unit: "packages/bakery/proof.test.ts",
-        leafName: "rises twice",
-        reason: "it is slow on this configuration",
-      }])];
-      const gate = coverageGateFor(
-        suites,
-        new Set(["packages/bakery/oven.ts"]),
-      );
-      expect([...measuredUnitKeys(suites, gate)]).toHaveLength(2);
-    });
-
-    it("requires nothing of a suite this tree does not hold", () => {
-      // A manifest can name a suite a later tree dropped, and a unit of
-      // one cannot be placed by anything.
+    it("names no set for a chosen entry that is not a coverage gate", () => {
       const suites = [suite("workspace-unit", [bakery])];
-      const gate = coverageGateFor(
-        suites,
-        new Set(["packages/bakery/oven.ts"]),
-      );
-      expect(measuredUnitKeys([], gate).size).toBe(0);
-    });
-
-    it("requires nothing when the cap turned the gate off", () => {
-      const many = Array.from(
-        { length: LOCAL_COVERAGE_MAX_SETS + 1 },
-        (_, index): MeasuredSet => ({
-          member: `packages/p${index}`,
-          reachedBy: [`packages/p${index}/`],
-          units: [`packages/p${index}/one.test.ts`],
-        }),
-      );
-      const suites = [suite("workspace-unit", many)];
-      const gate = coverageGateFor(
-        suites,
-        new Set(many.map((set) => `${set.member}/src/main.ts`)),
-      );
-      expect(measuredUnitKeys(suites, gate).size).toBe(0);
+      const other = sampleEntry({ k: "unit", s: "bakery", n: "glaze" }, {
+        unit: "workspace-unit/runtime/bakery",
+      });
+      expect(coverageGateSelection(suites, [], [{ entry: other }]).sets)
+        .toEqual([]);
     });
 
     it("names the members one suite measures", () => {
-      const suites = [
-        suite("workspace-unit", [bakery, cellar]),
-        suite("runner-unit", [{
-          member: "packages/runner",
-          reachedBy: ["packages/runner/"],
-          units: ["packages/runner/one.test.ts"],
-        }]),
-      ];
-      const gate = coverageGateFor(
-        suites,
-        new Set(["packages/bakery/oven.ts", "packages/runner/src/run.ts"]),
-      );
-      expect([...measuredMembersOf(gate, "workspace-unit")])
-        .toEqual(["packages/bakery"]);
-      expect([...measuredMembersOf(gate, "runner-unit")])
-        .toEqual(["packages/runner"]);
-      expect([...measuredMembersOf(gate, "nothing-unit")]).toEqual([]);
+      const runner: MeasuredSet = {
+        member: "runtime/runner",
+        reachedBy: ["runtime/runner/"],
+        units: ["runtime/runner/one.test.ts"],
+      };
+      const selection = {
+        sets: [
+          { suite: "workspace-unit", set: bakery },
+          { suite: "runner-unit", set: runner },
+        ],
+        reached: [],
+      };
+      expect([...measuredMembersOf(selection, "workspace-unit")])
+        .toEqual(["runtime/bakery"]);
+      expect([...measuredMembersOf(selection, "runner-unit")])
+        .toEqual(["runtime/runner"]);
+      expect([...measuredMembersOf(selection, "nothing-unit")]).toEqual([]);
     });
   });
 
@@ -301,9 +215,9 @@ describe("coverage", () => {
         expect(measuredCost(
           fittedAs({ overhead: 10, correction: 2, unitOverhead: 1 }),
           [
-            entry("bakery", "packages/bakery/glaze.test.ts", 3),
-            entry("bakery", "packages/bakery/glaze.test.ts", 4),
-            entry("bakery", "packages/bakery/proof.test.ts", 5),
+            entry("bakery", "runtime/bakery/glaze.test.ts", 3),
+            entry("bakery", "runtime/bakery/glaze.test.ts", 4),
+            entry("bakery", "runtime/bakery/proof.test.ts", 5),
           ],
         )).toEqual({
           overhead: 10,
@@ -323,12 +237,12 @@ describe("coverage", () => {
             overhead: 10,
             correction: 2,
             unitOverhead: 1,
-            unitHooks: { "packages/bakery/glaze.test.ts": 5 },
+            unitHooks: { "runtime/bakery/glaze.test.ts": 5 },
           }),
           [
-            entry("bakery", "packages/bakery/glaze.test.ts", 3),
-            entry("bakery", "packages/bakery/glaze.test.ts", 4),
-            entry("bakery", "packages/bakery/proof.test.ts", 5),
+            entry("bakery", "runtime/bakery/glaze.test.ts", 3),
+            entry("bakery", "runtime/bakery/glaze.test.ts", 4),
+            entry("bakery", "runtime/bakery/proof.test.ts", 5),
           ],
         )).toEqual({
           overhead: 10,
@@ -344,7 +258,7 @@ describe("coverage", () => {
         // runs twice, however the entries are spread. Each run is a pass
         // of its own, which starts the suite and opens the unit again.
         const repeated = {
-          ...entry("bakery", "packages/bakery/glaze.test.ts", 100),
+          ...entry("bakery", "runtime/bakery/glaze.test.ts", 100),
           repeats: 2,
         };
         expect(
@@ -367,8 +281,8 @@ describe("coverage", () => {
           measuredCost(
             fittedAs({ overhead: 0, correction: 0.4, unitOverhead: 0 }),
             [
-              entry("bakery", "packages/bakery/glaze.test.ts", 40),
-              entry("bakery", "packages/bakery/glaze.test.ts", 50),
+              entry("bakery", "runtime/bakery/glaze.test.ts", 40),
+              entry("bakery", "runtime/bakery/glaze.test.ts", 50),
             ],
           )?.spread,
         ).toBe(90);
@@ -376,7 +290,7 @@ describe("coverage", () => {
 
       it("charges an entry once for every time it runs", () => {
         const repeated = {
-          ...entry("bakery", "packages/bakery/glaze.test.ts", 3),
+          ...entry("bakery", "runtime/bakery/glaze.test.ts", 3),
           repeats: 4,
         };
         expect(
@@ -390,7 +304,7 @@ describe("coverage", () => {
       it("returns `undefined` where no lane has run a suite with coverage on", () => {
         expect(measuredCost(
           measuredFits(),
-          [entry("bakery", "packages/bakery/glaze.test.ts", 3)],
+          [entry("bakery", "runtime/bakery/glaze.test.ts", 3)],
         )).toBeUndefined();
       });
     });
@@ -401,11 +315,11 @@ describe("coverage", () => {
           sampleManifest({
             calibration: measuredFits("workspace-unit"),
             entries: [
-              entry("bakery", "packages/bakery/glaze.test.ts", 20),
-              entry("bakery", "packages/bakery/proof.test.ts", 20),
+              entry("bakery", "runtime/bakery/glaze.test.ts", 20),
+              entry("bakery", "runtime/bakery/proof.test.ts", 20),
               entry(
                 "cellar",
-                "packages/cellar/rack.test.ts",
+                "runtime/cellar/rack.test.ts",
                 LOCAL_COVERAGE_MAX_SECONDS,
               ),
             ],
@@ -414,7 +328,7 @@ describe("coverage", () => {
         );
         expect(lines).toHaveLength(1);
         expect(lines[0]).toContain(
-          "workspace-unit/packages/bakery costs 40s with coverage on",
+          "workspace-unit/runtime/bakery costs 40s with coverage on",
         );
       });
 
@@ -426,13 +340,13 @@ describe("coverage", () => {
           sampleManifest({
             calibration: measuredFits("workspace-unit"),
             entries: [
-              entry("bakery", "packages/bakery/glaze.test.ts", 20),
-              entry("bakery", "packages/bakery/proof.test.ts", 20),
+              entry("bakery", "runtime/bakery/glaze.test.ts", 20),
+              entry("bakery", "runtime/bakery/proof.test.ts", 20),
             ],
           }),
           [
             suite("workspace-unit", [bakery], [{
-              unit: "packages/bakery/proof.test.ts",
+              unit: "runtime/bakery/proof.test.ts",
               reason: "needs a display",
             }]),
           ],
@@ -462,7 +376,7 @@ describe("coverage", () => {
                 prologue: 0,
               },
               entries: costs.map((cost) =>
-                entry("cellar", "packages/cellar/rack.test.ts", cost)
+                entry("cellar", "runtime/cellar/rack.test.ts", cost)
               ),
             }),
             [{ ...suite("workspace-unit", [cellar]), needs: ["deno"] }],
@@ -473,7 +387,7 @@ describe("coverage", () => {
           // the lane pays first are not.
 
           expect(costing(20)).toEqual([
-            "workspace-unit/packages/cellar costs 35s with coverage on, " +
+            "workspace-unit/runtime/cellar costs 35s with coverage on, " +
             `past LOCAL_COVERAGE_MAX_SECONDS of ${
               duration(LOCAL_COVERAGE_MAX_SECONDS)
             }. ` +
@@ -493,10 +407,10 @@ describe("coverage", () => {
         it("says so where one of its tests costs more than a lane holds", () => {
           // Two lanes hold the total, but one test's runs all go in one lane.
           expect(costing(LANE_BUDGET_SECONDS)[0]).toContain(
-            "workspace-unit/packages/cellar costs more with coverage on " +
-              `than the run's ${LANES} lanes of ${
+            "workspace-unit/runtime/cellar costs more with coverage on " +
+              `than the ${LANES_MAX} lanes of ${
                 duration(LANE_BUDGET_SECONDS)
-              } hold`,
+              } a pull request may take hold`,
           );
           expect(costing(LANE_BUDGET_SECONDS / 2, LANE_BUDGET_SECONDS / 2)[0])
             .toContain(
@@ -506,12 +420,12 @@ describe("coverage", () => {
         });
 
         it("says so where the run's lanes cannot hold it", () => {
-          expect(costing(LANE_BUDGET_SECONDS * LANES)[0]).toContain(
-            "workspace-unit/packages/cellar costs more with coverage on " +
-              `than the run's ${LANES} lanes of ${
+          expect(costing(LANE_BUDGET_SECONDS * LANES_MAX)[0]).toContain(
+            "workspace-unit/runtime/cellar costs more with coverage on " +
+              `than the ${LANES_MAX} lanes of ${
                 duration(LANE_BUDGET_SECONDS)
-              } ` +
-              "hold, past LOCAL_COVERAGE_MAX_SECONDS",
+              } a pull request may take hold, past ` +
+              "LOCAL_COVERAGE_MAX_SECONDS",
           );
         });
       });
@@ -541,7 +455,7 @@ describe("coverage", () => {
                   { k: "unit", s: "runner", n: `test ${index}` },
                   {
                     suite: "runner-unit",
-                    unit: "packages/runner/test/one.test.ts",
+                    unit: "runtime/runner/test/one.test.ts",
                     cost,
                   },
                 )
@@ -553,23 +467,22 @@ describe("coverage", () => {
 
         it("is named once its tests fit the run's lanes, each paying its own overhead", () => {
           expect(costing(room, room, room)).toEqual([
-            `packages/runner is on EXCLUDED_FROM_COVERAGE_GATE for its ` +
+            `runtime/runner is on EXCLUDED_FROM_COVERAGE_GATE for its ` +
             `size, and its tests now cost ${
               duration(room * 3 + 3 * 30)
-            } with coverage on across 3 lane(s), inside the run's ` +
-            `${LANES} lanes of ${
+            } with coverage on across 3 lane(s), inside the ` +
+            `${LANES_MAX} lanes of ${
               duration(LANE_BUDGET_SECONDS)
-            }, so its line can ` +
-            `come off.`,
+            } a pull request may take, so its line can come off.`,
           ]);
         });
 
         it("is not named where it fits the run only by paying its overhead once", () => {
-          // Charged once, this fits the five lanes' budget exactly. Each
+          // Charged once, this fits the most lanes' budget exactly. Each
           // lane it spreads over pays the thirty again, so it does not.
-          const tests = LANE_BUDGET_SECONDS * LANES - 30;
+          const tests = LANE_BUDGET_SECONDS * LANES_MAX - 30;
           expect(
-            costing(...Array(2 * LANES).fill(tests / (2 * LANES))),
+            costing(...Array(2 * LANES_MAX).fill(tests / (2 * LANES_MAX))),
           ).toEqual([]);
         });
 
@@ -592,7 +505,7 @@ describe("coverage", () => {
                   { k: "unit", s: "runner", n: `half ${index}` },
                   {
                     suite: "runner-unit",
-                    unit: "packages/runner/test/one.test.ts",
+                    unit: "runtime/runner/test/one.test.ts",
                     cost: seconds,
                   },
                 )
@@ -601,14 +514,13 @@ describe("coverage", () => {
             [runner],
           );
           expect(lines).toEqual([
-            `packages/runner is on EXCLUDED_FROM_COVERAGE_GATE for its ` +
+            `runtime/runner is on EXCLUDED_FROM_COVERAGE_GATE for its ` +
             `size, and its tests now cost ${
               duration(2 * half + 2 * 30 + 2 * unitOverhead)
-            } with coverage on across 2 lane(s), inside the run's ` +
-            `${LANES} lanes of ${
+            } with coverage on across 2 lane(s), inside the ` +
+            `${LANES_MAX} lanes of ${
               duration(LANE_BUDGET_SECONDS)
-            }, so its line can ` +
-            `come off.`,
+            } a pull request may take, so its line can come off.`,
           ]);
         });
 
@@ -628,7 +540,7 @@ describe("coverage", () => {
               entries: ["one", "two"].map((name) =>
                 entry(
                   "runner",
-                  `packages/runner/test/${name}.test.ts`,
+                  `runtime/runner/test/${name}.test.ts`,
                   each,
                   "runner-unit",
                 )
@@ -653,7 +565,7 @@ describe("coverage", () => {
               entries: [
                 entry(
                   "runner",
-                  "packages/runner/test/one.test.ts",
+                  "runtime/runner/test/one.test.ts",
                   1,
                   "runner-unit",
                 ),
@@ -669,7 +581,7 @@ describe("coverage", () => {
         const lines = measuredCostLines(
           sampleManifest({
             calibration: measuredFits("workspace-unit"),
-            entries: [entry("cli", "packages/cli/test/one.test.ts", 1)],
+            entries: [entry("cli", "runtime/cli/test/one.test.ts", 1)],
           }),
           [],
         );
@@ -681,11 +593,11 @@ describe("coverage", () => {
           sampleManifest({
             calibration: measuredFits(),
             entries: [
-              entry("bakery", "packages/bakery/glaze.test.ts", 900),
-              entry("cellar", "packages/cellar/rack.test.ts", 1),
+              entry("bakery", "runtime/bakery/glaze.test.ts", 900),
+              entry("cellar", "runtime/cellar/rack.test.ts", 1),
               entry(
                 "runner",
-                "packages/runner/test/one.test.ts",
+                "runtime/runner/test/one.test.ts",
                 1,
                 "runner-unit",
               ),

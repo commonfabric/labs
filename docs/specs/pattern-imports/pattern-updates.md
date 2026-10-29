@@ -79,7 +79,7 @@ during that implementation are archived at
   covers only what a `system:` origin adds to it.
 - **Lineage / fork detection.** No substrate exists today — `parents` was
   deleted with the pattern-id retirement, and `pieceLineageSchema`
-  (`packages/runner/src/schemas.ts`) is dead code, referenced nowhere.
+  (`runtime/runner/src/schemas.ts`) is dead code, referenced nowhere.
   Deferred; automatic system-source updates continue to track one exact source
   path and do not attempt to infer user fork relationships.
 - **CFC provenance of fetched source.** Pattern source can carry private data;
@@ -96,11 +96,11 @@ during that implementation are archived at
 |---|---|---|
 | Pattern pointer `patternIdentity = {identity, symbol}` on the piece result cell | `runner.ts` (`applySetupState` / `getPatternIdentityRef`) | The thing an update rewrites |
 | **In-place re-run watcher** — `setupPatternWatcher` sinks the `patternIdentity` meta; on change it cancels the old pattern's nodes and re-instantiates the new pattern **onto the same result cell** | `runner.ts` (enabled unless `doNotUpdateOnPatternChange`) | Applies a pointer move when the piece is already running; a piece that is not running has the new pattern staged over its document by the transition itself |
-| `SourceReconciler` | `packages/runner/src/source-reconciler.ts` | Origin resolution, identity lookup, verified closure compile, and the guarded transition — one path for every piece |
-| Space root: `spaceCell.defaultPattern` link → root piece → `patternIdentity` | `packages/piece/src/ops/pieces-controller.ts` (`linkDefaultPattern`/`getDefaultPattern`) | What a system update rewrites |
-| `ensureDefaultPattern` (resolve → follow the origin → start; with `reconcile: false`, resolve → start, following the origin only if the held pattern cannot load) / `recreateDefaultPattern` (manual, **not** state-preserving) | `packages/piece/src/ops/pieces-controller.ts` | The root's open path and its repair ladder, and the state-losing escape hatch (recreate); both URL-based creation paths stamp `patternSource` |
-| System patterns = **raw TSX served by path**, bundled via `deno compile --include`; **no name→identity manifest** | `packages/runner/src/harness/patterns-route.deno.ts` defines the route; `packages/toolshed/routes/patterns/patterns-server.ts` and `patterns.routes.ts` name this deployment's directories and wire it into the server | Where the current system source + its identity come from |
-| Per-space host resolution: `mappedHostFor(space)` / `registerSpaceHost` (3-tier: seed `spaceHostMap` → learned site-table → default) | `Runtime.mappedHostFor` / `registerSpaceHost` in `packages/runner/src/runtime.ts`, `storage/v2-remote-session.ts` | Which toolshed a space's source is fetched from |
+| `SourceReconciler` | `runtime/runner/src/source-reconciler.ts` | Origin resolution, identity lookup, verified closure compile, and the guarded transition — one path for every piece |
+| Space root: `spaceCell.defaultPattern` link → root piece → `patternIdentity` | `runtime/piece/src/ops/pieces-controller.ts` (`linkDefaultPattern`/`getDefaultPattern`) | What a system update rewrites |
+| `ensureDefaultPattern` (resolve → follow the origin → start; with `reconcile: false`, resolve → start, following the origin only if the held pattern cannot load) / `recreateDefaultPattern` (manual, **not** state-preserving) | `runtime/piece/src/ops/pieces-controller.ts` | The root's open path and its repair ladder, and the state-losing escape hatch (recreate); both URL-based creation paths stamp `patternSource` |
+| System patterns = **raw TSX served by path**, bundled via `deno compile --include`; **no name→identity manifest** | `runtime/runner/src/harness/patterns-route.deno.ts` defines the route; `runtime/toolshed/routes/patterns/patterns-server.ts` and `patterns.routes.ts` name this deployment's directories and wire it into the server | Where the current system source + its identity come from |
+| Per-space host resolution: `mappedHostFor(space)` / `registerSpaceHost` (3-tier: seed `spaceHostMap` → learned site-table → default) | `Runtime.mappedHostFor` / `registerSpaceHost` in `runtime/runner/src/runtime.ts`, `storage/v2-remote-session.ts` | Which toolshed a space's source is fetched from |
 | Identity computation: `transformInjectHelperModule` + `computeModuleIdentities` | `harness/pretransform.ts`, `sandbox/module-record-compiler.ts` | What toolshed runs to answer `?identity` |
 | Entry-doc `annotations` + `annotatePattern` | `pattern-manager.ts`, `cell-cache.ts` | **Rejected as the carrier** — see below |
 
@@ -108,7 +108,7 @@ during that implementation are archived at
 non-hashed, excluded from `verifySourceDocs`) and looks like a natural home for
 "where updates live" — but it is **space-local**: `writeSourceDocs` preserves
 the *destination* cell's annotations, and replication does not copy the
-*source's* (`packages/runner/src/compilation-cache/cell-cache.ts`). An
+*source's* (`runtime/runner/src/compilation-cache/cell-cache.ts`). An
 `updatesAt` written in a publisher's space
 would not appear on a consumer's replicated copy. The **piece** is the reliable
 carrier: explicit source provenance travels with it. An unstamped piece follows
@@ -203,11 +203,11 @@ is stored on the root piece. It is dispatched by its scheme:
   updates); a bare slug **tracks**. Immutability is just a pinned ref.
 - **`system:` ref** (a pattern this deployment's toolshed serves from its
   patterns directory, addressed relative to that route, e.g.
-  `system:system/default-app.tsx` → `/api/patterns/system/default-app.tsx`) →
-  use `?identity` against the space's host, then fetch and compile whenever the
-  persisted artifact needs an update or repair. The ref is host-relative, so it
-  survives a space moving hosts; a ref that would climb out of the patterns
-  route is refused.
+  `system:system/default-app/default-app.tsx` →
+  `/api/patterns/system/default-app/default-app.tsx`) → use `?identity` against
+  the space's host, then fetch and compile whenever the persisted artifact needs
+  an update or repair. The ref is host-relative, so it survives a space moving
+  hosts; a ref that would climb out of the patterns route is refused.
 - **Anything else** → no fetch. The scheme is a whitelist rather than a
   filter, because a bare path cannot be distinguished from an authored module
   name that merely looks like a route, and resolving such a name against the
@@ -460,7 +460,7 @@ Because the updater applies without that comparison, an incompatible schema
 that merges reaches every running piece. CI carries the check instead:
 `tasks/pattern-compat.ts` compiles every authored pattern and proves its
 argument/result contract against every contract recorded for it under
-`packages/patterns/baselines/`, using the same
+`patterns/baselines/`, using the same
 `assertPatternSchemasBackwardCompatible` that `cf piece setsrc` enforces — so
 the two paths cannot drift apart on what "compatible" means.
 
@@ -479,7 +479,7 @@ the two paths cannot drift apart on what "compatible" means.
   survive it only to fail every prototype-matched read; updating such a piece
   takes redeployment or `dangerouslyAllowIncompatibleSchema`. The full
   argument lives with the check (`schemaSubsetIssue`,
-  `packages/piece/src/schema-compatibility.ts`).
+  `runtime/piece/src/schema-compatibility.ts`).
 - Baselines are **never pruned**, and `deno task pattern-compat --update` can
   only add one. An author-run command that could remove a baseline could remove
   the one that would have caught the break.
@@ -502,6 +502,15 @@ light computation (`resolveEntryIdentity` in the runner). The worker
 independently checks the result by compiling the downloaded closure and
 comparing its compiler-produced entry identity.
 
+Where the deployment states when it released what it serves
+(`TOOLSHED_RELEASED_AT`), the response carries that time beside the identity, in
+a `CF-Released-At` header holding an RFC 3339 date-time, exposed to cross-origin
+readers. It is one value for everything the deployment serves, and it is what
+orders two identities of one file: a content hash says only that two sources
+differ, never which is the later release. It is the time of the deploy rather
+than of a commit or a build, so deploying an earlier commit again, to roll a bad
+release back, is the latest release the deployment has made.
+
 Attached source roots travel as repeated `sourceRoot` query parameters naming
 full `/api/patterns/` pathnames, retaining any percent-encoding. The route accepts
 up to 32 distinct roots, validates their paths, and caches by the entry and sorted
@@ -510,7 +519,8 @@ root, so adding roots does not repeatedly parse the combined file set.
 
 Three implementation facts make the light identity equal what the worker stores
 as `patternIdentity`, verified by a parity test against the real
-`default-app.tsx`, `home.tsx`, and `examples/phonetic-speller.tsx`:
+`default-app.tsx`, `home.tsx`, and
+`examples/phonetic-speller/phonetic-speller.tsx`:
 
 - **Hash pristine, not injected.** The engine restores each module's original
   pre-injection bytes (`pristineModuleSources`) before hashing, so the light
@@ -527,15 +537,18 @@ as `patternIdentity`, verified by a parity test against the real
   adopt.
 - **Assemble the program the worker assembles.** Resolving a pattern for a
   compile attaches every file that a `dataFile()` call in its closure reads,
-  and the compiler folds each one into the entry's hash. The light path
+  and the compiler folds each one into the hash of the module that reads it,
+  which the entry's hash covers. The light path
   attaches them by the same step (`attachDeclaredDataFiles`), and reads each
   one as a program stores it: strictly as UTF-8, keeping a leading byte order
   mark that decoding it as source would drop.
 
 Both the `?identity` representation and every source-module representation use
 strong checksum `ETag`s with `Cache-Control: public, no-cache`. The identity
-itself is the `?identity` validator; a source module's validator is the SHA-256
-of its exact response bytes. Clients therefore retain unchanged bytes but must
+itself, with the release time where there is one, is the `?identity` validator,
+so revalidating after a redeploy of unchanged source gets a `200` carrying its
+new time rather than a `304`; a source module's validator is the SHA-256 of its
+exact response bytes. Clients therefore retain unchanged bytes but must
 conditionally revalidate them before every update attempt.
 
 **Runtime side (when the piece is opened).** Resolve the piece without starting
@@ -565,14 +578,34 @@ then start it:
 3. If `currentId` equals the running `patternIdentity.identity`, probe that
    exact stored artifact. A successful load is done. A missing or unloadable
    artifact continues to compile from source rather than taking the fast path,
-   which is what puts the artifact back.
-4. Revalidate `{host}{url}` and every module in its complete authored import
+   which is what puts the artifact back. Either way, an answer stating a later
+   release time than the running source's moves that time forward: the
+   reconciliation record confirms the running source at it.
+4. The running source's release time is the later of the one the revision that
+   adopted it records and the one the reconciliation record confirms for it.
+   If `currentId` differs and the running source has a release time, an answer
+   stating an earlier time or none is an earlier release than the piece runs.
+   The piece keeps its source, and the attempt records that it follows its
+   origin, naming the source it runs rather than the earlier one offered, so
+   that hosts offering the two releases in turn leave the record as it is.
+   Two answers stating the same time are not ordered, and an answer to a piece
+   whose source records no time is not either. A running artifact that will
+   not load has nothing to start and continues regardless, so the earlier
+   release is a rescue, unless the piece's history records its move from the
+   offered source to the running one. A runtime older than the release a piece
+   moved to cannot load it either, and in that case is behind it rather than
+   holding a dead pattern: the piece keeps its source, as against any earlier
+   release, so a stale runtime and a current one sharing the piece do not move
+   it between the two. A release time that is not one leaves the piece's
+   source as it is, like a failed identity request.
+5. Revalidate `{host}{url}` and every module in its complete authored import
    closure with the same `no-cache` fetch policy, then compile with the export
    symbol the piece already runs. Apply only when the compiler supplies an
    entry ref whose identity exactly equals `currentId`; never synthesize a ref
    or fall back around `?identity`. A fetch, compile, evaluation,
    missing-entry-ref, or identity-mismatch failure leaves the piece unchanged.
-5. Synchronize the piece's stored argument, then write the transition. The
+6. Synchronize the piece's stored argument, then write the transition, whose
+   revision records the release time the answer stated, if any. The
    captured identity and source must still match on every attempt, and so must
    that argument, so a concurrent edit, detach, repoint, or replacement wins.
    A piece that is not running has the candidate staged over its document in
@@ -580,10 +613,10 @@ then start it:
    re-instantiated by the watcher already installed on it. Staging the candidate
    is also what refuses one the piece's stored data cannot satisfy: the setup
    rejects it, the transaction fails, and the piece stays as it was.
-6. Start the piece. A piece compiled moments ago from the source it was created
+7. Start the piece. A piece compiled moments ago from the source it was created
    with is started directly: following that origin again would only fetch what
    it was just built from. A surface the runtime is instantiating for the first
-   time reaches this loop with no piece to follow yet, so steps 2 and 4 resolve
+   time reaches this loop with no piece to follow yet, so steps 2 and 5 resolve
    its supplied ref outright, and the run that brings the piece into being
    records that ref with its creation revision.
 
@@ -601,7 +634,18 @@ normally hashes to a different entry identity and the pattern pointer is not
 written. The same rule covers an identity-algorithm incompatibility between an
 older worker and a newer toolshed: disagreement prevents the update. No
 `/api/meta` request, git-SHA comparison, pattern response build header, or
-worker-to-shell version-skew signal is part of the authorization path.
+worker-to-shell version-skew signal is part of the authorization path. The
+release time is not part of it either: it decides whether a candidate is a later
+release than the running one, never whether the content is what the host
+advertised.
+
+What fails closed within one attempt does not settle anything across attempts.
+Instances serving two releases at once — a deployment partway through
+restarting them, two deployments reaching the same memory — answer one piece's
+successive attempts differently, each consistently, and each answer differs from
+what the last attempt adopted. Ordered by identity alone, the piece would move
+on every attempt. The release time is what keeps it on the later release:
+step 4 refuses the earlier one.
 
 Authored identity deliberately does not fingerprint bare runtime imports or the
 runtime's implementation. Local compilation and evaluation are a capability

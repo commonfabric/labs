@@ -34,19 +34,19 @@ stores each module's text as one, and its records link to them.
 ## Motivation
 
 A link's `schema` field (`CellLinkRefPayload`,
-`packages/runner/src/sigil-types.ts`) holds a complete, self-contained JSON
+`runtime/runner/src/sigil-types.ts`) holds a complete, self-contained JSON
 Schema — including its whole `$defs` closure — inlined verbatim into the
 stored document. Nothing deduplicates it at rest. The same schema is
 duplicated on three surfaces:
 
 1. **At rest, per link.** Every schema-bearing link in a stored document
    carries a full copy. Prolific writers include every rendered VDOM prop
-   link (`packages/html/src/worker/reconciler.ts`), pattern bindings, and
+   link (`runtime/html/src/worker/reconciler.ts`), pattern bindings, and
    result links. Narrowing multiplies the problem: `schemaAtPath` re-attaches
    the reachable `$defs` closure to every narrowed variant, so N views into
    one type store N overlapping closures.
 2. **Client→server, per watch.** `SpaceReplica.#refreshWatchSet()`
-   (`packages/runner/src/storage/v2.ts`) sends one watch spec per (doc,
+   (`runtime/runner/src/storage/v2.ts`) sends one watch spec per (doc,
    selector), each with the full inline selector schema. No compression
    exists in this direction, and a reconnect the server cannot resume
    re-sends the entire accumulated watch set — the payload grows
@@ -63,23 +63,23 @@ durable schema identity: a name that is valid in storage, in queries, and
 across sessions. The system already has the pieces:
 
 - **Schema hashing and interning** — `internSchemaAsTaggedHashString`
-  (`packages/data-model-schema/src/schema-intern.ts`) produces a
+  (`base/data-model-schema/src/schema-intern.ts`) produces a
   `fid1:` tagged hash; the intern table already gives structurally equal
   schemas one identity per process.
 - **Content-addressed schema documents** — CFC persists schemas as
   `cid:<taggedHash>` documents (`ensureSchemaDocument`,
-  `packages/runner/src/cfc/prepare.ts`) through the shared
+  `runtime/runner/src/cfc/prepare.ts`) through the shared
   schema-document staging (registration, per-transaction dedupe,
   confirmed-persistence elision), with client-side hash verification on
   read and traversal support: the server's
   graph traversal synthesizes a link from the `cfc.schemaHash` field and
   includes the schema document in query results and watch sets
-  (`cfcMetaToSigilLink`, `packages/runner/src/traverse.ts`).
+  (`cfcMetaToSigilLink`, `runtime/runner/src/traverse.ts`).
 - **Cycle condensation** — module identity hashing already condenses
   strongly connected components so import cycles hash as a unit
-  (`computeModuleHashes`, `packages/runner/src/harness/module-identity.ts`).
+  (`computeModuleHashes`, `runtime/runner/src/harness/module-identity.ts`).
 - **A reserved namespace** — `REQUEST_SCHEMA_CAS_REF_PREFIX`
-  (`packages/memory/v2/schema-table-links.ts`) reserves `schema-cas@1:` for
+  (`runtime/memory/v2/schema-table-links.ts`) reserves `schema-cas@1:` for
   transport; the storage-side counterpart is this design.
 
 ## Design
@@ -239,7 +239,13 @@ keyword, the resource-scope keywords (`$id`, `$anchor`, `$dynamicAnchor`,
 `$recursiveRef`, whose scoping the rewrite cannot preserve), and an
 external
 ref whose document is not at hand — and a writer falls back to carrying
-such a schema inline, as today.
+such a schema inline, as today. A merged envelope never reaches the fallback
+on account of its definition map: the merge returns the document in
+canonical form, with one map at the root holding every definition the
+author named, at most one minted definition per meaning those do not carry,
+and nothing a merge minted that the document does not reach
+(`canonicalizeCfcSchemaDocument` in the runner's `cfc/schema-refs.ts`), so
+the hash an envelope is stamped with is of that form.
 
 An external ref is a `$ref` whose value is a `cid:` URI:
 
@@ -301,7 +307,7 @@ simply a schema whose only member is an external `$ref`:
 This keeps the payload type, the three schema-position walkers
 (`mapLinkSchemas`, `findSyncSchemaRef`, `containsSyncSchemaRefString` — which
 must all learn the new form in one change; the walker-agreement test in
-`packages/memory/test/v2-sync-schema-table.test.ts` pins that), and the
+`runtime/memory/test/v2-sync-schema-table.test.ts` pins that), and the
 schema-combination path structurally unchanged: a reference dereferences to
 exactly the schema that would have been inline.
 
@@ -313,7 +319,7 @@ in the target space (same transaction), and stamps the reference.
 vocabulary, not links; they adopt the same reference form on the same
 schedule as the link flip, which retires the standing "`$alias` schemas
 travel inline indefinitely" carve-out in
-`packages/memory/v2/schema-table-links.ts`.
+`runtime/memory/v2/schema-table-links.ts`.
 
 ### References in result-schema metadata
 
@@ -349,7 +355,7 @@ the enforcement or was written out of band. Keeping the grammar to two
 forms is what lets a reader recompose a reference without merging two
 schema-resource scopes.
 
-The writer (`writeResultSchemaMeta`, `packages/runner/src/result-schema-meta.ts`)
+The writer (`writeResultSchemaMeta`, `runtime/runner/src/result-schema-meta.ts`)
 decomposes the schema as a link writer does, registers the closure, and
 stamps the reference; the transaction's schema-document staging reads the
 `schema` member of a written document — or a write made at that member —
@@ -426,7 +432,7 @@ local store at the reading seams:
   server registers through traversal without one) retains for the process
   lifetime; its entries are a cache over its own store, so a size cap there
   is safe if ever needed — an evicted document is one local read away.
-- `resolveSchemaRefs` (`packages/runner/src/cfc/schema-refs.ts`) extends
+- `resolveSchemaRefs` (`runtime/runner/src/cfc/schema-refs.ts`) extends
   from `#/$defs/<name>`-only to `cid:` refs (with optional `#/$defs/<name>`
   fragment), resolving through the registry. An unresolvable ref keeps the
   existing fail-closed contract: `resolveSchema` returns `false`, and
@@ -549,21 +555,24 @@ declared by a link inside B resolves in B when that next link is followed.
 
 An immutable document (`snapshot:` or portable `data:`) is stored in no
 space, and nothing writes it. A native snapshot retains its frozen value
-and relative-link origin; a portable identifier encodes its value. A link inside one resolves its schema's `cid:` references
-in the space carried by the address that names the document, by the same
-rule and through the same gates as a link inside a stored document. Two
-kinds of immutable document differ in what that space holds:
+and relative-link origin; a portable identifier encodes its value. A link
+inside one keeps its schema in the form the value held it, and resolves
+the schema's `cid:` references through the same gates as a link inside a
+stored document. Where the closure is looked for depends on what minted
+the document:
 
 - A snapshot of a value read out of a stored document — an array element
-  read by value — is addressed in that document's space and keeps each
-  link's schema in the form the stored value held it. A reference among them
-  names a closure the write-side guarantee below put in that space, with the
-  write that stored the link.
+  read by value — is addressed in that document's space, and a reference
+  among its links' schemas resolves there: the write-side guarantee below
+  put the closure in that space, with the write that stored the link.
 - A document minted from a value no space has stored
-  (`Runtime.getImmutableCell()`) has no such write behind it, so it carries
-  each link's schema in the inline form, recomposed through the realm
-  registry when the document is minted. A reference the registry cannot
-  recompose stays a reference, and the gates decide the read.
+  (`Runtime.getImmutableCell()`) has no such write behind it, so no space
+  holds the closure a reference among its links' schemas names. The realm
+  registry does, since it minted the reference, and the traversal's loader
+  takes a document the registry holds from the registry for such a
+  document, without reading the space the document is addressed in. A
+  document the registry lacks is read from that space, as for a stored
+  document, and the gates decide the read.
 
 A schema document's value is space-free: content addressing makes the
 bytes identical wherever they are stored, so the realm-wide registry
@@ -577,10 +586,8 @@ documents available alongside their declarations:
   decomposed closure is written into the space that will hold the
   reference, in the same transaction as the reference itself. A
   transaction stamps the reference itself on an inline link schema it
-  writes into an ordinary document — a value copied out of an immutable
-  document minted from unstored data carries its link schemas inline, and
-  would otherwise store and send every closure in full. Three kinds of
-  inline schema stay as written:
+  writes into an ordinary document, which would otherwise store and send
+  the closure in full. Three kinds of inline schema stay as written:
   a trivial one, one that decomposition refuses, and one that takes no more
   wire bytes than the reference that would replace it, a bare handle stamp
   such as `{ asCell: ["stream"] }` among them; an immutable document is never

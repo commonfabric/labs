@@ -9,13 +9,13 @@ subscriber's watch set covers, and which of them a write has invalidated.
 The two must give the same answer. If a server thinks a schema reaches five
 documents and a client thinks it reaches six, the sixth never arrives and the
 client waits on a document nobody will send. So there is one implementation of
-graph traversal, in `packages/runner/src/traverse.ts`, and the memory server
+graph traversal, in `runtime/runner/src/traverse.ts`, and the memory server
 calls it. That is the reason for the import edge from `memory` to `runner`, and
 it is the reason the edge is not going away.
 
 ## What the two packages exchange
 
-`packages/memory/v2/query.ts` is the only file in `memory` that imports `runner`
+`runtime/memory/v2/query.ts` is the only file in `memory` that imports `runner`
 for the graph query, and everything that query needs comes from one place:
 `@commonfabric/runner/graph-query`.
 
@@ -65,11 +65,23 @@ caller keeps them, walks them under a schema, and records what it reached.
   fire for them changes which documents a traversal re-walks and what
   consumers of traversed values observe; see the OFF-ARM NEUTRALITY note at
   that site for what gates enabling it.
+- A walk reports each tracker record it makes, or finds the tracker already
+  holding, to the `onTrackedDoc` hook of its options, with the document whose
+  walk needed it: the document holding the link that was followed, the
+  document whose schema or `cfc` envelope named a schema document, or the
+  referrer `visit()` was given for a root. `memory` attributes its tracker
+  with that, so a document nothing reaches any more can leave a session's
+  result (`../specs/memory-v2/04-protocol.md`, section 4.6.3). A visit a
+  memory server's incremental passes make to a document it already tracks,
+  for a root added again, a covered root walked on its own, or a document
+  walked again for its attributions, asks for a `rewalk`, which traverses
+  the document itself even where the shared memo holds it, so that its links
+  are reported again; a graph's first evaluation does not.
 - The rest is vocabulary the two sides name in common:
   `MapSetStringToPathSelectors` (the tracker), `schemaTrackerCoversSelector`
-  (whether a tracker already covers a selector), `createSchemaMemo` and
-  `SchemaMemo` (traversal results reused across walks), and the address and
-  selector types.
+  and `coveringSelector` (whether a tracker already covers a selector, and
+  which record does), `createSchemaMemo` and `SchemaMemo` (traversal results
+  reused across walks), and the address and selector types.
 
 Everything else about a query — the engine reads, the entity snapshots, the
 watch bookkeeping, the branch and sequence handling — stays in `memory`.
@@ -95,12 +107,12 @@ write can still answer with what that document used to reach.
 The edge is one import statement, but the module behind it is not a leaf.
 `runner/src/graph-query.ts` imports `traverse.ts` and the extended storage
 transaction, and those reach `cell.ts`, which reaches the runtime and its
-builtins. Loading `packages/memory/v2/server.ts` therefore loads 459 modules and
+builtins. Loading `runtime/memory/v2/server.ts` therefore loads 459 modules and
 210,000 lines, 267 of those modules from `runner` and the rest reached through
 it — `js-compiler`, `llm`, and `html` among the packages that arrive this way.
 Counting dynamic imports as well takes it to 596 modules.
 
-The transactional core does not: `packages/memory/v2/engine.ts` reaches 124
+The transactional core does not: `runtime/memory/v2/engine.ts` reaches 124
 modules and 35,000 lines, none of them from `runner`, since the
 content-addressed schema vocabulary it validates commits with sits in
 `@commonfabric/data-model-schema`. The engine is a runner-free store; what the

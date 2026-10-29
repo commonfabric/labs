@@ -269,7 +269,7 @@ describe("calibrate", () => {
     });
 
     it("keeps two lanes of one run apart", () => {
-      // Five lanes of a run may each hold the same suite, and adding two
+      // Several lanes of a run may each hold the same suite, and adding two
       // lanes' figures would describe a batch neither of them ran.
       const seen = observationsOf([
         { run: "run-1-lane-1", records: batch("runner-unit", 10, 30, 4) },

@@ -67,12 +67,12 @@ later. It has no connector tokens and no `wellKnownGrants` record. The task
 input contains its text and a `loomId`, with no attached input cells.
 
 **Mechanism.**
-[`resolveWellKnownGrantRefs()`](../../../../packages/cf-harness/src/well-known-grants.ts#L142)
+[`resolveWellKnownGrantRefs()`](../../../../runtime/cf-harness/src/well-known-grants.ts#L142)
 calls `getDefaultPattern(false)` and throws on an absent default pattern before
 it reaches the independently configured connector grants.
-[`establishContextMessages()`](../../../../packages/cf-harness/src/session-assembly.ts#L386)
+[`establishContextMessages()`](../../../../runtime/cf-harness/src/session-assembly.ts#L386)
 catches that exception. The interactive caller's
-[`onGrantsUnavailable`](../../../../packages/cf-harness/src/interactive-chat-service.ts#L1665)
+[`onGrantsUnavailable`](../../../../runtime/cf-harness/src/interactive-chat-service.ts#L1665)
 only logs it. The model receives neither the references nor the reason they are
 unavailable.
 
@@ -107,7 +107,7 @@ The parent noticed the unusable result, but treated the absence of `mail` as
 something a default or a child could solve.
 
 **Mechanism.** The
-[`run_pattern` argument checks](../../../../packages/cf-harness/src/tools/run-pattern.ts#L1217)
+[`run_pattern` argument checks](../../../../runtime/cf-harness/src/tools/run-pattern.ts#L1217)
 reject undeclared supplied keys and validate supplied live and plain values.
 Their loops do not examine an omitted required key. The result-error path
 reports a failure only when its observation window identifies an attributable
@@ -186,7 +186,7 @@ without truncation, and exactly reproduced the recorded eight-section selection.
 query consisting only of `WishState` selected “Result Shape” first.
 
 The lexical scorer in
-[`sections.ts`](../../../../packages/cf-harness/src/docs-corpus/sections.ts#L138)
+[`sections.ts`](../../../../runtime/cf-harness/src/docs-corpus/sections.ts#L138)
 accumulates generic wording such as “pattern,” “pass,” and “value” across
 headings and paths. The exact symbol does not control the selection. This
 isolates a retrieval failure from an answer-model failure; a larger answer model
@@ -230,7 +230,7 @@ demonstrates actual reuse, unlike the handoff's run 7.
 
 The selected description promises **this month's mail headers**. The user's
 request has no month restriction and names the inbox. The corresponding
-[`mailbox-month-headers` primitive](../../../../packages/patterns/primitives/mailbox-month-headers.tsx#L99)
+[`mailbox-month-headers` primitive](../../../../patterns/product/primitives/mailbox-month-headers.tsx#L99)
 filters by month and deletion state, without an inbox-membership predicate; its
 UI also does not display the snippet that the wrapper's description promises.
 The imported source was not separately fetched during this analysis, so the

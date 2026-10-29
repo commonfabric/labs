@@ -1,44 +1,113 @@
 name: Manual Production Deployment
 
-run-name: Deploy ${{ inputs.ref }} to Estuary
+run-name: Estuary ${{ inputs.ref }} from ${{ inputs.source_branch }} (verify=${{ inputs.verify_only }})
 
 on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Git commit SHA or tag to deploy"
+        description: "Full lowercase Labs commit SHA"
         required: true
         type: string
+      source_branch:
+        description: "Branch containing the selected Labs commit"
+        type: choice
+        default: main
+        options: [main, alex-daily]
+      verify_only:
+        description: "Verify all Estuary workers and HTTPS without deploying"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: estuary-production-deployment
+  cancel-in-progress: false
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - &check-window
+        name: 🔎 Check the authorized source window
+        env:
+          SOURCE_BRANCH: ${{ inputs.source_branch }}
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          if [[ "$WORKFLOW_REF" != refs/heads/main ]]; then
+            echo '::error::Dispatch the production workflow on main.'
+            exit 1
+          fi
+          case "$SOURCE_BRANCH" in
+            main) ;;
+            alex-daily)
+              now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+              if [[ "$now" < '2026-10-19T22:15:16Z' || ! "$now" < '2026-10-22T22:15:16Z' ]]; then
+                echo '::error::The alex-daily Estuary authorization has expired or has not started.'
+                exit 1
+              fi ;;
+            *) echo '::error::Unsupported source branch.'; exit 1 ;;
+          esac
+
+      - name: 🔎 Verify the exact source commit
+        id: resolve
+        env:
+          DEPLOY_SHA: ${{ inputs.ref }}
+          SOURCE_BRANCH: ${{ inputs.source_branch }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ ! "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo '::error::ref must be a full lowercase commit SHA.'
+            exit 1
+          fi
+          status=$(gh api "repos/$GITHUB_REPOSITORY/compare/$DEPLOY_SHA...$SOURCE_BRANCH" --jq .status)
+          case "$status" in
+            ahead|identical) ;;
+            *) echo '::error::The commit is not on the selected source branch.'; exit 1 ;;
+          esac
+          echo "sha=$DEPLOY_SHA" >> "$GITHUB_OUTPUT"
+
   deploy-estuary:
     name: "Deploy to Estuary (Production)"
+    needs: validate
     runs-on: ubuntu-latest
     environment: estuary # Protection rules configured in GitHub repo settings
 
     steps:
+      - *check-window
       - name: 📥 Checkout specific ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.inputs.ref }}
+          ref: ${{ needs.validate.outputs.sha }}
+          persist-credentials: false
 
       - name: 🔍 Resolve ref to commit SHA
         id: resolve
+        env:
+          DEPLOY_SHA: ${{ needs.validate.outputs.sha }}
         run: |
           SHA=$(git rev-parse HEAD)
-          echo "Deploying ref: ${{ github.event.inputs.ref }} (commit: $SHA)"
+          test "$SHA" = "$DEPLOY_SHA"
+          echo "Selected commit: $SHA"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
       # Download the artifacts for this specific SHA from the artifact storage
       - name: 🔑 Authenticate to Google Cloud
-        uses: google-github-actions/auth@3a3c4c57d294ef65efaaee4ff17b22fa88dd3c69 # v1.3.0
+        if: ${{ !inputs.verify_only }}
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       - name: ⚙️ Setup Google Cloud SDK
-        uses: google-github-actions/setup-gcloud@e30db14379863a8c79331b04a9969f4c1e225e0b # v1.1.1
+        if: ${{ !inputs.verify_only }}
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
       - name: 📥 Download tarball from GCS
+        if: ${{ !inputs.verify_only }}
         run: |
           mkdir -p downloaded-artifacts
           gsutil cp gs://commontools-build-artifacts/workspace-artifacts/labs-${{ steps.resolve.outputs.sha }}.tar.gz downloaded-artifacts/
@@ -51,11 +120,14 @@ jobs:
           fi
 
       - name: 🦕 Setup Deno
+        if: ${{ !inputs.verify_only }}
         uses: ./.github/actions/deno-setup
         with:
           cache: false
 
+      - *check-window
       - name: 🚀 Deploy application to Estuary (Production)
+        if: ${{ !inputs.verify_only }}
         id: deployment
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         with:
@@ -63,3 +135,75 @@ jobs:
           username: bastion
           key: ${{ secrets.BASTION_SSH_PRIVATE_KEY }}
           script: /opt/cf/deploy.sh ${{ vars.DEPLOYMENT_ENVIRONMENT }} ${{ steps.resolve.outputs.sha }}
+
+      - name: 🔎 Verify every Estuary worker and HTTPS
+        id: evidence
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
+        env:
+          DEPLOY_SHA: ${{ steps.resolve.outputs.sha }}
+        with:
+          host: ${{ secrets.BASTION_HOST }}
+          username: bastion
+          key: ${{ secrets.BASTION_SSH_PRIVATE_KEY }}
+          envs: DEPLOY_SHA
+          capture_stdout: true
+          script: |
+            set -eu
+            ssh -i /home/bastion/.ssh/id_ed25519 -o BatchMode=yes deploy@estuary.saga-castor.ts.net python3 - "$DEPLOY_SHA" <<'PY'
+            import base64, concurrent.futures, datetime, json, sys, urllib.request
+            expected = sys.argv[1]
+            host = "estuary.saga-castor.ts.net"
+            ports = list(range(8001, 8022))
+            def read_meta(url):
+                with urllib.request.urlopen(url) as response:
+                    if response.status != 200 or response.geturl() != url:
+                        raise ValueError("Unexpected HTTP status: " + str(response.status))
+                    body = json.load(response)
+                if body.get("gitSha") != expected:
+                    raise ValueError("Wrong Labs revision from " + url)
+                return body["gitSha"]
+            def worker(port):
+                return {"host": host, "port": port, "git_sha": read_meta(f"http://127.0.0.1:{port}/api/meta")}
+            with concurrent.futures.ThreadPoolExecutor(max_workers=21) as pool:
+                workers = list(pool.map(worker, ports))
+            url = "https://estuary.saga-castor.ts.net/api/meta"
+            proof = {"labs_sha": expected, "expected_workers": {host: ports}, "workers": workers,
+                     "https": {"url": url, "git_sha": read_meta(url)},
+                     "verified_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+            print("ESTUARY_RECEIPT:" + base64.b64encode(json.dumps(proof).encode()).decode())
+            PY
+
+      - name: 🔎 Validate and save the Estuary receipt
+        env:
+          REMOTE_OUTPUT: ${{ steps.evidence.outputs.stdout }}
+          DEPLOY_SHA: ${{ steps.resolve.outputs.sha }}
+          SOURCE_BRANCH: ${{ inputs.source_branch }}
+          VERIFY_ONLY: ${{ inputs.verify_only }}
+        run: |
+          python3 - <<'PY'
+          import base64, json, os, pathlib
+          lines = [line.removeprefix("ESTUARY_RECEIPT:") for line in os.environ["REMOTE_OUTPUT"].splitlines()
+                   if line.startswith("ESTUARY_RECEIPT:")]
+          if len(lines) != 1:
+              raise ValueError("Expected exactly one Estuary receipt")
+          proof = json.loads(base64.b64decode(lines[0], validate=True))
+          host = "estuary.saga-castor.ts.net"
+          sha = os.environ["DEPLOY_SHA"]
+          workers = [{"host": host, "port": port, "git_sha": sha} for port in range(8001, 8022)]
+          if (proof["labs_sha"] != sha or proof["workers"] != workers or
+                  proof["expected_workers"] != {host: list(range(8001, 8022))} or
+                  proof["https"] != {"url": "https://" + host + "/api/meta", "git_sha": sha}):
+              raise ValueError("Receipt does not verify the complete Estuary backend")
+          proof.update(repository=os.environ["GITHUB_REPOSITORY"], workflow_sha=os.environ["GITHUB_SHA"],
+                       run_id=os.environ["GITHUB_RUN_ID"], run_attempt=os.environ["GITHUB_RUN_ATTEMPT"],
+                       source_branch=os.environ["SOURCE_BRANCH"], verify_only=os.environ["VERIFY_ONLY"] == "true")
+          pathlib.Path(os.environ["RUNNER_TEMP"], "receipt.json").write_text(json.dumps(proof, indent=2) + "\n")
+          PY
+
+      - name: 📤 Upload verified Estuary evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: estuary-deployment-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/receipt.json
+          if-no-files-found: error
+          retention-days: 7

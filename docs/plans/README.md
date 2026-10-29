@@ -22,12 +22,19 @@ a record: archive it to `docs/history/plans/` following the procedure in
 - [Unify Weaver Ask and CF harness](weaver-ask-console.md) sequences typed
   callbacks, a cohesive handles module, one session UI for both command aliases,
   and hands-on demo validation across labs, Weaver, and Loom.
+- [The served vote's remaining cost: the main thread's fan-out](served-vote-fan-out.md)
+  carries the served-vote investigation on from where its records leave it:
+  the memory server's per-session walk and encode on the main thread, the
+  four measurements that decide which change to make, the recipes for taking
+  them, and how the overlapped commit is validated.
+- [The serving loop off the request thread](serving-loop-worker.md) moves the
+  server-execution host into a Web Worker of the toolshed process: the worker
+  reads the store on its own SQLite connections, sends wave commits and
+  everything else it needs from the memory server over a `MessagePort`, and
+  the request thread stops waiting behind waves.
 - [Memory router security requirements](memory-router-security-requirements.md)
   defines the authentication, authorization, isolation, and public-ingress
   gates for multiplexed Memory WebSockets routed to toolsheds.
-- [Compact CFC label maps](compact-cfc-label-maps.md) proposes shared label
-  subtrees, graph-aware policy queries, and a reader-first stored-format migration
-  to bound the cost of staged reference diamonds.
 - [Independent reference labels](cfc-independent-reference-labels.md) moves a
   link write to the specified contract (§8.2, §8.12.8): the slot persists the
   creating attempt's own label and nothing copied from the target, a label
@@ -163,6 +170,12 @@ a record: archive it to `docs/history/plans/` following the procedure in
   the loop on purpose. The
   backoff Topic 911 waits for, and the first of Topic 913's three guardrails.
   Always on, in every runtime.
+- [Durable history of new real test failures and a bounded
+  aggregate](durable-new-real-test-failure-history.md) keeps every new real
+  test failure the test-selection publisher has credited a test with through
+  a bootstrap, a rename, and an outage, and stops the publisher's aggregate
+  growing with the age of the store. It is built, and waits for the checks
+  its first run after landing answers.
 - [Memory `apply-op`](memory-apply-op.md) sequences the editor-neutral
   collaborative-field substrate, the first CodeMirror codec and editor
   integration, and the checkpoints and review gates required before a future
@@ -249,8 +262,8 @@ a record: archive it to `docs/history/plans/` following the procedure in
   [shaped reads and verb results](shaped-reads-and-verb-results.md) — the shared
   read layer, how a shape says "an address here, a value there", and what
   calling a verb adds — and at
-  [CLI surface shape](cli-surface-shape.md) for the command surface and an
-  additive path to it. Start here rather than at either part.
+  [CLI surface shape](../history/plans/cli-surface-shape.md) for the command surface, an executed
+  plan now archived. Start here rather than at either part.
 - [References as arguments](references-as-arguments.md) proposes lifting
   address resolution out of the LLM dialog builtin, which already does it, and
   into the boundary every external caller crosses. An LLM and the CLI can

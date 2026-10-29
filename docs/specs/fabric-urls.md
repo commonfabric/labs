@@ -4,7 +4,7 @@
 
 Concept design. No implementation or deployment is currently planned. The
 document remains a reference for evaluating a future URL and naming system;
-the [current shell routes](../../packages/shell/README.md#routes) remain
+the [current shell routes](../../runtime/shell/README.md#routes) remain
 authoritative.
 
 The [space name registry](../plans/space-name-registry.md) describes a
@@ -20,12 +20,12 @@ compatible implementation concept. It is also not planned for deployment.
 
 ### Non-goals
 
-ASPs already have to deal with abuse reports for content, so it is a trivial
-problem to add short names to their list of abuse concerns. Therefore, we are
-not concerned with making names have deniability, or otherwise safeguarding the
-creation of names from ASPs. ASPs will need to deal with squatting abuse,
-rate-limiting name adoption, and similar concerns. The mechanisms to do this are
-out of scope at this time.
+Application service providers (ASPs) already have to deal with abuse reports for
+content, so it is a trivial problem to add short names to their list of abuse
+concerns. Therefore, we are not concerned with making names have deniability, or
+otherwise safeguarding the creation of names from ASPs. ASPs will need to deal
+with squatting abuse, rate-limiting name adoption, and similar concerns. The
+mechanisms to do this are out of scope at this time.
 
 ### Technical constraints
 

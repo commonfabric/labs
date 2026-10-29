@@ -13,9 +13,11 @@ a job passes it only works once the matching infra change has landed and been
 deployed. `docs/development/deploying.md` describes which jobs deploy where and
 what the wrapper accepts.
 
-The staging deploy jobs trigger on pushes to `main`, so a change to one of them
-cannot be exercised on a branch. Reason it through before merging rather than
-after.
+The Rapids receiver and `deploy-shell-staging` run only on `main`, so neither
+deployment can be exercised on a pull-request branch. Reason through changes
+to both before merging. The Rapids wrapper must be installed before its Labs
+call site merges; `tasks/rapids-workflows.test.ts` checks the receiver's trust
+gates and success-proof sequence locally.
 
 ## Step names carry a phase marker
 
@@ -114,14 +116,16 @@ The Dashboard workflow's tests job is the one such job, and the test-records
 relay (`.github/workflows/test-records-relay.yml`) does not follow that
 workflow.
 
-A check that no lane can be asked to run records nothing either.
-`docs/specs/test-records.md` under "Recording" holds the criterion. Three checks
-are of that shape. Two are steps of `Status` in `deno.yml`: the coverage gate,
-which reads the coverage artifacts of every lane in its own run, and the store
-half of the topology's drift guard, which reads those lanes' records. The third
-is the CFC Property Suite's audit step, which reads the corpus the suite in the
-step before it has just written. `Status` ships only the coverage measurements a
-push run writes, which are measurements rather than records of a check. A gate
+A check that nothing can be asked to run records nothing either.
+`docs/specs/test-records.md` under "Recording" holds the criterion. Two checks
+are of that shape: the store half of the topology's drift guard, a step of
+`Status` in `deno.yml` that reads the records of every lane in its own run, and
+the CFC Property Suite's audit step, which reads the corpus the suite in the
+step before it has just written. The coverage gates are recorded although no
+lane runs them, because a plan runs one by choosing its measured set's units,
+and the topology's `coverage-gate` suite claims their identities. `Status`
+judges them and ships their records on every run, with the coverage
+measurements a push run writes beside them. A gate
 comparing against a base ref is not this: `check-baselines-append-only` and
 `check-test-aliases` each resolve a merge base, and both run in a lane and
 record.
@@ -139,8 +143,9 @@ audit step leave that workflow taking no part in test records at all.
 
 There are no jobs to split or rebalance by hand: the lanes pack every test by
 its measured cost. What decides a lane's wall time is the lane dials in
-`tasks/test-selection/policy.ts` — `LANES`, `LANE_BOUND_SECONDS`,
-`LANE_SAFETY_SECONDS`, `FULL_LANE_BOUND_SECONDS` and `FULL_LANES_MAX` — and
+`tasks/test-selection/policy.ts` — `DISCRETIONARY_SECONDS`,
+`LANE_BOUND_SECONDS`, `LANE_SAFETY_SECONDS`, `FULL_LANE_BOUND_SECONDS` and
+`LANES_MAX` — and
 "Every dial" in `docs/development/test-selection.md` gives the reason to move
 each. `docs/development/CI_PERFORMANCE.md` says when changing them is worth
 starting. Read it first.

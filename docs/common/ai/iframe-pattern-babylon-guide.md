@@ -13,7 +13,7 @@ hybrid.
 ## Source layout and durable model
 
 ```text
-packages/patterns/babylon-shared-scene/
+patterns/examples/babylon-shared-scene/
 ├── contract.ts
 ├── guest.ts
 ├── guest.html
@@ -269,6 +269,13 @@ must be agreed on or must survive stays a Cell write.
 [Optional presence](./iframe-pattern-guide.md#optional-presence) in the
 iframe pattern guide is the contract.
 
+An action the pattern exposes as a verb, or work only the pattern can start,
+such as a request to `agent()` or another LLM built-in, goes through a verb the
+pattern passes in as a stream where it can; the guest sends it an event with
+`fabric.stream(name).send(event)`.
+[Optional streams](./iframe-pattern-guide.md#optional-streams) in the iframe
+pattern guide is the contract.
+
 The iframe CSP does not grant arbitrary network access. Prefer procedural
 geometry and materials in a self-contained guest. If a scene needs external
 models or textures, include them as supported pattern data rather than fetching
@@ -348,15 +355,15 @@ once.
 ## Generate and validate
 
 ```bash
-deno run -A tools/write-iframe-wrapper.ts \
-  --contract packages/patterns/babylon-shared-scene/contract.ts \
-  --guest packages/patterns/babylon-shared-scene/guest.ts \
-  --html packages/patterns/babylon-shared-scene/guest.html \
-  --out packages/patterns/babylon-shared-scene/main.tsx
+deno run -A scripts/write-iframe-wrapper.ts \
+  --contract patterns/examples/babylon-shared-scene/contract.ts \
+  --guest patterns/examples/babylon-shared-scene/guest.ts \
+  --html patterns/examples/babylon-shared-scene/guest.html \
+  --out patterns/examples/babylon-shared-scene/main.tsx
 
-deno fmt packages/patterns/babylon-shared-scene
-deno check packages/patterns/babylon-shared-scene/guest.ts
-deno task cf check packages/patterns/babylon-shared-scene/main.tsx --no-run
+deno fmt patterns/examples/babylon-shared-scene
+deno check patterns/examples/babylon-shared-scene/guest.ts
+deno task cf check patterns/examples/babylon-shared-scene/main.tsx --no-run
 ```
 
 Launch the pattern with the steps under

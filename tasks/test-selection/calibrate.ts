@@ -251,10 +251,10 @@ export function laneObservations(
  * every one of them passed.
  *
  * They are keyed by the run, the suite, and whether coverage was on,
- * because five lanes of one run may each run the same suite and adding
- * two lanes' figures would describe a batch neither of them ran. Not by
- * the measurement's name, which is what tells the five apart and would
- * therefore keep them apart.
+ * because several lanes of one run may each run the same suite and
+ * adding two lanes' figures would describe a batch neither of them ran.
+ * Not by the measurement's name, which is what tells the lanes apart and
+ * would therefore keep them apart.
  */
 export function observationsOf(
   runs: Iterable<{ run: string; records: Iterable<TestRecord> }>,

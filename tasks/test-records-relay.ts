@@ -35,6 +35,7 @@ import {
   readEnv,
   RECORD_SCHEMA_VERSION,
   type RunContext,
+  shippedArtifact,
   type TestRecord,
 } from "@commonfabric/test-support/records";
 import { isObjectOrArray } from "@commonfabric/utils/types";
@@ -225,7 +226,7 @@ async function readArtifactRecords(dir: string): Promise<TestRecord[]> {
     if (line.length === 0) continue;
     const record = parseRecordLine(line);
     if (record === undefined) {
-      console.warn(`test records: dropped an unparsable line in ${dir}`);
+      console.warn(`test records: dropped a line no reader accepts in ${dir}`);
       continue;
     }
     records.push(record);
@@ -254,11 +255,11 @@ export async function relayArtifacts(options: RelayOptions): Promise<string[]> {
   const names: string[] = [];
   for await (const entry of Deno.readDir(options.artifactsDir)) {
     if (!entry.isDirectory) continue;
-    const attempt = entry.name.match(/-a(\d+)$/)?.[1];
+    const attempt = shippedArtifact(entry.name)?.attempt;
     if (attempt === undefined) {
       console.error(`test records: ${entry.name} names no attempt`);
       failed.push(entry.name);
-    } else if (Number(attempt) === options.run.runAttempt) {
+    } else if (attempt === options.run.runAttempt) {
       names.push(entry.name);
     } else {
       console.log(`test records: ${entry.name} is another attempt's`);
