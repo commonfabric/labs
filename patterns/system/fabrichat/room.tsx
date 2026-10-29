@@ -1561,7 +1561,10 @@ export const FabriChatRoomCore = pattern<
   // viewer's profile and access resolve, and enable again, dropping what was
   // typed or clicked meanwhile.
   const cannotSend = computed((): boolean | Default<true> => !canSend);
-  const isOwner = computed(() => isOwnerOf(messages));
+  // It defaults to `false`. The rows' map takes it as an argument, and a room
+  // whose rows were stored while the map took another has no value for it
+  // there.
+  const isOwner = computed((): boolean | Default<false> => isOwnerOf(messages));
   const viewer = computed((): ChatRoomViewer => {
     const profile = viewerProfileOf(myProfile);
     const principal = profile === undefined
