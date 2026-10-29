@@ -2250,6 +2250,31 @@ function recordsUseOfPath(
   ].some((paths) => Array.from(paths).some(overlaps));
 }
 
+/**
+ * True when some element an array of `arrayType` may hold has no identity of
+ * its own, a primitive or a nullish value, across each array type a union of
+ * them may be. An element typed `any` or `unknown` says nothing either way.
+ */
+function holdsElementsWithoutIdentity(
+  arrayType: ts.Type,
+  checker: ts.TypeChecker,
+): boolean {
+  const nonNullable = checker.getNonNullableType(arrayType);
+  const arrays = nonNullable.isUnion() ? nonNullable.types : [nonNullable];
+  return arrays.some((array) => {
+    const element = checker.getIndexTypeOfType(array, ts.IndexKind.Number);
+    if (!element) return false;
+    return (element.isUnion() ? element.types : [element]).some((member) =>
+      !!(member.flags & (
+        ts.TypeFlags.BooleanLike | ts.TypeFlags.NumberLike |
+        ts.TypeFlags.StringLike | ts.TypeFlags.BigIntLike |
+        ts.TypeFlags.ESSymbolLike | ts.TypeFlags.EnumLike |
+        ts.TypeFlags.Null | ts.TypeFlags.Undefined | ts.TypeFlags.Void
+      ))
+    );
+  });
+}
+
 function toCapability(state: MutableCapabilityState): ReactiveCapability {
   const hasReads = state.reads.size > 0;
   const hasWrites = state.writes.size > 0;
@@ -2647,29 +2672,6 @@ export function analyzeFunctionCapabilities(
       return isCellLikeType(checker.getTypeAtLocation(expr), checker);
     };
 
-    // True when some element an array of `arrayType` may hold has no
-    // identity of its own, a primitive or a nullish value, across each array
-    // type a union of them may be. An element typed `any` or `unknown` says
-    // nothing either way.
-    const holdsElementsWithoutIdentity = (arrayType: ts.Type): boolean => {
-      if (!checker) return false;
-      const nonNullable = checker.getNonNullableType(arrayType);
-      const arrays = nonNullable.isUnion() ? nonNullable.types : [nonNullable];
-      return arrays.some((array) => {
-        const element = checker.getIndexTypeOfType(array, ts.IndexKind.Number);
-        if (!element) return false;
-        return (element.isUnion() ? element.types : [element]).some(
-          (member) =>
-            !!(member.flags & (
-              ts.TypeFlags.BooleanLike | ts.TypeFlags.NumberLike |
-              ts.TypeFlags.StringLike | ts.TypeFlags.BigIntLike |
-              ts.TypeFlags.ESSymbolLike | ts.TypeFlags.EnumLike |
-              ts.TypeFlags.Null | ts.TypeFlags.Undefined | ts.TypeFlags.Void
-            )),
-        );
-      });
-    };
-
     // The type the declaration of `ref`'s parameter gives the value at its
     // path, followed through cells, properties and array elements; undefined
     // for a root no parameter declares or a path the type does not name.
@@ -2706,7 +2708,10 @@ export function analyzeFunctionCapabilities(
       const declared = declaredTypeAt(ref);
       return holdsElementsWithoutIdentity(
         typeRegistry?.get(arrayExpr) ?? checker.getTypeAtLocation(arrayExpr),
-      ) || (declared !== undefined && holdsElementsWithoutIdentity(declared));
+        checker,
+      ) ||
+        (declared !== undefined &&
+          holdsElementsWithoutIdentity(declared, checker));
     };
 
     const isPrimitiveLikeExpression = (expr: ts.Expression): boolean => {
@@ -4714,33 +4719,29 @@ export function analyzeFunctionCapabilities(
               }
 
               for (const identityPath of paramSummary.identityPaths ?? []) {
-                if (source.dynamic) {
-                  markWildcard(source.root, source.path);
-                } else {
-                  const isComparablePath = (paramSummary.comparablePaths ?? [])
-                    .some((path) =>
-                      path.length === identityPath.length &&
-                      path.every((segment, index) =>
-                        segment === identityPath[index]
-                      )
-                    );
-                  const recordPath = isComparablePath
-                    ? recordComparablePath
-                    : recordIdentityPath;
-                  recordPath(
-                    source.root,
-                    [...source.path, ...identityPath],
-                    {
-                      cellLike: (paramSummary.identityCellPaths ?? []).some(
-                        (path) =>
-                          path.length === identityPath.length &&
-                          path.every((segment, index) =>
-                            segment === identityPath[index]
-                          ),
-                      ),
-                    },
+                const isComparablePath = (paramSummary.comparablePaths ?? [])
+                  .some((path) =>
+                    path.length === identityPath.length &&
+                    path.every((segment, index) =>
+                      segment === identityPath[index]
+                    )
                   );
-                }
+                const recordPath = isComparablePath
+                  ? recordComparablePath
+                  : recordIdentityPath;
+                recordPath(
+                  source.root,
+                  [...source.path, ...identityPath],
+                  {
+                    cellLike: (paramSummary.identityCellPaths ?? []).some(
+                      (path) =>
+                        path.length === identityPath.length &&
+                        path.every((segment, index) =>
+                          segment === identityPath[index]
+                        ),
+                    ),
+                  },
+                );
               }
 
               if (paramSummary.passthrough && source.path.length === 0) {

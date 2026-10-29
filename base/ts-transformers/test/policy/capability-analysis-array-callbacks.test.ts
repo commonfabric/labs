@@ -288,6 +288,31 @@ export default pattern<{
       });
     });
 
+    it("reaches the input schema whole from a callback that takes its elements as a rest parameter", async () => {
+      const schema = await liftInputSchema(
+        `table.filter((row) => row.topic !== undefined)
+  .filter((...args) => args[0].mentionedBy !== undefined)`,
+      );
+
+      expect(elementProperties(schema)).toEqual({
+        topic: { type: "unknown" },
+        mentionedBy: { type: "unknown" },
+      });
+    });
+
+    it("reaches the input schema whole from a function expression that reads its elements through `arguments`", async () => {
+      const schema = await liftInputSchema(
+        `table.filter((row) => row.topic !== undefined).filter(function () {
+  return arguments[0].mentionedBy !== undefined;
+})`,
+      );
+
+      expect(elementProperties(schema)).toEqual({
+        topic: { type: "unknown" },
+        mentionedBy: { type: "unknown" },
+      });
+    });
+
     it("reaches the input schema through the array a callback is handed", async () => {
       const schema = await liftInputSchema(
         `table.filter((row, index, all) =>

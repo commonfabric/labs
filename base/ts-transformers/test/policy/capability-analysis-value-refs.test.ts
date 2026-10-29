@@ -456,6 +456,80 @@ export default lift(({ rows }: { rows: Row[] }): string => {
     });
   });
 
+  describe("a map a `set` whose result is dropped fills", () => {
+    it("narrows a value a `forEach` callback's `return` puts in the map to the field read back", async () => {
+      // `forEach` drops what its callback returns.
+
+      const fields = await liftRowFields(`
+import { lift } from "commonfabric";
+interface Row { id: number; name: string; note: string }
+export default lift(({ rows }: { rows: Row[] }): string => {
+  const byId = new Map<number, Row>();
+  rows.forEach((row) => {
+    return byId.set(row.id, row);
+  });
+  return byId.get(1)?.name ?? "";
+});
+`);
+      expect(fields).toEqual(["id", "name"]);
+    });
+
+    it("narrows a value a `set` on the left of a comma puts in the map to the field read back", async () => {
+      const fields = await liftRowFields(`
+import { lift } from "commonfabric";
+interface Row { id: number; name: string; note: string }
+export default lift(({ rows }: { rows: Row[] }): string => {
+  const byId = new Map<number, Row>();
+  const ids = rows.map((row) => (byId.set(row.id, row), row.id));
+  return \`\${ids.length}:\${byId.get(1)?.name ?? ""}\`;
+});
+`);
+      expect(fields).toEqual(["id", "name"]);
+    });
+  });
+
+  describe("the array an array callback is handed", () => {
+    it("reads through it only what the callback reads, for each array a conditional may be", async () => {
+      const fields = await liftRowFields(`
+import { lift } from "commonfabric";
+interface Row { id: number; name: string; note: string }
+export default lift(({ rows, other }: { rows: Row[]; other: Row[] }): Row[] =>
+  (rows.length > 0 ? rows : other)
+    .filter((row, _, all) => row.name === all[0]!.name)
+);
+`);
+      expect(fields).toEqual(["name"]);
+    });
+
+    it("keeps every field of the values either of two array literals of objects holds", async () => {
+      // The element is no one ref, so the values leave whole where each
+      // literal puts them.
+
+      const output = await transformSource(
+        `
+import { lift } from "commonfabric";
+interface Row { id: number; name: string; note: string }
+export default lift(({ first, second, enabled }: {
+  first: Row;
+  second: Row;
+  enabled: boolean;
+}): string[] =>
+  (enabled ? [{ row: first }] : [{ row: second, extra: 1 }])
+    .map((entry) => entry.row.name)
+);
+`,
+        { types: COMMONFABRIC_TYPES },
+      );
+      const [argument] = callSchemas(parseModule(output), "lift");
+      const properties = argument!.properties as Record<
+        string,
+        Record<string, unknown>
+      >;
+      expect(properties.first).toEqual({ $ref: "#/$defs/Row" });
+      expect(properties.second).toEqual({ $ref: "#/$defs/Row" });
+    });
+  });
+
   describe("an array literal a spread fills", () => {
     it("keeps every field a later read of a local sorted copy reads", async () => {
       const fields = await liftRowFields(`
@@ -639,6 +713,26 @@ export default handler<void, { history: Writable<number[]> }>(
       expect(state.history!.items).toEqual({ type: "number" });
     });
 
+    it("keeps the elements of a primitive array a key picks at run time as values when a shifted copy of it is written back", async () => {
+      // No parameter's declared type names the list the key picks, so the
+      // copy's own type decides.
+
+      const state = await stateProperties(`
+import { handler, Writable } from "commonfabric";
+export default handler<
+  void,
+  { histories: Writable<Record<string, number[]>>; key: Writable<string> }
+>((_, { histories, key }) => {
+  const updated = [...histories.get()[key.get()]!, 1].slice(-3);
+  histories.key(key.get()).set(updated);
+});
+`);
+      expect(state.histories!.additionalProperties).toEqual({
+        type: "array",
+        items: { type: "number" },
+      });
+    });
+
     it("keeps the field a destructured callback parameter compares through elements of a copy or another array", async () => {
       const fields = await liftRowFields(`
 import { lift } from "commonfabric";
@@ -661,6 +755,26 @@ export default handler<void, { rows: Writable<Row[]>; gone: Writable<Row> }>(
     const index = list.findIndex((row) => equals(row, gone.get()));
     const copy = [...list];
     copy.splice(index, 1);
+    rows.set(copy);
+  },
+);
+`);
+      expect(state.rows!.items).toEqual({
+        type: "unknown",
+        asCell: ["comparable"],
+      });
+    });
+
+    it("keeps comparing the elements of a copy the body only measures and writes an element into before writing it back", async () => {
+      const state = await stateProperties(`
+import { equals, handler, Writable } from "commonfabric";
+interface Row { id: number; name: string }
+export default handler<void, { rows: Writable<Row[]>; gone: Writable<Row> }>(
+  (_, { rows, gone }) => {
+    const list = rows.get();
+    const index = list.findIndex((row) => equals(row, gone.get()));
+    const copy = [...list];
+    if (index >= 0 && index < copy.length) copy[index] = { id: 0, name: "" };
     rows.set(copy);
   },
 );
