@@ -19,7 +19,7 @@ The batch CLI takes the endpoint as three flags that go together:
 
 | Flag                | Meaning                                                                                                      |
 | ------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `--commands-url`    | Base URL of the host's command endpoint, `http:` or `https:`.                                                |
+| `--commands-url`    | Base URL of the host's command endpoint, `http:` or `https:`, with no query or fragment.                     |
 | `--commands-actor`  | The actor every command runs as, sent in each `POST` body as the host wrote it; cf-harness does not read it. |
 | `--commands-run-id` | The host's id for this run, sent on every request as the `X-Loom-Agent-Run-Id` header.                       |
 

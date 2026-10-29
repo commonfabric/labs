@@ -387,6 +387,15 @@ describe("cf agent runner", () => {
     ).rejects.toThrow(/go together/);
     await expect(run(deps, [...base, "--tools", "list_commands"]))
       .rejects.toThrow(/--commands-url/);
+    await expect(
+      run(deps, [
+        ...base,
+        "--commands-url",
+        "http://127.0.0.1:8090",
+        "--commands-actor",
+        "",
+      ]),
+    ).rejects.toThrow(/Missing value for option "--commands-actor"/);
     expect(started).toEqual([]);
   });
 

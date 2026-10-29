@@ -126,6 +126,11 @@ export const validateLoomCommandsConfig = (
   if (url === undefined || !["http:", "https:"].includes(url.protocol)) {
     throw new Error("Commands require an `http:` or `https:` endpoint URL.");
   }
+  if (url.search !== "" || url.hash !== "") {
+    throw new Error(
+      "Commands require an endpoint URL with no query or fragment.",
+    );
+  }
   if (typeof config.actor !== "string" || config.actor === "") {
     throw new Error("Commands require the actor they run as.");
   }
@@ -405,14 +410,15 @@ export type LoomCommandCatalogRead =
  * The catalog one run reads its commands from. The host is asked on first
  * use and the catalog held for the rest of the run, so a run of many
  * commands lists once; `refresh` asks again and holds what it reads. A read
- * that fails is not held, so the next use asks the host again.
+ * that fails, a read `signal` cancelled included, is not held, so the next
+ * use asks the host again.
  */
 export interface LoomCommandCatalogSource {
   /** The held catalog, read from the host when none is held yet. */
-  current(): Promise<LoomCommandCatalogRead>;
+  current(signal?: AbortSignal): Promise<LoomCommandCatalogRead>;
 
   /** The host's catalog as it stands, held in place of the old one. */
-  refresh(): Promise<LoomCommandCatalogRead>;
+  refresh(signal?: AbortSignal): Promise<LoomCommandCatalogRead>;
 }
 
 /** A catalog source over the host's `GET <url>/commands`. */
@@ -420,8 +426,10 @@ export const createLoomCommandCatalogSource = (
   config: HarnessLoomCommandsConfig,
 ): LoomCommandCatalogSource => {
   let held: Promise<LoomCommandCatalogRead> | undefined;
-  const read = async (): Promise<LoomCommandCatalogRead> => {
-    const listed = await listLoomCommands(config);
+  const read = async (
+    signal?: AbortSignal,
+  ): Promise<LoomCommandCatalogRead> => {
+    const listed = await listLoomCommands(config, signal);
     return listed.status === "ok"
       ? { status: "ok", catalog: loomCommandCatalogOf(listed.commands) }
       : listed;
@@ -439,7 +447,7 @@ export const createLoomCommandCatalogSource = (
     return reading;
   };
   return {
-    current: () => held ?? hold(read()),
-    refresh: () => hold(read()),
+    current: (signal) => held ?? hold(read(signal)),
+    refresh: (signal) => hold(read(signal)),
   };
 };

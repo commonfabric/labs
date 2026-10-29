@@ -2140,11 +2140,11 @@ admitted host answer, limited to 500 characters. An answer withheld by CFC
 contributes no reason text or outputs. The job snapshot's `commands` array holds
 these same bodies in execution order.
 
-The lane binds each harness invocation to the stored job's `id`. A host command
-configuration may name `jobIdEnvVar`; command discovery and execution then
-receive that job id in the named variable of their cleared host environment. The
-request and model tool arguments cannot select the identity, and concurrent jobs
-have separate bindings.
+The lane binds each harness invocation to the stored job's `id`. When the
+profile names a command endpoint (`commands: {url, actor}`), every request to it
+carries that job id in the `X-Loom-Agent-Run-Id` header. The request and model
+tool arguments cannot select the identity, and concurrent jobs have separate
+bindings.
 
 A caller that can show a browser declares `browserHost: {}` on enqueue, under a
 profile that admits one, and the job browses through it: the lane adds

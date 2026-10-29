@@ -243,10 +243,12 @@ What works today:
     (present only with `--loom-retrieval-config`; read-only, each row measured
     against the run's observation ceiling; a row loom returns without a label is
     given the query's label, and one whose label is malformed is withheld)
-  - `list_commands` and `run_command` (present only with the three
-    `--commands-*` flags naming the host's command endpoint; the commands the
-    host offers, run as the actor the host names; the listing shows each command
-    as a one-line signature and is the host's command metadata, unmeasured;
+  - `list_commands` and `run_command` (present only with `--commands-url`,
+    `--commands-actor` and `--commands-run-id` naming the host's command
+    endpoint, which the agent runner passes from a local-job profile's
+    `commands` entry with the job's own id as the run id; the commands the host
+    offers, run as the actor the host names; the listing shows each command as a
+    one-line signature and is the host's command metadata, unmeasured;
     `run_command` refuses a name the listing does not show, takes one call or a
     batch of up to sixteen, and measures each answer like a retrieval row)
   - `research` (present when the run resolves a documentation corpus or pattern

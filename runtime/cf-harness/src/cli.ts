@@ -733,7 +733,7 @@ Options:
   --loom-retrieval-config <path> Absolute host-owned JSON file backing the read-only Loom tools
   --commands-url <url>          Base URL of the host's command endpoint behind list_commands
                                 and run_command (GET <url>/commands, POST <url>/command)
-  --commands-actor <actor>      The actor run_command runs every command as
+  --commands-actor <actor>      The actor each command runs as, passed to the host unread
   --commands-run-id <id>        The host's id for this run, sent on every command request;
                                 --commands-url, --commands-actor and --commands-run-id go together
   --commands-relevant <id>      A command relevant to this run, which list_commands shows first

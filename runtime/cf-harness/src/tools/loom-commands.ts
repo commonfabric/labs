@@ -360,9 +360,11 @@ export const listCommandsTool: HarnessToolDefinition<
     }
     // An explicit listing asks the host afresh, and what it reads is the
     // catalog `run_command` checks calls against from then on.
-    const listed = await source.refresh();
+    const listed = await source.refresh(context.signal);
     if (listed.status === "error") {
-      return fail(listed.code, listed.message);
+      return context.signal?.aborted
+        ? fail("cancelled", "The turn was cancelled during the host call.")
+        : fail(listed.code, listed.message);
     }
     const { catalog } = listed;
     const detail = new Set(
@@ -788,9 +790,14 @@ const readCatalog = async (
       "The turn was cancelled before the command.",
     );
   }
-  const listed = await source.current();
-  return listed.status === "ok"
-    ? { catalog: listed.catalog }
+  const listed = await source.current(context.signal);
+  if (listed.status === "ok") return { catalog: listed.catalog };
+  return context.signal?.aborted
+    ? notSent(
+      outputId,
+      "cancelled",
+      "The turn was cancelled before the command.",
+    )
     : notSent(outputId, listed.code, listed.message);
 };
 
