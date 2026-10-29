@@ -101,7 +101,10 @@ import {
 } from "./unread-type-diagnostics.ts";
 import { holdsUnreadValue } from "./unread-label-diagnostics.ts";
 import { dedupeByValueEqual } from "./value-equality.ts";
-import { assertScopeDeclarationsAreReachable } from "./scope-placement.ts";
+import {
+  armsDeclareScope,
+  assertScopeDeclarationsAreReachable,
+} from "./scope-placement.ts";
 import {
   acceptsAnyValue,
   acceptsNoValue,
@@ -1859,7 +1862,8 @@ function sharedPropertyOf(
  * The schema of a union whose arms have these schemas: an arm that is itself
  * a bare union contributes its arms, an arm accepting anything makes the
  * whole accept anything, labeled, given the context, with the labels the
- * arms state (`reducedLabeledUnion()`), arms accepting nothing drop out, equal arms fold
+ * arms state (`reducedLabeledUnion()`), unless an arm declares a scope
+ * (`armsDeclareScope()`), arms accepting nothing drop out, equal arms fold
  * (by value-model equality, as every other union in this package folds),
  * and a lone survivor stands alone. Given the context, a fold that drops an
  * arm with an origin of its own is recorded (`unionFoldedFrom`), so an
@@ -1877,7 +1881,9 @@ function unionOfSchemas(
   );
   const reduced = context && reducedLabeledUnion(flat, context);
   if (reduced !== undefined) return reduced;
-  if (flat.some((schema) => schema === true)) return true;
+  if (flat.some((schema) => schema === true) && !armsDeclareScope(flat)) {
+    return true;
+  }
   const kept = flat.filter((schema) => schema !== false);
   const unique = dedupeByValueEqual(kept);
   if (unique.length === 0) return false;
@@ -2262,7 +2268,7 @@ export class SchemaGenerator {
 
     settlePoliciesReadInPart(result);
     stateReferencedIfcLabels(result);
-    assertAnyValuesKeptLabels(context.anyValuesBesideUnwritten);
+    assertAnyValuesKeptLabels(context.anyValuesBesideUnwritten, result);
     assertScopeDeclarationsAreReachable(result);
     return result;
   }
@@ -4447,7 +4453,10 @@ export class SchemaGenerator {
       );
       const reduced = reducedLabeledUnion(memberSchemas, context);
       if (reduced !== undefined) return reduced;
-      if (memberSchemas.some((schema) => schema === true)) {
+      if (
+        memberSchemas.some((schema) => schema === true) &&
+        !armsDeclareScope(memberSchemas)
+      ) {
         return true;
       }
       if (memberSchemas.length === 1) {

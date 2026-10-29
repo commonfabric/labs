@@ -183,6 +183,7 @@ export function anyValueSchema(
   );
   if (unwritten.size > 0) {
     context.anyValuesBesideUnwritten.push({
+      within: "intersection",
       definitions: context.definitions,
       unwritten: [...unwritten],
       kept: labels,

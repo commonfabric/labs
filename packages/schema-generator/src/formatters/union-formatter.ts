@@ -9,6 +9,7 @@ import ts from "typescript";
 
 import { reportUnresolvedDefault } from "../default-diagnostics.ts";
 import { reducedLabeledUnion } from "../ifc-labels.ts";
+import { armsDeclareScope } from "../scope-placement.ts";
 import type { GenerationContext, TypeFormatter } from "../interface.ts";
 import type { SchemaGenerator } from "../schema-generator.ts";
 import { unionFoldedFrom } from "../schema-origins.ts";
@@ -695,10 +696,13 @@ export class UnionFormatter implements TypeFormatter {
     }
     const reduced = reducedLabeledUnion(unionOptions, context);
     if (reduced !== undefined) return reduced;
+    // A union with an arm that declares a scope keeps its arms, so the scope's
+    // placement is refused, rather than becoming `true` (`armsDeclareScope()`).
+    const scoped = armsDeclareScope(unionOptions);
     const anyOf: MutableJSONSchemaObj[] = [];
     for (const option of unionOptions) {
       // mergePrimitiveSchemaIntoAnyOf mutates anyOf in place; returns true to short-circuit
-      if (this.#mergePrimitiveSchemaIntoAnyOf(anyOf, option)) {
+      if (this.#mergePrimitiveSchemaIntoAnyOf(anyOf, option) && !scoped) {
         return true;
       }
     }

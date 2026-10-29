@@ -5,6 +5,7 @@ import type {
   MutableJSONSchemaObj,
 } from "@commonfabric/api";
 import {
+  assertAnyValuesKeptLabels,
   combineIfcLabels,
   declaredIfcLabels,
   holdsIfcLabels,
@@ -32,13 +33,17 @@ const generate = async (code: string) => {
   return asObjectSchema(new SchemaGenerator().generateSchema(type, checker));
 };
 
-/** A context holding `definitions`, with origins recorded. */
+/**
+ * A context holding `definitions`, with origins recorded, and the values met
+ * beside a definition not written yet collected.
+ */
 const contextWith = (
   definitions: Record<string, MutableJSONSchemaObj> = {},
 ): GenerationContext =>
   ({
     definitions,
     schemaOrigins: new WeakMap(),
+    anyValuesBesideUnwritten: [],
   }) as unknown as GenerationContext;
 
 describe("ifc-labels", () => {
@@ -132,6 +137,48 @@ describe("ifc-labels", () => {
       ).toBeUndefined();
     });
 
+    it("records a union an arm of which reaches a definition not written yet, with the labels it kept", () => {
+      // `Node` is still being generated, so it is not among the definitions.
+
+      const context = contextWith();
+      const arms: MutableJSONSchema[] = [
+        true,
+        { $ref: "#/$defs/Node" },
+        labeled,
+      ];
+      expect(reducedLabeledUnion(arms, context)).toEqual({
+        ifc: { confidentiality: ["a"] },
+      });
+      expect(context.anyValuesBesideUnwritten).toEqual([{
+        within: "union",
+        definitions: context.definitions,
+        unwritten: ["Node"],
+        kept: { confidentiality: ["a"] },
+        arms,
+        accepting: [true],
+      }]);
+    });
+
+    it("records a union with no label an arm of which is `true`, and none an arm of which is `unknown`, beside a definition not written yet", () => {
+      // An arm that is `true` makes the union `true`, while `unknown` beside
+      // the reference keeps both arms.
+
+      const made = contextWith();
+      expect(reducedLabeledUnion([true, { $ref: "#/$defs/Node" }], made))
+        .toBeUndefined();
+      expect(made.anyValuesBesideUnwritten.map(({ kept }) => kept)).toEqual([
+        undefined,
+      ]);
+      const kept = contextWith();
+      expect(
+        reducedLabeledUnion(
+          [{ type: "unknown" }, { $ref: "#/$defs/Node" }],
+          kept,
+        ),
+      ).toBeUndefined();
+      expect(kept.anyValuesBesideUnwritten).toEqual([]);
+    });
+
     it("returns `undefined` for a union with an arm that declares a scope, whether that arm accepts anything or not", () => {
       // The union keeps its arms, among which the scope's placement is
       // refused.
@@ -143,6 +190,86 @@ describe("ifc-labels", () => {
           contextWith(),
         ),
       ).toBeUndefined();
+    });
+  });
+
+  describe("assertAnyValuesKeptLabels()", () => {
+    /**
+     * The values a union of `arms` reduced beside the definition `Node`,
+     * written afterwards as `node`, collected, and the schema `Node` is the
+     * root of, which holds it.
+     */
+    const unionBesideNode = (
+      arms: readonly MutableJSONSchema[],
+      node: MutableJSONSchemaObj,
+    ) => {
+      const context = contextWith();
+      reducedLabeledUnion(arms, context);
+      context.definitions.Node = node;
+      return {
+        values: context.anyValuesBesideUnwritten,
+        schema: { $ref: "#/$defs/Node", $defs: { Node: node } },
+      };
+    };
+    const secret: MutableJSONSchemaObj = {
+      type: "object",
+      properties: {
+        secret: { type: "string", ifc: { confidentiality: ["s"] } },
+      },
+    };
+    const reference: MutableJSONSchema = { $ref: "#/$defs/Node" };
+    const labeled: MutableJSONSchemaObj = {
+      type: "object",
+      properties: { x: { type: "string" } },
+      ifc: { confidentiality: ["a"] },
+    };
+
+    it("throws for a union that kept fewer restrictions than its arms state once the definition is written", () => {
+      const { values, schema } = unionBesideNode(
+        [true, reference, labeled],
+        secret,
+      );
+      expect(() => assertAnyValuesKeptLabels(values, schema)).toThrow(
+        "it meets `Node` inside the definition of `Node`",
+      );
+    });
+
+    it("throws for a union with no label of its own that an arm made `true`", () => {
+      const { values, schema } = unionBesideNode([true, reference], secret);
+      expect(() => assertAnyValuesKeptLabels(values, schema)).toThrow(
+        "it meets `Node` inside the definition of `Node`",
+      );
+    });
+
+    it("returns where the union kept every restriction its arms state", () => {
+      const { values, schema } = unionBesideNode(
+        [true, reference, labeled],
+        {
+          type: "object",
+          properties: {
+            secret: { type: "string", ifc: { confidentiality: ["a"] } },
+          },
+        },
+      );
+      expect(() => assertAnyValuesKeptLabels(values, schema)).not.toThrow();
+    });
+
+    it("returns where the definition states evidence alone", () => {
+      // Evidence a union does not keep is evidence the value lacks.
+
+      const { values, schema } = unionBesideNode([true, reference], {
+        type: "object",
+        properties: { signed: { type: "string", ifc: { integrity: ["i"] } } },
+      });
+      expect(() => assertAnyValuesKeptLabels(values, schema)).not.toThrow();
+    });
+
+    it("returns where the schema generated does not hold the definition", () => {
+      // A definition the schema drops took the union inside it with it.
+
+      const { values } = unionBesideNode([true, reference, labeled], secret);
+      expect(() => assertAnyValuesKeptLabels(values, { type: "object" })).not
+        .toThrow();
     });
   });
 
@@ -571,6 +698,57 @@ describe("ifc-labels", () => {
       `)).rejects.toThrow(
         'One value declares `ifc.integrity` twice, as `["a"]` and as `["b"]`.',
       );
+    });
+
+    it("refuses a union with a member accepting any value that meets, inside its own definition, a definition stating a restriction it did not keep", async () => {
+      await expect(generate(`
+        interface SchemaRoot {
+          secret: Confidential<string, readonly ["s"]>;
+          child?: SchemaRoot | any | Confidential<{ x: string }, readonly ["c"]>;
+        }
+      `)).rejects.toThrow(
+        "it meets `SchemaRoot` inside the definition of `SchemaRoot`",
+      );
+    });
+
+    it("refuses such a union with no label of its own, which its member accepting anything makes `true`", async () => {
+      await expect(generate(`
+        interface SchemaRoot {
+          secret: Confidential<string, readonly ["s"]>;
+          child?: SchemaRoot | any;
+        }
+      `)).rejects.toThrow(
+        "it meets `SchemaRoot` inside the definition of `SchemaRoot`",
+      );
+    });
+
+    it("returns such a union beside a definition that states no restriction as `true`", async () => {
+      const schema = await generate(`
+        interface SchemaRoot {
+          name: string;
+          child?: SchemaRoot | any;
+        }
+      `);
+      expect(
+        (schema.$defs?.SchemaRoot as MutableJSONSchemaObj).properties?.child,
+      ).toBe(true);
+    });
+
+    it("keeps every label of a recursion a generic alias reads again one level down", async () => {
+      // The definition read one level down meets itself, and is dropped, read
+      // in full by the level above.
+
+      const schema = await generate(`
+        type Rec<T> = {
+          child: Rec<T> | T | Confidential<{ x: string }, readonly ["c"]>;
+          secret: Confidential<string, readonly ["s"]>;
+        };
+        interface SchemaRoot { r: Rec<any> }
+      `);
+      const r = schema.properties?.r as MutableJSONSchemaObj;
+      expect(r.properties?.child).toEqual({
+        ifc: { confidentiality: ["c", "s"] },
+      });
     });
 
     it("refuses another label a reference declares differently from its definition", async () => {

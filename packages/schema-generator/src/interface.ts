@@ -249,8 +249,9 @@ export interface GenerationContext {
   nameAnonymousDefinition: () => string;
 
   /**
-   * Each value an intersection the checker gives `any` settled to that met a
-   * definition still being generated, checked once generation is done
+   * Each value settled to accept any value that met a definition still being
+   * generated, an intersection the checker gives `any` or a union with an arm
+   * accepting any value, checked once generation is done
    * (`assertAnyValuesKeptLabels()`).
    */
   anyValuesBesideUnwritten: AnyValueBesideUnwritten[];

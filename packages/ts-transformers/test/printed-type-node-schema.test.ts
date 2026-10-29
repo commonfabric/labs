@@ -2951,6 +2951,34 @@ type Outer<T> = Confidential<{ inner: Omit<T | never | Confidential<{ x: string 
           }
         });
 
+        it("refuses a scope wrapper beside a member a binding makes `any`, on both sides", async () => {
+          // A member that is `true` makes a union `true`, but not one with
+          // a member that declares a scope, which no member of a union can.
+
+          await expect(schemasOf(
+            `import type { PerUser } from "commonfabric";
+type Outer<T, U> = { inner: PerUser<T> | U };`,
+            "Outer<string, any>",
+          )).rejects.toThrow("A scope wrapper cannot be a member of a union.");
+        });
+
+        it("refuses a union with a member accepting any value that meets, inside its own definition, one stating a restriction it did not keep", async () => {
+          // `Node` is still being generated where its own member meets it,
+          // so the union is read again once it is written, and `s` is no
+          // label it kept.
+
+          await expect(schemasOf(
+            `${DECLARATIONS}
+interface Node {
+  secret: Confidential<string, readonly ["s"]>;
+  child?: Node | any | Sec<One>;
+}`,
+            "Node",
+          )).rejects.toThrow(
+            "it meets `Node` inside the definition of `Node`",
+          );
+        });
+
         it("refuses a scope wrapper beside a labeled member of a union in a payload read under bindings, `T` bound to `any`", async () => {
           // The union keeps its members rather than reducing to
           // `PerUser<any>`, which accepts any value, so the scope's

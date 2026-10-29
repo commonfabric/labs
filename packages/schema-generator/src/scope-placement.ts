@@ -55,7 +55,7 @@ const SAME_SLOT_COMPOUND_KEYWORDS = ["anyOf", "oneOf", "allOf"] as const;
  * that reader also follows a `$ref` to its definition, which this one does not,
  * since the walk visits each definition in `$defs` itself.
  */
-export const topLevelScope = (
+const topLevelScope = (
   schema: MutableJSONSchema,
 ): string | undefined => {
   if (!isObjectOrArray(schema)) return undefined;
@@ -68,6 +68,17 @@ export const topLevelScope = (
   }
   return typeof schema.scope === "string" ? schema.scope : undefined;
 };
+
+/**
+ * Whether any of `arms`, a union's, declares a scope at its own top level
+ * (`topLevelScope()`). No member of a union can, so such a union keeps its
+ * arms, neither reduced to one of them nor made `true` by one accepting any
+ * value, and the scope's placement is refused
+ * (`assertScopeDeclarationsAreReachable()`).
+ */
+export const armsDeclareScope = (
+  arms: readonly MutableJSONSchema[],
+): boolean => arms.some((arm) => topLevelScope(arm) !== undefined);
 
 /**
  * The error raised when a scope wrapper lands inside a union. Shared with the

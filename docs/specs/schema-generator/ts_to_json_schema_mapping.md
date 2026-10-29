@@ -155,10 +155,12 @@ Secret`, or a reference whose argument is met again inside what it denotes,
 which grows at each level, as `T[]` does in
 `type Nest<T> = { inner: Nest<T[]> } | Secret`, through a generic interface
 as well: neither reading has an end. A reference read again with arguments
-that denote other nodes nests only as deep as those arguments, and keeps the
-label at each level: `Box<Box<string>>`, and `Wrap<Wrap<string>>` where
+that denote other nodes nests only as deep as those arguments, and is read at
+each level: `Box<Box<string>>`, and `Wrap<Wrap<string>>` where
 `type Wrap<T> = Box<T>`, whose one reference to `Box` is read at each level.
-A recursion through a named definition is not one either: the definition's
+Each level is a union with `Secret`, which accepts any value, so it is
+`Secret` with the labels of every member, on the whole value (§8). A
+recursion through a named definition is not one either: the definition's
 `$ref` ends it, and the alias is read afresh inside the definition. A plain generic declaration is read under
 bindings for every required parameter, taken from the reference's written
 arguments or preceding-parameter defaults (§4.1). A member the bindings cannot
@@ -1023,7 +1025,10 @@ Default paths of §7:
   stripped.
 - **General case** → `anyOf` with **primitive merging**
   (`mergePrimitiveSchemaIntoAnyOf`): a `true` member
-  short-circuits the union to `true`; `false` members drop; exact-JSON
+  short-circuits the union to `true`, unless a member declares a scope, which
+  no member of a union may (`armsDeclareScope` in `scope-placement.ts`): the
+  union then keeps its members, and is refused (§10), on the node path and in
+  a view's property alike; `false` members drop; exact-JSON
   duplicates drop; same-`type` enum schemas merge enum sets (sorted); enum +
   bare same-`type` → bare type; bare primitive types merge into sorted
   **`type` arrays** — how `string | undefined` becomes
@@ -1043,7 +1048,11 @@ Default paths of §7:
   labels go on the whole value, not on an arm, because the runtime keeps a
   union arm's labels only beside arms that cannot hold the same values
   (`assertNoDivergentIfcBranches` in `packages/runner/src/cfc/schema-merge.ts`),
-  and an arm accepting anything can hold any. The node path reads every
+  and an arm accepting anything can hold any; narrowing such a union to a
+  child path gives `true` (`#narrowUnion` in `packages/runner/src/cfc.ts`).
+  A union a member of which is a CFC alias over `any`, as
+  `{ next: Node } | Confidential<any, L>` is, is that member too. The node
+  path reads every
   union written, so `any | Sec<X>` reads `{ ifc: … }` there and `true` by
   type, where the checker has already reduced it, as `Sec<X> & any` does
   (§9); a type the checker leaves unreduced, as some instantiations are,
@@ -1054,6 +1063,17 @@ Default paths of §7:
   inside a union is (§10) rather than reduced with the scope dropped. The
   members are recorded (`GenerationContext.schemaOrigins`, `"reduction"`) for
   a `Pick` or an `Omit` over the union, which maps them one at a time (§2).
+  A member that reaches a definition still being generated, as a recursive
+  type's own member does, holds labels that cannot be read there. Once
+  generation is done, the union is read again, and refused where its members
+  then state a confidentiality atom it did not keep ("A union with a member
+  accepting any value is that member, with the labels of every member, but
+  it meets `Node` inside the definition of `Node`, where those labels cannot
+  be read yet."), as is such a union that states no label of its own and a
+  `true` member makes `true` (`anyValuesBesideUnwritten`). Only a definition
+  the generated schema holds counts: a recursion through its own argument
+  reads the definition again one level down, where the level above absorbs
+  it.
 - **`widenLiterals`** additionally merges member schemas that differ only in
   their literal values, an `enum` or a `const` whose values share one base
   type, widening those to that type, before the anyOf pass
@@ -2331,6 +2351,7 @@ Everything that throws, with source (test-pinned unless noted):
 | Scope wrapper as a union member beside a value other than `null` or `undefined` | `A scope wrapper cannot be a member of a union.` | `common-fabric-formatter.ts`, `scope-placement.ts` |
 | Scope wrapper around a cell beside anything, `null` and `undefined` included | `A scope wrapper around a cell cannot hold anything beside the cell` | `common-fabric-formatter.ts` |
 | Scope wrapper beside `null` or `undefined` in a written union whose members do not read as wrappers or `null` or `undefined` | ``A scope wrapper beside `null` or `undefined` is read from the union written around it`` | `common-fabric-formatter.ts` |
+| A value accepting any value, an intersection the checker gives `any` or a union with a member accepting any value, that met a definition still being generated and kept fewer restrictions than it states | ``A value intersected with `any` keeps the labels of what it is intersected with, but it meets …`` / ``A union with a member accepting any value is that member, with the labels of every member, but it meets …`` | `ifc-labels.ts` |
 | An `ifc` key other than `confidentiality` declared differently by nested wrappers, or by a `$ref` and its definition | ``One value declares `ifc.<key>` twice, as … and as ….`` | `ifc-labels.ts` |
 | Circular type alias (wrapper chain) | `Circular type alias detected: A -> B -> …` | `type-utils.ts` |
 | Circular type alias (union alias) | `Circular type alias detected: <name>` | `union-formatter.ts` |

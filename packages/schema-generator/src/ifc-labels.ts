@@ -36,7 +36,7 @@ import {
 import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import type { GenerationContext } from "./interface.ts";
-import { topLevelScope } from "./scope-placement.ts";
+import { armsDeclareScope } from "./scope-placement.ts";
 import { dedupeByValueEqual } from "./value-equality.ts";
 
 type IfcLabels = Readonly<Record<string, unknown>>;
@@ -593,6 +593,35 @@ const forEachIfcLabels = (
 };
 
 /**
+ * The labels of a value that may be any of `arms`, a union's, of which those
+ * in `accepting` accept any value, joined (`joinMemberIfcLabels()`): an arm
+ * accepting anything contributes the labels it states, and any other arm
+ * those it states and each confidentiality atom anywhere in its value,
+ * through the definitions in `definitions` its references reach.
+ */
+const reducedArmLabels = (
+  arms: readonly MutableJSONSchema[],
+  accepting: readonly MutableJSONSchema[],
+  definitions: Readonly<Record<string, MutableJSONSchema>>,
+): IfcLabels | undefined =>
+  joinMemberIfcLabels(
+    {},
+    arms.map((arm): IfcLabels => {
+      const declared = isObjectNotArray(arm) && isObjectNotArray(arm.ifc)
+        ? arm.ifc
+        : {};
+      if (accepting.includes(arm)) return declared;
+      let confidentiality: IfcLabels = {};
+      forEachIfcLabels(arm, definitions, (found) => {
+        confidentiality = combineIfcLabels(confidentiality, {
+          confidentiality: found.confidentiality,
+        });
+      });
+      return { ...declared, ...confidentiality };
+    }),
+  );
+
+/**
  * The schema of a union whose `arms` include one accepting any value, as
  * `any` or a bare `unknown` does (`acceptsAnyValue()`, `isUnknownValue()`),
  * where some arm states a label anywhere in its value: the arm the checker
@@ -609,43 +638,55 @@ const forEachIfcLabels = (
  * option accepting no value, as `never` gives, is no arm of the union, and is
  * neither read nor recorded (`acceptsNoValue()`). `undefined` for any other
  * union, which keeps its arms, and for one with an arm that declares a scope
- * (`topLevelScope()`): it keeps its arms too, so the scope's placement
- * inside the union is refused (`assertScopeDeclarationsAreReachable()`)
- * rather than the scope reduced away.
+ * (`armsDeclareScope()`): it keeps its arms too, so the scope's placement
+ * inside the union is refused rather than the scope reduced away.
+ *
+ * An arm may reach a definition not written yet, as one still being
+ * generated is not, whose labels cannot be read here. The union is then
+ * read again once generation is done (`anyValuesBesideUnwritten`), and
+ * refused where its arms state a restriction the value did not keep. So is a
+ * union that states no label here, of which an arm is `true`: the union is
+ * `true` too, keeping no label the definition may state.
  */
 export const reducedLabeledUnion = (
   options: readonly MutableJSONSchema[],
   context: GenerationContext,
 ): MutableJSONSchema | undefined => {
   const arms = options.filter((option) => !acceptsNoValue(option));
-  if (arms.some((arm) => topLevelScope(arm) !== undefined)) return undefined;
+  if (armsDeclareScope(arms)) return undefined;
   const accepting = arms.filter((arm) =>
     acceptsAnyValue(arm) || isUnknownValue(arm)
   );
   if (accepting.length === 0 || accepting.length === arms.length) {
     return undefined;
   }
+  const unwritten = new Set<string>();
   let labeled = false;
   for (const arm of arms) {
-    forEachIfcLabels(arm, context.definitions, () => (labeled = true));
+    forEachIfcLabels(
+      arm,
+      context.definitions,
+      () => (labeled = true),
+      unwritten,
+    );
   }
-  if (!labeled) return undefined;
-  const labels = joinMemberIfcLabels(
-    {},
-    arms.map((arm): IfcLabels => {
-      const declared = isObjectNotArray(arm) && isObjectNotArray(arm.ifc)
-        ? arm.ifc
-        : {};
-      if (accepting.includes(arm)) return declared;
-      let confidentiality: IfcLabels = {};
-      forEachIfcLabels(arm, context.definitions, (found) => {
-        confidentiality = combineIfcLabels(confidentiality, {
-          confidentiality: found.confidentiality,
-        });
-      });
-      return { ...declared, ...confidentiality };
-    }),
-  );
+  const readOnceWritten = (kept: IfcLabels | undefined) => {
+    if (unwritten.size === 0) return;
+    context.anyValuesBesideUnwritten.push({
+      within: "union",
+      definitions: context.definitions,
+      unwritten: [...unwritten],
+      kept,
+      arms,
+      accepting,
+    });
+  };
+  if (!labeled) {
+    if (arms.includes(true)) readOnceWritten(undefined);
+    return undefined;
+  }
+  const labels = reducedArmLabels(arms, accepting, context.definitions);
+  readOnceWritten(labels);
   const unknown = accepting.find(isUnknownValue);
   const base: MutableJSONSchemaObj =
     accepting.some(acceptsAnyValue) || unknown === undefined
@@ -689,27 +730,69 @@ export const withReducedArmsLabeled = (
 };
 
 /**
- * A value an intersection the checker gives `any` settled to, which met
- * definitions not yet written (`unwritten`) in `definitions`, and the labels
- * it kept (`labelsBesideAnyValue()`).
+ * A value settled to accept any value, which met definitions not yet written
+ * (`unwritten`) in `definitions`, and the labels it kept: one an
+ * intersection the checker gives `any` settled to (`labelsBesideAnyValue()`),
+ * or a union of `arms`, of which those in `accepting` accept any value,
+ * reduced to them (`reducedLabeledUnion()`) or made `true` by one.
  */
-export type AnyValueBesideUnwritten = {
-  readonly definitions: Readonly<Record<string, MutableJSONSchema>>;
-  readonly unwritten: readonly string[];
-  readonly kept: IfcLabels | undefined;
-};
+export type AnyValueBesideUnwritten =
+  & {
+    readonly definitions: Readonly<Record<string, MutableJSONSchema>>;
+    readonly unwritten: readonly string[];
+    readonly kept: IfcLabels | undefined;
+  }
+  & (
+    | { readonly within: "intersection" }
+    | {
+      readonly within: "union";
+      readonly arms: readonly MutableJSONSchema[];
+      readonly accepting: readonly MutableJSONSchema[];
+    }
+  );
 
 /**
  * Refuses a value in `values` that kept fewer restrictions than the
  * definitions it met before they were written state now that they are: a
  * reference met inside its own definition, as recursion meets it, names a
- * definition whose labels could not be read there.
+ * definition whose labels could not be read there. A union's are the labels
+ * its arms state, read as its reduction reads them (`reducedArmLabels()`), to
+ * which a written definition adds confidentiality alone. For a union, only a
+ * definition `schema`, the schema generated, holds counts: one it does not
+ * hold took the union inside it with it, as a recursion through its own
+ * argument does, read again one level down and absorbed by the level above.
  */
 export const assertAnyValuesKeptLabels = (
   values: readonly AnyValueBesideUnwritten[],
+  schema: MutableJSONSchema,
 ): void => {
-  for (const { definitions, unwritten, kept } of values) {
-    for (const name of unwritten) {
+  const emitted = isObjectNotArray(schema) && isObjectNotArray(schema.$defs)
+    ? schema.$defs
+    : {};
+  for (const value of values) {
+    const { definitions, kept } = value;
+    if (value.within === "union") {
+      const unwritten = value.unwritten.filter((name) =>
+        Object.hasOwn(emitted, name)
+      );
+      if (unwritten.length === 0) continue;
+      const stated = reducedArmLabels(value.arms, value.accepting, definitions);
+      if (stated !== undefined && !holdsIfcLabels(kept ?? {}, stated)) {
+        const names = unwritten.map((name) => `\`${name}\``).join(", ");
+        const inside = unwritten.length === 1
+          ? `the definition of ${names}`
+          : "their own definitions";
+        throw new Error(
+          `A union with a member accepting any value is that member, with ` +
+            `the labels of every member, but it meets ${names} inside ` +
+            `${inside}, where those labels cannot be read yet. Declare that ` +
+            `union without \`any\` or \`unknown\`, or with the labels ` +
+            `${names} states on a member of it.`,
+        );
+      }
+      continue;
+    }
+    for (const name of value.unwritten) {
       const stated = labelsBesideAnyValue(
         [{ $ref: `${LOCAL_DEFINITION_PREFIX}${name}` }],
         definitions,

@@ -106,7 +106,11 @@ describe("alias-of-any-schema", () => {
     expect(propertyA(input)).toEqual({ ifc: { confidentiality: ["secret"] } });
   });
 
-  it("keeps the label at every level of a generic alias nested in itself finitely", async () => {
+  it("keeps the label of a generic alias nested in itself finitely on the whole value", async () => {
+    // Each level is a union with a member accepting any value, which it is,
+    // with the labels of every member: the label is on the whole value, which
+    // holds every level.
+
     const { input, diagnostics } = await patternInputOf(`
       import { pattern } from "commonfabric";
       import type { Confidential } from "commonfabric";
@@ -114,18 +118,12 @@ describe("alias-of-any-schema", () => {
       export default pattern<{ a: Box<Box<string>> }>(() => ({}));
     `);
 
-    const box = (next: unknown) => ({
-      anyOf: [
-        { type: "object", properties: { next }, required: ["next"] },
-        { ifc: { confidentiality: ["secret"] } },
-      ],
-    });
-    expect(propertyA(input)).toEqual(box(box({ type: "string" })));
+    expect(propertyA(input)).toEqual({ ifc: { confidentiality: ["secret"] } });
     expect(diagnostics.filter(({ severity }) => severity === "error"))
       .toEqual([]);
   });
 
-  it("keeps the label at every level of a generic alias nested in itself finitely through an alias forwarding to it", async () => {
+  it("keeps the label of a generic alias nested in itself finitely through an alias forwarding to it on the whole value", async () => {
     const { input, diagnostics } = await patternInputOf(`
       import { pattern } from "commonfabric";
       import type { Confidential } from "commonfabric";
@@ -134,18 +132,12 @@ describe("alias-of-any-schema", () => {
       export default pattern<{ a: Wrap<Wrap<string>> }>(() => ({}));
     `);
 
-    const box = (next: unknown) => ({
-      anyOf: [
-        { type: "object", properties: { next }, required: ["next"] },
-        { ifc: { confidentiality: ["secret"] } },
-      ],
-    });
-    expect(propertyA(input)).toEqual(box(box({ type: "string" })));
+    expect(propertyA(input)).toEqual({ ifc: { confidentiality: ["secret"] } });
     expect(diagnostics.filter(({ severity }) => severity === "error"))
       .toEqual([]);
   });
 
-  it("keeps the label at every level of a forwarded nesting whose alias also recurs through a named definition", async () => {
+  it("keeps the label of a forwarded nesting whose alias also recurs through a named definition on the whole value", async () => {
     const { input, diagnostics } = await patternInputOf(`
       import { pattern } from "commonfabric";
       import type { Confidential } from "commonfabric";
@@ -156,14 +148,7 @@ describe("alias-of-any-schema", () => {
       export default pattern<{ a: Wrap<Wrap<string>> }>(() => ({}));
     `);
 
-    const box = (next: unknown) => ({
-      anyOf: [
-        { type: "object", properties: { next }, required: ["next"] },
-        { ifc: { confidentiality: ["secret"] } },
-        { $ref: "#/$defs/Node" },
-      ],
-    });
-    expect(propertyA(input)).toEqual(box(box({ type: "string" })));
+    expect(propertyA(input)).toEqual({ ifc: { confidentiality: ["secret"] } });
     expect(diagnostics.filter(({ severity }) => severity === "error"))
       .toEqual([]);
   });
@@ -186,14 +171,7 @@ describe("alias-of-any-schema", () => {
       `);
 
       expect(propertyA(input)).toEqual({
-        anyOf: [
-          {
-            type: "object",
-            properties: { value: { type: "string" } },
-            required: ["value"],
-          },
-          { ifc: { confidentiality: ["secret"] } },
-        ],
+        ifc: { confidentiality: ["secret"] },
       });
       expect(diagnostics.filter(({ severity }) => severity === "error"))
         .toEqual([]);

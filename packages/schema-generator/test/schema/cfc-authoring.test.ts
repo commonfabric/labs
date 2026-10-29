@@ -1681,11 +1681,13 @@ describe("Schema: CFC authoring aliases", () => {
           "Five",
           { default: 5, ...SECRET },
         ],
+        // A union with a member accepting any value is that member, with the
+        // labels of every member.
         [
           "a union holding a CFC alias",
           "type OrText = Secret | string;",
           "OrText",
-          { anyOf: [SECRET, { type: "string" }] },
+          SECRET,
         ],
         [
           "an array of a CFC alias",
@@ -1735,89 +1737,71 @@ describe("Schema: CFC authoring aliases", () => {
       }
     });
 
-    it("keeps the label at every level of a generic alias nested in itself finitely", async () => {
+    it("keeps the label of a generic alias nested in itself finitely on the whole value", async () => {
+      // Each level is a union with `Secret`, which accepts any value, so it is
+      // `Secret`, with the labels of every member: the label is on the whole
+      // value, which holds every level.
+
       for (
         const { schema, diagnostics } of await bothPaths(
           "type Box<T> = { next: T } | Secret;",
           "Box<Box<string>>",
         )
       ) {
-        const box = (next: unknown) => ({
-          anyOf: [
-            { type: "object", properties: { next }, required: ["next"] },
-            SECRET,
-          ],
-        });
-        expect(schema.properties.a).toEqual(box(box({ type: "string" })));
+        expect(schema.properties.a).toEqual(SECRET);
         expect(diagnostics).toEqual([]);
       }
     });
 
     for (
-      const [written, declarations, value, levels] of [
+      const [written, declarations, value] of [
         [
           "an alias forwarding to it",
           "type Box<T> = { next: T } | Secret; type Wrap<T> = Box<T>;",
           "Wrap<Wrap<string>>",
-          2,
         ],
         [
           "an alias nesting it twice",
           "type Box<T> = { next: T } | Secret; type Twice<T> = Box<Box<T>>;",
           "Twice<Twice<string>>",
-          4,
         ],
         [
           "an alias forwarding to one that forwards to it",
           "type Box<T> = { next: T } | Secret; type Wrap<T> = Box<T>; type Wraps<T> = Wrap<Wrap<T>>;",
           "Wraps<Wraps<string>>",
-          4,
         ],
       ] as const
     ) {
-      it(`keeps the label at every level of a generic alias nested in itself finitely through ${written}`, async () => {
+      it(`keeps the label of a generic alias nested in itself finitely through ${written} on the whole value`, async () => {
         for (
           const { schema, diagnostics } of await bothPaths(declarations, value)
         ) {
-          let expected: unknown = { type: "string" };
-          for (let level = 0; level < levels; level++) {
-            expected = {
-              anyOf: [
-                {
-                  type: "object",
-                  properties: { next: expected },
-                  required: ["next"],
-                },
-                SECRET,
-              ],
-            };
-          }
-          expect(schema.properties.a).toEqual(expected);
+          expect(schema.properties.a).toEqual(SECRET);
           expect(diagnostics).toEqual([]);
         }
       });
     }
 
-    it("keeps the label at every level of a forwarded nesting whose alias also recurs through a named definition", async () => {
+    it("keeps the label of a forwarded nesting whose alias also recurs through a named definition on the whole value, and in the definition", async () => {
+      // `Box` is `Secret`, with the labels of every member, at every level,
+      // the one `Node` holds included.
+
+      const declarations = `type Node = { box: Box<string> };
+           type Box<T> = { next: T } | Secret | Node;
+           type Wrap<T> = Box<T>;`;
       for (
         const { schema, diagnostics } of await bothPaths(
-          `type Node = { box: Box<string> };
-           type Box<T> = { next: T } | Secret | Node;
-           type Wrap<T> = Box<T>;`,
+          declarations,
           "Wrap<Wrap<string>>",
         )
       ) {
-        const box = (next: unknown) => ({
-          anyOf: [
-            { type: "object", properties: { next }, required: ["next"] },
-            SECRET,
-            { $ref: "#/$defs/Node" },
-          ],
-        });
-        expect(schema.properties.a).toEqual(box(box({ type: "string" })));
-        expect(schema.$defs.Node.properties.box).toEqual(
-          box({ type: "string" }),
-        );
+        expect(schema.properties.a).toEqual(SECRET);
+        expect(diagnostics).toEqual([]);
+      }
+      for (
+        const { schema, diagnostics } of await bothPaths(declarations, "Node")
+      ) {
+        expect(schema.$defs.Node.properties.box).toEqual(SECRET);
         expect(diagnostics).toEqual([]);
       }
     });
@@ -1829,6 +1813,9 @@ describe("Schema: CFC authoring aliases", () => {
       ] as const
     ) {
       it(`reports nothing for a recursion through a member \`${alias}\` drops`, async () => {
+        // The union is `Secret`, with the labels of every member, once its
+        // members are read, the member the alias keeps among them.
+
         for (
           const { schema, diagnostics } of await bothPaths(
             `type Data<T> =
@@ -1837,16 +1824,7 @@ describe("Schema: CFC authoring aliases", () => {
             "Data<string>",
           )
         ) {
-          expect(schema.properties.a).toEqual({
-            anyOf: [
-              {
-                type: "object",
-                properties: { value: { type: "string" } },
-                required: ["value"],
-              },
-              SECRET,
-            ],
-          });
+          expect(schema.properties.a).toEqual(SECRET);
           expect(diagnostics).toEqual([]);
         }
       });
@@ -1861,21 +1839,16 @@ describe("Schema: CFC authoring aliases", () => {
           "Data<string>",
         )
       ) {
-        expect(schema.properties.a).toEqual({
-          anyOf: [
-            {
-              type: "object",
-              properties: { value: { type: "string" } },
-              required: ["value"],
-            },
-            SECRET,
-          ],
-        });
+        expect(schema.properties.a).toEqual(SECRET);
         expect(diagnostics).toEqual([]);
       }
     });
 
     it("keeps the index signature `Pick` reads a key only it holds from", async () => {
+      // Without it, `Pick` reads no `other`, and the union is not read in
+      // full: it is `Secret`, with the labels of every member, only once its
+      // members are.
+
       for (
         const { schema, diagnostics } of await bothPaths(
           `type Data<T> =
@@ -1884,16 +1857,7 @@ describe("Schema: CFC authoring aliases", () => {
           "Data<string>",
         )
       ) {
-        expect(schema.properties.a).toEqual({
-          anyOf: [
-            {
-              type: "object",
-              properties: { other: { type: "string" } },
-              required: ["other"],
-            },
-            SECRET,
-          ],
-        });
+        expect(schema.properties.a).toEqual(SECRET);
         expect(diagnostics).toEqual([]);
       }
     });
@@ -1964,25 +1928,23 @@ describe("Schema: CFC authoring aliases", () => {
       }
     });
 
-    it("keeps the label at every depth of a recursion through a named definition", async () => {
+    it("keeps the label of a recursion through a named definition on the whole value, and in the definition", async () => {
+      // `Tree` is `Secret`, with the labels of every member, read inside
+      // `Node` too, where `Node` itself, not written yet, holds no label
+      // beside it.
+
+      const declarations =
+        "type Tree = { next: Node } | Secret; interface Node { tree: Tree }";
       for (
-        const { schema, diagnostics } of await bothPaths(
-          "type Tree = { next: Node } | Secret; interface Node { tree: Tree }",
-          "Tree",
-        )
+        const { schema, diagnostics } of await bothPaths(declarations, "Tree")
       ) {
-        const tree = {
-          anyOf: [
-            {
-              type: "object",
-              properties: { next: { $ref: "#/$defs/Node" } },
-              required: ["next"],
-            },
-            SECRET,
-          ],
-        };
-        expect(schema.properties.a).toEqual(tree);
-        expect(schema.$defs.Node.properties.tree).toEqual(tree);
+        expect(schema.properties.a).toEqual(SECRET);
+        expect(diagnostics).toEqual([]);
+      }
+      for (
+        const { schema, diagnostics } of await bothPaths(declarations, "Node")
+      ) {
+        expect(schema.$defs.Node.properties.tree).toEqual(SECRET);
         expect(diagnostics).toEqual([]);
       }
     });
