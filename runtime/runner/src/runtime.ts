@@ -1250,6 +1250,15 @@ export const delegationsCause = (
   space: MemorySpace,
 ): { delegations: MemorySpace } => ({ delegations: space });
 
+/**
+ * How many profiles' delegation records `loadProfileDelegations` reads at
+ * once. Measured over a socket on one host, twenty read together took four
+ * times what twenty read in sequence did, and four at a time took half the
+ * sequence; against a remote host each read is a round trip, so the window
+ * is what keeps the load from growing with the profile count.
+ */
+const PROFILE_RECORD_READS_IN_FLIGHT = 4;
+
 const delegationRecordSchema = {
   type: "object",
   properties: {
@@ -4758,14 +4767,31 @@ export class Runtime {
     await profiles.sync();
     const links = profiles.get();
     if (!Array.isArray(links)) return 0;
-    let held = 0;
-    for (const link of links) {
-      if (!isCell(link)) continue;
+    const spaces = links.flatMap((link) => {
+      if (!isCell(link)) return [];
       const space = link.getAsNormalizedFullLink().space;
-      if (space === home.space) continue;
+      return space === home.space ? [] : [space];
+    });
+    // The records are read a few at a time: each is its own round trip to
+    // the server holding Home, so reading them one after another costs a
+    // runtime starting against a remote host a round trip per profile,
+    // while a single batch of them all costs more than the sequence does
+    // over a socket on this host, so a small window is what wins.
+    const recorded: Uint8Array[][] = [];
+    for (let i = 0; i < spaces.length; i += PROFILE_RECORD_READS_IN_FLIGHT) {
+      recorded.push(
+        ...await Promise.all(
+          spaces.slice(i, i + PROFILE_RECORD_READS_IN_FLIGHT).map((space) =>
+            this.recordedDelegations(space)
+          ),
+        ),
+      );
+    }
+    let held = 0;
+    for (const delegations of recorded) {
       // Each recorded delegation is one the space issued to this key, so
       // each is a chain of its own.
-      for (const delegation of await this.recordedDelegations(space)) {
+      for (const delegation of delegations) {
         await this.storageManager.addDelegationChain([delegation]);
         held += 1;
       }
