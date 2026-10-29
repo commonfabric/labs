@@ -866,15 +866,18 @@ intake sent, skipped for its receipt, or refused for something in the row itself
 (its envelope, its `kind` or its `host`) or for the kind its space declares,
 which never changes, is decided for the life of the runtime worker. A row
 refused for the state of its space (the access list, or the root) is vetted
-again the next time the offers of its inbox change; a change to the space alone,
-such as a grant to the sender, a room linked back at its reserved address or a
-Loom linked back as the root, does not bring that about. A refusal is logged once per row, as a warning under
+again when that state changes, such as a grant to the sender, a room linked back
+at its reserved address or a Loom linked back as the root: the intake follows the
+access list and the root link of each space a row waits on, and stops once none
+does. It is also vetted again the next time the offers of its inbox change. A refusal is logged once per row, as a warning under
 `piece.share-intake`, with its reason. When Home's handler returns a `conflict`
 for a row it was sent, as for a space the catalog already holds under another
 kind, the intake logs that once too, with the reason. A failure to read what
 vetting needs, other than a refusal of access, is logged, and the row is vetted
-again when its inbox next changes. So is a space whose kind the host cannot
-tell, as when it does not report kinds, and a send to Home that throws. A
+again when a lost connection to the host comes back, or when its inbox next
+changes. So is a space whose kind the host cannot tell, as when it does not
+report kinds, and a send to Home that throws. A lone offer is so taken up once
+what kept it waiting changes, with no other offer, profile change or restart. A
 catalog that cannot be read is taken to hold no receipts, since Home's handler
 refuses a duplicate in any case. The intake removes and marks nothing, so every
 offer stays in its inbox, and another reader, such as a loom daemon, reads them

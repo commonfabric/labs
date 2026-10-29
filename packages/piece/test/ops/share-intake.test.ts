@@ -889,6 +889,84 @@ describe("share-intake", () => {
       ).toContain("granted later");
     });
 
+    it("is registered once its space comes to grant its sender, with no other change to its inbox", async () => {
+      const space = await offeredSpace({ [someoneElse]: "WRITE" });
+      const intake = start();
+      await deliver([offerOf(space, "granted alone")]);
+      await runtime.idle();
+      await intake.idle();
+      expect(intake.accessForTestingOnly.decisionsFor(sender, "granted alone"))
+        .toEqual(["sender-not-member"]);
+
+      await new ACLManager(runtime, space).set(sender, "WRITE");
+
+      expect(registeredIds(await registeredThrough("granted alone")))
+        .toEqual(["granted alone"]);
+    });
+
+    it("is registered once its space's root is linked, with no other change to its inbox", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" }, { root: false });
+      const intake = start();
+      await deliver([offerOf(space, "rooted later")]);
+      await runtime.idle();
+      await intake.idle();
+      expect(intake.accessForTestingOnly.decisionsFor(sender, "rooted later"))
+        .toEqual(["space-root-missing"]);
+
+      await placeRoom(space, true);
+
+      expect(registeredIds(await registeredThrough("rooted later")))
+        .toEqual(["rooted later"]);
+    });
+
+    it("is registered once the host lets the owner into its space again, with no other change to its inbox", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      let refused = true;
+      using _refused = stub(
+        storage,
+        "spaceAccessError",
+        (each) =>
+          refused && each === space ? new Error("access refused") : undefined,
+      );
+      const changed: ((space: MemorySpace) => void)[] = [];
+      using _watching = stub(
+        storage,
+        "subscribeSpaceAccessChange",
+        (observer: (space: MemorySpace) => void) => {
+          changed.push(observer);
+          return () => changed.splice(changed.indexOf(observer), 1);
+        },
+      );
+      const intake = start();
+      await deliver([offerOf(space, "let in")]);
+      await runtime.idle();
+      await intake.idle();
+      expect(intake.accessForTestingOnly.decisionsFor(sender, "let in"))
+        .toEqual(["recipient-access-refused"]);
+
+      refused = false;
+      for (const observer of [...changed]) observer(space);
+
+      expect(registeredIds(await registeredThrough("let in")))
+        .toEqual(["let in"]);
+    });
+
+    it("stops following a space once nothing in an inbox waits on it", async () => {
+      const space = await offeredSpace({ [someoneElse]: "WRITE" });
+      const intake = start();
+      await deliver([offerOf(space, "settled")]);
+      await runtime.idle();
+      await intake.idle();
+      expect(intake.accessForTestingOnly.followedSpaces).toBe(1);
+
+      await new ACLManager(runtime, space).set(sender, "WRITE");
+      await registeredThrough("settled");
+      await runtime.idle();
+      await intake.idle();
+
+      expect(intake.accessForTestingOnly.followedSpaces).toBe(0);
+    });
+
     it("is accepted by Home's chat manager, in its space, keeping an archived entry archived, once registered", async () => {
       const space = await offeredSpace({ [sender]: "WRITE" });
       const intake = start();
@@ -1702,6 +1780,51 @@ describe("share-intake", () => {
       expect(
         registeredIds(await registeredThrough("after the failed read")),
       ).toEqual(["read again", "after the failed read"]);
+    });
+
+    it("vets the offer again when the connection to the host comes back, with no other change to its inbox, after reading its space's access list fails", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      const original = ACLManager.prototype.getStored;
+      let failures = 1;
+      using _flaky = stub(
+        ACLManager.prototype,
+        "getStored",
+        function (this: ACLManager) {
+          return failures-- > 0
+            ? Promise.reject(new Error("connection lost"))
+            : original.call(this);
+        },
+      );
+      const restored: (() => void)[] = [];
+      using _restoring = stub(
+        storage,
+        "subscribeConnectionRestored",
+        (observer: () => void) => {
+          restored.push(observer);
+          return () => restored.splice(restored.indexOf(observer), 1);
+        },
+      );
+      const intake = start();
+      await deliver([offerOf(space, "read once more")]);
+      await runtime.idle();
+      await intake.idle();
+      expect(intake.accessForTestingOnly.decisionsFor(sender, "read once more"))
+        .toEqual([]);
+
+      for (const observer of [...restored]) observer();
+
+      expect(registeredIds(await registeredThrough("read once more")))
+        .toEqual(["read once more"]);
+      // Decided, so a later restored connection vets nothing again.
+      await runtime.idle();
+      await intake.idle();
+      for (const observer of [...restored]) observer();
+      await runtime.idle();
+      await intake.idle();
+      expect(intake.accessForTestingOnly.decisionsFor(sender, "read once more"))
+        .toEqual(["sent"]);
+      intake.stop();
+      expect(restored).toEqual([]);
     });
 
     it("logs the failure, and vets the offer again when its inbox next changes, when the host cannot tell its space's kind", async () => {

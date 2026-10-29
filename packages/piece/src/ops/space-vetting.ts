@@ -15,6 +15,7 @@ import type { DID } from "@commonfabric/identity";
 import { type ACL, hasConcreteOwner, isACL } from "@commonfabric/memory/acl";
 import {
   ACLManager,
+  type Cancel,
   type Cell,
   inSpaceRootCause,
   isCell,
@@ -137,6 +138,27 @@ export async function vetWritableSpaceRoot(
   const writable = await readWritableSpace(runtime, space, identity);
   if (typeof writable === "string") return writable;
   return isOwnRoot(writable.root, space) ? writable.root : "space-root-missing";
+}
+
+/**
+ * Calls `changed` whenever what {@link vetSpace} reads of `space` that can
+ * change does: its access list, or which document its `defaultPattern` links
+ * as its root. Each subscription also calls it once at once, with what it
+ * starts from, as a cell's sink does. The kind a space declares never
+ * changes, so nothing follows it. Until the returned function is called.
+ */
+export function followSpaceState(
+  runtime: Runtime,
+  space: DID,
+  changed: () => void,
+): Cancel {
+  const cancels = [
+    new ACLManager(runtime, space).sink(() => changed()),
+    runtime.getSpaceCell(space).key("defaultPattern").sink(() => changed()),
+  ];
+  return () => {
+    for (const cancel of cancels) cancel();
+  };
 }
 
 /** Reads a space's root and requires the identity's write access to it. */
