@@ -1760,44 +1760,6 @@ describe("share-intake", () => {
   });
 
   describe("reading Home", () => {
-    it("logs a failed scan, and takes up its inboxes when Home's holders next change", async () => {
-      const space = await offeredSpace({ [sender]: "WRITE" });
-      let failures = 1;
-      // Home, but for a first read of its held inbox that fails.
-      const failing = {
-        key: (name: string) =>
-          name !== "privateInbox" ? home.key(name as never) : {
-            asSchema: (schema: unknown) => {
-              const cell = home.key(name as never).asSchema(schema as never);
-              return {
-                sink: (callback: () => void) => cell.sink(callback),
-                pull: () =>
-                  failures-- > 0
-                    ? Promise.reject(new Error("read failed"))
-                    : cell.pull(),
-              };
-            },
-          },
-      };
-      const before = scanFailuresLogged();
-      const intake = startShareIntakeOf(
-        runtime,
-        failing as never,
-        identity.did(),
-      );
-      if (intake === undefined) throw new Error("Home has no stream");
-      after = () => intake.stop();
-      await deliver([offerOf(space, "after a failed scan")]);
-      await runtime.idle();
-      await intake.idle();
-      expect(scanFailuresLogged() - before).toBe(1);
-      await setHome("retainedPrivateInboxes", []);
-
-      expect(
-        registeredIds(await registeredThrough("after a failed scan")),
-      ).toEqual(["after a failed scan"]);
-    });
-
     /**
      * Home, as the intake reads it, but for a read of its `field`, or of
      * `inner` within it when named, that fails once `failNextRead()` is
@@ -1841,6 +1803,32 @@ describe("share-intake", () => {
         },
       };
     }
+
+    it("logs a failed scan, and takes up its inboxes when Home's holders next change", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      const adopted = await inboxIn(
+        await runtime.createSpace({ grants: { "*": "WRITE" } }),
+      );
+      await deliver([offerOf(space, "after a failed scan")], adopted);
+      const flaky = flakyHome("privateInbox");
+      const intake = startShareIntakeOf(runtime, flaky.home, identity.did());
+      if (intake === undefined) throw new Error("Home has no stream");
+      after = () => intake.stop();
+      await runtime.idle();
+      await intake.idle();
+      const before = scanFailuresLogged();
+      flaky.failNextRead();
+      await setHome("privateInbox", { piece: adopted });
+      await runtime.idle();
+      await intake.idle();
+      expect(scanFailuresLogged() - before).toBe(1);
+
+      await setHome("retainedPrivateInboxes", [inbox]);
+
+      expect(
+        registeredIds(await registeredThrough("after a failed scan")),
+      ).toEqual(["after a failed scan"]);
+    });
 
     it("takes up what Home holds again when the connection to the host comes back, with no other change, after reading it fails", async () => {
       const space = await offeredSpace({ [sender]: "WRITE" });
