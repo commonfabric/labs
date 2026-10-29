@@ -37,8 +37,9 @@
  * piece, that every stored slot and per-user outcome reads as it did, that the
  * updated room can edit and react to a seeded message, that the manager lists
  * its rooms and its outgoing notices and the group room its participants'
- * principals, before and after a room is started, and that starting a direct
- * chat with the same person again finds the room the manager holds.
+ * principals and that its reader can send, before and after a room is started,
+ * and that starting a direct chat with the same person again finds the room the
+ * manager holds.
  *
  * The whole rehearsal runs twice: once with the manager's and the group room's
  * views never read before the update, and once with a client showing Home and
@@ -355,10 +356,11 @@ const rehearse = (title: string, readBefore: boolean): void => {
     type Snapshot = Awaited<ReturnType<typeof snapshot>>;
 
     /**
-     * What a client reads of the manager's rooms and of the group room's
-     * participants, each directly and through the views a client that draws
-     * natively reads. Rooms are listed by kind, sorted, since two rooms started
-     * in the same instant may list in either order.
+     * What a client reads of the manager's rooms, of the group room's
+     * participants, and of whether the group room's reader can send, each
+     * directly and through the views a client that draws natively reads. Rooms
+     * are listed by kind, sorted, since two rooms started in the same instant
+     * may list in either order.
      */
     const views = async () => ({
       rooms: kindsOf(await manager.key("rooms").pull()),
@@ -375,6 +377,8 @@ const rehearse = (title: string, readBefore: boolean): void => {
       viewedNotices: recipientsOf(
         await manager.key("$VIEWS").key("chats").key("outgoingNotices").pull(),
       ),
+      canSend: await room.key("canSend").pull(),
+      viewedCanSend: await room.key("$VIEWS").key("room").key("canSend").pull(),
     });
     type Views = Awaited<ReturnType<typeof views>>;
     let viewsBefore: Views | undefined;
@@ -712,6 +716,8 @@ const rehearse = (title: string, readBefore: boolean): void => {
         // still to be delivered.
         notices: [added, counterpart, member].sort(),
         viewedNotices: [added, counterpart, member].sort(),
+        canSend: true,
+        viewedCanSend: true,
       };
       if (readBefore) expect(viewsBefore).toEqual(listed);
       expect(await views()).toEqual(listed);
@@ -733,6 +739,8 @@ const rehearse = (title: string, readBefore: boolean): void => {
         viewedRooms: ["direct", "group", "group"],
         notices: [added, counterpart, member, member].sort(),
         viewedNotices: [added, counterpart, member, member].sort(),
+        canSend: true,
+        viewedCanSend: true,
       });
     });
 
