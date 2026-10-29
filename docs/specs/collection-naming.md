@@ -181,7 +181,7 @@ Slugs generalize from space-scoped to collection-scoped. The grammar, the
 derivation, and the claim semantics are the same one level down; only the scope
 of the lookup changes. The derivation matters to anything built here: a slug
 lives at an id derived from its name (`slugIdForSpace`,
-`packages/runner/src/slugs.ts`), so it is addressable without a registry and
+`runtime/runner/src/slugs.ts`), so it is addressable without a registry and
 unenumerable without one. A space carries a separate index for that reason, and
 the index is worth copying twice over — it is written one key at a time, so two
 clients naming different things merge rather than racing, and it is honest that
@@ -195,7 +195,7 @@ piece holding three collections is not one namespace with internal routing; it
 is three collections, each declaring its own name. A slug may point at a
 collection nested inside a piece rather than at a piece root, which is what
 makes this addressable without a new mechanism — `setPieceSlug`
-(`packages/cli/lib/piece.ts`) accepts a source path and links the cell at that
+(`runtime/cli/lib/piece.ts`) accepts a source path and links the cell at that
 path.
 
 ### Items contain collections
@@ -262,7 +262,7 @@ own. Written as a citation, fully qualified, that is `#@topics-dev/top/42`.
 A person who works with that board every day binds a name to it in their own
 home space. That binding is a slug like any other, but its target lives in
 another space, and an entity id does not carry the space it belongs to:
-`setPieceSlug` (`packages/cli/lib/piece.ts`) builds its target in the space it
+`setPieceSlug` (`runtime/cli/lib/piece.ts`) builds its target in the space it
 was given, so this binding needs the cross-space target that step 2 of the road
 below adds. The resolver is already ready for it — a slug's redirect is followed
 into the space the target link names.
@@ -294,7 +294,7 @@ different things on different days, and nothing in the string says which.
 ## Character set
 
 Names are ASCII: lowercase letters, digits, and single hyphens between words, as
-the space-level slug grammar already requires (`packages/runner/src/slugs.ts`).
+the space-level slug grammar already requires (`runtime/runner/src/slugs.ts`).
 A name is compared by exact string equality, which keeps resolution total and
 cheap.
 
@@ -337,10 +337,10 @@ short.
 | `#@<space>/top/42` | fully qualified; depends on no binding |
 
 A leading `@` marks a space segment, matching what `asSpaceSegment`
-(`packages/runner/src/fabric-url.ts`) already recognizes, and it keeps a binding
+(`runtime/runner/src/fabric-url.ts`) already recognizes, and it keeps a binding
 name and a space name from competing for the same slot. A space name is
 universal rather than personal: `createSession`
-(`packages/identity/src/session.ts`) derives a space's DID from a fixed public
+(`base/identity/src/session.ts`) derives a space's DID from a fixed public
 passphrase and the name, so the same name resolves to the same space for
 everyone, with no registry and no subscription. That is what makes the fully
 qualified form depend on nobody.
@@ -525,9 +525,9 @@ to is what would, and that is open below rather than built.
 Each step is usable on its own, and where one rests on another the step says so.
 
 **1. Restructure the reverse map.** A piece carries one single-valued `slug`
-entry in its metadata, written by `setSlugLink` (`packages/piece/src/slugs.ts`)
+entry in its metadata, written by `setSlugLink` (`runtime/piece/src/slugs.ts`)
 and read by `handlePieceGetSlug`
-(`packages/runtime-client/src/backends/runtime-processor.ts`); the shell
+(`runtime/runtime-client/src/backends/runtime-processor.ts`); the shell
 rewrites a visited identity URL to that name. One slot cannot hold both a member
 name and a space-level name, so a map carrying both would make the canonical URL
 whichever was written last. Two further gaps were to close here, and one of them
@@ -544,7 +544,7 @@ entry: a namespace the collection owns lives in a cell of the collection, and
 naming a member stamps no metadata on any piece. What still reaches the entry is
 a space-level name whose path selects a member — `cf piece set-slug two /top/2`
 resolves member `2` and stamps that member's root with `two`
-(`packages/cli/test/setPieceSlug.test.ts`, "names the member a slug's path
+(`runtime/cli/test/setPieceSlug.test.ts`, "names the member a slug's path
 selects, and stamps that member with the name"). Such a member answers to
 `<space>/two` and to `<space>/top/2` at once, and a visit by identity is
 rewritten to the first, because that single entry is the whole of the reverse
@@ -555,7 +555,7 @@ distinguishes the two kinds of name and designates one as canonical.
 **2. Make name assignment refuse by default.** Two halves, and only the first
 has landed.
 
-Landed: `setSlugLink` (`packages/piece/src/slugs.ts`) syncs the name and reads
+Landed: `setSlugLink` (`runtime/piece/src/slugs.ts`) syncs the name and reads
 it inside the transaction it commits in, refusing a name pointing anywhere but
 where the caller said to take it from, and taking it under an explicit flag.
 Taking a name clears the `slug` entry from the document root it takes it from,
@@ -583,7 +583,7 @@ and forward and reverse resolutions. Whatever allocator it needs is its own; a
 collection that accepts names from people can reuse the claim from step 2 at
 collection scope, which is itself unbuilt.
 
-Landed: address resolution (`packages/piece/src/slugs.ts`) splits along what
+Landed: address resolution (`runtime/piece/src/slugs.ts`) splits along what
 the caller is asking for. An address alone resolves through
 `resolvePieceAddress`, which names a piece and refuses a name pointing at a
 collection, because a collection is not a piece and nothing downstream of it
@@ -602,7 +602,7 @@ the address to the current space or replace it with a root-piece slug.
 The URL carries a nonempty pointer path as a JSON string array in `cellPath` so
 spaces, punctuation, empty keys, and dot segments survive URL parsing. This
 query cannot accompany a slug, another `cellPath`, or a path after the id.
-`urlToAppView` (`packages/navigation/src/view.ts`) reads the segment after a
+`urlToAppView` (`runtime/navigation/src/view.ts`) reads the segment after a
 slug as the member name and carries it in the view, which serializes back to
 `<space>/<collection>/<member>`. It walks no further: segments past the member
 are carried in the view as written, and the shell refuses such an address by
@@ -614,16 +614,16 @@ the space, so the shell opens `//<space>/top/42`, the reference its header
 offers, and settles on `/<space>/top/42`. A leading `@` on the first segment
 marks the space as well, and the shell opens `/@<space>/top/42` the same way.
 Resolution is a separate worker round trip, `slug:resolve`
-(`packages/runtime-client/src/backends/runtime-processor.ts`), which hands the
+(`runtime/runtime-client/src/backends/runtime-processor.ts`), which hands the
 reference to the runner's walk and answers with the piece and whatever the walk
 did not spend. A name with no member after it is a different question of the
 same slug — which piece is this name inside — and `resolveSlugTargetInPiece`
 answers it directly, so `<space>/top` opens the piece holding the collection.
-The slug grammar in `packages/runner/src/slugs.ts` does not change, and a member
+The slug grammar in `runtime/runner/src/slugs.ts` does not change, and a member
 answers to it too.
 
 Where the walk lives is what that split settles. `parseFabricUrl`
-(`packages/runner/src/fabric-url.ts`) is deliberately pure and synchronous, and
+(`runtime/runner/src/fabric-url.ts`) is deliberately pure and synchronous, and
 names turning a space name into a DID as the kind of work that belongs outside
 it. Walking into a collection is that kind of work — it syncs and reads a cell
 — so the walk sits beside the parse rather than inside it, and every reader of
@@ -632,7 +632,7 @@ these URLs keeps reading the segments apart from resolving them.
 That split is also what bounds who resolves a fully qualified reference. The
 shell reads it and `cf` reads it, both holding a session that can turn a space
 name into a DID and walk a collection. The pattern-facing reader, the
-`cellFromUrl` builtin (`packages/runner/src/builtins/cell-from-url.ts`), does
+`cellFromUrl` builtin (`runtime/runner/src/builtins/cell-from-url.ts`), does
 not, and what refuses it is the parse rather than the builtin: it reads
 through `parseFabricUrl`, whose rooted-path branch wants an entity id where a
 collection's name sits. The builtin is not that pure contract itself — it
@@ -646,12 +646,12 @@ and the clipboard flavors.
 
 The editor already carries most of this shape and should be read before any of
 it is rebuilt:
-`packages/ui/src/v2/components/cf-code-editor/docs/mention-refs.md` describes a
+`runtime/ui/src/v2/components/cf-code-editor/docs/mention-refs.md` describes a
 reference form that keeps a short local key in the text while the destination
 lives in a cell the host pattern owns, decides what is a reference by membership
 in that map rather than by the token's shape, and keeps a mention's visible
 label in step with a rename of its destination. `mintRefKey`
-(`packages/ui/src/v2/core/mention-refs.ts`) is a worked short-key allocator,
+(`runtime/ui/src/v2/core/mention-refs.ts`) is a worked short-key allocator,
 widening on collision rather than lengthening by default. Two things that
 document settles are worth carrying over rather than re-deciding: a reference's
 visible label and its citation spelling are different, and a label that a person
@@ -671,7 +671,7 @@ writes a different one. Its commit is rejected `ConflictError`; the identical
 write with the read removed commits. That rejection is in the retryable class,
 so `editWithRetry` catches up and re-runs the body, which is what makes a
 read-then-refuse a claim rather than a time-of-check race.
-`packages/piece/test/slug.test.ts` holds the pair that differs in the read
+`runtime/piece/test/slug.test.ts` holds the pair that differs in the read
 alone.
 
 ## Deliberately open
@@ -735,17 +735,17 @@ unsettled is the order among them.
 **Whether a name policy is machine-readable**, so a consumer can branch on it,
 or is documentation that a consumer's author reads. The first customer
 publishes one — `NamingDeclaration` in
-`packages/patterns/collection-naming/naming.ts`, ruled 2026-09-03 in
+`patterns/product/collection-naming/naming.ts`, ruled 2026-09-03 in
 `docs/plans/collection-naming-topics.md` (decision 7) — and whether that shape
 becomes the standard every collection declares is what remains open.
 
 **Whether a collection's declaration is checked against the name it is reached
 through.** A declaration carries a slot for the collection's own name — `name`
-in `NamingDeclaration` (`packages/patterns/collection-naming/naming.ts`) — and a
+in `NamingDeclaration` (`patterns/product/collection-naming/naming.ts`) — and a
 resolver reading it could verify that a binding and its target agree and report
 a mismatch. Nothing reads the declaration: no collection sets `name`, no
 resolver compares one, and member resolution
-(`packages/runner/src/slug-resolution.ts`) reads no part of it. Making one
+(`runtime/runner/src/slug-resolution.ts`) reads no part of it. Making one
 consumer real is [#6986](https://github.com/commonfabric/labs/issues/6986),
 whose natural first consumer is that check, with a name assigned onto a
 collection written into the declaration.
@@ -753,16 +753,16 @@ collection written into the declaration.
 **Whether member resolution applies a collection's grammar.** It applies no
 member-name grammar
 ([#6994](https://github.com/commonfabric/labs/issues/6994)):
-`resolveSlugReference` (`packages/runner/src/slug-resolution.ts`) looks the
+`resolveSlugReference` (`runtime/runner/src/slug-resolution.ts`) looks the
 segment after a collection's name up as a key of that collection's map. The
 allocator's grammar lives in the collection's library, as `isMemberName` in
-`packages/patterns/collection-naming/naming.ts`. So a key the allocator would
+`patterns/product/collection-naming/naming.ts`. So a key the allocator would
 never issue still resolves: `top/007` resolves to whatever piece a writer stored
 under the key `007`, while the names table publishes no row for it.
 
 The resolver does not hardcode that grammar because the two sit at opposite ends
 of the pace layers in `AGENTS.md`: the decimal grammar belongs to the
-collection's library, in `packages/patterns` at the top, and the resolver sits
+collection's library, in `patterns` at the top, and the resolver sits
 in `runner`, at the foundation. Hardcoded, it would also refuse the members of
 any collection that names them some other way, such as `docs/getting-started` in
 "Names resolve through collections". Applying each collection's own grammar

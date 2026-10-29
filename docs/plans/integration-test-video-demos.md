@@ -11,9 +11,9 @@ existing typing and clicking paths, adds optional explanatory overlays, and
 composes multi-user runs into one labeled video.
 
 The first end-to-end acceptance target is
-`packages/patterns/integration/cfc-render-policy-demo.test.ts`. The first
+`patterns/integration/cfc-render-policy-demo.test.ts`. The first
 multi-user acceptance target is
-`packages/patterns/integration/lunch-poll-vote.test.ts`.
+`patterns/integration/lunch-poll-vote.test.ts`.
 
 ## Status convention
 
@@ -93,21 +93,21 @@ plan remains live rather than being archived.
 The implementation must start from these shipped behaviors rather than create
 parallel infrastructure:
 
-- `packages/integration/shell-utils.ts` owns the browser and page lifecycle for
+- `runtime/integration/shell-utils.ts` owns the browser and page lifecycle for
   browser integration tests. One `ShellIntegration` currently launches one
   browser and one initial page; multi-user tests create multiple
   `ShellIntegration` instances.
-- `packages/integration/page.ts` wraps Astral's page, already provides
+- `runtime/integration/page.ts` wraps Astral's page, already provides
   screenshot capture, and already uses Astral's raw protocol bindings for
   event-driven condition notifications.
-- `packages/integration/astral-adapter.ts` defines the local screencast frame
+- `runtime/integration/astral-adapter.ts` defines the local screencast frame
   shape. Astral's raw protocol bindings expose `Page.startScreencast`,
   `Page.screencastFrame`, `Page.screencastFrameAck`, and
   `Page.stopScreencast`.
 - Astral's keyboard supports a per-character delay. Its mouse can move in
   steps, but CDP-generated mouse movement is not rendered as a visible system
   cursor in page screenshots or screencasts.
-- `packages/patterns/integration/cfc-browser-helpers.ts` owns the preferred
+- `patterns/integration/cfc-browser-helpers.ts` owns the preferred
   pattern-test input and click paths. `fillCfInput()` currently performs a
   bulk DOM input/change/commit/verify sequence, and `clickCfButton()` plus the
   trusted-action helpers resolve and click the actual target once.
@@ -280,31 +280,31 @@ browser console contents in the manifest.
 
 Expected new or expanded files:
 
-- `packages/integration/presentation/config.ts` — environment/config parsing,
+- `runtime/integration/presentation/config.ts` — environment/config parsing,
   defaults, validation, participant metadata, and disabled fast path.
-- `packages/integration/presentation/clock.ts` — injectable monotonic clock and
+- `runtime/integration/presentation/clock.ts` — injectable monotonic clock and
   recording-only holds.
-- `packages/integration/presentation/overlay.ts` — idempotent in-page cursor
+- `runtime/integration/presentation/overlay.ts` — idempotent in-page cursor
   and callout overlay.
-- `packages/integration/presentation/interactions.ts` — before/after click and
+- `runtime/integration/presentation/interactions.ts` — before/after click and
   type hooks shared by helper and direct Astral interaction paths.
-- `packages/integration/presentation/recorder.ts` — per-page screencast state,
+- `runtime/integration/presentation/recorder.ts` — per-page screencast state,
   frame acknowledgments, ordered writes, and manifest rows.
-- `packages/integration/presentation/session.ts` — run-level participant and
+- `runtime/integration/presentation/session.ts` — run-level participant and
   step timeline; coordinates recorders without serializing their actions.
-- `packages/integration/presentation/encode.ts` — FFmpeg discovery, per-stream
+- `runtime/integration/presentation/encode.ts` — FFmpeg discovery, per-stream
   encoding, layout composition, cleanup, and injectable command runner.
-- `packages/integration/presentation/manifest.ts` — versioned manifest types
+- `runtime/integration/presentation/manifest.ts` — versioned manifest types
   and validation.
-- `packages/integration/page.ts` — narrow screencast and viewport operations,
+- `runtime/integration/page.ts` — narrow screencast and viewport operations,
   plus presentation hook installation; do not expose raw protocol bindings
   generally.
-- `packages/integration/shell-utils.ts` — participant registration and
+- `runtime/integration/shell-utils.ts` — participant registration and
   lifecycle start/finalize integration.
-- `packages/integration/env.ts` and `packages/integration/index.ts` — public
+- `runtime/integration/env.ts` and `runtime/integration/index.ts` — public
   configuration/export surface.
 
-If implementation tests are added under `packages/integration/test/`, replace
+If implementation tests are added under `runtime/integration/test/`, replace
 the package's current stub `test` task with a real `deno test` task. Keep the
 package's required workspace test entry.
 
@@ -319,7 +319,7 @@ Astral page:
   and operation outcome;
 - the observer is unset by default and adds no delays or DOM changes;
 - product-specific presentation behavior remains in
-  `packages/integration/presentation/`, not in the Astral package;
+  `runtime/integration/presentation/`, not in the Astral package;
 - `ElementHandle.click()` and `ElementHandle.type()` invoke the observer so
   direct element operations cannot bypass presentation mode;
 - direct `page.keyboard.type()` receives the presentation default character
@@ -453,7 +453,7 @@ accumulate millisecond literals.
 
 ### Stage 1 completion gate
 
-- [ ] Recorder and encoder unit tests pass in `packages/integration`.
+- [ ] Recorder and encoder unit tests pass in `runtime/integration`.
 - [ ] A single-page synthetic frame fixture proves wall-clock-equivalent
   variable durations.
 - [ ] The CFC render-policy test can be recorded through the reusable recorder.

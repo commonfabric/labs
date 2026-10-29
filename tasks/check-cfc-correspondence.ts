@@ -6,7 +6,7 @@
  *
  * The specification lives in the private `commonfabric/specs` repository, and
  * what this public repository commits of it is the spec snapshot at
- * `packages/runner/src/cfc/kernel/spec-snapshot.json`: the specs commit,
+ * `runtime/runner/src/cfc/kernel/spec-snapshot.json`: the specs commit,
  * every section number, and one hash per pseudocode function. Against that
  * snapshot, and against the manifest beside it, this holds four things:
  *
@@ -18,13 +18,13 @@
  *    with the row and the snapshot; a `missing` row names a function the
  *    kernel does not export.
  * 2. **The kernel is pinned and pure.** Every function a file under
- *    `packages/runner/src/cfc/kernel/` exports carries a `@spec` header whose
+ *    `runtime/runner/src/cfc/kernel/` exports carries a `@spec` header whose
  *    hash is the snapshot's for that function, and the file's value imports
  *    reach only other kernel files: a type import is erased before anything
  *    runs and is allowed from anywhere, and nothing else from outside the
  *    kernel executes. The ledger files, {@link KERNEL_LEDGER_FILES}, are
  *    exempt from the header rule and held to the import rule.
- * 3. **Every `§` citation under `packages/runner/src/cfc/` names a section
+ * 3. **Every `§` citation under `runtime/runner/src/cfc/` names a section
  *    the snapshot has.** A citation written on purpose to something else is
  *    recorded in {@link EXEMPTIONS}, naming the file, the citation and why;
  *    an entry whose file no longer writes its citation is reported too.
@@ -64,7 +64,7 @@ import { repositoryFiles } from "./repository-files.ts";
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
 /** The kernel directory, repository-relative, with its trailing slash. */
-export const KERNEL_DIR = "packages/runner/src/cfc/kernel/";
+export const KERNEL_DIR = "runtime/runner/src/cfc/kernel/";
 
 /**
  * The files under the kernel directory that are the ledger rather than kernel
@@ -86,15 +86,15 @@ export const SPEC_PENDING_BUDGET = 3;
  * harness console's display ceiling. The two lists are kept in step by hand.
  */
 export const GOVERNED_SOURCE: readonly RegExp[] = [
-  /^packages\/runner\/src\/cfc\/.*\.tsx?$/,
-  /^packages\/runner\/src\/cfc\.ts$/,
-  /^packages\/runner\/test\/cfc[^/]*\.test\.tsx?$/,
-  /^packages\/runner\/test\/cfc\/.*\.tsx?$/,
-  /^packages\/html\/src\/worker\/(?:reconciler|display-fit)\.ts$/,
-  /^packages\/cf-harness\/src\/cfc-[^/]*\.ts$/,
-  /^packages\/cf-harness\/src\/contracts\/cfc-[^/]*\.ts$/,
-  /^packages\/cf-harness\/src\/sandbox\/runsc-cfc-result\.ts$/,
-  /^packages\/cf-harness\/console\/display-ceiling\.ts$/,
+  /^runtime\/runner\/src\/cfc\/.*\.tsx?$/,
+  /^runtime\/runner\/src\/cfc\.ts$/,
+  /^runtime\/runner\/test\/cfc[^/]*\.test\.tsx?$/,
+  /^runtime\/runner\/test\/cfc\/.*\.tsx?$/,
+  /^runtime\/html\/src\/worker\/(?:reconciler|display-fit)\.ts$/,
+  /^runtime\/cf-harness\/src\/cfc-[^/]*\.ts$/,
+  /^runtime\/cf-harness\/src\/contracts\/cfc-[^/]*\.ts$/,
+  /^runtime\/cf-harness\/src\/sandbox\/runsc-cfc-result\.ts$/,
+  /^runtime\/cf-harness\/console\/display-ceiling\.ts$/,
 ];
 
 /** Whether `path` is one the CFC rule governs. */
@@ -119,7 +119,7 @@ export interface Exemption {
 }
 
 /**
- * Every `§` citation under `packages/runner/src/cfc/` that names something
+ * Every `§` citation under `runtime/runner/src/cfc/` that names something
  * other than a section of the specification, on purpose.
  */
 export const EXEMPTIONS: readonly Exemption[] = [];
@@ -606,7 +606,7 @@ export function collectFindings(input: CheckInput): Finding[] {
   }
   if (markers > input.budget) {
     findings.push({
-      file: "packages/runner/src/cfc/",
+      file: "runtime/runner/src/cfc/",
       message: `${markers} \`SPEC-PENDING\` markers across the governed ` +
         `files exceed the budget of ${input.budget}; land a ruling before ` +
         "adding another",
@@ -638,8 +638,8 @@ export async function readInput(root: string): Promise<CheckInput> {
       kernelFiles.push(await read(path));
     }
     if (
-      (path.startsWith("packages/runner/src/cfc/") ||
-        path === "packages/runner/src/cfc.ts") && SOURCE.test(path)
+      (path.startsWith("runtime/runner/src/cfc/") ||
+        path === "runtime/runner/src/cfc.ts") && SOURCE.test(path)
     ) {
       citationFiles.push(await read(path));
     }

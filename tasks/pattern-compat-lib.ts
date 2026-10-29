@@ -31,7 +31,7 @@ import {
 import {
   formatSchemaIncompatibility,
   patternSchemaIncompatibilities,
-} from "../packages/piece/src/schema-compatibility.ts";
+} from "../runtime/piece/src/schema-compatibility.ts";
 import { readOnlyArguments } from "./only-arguments.ts";
 import type { AcceptedContractBreak } from "./pattern-compat-accepted-breaks.ts";
 import { matchesPatternFilter } from "./pattern-files.ts";
@@ -141,7 +141,7 @@ export interface StoredBaseline extends PatternContract {
  * exception that throws). A baseline that silently flattens a value agrees with
  * buggy output instead of catching it, and worse here, it would never match the
  * contract it was recorded from — the gate would report a missing baseline
- * forever. `packages/schema-generator/test/fixtures-runner.test.ts` documents
+ * forever. `base/schema-generator/test/fixtures-runner.test.ts` documents
  * this same hazard for its goldens and solves it the same way.
  *
  * The encoding's prefix tag identifies it on the wire but is not part of the
@@ -260,7 +260,7 @@ export function checkPattern(
 // Baseline store
 //
 // Parameterized by directory so these are testable against a temp tree rather
-// than only against the real `packages/patterns` layout.
+// than only against the real `patterns` layout.
 //
 
 /** Read every recorded contract for a pattern. Absent directory → none. */

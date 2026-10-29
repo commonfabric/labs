@@ -8,7 +8,7 @@ This document specifies the product operation and its entry points. The
 [piece source lifecycle](piece-source-lifecycle.md) remains the design of
 record for retaining source, recording revisions, checking compatibility, and
 detaching a directly edited piece. The
-[`cf-harness` implementation profile](../../packages/cf-harness/docs/IMPLEMENTATION_PROFILE.md)
+[`cf-harness` implementation profile](../../runtime/cf-harness/docs/IMPLEMENTATION_PROFILE.md)
 describes the agent runtime used by the operation.
 
 ## Status
@@ -414,7 +414,7 @@ a requirement here, where it must not be mistaken for one, and what it adds to
 the retention and identifier obligations above.
 
 - **The fabric session is an available isolated runtime target.** The harness
-  fabric session (`packages/cf-harness/src/fabric-session.ts`) constructs an
+  fabric session (`runtime/cf-harness/src/fabric-session.ts`) constructs an
   authorization-verified `PiecesController` on the host side, so no fabric
   credential exists inside the sandbox. The isolated-runtime-target
   requirement in the authoring session stands as written; this component
@@ -438,7 +438,7 @@ the retention and identifier obligations above.
 
 - **Handles redact at the model boundary; the progress surface is separate.**
   Session handles (`cfh:` tokens,
-  `packages/cf-harness/src/handle-table.ts`) replace fabric identifiers at the
+  `runtime/cf-harness/src/handle-table.ts`) replace fabric identifiers at the
   model boundary. This specification's exclusion of identifiers from progress
   events is a separate, person-facing projection and remains required. The
   identifier scrubber for compile diagnostics — bare tagged hashes, DIDs,
@@ -454,7 +454,7 @@ the retention and identifier obligations above.
   durable address-to-token map of every fabric address a run touched.
 
 - **Address intake.** The CLI's LLM-friendly reference normalization
-  (`packages/cli/lib/llm-friendly-ref.ts`) provides the client-side shape for
+  (`runtime/cli/lib/llm-friendly-ref.ts`) provides the client-side shape for
   this specification's piece-address syntax. The authenticated server remains
   the resolution authority.
 

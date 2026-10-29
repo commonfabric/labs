@@ -105,9 +105,9 @@ quick tips.
   per-connection-tagged (`c=`) so cross-client write churn can be attributed to
   specific clients. Add `CF_DEBUG_MEMORY_WRITE_VALUES=1` to also dump raw values
   (avoid on real data — they can hold PII/secrets). Output goes to the toolshed's
-  stderr — `packages/toolshed/local-dev-toolshed.log` under the local-dev scripts.
+  stderr — `runtime/toolshed/local-dev-toolshed.log` under the local-dev scripts.
   See
-  [`memwrite-trace.ts`](../../../packages/toolshed/routes/storage/memory/memwrite-trace.ts).
+  [`memwrite-trace.ts`](../../../runtime/toolshed/routes/storage/memory/memwrite-trace.ts).
 - [VDOM Debug Helpers](vdom-debug.md) - `commonfabric.vdom.*` VDOM tree inspection
 - [Logger Internals](../../features/logger-internals.md) - Creating loggers in runtime code (`getLogger`, timing, flags)
 

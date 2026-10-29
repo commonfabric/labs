@@ -86,7 +86,7 @@ skills exist to prevent. Two defenses:
    for the two facts a machine can check exactly: `deno task check-skill-facts`
    fails when a repo path or a `@commonfabric/...` specifier a skill cites stops
    resolving. Write a path in backticks and from the repo root and it is checked;
-   write it as a placeholder (`packages/<pkg>/mod.ts`) to mark it as an
+   write it as a placeholder (`runtime/<pkg>/mod.ts`) to mark it as an
    illustration. See [`skill-audit.md`](./skill-audit.md).
 
 ## The editing test

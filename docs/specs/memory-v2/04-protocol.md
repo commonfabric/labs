@@ -523,7 +523,7 @@ safe integer as diagnostic data. An absent generation stays absent in the
 normalized report, so adding or removing it from a valid signed report fails
 authentication. Client retirement is disabled, and nonzero startup cutoff
 settings are rejected. See
-[client attribution](../../../packages/memory/README.md#client-attribution)
+[client attribution](../../../runtime/memory/README.md#client-attribution)
 for host wiring and configuration constraints.
 
 Rules:

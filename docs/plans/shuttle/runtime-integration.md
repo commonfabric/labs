@@ -2,18 +2,18 @@
 
 Satellite of [`README.md`](README.md), grounding decision 9 (one
 in-process connection, `cf` verbs through shared library seams, a `!cf`
-subprocess escape). This records what the runtime and `packages/cli` offer
+subprocess escape). This records what the runtime and `runtime/cli` offer
 today, the discipline a long-lived process must add, and the seam work in
 `cli` that is prerequisite to building anything.
 
 ## The connection
 
 One persistent `PiecesController` serves a place. `PiecesController.initialize`
-(`packages/piece/src/ops/pieces-controller.ts`) is the lean constructor: it
+(`runtime/piece/src/ops/pieces-controller.ts`) is the lean constructor: it
 opens the session and its storage manager, builds the `remoteClient` runtime
 over the deployment's experimental options, health-checks the server before
 reading any of the space, and settles the space session. `loadPieces`
-(`packages/cli/lib/piece.ts`) wraps that same sequence for the CLI, adding a
+(`runtime/cli/lib/piece.ts`) wraps that same sequence for the CLI, adding a
 version check against the server's git sha, embedded-space validation, and the
 error-log, navigate, and JSON-console wiring a one-shot verb wants. A shell
 pays the sequence once at connect; `cf` pays it per invocation.
@@ -21,25 +21,25 @@ pays the sequence once at connect; `cf` pays it per invocation.
 The ambient record maps onto the config shapes those functions already
 take: `SpaceConfig` (`apiUrl`, `space`, `identity`, …) and `PieceConfig`
 (adding `piece`, `pieceScope`, `piecePath`, `pieceInput`) in
-`packages/cli/lib/piece.ts`. `cf` builds them from flags through
+`runtime/cli/lib/piece.ts`. `cf` builds them from flags through
 `parseSpaceOptions`, `parsePieceOptions`, and `readTargetPositionals`
-(`packages/cli/commands/piece.ts`); shuttle constructs them from the
+(`runtime/cli/commands/piece.ts`); shuttle constructs them from the
 ambient record directly and skips the flag parsing.
 
 The connection pushes. The `remoteClient` runtime preset opens a persistent
-`WebSocketTransport` (`packages/runner/src/storage/v2-remote-session.ts`), so
+`WebSocketTransport` (`runtime/runner/src/storage/v2-remote-session.ts`), so
 a write landing on the server from anywhere reaches this process's cells and
 re-fires their sinks. `watch` needs no polling.
 
 Two existing long-lived holders show the lifecycle discipline:
 
-- `packages/cf-harness`: `createHarnessFabricSessionFactory` builds one
+- `runtime/cf-harness`: `createHarnessFabricSessionFactory` builds one
   controller and `cacheHarnessFabricSessionFactory` memoizes it so every
   invocation of a run shares it. Its cache clears on a **rejected
   construction** and nothing else — the `session === attempt` test guards
   against evicting a newer attempt, and is not a health probe — so it
   covers the connection that never opened, not one that later drops.
-- `packages/fuse`: `CellBridge` takes an injectable `PiecesLoader` plus a
+- `runtime/fuse`: `CellBridge` takes an injectable `PiecesLoader` plus a
   separate `reconnectPiecesLoader` for recovery.
 
 `initialize` health-checks the server before it returns, so the first
@@ -50,7 +50,7 @@ asks once.
 ## Recovery already exists
 
 An established connection heals below shuttle, in the memory client
-(`packages/memory/v2/client.ts`) rather than the storage layer above it:
+(`runtime/memory/v2/client.ts`) rather than the storage layer above it:
 
 - `Client.#onClose` marks the client disconnected, calls
   `handleDisconnect()` on every `SpaceSession`, rejects in-flight requests
@@ -70,7 +70,7 @@ An established connection heals below shuttle, in the memory client
   alone.
 
 One near-miss worth pinning: `Provider.#syncRequests` and `#replaySync`
-(`packages/runner/src/storage/v2.ts`) look like this replay but fire only
+(`runtime/runner/src/storage/v2.ts`) look like this replay but fire only
 on route replacement — the reconnect replay is `SpaceSession`'s, above.
 
 Two gaps around it. **Initial** construction is not retried —
@@ -120,18 +120,18 @@ decides what to collapse.
 ## Watch mechanics
 
 `Cell.sink(callback, options)` (`IAnyCell.sink`,
-`packages/runner/src/cell.ts`) is the substrate: it fires immediately with
+`runtime/runner/src/cell.ts`) is the substrate: it fires immediately with
 the current value and re-fires on every committed change, and it works
-outside a browser — `packages/fuse/cell-bridge.ts`,
-`packages/cli/lib/callable.ts`, and the agents connector all sink from Deno
-processes. (`packages/runtime-client` is not a candidate: its only transport
+outside a browser — `runtime/fuse/cell-bridge.ts`,
+`runtime/cli/lib/callable.ts`, and the agents connector all sink from Deno
+processes. (`runtime/runtime-client` is not a candidate: its only transport
 is browser-main-thread-to-Web-Worker.)
 
 Two disciplines every existing sink consumer rediscovered:
 
 - **Settling.** One logical change fires several sink callbacks before the
   reactive graph quiets. FUSE debounces on a timer; `renderVDomToHtml`
-  (`packages/cli/lib/piece-render.ts`) uses a reentrancy guard around a wait
+  (`runtime/cli/lib/piece-render.ts`) uses a reentrancy guard around a wait
   its caller supplies, so several batches produce exactly one report per quiet
   runtime. Under `cf piece render --watch` that wait is `runtime.idle()`,
   repeated while storage holds work a computation is waiting for. The
@@ -139,26 +139,26 @@ Two disciplines every existing sink consumer rediscovered:
 - **Freshness requires running.** A piece that is not started serves stored
   state; computed values are only fresh when the pattern runs in this
   process. That is what `cf cell get --step` does per invocation
-  (`getCellValue` in `packages/cli/lib/piece.ts`: get with `runIt`, then
+  (`getCellValue` in `runtime/cli/lib/piece.ts`: get with `runIt`, then
   pull, `idle`, `synced`). In a persistent shell that dance collapses to a
   one-time start per piece. When shuttle starts a piece is a policy question
   the main document carries.
 
 `renderPiece(config, { watch, onUpdate })` in
-`packages/cli/lib/piece-render.ts` is the closest prior art: it returns a
+`runtime/cli/lib/piece-render.ts` is the closest prior art: it returns a
 cancel function and drives `onUpdate` per settled change. Its command action
 keeps the process alive with a SIGINT listener and a never-resolving promise
 — the shape a shell must not copy.
 
-## Seam inventory in `packages/cli`
+## Seam inventory in `runtime/cli`
 
 The CLI already factors many command actions as named exports with
 dependency seams — the `*FromCommand` family in
-`packages/cli/commands/piece.ts` (`getCellValueFromCommand`,
+`runtime/cli/commands/piece.ts` (`getCellValueFromCommand`,
 `setCellValueFromCommand`, `listPiecesFromCommand`,
 `describePieceFromCommand`, the survey/repair/retarget/rollback/restore set,
 and more), each shaped `(options, ...positionals, deps)`. `cf wish` goes
-further: `wishAction` over `readWish` (`packages/cli/lib/wish.ts`), which
+further: `wishAction` over `readWish` (`runtime/cli/lib/wish.ts`), which
 abstracts its connection behind `WishRuntimeHost` — the cleanest seam and
 the model to generalize.
 
@@ -259,14 +259,14 @@ command. Its `deps` bag holds collaborators only, so a caller holding a
 connection passes an `executePieceCallable` bound to it and drives the rest
 as written.
 
-## Prerequisite work in `packages/cli`
+## Prerequisite work in `runtime/cli`
 
 Each of these is small and lands on its own; together they are what decision
 9's "factor the seam in `cli`, not reimplement in shuttle" means concretely.
 
 1. **Reaching the seams.** Settled by where the shell sits. It is this
    package's own code, so it reads every seam by relative path and owes no
-   export entry for one; `packages/cli/deno.jsonc` carries `.` → `mod.ts`
+   export entry for one; `runtime/cli/deno.jsonc` carries `.` → `mod.ts`
    alone, whose import runs CLI startup.
 2. **Thread `deps.loadPieces` through the functions that still hardcode
    it.** Everything a shuttle-v1 verb reaches takes it; what is left is the
@@ -379,16 +379,16 @@ Each of these is small and lands on its own; together they are what decision
    passes — it writes the same settings, and it is what a verb reaching an
    un-injected library function already does — so the posture and the two
    memos rest on the limit alone. And a connection opened through
-   `PiecesController.initialize` directly, as `packages/fuse` and
-   `packages/cf-harness` open one, passes no claim at all.
+   `PiecesController.initialize` directly, as `runtime/fuse` and
+   `runtime/cf-harness` open one, passes no claim at all.
 
-   Three declarations name it, all of them in `packages/cli`: `quietMode`
+   Three declarations name it, all of them in `runtime/cli`: `quietMode`
    and `receipted` say what holds of them under it, and `loadPieces` says
    what it refuses and where the reasoning is kept. The globals in
-   `packages/llm` and `packages/runner` belong to other packages and say
+   `base/llm` and `runtime/runner` belong to other packages and say
    nothing about it, so this inventory is the only record of them — and
    the part of it that goes stale first if nobody reads it back against
-   those files. What `packages/cli/README.md` records is the deployment
+   those files. What `runtime/cli/README.md` records is the deployment
    rule, on `cf`'s own terms: one connection per process is false of `cf`,
    where a single verb opens several, so the connection limit is recorded
    here, and a shuttle process is what holds to it.
@@ -405,7 +405,7 @@ Each of these is small and lands on its own; together they are what decision
    within a shuttle session for free.
 
 9. **Warming a piece without stepping it.** Done, as `warmPiece`
-   (`packages/cli/lib/piece.ts`). Reaching in warms (decision 10) needs a
+   (`runtime/cli/lib/piece.ts`). Reaching in warms (decision 10) needs a
    piece started and left running, which is what no existing seam did:
    `stepPiece` exists to commit what recomputation produced, so it settles,
    receipts the space and stops the piece again. `warmPiece` resolves the

@@ -7,7 +7,7 @@ it runs there, and what the arrangement rests on.
 ## The step
 
 `ExtendedStorageTransaction.commit()`
-([extended-storage-transaction.ts](../../packages/runner/src/storage/extended-storage-transaction.ts))
+([extended-storage-transaction.ts](../../runtime/runner/src/storage/extended-storage-transaction.ts))
 does two things before it reaches the CFC enforcement ladder:
 
 1. **Materialize schema documents.** Every content-addressed schema document a
@@ -18,7 +18,7 @@ does two things before it reaches the CFC enforcement ladder:
    enforcement dial says.
 2. **Settle relevance and prepare**, which is `prepareForCommit()`:
    - **Probe flow-label relevance.** `flowLabelWorkExists`
-     ([prepare.ts](../../packages/runner/src/cfc/prepare.ts)) asks whether the
+     ([prepare.ts](../../runtime/runner/src/cfc/prepare.ts)) asks whether the
      transaction observed or wrote a document carrying stored labels. A
      transaction that did is marked relevant. A write counts whatever value
      it leaves: every write the transaction recorded is an attempted write
@@ -79,7 +79,7 @@ to `commit()` for reads and writes, at every call site.
 before they commit. It is an ordering choice rather than a correctness one:
 
 - The scheduler counts the CFC outbox as asynchronous post-commit work
-  (`hasPendingPostCommitEffects`, [run.ts](../../packages/runner/src/scheduler/run.ts)),
+  (`hasPendingPostCommitEffects`, [run.ts](../../runtime/runner/src/scheduler/run.ts)),
   and prepare is what fills the outbox.
 - The scheduler and the event loop build a reactivity log from the transaction
   before the commit (`txToReactivityLog`). Prepare's label-map writes belong in
@@ -117,7 +117,7 @@ write log, and the decision inputs recorded beside them. The snapshot is
 frozen at every level as it is taken, and `prepareCfc()` accepts no input, so
 no caller can supply one or change the one taken. The prepared digest is
 `preparedDigestFor()` of that snapshot
-([canonical.ts](../../packages/runner/src/cfc/canonical.ts)): its canonical
+([canonical.ts](../../runtime/runner/src/cfc/canonical.ts)): its canonical
 form, hashed.
 
 **When the digest is computed.** The digest is a function of the snapshot
@@ -160,7 +160,7 @@ follows a preparation is:
 
 Activity invalidates the preparation where it happens, in the entry the
 transaction offers for it
-([extended-storage-transaction.ts](../../packages/runner/src/storage/extended-storage-transaction.ts)),
+([extended-storage-transaction.ts](../../runtime/runner/src/storage/extended-storage-transaction.ts)),
 and the invalidation records which kind it was:
 
 - a read (`read-after-prepare`);
@@ -208,7 +208,7 @@ there.
 
 Computing the digest on first read changes when the hash runs, and neither
 what it is nor which commits the recheck accepts.
-`packages/runner/test/storage/prepared-digest.test.ts` pins both halves: a
+`runtime/runner/test/storage/prepared-digest.test.ts` pins both halves: a
 commit whose activity stands hashes nothing, and one whose activity moved
 hashes both snapshots, and is refused where they differ.
 
@@ -298,13 +298,13 @@ the commit.
 
 ## Where this is pinned
 
-- [cfc/preparation-cancellation.test.ts](../../packages/runner/test/cfc/preparation-cancellation.test.ts)
+- [cfc/preparation-cancellation.test.ts](../../runtime/runner/test/cfc/preparation-cancellation.test.ts)
   — cancellation during preparation, label and refusal parity, and changes to
   the transaction during a yield.
-- [sqlite-query-cancellation.test.ts](../../packages/runner/test/sqlite-query-cancellation.test.ts)
+- [sqlite-query-cancellation.test.ts](../../runtime/runner/test/sqlite-query-cancellation.test.ts)
   — stopping a piece discards its query writeback; restarting reissues the
   pending query.
-- [cfc-commit-preparation.test.ts](../../packages/runner/test/cfc-commit-preparation.test.ts)
+- [cfc-commit-preparation.test.ts](../../runtime/runner/test/cfc-commit-preparation.test.ts)
   — a transaction that turns relevant after the caller prepared it still
   commits prepared; an `editWithRetry` action runs once for a CFC verdict on a
   transaction nothing prepared; a read-only transaction is left unprepared
@@ -314,17 +314,17 @@ the commit.
   starting value, and an authoritative write of an unchanged value, each make
   a labeled target relevant; a reverted path's derived label is replaced
   whether or not another document in its space changed.
-- [storage/prepared-digest.test.ts](../../packages/runner/test/storage/prepared-digest.test.ts)
+- [storage/prepared-digest.test.ts](../../runtime/runner/test/storage/prepared-digest.test.ts)
   — what the prepared digest binds; a write after a preparation invalidates
   it and fails the commit through each write entry, including a batched
   write the storage layer elides, a recorded SQLite statement, and a recorded
   mergeable op; an empty batch leaves the preparation standing; module
   delegations set after a preparation fail the commit on the digest
   comparison.
-- [runtime-prepare-tx-for-commit.test.ts](../../packages/runner/test/runtime-prepare-tx-for-commit.test.ts)
+- [runtime-prepare-tx-for-commit.test.ts](../../runtime/runner/test/runtime-prepare-tx-for-commit.test.ts)
   — the settled-transaction and aborted-transaction cases.
-- [cfc-flow-probe-memo.test.ts](../../packages/runner/test/cfc-flow-probe-memo.test.ts)
+- [cfc-flow-probe-memo.test.ts](../../runtime/runner/test/cfc-flow-probe-memo.test.ts)
   — one probe evaluation per transaction activity epoch.
-- [edit-with-retry-classification.test.ts](../../packages/runner/test/edit-with-retry-classification.test.ts)
+- [edit-with-retry-classification.test.ts](../../runtime/runner/test/edit-with-retry-classification.test.ts)
   — which commit rejections `editWithRetry` retries, and which end the
   sequence after one attempt.

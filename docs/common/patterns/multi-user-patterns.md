@@ -209,15 +209,15 @@ current, carries the verified-identity seal, and links to each contributor's
 profile. Snapshotting the `#profileName` value and the `#profilePicture` bytes
 (or, for a profile with no picture, the `#profileAvatar` text) instead is the
 self-containment fallback (renders with remote profile spaces offline);
-`profileLook()` in `packages/patterns/system/profile-look.ts` picks which to
+`profileLook()` in `patterns/system/profile-look/profile-look.ts` picks which to
 copy. See
 the [shared-profile roster guide](../../specs/shared-profile-rosters.md);
 canonical live-link demo:
-`packages/patterns/profile-roster-live-demo.tsx`; worked examples:
-`packages/patterns/profile-group-chat/main.tsx`,
-`packages/patterns/scrabble/scrabble.tsx`,
-`packages/patterns/battleship/multiplayer/lobby.tsx`,
-`packages/patterns/lunch-poll/main.tsx`.
+`patterns/examples/profile-roster-live-demo/profile-roster-live-demo.tsx`;
+worked examples: `patterns/examples/profile-group-chat/main.tsx`,
+`patterns/showcase/scrabble/scrabble.tsx`,
+`patterns/showcase/battleship/multiplayer/lobby.tsx`,
+`patterns/apps/lunch-poll/main.tsx`.
 
 **`<cf-profile-badge>` is the one idiomatic way to render an identity** — avatar +
 name + the runtime-attested generative seal (an aura ring derived from the
@@ -316,7 +316,7 @@ whose remote profile space is offline.
 > and the renderer throws *"Bidirectionally bound property $profile is not
 > reactive"*, blanking the whole pattern. Build each view as static JSX and switch
 > with `ifElse(cond, staticA, staticB)` as a child of a static wrapper; gate only
-> *siblings* reactively. Repro: `packages/patterns/scope-bug-computed-vnode-blank/`.
+> *siblings* reactively. Repro: `patterns/dev/scope-bug-computed-vnode-blank/`.
 
 ### Build the roster by join
 
@@ -328,7 +328,7 @@ fallback), and keep a `PerUser` pointer that is a **cell reference** to their ow
 entry (see [Shared Directories And "Me"](#shared-directories-and-me)). Decide "is
 this me?" with `equals()` on the stored profile cell (or the entry reference) —
 never by comparing the mutable, non-unique display name. The live demo
-`packages/patterns/profile-roster-live-demo.tsx` is the reference implementation.
+`patterns/examples/profile-roster-live-demo/profile-roster-live-demo.tsx` is the reference implementation.
 
 ### Ownership and authorship
 
@@ -543,7 +543,7 @@ If a multi-user pattern has admins, moderators, managers, or protected writes:
    the reason given below.
 3. Define role names, subjects, and the integrity string beside the owning
    pattern.
-4. Reuse `packages/patterns/cfc/admin/mod.ts` for the registry shape and lookup
+4. Reuse `patterns/system/cfc/admin/mod.ts` for the registry shape and lookup
    helpers.
 5. Name one reviewed handler in the roster's write contract, and send every
    roster change to it as an event.
@@ -564,7 +564,7 @@ import {
   adminRegistryEntries,
   type EmptyAdminRegistryValue,
   subjectHasAdminRole,
-} from "../cfc/admin/mod.ts";
+} from "../../system/cfc/admin/mod.ts";
 import {
   type AddIntegrity,
   type Default,
@@ -688,15 +688,15 @@ silent, so a roster that can take one admin and never a second looks exactly
 like one that works. A test that changes the roster once cannot tell the
 difference. One that changes it twice can.
 
-`packages/patterns/cfc/README.md` gives the full set of rules under "Floor An
+`patterns/system/cfc/README.md` gives the full set of rules under "Floor An
 Admin Registry", with the failure each one produces when it is broken, and says
 what choosing a cell rather than a name as the role's subject costs and saves.
 
 For protected writes that must come from reviewed UI, check the shared CFC
 helper docs before copying from a demo:
 
-- `packages/patterns/cfc/README.md`
-- `packages/patterns/cfc/INDEX.md`
+- `patterns/system/cfc/README.md`
+- `patterns/system/cfc/INDEX.md`
 - `docs/common/ai/cfc-helper-authoring-guide.md`
 
 Shared CFC helpers provide reusable policy structure. The pattern still owns its
@@ -898,7 +898,7 @@ per-viewer value:
 })}
 ```
 
-The lunch poll's self ring (`packages/patterns/lunch-poll/main.tsx`) takes this
+The lunch poll's self ring (`patterns/apps/lunch-poll/main.tsx`) takes this
 shape over rows a `computed()` produced, reading the viewer's per-user profile,
 and its pattern test checks that the ring lands on the viewer's own swatch and
 no other. A per-session read in the same place can fail to resolve; see
@@ -938,7 +938,7 @@ See [Writable → Mergeable writes](../concepts/types-and-schemas/writable.md#me
 for the full method list and the
 [mergeable](../../features/mergeable-collection-writes.md) /
 [keyed](../../features/keyed-collection-writes.md) collection-write design
-notes. The lunch poll (`packages/patterns/lunch-poll/`) is a worked example: its
+notes. The lunch poll (`patterns/apps/lunch-poll/`) is a worked example: its
 votes and options are keyed, mergeable, multi-user state.
 
 ## Testing Multi-User Behavior
@@ -954,9 +954,9 @@ Three escalating options:
    each participant pattern runs in its own isolated runtime against one
    shared space, coordinating via `{ label }` / `{ await }` markers. See the
    "Multi-User Tests" section of `docs/common/ai/pattern-testing-guide.md`
-   and the example `packages/patterns/cfc-group-chat-demo/multi-user.test.tsx`.
+   and the example `patterns/examples/cfc-group-chat-demo/multi-user.test.tsx`.
 2. **Multi-runtime integration harness**
-   (`packages/patterns/integration/multi-runtime-harness.ts`): opens an
+   (`patterns/integration/multi-runtime-harness.ts`): opens an
    existing piece in several worker-isolated runtimes (distinct identities,
    or one identity in two sessions); supports trusted-surface CFC events
    headlessly. It serves the authored patterns tree beside its in-process
@@ -998,22 +998,22 @@ See:
 
 ## Good Examples
 
-- `packages/patterns/scoped-group-chat/main-plain-inputs.tsx`: data-shaped
+- `patterns/examples/scoped-group-chat/main-plain-inputs.tsx`: data-shaped
   scoped inputs.
-- `packages/patterns/scoped-group-chat/main-with-writable-inputs.tsx`: scoped
+- `patterns/examples/scoped-group-chat/main-with-writable-inputs.tsx`: scoped
   writable aliases for mutation-heavy UI.
-- `packages/patterns/scoped-user-directory/`: per-user pointer into a shared
+- `patterns/examples/scoped-user-directory/`: per-user pointer into a shared
   directory.
-- `packages/patterns/battleship/multiplayer/`: shared match state with per-user
+- `patterns/showcase/battleship/multiplayer/`: shared match state with per-user
   player identity.
-- `packages/patterns/cfc-group-chat-demo/`: multi-user chat with CFC-backed
+- `patterns/examples/cfc-group-chat-demo/`: multi-user chat with CFC-backed
   authorship and admin-protected room creation.
-- `packages/patterns/profile-roster-live-demo.tsx`: the canonical identity
-  presentation — `#profile` viewer resolution, join stores each participant's live
-  profile cell, and **every** member renders with
-  `<cf-profile-badge $profile={p.profile}>`. `packages/patterns/scrabble/scrabble.tsx`
+- `patterns/examples/profile-roster-live-demo/profile-roster-live-demo.tsx`: the
+  canonical identity presentation — `#profile` viewer resolution, join stores
+  each participant's live profile cell, and **every** member renders with
+  `<cf-profile-badge $profile={p.profile}>`. `patterns/showcase/scrabble/scrabble.tsx`
   is the worked multi-user example (object-wrapped roster, per-player live badges).
-- `packages/patterns/fair-share/`: the snapshot-fallback style — a
+- `patterns/examples/fair-share/`: the snapshot-fallback style — a
   `cf-profile-badge` "You" card with `cf-avatar` for other members (use only when a
   live profile cell is not stored).
 

@@ -103,7 +103,7 @@ using measured workloads and existing storage limits before enabling writes.
 Reuse version 2's label-document references in node payloads where beneficial.
 Update label-reference discovery and commit-closure validation to scan nodes
 without expanding paths. In particular, `label-documents.ts` and
-`packages/memory/v2/engine.ts` must agree on the complete referenced-document
+`runtime/memory/v2/engine.ts` must agree on the complete referenced-document
 set. Cold sync and cross-space copying must deliver that closure with the
 envelope, independently of the author's in-memory label registry.
 

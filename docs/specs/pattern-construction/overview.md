@@ -40,7 +40,7 @@ metadata, and lifts and handlers gain cause-based identifier stability.
 
 ### Current builder flow
 
-- `packages/runner/src/builder/pattern.ts` pushes a frame, runs the author’s
+- `runtime/runner/src/builder/pattern.ts` pushes a frame, runs the author’s
   factory immediately, and records every `Reactive` and node it touches.
 - Inputs are wrapped in `reactive` proxies so the builder can serialize graphs
   before runtime cells exist.
@@ -72,19 +72,19 @@ metadata, and lifts and handlers gain cause-based identifier stability.
 
 ## Repository Observations
 
-- `packages/runner/src/builder/reactive.ts` shows how `reactive` proxies
+- `runtime/runner/src/builder/reactive.ts` shows how `reactive` proxies
   track connected nodes via `.connect`, compute nested schema metadata with
   `ContextualFlowControl`, and expose helpers such as `.map`. Capability
   wrappers must recreate these affordances against real runtime cells.
-- `packages/runner/src/builder/factory.ts` pushes frames before calling the
+- `runtime/runner/src/builder/factory.ts` pushes frames before calling the
   author factory. `createCell` expects the frame to provide a `cause` and an
   `unsafe_binding`, so the new wrappers must keep the frame lifecycle intact.
-- `packages/runner/src/runner.ts` writes pattern and argument metadata links,
+- `runtime/runner/src/runner.ts` writes pattern and argument metadata links,
   schema metadata, and the raw internal manifest onto the result cell. It later
   instantiates nodes by unwrapping aliases in `unwrapOneLevelAndBindToDoc`.
   Snapshot generation should hook into this instantiation path to capture
   concrete cell ids.
-- `packages/runner/src/create-ref.ts` hashes the supplied `cause` and recorded
+- `runtime/runner/src/create-ref.ts` hashes the supplied `cause` and recorded
   structure to derive entity ids. Stable causes therefore hinge on the data we
   pass into frames when new cells are materialized.
 
@@ -222,8 +222,8 @@ snapshots or the reactive-interpreter rollout. See
 
 ## Testing Strategy
 
-- Extend pattern and runner tests (e.g., `patterns/todo-list.tsx`) to assert
-  capability wrapper behavior, array helpers, and redirect semantics.
+- Extend pattern and runner tests (e.g., `patterns/examples/todo-list.tsx`) to
+  assert capability wrapper behavior, array helpers, and redirect semantics.
 - Add instantiation tests that serialize the new graph snapshot and rehydrate
   it, focusing on handler-generated graphs.
 - Verify scheduler behavior (ignored self-writes, iteration cap) with the new

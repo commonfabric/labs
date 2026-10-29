@@ -61,14 +61,14 @@ describe("test-summary", () => {
     });
 
     it("describes each failing test and the logs of a failing run", () => {
-      const failing = record("outer > inner", "fail", "packages/runner/a.ts");
+      const failing = record("outer > inner", "fail", "runtime/runner/a.ts");
       const lines = summaryLines(summary({
         tests: [
           { record: record("a", "pass") },
           {
             record: failing,
             message: "Uncaught Error: broken",
-            rerun: "cd packages/runner && deno task test --filter outer",
+            rerun: "cd runtime/runner && deno task test --filter outer",
           },
         ],
         logs: "/tmp/logs",
@@ -78,8 +78,8 @@ describe("test-summary", () => {
         "FAILED: 1 failed, 1 passed, 0 skipped (1.3s)",
         "",
         "FAIL unit/runner: outer > inner",
-        "  file:  packages/runner/a.ts",
-        "  rerun: cd packages/runner && deno task test --filter outer",
+        "  file:  runtime/runner/a.ts",
+        "  rerun: cd runtime/runner && deno task test --filter outer",
         "  | Error: broken",
         "",
         "Logs: /tmp/logs",
@@ -225,7 +225,7 @@ describe("test-summary", () => {
 
   describe("shellQuote()", () => {
     it("leaves a plain word as it is", () => {
-      expect(shellQuote("packages/runner")).toBe("packages/runner");
+      expect(shellQuote("runtime/runner")).toBe("runtime/runner");
     });
 
     it("quotes a word holding spaces and apostrophes", () => {
@@ -235,15 +235,15 @@ describe("test-summary", () => {
 
   describe("unitRerun()", () => {
     it("filters on the outermost describe of a nested test", () => {
-      expect(unitRerun("packages/runner", "Cell writes > keeps order"))
+      expect(unitRerun("runtime/runner", "Cell writes > keeps order"))
         .toBe(
-          "cd packages/runner && deno task test --filter 'Cell writes'",
+          "cd runtime/runner && deno task test --filter 'Cell writes'",
         );
     });
 
     it("takes a member path as the workspace lists it", () => {
-      expect(unitRerun("./packages/runner", "a"))
-        .toBe("cd packages/runner && deno task test --filter a");
+      expect(unitRerun("./runtime/runner", "a"))
+        .toBe("cd runtime/runner && deno task test --filter a");
     });
 
     it("filters on the whole name of a top-level test", () => {

@@ -104,17 +104,17 @@ First diagnostic command when a transformer behavior is surprising:
 deno task cf check <pattern-or-fixture>.tsx --show-transformed --no-run
 ```
 
-- [expression-site-policy.ts](../../../../packages/ts-transformers/src/transformers/expression-site-policy.ts)
+- [expression-site-policy.ts](../../../../base/ts-transformers/src/transformers/expression-site-policy.ts)
   - shared expression-site handling decision
-- [call-kind.ts](../../../../packages/ts-transformers/src/ast/call-kind.ts)
+- [call-kind.ts](../../../../base/ts-transformers/src/ast/call-kind.ts)
   - call family / ownership / callback-container classification
-- [callback-boundary.ts](../../../../packages/ts-transformers/src/policy/callback-boundary.ts)
+- [callback-boundary.ts](../../../../base/ts-transformers/src/policy/callback-boundary.ts)
   - shared callback-boundary semantics for context + validation
-- [pattern-context-validation.ts](../../../../packages/ts-transformers/src/transformers/pattern-context-validation.ts)
+- [pattern-context-validation.ts](../../../../base/ts-transformers/src/transformers/pattern-context-validation.ts)
   - restricted-context validation and builder placement
-- [pattern-body-reactive-root-lowering.ts](../../../../packages/ts-transformers/src/transformers/pattern-body-reactive-root-lowering.ts)
+- [pattern-body-reactive-root-lowering.ts](../../../../base/ts-transformers/src/transformers/pattern-body-reactive-root-lowering.ts)
   - remaining tracked-reactive body rewrite seam
-- [schema-injection.ts](../../../../packages/ts-transformers/src/transformers/schema-injection.ts)
+- [schema-injection.ts](../../../../base/ts-transformers/src/transformers/schema-injection.ts)
   - schema injection, fallback policy, registry-aware recovery
 
 ## Compact Schema Matrix
@@ -132,10 +132,10 @@ deno task cf check <pattern-or-fixture>.tsx --show-transformed --no-run
 
 Primary proof surface:
 
-- [schema-shrink-validation.test.ts](../../../../packages/ts-transformers/test/schema-shrink-validation.test.ts)
-- [validation.test.ts](../../../../packages/ts-transformers/test/validation.test.ts)
-- [fixtures/schema-injection/](../../../../packages/ts-transformers/test/fixtures/schema-injection/)
-- [fixtures/schema-transform/](../../../../packages/ts-transformers/test/fixtures/schema-transform/)
+- [schema-shrink-validation.test.ts](../../../../base/ts-transformers/test/schema-shrink-validation.test.ts)
+- [validation.test.ts](../../../../base/ts-transformers/test/validation.test.ts)
+- [fixtures/schema-injection/](../../../../base/ts-transformers/test/fixtures/schema-injection/)
+- [fixtures/schema-transform/](../../../../base/ts-transformers/test/fixtures/schema-transform/)
 
 ## Current Open Review Question
 

@@ -27,9 +27,9 @@ actually instantiates.
 
 ## Tier 1 — contract compatibility
 
-Compiles **every** authored pattern under `packages/patterns/`, derives its
+Compiles **every** authored pattern under `patterns/`, derives its
 argument and result schemas, and proves the current contract can be applied
-over every contract recorded for it under `packages/patterns/baselines/`.
+over every contract recorded for it under `patterns/baselines/`.
 There is no opt-in: a pattern is covered by existing.
 
 Baselines are **append-only**, enforced mechanically by
@@ -302,11 +302,11 @@ the candidate for closing that gap.
 ## Fixture layout
 
 ```
-packages/piece/test/vintages/<test key>/<tier>/<iso>-<identity>.sqlite
-packages/piece/test/vintages/<test key>/<tier>/<iso>-<identity>.sqlite.spaces/<did>.sqlite
+runtime/piece/test/vintages/<test key>/<tier>/<iso>-<identity>.sqlite
+runtime/piece/test/vintages/<test key>/<tier>/<iso>-<identity>.sqlite.spaces/<did>.sqlite
 ```
 
-- **`<test key>`** is the path under `packages/patterns/` of the **test** that
+- **`<test key>`** is the path under `patterns/` of the **test** that
   produced the fixture. Keyed by test rather than by pattern because a test
   need not be named after what it drives, and one fixture routinely covers
   several patterns.
@@ -323,7 +323,7 @@ packages/piece/test/vintages/<test key>/<tier>/<iso>-<identity>.sqlite.spaces/<d
   not have. It is part of the fixture, not a fixture itself, so
   `parseVintagePath` declines everything inside one.
 
-The tree is deliberately **not** under `packages/patterns/`.
+The tree is deliberately **not** under `patterns/`.
 `tasks/build-binaries.ts` passes that whole directory to `deno compile
 --include`, which is recursive over non-source files, so fixtures would ship
 inside the toolshed binary; and `PatternsServer` serves the same directory by
@@ -358,14 +358,14 @@ not history.
 
 ```
 deno task pattern-vintage                                  # replay every fixture (what CI runs)
-deno task pattern-vintage --update topics/topics.test.tsx  # capture a first pinned fixture
+deno task pattern-vintage --update apps/topics/topics.test.tsx  # capture a first pinned fixture
 deno task pattern-vintage --capture-changed                # capture a generation where due
-deno task pattern-vintage --pin topics/topics.test.tsx     # promote the newest generation
+deno task pattern-vintage --pin apps/topics/topics.test.tsx     # promote the newest generation
 ```
 
 `--update` and `--pin` name a **test** path, never a pattern path: a fixture is
 produced by running a test and covers whatever that test instantiates.
-`system/home.tsx` names no test and captures nothing.
+`system/home/home.tsx` names no test and captures nothing.
 
 There is no bare `--update` and no list of what CI replays. Every fixture under
 the vintages tree is replayed by the plain command, so committing a captured
@@ -519,7 +519,7 @@ specification:
   during it (CFC enforcement stays at its `enforce-strict` default), and the
   heal above is the parent re-creating children, not the production
   roll-forward repair — that path has its own assertion in
-  `packages/runner/test/pattern-pointer-unloadable-swap.test.ts`;
+  `runtime/runner/test/pattern-pointer-unloadable-swap.test.ts`;
   and what an adopted fixture pins is old *source*, not old *storage format* —
   the memory migration chain runs once at adopt time, so the committed file
   already carries today's schema and CI does not re-exercise the migrations.
