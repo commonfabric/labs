@@ -889,11 +889,14 @@ describe("instance-carry-over", () => {
       });
 
       it("keeps its child's state by its pattern identity when a named sibling is inserted ahead of it, where the parent's previous pattern does not load", async () => {
-        // With no previous pattern to match it by order, the instance takes
-        // the one positional child of its own pattern identity.
+        // The parent holds no setup record, so its previous pattern is the
+        // one its setup marker names, which does not load. With no previous
+        // pattern to match it by order, the instance takes the one positional
+        // child of its own pattern identity.
 
         const cell = await deployedParent("bound-later-previous-unloadable", {
           named: DEPLOYED,
+          record: "absent",
         });
         await writeMeta(cell, {
           patternSetupIdentity: { identity: "unloadable", symbol: "default" },
