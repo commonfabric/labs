@@ -148,6 +148,9 @@ const signedPayloadBytes = (payload: DelegationPayload): Uint8Array =>
 
 /** The CID of a delegation's envelope bytes, in base58btc. */
 export async function delegationCid(bytes: Uint8Array): Promise<string> {
+  // multiformats' hasher rather than `@commonfabric/content-hash`: a CID is
+  // built from a multihash digest, which this returns with its algorithm code
+  // and encoded form, where `content-hash` returns the bare digest bytes.
   const digest = await sha256.digest(bytes);
   return CID.createV1(DAG_CBOR_CODE, digest).toString(base58btc);
 }
