@@ -708,7 +708,8 @@ type Payload = readonly (readonly ts.Type[])[];
  * parameter whose keys the bindings alone cannot name, as one renaming them
  * with an `as` clause has, or an intersection with a part the checker defers
  * (`isDeferredType()`), as `(T extends object ? T : never) & { y: number }`
- * is, whose members the other parts' would only partly list.
+ * is: that part lists none of its instantiation's members, so the other
+ * parts list only some of the payload's.
  */
 const boundPayloadOf = (
   metadata: CarriedMetadata,
