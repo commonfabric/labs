@@ -277,11 +277,16 @@ describe("compile-cache-output-version", () => {
       // this is where an entry the compiler stops accepting fails a pull
       // request rather than a release: one entry under one persisted variant
       // per test, each a few seconds, well inside the time a test may take.
+      //
+      // A test's name writes its entry as `./` and the path in the corpus.
+      // A pattern key on its own, such as `chatbot.tsx`, is one the moved-path
+      // test-identity aliases rename to where that pattern now lives, and the
+      // corpus keeps its own copies where they were.
 
       for (const entry of CORPUS_ENTRIES) {
         for (const variant of PERSISTED_CACHE_VARIANTS) {
           const name = cacheVariantName(variant);
-          it(`compiles ${entry} under the ${name === "" ? "plain" : name} variant`, async () => {
+          it(`compiles ./${entry} under the ${name === "" ? "plain" : name} variant`, async () => {
             const compiled = await compileCorpus(
               join(REPO_ROOT, CORPUS_DIR),
               variant,
