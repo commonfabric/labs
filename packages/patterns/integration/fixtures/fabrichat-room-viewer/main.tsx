@@ -18,6 +18,7 @@ import {
   handler,
   NAME,
   pattern,
+  type PerSession,
   type Stream,
   UI,
   type VNode,
@@ -88,16 +89,16 @@ export interface MainOutput {
   [UI]: VNode;
 
   /** Whether the reader can send in the room. */
-  canSend: boolean;
+  canSend: PerSession<boolean>;
 
   /** Who the room says is reading it. */
-  viewer: ChatRoomViewer;
+  viewer: PerSession<ChatRoomViewer>;
 
   /** What the reader may do to each of the room's messages. */
-  messageRights: ChatMessageRights[];
+  messageRights: PerSession<ChatMessageRights[]>;
 
   /** Whether the reader can add someone to the room. */
-  canAdd: boolean;
+  canAdd: PerSession<boolean>;
 
   /** Makes a profile the person's own. */
   useProfile: Stream<UseProfileEvent>;

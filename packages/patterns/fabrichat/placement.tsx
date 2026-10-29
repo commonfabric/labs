@@ -63,8 +63,8 @@ export interface PlacedRoom {
   /** The room's messages. */
   messages?: PlacedMessageList;
 
-  /** Whether the reader can send. */
-  canSend?: boolean;
+  /** Whether the reader can send, which each session reads for itself. */
+  canSend?: PerSession<boolean>;
 }
 
 /** Whether the viewer can read a placed room. */
