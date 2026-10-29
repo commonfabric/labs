@@ -208,6 +208,7 @@ import {
   type ViewInterestLease,
 } from "./interface.ts";
 import { endLocalReadValidationStretch } from "./local-read-policy.ts";
+import type { MemorySocketFactory } from "./memory-socket.ts";
 import {
   getBlindStructuralTarget,
   isDurableReadTx,
@@ -1149,6 +1150,13 @@ export interface Options {
    * stateful operation.
    */
   spaceHostMap?: Record<string, string>;
+
+  /**
+   * Opens each memory connection. Absent, `createMemorySocket()` picks the
+   * backend for the platform the manager runs on. Tests inject their own to
+   * observe which addresses the manager dials.
+   */
+  createSocket?: MemorySocketFactory;
 
   id?: string;
   settings?: IRemoteStorageProviderSettings;
@@ -4274,7 +4282,7 @@ export class StorageManager implements IStorageManager {
           dynamicHosts,
         ),
         options.as,
-        undefined,
+        options.createSocket,
         options.clientBuild,
       ),
     );
