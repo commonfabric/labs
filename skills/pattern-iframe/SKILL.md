@@ -31,8 +31,9 @@ verbs it is handed.
 
 What the guides cannot leave to judgment:
 
-- Put the files under `packages/patterns/iframe-<name>/`. The `iframe-` prefix
-  is load-bearing: pattern discovery uses it to recognize `guest.ts` and
+- Put the files under `patterns/<category>/iframe-<name>/`, with the category
+  chosen from those `patterns/README.md` lists. The `iframe-` prefix is
+  load-bearing: pattern discovery uses it to recognize `guest.ts` and
   `guest.tsx` as browser sources rather than pattern entries, and the root
   `deno.jsonc` excludes `guest.js` from fmt, lint, and the type check by it.
 - `main.tsx` is hand-written from the guide's templates. It reads `guest.html`
@@ -52,11 +53,11 @@ What the guides cannot leave to judgment:
   uses. Keep action controls disabled until it resolves; an individual
   synchronous `sink()` callback must never declare the guest ready.
 
-`packages/patterns/iframe-verb-list/` is the smallest complete example, with a
-verb; `packages/patterns/iframe-signal-atlas/` adds a per-user SQLite database
-and per-session output, and `packages/patterns/iframe-cursor-canvas/` a presence
-room. `packages/patterns/iframe-ring-loops/` is the exception, not a template:
-its `main.tsx` composes a `frame.tsx` that `tools/write-iframe-wrapper.ts`
+`patterns/examples/iframe-verb-list/` is the smallest complete example, with a
+verb; `patterns/showcase/iframe-signal-atlas/` adds a per-user SQLite database
+and per-session output, and `patterns/examples/iframe-cursor-canvas/` a presence
+room. `patterns/showcase/iframe-ring-loops/` is the exception, not a template:
+its `main.tsx` composes a `frame.tsx` that `scripts/write-iframe-wrapper.ts`
 generates, and it has no `guest.js`. Do not copy its shape into a new pattern.
 
 Run the pattern or add a focused test when behavior, rather than only its data

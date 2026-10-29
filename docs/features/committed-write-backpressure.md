@@ -70,7 +70,7 @@ non-stale-basis rejection drops immediately.
 ## The model
 
 The event-handler commit path classifies each commit result and acts on it
-(`packages/runner/src/scheduler/events.ts`, `classifyCommitDisposition`):
+(`runtime/runner/src/scheduler/events.ts`, `classifyCommitDisposition`):
 
 - **Success** — done.
 - **A stale-basis rejection** (`ConflictError` or `StorageTransactionInconsistent`)
@@ -293,7 +293,7 @@ must be actively retried rather than recovered by re-derivation.
 
 ## Tests
 
-- `packages/runner/test/scheduler-commit-backpressure.test.ts` — the validation
+- `runtime/runner/test/scheduler-commit-backpressure.test.ts` — the validation
   of record. It drives the event-handler commit path against an emulated server
   that rejects commits on demand: a burst of transient conflicts longer than the
   old budget still lands; a non-stale-basis rejection (which the server normalizes
@@ -303,31 +303,31 @@ must be actively retried rather than recovered by re-derivation.
   three whole-array appends (`list = [...list, value]`, the profile-append shape)
   survive a conflict storm so the durable count reaches three. This
   deterministically reproduces the silent-loss bug and proves the fix.
-- `packages/runner/test/scheduler-event-retry-readiness.test.ts` — the wait
+- `runtime/runner/test/scheduler-event-retry-readiness.test.ts` — the wait
   ahead of the re-run. A refusal carrying a test-held `readyToRetry` gate
   shows no re-dispatch while the gate is held, once logical time has passed
   every backoff step, and exactly one once it opens; a later event queued
   during the hold runs only after the retry; the pending-commit barrier stays
   open for the same hold; and the document the conflict names is synced
   before the handler runs again.
-- `packages/runner/test/mergeable-append-multispace-conflict.test.ts` — a
+- `runtime/runner/test/mergeable-append-multispace-conflict.test.ts` — a
   mergeable append survives a `StorageTransactionInconsistent` storm (windowed),
   and an `AuthorizationError` on the same commit fails fast without entering the
   window (non-stale-basis).
-- `packages/runner/test/scheduler-event-lineage.test.ts` — a permanently failing
+- `runtime/runner/test/scheduler-event-lineage.test.ts` — a permanently failing
   origin (a handler that aborts its own tx) fast-fails on its first attempt (an
   abort is not a stale basis, so it is not windowed), and the test asserts the
   lineage invariant: the origin's payload-only same-space follow-up never commits.
   Also exercises the give-up (`retries: false`) and terminal-convergence paths,
   and the "stops handler-result pieces when the handler commit never converges"
   case drives an unending conflict to a terminal `CommitConvergenceError`.
-- `packages/runner/test/cfc-ui-contract.test.ts` — the `writeAuthorizedBy`
+- `runtime/runner/test/cfc-ui-contract.test.ts` — the `writeAuthorizedBy`
   enforcement cases confirm the fast-fail path: an unauthorized push is rejected
   and dropped immediately rather than retried for the full window. The refusal
   is a `CfcCommitRefusalError` — a verdict on the pushed data, so it is
   terminal (`cfc/verdict-reason.ts`); only a refusal that is not wholly a
   verdict keeps the retryable `StorageTransactionAborted` name.
-- `packages/patterns/integration/home-profile.test.ts` — unchanged browser-level
+- `patterns/integration/home-profile.test.ts` — unchanged browser-level
   profile-creation regression coverage; still passes (the fix does not regress
   the normal cross-space append).
 

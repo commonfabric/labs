@@ -10,7 +10,7 @@ half of Phase 3. Assumes [README.md](README.md) §3.2 and
   speculation engine — it REDIRECTS the existing run's writes into an
   overlay instead of a storage transaction.
 - Overlay substrate: the storage stack's transaction/journal layering in
-  `packages/runner/src/storage/` (`extended-storage-transaction.ts`,
+  `runtime/runner/src/storage/` (`extended-storage-transaction.ts`,
   `cache.ts`). The v1 branch validated "drop authority, keep the run"
   against this stack; the concept ports, the code does not.
 
@@ -253,7 +253,7 @@ currency. The existing overlay and retirement rules below still apply.
   crossed no hop, one starting at a handle minted from a stored link,
   asks for its dead-end document itself, as a same-space hop's target
   is asked for, so the withdrawal has a load to wait on. Pinned in
-  `packages/runner/test/executor-cross-space.test.ts` (a served
+  `runtime/runner/test/executor-cross-space.test.ts` (a served
   handler resolving a foreign cell through a document the serving
   runtime has not loaded keeps the document the chain reaches).
 
@@ -261,7 +261,7 @@ currency. The existing overlay and retirement rules below still apply.
   `viaLinkHop`), `schema.ts`'s lazy branch, `schema-view.ts`
   (`UnresolvedInputError`), `cell.ts`'s `resolveAsCell()` with
   `scheduler/handler-load-wait.ts` for the handler withdrawal; pinned in
-  `packages/runner/test/unresolved-input-lift.test.ts` (the hop-target
+  `runtime/runner/test/unresolved-input-lift.test.ts` (the hop-target
   dead-end disposes and re-triggers on arrival; the stated-null
   control still flows; its case has no previous result, so it does not
   pin that one is overwritten), with the serving-runtime match
@@ -556,7 +556,7 @@ scheduler treats the flip of an action's own output like its own
 commit and does not re-run the writer for it (a divergent
 authoritative value would otherwise re-derive, re-speculate, retire,
 and flip forever); downstream readers are unaffected. Impl:
-`packages/runner/src/speculation/overlay-destination.ts` (`#sweep`'s
+`runtime/runner/src/speculation/overlay-destination.ts` (`#sweep`'s
 gate, `#supersedeOlderEntries`), the replica's superseded flip
 (`finalizeSupersededSpeculation` — `IIntegrateNotification.source`),
 and the scheduler's own-source skip (`scheduler/invalidation.ts`);

@@ -16,7 +16,7 @@ of those styles.
 Keep these files together:
 
 ```text
-packages/patterns/iframe-d3-shared-bars/
+patterns/examples/iframe-d3-shared-bars/
 ├── contract.ts  # types and defaults shared by main.tsx and the guest
 ├── guest.ts     # the D3 application and Fabric bridge client
 ├── guest.html   # the guest's document: the chart's markup and styles
@@ -439,9 +439,9 @@ sandbox runs.
 From the repository root, format and compile the guest and the pattern:
 
 ```bash
-deno fmt packages/patterns/iframe-d3-shared-bars
-deno check packages/patterns/iframe-d3-shared-bars/guest.ts
-deno task cf check packages/patterns/iframe-d3-shared-bars/main.tsx --no-run
+deno fmt patterns/examples/iframe-d3-shared-bars
+deno check patterns/examples/iframe-d3-shared-bars/guest.ts
+deno task cf check patterns/examples/iframe-d3-shared-bars/main.tsx --no-run
 ```
 
 Launch the pattern with the steps under

@@ -6,7 +6,7 @@ description: Guide for developing Lit web components in the Common UI v2 system 
 # Lit Component Development for Common UI
 
 This skill provides guidance for developing Lit web components within the Common
-UI v2 component library (`packages/ui/src/v2`).
+UI v2 component library (`runtime/ui/src/v2`).
 
 ## When to Use This Skill
 
@@ -64,7 +64,7 @@ and `references/advanced-patterns.md` for complex integration patterns.
 Create the component directory structure:
 
 ```
-packages/ui/src/v2/components/cf-component-name/
+runtime/ui/src/v2/components/cf-component-name/
 ├── cf-component-name.ts    # Component implementation
 ├── index.ts                # Export and registration
 └── styles.ts               # Optional: for complex components
@@ -291,12 +291,12 @@ Run with: `deno task test` (includes required flags)
 ## Package Structure
 
 Each component is declared in its own directory under
-`packages/ui/src/v2/components/`. `packages/ui/src/v2/index.ts` re-exports every
+`runtime/ui/src/v2/components/`. `runtime/ui/src/v2/index.ts` re-exports every
 component, and the package root re-exports that in turn, so consumers import
 them from `@commonfabric/ui`:
 
 ```typescript
-// packages/ui/src/v2/index.ts
+// runtime/ui/src/v2/index.ts
 export * from "./components/cf-button/index.ts";
 ```
 

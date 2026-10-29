@@ -60,8 +60,8 @@ runtime's sigil link — absolute so the row is portable and resolvable
 independent of any base document or space.
 
 The runtime already produces this shape. `Cell.getAsLink()` returns a `SigilLink`
-(see [`packages/runner/src/cell.ts`](../../../packages/runner/src/cell.ts) and
-[`packages/runner/src/link-utils.ts`](../../../packages/runner/src/link-utils.ts)
+(see [`runtime/runner/src/cell.ts`](../../../runtime/runner/src/cell.ts) and
+[`runtime/runner/src/link-utils.ts`](../../../runtime/runner/src/link-utils.ts)
 `createSigilLinkFromParsedLink`). For storage we serialize it with **no `base`**
 so `id`, `space`, and `scope` are always present:
 
@@ -93,7 +93,7 @@ Rationale for absolute links:
 Executed during `db.exec`, before the `sqlite` op is recorded onto the commit
 (Section [04](./04-server-execution-and-transactions.md)). The codec is
 `encodeCfLinkValue`
-([`packages/runner/src/builtins/sqlite/cf-link.ts`](../../../packages/runner/src/builtins/sqlite/cf-link.ts)):
+([`runtime/runner/src/builtins/sqlite/cf-link.ts`](../../../runtime/runner/src/builtins/sqlite/cf-link.ts)):
 
 1. Determine which parameters target link columns by mapping each parameter to
    its column (from the statement's named columns) and the `*_cf_link` suffix /
@@ -113,7 +113,7 @@ encoded string is stable regardless of where the row is later read.
 
 The server returns raw stored strings; decoding happens **on the client** in the
 query built-in after rows return
-([`packages/runner/src/builtins/sqlite-builtins.ts`](../../../packages/runner/src/builtins/sqlite-builtins.ts)),
+([`runtime/runner/src/builtins/sqlite-builtins.ts`](../../../runtime/runner/src/builtins/sqlite-builtins.ts)),
 and is **driven by the typed `db.query<Row>` schema**:
 
 1. From the transformer-injected `rowSchema`, identify which result columns are

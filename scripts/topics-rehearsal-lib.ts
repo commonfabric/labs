@@ -94,7 +94,7 @@ export async function cfApply(
  * the false alarm the retirement rule exists to remove.
  *
  * The runtime spells a missing property one way (`resolveCellPath` in
- * `packages/runner/src/piece-helpers.ts`, which keeps the distinction between
+ * `runtime/runner/src/piece-helpers.ts`, which keeps the distinction between
  * an absent field and a schema-valid `undefined` one), and the CLI already
  * keys on that phrasing to report it as a data error rather than a usage
  * failure (`isPieceGetDataError`). Wording the runtime changes fails this
@@ -270,7 +270,7 @@ export interface TopicsExport {
  * out is not silent: `buildRestoreDocument` throws on any link-valued field it
  * does not recognize, because writing one as data would corrupt it and
  * dropping it would destroy it. The restore drill
- * (`packages/cli/integration/topics-restore-drill.sh`) is what turns that
+ * (`runtime/cli/integration/topics-restore-drill.sh`) is what turns that
  * throw into a failing check rather than a surprise mid-incident.
  *
  * A field stays here after the pattern stops declaring it, because whether it
@@ -345,7 +345,7 @@ export const PRESERVED_FIELDS = ["shortName"] as const;
  * THE EXPORT'S OWN VINTAGE CANNOT DECIDE THIS, and neither can the pattern
  * identity matching. A topic migrated past an input keeps the stored link in
  * its raw argument document, unreachable through the new projection
- * (`packages/cli/test/piece-link-input-visibility.test.ts`), and an export
+ * (`runtime/cli/test/piece-link-input-visibility.test.ts`), and an export
  * taken from it afterwards therefore holds a link at a path its own source
  * does not declare, with the identity matching. Reasoning from identity to
  * "declared" sends the restore to `cf piece link` against that path, which

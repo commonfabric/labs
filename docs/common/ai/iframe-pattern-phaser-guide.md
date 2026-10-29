@@ -16,7 +16,7 @@ explicit migration or hybrid.
 Keep these files together:
 
 ```text
-packages/patterns/iframe-phaser-shared-targets/
+patterns/examples/iframe-phaser-shared-targets/
 ├── contract.ts  # types and defaults shared by main.tsx and the guest
 ├── guest.ts     # the Phaser game and Fabric bridge client
 ├── guest.html   # the guest's document: the canvas parent and status UI
@@ -447,10 +447,10 @@ sandbox runs.
 From the repository root, format and compile the guest and the pattern:
 
 ```bash
-deno fmt packages/patterns/iframe-phaser-shared-targets
-deno check packages/patterns/iframe-phaser-shared-targets/guest.ts
+deno fmt patterns/examples/iframe-phaser-shared-targets
+deno check patterns/examples/iframe-phaser-shared-targets/guest.ts
 deno task cf check \
-  packages/patterns/iframe-phaser-shared-targets/main.tsx --no-run
+  patterns/examples/iframe-phaser-shared-targets/main.tsx --no-run
 ```
 
 Launch the pattern with the steps under

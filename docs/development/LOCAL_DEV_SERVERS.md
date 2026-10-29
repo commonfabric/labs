@@ -15,7 +15,7 @@
 ./scripts/restart-local-dev.sh --dangerously-clear-all-spaces # Clear databases/spaces
 ./scripts/start-local-dev.sh --cf-harness    # ...and a cf-harness console
 ./scripts/check-local-dev.sh          # Health check both servers
-./scripts/share-pattern-via-tailscale.sh packages/patterns/lunch-poll/main.tsx  # Host a pattern + share on your tailnet
+./scripts/share-pattern-via-tailscale.sh patterns/apps/lunch-poll/main.tsx  # Host a pattern + share on your tailnet
 ./scripts/share-pattern-via-tailscale.sh --down                                 # Tear that down
 ```
 
@@ -49,13 +49,13 @@ resolves it and prints it beside the record that decided it.
 declare a browser host, such as the Weaver, to show the agent's web pages to the
 owner; it is off unless named here or exported as
 `CF_HARNESS_ALLOW_BROWSER_HOST=1`, and the console lists `browser_host` in
-`GET /api/status` when it is on. `packages/cf-harness/console/README.md` has the
+`GET /api/status` when it is on. `runtime/cf-harness/console/README.md` has the
 rest.
 
 The console is a surface on the fabric rather than part of it. It needs a
 sandbox runtime and a connected model provider, and when it cannot start —
 either of those missing, its port taken, a value underivable — it says so in
-the script's output and in `packages/cf-harness/local-dev-console.log`, and the
+the script's output and in `runtime/cf-harness/local-dev-console.log`, and the
 shell and toolshed keep running. The sandbox runtime is the one
 `CF_HARNESS_SANDBOX_RUNTIME` names, `runsc`. With none named (unset, or white
 space alone), a Mac
@@ -74,8 +74,8 @@ named by `CF_HARNESS_RUNSC_BINARY`; that refusal names the `sudo sysctl -w`
 that allows them. Every other platform does not start unless the runtime is
 named. That default is for a fabric a person starts. Where `LOOM_INSTANCE_ID`
 is set the console is launched for that loom instance, and with no runtime named
-it does not start on any platform, saying that Loom must name one. `packages/cf-harness/console/README.md` covers the console itself,
-and [`../../packages/cf-harness/docs/WEAVER.md`](../../packages/cf-harness/docs/WEAVER.md)
+it does not start on any platform, saying that Loom must name one. `runtime/cf-harness/console/README.md` covers the console itself,
+and [`../../runtime/cf-harness/docs/WEAVER.md`](../../runtime/cf-harness/docs/WEAVER.md)
 the operator procedure it belongs to.
 
 Source-run build metadata describes the checkout the same way compiled
@@ -183,21 +183,21 @@ The same env vars must also be set when running `cf` CLI commands against the
 server. See `docs/development/EXPERIMENTAL_OPTIONS.md` for all available flags.
 
 **Logs:**
-- `packages/shell/local-dev-shell.log`
-- `packages/toolshed/local-dev-toolshed.log`
+- `runtime/shell/local-dev-shell.log`
+- `runtime/toolshed/local-dev-toolshed.log`
 
 **CLI identity for local dev:** For normal development — deploying pieces,
 pattern work, anything acting as *you* — mint a unique key:
 ```bash
 mkdir -p .cf
-deno run -A packages/cli/mod.ts id new > .cf/shared-dev.key
+deno run -A runtime/cli/mod.ts id new > .cf/shared-dev.key
 export CF_IDENTITY="$PWD/.cf/shared-dev.key"
 ```
 The local toolshed itself runs as the identity derived from the passphrase
 `"implicit trust"`. Derive that key only when the CLI must act as the server's
 operator/admin (deploying system home patterns):
 ```bash
-deno run -A packages/cli/mod.ts id derive "implicit trust" > claude.key
+deno run -A runtime/cli/mod.ts id derive "implicit trust" > claude.key
 export CF_IDENTITY="$PWD/claude.key"
 ```
 It is a shared, publicly-derivable key — every developer who derives it gets
@@ -315,7 +315,7 @@ nothing says that port is another process.
 | Stale data | Cache issues | Use `--clear-cache` flag (or `--dangerously-clear-all-spaces` for database issues) |
 | `*.ts.net` URLs hang | Not on Tailscale | Connect to the Tailscale network |
 | OAuth error: `Unexpected token '<'` | Fetching from wrong port | Use port 8000 for API calls ([see below](#oauth-returns-html-instead-of-json)) |
-| UI component changes not appearing | Shell doesn't watch packages/ui | Restart local dev server |
+| UI component changes not appearing | Shell doesn't watch runtime/ui | Restart local dev server |
 
 ### Manual Fallback
 
@@ -335,34 +335,34 @@ ss -tlnp 'sport = :5173' | awk -F'pid=' 'NF>1{split($2,a,","); print a[1]}' | xa
 sleep 2
 
 # 3. Start backend (Terminal 1)
-cd packages/toolshed
+cd runtime/toolshed
 SHELL_URL=http://localhost:5173 deno task dev
 
 # 4. Start frontend (Terminal 2)
-cd packages/shell
+cd runtime/shell
 TOOLSHED_PORT=8000 deno task dev-local
 ```
 
 **Alternative: Local shell with cloud backend:**
 ```bash
-cd packages/toolshed
+cd runtime/toolshed
 SHELL_URL=http://localhost:5173 API_URL=https://toolshed.saga-castor.ts.net/ deno task dev
 ```
 
-**Environment setup:** Copy `.env.example` to `.env` in the toolshed directory. See [`CONFIGURATION.md`](./CONFIGURATION.md) for a categorized reference of all configuration (env vars, tasks, flags), or `packages/toolshed/env.ts` for the canonical Zod schema.
+**Environment setup:** Copy `.env.example` to `.env` in the toolshed directory. See [`CONFIGURATION.md`](./CONFIGURATION.md) for a categorized reference of all configuration (env vars, tasks, flags), or `runtime/toolshed/env.ts` for the canonical Zod schema.
 
 ### Checking Logs
 
 ```bash
 # View recent shell errors
-tail -50 packages/shell/local-dev-shell.log
+tail -50 runtime/shell/local-dev-shell.log
 
 # View recent toolshed errors
-tail -50 packages/toolshed/local-dev-toolshed.log
+tail -50 runtime/toolshed/local-dev-toolshed.log
 
 # Follow logs in real-time
-tail -f packages/shell/local-dev-shell.log
-tail -f packages/toolshed/local-dev-toolshed.log
+tail -f runtime/shell/local-dev-shell.log
+tail -f runtime/toolshed/local-dev-toolshed.log
 ```
 
 ### OAuth Returns HTML Instead of JSON
@@ -383,12 +383,12 @@ This happens when OAuth or API calls hit port 5173 (frontend) instead of port 80
 
 ### UI Component Changes Not Appearing
 
-When editing `cf-*` components in `packages/ui/`, restart the local dev server to ensure the updated code is running.
+When editing `cf-*` components in `runtime/ui/`, restart the local dev server to ensure the updated code is running.
 
-The shell's dev server watches `packages/shell/src` only, so a change anywhere
-else in the workspace — `packages/ui`, `packages/runtime-client`, and the rest —
+The shell's dev server watches `runtime/shell/src` only, so a change anywhere
+else in the workspace — `runtime/ui`, `runtime/runtime-client`, and the rest —
 does not trigger a rebuild, and the browser keeps serving the previous bundle.
-Touching any file under `packages/shell/src` rebuilds everything the shell
+Touching any file under `runtime/shell/src` rebuilds everything the shell
 bundles, which is quicker than a restart.
 
 ---
@@ -444,4 +444,4 @@ own enforcement is a separate setting and is unchanged by it.
 
 When the home space and the runner's own toolshed are different deployments,
 `--api-url` names the first and `--local-api-url` the second. The
-[CLI README](../../packages/cli/README.md#agent-runner) describes the command.
+[CLI README](../../runtime/cli/README.md#agent-runner) describes the command.

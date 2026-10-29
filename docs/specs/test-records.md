@@ -9,7 +9,7 @@ guide](../development/test-records.md) says how to use it, and
 repository joins it. [The plan this system came
 from](../history/plans/test-run-telemetry.md) is archived, and carries the
 reasoning that shaped what follows. The shared implementation is
-`packages/test-support/src/records/`.
+`base/test-support/src/records/`.
 
 ## Identity
 
@@ -60,12 +60,19 @@ rename splits history, and a line appended under
 `tasks/test-identity-aliases/` bridges a split worth bridging. That
 directory holds files named after test files — by last path segment, so test
 files of one name share a file — plus `whole-scope.jsonl` for whole-scope
-lines, and reads as a single set of aliases. It is append-only file by file,
-maps any identity at most once, must stay acyclic, and each line carries the
-rename's date; readers resolve aliases transitively and apply one only to
-records older than its date (`deno task check-test-aliases` enforces the
-directory's shape). Alias lines name the three required identity parts and
-apply the rename to every variant.
+lines and `moved-paths.jsonl` for moved-path lines, and reads as a single set
+of aliases. A moved-path line maps the repository-relative path of a directory
+or a file to the path it moved to. It renames that path wherever an identity's
+name holds it as a path of its own, in every kind and scope. Moving a directory
+therefore takes one line, however many names spell its path. When two moved
+paths both occur in a name, the longer one applies. A moved path applies to a
+given name at most once. The directory is append-only file by file. It maps any
+identity at most once, holds no cycles, and never moves a path into a path that
+contains it. Each line carries the rename's date. Readers resolve aliases
+transitively, and apply each one only to records older than its date.
+`deno task check-test-aliases` enforces the directory's shape. Alias lines
+other than moved-path lines name the three required identity parts, and every
+line applies its rename to every variant.
 
 A task-level record may coexist with the per-item records of the same run
 (`pattern-compat` beside `pattern-compat <key>`, `integration.sh` beside
@@ -151,11 +158,9 @@ Every package of a workspace run writes into one spool, so each map also
 names the repository-relative directory its process ran in. A caller
 ingesting one package's report asks for that directory. A map naming it
 belongs to that package and is read whole, whatever files it names: a
-test task may name a file anywhere in the tree, and
-`packages/test-support` runs `tools/write-iframe-wrapper.test.ts`, two
-directories above itself. A map naming no directory at all is judged by
-its files instead, and contributes only those under the directory asked
-for. Either way the scope is applied before ambiguity is judged, or a
+test task may name a file anywhere in the tree. A map naming no directory at all
+is judged by its files instead, and contributes only those under the directory
+asked for. Either way the scope is applied before ambiguity is judged, or a
 name two packages happen to share would cost each of them a file it held
 unambiguously.
 

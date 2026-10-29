@@ -15,7 +15,7 @@ you are migrating an existing guest and need to compare the two source styles.
 Keep these files together:
 
 ```text
-packages/patterns/iframe-react-quick-notes/
+patterns/examples/iframe-react-quick-notes/
 ├── contract.ts  # types and defaults shared by main.tsx and the guest
 ├── guest.tsx    # the React application and Fabric bridge client
 ├── guest.html   # the guest's document, holding the React root
@@ -861,9 +861,9 @@ and every other import of the guest into the one module the sandbox runs.
 From the repository root, format and compile both realms:
 
 ```bash
-deno fmt packages/patterns/iframe-react-quick-notes
-deno check packages/patterns/iframe-react-quick-notes/guest.tsx
-deno task cf check packages/patterns/iframe-react-quick-notes/main.tsx --no-run
+deno fmt patterns/examples/iframe-react-quick-notes
+deno check patterns/examples/iframe-react-quick-notes/guest.tsx
+deno task cf check patterns/examples/iframe-react-quick-notes/main.tsx --no-run
 ```
 
 Launch against local servers, starting them first:
@@ -891,7 +891,7 @@ test -e .cf/iframe-pattern.key || \
 export CF_API_URL=http://localhost:8000
 export CF_IDENTITY=.cf/iframe-pattern.key
 export CF_SPACE="$(deno task cf space create --label "Iframe React notes")"
-deno task cf piece new packages/patterns/iframe-react-quick-notes/main.tsx \
+deno task cf piece new patterns/examples/iframe-react-quick-notes/main.tsx \
   --root . --slug react-notes
 ```
 

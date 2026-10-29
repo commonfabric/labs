@@ -3,9 +3,9 @@
 _How to express, in a pattern or a test, the family of "move a labeled value
 from one space to another" operations: keep its integrity, declassify its
 confidentiality, or take only a subset — and where the authoring surface still
-has gaps. Grounded in the runner implementation (`packages/runner/src/cfc/`) and
+has gaps. Grounded in the runner implementation (`runtime/runner/src/cfc/`) and
 pinned end-to-end by
-[`packages/runner/test/cfc-cross-space-integrity.test.ts`](../../packages/runner/test/cfc-cross-space-integrity.test.ts).
+[`runtime/runner/test/cfc-cross-space-integrity.test.ts`](../../runtime/runner/test/cfc-cross-space-integrity.test.ts).
 Spec ground: `commonfabric/specs` `cfc/03-core-concepts.md` §3.7 (cross-space
 links), `cfc/08-02` (pass-through via references), `cfc/08-03` (projection),
 `cfc/08-04` (exact-copy verification), `cfc/08-12` (store-label monotonicity /
@@ -121,8 +121,8 @@ Two different meanings, two different behaviors:
   projected pointer via `scope.projection` (§8.3.2), so a projected field can
   never claim whole-object integrity. Malformed and array-wildcard claims fail
   closed. The `Projection` / `ProjectionOf` / `ProjectionPath` helpers in
-  `packages/api/cfc.ts` are safe to reach for; full behavior is pinned by
-  `packages/runner/test/cfc-projection.test.ts` (and scenario 3a′ in this
+  `base/api/cfc.ts` are safe to reach for; full behavior is pinned by
+  `runtime/runner/test/cfc-projection.test.ts` (and scenario 3a′ in this
   document's test file). Checked recomposition (`recomposeProjections`) remains
   unimplemented and fails closed.
 - **`passThrough` (§8.2) remains unimplemented and fails closed** — a write
@@ -184,10 +184,10 @@ Runner seams: `linkSlotLabel` / `linkedSourceEvidence` /
 (`cfc/prepare.ts`); `ExchangeRule` / `buildCfcPolicySnapshot` (`cfc/policy.ts`);
 `evaluateExchangeRules` + home-clause locality (`cfc/exchange-eval.ts`);
 `writeCfcGrant` (`storage/extended-storage-transaction.ts`, `cfc/grants.ts`);
-authoring aliases (`packages/api/cfc.ts`, canonical set
+authoring aliases (`base/api/cfc.ts`, canonical set
 `CFC_CANONICAL_ALIAS_NAMES`, lowered by `ts-transformers/src/cfc-authoring.ts`).
 Tests:
-[`cfc-cross-space-integrity.test.ts`](../../packages/runner/test/cfc-cross-space-integrity.test.ts)
+[`cfc-cross-space-integrity.test.ts`](../../runtime/runner/test/cfc-cross-space-integrity.test.ts)
 (the four scenarios end-to-end), `cfc-exact-copy.test.ts`,
 `cfc-exchange-eval.test.ts`, `cfc-grant-records.test.ts`, `cfc-write-floor.test.ts`
 (link-carried label idiom). Spec: `cfc/03-core-concepts.md` §3.7,

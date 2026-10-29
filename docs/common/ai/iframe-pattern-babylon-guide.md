@@ -17,7 +17,7 @@ hybrid.
 Keep these files together:
 
 ```text
-packages/patterns/iframe-babylon-shared-scene/
+patterns/examples/iframe-babylon-shared-scene/
 ├── contract.ts  # types and defaults shared by main.tsx and the guest
 ├── guest.ts     # the Babylon.js scene and Fabric bridge client
 ├── guest.html   # the guest's document: the canvas and status UI
@@ -462,10 +462,10 @@ the one module the sandbox runs.
 From the repository root, format and compile the guest and the pattern:
 
 ```bash
-deno fmt packages/patterns/iframe-babylon-shared-scene
-deno check packages/patterns/iframe-babylon-shared-scene/guest.ts
+deno fmt patterns/examples/iframe-babylon-shared-scene
+deno check patterns/examples/iframe-babylon-shared-scene/guest.ts
 deno task cf check \
-  packages/patterns/iframe-babylon-shared-scene/main.tsx --no-run
+  patterns/examples/iframe-babylon-shared-scene/main.tsx --no-run
 ```
 
 Launch the pattern with the steps under

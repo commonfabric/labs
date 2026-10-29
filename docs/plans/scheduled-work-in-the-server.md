@@ -67,7 +67,7 @@ export default pattern("Feed reader", ({ url, items }) => ({
 ```
 
 `[SCHEDULE]` would join the reserved keys in
-[`framework-result-keys.ts`](../../packages/utils/src/framework-result-keys.ts).
+[`framework-result-keys.ts`](../../base/utils/src/framework-result-keys.ts).
 That file already states the contract these keys live under: the spellings
 belong to the framework, the runner reads them back off the result, and the
 transformer decides what a pattern may declare about them.
@@ -337,7 +337,7 @@ what the serving loop's own testing rules already require.
 **Run pieces on a timer in a separate process that acts as a client.**
 Foreclosed by D12. It is also foreclosed independently: with server execution
 on, a runtime that is not the serving runtime loses the derivation-commit path
-([`runtime.ts`](../../packages/runner/src/runtime.ts)), so such a process
+([`runtime.ts`](../../runtime/runner/src/runtime.ts)), so such a process
 could not commit what its pieces derive.
 
 **Make `#now/N` durable instead of adding a declaration.** Attractive, because

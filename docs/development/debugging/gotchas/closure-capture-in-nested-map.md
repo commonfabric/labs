@@ -72,7 +72,7 @@ const peopleNames = computed(() =>
 ```
 
 The receiver is now a Reactive again; the transformer rewrites the inner
-`.map`. Shipping example: `packages/patterns/factory-outputs/lot-watch/main.tsx`
+`.map`. Shipping example: `patterns/dev/factory-outputs/lot-watch/main.tsx`
 — the hoisted `people` receiver, consumed inside the sightings rows by the
 quick-pick chips
 (`people.map((p) => … setAssignPersonName.send({ name: p.name }))`).

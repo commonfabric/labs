@@ -14,7 +14,7 @@ No other pattern guide is required for this shape.
 Keep these files together:
 
 ```text
-packages/patterns/iframe-quick-notes/
+patterns/examples/iframe-quick-notes/
 ├── contract.ts  # types and defaults shared by main.tsx and the guest
 ├── guest.ts     # the iframe application; guest.tsx is also accepted
 ├── guest.html   # the guest's document
@@ -483,7 +483,7 @@ The guest wears the theme of the page around its iframe. The nearest `cf-theme`
 above the `cf-iframe` provides it: before the guest's own styles, the guest
 receives that theme's `--cf-theme-*` custom properties declared on `:root`,
 followed by a base stylesheet written against them:
-[`guest-base-sheet.ts`](../../../packages/ui/src/v2/components/cf-theme/guest-base-sheet.ts).
+[`guest-base-sheet.ts`](../../../runtime/ui/src/v2/components/cf-theme/guest-base-sheet.ts).
 The guest's root also carries the resolved scheme as `data-color-scheme`
 (`light` or `dark`). The sheet styles `html`, `body`, headings, links, buttons,
 form fields, code, and rules, and provides these classes:
@@ -771,7 +771,7 @@ pointer is down, publish the shape's position as a facet and draw peers' facets
 over the stored positions. On release, write the position to the Cell, and
 clear the facet only after that write and a `pull()` have settled, so peers do
 not see the shape return to where it was in between.
-`packages/patterns/iframe-cursor-canvas/` is a complete example.
+`patterns/examples/iframe-cursor-canvas/` is a complete example.
 
 ## Optional streams
 
@@ -976,7 +976,7 @@ A built-in that already returns a stream needs no verb of its own:
 `llmDialog()` returns `addMessage`, which goes in the `$context` record as it
 is, with the kind `stream`.
 
-`packages/patterns/iframe-verb-list/` is a complete example.
+`patterns/examples/iframe-verb-list/` is a complete example.
 
 ## Bundle the guest
 
@@ -1012,9 +1012,9 @@ import React from "npm:react@19.2.8";
 Format and compile the result:
 
 ```bash
-deno fmt packages/patterns/iframe-quick-notes
-deno check packages/patterns/iframe-quick-notes/guest.ts
-deno task cf check packages/patterns/iframe-quick-notes/main.tsx --no-run
+deno fmt patterns/examples/iframe-quick-notes
+deno check patterns/examples/iframe-quick-notes/guest.ts
+deno task cf check patterns/examples/iframe-quick-notes/main.tsx --no-run
 ```
 
 If the pattern is intentionally outside the repository, pass its directory as
@@ -1046,7 +1046,7 @@ test -e .cf/iframe-pattern.key || \
 export CF_API_URL=http://localhost:8000
 export CF_IDENTITY=.cf/iframe-pattern.key
 export CF_SPACE="$(deno task cf space create --label "Iframe quick notes")"
-deno task cf piece new packages/patterns/iframe-quick-notes/main.tsx \
+deno task cf piece new patterns/examples/iframe-quick-notes/main.tsx \
   --root . --slug quick-notes
 ```
 

@@ -15,7 +15,7 @@ async function fixtureTree(
   contents: string,
 ): Promise<string> {
   const root = await Deno.makeTempDir({ prefix: "check-no-waitfor-" });
-  const dir = join(root, "packages", "foo", "integration");
+  const dir = join(root, "runtime", "foo", "integration");
   await Deno.mkdir(dir, { recursive: true });
   await Deno.writeTextFile(join(dir, fileName), contents);
   return root;
@@ -312,39 +312,39 @@ Deno.test("importsPollingWaitFor ignores a sibling utils.ts outside the package"
 //
 
 Deno.test("isIntegrationTestFile scopes to integration test files", () => {
-  assert(isIntegrationTestFile("packages/shell/integration/piece.test.ts"));
+  assert(isIntegrationTestFile("runtime/shell/integration/piece.test.ts"));
   assert(
-    isIntegrationTestFile("packages/patterns/integration/counter.test.ts"),
+    isIntegrationTestFile("patterns/integration/counter.test.ts"),
   );
   assert(
     isIntegrationTestFile(
-      "packages/cli/test/integration/fuse-memory-proxy.test.ts",
+      "runtime/cli/test/integration/fuse-memory-proxy.test.ts",
     ),
   );
 });
 
 Deno.test("isIntegrationTestFile excludes the integration package itself", () => {
-  // packages/integration/ defines and re-exports waitFor.
+  // runtime/integration/ defines and re-exports waitFor.
   assertEquals(
-    isIntegrationTestFile("packages/integration/utils.ts"),
+    isIntegrationTestFile("runtime/integration/utils.ts"),
     false,
   );
   assertEquals(
-    isIntegrationTestFile("packages/integration/shell-utils.ts"),
+    isIntegrationTestFile("runtime/integration/shell-utils.ts"),
     false,
   );
 });
 
 Deno.test("isIntegrationTestFile excludes non-integration and non-ts files", () => {
   assertEquals(
-    isIntegrationTestFile("packages/runner/test/scheduler.test.ts"),
+    isIntegrationTestFile("runtime/runner/test/scheduler.test.ts"),
     false,
   );
   assertEquals(
-    isIntegrationTestFile("packages/patterns/integration/counter.tsx"),
+    isIntegrationTestFile("patterns/integration/counter.tsx"),
     false,
   );
-  // Outside packages/ entirely.
+  // Outside every package.
   assertEquals(
     isIntegrationTestFile("docs/examples/integration/demo.ts"),
     false,
@@ -420,7 +420,7 @@ Deno.test("main reports the offender and returns 1 on a violation", async () => 
       code = await main(root);
     });
     assertEquals(code, 1);
-    assert(err.includes("packages/foo/integration/bad.test.ts"));
+    assert(err.includes("runtime/foo/integration/bad.test.ts"));
     assert(err.includes("waitForCondition"));
     assert(err.includes("docs/development/waiting-in-tests.md"));
   } finally {

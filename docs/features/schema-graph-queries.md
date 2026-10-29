@@ -9,13 +9,13 @@ subscriber's watch set covers, and which of them a write has invalidated.
 The two must give the same answer. If a server thinks a schema reaches five
 documents and a client thinks it reaches six, the sixth never arrives and the
 client waits on a document nobody will send. So there is one implementation of
-graph traversal, in `packages/runner/src/traverse.ts`, and the memory server
+graph traversal, in `runtime/runner/src/traverse.ts`, and the memory server
 calls it. That is the reason for the import edge from `memory` to `runner`, and
 it is the reason the edge is not going away.
 
 ## What the two packages exchange
 
-`packages/memory/v2/query.ts` is the only file in `memory` that imports `runner`
+`runtime/memory/v2/query.ts` is the only file in `memory` that imports `runner`
 for the graph query, and everything that query needs comes from one place:
 `@commonfabric/runner/graph-query`.
 
@@ -107,12 +107,12 @@ write can still answer with what that document used to reach.
 The edge is one import statement, but the module behind it is not a leaf.
 `runner/src/graph-query.ts` imports `traverse.ts` and the extended storage
 transaction, and those reach `cell.ts`, which reaches the runtime and its
-builtins. Loading `packages/memory/v2/server.ts` therefore loads 459 modules and
+builtins. Loading `runtime/memory/v2/server.ts` therefore loads 459 modules and
 210,000 lines, 267 of those modules from `runner` and the rest reached through
 it — `js-compiler`, `llm`, and `html` among the packages that arrive this way.
 Counting dynamic imports as well takes it to 596 modules.
 
-The transactional core does not: `packages/memory/v2/engine.ts` reaches 124
+The transactional core does not: `runtime/memory/v2/engine.ts` reaches 124
 modules and 35,000 lines, none of them from `runner`, since the
 content-addressed schema vocabulary it validates commits with sits in
 `@commonfabric/data-model-schema`. The engine is a runner-free store; what the

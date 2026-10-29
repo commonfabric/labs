@@ -20,7 +20,7 @@ import {
   verbPattern,
   verbSurface,
 } from "./check-command-docs.ts";
-import { VERB_HELP } from "../packages/cli/lib/shuttle/verbs.ts";
+import { VERB_HELP } from "../runtime/cli/lib/shuttle/verbs.ts";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
@@ -199,7 +199,7 @@ describe("check-command-docs", () => {
 
   describe("isLiveDoc()", () => {
     /** One package, the way the root config names its members. */
-    const packageDocs = new Set(["packages/oven/README.md"]);
+    const packageDocs = new Set(["runtime/oven/README.md"]);
 
     it("reads a path spelled with either separator", () => {
       // The rules are written in slashes and the path arrives in the host's
@@ -210,8 +210,8 @@ describe("check-command-docs", () => {
       expect(isLiveDoc("docs/history/report.md", packageDocs)).toBe(false);
       expect(isLiveDoc("docs\\history\\report.md", packageDocs)).toBe(false);
       expect(isLiveDoc("docs\\plans\\later.md", packageDocs)).toBe(false);
-      expect(isLiveDoc("packages\\oven\\brew.ts", packageDocs)).toBe(false);
-      expect(isLiveDoc("packages\\oven\\README.md", packageDocs)).toBe(true);
+      expect(isLiveDoc("runtime\\oven\\brew.ts", packageDocs)).toBe(false);
+      expect(isLiveDoc("runtime\\oven\\README.md", packageDocs)).toBe(true);
     });
 
     it("takes nothing vendored under node_modules as documentation", () => {
@@ -232,19 +232,19 @@ describe("check-command-docs", () => {
       // A fixture corpus and a test directory keep READMEs of their own, and
       // neither is somewhere a caller is sent to read.
 
-      expect(isLiveDoc("packages/oven/README.md", packageDocs)).toBe(true);
-      expect(isLiveDoc("packages/oven/test/README.md", packageDocs))
+      expect(isLiveDoc("runtime/oven/README.md", packageDocs)).toBe(true);
+      expect(isLiveDoc("runtime/oven/test/README.md", packageDocs))
         .toBe(false);
-      expect(isLiveDoc("packages/oven/test/fixtures/README.md", packageDocs))
+      expect(isLiveDoc("runtime/oven/test/fixtures/README.md", packageDocs))
         .toBe(false);
       // A member the config names below the first level is still a package.
       expect(
-        isLiveDoc("packages/mixers/whisk/README.md", packageDocs),
+        isLiveDoc("runtime/mixers/whisk/README.md", packageDocs),
       ).toBe(false);
       expect(
         isLiveDoc(
-          "packages/mixers/whisk/README.md",
-          new Set(["packages/mixers/whisk/README.md"]),
+          "runtime/mixers/whisk/README.md",
+          new Set(["runtime/mixers/whisk/README.md"]),
         ),
       ).toBe(true);
     });
@@ -258,12 +258,12 @@ describe("check-command-docs", () => {
           `${root}/deno.jsonc`,
           `{
   // The member list is what says a directory is a package.
-  "workspace": ["./packages/oven", "./packages/mixers/whisk"]
+  "workspace": ["./runtime/oven", "./runtime/mixers/whisk"]
 }`,
         );
         expect([...await readPackageDocs(root)].sort()).toEqual([
-          "packages/mixers/whisk/README.md",
-          "packages/oven/README.md",
+          "runtime/mixers/whisk/README.md",
+          "runtime/oven/README.md",
         ]);
       } finally {
         await Deno.remove(root, { recursive: true });
@@ -273,7 +273,7 @@ describe("check-command-docs", () => {
     it("takes no README from a config that lists no workspace", async () => {
       // A config without the key is not a config with an empty one by
       // accident: no member means no package README counts, and the walk
-      // simply finds nothing under `packages/`.
+      // simply finds nothing in a package.
 
       const root = await Deno.makeTempDir();
       try {
@@ -293,10 +293,10 @@ describe("check-command-docs", () => {
       try {
         await Deno.writeTextFile(
           `${root}/deno.jsonc`,
-          `{ "workspace": ["./packages/oven", 7, { "path": "./packages/x" }] }`,
+          `{ "workspace": ["./runtime/oven", 7, { "path": "./runtime/x" }] }`,
         );
         expect([...await readPackageDocs(root)]).toEqual([
-          "packages/oven/README.md",
+          "runtime/oven/README.md",
         ]);
       } finally {
         await Deno.remove(root, { recursive: true });
@@ -347,7 +347,7 @@ describe("check-command-docs", () => {
     });
 
     it("does not read a mention in a sentence as a description", () => {
-      // This is the whole standard. `packages/cli/README.md` lost its row for
+      // This is the whole standard. `runtime/cli/README.md` lost its row for
       // `more` while its prose went on saying what `more` writes, and a rule
       // that took the sentence would have passed that drift.
 
@@ -398,7 +398,7 @@ describe("check-command-docs", () => {
         // throwaway tree needs one the way the repository has one.
         await Deno.writeTextFile(
           `${root}/deno.jsonc`,
-          `{ "workspace": ["./packages/oven"] }`,
+          `{ "workspace": ["./runtime/oven"] }`,
         );
         for (const [path, text] of Object.entries(files)) {
           const full = `${root}/${path}`;
@@ -480,8 +480,8 @@ describe("check-command-docs", () => {
 
     it("reads a package README and not the source beside it", async () => {
       await withDocs({
-        "packages/oven/README.md": "`cf brew` heats the glaze.",
-        "packages/oven/brew.ts": "// `cf glaze set` in a comment",
+        "runtime/oven/README.md": "`cf brew` heats the glaze.",
+        "runtime/oven/brew.ts": "// `cf glaze set` in a comment",
       }, async (root) => {
         const { commands: found } = await documentedNames(
           root,
@@ -514,8 +514,8 @@ describe("check-command-docs", () => {
       // A fixture corpus documents the fixtures, for whoever maintains them.
 
       await withDocs({
-        "packages/oven/README.md": "`cf brew` heats the glaze.",
-        "packages/oven/test/fixtures/README.md": "`cf glaze set` here too.",
+        "runtime/oven/README.md": "`cf brew` heats the glaze.",
+        "runtime/oven/test/fixtures/README.md": "`cf glaze set` here too.",
       }, async (root) => {
         const { commands: found } = await documentedNames(
           root,
@@ -578,7 +578,7 @@ describe("check-command-docs", () => {
       // and a verb described in the same document are both found.
 
       await withDocs({
-        "packages/oven/README.md": "`cf brew` heats it.\n\n| `ls` | Lists. |",
+        "runtime/oven/README.md": "`cf brew` heats it.\n\n| `ls` | Lists. |",
       }, async (root) => {
         const found = await documentedNames(
           root,

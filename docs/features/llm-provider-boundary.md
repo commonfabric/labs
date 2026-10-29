@@ -12,7 +12,7 @@ the providers the toolshed can resolve a name to.
 
 ## Which side owns what
 
-| | Caller — `@commonfabric/llm` | Server — `packages/toolshed/routes/ai/llm/` |
+| | Caller — `@commonfabric/llm` | Server — `runtime/toolshed/routes/ai/llm/` |
 |---|---|---|
 | Loaded by | a browser tab, the command line, a background service, and the server too, for the request types | the toolshed server process alone |
 | Knows | the request shape and a model **name** | every registered model, its provider, and its capabilities |
@@ -28,7 +28,7 @@ that wants the list asks for it, over `GET /api/ai/llm/models`.
 ## Why the catalog stays on the server's side
 
 The catalog is
-[`packages/toolshed/routes/ai/llm/models.ts`](../../packages/toolshed/routes/ai/llm/models.ts).
+[`runtime/toolshed/routes/ai/llm/models.ts`](../../runtime/toolshed/routes/ai/llm/models.ts).
 It is five things at once: the model list, the aliases, the capability records,
 the provider clients, and the chain that decides what `default` means.
 
@@ -37,7 +37,7 @@ Which models a deployment has is decided by the credentials it was configured
 with and by what the gateway answers when the toolshed asks it, so the true
 list exists only at run time and only in the server. A copy shipped to a caller
 would be a guess. This is why the callers that need the list already fetch
-`GET /api/ai/llm/models` rather than importing one — `packages/patterns`
+`GET /api/ai/llm/models` rather than importing one — `patterns`
 builds its model pickers that way, and cf-harness derives its own entries from
 the gateway's `/v1/models`. Moving a static catalog to the caller's package
 would create a second answer with no consumer and no way to be right.
@@ -50,7 +50,7 @@ narrower than the reason above rather than independent of it:
   a credentials file it reads off disk. A credential belongs in one process.
 - **The clients need the AI SDK.** `createAnthropic`, `createOpenAI`,
   `createGroq`, and `createVertex` come from packages declared in
-  `packages/toolshed/deno.jsonc`, scoped to the toolshed alone.
+  `runtime/toolshed/deno.jsonc`, scoped to the toolshed alone.
 
 The gateway is the exception that shows the shape: its block is gated on a URL
 rather than a key, and it authenticates with a placeholder. It stays here not
@@ -59,7 +59,7 @@ because it is secret but because what it offers is only discoverable from here.
 Two rules hold on the caller's side, for two different reasons, and a
 different check keeps each. `@commonfabric/llm` is loaded into a browser worker
 through `@commonfabric/runner` and `runtime-client`, so nothing a browser tab
-may not load belongs there; `packages/llm/test/package-boundary.test.ts` reads
+may not load belongs there; `base/llm/test/package-boundary.test.ts` reads
 that package's sources against an allowlist, so a provider SDK, a `node:`
 module, or any dependency nobody thought to ban turns the suite red. And
 `@commonfabric/runner` imports that package, so an import back the other way
@@ -95,9 +95,9 @@ Two places where the division is less clean than the above, both worth knowing
 before relying on it:
 
 - `DEFAULT_GENERATE_OBJECT_MODEL` in
-  [`packages/llm/src/types.ts`](../../packages/llm/src/types.ts) is a
+  [`base/llm/src/types.ts`](../../base/llm/src/types.ts) is a
   qualified model name on the caller's side, and
-  `packages/toolshed/routes/ai/llm/generateObject.ts` imports it back to use as
+  `runtime/toolshed/routes/ai/llm/generateObject.ts` imports it back to use as
   a default. The server's own answer to "which model when the caller names
   none" is the `default` alias; this constant sits beside that answer rather
   than deferring to it, because `generateObject` wants a cheaper model than a
@@ -115,19 +115,19 @@ before relying on it:
 
 ## The harness talks to the gateway itself
 
-`packages/cf-harness` is a third place with model code, and it is not part of
+`runtime/cf-harness` is a third place with model code, and it is not part of
 the path above. It speaks the gateway's OpenAI-compatible protocol directly
 rather than going through the toolshed, and builds its own catalog entries from
 what the gateway's `/v1/models` returns — the same discovery the toolshed does,
 run separately for itself. What it hardcodes is narrower: a default model name,
 a subagent model name, and a pricing table. What it shares with the path above
 is the vocabulary in
-[`packages/llm/src/types.ts`](../../packages/llm/src/types.ts) — the native
+[`base/llm/src/types.ts`](../../base/llm/src/types.ts) — the native
 model tool identifiers and their results — and nothing else.
 
 ## Related documentation
 
-- [`packages/llm/README.md`](../../packages/llm/README.md) — what the caller's
+- [`base/llm/README.md`](../../base/llm/README.md) — what the caller's
   package contains
 - [`llm-testing.md`](llm-testing.md) — the test-environment guard, the client
   mocks, and driving the route against a stand-in model

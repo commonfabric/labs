@@ -131,7 +131,7 @@ provide, the document says so, under the heading "Prerequisites".
   from either member's side by the other member's principal.
 - **Group room.** Any other room. Two group rooms can have the same members.
 - **Container.** A space that shows chats among other things, such as a space
-  whose root is the `loom` pattern (`packages/patterns/loom/`). A container
+  whose root is the `loom` pattern (`patterns/system/loom/`). A container
   may name its own chat, a room in its space, as the `loom` pattern's root
   does with its `chatRoom` link, and its `ensureChatRoom` creates that room,
   with no panel showing it.
@@ -265,7 +265,7 @@ names the ones it needs, and they are gathered here:
 
 ## Implementation status
 
-The four patterns are in `packages/patterns/fabrichat/`: `room.tsx`,
+The four patterns are in `patterns/system/fabrichat/`: `room.tsx`,
 `manager.tsx`, `placement.tsx`, and `adapter.tsx`, with the contracts' records
 in `schemas.tsx`. The room's stored records and the handlers that write them are
 in `room-records.tsx`, and one message's rendering in `message-row.tsx`. The
@@ -293,7 +293,7 @@ design, as below.
   [`clients.md`](clients.md#the-sanctioned-issuing-path)).
 - **A room keeps its own participants.** A room in a space of its own keeps
   the space's participants through `addParticipant`, the roster's one writer
-  (`packages/patterns/loom/participants.tsx`): the manager that creates or
+  (`patterns/system/loom/participants.tsx`): the manager that creates or
   accepts the room adds its user, from an event that follows. As a stop-gap, a
   member whose manager has done neither is not on the roster, and is shown
   among the participants only once they write, as an author. A room in an

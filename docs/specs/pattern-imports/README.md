@@ -17,7 +17,7 @@ reference without a subpath selects the pattern's entry module. A reference
 with a subpath selects a module through the current immutable authored-program
 manifest's explicit exports map. The selected module identity is in the same
 namespace as the compile cache and `cf:module/<hash>`
-(`packages/runner/src/harness/module-identity.ts`), and that selected identity
+(`runtime/runner/src/harness/module-identity.ts`), and that selected identity
 is what deployed importers pin.
 
 There is deliberately **no type tag in the specifier** (`cf:piece/…` vs
@@ -57,10 +57,10 @@ general piece origin model is described in `../piece-source-lifecycle.md`.
 
 - **Reuse without copy-paste.** Today a pattern can import only its own files
   (`./`, `../`, `/`) and three allowlisted runtime modules
-  (`packages/runner/src/sandbox/runtime-module-policy.ts`). Sharing a schema or
+  (`runtime/runner/src/sandbox/runtime-module-policy.ts`). Sharing a schema or
   a sub-pattern across separately-deployed patterns means duplicating source.
 - **Typed reuse.** The `fetchProgram` builtin
-  (`packages/runner/src/builtins/fetch-program.ts`) fetches and compiles remote
+  (`runtime/runner/src/builtins/fetch-program.ts`) fetches and compiles remote
   programs at *runtime*, untyped at the call site. An import is compile-time:
   TypeScript checks the binding names and types against the real source.
 - **A publishing story built from naming and placement.** Pointing a slug at a
@@ -93,16 +93,16 @@ general piece origin model is described in `../piece-source-lifecycle.md`.
 
 | Piece of machinery | Where | Role here |
 |---|---|---|
-| `ProgramResolver` seam (`main()` / `resolveSource(specifier)`, async) | `packages/js-compiler/program.ts`, `typescript/resolver.ts` | The hook where fabric imports plug in; it discovers only the reachable closure and cannot enumerate unreachable authored files |
-| Authored-import policy | `packages/runner/src/sandbox/runtime-module-policy.ts` | Single dispatch point for `cf:` specifiers |
-| Per-module Merkle identity (source + deps; external deps fold the full specifier string into the leaf: `runtime:${specifier}@${fingerprint}`) | `computeModuleHashes` in `packages/runner/src/harness/module-identity.ts` | Makes pinned specifiers content-derived with **no hashing changes** (§ Snapshot semantics); the primitive includes type edges, but production engine paths currently remove authored `.d.ts` files before identity and persistence |
-| Piece → pattern pointer: `meta("patternIdentity")` = `{ identity, symbol }` (entry-module identity), the sole pointer post-`#4156` | write `applySetupState`, read `getPatternIdentityRef` in `packages/runner/src/runner.ts` | The terminal pointer hop for an entry import and the route to the retained manifest for a future subpath import |
-| Pattern source-of-truth: the `pattern:<identity>` source-doc closure (there is no longer a meta cell; the retired one's `program` was pure duplication of these docs) | `packages/runner/src/compilation-cache/cell-cache.ts` | Recovered via `getPatternSourceProgramByIdentity` / `loadVerifiedSourceClosure` |
-| Compile cache: source docs at cell key **`pattern:<identity>`**, compiled docs at `compileCache:<rtVersion>/<identity>`, each linking its `code` to a `cid:` code document hashed over the string | `packages/runner/src/compilation-cache/cell-cache.ts` (`sourceDocKey`/`compiledDocKey`, `codeLink`) | **The URI a pattern is saved under by hash.** Content-addressed per-module source + compiled storage; imports resolve from and dedupe into it, and identical module text is one code document per space |
-| Slug cells: generic **redirect link to any cell** (`setSlugLink` is target-agnostic; only `resolvePieceAddress` layers a "must be a piece" check) | `packages/piece/src/slugs.ts` | Slugs can name pieces *or* patterns today, mechanically |
-| Slug ids: `hashOf({causal:{space, slug}})`; slug grammar `[a-z0-9]+(-[a-z0-9]+)*`, ≤80 chars; **`isSlugAddress(t) = !t.includes(":")`** | `packages/runner/src/slugs.ts` | The existing slug-vs-URI discriminator the grammar reuses |
-| `loadPatternByIdentity(entryIdentity, symbol, space)` | `packages/runner/src/pattern-manager.ts` | Existing by-identity load path the resolver builds on |
-| Per-space host routing: `spaceHostMap` seeds routes, `registerSpaceHost` adds a route, and the home-space site table hydrates durable hints; foreign-host sessions are ordinary authenticated memory sessions | `packages/runner/src/storage/v2-remote-session.ts`, `packages/runner/src/storage/v2.ts`, and `packages/runtime-client/src/backends/runtime-processor.ts` | Reads work for a foreign space whose route is already known. A seeded route can only be confirmed. An unseeded default-host provider remains provisional until the first hint arrives or its session accepts a stateful operation. A different host cancels unfinished session setup, replaces the provisional replica, makes overlapping read-only callers use the hinted replica, and loads dependencies discovered from the hinted data. Transactions based on the old replica are rejected. A different-host hint conflicts after an ordinary or scheduler transaction, ACL setup transaction, or SQLite source registration is accepted for issue, even if its acknowledgment later fails. The first accepted late hint then remains stable. Seeds, live hints, and initial table hydration accept only an HTTP or HTTPS origin with no credentials, path, query, or fragment. Hydration selects the last accepted entry for each space without replacing a route already accepted through IPC. A conflicting table route accepted first makes later IPC registration fail. Historical lifecycle resolution can apply a host from an explicit `cf://` reference to the live runtime, but durable route persistence remains planned |
+| `ProgramResolver` seam (`main()` / `resolveSource(specifier)`, async) | `base/js-compiler/program.ts`, `typescript/resolver.ts` | The hook where fabric imports plug in; it discovers only the reachable closure and cannot enumerate unreachable authored files |
+| Authored-import policy | `runtime/runner/src/sandbox/runtime-module-policy.ts` | Single dispatch point for `cf:` specifiers |
+| Per-module Merkle identity (source + deps; external deps fold the full specifier string into the leaf: `runtime:${specifier}@${fingerprint}`) | `computeModuleHashes` in `runtime/runner/src/harness/module-identity.ts` | Makes pinned specifiers content-derived with **no hashing changes** (§ Snapshot semantics); the primitive includes type edges, but production engine paths currently remove authored `.d.ts` files before identity and persistence |
+| Piece → pattern pointer: `meta("patternIdentity")` = `{ identity, symbol }` (entry-module identity), the sole pointer post-`#4156` | write `applySetupState`, read `getPatternIdentityRef` in `runtime/runner/src/runner.ts` | The terminal pointer hop for an entry import and the route to the retained manifest for a future subpath import |
+| Pattern source-of-truth: the `pattern:<identity>` source-doc closure (there is no longer a meta cell; the retired one's `program` was pure duplication of these docs) | `runtime/runner/src/compilation-cache/cell-cache.ts` | Recovered via `getPatternSourceProgramByIdentity` / `loadVerifiedSourceClosure` |
+| Compile cache: source docs at cell key **`pattern:<identity>`**, compiled docs at `compileCache:<rtVersion>/<identity>`, each linking its `code` to a `cid:` code document hashed over the string | `runtime/runner/src/compilation-cache/cell-cache.ts` (`sourceDocKey`/`compiledDocKey`, `codeLink`) | **The URI a pattern is saved under by hash.** Content-addressed per-module source + compiled storage; imports resolve from and dedupe into it, and identical module text is one code document per space |
+| Slug cells: generic **redirect link to any cell** (`setSlugLink` is target-agnostic; only `resolvePieceAddress` layers a "must be a piece" check) | `runtime/piece/src/slugs.ts` | Slugs can name pieces *or* patterns today, mechanically |
+| Slug ids: `hashOf({causal:{space, slug}})`; slug grammar `[a-z0-9]+(-[a-z0-9]+)*`, ≤80 chars; **`isSlugAddress(t) = !t.includes(":")`** | `runtime/runner/src/slugs.ts` | The existing slug-vs-URI discriminator the grammar reuses |
+| `loadPatternByIdentity(entryIdentity, symbol, space)` | `runtime/runner/src/pattern-manager.ts` | Existing by-identity load path the resolver builds on |
+| Per-space host routing: `spaceHostMap` seeds routes, `registerSpaceHost` adds a route, and the home-space site table hydrates durable hints; foreign-host sessions are ordinary authenticated memory sessions | `runtime/runner/src/storage/v2-remote-session.ts`, `runtime/runner/src/storage/v2.ts`, and `runtime/runtime-client/src/backends/runtime-processor.ts` | Reads work for a foreign space whose route is already known. A seeded route can only be confirmed. An unseeded default-host provider remains provisional until the first hint arrives or its session accepts a stateful operation. A different host cancels unfinished session setup, replaces the provisional replica, makes overlapping read-only callers use the hinted replica, and loads dependencies discovered from the hinted data. Transactions based on the old replica are rejected. A different-host hint conflicts after an ordinary or scheduler transaction, ACL setup transaction, or SQLite source registration is accepted for issue, even if its acknowledgment later fails. The first accepted late hint then remains stable. Seeds, live hints, and initial table hydration accept only an HTTP or HTTPS origin with no credentials, path, query, or fragment. Hydration selects the last accepted entry for each space without replacing a route already accepted through IPC. A conflicting table route accepted first makes later IPC registration fail. Historical lifecycle resolution can apply a host from an explicit `cf://` reference to the live runtime, but durable route persistence remains planned |
 
 ### The two "pattern by hash" handles, explicitly
 
@@ -110,7 +110,7 @@ Because both come up, and only one is the pin:
 
 - **`of:fid1:<hash>`** — the entity URI of a **cell that carries a pattern
   pointer** (a piece result cell), `toURI(createRef(...))`
-  (`toURI`, `packages/runner/src/uri-utils.ts`). A *causal* ref: resolvable (it's a
+  (`toURI`, `runtime/runner/src/uri-utils.ts`). A *causal* ref: resolvable (it's a
   cell address) but not re-hash-verifiable from fetched content alone. Usable as
   a reference *starting point* (the chase reads its `patternIdentity`); never
   the pin.
@@ -136,7 +136,7 @@ separate fields:
   "source": {
     "ref": "cf:pattern:<prefix-free-entry-module-hash>",
     "repository": "https://github.com/commonfabric/labs",
-    "entry": "/packages/patterns/annotation.tsx",
+    "entry": "/patterns/apps/annotation/annotation.tsx",
     "origin": "cf:/did:key:z6Mk.../annotation"
   }
 }
@@ -332,9 +332,9 @@ hash    = 43 base64url chars  ; hashStringOf/hashOf output (value-hash/):
 ```
 
 (Hashes are **not** hex: `hashStringOf` emits unprefixed base64url
-(`packages/data-model/src/value-hash/impl.ts`), and entity URIs carry the
-`fid1:` tag inside `of:` — `of:fid1:<hash>` is what `toURI` produces. The
-base64url alphabet contains no `/`, `@`, or `:`, so pin-splitting and
+(`base/data-model/src/value-hash/impl.ts`), and entity URIs
+carry the `fid1:` tag inside `of:` — `of:fid1:<hash>` is what `toURI` produces.
+The base64url alphabet contains no `/`, `@`, or `:`, so pin-splitting and
 segment-splitting stay unambiguous.)
 
 Examples:
@@ -401,7 +401,7 @@ resolve to a pattern", naming the chain followed). An unpinned subpath also
 fails when the target has no retained manifest or does not explicitly export
 that name. Each pointer hop is an ordinary cell read under the space's ordinary
 authorization. The entry-only chase matches the as-built resolver in
-`packages/runner/src/fabric-ref-resolution.ts`. Manifest-backed subpath
+`runtime/runner/src/fabric-ref-resolution.ts`. Manifest-backed subpath
 selection remains required work.
 
 ### Explicit public subpaths
@@ -445,7 +445,7 @@ Why this shape:
 - **Valid ESM specifier.** Schemes are legal in import specifiers; resolution
   is entirely ours via the `ProgramResolver`/compiler-host seam, and TypeScript
   is satisfied through the same mechanism that resolves `commonfabric` today
-  (`resolveModuleNameLiterals`, `packages/js-compiler/typescript/compiler.ts`).
+  (`resolveModuleNameLiterals`, `base/js-compiler/typescript/compiler.ts`).
 - **Its durable identifier forms follow the shell's URL shapes.** A mutable
   piece uses `cf:/<space-did>/of:fid1:<piece-id>`. An immutable pattern uses the
   space-free `cf:pattern:<identity>` form. Authored static imports may still use
@@ -541,7 +541,7 @@ Mechanics:
 
 2. **The pinned hash folds into the importer's identity for free.** Module
    identity already hashes external deps as `runtime:${specifier}@${fingerprint}`
-   (`packages/runner/src/module-identity.ts`) — the specifier string contains
+   (`runtime/runner/src/module-identity.ts`) — the specifier string contains
    the pin, so
    two importers differing only in pin have different module identities, and
    transitively different program ids (`engine.ts:computeId` hashes the source
@@ -697,7 +697,7 @@ with storage and network access, and `ProgramResolver.resolveSource` is async)
 
 ### 1. Specifier parsing + policy
 
-- New `packages/runner/src/sandbox/fabric-import-specifier.ts`: parse/format
+- New `runtime/runner/src/sandbox/fabric-import-specifier.ts`: parse/format
   for the grammar above (host/space/ref/subpath/pin), reusing
   `isSlugAddress`/`validateSlug`.
 - `runtime-module-policy.ts`: `isAllowedAuthoredImportSpecifier` accepts
@@ -719,7 +719,7 @@ Engine wraps the authored resolver; on a `cf:` specifier:
    - An unpinned entry reference runs the uniform chase **as ordinary cell
      reads through the compiling runtime's storage** (slug cell redirect → the
      piece's `patternIdentity`). `cf check` constructs a runtime
-     (`packages/cli/lib/dev.ts`), and every production compile happens inside
+     (`runtime/cli/lib/dev.ts`), and every production compile happens inside
      one, so space authorization is exactly memory-read authorization.
    - In M4, an unpinned subpath continues from the mutable target to its current
      source revision and immutable manifest. It performs an exact exports-map
@@ -740,7 +740,7 @@ Engine wraps the authored resolver; on a `cf:` specifier:
    TS program under a reserved prefix such as
    `/~cf/<identity>/<original-path>`. Thread a
    specifier-to-mounted-module alias map into the compiler so
-   `resolveModuleNameLiterals` (`packages/js-compiler/typescript/compiler.ts`)
+   `resolveModuleNameLiterals` (`base/js-compiler/typescript/compiler.ts`)
    maps the `cf:` specifier to
    the mounted file. Relative imports inside the subtree resolve as ordinary
    path joins.

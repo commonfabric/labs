@@ -12,7 +12,7 @@ answers who/what/when/why-different questions with no live runtime. Reach for it
 whenever you'd otherwise reason about runtime state from the outside — it
 replaces a guess with the ground truth the engine itself reads.
 
-Full command reference + flags: `packages/state-inspector/README.md`. This skill
+Full command reference + flags: `runtime/state-inspector/README.md`. This skill
 is the **map** — what the tool sees, what to trust, and which question each
 command answers. Run commands with `deno task cf inspect <cmd>`; every command
 takes `--json` for machine reading, and a `<space>` is a DID, a unique
