@@ -62,20 +62,23 @@ const denoFactory = isDeno()
   ? (await import("./memory-socket.deno.ts")).createDenoMemorySocket
   : undefined;
 
-/** Opens a native WebSocket for a browser or a plain TCP connection. */
+/** Opens a native WebSocket, the backend a browser uses for every address. */
 export function createNativeMemorySocket(address: URL): MemorySocketConnection {
   const socket = new WebSocket(address);
   socket.binaryType = "arraybuffer";
   return { socket, send: (frame) => socket.send(frame) };
 }
 
-/** Opens a memory socket, using Node TLS for Deno's secure connections. */
+/** Opens a memory socket, using Deno's Node networking stack under Deno. */
 export function createMemorySocket(address: URL): MemorySocketConnection {
-  // Deno's native TLS WebSocket writer can finish with buffered ciphertext
-  // and no surviving write future to drain it.
+  // Deno's native WebSocket client fails memory traffic both ways. Over TLS
+  // its writer can finish with buffered ciphertext and no surviving write
+  // future to drain it. Over plain TCP it leaves Nagle's algorithm on and
+  // writes a frame of more than 1,024 bytes as a header and then a payload,
+  // so the payload waits for the peer's delayed acknowledgment of the header,
+  // about 40 milliseconds on Linux.
   // TODO(gideon): Remove the Node backend once the pinned Deno flushes frames
-  // and its native WebSocket can enable TCP keepalive.
-  return denoFactory && address.protocol === "wss:"
-    ? denoFactory(address)
-    : createNativeMemorySocket(address);
+  // and its native WebSocket can disable Nagle's algorithm and enable TCP
+  // keepalive.
+  return denoFactory ? denoFactory(address) : createNativeMemorySocket(address);
 }

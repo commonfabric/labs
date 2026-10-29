@@ -2940,6 +2940,9 @@ The supported output switches are:
   returning an empty successful JSON stream.
 - `cf cell get` and `cf wish` always return JSON. Their `--json` options are
   accepted, documented no-ops for callers that select JSON explicitly.
+- `cf delegation show --json` prints one row per delegation of each chain the
+  file holds; `cf delegation issue --out <file> --json` reports the write as one
+  object naming the file, the space, the audience, and the chain's length.
 - `cf check --json` compiles without evaluating and prints one object with a
   `files` array. Each entry has the input `path` and the compiled module bodies
   in `output`.
@@ -3400,3 +3403,46 @@ same identity to another client preserves its DID. A receipt with null current
 access means access was removed; retrying cannot restore it. See
 [the service contract](../toolshed/README.md#space-invitations) for the SDK,
 proof, deployment, and storage rules.
+
+## Delegating a space to another key
+
+A space is opened by the key its access list grants, or by a key holding a chain
+of delegations from one it grants, which is how a profile space that owns itself
+is opened at all (`docs/specs/profile-delegation.md`). `cf delegation` issues
+such a chain to another key, an agent's or a daemon's, and holds one when the
+CLI connects.
+
+- `cf delegation issue --to <did> --out <file>` issues a delegation over the
+  space from your identity to the key `--to` names, and writes the chain that
+  key presents: the delegation alone where the access list grants you, and
+  behind the chain you hold yourself where you hold the space through one, as a
+  profile's owner does through the delegation Home records, or as a key
+  delegated to in turn does through the chain `--delegations` names. The server
+  resolves the holder's capability from the chain's root, so the holder acts
+  under the grant you act under. It takes `--identity`, `--api-url`, and
+  `--space` or `--url`, or the corresponding `CF_IDENTITY`, `CF_API_URL`, and
+  `CF_SPACE`. `--expires-in <seconds>` gives the delegation an expiry, which the
+  server holds a session to after admitting it. The file `--out` names must not
+  exist; without `--out`, the chain is written to stdout.
+- `cf delegation show <file>` describes each delegation of each chain the file
+  holds: its CID, issuer, audience, subject, command, expiry, and whether a
+  runtime would hold the chain and present it now, with what is wrong with it
+  where it would not, an expired link among them. `--json` prints the rows as
+  JSON.
+
+A chain file is JSON naming its format, `commonfabric/delegation-chains`, and
+listing chains, each the delegations' envelope bytes root first in base64url.
+The delegations inside are UCAN envelopes, so the file adds nothing a holder has
+to trust beyond them; a chain that does not verify is refused where it is held.
+The format is this repository's own rather than the UCAN working group's
+container, which bundles tokens in no order for the recipient to link; reading
+and writing a container is a later feature, for tooling that speaks it.
+
+The `cf piece` and `cf cell` commands, which carry these options, hold the
+chains in the files `--delegations <path>` names, repeatable, or the one
+`CF_DELEGATIONS` names, before they open any space, Home included, so a session
+on a space a chain is over presents it. A file that cannot be read, a chain in
+it that ends at a key other than the identity, one no session would present
+then, expired or not yet valid, or one the runtime refuses, fails the command
+rather than warning: the caller named the file. The delegations your own Home
+records for your profiles are held without naming anything.

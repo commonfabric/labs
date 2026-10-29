@@ -2381,6 +2381,17 @@ each operand of a fallback, wherever on the member spine it sits, a call on
   Cell even when a projected result member is observed; this preserves the
   nested Cell in synthesized closure schemas without widening the enclosing
   root to wildcard
+- a truthiness test of a non-primitive member, such as `if (x)`, `x ? a : b`,
+  `x && y` or `!x`, needs only the member's presence, so it adds nothing to
+  what the body's other uses of the member retain: `if (user) return
+  user.name` records `["user", "name"]` alone, and an identity use of the
+  member keeps it for identity alone. Where nothing else the body does uses the member,
+  the test is a read of it, so the member stays in the input schema:
+  `x && other.get()` records `["x"]` as well as `["other"]`. A test of a
+  primitive member is a read of it in either case, since a primitive's value
+  is its presence (`isBooleanConditionUsage` and `recordsUseOfPath` in
+  `policy/capability-analysis.ts`; `test/guard-capture-schema.test.ts`,
+  `test/policy/capability-analysis-coverage.test.ts`)
 - array-like roots whose observed paths only touch non-item properties
   (`length`, `get`, `set`, `key`, `update`) keep array shape but shrink their
   item type to `unknown`

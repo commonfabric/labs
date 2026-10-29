@@ -4758,26 +4758,44 @@ export class Runtime {
     await profiles.sync();
     const links = profiles.get();
     if (!Array.isArray(links)) return 0;
-    let held = 0;
-    for (const link of links) {
-      if (!isCell(link)) continue;
+    const spaces = links.flatMap((link) => {
+      if (!isCell(link)) return [];
       const space = link.getAsNormalizedFullLink().space;
-      if (space === home.space) continue;
-      const record = this.getCell(
-        home.space,
-        delegationsCause(space),
-        delegationRecordSchema,
-      );
-      await record.sync();
+      return space === home.space ? [] : [space];
+    });
+    // The records are read together, so that their reads reach the server
+    // holding Home as one request rather than as a round trip per profile.
+    const recorded = await Promise.all(
+      spaces.map((space) => this.recordedDelegations(space)),
+    );
+    let held = 0;
+    for (const delegations of recorded) {
       // Each recorded delegation is one the space issued to this key, so
       // each is a chain of its own.
-      for (const delegation of record.get()?.delegations ?? []) {
-        if (!(delegation instanceof FabricBytes)) continue;
-        await this.storageManager.addDelegationChain([delegation.slice()]);
+      for (const delegation of delegations) {
+        await this.storageManager.addDelegationChain([delegation]);
         held += 1;
       }
     }
     return held;
+  }
+
+  /**
+   * The delegations the Home space records over `space`, as their bytes,
+   * oldest first: the one the space issued to this key when it was created
+   * to own itself, and any added beside it since. Empty for a space Home
+   * records none for. Each is a copy, the caller's to keep or change.
+   */
+  async recordedDelegations(space: MemorySpace): Promise<Uint8Array[]> {
+    const record = this.getCell(
+      this.getHomeSpaceCell().space,
+      delegationsCause(space),
+      delegationRecordSchema,
+    );
+    await record.sync();
+    return (record.get()?.delegations ?? []).flatMap((delegation) =>
+      delegation instanceof FabricBytes ? [delegation.slice()] : []
+    );
   }
 
   /**
