@@ -3077,8 +3077,8 @@ type Outer<T, U> = { inner: PerUser<T> | U };`,
           )).rejects.toThrow("A scope wrapper cannot be a member of a union.");
         });
 
-        it("refuses a union with a member accepting any value that meets, inside its own definition, one stating a restriction it did not keep", async () => {
-          // `Node` is still being generated where its own member meets it,
+        it("refuses a union with a member accepting any value that reaches, inside its own definition, one stating a restriction it did not keep", async () => {
+          // `Node` is still being generated where its own member reaches it,
           // so the union is read again once it is written, and `s` is no
           // label it kept.
 
@@ -3090,7 +3090,7 @@ interface Node {
 }`,
             "Node",
           )).rejects.toThrow(
-            "it meets `Node` inside the definition of `Node`",
+            "it reaches `Node` inside the definition of `Node`",
           );
         });
 

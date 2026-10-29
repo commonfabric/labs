@@ -1077,7 +1077,7 @@ Default paths of §7:
   generation is done, the union is read again, and refused where its members
   then state a restriction it did not keep ("A union with a member
   accepting any value is that member, with the labels of every member, but
-  it meets `Node` inside the definition of `Node`, where those labels cannot
+  it reaches `Node` inside the definition of `Node`, where those labels cannot
   be read yet."), as is such a union that states no label of its own and a
   `true` member makes `true` (`anyValuesBesideUnwritten`). Only a definition
   the generated schema holds counts: a recursion through its own argument
@@ -2368,7 +2368,7 @@ Everything that throws, with source (test-pinned unless noted):
 | Scope wrapper as a union member beside a value other than `null` or `undefined` | `A scope wrapper cannot be a member of a union.` | `common-fabric-formatter.ts`, `scope-placement.ts` |
 | Scope wrapper around a cell beside anything, `null` and `undefined` included | `A scope wrapper around a cell cannot hold anything beside the cell` | `common-fabric-formatter.ts` |
 | Scope wrapper beside `null` or `undefined` in a written union whose members do not read as wrappers or `null` or `undefined` | ``A scope wrapper beside `null` or `undefined` is read from the union written around it`` | `common-fabric-formatter.ts` |
-| A value accepting any value, an intersection the checker gives `any` or a union with a member accepting any value, that met a definition still being generated and kept fewer restrictions than it states | ``A value intersected with `any` keeps the labels of what it is intersected with, but it meets …`` / ``A union with a member accepting any value is that member, with the labels of every member, but it meets …`` | `ifc-labels.ts` |
+| A value accepting any value, an intersection the checker gives `any` or a union with a member accepting any value, that reached a definition still being generated and kept fewer restrictions than it states | ``A value intersected with `any` keeps the labels of what it is intersected with, but it meets …`` / ``A union with a member accepting any value is that member, with the labels of every member, but it reaches …`` | `ifc-labels.ts` |
 | An `ifc` key other than `confidentiality` declared differently by nested wrappers, or by a `$ref` and its definition | ``One value declares `ifc.<key>` twice, as … and as ….`` | `ifc-labels.ts` |
 | Circular type alias (wrapper chain) | `Circular type alias detected: A -> B -> …` | `type-utils.ts` |
 | Circular type alias (union alias) | `Circular type alias detected: <name>` | `union-formatter.ts` |

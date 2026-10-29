@@ -34,7 +34,7 @@ const generate = async (code: string) => {
 };
 
 /**
- * A context holding `definitions`, with origins recorded, and the values met
+ * A context holding `definitions`, with origins recorded, and the values that reached
  * beside a definition not written yet collected.
  */
 const contextWith = (
@@ -274,14 +274,14 @@ describe("ifc-labels", () => {
         secret,
       );
       expect(() => assertAnyValuesKeptLabels(values, schema)).toThrow(
-        "it meets `Node` inside the definition of `Node`",
+        "it reaches `Node` inside the definition of `Node`",
       );
     });
 
     it("throws for a union with no label of its own that an arm made `true`", () => {
       const { values, schema } = unionBesideNode([true, reference], secret);
       expect(() => assertAnyValuesKeptLabels(values, schema)).toThrow(
-        "it meets `Node` inside the definition of `Node`",
+        "it reaches `Node` inside the definition of `Node`",
       );
     });
 
@@ -744,14 +744,14 @@ describe("ifc-labels", () => {
       );
     });
 
-    it("refuses a union with a member accepting any value that meets, inside its own definition, a definition stating a restriction it did not keep", async () => {
+    it("refuses a union with a member accepting any value that reaches, inside its own definition, a definition stating a restriction it did not keep", async () => {
       await expect(generate(`
         interface SchemaRoot {
           secret: Confidential<string, readonly ["s"]>;
           child?: SchemaRoot | any | Confidential<{ x: string }, readonly ["c"]>;
         }
       `)).rejects.toThrow(
-        "it meets `SchemaRoot` inside the definition of `SchemaRoot`",
+        "it reaches `SchemaRoot` inside the definition of `SchemaRoot`",
       );
     });
 
@@ -762,7 +762,7 @@ describe("ifc-labels", () => {
           child?: SchemaRoot | any;
         }
       `)).rejects.toThrow(
-        "it meets `SchemaRoot` inside the definition of `SchemaRoot`",
+        "it reaches `SchemaRoot` inside the definition of `SchemaRoot`",
       );
     });
 
@@ -779,7 +779,7 @@ describe("ifc-labels", () => {
     });
 
     it("keeps every label of a recursion a generic alias reads again one level down", async () => {
-      // The definition read one level down meets itself, and is dropped, read
+      // The definition read one level down reaches itself, and is dropped, read
       // in full by the level above.
 
       const schema = await generate(`

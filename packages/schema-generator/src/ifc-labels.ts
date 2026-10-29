@@ -734,7 +734,7 @@ export const withReducedArmsLabeled = (
 };
 
 /**
- * A value settled to accept any value, which met definitions not yet written
+ * A value settled to accept any value, which reached definitions not yet written
  * (`unwritten`) in `definitions`, and the labels it kept: one an
  * intersection the checker gives `any` settled to (`labelsBesideAnyValue()`),
  * or a union of `arms`, reduced to those accepting any value
@@ -787,7 +787,7 @@ export const assertAnyValuesKeptLabels = (
           : "their own definitions";
         throw new Error(
           `A union with a member accepting any value is that member, with ` +
-            `the labels of every member, but it meets ${names} inside ` +
+            `the labels of every member, but it reaches ${names} inside ` +
             `${inside}, where those labels cannot be read yet. Declare that ` +
             `union without \`any\` or \`unknown\`, or with the labels ` +
             `${names} states on a member of it.`,
