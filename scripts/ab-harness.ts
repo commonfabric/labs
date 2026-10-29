@@ -35,7 +35,7 @@ if (!ROOT) {
   console.error("set CF_ROOT to a checkout root");
   Deno.exit(2);
 }
-const R = `${ROOT}/packages/runner/src`;
+const R = `${ROOT}/runtime/runner/src`;
 const want = new Set(
   Deno.args.length ? Deno.args : ["encoded", "liveness", "provenance"],
 );
@@ -125,7 +125,7 @@ const { resolveLocalProgram } = await import(
   "@commonfabric/runner/local-program.deno"
 );
 const FIXTURE = Deno.env.get("CF_FIXTURE") ??
-  `${ROOT}/packages/patterns/factory-outputs/parking-coordinator/main.test.tsx`;
+  `${ROOT}/patterns/dev/factory-outputs/parking-coordinator/main.test.tsx`;
 const engine = new Engine(runtime);
 const realProgram = await resolveLocalProgram(
   (resolver) => engine.resolve(resolver),

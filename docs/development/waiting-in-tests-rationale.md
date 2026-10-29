@@ -76,7 +76,7 @@ arises.
 
 [Browser-hosted unit tests have a harness
 backstop](waiting-in-tests.md#browser-hosted-unit-tests-have-a-harness-backstop)
-describes the `testTimeout` bound `packages/deno-web-test` places on each
+describes the `testTimeout` bound `runtime/deno-web-test` places on each
 test. This section records what the bound replaced and the competing ceiling
 that sizes it.
 
@@ -93,7 +93,7 @@ call rather than reissuing it: the evaluate runs once, and an answer that
 arrives late is still returned by whichever attempt is live for it. What
 differs between harnesses is the timeout. `deno-web-test` leaves astral's own
 ten seconds, which is where the fifty-second floor above comes from.
-`packages/integration`'s `Browser.launch` writes sixty seconds onto the page
+`runtime/integration`'s `Browser.launch` writes sixty seconds onto the page
 instead, so an evaluate the browser integration suites make ends after five
 minutes of deadline plus up to fifteen seconds of the retry's backoff. Neither
 is a bound this repository keeps, and neither wants a second one underneath
@@ -234,7 +234,7 @@ run. What that ordering protects is any wait that races an event against a
 deadline where the event arrives across several turns and the deadline is one
 `src/` timer.
 
-The conflict read-repair wait in `packages/runner/src/storage/v2.ts` is that
+The conflict read-repair wait in `runtime/runner/src/storage/v2.ts` is that
 shape. A commit the server refuses for a stale basis carries a retry gate, the
 caught-up frame the server stages for the session, and the storage layer holds
 the rejection until that frame has landed — or until a 30 s backstop lets it
@@ -261,7 +261,7 @@ run one, it re-queues itself behind the kick and looks again, and it jumps
 only when no turn is left. A turn chain that never ends starves the pump
 rather than hanging the test: past `AUTO_ADVANCE_STARVATION_LIMIT` consecutive
 yields it throws, naming the condition, as `settle()` does for zero-delay work
-that regenerates. `packages/runner/test/clock-preload-auto-advance.test.ts`
+that regenerates. `runtime/runner/test/clock-preload-auto-advance.test.ts`
 pins the ordering, and the SES-lockdown classification pin waits on the
 `src/` sleep it arms rather than on one turn, because one turn no longer
 carries a jump.
@@ -286,7 +286,7 @@ document](waiting-in-tests.md#a-production-backstop-cannot-carry-a-test).
 
 ## Why the runtime-client suite stays on the real clock
 
-`packages/runtime-client` keeps its unit tests on the real clock, and the
+`runtime/runtime-client` keeps its unit tests on the real clock, and the
 reasons are worth recording because the package looks, at a glance, like a
 candidate for the runner preload. [The main
 document](waiting-in-tests.md#the-runtime-client-suite-stays-on-the-real-clock)
@@ -405,7 +405,7 @@ followed by its `...`, which is the line a reader places the hang by.
 send a barrier that must arrive after the event being ruled out, wait for the
 barrier, and pair the conversion with a control that can fail. The
 iframe-sandbox CSP suite
-(`packages/iframe-sandbox/test/iframe-csp.browser.test.ts`) is the worked
+(`base/iframe-sandbox/test/iframe-csp.browser.test.ts`) is the worked
 example of how much checking both requirements take.
 
 The barrier has to be genuinely ordered after the event, which is a claim
@@ -441,7 +441,7 @@ supply.
 
 ## The FUSE exec suite
 
-`packages/cli/integration/fuse-exec.sh` appears in [Where the polling
+`runtime/cli/integration/fuse-exec.sh` appears in [Where the polling
 `waitFor` stays](waiting-in-tests.md#where-the-polling-waitfor-stays) for its
 poll loops: a shell script observing another process through a kernel mount
 has no event channel to convert them to. The three studies below cover the
@@ -620,7 +620,7 @@ daemon and its `/proc` entries are gone.
 
 ### The daemon's `.status` file is a probe, not a signal
 
-The FUSE daemon keeps write statistics (`writeStats` in `packages/fuse/mod.ts`)
+The FUSE daemon keeps write statistics (`writeStats` in `runtime/fuse/mod.ts`)
 and publishes them through the `.status` file at the mount root. A script can
 read that file to see how many descriptors the daemon has opened, written and
 flushed. The counts it reads are the ones the daemon held when it answered, so
@@ -649,7 +649,7 @@ change.
 A macOS mount cannot use those timeouts, because FUSE-T ignores the ones a
 reply carries; it bounds staleness through an NFS attribute-cache mount option
 instead, the `attrcache-timeout` default described in
-`packages/fuse/mount-options.ts`. A `.status` poll on macOS is therefore only
+`runtime/fuse/mount-options.ts`. A `.status` poll on macOS is therefore only
 as sharp as that option allows: a reader that has read the file once holds the
 NFS client's cached copy until it expires, so a count arrives a beat after the
 write that caused it. That the counts advance is settled by the
@@ -677,7 +677,7 @@ a live root, so releasing the demand to wait would let the cascade the built-in
 feeds go dormant before the assertion sees it.
 
 The second is whether anything must drain the scheduler between that wait and
-the read. `Runtime.settled()` in `packages/runner/src/runtime.ts` loops
+the read. `Runtime.settled()` in `runtime/runner/src/runtime.ts` loops
 `scheduler.idleWithPendingCommits()`, `storageManager.synced()`, and a wait on
 every in-flight async built-in, returning from the round in which nothing is
 left to track — so the last thing it awaits is the storage sync. Applying what
@@ -693,7 +693,7 @@ read observes for itself, and observes it earlier.
 Two waits elsewhere look like precedent for one here and are narrower than
 their shape. The runner's initial settle drains after its sync because
 `replica.poll()` fires without await during `mount()`, and a pattern mounts
-once. The serving loop in `packages/runner/src/executor/space-server.ts` yields
+once. The serving loop in `runtime/runner/src/executor/space-server.ts` yields
 a macrotask because it then probes `scheduler.isIdle()`, which is synchronous
 and cannot wait, where `runtime.idle()` waits and `Scheduler.queueExecution`
 marks the scheduler scheduled when it arms its task rather than when the task
@@ -718,7 +718,7 @@ out.
 ### Production reconnect backoff
 
 One loop that looks like a violation is a deliberate exception:
-`MemoryClient.#reconnect()` in `packages/memory/v2/client.ts`. When the
+`MemoryClient.#reconnect()` in `runtime/memory/v2/client.ts`. When the
 websocket to the memory server drops, the client loops — it re-runs the
 `hello` handshake, re-opens every mounted space's session, and, when an
 attempt fails, waits a short, growing delay before trying again. That
@@ -726,7 +726,7 @@ inter-attempt delay is the exception.
 
 The connection attempt itself is event-driven. `hello()` calls
 `transport.send()`, which opens the websocket. The websocket transport
-(`WebSocketTransport` in `packages/runner/src/storage/v2-remote-session.ts`)
+(`WebSocketTransport` in `runtime/runner/src/storage/v2-remote-session.ts`)
 resolves the open on the real `open` event and rejects it on the real `error`
 or `close` event. The client never polls to discover whether a connection
 attempt has succeeded; it awaits the transport event. On the success path

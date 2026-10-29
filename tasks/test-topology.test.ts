@@ -210,7 +210,7 @@ describe("the test topology", () => {
     // and taking the first shared unit would make this fail for the
     // wrong reason the day a whole-file skip changes the order.
     const shared = defaults.units.filter((unit) =>
-      opposite.units.includes(unit) && unit.startsWith("packages/runner/")
+      opposite.units.includes(unit) && unit.startsWith("runtime/runner/")
     );
     expect(shared.length > 0).toBe(true);
     // They are distinct execution surfaces, so the same file being a unit
@@ -244,7 +244,13 @@ describe("the test topology", () => {
       { test: { k: "format", s: "repo", n: "deno-fmt" } },
       { test: { k: "gate", s: "repo", n: "check-deno-pins" } },
       { test: { k: "gate", s: "repo", n: "check-test-aliases" } },
-      { test: { k: "gate", s: "repo", n: "pattern-compat annotation.tsx" } },
+      {
+        test: {
+          k: "gate",
+          s: "repo",
+          n: "pattern-compat apps/annotation/annotation.tsx",
+        },
+      },
       // The vintage gate's wrapper record. Its per-fixture records are
       // named after fixtures in the tree, which `test-topology/gates.test.ts`
       // checks against the tree itself.
@@ -253,7 +259,7 @@ describe("the test topology", () => {
         test: {
           k: "typecheck",
           s: "repo",
-          n: "cfcheck packages/patterns/annotation.tsx",
+          n: "cfcheck patterns/apps/annotation/annotation.tsx",
         },
       },
       { test: { k: "typecheck", s: "memory", n: "deno-check" } },
@@ -425,7 +431,7 @@ describe("what the command-line dispatch table becomes", () => {
   /** Every step the dispatch script begins itself. */
   async function recordedSteps(): Promise<string[]> {
     const script = await Deno.readTextFile(
-      new URL("../packages/cli/integration/integration.sh", import.meta.url),
+      new URL("../runtime/cli/integration/integration.sh", import.meta.url),
     );
     return [
       ...new Set(

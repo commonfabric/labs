@@ -232,11 +232,11 @@ describe("check-test-shuffle", () => {
     // it and see only that thing reported.
     const TRACKED = [
       "tasks/run-test-batches.ts",
-      "packages/deno-web-test/runner.ts",
-      "packages/cli/lib/test-runner.ts",
-      "packages/cli/integration/integration.sh",
-      "packages/cli/integration/acl.sh",
-      "packages/cli/integration/fuse-exec.sh",
+      "runtime/deno-web-test/runner.ts",
+      "runtime/cli/lib/test-runner.ts",
+      "runtime/cli/integration/integration.sh",
+      "runtime/cli/integration/acl.sh",
+      "runtime/cli/integration/fuse-exec.sh",
     ];
     const WRITTEN = [
       "run-test-batches.ts deno-web-test/cli.ts cf test",
@@ -257,29 +257,29 @@ describe("check-test-shuffle", () => {
 
     it("names a runner whose implementation has moved", () => {
       const stale = staleRecords(
-        TRACKED.filter((file) => file !== "packages/deno-web-test/runner.ts"),
+        TRACKED.filter((file) => file !== "runtime/deno-web-test/runner.ts"),
         WRITTEN,
       );
       expect(stale).toHaveLength(1);
-      expect(stale[0]!.command).toBe("packages/deno-web-test/runner.ts");
+      expect(stale[0]!.command).toBe("runtime/deno-web-test/runner.ts");
     });
 
     it("names an exemption for a harness the tree no longer holds", () => {
       const stale = staleRecords(
-        TRACKED.filter((file) => file !== "packages/cli/integration/acl.sh"),
+        TRACKED.filter((file) => file !== "runtime/cli/integration/acl.sh"),
         WRITTEN,
       );
       expect(stale).toHaveLength(1);
-      expect(stale[0]!.command).toBe("packages/cli/integration/acl.sh");
+      expect(stale[0]!.command).toBe("runtime/cli/integration/acl.sh");
     });
 
     it("names an exemption a second harness of the same name would take", () => {
       const stale = staleRecords(
-        [...TRACKED, "packages/oven/integration/acl.sh"],
+        [...TRACKED, "runtime/oven/integration/acl.sh"],
         WRITTEN,
       );
       expect(stale).toHaveLength(1);
-      expect(stale[0]!.problem).toContain("packages/oven/integration/acl.sh");
+      expect(stale[0]!.problem).toContain("runtime/oven/integration/acl.sh");
     });
   });
 

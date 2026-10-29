@@ -18,10 +18,10 @@ interpretation, or the transformer stages that decide *when* to generate.
 
 Authoritative implementation sources:
 
-- `packages/schema-generator/src/**`
-- `packages/schema-generator/test/**` (fixtures under `test/fixtures/schema/`)
-- the wrapper/extension vocabulary in `packages/api/index.ts` and
-  `packages/api/cfc.ts`
+- `base/schema-generator/src/**`
+- `base/schema-generator/test/**` (fixtures under `test/fixtures/schema/`)
+- the wrapper/extension vocabulary in `base/api/index.ts` and
+  `base/api/cfc.ts`
 
 If this document conflicts with code or passing tests, code/tests win.
 
@@ -37,7 +37,7 @@ Consumers, as of this writing (verified by import grep): the only external
 consumer package is `@commonfabric/ts-transformers`, along two axes:
 
 1. **Schema generation proper** — `SchemaGeneratorTransformer`
-   (`packages/ts-transformers/src/transformers/schema-generator.ts`)
+   (`base/ts-transformers/src/transformers/schema-generator.ts`)
    constructs a `SchemaGenerator` and feeds it the pipeline's bare cross-stage
    maps `typeRegistry` / `schemaHints`
    (`ts-transformers/src/core/cross-stage-state.ts`; its header notes
@@ -121,7 +121,11 @@ detection first; then the default library's generic aliases — `Readonly`,
 `ReadonlyArray`, `Record` — applied structurally to their arguments when the
 name binds through the node or, for an unbindable synthetic reference,
 resolves lexically (`checker.resolveName`) to a library declaration, so an
-authored or imported shadow of the name keeps the general path; then an
+authored or imported shadow of the name keeps the general path, with `Pick`
+and `Omit` over a type literal written in place, where the literal is read by
+its syntax, reading only the members they keep, and `Pick` none of its index
+signatures where every key it names is a member's, so that a member they
+drop, and a recursion through it, is not read; then an
 alias whose whole body is one of its own type parameters
 (`type Reactive<T> = T`), read as the argument the reference supplies for that
 parameter, since the reference denotes exactly that argument — except a scope
@@ -129,7 +133,57 @@ wrapper, whose scope `CommonFabricFormatter` reads from the reference's name;
 then the general path, which resolves the name the same way — bound through
 the node, else lexically from the module's scope, an import followed to what
 it imports — and formats the declared type, so a name the module declares,
-exported or not, or imports is read. A plain generic declaration is read under
+exported or not, or imports is read. A name whose declared type is `any`
+because its declaration wraps a CFC alias, a scope wrapper, or a `Default`
+around `any` (`writesWrapperErasedByAny()`; `Projection`, read by the type the
+checker resolves it to, counts as none) is read as its declaration writes
+it instead, under the reference's arguments: the checker reads `any` beside
+anything as `any`, so `type Secret = Confidential<any, C>` and
+`type SecretOf<C> = Confidential<any, C>` are `any` to it, and only the
+declaration holds the wrapper. Read that way, `{ a: Secret }` gives `a`
+`{ ifc: { confidentiality: C } }`, as `Confidential<any, C>` written in place
+does, and `type U = PerUser<any>` gives `{ scope: "user" }`. A name declared
+as `any` with no such wrapper reads as `any`. An alias read this way that
+refers to itself inside its declaration is `any` to the checker there too,
+and the labels it wraps would be lost at that depth, so the reading is the
+`cfc-schema:recursive-alias-of-any` error, which advises writing `unknown`,
+which the checker keeps a wrapper around. A recursion is a reference read
+again inside its own reading with arguments that denote the same written
+nodes, each type parameter an argument names followed to the node bound to it
+(`#writtenArguments()`), as `Tree` is in `type Tree = { next: Tree } |
+Secret`, or a reference whose argument is met again inside what it denotes,
+which grows at each level, as `T[]` does in
+`type Nest<T> = { inner: Nest<T[]> } | Secret`, through a generic interface
+as well: neither reading has an end. A reference read again with arguments
+that denote other nodes nests only as deep as those arguments, and keeps the
+label at each level: `Box<Box<string>>`, and `Wrap<Wrap<string>>` where
+`type Wrap<T> = Box<T>`, whose one reference to `Box` is read at each level.
+A recursion through a named definition is not one either: the definition's
+`$ref` ends it, and the alias is read afresh inside the definition. The same
+wrapper written as a record's value or a tuple's element is lost to a reading
+by type, which holds `any` there and keeps no declaration naming it:
+`Record<string, Confidential<any, C>>` is a record of `any` to the checker,
+and `[Secret]` a tuple of `any`. So a reference to one of the default
+library's aliases above, or a tuple, with a part the checker reads as `any`
+that writes such a wrapper (`#holdsWrapperErasedByAny()`) is read by its
+syntax, from the type path as well: `{ a: Record<string, Secret> }` gives `a`
+`{ type: "object", properties: {}, additionalProperties: { ifc: … } }`,
+through `Readonly` and `Partial` too, and a tuple's items keep the wrapper. A
+record's keys are read as the checker reads them, so `Record<Keys, Secret>`
+for a named `type Keys = "x" | "y"`, and `Record<keyof Obj, Secret>`, keep the
+wrapper on each key as literal keys written in place do. A tuple or one of
+these aliases written in place is read so wherever it is; one an alias
+declares, `type Dict = Record<string, Secret>` or `type Pair = [Secret]`, is
+read so inside the alias's definition, whose `$ref` ends a recursion through
+it, as in `type List = [Secret, List?]`, and a reference to such an alias
+holds what it declares, so `Readonly<Pair>` is read so too. `Readonly`,
+`Partial`, `Required`, `Pick`, and `Omit` over an operand the checker reads
+as `any` map `any`'s keys, as the checker does, with the operand's labels on
+the whole: `Partial<Secret>` is
+`{ type: "object", properties: {}, additionalProperties: true, ifc: … }`, and
+`Pick<Secret, "x">` the object of a required `x` that accepts any value.
+Where the alias's rules do not apply, as to `Omit` with keys no literal names,
+the reference is read by its type. A plain generic declaration is read under
 bindings for every required parameter, taken from the reference's written
 arguments or preceding-parameter defaults (§4.1). A member the bindings cannot
 read, such as an indexed access with no checker-created instantiation, remains
@@ -157,32 +211,83 @@ policies, so compilation must refuse the schema.
 
 An intersection node is settled the way the checker settles the type, each
 constituent read through its reference, and what remains is merged as
-`IntersectionFormatter` merges: identical constituents fold; `never` leaves
-`false`; `any` makes the whole accept anything unless the constituents beside
+`IntersectionFormatter` merges: identical constituents fold; a constituent
+accepting nothing (`never`) is what the whole accepts, with the labels it
+states; `any` makes the whole accept anything unless the constituents beside
 it that are no union already contradict each other, which is as far as the
-checker looks before `any` wins; otherwise a union constituent distributes
-and every combination of arms is settled on its own; `unknown` is the
-identity; an empty object part drops out and takes `null` and `undefined`
-with it, as `T & {}` does; primitives are narrowed or found disjoint wherever
-they sit, `"a" & string` being `"a"` and `string & number` nothing; `null` or
-`undefined` beside an object leaves nothing; and a constituent that merge
-refuses — a non-object, or one with an index signature, which an array is —
-yields the same unsupported-pattern fallback the type path emits. Where a
+checker looks before `any` wins, and the whole then keeps what the type path
+keeps of a property the checker gives `any` (§9) — a whole intersection
+keeps it on this path alone, as the checker hands the type path `any`
+itself, which holds nothing of the constituents beside it; a constituent
+whose value, with its labels and whole-value keywords set aside, is `{}` or
+`{ not: true }` is read as `any` or `never`; otherwise a union constituent
+distributes and every combination of arms is settled on its own; `unknown`
+is the identity; an empty object part drops out and takes `null` and
+`undefined` with it, as `T & {}` does; primitives are narrowed or found
+disjoint wherever they sit, `"a" & string` being `"a"` and `string & number`
+nothing; `null` or `undefined` beside an object or a cell leaves nothing; a
+cell among the constituents is the value, the first cell's, with the cap any
+of them puts on its handle, as the checker reads a value of intersected
+cells, so `Cell<unknown> & { y: number }` is that cell; arrays merge into an
+array of the intersection of their items; an index signature merges with the
+members, its values the `additionalProperties` of the merged object, the
+intersection of every part's, while a member keeps what its own declarations
+give it, as the checker reads a member of an intersection; and a constituent
+that merge refuses — a non-object, an array beside an object, an index
+signature on numeric keys alone beside one on every key, or one whose keys
+nothing records beside another — yields the same unsupported-pattern fallback
+the type path emits. Which keys an index signature applies to is recorded
+where the generator writes it (`GenerationContext.indexKeys`), since a
+number-keyed map's schema reads as a string-keyed one's, and a copy carries
+the record, a scoped or labeled one included; equal schemas recorded with
+different keys stay apart when constituents fold. A signature with no record
+is read as holding data under any key and establishing it under none another
+part shares. Object parts merge
+into one object, and a property several of them declare is settled the same
+way from the schemas its declarations give it, documented as the type path
+documents it (§9) and refused where its declarations are in different
+scopes. The keywords JSDoc writes are set aside while those schemas are
+settled, and an optional declaration admits `undefined` beside one that
+requires the property. What a constituent states besides which values it
+holds is set aside while the values are settled and stated of what they
+settle to, as the type path reads it from the checker's type: its scope and
+its default belong to the whole value, so two scopes refuse the
+intersection, as a scope wrapper nested in another with no cell between
+them, and defaults that differ leave none; its labels are placed as the type
+path places a CFC carrier's (§11): a restriction goes on the members of the
+result it declares, or on the whole result where it declares all of them or
+none, and evidence (`integrity`, `addIntegrity`) goes on the whole result
+only where the labeled constituent holds all of its data, every member any
+constituent declares, its items where one is an array, and the values under
+keys no member names where one has an index signature, and otherwise on the
+members it declares, as data another constituent holds may be data the
+labeled one never established; a union's restrictions go on the members any
+of its arms declares, and its evidence on the members of the arm the value
+is. A keyword written beside a reference is read in place of the
+definition's, through a chain of references, except its labels, which join
+the definition's. A merge met again inside itself, as the members of two
+recursive definitions meet, is written where it starts and as a definition
+named as the type path names a recursive type (`AnonymousType_N`), and each
+meeting inside it is a reference to that definition; merges are told apart
+by their schemas together with the origins recorded in them (below), so
+equal schemas that came from different types are different merges. Where a
 schema alone no longer says what its type was, the generation context
 records where it came from (`schemaOrigins`): `void` lowers to the opaque
 marker `OpaqueCell<any>` also lowers to, and reduces as `undefined` does
 beside another primitive (`undefined & void` is `undefined`, `string & void`
-nothing) while the wrapper, having no primitive domain, is refused by a
-merge as a non-object constituent; an unsupported-pattern fallback keeps the
-constituents behind it, so a nested or named intersection is reopened when
-an enclosing one reduces it (`(string & Brand) & number` is nothing); and a
-union whose arms fold to one schema — `void | OpaqueCell<any>`, or two
-branded primitives with the same fallback — keeps every arm, so an
-intersection reading the survivor still distributes over them (an arm
-accepting nothing is no arm, and is neither counted nor kept). Schemas with
-recorded union or intersection constituents are deduplicated by identity:
-equal fallback schemas can hide disjoint source types, so separate folded
-unions remain separate constraints in an enclosing intersection.
+nothing), while the wrapper is a cell, the value beside any other part; an
+unsupported-pattern fallback keeps the constituents behind it, so a nested
+or named intersection is reopened when an enclosing one reduces it
+(`(string & Brand) & number` is nothing); and a union whose arms fold to one
+schema — `void | OpaqueCell<any>`, two branded primitives with the same
+fallback, or `Record<string, T> | Record<number, T>` — keeps every arm, a
+labeled or scoped copy of it included and wherever it sits among the arms of
+another union, so an intersection reading the survivor still distributes over
+them, and the labels the survivor states are that union's (an arm accepting
+nothing is no arm, and is neither counted nor kept).
+Schemas with recorded union or intersection constituents are deduplicated by
+identity: equal fallback schemas can hide disjoint source types, so separate
+folded unions remain separate constraints in an enclosing intersection.
 
 `readonly` marks mutability and contributes no JSON Schema keyword. A
 synthetic `readonly T[]` therefore has the same schema as its wrapped `T[]`.
@@ -201,7 +306,9 @@ other consumers read is untouched. A member a homomorphic mapped type such as
 `Pick`, `Omit`, `Partial` or `Readonly` makes keeps the declaration of the
 member it maps, and is read as that declaration reads it where the mapping
 leaves its value as declared: a named member type stays a `$ref`, and the
-`undefined` an optional member's `?` adds stays out of it.
+`undefined` an optional member's `?` adds stays out of it. A property several
+members of an intersection or a union declare has no one declaration to read
+it as, and is read as its type, the `undefined` its `?` adds left out.
 `Partial<Foo>` and `Required<Foo>` map
 over each arm's own keys and so distribute over a union, arm by arm; on an
 array they map the elements, which count as optional: `Partial` admits
@@ -304,8 +411,8 @@ by any repo test.
 | `Record<K,V>` with finite literal-union `K` | expands to concrete `properties`, in the order `K` is written (a mapped type's properties follow its written key union, numeric keys by the property names they make, `-1` and `1.0` naming `"-1"` and `"1"`, else their declarations; JavaScript lists integer-like keys of `properties` in ascending order whatever order they are added in, so for those the order shows in `required`: `Omit<T, K>` lists `T`'s in `T`'s order; §8 says why the checker's order is not used) | via `ObjectFormatter`; `propertiesInSourceOrder()` in `source-order.ts`; fixture `record-union-keys` | record-mapped-types.test.ts; schema-order.test.ts |
 | Functions / callables / constructables | property skipped entirely (not in `properties`, not in `required`) — **except** callable properties whose call signature returns `Stream`/`Cell`/`SqliteDb` (ModuleFactory/HandlerFactory shapes): kept as `{ asCell: ["stream"/"cell"/"sqlite"] }`, they participate in `required`, and they carry the property's JSDoc description. Stream-valued properties also carry the `deprecated` annotation. Generic members, including nested type literals, union/intersection arms and array elements, use their instantiated type or bound argument to classify callability | classification: `object-formatter.ts`; member paths: `object-formatter.ts`, `schema-generator.ts` (only those three kinds; capability cells like `ReadonlyCell` returns are *not* kept) | pattern-with-types fixtures; object-formatter.test.ts |
 | `FabricPrimitive` class (`FabricBytes`, `FabricDurationDay`, `FabricDurationNsec`, `FabricEpochDay`, `FabricEpochNsec`, `FabricHash`, `FabricKeyPair`, `FabricRegExp`, `FabricUnavailable` carrying the `FabricPrimitive` brand) | `{ type: "<Name>" }` — the fabric-primitive schema vocabulary (§5.2); a leaf, not hoisted, matched by prototype at validation time | `native-type-formatter.ts` | fixture `fabric-special-object-brand`; end-to-end: ts-transformers `schema-transform/fabric-special-object-brand` |
-| `FabricInstancePlus` nominal brand (`FABRIC_INSTANCE_PLUS_BRAND` in `packages/data-model/src/api.ts`, an interned `unique symbol`), which `FabricInstance` declares at `never` | property skipped entirely (not in `properties`, not in `required`) — a symbol-keyed member, which the generator skips as it skips every symbol-keyed member; a field typed as `FabricInstance` emits `{ type: "object", properties: {} }` | `shouldSkipInternalProperty`, `object-formatter.ts` | fixture `fabric-special-object-brand` |
-| `FabricPrimitive` nominal brand (`FABRIC_PRIMITIVE_BRAND` in `packages/data-model/src/api.ts`, an interned `unique symbol`) on a type outside the fabric-primitive vocabulary | property skipped entirely (not in `properties`, not in `required`) — a symbol-keyed member, which the generator skips as it skips every symbol-keyed member; a field typed as the `FabricPrimitive` base still emits `{ type: "object", properties: {} }` | `shouldSkipInternalProperty`, `object-formatter.ts` | fixture `fabric-special-object-brand` |
+| `FabricInstancePlus` nominal brand (`FABRIC_INSTANCE_PLUS_BRAND` in `base/data-model/src/api.ts`, an interned `unique symbol`), which `FabricInstance` declares at `never` | property skipped entirely (not in `properties`, not in `required`) — a symbol-keyed member, which the generator skips as it skips every symbol-keyed member; a field typed as `FabricInstance` emits `{ type: "object", properties: {} }` | `shouldSkipInternalProperty`, `object-formatter.ts` | fixture `fabric-special-object-brand` |
+| `FabricPrimitive` nominal brand (`FABRIC_PRIMITIVE_BRAND` in `base/data-model/src/api.ts`, an interned `unique symbol`) on a type outside the fabric-primitive vocabulary | property skipped entirely (not in `properties`, not in `required`) — a symbol-keyed member, which the generator skips as it skips every symbol-keyed member; a field typed as the `FabricPrimitive` base still emits `{ type: "object", properties: {} }` | `shouldSkipInternalProperty`, `object-formatter.ts` | fixture `fabric-special-object-brand` |
 | TS `enum` declaration | hoisted under the enum name with **no `type` key** (all-literal union path, §8): numeric → `$defs: { Color: { enum: [0,1,2] } }` + `$ref`; string → `$defs: { Mode: { enum: ["on","off"] } }` | union path `union-formatter.ts`; hoisting §5 | `test/enum-schema-rows.test.ts` |
 | Single enum member type (`Mode.On`) | inline literal schema, e.g. `{ type: "string", enum: ["on"] }`; enum-member symbols are excluded from named-type hoisting so same-named members and unrelated named types cannot collide in `$defs` | `getNamedTypeKey`, `type-utils.ts`; pinned by `test/enum-member-hoisting.test.ts` | — |
 | `SqliteDatabase` (the `SqliteDb` handle's value, carrying the `SQLITE_DB_BRAND` unique symbol) | the handle descriptor `{ id, tables, rev }` with `additionalProperties: true` (§5.2), hoisted under `SqliteDatabase`; the brand's own members describe nothing, so a structural schema would shape a handle read down to `{}` | `native-type-formatter.ts` | `test/schema/cell-type.test.ts`; end-to-end: ts-transformers `handler-schema/sqlite-db-handler-state`, `schema-injection/scoped-sqlite-factory` |
@@ -346,13 +453,14 @@ schema carries CFC labels at its root, such as an optional
 stay on the property, because the runtime's policy merge refuses labels on one
 `anyOf` branch whose siblings it cannot prove type-disjoint, and a labeled
 `$ref` cannot be (`assertNoDivergentIfcBranches`,
-`packages/runner/src/cfc/schema-merge.ts`). The property remains outside
+`runtime/runner/src/cfc/schema-merge.ts`). The property remains outside
 `required`. Explicit `T | undefined` and optional tuple elements also retain
 `undefined`.
 
-Library key arguments also read their bindings: `Pick<T, K>` and `Omit<T, K>`
-accept a `K` bound to a literal key union, and `Record<K, T>` accepts a bound
-string or number index type. This keeps intersection aliases such as
+Library key arguments are read as the checker reads them, bindings included:
+`Pick<T, K>` and `Omit<T, K>` accept a `K` that is a literal key union, named
+or bound, or `keyof` an object type, and `Record<K, T>` accepts the same keys
+or a bound string or number index type. This keeps intersection aliases such as
 `Omit<T, K> & Partial<Pick<T, K>>` readable without losing their enclosing
 shape. Concrete template-literal types remain readable beside generic members;
 an unrelated binding does not make such a type deferred.
@@ -500,8 +608,8 @@ A field authored against a `FabricPrimitive` class ITSELF (`blob: FabricBytes`)
 emits that class's schema-vocabulary name, a leaf with no `properties`, no
 `required`, and no `$defs` hoisting. Validation is by prototype: a value
 matches the name it reports as `.schemaType`, which each class under
-`packages/data-model/src/fabric-primitives/` supplies. The dialect side is
-specified in `docs/specs/json_schema.md`.
+`base/data-model/src/fabric-primitives/` supplies. The dialect
+side is specified in `docs/specs/json_schema.md`.
 
 `NativeTypeFormatter` also claims one type that is not in the name table: the
 `SqliteDb` handle's readable value, recognized by the `SQLITE_DB_BRAND` unique
@@ -681,7 +789,7 @@ Nesting prepends: `Stream<Cell<number>>` → `{ type: "number", asCell:
 opaque). Boolean inner schemas: `true` → `{ asCell: [brand] }`; `false` →
 `{ asCell: [brand], not: true }`.
 
-Entry shapes (`packages/api/index.ts`): `AsCellEntry = CellKind |
+Entry shapes (`base/api/index.ts`): `AsCellEntry = CellKind |
 { kind: CellKind; scope?: SchemaScope }`, `CellKind` being the seven brand
 strings. The object form is produced only by scope wrapping
 (§10). `Cell<Cell<T>>` → `asCell: ["cell","cell"]` is representable per the
@@ -693,7 +801,7 @@ cell-in-cell nesting as of this writing; the pinned nested pair is
 them only in two stale comments; the api `JSONSchemaObj` has no such members.
 The single-array cleanup landed in #3732 (2026-05-29, verified in git), also
 the README's last commit. Legacy *readers* of `asStream` survive in
-`packages/runner/src/` (`schema.ts`, `traverse.ts`, `link-utils.ts`, …) for
+`runtime/runner/src/` (`schema.ts`, `traverse.ts`, `link-utils.ts`, …) for
 pre-cleanup schemas.
 
 ### 6.3 Node/type interplay
@@ -752,7 +860,7 @@ pre-cleanup schemas.
 
 `Reactive<T>` emits **no wrapper marker of any kind**. Evidence chain:
 
-1. `Reactive<T> = T` is an identity alias (`packages/api/index.ts`) — no
+1. `Reactive<T> = T` is an identity alias (`base/api/index.ts`) — no
    runtime wrapper, no structural brand, so structural detection cannot see it
    (explicit comment, `common-fabric-formatter.ts`).
 2. Node-level detection deliberately excludes the spelling:
@@ -1042,14 +1150,125 @@ Default paths of §7:
   metadata carriers, whose labels §11 reads, are filtered before validation;
   a single survivor delegates directly, and where none survives the full set
   is merged.
-- Unsupported shapes — non-object constituent, constituent with an index
-  signature, or a checker error — produce a **permissive fallback, not a
-  throw**: `{ type: "object", additionalProperties: true, $comment:
-  "Unsupported intersection pattern: <reason>" }`.
-- Property merge is **first-wins** (no schema merging); conflicting property
-  descriptions keep the first + `$comment` + logger warning;
-  `required` is unioned; `$ref` constituents resolve
-  through `context.definitions`.
+- An intersection of parts the generator gives an array's schema, arrays, tuples
+  and `ArrayLike<T>` among them, is an array of the values every one of them
+  holds: its `items` are the schema of the intersection's number index, the
+  intersection of the element types, so `unknown[] & readonly string[]` is
+  `string[]`'s schema. Its constituents' JSDoc documents it as it documents a
+  merged object (below). Tested: intersection-formatter.test.ts.
+- An index signature merges with the members, as one object type declaring
+  all of the constituents' members and index signatures would: the keys no
+  member names hold the intersection's index type, its string one or else its
+  number one, which the checker gives as the intersection of the
+  constituents' (`additionalProperties`), and a member keeps the type its own
+  declarations give it, as the checker reads `T["x"]` of an intersection. A
+  number-keyed object is a map, so `{ name: string } & Record<number, string>`
+  gives `name` beside `additionalProperties: { type: "string" }`.
+  `{ x: unknown; y: string } & Record<string, string>` gives
+  `{ properties: { x: { type: "unknown" }, y: { type: "string" } },
+  additionalProperties: { type: "string" } }`, and labels follow the members
+  and index values they are written on (§11). Tested:
+  intersection-formatter.test.ts, intersection-provenance.test.ts.
+- An intersection the checker reduces to nothing, as it reduces one whose
+  parts give a discriminant property different literal types
+  (`{ k: "x" } & { k: "y" }`), is `false`, though the checker may hand it
+  over unreduced as an arm of a union.
+- Unsupported shapes — a non-object constituent; an array, a tuple,
+  `ArrayLike<T>` or a typed array beside an object, which the generator gives
+  an array's schema whose items no member can hold; and an index signature on
+  numeric keys alone beside one on every key, as in
+  `Record<string, unknown> & Record<number, string>`, which no one
+  `additionalProperties` can state — produce a **permissive fallback, not a
+  throw**: `{ type: "object", additionalProperties: true,
+  $comment: "Unsupported intersection pattern: <reason>" }`. The fallback
+  may hold a constituent's data anywhere, so it keeps the labels of its
+  constituents as a property the checker gives `any` keeps them (§9,
+  `labelsBesideAnyValue()`): every restriction a constituent states anywhere
+  in its value, a member's or an array's items' included, goes on the whole
+  fallback, and its evidence goes nowhere. `{ x: Confidential<string, C> } &
+  string[]` gives the fallback `ifc: { confidentiality: C }`. A scope a
+  member states is not lifted. A fallback that meets a definition still
+  being generated, as one inside a recursive interface does, is checked once
+  generation is done, at each position emitting it, and refused where one
+  holds fewer restrictions than that definition states ("An intersection
+  whose constituents cannot be merged keeps the labels of its constituents,
+  but it meets `Node` inside the definition of `Node` …"). A position holds
+  the restrictions stated there: those a wrapper places on the fallback, and
+  where an alias names it, those beside the reference as well as the
+  alias's own. So `child?: Confidential<Node & string[], C>` inside `Node` is
+  read where `Node` states `C`, and so is `child?: Confidential<Child, C>`
+  for `type Child = Node & string[]`, but not beside `other?: Child`: the
+  label beside one reference does not reach another. A fallback emitted
+  nowhere is held to the labels it kept.
+- A property several constituents declare takes the schema of its type in
+  the intersection, which the checker gives as the intersection of the
+  declared types: `{ a: unknown } & { a: string }` and
+  `{ a: string | number } & { a: string }`, in either order, give `a` the
+  schema of `string`, `{ a: string } & { a: number }` gives it `false`, and
+  `{ a: unknown[] } & { a: string[] }` gives it `string[]`'s. Where one
+  declaration's type is that very type, the property takes that
+  declaration's schema, read through the node it is written with. Any other
+  type is formatted as the property's, so what the checker keeps of every
+  declaration is read from the type, whichever declaration wrote it: a scope
+  wrapper's brand, as in `{ a: X } & { a: PerUser<X> }`, scoped to the user
+  in either order (§10); a CFC carrier, whose labels go on the members of
+  the payload it was written around (§11); and a `Default` brand.
+  `{ a: { x: string } } & { a: { y: number } }` merges the two objects, and a
+  callable keeps its wrapper marker.
+- A writer is the one label a type cannot carry: only a `typeof` node names it
+  (§11). A property whose value holds a writer policy, on itself or on its
+  members, index values or elements, a cell's link to its own document aside, is
+  settled from the schemas its declarations give it, each read through the node
+  it is written with, as the node-based path settles one (§2). Read from the
+  type alone, the writer would go unread, and with it every label beside it,
+  since a value's carriers are read in full or not at all. So
+  `{ a: WriteAuthorizedBy<{ x: string }, typeof save> } &
+  { a: { x: string; y: number } }`, in either order, gives `a` the members
+  `x` and `y` with the writer on `x`, as a restriction goes on the members its
+  declaration names, and labels written beside the writer go there with it.
+- A property whose declarations are in different scopes, a cell's cap
+  counting as its scope, is refused, as one value is stored in one scope:
+  `{ a: PerUser<X> } & { a: PerSpace<X> }` throws "The property `a` is
+  declared in scope `user` by one member of an intersection and in scope
+  `space` by another. A value is stored in one scope, so declare `a` in the
+  same scope wherever it is declared." Where the schema declares no scope, as
+  an inferred lift result's does (§10), the declarations' scopes are not
+  read, and a value two scope wrappers brand is read as its payload.
+- Where the checker gives the property `any`, which holds nothing of the
+  declarations beside the one that declares `any`, the property accepts any
+  value and keeps what would otherwise fail open. It keeps the scope a
+  declaration states, read from its type's brand or, where its type is `any`,
+  from its schema, a cell's cap counting as its scope. It keeps every
+  restriction a declaration states anywhere in its value, through its
+  references, on the whole value, which may hold that declaration's data
+  anywhere: every `ifc` key but the evidence keys `integrity` and
+  `addIntegrity`. Evidence goes only where the declaration's payload must be
+  (§11), so it is kept of a declaration that declares `any` itself, whose
+  payload is the whole value, and of no other, as `any` does not make the
+  value that declaration's payload.
+  `{ a: Confidential<{ x: string }, L> } & { a: any }` gives `a`
+  `{ ifc: { confidentiality: L } }`, `{ a: PerUser<string> } & { a: any }`
+  gives it `{ scope: "user" }`, `{ a: Integrity<string, I> } & { a: any }`
+  gives it `true`, and `{ a: Integrity<any, I> } & { a: string }` gives it
+  `{ ifc: { integrity: I } }`. A declaration accepting nothing (`never`)
+  leaves the property that declaration's schema, labels included. The default
+  the declarations agree on is kept as well. Where `any` meets a reference to
+  a definition still being generated, as a recursive type's own member does,
+  that definition's labels cannot be read there; once generation is done, a
+  value that kept fewer of them than the definition states is refused ("A
+  value intersected with `any` keeps the labels of what it is intersected
+  with, but it meets `Node` inside the definition of `Node`, where those
+  labels cannot be read yet."), and a declaration of `any` stating them is
+  kept.
+- The property's description and its deprecation mark are the first
+  declaration's where it has them, and otherwise those of the schema it
+  takes. A later declaration's differing description is noted
+  in a `$comment` ("Conflicting docs across intersection constituents; using
+  first") and a logger warning. `required` is unioned, as a property any
+  constituent requires is required; `$ref` constituents resolve through
+  `context.definitions`. Tested: intersection-formatter.test.ts,
+  intersection-provenance.test.ts, the descriptions-intersection-conflict
+  fixture.
 - Constituent-level JSDoc joins with `\n\n` plus provenance `$comment`s ("Docs
   inherited from intersection constituents." / "Sources: …" / "Missing docs
   for: …") (descriptions-intersection-* fixtures ×7).
@@ -1059,7 +1278,7 @@ Default paths of §7:
 `PerSpace` / `PerUser` / `PerSession` / `PerAny` (api: `Scoped<T, S>`, `T`
 intersected with an optional `SCOPE_BRAND`-typed member for each of its members
 other than `null` and `undefined`, which it holds as they are,
-`packages/api/index.ts`) lower to a `scope` key with values
+`base/api/index.ts`) lower to a `scope` key with values
 `"space" | "user" | "session" | "any"` (`SCOPE_WRAPPER_SCOPES`,
 `common-fabric-formatter.ts`). The type keeps the alias it is reached by,
 `PerUser<…>` or an author's own, as `Box<T>` in `type Box<T> = PerUser<…>`, so
@@ -1168,7 +1387,7 @@ optional property, which keeps the cell alone (`handle?: PerSpace<Cell<T>>` →
 written, so `handle?: PerSpace<Cell<T>> | undefined` throws as well, including
 where the type it is read at has lost that `undefined`, as `Required` takes it
 out. Tested end to end in the runtime:
-`packages/runner/test/ascell-scope-cap.test.ts`. A nested scope **without an intervening
+`runtime/runner/test/ascell-scope-cap.test.ts`. A nested scope **without an intervening
 cell boundary throws** (`Nested scope wrappers require a cell boundary between
 scopes.`; tested, scope-wrappers.test.ts), and so does a type carrying two
 scopes' brands on one value, as an inferred `PerUser<PerSession<T>>` resolves
@@ -1255,7 +1474,7 @@ lift's result at the narrowest scope its callback reads.
 ## 11. CFC Alias Lowering (`ifc` Metadata)
 
 The canonical authoring surface contains 18 names. The inventory is
-`CFC_CANONICAL_ALIAS_NAMES` (`packages/api/cfc.ts`), consumed by
+`CFC_CANONICAL_ALIAS_NAMES` (`base/api/cfc.ts`), consumed by
 `CommonFabricFormatter`. Sixteen aliases lower the wrapped value and attach an
 `ifc` payload; `AnyOf` and `PolicyOf` are label-expression markers interpreted
 inside those payloads.
@@ -1326,10 +1545,18 @@ Mechanics:
   generic alias keeps its argument (`Integrity<Sec<string>, I>` is a string), a
   nested `WriteAuthorizedBy` keeps its `typeof` binding, and a nested label
   keeps its `AnyOf` clauses. A named type in the payload stays a `$ref` to its
-  definition.
+  definition. A canonical alias the checker reads as `any`, as it reads
+  `Integrity<Confidential<any, C>, I>`, is read from its declared type, whose
+  payload is the alias's own parameter, bound to nothing; the payload is then
+  read as the argument written for it, so that alias keeps both labels, and
+  `Confidential<Default<any, 5>, C>` keeps its default. That declared type is
+  one type for every reference read from it, so its reading is that type
+  together with the reference: another reference to the alias inside it is no
+  cycle, and `Confidential<Confidential<any, A>, B>` keeps both labels, while
+  the same reference read inside its own reading is one.
 - A label lands on the part of a value its policy was written around. Each
   carrier records that payload beside its metadata (`CfcStamp<T, M>`,
-  `packages/api/cfc.ts`), because TypeScript merges a carrier into whatever
+  `base/api/cfc.ts`), because TypeScript merges a carrier into whatever
   its value is merged into: an intersection, a spread, a mapped type. So a
   label is placed by the payload it records, never by where the carrier sits
   (`placeCarriedLabels`, `payloadReach`):
@@ -1355,12 +1582,32 @@ Mechanics:
     whose carrier did not come from the type it maps over.
   - A label reaching every member lands on the whole value, and one reaching
     none lands nowhere. A union payload's members are those of each
-    alternative.
+    alternative. A value with an index signature that no index signature of
+    its payload applies to every key of holds data under keys no member names,
+    which evidence never reaches, so evidence reaching every named member lands
+    on those members, not the whole value:
+    `{ x: string } & Integrity<{ x: string }, L> & Record<string, unknown>`
+    labels `x` alone. A `string`-keyed index signature applies to numeric keys
+    too, while one keyed by `number` or by a template literal applies to only
+    some of a `string` key's, so `Integrity<Record<number, string>, L>` or
+    `` Integrity<Record<`foo-${string}`, string>, L> `` beside
+    `Record<string, unknown>` lends no evidence to the other keys. An index
+    signature keyed by symbols holds no data a schema holds. A value of a union
+    payload is one of its alternatives: where the value holds one of them as a
+    part, as each arm the checker distributes an intersection over the union
+    into does, evidence reaches that alternative's data alone, while a
+    restriction still reaches wherever any alternative's may be. So
+    `Integrity<Record<string, string> | { x: string }, L> & Record<string,
+    unknown>` labels its first arm whole and `x` alone in its second. A value
+    whose schema has no members to place labels on, as an unsupported-pattern
+    fallback, takes a restriction whole and evidence that reaches only some of
+    its data nowhere.
   - A payload whose type lists no members, such as `{}` or `unknown`, may
     hold data under any key, so a restriction labels the whole value. Its
     evidence labels the whole value only where nothing writes over members
     and the value holds nothing besides: `Integrity<{}, L>` carries `L`, but
-    `{ ...tagged, name }` and `{ name } & Integrity<{}, L>` do not.
+    `{ ...tagged, name }`, `{ name } & Integrity<{}, L>` and
+    `Record<string, number> & Integrity<unknown, L>` do not.
   - A primitive, alone or beside carriers and brands, is all the data its
     value holds, so a payload that is or includes a primitive labels such a
     value whole: `Integrity<string, L>`, and the `string` alternative of
@@ -1385,7 +1632,7 @@ Mechanics:
   `printed-type-node-schema.test.ts` ("a labeled payload merged into a larger
   value").
 - A policy's type keeps its alias name beside `null` and `undefined`: the
-  carrier holds them beside its stamp (`CfcTag`, `packages/api/cfc.ts`), so
+  carrier holds them beside its stamp (`CfcTag`, `base/api/cfc.ts`), so
   `Confidential<string | null, L>` is `(string & carrier) | null` and reads
   as its reference does, `null` included. A policy around `null` alone,
   `Confidential<null, L>`, is `null`, with no name or carrier left, and a
@@ -1696,16 +1943,18 @@ Mechanics:
   itself. A `PolicyOf` reached from a type alone, with no annotation that
   denotes it, has no binding to read: its brand is read as an ordinary object,
   `{ __ct_cfc_policy_of__: undefined }`, not as a policy atom. A label list the
-  extraction cannot read in full is reported as the `cfc-label:unread` warning
-  (`unread-label-diagnostics.ts`), naming the label: an argument that is not a
-  tuple, or an atom with anything unread in it, whether the atom itself, a
-  field of an object atom, or an alternative of an `AnyOf` clause. A union of
-  literals is one such thing, and that `PolicyOf` brand another. A UI
-  contract that writes no `requiredEventIntegrity` requires its trusted
-  pattern, and that list is checked too. The schema carries what it could not
-  read as no label, as an atom that serializes as `null` (an unread value, not
-  an authored `null`, which is a literal read like any other), or as a field
-  left out.
+  extraction reads only in part is reported as the `cfc-label:unread` warning
+  (`unread-label-diagnostics.ts`), naming the label: an atom with anything
+  unread in it, whether the atom itself, a field of an object atom, or an
+  alternative of an `AnyOf` clause. A union of literals is one such thing, and
+  that `PolicyOf` brand another. The schema carries what it could not read as an
+  atom that serializes as `null` (an unread value, not an authored `null`, which
+  is a literal read like any other), or as a field left out. A label list that
+  reads as no list at all, as an array type (`string[]`) or a union of tuples
+  does, is reported as the `cfc-label:not-a-list` error: the runtime reads
+  labels only from a list, so none of what is written there would reach it. A UI
+  contract that writes no `requiredEventIntegrity` requires its trusted pattern,
+  and that list is checked too.
   Projection paths encode as JSON Pointers with `~0`/`~1` escaping
   (`encodeJsonPointerPath`).
 - `ifc` combines with the base schema's existing `ifc` one key at a time
@@ -1801,7 +2050,7 @@ Mechanics:
 In-package coverage: `test/schema/cfc-authoring.test.ts` (13 tests), including
 renamed `AnyOf` / `PolicyOf` imports, and `test/ifc-labels.test.ts` for how
 labels combine. Transformer-side policy compilation and
-diagnostics are pinned by `packages/ts-transformers/test/cfc-authoring.test.ts`.
+diagnostics are pinned by `base/ts-transformers/test/cfc-authoring.test.ts`.
 
 The collection/opaque helpers `LengthPreservedFrom`, `FilteredFrom`,
 `SubsetOf`, `PermutationOf`, and `OpaqueInput` were removed from
@@ -1811,7 +2060,7 @@ arbitrary record `M`; that low-level escape hatch does not make the removed
 helpers part of the supported authoring surface.
 
 The emitted key set aligns with the api's `JSONSchemaObj.ifc` member
-(`packages/api/index.ts`): `confidentiality`, `integrity`,
+(`base/api/index.ts`): `confidentiality`, `integrity`,
 `addIntegrity`, `requiredIntegrity`, `maxConfidentiality`, `ownerPrincipal`,
 `writeAuthorizedBy`, `writePolicyAnyOf`, `exactCopyOf`, `projection`,
 `observes`, and `uiContract`. `ownerPrincipal` and `observes` have no direct
@@ -1834,7 +2083,7 @@ producing alias in this package as of this writing.
 - Index signatures and intersection constituents have their own attachment
   points (§4 table; §9).
 - Hashtags remain in attached descriptions. Discovery extracts them at runtime
-  with `tagsFromSchema` in `packages/runtime-client/src/schema-tags.ts`,
+  with `tagsFromSchema` in `runtime/runtime-client/src/schema-tags.ts`,
   using `extractHashtags` from `@commonfabric/utils/hashtags`. Tags are
   lowercased and deduplicated in first-seen order across nested schemas.
   Fixtures: descriptions-hashtag-tags, descriptions-index-signature-tags,
@@ -2086,7 +2335,7 @@ synthetic node resolution failure → `any` → `true`
 
 ## 17. Test Workflow
 
-- `deno task test` from `packages/schema-generator/` (env knobs allow-listed
+- `deno task test` from `base/schema-generator/` (env knobs allow-listed
   in `deno.jsonc`); `deno task check` type-checks source, harnesses, and
   test suites while excluding raw fixture inputs. Those inputs depend on the
   synthetic declarations supplied by the fixture runner and are checked there.
@@ -2094,7 +2343,7 @@ synthetic node resolution failure → `any` → `true`
   `test/fixtures/schema/*.input.ts` → `*.expected.json`; the root type is the
   fixture's `SchemaRoot`. Env knobs: `FIXTURE=<baseName>` filter;
   `UPDATE_GOLDENS=1` rewrites goldens
-  (`packages/test-support/src/fixture-runner.ts`); `SKIP_INPUT_CHECK=1`
+  (`base/test-support/src/fixture-runner.ts`); `SKIP_INPUT_CHECK=1`
   disables the default batch type-check of all inputs in one program — type
   errors otherwise fail the suite before any comparison.
 - **Normalization caveat**: goldens are normalized — object keys sorted,
@@ -2124,7 +2373,7 @@ synthetic node resolution failure → `any` → `true`
 
 When a section above enumerates a set, the constant/function below is
 canonical; update prose from it, not the other way around. Paths relative to
-`packages/schema-generator/` unless noted.
+`base/schema-generator/` unless noted.
 
 | Spec content | Canonical source | Guard / note |
 | --- | --- | --- |
@@ -2136,15 +2385,15 @@ canonical; update prose from it, not the other way around. Paths relative to
 | Node-wrapper participation (§6.1, §6.4) | `NODE_WRAPPER_SPELLINGS` (`src/type-utils.ts`) | compile-time table |
 | Brand values / kind↔brand maps (§6.2) | `CellBrand` / `wrapperKindToBrand` (`src/typescript/cell-brand.ts`) | capability-wrapper-types tests |
 | Capability-kind subset (§6.3) | `CELL_CAPABILITY_KIND_MAP` (`src/formatters/common-fabric-formatter.ts`) | exhaustive over `CellWrapperKind` |
-| `asCell` entry shape (§6.2, §10) | `AsCellEntry` / `CellKind` / `SchemaScope` (`packages/api/index.ts`) | — |
+| `asCell` entry shape (§6.2, §10) | `AsCellEntry` / `CellKind` / `SchemaScope` (`base/api/index.ts`) | — |
 | Scope wrapper map (§10) | `SCOPE_WRAPPER_SCOPES` (`src/formatters/common-fabric-formatter.ts`) | scoped-wrappers fixture |
-| CFC alias set (§11) | `CFC_CANONICAL_ALIAS_NAMES` (`packages/api/cfc.ts`) | — |
+| CFC alias set (§11) | `CFC_CANONICAL_ALIAS_NAMES` (`base/api/cfc.ts`) | — |
 | CFC payload map (§11) | `buildIfcMetadataForAlias` switch (`src/formatters/common-fabric-formatter.ts`) | cfc-authoring tests |
-| `ifc` key vocabulary (§11) | `JSONSchemaObj.ifc` (`packages/api/index.ts`) | — |
+| `ifc` key vocabulary (§11) | `JSONSchemaObj.ifc` (`base/api/index.ts`) | — |
 | Hint shape (§13) | `SchemaHint` / `UiContractHint` (`src/interface.ts`) | — |
 | Generation options (§14) | `SchemaGenerationOptions` (`src/interface.ts`) | widening, writer identity, and diagnostics |
 | Throw inventory (§15) | grep `throw new Error` under `src/` | messages quoted above verified this snapshot |
-| Fixture env knobs (§17) | `test/fixtures-runner.test.ts`; `packages/test-support/src/fixture-runner.ts` | — |
+| Fixture env knobs (§17) | `test/fixtures-runner.test.ts`; `base/test-support/src/fixture-runner.ts` | — |
 
 A drift-resistant habit (mirroring the ts-transformers spec §21.1): when
 editing a set above, update this document from the canonical source and keep

@@ -7,14 +7,14 @@ Fabric UI library. Division of labor:
 
 - **This file** — complete component index (tag, purpose, bindable props) and
   the usage narrative that is not derivable from source.
-- [`packages/patterns/catalog/catalog.tsx`](../../../packages/patterns/catalog/catalog.tsx)
+- [`patterns/dev/catalog/catalog.tsx`](../../../patterns/dev/catalog/catalog.tsx)
   and the story files under
-  [`packages/patterns/catalog/stories/`](../../../packages/patterns/catalog/stories/)
+  [`patterns/dev/catalog/stories/`](../../../patterns/dev/catalog/stories/)
   — authoritative, type-checked live usage.
 - Component source under
-  [`packages/ui/src/v2/components/`](../../../packages/ui/src/v2/components/)
+  [`runtime/ui/src/v2/components/`](../../../runtime/ui/src/v2/components/)
   — authoritative props, events, and JSDoc.
-- [`packages/ui/LLM-COMPONENT-INSTRUCTIONS.md`](../../../packages/ui/LLM-COMPONENT-INSTRUCTIONS.md)
+- [`runtime/ui/LLM-COMPONENT-INSTRUCTIONS.md`](../../../runtime/ui/LLM-COMPONENT-INSTRUCTIONS.md)
   — HTML attribute tables per component.
 
 ## Bidirectional Binding
@@ -89,7 +89,7 @@ That state follows the rendered checkbox, including values delivered through
 
 ## Component Index
 
-One row per component directory in `packages/ui/src/v2/components/`. "Bindable
+One row per component directory in `runtime/ui/src/v2/components/`. "Bindable
 props" lists cell-bound (`$`-prefixed) properties verified in source; an empty
 cell means none confirmed — check the component source before assuming.
 
@@ -171,7 +171,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-picker` | Carousel selection over cells with `[UI]` | `$items`, `$selectedIndex` |
 | `cf-piece` | Provides piece context to child components | |
 | `cf-plaid-link` | Plaid banking integration | `$auth` |
-| `cf-profile-badge` | The blessed, trusted way to render a profile identity (avatar + name + the generative verification seal — a DID-derived aura ring + cursor glint, no shield icon); navigable to the profile. Variants `full`/`chip`/`circle`/`hero` + `size`/`noNavigate` attrs (CT-1761). Prefer it over a bare name/avatar anywhere an identity appears. | `$profile` |
+| `cf-profile-badge` | The blessed, trusted way to render a profile identity (avatar + name + the generative verification seal — an aura ring derived from the owner's DID and, for a profile, its space, + cursor glint, no shield icon); navigable to the profile. Variants `full`/`chip`/`circle`/`hero` + `size`/`noNavigate` attrs (CT-1761). Prefer it over a bare name/avatar anywhere an identity appears. | `$profile` |
 | `cf-progress` | Progress bar, determinate or indeterminate | |
 | `cf-prompt-input` | Multiline prompt input with `@`-mentions, attachments, voice | `$mentionable`, `$model` |
 | `cf-question` | Asks a single question and collects the answer | |
@@ -192,7 +192,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-slider` | Range input slider | `$value` |
 | `cf-space-create` | Label field + create button that creates a new space owned by the signed-in identity, with a random DID, and adds it to that identity's Home space list; fires `cf-space-created` with `{ did, label }`; the label is the entry's name | |
 | `cf-space-link` | Renders a space as a clickable navigation pill; opens the space by `spaceDid` when given, else by the legacy `spaceName` | |
-| `cf-submit-input` | Text field + submit button whose real (trusted) click carries the typed text as `event.target.value` with the surface's UI integrity, so it can authorize an owner-protected runtime write; prefer over `cf-message-input` when the submit gesture must be trusted | |
+| `cf-submit-input` | Text field + submit button whose real (trusted) click carries the typed text as `event.target.value` with the surface's UI integrity, so it can authorize an owner-protected runtime write; prefer over `cf-message-input` when the submit gesture must be trusted | `$draft` |
 | `cf-svg` | Renders SVG content from a string; safe for untrusted content, and anything that would run script is dropped | |
 | `cf-switch` | Toggle switch for binary on/off state | `$checked` |
 | `cf-tab` | Individual tab button used within `cf-tab-list` | |
@@ -221,6 +221,26 @@ cell means none confirmed — check the component source before assuming.
 | `cf-webhook` | Webhook integration: receives payloads into a stream | `$inbox`, `$config` |
 
 ---
+
+## cf-submit-input
+
+Clicking the submit button or pressing Enter sends a trusted click to the host's
+`onClick` handler. Its `target.value` is the exact displayed text. Without a
+binding, the field clears after dispatching that click; `initialValue` can seed
+it once.
+
+Bind `$draft` to a writable `{ value: string; revision: string }` cell to keep
+drafts across placements and let the caller decide when to clear them. The field
+writes a new revision for every input edit and carries that revision as
+`target.dataset.draftRevision` on the submit click. The handler stores the event's
+text, and clears the bound draft in the accepting transaction only if both its
+revision and value still match the event. Keep the revision when clearing its
+value. A refused send leaves the draft untouched, and a newer edit survives even
+when its text is identical to the submitted text. The bound field uses
+`CellController` to protect pending local edits from stale deliveries.
+
+The draft binding supplies its own initial text and controls clearing; a bound
+field does not use `initialValue` or clear itself after dispatch.
 
 ## cf-form
 
@@ -309,7 +329,7 @@ array indices, which drift when lists change.
 
 Contributor-facing internals (FormFieldController, file organization, design
 decisions) live in
-[`packages/ui/docs/forms-internals.md`](../../../packages/ui/docs/forms-internals.md).
+[`runtime/ui/docs/forms-internals.md`](../../../runtime/ui/docs/forms-internals.md).
 
 ---
 
@@ -502,7 +522,7 @@ or a `JSXElement` (a renderable sub-piece), or a reactive value of one, so a
 value of the wrong shape under `[UI]`, `[CHIP_UI]` or `[TILE_UI]` is a compile
 error at the pattern.
 
-See `packages/patterns/examples/ui-variants-demo.tsx` for a full example.
+See `patterns/examples/ui-variants/ui-variants-demo.tsx` for a full example.
 
 > Note: `sidebarUI` is a shell composition **slot**, a separate concept from
 > size variants. Other exported subviews such as `settingsUI` are
@@ -1076,7 +1096,7 @@ and (for the current viewer) a verified seal that user-space cannot forge.
 
 | You are showing… | Use | Why |
 | --- | --- | --- |
-| **any participant** whose live profile cell you hold — the viewer (via `wish`) or anyone who contributed their cell on join | `cf-profile-badge` bound to that cell | trusted; draws name + avatar + a DID-derived verified seal; cross-space reads resolve for every viewer (CT-1667/1687) |
+| **any participant** whose live profile cell you hold — the viewer (via `wish`) or anyone who contributed their cell on join | `cf-profile-badge` bound to that cell | trusted; draws name + avatar + a verified seal; verification attests the owner, and the seal, derived from the owner's DID and the profile's space, tells their profiles apart (a record of the person that is not a profile wears the owner's seal alone); cross-space reads resolve for every viewer (CT-1667/1687) |
 | a person you hold **only a snapshot** for — a self-contained piece, or an offline remote profile space | `cf-avatar` + their name | untrusted fallback, safe for any value; needs no profile cell |
 | a row that **may or may not** carry a profile — one written before the space had profiles, beside rows that do | `cf-profile-badge` with `fallback-name` | one binding for both, so nothing has to test a cell-typed field for presence; the name shows only where no profile resolves |
 
@@ -1149,14 +1169,16 @@ const profileWish = wish({ query: "#profile" }); // resolves the viewer's profil
   other participants, bind the profile cell they contributed to the shared roster
   on join.
 - `size`: `xs | sm | md | lg | xl`.
-- The verified seal only appears for a live, runtime-attested profile cell (it
-  will not show in stories or `--no-run` checks — that is expected, not a failure).
+- The verified seal only appears for a live, runtime-attested cell: a profile,
+  or another record of the person whose label attests them, which wears the
+  owner's seal alone (it will not show in stories or `--no-run` checks — that
+  is expected, not a failure).
 - **Every participant** with a stored profile cell can be badged — not just the
   viewer. Cross-space profile reads resolve for any authorized viewer (CT-1667/1687),
   so store each person's `#profile` cell in the shared `PerSpace` roster on join and
   bind `$profile={p.profile}`. See
   [multi-user-patterns → Presenting Identity](../patterns/multi-user-patterns.md#presenting-identity)
-  and the live demo `packages/patterns/profile-roster-live-demo.tsx`. Only fall back
+  and the live demo `patterns/examples/profile-roster-live-demo/profile-roster-live-demo.tsx`. Only fall back
   to `cf-avatar` when you deliberately hold just a snapshot.
 - ⚠️ **Bind it at a STATIC `[UI]` position.** Like every `$`-bidirectional binding
   (`$value`, `$checked`, …), `$profile` must be bound where the JSX is constructed
@@ -1165,7 +1187,7 @@ const profileWish = wish({ query: "#profile" }); // resolves the viewer's profil
   bound property $profile is not reactive"*, blanking the whole pattern. Resolve
   `wish({query:"#profile"})` once and place the badge in the static JSX; gate only
   its *siblings* reactively, or use `ifElse(cond, staticA, staticB)` as a child of a
-  static wrapper. Repro: `packages/patterns/scope-bug-computed-vnode-blank/`.
+  static wrapper. Repro: `patterns/dev/scope-bug-computed-vnode-blank/`.
 
 ---
 
@@ -1239,7 +1261,7 @@ be any cell the pattern declares `PolicyOf` its custody rules: the runtime
 reads the policy from that cell's label, where the reference, its module
 identity, digest and room subject, is bound. The box `$box` receives is the one
 document the room's projector reads; reading it is label-gated like any other
-read. `packages/patterns/cfc-exchange-rules/custody-answer-room.tsx` is a room
+read. `patterns/examples/cfc-exchange-rules/custody-answer-room.tsx` is a room
 built this way, which shows its answer through `cf-custody-answer`.
 
 The button opens a native modal dialog. Its first part comes from what the
@@ -1277,7 +1299,7 @@ nor the key of the actor's entry in the room. The box's entries carry the
 room's policy, and a read through the link carries it, so `$box` need declare
 none. Known limitation: a `$box` whose entries do declare a label makes the
 seal's commit fail (see the `TODO(custody-box-link)` repro in
-`packages/patterns/cfc-exchange-rules/custody-answer-room.tsx`). A binding that changes while a commit is in flight
+`patterns/examples/cfc-exchange-rules/custody-answer-room.tsx`). A binding that changes while a commit is in flight
 leaves the component without that event even if the seal committed, so a
 pattern that must know should read the room rather than rely on it; the
 seal still writes the box link to the `$box` bound when the actor reviewed.
@@ -1313,7 +1335,7 @@ the component quiet, and it asks nothing before the room has terms. Any other
 failure, such as a lost worker connection or a slot the seal did not write,
 shows as an alert. It fires `cf-published` once the published answer is shown,
 with `detail.instance` when this component published it.
-`packages/patterns/cfc-exchange-rules/custody-answer-room.tsx` is a room built
+`patterns/examples/cfc-exchange-rules/custody-answer-room.tsx` is a room built
 this way; the [custody seal spec](../../specs/cfc-custody-seal.md) says what it
 does not cover.
 

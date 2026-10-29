@@ -270,7 +270,7 @@ commit with the same sources.
 The lane jobs restore a pattern compile byte cache from `.ci-cache/compile` in
 one `actions/cache` step, keyed `cc-lane-<fingerprint>-tests-<lane>-<hash>` with
 the restore prefix `cc-lane-<fingerprint>-`, where the hash is a `hashFiles()`
-over `packages/patterns` and `packages/generated-patterns`. The fingerprint is
+over `patterns` and `runtime/generated-patterns`. The fingerprint is
 the compiler-input fingerprint, which moves with every input that can change
 what the compiler emits. A cache entry CI names by it therefore holds bytes the
 compiler now running emitted, and an entry from any other compiler is one the
@@ -302,7 +302,7 @@ defines, computed once, rather than a second description of the same list of
 inputs that can drift from it.
 
 `COMPILE_FINGERPRINT_INPUTS` in
-`packages/runner/src/compilation-cache/compiler-fingerprint.deno.ts` is the list
+`runtime/runner/src/compilation-cache/compiler-fingerprint.deno.ts` is the list
 being hashed, and it is the only place that list is written down. Changing what
 shapes the emitted bytes means editing it there; nothing in the workflow
 enumerates those inputs, so nothing in the workflow has to be changed to match.
@@ -418,7 +418,7 @@ checking for tests that share process-wide state.
 Deno runs each parallel test file on its own thread of a single process, so
 "process-wide state" means state every file shares: environment variables,
 replaced globals, and the current directory. A test that only configures a CLI
-it spawns shares nothing — `cf` in `packages/cli/test/utils.ts` takes the
+it spawns shares nothing — `cf` in `runtime/cli/test/utils.ts` takes the
 command's environment as an argument and gives it nothing else, so those tests
 stay in the parallel group.
 

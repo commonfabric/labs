@@ -54,10 +54,10 @@ What is on by default and what is not:
   reason the served-vote record gives: it halves the cycle and does not move
   the burst, and on the main-thread arm it lengthens it.
 - The view interests are held on the worker unconditionally
-  (`packages/runner/src/executor/view-interests.ts`, keyed on the server's
+  (`runtime/runner/src/executor/view-interests.ts`, keyed on the server's
   `viewsChanged` and `sessionChanged` observer events); nothing switches that.
 - The lunch poll's tally rows no longer carry the viewer
-  (`packages/patterns/lunch-poll/main.tsx`), and
+  (`patterns/apps/lunch-poll/main.tsx`), and
   `docs/common/patterns/multi-user-patterns.md` carries the rule.
 
 ## The memory server's walk and encode
@@ -65,12 +65,12 @@ What is on by default and what is not:
 Most of what is left runs in the memory server's per-session walk and encode,
 with no serving-loop wait in front of it. The code:
 
-- `Server.flushSessions()` in `packages/memory/v2/server.ts` is the pass; the
+- `Server.flushSessions()` in `runtime/memory/v2/server.ts` is the pass; the
   per-session refresh and its `walk` phase sit under it, around the
   `"memory", "refresh", "phase", "walk"` row, and the graph re-evaluation it
-  calls is `packages/memory/v2/query.ts`, whose `refreshTiming` records the
+  calls is `runtime/memory/v2/query.ts`, whose `refreshTiming` records the
   `memory/refresh/walk/<phase>` rows.
-- The encode is `packages/memory/v2/message-compression.ts` (`send/encode`).
+- The encode is `runtime/memory/v2/message-compression.ts` (`send/encode`).
 - The inbound side's `memory/frame/queue` and `memory/frame/handle` rows say
   what a client's own frames wait behind.
 
@@ -85,7 +85,7 @@ answers them for the poll, and a change is measured against its answer again:
    Sum them over a burst per arm.
 2. **How much of the work is the same across sessions?** Five sessions hold
    the same view of the same documents under different identities. The
-   initial `trackGraph` evaluation cache in `packages/memory/v2/query.ts`
+   initial `trackGraph` evaluation cache in `runtime/memory/v2/query.ts`
    can share space-pure results across identities. Incremental refresh does
    not use that cache. Count repeated document/path/schema tuples during
    refresh, then compare their versions, scoped reach and evaluation context
@@ -136,8 +136,8 @@ serving-side rows beside them, written up as a dated record under
 
 ## How to measure
 
-The burst is `packages/patterns/integration/lunch-poll-vote-burst.bench.ts`.
-From `packages/patterns`, one arm at a time, the box otherwise idle:
+The burst is `patterns/integration/lunch-poll-vote-burst.bench.ts`.
+From `patterns`, one arm at a time, the box otherwise idle:
 
 ```sh
 CF_LUNCH_POLL_VOTERS=5 CF_LUNCH_POLL_OPTIONS=5 \
@@ -163,7 +163,7 @@ of one run differ by about a third, so an arm is measured twice and two arms are
 compared within one sitting, never one sitting against another.
 
 The seed is the topics board's, against a toolshed started from source. In
-`packages/toolshed`:
+`runtime/toolshed`:
 
 ```sh
 PORT=8400 API_URL=http://localhost:8400 MEMORY_DIR=file:///tmp/seed-mem/ \
@@ -175,7 +175,7 @@ LOG_LEVEL=warn OTEL_ENABLED=false deno run --unstable-otel -A index.ts
 and once `/_health` answers, from the repository root:
 
 ```sh
-deno run -A packages/patterns/integration/topic-board-seed.ts \
+deno run -A patterns/integration/topic-board-seed.ts \
   --api-url=http://localhost:8400/ --passphrase="seed measure" \
   --topics=30 --demand=index --crossrefs=2 --citing-topics=3 --body-words=120 \
   --out=/tmp/board.json
@@ -193,7 +193,7 @@ Spans and a CPU profile come from a throwaway probe, which stays uncommitted
 because the workload stays uninstrumented
 (`docs/specs/server-side-execution/testing.md` §1). The probe hosts the
 bench's own harness in the test process: `MultiRuntimeHarness` from
-`packages/patterns/integration/multi-runtime-harness.ts` with the
+`patterns/integration/multi-runtime-harness.ts` with the
 `lunch-poll-keyed-votes` fixture, `input: { renderPoll: true }`,
 `watchPaths: []`, every session with `renderView: true`, a burst driven the
 way the bench drives one and ended with `waitForRows`, and each session's
@@ -204,7 +204,7 @@ written out with `CF_TIMING_MEASURES=1` set. The scripts under
 --detail` for who called a key and how heavily, `wall-time.ts` for what was
 open while nothing instrumented ran. A CPU profile of the same process comes
 from `node:inspector`'s `Profiler` around the burst, rendered with
-`renderProfileReport` from `packages/integration/cdp-profiler.ts`; the
+`renderProfileReport` from `runtime/integration/cdp-profiler.ts`; the
 `CF_PROF_CPU=1` arm of `skills/perf-investigation/scripts/profile-cf.ts` is
 the pattern to copy. Measures taken with `CF_TIMING_MEASURES` on inflate the
 loop-off arm several times over, so the bench is the number and the probe is
@@ -216,23 +216,23 @@ The overlap is off by default, so the suites run inline unless a test sets
 the policy. It is validated by forcing it on for every executor suite: change
 the one expression in `SpaceServer.#waveCycle` from
 `overlapWaveCommit === true` to `overlapWaveCommit !== false`, run the
-`packages/runner` executor suites (`test/executor-*.test.ts`,
+`runtime/runner` executor suites (`test/executor-*.test.ts`,
 `test/serving-worker.test.ts`, `test/executor/*.test.ts`), and put the
 expression back. Everything passes under both forms; the two places a forced
 run changed, the drain's in-flight guard recording its wave and the guard
 reading a sibling's seal, are in the served-vote record.
 A change to the cycle, the finish or the park is run both ways before it is
 pushed. Run these suites with `--preload=test/clock-preload.ts` from
-`packages/runner`, as the package's `deno-test` task does. A bare
+`runtime/runner`, as the package's `deno-test` task does. A bare
 `deno test` leaves the global `clock` undefined in the executor and
 parked-runtime tests; that failure does not establish a container defect.
 
 Before a push: repo-wide `deno fmt --check`, `deno lint`, `deno task check`,
 `deno task check-docs-history-index` and `deno task check-skill-facts`, the
-`packages/runner` executor suites, `packages/memory`'s `v2-view-interest`,
+`runtime/runner` executor suites, `runtime/memory`'s `v2-view-interest`,
 `v2-demand-changed-principal` and `v2-server-miss-interest` tests,
-`packages/toolshed/lib/server-execution.test.ts` and
-`packages/piece/test/served-lifecycle.test.ts`.
+`runtime/toolshed/lib/server-execution.test.ts` and
+`runtime/piece/test/served-lifecycle.test.ts`.
 
 ## Open items
 

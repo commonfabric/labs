@@ -671,7 +671,11 @@ these.
   counter was missing from §7's stats shape — FIXED with this fold.)
 - Q2: non-re-derivable writes REBASE AND RETRY with field-level
   merge; the watermark advance and its consequences move TOGETHER,
-  never separately. [serving-loop §3d; events §4]
+  never separately. An event-handler contribution with a stale
+  recorded read requeues WHOLE ahead of the rebase, the later entries
+  of its stream in the wave requeue with it, and the re-drain waits on
+  the replica taking the commit that staled the read. [serving-loop
+  §3d, PROPOSED 2026-10-23; events §2, §5]
 - Q3: semantic rebase conflict ⇒ REQUEUE (ran, raced) — distinct
   from DROP (cannot run at all) — distinct again from the
   superseded-WRITE drop. [serving-loop §3d; events §5]
@@ -854,7 +858,7 @@ these.
   the input-driven retry counts a second `memo.misses` +
   `outbox.queued`. [serving-loop §4, §7]
 
-### T15 (COMPLETE — authored with Phase 2, 2026-08-07; OW4's impl witnesses are `packages/runner/test/speculation-overlay.test.ts` and the `sx2-speculation` integration surface)
+### T15 (COMPLETE — authored with Phase 2, 2026-08-07; OW4's impl witnesses are `runtime/runner/test/speculation-overlay.test.ts` and the `sx2-speculation` integration surface)
 
 - Q1: the binding edit commits AUTHORED under S1's session envelope —
   state authorship under existing ACL + CAS, unchanged (README §3.6).

@@ -215,7 +215,7 @@ export type { ButtonVariant };
 
 Note: Both registrations are intentional. The component file registers
 unconditionally on import (the dominant convention in
-`packages/ui/src/v2/components/`); the index file's conditional check is then a
+`runtime/ui/src/v2/components/`); the index file's conditional check is then a
 safe no-op, and prevents duplicate registration errors during hot module
 replacement or alternate import paths. Keep both.
 

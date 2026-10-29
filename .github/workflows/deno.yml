@@ -238,7 +238,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .ci-cache/compile
-          key: cc-lane-${{ steps.compile-cache-key.outputs.fingerprint }}-${{ github.job }}-${{ matrix.lane }}-${{ hashFiles('packages/patterns/**', 'packages/generated-patterns/**') }}
+          key: cc-lane-${{ steps.compile-cache-key.outputs.fingerprint }}-${{ github.job }}-${{ matrix.lane }}-${{ hashFiles('patterns/**', 'runtime/generated-patterns/**') }}
           restore-keys: |
             cc-lane-${{ steps.compile-cache-key.outputs.fingerprint }}-
 
@@ -373,7 +373,9 @@ jobs:
       # run's records and holds them to this run's commit. No lane can run it:
       # a lane's records have not shipped when its gates run. It is handed the
       # directory rather than a list of files, so a run whose records it cannot
-      # find fails rather than checking nothing.
+      # find fails rather than checking nothing. The download holds every
+      # attempt's artifacts, and it reads only each job's latest attempt, so a
+      # lane re-run after it was stopped part way is judged by the re-run.
       - name: 🔎 Check the topology against this run's records
         if: ${{ !cancelled() }}
         timeout-minutes: *work-timeout
@@ -784,7 +786,7 @@ jobs:
           fi
 
       - name: 🏗️ Build shell with staging API URL
-        working-directory: packages/shell
+        working-directory: runtime/shell
         run: |
           deno task production
 
@@ -809,10 +811,10 @@ jobs:
       - name: 📤 Upload shell assets to Staging GCS
         run: |
           # Retain the complete immutable module graph for long-lived pages.
-          gsutil -m rsync -r packages/shell/dist gs://staging-commontools-dev/builds/${{ github.sha }}/
+          gsutil -m rsync -r runtime/shell/dist gs://staging-commontools-dev/builds/${{ github.sha }}/
 
           # Upload to bucket root as "latest" (-d removes orphaned files)
-          gsutil -m rsync -r -d packages/shell/dist gs://staging-commontools-dev/
+          gsutil -m rsync -r -d runtime/shell/dist gs://staging-commontools-dev/
 
           echo "📦 Staging Shell deployed"
           echo "https://staging.commontools.dev/"

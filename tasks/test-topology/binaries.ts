@@ -114,16 +114,17 @@ function binarySuite(
 
 /**
  * The binary suites. The server-execution shell is the same build under
- * a different compile-time define, which is what a variant is: one test,
+ * different compile-time defines, which is what a variant is: one test,
  * two configurations, two histories that never stand in for each other.
  */
 export function loadBinarySuites(): Suite[] {
+  const defaults = serverExecutionCiLane("default");
   const opposite = serverExecutionCiLane("opposite");
   return [
-    binarySuite("binaries", BINARY_NAMES),
+    binarySuite("binaries", BINARY_NAMES, { env: { ...defaults.environment } }),
     binarySuite("binaries-opposite", ["toolshed"], {
       variant: opposite.recordVariant,
-      env: { EXPERIMENTAL_SERVER_EXECUTION: String(opposite.enabled) },
+      env: { ...opposite.environment },
     }),
   ];
 }

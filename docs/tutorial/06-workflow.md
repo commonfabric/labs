@@ -53,7 +53,7 @@ tab completion:
 
 ```bash
 # zsh: add to ~/.zshrc after compinit (bash: swap zsh -> bash, use ~/.bashrc)
-source <(deno run -A packages/cli/mod.ts completion zsh)
+source <(deno run -A runtime/cli/mod.ts completion zsh)
 ```
 
 It completes commands and flags offline, and — once `CF_IDENTITY`/`CF_API_URL`
@@ -226,7 +226,7 @@ streams, same cells. The browser shell is just one more client.
 Tests are patterns that test patterns: instantiate the subject, alternate
 `action` steps and `assert(() => boolean)` assertions, and return them
 under the reserved `[TESTS]` key. From
-`packages/patterns/counter/counter.test.tsx`:
+`patterns/examples/counter/counter.test.tsx`:
 
 ```tsx
 // Shown at module scope.
@@ -255,8 +255,8 @@ export default pattern(() => {
 ```
 
 ```bash
-deno task cf test packages/patterns/counter/counter.test.tsx --verbose
-deno task cf test packages/patterns/my-pattern/      # all tests in a directory
+deno task cf test patterns/examples/counter/counter.test.tsx --verbose
+deno task cf test patterns/my-pattern/      # all tests in a directory
 ```
 
 Notice what makes the subject *testable*: dual type parameters on
@@ -266,7 +266,7 @@ Chapter 3 insisted on them. Keep assertions deterministic — no
 (`fetchJson` and friends) can still be tested deterministically: export a
 module-scope `fetchMocks` array from the test file and the harness injects
 it as the runtime's fetch (worked examples in
-`packages/patterns/examples/fetch-mock.test.tsx`). The guidance from the
+`patterns/examples/fetch-json/fetch-mock.test.tsx`). The guidance from the
 canonical guide: primary verification is still runtime behavior; write
 tests for logic that's awkward or expensive to verify by clicking.
 

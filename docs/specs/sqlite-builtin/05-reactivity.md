@@ -60,12 +60,12 @@ into the write's own commit:
 - `db.exec` records the `sqlite` op onto the caller's transaction **and** does a
   read-modify-write of `rev` on the handle cell **in the same commit** (one
   commit = cell ops + the `sqlite` op + the `rev`-incremented handle value). See
-  [`packages/runner/src/cell.ts`](../../../packages/runner/src/cell.ts) and
+  [`runtime/runner/src/cell.ts`](../../../runtime/runner/src/cell.ts) and
   Section [04](./04-server-execution-and-transactions.md).
 - The scheduler lets an action see its *own* uncommitted writes within a
   transaction and propagates to other readers only after commit (per the
   scheduler's transaction model and own-commit-source skip in
-  [`packages/runner/src/scheduler/`](../../../packages/runner/src/scheduler/)).
+  [`runtime/runner/src/scheduler/`](../../../runtime/runner/src/scheduler/)).
   Because the `rev` change rides the write commit, a query depending on the
   handle is notified only once that commit lands — exactly when the SQLite write
   is durable. There is no window where the query re-runs before the write is

@@ -2,17 +2,18 @@
 //
 // Guards against new use of the polling `waitFor` helper in integration tests.
 //
-// `waitFor` (defined in packages/integration/utils.ts, exported from
+// `waitFor` (defined in runtime/integration/utils.ts, exported from
 // "@commonfabric/integration") re-runs a predicate every 50 milliseconds — in a
 // browser test each tick is a DevTools Protocol round-trip — and throws once a
 // timeout elapses. An earlier change moved the browser suites off it and onto
 // event-driven waits (`waitForCondition`, `awaitViewSettled`, and the wrappers
-// in packages/patterns/integration/cfc-browser-helpers.ts). This check keeps new
+// in patterns/integration/cfc-browser-helpers.ts). This check keeps new
 // tests from importing the polling helper again.
 //
 // A file is in scope when it lives under an `integration/` directory somewhere
-// beneath `packages/`, excluding the `@commonfabric/integration` package itself,
-// which defines and re-exports `waitFor`. An in-scope file fails the check when
+// in a package (`tasks/package-layout.ts` says where those are), excluding the
+// `@commonfabric/integration` package itself, which defines and re-exports
+// `waitFor`. An in-scope file fails the check when
 // it takes `waitFor` as a value from an import of that package — either through
 // the bare specifier or through a relative path to the package's `utils.ts` or
 // `index.ts` — and is not on the ALLOWLIST below. Text inside a comment or a
@@ -25,8 +26,10 @@
 //
 // Usage: deno run --allow-read ./tasks/check-no-waitfor.ts
 
+import { exists } from "@std/fs/exists";
 import { walk } from "@std/fs/walk";
 import { dirname, fromFileUrl, relative, resolve } from "@std/path";
+import { PACKAGE_ROOTS, packageDirOf } from "./package-layout.ts";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
@@ -36,18 +39,18 @@ const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 // docs/development/waiting-in-tests.md.
 export const ALLOWLIST: ReadonlySet<string> = new Set([
   // Headless cell pull: no page to attach an in-page waiter to.
-  "packages/generated-patterns/integration/pattern-harness.ts",
+  "runtime/generated-patterns/integration/pattern-harness.ts",
   // Off-page piece-result cell reads through the in-process controller.
-  "packages/shell/integration/piece.test.ts",
+  "runtime/shell/integration/piece.test.ts",
   // Cross-page joint condition: the wait spans two separate browser pages, which
   // a single-page in-page waiter cannot express.
-  "packages/patterns/integration/lunch-poll-vote.test.ts",
+  "patterns/integration/lunch-poll-vote.test.ts",
   // MockDoc rendered-HTML reads and fresh cell.sync() round-trips, with no
   // completion callback the test can hook.
-  "packages/runtime-client/integration/client.test.ts",
+  "runtime/runtime-client/integration/client.test.ts",
   // Env-gated profiling scaffolding: one-shot waits that arm a trace or reset a
   // logger baseline, gated behind CF_CAPTURE_* variables that default to off.
-  "packages/patterns/integration/default-app.test.ts",
+  "patterns/integration/default-app.test.ts",
 ]);
 
 // Matches an import of the `@commonfabric/integration` package and captures the
@@ -63,7 +66,7 @@ export const ALLOWLIST: ReadonlySet<string> = new Set([
 // (".../shell-utils", which does not re-export `waitFor`). A relative path
 // reaches the same code without naming the package: `utils.ts` defines
 // `waitFor` and `index.ts` re-exports it, so a specifier that starts with a `.`
-// and ends at either file counts. Under `packages/`, only the package itself
+// and ends at either file counts. Among the packages, only that one
 // holds an `integration/utils.ts` or an `integration/index.ts`.
 //
 // Namespace imports are out of scope: `import * as I from
@@ -139,15 +142,15 @@ export function importsPollingWaitFor(source: string): boolean {
 
 /**
  * Returns true when `relPath` (a repo-relative, forward-slash path) is an
- * integration test in scope for this check: under `packages/`, inside an
+ * integration test in scope for this check: in a package, inside an
  * `integration/` directory, a `.ts` file, and not part of the
  * `@commonfabric/integration` package that defines `waitFor`.
  */
 export function isIntegrationTestFile(relPath: string): boolean {
   const path = relPath.replaceAll("\\", "/");
-  if (!path.startsWith("packages/")) return false;
+  if (packageDirOf(path) === undefined) return false;
   // The package that defines and re-exports `waitFor`.
-  if (path.startsWith("packages/integration/")) return false;
+  if (path.startsWith("runtime/integration/")) return false;
   if (!path.includes("/integration/")) return false;
   return path.endsWith(".ts");
 }
@@ -160,21 +163,24 @@ export interface ScanResult {
   allowlisted: string[];
 }
 
-/** Scans integration tests under `root`/packages for polling-`waitFor` use. */
+/** Scans the integration tests of every package for polling-`waitFor` use. */
 export async function scan(root: string = REPO_ROOT): Promise<ScanResult> {
   const violations: string[] = [];
   const allowlisted: string[] = [];
-  const packagesDir = resolve(root, "packages");
-  const walker = walk(packagesDir, {
-    includeDirs: false,
-    skip: [/\/node_modules\//, /\/dist\//, /\/\.cache\//, /\/coverage\//],
-  });
-  for await (const entry of walker) {
-    const rel = relative(root, entry.path).replaceAll("\\", "/");
-    if (!isIntegrationTestFile(rel)) continue;
-    const source = await Deno.readTextFile(entry.path);
-    if (!importsPollingWaitFor(source)) continue;
-    (ALLOWLIST.has(rel) ? allowlisted : violations).push(rel);
+  for (const packageRoot of PACKAGE_ROOTS) {
+    const directory = resolve(root, packageRoot);
+    if (!await exists(directory, { isDirectory: true })) continue;
+    const walker = walk(directory, {
+      includeDirs: false,
+      skip: [/\/node_modules\//, /\/dist\//, /\/\.cache\//, /\/coverage\//],
+    });
+    for await (const entry of walker) {
+      const rel = relative(root, entry.path).replaceAll("\\", "/");
+      if (!isIntegrationTestFile(rel)) continue;
+      const source = await Deno.readTextFile(entry.path);
+      if (!importsPollingWaitFor(source)) continue;
+      (ALLOWLIST.has(rel) ? allowlisted : violations).push(rel);
+    }
   }
   violations.sort();
   allowlisted.sort();
@@ -197,7 +203,7 @@ function reportViolations(violations: string[]): void {
     "    reflects the new state.",
     "  - awaitViewSettled(page) — resolves once the view is interactive.",
     "  - waitForText / clickCfButton / clickCfButtonAndWaitForText / … in",
-    "    packages/patterns/integration/cfc-browser-helpers.ts.",
+    "    patterns/integration/cfc-browser-helpers.ts.",
     "",
     "In a test with no page, resolve a defer() from a callback the test already",
     "registers (a cell sink, a subscription's next, a scheduler onError) instead",

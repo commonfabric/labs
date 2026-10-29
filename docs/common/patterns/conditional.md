@@ -68,7 +68,7 @@ Give such an element a static `hidden` as well:
 `hidden` keeps the element out of view until `editorDisplay` has a value,
 and an inline `display` outranks `hidden` once it has one, so the computed
 alone decides from then on. A `cf-` component honors `hidden` the same way.
-FabriChat (`packages/patterns/fabrichat/`) hides per-viewer and per-session
+FabriChat (`patterns/system/fabrichat/`) hides per-viewer and per-session
 controls this way, for the reason its `FabriChatMessageRow` states.
 
 The element stays hidden for as long as the computed has no value for the

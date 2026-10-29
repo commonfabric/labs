@@ -84,6 +84,7 @@ describe("the binary build suites", () => {
       expect(made[0]!.env?.EXPERIMENTAL_SERVER_EXECUTION).toBe(
         String(opposite.enabled),
       );
+      expect(made[0]!.env).toMatchObject(opposite.environment);
     });
   });
 });

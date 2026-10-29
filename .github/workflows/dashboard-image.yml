@@ -5,13 +5,15 @@ on:
   push:
     branches: [main]
     paths:
-      - "Dockerfile.dashboard"
-      - "packages/dashboard/**"
-      # The image runs whatever `packages/test-support` held when it was
+      - "dashboard/Dockerfile"
+      - "dashboard/**"
+      # The image runs whatever `base/test-support` held when it was
       # built, and the dashboard's manifest reader is in there. Without this
       # the deployed dashboard keeps reading manifests by a rule the
       # publisher has stopped writing to.
-      - "packages/test-support/**"
+      - "base/test-support/**"
+      # The dashboard and `test-support` both import `@commonfabric/utils`.
+      - "base/utils/**"
       - "scripts/ci-gantt.ts"
       - "deno.jsonc"
       - "deno.lock"
@@ -60,7 +62,7 @@ jobs:
       # in `run-recorded`, and ships no artifact. The relay does not follow
       # this workflow.
       - name: 🧪 Test dashboard
-        working-directory: packages/dashboard
+        working-directory: dashboard
         run: deno task test
 
   publish:
@@ -139,7 +141,7 @@ jobs:
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
-          file: Dockerfile.dashboard
+          file: dashboard/Dockerfile
           platforms: linux/amd64
           push: true
           build-args: |

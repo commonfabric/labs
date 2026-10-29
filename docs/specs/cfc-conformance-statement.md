@@ -4,7 +4,7 @@ The Contextual Flow Control specification in `commonfabric/specs` under `cfc/`
 says, in §18.6.4 of `18-runtime-implementation-profiles.md`, that a deployment
 claiming the reactive-runtime profile MUST document eight things. This document
 is this runtime's answer, one section per item. Each section names the adapter
-code under `packages/runner/src/` that implements the item, by file and
+code under `runtime/runner/src/` that implements the item, by file and
 symbol, and states every known non-conformance with its direction: an
 _over-taint_ refuses or labels more than the specification would, which is the
 fail-closed direction; an _under-taint_ admits or labels less, which is a
@@ -12,7 +12,7 @@ soundness defect. Where neither the code nor a labs document establishes an
 answer, the section says "not established" and what would establish it.
 
 The statement is written against the specification at the commit the spec
-snapshot at `packages/runner/src/cfc/kernel/spec-snapshot.json` records,
+snapshot at `runtime/runner/src/cfc/kernel/spec-snapshot.json` records,
 `0c12ccf3`. It describes the runtime's shipped defaults: the dial values
 `RUNTIME_CFC_DIAL_DEFAULTS` in `cfc/posture-report.ts` applies to every
 `Runtime`, and `presetCfcOptions` in `runtime-presets.ts` pins for every host
@@ -20,7 +20,7 @@ preset. A host that sets a dial lower is described by
 [`cfc-enforcement-matrix.md`](cfc-enforcement-matrix.md) rather than here.
 
 The runtime holds no kernel function yet: every row of
-`packages/runner/src/cfc/kernel/manifest.ts` reads `missing`, and the symbols
+`runtime/runner/src/cfc/kernel/manifest.ts` reads `missing`, and the symbols
 named below are the adapters that make each decision today. The procedure for
 changing any of it is
 [`../development/cfc-spec-correspondence.md`](../development/cfc-spec-correspondence.md);
@@ -29,7 +29,7 @@ this document changes in the same pull request as the behavior it describes.
 ## Maintaining this statement
 
 This is a live document pinned to the specs commit
-`packages/runner/src/cfc/kernel/spec-snapshot.json` records. It is re-read,
+`runtime/runner/src/cfc/kernel/spec-snapshot.json` records. It is re-read,
 and changed in the same pull request, whenever an adapter symbol it cites is
 renamed, moved or changes what it decides; whenever a dial default in
 `RUNTIME_CFC_DIAL_DEFAULTS` or a preset's pin moves; whenever a §18.6.4 bullet
@@ -186,7 +186,7 @@ content arrives through ordinary reads. For label views,
 `cfcLabelViewForDereferenceTraces` in `cfc/label-view-state.ts` carry the
 class-less confidentiality of every entry resolving at the slot, wildcard
 templates included, and the render path reads them through
-`cfcLabelViewForResolvedTarget` in `packages/html/src/worker/reconciler.ts`.
+`cfcLabelViewForResolvedTarget` in `runtime/html/src/worker/reconciler.ts`.
 
 **What a link write persists.** `linkSlotLabel` in `cfc/prepare.ts` persists
 at the receiving slot the reference's own label as §8.2.3 and §8.12.8 state
@@ -245,7 +245,7 @@ document claims it, and the following is not established:
 - The remaining §18.7 rows at every boundary: row-set retention under
   §8.17.6, a target changing between verification and commit, deletion and
   inaccessible-target normalization, cross-space multi-hop, and rewrite or
-  removal of a reference. `packages/runner/test/cfc-probe-slot-anchoring.test.ts`
+  removal of a reference. `runtime/runner/test/cfc-probe-slot-anchoring.test.ts`
   covers the "private query selects public targets" case for the flow join,
   dereferenced alone and after resolving the container.
 
@@ -286,7 +286,7 @@ statement.
   form of it: an under-claim of integrity, which §15.1.1 holds sound.
 - The release gates (`verifyInputRequirements` and
   `verifySinkRequestCeilings` in `cfc/prepare.ts`, `readRefusal` in
-  `packages/html/src/worker/display-fit.ts`) evaluate the value-intrinsic
+  `runtime/html/src/worker/display-fit.ts`) evaluate the value-intrinsic
   rules at each location an access consumed and the other rules over the
   join (`evaluateAccessExchange`, and `exchangeEachObservation` in
   `cfc/access-integrity.ts`), per §5.3, §4.6.3 and §8.10.1.1. An observation
@@ -344,9 +344,49 @@ dials.
   to `observe` when a caller lowers flow labels, and leaves the enforcement
   mode as given. `cfc-enforcement-matrix.md` §3 asks for a deploy check; none
   exists.
-- Under strict, writer-fit misfits on runtime-owned stores are admitted by a
-  declared policy, an over-taint another writer can impose, stated in
-  `cfc-enforcement-matrix.md` §4 under "Runtime-owned-store declaration".
+- A space-scoped store's residency ceiling includes its own space as both
+  `Space(S)` and `PersonalSpace(S)`, alongside the declared policy. This
+  implements the own-space proposal in
+  [specs#71](https://github.com/commonfabric/specs/pull/71), which is closed
+  without merging; no successor ruling is incorporated in the pin. The
+  pinned §8.12.4 has no residency term, and the proposed base rule in
+  [specs#68](https://github.com/commonfabric/specs/pull/68) admits only the
+  `Space(S)` form on an unbound store. The own-space addition admits writes
+  those texts refuse and runs at strict without a default-off dial or a
+  separate `SPEC-PENDING` marker; the three slots are occupied and the
+  residency marker names #68. This is a nonconforming semantic gap and does
+  not satisfy the correspondence procedure's step 4. @danfuzz's authorization
+  to proceed ahead of unresolved specs dependencies does not supply a ruling;
+  the gap still needs one and a reconciled pin. This entry and
+  `cfc-enforcement-matrix.md` §4 record the additional gap.
+  The new clause is absent on `user` and `session` stores, even when their
+  scoped principal is unavailable. No foreign-space clause or unbound
+  `User` clause is added. Full derived labels still persist and taint readers;
+  no declaration or frozen existence label is released.
+- Under strict, an authorized runtime-owned store with a live enrollment or
+  an authenticated piece-setup claim admits eligible writer-fit misfits and
+  records them only in the derived component.
+  This is a slice of the proposed §8.12.5 change in
+  [specs#78](https://github.com/commonfabric/specs/pull/78), not the pinned
+  rule: the pin requires declaring those misfits, so a later clean overwrite can
+  carry less taint here than under the pin. The strict default implements the
+  proposal ahead of its ruling; the specification dependency remains open until
+  the ruling and pin are reconciled. Against the proposal, the
+  authored-declaration, read-failed and foreign-container refusals remain
+  fail-closed residuals. Piece setup supplies a separate transaction-local
+  claim for its argument, result and internal stores, so
+  `PiecesController.setupPersistent()` can commit their setup with derived-only
+  persistence before starting the piece. This claim establishes no lifetime
+  enrollment and grants no authority to a later transaction. A generic
+  transaction-local ownership marker alone still takes the pinned declaration
+  route: one-shot handoffs and marker-only anchored children retain that
+  ratchet. Lazy scoped-default seeding on a later transaction before enrollment
+  also retains the generic marker and declaration route. Existing declarations
+  and frozen existence stamps remain. Clean
+  creation records no empty existence entry, so even a path created clean keeps
+  the first labeled write's existence label after a clean overwrite. No
+  automatic data repair is performed. See
+  `cfc-enforcement-matrix.md` §4, "Runtime-owned-store derived admission".
   `isDeclarablePolicyStore` in `cfc/prepare.ts` exempts the raw meta seam,
   `computed:` cells, stream entry documents and compilation-cache documents
   from the writer-fit refusal at every rung; the meta seam's residual, a

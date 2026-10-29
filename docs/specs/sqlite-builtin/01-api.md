@@ -5,7 +5,7 @@
 **Decision: a new `Cell` *variant*, `SqliteDb`.** The database handle ships as a
 **branded cell of kind `"sqlite"`** — alongside the existing `readonly`,
 `writeonly`, and `opaque` kinds in `CellKind`
-([`packages/api/index.ts`](../../../packages/api/index.ts) — `CellKind` now
+([`base/api/index.ts`](../../../base/api/index.ts) — `CellKind` now
 includes `"sqlite"`). Instead of the general value-cell mutators (`.set`/`.send`),
 it exposes a SQLite method surface — `.exec` (write) and `.query` (reactive
 read).
@@ -23,9 +23,9 @@ read).
 
 The runtime's reactive I/O — `fetchJson`, `generateText`, `streamData` — is
 expressed as built-ins registered in
-[`packages/runner/src/builtins/index.ts`](../../../packages/runner/src/builtins/index.ts)
+[`runtime/runner/src/builtins/index.ts`](../../../runtime/runner/src/builtins/index.ts)
 and surfaced as builder factories in
-[`packages/runner/src/builder/built-in.ts`](../../../packages/runner/src/builder/built-in.ts).
+[`runtime/runner/src/builder/built-in.ts`](../../../runtime/runner/src/builder/built-in.ts).
 A reactive read returns a `Reactive<{ pending, result, error }>` and re-runs
 when its inputs change. `db.query` is the same shape and slots into the same
 machinery — read-tracking, scheduler subscription, post-commit effects, request
@@ -56,7 +56,7 @@ empty object:
   so concurrent writes serialize; patterns do not read it directly.
 
 That descriptor is what the compiler emits as the schema of a `SqliteDb`
-position (`NativeTypeFormatter`, `packages/schema-generator`), keyed on the
+position (`NativeTypeFormatter`, `base/schema-generator`), keyed on the
 `SQLITE_DB_BRAND` the handle type carries: the brand's own members describe
 nothing, so a schema derived from them would shape every read of a handle down
 to `{}`. `tables` therefore reads back whole, per-column `ifc` labels included
@@ -97,11 +97,13 @@ export interface ISqliteQueryable {
     options?: {
       params?: ReadonlyArray<unknown> | Record<string, unknown>;
       reactOn?: unknown;
+      requestKey?: string;
     },
   ): Reactive<{
     pending: boolean;
     result?: SqliteQueryRow<Row>[];
     error?: any;
+    requestKey?: string;
   }>;
 }
 
@@ -129,7 +131,7 @@ Why a cell variant rather than `Cell<SqliteDatabase>` or an opaque empty value:
   who can call them.
 - It still travels as a **reference**: like every cell it carries a `toCell`
   back-pointer
-  ([`packages/runner/src/back-to-cell.ts`](../../../packages/runner/src/back-to-cell.ts)),
+  ([`runtime/runner/src/back-to-cell.ts`](../../../runtime/runner/src/back-to-cell.ts)),
   so the runtime can recover the handle cell — to name the database from its
   entity id, to resolve its source server-side, and to subscribe for reactivity.
 - The handle's **id is opaque** to the pattern: it is the handle cell's own
@@ -233,8 +235,16 @@ db.query<Row = Record<string, unknown>>(
      *  Pass the whole `db` for "any committed write to this database re-runs".
      *  See Section 05. */
     reactOn?: unknown;
+
+    /** Application key echoed on the request's pending and settled states. */
+    requestKey?: string;
   },
-): Reactive<{ pending: boolean; result?: QueryRow<Row>[]; error?: any }>;
+): Reactive<{
+  pending: boolean;
+  result?: QueryRow<Row>[];
+  error?: any;
+  requestKey?: string;
+}>;
 ```
 
 `db.query` is **read-only**. The server rejects any statement that is not a
@@ -257,6 +267,7 @@ export type SqliteQueryParams = {
   sql: string;
   params?: ReadonlyArray<unknown> | Record<string, unknown>;
   reactOn?: unknown;
+  requestKey?: string;
 };
 export declare const sqliteQuery: <Row = Record<string, unknown>>(
   params: Opaque<SqliteQueryParams>,
@@ -264,11 +275,22 @@ export declare const sqliteQuery: <Row = Record<string, unknown>>(
   pending: boolean;
   result?: QueryRow<Row>[];
   error?: any;
+  requestKey?: string;
 }>;
 ```
 
 `db.query<Row>(sql, opts)` and `sqliteQuery<Row>({ db, sql, ...opts })` lower to
 the same `sqliteQuery` node; choose whichever reads better.
+
+`requestKey` is an optional application key, captured with the inputs and echoed
+on every pending, successful, or failed state that the request publishes.
+Changing it changes the memo identity even when SQL and parameters match. A
+consumer compares it with its current application key before using the state;
+updating an input does not synchronously replace the query's previous state.
+The key does not change row identities and is absent for an untagged request.
+Keep it stable for unchanged search and source inputs; unrelated rendering state
+in the key causes another database request. A source registration generation
+belongs in the key only when a new registration requires a fresh request.
 
 SQLite permits result aliases that Fabric records reserve against prototype
 pollution. A reactive query carries a row containing `constructor` or
@@ -286,9 +308,9 @@ described above. The ts-transformer lowers `<Row>` into an injected `rowSchema`
 property on the call — method-call lowering keyed on the `"sqlite"` receiver
 brand for the `db.query<Row>` form, and the free-function form keyed on the
 `sqliteQuery` export
-([`packages/ts-transformers/src/transformers/schema-injection.ts`](../../../packages/ts-transformers/src/transformers/schema-injection.ts);
+([`base/ts-transformers/src/transformers/schema-injection.ts`](../../../base/ts-transformers/src/transformers/schema-injection.ts);
 brand recognition in
-[`packages/ts-transformers/src/transformers/cell-type.ts`](../../../packages/ts-transformers/src/transformers/cell-type.ts)).
+[`base/ts-transformers/src/transformers/cell-type.ts`](../../../base/ts-transformers/src/transformers/cell-type.ts)).
 A `Cell<T>` field in `Row` lowers to `asCell`, which is what drives `_cf_link`
 decode-to-`Cell` (Section [02](./02-cf-link-encoding.md)). The column schema and
 the runtime's durable object-or-entry-list representation therefore stay
@@ -326,7 +348,7 @@ computed columns).
 > type arguments for `toSchema<T>`, `generateObject`, and `lift`. Both the
 > `sqliteQuery` free function and the `db.query` method are registered; the
 > method form is recognized via the `"sqlite"` cell brand. See
-> [`packages/ts-transformers/docs/adding-type-arg-schema-lowering.md`](../../../packages/ts-transformers/docs/adding-type-arg-schema-lowering.md).
+> [`base/ts-transformers/docs/adding-type-arg-schema-lowering.md`](../../../base/ts-transformers/docs/adding-type-arg-schema-lowering.md).
 
 ## `db.exec(sql, params?)` — imperative write
 
@@ -375,7 +397,7 @@ encoded to a sigil link **only** when that parameter targets a `_cf_link` column
 otherwise binding a cell throws (Section [02](./02-cf-link-encoding.md)).
 
 (Runtime: `.exec` is implemented on the cell
-([`packages/runner/src/cell.ts`](../../../packages/runner/src/cell.ts)) and
+([`runtime/runner/src/cell.ts`](../../../runtime/runner/src/cell.ts)) and
 records the op through the storage seam `recordSqliteWrite` → `getNativeCommit` →
 `ClientCommit`, which the engine applies inside the commit transaction — Section
 [04](./04-server-execution-and-transactions.md).)
@@ -386,7 +408,7 @@ records the op through the storage seam `recordSqliteWrite` → `getNativeCommit
   `cfLink<T>()`), because it is a property of the database and is the natural
   home for `_cf_link` markers and future per-column CFC labels (the same `ifc`
   mechanism schemas already support —
-  [`packages/api/index.ts`](../../../packages/api/index.ts) `ifc` field).
+  [`base/api/index.ts`](../../../base/api/index.ts) `ifc` field).
 - **Result-row typing** is the `db.query<Row>` (or `sqliteQuery<Row>`) type
   argument, lowered to a runtime schema by the transformer — needed both to type
   the result and to surface `_cf_link` columns as live `Cell`s.
@@ -419,19 +441,19 @@ encode/decode and to enforce the "single string field ending in `_cf_link`" rule
 As built:
 
 1. Built-in implementations in
-   [`packages/runner/src/builtins/sqlite-builtins.ts`](../../../packages/runner/src/builtins/sqlite-builtins.ts)
+   [`runtime/runner/src/builtins/sqlite-builtins.ts`](../../../runtime/runner/src/builtins/sqlite-builtins.ts)
    (`sqliteDatabase`, `sqliteQuery`), registered in
-   [`packages/runner/src/builtins/index.ts`](../../../packages/runner/src/builtins/index.ts).
+   [`runtime/runner/src/builtins/index.ts`](../../../runtime/runner/src/builtins/index.ts).
 2. The `SqliteDb` cell variant and its `.exec`/`.query` methods live on the cell
-   ([`packages/runner/src/cell.ts`](../../../packages/runner/src/cell.ts)); the
+   ([`runtime/runner/src/cell.ts`](../../../runtime/runner/src/cell.ts)); the
    write op flows through the storage seam `recordSqliteWrite`
-   ([`packages/runner/src/storage/interface.ts`](../../../packages/runner/src/storage/interface.ts)
+   ([`runtime/runner/src/storage/interface.ts`](../../../runtime/runner/src/storage/interface.ts)
    and the v2/extended transaction implementations).
 3. Public types — `CellKind` (`"sqlite"`), `ISqliteDb`/`SqliteDb`,
    `ISqliteExecutable`, `ISqliteQueryable`, `SqliteDatabaseFunction`,
    `SqliteQueryParams`/`SqliteQueryFunction`, `table`/`cfLink` — in
-   [`packages/api/index.ts`](../../../packages/api/index.ts). There is **no**
+   [`base/api/index.ts`](../../../base/api/index.ts). There is **no**
    `sqliteExecute` export.
 4. The ts-transformer lowers the `<Row>` type argument for both `sqliteQuery` and
    `db.query` to an injected `rowSchema`
-   ([`packages/ts-transformers/src/transformers/schema-injection.ts`](../../../packages/ts-transformers/src/transformers/schema-injection.ts)).
+   ([`base/ts-transformers/src/transformers/schema-injection.ts`](../../../base/ts-transformers/src/transformers/schema-injection.ts)).

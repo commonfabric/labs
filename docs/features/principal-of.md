@@ -7,7 +7,7 @@ from a profile, or to check who created a room before accepting it.
 module, returns the one principal the label on `target`'s value attests. This
 document says which claims it reads, what it returns when they do not settle on
 one principal, what it reads to find out, and what the result discloses. The
-implementation is `packages/runner/src/builder/principal-of.ts`.
+implementation is `runtime/runner/src/builder/principal-of.ts`.
 
 ## The claims it reads
 
@@ -27,7 +27,7 @@ name, as a literal, the `ownerPrincipal` its schema declares, and a literal
 `ownerPrincipal` is itself refused unless it is the principal the write acts
 for. Either way, a claim the runtime admits names the principal the write acts
 for.
-`packages/runner/src/cfc/represents-principal.ts` is the one definition of a
+`runtime/runner/src/cfc/represents-principal.ts` is the one definition of a
 claim for both sides: the check `prepare.ts` makes on a write, and the readers.
 
 `principalOf()` reads a claim as `exactPrincipalAttestations()` in that module
@@ -151,6 +151,34 @@ one somebody else does reads `principalsOf()` instead, so that a contested
 label is refused rather than admitted as an unattested one. The Loom root's
 `addPanel` reads its occurrence's `addedBy` field that way.
 
+## Whose own profile a profile is
+
+`profileOwnerOf(profile)`, exported beside them, answers the one question
+every reader of a person's profiles asks: whose own profile `profile` is. It
+returns the principal `principalsOf(profile, "represents-principal")` returns
+when that is exactly one, and only when the profile's `name`, followed through
+every link it holds, stays within the profile's own documents: the profile's,
+and those whose `result` back-link, which setup writes and no pattern can,
+names it. Otherwise, and for a `target` of `undefined`, it returns `undefined`.
+It is the rule `profileOwnerAt()` in `runtime/runner/src/profile-owner.ts`
+states, which hosts apply through `profileOwnership()`. It can be called where
+`principalOf()` can; in a handler, a profile or name document still loading
+withdraws the handler, which runs again once it arrives.
+
+`resultOwnerOf(target, field)` reads no label: it names, as `space/id`, the
+pattern whose result the document `target` is in back-links, when that
+result's own `field` is that document, or returns `undefined` otherwise, for
+a document no pattern's setup derived, and for a `target` of `undefined`.
+Without `field` it checks only whose the document is. A handler that decides
+by several cells it is bound to checks each by the field it must be, so that
+a binding of another pattern's cells, or of the right pattern's cells in each
+other's places, is refused, as Home's `setProfileRetired` and
+`registerSharedSpace` do. Its reads, like `profileOwnerOf()`'s, are ones a
+computation reruns on. A cell whose root holds
+a link stands for the linked document, so such a cell names that document's
+owner; Home hands its handlers the space of the earlier default it holds that
+way (`legacyDefaultProfileSpace`), a cell of its own, instead.
+
 ## Where it can be called
 
 | Where the call runs | Result |
@@ -244,7 +272,7 @@ authority and intent.
 
 ## Tests
 
-`packages/runner/test/builder/principal-of.test.ts` covers the reader against
+`runtime/runner/test/builder/principal-of.test.ts` covers the reader against
 stored labels of each shape above, a profile with and without a written name
 whose other fields carry another runtime's principal, claims the runtime minted
 in a handler
@@ -255,10 +283,10 @@ on a label-only change beside one that holds the same cell and does not, a
 lift that runs again once the name is written, the
 withdrawal of a handler that reads a document still loading beside the cases
 that do not withdraw, and the call in a compiled pattern's handler and
-`computed()`. `packages/runner/test/executor-cross-space.test.ts` covers a
+`computed()`. `runtime/runner/test/executor-cross-space.test.ts` covers a
 served handler reading the label of a foreign document its event reaches
 through a link chain, and one whose chain reaches a document that does not
 exist.
-`packages/runner/test/cfc/represents-principal.test.ts` covers
+`runtime/runner/test/cfc/represents-principal.test.ts` covers
 `exactPrincipalAttestations()` for both kinds, and the written-name rule as
 `authorPrincipalCandidates()` and `exactPrincipalAttestations()` read it.

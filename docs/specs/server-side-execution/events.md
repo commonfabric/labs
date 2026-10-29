@@ -5,10 +5,10 @@ Normative spec for Phase 3 (D-v2-1). Assumes
 
 ## Anchors
 
-- Event machinery: `packages/runner/src/scheduler/events.ts`
+- Event machinery: `runtime/runner/src/scheduler/events.ts`
   (`queueSchedulerEvent`, `addSchedulerEventHandler`,
   `SchedulerEventQueueState`), durable identity in
-  `packages/runner/src/scheduler/event-identity.ts`, preflight in
+  `runtime/runner/src/scheduler/event-identity.ts`, preflight in
   `event-preflight-dependencies.ts`. The server-side handler run reuses
   this machinery inside the SpaceServer's runtime — do not build a second
   event executor.
@@ -211,7 +211,13 @@ handler fires
   beyond the space's commit sequence — same as today. A consequence
   takes effect at its event's place in the firing session's order: a
   write that session committed after the event supersedes the
-  consequence writes it overwrote (serving-loop.md §3d).
+  consequence writes it overwrote (serving-loop.md §3d). A requeue
+  decided at the wave commit keeps the per-stream order: the later
+  entries of that stream the wave processed requeue with the requeued
+  head and re-drain behind it. It does not reach another stream, so a
+  later entry of another stream the wave consequenced keeps its commit,
+  and across streams the arrival order holds between requeues
+  (PROPOSED 2026-10-23, awaiting ruling; serving-loop.md §3d).
 - **Terminal positions.** An error consequence, a T3 dropped notice,
   and a `needs-attention` notice each complete processing at the event's
   arrival position even when the handler produces no domain writes. A
@@ -568,7 +574,7 @@ loop's duty).
   not a CFC verdict. So is a CFC refusal that is not wholly a verdict,
   which keeps the retryable `StorageTransactionAborted` name: prepare
   could not evaluate an input the transaction did not have, or the
-  prepared state drifted (`packages/runner/src/cfc/verdict-reason.ts`),
+  prepared state drifted (`runtime/runner/src/cfc/verdict-reason.ts`),
   and a fresh attempt may land the write that sealing an error would
   end. An explicit handler abort is a handler-error consequence, not an
   infrastructure retry.
@@ -602,7 +608,14 @@ loop's duty).
   followers), and a withdrawal landing while a drain pass is mid-
   iteration stops the pass before it queues later arrivals behind the
   barrier's back — else a later arrival's consequence lands ahead of
-  the withdrawn entry's re-drain, the b01 inversion. The piece-start
+  the withdrawn entry's re-drain, the b01 inversion. A requeue decided
+  at the wave commit — a stale recorded read or a semantic rebase
+  conflict (serving-loop.md §3d) — is the barrier's third arm: the
+  later entries of the same stream that sealed into that wave are
+  withdrawn with the requeued head, and the drain holds them, and every
+  later same-space arrival, behind it until its replay commits; a head
+  waiting on §3d's catch-up gate is a deferred head like any other
+  (PROPOSED 2026-10-23, awaiting ruling). The piece-start
   deferral (a served entry whose piece could not be started, or whose
   piece stands registered between pattern graphs — T3) carries
   the same in-queue sweep; cross-space neighbours and LT1 in-process
@@ -692,11 +705,20 @@ loop's duty).
   and ambiguous storage-time or transport outcomes, are not authorized
   for explicit replay.
 - A serving runtime's refusal of a foreign scoped read (protocol.md §2's
-  fail-closed interim) is no load in flight. The read's scope and the
-  runtime's serving posture decide it, so the same read from the same
-  runtime is refused every time, and the storage manager registers no
-  pending load for it, so a served event's preflight never parks on one.
-  What decides the event is what its run reads. A run that reads the
+  grant-scoped read) is no load in flight. The read's scope, the
+  runtime's serving posture and the foreign space's access list decide
+  it, so the same read from the same runtime is refused every time until
+  that list changes, and the storage manager registers no pending load
+  for it, so a served event's preflight never parks on one. While the
+  reading actor's grant is still being asked for, the read is a load in
+  flight like any other: the preflight parks on it, and a run that
+  reaches such a document in its body alone is withdrawn and runs again
+  once the load settles; a refusal settles it as an absence, not as a
+  failure of the load, so the event dispatches and what decides it is
+  what its run reads. A load that fails instead fails the withdrawn
+  event as a load that failed before dispatch does: deferred with the
+  load's typed failure, no consequence written, later same-space
+  arrivals held behind it. A run that reads the
   value of such a document, a user- or session-scoped document in
   another space reached through its declared event or its bound state,
   read an absence that is not the document's state: the run is withdrawn

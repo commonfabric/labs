@@ -25,6 +25,9 @@ import {
 
 import {
   accountFor,
+  addLaneResults,
+  ANNOTATED_FAILURES,
+  annotateLaneFailures,
   batchCoverage,
   batchesOf,
   batchRepeats,
@@ -41,12 +44,14 @@ import {
   describeCoverage,
   describePlan,
   describeWithheld,
+  errorAnnotation,
   type Execution,
   gainedSince,
   landedFiles,
   type LaneDeps,
   type LaneOptions,
   lanePlan,
+  laneRerun,
   LaneStop,
   main,
   manifestMoment,
@@ -56,6 +61,7 @@ import {
   parseLaneArgs,
   PATTERN_COVERAGE_DIR,
   planOver,
+  reportLane,
   requestedRun,
   rerunFailures,
   runBatch,
@@ -153,7 +159,7 @@ function manifestOf(entries: readonly Partial<ManifestEntry>[]): Manifest {
     entries: entries.map((entry) => ({
       test: { k: "unit", s: "bakery", n: "glaze > sets" },
       suite: "workspace-unit",
-      unit: "packages/bakery/glaze.test.ts",
+      unit: "runtime/bakery/glaze.test.ts",
       cost: 1,
       score: 0.5,
       inputs: { catches: 0, sources: 0, churn: 0 },
@@ -493,7 +499,7 @@ describe("the moment a lane resolves its manifest at", () => {
 describe("turning a lane's selections into batches", () => {
   const bakery = suite({
     id: "workspace-unit",
-    units: ["packages/bakery/glaze.test.ts"],
+    units: ["runtime/bakery/glaze.test.ts"],
   });
 
   it("skips the identities inside a chosen unit that were not chosen", () => {
@@ -510,7 +516,7 @@ describe("turning a lane's selections into batches", () => {
     }]);
     expect(batches.length).toBe(1);
     expect(batches[0]!.units).toEqual([{
-      unit: "packages/bakery/glaze.test.ts",
+      unit: "runtime/bakery/glaze.test.ts",
       skip: ["glaze > browns"],
       cost: 3,
     }]);
@@ -544,7 +550,7 @@ describe("turning a lane's selections into batches", () => {
     // describe around a chosen test runs its hooks too, so the unit costs
     // them as well.
     expect(unitFor("glaze > sets", "icing")).toEqual({
-      unit: "packages/bakery/glaze.test.ts",
+      unit: "runtime/bakery/glaze.test.ts",
       skip: ["glaze > browns", "glazed", "icing > sets", "icing > browns"],
       cost: 1 + 2 + 16,
     });
@@ -557,14 +563,14 @@ describe("turning a lane's selections into batches", () => {
 
     const member = suite({
       id: "workspace-unit",
-      units: ["packages/bakery"],
-      whole: ["packages/bakery"],
+      units: ["runtime/bakery"],
+      whole: ["runtime/bakery"],
     });
     const manifest = manifestOf([
-      { unit: "packages/bakery", cost: 2 },
+      { unit: "runtime/bakery", cost: 2 },
       {
         test: { k: "unit", s: "bakery", n: "glaze > browns" },
-        unit: "packages/bakery",
+        unit: "runtime/bakery",
         cost: 7,
       },
     ]);
@@ -574,7 +580,7 @@ describe("turning a lane's selections into batches", () => {
       repeats: 1,
     }]);
     expect(batches[0]!.units).toEqual([
-      { unit: "packages/bakery", skip: [], cost: 9 },
+      { unit: "runtime/bakery", skip: [], cost: 9 },
     ]);
   });
 
@@ -617,13 +623,13 @@ describe("turning a lane's selections into batches", () => {
     // flaky unit is not a reason to run the rest of the batch again.
     const twoUnits = suite({
       id: "workspace-unit",
-      units: ["packages/bakery/glaze.test.ts", "packages/bakery/ice.test.ts"],
+      units: ["runtime/bakery/glaze.test.ts", "runtime/bakery/ice.test.ts"],
     });
     const manifest = manifestOf([
       {},
       {
         test: { k: "unit", s: "bakery", n: "ice > sets" },
-        unit: "packages/bakery/ice.test.ts",
+        unit: "runtime/bakery/ice.test.ts",
       },
     ]);
     const batches = batchesOf([twoUnits], pricedFor([twoUnits], manifest), [
@@ -635,15 +641,15 @@ describe("turning a lane's selections into batches", () => {
     const round = (run: number) =>
       unitsForRun(batches[0]!, run).map((request) => request.unit);
     expect(round(1)).toEqual([
-      "packages/bakery/glaze.test.ts",
-      "packages/bakery/ice.test.ts",
+      "runtime/bakery/glaze.test.ts",
+      "runtime/bakery/ice.test.ts",
     ]);
     expect(round(2)).toEqual([
-      "packages/bakery/glaze.test.ts",
-      "packages/bakery/ice.test.ts",
+      "runtime/bakery/glaze.test.ts",
+      "runtime/bakery/ice.test.ts",
     ]);
-    expect(round(3)).toEqual(["packages/bakery/glaze.test.ts"]);
-    expect(round(4)).toEqual(["packages/bakery/glaze.test.ts"]);
+    expect(round(3)).toEqual(["runtime/bakery/glaze.test.ts"]);
+    expect(round(4)).toEqual(["runtime/bakery/glaze.test.ts"]);
   });
 
   it("runs a unit nothing asked to repeat exactly once", () => {
@@ -1523,9 +1529,9 @@ describe("what the two runs agree about", () => {
   const bakery = [
     suite({
       id: "workspace-unit",
-      units: ["packages/bakery/glaze.test.ts", "packages/bakery/proof.test.ts"],
+      units: ["runtime/bakery/glaze.test.ts", "runtime/bakery/proof.test.ts"],
       unavailable: [{
-        unit: "packages/bakery/gone.test.ts",
+        unit: "runtime/bakery/gone.test.ts",
         reason: "not in this configuration",
       }],
     }),
@@ -1537,14 +1543,14 @@ describe("what the two runs agree about", () => {
    * changed looks like.
    */
   const stale = manifestOf([
-    { unit: "packages/bakery/glaze.test.ts" },
+    { unit: "runtime/bakery/glaze.test.ts" },
     {
       test: { k: "unit", s: "bakery", n: "gone > entirely" },
-      unit: "packages/bakery/gone.test.ts",
+      unit: "runtime/bakery/gone.test.ts",
     },
     {
       test: { k: "unit", s: "bakery", n: "deleted > long ago" },
-      unit: "packages/bakery/deleted.test.ts",
+      unit: "runtime/bakery/deleted.test.ts",
     },
   ]);
 
@@ -1552,8 +1558,8 @@ describe("what the two runs agree about", () => {
     const full = unitsPerLane(bakery, stale, 1, "everything")[0];
     const budgeted = unitsPerLane(bakery, stale, 1)[0];
     expect(full).toEqual([
-      "packages/bakery/glaze.test.ts",
-      "packages/bakery/proof.test.ts",
+      "runtime/bakery/glaze.test.ts",
+      "runtime/bakery/proof.test.ts",
     ]);
     expect(budgeted).toEqual(full);
   });
@@ -1632,7 +1638,7 @@ describe("running a lane's work", () => {
       id: "workspace-unit",
       recordSurfaces: [{ kind: "unit", scope: "bakery" }],
       needs: [],
-      units: ["packages/bakery/glaze.test.ts"],
+      units: ["runtime/bakery/glaze.test.ts"],
       unavailable: [],
       whole: [],
       locate: () => undefined,
@@ -1644,18 +1650,18 @@ describe("running a lane's work", () => {
     await runBatch(
       {
         suite: recording,
-        units: [{ unit: "packages/bakery/glaze.test.ts", skip: [] }],
-        runs: new Map([["packages/bakery/glaze.test.ts", 1]]),
+        units: [{ unit: "runtime/bakery/glaze.test.ts", skip: [] }],
+        runs: new Map([["runtime/bakery/glaze.test.ts", 1]]),
         projected: 0,
       },
       lane,
       workDir,
       undefined,
       {},
-      { dir: "/cov/workspace-unit", members: new Set(["packages/bakery"]) },
+      { dir: "/cov/workspace-unit", members: new Set(["runtime/bakery"]) },
     );
     expect(given?.coverageDir).toBe("/cov/workspace-unit");
-    expect([...(given?.measuredMembers ?? [])]).toEqual(["packages/bakery"]);
+    expect([...(given?.measuredMembers ?? [])]).toEqual(["runtime/bakery"]);
     expect(given?.patternCoverageDir).toBeUndefined();
     await Deno.remove(workDir, { recursive: true });
   });
@@ -1667,7 +1673,7 @@ describe("running a lane's work", () => {
       id: "workspace-unit",
       recordSurfaces: [{ kind: "unit", scope: "bakery" }],
       needs: [],
-      units: ["packages/bakery/glaze.test.ts"],
+      units: ["runtime/bakery/glaze.test.ts"],
       unavailable: [],
       whole: [],
       locate: () => undefined,
@@ -1679,8 +1685,8 @@ describe("running a lane's work", () => {
     await runBatch(
       {
         suite: recording,
-        units: [{ unit: "packages/bakery/glaze.test.ts", skip: [] }],
-        runs: new Map([["packages/bakery/glaze.test.ts", 1]]),
+        units: [{ unit: "runtime/bakery/glaze.test.ts", skip: [] }],
+        runs: new Map([["runtime/bakery/glaze.test.ts", 1]]),
         projected: 0,
       },
       { ...lane, full: true },
@@ -2022,7 +2028,7 @@ describe("running a lane's work", () => {
     const entry: ManifestEntry = {
       test: { k: "unit", s: "bakery", n: "glaze > sets" },
       suite: "workspace-unit",
-      unit: "packages/bakery/glaze.test.ts",
+      unit: "runtime/bakery/glaze.test.ts",
       cost: 1.5,
       score: 0.5,
       inputs: { catches: 0, sources: 0, churn: 0 },
@@ -2037,8 +2043,8 @@ describe("running a lane's work", () => {
         lane,
         [{
           suite: runnable(["true"], "workspace-unit"),
-          units: [{ unit: "packages/bakery/glaze.test.ts", skip: [] }],
-          runs: new Map([["packages/bakery/glaze.test.ts", 2]]),
+          units: [{ unit: "runtime/bakery/glaze.test.ts", skip: [] }],
+          runs: new Map([["runtime/bakery/glaze.test.ts", 2]]),
           projected: 0,
         }],
         ["deno"],
@@ -2079,8 +2085,8 @@ describe("running a lane's work", () => {
         lane,
         [{
           suite: runnable(["true"], "workspace-unit"),
-          units: [{ unit: "packages/bakery/glaze.test.ts", skip: [] }],
-          runs: new Map([["packages/bakery/glaze.test.ts", 2]]),
+          units: [{ unit: "runtime/bakery/glaze.test.ts", skip: [] }],
+          runs: new Map([["runtime/bakery/glaze.test.ts", 2]]),
           projected: 0,
         }],
         ["deno"],
@@ -2144,7 +2150,7 @@ describe("running a lane's work", () => {
     return {
       test: { k: "unit", s: "bakery", n: `${unit} > sets` },
       suite: "workspace-unit",
-      unit: `packages/bakery/${unit}.test.ts`,
+      unit: `runtime/bakery/${unit}.test.ts`,
       cost,
       score: 0.5,
       inputs: { catches: 0, sources: 0, churn: 0 },
@@ -2157,7 +2163,7 @@ describe("running a lane's work", () => {
   function unmeasured(unit: string, costs: readonly number[]): ManifestEntry {
     return standIn(
       runnable(["true"], "workspace-unit"),
-      `packages/bakery/${unit}.test.ts`,
+      `runtime/bakery/${unit}.test.ts`,
       costs,
     );
   }
@@ -2615,7 +2621,7 @@ describe("the lane's own housekeeping", () => {
               Promise.resolve([
                 suite({
                   id: "workspace-unit",
-                  units: ["packages/bakery/glaze.test.ts"],
+                  units: ["runtime/bakery/glaze.test.ts"],
                 }),
               ]),
             manifest: () => Promise.resolve({ manifest: manifestOf([{}]) }),
@@ -2819,7 +2825,7 @@ describe("the lane's own housekeeping", () => {
     const temp = await Deno.makeTempDir({ prefix: "lane-tmp-" });
     const restore = setEnv({ TMPDIR: temp, RUNNER_TEMP: undefined });
     const dir =
-      `${root}/coverage${COVERAGE_PROFILE_SUFFIX}/workspace-unit/packages__bakery`;
+      `${root}/coverage${COVERAGE_PROFILE_SUFFIX}/workspace-unit/runtime__bakery`;
     await Deno.mkdir(dir, { recursive: true });
     await Deno.writeTextFile(`${dir}/broken.json`, "this is not a profile");
     const bare: Suite = {
@@ -2872,7 +2878,7 @@ describe("the lane's own housekeeping", () => {
       id: "wanting",
       recordSurfaces: [{ kind: "unit", scope: "wanting" }],
       needs: ["nothing-opens-this" as CapabilityId],
-      units: ["packages/bakery/glaze.test.ts"],
+      units: ["runtime/bakery/glaze.test.ts"],
       unavailable: [],
       whole: [],
       locate: () => undefined,
@@ -2941,7 +2947,7 @@ describe("the lane's own housekeeping", () => {
           Promise.resolve([
             suite({
               id: "workspace-unit",
-              units: ["packages/bakery/glaze.test.ts"],
+              units: ["runtime/bakery/glaze.test.ts"],
               command: () => {
                 throw new Error("an empty lane must run no batch");
               },
@@ -3019,7 +3025,7 @@ describe("the lane's own housekeeping", () => {
     const compiling = [suite({
       id: "pattern-unit",
       needs: ["compile-cache"],
-      units: ["packages/patterns/counter.test.tsx"],
+      units: ["patterns/examples/counter.test.tsx"],
       command: (_units, context) =>
         Deno.writeTextFile(`${context.root}/${COMPILE_CACHE_FILE}`, "{}")
           .then(() => []),
@@ -3040,7 +3046,7 @@ describe("the lane's own housekeeping", () => {
     try {
       await onlyLane(root, [suite({
         id: "workspace-unit",
-        units: ["packages/bakery/glaze.test.ts"],
+        units: ["runtime/bakery/glaze.test.ts"],
       })]);
       expect(await exists(`${root}/coverage/lcov/${COMPILE_CACHE_STATE_FILE}`))
         .toBe(false);
@@ -3058,7 +3064,7 @@ describe("the lane's own housekeeping", () => {
     const temp = await Deno.makeTempDir({ prefix: "lane-tmp-" });
     const failing = [suite({
       id: "workspace-unit",
-      units: ["packages/bakery/glaze.test.ts"],
+      units: ["runtime/bakery/glaze.test.ts"],
       command: (_units, context) =>
         Promise.resolve([{
           command: [Deno.execPath(), "eval", "Deno.exit(1)"],
@@ -3068,11 +3074,11 @@ describe("the lane's own housekeeping", () => {
     const refusing = [suite({
       id: "workspace-unit",
       needs: ["nothing-opens-this" as CapabilityId],
-      units: ["packages/bakery/glaze.test.ts"],
+      units: ["runtime/bakery/glaze.test.ts"],
     })];
     const throwing = [suite({
       id: "workspace-unit",
-      units: ["packages/bakery/glaze.test.ts"],
+      units: ["runtime/bakery/glaze.test.ts"],
       command: () =>
         Promise.reject(new Error("the command could not be built")),
     })];
@@ -3080,10 +3086,10 @@ describe("the lane's own housekeeping", () => {
     // conversion can read where `broken`.
     const passing = (broken: boolean) => [suite({
       id: "workspace-unit",
-      units: ["packages/bakery/glaze.test.ts"],
+      units: ["runtime/bakery/glaze.test.ts"],
       locate: () => ({
         level: "unit" as const,
-        unit: "packages/bakery/glaze.test.ts",
+        unit: "runtime/bakery/glaze.test.ts",
       }),
       command: async (_units, context) => {
         const profiles = `${context.root}/coverage-raw/workspace-unit/bakery`;
@@ -3157,6 +3163,153 @@ describe("the lane's own housekeeping", () => {
       await Deno.remove(root, { recursive: true });
     }
   });
+
+  /**
+   * Runs the only lane of a pull request's run over `suites` in a root
+   * holding a workspace of `runtime/bakery`, and returns whether it
+   * passed and the block it ended with.
+   */
+  async function closingSummary(
+    suites: Suite[],
+  ): Promise<{ ok: boolean; summary: string[] }> {
+    const root = await Deno.makeTempDir({ prefix: "lane-summary-" });
+    await Deno.writeTextFile(
+      `${root}/deno.jsonc`,
+      JSON.stringify({ workspace: ["./runtime/bakery"] }),
+    );
+    const lines: string[] = [];
+    const log = console.log;
+    // As it runs outside a job, whatever job runs this test.
+    const restore = setEnv({
+      RUNNER_TEMP: undefined,
+      GITHUB_ACTIONS: undefined,
+      GITHUB_STEP_SUMMARY: undefined,
+    });
+    console.log = (line: string) => lines.push(line);
+    try {
+      const ok = await runLane(
+        {
+          lane: 1,
+          of: 1,
+          full: false,
+          dryRun: false,
+          laneCount: false,
+          root,
+          at: "2026-09-01T00:00:00Z",
+        },
+        {
+          topology: () => Promise.resolve(suites),
+          manifest: ({ at }) =>
+            Promise.resolve({ absent: `no manifest at ${at}: held out here` }),
+          spool: () => undefined,
+        },
+      );
+      return {
+        ok,
+        summary: lines.slice(
+          lines.findIndex((line) => line.includes("test summary")) + 1,
+        ),
+      };
+    } finally {
+      console.log = log;
+      restore();
+      await Deno.remove(root, { recursive: true });
+    }
+  }
+
+  const unit = "runtime/bakery/glaze.test.ts";
+
+  it("ends with each failing test, its error, and how to run it again", async () => {
+    const report = `<testsuites><testsuite name="./glaze.test.ts">
+  <testcase name="glaze" classname="./glaze.test.ts"/>
+  <testcase name="glaze &gt; sets" classname="./glaze.test.ts">
+    <failure message="Uncaught Error: still runny">stack</failure>
+  </testcase>
+</testsuite></testsuites>`;
+    const { ok, summary } = await closingSummary([suite({
+      id: "workspace-unit",
+      units: [unit],
+      locate: () => ({ level: "unit" as const, unit }),
+      command: (_units, context) => {
+        const at = `${context.outputDir}/report.xml`;
+        return Promise.resolve([{
+          command: [
+            Deno.execPath(),
+            "eval",
+            `Deno.writeTextFileSync(${JSON.stringify(at)}, ` +
+            `${JSON.stringify(report)}); Deno.exit(1)`,
+          ],
+          cwd: context.root,
+          junit: [{
+            kind: "unit",
+            scope: "bakery",
+            path: at,
+            filePrefix: "runtime/bakery",
+          }],
+        }]);
+      },
+    })]);
+
+    expect(ok).toBe(false);
+    expect(summary[0]).toMatch(/^FAILED: 1 failed, 0 passed, 0 skipped \(/);
+    expect(summary.slice(1)).toEqual([
+      "",
+      "FAIL unit/bakery: glaze > sets",
+      "  file:  runtime/bakery/glaze.test.ts",
+      "  rerun: cd runtime/bakery && deno task test --filter glaze",
+      "  | Error: still runny",
+      "",
+      "Logs: the output above",
+    ]);
+  });
+
+  it("ends by saying why it failed where no test failed", async () => {
+    const { ok, summary } = await closingSummary([suite({
+      id: "workspace-unit",
+      units: [unit],
+      locate: () => ({ level: "unit" as const, unit }),
+      command: async (_units, context) => {
+        // A pass, and a coverage profile no conversion can read.
+        const profiles = `${context.root}/coverage-raw/workspace-unit/bakery`;
+        await Deno.mkdir(profiles, { recursive: true });
+        await Deno.writeTextFile(`${profiles}/broken.json`, "{");
+        const record = JSON.stringify({
+          line: "record",
+          test: { k: "unit", s: "bakery", n: "glaze > sets" },
+          outcome: "pass",
+          durationMs: 1,
+        });
+        return [{
+          command: [
+            Deno.execPath(),
+            "eval",
+            `Deno.writeTextFileSync(
+              Deno.env.get("CF_TEST_RECORDS_DIR") + "/fragment-a.ndjson",
+              ${JSON.stringify(record + "\n")},
+            )`,
+          ],
+          cwd: context.root,
+        }];
+      },
+    })]);
+
+    expect(ok).toBe(false);
+    expect(summary[0]).toMatch(/^FAILED: 0 failed, 1 passed, 0 skipped \(/);
+    expect(summary.slice(1)).toEqual([
+      "",
+      "Converting a coverage profile lost a tracked file.",
+      "",
+      "Logs: the output above",
+    ]);
+  });
+
+  it("ends a passing lane with one line", async () => {
+    const { ok, summary } = await closingSummary([]);
+
+    expect(ok).toBe(true);
+    expect(summary).toHaveLength(1);
+    expect(summary[0]).toMatch(/^PASSED: 0 failed, 0 passed, 0 skipped \(/);
+  });
 });
 
 describe("what a lane records about itself", () => {
@@ -3199,7 +3352,7 @@ describe("what a lane records about itself", () => {
             path: report,
             kind: "unit",
             scope: "bakery",
-            filePrefix: "packages/bakery",
+            filePrefix: "runtime/bakery",
           }],
         }]),
     });
@@ -3213,7 +3366,7 @@ describe("what a lane records about itself", () => {
     expect(result.ok).toBe(true);
     // The report's case reaches the lane's records with its file joined on.
     expect(result.records.map((record) => record.test.n)).toEqual(["bakes"]);
-    expect(result.records[0]!.file).toBe("packages/bakery/test/bake.test.ts");
+    expect(result.records[0]!.file).toBe("runtime/bakery/test/bake.test.ts");
 
     const spooled: string[] = [];
     for await (const entry of Deno.readDir(spool)) {
@@ -3438,7 +3591,7 @@ describe("what a lane records about itself", () => {
         {
           suite: suite({
             id: "pattern-integration",
-            units: ["packages/bakery/oven.test.ts"],
+            units: ["runtime/bakery/oven.test.ts"],
             recordSurfaces: [{ kind: "integration", scope: "bakery" }],
             locate: (record) =>
               record.file === undefined
@@ -3459,12 +3612,12 @@ describe("what a lane records about itself", () => {
                   path: `${context.outputDir}/report.xml`,
                   kind: "integration",
                   scope: "bakery",
-                  filePrefix: "packages/bakery",
+                  filePrefix: "runtime/bakery",
                 }],
               }]),
           }),
-          units: [{ unit: "packages/bakery/oven.test.ts", skip: [] }],
-          runs: new Map([["packages/bakery/oven.test.ts", 1]]),
+          units: [{ unit: "runtime/bakery/oven.test.ts", skip: [] }],
+          runs: new Map([["runtime/bakery/oven.test.ts", 1]]),
           projected: 0,
         },
         lane,
@@ -3489,7 +3642,7 @@ describe("what a lane records about itself", () => {
           hooksMeasurementName(
             "pattern-integration",
             false,
-            "packages/bakery/oven.test.ts",
+            "runtime/bakery/oven.test.ts",
           ),
         ),
       ).toBe(3500);
@@ -3851,7 +4004,7 @@ describe("the last corners of a lane's bookkeeping", () => {
     ]);
     const bakery = suite({
       id: "workspace-unit",
-      units: ["packages/bakery/glaze.test.ts"],
+      units: ["runtime/bakery/glaze.test.ts"],
     });
     const batches = batchesOf(
       [bakery],
@@ -3864,7 +4017,7 @@ describe("the last corners of a lane's bookkeeping", () => {
     );
     expect(batches.length).toBe(1);
     expect(batches[0]!.units).toEqual([{
-      unit: "packages/bakery/glaze.test.ts",
+      unit: "runtime/bakery/glaze.test.ts",
       skip: [],
       cost: 8,
     }]);
@@ -3920,7 +4073,7 @@ describe("writing the lane's records into its spool", () => {
 });
 
 describe("reading a batch's records against what it was asked to run", () => {
-  const UNIT = "packages/bakery/glaze.test.ts";
+  const UNIT = "runtime/bakery/glaze.test.ts";
 
   /**
    * A batch of one unit run `runs` times, over a suite that locates by
@@ -4567,7 +4720,7 @@ describe("glaze", () => {
 });
 
 describe("what a batch reads of what a whole run registered", () => {
-  const UNIT = "packages/bakery#browser-test";
+  const UNIT = "runtime/bakery#browser-test";
 
   /**
    * Runs a batch of one unit that holds every file of a package's browser
@@ -4626,8 +4779,8 @@ describe("what a batch reads of what a whole run registered", () => {
         kind: "browser",
         scope: "bakery",
         tests: {
-          "packages/bakery/a.browser.test.ts": ["renders"],
-          "packages/bakery/b.browser.test.ts": ["clicks"],
+          "runtime/bakery/a.browser.test.ts": ["renders"],
+          "runtime/bakery/b.browser.test.ts": ["clicks"],
         },
       }),
     ).toEqual(new Map([[UNIT, new Set(["renders", "clicks"])]]));
@@ -4641,7 +4794,7 @@ describe("what a batch reads of what a whole run registered", () => {
       await registeredBy({
         kind: "browser",
         scope: "bakery",
-        tests: { "packages/bakery/a.browser.test.ts": [] },
+        tests: { "runtime/bakery/a.browser.test.ts": [] },
       }),
     ).toEqual(new Map([[UNIT, new Set()]]));
   });
@@ -4651,14 +4804,14 @@ describe("what a batch reads of what a whole run registered", () => {
       await registeredBy({
         kind: "browser",
         scope: "pantry",
-        tests: { "packages/pantry/a.browser.test.ts": ["renders"] },
+        tests: { "runtime/pantry/a.browser.test.ts": ["renders"] },
       }),
     ).toEqual(new Map());
   });
 });
 
 describe("what a lane does with the batches it was given", () => {
-  const UNIT = "packages/bakery/test/glaze.test.ts";
+  const UNIT = "runtime/bakery/test/glaze.test.ts";
 
   /**
    * A command that records the unit having run, and then does whatever
@@ -4734,12 +4887,15 @@ describe("what a lane does with the batches it was given", () => {
   async function run(
     command: readonly string[],
     over: { full?: boolean; manifest?: Manifest; stop?: LaneStop } = {},
-  ): Promise<{ ok: boolean; measured: TestRecord[] }> {
+  ): Promise<{ ok: boolean; measured: TestRecord[]; annotations: string[] }> {
     const spool = await Deno.makeTempDir({ prefix: "lane-spool-" });
     const { stop } = over;
     const restore = outsideJob();
     const log = console.log;
-    console.log = () => {};
+    const annotations: string[] = [];
+    console.log = (line: string) => {
+      if (line.startsWith("::error")) annotations.push(line);
+    };
     try {
       const ok = await runLane(
         {
@@ -4767,7 +4923,7 @@ describe("what a lane does with the batches it was given", () => {
       const measured = written.split("\n")
         .filter((line) => line.length > 0)
         .map((line) => JSON.parse(line) as TestRecord);
-      return { ok, measured };
+      return { ok, measured, annotations };
     } finally {
       console.log = log;
       restore();
@@ -4804,6 +4960,121 @@ describe("what a lane does with the batches it was given", () => {
     // carrying both outcomes for the identity.
     expect(batchOutcome(measured)).toBe("pass");
   });
+
+  it("leaves excused failures out of the live annotations", async () => {
+    const restore = setEnv({
+      GITHUB_ACTIONS: "true",
+      GITHUB_STEP_SUMMARY: undefined,
+    });
+    try {
+      const { ok, annotations } = await run(recording("", "fail"), {
+        full: true,
+        manifest: withholding(),
+      });
+      expect(ok).toBe(true);
+      expect(annotations).toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+
+  for (const missingManifest of [false, true]) {
+    const title = missingManifest
+      ? "keeps later batches running when rerun-command lookup cannot read the workspace manifest"
+      : "annotates a gating failure before starting the next batch and keeps running the lane";
+    it(title, async () => {
+      const spool = await Deno.makeTempDir({ prefix: "lane-early-failure-" });
+      const lines: string[] = [];
+      const entries = ["first", "second"].map((name, index) => ({
+        test: { k: "unit" as const, s: "bakery", n: `${name} > runs` },
+        suite: name,
+        unit: `packages/bakery/${name}.test.ts`,
+        cost: 2 - index,
+      }));
+      let secondRan = false;
+      const reporting = (index: number) => {
+        const entry = entries[index]!;
+        return suite({
+          id: entry.suite,
+          units: [entry.unit],
+          locate: (record) =>
+            record.test.n === entry.test.n
+              ? { level: "unit", unit: entry.unit }
+              : undefined,
+          command: (_units, context) => {
+            if (index === 1) {
+              expect(lines.filter((line) => line.startsWith("::error")))
+                .toHaveLength(1);
+              expect(lines.some((line) => line.startsWith("FAILED:")))
+                .toBe(false);
+              secondRan = true;
+            }
+            return Promise.resolve([{
+              command: [
+                Deno.execPath(),
+                "eval",
+                `const dir = Deno.env.get("CF_TEST_RECORDS_DIR");
+               Deno.mkdirSync(dir, { recursive: true });
+               Deno.writeTextFileSync(
+                 dir + "/fragment-fixture.ndjson",
+                 JSON.stringify(${
+                  JSON.stringify({
+                    line: "record",
+                    test: entry.test,
+                    outcome: index === 0 ? "fail" : "pass",
+                    durationMs: 1,
+                  })
+                }) + "\\n",
+               );`,
+              ],
+              cwd: context.root,
+            }]);
+          },
+        });
+      };
+      const restore = setEnv({
+        RUNNER_TEMP: undefined,
+        GITHUB_ACTIONS: "true",
+        GITHUB_STEP_SUMMARY: undefined,
+      });
+      const warnings: unknown[][] = [];
+      const warn = console.warn;
+      console.warn = (...args: unknown[]) => warnings.push(args);
+      const log = console.log;
+      console.log = (line: string) => lines.push(line);
+      try {
+        const ok = await runLane({
+          lane: 1,
+          of: 1,
+          full: true,
+          dryRun: false,
+          laneCount: false,
+          root: missingManifest ? spool : REPOSITORY,
+          at: "2026-09-01T00:00:00Z",
+          coverageDir: `${spool}/coverage`,
+        }, {
+          manifest: () =>
+            Promise.resolve({
+              manifest: manifestOf(entries),
+              objectName: "manifest-fixture.json.gz",
+            }),
+          topology: () => Promise.resolve([reporting(0), reporting(1)]),
+          spool: () => spool,
+        });
+        expect(ok).toBe(false);
+        expect(secondRan).toBe(true);
+        expect(warnings).toHaveLength(missingManifest ? 1 : 0);
+        expect(lines.filter((line) => line.startsWith("::error")))
+          .toHaveLength(1);
+        expect(lines.some((line) => line.startsWith("FAILED:"))).toBe(true);
+      } finally {
+        console.log = log;
+        console.warn = warn;
+        restore();
+        await Deno.remove(spool, { recursive: true });
+      }
+    });
+  }
 
   it("fails a lane told to stop, runs nothing more, and says what it spent", async () => {
     const stop = new LaneStop();
@@ -4900,7 +5171,7 @@ describe("what a lane does with the batches it was given", () => {
       suite({
         id,
         needs,
-        units: [`packages/bakery/${id}.test.ts`],
+        units: [`runtime/bakery/${id}.test.ts`],
         command: (_units, context) =>
           Promise.resolve([{
             command: [
@@ -4935,12 +5206,12 @@ describe("what a lane does with the batches it was given", () => {
                 {
                   test: { k: "unit", s: "bakery", n: "asked > runs" },
                   suite: "asked",
-                  unit: "packages/bakery/asked.test.ts",
+                  unit: "runtime/bakery/asked.test.ts",
                 },
                 {
                   test: { k: "unit", s: "bakery", n: "did-not > runs" },
                   suite: "did-not",
-                  unit: "packages/bakery/did-not.test.ts",
+                  unit: "runtime/bakery/did-not.test.ts",
                 },
               ]),
               objectName: "manifest-fixture.json.gz",
@@ -5395,7 +5666,7 @@ describe("what a lane does with the batches it was given", () => {
       // Each unit fits the budget on its own and the two do not fit
       // together, so a round that ran the first has to leave the second
       // for a later round rather than dropping it.
-      const SECOND = "packages/bakery/test/cools.test.ts";
+      const SECOND = "runtime/bakery/test/cools.test.ts";
       const names: Record<string, string> = {
         [UNIT]: "glaze > sets",
         [SECOND]: "glaze > cools",
@@ -5672,15 +5943,15 @@ describe("what a lane measures", () => {
     const coverage = batchCoverage(
       options,
       "workspace-unit",
-      gated("packages/bakery"),
+      gated("runtime/bakery"),
     );
     expect(coverage?.dir)
       .toBe(`/repo/coverage${COVERAGE_PROFILE_SUFFIX}/workspace-unit`);
-    expect([...coverage!.members!]).toEqual(["packages/bakery"]);
+    expect([...coverage!.members!]).toEqual(["runtime/bakery"]);
   });
 
   it("measures nothing in a suite whose gates the plan did not choose", () => {
-    expect(batchCoverage(options, "runner-unit", gated("packages/bakery")))
+    expect(batchCoverage(options, "runner-unit", gated("runtime/bakery")))
       .toBeUndefined();
   });
 
@@ -5688,7 +5959,7 @@ describe("what a lane measures", () => {
     const coverage = batchCoverage(
       { ...options, full: true },
       "runner-unit",
-      gated("packages/bakery"),
+      gated("runtime/bakery"),
     );
     expect(coverage?.members).toBeUndefined();
     expect(coverage?.dir)
@@ -5704,7 +5975,7 @@ describe("what a lane measures", () => {
     const coverage = batchCoverage(
       options,
       "workspace-unit",
-      gated("packages/bakery"),
+      gated("runtime/bakery"),
     );
     expect(coverage?.patternDir).toBeUndefined();
   });
@@ -5713,7 +5984,7 @@ describe("what a lane measures", () => {
     const coverage = batchCoverage(
       { ...options, full: true, coverageDir: "elsewhere" },
       "runner-unit",
-      gated("packages/bakery"),
+      gated("runtime/bakery"),
     );
     expect(coverage?.dir)
       .toBe(`/repo/elsewhere${COVERAGE_PROFILE_SUFFIX}/runner-unit`);
@@ -5725,14 +5996,14 @@ describe("what a lane measures", () => {
     const units = [
       suite({
         id: "workspace-unit",
-        units: ["packages/bakery/one.test.ts"],
+        units: ["runtime/bakery/one.test.ts"],
         measured: [{
-          member: "packages/bakery",
-          reachedBy: ["packages/bakery/"],
-          units: ["packages/bakery/one.test.ts"],
+          member: "runtime/bakery",
+          reachedBy: ["runtime/bakery/"],
+          units: ["runtime/bakery/one.test.ts"],
         }],
       }),
-      suite({ id: "runner-unit", units: ["packages/oven/one.test.ts"] }),
+      suite({ id: "runner-unit", units: ["runtime/oven/one.test.ts"] }),
     ];
     const suites = [...units, coverageGateSuite(units)];
     const gate = { k: "gate", s: "bakery", n: "coverage-gate workspace-unit" };
@@ -5740,19 +6011,19 @@ describe("what a lane measures", () => {
       {
         test: gate,
         suite: "coverage-gate",
-        unit: "workspace-unit/packages/bakery",
+        unit: "workspace-unit/runtime/bakery",
         cost: 0,
         score: 0.9,
       },
       {
         test: { k: "unit", s: "bakery", n: "one" },
-        unit: "packages/bakery/one.test.ts",
+        unit: "runtime/bakery/one.test.ts",
         cost: 10,
       },
       {
         test: { k: "unit", s: "oven", n: "one" },
         suite: "runner-unit",
-        unit: "packages/oven/one.test.ts",
+        unit: "runtime/oven/one.test.ts",
         cost: 10,
       },
     ]);
@@ -5785,7 +6056,7 @@ describe("what a lane measures", () => {
     });
 
     /**
-     * A repository whose second commit touches `packages/bakery`, and the
+     * A repository whose second commit touches `runtime/bakery`, and the
      * plan a pull request of it packs from `manifest`.
      */
     async function reaching(manifest: Manifest) {
@@ -5810,8 +6081,8 @@ describe("what a lane measures", () => {
         await git("add", ".");
         await git("-c", "commit.gpgsign=false", "commit", "-q", "-m", "one");
         await git("branch", "base");
-        await Deno.mkdir(`${repo}/packages/bakery`, { recursive: true });
-        await Deno.writeTextFile(`${repo}/packages/bakery/glaze.ts`, "b");
+        await Deno.mkdir(`${repo}/runtime/bakery`, { recursive: true });
+        await Deno.writeTextFile(`${repo}/runtime/bakery/glaze.ts`, "b");
         await git("add", ".");
         await git("-c", "commit.gpgsign=false", "commit", "-q", "-m", "two");
         return await lanePlan(
@@ -5828,7 +6099,7 @@ describe("what a lane measures", () => {
       const { seen, laid, coverage } = await reaching(manifest);
       expect(laid.gates.map((chosen) => chosen.entry.test)).toEqual([gate]);
       expect(coverage.sets.map((ref) => ref.set.member))
-        .toEqual(["packages/bakery"]);
+        .toEqual(["runtime/bakery"]);
       expect(seen.manifest.calibration.suites["workspace-unit"])
         .toEqual(WITH);
       expect(seen.manifest.calibration.suites["runner-unit"])
@@ -5847,7 +6118,7 @@ describe("what a lane measures", () => {
       expect(laid.gates).toEqual([]);
       expect(coverage.sets).toEqual([]);
       expect(coverage.reached.map((ref) => ref.set.member))
-        .toEqual(["packages/bakery"]);
+        .toEqual(["runtime/bakery"]);
       expect(seen.manifest.calibration.suites["workspace-unit"])
         .toEqual(WITHOUT);
     });
@@ -5864,7 +6135,7 @@ describe("what a lane measures", () => {
 
 describe("planOver()", () => {
   const suites = [
-    suite({ id: "workspace-unit", units: ["packages/bakery/glaze.test.ts"] }),
+    suite({ id: "workspace-unit", units: ["runtime/bakery/glaze.test.ts"] }),
   ];
 
   /** A manifest holding its one identity back as too flaky. */
@@ -5899,8 +6170,8 @@ describe("planOver()", () => {
     // runs whatever it costs. One that was on the default branch before
     // the change runs where there is room for it, and here there is none.
 
-    const glaze = "packages/bakery/glaze.test.ts";
-    const proof = "packages/bakery/proof.test.ts";
+    const glaze = "runtime/bakery/glaze.test.ts";
+    const proof = "runtime/bakery/proof.test.ts";
     const reasons = (landed: ReadonlySet<string>) =>
       planOver({
         suites: [suite({ id: "workspace-unit", units: [glaze, proof] })],
@@ -5949,17 +6220,17 @@ describe("converting what a lane collected", () => {
 
   it("writes one report per profile directory, named for the set", async () => {
     const root = await collected([
-      "workspace-unit/packages__bakery",
-      "runner-unit/packages__runner",
+      "workspace-unit/runtime__bakery",
+      "runner-unit/runtime__runner",
     ]);
     const converted = await convertCoverage({ ...options(root) });
     expect(converted.ok).toBe(true);
     expect(converted.reports).toEqual([
-      "runner-unit/packages__runner",
-      "workspace-unit/packages__bakery",
+      "runner-unit/runtime__runner",
+      "workspace-unit/runtime__bakery",
     ]);
     const at = `${root}/coverage/${COVERAGE_REPORT_DIR}/workspace-unit/` +
-      `packages__bakery/${COVERAGE_REPORT_FILE}`;
+      `runtime__bakery/${COVERAGE_REPORT_FILE}`;
     expect((await Deno.stat(at)).isFile).toBe(true);
   });
 
@@ -5967,9 +6238,9 @@ describe("converting what a lane collected", () => {
     // The repository-wide figure the full run publishes is the merge of
     // every report, so a directory the gate will not score is still
     // converted.
-    const root = await collected(["cli-core/packages__cli"]);
+    const root = await collected(["cli-core/runtime__cli"]);
     const converted = await convertCoverage({ ...options(root) });
-    expect(converted.reports).toEqual(["cli-core/packages__cli"]);
+    expect(converted.reports).toEqual(["cli-core/runtime__cli"]);
   });
 
   it("takes the directory its coverage goes under from the command line", () => {
@@ -5992,12 +6263,12 @@ describe("converting what a lane collected", () => {
     // report that was never complete.
     const root = await Deno.makeTempDir({ prefix: "lane-coverage-" });
     const dir =
-      `${root}/coverage${COVERAGE_PROFILE_SUFFIX}/workspace-unit/packages__bakery`;
+      `${root}/coverage${COVERAGE_PROFILE_SUFFIX}/workspace-unit/runtime__bakery`;
     await Deno.mkdir(dir, { recursive: true });
     await Deno.writeTextFile(`${dir}/broken.json`, "this is not a profile");
     const converted = await convertCoverage({ ...options(root) });
     expect(converted.ok).toBe(false);
-    expect(converted.reports).toEqual(["workspace-unit/packages__bakery"]);
+    expect(converted.reports).toEqual(["workspace-unit/runtime__bakery"]);
   });
 
   it("writes nothing where the lane measured nothing", async () => {
@@ -6042,26 +6313,26 @@ describe("converting what a lane collected", () => {
       const marked = await markMeasuredFailures(
         options(root),
         [
-          measuring("workspace-unit", "packages/bakery", [
-            "packages/bakery/glaze.test.ts",
+          measuring("workspace-unit", "runtime/bakery", [
+            "runtime/bakery/glaze.test.ts",
           ]),
-          measuring("runner-unit", "packages/runner", [
-            "packages/runner/park.test.ts",
+          measuring("runner-unit", "runtime/runner", [
+            "runtime/runner/park.test.ts",
           ]),
         ],
-        new Set(["workspace-unit\tpackages/bakery/glaze.test.ts"]),
+        new Set(["workspace-unit\truntime/bakery/glaze.test.ts"]),
       );
-      expect(marked).toEqual(["workspace-unit/packages/bakery"]);
+      expect(marked).toEqual(["workspace-unit/runtime/bakery"]);
       const at = `${root}/coverage/${COVERAGE_REPORT_DIR}/workspace-unit/` +
-        `packages__bakery/${COVERAGE_FAILURE_MARKER}`;
+        `runtime__bakery/${COVERAGE_FAILURE_MARKER}`;
       expect(await Deno.readTextFile(at)).toBe(
-        "packages/bakery/glaze.test.ts\n",
+        "runtime/bakery/glaze.test.ts\n",
       );
       // And nothing beside the set whose unit passed.
       await expect(
         Deno.stat(
           `${root}/coverage/${COVERAGE_REPORT_DIR}/runner-unit/` +
-            `packages__runner/${COVERAGE_FAILURE_MARKER}`,
+            `runtime__runner/${COVERAGE_FAILURE_MARKER}`,
         ),
       ).rejects.toThrow();
     } finally {
@@ -6078,11 +6349,11 @@ describe("converting what a lane collected", () => {
     try {
       await markMeasuredFailures(
         options(root),
-        [measuring("workspace-unit", "packages/bakery", ["one.test.ts"])],
+        [measuring("workspace-unit", "runtime/bakery", ["one.test.ts"])],
         new Set(["workspace-unit\tone.test.ts"]),
       );
       const dir =
-        `${root}/coverage/${COVERAGE_REPORT_DIR}/workspace-unit/packages__bakery`;
+        `${root}/coverage/${COVERAGE_REPORT_DIR}/workspace-unit/runtime__bakery`;
       expect(
         (await Array.fromAsync(Deno.readDir(dir))).map((entry) => entry.name),
       ).toEqual([COVERAGE_FAILURE_MARKER]);
@@ -6097,7 +6368,7 @@ describe("converting what a lane collected", () => {
       expect(
         await markMeasuredFailures(
           options(root),
-          [measuring("workspace-unit", "packages/bakery", ["one.test.ts"])],
+          [measuring("workspace-unit", "runtime/bakery", ["one.test.ts"])],
           new Set(),
         ),
       ).toEqual([]);
@@ -6130,13 +6401,13 @@ describe("what a lane says about coverage", () => {
         sets: [{
           suite: "workspace-unit",
           set: {
-            member: "packages/bakery",
-            reachedBy: ["packages/bakery/"],
-            units: ["packages/bakery/one.test.ts"],
+            member: "runtime/bakery",
+            reachedBy: ["runtime/bakery/"],
+            units: ["runtime/bakery/one.test.ts"],
           },
         }],
         reached: [],
-      }, ["workspace-unit/packages__bakery"]);
+      }, ["workspace-unit/runtime__bakery"]);
     } finally {
       console.log = log;
     }
@@ -6145,11 +6416,11 @@ describe("what a lane says about coverage", () => {
     // report belongs to, and its directory is not spelled out.
     expect(
       text.split("\n").filter((line) =>
-        line === "- workspace-unit/packages/bakery"
+        line === "- workspace-unit/runtime/bakery"
       ),
     ).toHaveLength(2);
     expect(text).toContain("Reports this lane wrote");
-    expect(text).not.toContain("packages__bakery");
+    expect(text).not.toContain("runtime__bakery");
   });
 
   it("names a set whose number this run did not stand behind", () => {
@@ -6161,14 +6432,14 @@ describe("what a lane says about coverage", () => {
     console.log = (line: string) => lines.push(line);
     try {
       describeCoverage({ sets: [], reached: [] }, [], [
-        "workspace-unit/packages/bakery",
+        "workspace-unit/runtime/bakery",
       ]);
     } finally {
       console.log = log;
     }
     const text = lines.join("\n");
     expect(text).toContain("no baseline is published");
-    expect(text).toContain("- workspace-unit/packages/bakery");
+    expect(text).toContain("- workspace-unit/runtime/bakery");
   });
 
   it("names a report by its set where the change reached that set", () => {
@@ -6180,24 +6451,24 @@ describe("what a lane says about coverage", () => {
     const ref = {
       suite: "workspace-unit",
       set: {
-        member: "packages/bakery",
-        reachedBy: ["packages/bakery/"],
-        units: ["packages/bakery/one.test.ts"],
+        member: "runtime/bakery",
+        reachedBy: ["runtime/bakery/"],
+        units: ["runtime/bakery/one.test.ts"],
       },
     };
     try {
       describeCoverage(
         { sets: [ref], reached: [ref] },
-        ["workspace-unit/packages__bakery", "workspace-unit/packages__cellar"],
+        ["workspace-unit/runtime__bakery", "workspace-unit/runtime__cellar"],
       );
     } finally {
       console.log = log;
     }
     const text = lines.join("\n");
-    expect(text).toContain("- workspace-unit/packages/bakery");
+    expect(text).toContain("- workspace-unit/runtime/bakery");
     // A directory no set is scored from keeps the name the suite wrote.
-    expect(text).toContain("- workspace-unit/packages__cellar");
-    expect(text).not.toContain("- workspace-unit/packages__bakery");
+    expect(text).toContain("- workspace-unit/runtime__cellar");
+    expect(text).not.toContain("- workspace-unit/runtime__bakery");
   });
 
   it("names the sets whose gates the plan chose apart from those it did not", () => {
@@ -6214,8 +6485,8 @@ describe("what a lane says about coverage", () => {
     });
     try {
       describeCoverage({
-        sets: [ref("packages/cellar")],
-        reached: [ref("packages/bakery"), ref("packages/cellar")],
+        sets: [ref("runtime/cellar")],
+        reached: [ref("runtime/bakery"), ref("runtime/cellar")],
       }, []);
     } finally {
       console.log = log;
@@ -6226,11 +6497,11 @@ describe("what a lane says about coverage", () => {
     expect(chosen).toBeGreaterThanOrEqual(0);
     expect(passedOver).toBeGreaterThan(chosen);
     expect(text.slice(chosen, passedOver)).toContain(
-      "workspace-unit/packages/cellar",
+      "workspace-unit/runtime/cellar",
     );
-    expect(text.slice(chosen, passedOver)).not.toContain("packages/bakery");
-    expect(text.slice(passedOver)).toContain("workspace-unit/packages/bakery");
-    expect(text.slice(passedOver)).not.toContain("packages/cellar");
+    expect(text.slice(chosen, passedOver)).not.toContain("runtime/bakery");
+    expect(text.slice(passedOver)).toContain("workspace-unit/runtime/bakery");
+    expect(text.slice(passedOver)).not.toContain("runtime/cellar");
   });
 });
 
@@ -6336,5 +6607,220 @@ describe("what a lane hands the children it spawns", () => {
     // The lane itself holds nothing for a child to inherit, which is
     // what leaves the declaration as the only way one gets a token.
     expect(heldAfter).toEqual([undefined, undefined]);
+  });
+});
+
+describe("the summary a lane ends with", () => {
+  /** A record of a test of `kind` in `scope`. */
+  const record = (
+    kind: string,
+    scope: string,
+    name: string,
+    outcome: TestRecord["outcome"],
+    file?: string,
+  ): TestRecord => ({
+    line: "record",
+    test: { k: kind, s: scope, n: name },
+    outcome,
+    durationMs: 1,
+    ...(file === undefined ? {} : { file }),
+  });
+  const members = new Map([["runner", "runtime/runner"]]);
+
+  it("gives a rerun command for each kind of test a developer can run", () => {
+    expect(laneRerun(record("unit", "runner", "a > b", "fail"), members))
+      .toBe("cd runtime/runner && deno task test --filter a");
+    expect(laneRerun(
+      record(
+        "integration",
+        "shell",
+        "x",
+        "fail",
+        "runtime/shell/integration/login.test.ts",
+      ),
+      members,
+    )).toBe("deno task integration shell login");
+    expect(laneRerun(
+      record(
+        "pattern",
+        "patterns",
+        "patterns/showcase/dice/dice.test.tsx",
+        "fail",
+      ),
+      members,
+    )).toBe(
+      "deno task integration pattern-tests patterns/showcase/dice/dice.test.tsx",
+    );
+  });
+
+  it("gives no rerun command for a test with no local command", () => {
+    expect(laneRerun(record("unit", "nowhere", "a", "fail"), members))
+      .toBeUndefined();
+    expect(laneRerun(record("gate", "repo", "fmt", "fail"), members))
+      .toBeUndefined();
+    expect(laneRerun(record("integration", "cf-harness", "a", "fail"), members))
+      .toBeUndefined();
+  });
+
+  it("keeps a failure the lane fails for over any other outcome of its test", () => {
+    const tests = new Map();
+    const failed = record("unit", "runner", "flaps", "fail");
+    const failing = new Set([JSON.stringify(["unit", "runner", "flaps"])]);
+    addLaneResults(
+      tests,
+      [record("unit", "runner", "flaps", "pass"), failed],
+      new Map([[failed, "Uncaught Error: no"]]),
+      failing,
+    );
+    addLaneResults(
+      tests,
+      [record("unit", "runner", "flaps", "pass")],
+      new Map(),
+      failing,
+    );
+
+    expect([...tests.values()]).toEqual([{
+      record: failed,
+      message: "Uncaught Error: no",
+    }]);
+  });
+
+  it("takes a failure's message from whichever of its records carries one", () => {
+    // A producer's spool can record a failure the JUnit report records
+    // again, and only the report's record carries the message.
+    const tests = new Map();
+    const spooled = record("unit", "runner", "breaks", "fail");
+    const reported = record("unit", "runner", "breaks", "fail");
+    addLaneResults(
+      tests,
+      [spooled, reported],
+      new Map([[reported, "Uncaught Error: broke"]]),
+      new Set([JSON.stringify(["unit", "runner", "breaks"])]),
+    );
+
+    expect([...tests.values()]).toEqual([{
+      record: spooled,
+      message: "Uncaught Error: broke",
+    }]);
+  });
+
+  it("leaves out a failure the lane excused", () => {
+    const tests = new Map();
+    addLaneResults(
+      tests,
+      [record("unit", "runner", "flaky", "fail")],
+      new Map(),
+      new Set(),
+    );
+
+    expect([...tests.values()]).toEqual([]);
+  });
+
+  it("annotates a failing test with its file, name, rerun command and error", () => {
+    expect(errorAnnotation({
+      record: record(
+        "unit",
+        "runner",
+        "a, b: c",
+        "fail",
+        "runtime/runner/t.ts",
+      ),
+      message: "Uncaught Error: 100%\nbroken",
+      rerun: "cd runtime/runner && deno task test --filter 'a, b: c'",
+    })).toBe(
+      "::error file=runtime/runner/t.ts,title=unit/runner%3A a%2C b%3A c::" +
+        "rerun: cd runtime/runner && deno task test --filter 'a, b: c'" +
+        "%0AError: 100%25%0Abroken",
+    );
+  });
+
+  it("annotates each failing identity once across batches and the closing summary, within one lane limit", () => {
+    const lines: string[] = [];
+    const annotated = new Set<string>();
+    const first = { record: record("unit", "runner", "first", "fail") };
+    const second = { record: record("unit", "runner", "second", "fail") };
+    const passing = { record: record("unit", "runner", "passed", "pass") };
+    const actions = (name: string) =>
+      name === "GITHUB_ACTIONS" ? "true" : undefined;
+    const log = console.log;
+    const restore = setEnv({ GITHUB_STEP_SUMMARY: undefined });
+    console.log = (line: string) => lines.push(line);
+    try {
+      annotateLaneFailures([passing, first, first], annotated, actions);
+      expect(lines).toEqual([errorAnnotation(first)]);
+      annotateLaneFailures([first, second], annotated, actions);
+      expect(lines).toEqual([errorAnnotation(first), errorAnnotation(second)]);
+      const rest = Array.from({ length: ANNOTATED_FAILURES }, (_, index) => ({
+        record: record("unit", "runner", `rest-${index}`, "fail"),
+      }));
+      annotateLaneFailures(rest, annotated, actions);
+      reportLane(
+        {
+          tests: [first, second, ...rest],
+          commands: [],
+          seconds: 1,
+        },
+        actions,
+        annotated,
+      );
+      expect(lines.filter((line) => line.startsWith("::error")))
+        .toHaveLength(ANNOTATED_FAILURES);
+      expect(annotated.size).toBe(ANNOTATED_FAILURES);
+    } finally {
+      console.log = log;
+      restore();
+    }
+  });
+
+  it("prints the summary last, annotating only inside GitHub Actions", () => {
+    const failing = Array.from(
+      { length: ANNOTATED_FAILURES + 2 },
+      (_unused, index) => ({
+        record: record("unit", "runner", `t${index}`, "fail"),
+      }),
+    );
+    const printedUnder = (env: Record<string, string>): string[] => {
+      const lines: string[] = [];
+      const log = console.log;
+      console.log = (line: string) => lines.push(line);
+      try {
+        reportLane(
+          { tests: failing, commands: [], seconds: 1 },
+          (name) => env[name],
+        );
+      } finally {
+        console.log = log;
+      }
+      return lines;
+    };
+
+    const stepSummary = Deno.makeTempFileSync({ prefix: "lane-step-" });
+    // The step summary of whatever job runs this test is not written to.
+    const outsideJob = setEnv({ GITHUB_STEP_SUMMARY: undefined });
+    let local: string[];
+    let actions: string[];
+    try {
+      local = printedUnder({});
+      actions = printedUnder({ GITHUB_ACTIONS: "true" });
+    } finally {
+      outsideJob();
+    }
+    expect(local.some((line) => line.startsWith("::error"))).toBe(false);
+    expect(local).toContain("FAIL unit/runner: t0");
+    expect(actions.filter((line) => line.startsWith("::error")).length)
+      .toBe(ANNOTATED_FAILURES);
+    // The step summary holds the block, fenced so that it renders as the
+    // log shows it.
+    const restore = setEnv({ GITHUB_STEP_SUMMARY: stepSummary });
+    try {
+      printedUnder({});
+    } finally {
+      restore();
+    }
+    const written = Deno.readTextFileSync(stepSummary);
+    Deno.removeSync(stepSummary);
+    expect(written).toMatch(/^```text\nFAILED: 12 failed/);
+    expect(written).toContain("FAIL unit/runner: t0\n");
+    expect(written.endsWith("```\n")).toBe(true);
   });
 });

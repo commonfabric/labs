@@ -24,14 +24,14 @@
  */
 // deno-lint-ignore no-external-import
 import { Session } from "node:inspector";
-import { main } from "../../../packages/cli/mod.ts";
+import { main } from "../../../runtime/cli/mod.ts";
 import {
   getLoggerCountsBreakdown,
   getLoggerFlagsBreakdown,
   getTimingStatsBreakdown,
   TIMING_MEASURE_PREFIX,
 } from "@commonfabric/utils/logger";
-import { renderProfileReport } from "../../../packages/integration/cdp-profiler.ts";
+import { renderProfileReport } from "../../../runtime/integration/cdp-profiler.ts";
 
 const out = Deno.env.get("CF_PROF_OUT") ?? "cf-prof";
 const cpu = Deno.env.get("CF_PROF_CPU") === "1";

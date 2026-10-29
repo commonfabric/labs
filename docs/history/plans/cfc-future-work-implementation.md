@@ -32,7 +32,7 @@ coding; `prepare.ts` line numbers in particular will drift.
 - **Dials, not flag-days.** New behavior lands behind a mode dial defaulting to
   today's behavior; rollout = flip the dial in hosts, not merge the PR. Existing
   dials: `cfcEnforcementMode` (Runtime default `enforce-explicit`,
-  [runtime.ts:495](../../../packages/runner/src/runtime.ts)), `cfcFlowLabels`
+  [runtime.ts:495](../../../runtime/runner/src/runtime.ts)), `cfcFlowLabels`
   (default `off`), `cfcSinkMaxConfidentiality` (default none). New dials this
   plan adds: `cfcPolicyEvaluation` (B5), `cfcWriteFloor` (D3).
 - **Fail-closed on the new path, byte-identical on the old.** Every
@@ -44,7 +44,7 @@ coding; `prepare.ts` line numbers in particular will drift.
   the new form as **more** restrictive, never less (the `{anyOf:…}` wrapper and
   additive-entry designs below are chosen precisely for this).
 - **Digest coverage.** Anything that can change a boundary decision must be in
-  `PreparedDigestInput` ([types.ts:299](../../../packages/runner/src/cfc/types.ts))
+  `PreparedDigestInput` ([types.ts:299](../../../runtime/runner/src/cfc/types.ts))
   so post-prepare changes invalidate: this plan adds `policySnapshot` (B5) and
   the write-attempt log (D4).
 - **Perf gates.** Label-path changes run
@@ -100,11 +100,11 @@ outline).
 
 **Current state.** Flat sets everywhere:
 `IFCLabel = { confidentiality?: unknown[]; integrity?: unknown[] }`
-([label-view-core.ts:5](../../../packages/runner/src/cfc/label-view-core.ts));
+([label-view-core.ts:5](../../../runtime/runner/src/cfc/label-view-core.ts));
 join = concat + structural dedup (`mergeLabel`,
-[label-view-core.ts:123](../../../packages/runner/src/cfc/label-view-core.ts));
+[label-view-core.ts:123](../../../runtime/runner/src/cfc/label-view-core.ts));
 fit = flat membership (`atomsOutsideCeiling` / `cfcObservationFitsCeiling`,
-[observation.ts:81-138](../../../packages/runner/src/cfc/observation.ts)).
+[observation.ts:81-138](../../../runtime/runner/src/cfc/observation.ts)).
 Integrity stays flat forever (no OR-integrity — spec §3.1.6; mixed integrity is
 `IntegritySummary`, out of scope here).
 
@@ -135,7 +135,7 @@ Integrity stays flat forever (no OR-integrity — spec §3.1.6; mixed integrity 
    (spec §3.1.8 rationale: OR-Expires inverts most-restrictive-wins; OR-Caveat
    makes risk dischargeable by identity).
 6. **Ceiling meet.** `meetCfcObservationCeilings`
-   ([observation.ts:188](../../../packages/runner/src/cfc/observation.ts)).
+   ([observation.ts:188](../../../runtime/runner/src/cfc/observation.ts)).
    _Corrected 2026-07-02 — the original decision here ("pairwise
    alternative-set intersection, sound: the intersection clause subsumes via
    both parents") was **unsound**._ Ceiling clauses sit on the demanding side
@@ -202,7 +202,7 @@ union, join of `[[A∨B]]` and `[C]` = both clauses) and a
 Accept `{anyOf:[…]}` entries in schema `ifc.confidentiality`: validation at the
 schema write-policy path (reject non-principal-like alternatives with an
 `unsupportedTrustSensitiveReason`-style fail-closed reason,
-[prepare.ts:1623](../../../packages/runner/src/cfc/prepare.ts)); schema-merge
+[prepare.ts:1623](../../../runtime/runner/src/cfc/prepare.ts)); schema-merge
 direction rule (growing = adding clauses; merging alternative sets is never a
 merge result — extend `schema-merge.ts` conflict table + tests). Persistence:
 clause objects ride `LabelMapEntry.label` unchanged (shape already `unknown[]`);
@@ -245,16 +245,16 @@ prompt-caveat strip; enables declassification/discharge for the first time.
 
 **Current state (verified absent).** Zero exchange/policy machinery repo-wide.
 What exists to build on: `trustSnapshotProvider` (Runtime option,
-[runtime.ts:248,485,748](../../../packages/runner/src/runtime.ts) — injected
+[runtime.ts:248,485,748](../../../runtime/runner/src/runtime.ts) — injected
 per-tx via `setCfcTrustSnapshot`); `WritePolicyInput` recording
-([extended-storage-transaction.ts:464](../../../packages/runner/src/storage/extended-storage-transaction.ts));
+([extended-storage-transaction.ts:464](../../../runtime/runner/src/storage/extended-storage-transaction.ts));
 the runtime-minted-integrity gate (`gateRuntimeMintedIntegrity`,
-[prepare.ts:2680](../../../packages/runner/src/cfc/prepare.ts), builtins bypass);
+[prepare.ts:2680](../../../runtime/runner/src/cfc/prepare.ts), builtins bypass);
 the per-space system-doc pattern (`ACLManager`,
-[acl-manager.ts:10-61](../../../packages/runner/src/acl-manager.ts)); the
+[acl-manager.ts:10-61](../../../runtime/runner/src/acl-manager.ts)); the
 content-addressed + identity-memoized resolution pattern
 (`resolveCfcSchemaRefs`,
-[schema-refs.ts:213](../../../packages/runner/src/cfc/schema-refs.ts)); the
+[schema-refs.ts:213](../../../runtime/runner/src/cfc/schema-refs.ts)); the
 evidence-matching precedent (`ui-contract.ts` trusted-event verification).
 The only "discharge" today is `schema-sanitization.ts`'s bulk strip of the four
 prompt-risk kind strings — exactly the "prompt-specific runtime branch" spec
@@ -298,14 +298,14 @@ bindings) → bindings | null`, multi-binding enumeration over a label
 valid bindings), post-match equality constraints between variables, and the
 `atomEntails(a, b)` hook (deepEqual default; `Expires`: timestamp ordering;
 everything else fails closed). Register the missing atom families in
-[packages/api/cfc.ts](../../../packages/api/cfc.ts) `CFC_ATOM_TYPE` with mint
+[packages/api/cfc.ts](../../../base/api/cfc.ts) `CFC_ATOM_TYPE` with mint
 helpers + `atom-classes.ts` propagation classes (SC-10 parity): `Expires`,
 `BoundaryContext`, `CaveatScreened`, `DisclosureRendered`,
 `DisclosureAcknowledged`, `DisclaimerAttached`, `CaveatAssessment`, `User`,
 `Space`, `HasRole`. Add the missing `CFC_CONCEPT_KIND` tier kinds
 (`…-ingress-screened`, `…-value-screened`). Extend
 `RUNTIME_MINTED_INTEGRITY_ATOM_TYPES`
-([prepare.ts:2644](../../../packages/runner/src/cfc/prepare.ts)) for the new
+([prepare.ts:2644](../../../runtime/runner/src/cfc/prepare.ts)) for the new
 evidence families so pattern code cannot self-mint them.
 Tests: `cfc-atom-pattern.test.ts` — binding, multi-binding disjunction,
 constraint correlation, entailment, fail-closed unknown families.
@@ -318,14 +318,14 @@ integrity?: AtomPattern[]; boundary?: AtomPattern[] }`, `preConfScope:
 AtomPattern[]; dropClause?: boolean }`), `PolicyRecord` (id, digest, rules),
 `PolicySnapshot` (frozen record set + digest). `RuntimeOptions.cfcPolicyRecords`
 → frozen snapshot at construction (deep-freeze like the sink ceilings,
-[runtime.ts:499-507](../../../packages/runner/src/runtime.ts)); snapshot injected
+[runtime.ts:499-507](../../../runtime/runner/src/runtime.ts)); snapshot injected
 into tx CFC state alongside the trust snapshot. Tests: canonicalization/digest
 stability, freeze, malformed-record fail-closed.
 
 **B3 — trust closure.**
 `packages/runner/src/cfc/trust.ts`: a `TrustResolver` built from frozen
 deployment config + the tx `TrustSnapshot`
-([types.ts:246](../../../packages/runner/src/cfc/types.ts)) — `conceptSatisfied
+([types.ts:246](../../../runtime/runner/src/cfc/types.ts)) — `conceptSatisfied
 (concept, integrityAtoms, actingPrincipal) → boolean` via declared
 concept-delegate edges (transitive, bounded depth). Determinism contract: the
 resolver is a pure function of snapshot + config; `TrustSnapshot.revision`
@@ -351,14 +351,14 @@ clause locality).
 
 **B5 — boundary integration (dial: `cfcPolicyEvaluation: "off" | "observe" |
 "enforce"`, default `off`).**
-In `prepareBoundaryCommit` ([prepare.ts:3095](../../../packages/runner/src/cfc/prepare.ts)):
+In `prepareBoundaryCommit` ([prepare.ts:3095](../../../runtime/runner/src/cfc/prepare.ts)):
 - Mint `BoundaryContext` atoms per sink-request input (sink name; `sinkClass`
   starts with `"network"` for fetch/LLM — the display class arrives with H3b)
   — this is the Tier-2 "`sinkClass`/`BoundaryContext` substrate" item, landed
   here.
 - For each gated label (sink-request payloads in `verifySinkRequestCeilings`,
-  [prepare.ts:3058](../../../packages/runner/src/cfc/prepare.ts); consumed-read
-  labels in `verifyInputRequirements`, [prepare.ts:2386](../../../packages/runner/src/cfc/prepare.ts)):
+  [prepare.ts:3058](../../../runtime/runner/src/cfc/prepare.ts); consumed-read
+  labels in `verifyInputRequirements`, [prepare.ts:2386](../../../runtime/runner/src/cfc/prepare.ts)):
   evaluate to fixpoint, then subsumption-fit the **rewritten** label.
   `observe` = evaluate + diagnostics, decide on the un-rewritten label;
   `enforce` = decide on the rewritten label; exhaustion/lookup failure =
@@ -414,18 +414,18 @@ dereferencing, is unlabeled).
 **Current substrate (better than the audit implied).** The persisted entry
 already has a provenance axis (`LabelMapEntry.origin`:
 declared/link/derived/structure/external-ingest,
-[types.ts:171-182](../../../packages/runner/src/cfc/types.ts)); reads already
+[types.ts:171-182](../../../runtime/runner/src/cfc/types.ts)); reads already
 distinguish shape-only observations (`nonRecursive` on `IReadActivity`,
-[storage/interface.ts:1469](../../../packages/runner/src/storage/interface.ts))
+[storage/interface.ts:1469](../../../runtime/runner/src/storage/interface.ts))
 and link-topology probes (`linkResolutionProbe` marker,
-[reactivity-log.ts:58](../../../packages/runner/src/storage/reactivity-log.ts) —
+[reactivity-log.ts:58](../../../runtime/runner/src/storage/reactivity-log.ts) —
 currently **excluded** from flow taint, which *is* the SC-8 residual);
 read-side resolution already threads `nonRecursive`
 (`effectiveReadLabel(metadata, logicalPath, nonRecursive, { excludeLinkOrigin:
 true })` inside `deriveFlowJoin`,
-[prepare.ts:1321](../../../packages/runner/src/cfc/prepare.ts)); and the
+[prepare.ts:1321](../../../runtime/runner/src/cfc/prepare.ts)); and the
 `structure` origin already labels container shape at exact paths
-([prepare.ts:3517-3583](../../../packages/runner/src/cfc/prepare.ts)).
+([prepare.ts:3517-3583](../../../runtime/runner/src/cfc/prepare.ts)).
 
 **C0 — design doc first (`docs/specs/cfc-observation-classes.md`).** This epic
 has real open semantics; write them down before code:
@@ -452,7 +452,7 @@ has real open semantics; write them down before code:
 
 **C1 — read-shape plumbing.** Classify each flow observation (value /
 shape-only via `nonRecursive` / followRef via `linkResolutionProbe`) in
-`forEachFlowObservation` ([prepare.ts:1215](../../../packages/runner/src/cfc/prepare.ts));
+`forEachFlowObservation` ([prepare.ts:1215](../../../runtime/runner/src/cfc/prepare.ts));
 `effectiveReadLabel` selects entries by class-compatibility instead of the
 boolean; `excludeLinkOrigin` becomes class selection (link-origin entries
 consumed by `followRef` reads). Flow-taint parity test, scoped per C0 §6:
@@ -470,7 +470,7 @@ class.
 **C3 — the two channel fixes (red first).**
 SC-4: test — write secret → derived label present; overwrite with public value
 → **existence/shape entry still carries the old J** (today it vanishes; the
-in-code acknowledgment sits near [prepare.ts:1150](../../../packages/runner/src/cfc/prepare.ts)).
+in-code acknowledgment sits near [prepare.ts:1150](../../../runtime/runner/src/cfc/prepare.ts)).
 SC-8: test — read WHICH link sits at a slot (no dereference) → flow join now
 carries the link entry's `followRef` label (today: clean).
 
@@ -481,7 +481,7 @@ the epic).
 
 **C5 — sqlite precision.** Null-origin/computed-column conservative merge
 (`deriveNullOriginIfc`,
-[sqlite-builtins.ts:205](../../../packages/runner/src/builtins/sqlite-builtins.ts))
+[sqlite-builtins.ts:205](../../../runtime/runner/src/builtins/sqlite-builtins.ts))
 narrows to the classes actually consumed.
 
 **Rollout.** _Corrected by C0 (#4476) — two regimes, not one._
@@ -509,10 +509,10 @@ security-urgent track.**
 **Current state.** (1) tool-invoke never consults `inputSchema.ifc.
 requiredIntegrity` (`llm-dialog.ts` `handleInvoke`/`executeToolCalls`); (2) the
 enforced gate is write-target-scoped (`verifyInputRequirements`,
-[prepare.ts:2386](../../../packages/runner/src/cfc/prepare.ts)) and the demo's
+[prepare.ts:2386](../../../runtime/runner/src/cfc/prepare.ts)) and the demo's
 targets carry no floor; (3) vacuous pass — empty consumed set satisfies the
 gate, acknowledged in-code with the coupling warning
-([prepare.ts:2372-2380](../../../packages/runner/src/cfc/prepare.ts): tightening
+([prepare.ts:2372-2380](../../../runtime/runner/src/cfc/prepare.ts): tightening
 without per-write provenance would over-reject); model output carries no label
 at all. The red test already exists and is `it.ignore`'d:
 `packages/runner/test/cfc-agent-tool-input-integrity.test.ts`.
@@ -583,7 +583,7 @@ honestly). Two payoffs, both tested red-first: (i) the general audit-#14
 tightening — a floor-declaring write with an **empty read prefix** fails
 instead of vacuously passing; (ii) the S7-style false-reject scaffolding
 (`isProvenanceOnlyConsumedLabel`,
-[prepare.ts:2381](../../../packages/runner/src/cfc/prepare.ts)) can narrow — the
+[prepare.ts:2381](../../../runtime/runner/src/cfc/prepare.ts)) can narrow — the
 admin-grant lookup no longer gates an unrelated later write (port the
 group-chat regression scenario from the comment into a test). Digest: the
 write-attempt log joins `PreparedDigestInput` + `canonical.ts`.
@@ -603,14 +603,14 @@ aggregates work via the common-alternative property, land read-time clearance
 (Phase 3.b) and server-side commit-time re-derivation (Phase 3.c).
 
 **Current state.** Phase 3.a is done and well-factored: rule AST + shared
-evaluator in [packages/memory/v2/sqlite/row-label.ts](../../../packages/memory/v2/sqlite/row-label.ts)
+evaluator in [packages/memory/v2/sqlite/row-label.ts](../../../runtime/memory/v2/sqlite/row-label.ts)
 (memory-side — conveniently already where 3.c needs it); `any()` serializes but
 is rejected at `table()` time with the clause-profile error
 (row-label.ts:246-249, enforced at 311/343/582); read side
-([row-label-read.ts](../../../packages/runner/src/builtins/sqlite/row-label-read.ts)):
+([row-label-read.ts](../../../runtime/runner/src/builtins/sqlite/row-label-read.ts)):
 true-origin attribution, `onExceed: fail|skip` with the aggregate-skip
 refusal, ceiling placeholder resolution (`__ctCurrentPrincipal`/`__ctDbOwner`);
-write side ([row-label-write.ts](../../../packages/runner/src/builtins/sqlite/row-label-write.ts)):
+write side ([row-label-write.ts](../../../runtime/runner/src/builtins/sqlite/row-label-write.ts)):
 no-laundering fit + fail-closed rejects for every non-attributable shape, each
 error naming 3.c as the lift; `authoredBy`/`endorsedBy` already mint
 self-describing `claimed-*` atoms (the forgeability mitigation is **already
@@ -704,8 +704,8 @@ needs it.
 
 **Goal.** Turn on what is built. Corrected picture from the seam mapping: the
 Runtime constructor **already defaults `enforce-explicit`**
-([runtime.ts:495](../../../packages/runner/src/runtime.ts)), as does lib-shell
-([lib-shell/src/runtime.ts:113-149](../../../packages/lib-shell/src/runtime.ts));
+([runtime.ts:495](../../../runtime/runner/src/runtime.ts)), as does lib-shell
+([lib-shell/src/runtime.ts:113-149](../../../runtime/lib-shell/src/runtime.ts));
 `InitializationData` already carries `renderDeclassificationPolicy` and
 `renderConfidentialityCeiling` across the worker IPC
 ([runtime-client/protocol/types.ts:130-187](../../../packages/runtime-client/protocol/types.ts)).
@@ -739,7 +739,7 @@ profile per §8.10.6 owner direction: `atoms: [<acting-user DID string>, …]`
 (exact-match forms the reconciler can check today) +
 `caveatKinds: [<influence-class kinds>]` allow-list. Dogfood behind a shell
 flag; the reconciler's fail-closed narrowing
-([reconciler.ts childRenderPolicyForNode](../../../packages/html/src/worker/reconciler.ts))
+([reconciler.ts childRenderPolicyForNode](../../../runtime/html/src/worker/reconciler.ts))
 does the rest. Expect over-blocking (no exchange resolution yet) — that is the
 point of the dogfood stage; H3b fixes precision.
 
@@ -755,7 +755,7 @@ here (completing B5's substrate).
 Define the mode matrix in a short doc section first (which combinations of
 enforcement × flow dial are conforming deployment states; rollout ordering:
 propagation-observe → persist → strict). Implement strict-only rejects at the
-ladder ([extended-storage-transaction.ts:1016-1033](../../../packages/runner/src/storage/extended-storage-transaction.ts)).
+ladder ([extended-storage-transaction.ts:1016-1033](../../../runtime/runner/src/storage/extended-storage-transaction.ts)).
 Missing-policy is **not** part of the strict delta: `enforce-explicit` already
 fail-closes it (prepare records `missing schema write-policy input`, the
 ladder rejects any reasoned tx under both enforcing modes, asserted in
@@ -767,7 +767,7 @@ an explicit-mode grace, each with its error contract (SC-18c: stable reason
 strings naming rule id + path).
 
 **H5 — trigger reads on the enforcement side (SC-3 completion).**
-`CfcTxState.triggerReads` ([types.ts:339-345](../../../packages/runner/src/cfc/types.ts))
+`CfcTxState.triggerReads` ([types.ts:339-345](../../../runtime/runner/src/cfc/types.ts))
 currently joins only the flow derivation. Add their `effectiveReadLabel`s to
 the consumed set for the sink-request ceiling and input-requirement gates,
 behind a flag folded into the H4 matrix (cost: extra metadata reads per

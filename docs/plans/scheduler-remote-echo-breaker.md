@@ -81,13 +81,28 @@ read it as its diff base and wrote its own over it. A derivation that reads
 one field of `D` and writes another is re-triggered by `D` but overwrites
 nothing the other writer wrote, so it is not an echo, however often the field
 it reads changes. A run triggered at the whole of `D` cannot be told apart that
-way, and any changing write to `D` counts for it.
+way, and any changing write to `D` counts for it, unless the server confirms
+that every operation on `D` was elided.
 
 Otherwise the run is a **convergence step** for `D`. Storage drops a write of
 an equal value before it reaches the transaction's write details, so a run that
 wrote `D`'s current value again leaves no write behind, exactly as a run that
 did not write `D` at all. Both are convergence: this run did not overwrite
-anything.
+anything. A staged write also converges when the server reports every wire
+operation on that document in `elidedOpIndexes`: another writer already
+published the same result. That verdict overrides the staged difference and
+clears the pair's count or backoff. Elision of another document, or only some
+operations on this document, proves no such agreement. Missing elision metadata
+leaves the staged classification in force; an empty revision list alone does
+not establish convergence.
+
+Sealed commits from the co-hosted executor report a sequence number without
+elision metadata, so their runs use the staged classification.
+
+Fresh input changes can arrive alongside an output change in the same run.
+They do not exempt a differing output from detection: concurrent input progress
+can coexist with a real disagreement. Server-confirmed identity writes provide
+the evidence that repeated computations agree.
 
 Every address is compared by its complete identity — space, scope instance, and
 id, the scheduler's `entityKey` — resolved against the one identity the
@@ -99,8 +114,9 @@ document.
 
 Which triggers the run changed is read at commit kickoff, while the
 transaction's write details are still staged. The steps are formed once the
-commit has succeeded, against the pairs the breaker holds then, since another
-run of the action may have opened one while this run committed. An action the
+commit has succeeded, using the source transaction's per-document elision verdict
+and the pairs the breaker holds then, since another run of the action may have
+opened one while this run committed. An action the
 breaker holds no pair of can only begin counting, which takes an echo step, so
 for it only the changed triggers are classified, and a run that changed none
 yields no step at all; for a tracked action every trigger the run read is
@@ -131,7 +147,7 @@ Proposed defaults, to be tuned against the health-route rate signal (Topic
 
 The storm traces and the quiet weeks that set the window and the threshold are
 replayed through the detector by
-`packages/runner/test/scheduler-remote-echo-breaker-traces.test.ts` against
+`runtime/runner/test/scheduler-remote-echo-breaker-traces.test.ts` against
 the fixture extracted from the space's 2026-08-18 export, so a change to either
 is held to every loop that space has run and to its busiest ordinary traffic.
 The backoff bounds and the quiet reset are not set by that replay.
@@ -343,7 +359,7 @@ without a staged rollout:
 
 ## 6. Tests
 
-`packages/runner/test/scheduler-remote-echo-breaker.test.ts` holds both
+`runtime/runner/test/scheduler-remote-echo-breaker.test.ts` holds both
 levels. Waits are on scheduler drains and the fake clock's `settle` and `tick`,
 never a sleep or a poll, per
 [`../development/waiting-in-tests.md`](../development/waiting-in-tests.md).
@@ -372,13 +388,16 @@ never a sleep or a poll, per
   write, and that convergence step clears its pair; commits stop and nothing is
   active. A derivation re-run past the threshold by another session's edits to
   its input does not trip, whether its output is a separate document or another
-  field of the input's document. A re-subscribed action does not inherit the
-  retired registration's backoff.
+  field of the input's document. With input and output changing together,
+  a competing derivation that publishes the same result before each commit
+  makes the server elide those commits, and the breaker counts no echoes.
+  Durable overwrites under the same input progression still trip it. A
+  re-subscribed action does not inherit the retired registration's backoff.
 
 Each of the renewal, convergence, identity, field-path, and unsubscribe
 behaviors has been checked to fail its test when reverted.
 
-`packages/runner/test/scheduler-remote-echo-breaker-traces.test.ts` replays
+`runtime/runner/test/scheduler-remote-echo-breaker-traces.test.ts` replays
 the Topics space's own history through the detector: two minutes of each of
 the five documents most rewritten in the July 2026 storms, the slow three at
 the cadence they sustained for hours, and every document written four or more
@@ -386,7 +405,7 @@ times in the three quiet weeks that followed, from
 `fixtures/topics-echo-traces.json.gz`. Every storm document trips and no quiet
 space- or user-scoped document does.
 
-`packages/runner/test/scoped-output-convergence.test.ts` runs the October
+`runtime/runner/test/scoped-output-convergence.test.ts` runs the October
 storm's own pattern shape, a derivation over a per-session input in two
 sessions: with the placement fix in, the sessions converge, the commit
 sequence stops moving, and the breaker counts no cycle.

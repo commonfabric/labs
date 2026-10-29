@@ -12,8 +12,8 @@ that a long-lived runtime that opens and closes many pieces does not hold every
 document it ever loaded.
 
 The implementation is `SpaceReplica.releaseUnread()` in
-`packages/runner/src/storage/v2.ts`, driven by
-`Runtime.releaseUnreadDocuments()` in `packages/runner/src/runtime.ts`. The wire
+`runtime/runner/src/storage/v2.ts`, driven by
+`Runtime.releaseUnreadDocuments()` in `runtime/runner/src/runtime.ts`. The wire
 message it relies on is `session.watch.remove`, section 4.3.9 of
 [`../specs/memory-v2/04-protocol.md`](../specs/memory-v2/04-protocol.md).
 
@@ -48,7 +48,7 @@ comes next.
 
 An event handler is not a reader between events. Before a handler runs, the
 scheduler loads its inputs and waits for them (the presync and the preflight in
-`packages/runner/src/scheduler/events.ts`), so a handler whose inputs were
+`runtime/runner/src/scheduler/events.ts`), so a handler whose inputs were
 released loads them again when its next event arrives.
 
 ## When documents are released
@@ -56,7 +56,7 @@ released loads them again when its next event arrives.
 A release pass runs when something that read documents has gone: when a piece
 is stopped (`Runner.stop()`, which also runs when the runtime restarts a
 piece), and when a host's client departs
-(`RuntimeProcessor.disposeClient()` in `packages/runtime-client`). A host may
+(`RuntimeProcessor.disposeClient()` in `runtime/runtime-client`). A host may
 also call `Runtime.releaseUnreadDocuments()` itself. The pass waits until the
 scheduler is idle. Passes run one after another, never two at once.
 
@@ -138,7 +138,7 @@ stands on the server:
 
 `getLoggerCounts().sizes.storage` reports a runtime's `documents` and
 `watchedDocuments`, in total and per space under `bySpace`.
-`packages/runner/test/document-release.profile.ts` stores forty todo lists and
+`runtime/runner/test/document-release.profile.ts` stores forty todo lists and
 has a second runtime open each one (load, start, subscribe to its result) and
 close it again (cancel the subscription, stop it, let go of its cells),
 printing those sizes as it goes; `--no-release` runs it against a server

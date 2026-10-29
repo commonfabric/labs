@@ -68,7 +68,8 @@ The client MUST declare its protocol version in the first WebSocket message:
     "presenceV1": true,
     "sessionClose": true,
     "admissionNotice": true,
-    "elidedVerdicts": true
+    "elidedVerdicts": true,
+    "syncPartsV1": true
   }
 }
 ```
@@ -97,7 +98,9 @@ If the server accepts the protocol, it returns:
     "admissionNotice": true,
     "sessionReportV1": true,
     "syncCrossingsV1": true,
-    "watchRemoveV1": true
+    "watchRemoveV1": true,
+    "syncPartsV1": true,
+    "watchSetPartsV1": true
   },
   "sessionOpen": {
     "audience": "did:key:z6Mk...",
@@ -117,7 +120,8 @@ does not mark the connection ready.
 `ifElse`, `when`, and `unless` key their result stores on the owning piece and
 output spot. It is inherent to the build, and an absent marker means false.
 The server accepts a wire-compatible `hello` without this marker, but refuses
-every `session.open` on that connection with `SessionRevokedError`, before
+every `session.open` on that connection with `SessionRevokedError` and
+`clientUpdateRequired: true`, before
 authorization, store opening, or session restoration. A reconnecting client
 treats this verdict as terminal for the session, dropping its pending commits
 and watches. Refusing at session admission uses that terminal path even in
@@ -269,6 +273,17 @@ of the flag.
 unless the server advertises the capability; a client of an older server
 removes a watch by replacing the session's watch set.
 
+`syncPartsV1` advertises that a client handles a session sync sent in parts
+(see [Syncs in parts](#syncs-in-parts)). It defaults to `false` when absent. A
+server sends parts only to a client that advertised it, and a client that did
+not refuses a sync carrying `more`. A server advertises it too, but splits a
+sync only where its transport bounds what one message may carry.
+
+`watchSetPartsV1` is a server capability: the server applies a
+`session.watch.set` staged in parts as one set (section 4.3.5). It defaults to
+`false` when absent. A client must not send `part` or `more` unless the server
+advertises it; a client of an older server sends every set whole.
+
 `entityIdListing` advertises support for `entity-id.list`. It defaults to
 `false` when absent. A client must not send the request unless the server
 advertises the capability.
@@ -374,6 +389,14 @@ logical session per space rather than to one TCP connection.
 type SessionId = string;
 type SignatureBytes = Uint8Array;
 
+interface MemoryClientInfo {
+  application: string;
+  gitSha: string | null;
+  instanceId: string;
+  generation?: number;
+  startedAt: number;
+}
+
 interface SessionOpenRequest {
   type: "session.open";
   requestId: string;
@@ -382,6 +405,7 @@ interface SessionOpenRequest {
   // naming one carries neither `invocation` nor `authorization`.
   principal?: DID;
   session: {
+    client?: MemoryClientInfo;
     sessionId?: SessionId;
     seenSeq?: number;
     sessionToken?: string;
@@ -445,6 +469,7 @@ interface SessionOpenInvocation {
     // The request's `session` descriptor, field for field: the server refuses
     // an open whose descriptor differs from the signed one.
     session: {
+      client?: MemoryClientInfo;
       sessionId?: SessionId;
       seenSeq?: number;
       sessionToken?: string;
@@ -480,6 +505,26 @@ interface SessionOpenResult {
   };
 }
 ```
+
+`session.client` is optional, bounded, self-reported runtime provenance. The
+application is 1–64 printable ASCII characters; the SHA is a full lowercase
+40-character hash or `null`; the instance ID is 1–128 ASCII letters, digits,
+underscores or hyphens. Generation is optional and, when present, a positive safe
+integer. Start time is a nonnegative safe integer in Unix milliseconds. Unknown
+fields are ignored; malformed known fields make the optional report absent. A
+signed open binds the recognized report fields in its descriptor; both signed
+and received reports use the same normalization, so changing or stripping a valid
+report fails authentication; a connection-authenticated open attributes it to the
+named principal, without attesting the running code.
+
+Client attribution does not control session admission. Producers emit the
+reserved `generation` field as `1`; readers accept its absence or any positive
+safe integer as diagnostic data. An absent generation stays absent in the
+normalized report, so adding or removing it from a valid signed report fails
+authentication. Client retirement is disabled, and nonzero startup cutoff
+settings are rejected. See
+[client attribution](../../../runtime/memory/README.md#client-attribution)
+for host wiring and configuration constraints.
 
 Rules:
 
@@ -750,6 +795,10 @@ interface ResponseMessage<Result> {
     // keep reopening a denied session or to terminate it. An older server sends
     // no marker, so its AuthorizationError is read as permanent.
     retriable?: boolean;
+    // Runtime incompatibility: retain the server's reason and stop mounting
+    // until the runtime is replaced. Independent of the error name; access
+    // retries and ACL changes cannot heal it.
+    clientUpdateRequired?: true;
     // Positive, versioned evidence that the server reached a durable no-commit
     // verdict. Delivery recovery may use this to distinguish a permanent
     // protocol failure from an ambiguous transport or storage outcome.
@@ -780,32 +829,55 @@ interface SessionAdmissible {
 }
 ```
 
-`session/admissible` names a space and a principal that the server refused
-that space on this connection, and that the space's access list now grants
-`READ`. The server records a refusal when it denies a `session.open` for want
-of `READ`, and when an access-list change revokes a session for the same
-reason. An access-list commit that gives a recorded principal `READ` sends the
-notice to the connection the refusal was recorded on, and removes the record,
-so each refusal is told at most once. A grant written to the space's store by
-another process sends it at the space's next refresh turn after the server
-finds the change (see the capability cache under the ACL policy below). A change that leaves the principal
-without `READ` sends nothing, and the notice reaches no other connection.
+`session/admissible` names a space and a principal that the server refused that
+space, on this connection or on a closed one whose refusal it holds (below), and
+that the space's access list now grants `READ`. The server records a refusal
+when it denies a `session.open` for want of `READ`, and when an access-list
+change revokes a session for the same reason. An access-list commit that gives a
+recorded principal `READ` sends the notice to the connection the refusal was
+recorded on, and removes the record, so each refusal is told at most once. A
+grant written to the space's store by another process sends it at the space's
+next refresh turn after the server finds the change (see the capability cache
+under the ACL policy below), or sooner, when the principal's own admitted
+`session.open` of the space finds it and so ends a held record (below). A change
+that leaves the principal without `READ` sends nothing. While the connection the
+refusal was recorded on is open, the notice reaches no other connection.
+
+A refusal outlives the connection it was recorded on. With one connection per
+space, a refused `session.open` closes the connection it was refused on while
+the principal's sessions on other spaces stay open on theirs, so when that
+connection closes the server holds the record for the principal instead. A grant
+then sends the notice to every connection serving the principal: each that holds
+a session opened as it, in any space, under a lease that has not run out, and
+each whose `connection.auth` holds it. A connection is told once however many of
+its principal's refusals the grant answers. The principal is told on whichever
+connection its client still has, and learns nothing it could not learn there by
+opening the session again.
 
 The notice is a hint and grants nothing. A client that acts on it opens the
 session again through ordinary admission, which decides on the access list as
 it then stands. It tells the principal only that its own access changed, and
 when, which opening the session again would also tell it.
 
-A record lives as long as its connection, and ends with an admitted
-`session.open` of the same space and principal, or with a `connection.release`
-of the principal. A connection holds at most 1024 records, and the oldest is
-dropped past that; its principal then learns of a grant only by opening the
-session again. A connection whose peer did not advertise `admissionNotice`
-records nothing, and neither does a routed connection
-([`routed-mode-a.md`](routed-mode-a.md)), whatever its peers advertise. Nor
-does a session opened `actingAs: "space-owner"`: only a co-hosted serving
-runtime opens one, and it hears of every access-list commit in process, after
-which its next read of the space opens the session again.
+A record ends with an admitted `session.open` of the same space and principal on
+its connection, or with a `connection.release` of the principal there. A held
+record ends with an admitted `session.open` of its space and principal on any
+connection, which first sends the notice to every other connection serving the
+principal, since one runtime's admission says nothing of another's, and ends
+each of those connections' own record of the space and principal, which that
+notice answers; or once no connection serves its principal, which the server
+checks when a connection closes, a session closes or is revoked, and a
+`connection.release` ends an authentication. A lease running out is not checked
+when it happens, so a held record whose principal only an expired lease serves
+stays until the next of those, and its notice reaches no connection meanwhile. A
+connection holds at most 1024 records, and so do a principal's held records; the
+oldest is dropped past that, and its principal then learns of a grant only by
+opening the session again. A connection whose peer did not advertise
+`admissionNotice` records nothing, and neither does a routed connection
+([`routed-mode-a.md`](routed-mode-a.md)), whatever its peers advertise. Nor does
+a session opened `actingAs: "space-owner"`: only a co-hosted serving runtime
+opens one, and it hears of every access-list commit in process, after which its
+next read of the space opens the session again.
 
 Live data delivery is not routed through the initiating request id.
 
@@ -856,6 +928,8 @@ interface SessionSync {
     path: string[];
     schema?: JSONSchema;
   }>;
+  // On every part of a sync sent in parts but the last (see below).
+  more?: true;
 }
 ```
 
@@ -880,6 +954,42 @@ Semantics:
   a crossing's target, for want of access say, carries on without it. Only
   servers advertising `syncCrossingsV1` send the field; a client of an
   older server finds the links by reading what it synced.
+
+#### Syncs in parts
+
+A server may send a sync too large for one message as several, to a client
+that advertised `syncPartsV1`. A split divides the sync's lists (`upserts`,
+`removes`, `crossings`, `operationFields` and `viewPlans`), never an entry of
+one, and the concatenation of each list over the parts, in order, is the list
+the sync carried. Every part repeats the sync's other fields, and every part
+but the last carries `more: true`. A receiver requires the parts to repeat those
+fields alike, so a list added to `SessionSync` can be divided only behind a
+capability of its own.
+
+The first part goes where the whole sync would have gone, as `response.ok.sync`
+or `session/effect.effect`; each later part is a `session/effect` for the same
+space and session. The server sends a sync's parts one after another, with no
+other message for that session between them. Messages for other sessions may
+come between them on the way to the client, and so may a router's own answer
+to another request of the session (a refusal), which carries no sync. Each
+part is a message of its own: it carries its own schema and label tables, and
+each bound on a message applies to each part. An entry larger than those
+bounds goes alone, in a part of its own.
+
+The client holds the parts and handles their concatenation, once the last
+arrives, as the sync it would have received whole: a response completes only
+then. It handles a message for the session that carries no sync as it arrives,
+and takes the next sync for the session as the next part. A sync for the
+session other than an effect before the last part, a part whose repeated fields
+differ from the first's, and a `more` other than `true` are protocol
+violations, which discard the connection, as a frame the client cannot decode
+does. A connection that closes before the last part arrives loses the parts
+with it, as it loses any frame in flight.
+
+The routed host splits a sync that one message could not carry, past the
+routed frame cap or the bytes a message may take, into parts of at most 1 MiB
+([`routed-mode-a.md`](routed-mode-a.md)): splitting costs the server more than
+sending whole. A direct server sends every sync whole.
 
 #### Negotiated schema-table encoding
 
@@ -1338,6 +1448,17 @@ interface WatchSetRequest {
   // The client's declared holdings (section 4.1.2): when present, the
   // response's `sync` is the difference between the new union and these.
   holdings?: SessionHolding[];
+  // On every part of a set staged in parts: the set's name, the number of
+  // parts before this one, and on every part but the last, `more` (servers
+  // advertising `watchSetPartsV1`; see below).
+  stage?: string;
+  part?: number;
+  more?: true;
+}
+
+// The answer to a staged part that more parts follow.
+interface WatchSetStagedResult {
+  staged: true;
 }
 
 interface WatchSetResult {
@@ -1359,6 +1480,37 @@ Semantics:
   resume, a restarted server) re-establishes its watches without downloading
   again every document it still holds
 - later committed changes continue to arrive via `session/effect`
+
+A client may stage a set too large for one message in parts, to a server that
+advertises `watchSetPartsV1`. Each part is a `session.watch.set` with a request
+ID of its own, the set's name in `stage` (an identifier every part of the set
+carries), a `part` counting the parts before it, and a share of the set's
+`watches`, `holdings` and `views`; every part but the last carries `more: true`.
+The server holds a part that more parts follow and answers it with
+`{ staged: true }`, changing nothing the session holds, and the last part
+replaces the watch set with the concatenation of every part's lists, as the one
+set they divide would: its response carries the sync. A part may leave out a
+list it has no entries for; the set names `holdings` or `views` when any part
+does. The joined set is checked as one set: a view named in two parts is
+refused as one named twice in one set is.
+
+A part numbered 0 starts a staged set, ending any set the session staged
+before. The server refuses, as a `ProtocolError`, a later part that does not
+follow the parts of its set the server holds, and with it the set: the parts
+after it are refused too, as none follows the parts held, so a set staged in
+parts is applied whole or not at all. A set without `part` is whole, and it and
+any other watch mutation of the session end a set the session was staging, and
+are applied as ever; a router or a routed host can have refused the set's last
+part itself, leaving the server parts no part follows. A watch mutation the
+server refuses unread, or for a session whose lease has run out, ends nothing. A staged set also ends
+when its connection closes, and when the session closes, is revoked or is
+opened again. A server holds at most 64 parts of one set before the last part,
+and at most 64 Mi characters of the parts of every set a connection's sessions
+are staging; a part past either is refused, and with it its set.
+
+A client sends a set's parts back to back on one connection, before any later
+watch mutation of the session, and takes the first refusal among their answers
+as the set's.
 
 ### 4.3.6 `session.watch.add` — Extend the Session Watch Set
 

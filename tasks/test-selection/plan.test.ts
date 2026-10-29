@@ -50,7 +50,7 @@ function entries(
     { length: count },
     (_, i) =>
       sampleEntry({ k: "unit", s: "memory", n: `case ${i}` }, {
-        unit: `packages/memory/test/case-${i}.test.ts`,
+        unit: `runtime/memory/test/case-${i}.test.ts`,
         ...fields(i),
       }),
   );
@@ -955,7 +955,7 @@ describe("plan", () => {
           { k: "gate", s: "memory", n: "coverage-gate workspace-unit" },
           {
             suite: "coverage-gate",
-            unit: "workspace-unit/packages/memory",
+            unit: "workspace-unit/runtime/memory",
             score,
           },
         ),
@@ -1032,7 +1032,7 @@ describe("plan", () => {
       const members = [
         ...entries(3, () => ({ cost: 20 })),
         sampleEntry({ k: "unit", s: "memory", n: "too long" }, {
-          unit: "packages/memory/test/too-long.test.ts",
+          unit: "runtime/memory/test/too-long.test.ts",
           cost: LANE_BUDGET_SECONDS * 2,
         }),
       ];
@@ -1049,12 +1049,12 @@ describe("plan", () => {
       // test scoring below the gate no longer fits.
       const members = entries(30, () => ({ cost: 20 }));
       const above = sampleEntry({ k: "unit", s: "cellar", n: "above" }, {
-        unit: "packages/cellar/above.test.ts",
+        unit: "runtime/cellar/above.test.ts",
         cost: 50,
         score: 0.95,
       });
       const below = sampleEntry({ k: "unit", s: "cellar", n: "below" }, {
-        unit: "packages/cellar/below.test.ts",
+        unit: "runtime/cellar/below.test.ts",
         cost: 100,
         score: 0.8,
       });
@@ -1078,7 +1078,7 @@ describe("plan", () => {
       const members = entries(15, () => ({ cost: 20 }));
       const above = ["first", "second", "third"].map((name, at) =>
         sampleEntry({ k: "unit", s: "cellar", n: name }, {
-          unit: `packages/cellar/${name}.test.ts`,
+          unit: `runtime/cellar/${name}.test.ts`,
           cost: 225,
           score: 0.99 - at / 100,
         })
@@ -1158,7 +1158,7 @@ describe("plan", () => {
     it("leaves no test a chosen gate ran among those held back with their unit", () => {
       const members = ["w0", "w1", "w2"].map((name) =>
         sampleEntry({ k: "unit", s: "memory", n: name }, {
-          unit: "packages/memory/test/whole.test.ts",
+          unit: "runtime/memory/test/whole.test.ts",
         })
       );
       const manifest = sampleManifest({
@@ -1170,7 +1170,7 @@ describe("plan", () => {
         }],
       });
       const wholeUnits = new Set([
-        "workspace-unit\tpackages/memory/test/whole.test.ts",
+        "workspace-unit\truntime/memory/test/whole.test.ts",
       ]);
       expect(run(manifest, { wholeUnits }).heldWithUnit).toHaveLength(2);
       expect(
@@ -1199,7 +1199,7 @@ describe("plan", () => {
         ...gateOver(members, 0.05),
         entry: sampleEntry({ k: "gate", s, n }, {
           suite: "coverage-gate",
-          unit: `workspace-unit/packages/${s}`,
+          unit: `workspace-unit/runtime/${s}`,
         }),
       });
       const gates = [named("g", "memory"), named("g", "cellar")];
@@ -1286,7 +1286,7 @@ describe("plan", () => {
         entries: [
           sampleEntry({ k: "integration", s: "patterns", n: "one" }, {
             suite: "pattern-integration",
-            unit: "packages/patterns/integration/one.test.ts",
+            unit: "patterns/integration/one.test.ts",
             cost: 1,
           }),
         ],
@@ -1308,7 +1308,7 @@ describe("plan", () => {
       const manifest = sampleManifest({
         entries: entries(4, (i) => ({
           suite: "pattern-integration",
-          unit: `packages/patterns/integration/case-${i}.test.ts`,
+          unit: `patterns/integration/case-${i}.test.ts`,
           cost: 1,
         })),
         calibration: {
@@ -1376,7 +1376,7 @@ describe("plan", () => {
         entries: entries(1, () => ({
           cost: 200,
           suite: "pattern-integration",
-          unit: "packages/patterns/one.test.ts",
+          unit: "patterns/one.test.ts",
         })),
         calibration: {
           setupCost: { toolshed: 60 },
@@ -1607,7 +1607,7 @@ describe("plan", () => {
       const manifest = sampleManifest({
         entries: entries(3, (i) => ({
           cost: 1,
-          unit: `packages/memory/test/${i}.test.ts`,
+          unit: `runtime/memory/test/${i}.test.ts`,
         })),
         calibration: {
           setupCost: {},
@@ -1631,7 +1631,7 @@ describe("plan", () => {
           entries(40, (i) => ({
             suite,
             cost: 1 + ((i * 7 + s) % 11),
-            unit: `packages/${suite}/${i % 9}.test.ts`,
+            unit: `runtime/${suite}/${i % 9}.test.ts`,
             repeats: i % 13 === 0 ? 2 : 1,
           })).map((entry) => ({
             ...entry,
@@ -1646,8 +1646,8 @@ describe("plan", () => {
               correction: 0.8,
               unitOverhead: 2,
               unitHooks: {
-                "packages/workspace-unit/0.test.ts": 6,
-                "packages/workspace-unit/4.test.ts": 2.5,
+                "runtime/workspace-unit/0.test.ts": 6,
+                "runtime/workspace-unit/4.test.ts": 2.5,
               },
             },
             "runner-unit": { overhead: 4, correction: 0.4, unitOverhead: 1 },
@@ -1655,7 +1655,7 @@ describe("plan", () => {
               overhead: 21,
               correction: 1.2,
               unitOverhead: 0,
-              unitHooks: { "packages/cli-core/3.test.ts": 11 },
+              unitHooks: { "runtime/cli-core/3.test.ts": 11 },
             },
           },
           prologue: 0,
@@ -1694,7 +1694,7 @@ describe("plan", () => {
       const manifest = sampleManifest({
         entries: entries(3, (i) => ({
           cost: 1,
-          unit: `packages/memory/test/${i}.test.ts`,
+          unit: `runtime/memory/test/${i}.test.ts`,
         })),
         calibration: {
           setupCost: {},
@@ -1704,8 +1704,8 @@ describe("plan", () => {
               correction: 2,
               unitOverhead: 1,
               unitHooks: {
-                "packages/memory/test/0.test.ts": 4,
-                "packages/memory/test/1.test.ts": 3,
+                "runtime/memory/test/0.test.ts": 4,
+                "runtime/memory/test/1.test.ts": 3,
               },
             },
           },
@@ -1781,7 +1781,7 @@ describe("plan", () => {
       const manifest = sampleManifest({
         entries: entries(3, () => ({
           cost: 1,
-          unit: "packages/memory/test/one.test.ts",
+          unit: "runtime/memory/test/one.test.ts",
         })),
         calibration: {
           setupCost: {},
@@ -1811,7 +1811,7 @@ describe("plan", () => {
             }, {
               cost: 1,
               suite,
-              unit: "packages/patterns/integration/all.test.ts",
+              unit: "patterns/integration/all.test.ts",
             }),
         ),
         calibration: {
@@ -1865,8 +1865,8 @@ describe("plan", () => {
         // runs once adds none.
         expect(
           repeated({ overhead: 10, correction: 1, unitOverhead: 0 }, [
-            { cost: 1, repeats: 3, unit: "packages/memory/test/a.test.ts" },
-            { cost: 1, repeats: 1, unit: "packages/memory/test/b.test.ts" },
+            { cost: 1, repeats: 3, unit: "runtime/memory/test/a.test.ts" },
+            { cost: 1, repeats: 1, unit: "runtime/memory/test/b.test.ts" },
           ]),
         ).toBeCloseTo(30 + 4, 6);
       });
@@ -1874,8 +1874,8 @@ describe("plan", () => {
       it("charges a unit's overhead once for each pass that opens it", () => {
         expect(
           repeated({ overhead: 0, correction: 1, unitOverhead: 5 }, [
-            { cost: 1, repeats: 2, unit: "packages/memory/test/a.test.ts" },
-            { cost: 1, repeats: 1, unit: "packages/memory/test/b.test.ts" },
+            { cost: 1, repeats: 2, unit: "runtime/memory/test/a.test.ts" },
+            { cost: 1, repeats: 1, unit: "runtime/memory/test/b.test.ts" },
           ]),
         ).toBeCloseTo(15 + 3, 6);
       });
@@ -1885,12 +1885,12 @@ describe("plan", () => {
         // come to 0.4 of 40 and 200, where the floor is 20 and 20.
         expect(
           repeated({ overhead: 0, correction: 0.4, unitOverhead: 0 }, [
-            { cost: 10, repeats: 2, unit: "packages/memory/test/a.test.ts" },
-            { cost: 10, repeats: 1, unit: "packages/memory/test/a.test.ts" },
+            { cost: 10, repeats: 2, unit: "runtime/memory/test/a.test.ts" },
+            { cost: 10, repeats: 1, unit: "runtime/memory/test/a.test.ts" },
             ...Array.from({ length: 10 }, (_, i) => ({
               cost: 20,
               repeats: 1,
-              unit: `packages/memory/test/${i}.test.ts`,
+              unit: `runtime/memory/test/${i}.test.ts`,
             })),
           ]),
         ).toBeCloseTo(96, 6);
@@ -1903,12 +1903,12 @@ describe("plan", () => {
         // other files of 20 the loads come to 0.4 of 375.
         expect(
           repeated({ overhead: 0, correction: 0.4, unitOverhead: 0 }, [
-            { cost: 40, repeats: 1, unit: "packages/memory/test/a.test.ts" },
-            { cost: 5, repeats: 3, unit: "packages/memory/test/a.test.ts" },
+            { cost: 40, repeats: 1, unit: "runtime/memory/test/a.test.ts" },
+            { cost: 5, repeats: 3, unit: "runtime/memory/test/a.test.ts" },
             ...Array.from({ length: 12 }, (_, i) => ({
               cost: 20,
               repeats: 1,
-              unit: `packages/memory/test/${i}.test.ts`,
+              unit: `runtime/memory/test/${i}.test.ts`,
             })),
           ]),
         ).toBeCloseTo(150, 6);
@@ -1919,8 +1919,8 @@ describe("plan", () => {
         // 60, which is the only one still running.
         expect(
           repeated({ overhead: 0, correction: 0.4, unitOverhead: 0 }, [
-            { cost: 100, repeats: 1, unit: "packages/memory/test/a.test.ts" },
-            { cost: 60, repeats: 2, unit: "packages/memory/test/b.test.ts" },
+            { cost: 100, repeats: 1, unit: "runtime/memory/test/a.test.ts" },
+            { cost: 60, repeats: 2, unit: "runtime/memory/test/b.test.ts" },
           ]),
         ).toBeCloseTo(160, 6);
       });
@@ -1930,7 +1930,7 @@ describe("plan", () => {
           entries: entries(3, (i) => ({
             cost: [100, 60, 30][i]!,
             repeats: [1, 2, 3][i]!,
-            unit: `packages/memory/test/${i}.test.ts`,
+            unit: `runtime/memory/test/${i}.test.ts`,
           })),
           calibration: {
             setupCost: {},
@@ -1979,7 +1979,7 @@ describe("plan", () => {
         fields: Partial<ManifestEntry> = {},
       ): ManifestEntry {
         return sampleEntry({ k: "unit", s: "memory", n }, {
-          unit: "packages/memory/test/hooks.test.ts",
+          unit: "runtime/memory/test/hooks.test.ts",
           cost,
           ...fields,
         });
@@ -2082,7 +2082,7 @@ describe("plan", () => {
         // and in the other to 0.6.
         const corpus = entries(3, (i) => ({
           cost: [0.1, 0.2, 0.3][i]!,
-          unit: "packages/memory/test/one.test.ts",
+          unit: "runtime/memory/test/one.test.ts",
         }));
         const around = aroundIn(corpus);
         const selections = corpus.map((entry) => ({ entry, repeats: 1 }));
@@ -2120,7 +2120,7 @@ describe("plan", () => {
         const manifest = sampleManifest({
           entries: entries(3, () => ({
             cost: 40,
-            unit: "packages/memory/test/one.test.ts",
+            unit: "runtime/memory/test/one.test.ts",
           })),
           calibration: sideBySide,
         });
@@ -2135,7 +2135,7 @@ describe("plan", () => {
           entries: entries(2, (i) => ({
             cost: 10,
             repeats: i === 0 ? 2 : 1,
-            unit: "packages/memory/test/one.test.ts",
+            unit: "runtime/memory/test/one.test.ts",
           })),
           calibration: sideBySide,
         });
@@ -2162,7 +2162,7 @@ describe("plan", () => {
             6,
             (i) =>
               i < 2
-                ? { cost: 40, unit: "packages/memory/test/one.test.ts" }
+                ? { cost: 40, unit: "runtime/memory/test/one.test.ts" }
                 : { cost: 10 },
           ),
           calibration: sideBySide,
@@ -2253,7 +2253,7 @@ describe("a unit its runner runs whole", () => {
   // A lane that picks any test in such a unit runs every test in it. The packer
   // places the unit as one choice, and the plan lists its tests.
 
-  const HALF = "packages/ui#browser-test";
+  const HALF = "runtime/ui#browser-test";
   const WHOLE = new Set([`workspace-unit\t${HALF}`]);
 
   /** Three tests of the browser half, and five ordinary ones beside it. */
@@ -2366,7 +2366,7 @@ describe("a unit its runner runs whole", () => {
         k: "browser",
         s: "ui",
         n: `whole workspace-unit ${HALF}`,
-      }, { unit: "packages/ui/test/other.test.ts" }),
+      }, { unit: "runtime/ui/test/other.test.ts" }),
     );
     expect(() => foldWholeUnits(manifest, WHOLE)).toThrow(
       "another entry in the corpus already has",
@@ -2479,7 +2479,7 @@ describe("an identity a manifest carries twice", () => {
     // scores, and which of them a plan followed would depend on where the
     // manifest listed them.
     const first = sampleEntry({ k: "unit", s: "memory", n: "case 0" }, {
-      unit: "packages/memory/test/case-0.test.ts",
+      unit: "runtime/memory/test/case-0.test.ts",
       score: 0.9,
     });
     const rest = entries(3).slice(1);
@@ -2513,12 +2513,12 @@ describe("running everything", () => {
       entries: [
         ...entries(6, (i) => ({ cost: 1 + i, score: 0.9 - i / 10 })),
         sampleEntry({ k: "unit", s: "memory", n: "flaky" }, {
-          unit: "packages/memory/test/flaky.test.ts",
+          unit: "runtime/memory/test/flaky.test.ts",
           flakeRate: 0.9,
           cost: 2,
         }),
         sampleEntry({ k: "unit", s: "memory", n: "worthless" }, {
-          unit: "packages/memory/test/worthless.test.ts",
+          unit: "runtime/memory/test/worthless.test.ts",
           score: 0,
           cost: 2,
         }),
@@ -2640,7 +2640,7 @@ describe("running everything", () => {
       entries: [
         ...entries(40, (i) => ({ cost: i % 7 === 0 ? 5_000 : i / 10 })),
         sampleEntry({ k: "unit", s: "memory", n: "flaky" }, {
-          unit: "packages/memory/test/flaky.test.ts",
+          unit: "runtime/memory/test/flaky.test.ts",
           flakeRate: 1,
         }),
       ],
@@ -2725,7 +2725,7 @@ describe("how many lanes the full run needs", () => {
       entries: [
         ...entries(20, () => ({ cost: 1, repeats: 10 })),
         sampleEntry({ k: "unit", s: "memory", n: "vast" }, {
-          unit: "packages/memory/test/vast.test.ts",
+          unit: "runtime/memory/test/vast.test.ts",
           cost: 4_000,
         }),
       ],
@@ -2904,7 +2904,7 @@ describe("how many lanes the full run needs", () => {
       entries: [
         ...entries(20, () => ({ cost: 100 })),
         sampleEntry({ k: "unit", s: "memory", n: "vast" }, {
-          unit: "packages/memory/test/vast.test.ts",
+          unit: "runtime/memory/test/vast.test.ts",
           cost: FULL_LANE_BUDGET_SECONDS * 3,
         }),
       ],
@@ -2939,7 +2939,7 @@ describe("how many lanes the full run needs", () => {
           cost: Math.floor(FULL_LANE_BUDGET_SECONDS / 5.3),
         })),
         sampleEntry({ k: "unit", s: "memory", n: "vast" }, {
-          unit: "packages/memory/test/vast.test.ts",
+          unit: "runtime/memory/test/vast.test.ts",
           cost: FULL_LANE_BUDGET_SECONDS * 1.7,
         }),
       ],

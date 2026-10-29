@@ -1,0 +1,320 @@
+import { assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
+import { connect, loopback } from "@commonfabric/memory/v2/client";
+import { Server } from "@commonfabric/memory/v2/server";
+
+import env from "@/env.ts";
+import { StatsResponseSchema as declared } from "@/routes/health/health.routes.ts";
+import createApp from "@/lib/create-app.ts";
+import router from "@/routes/health/health.index.ts";
+
+if (env.ENV !== "test") {
+  throw new Error("ENV must be 'test'");
+}
+
+const app = createApp().route("/", router);
+
+Deno.test("health routes", async (t) => {
+  await t.step("GET /_health returns 200 with health status", async () => {
+    const response = await app.request("/_health");
+    assertEquals(response.status, 200);
+
+    const json = await response.json();
+    assertEquals(json.status, "OK");
+    assertEquals(typeof json.timestamp, "number");
+    // Test env: no baked metadata and no COMMIT_SHA, so the commit is
+    // unknown — null in the body, and the header (the CLI's capture
+    // channel) is omitted rather than sent empty.
+    assertEquals(json.gitSha, null);
+    assertEquals(response.headers.get("x-cf-git-sha"), null);
+  });
+
+  await t.step(
+    "GET /api/health/serving-loop-realm answers 404 while no serving loop runs here",
+    async () => {
+      // No serving loop is started in this process, so the route has no
+      // realm to ask; it says so at once rather than wait for one.
+      const response = await app.request("/api/health/serving-loop-realm");
+      assertEquals(response.status, 404);
+      const json = await response.json();
+      assertEquals(typeof json.error, "string");
+    },
+  );
+
+  await t.step(
+    "GET /api/health/stats reports this process's memory",
+    async () => {
+      const processMemory = async () => {
+        const response = await app.request("/api/health/stats");
+        assertEquals(response.status, 200);
+        const json = await response.json();
+        assertEquals(
+          declared.safeParse({ ...json, processMemory: undefined }).success,
+          false,
+        );
+        return declared.parse(json).processMemory;
+      };
+      const size = 256 * 1024 * 1024;
+      const before = await processMemory();
+      expect(before.rss).toBeGreaterThan(0);
+      expect(before.heapUsed).toBeGreaterThan(0);
+      expect(before.external).toBeLessThan(size);
+      // A buffer allocated in this process, which serves the route, shows in
+      // the report while it is held.
+      const held = new Uint8Array(size);
+      const during = await processMemory();
+      expect(during.external).toBeGreaterThanOrEqual(size);
+      assertEquals(held.length, size);
+    },
+  );
+
+  await t.step(
+    "GET /api/health/stats reports the memory server's document caches",
+    async () => {
+      // The provider is registered by the Server constructor (newest live
+      // server reported), so a server constructed here stands in for the
+      // co-hosted one; it has opened no space yet.
+      const server = new Server({
+        store: new URL("memory://health-stats-document-caches"),
+        authorizeSessionOpen: () => "did:key:z6Mk-health-stats-principal",
+        sessionOpenAuth: { audience: "did:key:z6Mk-health-stats-audience" },
+      });
+      try {
+        const stats = async () => {
+          const response = await app.request("/api/health/stats");
+          assertEquals(response.status, 200);
+          const json = await response.json();
+          assertEquals(json.documentCaches, server.documentCachesDiagnostics());
+          // The declared response schema admits the live response.
+          assertEquals(declared.safeParse(json).success, true);
+          return json;
+        };
+        const empty = await stats();
+        assertEquals(typeof empty.documentCaches.totalBudgetBytes, "number");
+        assertEquals(empty.documentCaches.bytes, 0);
+        assertEquals(empty.documentCaches.totalBudgetEvictions, 0);
+        assertEquals(empty.documentCaches.spaces, {});
+        // Any read opens a space; its record carries every per-space field
+        // the schema declares, and the schema refuses a malformed one.
+        const space = "did:key:z6Mk-health-stats-space";
+        await server.evaluateGraphQuery(space, {
+          roots: [{ id: "of:doc:1", selector: { path: [], schema: true } }],
+        });
+        const populated = await stats();
+        const cache = populated.documentCaches.spaces[space];
+        assertEquals(
+          Object.keys(cache).sort(),
+          [
+            "budgetBytes",
+            "bytes",
+            "entries",
+            "evictions",
+            "hits",
+            "maxEntries",
+            "misses",
+            "patchReplays",
+            "resumes",
+          ],
+        );
+        assertEquals(
+          declared.safeParse({
+            ...populated,
+            documentCaches: {
+              ...populated.documentCaches,
+              spaces: { [space]: { ...cache, hits: "wrong" } },
+            },
+          }).success,
+          false,
+        );
+      } finally {
+        await server.close();
+      }
+    },
+  );
+
+  await t.step(
+    "GET /api/health/stats reports the memory server's commit rates",
+    async () => {
+      const principal = "did:key:z6Mk-health-stats-commit-principal";
+      const server = new Server({
+        store: new URL("memory://health-stats-commit-rates"),
+        authorizeSessionOpen: () => principal,
+        sessionOpenAuth: { audience: "did:key:z6Mk-health-stats-audience" },
+        subscriptionRefreshDelayMs: "manual",
+      });
+      try {
+        const stats = async () => {
+          const response = await app.request("/api/health/stats");
+          assertEquals(response.status, 200);
+          const json = await response.json();
+          expect(json.commitRates).toEqual(server.commitRates());
+          // The declared response schema admits the live response.
+          expect(declared.safeParse(json).success).toBe(true);
+          return json;
+        };
+        const empty = await stats();
+        expect(empty.commitRates).toEqual({
+          storm: empty.commitRates.storm,
+          activeSpaces: 0,
+          storms: 0,
+          spaces: [],
+        });
+        expect(empty.commitRates.storm.commitsPerMinute).toBeGreaterThan(0);
+        expect(empty.commitRates.storm.sustainedSeconds).toBeGreaterThan(0);
+        // One commit through an opened session reports its space and its
+        // writer, keyed by the session and the principal it was opened as.
+        const space = "did:key:z6Mk-health-stats-commit-space";
+        const client = await connect({ transport: loopback(server) });
+        const mounted = await client.mount(space, {}, (_space, _session, {
+          audience,
+          challenge,
+        }) => ({
+          invocation: { aud: audience, challenge: challenge.value },
+          authorization: {},
+        }));
+        await mounted.transact({
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "set",
+            id: "of:health-stats-commit",
+            value: { value: { written: true } },
+          }],
+        });
+        const populated = await stats();
+        expect(populated.commitRates.activeSpaces).toBe(1);
+        const [rates] = populated.commitRates.spaces;
+        expect(Object.keys(rates).sort()).toEqual([
+          "activeWriters",
+          "minute",
+          "space",
+          "tenMinutes",
+          "writers",
+        ]);
+        expect(rates.space).toBe(space);
+        expect(rates.minute).toEqual({
+          accepted: 1,
+          rejected: 0,
+          operations: 1,
+        });
+        expect(
+          rates.writers.map((writer: { principal?: string }) =>
+            writer.principal
+          ),
+        ).toEqual([principal]);
+        // The schema refuses a malformed count.
+        expect(
+          declared.safeParse({
+            ...populated,
+            commitRates: {
+              ...populated.commitRates,
+              spaces: [{ ...rates, minute: { ...rates.minute, accepted: -1 } }],
+            },
+          }).success,
+        ).toBe(false);
+      } finally {
+        await server.close();
+      }
+    },
+  );
+
+  await t.step(
+    "GET /api/health/stats reports the sessions' remote-echo breaker reports",
+    async () => {
+      const principal = "did:key:z6Mk-health-stats-report-principal";
+      const server = new Server({
+        store: new URL("memory://health-stats-session-reports"),
+        authorizeSessionOpen: () => principal,
+        sessionOpenAuth: { audience: "did:key:z6Mk-health-stats-audience" },
+        subscriptionRefreshDelayMs: "manual",
+      });
+      try {
+        const stats = async () => {
+          const response = await app.request("/api/health/stats");
+          assertEquals(response.status, 200);
+          const json = await response.json();
+          expect(json.sessionReports).toEqual(server.sessionReports());
+          // The declared response schema admits the live response.
+          expect(declared.safeParse(json).success).toBe(true);
+          return json;
+        };
+        const empty = await stats();
+        expect(empty.sessionReports).toEqual({
+          echoBreaker: {
+            trips: 0,
+            clears: { convergence: 0, quiet: 0, retired: 0, evicted: 0 },
+          },
+          recent: [],
+        });
+        // A trip and the clear that ends it, sent on an opened session, are
+        // counted and listed under that session and its principal.
+        const space = "did:key:z6Mk-health-stats-report-space";
+        const client = await connect({ transport: loopback(server) });
+        const mounted = await client.mount(space, {}, (_space, _session, {
+          audience,
+          challenge,
+        }) => ({
+          invocation: { aud: audience, challenge: challenge.value },
+          authorization: {},
+        }));
+        const document = {
+          id: "of:health-stats-report",
+          scopeKey: "space" as const,
+        };
+        const action = "cf:module/abc:__cfLift_1:xyz";
+        await mounted.sendReport({
+          kind: "echo-breaker",
+          event: "trip",
+          document,
+          action,
+        });
+        await mounted.sendReport({
+          kind: "echo-breaker",
+          event: "clear",
+          document,
+          action,
+          reason: "convergence",
+          renewals: 2,
+          trippedMs: 1500,
+        });
+        const populated = await stats();
+        expect(populated.sessionReports.echoBreaker).toEqual({
+          trips: 1,
+          clears: { convergence: 1, quiet: 0, retired: 0, evicted: 0 },
+        });
+        expect(
+          populated.sessionReports.recent.map((
+            report: { event: string; principal?: string; space: string },
+          ) => [report.event, report.principal, report.space]),
+        ).toEqual([["trip", principal, space], ["clear", principal, space]]);
+        // The schema refuses a clear without its reason.
+        const [listedTrip, listedClear] = populated.sessionReports.recent;
+        const { reason: _reason, ...unexplained } = listedClear;
+        expect(
+          declared.safeParse({
+            ...populated,
+            sessionReports: {
+              ...populated.sessionReports,
+              recent: [listedTrip, unexplained],
+            },
+          }).success,
+        ).toBe(false);
+        // The schema refuses a malformed count.
+        expect(
+          declared.safeParse({
+            ...populated,
+            sessionReports: {
+              ...populated.sessionReports,
+              echoBreaker: {
+                ...populated.sessionReports.echoBreaker,
+                trips: -1,
+              },
+            },
+          }).success,
+        ).toBe(false);
+      } finally {
+        await server.close();
+      }
+    },
+  );
+});
