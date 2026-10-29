@@ -25,18 +25,17 @@ import {
   Writable,
 } from "commonfabric";
 import {
+  clickInRow,
   findNodeByProp,
+  hasText,
+  innermostNode,
   propValue,
   readValue,
 } from "../../tools/test-support/vnode-helpers.ts";
 import FabriChatPlacement from "./placement.tsx";
 import { profileGesture, testRoomProfile } from "./room-test-fixture.ts";
 import { FabriChatMessageRow } from "./message-row.tsx";
-import {
-  type ComposerState,
-  type MessageRecord,
-  type MessagesValue,
-} from "./room-records.tsx";
+import { type MessageRecord, type MessagesValue } from "./room-records.tsx";
 import { FabriChatRoomCore } from "./room.tsx";
 import {
   CHAT_DELETE_ACTION,
@@ -97,11 +96,19 @@ const bodies = (messages: Cell<MessagesValue>): string =>
 const reactingDisabled = (room: unknown): unknown =>
   propValue(findNodeByProp(room, "placeholder", "Any emoji"), "disabled");
 
-// The display of a message row's editor.
-const editorDisplay = (row: unknown): unknown =>
+// The display of the editor in a room's row for the message whose text is
+// `text`.
+const editorDisplay = (room: unknown, text: string): unknown =>
   readValue(
     (propValue(
-      findNodeByProp(row, "data-ui-pattern", CHAT_EDIT_SURFACE),
+      findNodeByProp(
+        innermostNode(room, (node) =>
+          hasText(node, text) &&
+          findNodeByProp(node, "data-ui-pattern", CHAT_EDIT_SURFACE) !==
+            undefined),
+        "data-ui-pattern",
+        CHAT_EDIT_SURFACE,
+      ),
       "style",
     ) as { display?: unknown })?.display,
   );
@@ -217,24 +224,12 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
     // Stand-ins for what the room derives; a row's streams read none of it.
     places: {},
     cannotWrite: false,
-    isOwner: false,
+    rowFacts: {},
     ...records,
   } as RowArg);
-  const composer = Writable.of<ComposerState>({});
-  const onHis = FabriChatMessageRow({
-    message: setup.records.messages.key(1),
-    myProfile: profile,
-    inThread: false,
-    kind: "group" as const,
-    composer,
-    // Stand-ins for what the room derives; a row's streams read none of it.
-    places: {},
-    cannotWrite: false,
-    isOwner: false,
-    ...records,
-  } as RowArg);
+  // Through the Edit control on his message's row in the room.
   const action_start_edit = action(() =>
-    composer.key("editing").set(setup.records.messages.key(1))
+    clickInRow(room[UI], "From Bob", "Edit")
   );
 
   return {
@@ -282,11 +277,20 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       },
       // He opens the editor on his own message.
       { action: action_start_edit },
-      { assertion: assert(() => editorDisplay(onHis[UI]) === "block") },
+      {
+        assertion: assert(() =>
+          editorDisplay(room[UI], "From Bob") === "block"
+        ),
+      },
       { label: "bob-tried" },
       { await: "alice-done" },
-      // Alice obliterated it, so the editor no longer offers him an edit.
-      { assertion: assert(() => editorDisplay(onHis[UI]) === "none") },
+      // Alice obliterated it, so the editor no longer offers him an edit. Its
+      // row now reads as the tombstone it is.
+      {
+        assertion: assert(() =>
+          editorDisplay(room[UI], "This message was removed.") === "none"
+        ),
+      },
     ],
     // His refused deletion and obliteration of Alice's message on its row,
     // and his refused deletion of it through the room.

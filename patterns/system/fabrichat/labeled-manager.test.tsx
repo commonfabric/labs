@@ -121,7 +121,7 @@ export default pattern((input) => {
     places: {},
     openThreadKey: "",
     cannotWrite: false,
-    isOwner: false,
+    rowFacts: {},
     ...records,
     canJoin: true,
     manager,
