@@ -2858,6 +2858,44 @@ type Stamp = Confidential<{ x: string | number }, readonly ["d"]>["__ct_cfc__"];
           expect(read).toEqual({ input: expected, output: expected });
         });
 
+        it("reads a mapped type over a union that adds a stamp to the carrier with the added stamp's label, on both sides", async () => {
+          // The carrier records a policy the members' do not, so it is not
+          // theirs, and the object is labeled by every policy it records.
+
+          const read = await schemasOf(
+            `import type { Integrity } from "commonfabric";
+${DECLARATIONS}
+type Source = Integrity<{ x: string }, readonly ["i"]> | Integrity<{ x: number }, readonly ["i"]>;
+type Stamp = Confidential<{ x: string | number }, readonly ["d"]>["__ct_cfc__"];`,
+            '{ [K in keyof Source]: K extends "__ct_cfc__" ? Source[K] | Stamp : Source[K] }',
+          );
+          for (const side of [read.input, read.output]) {
+            expect((side as Schema).ifc).toEqual({
+              integrity: ["i"],
+              confidentiality: ["d"],
+            });
+          }
+        });
+
+        for (const replacement of ["{}", "object", "any"]) {
+          it(`reads a mapped type over a union that replaces the carrier with \`${replacement}\` unlabeled, on both sides`, async () => {
+            // A carrier that records no policy gives the object no label, and
+            // none of the members' `i`.
+
+            const read = await schemasOf(
+              `import type { Integrity } from "commonfabric";
+type Source = Integrity<{ x: string }, readonly ["i"]> | Integrity<{ x: number }, readonly ["i"]>;`,
+              `{ [K in keyof Source]: K extends "__ct_cfc__" ? ${replacement} : Source[K] }`,
+            );
+            const expected = {
+              type: "object",
+              properties: { x: { type: ["number", "string"] } },
+              required: ["x"],
+            };
+            expect(read).toEqual({ input: expected, output: expected });
+          });
+        }
+
         for (
           const [inner, argument] of [
             ['Pick<Sec<T>, "x">', 'Confidential<One, readonly ["c"]> | Two'],

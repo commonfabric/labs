@@ -1802,10 +1802,14 @@ Mechanics:
   carrier into one, though it maps only whichever member the value is, so it
   is labeled with the members' labels joined, as `Pick` and `Omit` over a
   union are: `{ [K in keyof (Integrity<X, L> | Sec<X>)]: … }` carries `Sec`'s
-  label and not `L`. That holds where the mapping keeps the union's carrier,
-  its carrier's type and the union's each assignable to the other; one that
-  replaces it, as `K extends "__ct_cfc__" ? Stamp : S[K]` does, is labeled by
-  the carrier it holds, as any other object is.
+  label and not `L`. That holds where the mapping keeps the union's carrier:
+  its carrier records the very policies the union's does, each stamp's
+  metadata and payload the same types (`recordsSameStamps` in
+  `common-fabric-formatter.ts`), which the carrier's type alone does not say,
+  as every stamp member is optional. One that replaces it, as
+  `K extends "__ct_cfc__" ? Stamp : S[K]` does, adds a stamp to it, or erases
+  it with `{}`, `object` or `any`, is labeled by the carrier it holds, as any
+  other object is, so not at all where that records no policy.
 - User alias chains are followed with type-parameter node substitution until a
   canonical name is reached (`#resolveAliasChainFromDeclaration` /
   `substituteTypeNode`), and the labels read the substituted argument nodes.

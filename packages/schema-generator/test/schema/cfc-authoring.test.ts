@@ -4577,6 +4577,44 @@ describe("Schema: CFC authoring aliases", () => {
         expect(diagnostics).toEqual([]);
       });
 
+      it("reads a mapped type over a union that adds a stamp to the carrier with the added stamp's label", async () => {
+        // The carrier records a policy the members' do not, so it is not
+        // theirs, and the object is labeled by every policy it records.
+
+        const { schema, diagnostics } = await generate(
+          "View",
+          `type Source = Integrity<{ x: string }, readonly ["i"]> | Integrity<{ x: number }, readonly ["i"]>;
+          type Stamp = Confidential<{ x: string | number }, readonly ["d"]>["__ct_cfc__"];
+          type View = { [K in keyof Source]: K extends "__ct_cfc__" ? Source[K] | Stamp : Source[K] };
+          `,
+        );
+        expect((schema as { ifc?: unknown }).ifc).toEqual({
+          integrity: ["i"],
+          confidentiality: ["d"],
+        });
+        expect(diagnostics).toEqual([]);
+      });
+
+      for (const replacement of ["{}", "object", "any"]) {
+        it(`reads a mapped type over a union that replaces the carrier with \`${replacement}\` unlabeled`, async () => {
+          // A carrier that records no policy gives the object no label, and
+          // none of the members' `i`.
+
+          const { schema, diagnostics } = await generate(
+            "View",
+            `type Source = Integrity<{ x: string }, readonly ["i"]> | Integrity<{ x: number }, readonly ["i"]>;
+            type View = { [K in keyof Source]: K extends "__ct_cfc__" ? ${replacement} : Source[K] };
+            `,
+          );
+          expect(schema).toEqual({
+            type: "object",
+            properties: { x: { type: ["number", "string"] } },
+            required: ["x"],
+          });
+          expect(diagnostics).toEqual([]);
+        });
+      }
+
       it("keeps a label on a member of the value where every member places it there or on the whole value", async () => {
         // The first member's integrity was written around `One`, so it lands
         // on `x` alone; the second's around both members, so it lands on the

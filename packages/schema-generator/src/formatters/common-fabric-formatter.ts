@@ -772,6 +772,25 @@ const payloadUnder = (
 };
 
 /**
+ * Whether `stamps` and `others` record the same policies: each stamp's
+ * metadata and payload are the very types one of the others' are, and each
+ * of the others' are one of `stamps'`. A carrier's type alone does not say
+ * so, as every stamp member is optional and `{}` is assignable to a stamp.
+ */
+const recordsSameStamps = (
+  stamps: readonly CarrierStamp[],
+  others: readonly CarrierStamp[],
+): boolean => {
+  const within = (
+    stamp: CarrierStamp,
+    among: readonly CarrierStamp[],
+  ): boolean =>
+    among.some((other) => other.meta === stamp.meta && other.of === stamp.of);
+  return stamps.every((stamp) => within(stamp, others)) &&
+    others.every((other) => within(other, stamps));
+};
+
+/**
  * Whether `type` is one the checker defers until the type parameters it is
  * written over are bound, as a conditional type and an indexed access are,
  * `Extract<T, U>` and `Awaited<T>` among them: read uninstantiated, it lists
@@ -3084,7 +3103,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     );
     const stamps = carrierStamps(value, checker);
     this.#reportCarriedWriter(stamps.map((stamp) => stamp.meta), context);
-    const members = this.#mappedMembers(type, carrier, value, context);
+    const members = this.#mappedMembers(type, carrier, stamps, context);
     if (members) return this.#withMemberLabels(schema, type, members, context);
     return this.#withPlacedLabels(
       schema,
@@ -3159,13 +3178,15 @@ export class CommonFabricFormatter implements TypeFormatter {
    * checker did not distribute it over, as `{ [K in keyof (A | B)]: … }`
    * does, read as an operand of a default-library alias is
    * (`#operandView()`), several of them. `undefined` for any other type, and
-   * for one whose carrier, `value` held by its member `carrier`, is not the
-   * union's: a mapping that replaces the carrier carries labels of its own.
+   * for one whose carrier, its member `carrier`, does not record the very
+   * policies the union's does, `stamps` (`recordsSameStamps()`): a mapping
+   * that replaces the carrier, with another stamp or with `{}`, carries the
+   * labels its own carrier records, none where it records none.
    */
   #mappedMembers(
     type: ts.Type,
     carrier: ts.Symbol,
-    value: ts.Type,
+    stamps: readonly CarrierStamp[],
     context: GenerationContext,
   ): readonly LabeledMember[] | undefined {
     if (((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Mapped) === 0) {
@@ -3176,17 +3197,15 @@ export class CommonFabricFormatter implements TypeFormatter {
     const checker = context.typeChecker;
     const sourceCarrier = checker.getPropertyOfType(source, carrier.name);
     if (!sourceCarrier) return undefined;
-    const sourceValue = memberValueType(
-      sourceCarrier,
-      checker.getTypeOfSymbol(sourceCarrier),
+    const sourceStamps = carrierStamps(
+      memberValueType(
+        sourceCarrier,
+        checker.getTypeOfSymbol(sourceCarrier),
+        checker,
+      ),
       checker,
     );
-    if (
-      !checker.isTypeAssignableTo(value, sourceValue) ||
-      !checker.isTypeAssignableTo(sourceValue, value)
-    ) {
-      return undefined;
-    }
+    if (!recordsSameStamps(stamps, sourceStamps)) return undefined;
     const view = this.#operandView(
       source,
       context.boundTypeParameters,
