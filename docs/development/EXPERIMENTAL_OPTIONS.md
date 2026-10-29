@@ -1038,8 +1038,9 @@ holds the measurements and the conditions for revisiting.
   last set up gives the same name, where that pattern loads and names the
   instance and the parent's setup record, where it has one, numbers the
   instance's cell as this runtime's build of that pattern does; and otherwise
-  the one positional child of the instance's own pattern identity. Otherwise
-  the instance starts fresh. With the flag off, nothing is pending, so
+  the one unclaimed positional child of the instance's own pattern identity,
+  one that no other instance carries and no positional node of the pattern
+  still sets up at its own spot. Otherwise the instance starts fresh. With the flag off, nothing is pending, so
   carry-over and the start's pre-sync for it have nothing to act on.
 - **Current default and planned end state.** Off by default. The end state is
   on, with the flag and the positional compile of `const`-bound instances
@@ -1050,7 +1051,7 @@ holds the measurements and the conditions for revisiting.
   instance, which it does where that pattern's own source bound the instance
   to a `const`, and where the parent's setup record does not number the
   instance's cell otherwise; and, for any other instance, where its deployed
-  child is the one positional child of its pattern identity. An instance
+  child is the one unclaimed positional child of its pattern identity. An instance
   placed by neither, such as one of two instances of one pattern first bound
   to `const`s by the update that names them, is not carried over yet: it
   starts fresh, and its deployed child's state is left where nothing reaches

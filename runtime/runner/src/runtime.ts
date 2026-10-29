@@ -464,8 +464,8 @@ export interface ExperimentalOptions {
    * child over: the one the pattern the parent last set up places, where that
    * pattern loads and names it too, and the parent's setup record, where it
    * has one, numbers its cell as this runtime's build of that pattern does;
-   * and otherwise the one positional child of the instance's own pattern
-   * identity. An instance placed by neither starts fresh. It needs every
+   * and otherwise the one unclaimed positional child of the instance's own
+   * pattern identity. An instance placed by neither starts fresh. It needs every
    * runtime that opens the same space to run the same naming mode first, so
    * no environment variable reaches it
    * (`docs/development/EXPERIMENTAL_OPTIONS.md#instancenames`).
