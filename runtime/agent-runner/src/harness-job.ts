@@ -61,6 +61,18 @@ import type { CfcObservationMaxConfidentiality } from "@commonfabric/runner/cfc"
 
 import type { AgentRunReport } from "./agent-runner.ts";
 
+/** The host command endpoint a job's command tools call. */
+export interface HarnessJobCommands {
+  /** Base URL of the endpoint: `GET <url>/commands`, `POST <url>/command`. */
+  url: string;
+
+  /** The actor every command runs as, passed to the host as given. */
+  actor: string;
+
+  /** The host's id for this job, sent on every request. */
+  runId: string;
+}
+
 /** What a job does in the fabric, when it does anything there. */
 export interface HarnessJobFabric {
   /** The origin of the toolshed serving the job's space. */
@@ -145,13 +157,10 @@ export interface HarnessJobSpec extends HarnessModelLimits {
   loomRetrievalConfigPath?: string;
 
   /**
-   * The host-owned file naming the command broker behind `list_commands`,
-   * `run_command`, and `run_read_command`.
+   * The host's command endpoint behind `list_commands` and `run_command`,
+   * the actor commands run as, and the id the host attributes them to.
    */
-  loomCommandsConfigPath?: string;
-
-  /** Host job identity attributed to this job's brokered commands. */
-  commandJobId?: string;
+  commands?: HarnessJobCommands;
 
   /** The job's fabric session and input cells; absent for a job with none. */
   fabric?: HarnessJobFabric;
@@ -192,7 +201,6 @@ export const HARNESS_JOB_GRANT_ENV_KEYS = [
   "CF_HARNESS_SPACE_DB",
   "CF_HARNESS_LOOM_AUTHORING_CONFIG",
   "CF_HARNESS_LOOM_RETRIEVAL_CONFIG",
-  "CF_HARNESS_LOOM_COMMANDS_CONFIG",
   "CF_HARNESS_PATTERN_INDEX_URL",
   "CF_HARNESS_PATTERN_INDEX_PUBLISH",
   "CF_HARNESS_PATTERN_INDEX_PUBLISH_DISCOVERABLE",
@@ -365,8 +373,15 @@ const argvOf = (
   ...(spec.loomRetrievalConfigPath !== undefined
     ? ["--loom-retrieval-config", spec.loomRetrievalConfigPath]
     : []),
-  ...(spec.loomCommandsConfigPath !== undefined
-    ? ["--loom-commands-config", spec.loomCommandsConfigPath]
+  ...(spec.commands !== undefined
+    ? [
+      "--commands-url",
+      spec.commands.url,
+      "--commands-actor",
+      spec.commands.actor,
+      "--commands-run-id",
+      spec.commands.runId,
+    ]
     : []),
   // One word each, for the reason the prompt is.
   ...(spec.instructions !== undefined
@@ -501,9 +516,6 @@ export const runHarnessJob = async (
     ...options.harnessDeps,
     ...SANDBOX_SELECTION,
     env,
-    ...(spec.commandJobId !== undefined
-      ? { commandJobId: spec.commandJobId }
-      : {}),
     ...(options.browserHost !== undefined
       ? { browserHost: options.browserHost }
       : {}),

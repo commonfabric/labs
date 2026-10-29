@@ -59,8 +59,11 @@ export interface LocalJobProfile extends HarnessModelLimits {
   /** The host file backing the read-only Loom tools, when a tool needs it. */
   loomRetrievalConfig?: string;
 
-  /** The host file naming the command broker, when a tool needs it. */
-  loomCommandsConfig?: string;
+  /**
+   * The host's command endpoint behind `list_commands` and `run_command`,
+   * when a tool needs it. Every job's requests carry its own id.
+   */
+  commands?: LocalJobCommands;
 
   /** Model name passed to `cf-harness`. */
   model?: string;
@@ -110,6 +113,15 @@ export interface LocalJobProfile extends HarnessModelLimits {
    * by declaring a browser host (`browserHost`).
    */
   subagentProfiles?: HarnessSubagentProfile[];
+}
+
+/** A profile's command endpoint, as the host file states it. */
+export interface LocalJobCommands {
+  /** Base URL of the endpoint: `GET <url>/commands`, `POST <url>/command`. */
+  url: string;
+
+  /** The actor every command runs as, passed to the host as given. */
+  actor: string;
 }
 
 /** A profile's fabric session, as the host file states it. */
@@ -208,6 +220,10 @@ const isUrl = (value: unknown): value is string => {
   }
 };
 
+/** Helper for reading, which says whether `value` is an `http(s):` URL. */
+const isHttpUrl = (value: unknown): value is string =>
+  isUrl(value) && ["http:", "https:"].includes(new URL(value).protocol);
+
 /** Helper for reading, which checks one profile and returns it. */
 const profileOf = (name: string, value: unknown): LocalJobProfile => {
   const fail = (what: string): never => {
@@ -223,7 +239,7 @@ const profileOf = (name: string, value: unknown): LocalJobProfile => {
     taskRole,
     retry,
     loomRetrievalConfig,
-    loomCommandsConfig,
+    commands,
     model,
     reasoningEffort,
     browserHost,
@@ -267,17 +283,19 @@ const profileOf = (name: string, value: unknown): LocalJobProfile => {
     fail(`\`taskRole\` must be one of ${ROLES.join(", ")}`);
   }
   if (retry !== "never") fail("`retry` must be `never`");
-  for (
-    const [key, path] of [
-      ["loomRetrievalConfig", loomRetrievalConfig],
-      ["loomCommandsConfig", loomCommandsConfig],
-    ] as const
+  if (
+    loomRetrievalConfig !== undefined &&
+    (typeof loomRetrievalConfig !== "string" ||
+      !isAbsolute(loomRetrievalConfig))
   ) {
-    if (
-      path !== undefined && (typeof path !== "string" || !isAbsolute(path))
-    ) {
-      fail(`\`${key}\` must be an absolute path`);
-    }
+    fail("`loomRetrievalConfig` must be an absolute path");
+  }
+  if (
+    commands !== undefined &&
+    (!isObjectNotArray(commands) || !isHttpUrl(commands.url) ||
+      typeof commands.actor !== "string" || commands.actor === "")
+  ) {
+    fail("`commands` must name an http(s) `url` and an `actor`");
   }
   if (model !== undefined && typeof model !== "string") {
     fail("`model` must be a string");
@@ -359,8 +377,13 @@ const profileOf = (name: string, value: unknown): LocalJobProfile => {
     ...(loomRetrievalConfig !== undefined
       ? { loomRetrievalConfig: loomRetrievalConfig as string }
       : {}),
-    ...(loomCommandsConfig !== undefined
-      ? { loomCommandsConfig: loomCommandsConfig as string }
+    ...(commands !== undefined
+      ? {
+        commands: {
+          url: (commands as LocalJobCommands).url,
+          actor: (commands as LocalJobCommands).actor,
+        },
+      }
       : {}),
     ...(model !== undefined ? { model: model as string } : {}),
     ...(effort !== undefined ? { reasoningEffort: effort } : {}),

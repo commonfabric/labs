@@ -1,20 +1,19 @@
 /**
- * Lists and runs the commands a host admits, through the host's Loom CLI over
- * the scoped broker the host launched for the run. The broker is the
- * authority: it lists only the commands its grant admits, refuses every other
- * command it is asked to run, and stamps each command it forwards with the
- * agent actor and the run it was started for. Nothing here names a command.
+ * Lists and runs the commands a host offers, over the host's command
+ * endpoint: `GET <url>/commands` lists them and `POST <url>/command` runs
+ * one. Every request carries the run id the host gave this run, so the host
+ * attributes the call to the job it started, and every command names the
+ * actor the host configured. The host decides what runs; each command's own
+ * declarations are its limits. Nothing here names a command.
  *
  * What this module adds is the reading: a manifest row becomes a
  * `HarnessCallableDescriptor`, rows whose own declarations say an agent may
  * not run them are left out, and a command's answer is checked to be the
- * JSON object the command layer returns. Every process runs over a cleared
- * environment; host text on stderr never reaches a caller.
+ * JSON object the command layer returns.
  */
 
 import type { JSONObject } from "@commonfabric/api";
 import { isObjectNotArray } from "@commonfabric/utils/types";
-import { isAbsolute } from "@std/path";
 
 import type {
   HarnessCallableDescriptor,
@@ -30,34 +29,24 @@ import {
   harnessCommandJsonBytes,
 } from "./contracts/client-command.ts";
 import { withoutSchemaExtensions } from "./loom-command-signature.ts";
-import type { ProcessRunner } from "./sandbox/process-runner.ts";
-import { createClearedHostProcessEnv } from "./tools/host-process-env.ts";
 
-/** Configuration supplied by the operator, outside the model's tool inputs. */
+/** Configuration supplied by the host, outside the model's tool inputs. */
 export interface HarnessLoomCommandsConfig {
-  /** Absolute path to the host's executable Loom CLI. */
-  cliPath: string;
+  /** Base URL of the host's command endpoint, `http:` or `https:`. */
+  url: string;
 
-  /** Host-chosen environment variable carrying the current job's identity. */
-  jobIdEnvVar?: string;
+  /** The actor every command runs as, passed to the host as given. */
+  actor: string;
 
-  /** Current job identity supplied by the embedder, outside the config file. */
-  jobId?: string;
-
-  /**
-   * The scoped broker the host launched. Only a broker is accepted: it is
-   * what stamps the actor and run on every command and narrows what is
-   * listed and run, so a run cannot be configured to attribute its own
-   * writes.
-   */
-  transport: { kind: "broker"; queuePath: string };
+  /** The host's id for the job this run serves, sent on every request. */
+  runId: string;
 }
+
+/** The header that carries {@link HarnessLoomCommandsConfig.runId}. */
+export const COMMAND_RUN_ID_HEADER = "X-Loom-Agent-Run-Id";
 
 /** One command a host admits, as `list_commands` shows it. */
 export interface LoomCommandEntry extends HarnessCallableDescriptor {
-  /** Broker-issued permission to invoke this command under a read-only demand. */
-  readOnlyGranted?: true;
-
   /** What the command acts on: `global`, `loom`, or another host scope. */
   target: string;
 
@@ -95,9 +84,6 @@ export interface LoomCommandInvocation {
 
   /** The loom version a write requires; a stale one is refused by the host. */
   expectedVersion?: number;
-
-  /** Requires the broker to recheck a read effect and a read-only grant. */
-  readOnly?: boolean;
 }
 
 /** Why a host process produced nothing a caller can read. */
@@ -132,65 +118,37 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 export const validateLoomCommandsConfig = (
   config: HarnessLoomCommandsConfig,
 ): void => {
-  if (
-    config.jobIdEnvVar !== undefined &&
-    (typeof config.jobIdEnvVar !== "string" ||
-      !/^[A-Z_][A-Z0-9_]*$/.test(config.jobIdEnvVar) ||
-      ["PATH", "LOOM_PAGE_RPC_QUEUE"].includes(config.jobIdEnvVar))
-  ) {
-    throw new Error(
-      "Loom commands require a valid, nonreserved `jobIdEnvVar`.",
-    );
+  let url: URL | undefined;
+  try {
+    url = new URL(config.url);
+  } catch {
+    url = undefined;
   }
-  if (!isAbsolute(config.cliPath)) {
-    throw new Error("Loom commands require an absolute `cliPath`.");
+  if (url === undefined || !["http:", "https:"].includes(url.protocol)) {
+    throw new Error("Commands require an `http:` or `https:` endpoint URL.");
   }
-  const transport: unknown = config.transport;
-  if (!isRecord(transport) || transport.kind !== "broker") {
-    throw new Error(
-      "Loom commands require the broker transport, which stamps the run's actor.",
-    );
+  if (typeof config.actor !== "string" || config.actor === "") {
+    throw new Error("Commands require the actor they run as.");
   }
   if (
-    typeof transport.queuePath !== "string" || !isAbsolute(transport.queuePath)
+    typeof config.runId !== "string" || config.runId === "" ||
+    /[^\x21-\x7e]/.test(config.runId)
   ) {
-    throw new Error("Loom commands require an absolute broker `queuePath`.");
+    throw new Error(
+      "Commands require a run id of printable, unspaced ASCII characters.",
+    );
   }
-};
-
-/**
- * Reads an explicit operator-owned configuration file; absence grants
- * nothing.
- */
-export const readLoomCommandsConfig = async (
-  path: string | undefined,
-  readTextFile: (path: string) => Promise<string> = Deno.readTextFile,
-  jobId?: string,
-): Promise<HarnessLoomCommandsConfig | undefined> => {
-  if (path === undefined) return undefined;
-  if (!isAbsolute(path)) {
-    throw new Error("The Loom commands configuration path must be absolute.");
-  }
-  const value: unknown = JSON.parse(await readTextFile(path));
-  if (!isRecord(value) || typeof value.cliPath !== "string") {
-    throw new Error("Loom commands require a host CLI and a transport.");
-  }
-  const config = { ...value } as unknown as HarnessLoomCommandsConfig;
-  if (jobId === undefined) delete config.jobId;
-  else config.jobId = jobId;
-  validateLoomCommandsConfig(config);
-  return config;
 };
 
 /**
  * Whether a manifest row's own declarations say an agent may not run it. A
- * broker-stamped run reaches the command layer as an `agent:` actor with
- * origin `session`, so a row is left out when it is a pattern's verb (an
+ * run's command reaches the command layer as an `agent:` actor with origin
+ * `session`, so a row is left out when it is a pattern's verb (an
  * agent calls a piece's verbs through `call_verb` on the piece it holds), a
  * developer command, one whose actors are all people, one that refuses or
  * does not require the `session` origin, or one that runs only over a
- * person's consent grant. The broker's grant decides what may run; this
- * decides only what is shown, and a row the host declares nothing about is
+ * person's consent grant. The host decides what may run; this decides only
+ * what is shown, and a row the host declares nothing about is
  * shown.
  */
 export const isHiddenFromAgents = (row: Record<string, unknown>): boolean => {
@@ -269,7 +227,6 @@ export const loomCommandEntryOfRow = (
     ...(effect === "read" || effect === "change"
       ? { effect: effect as HarnessCallableEffect }
       : {}),
-    ...(row.readOnlyGranted === true ? { readOnlyGranted: true } : {}),
     target: typeof scope === "string" && scope.length > 0
       ? scope.slice(0, HARNESS_COMMAND_ID_MAX_LENGTH)
       : "global",
@@ -348,31 +305,35 @@ export const nearestCommandNames = (
     .slice(0, LOOM_COMMAND_SUGGESTION_LIMIT)
     .map(({ candidate }) => candidate);
 
-/** Helper for both commands, which runs the CLI over the broker queue. */
-const runCli = (
+/**
+ * Helper for both commands, which sends one request to the host's endpoint
+ * with the run's id and reads the answer's text. A request that cannot be
+ * sent, or whose answer cannot be read, throws.
+ */
+const request = async (
   config: HarnessLoomCommandsConfig,
-  args: string[],
-  runner: ProcessRunner,
-  stdinText?: string,
-) => {
-  const env = createClearedHostProcessEnv();
-  env.LOOM_PAGE_RPC_QUEUE = config.transport.queuePath;
-  if (config.jobIdEnvVar !== undefined && config.jobId !== undefined) {
-    env[config.jobIdEnvVar] = config.jobId;
-  }
-  return runner.run({
-    command: config.cliPath,
-    args,
-    env,
-    clearEnv: true,
-    ...(stdinText !== undefined ? { stdinText } : {}),
+  path: "commands" | "command",
+  body: JSONObject | undefined,
+  signal: AbortSignal | undefined,
+): Promise<{ ok: boolean; text: string }> => {
+  const response = await fetch(`${config.url.replace(/\/+$/, "")}/${path}`, {
+    method: body === undefined ? "GET" : "POST",
+    headers: {
+      Accept: "application/json",
+      [COMMAND_RUN_ID_HEADER]: config.runId,
+      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+    },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    redirect: "manual",
+    ...(signal !== undefined ? { signal } : {}),
   });
+  return { ok: response.ok, text: await response.text() };
 };
 
-/** Reads the host's manifest through `loom command list --json`. */
+/** Reads the host's manifest through `GET <url>/commands`. */
 export const listLoomCommands = async (
   config: HarnessLoomCommandsConfig,
-  runner: ProcessRunner,
+  signal?: AbortSignal,
 ): Promise<LoomCommandListOutput> => {
   validateLoomCommandsConfig(config);
   const unread: LoomCommandListOutput = {
@@ -382,16 +343,15 @@ export const listLoomCommands = async (
   };
   let response;
   try {
-    response = await runCli(config, ["command", "list", "--json"], runner);
+    response = await request(config, "commands", undefined, signal);
   } catch {
     return unread;
   }
-  // A listing the CLI did not finish is not the host's catalog, whatever it
-  // printed.
-  if (response.exitCode !== 0) return unread;
+  // A refused listing is not the host's catalog, whatever its body says.
+  if (!response.ok) return unread;
   let manifest: unknown;
   try {
-    manifest = JSON.parse(response.stdout);
+    manifest = JSON.parse(response.text);
   } catch {
     return unread;
   }
@@ -406,30 +366,25 @@ export const listLoomCommands = async (
 };
 
 /**
- * Runs one command through `loom command run <id> --args-json - --json`. The
- * command layer answers every command it reached with a JSON object carrying
- * a boolean `ok`, a refusal included, so anything else is an answer that was
- * lost — and a lost answer may follow a command that took effect.
+ * Runs one command through `POST <url>/command`, as the configured actor,
+ * with the loom and expected version as the command's context. The command
+ * layer answers every command it reached with a JSON object carrying a
+ * boolean `ok`, a refusal included and whatever the HTTP status, so anything
+ * else is an answer that was lost — and a lost answer may follow a command
+ * that took effect.
  */
 export const runLoomCommand = async (
   config: HarnessLoomCommandsConfig,
   invocation: LoomCommandInvocation,
-  runner: ProcessRunner,
+  signal?: AbortSignal,
 ): Promise<LoomCommandRunOutput> => {
   validateLoomCommandsConfig(config);
-  const argv = [
-    "command",
-    "run",
-    invocation.command,
-    "--args-json",
-    "-",
-    "--json",
-    ...(invocation.loomId !== undefined ? ["--loom", invocation.loomId] : []),
+  const context: JSONObject = {
+    ...(invocation.loomId !== undefined ? { loom_id: invocation.loomId } : {}),
     ...(invocation.expectedVersion !== undefined
-      ? ["--expect", String(invocation.expectedVersion)]
-      : []),
-    ...(invocation.readOnly === true ? ["--read-only"] : []),
-  ];
+      ? { expected_version: invocation.expectedVersion }
+      : {}),
+  };
   const lost = (
     code: LoomCommandHostErrorCode,
     message: string,
@@ -439,20 +394,20 @@ export const runLoomCommand = async (
     message,
     landed: "unknown",
   });
-  let stdout: string;
+  let text: string;
   try {
-    ({ stdout } = await runCli(
-      config,
-      argv,
-      runner,
-      JSON.stringify(invocation.args),
-    ));
+    ({ text } = await request(config, "command", {
+      id: invocation.command,
+      args: invocation.args,
+      ...(Object.keys(context).length > 0 ? { context } : {}),
+      actor: config.actor,
+    }, signal));
   } catch {
     return lost("command_failed", "The host command's answer was lost.");
   }
   let body: unknown;
   try {
-    body = JSON.parse(stdout);
+    body = JSON.parse(text);
   } catch {
     return lost("command_failed", "The host command's answer was lost.");
   }
@@ -488,14 +443,13 @@ export interface LoomCommandCatalogSource {
   refresh(): Promise<LoomCommandCatalogRead>;
 }
 
-/** A catalog source over the host's `loom command list --json`. */
+/** A catalog source over the host's `GET <url>/commands`. */
 export const createLoomCommandCatalogSource = (
   config: HarnessLoomCommandsConfig,
-  runner: ProcessRunner,
 ): LoomCommandCatalogSource => {
   let held: Promise<LoomCommandCatalogRead> | undefined;
   const read = async (): Promise<LoomCommandCatalogRead> => {
-    const listed = await listLoomCommands(config, runner);
+    const listed = await listLoomCommands(config);
     return listed.status === "ok"
       ? { status: "ok", catalog: loomCommandCatalogOf(listed.commands) }
       : listed;

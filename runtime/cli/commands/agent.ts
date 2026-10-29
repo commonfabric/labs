@@ -23,7 +23,10 @@ import {
   type LocalJobsService,
   startLocalJobs,
 } from "@commonfabric/agent-runner/local-jobs/service";
-import { LOOM_RETRIEVAL_TOOL_IDS } from "@commonfabric/cf-harness/contracts/tool-descriptor";
+import {
+  LOOM_COMMAND_TOOL_IDS,
+  LOOM_RETRIEVAL_TOOL_IDS,
+} from "@commonfabric/cf-harness/contracts/tool-descriptor";
 import { HarnessControlError } from "@commonfabric/cf-harness/control-errors";
 import { type Cell, type Runtime, sendEvent } from "@commonfabric/runner";
 import {
@@ -53,6 +56,9 @@ import { absPath } from "../lib/utils.ts";
 /** The Loom retrieval tools a runner offers when it has a Loom configuration. */
 const LOOM_TOOLS = [...LOOM_RETRIEVAL_TOOL_IDS];
 
+/** The command tools a runner offers when it has a command endpoint. */
+const COMMAND_TOOLS = [...LOOM_COMMAND_TOOL_IDS];
+
 /** The harness tools every runner offers, beyond the ones every run reads its inputs through. */
 const BASE_TOOLS = ["web_fetch"];
 
@@ -65,6 +71,8 @@ export interface AgentRunnerCommandOptions {
   apiUrl?: string;
   localApiUrl?: string;
   loomRetrievalConfig?: string;
+  commandsUrl?: string;
+  commandsActor?: string;
   maxConcurrent: number;
   tools?: string;
   workRoot?: string;
@@ -83,7 +91,10 @@ export interface AgentRunnerCommandOptions {
  * every run has them.
  */
 export function resolveRunnerTools(
-  options: Pick<AgentRunnerCommandOptions, "tools" | "loomRetrievalConfig">,
+  options: Pick<
+    AgentRunnerCommandOptions,
+    "tools" | "loomRetrievalConfig" | "commandsUrl"
+  >,
 ): string[] {
   if (options.tools !== undefined) {
     const tools = options.tools.split(",").map((tool) => tool.trim()).filter((
@@ -99,13 +110,22 @@ export function resolveRunnerTools(
         { exitCode: 1 },
       );
     }
+    const commandTool = tools.find((tool) =>
+      (LOOM_COMMAND_TOOL_IDS as ReadonlySet<string>).has(tool)
+    );
+    if (commandTool !== undefined && options.commandsUrl === undefined) {
+      throw new ValidationError(
+        `Tool \`${commandTool}\` requires "--commands-url".`,
+        { exitCode: 1 },
+      );
+    }
     return withAgentInputAccessTools(tools);
   }
-  return withAgentInputAccessTools(
-    options.loomRetrievalConfig !== undefined
-      ? [...LOOM_TOOLS, ...BASE_TOOLS]
-      : BASE_TOOLS,
-  );
+  return withAgentInputAccessTools([
+    ...(options.loomRetrievalConfig !== undefined ? LOOM_TOOLS : []),
+    ...(options.commandsUrl !== undefined ? COMMAND_TOOLS : []),
+    ...BASE_TOOLS,
+  ]);
 }
 
 /** What the flags and environment resolve to. */
@@ -122,6 +142,10 @@ export interface AgentRunnerCommandConfig {
   leaseMs: number;
   workRoot: string;
   loomRetrievalConfigPath?: string;
+
+  /** The host's command endpoint and the actor commands run as. */
+  commands?: { url: string; actor: string };
+
   model?: string;
 }
 
@@ -218,6 +242,18 @@ export async function resolveAgentRunnerConfig(
   const runnerHost = options.localApiUrl !== undefined
     ? originOf("--local-api-url", options.localApiUrl)
     : homeHost;
+  if (
+    (options.commandsUrl === undefined) !==
+      (options.commandsActor === undefined)
+  ) {
+    throw new ValidationError(
+      `"--commands-url" and "--commands-actor" go together.`,
+      { exitCode: 1 },
+    );
+  }
+  if (options.commandsUrl !== undefined) {
+    originOf("--commands-url", options.commandsUrl);
+  }
   const identityPath = absPath(options.identity);
   const identity = await deps.loadIdentity(identityPath);
   return {
@@ -238,6 +274,9 @@ export async function resolveAgentRunnerConfig(
     ),
     ...(options.loomRetrievalConfig !== undefined
       ? { loomRetrievalConfigPath: absPath(options.loomRetrievalConfig) }
+      : {}),
+    ...(options.commandsUrl !== undefined && options.commandsActor !== undefined
+      ? { commands: { url: options.commandsUrl, actor: options.commandsActor } }
       : {}),
     ...(options.model !== undefined ? { model: options.model } : {}),
   };
@@ -366,6 +405,7 @@ export async function startAgentRunner(
         ...(config.loomRetrievalConfigPath !== undefined
           ? { loomRetrievalConfigPath: config.loomRetrievalConfigPath }
           : {}),
+        ...(config.commands !== undefined ? { commands: config.commands } : {}),
         ...(config.model !== undefined ? { model: config.model } : {}),
         report,
       }),
@@ -790,6 +830,15 @@ export const createAgentCommand = (
     .option(
       "--loom-retrieval-config <path:string>",
       "Host-owned JSON file backing the read-only Loom tools.",
+    )
+    .option(
+      "--commands-url <url:string>",
+      "Base URL of the host's command endpoint behind list_commands and " +
+        "run_command, for Fabric runs.",
+    )
+    .option(
+      "--commands-actor <actor:string>",
+      "The actor a Fabric run's commands run as; goes with --commands-url.",
     )
     .option(
       "--max-concurrent <n:integer>",

@@ -14,7 +14,7 @@ const ASK = {
   taskRole: "direct-command",
   retry: "never",
   loomRetrievalConfig: "/instance/agent-runner/loom-retrieval.json",
-  loomCommandsConfig: "/instance/agent-runner/loom-commands.json",
+  commands: { url: "http://127.0.0.1:8080", actor: "agent:agent-runner" },
   model: "gpt-5.4",
 };
 
@@ -181,9 +181,19 @@ describe("local-jobs/profiles", () => {
         "`loomRetrievalConfig`",
       ],
       [
-        "a commands file that is not a string",
-        { ...ASK, loomCommandsConfig: 7 },
-        "`loomCommandsConfig`",
+        "a command endpoint that is not an object",
+        { ...ASK, commands: "http://127.0.0.1:8080" },
+        "`commands`",
+      ],
+      [
+        "a command endpoint whose URL is not http(s)",
+        { ...ASK, commands: { ...ASK.commands, url: "file:///commands" } },
+        "`commands`",
+      ],
+      [
+        "a command endpoint with no actor",
+        { ...ASK, commands: { url: ASK.commands.url } },
+        "`commands`",
       ],
       ["a model that is not a string", { ...ASK, model: 7 }, "`model`"],
       [

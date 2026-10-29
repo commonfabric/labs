@@ -172,7 +172,7 @@ export interface HarnessSessionConfig {
   /** Explicit host-owned backing for read-only Loom retrieval. */
   loomRetrieval?: HarnessLoomRetrievalConfig;
 
-  /** Explicit host-owned broker for the commands the host admits. */
+  /** Explicit host-owned endpoint for the commands the host offers. */
   loomCommands?: HarnessLoomCommandsConfig;
 
   patternIndex?: HarnessPatternIndexConfig;

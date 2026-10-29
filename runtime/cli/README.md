@@ -1802,6 +1802,8 @@ cf agent runner --identity ./my.key --api-url https://toolshed.example \
 | `--api-url`, `CF_API_URL`   | The toolshed serving that user's home space.                                                                                      |
 | `--local-api-url`           | The toolshed the runner sits beside, recorded as the runner's `host`. Defaults to `--api-url`.                                    |
 | `--loom-retrieval-config`   | The host-owned JSON file backing the read-only Loom tools. Without it the runner offers no `loom_*` tool.                         |
+| `--commands-url`            | The host's command endpoint behind `list_commands` and `run_command` for Fabric runs. Without it the runner offers neither.       |
+| `--commands-actor`          | The actor a Fabric run's commands run as, passed to the host as given. Goes with `--commands-url`.                                |
 | `--tools`                   | Comma-separated tool names the runner offers. Defaults to what its configuration backs.                                           |
 | `--max-concurrent`          | How many runs the process holds at once. Defaults to 1.                                                                           |
 | `--lease-seconds`           | How far a claim's lease reaches past the run's last durable write. Defaults to 300.                                               |

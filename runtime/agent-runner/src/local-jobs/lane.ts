@@ -188,7 +188,6 @@ export const localJobSpecOf = async (
     ...(runRequest.imageAttachments !== undefined
       ? { imageAttachments: runRequest.imageAttachments }
       : {}),
-    commandJobId: job.id,
     taskRole: profile.taskRole,
     resultSchema: request.resultSchema as HarnessJobSpec["resultSchema"],
     tools: [
@@ -218,7 +217,9 @@ export const localJobSpecOf = async (
     model: profile.model ?? options.model,
     loomRetrievalConfigPath: profile.loomRetrievalConfig ??
       options.loomRetrievalConfigPath,
-    loomCommandsConfigPath: profile.loomCommandsConfig,
+    ...(profile.commands !== undefined
+      ? { commands: { ...profile.commands, runId: job.id } }
+      : {}),
     fabric: fabric && {
       ...fabric,
       maxConfidentiality: await agentRunObservationCeiling(
@@ -247,7 +248,7 @@ export const localJobSpecOf = async (
 /**
  * The progress events one transcript event reports: whole root assistant
  * `text`, a `step` for each tool the model called, and a `command` for each command the host ran, one per
- * executed call of a `run_command` or `run_read_command` batch. Children
+ * executed call of a `run_command` batch. Children
  * carry their profile, run id, parent call id and depth. Browser steps also
  * name the action, so a reader can distinguish clicking from waiting without
  * receiving arguments, URLs or page content.
@@ -285,11 +286,7 @@ export const localJobEventsOf = (
       })),
     ];
   }
-  if (
-    message.role !== "tool" ||
-    (message.toolName !== "run_command" &&
-      message.toolName !== "run_read_command")
-  ) return [];
+  if (message.role !== "tool" || message.toolName !== "run_command") return [];
   let output: unknown;
   try {
     output = JSON.parse(message.content);

@@ -170,6 +170,14 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
   ["max-concurrent", "how many agent runs one runner holds; a count"],
   ["lease-seconds", "a lease length in seconds"],
   [
+    "commands-url",
+    "the host's own command endpoint, which only the host that started the runner knows",
+  ],
+  [
+    "commands-actor",
+    "an actor string the host chooses and labs passes on unread",
+  ],
+  [
     "max-concurrent-local",
     "how many local jobs one runner runs at once; a count",
   ],
