@@ -223,7 +223,7 @@ export function unsupportedIntersectionSchema(
  */
 function labelsKeptBesideAnyValue(
   constituents: readonly MutableJSONSchema[],
-  from: AnyValueBesideUnwritten["from"],
+  from: "any" | "unsupported",
   context: GenerationContext,
 ): {
   labels: Record<string, unknown> | undefined;

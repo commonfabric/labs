@@ -2826,6 +2826,76 @@ type SelectSec<T extends { x: string }> = Pick<Sec<T>, "x">;`;
           });
         }
 
+        it("reads `Mapped<One>`, a mapped type over a union, with its members' labels joined, on both sides", async () => {
+          // The checker does not distribute `keyof (A | B)`, so the object
+          // maps whichever member the value is, as `Pick` and `Omit` do, and
+          // carries none of the integrity only one member holds.
+          const read = await schemasOf(
+            `import type { Integrity } from "commonfabric";
+${DECLARATIONS}
+type Mapped<T> = { [K in keyof (Integrity<T, readonly ["i"]> | Sec<T>)]: (Integrity<T, readonly ["i"]> | Sec<T>)[K] };`,
+            "Mapped<One>",
+          );
+          expect(read).toEqual({ input: picked(["a"]), output: picked(["a"]) });
+        });
+
+        it("reads a mapped type over a union that replaces the carrier with the labels of the carrier it holds, on both sides", async () => {
+          // The carrier is the mapping's own, not its members', and so are
+          // the labels: `d`, and none of the members' `i`.
+          const read = await schemasOf(
+            `import type { Integrity } from "commonfabric";
+${DECLARATIONS}
+type Source = Integrity<{ x: string }, readonly ["i"]> | Integrity<{ x: number }, readonly ["i"]>;
+type Stamp = Confidential<{ x: string | number }, readonly ["d"]>["__ct_cfc__"];`,
+            '{ [K in keyof Source]: K extends "__ct_cfc__" ? Stamp : Source[K] }',
+          );
+          const expected = {
+            type: "object",
+            properties: { x: { type: ["number", "string"] } },
+            required: ["x"],
+            ifc: { confidentiality: ["d"] },
+          };
+          expect(read).toEqual({ input: expected, output: expected });
+        });
+
+        it("reads a mapped type over a union that adds a stamp to the carrier with the added stamp's label, on both sides", async () => {
+          // The carrier records a policy the members' do not, so it is not
+          // theirs, and the object is labeled by every policy it records.
+
+          const read = await schemasOf(
+            `import type { Integrity } from "commonfabric";
+${DECLARATIONS}
+type Source = Integrity<{ x: string }, readonly ["i"]> | Integrity<{ x: number }, readonly ["i"]>;
+type Stamp = Confidential<{ x: string | number }, readonly ["d"]>["__ct_cfc__"];`,
+            '{ [K in keyof Source]: K extends "__ct_cfc__" ? Source[K] | Stamp : Source[K] }',
+          );
+          for (const side of [read.input, read.output]) {
+            expect((side as Schema).ifc).toEqual({
+              integrity: ["i"],
+              confidentiality: ["d"],
+            });
+          }
+        });
+
+        for (const replacement of ["{}", "object", "any"]) {
+          it(`reads a mapped type over a union that replaces the carrier with \`${replacement}\` unlabeled, on both sides`, async () => {
+            // A carrier that records no policy gives the object no label, and
+            // none of the members' `i`.
+
+            const read = await schemasOf(
+              `import type { Integrity } from "commonfabric";
+type Source = Integrity<{ x: string }, readonly ["i"]> | Integrity<{ x: number }, readonly ["i"]>;`,
+              `{ [K in keyof Source]: K extends "__ct_cfc__" ? ${replacement} : Source[K] }`,
+            );
+            const expected = {
+              type: "object",
+              properties: { x: { type: ["number", "string"] } },
+              required: ["x"],
+            };
+            expect(read).toEqual({ input: expected, output: expected });
+          });
+        }
+
         for (
           const [inner, argument] of [
             ['Pick<Sec<T>, "x">', 'Confidential<One, readonly ["c"]> | Two'],
@@ -2907,6 +2977,133 @@ type ViewOpen<T> = Omit<T | Sec<T>, never>;`,
               ifc: { confidentiality: ["a"] },
             });
           }
+        });
+
+        it("reads `ViewAny<any>`, where `ViewAny<T>` is `Omit<T | Sec<Two>, never>`, as `Two`'s members labeled with `a`, on both sides", async () => {
+          // A bare `any` is a member with no labels of its own, and
+          // `keyof any` is every key, so the view keeps `x` and `z`, each
+          // accepting anything.
+          const read = await schemasOf(
+            `${DECLARATIONS}
+type ViewAny<T> = Omit<T | Sec<Two>, never>;`,
+            "ViewAny<any>",
+          );
+          const expected = {
+            type: "object",
+            properties: { x: true, z: true },
+            required: ["x", "z"],
+            ifc: { confidentiality: ["a"] },
+          };
+          expect(read).toEqual({ input: expected, output: expected });
+        });
+
+        it("reads `T | Sec<Two>` in a payload read under bindings, `T` bound to `any`, as `any` labeled with `a`, on both sides", async () => {
+          // The runtime keeps a union arm's label only beside arms that
+          // cannot hold the same values, so the label goes on the whole
+          // value the checker reduces the union to.
+          const { input, output } = await schemasOf(
+            `${DECLARATIONS}
+type Outer<T> = Confidential<{ inner: T | Sec<Two> }, readonly ["outer"]>;`,
+            "Outer<any>",
+          );
+          for (const side of [input, output]) {
+            expect(
+              ((side as Schema).properties as Record<string, Schema>).inner,
+            ).toEqual({ ifc: { confidentiality: ["a"] } });
+          }
+        });
+
+        it("reads `Omit<T | never | Sec<One>, never>` in a payload read under bindings, `T` bound to `unknown`, as with no `never`, on both sides", async () => {
+          // `never` is no member of the union, so the view is the other
+          // members': with `keyof unknown` `never`, an object with none.
+          const { input, output } = await schemasOf(
+            `${DECLARATIONS}
+type Outer<T> = Confidential<{ inner: Omit<T | never | Confidential<{ x: string }, readonly ["a"]>, never> }, readonly ["outer"]>;`,
+            "Outer<unknown>",
+          );
+          for (const side of [input, output]) {
+            expect(
+              ((side as Schema).properties as Record<string, Schema>).inner,
+            ).toEqual({ type: "object", properties: {} });
+          }
+        });
+
+        it("keeps an `ExactCopy` a member states, with the members' confidentiality, on the whole of a union a binding makes `any`, on both sides", async () => {
+          // The value may hold the member's data anywhere, so its restriction
+          // goes on the whole value, as confidentiality does.
+
+          const { input, output } = await schemasOf(
+            `import type { ExactCopy } from "commonfabric";
+${DECLARATIONS}
+type Outer<T> = Confidential<{ inner: T | ExactCopy<One, readonly ["p"]> | Sec<Two> }, readonly ["outer"]>;`,
+            "Outer<any>",
+          );
+          for (const side of [input, output]) {
+            expect(
+              ((side as Schema).properties as Record<string, Schema>).inner,
+            ).toEqual({ ifc: { exactCopyOf: ["p"], confidentiality: ["a"] } });
+          }
+        });
+
+        it("keeps a member's label beside a `Default` a binding makes `any` on both sides, with the default on the input side", async () => {
+          // `One` does not cover the default's value, so the `Default`'s own
+          // type, `any`, is a member, which makes the union that member,
+          // labeled. The result side keeps no default of a `Default` in a
+          // union, whatever its value type.
+
+          const { input, output } = await schemasOf(
+            `import type { Default } from "commonfabric";
+${DECLARATIONS}
+type Outer<T, V extends T> = Confidential<{ inner: Default<T, V> | Sec<One> }, readonly ["outer"]>;`,
+            "Outer<any, 5>",
+          );
+          const inner = (side: unknown) =>
+            ((side as Schema).properties as Record<string, Schema>).inner;
+          expect(inner(input)).toEqual({
+            ifc: { confidentiality: ["a"] },
+            default: 5,
+          });
+          expect(inner(output)).toEqual({ ifc: { confidentiality: ["a"] } });
+        });
+
+        it("refuses a scope wrapper beside a member a binding makes `any`, on both sides", async () => {
+          // A member that is `true` makes a union `true`, but not one with
+          // a member that declares a scope, which no member of a union can.
+
+          await expect(schemasOf(
+            `import type { PerUser } from "commonfabric";
+type Outer<T, U> = { inner: PerUser<T> | U };`,
+            "Outer<string, any>",
+          )).rejects.toThrow("A scope wrapper cannot be a member of a union.");
+        });
+
+        it("refuses a union with a member accepting any value that reaches, inside its own definition, one stating a restriction it did not keep", async () => {
+          // `Node` is still being generated where its own member reaches it,
+          // so the union is read again once it is written, and `s` is no
+          // label it kept.
+
+          await expect(schemasOf(
+            `${DECLARATIONS}
+interface Node {
+  secret: Confidential<string, readonly ["s"]>;
+  child?: Node | any | Sec<One>;
+}`,
+            "Node",
+          )).rejects.toThrow(
+            "it reaches `Node` inside the definition of `Node`",
+          );
+        });
+
+        it("refuses a scope wrapper beside a labeled member of a union in a payload read under bindings, `T` bound to `any`", async () => {
+          // The union keeps its members rather than reducing to
+          // `PerUser<any>`, which accepts any value, so the scope's
+          // placement inside it is refused.
+          await expect(schemasOf(
+            `import type { PerUser } from "commonfabric";
+${DECLARATIONS}
+type Outer<T> = Confidential<{ inner: PerUser<T> | Confidential<{ x: string }, readonly ["a"]> }, readonly ["outer"]>;`,
+            "Outer<any>",
+          )).rejects.toThrow("A scope wrapper cannot be a member of a union.");
         });
 
         it("keeps the labels of a member whose labeled payload is `unknown`, on both sides", async () => {

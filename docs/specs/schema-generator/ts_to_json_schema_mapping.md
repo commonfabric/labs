@@ -155,10 +155,11 @@ Secret`, or a reference whose argument is met again inside what it denotes,
 which grows at each level, as `T[]` does in
 `type Nest<T> = { inner: Nest<T[]> } | Secret`, through a generic interface
 as well: neither reading has an end. A reference read again with arguments
-that denote other nodes nests only as deep as those arguments, and keeps the
-label at each level: `Box<Box<string>>`, and `Wrap<Wrap<string>>` where
+that denote other nodes nests only as deep as those arguments, and is read at
+each level: `Box<Box<string>>`, and `Wrap<Wrap<string>>` where
 `type Wrap<T> = Box<T>`, whose one reference to `Box` is read at each level.
-A recursion through a named definition is not one either: the definition's
+Each level is a union with `Secret`, which accepts any value, so it is
+`Secret` with the labels of every member, on the whole value (§8). A recursion through a named definition is not one either: the definition's
 `$ref` ends it, and the alias is read afresh inside the definition. The same
 wrapper written as a record's value or a tuple's element is lost to a reading
 by type, which holds `any` there and keeps no declaration naming it:
@@ -358,11 +359,20 @@ carry no label; a restriction written around an arm that names no members,
 as `unknown` does, or that has an index signature, labels the whole object.
 A metadata key the lowering could not read at all is not declared on the
 arm, so a member holding one counts as read. A bare `unknown` arm has no
-labels and no members. Unions these
+labels and no members. A bare `any` arm has no labels and every key, as
+`keyof any` is every key there is, so beside other arms it reads as an
+object whose index signature accepts any value: `View<any>`, for
+`type View<T> = Omit<T | Sec<X>, never>`, keeps `X`'s members, each accepting
+anything. Written under bindings in place, as `{ inner: Omit<T | Sec<X>, never> }`
+at `T = any`, the operand is one the checker reads as `any`, which maps
+`any`'s keys (§2's node path), with the members' labels on the whole. A union reduced to an
+arm accepting any value (§8) is read by the arms it was reduced from, and a
+CFC alias around such a union labels each of those arms too, as a label
+around a union labels whichever arm the value is. Unions these
 rules build — a tuple's items, a shared property, a merged signature — fold
 equal arms by value-model equality (`dedupeByValueEqual`), flatten a bare
 nested union, and keep an `unknown` arm beside the others as a synthetic
-union does.
+union does, except beside a labeled arm, which reduces the union (§8).
 `NonNullable` removes `null` and `undefined` from a direct schema (to
 `false`), an array-valued `type`, an `enum`'s values, a union's arms, or a
 referenced definition. The synthetic alias, tuple, intersection, and
@@ -993,7 +1003,11 @@ throw.
 
 - At most one `Default<>` member per union — more **throws**.
 - A default whose type is assignable to another member does not re-emit the
-  `Default`'s T as a branch (`isDefaultCoveredByUnion`).
+  `Default`'s T as a branch (`isDefaultCoveredByUnion`). A branch it does
+  re-emit is a member like any other: the members combine as a union's do
+  (§8), so a T accepting any value, as `Default<any, 5>`'s does, beside a
+  labeled member makes the union that member, labeled, with the default, and
+  beside a scope wrapper is refused.
 - An object default that would *widen* an existing object member **throws**,
   pointing at `DeepDefault`.
 - `DeepDefault<V>` requires an object target and an object default type (else
@@ -1042,7 +1056,10 @@ Default paths of §7:
   stripped.
 - **General case** → `anyOf` with **primitive merging**
   (`mergePrimitiveSchemaIntoAnyOf`): a `true` member
-  short-circuits the union to `true`; `false` members drop; exact-JSON
+  short-circuits the union to `true`, unless a member declares a scope, which
+  no member of a union may (`armsDeclareScope` in `scope-placement.ts`): the
+  union then keeps its members, and is refused (§10), on the node path and in
+  a view's property alike; `false` members drop; exact-JSON
   duplicates drop; same-`type` enum schemas merge enum sets (sorted); enum +
   bare same-`type` → bare type; bare primitive types merge into sorted
   **`type` arrays** — how `string | undefined` becomes
@@ -1050,6 +1067,49 @@ Default paths of §7:
   A member with no `type`, as the `{}` a nesting bound leaves, accepts any
   value, and no type merges into it: beside `undefined` the union stays an
   `anyOf` of the two. Singletons unwrap.
+- **A member accepting any value beside a labeled one**: where one member
+  accepts any value, `any` or a bare `unknown`, and some member states a
+  label anywhere in its value, the union is that member, as the checker
+  reduces `any | X` to `any` and `unknown | X` to `unknown`, `any` winning.
+  It is labeled as the whole of a value that may be any of them
+  (`reducedLabeledUnion` in `ifc-labels.ts`): with every restriction any
+  member states anywhere in its value, through its references, since the
+  value may hold that member's data anywhere, as `any` keeps them in an
+  intersection (§9); and with the evidence every member states alike of its
+  whole value, so a member accepting anything that states none leaves no
+  evidence. Confidentiality atoms combine; a restriction of another kind two
+  members state differently, as two `exactCopyOf` lists, is refused ("One
+  value declares `ifc.exactCopyOf` twice"), since one value can hold only
+  one. The
+  labels go on the whole value, not on an arm, because the runtime keeps a
+  union arm's labels only beside arms that cannot hold the same values
+  (`assertNoDivergentIfcBranches` in `runtime/runner/src/cfc/schema-merge.ts`),
+  and an arm accepting anything can hold any; narrowing such a union to a
+  child path gives `true` (`#narrowUnion` in `runtime/runner/src/cfc.ts`).
+  A union a member of which is a CFC alias over `any`, as
+  `{ next: Node } | Confidential<any, L>` is, is that member too. The node
+  path reads every
+  union written, so `any | Sec<X>` reads `{ ifc: … }` there and `true` by
+  type, where the checker has already reduced it, as `Sec<X> & any` does
+  (§9); a type the checker leaves unreduced, as some instantiations are,
+  reduces the same way by type. A union no member of which states a label
+  keeps its members, and so does one with a member that declares a scope, as
+  `PerUser<T>` at `T = any` does: that member accepts any value but declares
+  the scope of the whole slot, so the union is refused as a scope wrapper
+  inside a union is (§10) rather than reduced with the scope dropped. The
+  members are recorded (`GenerationContext.schemaOrigins`, `"reduction"`) for
+  a `Pick` or an `Omit` over the union, which maps them one at a time (§2).
+  A member that reaches a definition still being generated, as a recursive
+  type's own member does, holds labels that cannot be read there. Once
+  generation is done, the union is read again, and refused where its members
+  then state a restriction it did not keep ("A union with a member
+  accepting any value is that member, with the labels of every member, but
+  it reaches `Node` inside the definition of `Node`, where those labels cannot
+  be read yet."), as is such a union that states no label of its own and a
+  `true` member makes `true` (`anyValuesBesideUnwritten`). Only a definition
+  the generated schema holds counts: a recursion through its own argument
+  reads the definition again one level down, where the level above absorbs
+  it.
 - **`widenLiterals`** additionally merges member schemas that differ only in
   their literal values, an `enum` or a `const` whose values share one base
   type, widening those to that type, before the anyOf pass
@@ -1717,14 +1777,14 @@ Mechanics:
   checker folded into the object is that member's, instantiated, and labels
   the object too, so a payload no binding can be read through still places
   its labels; where it is several, the folded carrier holds every member's
-  policies at once, and is not read. A union operand may be any of its members, each read
-  on its own once its parameters are bound, and is unlabeled where a member
-  is `any`, to which the checker reduces it. A bare `unknown` member has no
-  labels and no members, so the other members' labels stay, landing where
-  they reach, though the checker reduces `unknown | X` to `unknown`: a label
-  is kept wherever the union is read before the checker reduces it, as a
-  user's alias read under its bindings is, and lost where the checker hands
-  over the reduced type, as for `Omit<unknown | Sec<X>, never>` written out.
+  policies at once, and is not read. A union operand may be any of its
+  members, each read on its own once its parameters are bound. A bare `any`
+  or `unknown` member has no labels and no members of its own, so the other
+  members' labels stay, landing where they reach, though the checker reduces
+  `any | X` and `unknown | X` to that member: a label is kept wherever the
+  union is read before the checker reduces it, as a user's alias read under
+  its bindings is, and lost where the checker hands over the reduced type, as
+  for `Omit<unknown | Sec<X>, never>` written out.
   So `OmitOpen<unknown>`, where `type OmitOpen<T> = Omit<T | Sec<T>, never>`,
   carries `Sec`'s label, written around a payload that names no members, on
   the whole object. A labeled `unknown` (`Confidential<unknown, L>`) is its
@@ -1783,7 +1843,19 @@ Mechanics:
   (`{ readonly [K in keyof Sec<X>]: Sec<X>[K] }`), is labeled by it, each
   metadata the carrier's type holds read in full or none and placed by the
   payload it records (above), and never holds the carrier as a member: no
-  value does.
+  value does. A mapped type over a union that the checker does not distribute
+  over it, as `{ [K in keyof (A | B)]: (A | B)[K] }`, folds every member's
+  carrier into one, though it maps only whichever member the value is, so it
+  is labeled with the members' labels joined, as `Pick` and `Omit` over a
+  union are: `{ [K in keyof (Integrity<X, L> | Sec<X>)]: … }` carries `Sec`'s
+  label and not `L`. That holds where the mapping keeps the union's carrier:
+  its carrier records the very policies the union's does, each stamp's
+  metadata and payload the same types (`recordsSameStamps` in
+  `common-fabric-formatter.ts`), which the carrier's type alone does not say,
+  as every stamp member is optional. One that replaces it, as
+  `K extends "__ct_cfc__" ? Stamp : S[K]` does, adds a stamp to it, or erases
+  it with `{}`, `object` or `any`, is labeled by the carrier it holds, as any
+  other object is, so not at all where that records no policy.
 - User alias chains are followed with type-parameter node substitution until a
   canonical name is reached (`#resolveAliasChainFromDeclaration` /
   `substituteTypeNode`), and the labels read the substituted argument nodes.
@@ -2342,6 +2414,7 @@ Everything that throws, with source (test-pinned unless noted):
 | Scope wrapper as a union member beside a value other than `null` or `undefined` | `A scope wrapper cannot be a member of a union.` | `common-fabric-formatter.ts`, `scope-placement.ts` |
 | Scope wrapper around a cell beside anything, `null` and `undefined` included | `A scope wrapper around a cell cannot hold anything beside the cell` | `common-fabric-formatter.ts` |
 | Scope wrapper beside `null` or `undefined` in a written union whose members do not read as wrappers or `null` or `undefined` | ``A scope wrapper beside `null` or `undefined` is read from the union written around it`` | `common-fabric-formatter.ts` |
+| A value accepting any value, an intersection the checker gives `any` or a union with a member accepting any value, that reached a definition still being generated and kept fewer restrictions than it states | ``A value intersected with `any` keeps the labels of what it is intersected with, but it meets …`` / ``A union with a member accepting any value is that member, with the labels of every member, but it reaches …`` | `ifc-labels.ts` |
 | An `ifc` key other than `confidentiality` declared differently by nested wrappers, or by a `$ref` and its definition | ``One value declares `ifc.<key>` twice, as … and as ….`` | `ifc-labels.ts` |
 | Circular type alias (wrapper chain) | `Circular type alias detected: A -> B -> …` | `type-utils.ts` |
 | Circular type alias (union alias) | `Circular type alias detected: <name>` | `union-formatter.ts` |

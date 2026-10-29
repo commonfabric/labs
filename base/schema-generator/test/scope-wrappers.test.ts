@@ -59,6 +59,41 @@ interface SchemaRoot {
     });
   }
 
+  for (
+    const [form, outer] of [
+      ["", "{ inner: PerUser<T> | U }"],
+      [
+        " under a label",
+        'Confidential<{ inner: PerUser<T> | U }, readonly ["outer"]>',
+      ],
+      [
+        " in a view of its members' properties",
+        'Confidential<{ inner: Pick<{ x: U } | { x: PerUser<T> }, "x"> }, readonly ["outer"]>',
+      ],
+    ] as const
+  ) {
+    it(`rejects a scope wrapper beside a member a binding makes \`any\`${form}`, async () => {
+      // A member that is `true` makes a union `true`, but not one with a
+      // member that declares a scope, which no member of a union can.
+
+      const { type, checker, typeNode } = await getTypeFromCode(
+        `
+type CfcStamp<T, Meta> = { readonly meta?: Meta; readonly of?: T };
+type CfcTag<T, Meta> = { readonly __ct_cfc__?: CfcStamp<T, Meta> };
+type Confidential<T, X extends readonly unknown[]> =
+  T & CfcTag<T, { confidentiality: X }>;
+type Outer<T, U> = ${outer};
+type SchemaRoot = Outer<string, any>;
+`,
+        "SchemaRoot",
+      );
+
+      expect(() =>
+        new SchemaGenerator().generateSchema(type, checker, typeNode)
+      ).toThrow("A scope wrapper cannot be a member of a union.");
+    });
+  }
+
   describe("two scopes' brands on one value where the schema declares no scope", () => {
     // An inferred result declares no scope, so the brands the checker
     // intersects onto its value are no part of its schema, as any other

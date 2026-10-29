@@ -102,17 +102,22 @@ import {
 } from "./unread-type-diagnostics.ts";
 import { holdsUnreadValue } from "./unread-label-diagnostics.ts";
 import { dedupeByValueEqual } from "./value-equality.ts";
-import { assertScopeDeclarationsAreReachable } from "./scope-placement.ts";
+import {
+  armsDeclareScope,
+  assertScopeDeclarationsAreReachable,
+} from "./scope-placement.ts";
 import {
   acceptsAnyValue,
   acceptsNoValue,
   assertAnyValuesKeptLabels,
   declaredIfcLabels,
   holdsIfcLabels,
+  isUnknownValue,
   joinMemberIfcLabels,
   joinPlacedIfcLabels,
   labeledValueMember,
   placementShape,
+  reducedLabeledUnion,
   restrictionsAndEvidence,
   settlePoliciesReadInPart,
   stateReferencedIfcLabels,
@@ -350,8 +355,9 @@ function requiredArm(
 
 /**
  * The schemas a union denotes, one per arm, read through local references
- * and flattened through nested unions; a schema that is no union is its own
- * single arm. The arms are the shared objects they are — see
+ * and flattened through nested unions, a union reduced to an arm accepting
+ * any value included (`reducedLabeledUnion()`); a schema that is no union is
+ * its own single arm. The arms are the shared objects they are — see
  * `resolveLocalRef`.
  */
 function unionArms(
@@ -359,6 +365,12 @@ function unionArms(
   context: GenerationContext,
 ): MutableJSONSchema[] {
   const resolved = resolveLocalRef(schema, context);
+  const origin = isObjectOrArray(resolved)
+    ? context.schemaOrigins?.get(resolved)
+    : undefined;
+  if (origin?.kind === "reduction") {
+    return origin.parts().flatMap((arm) => unionArms(arm, context));
+  }
   if (isObjectOrArray(resolved) && Array.isArray(resolved.anyOf)) {
     return (resolved.anyOf as MutableJSONSchema[]).flatMap((arm) =>
       unionArms(arm, context)
@@ -378,14 +390,21 @@ function unionArms(
  * (`holdsUnreadArmLabel()`), or not at all, as a union read by type is: a
  * label read in part could claim what its author never wrote together, and a
  * join leaves out what an unread one held. An arm that is `unknown` is one
- * with no labels and no members, as `keyof unknown` is `never`.
+ * with no labels and no members, as `keyof unknown` is `never`. A union
+ * reduced to an arm accepting any value is read by the arms it reduced
+ * (`reducedLabeledUnion()`), since the view maps each of them.
  */
 function withArmLabels(
   picked: MutableJSONSchema,
   operand: MutableJSONSchema,
   context: GenerationContext,
 ): MutableJSONSchema {
-  const arms = labeledArms(operand, context);
+  const origin = isObjectOrArray(operand)
+    ? context.schemaOrigins?.get(operand)
+    : undefined;
+  const arms = origin?.kind === "reduction"
+    ? origin.parts().flatMap((arm) => labeledArms(arm, context))
+    : labeledArms(operand, context);
   const value = valueMembersOf([picked], context);
   const place = (schema: MutableJSONSchema, arm: LabeledArm) =>
     withPartLabels(
@@ -442,7 +461,9 @@ function holdsUnreadArmLabel(
  * being required, and an `Omit` from a surface every arm covers that way
  * keeps just the signature, the named members dissolving into it as they do
  * in `keyof T`. An `unknown` arm has no keys, as `keyof unknown` is `never`,
- * so it is an object with no members. A lone arm that is no object is
+ * so it is an object with no members, and an arm accepting any value has
+ * every key, as `keyof any` is every key there is, so it is an object whose
+ * index signature accepts any value. A lone arm that is no object is
  * returned as it came; a union with such an arm, or a `Pick` naming a key
  * some arm lacks (a program the type checker rejects), has no view here and
  * is `undefined`.
@@ -452,8 +473,15 @@ function pickedView(
   context: GenerationContext,
   selection: { pick: Set<string> } | { omit: Set<string> },
 ): MutableJSONSchema | undefined {
-  const arms = unionArms(schema, context).map((arm) =>
-    isObjectOrArray(arm) && arm.type === "unknown"
+  const read = unionArms(schema, context);
+  const arms = read.map((arm) =>
+    read.length > 1 && acceptsAnyValue(arm)
+      ? {
+        type: "object",
+        properties: {},
+        additionalProperties: true,
+      } as MutableJSONSchema
+      : isObjectOrArray(arm) && arm.type === "unknown"
       ? { type: "object", properties: {} } as MutableJSONSchema
       : arm
   );
@@ -1400,23 +1428,6 @@ function withPartLabels(
   return withOriginOf(result, schema, context);
 }
 
-/** The keywords a value of `unknown` may carry beside its `type`. */
-const UNKNOWN_VALUE_KEYWORDS: ReadonlySet<string> = new Set([
-  "type",
-  "description",
-  "deprecated",
-  "$comment",
-]);
-
-/**
- * Whether `part` is `unknown`, the identity of an intersection: its `type`
- * and documentation alone, so a cell of `unknown` is not.
- */
-function isUnknownValue(part: MutableJSONSchema): boolean {
-  return isObjectOrArray(part) && part.type === "unknown" &&
-    Object.keys(part).every((key) => UNKNOWN_VALUE_KEYWORDS.has(key));
-}
-
 /**
  * Whether `part` declares a cell: an `asCell` entry on a schema that is not
  * `void`'s, which lowers to the opaque marker too (`schemaOrigins`).
@@ -1858,7 +1869,9 @@ function sharedPropertyOf(
 /**
  * The schema of a union whose arms have these schemas: an arm that is itself
  * a bare union contributes its arms, an arm accepting anything makes the
- * whole accept anything, arms accepting nothing drop out, equal arms fold
+ * whole accept anything, labeled, given the context, with the labels the
+ * arms state (`reducedLabeledUnion()`), unless an arm declares a scope
+ * (`armsDeclareScope()`), arms accepting nothing drop out, equal arms fold
  * (by value-model equality, as every other union in this package folds),
  * and a lone survivor stands alone. Given the context, a fold that drops an
  * arm with an origin of its own is recorded (`unionFoldedFrom`), so an
@@ -1874,7 +1887,11 @@ function unionOfSchemas(
       ? schema.anyOf as MutableJSONSchema[]
       : [schema]
   );
-  if (flat.some((schema) => schema === true)) return true;
+  const reduced = context && reducedLabeledUnion(flat, context);
+  if (reduced !== undefined) return reduced;
+  if (flat.some((schema) => schema === true) && !armsDeclareScope(flat)) {
+    return true;
+  }
   const kept = flat.filter((schema) => schema !== false);
   const unique = dedupeByValueEqual(kept);
   if (unique.length === 0) return false;
@@ -4452,7 +4469,12 @@ export class SchemaGenerator {
             : unplaced,
         )
       );
-      if (memberSchemas.some((schema) => schema === true)) {
+      const reduced = reducedLabeledUnion(memberSchemas, context);
+      if (reduced !== undefined) return reduced;
+      if (
+        memberSchemas.some((schema) => schema === true) &&
+        !armsDeclareScope(memberSchemas)
+      ) {
         return true;
       }
       if (memberSchemas.length === 1) {

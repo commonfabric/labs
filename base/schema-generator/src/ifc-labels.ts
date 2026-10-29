@@ -35,6 +35,8 @@ import {
 } from "@commonfabric/data-model";
 import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import type { GenerationContext } from "./interface.ts";
+import { armsDeclareScope } from "./scope-placement.ts";
 import { dedupeByValueEqual } from "./value-equality.ts";
 
 type IfcLabels = Readonly<Record<string, unknown>>;
@@ -91,6 +93,23 @@ export const acceptsAnyValue = (schema: MutableJSONSchema): boolean =>
   schema === true ||
   (isObjectOrArray(schema) && !Array.isArray(schema) &&
     Object.keys(schema).every((key) => BESIDE_ANY_VALUE.has(key)));
+
+/** The keywords a value of `unknown` may carry beside its `type`. */
+const UNKNOWN_VALUE_KEYWORDS: ReadonlySet<string> = new Set([
+  "type",
+  "description",
+  "deprecated",
+  "$comment",
+]);
+
+/**
+ * Whether `schema` is `unknown` alone: its `type` and documentation, so a
+ * labeled `unknown`, or a cell of one, is not. It is the identity of an
+ * intersection, and accepts any value.
+ */
+export const isUnknownValue = (schema: MutableJSONSchema): boolean =>
+  isObjectOrArray(schema) && schema.type === "unknown" &&
+  Object.keys(schema).every((key) => UNKNOWN_VALUE_KEYWORDS.has(key));
 
 /** Whether `schema` accepts no value, whatever it states beside that. */
 export const acceptsNoValue = (schema: MutableJSONSchema): boolean =>
@@ -528,46 +547,215 @@ export const labelsBesideAnyValue = (
       }
       continue;
     }
-    const visited = new Set<MutableJSONSchema>();
-    const visit = (node: MutableJSONSchema): void => {
-      if (!isObjectOrArray(node) || visited.has(node)) return;
-      visited.add(node);
-      if (isObjectOrArray(node.ifc)) {
-        keep(restrictionsAndEvidence(node.ifc).restrictions ?? {});
-      }
-      if (
-        typeof node.$ref === "string" &&
-        node.$ref.startsWith(LOCAL_DEFINITION_PREFIX)
-      ) {
-        const name = node.$ref.slice(LOCAL_DEFINITION_PREFIX.length);
-        const definition = definitions[name];
-        if (definition !== undefined) visit(definition);
-        else unwritten?.add(name);
-      }
-      forEachSubschema(node, (child) => {
-        visit(child as MutableJSONSchema);
-        return false;
-      }, { includeUnused: true });
-    };
-    visit(constituent);
+    forEachIfcLabels(
+      constituent,
+      definitions,
+      (labels) => keep(restrictionsAndEvidence(labels).restrictions ?? {}),
+      unwritten,
+    );
   }
   return kept;
 };
 
 /**
- * A value that may hold its constituents' data anywhere, which met
- * definitions not yet written (`unwritten`) in `definitions`, and the labels
- * it kept (`labelsBesideAnyValue()`): one an intersection the checker gives
- * `any` settled to (`"any"`), or one an intersection this generator cannot
- * merge falls back to (`"unsupported"`). A fallback is checked where it is
- * emitted (`GenerationContext.anyValuesBySchema`).
+ * Calls `found` with the `ifc` labels of each schema in `schema`'s value that
+ * states some: its own, and those of every schema below it and of the
+ * definitions in `definitions` its local references reach, each schema once.
+ * A definition a reference names that `definitions` does not hold yet, as
+ * one still being generated does not, is added to `unwritten`.
  */
-export type AnyValueBesideUnwritten = {
-  readonly from: "any" | "unsupported";
-  readonly definitions: Readonly<Record<string, MutableJSONSchema>>;
-  readonly unwritten: readonly string[];
-  readonly kept: IfcLabels | undefined;
+const forEachIfcLabels = (
+  schema: MutableJSONSchema,
+  definitions: Readonly<Record<string, MutableJSONSchema>>,
+  found: (labels: IfcLabels) => void,
+  unwritten?: Set<string>,
+): void => {
+  const visited = new Set<MutableJSONSchema>();
+  const visit = (at: MutableJSONSchema): void => {
+    if (!isObjectOrArray(at) || visited.has(at)) return;
+    visited.add(at);
+    if (isObjectNotArray(at.ifc)) found(at.ifc);
+    if (
+      typeof at.$ref === "string" &&
+      at.$ref.startsWith(LOCAL_DEFINITION_PREFIX)
+    ) {
+      const name = at.$ref.slice(LOCAL_DEFINITION_PREFIX.length);
+      const definition = definitions[name];
+      if (definition !== undefined) visit(definition);
+      else unwritten?.add(name);
+    }
+    forEachSubschema(at, (child) => {
+      visit(child as MutableJSONSchema);
+      return false;
+    }, { includeUnused: true });
+  };
+  visit(schema);
 };
+
+/**
+ * The labels of the whole of a value that may be any of `arms`, a union's:
+ * every restriction an arm states anywhere in its value, through the
+ * definitions in `definitions` its references reach, combined
+ * (`combineIfcLabels()`), since the value may hold that arm's data anywhere,
+ * and the evidence every arm states alike of its whole value
+ * (`joinMemberIfcLabels()`), since the value is provably the payload of each
+ * arm's policy only where every arm says so. A restriction other than
+ * confidentiality that two arms state differently is refused, as one value
+ * can hold only one.
+ */
+const reducedArmLabels = (
+  arms: readonly MutableJSONSchema[],
+  definitions: Readonly<Record<string, MutableJSONSchema>>,
+): IfcLabels | undefined => {
+  let restrictions: IfcLabels = {};
+  for (const arm of arms) {
+    forEachIfcLabels(arm, definitions, (found) => {
+      const stated = restrictionsAndEvidence(found).restrictions;
+      if (stated) restrictions = combineIfcLabels(restrictions, stated);
+    });
+  }
+  const evidence = joinMemberIfcLabels(
+    {},
+    arms.map((arm) =>
+      restrictionsAndEvidence(
+        isObjectNotArray(arm) && isObjectNotArray(arm.ifc) ? arm.ifc : {},
+      ).evidence ?? {}
+    ),
+  );
+  const labels = { ...restrictions, ...evidence };
+  return Object.keys(labels).length > 0 ? labels : undefined;
+};
+
+/**
+ * The schema of a union whose `arms` include one accepting any value, as
+ * `any` or a bare `unknown` does (`acceptsAnyValue()`, `isUnknownValue()`),
+ * where some arm states a label anywhere in its value: the arm the checker
+ * reduces the union to, `any | X` to `any` and `unknown | X` to `unknown`,
+ * `any` winning, labeled with the arms' labels as the whole of a value that
+ * may be any of them (`reducedArmLabels()`): every restriction any arm states
+ * anywhere in its value, and the evidence every arm states alike, so an arm
+ * accepting anything that states none leaves the value no evidence. The
+ * labels go on the whole value because the runtime keeps a union arm's labels
+ * only beside arms that cannot hold the same values, and an arm accepting
+ * anything can hold any. The arms
+ * are recorded (`GenerationContext.schemaOrigins`, `"reduction"`) for a
+ * reading that maps the value one arm at a time, as `Pick` and `Omit` do. An
+ * option accepting no value, as `never` gives, is no arm of the union, and is
+ * neither read nor recorded (`acceptsNoValue()`). `undefined` for any other
+ * union, which keeps its arms, and for one with an arm that declares a scope
+ * (`armsDeclareScope()`): it keeps its arms too, so the scope's placement
+ * inside the union is refused rather than the scope reduced away.
+ *
+ * An arm may reach a definition not written yet, as one still being
+ * generated is not, whose labels cannot be read here. The union is then
+ * read again once generation is done (`anyValuesBesideUnwritten`), and
+ * refused where its arms state a restriction the value did not keep. So is a
+ * union that states no label here, of which an arm is `true`: the union is
+ * `true` too, keeping no label the definition may state.
+ */
+export const reducedLabeledUnion = (
+  options: readonly MutableJSONSchema[],
+  context: GenerationContext,
+): MutableJSONSchema | undefined => {
+  const arms = options.filter((option) => !acceptsNoValue(option));
+  if (armsDeclareScope(arms)) return undefined;
+  const accepting = arms.filter((arm) =>
+    acceptsAnyValue(arm) || isUnknownValue(arm)
+  );
+  if (accepting.length === 0 || accepting.length === arms.length) {
+    return undefined;
+  }
+  const unwritten = new Set<string>();
+  let labeled = false;
+  for (const arm of arms) {
+    forEachIfcLabels(
+      arm,
+      context.definitions,
+      () => (labeled = true),
+      unwritten,
+    );
+  }
+  const readOnceWritten = (kept: IfcLabels | undefined) => {
+    if (unwritten.size === 0) return;
+    context.anyValuesBesideUnwritten.push({
+      from: "union",
+      definitions: context.definitions,
+      unwritten: [...unwritten],
+      kept,
+      arms,
+    });
+  };
+  if (!labeled) {
+    if (arms.includes(true)) readOnceWritten(undefined);
+    return undefined;
+  }
+  const labels = reducedArmLabels(arms, context.definitions);
+  readOnceWritten(labels);
+  const unknown = accepting.find(isUnknownValue);
+  const base: MutableJSONSchemaObj =
+    accepting.some(acceptsAnyValue) || unknown === undefined
+      ? {}
+      : { ...(unknown as MutableJSONSchemaObj) };
+  if (labels === undefined && Object.keys(base).length === 0) return true;
+  const reduced = labels ? withIfcLabels(base, labels) : base;
+  if (isObjectOrArray(reduced)) {
+    context.schemaOrigins?.set(reduced as MutableJSONSchemaObj, {
+      kind: "reduction",
+      parts: () => [...arms],
+    });
+  }
+  return reduced;
+};
+
+/**
+ * `labeled`, `schema` with `labels` added to it, recording the arms of the
+ * union `schema` was reduced from (`reducedLabeledUnion()`) with `labels`
+ * added to each, as a label around a union labels whichever arm the value
+ * is. `labeled` as it came where `schema` records no reduction.
+ */
+export const withReducedArmsLabeled = (
+  labeled: MutableJSONSchema,
+  schema: MutableJSONSchema,
+  labels: IfcLabels,
+  context: GenerationContext,
+): MutableJSONSchema => {
+  const origin = isObjectOrArray(schema)
+    ? context.schemaOrigins?.get(schema as MutableJSONSchemaObj)
+    : undefined;
+  if (origin?.kind !== "reduction" || !isObjectOrArray(labeled)) {
+    return labeled;
+  }
+  const parts = origin.parts().map((part) => withIfcLabels(part, labels));
+  context.schemaOrigins?.set(labeled as MutableJSONSchemaObj, {
+    kind: "reduction",
+    parts: () => parts,
+  });
+  return labeled;
+};
+
+/**
+ * A value that may hold its constituents' data anywhere, which reached
+ * definitions not yet written (`unwritten`) in `definitions`, and the labels
+ * it kept: one an intersection the checker gives `any` settled to (`"any"`),
+ * or one an intersection this generator cannot merge falls back to
+ * (`"unsupported"`), each kept by `labelsBesideAnyValue()`, or a union of
+ * `arms` reduced to those accepting any value (`reducedLabeledUnion()`) or
+ * made `true` by one (`"union"`). A fallback is checked where it is emitted
+ * (`GenerationContext.anyValuesBySchema`).
+ */
+export type AnyValueBesideUnwritten =
+  & {
+    readonly definitions: Readonly<Record<string, MutableJSONSchema>>;
+    readonly unwritten: readonly string[];
+    readonly kept: IfcLabels | undefined;
+  }
+  & (
+    | { readonly from: "any" | "unsupported" }
+    | {
+      readonly from: "union";
+      readonly arms: readonly MutableJSONSchema[];
+    }
+  );
 
 /**
  * Refuses a value in `values` that kept fewer restrictions than the
@@ -577,7 +765,12 @@ export type AnyValueBesideUnwritten = {
  * emitted in `schema`, the schema generated, is held to that at each position
  * emitting it, with the restrictions stated there (`emittedAnyValues()`), so
  * that a label one use of it states does not reach another. A value emitted
- * nowhere is held to what it kept.
+ * nowhere is held to what it kept. A union's are the labels its arms state,
+ * read as its reduction reads them (`reducedArmLabels()`), to which a written
+ * definition adds restrictions alone; for a union, only a definition `schema`
+ * holds counts: one it does not hold took the union inside it with it, as a
+ * recursion through its own argument does, read again one level down and
+ * absorbed by the level above.
  */
 export const assertAnyValuesKeptLabels = (
   values: readonly AnyValueBesideUnwritten[],
@@ -587,8 +780,33 @@ export const assertAnyValuesKeptLabels = (
   const emitted = bySchema && values.length > 0
     ? emittedAnyValues(schema, bySchema)
     : new Map<AnyValueBesideUnwritten, IfcLabels[]>();
+  const written = isObjectNotArray(schema) && isObjectNotArray(schema.$defs)
+    ? schema.$defs
+    : {};
   for (const value of values) {
-    const { from, definitions, unwritten, kept } = value;
+    const { definitions, kept } = value;
+    if (value.from === "union") {
+      const unwritten = value.unwritten.filter((name) =>
+        Object.hasOwn(written, name)
+      );
+      if (unwritten.length === 0) continue;
+      const stated = reducedArmLabels(value.arms, definitions);
+      if (stated !== undefined && !holdsIfcLabels(kept ?? {}, stated)) {
+        const names = unwritten.map((name) => `\`${name}\``).join(", ");
+        const inside = unwritten.length === 1
+          ? `the definition of ${names}`
+          : "their own definitions";
+        throw new Error(
+          `A union with a member accepting any value is that member, with ` +
+            `the labels of every member, but it reaches ${names} inside ` +
+            `${inside}, where those labels cannot be read yet. Declare that ` +
+            `union without \`any\` or \`unknown\`, or with the labels ` +
+            `${names} states on a member of it.`,
+        );
+      }
+      continue;
+    }
+    const { from, unwritten } = value;
     const held = emitted.get(value) ?? [kept ?? {}];
     for (const name of unwritten) {
       const stated = labelsBesideAnyValue(

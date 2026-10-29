@@ -1685,11 +1685,13 @@ describe("Schema: CFC authoring aliases", () => {
           "Five",
           { default: 5, ...SECRET },
         ],
+        // A union with a member accepting any value is that member, with the
+        // labels of every member.
         [
           "a union holding a CFC alias",
           "type OrText = Secret | string;",
           "OrText",
-          { anyOf: [SECRET, { type: "string" }] },
+          SECRET,
         ],
         [
           "an array of a CFC alias",
@@ -1742,92 +1744,77 @@ describe("Schema: CFC authoring aliases", () => {
       }
     });
 
-    it("keeps the label at every level of a generic alias nested in itself finitely", async () => {
+    it("keeps the label of a generic alias nested in itself finitely on the whole value", async () => {
+      // Each level is a union with `Secret`, which accepts any value, so it is
+      // `Secret`, with the labels of every member: the label is on the whole
+      // value, which holds every level.
+
       for (
         const { schema, diagnostics } of await schemasOfBothPaths(
           "type Box<T> = { next: T } | Secret;",
           "Box<Box<string>>",
         )
       ) {
-        const box = (next: unknown) => ({
-          anyOf: [
-            { type: "object", properties: { next }, required: ["next"] },
-            SECRET,
-          ],
-        });
-        expect(schema.properties.a).toEqual(box(box({ type: "string" })));
+        expect(schema.properties.a).toEqual(SECRET);
         expect(diagnostics).toEqual([]);
       }
     });
 
     for (
-      const [written, declarations, value, levels] of [
+      const [written, declarations, value] of [
         [
           "an alias forwarding to it",
           "type Box<T> = { next: T } | Secret; type Wrap<T> = Box<T>;",
           "Wrap<Wrap<string>>",
-          2,
         ],
         [
           "an alias nesting it twice",
           "type Box<T> = { next: T } | Secret; type Twice<T> = Box<Box<T>>;",
           "Twice<Twice<string>>",
-          4,
         ],
         [
           "an alias forwarding to one that forwards to it",
           "type Box<T> = { next: T } | Secret; type Wrap<T> = Box<T>; type Wraps<T> = Wrap<Wrap<T>>;",
           "Wraps<Wraps<string>>",
-          4,
         ],
       ] as const
     ) {
-      it(`keeps the label at every level of a generic alias nested in itself finitely through ${written}`, async () => {
+      it(`keeps the label of a generic alias nested in itself finitely through ${written} on the whole value`, async () => {
         for (
           const { schema, diagnostics } of await schemasOfBothPaths(
             declarations,
             value,
           )
         ) {
-          let expected: unknown = { type: "string" };
-          for (let level = 0; level < levels; level++) {
-            expected = {
-              anyOf: [
-                {
-                  type: "object",
-                  properties: { next: expected },
-                  required: ["next"],
-                },
-                SECRET,
-              ],
-            };
-          }
-          expect(schema.properties.a).toEqual(expected);
+          expect(schema.properties.a).toEqual(SECRET);
           expect(diagnostics).toEqual([]);
         }
       });
     }
 
-    it("keeps the label at every level of a forwarded nesting whose alias also recurs through a named definition", async () => {
+    it("keeps the label of a forwarded nesting whose alias also recurs through a named definition on the whole value, and in the definition", async () => {
+      // `Box` is `Secret`, with the labels of every member, at every level,
+      // the one `Node` holds included.
+
+      const declarations = `type Node = { box: Box<string> };
+           type Box<T> = { next: T } | Secret | Node;
+           type Wrap<T> = Box<T>;`;
       for (
         const { schema, diagnostics } of await schemasOfBothPaths(
-          `type Node = { box: Box<string> };
-           type Box<T> = { next: T } | Secret | Node;
-           type Wrap<T> = Box<T>;`,
+          declarations,
           "Wrap<Wrap<string>>",
         )
       ) {
-        const box = (next: unknown) => ({
-          anyOf: [
-            { type: "object", properties: { next }, required: ["next"] },
-            SECRET,
-            { $ref: "#/$defs/Node" },
-          ],
-        });
-        expect(schema.properties.a).toEqual(box(box({ type: "string" })));
-        expect(schema.$defs.Node.properties.box).toEqual(
-          box({ type: "string" }),
-        );
+        expect(schema.properties.a).toEqual(SECRET);
+        expect(diagnostics).toEqual([]);
+      }
+      for (
+        const { schema, diagnostics } of await schemasOfBothPaths(
+          declarations,
+          "Node",
+        )
+      ) {
+        expect(schema.$defs.Node.properties.box).toEqual(SECRET);
         expect(diagnostics).toEqual([]);
       }
     });
@@ -1839,6 +1826,9 @@ describe("Schema: CFC authoring aliases", () => {
       ] as const
     ) {
       it(`reports nothing for a recursion through a member \`${alias}\` drops`, async () => {
+        // The union is `Secret`, with the labels of every member, once its
+        // members are read, the member the alias keeps among them.
+
         for (
           const { schema, diagnostics } of await schemasOfBothPaths(
             `type Data<T> =
@@ -1847,16 +1837,7 @@ describe("Schema: CFC authoring aliases", () => {
             "Data<string>",
           )
         ) {
-          expect(schema.properties.a).toEqual({
-            anyOf: [
-              {
-                type: "object",
-                properties: { value: { type: "string" } },
-                required: ["value"],
-              },
-              SECRET,
-            ],
-          });
+          expect(schema.properties.a).toEqual(SECRET);
           expect(diagnostics).toEqual([]);
         }
       });
@@ -1871,21 +1852,16 @@ describe("Schema: CFC authoring aliases", () => {
           "Data<string>",
         )
       ) {
-        expect(schema.properties.a).toEqual({
-          anyOf: [
-            {
-              type: "object",
-              properties: { value: { type: "string" } },
-              required: ["value"],
-            },
-            SECRET,
-          ],
-        });
+        expect(schema.properties.a).toEqual(SECRET);
         expect(diagnostics).toEqual([]);
       }
     });
 
     it("keeps the index signature `Pick` reads a key only it holds from", async () => {
+      // Without it, `Pick` reads no `other`, and the union is not read in
+      // full: it is `Secret`, with the labels of every member, only once its
+      // members are.
+
       for (
         const { schema, diagnostics } of await schemasOfBothPaths(
           `type Data<T> =
@@ -1894,16 +1870,7 @@ describe("Schema: CFC authoring aliases", () => {
           "Data<string>",
         )
       ) {
-        expect(schema.properties.a).toEqual({
-          anyOf: [
-            {
-              type: "object",
-              properties: { other: { type: "string" } },
-              required: ["other"],
-            },
-            SECRET,
-          ],
-        });
+        expect(schema.properties.a).toEqual(SECRET);
         expect(diagnostics).toEqual([]);
       }
     });
@@ -1974,25 +1941,29 @@ describe("Schema: CFC authoring aliases", () => {
       }
     });
 
-    it("keeps the label at every depth of a recursion through a named definition", async () => {
+    it("keeps the label of a recursion through a named definition on the whole value, and in the definition", async () => {
+      // `Tree` is `Secret`, with the labels of every member, read inside
+      // `Node` too, where `Node` itself, not written yet, holds no label
+      // beside it.
+
+      const declarations =
+        "type Tree = { next: Node } | Secret; interface Node { tree: Tree }";
       for (
         const { schema, diagnostics } of await schemasOfBothPaths(
-          "type Tree = { next: Node } | Secret; interface Node { tree: Tree }",
+          declarations,
           "Tree",
         )
       ) {
-        const tree = {
-          anyOf: [
-            {
-              type: "object",
-              properties: { next: { $ref: "#/$defs/Node" } },
-              required: ["next"],
-            },
-            SECRET,
-          ],
-        };
-        expect(schema.properties.a).toEqual(tree);
-        expect(schema.$defs.Node.properties.tree).toEqual(tree);
+        expect(schema.properties.a).toEqual(SECRET);
+        expect(diagnostics).toEqual([]);
+      }
+      for (
+        const { schema, diagnostics } of await schemasOfBothPaths(
+          declarations,
+          "Node",
+        )
+      ) {
+        expect(schema.$defs.Node.properties.tree).toEqual(SECRET);
         expect(diagnostics).toEqual([]);
       }
     });
@@ -4064,6 +4035,11 @@ describe("Schema: CFC authoring aliases", () => {
           { confidentiality: ["a"] },
         ],
         [
+          '{ [K in keyof (Integrity<T, readonly ["i"]> | Sec<T>)]: (Integrity<T, readonly ["i"]> | Sec<T>)[K] }',
+          "{ x: string }",
+          { confidentiality: ["a"] },
+        ],
+        [
           'Pick<Sec<T>, "x">',
           "Labeled | { x: string; z: 1 }",
           { confidentiality: ["a", "c"] },
@@ -4161,6 +4137,179 @@ describe("Schema: CFC authoring aliases", () => {
         expect(diagnostics).toEqual([]);
       });
     }
+
+    for (
+      const [argument, inner] of [
+        ["unknown", { type: "unknown", ifc: { confidentiality: ["a"] } }],
+        ["any", { ifc: { confidentiality: ["a"] } }],
+      ] as const
+    ) {
+      it(`reads \`T | Sec<{ x: string; z: 1 }>\` under bindings as the \`${argument}\` \`T\` is bound to, labeled with the other member's labels`, async () => {
+        // The checker reduces the union to `T`'s argument. The runtime keeps
+        // a union arm's label only beside arms that cannot hold the same
+        // values, so the label goes on the whole value.
+        const { value, diagnostics } = await generate(`
+          type Sec<T> = Confidential<T, readonly ["a"]>;
+          type Outer<T> = Confidential<{ inner: T | Sec<{ x: string; z: 1 }> }, readonly ["b"]>;
+          interface Holder { value: Outer<${argument}> }
+        `);
+        expect((value as any).properties.inner).toEqual(inner);
+        expect(diagnostics).toEqual([]);
+      });
+    }
+
+    for (
+      const [member, inner] of [
+        ['{ x: Exact<string, readonly ["p"]> }', {
+          ifc: { exactCopyOf: ["p"] },
+        }],
+        ['Exact<{ x: string }, readonly ["p"]> | Sec<{ x: string; z: 1 }>', {
+          ifc: { exactCopyOf: ["p"], confidentiality: ["a"] },
+        }],
+      ] as const
+    ) {
+      it(`keeps every restriction a member states anywhere on the whole of \`T | ${member}\` under bindings, \`T\` bound to \`any\``, async () => {
+        // The value may hold a member's data anywhere, so a restriction of any
+        // kind goes on the whole value, as it does beside `any` in an
+        // intersection.
+
+        const { value, diagnostics } = await generate(`
+          type Sec<T> = Confidential<T, readonly ["a"]>;
+          type Exact<T, P extends readonly string[]> = Cfc<T, { exactCopyOf: P }>;
+          type Outer<T> = Confidential<{ inner: T | ${member} }, readonly ["b"]>;
+          interface Holder { value: Outer<any> }
+        `);
+        expect((value as any).properties.inner).toEqual(inner);
+        expect(diagnostics).toEqual([]);
+      });
+    }
+
+    it("reads `Default<T, V> | Sec<{ x: string }>` under bindings, `T` bound to `any`, as `any` with the member's label and the default", async () => {
+      // The other member does not cover the default's value, so the
+      // `Default`'s own type, `any`, is a member, which makes the union that
+      // member, labeled, the default kept.
+
+      const { value, diagnostics } = await generate(`
+        type Sec<T> = Confidential<T, readonly ["a"]>;
+        type Outer<T, V extends T> = Confidential<
+          { inner: Default<T, V> | Sec<{ x: string }> },
+          readonly ["b"]
+        >;
+        interface Holder { value: Outer<any, 5> }
+      `);
+      expect((value as any).properties.inner).toEqual({
+        ifc: { confidentiality: ["a"] },
+        default: 5,
+      });
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("refuses `Default<T, V> | PerUser<string>` under bindings, `T` bound to `any`", async () => {
+      // The `Default`'s own type, `any`, stays a member beside the scope
+      // wrapper, which no member of a union can be.
+
+      await expect(generate(`
+        type Outer<T, V extends T> = Confidential<
+          { inner: Default<T, V> | PerUser<string> },
+          readonly ["b"]
+        >;
+        interface Holder { value: Outer<any, 5> }
+      `)).rejects.toThrow("A scope wrapper cannot be a member of a union.");
+    });
+
+    it("refuses `T | Exact<A, P> | Exact<B, Q>` under bindings, `T` bound to `any`, whose members state `exactCopyOf` differently", async () => {
+      // The whole value can hold only one.
+
+      await expect(generate(`
+        type Exact<T, P extends readonly string[]> = Cfc<T, { exactCopyOf: P }>;
+        type Outer<T> = Confidential<
+          { inner: T | Exact<{ x: string }, readonly ["p"]> | Exact<{ y: string }, readonly ["q"]> },
+          readonly ["b"]
+        >;
+        interface Holder { value: Outer<any> }
+      `)).rejects.toThrow("One value declares `ifc.exactCopyOf` twice");
+    });
+
+    for (
+      const [argument, inner] of [
+        ["any", {
+          type: "object",
+          properties: {},
+          additionalProperties: true,
+          ifc: { confidentiality: ["a"] },
+        }],
+        ["unknown", { type: "object", properties: {} }],
+      ] as const
+    ) {
+      it(`reads \`Omit<T | U | Sec<{ x: string; z: 1 }>, never>\` under bindings with \`U\` bound to \`never\`, as with no \`U\`, \`T\` bound to \`${argument}\``, async () => {
+        // `never` is no member of the union, so it drops out before the union
+        // is read, and the view is the other members'.
+        const { value, diagnostics } = await generate(`
+          type Sec<T> = Confidential<T, readonly ["a"]>;
+          type Outer<T, U> = Confidential<
+            { inner: Omit<T | U | Sec<{ x: string; z: 1 }>, never> },
+            readonly ["b"]
+          >;
+          interface Holder { value: Outer<${argument}, never> }
+        `);
+        expect((value as any).properties.inner).toEqual(inner);
+        expect(diagnostics).toEqual([]);
+      });
+    }
+
+    for (const argument of ["any", "unknown"]) {
+      it(`refuses a scope wrapper beside a labeled member of a union under bindings, \`T\` bound to \`${argument}\``, async () => {
+        // `PerUser<any>` accepts any value, but the scope it declares is
+        // the slot's, which no member of a union can declare. The union
+        // keeps its members rather than reducing to the one accepting
+        // anything, so the scope's placement is refused.
+        await expect(generate(`
+          type Outer<T> = Confidential<
+            { inner: PerUser<T> | Confidential<{ x: string }, readonly ["a"]> },
+            readonly ["b"]
+          >;
+          interface Holder { value: Outer<${argument}> }
+        `)).rejects.toThrow("A scope wrapper cannot be a member of a union.");
+      });
+    }
+
+    it("keeps the members of a union under bindings beside the `unknown` `T` is bound to where none is labeled", async () => {
+      // With no label to place, the union stays as the node reads it.
+      const { value, diagnostics } = await generate(`
+        type Outer<T> = Confidential<{ inner: T | { x: string } }, readonly ["b"]>;
+        interface Holder { value: Outer<unknown> }
+      `);
+      expect((value as any).properties.inner).toEqual({
+        anyOf: [{ type: "unknown" }, {
+          type: "object",
+          properties: { x: { type: "string" } },
+          required: ["x"],
+        }],
+      });
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("reads `Omit<T | Sec<{ x: string; z: 1 }>, never>` under bindings with `T` bound to `any` as `any`'s keys, labeled with the other member's labels", async () => {
+      // The checker reads the operand as `any`, so the view maps `any`'s
+      // keys, as `Omit<any, never>` does, and `a`, written around a member of
+      // the union reduced to `any`, labels the whole.
+
+      const { value, diagnostics } = await generate(`
+        type Sec<T> = Confidential<T, readonly ["a"]>;
+        type Outer<T> = Confidential<
+          { inner: Omit<T | Sec<{ x: string; z: 1 }>, never> },
+          readonly ["b"]
+        >;
+        interface Holder { value: Outer<any> }
+      `);
+      expect((value as any).properties.inner).toEqual({
+        type: "object",
+        properties: {},
+        additionalProperties: true,
+        ifc: { confidentiality: ["a"] },
+      });
+      expect(diagnostics).toEqual([]);
+    });
 
     it("keeps the label of a labeled `unknown` among the members of an `Omit` under bindings", async () => {
       // `Confidential<unknown, …>` is its carrier, written around a payload
@@ -4626,11 +4775,78 @@ describe("Schema: CFC authoring aliases", () => {
             undefined,
           ],
           ['Pick<One | Two, "x">', undefined],
+          // A mapped type an author writes over a union, which the checker
+          // does not distribute, maps whichever member the value is too.
+          [
+            '{ [K in keyof (Integrity<One, readonly ["i"]> | Sec<One>)]: (Integrity<One, readonly ["i"]> | Sec<One>)[K] }',
+            secret,
+          ],
+          [
+            '{ readonly [K in keyof (Integrity<One, readonly ["i"]> | Integrity<Sec<One>, readonly ["i"]>)]: (Integrity<One, readonly ["i"]> | Integrity<Sec<One>, readonly ["i"]>)[K] }',
+            { integrity: ["i"], confidentiality: ["a"] },
+          ],
         ] as const
       ) {
         it(`reads \`${value}\` ${ifc ? "with its members' labels joined" : "unlabeled"}`, async () => {
           const { schema, diagnostics } = await generate(value);
           expect(schema).toEqual(picked(ifc));
+          expect(diagnostics).toEqual([]);
+        });
+      }
+
+      it("reads a mapped type over a union that replaces the carrier with the labels of the carrier it holds", async () => {
+        // The carrier is the mapping's own, not its members', and so are the
+        // labels: `d`, and none of the members' `i`.
+        const { schema, diagnostics } = await generate(
+          "View",
+          `type Source = Integrity<{ x: string }, readonly ["i"]> | Integrity<{ x: number }, readonly ["i"]>;
+          type Stamp = Confidential<{ x: string | number }, readonly ["d"]>["__ct_cfc__"];
+          type View = { [K in keyof Source]: K extends "__ct_cfc__" ? Stamp : Source[K] };
+          `,
+        );
+        expect(schema).toEqual({
+          type: "object",
+          properties: { x: { type: ["number", "string"] } },
+          required: ["x"],
+          ifc: { confidentiality: ["d"] },
+        });
+        expect(diagnostics).toEqual([]);
+      });
+
+      it("reads a mapped type over a union that adds a stamp to the carrier with the added stamp's label", async () => {
+        // The carrier records a policy the members' do not, so it is not
+        // theirs, and the object is labeled by every policy it records.
+
+        const { schema, diagnostics } = await generate(
+          "View",
+          `type Source = Integrity<{ x: string }, readonly ["i"]> | Integrity<{ x: number }, readonly ["i"]>;
+          type Stamp = Confidential<{ x: string | number }, readonly ["d"]>["__ct_cfc__"];
+          type View = { [K in keyof Source]: K extends "__ct_cfc__" ? Source[K] | Stamp : Source[K] };
+          `,
+        );
+        expect((schema as { ifc?: unknown }).ifc).toEqual({
+          integrity: ["i"],
+          confidentiality: ["d"],
+        });
+        expect(diagnostics).toEqual([]);
+      });
+
+      for (const replacement of ["{}", "object", "any"]) {
+        it(`reads a mapped type over a union that replaces the carrier with \`${replacement}\` unlabeled`, async () => {
+          // A carrier that records no policy gives the object no label, and
+          // none of the members' `i`.
+
+          const { schema, diagnostics } = await generate(
+            "View",
+            `type Source = Integrity<{ x: string }, readonly ["i"]> | Integrity<{ x: number }, readonly ["i"]>;
+            type View = { [K in keyof Source]: K extends "__ct_cfc__" ? ${replacement} : Source[K] };
+            `,
+          );
+          expect(schema).toEqual({
+            type: "object",
+            properties: { x: { type: ["number", "string"] } },
+            required: ["x"],
+          });
           expect(diagnostics).toEqual([]);
         });
       }
@@ -4964,7 +5180,6 @@ describe("Schema: CFC authoring aliases", () => {
             'Pick<Confidential<One, readonly ["b"]> | Sec<Two>, "x">',
             { confidentiality: ["b", "a"] },
           ],
-          ["SelectOr<any>", 'Pick<any | Sec<Two>, "x">', undefined],
           [
             "SelectOrIntegrity<never>",
             'Pick<Integrity<Two, readonly ["i"]>, "x">',
@@ -5132,6 +5347,24 @@ describe("Schema: CFC authoring aliases", () => {
           anyOf: [{ type: "string", ifc: secret }, { type: "null" }],
         });
         expect(read.diagnostics).toEqual([]);
+      });
+
+      it("keeps the label of the member beside the `any` `SelectOr<any>` binds into a union", async () => {
+        // A bare `any` is a member with no labels of its own, as a bare
+        // `unknown` is, though the checker reduces the union written out to
+        // `any`. `keyof any` is every key, so the view is `Two`'s `x`, which
+        // `a` was written around.
+        const { schema, diagnostics } = await generate(
+          "SelectOr<any>",
+          DECLARATIONS,
+        );
+        expect(schema).toEqual({
+          type: "object",
+          properties: { x: true },
+          required: ["x"],
+          ifc: secret,
+        });
+        expect(diagnostics).toEqual([]);
       });
 
       for (
