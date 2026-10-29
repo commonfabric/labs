@@ -204,4 +204,96 @@ describe("runsc-linux-live", () => {
       }
     },
   });
+
+  it({
+    name:
+      "reaches the host ports a run forwards at `host.docker.internal`, and no other port of the host's loopback, with egress kept",
+    ignore: home === undefined || Deno.build.os !== "linux",
+    fn: async () => {
+      const serve = (text: string) =>
+        Deno.serve(
+          { hostname: "127.0.0.1", port: 0, onListen: () => {} },
+          () => new Response(text),
+        );
+      const forwarded = serve("forwarded");
+      const other = serve("not-forwarded");
+      const forwardedPort = (forwarded.addr as Deno.NetAddr).port;
+      const otherPort = (other.addr as Deno.NetAddr).port;
+      const workspace = await Deno.makeTempDir({ prefix: "runsc-live-" });
+      try {
+        const selection = await resolveSandboxRuntimeSelection(
+          { HOME: home, CFC_VM_FORWARD_PORTS: String(forwardedPort) },
+          {},
+          { platform: "linux", flags: false, homeDir: home },
+        );
+        expect(selection.sandboxRunscForwardedHostPorts).toEqual([
+          forwardedPort,
+        ]);
+        const runtime = new RunscSandboxRuntime(resolveRunscSandboxConfig({
+          workspaceHostPath: workspace,
+          rootfs: selection.sandboxRootfs,
+          runscBinary: selection.sandboxRunscBinary,
+          cfcPolicyPath: selection.sandboxCfcPolicy,
+          rootless: selection.sandboxRunscRootless === true,
+          networkHelper: selection.sandboxRunscNetworkHelper,
+          unshare: selection.sandboxRunscUnshare,
+          setpriv: selection.sandboxRunscSetpriv,
+          forwardedHostPorts: selection.sandboxRunscForwardedHostPorts,
+          platform: "linux",
+          homeDir: home,
+        }));
+        try {
+          const fetched = (target: string, connectLimit = "") =>
+            runtime.runShell({
+              command: `curl -s ${connectLimit}--max-time 20 http://${target}/`,
+            });
+
+          const reached = await fetched(
+            `host.docker.internal:${forwardedPort}`,
+          );
+          // Nothing of pasta's reaches the call's output but root's two
+          // warnings, and no warning about a nameserver among them.
+          expect([
+            reached.exitCode,
+            reached.stdout,
+            withoutRootPasta(reached.stderr),
+          ]).toEqual([0, "forwarded", ""]);
+
+          // The name leads to the container's own loopback, where pasta
+          // listens on the forwarded port alone, so another port is refused
+          // there at once (curl's 7, "could not connect").
+          const otherByName = await fetched(
+            `host.docker.internal:${otherPort}`,
+          );
+          expect([otherByName.exitCode, otherByName.stdout]).toEqual([7, ""]);
+
+          // The gateway does not lead to the host's loopback: a connection
+          // there goes out as any other and finds nothing, where a mapped
+          // gateway would have answered at once. The limit bounds the wait
+          // for that nothing, not a connection that would succeed.
+          const atGateway = await fetched(
+            `10.0.2.2:${forwardedPort}`,
+            "--connect-timeout 2 ",
+          );
+          expect([atGateway.exitCode !== 0, atGateway.stdout]).toEqual([
+            true,
+            "",
+          ]);
+
+          const egress = await runtime.runShell({
+            command:
+              "curl -s -o /dev/null -w '%{http_code}' --max-time 20 http://1.1.1.1/",
+          });
+          expect(egress.exitCode).toBe(0);
+          expect(egress.stdout).toMatch(/^[23]\d\d$/);
+        } finally {
+          await runtime.close();
+        }
+      } finally {
+        await forwarded.shutdown();
+        await other.shutdown();
+        await Deno.remove(workspace, { recursive: true });
+      }
+    },
+  });
 });

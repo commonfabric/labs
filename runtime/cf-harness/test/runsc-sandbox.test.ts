@@ -14,8 +14,10 @@ import {
   defaultDarwinCfcVmStore,
   executableOnPath,
   PASTA_ARGS,
+  PASTA_FORWARDING_HOSTS_FILE,
   PASTA_HOSTS_FILE,
   PASTA_ROOT_ARGS,
+  pastaArgs,
   resolveRunscSandboxConfig,
   RUNSC_MAX_SESSIONS,
   RunscSandboxRuntime,
@@ -1703,13 +1705,24 @@ const pastaConfig = (
 /**
  * A runner that hands the fake what a command run under pasta runs, and
  * keeps every command it was given as it was given, with the spec of each
- * container started and the request that started it.
+ * container started and the request that started it. Pasta is to be given
+ * `pastaOwnArgs` first, {@link PASTA_ARGS} unless the case says otherwise.
  */
 class UnderPasta implements ProcessRunner {
   readonly fake = new FakeRunscRunner();
   readonly given: { command: string; args: string[] }[] = [];
   readonly specs: string[] = [];
   readonly started: ProcessRunRequest[] = [];
+
+  readonly #pastaOwnArgs: readonly string[];
+
+  /**
+   * Constructs an instance that expects pasta to be given `pastaOwnArgs`
+   * first.
+   */
+  constructor(pastaOwnArgs: readonly string[] = PASTA_ARGS) {
+    this.#pastaOwnArgs = pastaOwnArgs;
+  }
 
   async #unwrap<T extends { command: string; args: string[] }>(
     request: T,
@@ -1755,8 +1768,10 @@ class UnderPasta implements ProcessRunner {
     const args = throughUnshare ? given.slice(UNSHARE_ARGS.length + 2) : given;
     const end = args.indexOf("--");
     const own = args.slice(0, end);
-    assertEquals(own.slice(0, PASTA_ARGS.length), [...PASTA_ARGS]);
-    const rest = own.slice(PASTA_ARGS.length);
+    assertEquals(own.slice(0, this.#pastaOwnArgs.length), [
+      ...this.#pastaOwnArgs,
+    ]);
+    const rest = own.slice(this.#pastaOwnArgs.length);
     const log = rest.indexOf("--log-file");
     assertMatch(rest[log + 1], /\/pasta\.log$/);
     this.pastaFlags.push(rest.filter((_, i) => i !== log && i !== log + 1));
@@ -1811,6 +1826,92 @@ Deno.test("under pasta, a call starts its container in pasta's namespace, on tha
   });
   assertEquals(await Deno.readTextFile(hosts.source), PASTA_HOSTS_FILE);
   assertMatch(PASTA_HOSTS_FILE, /^10\.0\.2\.2\thost\.docker\.internal$/m);
+});
+
+Deno.test("under pasta, a call that forwards host ports gives pasta those ports alone, takes the host off the gateway, and names the container's loopback as the host", async () => {
+  const forwarding = [
+    "--config-net",
+    "--quiet",
+    "-4",
+    "-a",
+    "10.0.2.15",
+    "-n",
+    "24",
+    "-g",
+    "10.0.2.2",
+    "-t",
+    "none",
+    "-u",
+    "none",
+    "-T",
+    "8000,9000",
+    "-U",
+    "none",
+    "--no-map-gw",
+    "--dns-forward",
+    "10.0.2.2",
+    "--dns",
+    "10.0.2.2",
+  ];
+  assertEquals(pastaArgs([8000, 9000]), forwarding);
+  // Listed twice, forwarded once.
+  const c = pastaConfig({ forwardedHostPorts: [8000, 9000, 8000] });
+  assertEquals(c.forwardedHostPorts, [8000, 9000]);
+  const runner = new UnderPasta(forwarding);
+
+  const result = await new RunscSandboxRuntime(c, runner).runShell({
+    command: "echo hi",
+  });
+
+  assertEquals(result.exitCode, 0);
+  assertEquals(runner.given[0].command, PASTA);
+  const hosts = JSON.parse(runner.specs[0]).mounts.find((
+    m: { destination: string },
+  ) => m.destination === "/etc/hosts");
+  assertEquals(
+    await Deno.readTextFile(hosts.source),
+    PASTA_FORWARDING_HOSTS_FILE,
+  );
+  assertMatch(
+    PASTA_FORWARDING_HOSTS_FILE,
+    /^127\.0\.0\.1\thost\.docker\.internal$/m,
+  );
+  assert(!PASTA_FORWARDING_HOSTS_FILE.includes("10.0.2.2"));
+});
+
+Deno.test("under pasta, a call that forwards an empty list of host ports reaches no port of the host's loopback", () => {
+  const args = pastaArgs([]);
+
+  assertEquals(args[args.indexOf("-T") + 1], "none");
+  assert(args.includes("--no-map-gw"));
+});
+
+Deno.test("a configuration refuses forwarded host ports where no pasta would forward them, and a port that is not a port number", () => {
+  for (
+    const overrides of [
+      { forwardedHostPorts: [8000] },
+      {
+        networkHelper: PASTA,
+        setpriv: SETPRIV,
+        networkMode: "none" as const,
+        forwardedHostPorts: [8000],
+      },
+    ]
+  ) {
+    assertThrows(
+      () => config(overrides),
+      Error,
+      "forwarded host ports are forwarded by pasta, which this " +
+        "configuration does not run",
+    );
+  }
+  for (const port of [0, 65536, 1.5, -80]) {
+    assertThrows(
+      () => pastaConfig({ forwardedHostPorts: [port] }),
+      Error,
+      `forwarded host port must be a port number from 1 to 65535: \`${port}\``,
+    );
+  }
 });
 
 Deno.test("under pasta, root keeps root in a network namespace alone and a mount namespace of unshare's, and a user that is not root gets pasta's user namespace", async () => {
