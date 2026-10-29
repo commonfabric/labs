@@ -2632,11 +2632,20 @@ export default pattern<TopicInput, TopicOutput>(
 
     // Inbound: who points at this topic, looked up in the board's pivot rather
     // than derived a second time.
-    const referencedBy = backlinksOf({
+    //
+    // The binding's name is the name of the document the lookup is stored in,
+    // and it is published as `referencedBy`. On the deployed board, many
+    // topics' document named `referencedBy` holds at space scope only a link to
+    // each reader's own session instance of it, and a run whose reads stay at
+    // space scope writes behind such a link rather than over it, so a reader in
+    // any session that has not run the topic finds no backlinks. A document
+    // under this name has no such link, and the run stores the lookup in it at
+    // space scope, where every reader finds it.
+    const backlinks = backlinksOf({
       table: boardCrossrefs,
       self,
     });
-    const hasReferences = referencedBy.length > 0;
+    const hasReferences = backlinks.length > 0;
     // Only what THIS pattern owns is offered for removal. The union `mentions`
     // also carries the editor's map and the link resolutions, and a control
     // here could not honestly retract either: a mention in the prose is removed
@@ -2976,16 +2985,14 @@ export default pattern<TopicInput, TopicOutput>(
               </cf-vstack>
             </cf-card>
 
-            {/* ── Referenced by (the board's pivot; nothing persisted) ── */}
+            {/* ── Referenced by (derived from the board's pivot; nothing authored) ── */}
             {hasReferences
               ? (
                 <cf-card>
                   <cf-vstack gap="2">
                     <cf-heading level={5}>Referenced by</cf-heading>
                     <cf-vstack gap="1">
-                      {referencedBy.map((topic) => (
-                        <cf-cell-link $cell={topic} />
-                      ))}
+                      {backlinks.map((topic) => <cf-cell-link $cell={topic} />)}
                     </cf-vstack>
                   </cf-vstack>
                 </cf-card>
@@ -3060,7 +3067,7 @@ export default pattern<TopicInput, TopicOutput>(
       references,
       mentioned,
       mentions,
-      referencedBy,
+      referencedBy: backlinks,
       titleUpdatedBy,
       titleUpdatedAt,
       addComment,

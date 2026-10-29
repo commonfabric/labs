@@ -5,11 +5,13 @@
  * barrel, so that nothing outside a test reaches it by accident.
  */
 
+import { deepFreeze } from "@commonfabric/data-model";
 // @ts-types="@types/ws"
 import { WebSocket } from "ws";
 
+import { instancePartialCause } from "./builder/instance-name.ts";
 import { freezePartialCauses } from "./builder/pattern.ts";
-import type { Pattern } from "./builder/types.ts";
+import type { JSONObject, Pattern } from "./builder/types.ts";
 
 /**
  * The `ws` class behind every memory socket a runtime opens under Deno, for a
@@ -33,4 +35,15 @@ export function patternLiteralForTestingOnly<T extends Pattern>(
 ): T {
   freezePartialCauses(pattern);
   return pattern;
+}
+
+/**
+ * The partial cause, deep-frozen, of the sub-pattern instance a pattern binds
+ * to the `const` named `name`, under which its parent holds that instance's
+ * child. The builder makes it inside a pattern and no public export names it,
+ * so a test that reads a named instance's child from outside the pattern finds
+ * the child's spot through here.
+ */
+export function instancePartialCauseForTestingOnly(name: string): JSONObject {
+  return deepFreeze(instancePartialCause(name));
 }

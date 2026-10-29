@@ -277,13 +277,6 @@ const stepPeekSchema = {
     settle: { type: "boolean" },
     label: { type: "string" },
     await: { type: "string" },
-    // The payload is what the step sends, so it is read as authored: an
-    // object arrives as an object, reaching the handler as a reference into
-    // this step rather than a snapshot of it. `type: "unknown"` marks a value
-    // the traversal must not descend into, which is right for the fields this
-    // schema only tests for presence and wrong here, where it drops an object
-    // payload to `undefined`.
-    event: true,
     trustedUi: {
       type: "object",
       properties: {
@@ -638,10 +631,14 @@ const handlers: Record<
       throw new Error(`Test step ${index} action is not a stream`);
     }
     const meta = stepCell.asSchema(stepPeekSchema).get() as {
-      event?: unknown;
       trustedUi?: unknown;
     };
-    stream.send(buildActionEvent(meta?.event, meta?.trustedUi));
+    // Pull the payload before snapshotting links supplied by patterns or
+    // computations. The true schema also recursively reads accessible linked
+    // data, so this step can preload the handler's inputs; see the event-link
+    // guidance in docs/common/workflows/pattern-testing.md.
+    const event = await stepCell.key("event" as never).asSchema(true).pull();
+    stream.send(buildActionEvent(event, meta?.trustedUi));
     await settle();
     return {};
   },
