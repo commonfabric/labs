@@ -16,8 +16,14 @@
  * questions.
  */
 
+import {
+  forEachSubschema,
+  type SubschemaKeyword,
+} from "@commonfabric/data-model-schema/schema-walk";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { MutableJSONSchema } from "@commonfabric/api";
+
+import type { AnyValueBesideUnwritten } from "./ifc-labels.ts";
 
 /**
  * Keywords whose values are schemas for a DIFFERENT slot than the one being
@@ -195,4 +201,116 @@ export const assertScopeDeclarationsAreReachable = (
   schema: MutableJSONSchema,
 ): void => {
   walkSlot(schema);
+};
+
+/** The prefix of a reference to a definition in the schema's own `$defs`. */
+const LOCAL_DEFINITION_PREFIX = "#/$defs/";
+
+/**
+ * A scope declared on a member of a value, and that member's path from the
+ * value: property names, `[number]` for an element and `[string]` for the
+ * value under any other key.
+ */
+export type MemberScope = { readonly scope: string; readonly member: string };
+
+/** `member`'s path extended by the child schema `keyword` holds at `key`. */
+const memberAt = (
+  member: string,
+  keyword: SubschemaKeyword,
+  key: string | undefined,
+): string => {
+  if (keyword === "properties") return member ? `${member}.${key}` : key!;
+  if (keyword === "items" || keyword === "prefixItems") {
+    return `${member}[number]`;
+  }
+  if (keyword === "additionalProperties" || keyword === "patternProperties") {
+    return `${member}[string]`;
+  }
+  return member;
+};
+
+/**
+ * The first scope a member of `schemas` declares, anywhere in their values
+ * and through the definitions in `definitions` their local references reach
+ * (`topLevelScope()`), or `undefined` where none does. A schema's own scope,
+ * at its top level, is the whole value's and not a member's. A definition
+ * `definitions` does not hold yet is passed over.
+ */
+export const memberScopeWithin = (
+  schemas: readonly MutableJSONSchema[],
+  definitions: Readonly<Record<string, MutableJSONSchema>>,
+): MemberScope | undefined => {
+  const visited = new Set<MutableJSONSchema>();
+  const visit = (
+    node: MutableJSONSchema,
+    member: string,
+  ): MemberScope | undefined => {
+    if (!isObjectOrArray(node) || visited.has(node)) return undefined;
+    visited.add(node);
+    const scope = member ? topLevelScope(node) : undefined;
+    if (scope !== undefined) return { scope, member };
+    let found: MemberScope | undefined;
+    if (
+      typeof node.$ref === "string" &&
+      node.$ref.startsWith(LOCAL_DEFINITION_PREFIX)
+    ) {
+      const definition =
+        definitions[node.$ref.slice(LOCAL_DEFINITION_PREFIX.length)];
+      if (definition !== undefined) found = visit(definition, member);
+    }
+    forEachSubschema(node, (child, keyword, key) => {
+      found ??= visit(
+        child as MutableJSONSchema,
+        memberAt(member, keyword, key),
+      );
+      return found !== undefined;
+    }, { includeUnused: true });
+    return found;
+  };
+  for (const schema of schemas) {
+    const found = visit(schema, "");
+    if (found) return found;
+  }
+  return undefined;
+};
+
+/**
+ * The error raised for a scope a member declares inside an intersection
+ * whose constituents cannot be merged. The fallback it gets describes none of
+ * its members, so the write path never sees the member's scope and stores its
+ * data with the whole value's.
+ */
+export const scopeInsideUnmergedIntersectionError = (
+  { scope, member }: MemberScope,
+): Error =>
+  new Error(
+    `An intersection whose constituents cannot be merged falls back to a ` +
+      `schema that accepts any object and describes none of its members, ` +
+      `so it cannot keep the scope \`${scope}\` declared on ` +
+      `\`${member}\`. That data would be stored in the scope of the whole ` +
+      `value instead, which without a scope of its own is one copy shared ` +
+      `by everyone in the space. Declare the intersection with constituents ` +
+      `that merge, as \`{ x: PerUser<string> } & { items: string[] }\` ` +
+      `does, or scope the whole value (\`PerUser<{ x: string } & ` +
+      `string[]>\`).`,
+  );
+
+/**
+ * Refuses a fallback in `values`, one an intersection whose constituents
+ * cannot be merged fell back to (`"unsupported"`), that met definitions
+ * before they were written where one declares a scope on a member now that
+ * it is, as the fallback is refused where its constituents' members declare
+ * one it can read (`scopeInsideUnmergedIntersectionError()`).
+ */
+export const assertFallbacksKeptNoMemberScope = (
+  values: readonly AnyValueBesideUnwritten[],
+): void => {
+  for (const { from, definitions, unwritten } of values) {
+    if (from !== "unsupported") continue;
+    const found = memberScopeWithin(
+      unwritten.map((name) => ({ $ref: `${LOCAL_DEFINITION_PREFIX}${name}` })),
+      definitions,
+    );
+    if (found) throw scopeInsideUnmergedIntersectionError(found);
+  }
 };

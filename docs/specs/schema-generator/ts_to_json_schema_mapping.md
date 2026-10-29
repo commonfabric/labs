@@ -1186,8 +1186,18 @@ Default paths of §7:
   `labelsBesideAnyValue()`): every restriction a constituent states anywhere
   in its value, a member's or an array's items' included, goes on the whole
   fallback, and its evidence goes nowhere. `{ x: Confidential<string, C> } &
-  string[]` gives the fallback `ifc: { confidentiality: C }`. A scope a
-  member states is not lifted. A fallback that meets a definition still
+  string[]` gives the fallback `ifc: { confidentiality: C }`. A scope on
+  the whole value is kept, as `PerUser<{ x: string }> & string[]` gives the
+  fallback `scope: "user"`. A scope a member declares, anywhere in a
+  constituent's value and through its references, is refused ("An
+  intersection whose constituents cannot be merged falls back to a schema
+  that accepts any object and describes none of its members, so it cannot
+  keep the scope `user` declared on `x` …"): the write path reads a value's
+  scope from its own schema, and the fallback has none for its members, so
+  the member's data would be stored in the whole value's scope, one copy
+  shared across the space where the whole value has none. Where that member
+  is in a definition still being generated, the refusal comes once
+  generation is done. A fallback that meets a definition still
   being generated, as one inside a recursive interface does, is checked once
   generation is done, at each position emitting it, and refused where one
   holds fewer restrictions than that definition states ("An intersection
@@ -2275,6 +2285,7 @@ Everything that throws, with source (test-pinned unless noted):
 | Scope wrapper as a union member beside a value other than `null` or `undefined` | `A scope wrapper cannot be a member of a union.` | `common-fabric-formatter.ts`, `scope-placement.ts` |
 | Scope wrapper around a cell beside anything, `null` and `undefined` included | `A scope wrapper around a cell cannot hold anything beside the cell` | `common-fabric-formatter.ts` |
 | Scope wrapper beside `null` or `undefined` in a written union whose members do not read as wrappers or `null` or `undefined` | ``A scope wrapper beside `null` or `undefined` is read from the union written around it`` | `common-fabric-formatter.ts` |
+| A scope a member declares inside an intersection whose constituents cannot be merged | `An intersection whose constituents cannot be merged falls back to a schema that accepts any object and describes none of its members` | `scope-placement.ts` |
 | An `ifc` key other than `confidentiality` declared differently by nested wrappers, or by a `$ref` and its definition | ``One value declares `ifc.<key>` twice, as … and as ….`` | `ifc-labels.ts` |
 | Circular type alias (wrapper chain) | `Circular type alias detected: A -> B -> …` | `type-utils.ts` |
 | Circular type alias (union alias) | `Circular type alias detected: <name>` | `union-formatter.ts` |

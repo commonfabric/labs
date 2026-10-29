@@ -16,6 +16,10 @@ import {
 } from "../ifc-labels.ts";
 import type { SchemaGenerator } from "../schema-generator.ts";
 import { withIndexKeys, withOriginOf } from "../schema-origins.ts";
+import {
+  memberScopeWithin,
+  scopeInsideUnmergedIntersectionError,
+} from "../scope-placement.ts";
 import { dedupeByValueEqual } from "../value-equality.ts";
 import {
   cloneSchemaDefinition,
@@ -193,13 +197,19 @@ export function anyValueSchema(
  * the constituents as for an intersection the checker gives `any`
  * (`labelsBesideAnyValue()`). The object may hold a constituent's data
  * anywhere, so a restriction written anywhere in one, as on a member, would
- * otherwise fail open there.
+ * otherwise fail open there. A scope a member declares cannot be kept by an
+ * object that describes no member, so one is refused
+ * (`scopeInsideUnmergedIntersectionError()`), here or, where it is in a
+ * definition not yet written, once generation is done
+ * (`assertFallbacksKeptNoMemberScope()`).
  */
 export function unsupportedIntersectionSchema(
   reason: string,
   constituents: readonly MutableJSONSchema[],
   context: GenerationContext,
 ): MutableJSONSchemaObj {
+  const scoped = memberScopeWithin(constituents, context.definitions);
+  if (scoped) throw scopeInsideUnmergedIntersectionError(scoped);
   const { labels, value } = labelsKeptBesideAnyValue(
     constituents,
     "unsupported",

@@ -1,7 +1,10 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import type { MutableJSONSchema } from "@commonfabric/api";
-import { assertScopeDeclarationsAreReachable } from "../src/scope-placement.ts";
+import {
+  assertScopeDeclarationsAreReachable,
+  memberScopeWithin,
+} from "../src/scope-placement.ts";
 
 /** A slot holding `branch` beside `null`, declaring the user scope at its top. */
 const beside = (branch: MutableJSONSchema): MutableJSONSchema => ({
@@ -45,5 +48,26 @@ describe("scope-placement", () => {
         beside({ type: "string", scope: "user" }),
       )
     ).toThrow("A scope wrapper cannot be a member of a union.");
+  });
+
+  describe("memberScopeWithin", () => {
+    it("returns `undefined` for a scope at a schema's own top level", () => {
+      // That scope is the whole value's, which the caller keeps.
+
+      expect(memberScopeWithin([{
+        type: "object",
+        properties: { x: { type: "string" } },
+        scope: "user",
+      }], {})).toBeUndefined();
+    });
+
+    it("returns a nested member's scope beside the whole value's, with its path", () => {
+      expect(memberScopeWithin([{
+        properties: {
+          a: { properties: { x: { type: "string", scope: "session" } } },
+        },
+        scope: "user",
+      }], {})).toEqual({ scope: "session", member: "a.x" });
+    });
   });
 });

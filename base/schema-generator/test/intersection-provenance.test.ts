@@ -641,6 +641,11 @@ describe("SchemaGenerator", () => {
         propertyA({ ...UNSUPPORTED_INDEX_SIGNATURE as object, ifc: labelS }),
       ],
       [
+        "keeps a scoped constituent's scope on the fallback beside an array",
+        `type M1 = PerUser<{ x: string }>; type M2 = string[];`,
+        { ...UNSUPPORTED_INDEX_SIGNATURE as object, scope: "user" },
+      ],
+      [
         "keeps the scope of a declaration beside one typed as `any`",
         `type M1 = { a: any }; type M2 = { a: PerUser<string> };`,
         propertyA({ scope: "user" }),
@@ -1633,6 +1638,85 @@ describe("SchemaGenerator", () => {
       `);
       const message =
         "Nested scope wrappers require a cell boundary between scopes.";
+
+      expect(byType).toThrow(message);
+      expect(byNode).toThrow(message);
+    });
+
+    for (
+      const [declared, declarations, member, scope] of [
+        [
+          "a member beside others",
+          `
+            type M1 = { y: { a: string } | { b: number }; x: PerUser<string> };
+            type M2 = string[];
+          `,
+          "x",
+          "user",
+        ],
+        [
+          "a member of a named definition a member holds",
+          `
+            interface Inner { x: PerSession<string> }
+            type M1 = { inner: Inner };
+            type M2 = string[];
+          `,
+          "inner.x",
+          "session",
+        ],
+        [
+          "an array's elements",
+          `type M1 = { y: string }; type M2 = PerUser<string>[];`,
+          "[number]",
+          "user",
+        ],
+        [
+          "a record's values",
+          `type M1 = { r: Record<string, PerUser<string>> }; type M2 = string[];`,
+          "r[string]",
+          "user",
+        ],
+        [
+          "a cell member's handle",
+          `type M1 = { c: PerUser<Cell<string>> }; type M2 = string[];`,
+          "c",
+          "user",
+        ],
+        [
+          "a member of a property several constituents declare",
+          `type M1 = { a: { x: PerUser<string> } }; type M2 = { a: string[] };`,
+          "x",
+          "user",
+        ],
+      ] as const
+    ) {
+      it(`throws for a scope declared on ${declared}, inside constituents that cannot be merged`, async () => {
+        // The fallback describes none of its members, so the write path
+        // would never see the scope.
+
+        const { byType, byNode } = await schemasOfBothPaths(declarations);
+        const message =
+          `cannot keep the scope \`${scope}\` declared on \`${member}\``;
+
+        expect(byType).toThrow(message);
+        expect(byNode).toThrow(message);
+      });
+    }
+
+    it("throws where constituents that cannot be merged meet a definition whose member declares a scope, once it is written", async () => {
+      // `Node` is still being generated where its own member falls back, so
+      // the scope its member declares is read once generation is done.
+
+      const { byType, byNode } = await schemasOfBothPaths(
+        `
+          interface Node {
+            x: PerUser<string>;
+            child?: Node & string[];
+          }
+        `,
+        "Node",
+      );
+      const message = "cannot keep the scope `user` declared on `x`";
 
       expect(byType).toThrow(message);
       expect(byNode).toThrow(message);

@@ -101,7 +101,10 @@ import {
   reportUnreadTypes,
 } from "./unread-type-diagnostics.ts";
 import { dedupeByValueEqual } from "./value-equality.ts";
-import { assertScopeDeclarationsAreReachable } from "./scope-placement.ts";
+import {
+  assertFallbacksKeptNoMemberScope,
+  assertScopeDeclarationsAreReachable,
+} from "./scope-placement.ts";
 import {
   acceptsAnyValue,
   acceptsNoValue,
@@ -2154,6 +2157,7 @@ export class SchemaGenerator {
       result,
       context.anyValuesBySchema,
     );
+    assertFallbacksKeptNoMemberScope(context.anyValuesBesideUnwritten);
     assertScopeDeclarationsAreReachable(result);
     return result;
   }

@@ -230,4 +230,14 @@ describe("intersection-property-schema", () => {
         "Unsupported intersection pattern: index signature on constituent",
     });
   });
+
+  it("throws for a scope a member declares inside constituents that cannot be merged", async () => {
+    await expect(schemasOf(`
+      import { toSchema } from "commonfabric";
+      import type { PerUser } from "commonfabric";
+      export const schema = toSchema<{
+        a: { x: PerUser<string>; y: string } & string[];
+      }>();
+    `)).rejects.toThrow("cannot keep the scope `user` declared on `x`");
+  });
 });
