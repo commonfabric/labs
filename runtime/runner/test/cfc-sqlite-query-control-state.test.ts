@@ -31,7 +31,7 @@ import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import type { SqliteDbRef, SqliteParamsWire } from "@commonfabric/memory/v2";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 
 import {
   SQLITE_FOREIGN_SPACE_REFUSAL,

@@ -21,7 +21,7 @@
  */
 
 import { deepFreeze, type FabricPlainObject, hashOf, isDeepFrozen } from "@";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 // Doc-shaped test data, mirroring the default-app integration:
 // a note doc (~30 nodes) and a home-list doc holding N note entries.

@@ -4,7 +4,7 @@
  * instance class means editing this file.
  */
 
-import type { Constructor } from "@commonfabric/utils/types";
+import type { Constructor } from "@commonfabric/js-values/types";
 
 import { ProblematicValue, UnknownValue } from "@/codec-common";
 import type { FabricClassWithNonterminalCodec } from "@/codec-interface/interface.ts";

@@ -19,7 +19,7 @@ import {
 } from "@commonfabric/runner";
 import { applyCfcPolicyToExistingValue } from "@commonfabric/runner/cfc/policy-application";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { dirname, fromFileUrl, join, resolve } from "@std/path";
 import type { AgentsHostTargetDescription } from "./host.ts";
 import {

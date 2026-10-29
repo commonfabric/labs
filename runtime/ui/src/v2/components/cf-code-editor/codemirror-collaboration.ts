@@ -24,7 +24,7 @@ import {
   type OperationFieldSnapshot,
   type RuntimeClient,
 } from "@commonfabric/runtime-client";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 export type CodeMirrorOperationPayload = {
   updates: Array<{

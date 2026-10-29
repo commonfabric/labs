@@ -3,7 +3,7 @@ import { linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { deepFreeze } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { yieldToEventLoop } from "@commonfabric/utils/sleep";
+import { yieldToEventLoop } from "@commonfabric/async/sleep";
 import { convertCellsToLinks } from "../src/cell.ts";
 import { immutableCellsFor, immutableSnapshot } from "../src/immutable-cell.ts";
 import { createSigilLinkFromParsedLink, parseLink } from "../src/link-utils.ts";

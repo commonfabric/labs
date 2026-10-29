@@ -9,7 +9,7 @@
  * Not a `*.test.ts` file, so the runner does not pick it up as a suite.
  */
 
-import { holdWorkerLifetimeLock } from "@commonfabric/utils/worker-lifetime";
+import { holdWorkerLifetimeLock } from "@commonfabric/platform/worker-lifetime";
 
 import { BaseFabricSpecialObject } from "@/fabric-bases/BaseFabricSpecialObject.ts";
 import * as internal from "@/value-debug-internal.ts";

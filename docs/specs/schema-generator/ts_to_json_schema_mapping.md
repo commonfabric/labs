@@ -2084,7 +2084,7 @@ producing alias in this package as of this writing.
   points (§4 table; §9).
 - Hashtags remain in attached descriptions. Discovery extracts them at runtime
   with `tagsFromSchema` in `runtime/runtime-client/src/schema-tags.ts`,
-  using `extractHashtags` from `@commonfabric/utils/hashtags`. Tags are
+  using `extractHashtags` from `@commonfabric/runner/hashtags`. Tags are
   lowercased and deduplicated in first-seen order across nested schemas.
   Fixtures: descriptions-hashtag-tags, descriptions-index-signature-tags,
   descriptions-root-with-tags.

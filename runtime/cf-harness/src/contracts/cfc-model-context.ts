@@ -5,7 +5,7 @@ import type {
   IFCLabel,
 } from "@commonfabric/runner/cfc";
 import { isOrClause, normalizeClause } from "@commonfabric/runner/cfc";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { HarnessCfcInvocationInputLabelPath } from "./cfc-invocation-context.ts";
 import type { ToolOutputId } from "./tool-result.ts";

@@ -59,7 +59,7 @@ import {
   testIdentityKey,
   testIdentityOfKey,
 } from "@commonfabric/test-support/records";
-import { maxOf, minOf } from "@commonfabric/utils/math";
+import { maxOf, minOf } from "@commonfabric/collections/math";
 import {
   ciSubmissionsPrefix,
   storeBucket,

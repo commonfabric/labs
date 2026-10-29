@@ -31,9 +31,9 @@ import {
   createCacheHeaders,
   generateETag,
 } from "@commonfabric/static/etag";
-import { LRUCache } from "@commonfabric/utils/cache";
-import { decode, decodeDataFile } from "@commonfabric/utils/encoding";
-import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
+import { LRUCache } from "@commonfabric/collections/cache";
+import { decode, decodeDataFile } from "@commonfabric/text/utf8";
+import { stringTupleKey } from "@commonfabric/collections/string-tuple-key";
 
 import {
   formatReleaseTime,

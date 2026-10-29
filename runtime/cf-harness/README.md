@@ -11,11 +11,11 @@ duplicating them here.
 built as a general Common Fabric agent runtime, with Loom as the first target
 use case.
 
-The package is experimental but already integrated into Loom and Pattern
-Factory. It has a real execution core, bounded batch and interactive prompt/tool
-loops, durable artifacts and resumability, an operator CLI, explicit Agent
-Skills support, constrained delegation profiles, and CFC-aware mediation and
-deny/recovery shaping.
+The package is experimental but already integrated into Loom. It has a real
+execution core, bounded batch and interactive prompt/tool loops, durable
+artifacts and resumability, an operator CLI, explicit Agent Skills support,
+constrained delegation profiles, and CFC-aware mediation and deny/recovery
+shaping.
 
 For a concise status and lifecycle-aware documentation map, start with
 [docs/README.md](docs/README.md) and
@@ -963,8 +963,8 @@ deno task run -- \
   --print-transcript
 ```
 
-The gateway can also be selected via environment, which lets callers (loom,
-pattern-factory) switch to a local model without threading new flags:
+The gateway can also be selected via environment, which lets callers such as
+Loom switch to a local model without threading new flags:
 
 ```bash
 export CF_HARNESS_GATEWAY_BASE_URL=http://localhost:8080/
@@ -2986,7 +2986,6 @@ Explicit skill preload:
 ```bash
 deno task run -- \
   --workspace /path/to/common-fabric-2 \
-  --cwd pattern-factory \
   --gateway-auth-mode none \
   --skills-root labs/skills \
   --skill pattern-dev \
@@ -2999,15 +2998,14 @@ Sandbox rootfs override, for a rootfs with the tools a run needs:
 ```bash
 deno task run -- \
   --workspace /path/to/common-fabric-2 \
-  --cwd pattern-factory \
   --gateway-auth-mode none \
   --sandbox-rootfs /path/to/deno2-rootfs \
   --prompt "Run deno task cf --help and report whether it works."
 ```
 
 Use this for Deno 2 / Common Fabric CLI validation while keeping the mounted
-workspace as the source of truth for Labs, Pattern Factory, and Loom code. Run
-reports include the rootfs as the `image` of the capability snapshot.
+workspace as the source of truth for Labs and Loom code. Run reports include the
+rootfs as the `image` of the capability snapshot.
 
 Loom-backed batch runs may also pass a retained manifest:
 

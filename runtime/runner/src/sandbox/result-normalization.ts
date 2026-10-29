@@ -8,7 +8,7 @@ import {
   FabricEpochNsec,
   FabricRegExp,
 } from "@commonfabric/data-model/fabric-primitives";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { isReactive } from "../builder/types.ts";
 import { hasEncodableForm } from "../encodable-form.ts";

@@ -6,12 +6,12 @@ import {
   evaluateHarnessWriteFileAuthorization,
   type IFCLabel,
 } from "@commonfabric/runner/cfc";
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 import {
   isObjectNotArray,
   isObjectOrArray,
   type ReadonlyRecord,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 import { isAbsolute, relative } from "@std/path";
 
 import { isDigestBoundPromptSlot } from "./run-continuation.ts";

@@ -74,12 +74,12 @@
  * comparison and reporting around a fixture and reaches the runner to do it.
  * This half is path parsing over a directory walk. It reaches two leaves and
  * nothing else — the companion-directory rule, and the code-point string
- * comparison in `@commonfabric/utils/utf8` — so the test topology in
+ * comparison in `@commonfabric/text/utf8` — so the test topology in
  * `test-topology/gates.ts` can read the fixture names without loading the
  * runner. Every lane loads that topology before it runs anything.
  */
 
-import { utf8Compare } from "@commonfabric/utils/utf8";
+import { utf8Compare } from "@commonfabric/text/utf8";
 
 import { VINTAGE_SPACES_SUFFIX } from "../runtime/piece/test/vintage-layout.ts";
 

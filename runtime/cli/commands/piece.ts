@@ -30,8 +30,8 @@ import {
   parseScopedIdSegment,
   renderCellReference,
 } from "@commonfabric/runner/shared";
-import { decode } from "@commonfabric/utils/encoding";
-import { maxOf } from "@commonfabric/utils/math";
+import { decode } from "@commonfabric/text/utf8";
+import { maxOf } from "@commonfabric/collections/math";
 
 import { normalizeApiUrl } from "../lib/api-url.ts";
 import {

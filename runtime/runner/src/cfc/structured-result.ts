@@ -3,7 +3,7 @@ import {
   isFabricSpecialObject,
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { isSubschema } from "@commonfabric/data-model-schema/schema-walk";
 import { cfcOpaqueLinkForPath } from "./observation.ts";
 import {

@@ -1,4 +1,4 @@
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 
 /**
  * How long an event-driven test wait runs before it is called stuck. Two

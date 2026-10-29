@@ -17,8 +17,11 @@ import type {
   FabricError as ApiFabricError,
   FabricErrorConstructor as ApiFabricErrorConstructor,
 } from "@/api.ts";
-import { constructorOfObject } from "@commonfabric/utils/objects";
-import { isPlainObject, isUnsafeObjectKey } from "@commonfabric/utils/types";
+import { constructorOfObject } from "@commonfabric/js-values/objects";
+import {
+  isPlainObject,
+  isUnsafeObjectKey,
+} from "@commonfabric/js-values/types";
 
 import { FabricNativeWrapper } from "./FabricNativeWrapper.ts";
 import {

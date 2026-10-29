@@ -18,7 +18,7 @@
  * GitHub made, as a 32-bit big-endian unsigned integer, and then that request.
  */
 
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { GitHubRun } from "./github-runs.ts";
 
 /** One delivery of the organization's webhook. */

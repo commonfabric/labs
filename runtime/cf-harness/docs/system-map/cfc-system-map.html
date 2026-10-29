@@ -829,8 +829,8 @@
         y: 780,
         w: 210,
         h: 80,
-        t: "Loom · Pattern Factory",
-        s: "product adapters",
+        t: "Loom",
+        s: "product adapter",
       },
       {
         id: "gateway",
@@ -1899,7 +1899,7 @@
         kind: "Harness adapters",
         band: "agent",
         body:
-          `<p>Loom is the harness's first product adapter and Pattern Factory its first multi-phase orchestration adapter. Which CFC mode each selects is a fact about adapters that live outside this repository: the implementation profile states on their behalf that both select <code>observe</code> for workflows whose sandbox output does not yet carry mediation metadata end to end (deviation 2), and nothing in this tree establishes it; each adapter's own conformance statement is the authority.</p>`,
+          `<p>Loom is the harness's first product adapter. Which CFC mode it selects is a fact about an adapter that lives outside this repository: the implementation profile states on Loom's behalf that it selects <code>observe</code> for workflows whose sandbox output does not yet carry mediation metadata end to end (deviation 2), and nothing in this tree establishes it; Loom's own conformance statement is the authority.</p>`,
       },
       gateway: {
         kind: "Our service",
@@ -2150,7 +2150,7 @@
         why:
           "The sandbox's taint store and the runner's label store are two different systems that do not yet speak.",
         close: [
-          "Real CFC-result evidence for every exposed observation, so Loom and Pattern Factory can leave <code>observe</code> mode (deviation 2).",
+          "Real CFC-result evidence for every exposed observation, so Loom can leave <code>observe</code> mode (deviation 2).",
           "The direct driver has no registration to get wrong: it passes <code>--cfc</code> exactly when a CFC policy is configured, refuses an enforcing run that has none, and refuses a session in an enforcing mode.",
           "Reserve the artifact root from the sandbox (CT-2117).",
         ],

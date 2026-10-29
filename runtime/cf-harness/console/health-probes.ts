@@ -6,7 +6,7 @@
 import { type HarnessPatternIndexClientFactory } from "../src/pattern-index/factory.ts";
 import { PatternIndexError } from "@commonfabric/pattern-index/client";
 import { debugStr } from "@commonfabric/data-model";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { basename, dirname, join } from "@std/path";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import {

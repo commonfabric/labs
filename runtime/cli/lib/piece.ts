@@ -110,12 +110,12 @@ import { releaseCellConfidentiality } from "@commonfabric/runner/cfc/confidentia
 import { entityKindOfIdString } from "@commonfabric/runner/entity-kind";
 import { waitForSettledThroughHead } from "@commonfabric/runner/executor/watermark";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 import {
   isObjectNotArray,
   isObjectOrArray,
   isPlainObject,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 import { caseFold } from "unicode-case-folding";
 
 import { isHandlerCell } from "../../fuse/callables.ts";

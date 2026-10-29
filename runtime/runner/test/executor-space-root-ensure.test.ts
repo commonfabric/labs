@@ -32,7 +32,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import type { FabricValue, JSONSchema } from "@commonfabric/api";
 import type { Signer, URI } from "@commonfabric/memory/interface";
 import {

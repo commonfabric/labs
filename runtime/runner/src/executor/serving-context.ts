@@ -24,15 +24,15 @@
 
 import * as MemoryClient from "@commonfabric/memory/v2/client";
 import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
-import { isDeno } from "@commonfabric/utils/env";
+import { isDeno } from "@commonfabric/platform/env";
 import {
   type AsyncLocalStore,
   FallbackAsyncLocalStore,
-} from "@commonfabric/utils/async-local-store";
+} from "@commonfabric/async/async-local-store";
 
 // Deno/Node `AsyncLocalStorage` when available, the promise-aware fallback
-// otherwise. The `await import` stays here (not in the shared utils module): a
-// top-level await in widely-imported utils stalls Deno module evaluation.
+// otherwise. The `await import` stays here (not in `@commonfabric/async`): a
+// top-level await in a widely-imported package stalls Deno module evaluation.
 const ServingContextStorage = (isDeno()
   // deno-lint-ignore cf-imports/no-inline-module-import
   ? (await import("node:async_hooks")).AsyncLocalStorage

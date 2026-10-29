@@ -3,7 +3,7 @@ import {
   isPatternToolSchema,
   isPatternToolValue,
 } from "@commonfabric/piece/verb-listing";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { ContextualFlowControl } from "../runner/src/cfc.ts";
 

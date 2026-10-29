@@ -36,7 +36,7 @@ import {
 } from "@commonfabric/runtime-client";
 import { MessagePortRuntimeTransport } from "@commonfabric/runtime-client/transports/message-port";
 import { WebWorkerRuntimeTransport } from "@commonfabric/runtime-client/transports/web-worker";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 
 import { serverExecutionOnStepSkip } from "../../../tasks/server-execution-on-skips.ts";
 

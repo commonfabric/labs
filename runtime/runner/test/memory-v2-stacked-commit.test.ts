@@ -37,12 +37,9 @@ import type {
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import type { AppliedCommit } from "@commonfabric/memory/v2/engine";
-import {
-  getLogger,
-  getLoggerCountsBreakdown,
-} from "@commonfabric/utils/logger";
-import { maxOf } from "@commonfabric/utils/math";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { getLogger, getLoggerCountsBreakdown } from "@commonfabric/logger";
+import { maxOf } from "@commonfabric/collections/math";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { applyPatch } from "../../memory/v2/patch.ts";
 import {

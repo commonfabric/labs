@@ -1510,9 +1510,10 @@ Notes:
 - **`all benchmarks`** trends one **scale-invariant index per CPU** on the
   `benchmarks.yml` runs on main over ~45 days. The job runs `deno bench --json`
   over the bench files that workflow lists — micro-benchmarks across the runner,
-  utils, fuse, and memory packages, plus the topic-board navigation and scaling
-  benchmarks, which drive a browser end to end and so report in seconds where
-  the others report in nanoseconds. It uploads the report as a
+  collections, js-values, fuse, memory, data-model, and piece packages, plus the
+  topic-board navigation and scaling benchmarks, which drive a browser end to
+  end and so report in seconds where the others report in nanoseconds. It
+  uploads the report as a
   `bench-results` artifact with 90-day retention. There is no committed
   history. Each CPU's index compares a run with the previous run on the same
   CPU. It multiplies the previous index by the **geometric mean of the

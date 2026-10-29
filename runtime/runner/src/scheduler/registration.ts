@@ -1,4 +1,4 @@
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 import type { Cancel } from "../cancel.ts";
 import { toMemorySpaceAddress } from "../link-utils.ts";

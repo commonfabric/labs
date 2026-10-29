@@ -10,8 +10,8 @@
 
 import { CFC_ATOM_TYPE, type CfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { deriveFlowJoin } from "../src/cfc/prepare.ts";
 import type {

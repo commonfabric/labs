@@ -36,7 +36,7 @@ import {
 import {
   getLoggerCountsBreakdown,
   getTimingStatsBreakdown,
-} from "@commonfabric/utils/logger";
+} from "@commonfabric/logger";
 import { ProcessModuleByteCache } from "@commonfabric/test-support/compile-byte-cache";
 
 /**

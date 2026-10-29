@@ -12,7 +12,7 @@ import { taggedHashStringOf } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
+import { getLoggerCountsBreakdown } from "@commonfabric/logger";
 import { Runtime } from "../src/runtime.ts";
 import {
   createNonReactiveTransaction,

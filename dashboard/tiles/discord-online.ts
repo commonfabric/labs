@@ -12,7 +12,7 @@
  * with 4014.
  */
 
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { Status, Tile, TileView } from "../types.ts";
 import { escapeHtml, multiSparkline, thin } from "../lib.ts";
 import { dashboardCacheFile } from "../history-files.ts";

@@ -88,7 +88,7 @@ import { UI } from "@commonfabric/runner/shared";
 import { uiSchema } from "@commonfabric/runner/schemas";
 import { MockDoc } from "@commonfabric/html/mock-doc";
 import { renderInProcess } from "@commonfabric/html/in-process";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 /**
  * The requested discoverability of a publication, before the index receives

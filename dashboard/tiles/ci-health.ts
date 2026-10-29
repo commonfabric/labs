@@ -64,7 +64,7 @@ import {
   LOOM_REPO,
   REPO,
 } from "../config.ts";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { CompletedAttempts } from "../completed-attempts.ts";
 import { detailList } from "../detail-list.ts";
 import { livePageResponse } from "../live-page.ts";

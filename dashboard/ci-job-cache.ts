@@ -10,7 +10,7 @@
  */
 
 import { basename, dirname, join } from "@std/path";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { dashboardCacheFile } from "./history-files.ts";
 
 export const CI_JOB_CACHE_DAYS = 60;

@@ -16,7 +16,7 @@
  * back. A file that cannot be read at all is replaced.
  */
 
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { GitHubRun } from "./github-runs.ts";
 
 /** The head of one workflow's run list, as the file holds it. */

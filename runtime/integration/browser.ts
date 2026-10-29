@@ -4,7 +4,7 @@ import {
   WaitForOptions,
 } from "@astral/astral";
 
-import { removeDirectory } from "@commonfabric/utils/remove-directory";
+import { removeDirectory } from "@commonfabric/test-support/remove-directory";
 
 import { astralBinaryPath } from "./astral-adapter.ts";
 import { BrowserProcess } from "./browser-process.ts";

@@ -11,12 +11,12 @@ import {
 import { selectResearchContext } from "./research/context.ts";
 import { loomAuthoringForTurn } from "./loom-authoring.ts";
 import { ensureSESLockdown, type Runtime } from "@commonfabric/runner";
-import { spliceAll } from "@commonfabric/utils/arrays";
-import { maxOf } from "@commonfabric/utils/math";
+import { spliceAll } from "@commonfabric/collections/splice";
+import { maxOf } from "@commonfabric/collections/math";
 import {
   isObjectNotArray,
   type ReadonlyRecord,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 import { CfHarnessEngine } from "./engine.ts";
 import type { HarnessFabricSession } from "./fabric-session.ts";
 import {

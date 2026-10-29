@@ -2,7 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
-import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
+import { getLoggerCountsBreakdown } from "@commonfabric/logger";
 
 import { connect, loopback } from "../v2/client.ts";
 import { Server } from "../v2/server.ts";

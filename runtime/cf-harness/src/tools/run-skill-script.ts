@@ -2,7 +2,7 @@ import { basename, isAbsolute, relative } from "@std/path";
 
 import type { JSONSchema } from "@commonfabric/api";
 import type { CfcLabelView, CfcSandboxResult } from "@commonfabric/runner/cfc";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import {
   normalizeCdpOrigin,

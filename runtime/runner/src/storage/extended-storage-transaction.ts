@@ -24,11 +24,11 @@ import {
   type SqliteOperation,
   toDocumentPath,
 } from "@commonfabric/memory/v2";
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectOrArray, isPlainObject } from "@commonfabric/utils/types";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
+import { getLogger } from "@commonfabric/logger";
+import { isObjectOrArray, isPlainObject } from "@commonfabric/js-values/types";
 
 import type { CellScope } from "../builder/types.ts";
 import {
@@ -3580,8 +3580,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       const message = error instanceof Error ? error.message : String(error);
       this.#commitPreparationCrash = message;
       // Reported UNCONDITIONALLY, not through this module's opt-in logger
-      // (disabled by default — utils/logger.ts early-returns): a crash here
-      // is a bug in prep itself, and before this catch existed the class
+      // (disabled by default — `@commonfabric/logger` early-returns): a crash
+      // here is a bug in prep itself, and before this catch existed the class
       // escaped as an unhandled rejection, the loudest signal in the system.
       // Converting it to a modeled refusal must not also convert it to
       // silence — the same labs#4772 shape `reportDroppedCfcRejectedWrite`

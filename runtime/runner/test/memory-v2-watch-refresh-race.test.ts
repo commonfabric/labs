@@ -7,7 +7,7 @@ import {
   type SessionSync,
   type SessionSyncUpsert,
 } from "@commonfabric/memory/v2";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { IStorageProvider } from "../src/storage/interface.ts";
 import {
   ScriptedSessionTransport,

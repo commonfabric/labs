@@ -6,7 +6,7 @@ import type { MemorySpace, Signer, URI } from "@commonfabric/memory/interface";
 import type { CellScope } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import type { Result, Unit } from "../src/storage/interface.ts";
 import type { SessionFactory } from "../src/storage/v2.ts";

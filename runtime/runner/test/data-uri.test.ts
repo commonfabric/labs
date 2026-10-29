@@ -30,7 +30,7 @@ import { JsonCodecEngine } from "@commonfabric/data-model/codec-json";
 import { FabricHash } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { fromBase64url } from "@commonfabric/utils/base64url";
+import { fromBase64url } from "@commonfabric/bytes/base64url";
 
 import { createCell } from "../src/cell.ts";
 import { dataUriFromValueWithResolvedLinks } from "../src/data-uri.ts";

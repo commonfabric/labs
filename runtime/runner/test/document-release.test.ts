@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
-import { defer } from "@commonfabric/utils/defer";
-import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
+import { defer } from "@commonfabric/async/defer";
+import { getLoggerCountsBreakdown } from "@commonfabric/logger";
 import { fromFileUrl } from "@std/path";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";

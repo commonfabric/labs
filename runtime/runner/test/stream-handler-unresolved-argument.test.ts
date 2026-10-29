@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
-import { getLoggerFlagsBreakdown } from "@commonfabric/utils/logger";
+import { getLoggerFlagsBreakdown } from "@commonfabric/logger";
 import { sendEvent } from "../src/cell.ts";
 import type { RuntimeTelemetryEvent } from "../src/telemetry.ts";
 import {

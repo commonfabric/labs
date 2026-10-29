@@ -25,7 +25,7 @@ import {
   readResultSchemaMeta,
   type Runtime,
 } from "@commonfabric/runner";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { accessRefused } from "./space-access.ts";
 
 /** The kind of space a standalone FabriChat room's own space declares. */

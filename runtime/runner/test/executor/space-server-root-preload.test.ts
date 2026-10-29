@@ -7,7 +7,7 @@ import {
   setServerExecutionConfig,
 } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 import { cellTx } from "../../src/cell.ts";
 import { SpaceServer } from "../../src/executor/space-server.ts";

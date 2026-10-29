@@ -24,7 +24,7 @@ import {
   findFirstContentLineIndex,
   PATTERN_COVERAGE_GLOBAL,
 } from "@commonfabric/ts-transformers/runtime-contract";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 import { namesInstances } from "../builder/instance-name.ts";
 import { isTrustedBuilderArtifact } from "../builder/pattern-metadata.ts";

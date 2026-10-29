@@ -19,7 +19,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import "@commonfabric/utils/equal-ignoring-symbols";
+import "@commonfabric/test-support/equal-ignoring-symbols";
 
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";

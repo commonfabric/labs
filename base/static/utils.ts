@@ -1,4 +1,4 @@
-import { isDeno } from "@commonfabric/utils/env";
+import { isDeno } from "@commonfabric/platform/env";
 import { StaticCache } from "./cache.ts";
 
 // What a test fetches when it needs an asset and does not care which one. Any

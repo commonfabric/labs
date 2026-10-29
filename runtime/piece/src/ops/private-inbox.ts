@@ -26,8 +26,8 @@ import {
   sendEvent,
   transactionFailureMessage,
 } from "@commonfabric/runner";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { getLogger } from "@commonfabric/logger";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { accessRefused } from "./space-access.ts";
 
 const logger = getLogger("piece.private-inbox");

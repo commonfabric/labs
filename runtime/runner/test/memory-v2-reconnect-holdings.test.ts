@@ -13,7 +13,7 @@ import { assert } from "@std/assert";
 import { expect } from "@std/expect";
 import { afterEach, describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
-import { defer, type Deferred } from "@commonfabric/utils/defer";
+import { defer, type Deferred } from "@commonfabric/async/defer";
 import type { URI } from "@commonfabric/memory/interface";
 import {
   decodeMemoryBoundary,

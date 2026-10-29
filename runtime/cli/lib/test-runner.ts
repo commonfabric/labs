@@ -88,7 +88,7 @@ import {
   resetTimingMeasureBudget,
   setTimingMeasuresEnabled,
   TIMING_MEASURE_PREFIX,
-} from "@commonfabric/utils/logger";
+} from "@commonfabric/logger";
 
 import { assertionOutcome } from "./assert-record.ts";
 import { ActionReadReport } from "./action-read-report.ts";

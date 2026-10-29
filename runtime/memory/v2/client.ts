@@ -2,13 +2,13 @@ import { isCanonicalEd25519DID } from "@commonfabric/identity";
 import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
 import { cloneIfNecessary, debugStr } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
-import { getLogger } from "@commonfabric/utils/logger";
-import { maxOf } from "@commonfabric/utils/math";
+import { getLogger } from "@commonfabric/logger";
+import { maxOf } from "@commonfabric/collections/math";
 import {
   isObjectNotArray,
   isPlainObject,
   unsafeObjectKeyIn,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 
 import {
   type ClientCommit,

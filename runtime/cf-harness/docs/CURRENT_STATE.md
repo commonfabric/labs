@@ -8,8 +8,7 @@ The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
 
 `cf-harness` is an experimental but product-integrated Common Fabric agent
-runtime. Loom is its first product adapter and Pattern Factory is its first
-multi-phase orchestration adapter.
+runtime. Loom is its first product adapter.
 
 ## Architecture
 
@@ -1247,14 +1246,6 @@ the parent with whatever crosses.
 Loom currently forces autonomous `cf-harness` runs to `observe` mode while
 trusted `runsc-cfc` observation metadata is not wired through every local tool
 path. This is a product-integration deviation, not the package default.
-
-### Pattern Factory
-
-Pattern Factory runs each supported phase as a separate batch invocation. The
-launcher owns phase ordering, validation, bounded critic/manual-test repair
-passes, and finalization; `cf-harness` owns the phase-local model/tool loop and
-evidence. All default Pattern Factory phase profiles currently use CFC `observe`
-mode.
 
 ## Known limitations
 

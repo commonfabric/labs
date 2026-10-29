@@ -2,7 +2,10 @@ import type {
   FabricLink as ApiFabricLink,
   FabricLinkConstructor as ApiFabricLinkConstructor,
 } from "@/api.ts";
-import { isPlainObject, isUnsafeObjectKey } from "@commonfabric/utils/types";
+import {
+  isPlainObject,
+  isUnsafeObjectKey,
+} from "@commonfabric/js-values/types";
 
 import type { FabricPlainObject, FabricValue } from "@/interface.ts";
 import {

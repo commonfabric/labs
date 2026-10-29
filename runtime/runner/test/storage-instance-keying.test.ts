@@ -34,7 +34,7 @@ import {
   type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { Runtime, type ServerRunInfo } from "../src/runtime.ts";
 import { stampWaveRunContext } from "../src/executor/wave.ts";
 import { entityKey, entityNameKey } from "../src/scheduler/keys.ts";

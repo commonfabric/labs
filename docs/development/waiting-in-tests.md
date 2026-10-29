@@ -365,7 +365,7 @@ stimulus, including one delivered to another browser sharing the same piece, use
 two-browser vote test uses it for all of its cross-browser waits.
 
 **Non-browser and off-page waits** have no page to observe. Resolve a `defer()`
-(from `base/utils/src/defer.ts`) inside a callback the test already registers
+(from `base/async/src/defer.ts`) inside a callback the test already registers
 — a cell `sink`/`subscribe`, a storage subscription's `next`, a scheduler
 `onError`, a telemetry listener, or a counter incremented inside a test-owned
 transport. A read of a cell that a sink already observes belongs here too: the
@@ -981,19 +981,18 @@ unrelated real timer. Building first also keeps that interval off the fake
 clock, where an hour of ticks would run it thirty-six thousand times for
 nothing.
 
-## The utils package: a fake clock the test imports
+## The async package: a fake clock the test imports
 
 The reconciler and runner harnesses above install their fake clock through a
 `--preload` that wraps every `Deno.test` in the package, so a test gets the
 frozen clock whether or not it asked for one. That default is deliberate there:
 it catches a wall-clock sleep written anywhere in a suite that is meant to wait
-on events instead. `base/utils` does not want that default. It is a grab-bag
-of utilities; most of its tests are not about time at all, and some — the
-logger's timing tests, for one — busy-spin against the real `performance.now`,
-which a faked clock would leave spinning forever. Only the `sleep` and `timeout`
-tests want controlled time.
+on events instead. `base/async` does not want that default. Some of its tests
+are not about time at all, and some — the `yieldToEventLoop` test, for one —
+busy-spin against the real `performance.now`, which a faked clock would leave
+spinning forever. Only the `sleep` and `timeout` tests want controlled time.
 
-So `base/utils/test/sleep.test.ts` takes the opposite approach: instead of a
+So `base/async/test/sleep.test.ts` takes the opposite approach: instead of a
 preload forcing a clock on the whole package, the two suites that want one import
 it and open it themselves. They use `FakeTime` from `@std/testing/time`, opened
 with a `using` declaration so it restores the clock when the block ends:

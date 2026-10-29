@@ -6,7 +6,7 @@ import type {
   LiftFunction,
   ReadonlyCell,
 } from "@commonfabric/api";
-import type { Same } from "@commonfabric/utils/types";
+import type { Same } from "@commonfabric/js-values/types";
 
 // `lift` is ambient in this package — the callable lives in the runner's
 // builder — so every probe below sits inside a function that is never called.

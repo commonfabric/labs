@@ -2,7 +2,10 @@ import type {
   CellSubscribeOptions,
   CfcLabelView,
 } from "@commonfabric/runtime-client";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import { css, html } from "lit";
 
 import { BaseElement } from "../../core/base-element.ts";

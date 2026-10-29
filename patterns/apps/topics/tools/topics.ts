@@ -16,7 +16,7 @@
 import { parseArgs } from "@std/cli/parse-args";
 import { dirname, fromFileUrl, join, resolve } from "@std/path";
 import { debugStr } from "@commonfabric/data-model";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import {
   FIELDS,

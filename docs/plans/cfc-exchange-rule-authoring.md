@@ -616,7 +616,7 @@ browser test.
 - [x] `deno task check`
 - [x] `deno task --cwd base/api test`
 - [ ] `deno task --cwd base/schema-generator test` — blocked before test
-  execution by the pre-existing `base/utils/src/arrays.ts:91`
+  execution by the pre-existing `base/js-values/src/arrays.ts:91`
   `string | undefined` type error. The focused CFC schema suite passes.
 - [x] `deno task --cwd base/ts-transformers test`
 - [x] `deno task --cwd runtime/runner test`

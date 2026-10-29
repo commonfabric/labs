@@ -2,7 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
-import { encode } from "@commonfabric/utils/encoding";
+import { encode } from "@commonfabric/text/utf8";
 
 import { argv, cf, checkStderr } from "./utils.ts";
 

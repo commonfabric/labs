@@ -14,7 +14,7 @@ import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema"
 import {
   isExternalSchemaRef,
 } from "@commonfabric/data-model-schema/schema-refs";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import { recomposeSchema } from "../src/schema-decompose.ts";

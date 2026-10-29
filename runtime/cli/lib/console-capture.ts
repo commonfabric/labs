@@ -18,7 +18,7 @@
  * carries, so that the deltas are the test's own.
  */
 
-import { setLoggerCountObserver } from "@commonfabric/utils/logger";
+import { setLoggerCountObserver } from "@commonfabric/logger";
 
 import { isPerfDiagnosticWarnKey } from "./perf-diagnostic-logs.ts";
 

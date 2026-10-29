@@ -10,7 +10,7 @@
 
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { debugStr } from "@commonfabric/data-model";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
 
 import { type Cell, cellRuntime } from "../cell.ts";
 import { resolveLink } from "../link-resolution.ts";

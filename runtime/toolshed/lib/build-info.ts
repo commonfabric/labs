@@ -14,8 +14,8 @@ import {
   type BuildInfo,
   normalize,
   readBuildInfoFrom,
-} from "@commonfabric/utils/build-info";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+} from "@commonfabric/platform/build-info";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import env from "@/env.ts";
 
 export { type BuildInfo, normalize, readBuildInfoFrom };

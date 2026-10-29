@@ -83,8 +83,8 @@ import { withStuckNet } from "@commonfabric/test-support/stuck-net";
 import {
   getLoggerCountsBreakdown,
   getTimingStatsBreakdown,
-} from "@commonfabric/utils/logger";
-import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
+} from "@commonfabric/logger";
+import { terminateWorker } from "@commonfabric/platform/worker-lifetime";
 import {
   type CommitRejection,
   type PieceAddress,

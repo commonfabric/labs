@@ -82,14 +82,14 @@ import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
 import { validatePresencePublication } from "@commonfabric/memory/v2/presence";
 import type { AppliedCommit } from "@commonfabric/memory/v2/engine";
-import { BoundedKeyMap, LRUCache } from "@commonfabric/utils/cache";
-import { getLogger } from "@commonfabric/utils/logger";
-import { maxOf, minOf } from "@commonfabric/utils/math";
+import { BoundedKeyMap, LRUCache } from "@commonfabric/collections/cache";
+import { getLogger } from "@commonfabric/logger";
+import { maxOf, minOf } from "@commonfabric/collections/math";
 import {
   isObjectNotArray,
   isObjectOrArray,
   type ReadonlyRecord,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 
 import {
   applyPatchToDocument,

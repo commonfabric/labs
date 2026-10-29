@@ -14,7 +14,7 @@ import {
   writeResultSchemaMeta,
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
+import { getLoggerCountsBreakdown } from "@commonfabric/logger";
 import { PiecesController } from "../../src/ops/pieces-controller.ts";
 import {
   type ShareIntake,

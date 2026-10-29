@@ -223,45 +223,6 @@ runs the child at its own spot. The record is how a deployed parent's
 positional child becomes a named instance's child without moving to a new
 document.
 
-A parent set up under a pattern that did not name an instance holds that
-instance's child at the positional spot. The first setup of the parent under a
-pattern that names the instance carries that child over
-(`planInstanceCarryOver` in `runtime/runner/src/runner.ts`) and records it in
-`instanceChildren`, so carrying a child over is a one-time transition for each
-deployed parent. The child carried over is the one at the
-`legacyPartialCause` that the pattern the parent last set up gives the same
-instance name, where that pattern is loaded and names the instance. The
-pattern last set up is the one the parent's setup record describes, or, with
-no record of the current version, the one its setup marker names: a start
-repair re-stamps the record and leaves the marker alone, and the children sit
-at the numbers of the build the record describes. That build was made by the
-runtime that set the parent up, and the cause is one this runtime's build of
-the same pattern gives, so the record is held against this runtime's build
-(`compareStoredSetupBuild`): an instance whose cell the record shows holding
-state at another number, or whose description the record's cells cannot be
-matched with, is not placed this way. With no record, this runtime's build
-places the instance.
-
-An instance that way does not place carries over the one child, among the
-positional spots the parent's manifest records, whose `patternIdentity` is the
-instance's own child pattern identity, leaving out a child that a positional
-node of the pattern still sets up at its own spot under that identity. That
-covers an instance the pattern last set up does not name, which is new or was
-positional there, an instance whose parent's pattern last set up does not load
-or who has none, and an instance the record numbers otherwise. It reads stored
-identities rather than any build's numbers, so a renumbering cannot mislead
-it. More than one such child, or one that two instances would each take, goes
-to neither. A child is carried over by one instance at most. A start loads the
-pattern last set up by its identity, and syncs the children at the positional
-causes it gives the instances it names and at every positional spot the
-parent's manifest records, before setup reads them.
-
-An instance that carries nothing over starts fresh, and the setup logs
-`instance-carry-over` naming it, and, where the record numbers it otherwise,
-saying so. Whatever a version without the name set up for it is left where it
-is. An instance the parent ran under a name the pattern no longer gives is
-reported the same way, and its child is left behind.
-
 A sub-pattern instance with a positional cause moves to another child's state
 when a cell is added ahead of it, since its child is the one minted from
 whatever number it now takes. A parent's setup refuses
@@ -309,6 +270,81 @@ or a child the parent's `instanceChildren` records for a named instance, since
 no child can be set up at any other, so a fresh parent's setup reads no child
 at all.
 
+A parent set up under a pattern that did not name an instance holds that
+instance's child at the positional spot. The first setup under a pattern that
+names it carries the child over (`planInstanceCarryOver`), taking the first of
+these that applies:
+
+1. Where the pattern the parent last set up is loaded and names the instance,
+   the child is the one at the `legacyPartialCause` that pattern gives the same
+   instance name. This is exact. The pattern last set up is the one the
+   parent's setup record describes, or, with no record of the current version,
+   the one `patternSetupIdentity` names: a start repair re-stamps the record
+   and leaves the marker alone, and the children sit at the numbers of the
+   build the record describes. That build was made by the runtime that set the
+   parent up, and the cause is one this runtime's build of the same pattern
+   gives, so the record is held against this runtime's build
+   (`compareStoredSetupBuild`). Where it disagrees, a number this runtime's
+   builds give may name another child: the numbers of a cell holding state
+   the record shows at another number, and of every cell of a description
+   whose cells the record cannot be matched with, are ones it cannot vouch
+   for. An instance whose cell is at such a number goes to step 3, as does one
+   step 2 would place at such a spot, and step 4 is skipped for every
+   instance of the parent. With no record, this runtime's build places the
+   instance.
+2. Where that pattern is loaded and does not name the instance, which is new or
+   positional there, the instance is matched by order. Counting the new
+   pattern's positional nodes and such instances of one pattern identity in the
+   order the builder numbered them, the i-th takes the child at the i-th
+   positional spot the previous pattern sets up under that identity. So an
+   instance bound to a `const` in place of an inline one takes the inline one's
+   child, whatever is inserted around it, and so does a new instance of the same
+   pattern added where an inline one was deleted. Reordering instances of one
+   pattern in the same update hands each the state of the one whose place it
+   takes. With no such spot, or no child set up there, the instance goes on to
+   the next step. An instance whose own source changed in the same update goes
+   on that way, since its pattern identity changed with it, and so does a new
+   instance of a pattern the previous pattern does not set up, which step 4
+   then hands the child at its own `legacyPartialCause` where no move shows, as
+   a parent with no instance names does.
+3. Without that pattern, or where step 2 places the instance at no set-up child,
+   it is the one set-up child, among the positional spots the parent's manifest
+   records, whose `patternIdentity` is the instance's own child pattern
+   identity, leaving out a child that a positional node of the pattern still
+   sets up at its own spot under that same identity. More than one such child,
+   or one that two instances would each take, goes on to the next step.
+4. Otherwise, it is the child at the instance's own `legacyPartialCause`, which
+   is where the child runs with no instance names, unless the parent shows the
+   children have moved spots: that child carries an instance name stamp, or it
+   runs a pattern identity other than the instance's own while another
+   sub-pattern node sets up the identity it runs, or a child of the instance's
+   own identity runs at another positional spot the manifest records.
+5. Otherwise nothing is carried over. The instance starts fresh, and the setup
+   logs `instance-carry-over` naming it, its positional cause and the child set
+   up there, if any, and whether another instance keeps that child.
+
+A child is carried over by one instance at most. A start's pre-sync loads the
+previous pattern by identity first, and syncs the children at the positional
+spots the parent's manifest records and at the positional causes the previous
+pattern gives the instances it names, so the steps above find them in a runtime
+that has not read them yet. The carried child's link is recorded by instance
+name in the parent's `instanceChildren` meta, and binding the instance reads it
+there on every later start, so carrying a child over is a one-time transition
+for each deployed parent.
+
+Step 4 is what a parent does with no instance names at all, short of a sign that
+its children moved, so carrying a child over is never worse than running
+positionally. Two corners are left. Where the previous pattern builds, the order
+match of step 2 is a guess for instances of one pattern reordered in the same
+update. Steps 3 and 4 decide an instance without the previous pattern, in a
+parent with no setup marker or whose stored source no longer compiles, and an
+instance step 2 places at no set-up child. There a child can take another's
+state where its parent's children moved in the same update and either their
+pattern identities all changed or more than one of them shares the instance's
+identity, as it does with no instance names. Where its schema refuses a stored
+slot, setup drops the slot and logs `setup-stored-slot-dropped` rather than
+refusing.
+
 The refusal comes before anything the setup stages commits, so a refused
 update changes none of the piece's state. A live update the guard refuses
 leaves the previous pattern running. The piece's pattern pointer still names
@@ -321,9 +357,12 @@ What this leaves open:
 - Where a child's own source changed in the same update that moved it, its
   identity changed with it, so the positional rules have nothing to judge by
   and let the setup through. A child can then take another's state.
-- When a positional root moves to a number nothing held, its children are
-  minted afresh and the old ones are orphaned with no refusal, since nothing
-  sets up over them.
+- Anonymous roots other than named instances stay positional: an instance not
+  bound to a `const`, every instance in a runtime with naming off, a `.map()`
+  output and the element children under it.
+  When such a root moves to a number nothing held, its children are minted
+  afresh and the old ones are orphaned with no refusal, since nothing sets up
+  over them.
 - A parent set up as part of an update of an enclosing pattern, rather than
   pointed at its new pattern by an updater, is not judged, so its own
   positional children can move onto each other's state.
@@ -331,6 +370,19 @@ What this leaves open:
   a newer version of its own, so it can be refused where the new pattern sets
   up a stored child's pattern at another positional spot. Pointing it back at
   the pattern it ran before lets it start again.
+- A runtime change to how a pattern lowers, which adds or removes an
+  anonymous root, renumbers positional roots with no change to the pattern's
+  source. A named instance is immune to that; carrying its child over in step
+  1 relies on the previous pattern compiling under today's runtime to the
+  numbering it was deployed with.
+- A runtime with naming off, or one that predates instance names, binds a
+  parent's children positionally, even where a naming runtime carried them
+  over to their names: reopening the parent, it runs whatever instance now
+  takes a carried child's positional number on that child's document, and
+  updating the parent, it shows the carried child's state under that instance,
+  with no refusal in either case (`runtime/runner/test/instance-naming-modes.test.ts`).
+  The `instanceNames` flag stays off until such a runtime is kept away from a
+  space whose data a naming runtime wrote.
 
 ### Transaction provenance
 
@@ -644,7 +696,8 @@ partial-cause matching materializes the new cell and drops the stale entry
 naturally.
 
 Internal-cell identity is already refactor-fragile — anonymous cells re-mint
-on reorder via the `$generated` counter, named cells on rename — so kind
+when a cell is added ahead of them in the builder's walk, named cells and
+named sub-pattern instances on rename — so kind
 flips add a trigger to an existing hazard class (durable cross-piece links
 pointing at an orphaned entity), not a new class. The flipped classifier
 polarity widens the set of cells that flip when a pattern edit adds or

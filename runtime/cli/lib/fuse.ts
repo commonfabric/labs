@@ -8,7 +8,7 @@ import {
   resolve,
   SEPARATOR,
 } from "@std/path";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { CF_PERMISSION_FLAGS } from "./cf-permissions.ts";
 import { cliName } from "./cli-name.ts";
 import {

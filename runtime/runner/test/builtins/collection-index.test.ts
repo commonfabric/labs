@@ -1,6 +1,6 @@
 import { cloneWithoutValueAtPath } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 

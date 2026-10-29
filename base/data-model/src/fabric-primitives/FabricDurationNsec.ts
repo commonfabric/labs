@@ -5,7 +5,7 @@ import type {
 import {
   bigintFromUnpaddedBase64url,
   bigintToUnpaddedBase64url,
-} from "@commonfabric/utils/bigint";
+} from "@commonfabric/bytes/bigint";
 
 import type { FabricValue } from "@/interface.ts";
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";

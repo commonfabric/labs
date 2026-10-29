@@ -96,9 +96,9 @@ import {
   viewPieceSchema,
 } from "@commonfabric/runner/schemas";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
-import { ensureNotRenderThread } from "@commonfabric/utils/env";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { ensureNotRenderThread } from "@commonfabric/platform/env";
+import { getLogger } from "@commonfabric/logger";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { prepareSourceClosureVerification } from "../../../runner/src/compilation-cache/cell-cache.ts";
 import { getResultCellWithSourceSchema } from "../../../runner/src/piece-helpers.ts";

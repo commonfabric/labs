@@ -2,7 +2,7 @@ import {
   GOOGLE_SEARCH_NATIVE_MODEL_TOOL,
   isLLMNativeModelToolId,
 } from "@commonfabric/llm/types";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { HarnessNativeModelToolId } from "../contracts/native-model-tool.ts";
 import type {
   HarnessAssistantTranscriptMessage,

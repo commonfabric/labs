@@ -7,7 +7,7 @@ import { Identity } from "@commonfabric/identity";
 import { type Cell, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { STUCK_NET_MS } from "@commonfabric/test-support/stuck-net";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 
 import { waitForCellValue } from "../wait-for-cell-value.ts";
 

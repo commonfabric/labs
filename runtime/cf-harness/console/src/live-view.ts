@@ -20,7 +20,7 @@
  */
 
 import { html, LitElement, nothing, svg, type TemplateResult } from "lit";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   type ConsoleChatEventEnvelope,
   type ConsoleRunDetail,

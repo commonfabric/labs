@@ -19,8 +19,8 @@ import {
   type Runtime,
   sendEvent,
 } from "@commonfabric/runner";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { getLogger } from "@commonfabric/logger";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { inboxPieceLinkSchema } from "./private-inbox.ts";
 import {
   CHAT_ROOM_SPACE_KIND,

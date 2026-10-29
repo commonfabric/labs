@@ -1,5 +1,5 @@
-import { isBrowser } from "@commonfabric/utils/env";
-import { yieldToEventLoop } from "@commonfabric/utils/sleep";
+import { isBrowser } from "@commonfabric/platform/env";
+import { yieldToEventLoop } from "@commonfabric/async/sleep";
 
 /**
  * Whether cold pattern compilation should yield real macrotask turns between
