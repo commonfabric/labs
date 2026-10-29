@@ -7,6 +7,7 @@ import {
   action,
   type Cell,
   computed,
+  type Default,
   pattern,
   type PerSession,
   principalOf,
@@ -263,9 +264,13 @@ export interface FabriChatMessageRowInput {
 
   /**
    * What every row offers the reader, by the message's key, as the room
-   * derives it for the session. The row reads its own message's.
+   * derives it for the session. The row reads its own message's. It defaults
+   * to none, which a row whose argument was stored before it was given one
+   * reads, and then offers no control.
    */
-  rowFacts: ReadonlyCell<Record<string, RowFacts>>;
+  rowFacts: ReadonlyCell<
+    Record<string, RowFacts> | Default<Record<string, never>>
+  >;
 
   /**
    * Whether the room lets an OWNER of its space obliterate any message;
