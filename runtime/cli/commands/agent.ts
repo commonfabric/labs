@@ -203,6 +203,34 @@ function originOf(flag: string, value: string): string {
 }
 
 /**
+ * Refuses `--commands-url` and `--commands-actor` given apart, or an
+ * endpoint URL no command request could be sent to.
+ *
+ * @throws ValidationError for either.
+ */
+function checkCommandsFlags(
+  options: Pick<AgentRunnerCommandOptions, "commandsUrl" | "commandsActor">,
+): void {
+  if (
+    (options.commandsUrl === undefined) !==
+      (options.commandsActor === undefined)
+  ) {
+    throw new ValidationError(
+      `"--commands-url" and "--commands-actor" go together.`,
+      { exitCode: 1 },
+    );
+  }
+  const problem = options.commandsUrl === undefined
+    ? undefined
+    : commandEndpointUrlProblem(options.commandsUrl);
+  if (problem !== undefined) {
+    throw new ValidationError(`"--commands-url": ${problem}`, {
+      exitCode: 1,
+    });
+  }
+}
+
+/**
  * Resolves the command's options to a configuration.
  *
  * @throws ValidationError for a missing identity or API URL, a URL that does
@@ -243,23 +271,7 @@ export async function resolveAgentRunnerConfig(
   const runnerHost = options.localApiUrl !== undefined
     ? originOf("--local-api-url", options.localApiUrl)
     : homeHost;
-  if (
-    (options.commandsUrl === undefined) !==
-      (options.commandsActor === undefined)
-  ) {
-    throw new ValidationError(
-      `"--commands-url" and "--commands-actor" go together.`,
-      { exitCode: 1 },
-    );
-  }
-  const endpointProblem = options.commandsUrl === undefined
-    ? undefined
-    : commandEndpointUrlProblem(options.commandsUrl);
-  if (endpointProblem !== undefined) {
-    throw new ValidationError(`"--commands-url": ${endpointProblem}`, {
-      exitCode: 1,
-    });
-  }
+  checkCommandsFlags(options);
   const identityPath = absPath(options.identity);
   const identity = await deps.loadIdentity(identityPath);
   return {
@@ -546,6 +558,9 @@ export async function agentRunnerAction(
   options: AgentRunnerCommandOptions,
   deps: AgentRunnerCommandDeps = defaultAgentRunnerCommandDeps,
 ): Promise<void> {
+  // A malformed command endpoint is the operator's argument error, refused
+  // before either lane starts, as a refused sandbox selection is below.
+  checkCommandsFlags(options);
   const localConfig = resolveLocalJobsConfig(options, deps);
   // Every job of either lane goes to the harness's sandbox. A runtime
   // selection the harness would refuse each of them for refuses the runner
