@@ -74,12 +74,12 @@ async function patternTestFiles(root: string): Promise<string[]> {
   return found.sort();
 }
 
-/** The integration suites over `packages/patterns/integration/`. */
+/** The integration suites over `patterns/integration/`. */
 async function patternIntegrationSuites(
   root: string,
   defaultEnabled: boolean,
 ): Promise<Suite[]> {
-  const packageDir = "packages/patterns";
+  const packageDir = "patterns";
   const files = await filesIn(root, `${packageDir}/integration`);
   const flags = [
     "-A",
@@ -153,16 +153,16 @@ async function patternIntegrationSuites(
       // Catalog conflict and receipt behavior is exercised by the compiled
       // Home integration, including cases the authored test cannot observe.
       const catalogChanged = reachedByChange([
-        `${packageDir}/system/home.tsx`,
-        `${packageDir}/system/shared-space-catalog.ts`,
+        `${packageDir}/system/home/home.tsx`,
+        `${packageDir}/system/shared-space/shared-space-catalog.ts`,
       ], changed);
       // Where the Topics board stores its mention pivot, and so whether a
       // session that never runs the board reads it, is decided by the board's
       // source; a topic's source computes the backlinks read out of it. The
       // pivot integration reads both by path.
       const boardChanged = reachedByChange([
-        `${packageDir}/topics/main.tsx`,
-        `${packageDir}/topics/topic.tsx`,
+        `${packageDir}/apps/topics/main.tsx`,
+        `${packageDir}/apps/topics/topic.tsx`,
       ], changed);
       // The measurement fixtures reach authored lifts by name and attribute
       // measurements to their source locations. Renaming or removing a lift
@@ -235,7 +235,7 @@ function coverageEnv(
  * not ask for it, and nothing finer.
  */
 function patternReloadSuite(): Suite {
-  const unit = "packages/patterns/integration/reload";
+  const unit = "patterns/integration/reload";
   return {
     id: "pattern-reload",
     recordSurfaces: [{ kind: "integration", scope: "patterns" }],
@@ -273,7 +273,7 @@ function patternReloadSuite(): Suite {
           path: path.join(context.outputDir, "patterns-reload.xml"),
           kind: "integration",
           scope: "patterns",
-          filePrefix: "packages/patterns",
+          filePrefix: "patterns",
         }],
       }]);
     },
@@ -331,7 +331,7 @@ async function patternUnitSuite(root: string): Promise<Suite> {
 
 /** The generated-pattern integration tests. */
 async function generatedPatternSuite(root: string): Promise<Suite> {
-  const packageDir = "packages/generated-patterns";
+  const packageDir = "runtime/generated-patterns";
   return fileSuite({
     id: "generated-patterns",
     needs: ["deno", "compile-cache"],

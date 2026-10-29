@@ -39,16 +39,16 @@ import {
   unusedGrammarDirectories,
 } from "./build-binaries.ts";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
-import { type Config, ResolvedConfig } from "../packages/felt/interface.ts";
+import { type Config, ResolvedConfig } from "../base/felt/interface.ts";
 import {
   compileFingerprintGlobs,
   computeCompilerVersion,
   renderVersionModule,
   VERSION_NAMESPACE,
-} from "../packages/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
-import { SOURCE_COMPILE_CACHE_RUNTIME_VERSION } from "../packages/runner/src/compilation-cache/compile-cache-version.ts";
-import { treeSitterGrammars } from "../packages/cli/lib/view/languages/treesitter/grammars.ts";
-import { shellGrammar } from "../packages/cli/lib/view/languages/shell/shell.ts";
+} from "../runtime/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
+import { SOURCE_COMPILE_CACHE_RUNTIME_VERSION } from "../runtime/runner/src/compilation-cache/compile-cache-version.ts";
+import { treeSitterGrammars } from "../runtime/cli/lib/view/languages/treesitter/grammars.ts";
+import { shellGrammar } from "../runtime/cli/lib/view/languages/shell/shell.ts";
 
 const FAKE_MANIFEST = `{
   // Frontend-only types, stripped for the shipped binary and restored on revert.
@@ -156,11 +156,11 @@ async function makeFakeRepo(): Promise<string> {
   await writeFile(`${root}/deno.jsonc`, FAKE_MANIFEST);
   await writeFile(`${root}/deno.lock`, '{"version":"4"}\n');
   await writeFile(
-    `${root}/packages/runner/src/compilation-cache/compile-cache-version.ts`,
+    `${root}/runtime/runner/src/compilation-cache/compile-cache-version.ts`,
     SOURCE_VERSION_MODULE,
   );
-  await Deno.mkdir(`${root}/packages/toolshed`, { recursive: true });
-  await Deno.mkdir(`${root}/packages/cli`, { recursive: true });
+  await Deno.mkdir(`${root}/runtime/toolshed`, { recursive: true });
+  await Deno.mkdir(`${root}/runtime/cli`, { recursive: true });
   for (
     const tree of new BuildConfig({ root, toolshedFlags: [] }).patternPaths()
   ) {
@@ -179,65 +179,65 @@ Deno.test("BuildConfig resolves workspace paths against the root", async () => {
     assertEquals(config.cliOnly, true);
     assertEquals(config.workspaceManifestPath(), join(root, "deno.jsonc"));
     assertEquals(config.workspaceLockPath(), join(root, "deno.lock"));
-    assertEquals(config.shellProjectPath(), join(root, "packages", "shell"));
+    assertEquals(config.shellProjectPath(), join(root, "runtime", "shell"));
     assertEquals(
       config.shellOutPath(),
-      join(root, "packages", "shell", "dist"),
+      join(root, "runtime", "shell", "dist"),
     );
     assertEquals(
       config.toolshedProjectPath(),
-      join(root, "packages", "toolshed"),
+      join(root, "runtime", "toolshed"),
     );
     assertEquals(
       config.toolshedShellFrontendPath(),
-      join(root, "packages", "toolshed", "shell-frontend"),
+      join(root, "runtime", "toolshed", "shell-frontend"),
     );
     assertEquals(
       config.toolshedShellFrontendPathDev(),
-      join(root, "packages", "toolshed", "shell-frontend-dev"),
+      join(root, "runtime", "toolshed", "shell-frontend-dev"),
     );
     assertEquals(
       config.toolshedEntryPath(),
-      join(root, "packages", "toolshed", "index.ts"),
+      join(root, "runtime", "toolshed", "index.ts"),
     );
     assertEquals(
       config.toolshedEnvPath(),
-      join(root, "packages", "toolshed", "COMPILED"),
+      join(root, "runtime", "toolshed", "COMPILED"),
     );
     assertEquals(
       config.cliEnvPath(),
-      join(root, "packages", "cli", "COMPILED"),
+      join(root, "runtime", "cli", "COMPILED"),
     );
     assertEquals(
       config.staticAssetsPath(),
-      join(root, "packages", "static", "assets"),
+      join(root, "base", "static", "assets"),
     );
     assertEquals(config.patternPaths(), [
-      join(root, "packages", "patterns"),
-      join(root, "packages", "connectors", "agents", "debug-view"),
-      join(root, "packages", "connectors", "github", "activity-view"),
+      join(root, "patterns"),
+      join(root, "connectors", "agents", "debug-view"),
+      join(root, "connectors", "github", "activity-view"),
     ]);
     assertEquals(
       config.staticTypesPath(),
-      join(root, "packages", "static", "assets", "types"),
+      join(root, "base", "static", "assets", "types"),
     );
     assertEquals(config.docsCommonPath(), join(root, "docs", "common"));
     assertEquals(
       config.cliEntryPath(),
-      join(root, "packages", "cli", "mod.ts"),
+      join(root, "runtime", "cli", "mod.ts"),
     );
     assertEquals(
       config.cliMultiUserTestWorkerPath(),
-      join(root, "packages", "cli", "lib", "multi-user-test-worker.ts"),
+      join(root, "runtime", "cli", "lib", "multi-user-test-worker.ts"),
     );
-    assertEquals(config.fusePackagePath(), join(root, "packages", "fuse"));
+    assertEquals(config.fusePackagePath(), join(root, "runtime", "fuse"));
     assertEquals(config.distDir(), join(root, "dist"));
     assertEquals(config.distPath("cf"), join(root, "dist", "cf"));
     assertEquals(
       config.compileCacheVersionPath(),
       join(
         root,
-        "packages",
+        "runtime",
         "runner",
         "src",
         "compilation-cache",
@@ -255,13 +255,13 @@ Deno.test("the toolshed leaves out the pattern files it never serves", async () 
     const config = new BuildConfig({ root, toolshedFlags: [] });
     const [patterns, connector] = config.patternPaths();
     const served = [
-      join(patterns, "counter", "counter.tsx"),
-      join(patterns, "counter", "counter.test.tsx"),
+      join(patterns, "examples", "counter", "counter.tsx"),
+      join(patterns, "examples", "counter", "counter.test.tsx"),
       // These four tests are attached by Loom's shared-loom-runtime.ts publicationRoot().
-      join(patterns, "loom", "main.test.tsx"),
-      join(patterns, "loom", "presentation-refusals.test.tsx"),
-      join(patterns, "loom", "multi-user.test.tsx"),
-      join(patterns, "loom", "url-view.test.tsx"),
+      join(patterns, "system", "loom", "main.test.tsx"),
+      join(patterns, "system", "loom", "presentation-refusals.test.tsx"),
+      join(patterns, "system", "loom", "multi-user.test.tsx"),
+      join(patterns, "system", "loom", "url-view.test.tsx"),
       join(patterns, "iframe-game", "main.tsx"),
       join(patterns, "iframe-game", "contract.ts"),
       join(patterns, "notebook", "guest.ts"),
@@ -274,7 +274,7 @@ Deno.test("the toolshed leaves out the pattern files it never serves", async () 
       join(patterns, "iframe-game", "editor", "guest.tsx"),
       join(patterns, "iframe-game", "interaction.browser.test.ts"),
       join(patterns, "integration", "helpers.ts"),
-      join(patterns, "topics", "tools", "topics.ts"),
+      join(patterns, "apps", "topics", "tools", "topics.ts"),
       join(patterns, "baselines", "counter", "counter.tsx", "a.json"),
       join(connector, "logic.test.ts"),
     ];
@@ -540,7 +540,7 @@ Deno.test("each binary's modules and assets stay within BINARY_SOURCES", async (
     buildBinariesScript,
     config.toolshedEntryPath(),
     config.cliEntryPath(),
-    join(shell, "..", "felt", "cli.ts"),
+    join(shell, "..", "..", "base", "felt", "cli.ts"),
     shellConfigPath,
     ...shellConfig.entries.map((entry) => entry.in),
   ];
@@ -566,7 +566,9 @@ Deno.test("each binary's modules and assets stay within BINARY_SOURCES", async (
   }
   assertEquals([...outside].sort(), []);
   assert(
-    roots.includes(join(config.patternPaths()[0], "counter", "counter.tsx")),
+    roots.includes(
+      join(config.patternPaths()[0], "examples", "counter", "counter.tsx"),
+    ),
   );
 });
 
@@ -613,7 +615,7 @@ async function loadShellConfig(
       "--allow-read",
       "--allow-env",
       `--deny-env=${denied.join(",")}`,
-      join("packages", "shell", "felt.config.ts"),
+      join("runtime", "shell", "felt.config.ts"),
     ],
     env: { NO_COLOR: "1" },
   });
@@ -860,7 +862,7 @@ Deno.test("BuildConfig captures the checked-in version module and its path", asy
       config.compileCacheVersionPath(),
       join(
         root,
-        "packages",
+        "runtime",
         "runner",
         "src",
         "compilation-cache",
@@ -876,8 +878,8 @@ Deno.test("prepareWorkspace writes the fingerprint; revertWorkspace restores the
   const root = await makeFakeRepo();
   const config = new BuildConfig({ root, toolshedFlags: [], cliOnly: true });
   const versionPath = config.compileCacheVersionPath();
-  const compiledPath = join(root, "packages", "toolshed", "COMPILED");
-  const cliCompiledPath = join(root, "packages", "cli", "COMPILED");
+  const compiledPath = join(root, "runtime", "toolshed", "COMPILED");
+  const cliCompiledPath = join(root, "runtime", "cli", "COMPILED");
   const sourceModule = await Deno.readTextFile(versionPath);
   const computedModule = await renderComputedVersionModule(root);
   try {
@@ -951,7 +953,7 @@ Deno.test("signal cleanup restores workspace and exits once", async () => {
   try {
     const config = new BuildConfig({ root, toolshedFlags: [], cliOnly: true });
     const versionPath = config.compileCacheVersionPath();
-    const compiledPath = join(root, "packages", "toolshed", "COMPILED");
+    const compiledPath = join(root, "runtime", "toolshed", "COMPILED");
     await prepareWorkspace(config, await computeCompilerVersion(root));
     assertNotEquals(
       await Deno.readTextFile(versionPath),
@@ -1054,7 +1056,7 @@ Deno.test("each build step throws naming its output when its command fails", asy
   // command the steps run fails, and none of them may pass that over.
   const root = await makeFakeRepo();
   try {
-    await Deno.mkdir(`${root}/packages/shell`, { recursive: true });
+    await Deno.mkdir(`${root}/runtime/shell`, { recursive: true });
     const config = new BuildConfig({ root, toolshedFlags: [] });
     const {
       buildShell,

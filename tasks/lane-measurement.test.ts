@@ -208,12 +208,12 @@ describe("lane-measurement", () => {
         const name = hooksMeasurementName(
           "pattern-integration",
           measured,
-          "packages/patterns/integration/counter.test.ts",
+          "patterns/integration/counter.test.ts",
         );
         expect(hooksMeasurement(name)).toEqual({
           suite: "pattern-integration",
           measured,
-          unit: "packages/patterns/integration/counter.test.ts",
+          unit: "patterns/integration/counter.test.ts",
         });
       }
     });

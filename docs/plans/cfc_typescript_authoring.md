@@ -32,9 +32,9 @@ transition rules at commit time.
 
 In scope:
 
-- `packages/api`
-- `packages/ts-transformers`
-- `packages/schema-generator`
+- `base/api`
+- `base/ts-transformers`
+- `base/schema-generator`
 - builder and UI runtime helper parity needed for the closed helper set
 - acceptance tests that prove authoring parity across inferred and explicit
   schema paths
@@ -191,8 +191,8 @@ DOM but do not produce schema hints.
 
 ### 1. Lock The Contract Surface
 
-- [x] Freeze the canonical alias set across `packages/api`,
-      `packages/ts-transformers`, and `packages/schema-generator`
+- [x] Freeze the canonical alias set across `base/api`,
+      `base/ts-transformers`, and `base/schema-generator`
 - [x] Define the supported metadata keys for the TypeScript surface:
       `confidentiality`, `integrity`, `addIntegrity`, `requiredIntegrity`,
       `maxConfidentiality`, `writeAuthorizedBy`, `exactCopyOf`, `projection`,
@@ -208,8 +208,8 @@ DOM but do not produce schema hints.
 
 ### 2. Add The Public API Surface
 
-- [x] Export `Cfc<T, Meta>` from `packages/api`
-- [x] Export the canonical alias set from `packages/api`
+- [x] Export `Cfc<T, Meta>` from `base/api`
+- [x] Export the canonical alias set from `base/api`
 - [x] Export `OpaqueInput<T, Spec>` and keep its base schema shape equal to `T`
 - [x] Keep friendly sugar as aliases over the canonical surface rather than
       separate lowering paths

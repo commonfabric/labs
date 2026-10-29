@@ -224,7 +224,7 @@ child scans the list on load and again on any change to it.
 | a whole value handed to an imported helper inside a `computed()` when the helper uses a few of its fields               | Project the fields before the call, so the emitted schema declares only those                                                                                                                                                                                                                                     |
 
 `skills/pattern-dev/SKILL.md` states the reasons, and
-`packages/patterns/fabrichat/room.tsx` with its `message-row.tsx` is the worked
+`patterns/system/fabrichat/room.tsx` with its `message-row.tsx` is the worked
 case.
 
 ### Visual Review Reminder

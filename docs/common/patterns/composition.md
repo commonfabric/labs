@@ -85,7 +85,7 @@ can make the runtime traverse more linked data. An extra required field whose
 value is absent or incompatible and whose schema does not accept `undefined`
 invalidates the containing object; if that object is an array element, one
 invalid element voids the entire array read. See
-`packages/runner/test/traverse-required-links.test.ts`.
+`runtime/runner/test/traverse-required-links.test.ts`.
 
 The consumer normally owns this structural type:
 
@@ -132,7 +132,7 @@ reuse its full input or output schema. Keep that model limited to the role's
 semantic core. A consumer with extra needs should usually extend its own local
 projection instead of widening the shared model for everyone. For a concrete
 example, see `MentionablePiece` in
-`packages/patterns/system/backlinks-index.tsx`.
+`patterns/system/backlinks-index/backlinks-index.tsx`.
 
 Reusing a shared type is still appropriate when it is itself the intended
 protocol: for example, a stream event, an enum, or a cohesive domain model

@@ -81,7 +81,7 @@ has been explicitly verified as problematic.
 | `$checked={item}` | `$checked={item.done}` |
 | wrong event name | Use `oncf-send`, `oncf-input`, or `oncf-change` |
 | cell-bound control (for example `$value={status}`) with `oncf-change` writing `status.set(...)` | Let the binding own the control value; use the handler only for dependent state or side effects |
-| any `$`-binding (`$value`/`$checked`/`$profile`/…) inside a `computed(() => …)` subtree → throws *"Bidirectionally bound property … is not reactive"* and **blanks the whole render** | Hoist the `$`-binding to a **static** `[UI]` position; switch views with `ifElse(cond, staticA, staticB)` as a child of a static wrapper, or lift behind a `pattern<{…}>` sub-pattern. Repro: `packages/patterns/scope-bug-computed-vnode-blank/` |
+| any `$`-binding (`$value`/`$checked`/`$profile`/…) inside a `computed(() => …)` subtree → throws *"Bidirectionally bound property … is not reactive"* and **blanks the whole render** | Hoist the `$`-binding to a **static** `[UI]` position; switch views with `ifElse(cond, staticA, staticB)` as a child of a static wrapper, or lift behind a `pattern<{…}>` sub-pattern. Repro: `patterns/dev/scope-bug-computed-vnode-blank/` |
 
 ### 6. Custom Component Props and Styling Affordances
 
@@ -289,7 +289,7 @@ unnecessary live-cell and stream bindings, and let patterns migrate
 independently. An extra required field whose value is unavailable or
 incompatible invalidates its object; when that object is an array element, one
 invalid element voids the entire array read. See
-`packages/runner/test/traverse-required-links.test.ts` and
+`runtime/runner/test/traverse-required-links.test.ts` and
 `docs/common/patterns/composition.md#keep-external-data-contracts-narrow`.
 
 Do not flag a genuinely shared protocol (for example, a stream event or enum),

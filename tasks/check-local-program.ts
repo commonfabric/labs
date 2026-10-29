@@ -41,23 +41,23 @@ const RESOLVER = "FileSystemProgramResolver";
  */
 export const ALLOWLIST = new Map<string, string>([
   [
-    "packages/runner/src/harness/local-program.deno.ts",
+    "runtime/runner/src/harness/local-program.deno.ts",
     "the operation itself",
   ],
   [
-    "packages/js-compiler/program.ts",
+    "base/js-compiler/program.ts",
     "declares the resolver",
   ],
   [
-    "packages/js-compiler/mod.ts",
+    "base/js-compiler/mod.ts",
     "re-exports the resolver its own package declares",
   ],
   [
-    "packages/js-compiler/test/program.test.ts",
+    "base/js-compiler/test/program.test.ts",
     "tests the resolver's own containment rules",
   ],
   [
-    "packages/cli/commands/deps.ts",
+    "runtime/cli/commands/deps.ts",
     "walks imports to rewrite pins; compiles nothing, so has no data files",
   ],
 ]);

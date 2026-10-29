@@ -1,8 +1,8 @@
 # CFC runner future work — prioritized implementation gaps
 
 _Started 2026-07-01. Audit of the normative CFC prose spec (18 chapters + Lean
-formalization) against the implementation in `packages/runner` (primarily
-`packages/runner/src/cfc/`). Companion to
+formalization) against the implementation in `runtime/runner` (primarily
+`runtime/runner/src/cfc/`). Companion to
 [`cfc-spec-changes.md`](./cfc-spec-changes.md) (which tracks edits the **spec**
 needs); this file tracks work the **runner** needs._
 
@@ -11,7 +11,7 @@ needs); this file tracks work the **runner** needs._
 > `cfc/`. References below of the form `§3.1.8`, `04-label-representation.md`,
 > `notes/…`, or `proposals/…` are paths within that repo — e.g.
 > [`cfc/proposals/author-disjunctive-confidentiality.md`](https://github.com/commonfabric/specs/blob/main/cfc/proposals/author-disjunctive-confidentiality.md).
-> References of the form `packages/…` and `docs/specs/…` are in this repo.
+> References of the form `runtime/…` and `docs/specs/…` are in this repo.
 
 This list is ordered **big chunks first**: close the load-bearing structural
 gaps, then fill the small holes. Dependency order matters — several small holes
@@ -25,7 +25,7 @@ statement of what this runtime implements against the specification and in
 which direction each known gap errs; read it before this list, which is the
 backlog behind it. The theme that organizes the backlog: the runtime holds a
 label as `IFCLabel` in
-[`label-view-core.ts`](../../packages/runner/src/cfc/label-view-core.ts), joins by
+[`label-view-core.ts`](../../runtime/runner/src/cfc/label-view-core.ts), joins by
 union and matches against static allow-lists, where the spec's algebra is CNF
 clauses, exchange-rule evaluation, pattern matching, trust closure and
 observation-class refinement. Most of the distance is fail-closed (the runtime
@@ -75,7 +75,7 @@ Change `IFCLabel.confidentiality` from a flat `unknown[]` to `Clause[]`, where
 `Clause = Atom | Atom[]`. Generalize join to clause-granular concat+dedup (never
 merge alternatives), and generalize the ceiling-fit check
 (`cfcObservationFitsCeiling`/`atomsOutsideCeiling`,
-[`observation.ts`](../../packages/runner/src/cfc/observation.ts)) from flat subset to
+[`observation.ts`](../../runtime/runner/src/cfc/observation.ts)) from flat subset to
 **clause subsumption** (`∀ clause l ∈ L. ∃ clause c ∈ ceiling. alts(c) ⊆ alts(l)`),
 with a flat/flat fast-path that is byte-for-byte today's check. Then the
 **flat-assumption sweep**: every `for (const atom of confidentiality)` consumer
@@ -122,7 +122,7 @@ Decomposes into (dependency order — 1/2/3 can parallelize once A lands):
   unification, `substituteVars`/`instantiate`, multi-binding (§4.4.5). Register the
   ~10 missing atom families (`Space`, `HasRole`, `User`/principal, `Policy`/
   `Context`, `Concept`, `Role`, `CaveatScreened`, `BoundaryContext`, `Expires`) in
-  [`packages/api/cfc.ts`](../../packages/api/cfc.ts) + spec ch.15. Biggest self-
+  [`base/api/cfc.ts`](../../base/api/cfc.ts) + spec ch.15. Biggest self-
   contained algorithmic piece. **This is the "rich matcher" that also fixes the
   requiredIntegrity soundness edge** — see below.
 - **B2 — Policy-record store + content-addressed lookup.** `PolicyRecord`/
@@ -136,14 +136,14 @@ Decomposes into (dependency order — 1/2/3 can parallelize once A lands):
   + empty-postcondition drop) + `evaluateExchangeRules` fixpoint with bounded fuel
   and **hard fail-closed on exhaustion** (§4.4.5); then post-rewrite `canAccess`.
 - **B5 — Boundary hook.** Wire the evaluator into `prepareBoundaryCommit`
-  ([`prepare.ts:3095`](../../packages/runner/src/cfc/prepare.ts)) and the sink/
+  ([`prepare.ts:3095`](../../runtime/runner/src/cfc/prepare.ts)) and the sink/
   observation path; mint `BoundaryContext` atoms (sink, sinkClass, fieldRole,
   purpose, intentId); replace the flat `deepEqual` ceiling check with
   evaluate-to-fixpoint → `canAccess`.
 - **B6 — Prompt-caveat tier profile as data.** Express unscreened→ingress→
   value-screened tier upgrades and material-risk/influence discharge as ordinary
   exchange rules (§10.1, §8.10.5), then **retire the hard-coded special-case**: today
-  [`schema-sanitization.ts`](../../packages/runner/src/cfc/schema-sanitization.ts)
+  [`schema-sanitization.ts`](../../runtime/runner/src/cfc/schema-sanitization.ts)
   bulk-strips the four tier kind-strings identically (no transition, no evidence
   binding, no clause locality) — exactly the "prompt-specific runtime branch"
   §10.1 says MUST be replaced by exchange rules.
@@ -169,7 +169,7 @@ the §4.6.3 observation-class model (`shape` / `value` / `enumerate` / `count` /
 
 - **Closes SC-4 existence channel** — overwriting a derived label today also shrinks
   the *existence* label, leaking "this path was once written" as a public bit
-  (acknowledged in-code at [`prepare.ts:1191`](../../packages/runner/src/cfc/prepare.ts)).
+  (acknowledged in-code at [`prepare.ts:1191`](../../runtime/runner/src/cfc/prepare.ts)).
 - **Closes SC-8 pointer-identity-at-a-slot** — which element sits at a slot,
   observed without dereferencing, is not separately labeled. The `structure`
   labelMap component is only a partial container-shape mitigation.
@@ -194,7 +194,7 @@ the middle one):
 - **D2 — Per-write data-flow provenance.** Gate each protected write on the reads
   that *actually fed it*, not the transaction-global consumed set. The enabling
   machinery for D3, and the reason D3 can't be fixed in isolation (see the in-code
-  TODO at [`prepare.ts:2383`](../../packages/runner/src/cfc/prepare.ts): tightening
+  TODO at [`prepare.ts:2383`](../../runtime/runner/src/cfc/prepare.ts): tightening
   the vacuous pass without per-write provenance would over-reject). "Potential and
   Final Write Sets."
 - **D3 — Trusted-agent tool-input `requiredIntegrity` enforced, not decorative.**
@@ -256,7 +256,7 @@ collaborative-doc model as a downgraded/future area. Ref: §14.4.8, §3.1.6.
 
 Not new machinery so much as turning the system on. Every CFC enforcement dial now
 defaults to its strictest sound rung through `RUNTIME_CFC_DIAL_DEFAULTS`
-([`posture-report.ts`](../../packages/runner/src/cfc/posture-report.ts)):
+([`posture-report.ts`](../../runtime/runner/src/cfc/posture-report.ts)):
 `enforce-strict`, `cfcFlowLabels: persist`, the write floor, trigger-read
 gating, policy evaluation and label-metadata protection all on. A host dials
 an environment back only by naming a lower rung. What remains:
@@ -270,15 +270,15 @@ an environment back only by naming a lower rung. What remains:
 - **Default sink ceiling.** `cfcSinkMaxConfidentiality` declares none in the
   core preset; only the `MAX_ENFORCEMENT_CFC_OPTIONS` bundle sets one.
 - **Display ceiling unconditional.** The render ceiling
-  ([`render-ceiling.ts`](../../packages/runner/src/cfc/render-ceiling.ts)) is
+  ([`render-ceiling.ts`](../../runtime/runner/src/cfc/render-ceiling.ts)) is
   on by default in the shell, threaded into the reconciler by the worker
   backend
-  ([`runtime-processor.ts`](../../packages/runtime-client/src/backends/runtime-processor.ts)),
+  ([`runtime-processor.ts`](../../runtime/runtime-client/src/backends/runtime-processor.ts)),
   with a per-profile `cfcRenderCeiling(false)` opt-out. It is still a
   host-passed option the enforcement ladder does not reach, though §18.6.3
   puts it on the strict rung; graduating it removes the opt-out. (SC-16;
   §8.10.6.) Render-boundary *composition + text integrity* itself
-  is owned by `packages/html` (see Out of scope).
+  is owned by `runtime/html` (see Out of scope).
 
 ---
 
@@ -373,8 +373,8 @@ spec test failing.
   documents.
 - **Atom registry parity (`ExternalIngest` / `UserSurfaceInput`).** Both are
   *already* registered in the runtime — `CFC_ATOM_TYPE`
-  ([`packages/api/cfc.ts:35`,`:49`](../../packages/api/cfc.ts)) and the propagation
-  map ([`atom-classes.ts:30`,`:34`](../../packages/runner/src/cfc/atom-classes.ts),
+  ([`base/api/cfc.ts:35`,`:49`](../../base/api/cfc.ts)) and the propagation
+  map ([`atom-classes.ts:30`,`:34`](../../runtime/runner/src/cfc/atom-classes.ts),
   both `provenance`) — so no runner code is needed. The residual is spec-side:
   promote them from spec example-only into the §15 atom registry, and reconcile the
   `structure`/`minted`/`external-ingest` `LabelComponent` values that extend
@@ -389,7 +389,7 @@ policy (store labels + write-authority claims), not these mechanisms.
 
 | Spec surface | Ref | Owner |
 |---|---|---|
-| Render-boundary discharge, text-integrity meet, `sinkClass=display` gating | §8.10.5–6, inv-8/10/13 | `packages/html` reconciler (+ Epic B for atom-shaped ceilings) |
+| Render-boundary discharge, text-integrity meet, `sinkClass=display` gating | §8.10.5–6, inv-8/10/13 | `runtime/html` reconciler (+ Epic B for atom-shaped ceilings) |
 | Sandbox structured-result contract, caveat clearing, runsc/gVisor mediation, tool-invoke | §14.2.2, §18.2 | `@commonfabric/cf-harness` (runner provides the validator seam only) |
 | Labeled filesystem, subagents, command/CLI exec, `node=CodeHash` identity | §14.2 | cf-harness + sibling gVisor repo |
 | Tool-registry snapshot, agent plan trace, NL-refinement, measured contract | §14.1.3.5, §14.2.2.1 | cf-harness (overlaps the Reactive-Interpreter meta-node effort) |

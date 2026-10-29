@@ -26,8 +26,8 @@ ls -la ./cf.key 2>/dev/null || ls -la *.key 2>/dev/null || find . -name "*.key" 
 ```
 
 If no key exists, create one per the cf skill
-(`deno run -A packages/cli/mod.ts id new > cf.key` for a unique key — note the
-cf skill's warning: never redirect `deno task cf` output into a key file, the
+(`deno run -A runtime/cli/mod.ts id new > cf.key` for a unique key — note the cf
+skill's warning: never redirect `deno task cf` output into a key file, the
 wrapper pollutes it with ANSI preamble). Never overwrite an existing key file —
 identity-scoped data (PerUser state, favorites) becomes invisible under a new
 identity.
@@ -46,7 +46,7 @@ deno task cf check pattern.tsx --no-run
 **Run and collect automated pattern tests:**
 
 ```bash
-deno task cf test packages/patterns/[name]/main.test.tsx
+deno task cf test patterns/[name]/main.test.tsx
 ```
 
 New or changed pattern behavior must have automated coverage. Find every
@@ -56,14 +56,14 @@ the deployment commands below. Manual handler checks do not replace this step.
 **Deploy new pattern (first time only):**
 
 ```bash
-deno task cf piece new packages/patterns/[name]/main.tsx --test packages/patterns/[name]/main.test.tsx --identity cf.key --api-url $CF_API_URL --space <space>
+deno task cf piece new patterns/[name]/main.tsx --test patterns/[name]/main.test.tsx --identity cf.key --api-url $CF_API_URL --space <space>
 # Output: Created piece bafyreia... <- SAVE this piece ID
 ```
 
 **Update deployed pattern (all subsequent iterations):**
 
 ```bash
-deno task cf piece setsrc packages/patterns/[name]/main.tsx --test packages/patterns/[name]/main.test.tsx --cell <ID> --identity cf.key --api-url $CF_API_URL --space <space>
+deno task cf piece setsrc patterns/[name]/main.tsx --test patterns/[name]/main.test.tsx --cell <ID> --identity cf.key --api-url $CF_API_URL --space <space>
 ```
 
 `--cell` is required for `setsrc` — never "update" by re-running `piece new`,

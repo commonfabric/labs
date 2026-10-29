@@ -29,20 +29,20 @@ a session whose profile had resolved, while another session of theirs had none.
 
 The values declared `PerSession`, each a `computed()` bound under a new name:
 
-- in the room (`packages/patterns/fabrichat/room.tsx`): `canSendForSession`,
+- in the room (`patterns/system/fabrichat/room.tsx`): `canSendForSession`,
   `viewerForSession`, `messageRightsForSession`, and the add control's
   `canAddForSession`, which are the room's `canSend`, `viewer`,
   `messageRights` and `canAdd`;
 - the values the room's rendering derives from them: `cannotSendForSession`
   (the composers' `disabled`), `isOwnerForSession`, the two retitle controls'
   displays, and the add control's display;
-- in the placement (`packages/patterns/fabrichat/placement.tsx`):
+- in the placement (`patterns/system/fabrichat/placement.tsx`):
   `canSendForSession`, its `chat.canSend`.
 
 The output-type fields `ChatRoomView.canSend`, `viewer`, `messageRights` and
 `canAdd`, `AddMemberOutput.canAdd`, and `FabriChatPlacementView.canSend` are
-`PerSession<…>` too, and so is `PlacedRoom.canSend`, the placement's read of the
-room's `canSend`. `docs/specs/fabrichat/ChatRoomOutput.md` gives the fields
+`PerSession<…>` too, and so is `PlacedRoom.canSend`, the placement's read of
+the room's `canSend`. `docs/specs/fabrichat/ChatRoomOutput.md` gives the fields
 those types, and its Scopes section lists them as per session.
 
 The bindings were renamed for the reason the per-user record gives: the
@@ -82,7 +82,7 @@ it, and the row's increase is likely four documents (INFERRED).
 
 ## What an updated room does
 
-`packages/patterns/integration/fabrichat-update-rehearsal.test.ts` was run with
+`patterns/integration/fabrichat-update-rehearsal.test.ts` was run with
 its deployed release refreshed to `main` at `fcc5fbd8b1` (#9340). It now also
 reads the group room's `canSend`, directly and through `$VIEWS.room`, before
 and after the update and after a room is started since, and reads `true` each
@@ -109,13 +109,14 @@ Against every recorded baseline that declares one of these fields with no
 scope, the pattern-update proof reports `scope changed` (RUN,
 `deno task pattern-compat`):
 
-- `fabrichat/room.tsx`, against 113 baselines: `result.canSend`,
+- `system/fabrichat/room.tsx`, against 113 baselines: `result.canSend`,
   `result.canAdd`, `result.viewer` and `result.messageRights`, and each of
   them through `$VIEWS.room`, at whichever of those paths the baseline has;
-- `fabrichat/placement.tsx`, against 5 baselines: `result.$VIEWS.chat.canSend`,
-  `argument.room.canSend` and `result.room.canSend`;
-- `fabrichat/adapter.tsx`, whose argument and result carry the placement,
-  against 5 baselines: `argument.placement.$VIEWS.chat.canSend`,
+- `system/fabrichat/placement.tsx`, against 5 baselines:
+  `result.$VIEWS.chat.canSend`, `argument.room.canSend` and
+  `result.room.canSend`;
+- `system/fabrichat/adapter.tsx`, whose argument and result carry the
+  placement, against 5 baselines: `argument.placement.$VIEWS.chat.canSend`,
   `result.$VIEWS.chat.canSend`, `result.placement.$VIEWS.chat.canSend`,
   `argument.placement.room.canSend` and `result.placement.room.canSend`.
 

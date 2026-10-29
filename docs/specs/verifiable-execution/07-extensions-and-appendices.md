@@ -187,23 +187,23 @@ or Unclaimed (genesis).
 
 ## Appendix C: Mapping to Current Implementation
 
-| CF Protocol Concept   | Current Implementation                           | Package |
-| --------------------- | ------------------------------------------------ | ------- |
-| Entity                | `URI` (`${string}:${string}`)                    | memory  |
-| Fact                  | `Assertion \| Retraction`                        | memory  |
-| Unclaimed             | `{the, of}` with no `is` or `cause`              | memory  |
-| Commit                | `ClientCommit` (`packages/memory/v2.ts`)         | memory  |
-| Space                 | `MemorySpace` (`did:${string}`)                  | memory  |
-| Append-only log       | SQLite `fact` table                              | memory  |
-| Current state         | SQLite `memory` table                            | memory  |
-| ACL                   | `ACL` type with `Capability`                     | memory  |
-| Signer                | `Signer` interface                               | memory  |
-| Authorization         | Signed session open (`v2/session-open-auth.ts`)  | memory  |
-| Address tracking      | `IMemoryAddress` (`{id, type, path}`)            | runner  |
-| Read/Write tracking   | `Activity` type; `getReadActivities()`           | runner  |
-| Transaction           | `IStorageTransaction` (`V2StorageTransaction`)   | runner  |
-| Labels                | `Labels` type with `classification` (coarse)     | runner  |
-| Genesis cause         | `refer({the, of})` - hash of unclaimed state     | memory  |
+| CF Protocol Concept | Current Implementation                          | Package |
+| ------------------- | ----------------------------------------------- | ------- |
+| Entity              | `URI` (`${string}:${string}`)                   | memory  |
+| Fact                | `Assertion \| Retraction`                       | memory  |
+| Unclaimed           | `{the, of}` with no `is` or `cause`             | memory  |
+| Commit              | `ClientCommit` (`runtime/memory/v2.ts`)         | memory  |
+| Space               | `MemorySpace` (`did:${string}`)                 | memory  |
+| Append-only log     | SQLite `fact` table                             | memory  |
+| Current state       | SQLite `memory` table                           | memory  |
+| ACL                 | `ACL` type with `Capability`                    | memory  |
+| Signer              | `Signer` interface                              | memory  |
+| Authorization       | Signed session open (`v2/session-open-auth.ts`) | memory  |
+| Address tracking    | `IMemoryAddress` (`{id, type, path}`)           | runner  |
+| Read/Write tracking | `Activity` type; `getReadActivities()`          | runner  |
+| Transaction         | `IStorageTransaction` (`V2StorageTransaction`)  | runner  |
+| Labels              | `Labels` type with `classification` (coarse)    | runner  |
+| Genesis cause       | `refer({the, of})` - hash of unclaimed state    | memory  |
 
 ---
 

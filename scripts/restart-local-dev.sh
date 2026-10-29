@@ -132,7 +132,7 @@ if [[ "$CF_HARNESS" == "true" ]]; then
 fi
 ./scripts/stop-local-dev.sh "${STOP_ARGS[@]}" "${PASSTHROUGH_ARGS[@]}"
 
-CACHE_DIR="packages/toolshed/cache"
+CACHE_DIR="runtime/toolshed/cache"
 
 if [[ "$CLEAR_CACHE" == "true" ]]; then
     echo "Clearing disposable caches (preserving spaces/databases)..."

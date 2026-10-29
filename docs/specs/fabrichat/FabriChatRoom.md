@@ -20,7 +20,7 @@ The room keeps these `PerSpace` values, shared by everyone the space admits:
   space's store, which the send reads to check it and the room never writes.
 - Those who joined the room: profile links, in the order they were added, a
   roster only `addParticipant` writes
-  (`packages/patterns/loom/participants.tsx`).
+  (`patterns/system/loom/participants.tsx`).
 - The title a member last set: one keyed record, absent until a member sets
   one, which only `commitSetTitle` writes. `about.title` is computed from it
   and, where it is absent, from the title `about.record` holds.

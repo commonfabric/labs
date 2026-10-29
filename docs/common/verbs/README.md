@@ -17,7 +17,7 @@ the question they answer, so start with the one that matches yours.
 | [An author's prose, over the CLI](prose-over-the-cli.md) | *How does a doc comment reach a caller?* The reference for which of the two documents a caller's tools read carries which sentence. |
 
 The tour and the walkthrough describe one session, driven by one script.
-`packages/cli/integration/verb-session-demo.sh` runs it,
+`runtime/cli/integration/verb-session-demo.sh` runs it,
 `verb-session-gaps.sh` asserts the same surface as pass/fail in CI, and
 `deno task check-verb-session-sync` holds both documents to the demo: a `cf`
 command either quotes a line the demo runs or carries a `# not in the demo`

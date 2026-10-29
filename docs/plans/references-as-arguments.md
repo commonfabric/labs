@@ -28,7 +28,7 @@ satisfied it by converting that shape into the envelope at its gate.
 **Not a confinement decision — the runtime already took a position.** The
 dispatch-side closed-world gate accepts a link value opaquely and defers its
 schema check to the handler's own reads (`closedWorldEventRejection`,
-`packages/runner/src/runner.ts`, via its `acceptOpaqueValue: isCellLink`
+`runtime/runner/src/runner.ts`, via its `acceptOpaqueValue: isCellLink`
 option). The CLI's pre-dispatch gate passes the same option since #5880; the
 webhook path has no gate at all. The remaining refusal is drift between that
 path and the gate it feeds, not policy. CFC gets a heads-up — an existing
@@ -42,7 +42,7 @@ The rest of this document is the evidence for the paragraphs above.
 
 ## The team already needed this and already built it
 
-`traverseAndCellify` (`packages/runner/src/builtins/llm-dialog.ts`) walks an LLM
+`traverseAndCellify` (`runtime/runner/src/builtins/llm-dialog.ts`) walks an LLM
 tool call's input, finds `{"@link": "…"}`, and resolves it through
 `runtime.getCellFromLink()` before dispatch. Its output becomes
 `invocationArgs`, which goes into the `handler` branch's stream send. Its
@@ -61,7 +61,7 @@ second-class:
 | --- | --- |
 | LLM tool call (`llm-dialog`) | **yes** — `@link`, resolved before dispatch |
 | `cf piece call` | **yes** — the link envelope, and the emitted address converted against the declared contract at the dispatch gate |
-| Webhook POST (`sendToStream`, `packages/toolshed/routes/webhooks/`) | no — the raw payload is sent unresolved |
+| Webhook POST (`sendToStream`, `runtime/toolshed/routes/webhooks/`) | no — the raw payload is sent unresolved |
 | [Ingest channels](ingest-channels-journal-sink.md) | no — builds on the same dispatch |
 | `cf exec` and the FUSE projection | **yes** — JSON in, the same gate as `cf piece call` |
 
@@ -162,7 +162,7 @@ compiled pattern is.
 
 **Medium**, and most of it landed. The emission change shipped with the input
 contract's `contract` mode in
-`packages/ts-transformers/src/transformers/schema-injection.ts`, the gate
+`base/ts-transformers/src/transformers/schema-injection.ts`, the gate
 alignment was one option at one call site (#5880), and the CLI's address
 conversion rides its dispatch gate. What remains — resolution the webhook and
 ingest paths reach — is a lift-and-share of existing, exercised code. Nothing
@@ -174,7 +174,7 @@ At what layer are references disallowed? None of them chooses to. The layers
 disagree, and the innermost one already ruled in favor.
 
 **The dispatch-side gate accepts links.** `closedWorldEventRejection`
-(`packages/runner/src/runner.ts`) validates a present event payload with
+(`runtime/runner/src/runner.ts`) validates a present event payload with
 `acceptOpaqueValue: (value) => isCellLink(value)`: a link value passes
 unjudged, because its target cannot be read at dispatch and its schema check
 belongs to the handler's own reactive reads. The same gate works out how to
@@ -183,21 +183,21 @@ link *values*. That is a considered position on exactly this question, taken in
 the layer most careful about what a caller may submit.
 
 **The CLI gate is the same validator, aligned since #5880.**
-`verbInputSchemaError` (`packages/piece/src/verb-input.ts`) calls the identical
+`verbInputSchemaError` (`runtime/piece/src/verb-input.ts`) calls the identical
 `validateSchemaValue` and now passes `acceptOpaqueValue`, so a link envelope
 passes it opaquely — and one gate earlier, the emitted address is converted
 into that envelope against the declared contract. Its purpose is unchanged:
 refuse a malformed payload before it spends the invocation id.
 
 **The webhook path takes no position.** `sendToStream`
-(`packages/toolshed/routes/webhooks/webhooks.utils.ts`) forwards the raw
+(`runtime/toolshed/routes/webhooks/webhooks.utils.ts`) forwards the raw
 payload with no gate and no traversal.
 
 **And "data cannot name a cell" is not a core invariant — measured.** A sigil
 link is a link wherever it appears in stored data (`isLinkRef`,
-`packages/data-model/src/cell-rep.ts`), and a sigil riding an event payload
-survives `send()` as a **live edge**: probed against a local toolshed with an
-`any`-typed event field, so no gate intervened, the handler received the
+`base/data-model/src/cell-rep.ts`), and a sigil riding an event
+payload survives `send()` as a **live edge**: probed against a local toolshed
+with an `any`-typed event field, so no gate intervened, the handler received the
 resolved target — its own properties, and its `title` read back. The door is
 already open under the native spelling, so this plan names a capability rather
 than adding one.

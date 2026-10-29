@@ -12,9 +12,9 @@ that declares no `ifc` and no row rule is unaffected and pays nothing.
 
 CFC labels are open-ended sets of **atoms** (immutable JSON values), not a fixed
 classification lattice
-([`packages/runner/src/cfc.ts`](../../../packages/runner/src/cfc.ts);
-`packages/api/cfc.ts`). A schema attaches labels through its `ifc` field
-([`packages/api/index.ts`](../../../packages/api/index.ts)):
+([`runtime/runner/src/cfc.ts`](../../../runtime/runner/src/cfc.ts);
+`base/api/cfc.ts`). A schema attaches labels through its `ifc` field
+([`base/api/index.ts`](../../../base/api/index.ts)):
 
 - `confidentiality` — who may read (set of atoms; principals are common atoms,
   e.g. `did:mailto:…`, `did:key:…`).
@@ -33,7 +33,7 @@ conjunctive clause; the subset ceiling check is CFC spec §8.10.3's clause
 subsumption restricted to singletons) — the clause-aware migration path is CFC
 spec §18.5. Async effects already declare a **write policy**
 before committing side effects via the sink-request mechanism
-([`packages/runner/src/cfc/sink-request.ts`](../../../packages/runner/src/cfc/sink-request.ts)),
+([`runtime/runner/src/cfc/sink-request.ts`](../../../runtime/runner/src/cfc/sink-request.ts)),
 which is the seam SQLite writes use — and, under the `sqliteQuery` sink, the
 seam a query's READ request stages through as well ("The query's control
 state" below, for what that gate governs and what it leaves to the builtin).
@@ -68,7 +68,7 @@ spoofs another, and a name present in several joined tables is ambiguous. So
 labels are keyed off each result column's **TRUE origin** `(table, column)`, read
 from SQLite column metadata via FFI (`sqlite3_column_origin_name` /
 `sqlite3_column_table_name`) on the prepared statement
-([`column-origin.ts`](../../../packages/memory/v2/sqlite/column-origin.ts)):
+([`column-origin.ts`](../../../runtime/memory/v2/sqlite/column-origin.ts)):
 
 | query output | origin | meaning |
 |---|---|---|
@@ -107,7 +107,7 @@ handles. The invariant is one image, not two agreeing ones.
 version pinned in `column-origin.ts` has to equal the version resolved for
 `@db/sqlite`. Plug's cache is keyed by URL, so different versions name different
 files. The [SQLite dependency guide](../../development/DEPENDENCIES.md#sqlite)
-owns the complete roll procedure. A test in `packages/memory` checks the code
+owns the complete roll procedure. A test in `runtime/memory` checks the code
 pin against the lockfile, so a stale pin is reported as a test failure rather
 than a crash.
 
@@ -179,7 +179,7 @@ recomputable at any time, by either side, identically.
 ### Authoring surface — `table(columns, rule)`
 
 `table()` takes the rule as an optional second argument
-([`schema.ts`](../../../packages/memory/v2/sqlite/schema.ts)); the helpers live
+([`schema.ts`](../../../runtime/memory/v2/sqlite/schema.ts)); the helpers live
 on the builder's `cfSqlite` namespace (one import for the whole vocabulary).
 The rule receives a shallow field handle `f` (one accessor per declared column)
 and returns `{ confidentiality?, integrity? }` — two **independent**
@@ -229,7 +229,7 @@ label profile lands, CFC spec §18.5.3) — so the wrong semantics is never
 shipped silently.
 
 The closed helper set
-([`row-label.ts`](../../../packages/memory/v2/sqlite/row-label.ts); each helper
+([`row-label.ts`](../../../runtime/memory/v2/sqlite/row-label.ts); each helper
 returns a plain-JSON AST node):
 
 | helper | meaning |
@@ -352,8 +352,8 @@ would be a DoS vector). The same validation **re-runs on wire-supplied specs**
 before any evaluation: "couldn't validate" is never "no label".
 
 One pure evaluator —
-[`evaluateRowLabel`](../../../packages/memory/v2/sqlite/row-label.ts), in
-`packages/memory` beside `table()` — is shared by the write gate, read
+[`evaluateRowLabel`](../../../runtime/memory/v2/sqlite/row-label.ts), in
+`runtime/memory` beside `table()` — is shared by the write gate, read
 re-derivation, and (future) server-side commit evaluation, so the sides can
 never drift: the audit property holds by construction. It is fail-closed end
 to end: an absent rule-input field, a value class a regex cannot read (a
@@ -368,9 +368,9 @@ refused query / rejected write.
 Because the label is re-derived from stored data, the read side is
 self-sufficient: a row is correctly labeled even if it predates the rule.
 Implemented in the `sqliteQuery` flush
-([`sqlite-builtins.ts`](../../../packages/runner/src/builtins/sqlite-builtins.ts))
+([`sqlite-builtins.ts`](../../../runtime/runner/src/builtins/sqlite-builtins.ts))
 with the pure half in
-[`row-label-read.ts`](../../../packages/runner/src/builtins/sqlite/row-label-read.ts):
+[`row-label-read.ts`](../../../runtime/runner/src/builtins/sqlite/row-label-read.ts):
 
 1. **Locate the rule's inputs by TRUE origin, never output name** (Phase 2's
    provenance machinery): for each column the rule reads, find the result
@@ -585,8 +585,8 @@ const mine = db.query<Row>("SELECT * FROM messages ORDER BY id", {
 
 The write side is a gate; it does not determine the row's effective label
 (read re-derivation does). Implemented in `Cell.exec`
-([`cell.ts`](../../../packages/runner/src/cell.ts)) with the pure half in
-[`row-label-write.ts`](../../../packages/runner/src/builtins/sqlite/row-label-write.ts);
+([`cell.ts`](../../../runtime/runner/src/cell.ts)) with the pure half in
+[`row-label-write.ts`](../../../runtime/runner/src/builtins/sqlite/row-label-write.ts);
 zero cost until a table declares a rule:
 
 - An **attributable INSERT/REPLACE** (positional `?` params with an explicit
@@ -629,7 +629,7 @@ zero cost until a table declares a rule:
 The write's ground truth is the row the statement actually commits, whatever
 the statement's shape — so the server re-derives it there. Inside
 `applyCommitTransaction`
-([`commit-eval.ts`](../../../packages/memory/v2/sqlite/commit-eval.ts),
+([`commit-eval.ts`](../../../runtime/memory/v2/sqlite/commit-eval.ts),
 called from `applySqliteOperation`), a folded `sqlite` write whose target
 table declares a rule:
 
@@ -651,7 +651,7 @@ flags): it is the server's own soundness enforcement, so a stale or hostile
 client cannot skip it. Fail closed server-side, each rolling back the commit:
 an unattributable or undeclared target on a rule-bearing db (attributed with
 the SAME shared parser the runner gate uses,
-[`write-targets.ts`](../../../packages/memory/v2/sqlite/write-targets.ts)), an
+[`write-targets.ts`](../../../runtime/memory/v2/sqlite/write-targets.ts)), an
 unrecognized leading keyword (CTE-fronted writes), an invalid wire-supplied
 spec, a statement that already carries RETURNING (a second clause cannot be
 appended soundly — and `db.exec` returns void, so it had no consumer), every
@@ -665,7 +665,7 @@ pay nothing.
 A rolled-back commit is a **terminal** rejection: the server preserves the
 `RowLabelCommitError` name over the wire (it is not collapsed into a generic
 `TransactionError`), and the runner classifies it non-retryable
-([`storage/rejection.ts`](../../../packages/runner/src/storage/rejection.ts)
+([`storage/rejection.ts`](../../../runtime/runner/src/storage/rejection.ts)
 `isTerminalRejection`). Re-running the identical handler would recompute the
 identical refused write, so the doomed handler stops immediately rather than
 consuming its retry budget — its per-attempt speculative rev bumps would only
@@ -731,13 +731,13 @@ Phase 2's per-column label is a join — clause concatenation for confidentialit
 is never unioned when labels of different values fold into a derived one.
 
 Demos:
-[`cfc-row-label-mailbox`](../../../packages/patterns/cfc-row-label-mailbox/main.tsx)
+[`cfc-row-label-mailbox`](../../../patterns/examples/cfc-row-label-mailbox/main.tsx)
 (rule + ceiling + skip + aggregate refusal end to end) and
-[`cfc-row-label-records`](../../../packages/patterns/cfc-row-label-records/main.tsx)
+[`cfc-row-label-records`](../../../patterns/examples/cfc-row-label-records/main.tsx)
 (per-row ∧ per-column composition on one row). e2e:
-[`sqlite-cfc-row-label.test.ts`](../../../packages/runner/integration/sqlite-cfc-row-label.test.ts)
+[`sqlite-cfc-row-label.test.ts`](../../../runtime/runner/integration/sqlite-cfc-row-label.test.ts)
 (3.a/3.b) and
-[`sqlite-cfc-commit-eval.test.ts`](../../../packages/runner/integration/sqlite-cfc-commit-eval.test.ts)
+[`sqlite-cfc-commit-eval.test.ts`](../../../runtime/runner/integration/sqlite-cfc-commit-eval.test.ts)
 (3.c: atomic rollback + post-image upsert relabel).
 
 ## The query's control state
@@ -867,7 +867,7 @@ declaration.
 
 A row document's id is hashed with the space's row salt as well as the row
 key and the result cell's coordinates. The salt is a runtime secret
-(`packages/runner/src/runtime-secret.ts`): one document per space at a
+(`runtime/runner/src/runtime-secret.ts`): one document per space at a
 reserved id, minted with a random value by the first settle that needs it.
 The transaction write chokepoint refuses every unprivileged write to that id,
 and the one writer, `ensureRuntimeSecret()`, returns nothing; the read
@@ -960,9 +960,9 @@ type the injector cannot read.
 > `enrollRuntimeOwnedStore`, the `crossSpace` refusal over `deriveFlowJoin`,
 > the `shapeConfidentiality` join, and
 > `enqueueSinkRequestPostCommitEffect` in
-> [`sqlite-builtins.ts`](../../../packages/runner/src/builtins/sqlite-builtins.ts);
+> [`sqlite-builtins.ts`](../../../runtime/runner/src/builtins/sqlite-builtins.ts);
 > asserted in
-> [`cfc-sqlite-query-control-state.test.ts`](../../../packages/runner/test/cfc-sqlite-query-control-state.test.ts).
+> [`cfc-sqlite-query-control-state.test.ts`](../../../runtime/runner/test/cfc-sqlite-query-control-state.test.ts).
 > The route's conditions are in
 > [`cfc-enforcement-matrix.md`](../cfc-enforcement-matrix.md) §4.
 

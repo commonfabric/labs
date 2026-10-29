@@ -16,7 +16,7 @@ name: Benchmarks
 # share of a host the other tenants leave it. The dashboard draws a separate
 # line per processor model, which tells the models apart but not the hosts. So
 # every run also measures the machine it landed on, through
-# packages/dashboard/machine-calibration.bench.ts below, and the dashboard
+# dashboard/machine-calibration.bench.ts below, and the dashboard
 # divides that measurement out of its trend. Without it a run that landed on a
 # busy host reads on the tile as a code regression.
 on:
@@ -91,28 +91,28 @@ jobs:
         run: |
           mkdir -p bench-results
           deno bench --json -A --v8-flags=--expose-gc \
-            packages/runner/test/*.bench.ts \
-            packages/utils/src/cache.bench.ts \
-            packages/utils/test/string-tuple-key.bench.ts \
-            packages/utils/test/deep-equal.bench.ts \
-            packages/fuse/entity-projection.bench.ts \
-            packages/memory/test/v2-entity-id-list.bench.ts \
-            packages/memory/test/v2-cached-patch-replay.bench.ts \
-            packages/memory/test/v2-engine-read.bench.ts \
-            packages/memory/test/v2-path.bench.ts \
-            packages/memory/test/v2-refresh-schema-closure.bench.ts \
-            packages/data-model/bench/hashing.bench.ts \
-            packages/data-model/bench/codec-json.bench.ts \
-            packages/piece/test/piece-cold-runtime.bench.ts \
-            packages/dashboard/machine-calibration.bench.ts \
-            packages/patterns/integration/topic-board-navigation.bench.ts \
-            packages/patterns/integration/topic-board-scale.bench.ts \
-            packages/patterns/integration/lunch-poll-vote-burst.bench.ts \
-            packages/patterns/integration/lunch-poll-read-scale.bench.ts \
-            packages/patterns/integration/fabrichat-room.bench.ts \
-            packages/patterns/integration/fabrichat-room-scale.bench.ts \
-            packages/patterns/integration/fabrichat-send-burst.bench.ts \
-            packages/patterns/integration/piece-grid-stopped.bench.ts \
+            runtime/runner/test/*.bench.ts \
+            base/utils/src/cache.bench.ts \
+            base/utils/test/string-tuple-key.bench.ts \
+            base/utils/test/deep-equal.bench.ts \
+            runtime/fuse/entity-projection.bench.ts \
+            runtime/memory/test/v2-entity-id-list.bench.ts \
+            runtime/memory/test/v2-cached-patch-replay.bench.ts \
+            runtime/memory/test/v2-engine-read.bench.ts \
+            runtime/memory/test/v2-path.bench.ts \
+            runtime/memory/test/v2-refresh-schema-closure.bench.ts \
+            base/data-model/bench/hashing.bench.ts \
+            base/data-model/bench/codec-json.bench.ts \
+            runtime/piece/test/piece-cold-runtime.bench.ts \
+            dashboard/machine-calibration.bench.ts \
+            patterns/integration/topic-board-navigation.bench.ts \
+            patterns/integration/topic-board-scale.bench.ts \
+            patterns/integration/lunch-poll-vote-burst.bench.ts \
+            patterns/integration/lunch-poll-read-scale.bench.ts \
+            patterns/integration/fabrichat-room.bench.ts \
+            patterns/integration/fabrichat-room-scale.bench.ts \
+            patterns/integration/fabrichat-send-burst.bench.ts \
+            patterns/integration/piece-grid-stopped.bench.ts \
             > bench-results/results.json \
             2> >(tee bench-results/diagnostics.log >&2)
 
@@ -128,7 +128,7 @@ jobs:
       # key tile selects by name are simply absent from it. None of that is a
       # corrupt report, but a chart that quietly thins says nothing about when
       # it started, so the run that produced one fails here instead. The checks
-      # live in packages/dashboard/bench-report.ts, beside the code that reads
+      # live in dashboard/bench-report.ts, beside the code that reads
       # the report, so the two cannot drift apart.
       - name: ✅ Validate benchmark results
         run: >
