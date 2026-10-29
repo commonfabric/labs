@@ -2623,7 +2623,10 @@ type Outer<T extends { x: string }> = Select<Sec<T>>;`,
           const DECLARATIONS = `import type { PerUser } from "commonfabric";
 type PickScoped<T> = Pick<{ x: T } | { x: PerUser<string> }, "x">;
 type PickSec<T> = Pick<{ x: T } | { x: Sec<string> }, "x">;
-type OmitSecTwo<T> = Omit<{ x: T; z: 1 } | { x: Confidential<string, readonly ["c"]>; z: 1 }, "z">;`;
+type OmitSecTwo<T> = Omit<{ x: T; z: 1 } | { x: Confidential<string, readonly ["c"]>; z: 1 }, "z">;
+type SecretAny = Confidential<any, readonly ["s"]>;
+class SecretField { x!: SecretAny; y = 1; }
+class OtherSecretField { x!: SecretAny; z = 2; }`;
 
           it("refuses `PickScoped<number>`, whose `x` is a scope wrapper beside `number`", async () => {
             await expect(schemasOf(DECLARATIONS, "PickScoped<number>")).rejects
@@ -2644,6 +2647,9 @@ type OmitSecTwo<T> = Omit<{ x: T; z: 1 } | { x: Confidential<string, readonly ["
                   { type: "number" },
                   { type: "string", ifc: { confidentiality: ["a"] } },
                 ],
+              }],
+              ['Pick<SecretField | OtherSecretField, "x">', {
+                ifc: { confidentiality: ["s"] },
               }],
             ] as const
           ) {
@@ -2686,7 +2692,8 @@ type OmitSecTwo<T> = Omit<{ x: T; z: 1 } | { x: Confidential<string, readonly ["
           const DECLARATIONS = `import type { Integrity } from "commonfabric";
 type SecretAny = Confidential<any, readonly ["s"]>;
 type IntAny = Integrity<any, readonly ["j"]>;
-type PickAnySecPart<T> = Pick<{ x: T } & { x: SecretAny; y: 1 }, "x">;`;
+type PickAnySecPart<T> = Pick<{ x: T } & { x: SecretAny; y: 1 }, "x">;
+class SecretField { x!: SecretAny; y = 1; }`;
 
           for (
             const [a, ifc] of [
@@ -2701,6 +2708,9 @@ type PickAnySecPart<T> = Pick<{ x: T } & { x: SecretAny; y: 1 }, "x">;`;
                 confidentiality: ["s"],
               }],
               ["PickAnySecPart<number>", { confidentiality: ["s"] }],
+              ['Pick<SecretField & { x: SecretAny }, "x">', {
+                confidentiality: ["s"],
+              }],
             ] as const
           ) {
             it(`reads \`x\` of \`${a}\` as every declaration of it, on both sides`, async () => {

@@ -246,6 +246,17 @@ type MappedTypeWithInternals = ts.ObjectType & {
   readonly declaration?: ts.MappedTypeNode;
 };
 
+/**
+ * The annotation `declaration` writes, where it declares a property of a type
+ * literal, an interface, or a class.
+ */
+const annotationOf = (
+  declaration: ts.Declaration,
+): ts.TypeNode | undefined =>
+  ts.isPropertySignature(declaration) || ts.isPropertyDeclaration(declaration)
+    ? declaration.type
+    : undefined;
+
 /** Whether `type` is a mapped type, as `Pick<T, K>` is. */
 const isMappedType = (type: ts.Type): boolean =>
   ((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Mapped) !== 0;
@@ -327,9 +338,7 @@ const refuseWrapperLeftBehind = (
   checker: ts.TypeChecker,
 ): void => {
   for (const declaration of prop.declarations ?? []) {
-    const annotation = ts.isPropertySignature(declaration)
-      ? declaration.type
-      : undefined;
+    const annotation = annotationOf(declaration);
     if (
       annotation &&
       (checker.getTypeFromTypeNode(annotation).flags & ts.TypeFlags.Any) !==
@@ -403,9 +412,7 @@ const membersAnnotation = (
   const declarations = prop?.declarations ?? [];
   const declaration = prop?.valueDeclaration ??
     (declarations.length === 1 ? declarations[0] : undefined);
-  const node = declaration && ts.isPropertySignature(declaration)
-    ? declaration.type
-    : undefined;
+  const node = declaration && annotationOf(declaration);
   if (prop === undefined || node === undefined) return undefined;
   return holdsTypeParameter(node, checker)
     ? { node: undefined, generic: [checker.getTypeOfSymbol(prop)] }

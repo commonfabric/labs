@@ -286,6 +286,8 @@ type XEverywhere<T extends { x: unknown }> = { [P in keyof T]: T["x"] };
 type KEverywhere<T, K extends keyof T> = { [P in keyof T]: T[K] };
 type OnlyX<T> = { [P in keyof T as P extends "x" ? P : never]: T[P] };
 type Swapped<T> = { [P in keyof T as P extends "a" ? "b" : "a"]: T[P] };
+class SecretField { x!: SecretAny; y = 1; }
+class OtherSecretField { x!: SecretAny; z = 2; }
 `;
 
   /**
@@ -336,6 +338,10 @@ type Swapped<T> = { [P in keyof T as P extends "a" ? "b" : "a"]: T[P] };
         }],
         [
           'Pick<{ x: SecretAny } | { x: SecretAny; y: 1 }, "x">',
+          { ifc: { confidentiality: ["s"] } },
+        ],
+        [
+          'Pick<SecretField | OtherSecretField, "x">',
           { ifc: { confidentiality: ["s"] } },
         ],
         ['Pick<{ x: string } & { x: "a" | "b" }, "x">', { enum: ["a", "b"] }],
@@ -427,6 +433,10 @@ type Swapped<T> = { [P in keyof T as P extends "a" ? "b" : "a"]: T[P] };
           { ifc: { confidentiality: ["s"] } },
         ],
         [
+          'Pick<SecretField & { x: SecretAny }, "x">',
+          { ifc: { confidentiality: ["s"] } },
+        ],
+        [
           'Pick<({ x: IntAny } & { x: "a" }) | { x: IntAny }, "x">',
           { ifc: { integrity: ["j"] } },
         ],
@@ -485,6 +495,7 @@ type Swapped<T> = { [P in keyof T as P extends "a" ? "b" : "a"]: T[P] };
     for (
       const [value, name] of [
         ["Boxed<{ x: SecretAny }>", "x"],
+        ["Boxed<SecretField>", "x"],
         ['BoxedPick<{ x: SecretAny } | { x: SecretAny; y: 1 }, "x">', "x"],
         ["SameKeysOf<{ x: SecretAny }, { x: string }>", "x"],
         ["XEverywhere<{ x: string; y: SecretAny }>", "y"],
