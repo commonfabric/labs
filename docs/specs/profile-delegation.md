@@ -208,13 +208,13 @@ interface DelegationPayload {
 ```
 
 The codec's payload type carries every field above as UCAN defines it, `sub`
-nullable and `pol` an array included, so an issuer sets `pol` to `[]` and
-the verifier refuses anything else; the shape stays closed while the type
-stays UCAN's. The delegation a profile issues at creation has `iss` and
-`sub` both the profile DID, `aud` the core identity, `cmd` of `/memory`, an
-empty `pol`, and `exp` of `null`. It has no expiry because the key that could renew it is
-destroyed. It is the one delegation most users ever hold for a profile, and
-it is what makes "open the profile as myself" work.
+nullable and `pol` an array included, so an issuer sets `pol` to `[]` and the
+verifier refuses anything else; the shape stays closed while the type stays
+UCAN's. The delegation a profile issues at creation has `iss` and `sub` both the
+profile DID, `aud` the core identity, `cmd` of `/memory`, an empty `pol`, and
+`exp` of `null`. It has no expiry because the key that could renew it is
+destroyed. It is the one delegation most users ever hold for a profile, and it
+is what makes "open the profile as myself" work.
 
 Encoding and decoding DAG-CBOR, constructing a CID, and producing the
 varsig header are new to the repository, and the first slice does them
@@ -244,18 +244,17 @@ closed, and that slice brings a general DAG-CBOR codec with it.
 
 ### Where it is stored
 
-In the Home space, beside the profile list that is already the durable
-record of which profiles a user has: one document per profile space, under
-the cause `{ delegations: <space DID> }`, holding a list of delegations'
-bytes, the root delegation written there in the transaction that appends the
-profile link and any later delegation over the space, with another command
-or policy, added beside it. The Home
-space is readable by its owner alone, so the delegation is as private as the
-profile list itself, and it is the only record of the profile's authority
-anywhere. The runtime walks the list at startup, reads each profile's
-record, and holds the delegations keyed by space DID. Each is stored as its encoded
-bytes beside its CID, so the runtime presents it without re-encoding it, and
-the CID the server checks is the one the issuer produced.
+In the Home space, beside the profile list that is already the durable record of
+which profiles a user has: one document per profile space, under the cause
+`{ delegations: <space DID> }`, holding a list of delegations' bytes, the root
+delegation written there in the transaction that appends the profile link and
+any later delegation over the space, with another command or policy, added
+beside it. The Home space is readable by its owner alone, so the delegation is
+as private as the profile list itself, and it is the only record of the
+profile's authority anywhere. The runtime walks the list at startup, reads each
+profile's record, and holds the delegations keyed by space DID. Each is stored
+as its encoded bytes beside its CID, so the runtime presents it without
+re-encoding it, and the CID the server checks is the one the issuer produced.
 
 A delegation whose audience is a key other than the one the runtime acts as
 is no use to that runtime and is skipped. A delegation whose subject is not
@@ -555,33 +554,32 @@ part of this design.
    kind before taking it for a home, and `sessionOpenProofs` is on by
    default.
 4. **Chains beyond the profile.** Implemented for the command line.
-   `cf delegation issue` issues a delegation over a space from the
-   identity to another key and writes the chain that key presents: the
-   delegation alone where the access list grants the identity, and behind
-   the chain the identity's own sessions present where it holds the space
-   through one, as a profile's owner does through Home's record and a key
-   delegated to in turn does through a chain file
-   (`StorageManager.delegationChainFor`). The chain travels as a file in a
-   format of this repository's own (`delegation-chain-text.ts` in the
-   identity package): JSON naming the format and listing chains, each its
-   delegations' envelope bytes root first, so a holder never reconstructs
-   a chain. The UCAN working group's container format, a CBOR bag of
-   tokens in no order whose recipient links them itself, is the
-   interchange form other UCAN tooling reads; emitting and reading it is a
-   later feature, for when something on the other side speaks it.
-   `cf delegation show` describes a chain file, and says whether a runtime
-   would present each chain now. `--delegations` or `CF_DELEGATIONS` names
-   the files whose chains a `cf` runtime holds when it connects, and a
-   chain in one that no session would present then, expired or not yet
-   valid, fails the command. An issued delegation can carry an expiry,
-   which the server already holds a session to. A Home-space affordance for the same, and a daemon that
-   holds a chain from elsewhere than a file, are left for the hosts that
-   need them. When one does, the delegatee's inbox is the channel: the
-   issuer delivers the chain there as an offer, and the holder reads what
-   verifies and ends at its key, skipping the rest. The inbox grants the
-   world WRITE, so until the policy work of the next phase confines each
-   sender to its own documents, a chain delivered there can be removed or
-   written over by anyone with the address; the file stays the recovery.
+   `cf delegation issue` issues a delegation over a space from the identity to
+   another key and writes the chain that key presents: the delegation alone
+   where the access list grants the identity, and behind the chain the
+   identity's own sessions present where it holds the space through one, as a
+   profile's owner does through Home's record and a key delegated to in turn
+   does through a chain file (`StorageManager.delegationChainFor`). The chain
+   travels as a file in a format of this repository's own
+   (`delegation-chain-text.ts` in the identity package): JSON naming the format
+   and listing chains, each its delegations' envelope bytes root first, so a
+   holder never reconstructs a chain. The UCAN working group's container format,
+   a CBOR bag of tokens in no order whose recipient links them itself, is the
+   interchange form other UCAN tooling reads; emitting and reading it is a later
+   feature, for when something on the other side speaks it. `cf delegation show`
+   describes a chain file, and says whether a runtime would present each chain
+   now. `--delegations` or `CF_DELEGATIONS` names the files whose chains a `cf`
+   runtime holds when it connects, and a chain in one that no session would
+   present then, expired or not yet valid, fails the command. An issued
+   delegation can carry an expiry, which the server already holds a session to.
+   A Home-space affordance for the same, and a daemon that holds a chain from
+   elsewhere than a file, are left for the hosts that need them. When one does,
+   the delegatee's inbox is the channel: the issuer delivers the chain there as
+   an offer, and the holder reads what verifies and ends at its key, skipping
+   the rest. The inbox grants the world WRITE, so until the policy work of the
+   next phase confines each sender to its own documents, a chain delivered there
+   can be removed or written over by anyone with the address; the file stays the
+   recovery.
 5. **Caveats and revocation.** Read-only caveats, and per-delegation
    revocation.
 
