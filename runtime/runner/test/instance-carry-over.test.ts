@@ -896,6 +896,27 @@ describe("instance-carry-over", () => {
     const firstChild = (pieces: string[], cell: Cell<unknown>) =>
       pieces.find((piece) => piece !== cell.getAsNormalizedFullLink().id);
 
+    it("is bound by the start's pre-sync to the one positional child of its pattern identity", async () => {
+      // The pattern last set up left `a` positional, so the exact match does
+      // not place it, and the match by pattern identity reads the child at
+      // the positional spot the parent's manifest records.
+
+      await deployedParent("cold-identity", {
+        deployed: DEPLOYED_NODE_CHILD,
+        named: DEPLOYED_NODE_CHILD,
+      });
+      const cell = await coldRuntime("cold-identity");
+      const carried = positionalChild(cell, 0).getAsNormalizedFullLink().id;
+      const presynced = presyncedPieces();
+
+      const result = await update(cell, NAMED_WITH_SIBLING_NODE_CHILD);
+
+      expect({
+        firstChild: firstChild(presynced, cell),
+        aCount: result.aCount,
+      }).toEqual({ firstChild: carried, aCount: 7 });
+    });
+
     it("is bound by the start's pre-sync to the child the pattern last set up gives it", async () => {
       await deployedParent("cold-previous", {
         deployed: DEPLOYED_NODE_CHILD,
