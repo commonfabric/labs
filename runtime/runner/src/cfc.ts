@@ -328,20 +328,56 @@ const schemaAtPathKey = (
 };
 
 /**
- * The confidentiality a container's `ifc` passes to the children narrowing
- * reaches below it: that of a label read with the container's content, which
- * an absent or unrecognized `observes` declares as a covering label does, and
- * `observes: "value"` does too. A label observing only the container's shape,
- * its membership or the reference held there stays on the container.
+ * The label narrowing gives a position whose own label is `ifc`, below
+ * containers that pass it the confidentiality `inherited`
+ * (`confidentialityPassedDown()`). What a position inherits labels its
+ * content, so where its own label observes one content class, the two
+ * become one covering label: a label carries one class, and covering the
+ * position's own atoms too over-taints the other classes' reads rather than
+ * leaving them unlabeled.
+ *
+ * A `followRef` label keeps its class and takes the inherited atoms in.
+ * Folded into a covering label it would no longer label a reference read
+ * (`readConsumesEntry()`), and a write through the position would carry that
+ * to the stored declaration its siblings share (`mergeCfcSchemaEnvelopes()`).
+ * Kept, it over-taints the reference read, and leaves the position's own
+ * content reads without what it inherits.
  */
-function childInheritedConfidentiality(
+function labelAtPosition(
   ifc: JSONSchemaObj["ifc"],
-): NonNullable<JSONSchemaObj["ifc"]>["confidentiality"] {
-  const observes = declaredObservationClass(ifc?.observes);
-  return observes === "shape" || observes === "enumerate" ||
-      observes === "followRef"
-    ? undefined
-    : ifc?.confidentiality;
+  inherited: ReadonlySet<unknown>,
+): JSONSchemaObj["ifc"] {
+  if (inherited.size === 0) return ifc;
+  const atoms = new Set(inherited);
+  ContextualFlowControl.addIfcAtoms(atoms, ifc?.confidentiality);
+  const label = { ...ifc, confidentiality: ContextualFlowControl.lub(atoms) };
+  if (declaredObservationClass(ifc?.observes) !== "followRef") {
+    delete label.observes;
+  }
+  return label;
+}
+
+/**
+ * The confidentiality a container passes to the children narrowing reaches
+ * below it, given `label`, the label narrowing gives the container
+ * (`labelAtPosition()`). An array, a union and an unknown value pass a
+ * covering label's atoms and no others: a label observing one class of the
+ * container stays on it (§4.6.3). An object passes its label's atoms
+ * whatever the label observes, which over-taints its children's reads of a
+ * label observing one class.
+ */
+function confidentialityPassedDown(
+  label: JSONSchemaObj["ifc"],
+  container: "object" | "other",
+): ReadonlySet<unknown> {
+  const atoms = new Set<unknown>();
+  if (
+    container === "object" ||
+    declaredObservationClass(label?.observes) === undefined
+  ) {
+    ContextualFlowControl.addIfcAtoms(atoms, label?.confidentiality);
+  }
+  return atoms;
 }
 
 /**
@@ -712,23 +748,18 @@ export class ContextualFlowControl {
     schema: JSONSchema,
     path: readonly string[],
     defs: Record<string, JSONSchema> | undefined,
-    extraConfidentiality: Set<unknown> | undefined,
+    inheritedConfidentiality: ReadonlySet<unknown> | undefined,
     defaultEmptyProperties: JSONSchema,
     defaultMissingProperty: JSONSchema,
     walk?: BranchListWalk<NarrowedUnion>,
   ): JSONSchema {
-    const joined = (extraConfidentiality !== undefined)
-      ? new Set<unknown>(extraConfidentiality)
-      : new Set<unknown>();
-    // The covering labels containers on the path pass down to what it
-    // reaches (`childInheritedConfidentiality()`), kept apart from `joined`
-    // until the result's own label says whether they can join it.
-    const inherited = new Set<unknown>();
-    const inheritFrom = (ifc: JSONSchemaObj["ifc"]) =>
-      ContextualFlowControl.addIfcAtoms(
-        inherited,
-        childInheritedConfidentiality(ifc),
-      );
+    // The confidentiality the containers on the path pass down to the
+    // position the cursor is at (`confidentialityPassedDown()`). Each
+    // position is labeled from it and its own label alone
+    // (`labelAtPosition()`), so narrowing a path in one call and segment by
+    // segment agree.
+    let inherited: ReadonlySet<unknown> = inheritedConfidentiality ??
+      new Set();
     let cursor = schema;
     // Whether the path descended through a wildcard: a true schema is what
     // every child below it narrows to, markers and all, but its `default`
@@ -769,17 +800,6 @@ export class ContextualFlowControl {
           });
         }
       }
-      // A position on the path is labeled here as narrowing to it would
-      // label it, so that narrowing a path in one call and segment by
-      // segment agree. One whose own label observes one class keeps that
-      // label and nothing it would have inherited, so nothing inherited
-      // passes on below it.
-      if (
-        inherited.size !== 0 && isObjectOrArray(cursor) &&
-        declaredObservationClass(cursor.ifc?.observes) !== undefined
-      ) {
-        inherited.clear();
-      }
       // A cursor declaring no `type` admits every type, and which of its
       // keywords apply is settled only by a value — `properties` and
       // `additionalProperties` by an object, `prefixItems` and `items` by an
@@ -798,26 +818,31 @@ export class ContextualFlowControl {
           typeless)
       ) {
         // A label beside the union is on the value whichever arm admits it,
-        // so it labels that value's children as a container's label does
-        // (`childInheritedConfidentiality()`): the arms of an `anyOf` or a
-        // `oneOf` are narrowed without the keywords beside them.
-        inheritFrom(cursor.ifc);
+        // so it labels that value's children as a container's label does:
+        // the arms of an `anyOf` or a `oneOf` are narrowed without the
+        // keywords beside them, from what the union passes down.
+        inherited = confidentialityPassedDown(
+          labelAtPosition(cursor.ifc, inherited),
+          "other",
+        );
         // A type-list arm replaces its type with a scalar, and a schema
         // declaring no type is read as an object and as an array. Only a
         // compound can recur here without consuming a path segment, so only
         // a compound's result is reused, keyed by its branch lists, the
-        // definitions they resolve against, and the path segments left.
+        // definitions they resolve against, the path segments left, and what
+        // the arms inherit.
         walk ??= new BranchListWalk<NarrowedUnion>();
         const unionWalk = walk;
         const unionObject = cursor;
         const unionDefs = defs;
+        const armsInherit = inherited;
         const narrowUnion = () =>
           ContextualFlowControl.#narrowUnion(
             unionObject,
             typeless,
             path.slice(index),
             unionDefs,
-            extraConfidentiality,
+            armsInherit,
             defaultEmptyProperties,
             defaultMissingProperty,
             unionWalk,
@@ -830,6 +855,11 @@ export class ContextualFlowControl {
           unionDefs,
           unionObject.oneOf,
           path.length - index,
+          armsInherit.size === 0 ? undefined : internSchema({
+            ifc: {
+              confidentiality: ContextualFlowControl.lub(new Set(armsInherit)),
+            },
+          }),
         ];
         const narrowed = branches === undefined
           ? narrowUnion()
@@ -846,29 +876,14 @@ export class ContextualFlowControl {
         throughWildcard = true;
         break;
       } else if (cursor.type === "object") {
-        // An object's label joins whatever the path reaches below it, and a
-        // label it inherited is part of its label.
-        for (const atom of inherited) joined.add(atom);
-        inherited.clear();
-        if (cursor.ifc !== undefined) {
-          ContextualFlowControl.addIfcAtoms(
-            joined,
-            cursor.ifc.confidentiality,
-          );
-        }
+        inherited = confidentialityPassedDown(
+          labelAtPosition(cursor.ifc, inherited),
+          "object",
+        );
         if (cursor.properties && Object.hasOwn(cursor.properties, part)) {
           const cursorObj = cursor.properties as Record<string, JSONSchema>;
           cursor = cursorObj[part];
-          if (typeof cursor === "boolean") {
-            break;
-          } else {
-            if (cursor.ifc !== undefined) {
-              ContextualFlowControl.addIfcAtoms(
-                joined,
-                cursor.ifc.confidentiality,
-              );
-            }
-          }
+          if (typeof cursor === "boolean") break;
         } else if (cursor.additionalProperties !== undefined) {
           cursor = cursor.additionalProperties;
         } else if (
@@ -883,9 +898,10 @@ export class ContextualFlowControl {
           cursor = true;
         }
       } else if (cursor.type === "array") {
-        // An array's label labels its elements, unless it observes only the
-        // array's shape, membership or reference.
-        inheritFrom(cursor.ifc);
+        inherited = confidentialityPassedDown(
+          labelAtPosition(cursor.ifc, inherited),
+          "other",
+        );
         if (isArrayIndexPropertyName(part)) {
           const index = Number(part);
           if (cursor.prefixItems && index < cursor.prefixItems.length) {
@@ -898,6 +914,10 @@ export class ContextualFlowControl {
         }
       } else if (cursor.type === "unknown") {
         // we can descend into unknown, but we just get more unknown
+        inherited = confidentialityPassedDown(
+          labelAtPosition(cursor.ifc, inherited),
+          "other",
+        );
         cursor = { type: "unknown", ...(cursor.ifc && { ifc: cursor.ifc }) };
       } else {
         // A declared type other than object, array or unknown holds no
@@ -905,34 +925,19 @@ export class ContextualFlowControl {
         return false;
       }
     }
-    if (isObjectOrArray(cursor) && cursor.ifc !== undefined) {
-      ContextualFlowControl.addIfcAtoms(joined, cursor.ifc.confidentiality);
-    }
-    // One label carries one observation class, and neither a covering class
-    // nor `followRef` contains the other (`readConsumesEntry()`). So the
-    // covering labels passed down join the result only where its own label
-    // is covering too. A result whose own label is narrower keeps it as it
-    // is: no single label could carry both obligations, and dropping either
-    // would leave the read it governs unlabeled.
-    if (
-      !isObjectOrArray(cursor) ||
-      declaredObservationClass(cursor.ifc?.observes) === undefined
-    ) {
-      for (const atom of inherited) joined.add(atom);
-    }
     if (typeof cursor === "boolean") {
       if (!cursor) {
         return false; // no need to attach tags -- we'll never match
-      } else if (joined.size === 0) {
+      } else if (inherited.size === 0) {
         return true; // no ifc tags -- can just return true
       }
       cursor = {}; // change to use the empty object schema, so we can attach ifc.
     }
-    // If we've encountered any confidentiality atoms while walking down the
-    // schema, we need to add them to the returned object.
-    const ifc = (joined.size !== 0)
-      ? { ...cursor.ifc, confidentiality: ContextualFlowControl.lub(joined) }
-      : cursor.ifc;
+    // The position the path ends at is labeled as each one on the way was.
+    // Past a union, the arms have labeled what they reached, and their labels
+    // hold what they inherited, so this adds it only to a result uniting
+    // several arms.
+    const ifc = labelAtPosition(cursor.ifc, inherited);
     const selectedDefs = selectReferencedCfcSchemaDefs(cursor, defs);
     const result = { ...cursor, ...(ifc && { ifc }) } as Record<
       string,
@@ -955,7 +960,7 @@ export class ContextualFlowControl {
     typeless: boolean,
     path: readonly string[],
     defs: Record<string, JSONSchema> | undefined,
-    extraConfidentiality: Set<unknown> | undefined,
+    inherited: ReadonlySet<unknown>,
     defaultEmptyProperties: JSONSchema,
     defaultMissingProperty: JSONSchema,
     walk: BranchListWalk<NarrowedUnion>,
@@ -978,7 +983,7 @@ export class ContextualFlowControl {
         entry,
         path,
         defs,
-        extraConfidentiality,
+        inherited,
         defaultEmptyProperties,
         defaultMissingProperty,
         walk,

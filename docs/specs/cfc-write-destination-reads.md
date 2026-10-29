@@ -94,9 +94,13 @@ because the walk takes reads for two other reasons:
 
 A case pins each: marking the ancestor link's read, or the anchoring walk's
 parent read, makes a transaction commit that should be refused. The anchoring
-one turns on the anchored element landing in a document of its own, whose
-declared ceiling is empty, so the enclosing array's label has nowhere to fit
-once the read carrying it stops joining.
+one turns on the anchored element landing in a document of its own whose
+declared ceiling does not hold the enclosing array's label, so that label has
+nowhere to fit once the read carrying it stops joining. An element inherits
+its array's label where the label is covering, and its document then declares
+it ([How a step narrows](json_schema.md#how-a-step-narrows)), so the case
+labels the array for its shape alone: asking whether the parent is an array
+observes its shape, and the element does not inherit that label.
 
 ## Why the exclusion carries no label out
 

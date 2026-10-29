@@ -372,7 +372,8 @@ describe("cfc-reference-identity-reads", () => {
     it("joins the pointer's own label at a reference position narrowed out of a labeled array", async () => {
       // The array's label covers its elements' content, and the element's
       // own label observes its reference. Narrowed to the element, the
-      // pointer label still governs a read of the reference.
+      // pointer label still governs a read of the reference, which the
+      // inherited label then over-taints: one label carries one class.
 
       const rt = makeRuntime();
       const narrowed = ContextualFlowControl.schemaAtPath(
@@ -397,7 +398,7 @@ describe("cfc-reference-identity-reads", () => {
         expect(readMaybeLink(tx, { ...holder, path: ["ref"] }))
           .toBeDefined();
       });
-      expect(join).toEqual(["pointer-label"]);
+      expect(join?.sort()).toEqual(["content-label", "pointer-label"]);
     });
 
     it("leaves the pointer's own label out when the runtime's own wiring obtains the reference", async () => {

@@ -661,7 +661,7 @@ describe("CFC write-destination reads", () => {
     /** A document whose `items` array carries `ifc`, holding one element. */
     const anchoredListSchema = (ifc: {
       confidentiality: string[];
-      observes?: "enumerate";
+      observes?: "shape";
     }) =>
       ({
         type: "object",
@@ -678,19 +678,21 @@ describe("CFC write-destination reads", () => {
         required: ["items"],
       }) as const satisfies JSONSchema;
 
-    it("refuses an element anchored out of an array whose label observes its membership", async () => {
+    it("refuses an element anchored out of an array whose label observes its shape", async () => {
       await withStrictRuntime(async (runtime) => {
         // Each element becomes an entity document of its own, under an
         // identity derived from how far the enclosing arrays reach. Reading
-        // the parent to settle that consumes the array's membership label,
-        // which its elements do not inherit, so the anchored document's own
-        // ceiling declares nothing that admits it.
+        // the parent to settle that asks whether it is an array, which
+        // observes its shape however narrowly the read is classed, so it
+        // consumes the array's shape label. The elements do not inherit that
+        // label, so the anchored document's own ceiling declares nothing
+        // that admits it.
         //
         // What this pins is that the parent read's label reaches the
         // anchored document: mark that read and the write commits.
         const listSchema = anchoredListSchema({
           confidentiality: [SECRET_ATOM],
-          observes: "enumerate",
+          observes: "shape",
         });
 
         const seed = runtime.edit();
@@ -751,13 +753,12 @@ describe("CFC write-destination reads", () => {
       });
     });
 
-    it("refuses a confidential write into an element whose own label observes only its membership", async () => {
+    it("commits a confidential write into an element whose own label observes only its membership, and labels a read through the element's own document", async () => {
       await withStrictRuntime(async (runtime) => {
-        // The element's own label observes one class, so it keeps that label
-        // and inherits none of the array's: one label cannot carry both. Its
-        // document's ceiling then admits no confidential content, which is
-        // what keeps that content from being stored where a read of it would
-        // not be labeled.
+        // The element's own label refines its membership alone, so it still
+        // inherits the array's label (§4.2.2), and its anchored document
+        // declares it (§4.6.4). Read through that document's own link, the
+        // content is labeled as it is read through the holder.
 
         const listSchema = {
           type: "object",
@@ -794,8 +795,29 @@ describe("CFC write-destination reads", () => {
           items: [{ note: text }],
         });
         tx.prepareCfc();
+        expect(refusalOf(await tx.commit().settled)).toBeUndefined();
+        await runtime.storageManager.synced();
 
-        const refusal = refusalOf(await tx.commit().settled);
+        const holder = runtime.getCell<{ items: unknown[] }>(
+          space,
+          "scoped-element",
+          undefined,
+          runtime.edit(),
+        ).getRaw();
+        const element = parseLink(holder?.items[0]);
+        expect(element).toBeDefined();
+
+        const copy = runtime.edit();
+        const note = runtime.getCellFromLink(
+          { ...element!, space, path: [] },
+          undefined,
+          copy,
+        ).key("note").get();
+        expect(note).toBe("confidential");
+        runtime.getCell(space, "scoped-copy", undefined, copy).set({ note });
+        copy.prepareCfc();
+
+        const refusal = refusalOf(await copy.commit().settled);
         expect(refusal).toContain("writer-fit confidentiality misfit");
         expect(refusal).toContain(SECRET_ATOM);
       });
