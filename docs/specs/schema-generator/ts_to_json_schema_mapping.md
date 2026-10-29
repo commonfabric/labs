@@ -1767,7 +1767,7 @@ Mechanics:
   member from each: the carriers of a member that is itself labeled join the
   operand's, `never` drops out, leaving the operand unlabeled where no member
   is left, `null` and `undefined`, which a CFC alias holds beside its carrier
-  (`Cfc` in `packages/api/cfc.ts`), are members no policy labels, `any` makes
+  (`Cfc` in `base/api/cfc.ts`), are members no policy labels, `any` makes
   the operand `any`, unlabeled, and a bare `unknown` is a member adding no
   carrier. A carrier the checker defers while its payload is a parameter
   (`CfcTag<T, M>`) is read from the stamp it is given. So
