@@ -726,15 +726,8 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
     // Who may add differs by viewer, and what came of an add by session, so
     // both are hidden by a prop rather than built as a different tree (see
     // `FabriChatMessageRow`).
-    //
-    // TODO(danfuzz): Test `canAddForSession` itself, once the transformer
-    // keeps a captured value whose only use is as a guard, typed other than
-    // `boolean` or `number`, in a computation's inputs. As the leading operand
-    // of `&&` here it is left out, and reads as `undefined`.
     const addDisplayForSession = computed((): PerSession<ChatDisplay> =>
-      canAddForSession === true && myProfile?.get() !== undefined
-        ? "flex"
-        : "none"
+      canAddForSession && myProfile?.get() !== undefined ? "flex" : "none"
     );
     const outcomes = computed((): Record<string, AddMemberOutcome> =>
       withDeliveries(requests?.get() ?? {}, spaceOf(room), manager?.requests)
@@ -1610,12 +1603,7 @@ export const FabriChatRoomCore = pattern<
         : profileKeyOf(profile);
       return facts.entries.map((entry) => ({
         message: entry.cell,
-        // TODO(danfuzz): Test `canSendForSession` itself, once the
-        // transformer keeps a captured value whose only use is as a guard,
-        // typed other than `boolean` or `number`, in a computation's inputs.
-        // As the leading operand of `&&` here it is left out, and reads as
-        // `undefined`.
-        ...(canSendForSession === true && readerKey !== undefined
+        ...(canSendForSession && readerKey !== undefined
           ? rightsOf(
             entry.authorKey === readerKey,
             entry.live,
