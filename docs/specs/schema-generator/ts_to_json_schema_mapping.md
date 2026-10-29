@@ -976,7 +976,11 @@ throw.
 
 - At most one `Default<>` member per union — more **throws**.
 - A default whose type is assignable to another member does not re-emit the
-  `Default`'s T as a branch (`isDefaultCoveredByUnion`).
+  `Default`'s T as a branch (`isDefaultCoveredByUnion`). A branch it does
+  re-emit is a member like any other: the members combine as a union's do
+  (§8), so a T accepting any value, as `Default<any, 5>`'s does, beside a
+  labeled member makes the union that member, labeled, with the default, and
+  beside a scope wrapper is refused.
 - An object default that would *widen* an existing object member **throws**,
   pointing at `DeepDefault`.
 - `DeepDefault<V>` requires an object target and an object default type (else

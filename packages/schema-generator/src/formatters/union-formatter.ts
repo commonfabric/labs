@@ -696,16 +696,20 @@ export class UnionFormatter implements TypeFormatter {
     }
     const reduced = reducedLabeledUnion(unionOptions, context);
     if (reduced !== undefined) return reduced;
-    // A union with an arm that declares a scope keeps its arms, so the scope's
-    // placement is refused, rather than becoming `true` (`armsDeclareScope()`).
+    // A union with an arm that declares a scope keeps its arms, an arm
+    // accepting anything among them, so the scope's placement is refused,
+    // rather than becoming `true` (`armsDeclareScope()`).
     const scoped = armsDeclareScope(unionOptions);
+    let acceptsAnything = false;
     const anyOf: MutableJSONSchemaObj[] = [];
     for (const option of unionOptions) {
       // mergePrimitiveSchemaIntoAnyOf mutates anyOf in place; returns true to short-circuit
-      if (this.#mergePrimitiveSchemaIntoAnyOf(anyOf, option) && !scoped) {
-        return true;
+      if (this.#mergePrimitiveSchemaIntoAnyOf(anyOf, option)) {
+        if (!scoped) return true;
+        acceptsAnything = true;
       }
     }
+    if (acceptsAnything) return { anyOf: [...anyOf, true] };
 
     // If only one schema remains after filtering/merging, return it directly
     // without anyOf wrapper. Emitted schemas can coincide while the source
@@ -1080,12 +1084,22 @@ export class UnionFormatter implements TypeFormatter {
       unionOptions = this.#mergeIdenticalSchemas(unionOptions);
     }
 
+    // A member accepting any value beside a labeled one makes the union that
+    // member, labeled, as the general case does, a `Default`'s own value type
+    // included where the other members do not cover its value; beside one
+    // that declares a scope, it is kept, so the scope's placement is refused.
+    const reduced = reducedLabeledUnion(unionOptions, context);
+    if (reduced !== undefined) return reduced;
+    const scoped = armsDeclareScope(unionOptions);
+    let acceptsAnything = false;
     const anyOf: MutableJSONSchemaObj[] = [];
     for (const option of unionOptions) {
       if (this.#mergePrimitiveSchemaIntoAnyOf(anyOf, option)) {
-        return true;
+        if (!scoped) return true;
+        acceptsAnything = true;
       }
     }
+    if (acceptsAnything) return { anyOf: [...anyOf, true] };
 
     if (anyOf.length === 0) {
       return false;

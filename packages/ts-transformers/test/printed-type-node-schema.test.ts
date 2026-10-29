@@ -2968,6 +2968,27 @@ type Outer<T> = Confidential<{ inner: T | ExactCopy<One, readonly ["p"]> | Sec<T
           }
         });
 
+        it("keeps a member's label beside a `Default` a binding makes `any` on both sides, with the default on the input side", async () => {
+          // `One` does not cover the default's value, so the `Default`'s own
+          // type, `any`, is a member, which makes the union that member,
+          // labeled. The result side keeps no default of a `Default` in a
+          // union, whatever its value type.
+
+          const { input, output } = await schemasOf(
+            `import type { Default } from "commonfabric";
+${DECLARATIONS}
+type Outer<T, V extends T> = Confidential<{ inner: Default<T, V> | Sec<One> }, readonly ["outer"]>;`,
+            "Outer<any, 5>",
+          );
+          const inner = (side: unknown) =>
+            ((side as Schema).properties as Record<string, Schema>).inner;
+          expect(inner(input)).toEqual({
+            ifc: { confidentiality: ["a"] },
+            default: 5,
+          });
+          expect(inner(output)).toEqual({ ifc: { confidentiality: ["a"] } });
+        });
+
         it("refuses a scope wrapper beside a member a binding makes `any`, on both sides", async () => {
           // A member that is `true` makes a union `true`, but not one with
           // a member that declares a scope, which no member of a union can.

@@ -3950,6 +3950,39 @@ describe("Schema: CFC authoring aliases", () => {
       });
     }
 
+    it("reads `Default<T, V> | Sec<{ x: string }>` under bindings, `T` bound to `any`, as `any` with the member's label and the default", async () => {
+      // The other member does not cover the default's value, so the
+      // `Default`'s own type, `any`, is a member, which makes the union that
+      // member, labeled, the default kept.
+
+      const { value, diagnostics } = await generate(`
+        type Sec<T> = Confidential<T, readonly ["a"]>;
+        type Outer<T, V extends T> = Confidential<
+          { inner: Default<T, V> | Sec<{ x: string }> },
+          readonly ["b"]
+        >;
+        interface Holder { value: Outer<any, 5> }
+      `);
+      expect((value as any).properties.inner).toEqual({
+        ifc: { confidentiality: ["a"] },
+        default: 5,
+      });
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("refuses `Default<T, V> | PerUser<string>` under bindings, `T` bound to `any`", async () => {
+      // The `Default`'s own type, `any`, stays a member beside the scope
+      // wrapper, which no member of a union can be.
+
+      await expect(generate(`
+        type Outer<T, V extends T> = Confidential<
+          { inner: Default<T, V> | PerUser<string> },
+          readonly ["b"]
+        >;
+        interface Holder { value: Outer<any, 5> }
+      `)).rejects.toThrow("A scope wrapper cannot be a member of a union.");
+    });
+
     it("refuses `T | Exact<A, P> | Exact<B, Q>` under bindings, `T` bound to `any`, whose members state `exactCopyOf` differently", async () => {
       // The whole value can hold only one.
 
