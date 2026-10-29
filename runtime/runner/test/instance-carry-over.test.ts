@@ -1097,6 +1097,21 @@ describe("instance-carry-over", () => {
       expect(result.aCount).toBe(7);
     });
 
+    it("keeps its deployed child's state through its pattern identity, where the parent's pattern last set up does not load", async () => {
+      const cell = await deployedParent("previous-unloadable", {
+        record: "absent",
+      });
+      await writeMeta(cell, {
+        patternSetupIdentity: { identity: "unloadable", symbol: "default" },
+      });
+      const before = freshStarts();
+
+      const result = await update(cell, NAMED);
+
+      expect(result.aCount).toBe(7);
+      expect(freshStarts() - before).toBe(0);
+    });
+
     it("keeps the child it carried over across a further update", async () => {
       const cell = await deployedParent("further-update");
       await update(cell, NAMED_WITH_SIBLING);

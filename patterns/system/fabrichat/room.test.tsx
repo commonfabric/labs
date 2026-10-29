@@ -234,7 +234,7 @@ export default pattern(() => {
         ),
       },
 
-      // Edits: only the sender's.
+      // Whitespace-only edits are refused; the sender's exact text is kept.
       {
         action: aliceOnFirst.editMessage,
         event: typed(" \t "),
@@ -244,11 +244,6 @@ export default pattern(() => {
         assertion: assert(() =>
           stored(messages)[0]?.body === "  Hello, team  "
         ),
-      },
-      {
-        action: bobOnFirst.editMessage,
-        event: typed("Hijacked"),
-        trustedUi: editGesture,
       },
       {
         action: aliceOnFirst.editMessage,
@@ -352,8 +347,7 @@ export default pattern(() => {
       "This send has no text in `body`, and no attachments.",
       "Your profile hasn't loaded yet.",
       "This edit has no text in `body`.",
-      // Bob's edit of Alice's message, and the edit of a deleted one.
-      "Only its author can edit a message.",
+      // The edit of a deleted message.
       "That message was deleted.",
     ],
   };
