@@ -7,7 +7,7 @@ See the [verifiable-execution document map](README.md) for navigation.
 - **Normative language:** “MUST”, “SHOULD”, etc are used in the RFC 2119 sense.
 - **Content addressing:** Hashes and references are computed via this project's
   `hashOf()` function.
-- **Types:** Where practical, names and shapes align with the memory package: the fact model in `packages/memory/interface.ts`, and the commit and protocol shapes in `packages/memory/v2.ts`.
+- **Types:** Where practical, names and shapes align with the memory package: the fact model in `runtime/memory/interface.ts`, and the commit and protocol shapes in `runtime/memory/v2.ts`.
 
 ---
 

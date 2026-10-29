@@ -183,7 +183,7 @@ so it is never the fallback. A deployment rolls the router out in this order:
    shared connection names no space, lands on whichever toolshed the route
    defaults to, and is refused for every space that toolshed does not own.
    So its storage manager always dials dedicated connections
-   (`createToolshedRuntime` in `packages/toolshed/runtime-options.ts`), and
+   (`createToolshedRuntime` in `runtime/toolshed/runtime-options.ts`), and
    the toolsheds installed in step 1 must include that behavior; the flag
    they publish on `/api/meta` is unchanged.
 5. Close public ingress to `/api/storage/memory`: stop the app host
@@ -814,7 +814,7 @@ failed send, before socket accounting can change during close:
   admission nor write scheduling.
   Failure-only canonical size measurements retain eight result fields, documents
   and schema-table entries per category, with explicit scan bounds and truncation.
-  The [memory package diagnostics reference](../../../packages/memory/README.md#routed-transport-and-quotas)
+  The [memory package diagnostics reference](../../../runtime/memory/README.md#routed-transport-and-quotas)
   defines the fields and measurement limits.
 
 The snapshot contains no payload or error text. Data message sizes are the

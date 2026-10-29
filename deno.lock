@@ -2877,24 +2877,77 @@
       "npm:zod@^4.4.3"
     ],
     "members": {
-      "packages/agent-runner": {
-        "dependencies": [
-          "jsr:@db/sqlite@0.13.0"
-        ]
-      },
-      "packages/api": {
+      "base/api": {
         "dependencies": [
           "npm:typescript@6.0.3"
         ]
       },
-      "packages/cf-harness": {
+      "base/identity": {
+        "dependencies": [
+          "npm:@noble/ed25519@^3.1.0",
+          "npm:@scure/bip39@^2.2.0"
+        ]
+      },
+      "base/iframe-sandbox": {
+        "dependencies": [
+          "npm:@types/react-dom@19.2.5",
+          "npm:@types/react@19.2.18",
+          "npm:react-dom@19.2.8",
+          "npm:react@19.2.8"
+        ]
+      },
+      "base/js-compiler": {
+        "dependencies": [
+          "npm:source-map-js@^1.2.1",
+          "npm:typescript@6.0.3"
+        ]
+      },
+      "base/schema-generator": {
+        "dependencies": [
+          "npm:typescript@6.0.3"
+        ]
+      },
+      "base/spec-model": {
+        "dependencies": [
+          "jsr:@std/assert@^1.0.19"
+        ]
+      },
+      "base/static": {
+        "dependencies": [
+          "npm:typescript@6.0.3"
+        ]
+      },
+      "base/ts-transformers": {
+        "dependencies": [
+          "npm:typescript@6.0.3"
+        ]
+      },
+      "connectors/agents/connector": {
+        "dependencies": [
+          "npm:@agentclientprotocol/sdk@1.2.1",
+          "npm:@anthropic-ai/claude-agent-sdk@0.3.206"
+        ]
+      },
+      "patterns": {
+        "dependencies": [
+          "npm:@opentelemetry/api@^1.9.1",
+          "npm:@xyflow/react@^12.11.5",
+          "npm:typescript@6.0.3"
+        ]
+      },
+      "runtime/agent-runner": {
+        "dependencies": [
+          "jsr:@db/sqlite@0.13.0"
+        ]
+      },
+      "runtime/cf-harness": {
         "dependencies": [
           "jsr:@db/sqlite@0.13.0",
           "npm:entities@8",
           "npm:marked@^18.0.6"
         ]
       },
-      "packages/cli": {
+      "runtime/cli": {
         "dependencies": [
           "jsr:@cliffy/flags@1.0.0-rc.8",
           "jsr:@cliffy/table@1.0.0-rc.8",
@@ -2912,57 +2965,19 @@
           "npm:web-tree-sitter@0.26.12"
         ]
       },
-      "packages/connectors/agents/connector": {
-        "dependencies": [
-          "npm:@agentclientprotocol/sdk@1.2.1",
-          "npm:@anthropic-ai/claude-agent-sdk@0.3.206"
-        ]
-      },
-      "packages/dashboard": {
-        "dependencies": [
-          "npm:@resvg/resvg-js@2.6.2"
-        ]
-      },
-      "packages/deno-web-test": {
+      "runtime/deno-web-test": {
         "dependencies": [
           "npm:typescript@6.0.3"
         ]
       },
-      "packages/felt": {
-        "dependencies": [
-          "jsr:@deno/esbuild-plugin@^1.2.1",
-          "jsr:@std/fmt@^1.0.10",
-          "npm:esbuild@~0.25.12"
-        ]
-      },
-      "packages/html": {
+      "runtime/html": {
         "dependencies": [
           "npm:dom-serializer@3.1.1",
           "npm:domhandler@6.0.1",
           "npm:htmlparser2@12.0.0"
         ]
       },
-      "packages/identity": {
-        "dependencies": [
-          "npm:@noble/ed25519@^3.1.0",
-          "npm:@scure/bip39@^2.2.0"
-        ]
-      },
-      "packages/iframe-sandbox": {
-        "dependencies": [
-          "npm:@types/react-dom@19.2.5",
-          "npm:@types/react@19.2.18",
-          "npm:react-dom@19.2.8",
-          "npm:react@19.2.8"
-        ]
-      },
-      "packages/js-compiler": {
-        "dependencies": [
-          "npm:source-map-js@^1.2.1",
-          "npm:typescript@6.0.3"
-        ]
-      },
-      "packages/memory": {
+      "runtime/memory": {
         "dependencies": [
           "jsr:@db/sqlite@0.13.0",
           "jsr:@denosaurs/plug@^1.1.0",
@@ -2974,19 +2989,12 @@
           "npm:ws@8.22.0"
         ]
       },
-      "packages/patterns": {
-        "dependencies": [
-          "npm:@opentelemetry/api@^1.9.1",
-          "npm:@xyflow/react@^12.11.5",
-          "npm:typescript@6.0.3"
-        ]
-      },
-      "packages/piece": {
+      "runtime/piece": {
         "dependencies": [
           "jsr:@db/sqlite@0.13.0"
         ]
       },
-      "packages/runner": {
+      "runtime/runner": {
         "dependencies": [
           "jsr:@db/sqlite@0.13.0",
           "npm:@opentelemetry/api@^1.9.1",
@@ -2996,12 +3004,7 @@
           "npm:ws@^8.21.3"
         ]
       },
-      "packages/schema-generator": {
-        "dependencies": [
-          "npm:typescript@6.0.3"
-        ]
-      },
-      "packages/shell": {
+      "runtime/shell": {
         "dependencies": [
           "npm:@lit/context@^1.1.6",
           "npm:@lit/task@^1.0.3",
@@ -3011,23 +3014,13 @@
           "npm:@opentelemetry/sdk-trace-web@^2.9.0"
         ]
       },
-      "packages/spec-model": {
-        "dependencies": [
-          "jsr:@std/assert@^1.0.19"
-        ]
-      },
-      "packages/state-inspector": {
+      "runtime/state-inspector": {
         "dependencies": [
           "jsr:@db/sqlite@0.13.0",
           "jsr:@std/assert@^1.0.19"
         ]
       },
-      "packages/static": {
-        "dependencies": [
-          "npm:typescript@6.0.3"
-        ]
-      },
-      "packages/toolshed": {
+      "runtime/toolshed": {
         "dependencies": [
           "jsr:@cmd-johnson/oauth2-client@2",
           "jsr:@db/sqlite@0.13.0",
@@ -3059,12 +3052,7 @@
           "npm:stoker@^2.0.1"
         ]
       },
-      "packages/ts-transformers": {
-        "dependencies": [
-          "npm:typescript@6.0.3"
-        ]
-      },
-      "packages/ui": {
+      "runtime/ui": {
         "dependencies": [
           "npm:@codemirror/autocomplete@^6.20.3",
           "npm:@codemirror/collab@^6.1.1",
@@ -3105,6 +3093,18 @@
         "dependencies": [
           "jsr:@std/yaml@^1.0.12",
           "npm:typescript@6.0.3"
+        ]
+      },
+      "dashboard": {
+        "dependencies": [
+          "npm:@resvg/resvg-js@2.6.2"
+        ]
+      },
+      "base/felt": {
+        "dependencies": [
+          "jsr:@deno/esbuild-plugin@^1.2.1",
+          "jsr:@std/fmt@^1.0.10",
+          "npm:esbuild@~0.25.12"
         ]
       }
     }

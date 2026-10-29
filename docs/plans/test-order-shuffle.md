@@ -50,7 +50,7 @@ kind of dependence between two `it()` calls is out of the shuffle's reach
 today.
 
 The place that would reach the rest already exists.
-[`packages/test-support/src/records/bdd.ts`](../../packages/test-support/src/records/bdd.ts)
+[`base/test-support/src/records/bdd.ts`](../../base/test-support/src/records/bdd.ts)
 is what every test file's `import { describe, it } from "@std/testing/bdd"`
 resolves to: the root import map points that specifier at this repository's
 own module and gives the standard library's a second name,

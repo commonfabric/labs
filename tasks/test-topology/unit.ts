@@ -22,7 +22,7 @@
  * is a decision listed with its reason rather than a shape a task can fall
  * into unnoticed.
  *
- * `packages/runner` is a suite of its own rather than one more member.
+ * `runtime/runner` is a suite of its own rather than one more member.
  * Nothing about how it runs differs; what differs is what its
  * measurements mean. In the reference build the workspace members
  * recorded about one and a half seconds of measured tests for every
@@ -56,9 +56,10 @@ import {
 } from "./suite.ts";
 import type { CapabilityId } from "../ci-capabilities.ts";
 import { EXCLUDED_FROM_COVERAGE_GATE } from "../test-selection/policy.ts";
+import { packageDirOf, withoutPackageParent } from "../package-layout.ts";
 
 /** The member the runner suite owns; every other member is the other one. */
-const RUNNER_MEMBER = "./packages/runner";
+const RUNNER_MEMBER = "./runtime/runner";
 
 /** How a browser half is named as a unit, so it cannot be read as a file. */
 const BROWSER_SUFFIX = "#browser-test";
@@ -70,7 +71,7 @@ const BROWSER_SUFFIX = "#browser-test";
  */
 export const RUNS_WHOLE: ReadonlyMap<string, string> = new Map([
   [
-    "./packages/identity",
+    "./base/identity",
     "its tests run in a browser through deno-web-test, which takes no file " +
     "list from a lane",
   ],
@@ -107,9 +108,9 @@ interface Member {
   browserFiles: string[];
 }
 
-/** The record scope of a member: its path with `packages/` taken off. */
+/** The record scope of a member: its path below its package's parent. */
 export function memberScope(memberPath: string): string {
-  return memberPath.replace(/^\.\//, "").replace(/^packages\//, "");
+  return withoutPackageParent(memberPath.replace(/^\.\//, ""));
 }
 
 /** The members the workspace declares. */
@@ -223,9 +224,9 @@ function measuredSetOf(
   members: readonly Member[],
 ): MeasuredSet | undefined {
   const memberPath = wholeUnit(member);
-  // The gate is over `packages/`. `tasks` is one coverage group rather
+  // The gate is over the packages. `tasks` is one coverage group rather
   // than a tree of them, and `scripts` is outside coverage accounting.
-  if (!memberPath.startsWith("packages/")) return undefined;
+  if (packageDirOf(memberPath) === undefined) return undefined;
   if (EXCLUDED_FROM_COVERAGE_GATE.has(memberPath)) return undefined;
   const units = member.run !== undefined
     ? member.files

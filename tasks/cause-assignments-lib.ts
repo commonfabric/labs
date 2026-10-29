@@ -3,7 +3,7 @@
  * and the comparison of two of them, for `check-cause-assignments.ts`.
  *
  * Each pattern level's cells are numbered, described and matched across two
- * builds by `packages/runner/src/cause-assignment.ts`, which says what a
+ * builds by `runtime/runner/src/cause-assignment.ts`, which says what a
  * cell's description holds and why. This file adds the walk from the entry
  * pattern to every level, a key naming each level that holds when numbers
  * move, and a digest naming one build.
@@ -26,7 +26,7 @@ import {
   type RenumberedCell,
   renumberedCells,
   writerDescription,
-} from "../packages/runner/src/cause-assignment.ts";
+} from "../runtime/runner/src/cause-assignment.ts";
 
 /**
  * One pattern a pattern reaches, the entry pattern included, and its

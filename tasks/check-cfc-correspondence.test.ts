@@ -11,6 +11,7 @@ import {
   collectFindings,
   type Exemption,
   exportedFunctions,
+  GOVERNED_SOURCE,
   KERNEL_DIR,
   type SourceFile,
   valueImports,
@@ -90,7 +91,7 @@ describe("check-cfc-correspondence", () => {
   describe("collectFindings()", () => {
     it("returns no findings for a manifest, kernel and citations that agree with the snapshot", () => {
       const citing: SourceFile = {
-        path: "packages/runner/src/cfc/prepare.ts",
+        path: "runtime/runner/src/cfc/prepare.ts",
         text: "// §8.12.1 decides this, and §8 frames it.\n",
       };
       expect(collectFindings(input({ citationFiles: [citing] }))).toEqual([]);
@@ -224,7 +225,7 @@ describe("check-cfc-correspondence", () => {
         expect(messages(collectFindings(input({ manifest: [row, cnfRow] }))))
           .toEqual([
             "the row for `atomLe` reads `missing`, and " +
-            "packages/runner/src/cfc/kernel/store-labels.ts exports it",
+            "runtime/runner/src/cfc/kernel/store-labels.ts exports it",
           ]);
       });
 
@@ -233,7 +234,7 @@ describe("check-cfc-correspondence", () => {
           messages(collectFindings(input({ kernelFiles: [] }))),
         ).toEqual([
           "the row for `atomLe` names " +
-          "packages/runner/src/cfc/kernel/store-labels.ts, which exports " +
+          "runtime/runner/src/cfc/kernel/store-labels.ts, which exports " +
           "no such function",
         ]);
       });
@@ -243,8 +244,8 @@ describe("check-cfc-correspondence", () => {
         expect(messages(collectFindings(input({ manifest: [row, cnfRow] }))))
           .toEqual([
             "the row for `atomLe` names " +
-            "packages/runner/src/cfc/kernel/label.ts, and " +
-            "packages/runner/src/cfc/kernel/store-labels.ts is where it is " +
+            "runtime/runner/src/cfc/kernel/label.ts, and " +
+            "runtime/runner/src/cfc/kernel/store-labels.ts is where it is " +
             "exported",
           ]);
       });
@@ -356,8 +357,8 @@ export function atomLe(a: unknown, b: unknown): boolean {
             ),
           ),
         ).toEqual([
-          "the row for `atomLe` names packages/runner/src/cfc/kernel/label.ts, " +
-          "and packages/runner/src/cfc/kernel/exchange.ts is where it is " +
+          "the row for `atomLe` names runtime/runner/src/cfc/kernel/label.ts, " +
+          "and runtime/runner/src/cfc/kernel/exchange.ts is where it is " +
           "exported",
         ]);
       });
@@ -374,7 +375,7 @@ export function atomLe(a: unknown, b: unknown): boolean {
         expect(messages(collectFindings(input({ kernelFiles: [file] }))))
           .toEqual([
             "the row for `atomLe` names " +
-            "packages/runner/src/cfc/kernel/store-labels.ts, which exports " +
+            "runtime/runner/src/cfc/kernel/store-labels.ts, which exports " +
             "no such function",
             "`atomLe()` carries no `@spec` header",
           ]);
@@ -402,7 +403,7 @@ export function atomLe(a: unknown, b: unknown): boolean {
           .toEqual([
             "the row for `atomLe` names 08-12-store-label-monotonicity.md " +
             "§8.12.1, and the header of the `atomLe()` " +
-            "packages/runner/src/cfc/kernel/store-labels.ts exports names " +
+            "runtime/runner/src/cfc/kernel/store-labels.ts exports names " +
             "08-12-store-label-monotonicity.md §8.12.4",
             "exports `atomLe()` for 08-12-store-label-monotonicity.md " +
             "§8.12.4, which no manifest row or companion names",
@@ -435,7 +436,7 @@ export { le as atomLe };
         expect(messages(collectFindings(input({ kernelFiles: [file] }))))
           .toEqual([
             "the row for `atomLe` names " +
-            "packages/runner/src/cfc/kernel/store-labels.ts, which exports " +
+            "runtime/runner/src/cfc/kernel/store-labels.ts, which exports " +
             "no such function",
             "`atomLe()` carries a header for `canWrite`",
           ]);
@@ -453,7 +454,7 @@ export { le as atomLe };
           .toEqual([[
             `${KERNEL_DIR}label.ts`,
             "`atomLe()` is also exported by " +
-            "packages/runner/src/cfc/kernel/store-labels.ts; a kernel " +
+            "runtime/runner/src/cfc/kernel/store-labels.ts; a kernel " +
             "function has one home",
           ]]);
       });
@@ -563,7 +564,7 @@ export { le as atomLe };
 
     describe("citations against the section list", () => {
       const cited = (text: string): SourceFile => ({
-        path: "packages/runner/src/cfc/prepare.ts",
+        path: "runtime/runner/src/cfc/prepare.ts",
         text,
       });
 
@@ -586,12 +587,12 @@ export { le as atomLe };
       it("accepts a citation an exemption names, and reports one it stops writing", () => {
         const exemptions: Exemption[] = [
           {
-            file: "packages/runner/src/cfc/prepare.ts",
+            file: "runtime/runner/src/cfc/prepare.ts",
             citation: "§3.2.1",
             reason: "a labs document's section",
           },
           {
-            file: "packages/runner/src/cfc/prepare.ts",
+            file: "runtime/runner/src/cfc/prepare.ts",
             citation: "§9.9.9",
             reason: "gone",
           },
@@ -608,7 +609,7 @@ export { le as atomLe };
 
       it("reports an exemption with no reason", () => {
         const exemptions: Exemption[] = [{
-          file: "packages/runner/src/cfc/prepare.ts",
+          file: "runtime/runner/src/cfc/prepare.ts",
           citation: "§3.2.1",
           reason: " ",
         }];
@@ -622,7 +623,7 @@ export { le as atomLe };
 
       it("holds an exemption to its own file", () => {
         const exemptions: Exemption[] = [{
-          file: "packages/runner/src/cfc/other.ts",
+          file: "runtime/runner/src/cfc/other.ts",
           citation: "§3.2.1",
           reason: "a labs document's section",
         }];
@@ -649,15 +650,15 @@ export { le as atomLe };
 
       it("accepts markers within budget that name a specs pull request", () => {
         const files = [
-          marked("packages/runner/src/cfc/prepare.ts", ruled + ruled),
-          marked("packages/html/src/worker/reconciler.ts", ruled),
+          marked("runtime/runner/src/cfc/prepare.ts", ruled + ruled),
+          marked("runtime/html/src/worker/reconciler.ts", ruled),
         ];
         expect(collectFindings(input({ markerFiles: files }))).toEqual([]);
       });
 
       it("reports a marker naming no specs pull request, with its line", () => {
         const file = marked(
-          "packages/runner/src/cfc/prepare.ts",
+          "runtime/runner/src/cfc/prepare.ts",
           "const x = 1;\n// SPEC-PENDING: waiting on the ruling\n",
         );
         const findings = collectFindings(input({ markerFiles: [file] }));
@@ -671,7 +672,7 @@ export { le as atomLe };
 
       it("reports markers over budget", () => {
         const file = marked(
-          "packages/runner/src/cfc/prepare.ts",
+          "runtime/runner/src/cfc/prepare.ts",
           ruled + ruled + ruled + ruled,
         );
         expect(messages(collectFindings(input({ markerFiles: [file] }))))
@@ -760,6 +761,25 @@ export { le as atomLe };
         "./k.ts",
         "./p.ts",
       ]);
+    });
+  });
+
+  describe("GOVERNED_SOURCE", () => {
+    it("names only patterns that each govern a file the repository tracks", async () => {
+      // A pattern that matches no file governs no file, so the check passes
+      // without examining the files it was written for. This happens when a
+      // directory the pattern names is moved.
+
+      const { stdout } = await new Deno.Command("git", {
+        args: ["ls-files", "-z"],
+        cwd: new URL("..", import.meta.url),
+        stdout: "piped",
+      }).output();
+      const tracked = new TextDecoder().decode(stdout).split("\0");
+      const idle = GOVERNED_SOURCE.filter((pattern) =>
+        !tracked.some((path) => pattern.test(path))
+      ).map(String);
+      expect(idle).toEqual([]);
     });
   });
 });

@@ -50,8 +50,8 @@ themselves, the semantic equivalent of apps). They review differently:
   under live subscriptions. The source is far from what runs, so a change — to a
   pattern _or to the runtime code that executes it_ — can span many abstraction
   levels with implications that aren't obvious in isolation.
-- **Platform code** (most of `packages/**`) is plain TypeScript: review it as
-  you would any TS codebase, plus this repo's conventions and the
+- **Platform code** (`base/`, `runtime/`, `dashboard/`) is plain TypeScript:
+  review it as you would any TS codebase, plus this repo's conventions and the
   anti-duplication map below.
 
 Two failure modes recur when moving fast without the whole picture:
@@ -133,12 +133,12 @@ wider sweeps as follow-ups — don't boil the ocean.
 
 For `cf-harness` runtime-semantics changes, include the system map, which reads
 as authoritative but is never a source of truth, in that coherence sweep and
-follow its update procedure in `packages/cf-harness/docs/system-map/README.md`.
+follow its update procedure in `runtime/cf-harness/docs/system-map/README.md`.
 
-For a change under `packages/runner/src/cfc/` or `packages/runner/src/cfc.ts`,
-the CFC tests under `packages/runner/test/`, the render boundaries in
-`packages/html/src/worker/reconciler.ts` and `display-fit.ts`, the harness's CFC
-enforcement in `packages/cf-harness/src/` (`cfc-*.ts`, `contracts/cfc-*.ts`,
+For a change under `runtime/runner/src/cfc/` or `runtime/runner/src/cfc.ts`, the
+CFC tests under `runtime/runner/test/`, the render boundaries in
+`runtime/html/src/worker/reconciler.ts` and `display-fit.ts`, the harness's CFC
+enforcement in `runtime/cf-harness/src/` (`cfc-*.ts`, `contracts/cfc-*.ts`,
 `sandbox/runsc-cfc-result.ts`), or a `docs/specs/cfc-*.md` document, classify it
 yourself by `docs/development/cfc-spec-correspondence.md` before reading the
 author's classification: host arrangement, conforming implementation, or
@@ -178,14 +178,14 @@ names drift, so confirm against the package's actual exports when you rely on it
 | cloning a `FabricValue`                      | `@commonfabric/data-model`                                                                                    | `structuredClone()` or `JSON.parse(JSON.stringify(...))` on `FabricValue` / cell data — drops cell links, dies on circular `$UI` trees            |
 | cloning a schema (for modification)          | `@commonfabric/data-model-schema`, several useful functions available                                         | `structuredClone()` or `JSON.parse(JSON.stringify(...))`                                                                                          |
 | (de)serializing `FabricValue`s / wire format | `@commonfabric/data-model/codec-json`                                                                         | invent a parallel serializer / `toJSON` for `FabricValue`s                                                                                        |
-| cell ↔ link conversion                       | `convertCellsToLinks` (`packages/runner/src/cell.ts`)                                                         | re-implement link conversion (don't copy the internal `traverse*` helpers in `llm-dialog.ts`)                                                     |
+| cell ↔ link conversion                       | `convertCellsToLinks` (`runtime/runner/src/cell.ts`)                                                          | re-implement link conversion (don't copy the internal `traverse*` helpers in `llm-dialog.ts`)                                                     |
 | identity / DID / keypairs                    | `@commonfabric/identity`                                                                                      | mint DIDs or keys ad hoc                                                                                                                          |
 | variable-length integer encoding             | `@commonfabric/leb128` (LEB128 or similar)                                                                    | hand-roll varint encode / decode                                                                                                                  |
 | Merkle-tree hashing                          | **N/A — we don't do Merkle-tree hashing** (we have content hashes in `data-model`, not a classic Merkle tree) | invent or import a Merkle-tree library unless specifically asked                                                                                  |
 
 `hash`, `serialize`, and `clone` are the three we re-fork most — the tree
 _already_ carries several SHA-256s (e.g. `content-hash` vs
-`packages/toolshed/lib/sha2.ts` vs inline `crypto.subtle.digest`), so steer new
+`runtime/toolshed/lib/sha2.ts` vs inline `crypto.subtle.digest`), so steer new
 code to the canonical home rather than cargo-culting a neighbor. A new such
 definition isn't automatically wrong, but the PR must justify why the canonical
 home doesn't fit; a _silent_ fork is Blocking.

@@ -18,8 +18,9 @@
 
 import { walk } from "@std/fs/walk";
 import * as path from "@std/path";
+import { packageDirNamed } from "./package-layout.ts";
 import ports from "@commonfabric/ports" with { type: "json" };
-import { CF_PERMISSION_FLAGS } from "../packages/cli/lib/cf-permissions.ts";
+import { CF_PERMISSION_FLAGS } from "../runtime/cli/lib/cf-permissions.ts";
 import {
   FragmentWriter,
   preloadArgument,
@@ -222,7 +223,7 @@ function getCfCommand(rootDir: string): string[] {
     "deno",
     "run",
     ...CF_PERMISSION_FLAGS,
-    path.join(rootDir, "packages/cli/mod.ts"),
+    path.join(rootDir, "runtime/cli/mod.ts"),
   ];
 }
 
@@ -768,6 +769,17 @@ export async function runPackageIntegration(
   filter?: string,
   only?: PatternTestList,
 ): Promise<PackageOutcome> {
+  console.log(`\n${"=".repeat(60)}`);
+  console.log(`Running integration tests for: ${pkg}`);
+  console.log(`${"=".repeat(60)}`);
+  if (pkg === "pattern-tests") {
+    // A selection that names no file ran nothing, which is not a pass.
+    const tests = await runPatternTests(rootDir, junitDir, filter, only);
+    const success = tests.length > 0 &&
+      tests.every(({ record }) => record.outcome !== "fail");
+    return { success, code: success ? 0 : 1, tests };
+  }
+
   const packageDirName = pkg === "cli-fuse"
     ? "cli"
     : pkg === "patterns-reload"
@@ -775,12 +787,8 @@ export async function runPackageIntegration(
     : pkg;
   const packageDir = path.join(
     rootDir,
-    "packages",
-    packageDirName,
+    packageDirNamed(rootDir, packageDirName),
   );
-  console.log(`\n${"=".repeat(60)}`);
-  console.log(`Running integration tests for: ${pkg}`);
-  console.log(`${"=".repeat(60)}`);
 
   const env: Record<string, string> = {
     LOG_LEVEL: "warn",
@@ -829,13 +837,7 @@ export async function runPackageIntegration(
 
   let result: { success: boolean; code: number };
 
-  if (pkg === "pattern-tests") {
-    // A selection that names no file ran nothing, which is not a pass.
-    const tests = await runPatternTests(rootDir, junitDir, filter, only);
-    const success = tests.length > 0 &&
-      tests.every(({ record }) => record.outcome !== "fail");
-    return { success, code: success ? 0 : 1, tests };
-  } else if (pkg === "cli") {
+  if (pkg === "cli") {
     // CLI uses a special shell script
     env.CF_CLI_INTEGRATION_USE_LOCAL = "1";
     result = await runCommand(
@@ -885,7 +887,7 @@ export async function runPackageIntegration(
   let tests: TestResult[] = [];
   try {
     const spool = recordsDir();
-    const prefix = `packages/${packageDirName}`;
+    const prefix = packageDirNamed(rootDir, packageDirName);
     const report = readJUnit(await Deno.readTextFile(junitPath), {
       kind: "integration",
       scope: pkg,
@@ -953,14 +955,14 @@ Notes:
 
 Environment:
   CF_BINARY      - Path to the cf binary (for pattern-tests target).
-                   Falls back to running packages/cli/mod.ts via deno.
+                   Falls back to running runtime/cli/mod.ts via deno.
 Server ports (with offset):
   Toolshed:  ${ports.toolshed} + offset
   Shell:     ${ports.shell} + offset
 
 Log files (after servers start):
-  packages/shell/local-dev-shell.log
-  packages/toolshed/local-dev-toolshed.log
+  runtime/shell/local-dev-shell.log
+  runtime/toolshed/local-dev-toolshed.log
 `);
 }
 
@@ -1201,8 +1203,8 @@ async function main(): Promise<void> {
       notes,
       logs: "the output above" +
         (serverStarted
-          ? ", packages/toolshed/local-dev-toolshed.log, and " +
-            "packages/shell/local-dev-shell.log"
+          ? ", runtime/toolshed/local-dev-toolshed.log, and " +
+            "runtime/shell/local-dev-shell.log"
           : ""),
       seconds: (Date.now() - startedAt) / 1000,
     };

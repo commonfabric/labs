@@ -11,26 +11,28 @@ signatures.
 ## Pace Layers
 
 This repository contains many packages that compose and stack to create the
-Common Fabric product.
+Common Fabric product. Each package is a directory inside `base/` or `runtime/`,
+or is one of the three top-level directories `connectors/`, `dashboard/`, and
+`patterns/`. `LAYOUT.md` says what each of these holds.
+`tasks/package-layout.ts` encodes the same rule for the repository's tools.
 
-1. Foundation: api, data-model, data-model-schema, runner, identity, memory
-2. System: schema-generator, iframe-sandbox, ts-transformers, js-compiler
-3. Capabilities: piece, html, llm, navigation
-4. Operation: cf-harness, cli, connectors, fuse, state-inspector
-5. Deployed Product: toolshed, shell, lib-shell, runtime-client
-6. User Interface: ui
-7. End-User Programs: home-schemas, patterns
+These places are layers, and dependencies run between them in one order:
+`base/`, then `runtime/`, then `connectors/`, `dashboard/`, and `patterns/`
+together. A package imports from packages in its own layer or an earlier one.
+Inside `patterns/`, the categories are ordered the same way: `system`,
+`product`, `apps`, `examples`, `showcase`, `dev`. A pattern imports from its own
+category or an earlier one. `deno task check-dependency-direction` fails on a
+production import that runs against either order, and
+`deno task check-package-cycles` fails when two packages import each other.
 
-Anything under `packages/` not named above — utilities, build tooling, test
-support, internal dashboards, example code — sits outside the layer stack.
-
-Dependencies run downward: a package imports from its own layer or a lower one.
-That is the direction the stack is designed around, and the one to hold a new
-import to. It does not describe the tree as it stands — a number of imports run
-the other way, `runner` reaching into `js-compiler` and `llm` among them — so an
-existing import upward is not a precedent for the next one. Only the weaker
-property is enforced: `deno task check-package-cycles` fails when two packages
-import each other. Layer direction rests on review.
+Inside `runtime/`, the packages stack further. `runner` and `memory` are at the
+bottom. `piece`, `html`, and `navigation` come next, then `cf-harness`, `cli`,
+`fuse`, and `state-inspector`, then `toolshed`, `shell`, `lib-shell`, and
+`runtime-client`, and `ui` is at the top. A package imports from its own level
+or a lower one. The other packages in `runtime/`, such as test support and the
+agent runner, sit outside that stack. No check enforces this order, and some
+imports in the tree run against it, so an existing import upward is not a
+precedent for the next one.
 
 When a module looks as though it belongs to a higher layer but something lower
 needs it, decide by what the module actually touches rather than by what it is
@@ -153,13 +155,13 @@ a budgeted `SPEC-PENDING` marker. `docs/development/cfc-spec-correspondence.md`
 is the procedure: how to classify a change as host arrangement, conforming
 implementation, or semantic gap, how a gap is filed as a specs pull request, and
 what to do without access to the private specs repository. It governs
-`packages/runner/src/cfc/` and `packages/runner/src/cfc.ts`, the CFC tests under
-`packages/runner/test/`, the render boundaries in
-`packages/html/src/worker/reconciler.ts` and
-`packages/html/src/worker/display-fit.ts`, the harness's CFC enforcement in
-`packages/cf-harness/src/` (`cfc-*.ts`, `contracts/cfc-*.ts`,
+`runtime/runner/src/cfc/` and `runtime/runner/src/cfc.ts`, the CFC tests under
+`runtime/runner/test/`, the render boundaries in
+`runtime/html/src/worker/reconciler.ts` and
+`runtime/html/src/worker/display-fit.ts`, the harness's CFC enforcement in
+`runtime/cf-harness/src/` (`cfc-*.ts`, `contracts/cfc-*.ts`,
 `sandbox/runsc-cfc-result.ts`), the harness console's display ceiling in
-`packages/cf-harness/console/display-ceiling.ts`, and every
+`runtime/cf-harness/console/display-ceiling.ts`, and every
 `docs/specs/cfc-*.md`; the harness audit's clause derivation is
 `docs/specs/agent-harness/04-cfc-spec-correspondence.md`.
 
@@ -182,8 +184,8 @@ are easy to miss:
   path in `tasks/typecheck.ts`. `.claude/rules/workspace-packages.md` has the
   detail.
 
-Working in `packages/ts-transformers` or `packages/schema-generator`? Start at
-that package's own `AGENTS.md`.
+Working in `base/ts-transformers` or `base/schema-generator`? Start at that
+package's own `AGENTS.md`.
 
 #### Browser tests in agent sandboxes
 
@@ -252,6 +254,8 @@ leaves out; read it when one fails, or before adding a check exemption.
 - `check-single-copy-deps`, `check-unused-deps`, `check-deno-pins` — dependency
   declarations
 - `check-package-cycles` — two packages that import each other
+- `check-dependency-direction` — a production import from a package to a later
+  layer, or from a pattern to a later category
 - `check-completion-slots` — a `cf` option or positional nobody decided about
   completing
 - `check-command-docs` — a `cf` command or shuttle verb that no live document

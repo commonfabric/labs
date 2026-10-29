@@ -169,7 +169,7 @@ Deno.test("cache-only binary builders install their entrypoint graphs", async ()
     new URL("../.github/actions/deno-install/action.yml", import.meta.url),
   );
   const toolshedDockerfile = await Deno.readTextFile(
-    new URL("../Dockerfile.toolshed", import.meta.url),
+    new URL("../runtime/toolshed/Dockerfile", import.meta.url),
   );
   const root = fromFileUrl(new URL("../", import.meta.url));
   const config = new BuildConfig({ root, toolshedFlags: [] });
@@ -832,7 +832,7 @@ Deno.test("a lane uploads what Status and a reader of a failure need", async () 
   const root = paths[0]!.replace(/\/$/, "");
   const set = measuredSetDirectory({
     suite: "workspace-unit",
-    set: { member: "packages/bakery", reachedBy: [], units: [] },
+    set: { member: "runtime/bakery", reachedBy: [], units: [] },
   });
   const written = [
     DEFAULT_COVERAGE_DIR,
@@ -1033,7 +1033,7 @@ Deno.test("Status judges the coverage gates of every run", async () => {
       GITHUB_SHA: "c".repeat(40),
       JOB_RESULTS: JSON.stringify({ tests: { result: tests } }),
       PR_NUMBER: "42",
-      DESCRIPTION: "ACCEPT_COVERAGE_DEBT: packages/memory +1 lines",
+      DESCRIPTION: "ACCEPT_COVERAGE_DEBT: runtime/memory +1 lines",
     }, {
       deno: 'printf "%s\\n" "$@"',
       gh: `case "$2" in\n` +
@@ -1051,7 +1051,7 @@ Deno.test("Status judges the coverage gates of every run", async () => {
     "-A",
     "tasks/coverage-gate.ts",
     "--body",
-    "ACCEPT_COVERAGE_DEBT: packages/memory +1 lines",
+    "ACCEPT_COVERAGE_DEBT: runtime/memory +1 lines",
     "--comment",
     "coverage-comment.json",
     "--pr",
@@ -1104,7 +1104,7 @@ Deno.test("Status judges the coverage gates of every run", async () => {
       "tasks/coverage-gate.ts",
       "--default-branch",
       "--body",
-      "ACCEPT_COVERAGE_DEBT: packages/memory +1 lines",
+      "ACCEPT_COVERAGE_DEBT: runtime/memory +1 lines",
       "--of",
       "7",
       "--full",
@@ -1312,7 +1312,7 @@ Deno.test("the Dashboard workflow records no tests", async () => {
   const dashboard = withoutComments(await workflow("dashboard-image.yml"));
   const relay = withoutComments(await workflow("test-records-relay.yml"));
 
-  // CI runs `packages/dashboard`'s test task on the same commit and records
+  // CI runs `dashboard`'s test task on the same commit and records
   // what it runs. Recording the same task again here would file each of those
   // tests twice against one commit, so this workflow takes no part in test
   // records at either end: it spools nothing, and the relay does not follow

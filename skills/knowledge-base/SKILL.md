@@ -29,7 +29,7 @@ When specs contradict other docs, **specs win**.
 
 Tests and patterns that demonstrate actual behavior:
 
-- `packages/patterns/` - Pattern examples showing what works
+- `patterns/` - Pattern examples showing what works
 - `**/test/**` - Test files proving expected behavior
 
 These show reality, not aspirations.
@@ -38,9 +38,9 @@ These show reality, not aspirations.
 
 Core system implementation:
 
-- `packages/runner/` - Execution engine
-- `packages/runner/src/builder/` - Compilation
-- `packages/memory/` - Storage layer
+- `runtime/runner/` - Execution engine
+- `runtime/runner/src/builder/` - Compilation
+- `runtime/memory/` - Storage layer
 
 Code is always right about what it does.
 

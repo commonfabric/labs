@@ -76,8 +76,8 @@ or evicted from the bounded statistics map still contribute to the step's
 report. It adds each run once rather than combining parent-inclusive totals with
 their children's totals.
 
-The implementation is in `packages/runner/src/read-stats.ts`, the scheduler
-completion path, and `packages/cli/lib/action-read-report.ts`.
+The implementation is in `runtime/runner/src/read-stats.ts`, the scheduler
+completion path, and `runtime/cli/lib/action-read-report.ts`.
 
 ## Pattern-test budgets
 

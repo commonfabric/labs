@@ -7,3 +7,4 @@
 {"date":"2026-09-25","from":{"k":"unit","s":"tasks","n":"baseline override parser reads only a marker starting a line"},"to":{"k":"unit","s":"tasks","n":"acceptedCoverageDebt reads only a marker starting a line"}}
 {"date":"2026-09-25","from":{"k":"unit","s":"tasks","n":"coverage debt gating follows changed source groups"},"to":{"k":"unit","s":"tasks","n":"coverageGroupsForChangedFiles names the source group of each changed source file"}}
 {"date":"2026-09-25","from":{"k":"unit","s":"tasks","n":"a workspace member deeper than a group is not one of this ratchet's"},"to":{"k":"unit","s":"tasks","n":"acceptedCoverageDebt reads a workspace member nested below packages"}}
+{"date": "2026-12-01", "from": {"k": "unit", "s": "tasks", "n": "acceptedCoverageDebt reads a workspace member nested below packages"}, "to": {"k": "unit", "s": "tasks", "n": "acceptedCoverageDebt reads a workspace member nested below its package's directory"}}

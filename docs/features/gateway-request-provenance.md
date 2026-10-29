@@ -10,17 +10,17 @@ terminal are indistinguishable. Provenance is what separates them, in the
 records the gateway already keeps.
 
 The fields, and how each one is obtained, are in
-[`packages/cf-harness/README.md`](../../packages/cf-harness/README.md#request-provenance).
+[`runtime/cf-harness/README.md`](../../runtime/cf-harness/README.md#request-provenance).
 This document holds the invariants behind them.
 
 ## One vocabulary, two senders
 
 `cf-harness` sends provenance on every gateway request it makes. Toolshed sends
 it on the gateway requests its `/api/ai/llm` routes and its web search make;
-[`packages/toolshed/README.md`](../../packages/toolshed/README.md#gateway-request-provenance)
+[`runtime/toolshed/README.md`](../../runtime/toolshed/README.md#gateway-request-provenance)
 says what it reports.
 
-Both build their headers from `packages/cf-harness/src/provenance.ts`, which
+Both build their headers from `runtime/cf-harness/src/provenance.ts`, which
 toolshed imports as `@commonfabric/cf-harness/provenance`. One implementation
 means one sanitizer, and it means a field cannot exist for one sender and not
 the other. The `User-Agent` opens with the name of the sending program, so the
@@ -123,7 +123,7 @@ process rather than the requests of one caller.
 
 Naming the caller behind a toolshed request means the caller naming itself.
 Nothing in a request to `/api/ai/llm` says which space or which piece it came
-from: the runner's LLM builtins send neither, and `packages/llm/src/client.ts`
+from: the runner's LLM builtins send neither, and `base/llm/src/client.ts`
 sends no provenance of its own. Until they do, toolshed has nothing to report,
 and reporting a guess would be worse than reporting nothing.
 

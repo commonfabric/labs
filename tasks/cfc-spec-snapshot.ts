@@ -7,7 +7,7 @@
  * The specification lives in `commonfabric/specs`, which is private, and this
  * repository is public, so nothing the public build runs may read it. What
  * crosses is this snapshot, committed at
- * `packages/runner/src/cfc/kernel/spec-snapshot.json`: the specs commit it
+ * `runtime/runner/src/cfc/kernel/spec-snapshot.json`: the specs commit it
  * was read at, every section number a chapter heading carries, and for every
  * function a pseudocode block defines, the chapter file, the nearest
  * preceding section number, the function name and a SHA-256 of the block.
@@ -47,8 +47,7 @@ import { utf8Compare } from "@commonfabric/utils/utf8";
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
 /** Where the snapshot is written, repository-relative. */
-export const SNAPSHOT_PATH =
-  "packages/runner/src/cfc/kernel/spec-snapshot.json";
+export const SNAPSHOT_PATH = "runtime/runner/src/cfc/kernel/spec-snapshot.json";
 
 /** One function a pseudocode block defines. */
 export interface SnapshotFunction {

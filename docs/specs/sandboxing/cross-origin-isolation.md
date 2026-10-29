@@ -131,7 +131,7 @@ keeping the page non-isolated is the lower of the two.
   absent from a fresh compartment unless endowed, and it is not endowed.
   `Worker` is not endowed either, so a pattern cannot spawn the second thread
   that the counting-thread timer needs. See
-  [`packages/runner/src/sandbox/compartment-globals.ts`](../../../packages/runner/src/sandbox/compartment-globals.ts).
+  [`runtime/runner/src/sandbox/compartment-globals.ts`](../../../runtime/runner/src/sandbox/compartment-globals.ts).
 - Layer B, the non-isolated page. Below the JavaScript level, a non-isolated
   document is one the browser will not give a working `SharedArrayBuffer` or
   shared `WebAssembly.Memory`, for any code in the page, no matter what. This
@@ -211,13 +211,13 @@ top-level decision.
 
 - Header site. The shell document and its assets are served by the shell router
   at
-  [`packages/toolshed/routes/shell/shell.index.ts`](../../../packages/toolshed/routes/shell/shell.index.ts).
+  [`runtime/toolshed/routes/shell/shell.index.ts`](../../../runtime/toolshed/routes/shell/shell.index.ts).
   A middleware there pins `Cross-Origin-Opener-Policy: same-origin-allow-popups`
   (a non-isolating COOP) and `Cross-Origin-Embedder-Policy: unsafe-none` on
   every response. The middleware runs after the route handler, so it overrides
   any header an upstream change might set.
 - Regression guard. The test at
-  [`packages/toolshed/routes/shell/shell.test.ts`](../../../packages/toolshed/routes/shell/shell.test.ts)
+  [`runtime/toolshed/routes/shell/shell.test.ts`](../../../runtime/toolshed/routes/shell/shell.test.ts)
   asserts that the served document does not carry the isolating COOP+COEP
   combination. A future change that flips the app to cross-origin isolated will
   fail this test loudly.

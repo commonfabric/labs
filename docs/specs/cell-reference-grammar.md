@@ -8,7 +8,7 @@ admits a new requirement. It records the requirements the grammar answers to,
 the decisions taken against them, the alternatives a reader would ask about, and
 the decisions elsewhere in this tree that each confirms or replaces.
 
-`packages/runner/src/cell-reference.ts` owns the shared reader and renderer.
+`runtime/runner/src/cell-reference.ts` owns the shared reader and renderer.
 [Migration](#migration) describes their adoption across callers.
 [#6775](https://github.com/commonfabric/labs/issues/6775) is the question this
 document answers.
@@ -19,7 +19,7 @@ Seven nouns, each one thing, in the order a reference names them.
 
 - **Space** — where documents live; written as a DID, or as a **space name**,
   which a session resolves to a DID and a pattern cannot. Today the DID is
-  derived from the name (`createSession` in `packages/identity/src/session.ts`);
+  derived from the name (`createSession` in `base/identity/src/session.ts`);
   a registry could resolve it instead, and the grammar assumes nothing about
   which.
 - **Document** — the unit the store holds: an id (`of:fid1:…`, the `id` field)
@@ -27,7 +27,7 @@ Seven nouns, each one thing, in the order a reference names them.
   store calls it an entity.
 - **Piece** — a running pattern, named by its **result document** — by id, or by
   a **slug**: a name registered in a space, resolved by reading the space's slug
-  document for it (`slugIdForSpace` in `packages/runner/src/slugs.ts`), and held
+  document for it (`slugIdForSpace` in `runtime/runner/src/slugs.ts`), and held
   to lowercase letters, digits, and hyphens. Its inputs live in its **arguments
   document**, which the result's metadata links to; the CLI's "arguments cell"
   is that document's root.
@@ -128,7 +128,7 @@ writers write (R12 names them), and the form every `cf` command reads in its
 target positional and prints in every address it publishes — the bare alias
 included, since it designates the same piece. The CLI's bare alias
 (`pieceId[@scope]`, `pieceId/path` at a link endpoint, and a slug on its own) is
-a convenience over this grammar and follows it; `packages/cli/README.md` records
+a convenience over this grammar and follows it; `runtime/cli/README.md` records
 that new capability lands in the reference first and the alias never grows one
 the reference lacks. The alias reads a bare string piece-first, where this
 grammar reads it as a path against the context's piece
@@ -139,11 +139,11 @@ position, and the `./` form reaches the grammar's reading anywhere.
 Three neighboring grammars name related things and are **not** this grammar,
 though each is held to it in a stated way:
 
-| Grammar                                                             | Where defined                                                                             | Relation to this document                                                                                                                                                                                                            |
-| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Shell page URL, `https://<host>/<space>/<piece>/<path>`             | `packages/shell` routes; `parseFabricUrl` in `packages/runner/src/fabric-url.ts` reads it | Mutually translatable with a reference, segment for segment ([R11](#r11--translatable-with-its-siblings))                                                                                                                            |
-| Pattern import specifier, `cf:[/<space>/]<ref>[/<subpath>][@<pin>]` | [Pattern imports](pattern-imports/README.md#specifier-syntax)                             | Shares the reserved characters and the trailing-qualifier position; its pin is a qualifier this grammar registers ([D2](#d2--is-the-qualifier-introducer-and-nothing-else))                                                          |
-| Projection grammar, `--select 'topic@,topic.title'`                 | `packages/cli/README.md`, "Shell completion"                                              | Its own grammar by its own statement: a list splits on `,`, a path on `.`, and a trailing `@` asks for "a position's address", in its own words. It borrows `@` and `,`; the [inventory](#character-inventory) records the borrowing |
+| Grammar                                                             | Where defined                                                                           | Relation to this document                                                                                                                                                                                                            |
+| ------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Shell page URL, `https://<host>/<space>/<piece>/<path>`             | `runtime/shell` routes; `parseFabricUrl` in `runtime/runner/src/fabric-url.ts` reads it | Mutually translatable with a reference, segment for segment ([R11](#r11--translatable-with-its-siblings))                                                                                                                            |
+| Pattern import specifier, `cf:[/<space>/]<ref>[/<subpath>][@<pin>]` | [Pattern imports](pattern-imports/README.md#specifier-syntax)                           | Shares the reserved characters and the trailing-qualifier position; its pin is a qualifier this grammar registers ([D2](#d2--is-the-qualifier-introducer-and-nothing-else))                                                          |
+| Projection grammar, `--select 'topic@,topic.title'`                 | `runtime/cli/README.md`, "Shell completion"                                             | Its own grammar by its own statement: a list splits on `,`, a path on `.`, and a trailing `@` asks for "a position's address", in its own words. It borrows `@` and `,`; the [inventory](#character-inventory) records the borrowing |
 
 ## Requirements
 
@@ -159,21 +159,21 @@ pattern resolves from the string alone and so requires a DID and a handle; a
 session-holding reader resolves a space name and a slug as well, by whatever
 mechanism its session has — and not in what the grammar _admits_.
 
-Source: `packages/cli/README.md` ("the one reference syntax of the fabric"); the
-doc comment heading `packages/cli/lib/llm-friendly-ref.ts`.
+Source: `runtime/cli/README.md` ("the one reference syntax of the fabric"); the
+doc comment heading `runtime/cli/lib/llm-friendly-ref.ts`.
 
 ### R2 — Every dimension of a link's address has a written form
 
 A stored link addresses a cell by `id`, `space`, `path`, and `scope`, and every
 value any of those can hold in storage can be written as a reference. In
 particular the grammar's scope vocabulary is the storage layer's: `LinkScope` in
-`packages/api/index.ts` is `"inherit" | "space" | "user" | "session"`, and all
+`base/api/index.ts` is `"inherit" | "space" | "user" | "session"`, and all
 four are writable.
 
 Source: [Scoped cell instances](scoped-cell-instances.md#goals) requires scope
 to be "expressible in TypeScript authoring, generated schema, normalized links,
 and serialized sigil links". A stored link's `scope` is a `LinkScope`
-(`CellLinkRefPayload` in `packages/runner/src/sigil-types.ts`), which is where
+(`CellLinkRefPayload` in `runtime/runner/src/sigil-types.ts`), which is where
 the fourth value lives; the writer's input, `NormalizedFullLink`, is typed to
 the three, and the grammar has to write what storage holds rather than what one
 caller is typed to pass.
@@ -205,8 +205,8 @@ guessing.
 Source: `parseLLMFriendlyLink(target, space)` takes a fallback space; `cf` takes
 `--space` (or `CF_SPACE`) and `--cell`, and its positional path is a path
 against that cell, and "a relative path never does" begin with `/`
-(`packages/cli/README.md`, "Writing the target"); `parseLinkPrimitive` in
-`packages/runner/src/link-types.ts` resolves a stored link with no `id` against
+(`runtime/cli/README.md`, "Writing the target"); `parseLinkPrimitive` in
+`runtime/runner/src/link-types.ts` resolves a stored link with no `id` against
 its base cell.
 
 ### R5 — Absence means the context's, and the empty context is the base
@@ -235,7 +235,7 @@ Source: #6775.
 
 A value that is legal in one slot must not also be a legal, differently meaning
 value in another slot that is written with the same introducer. Space names are
-free-form — `createSession` in `packages/identity/src/session.ts` takes any
+free-form — `createSession` in `base/identity/src/session.ts` takes any
 string as a derivation seed — so any rule that relies on a space never being
 named `user` is a rule the fabric does not enforce.
 
@@ -257,8 +257,8 @@ holding `#` when entering it at a shell with `extendedglob` enabled. A leading
 `#` in a wish operand also needs quoting where it would start a shell comment;
 Bash completion escapes that leading character.
 
-Source: shell quoting examples in `packages/cli/README.md` and completion in
-`packages/cli/lib/completion/script.ts`.
+Source: shell quoting examples in `runtime/cli/README.md` and completion in
+`runtime/cli/lib/completion/script.ts`.
 
 ### R9 — The next qualifier costs no new character
 
@@ -274,7 +274,7 @@ Source: [Pattern imports](pattern-imports/README.md#specifier-syntax) places
 An address one command publishes is the whole target of the next, unchanged: no
 reassembly, no flag beside it, no part of it read out and passed separately.
 
-Source: `packages/cli/README.md`, "Every address this CLI publishes is that one
+Source: `runtime/cli/README.md`, "Every address this CLI publishes is that one
 string".
 
 ### R11 — Translatable with its siblings
@@ -283,17 +283,17 @@ A reference, a shell page URL, and a `cf:` import specifier that name the same
 cell translate into one another segment for segment, with no reordering and no
 character that one has and another must escape.
 
-Source: `parseFabricUrl` in `packages/runner/src/fabric-url.ts` reads both the
+Source: `parseFabricUrl` in `runtime/runner/src/fabric-url.ts` reads both the
 page URL and the reference today, and is where a translation that stopped
 holding would first fail.
 
 ### R12 — The forms that are emitted keep reading
 
 A stored link is fields — `id`, `space`, `path`, and `scope`
-(`packages/runner/src/sigil-types.ts`) — and a reference string is a rendering
+(`runtime/runner/src/sigil-types.ts`) — and a reference string is a rendering
 of them, so the runtime never needs string compatibility for a link. What holds
 the string durably is small and known: the `ref` the cf-harness handle table
-keeps with a run's state (`packages/cf-harness/src/contracts/handle-table.ts`),
+keeps with a run's state (`runtime/cf-harness/src/contracts/handle-table.ts`),
 the `@link` strings the LLM dialog writes into tool results, and rendered
 markdown in documents people keep; beyond those, pasted text, tool output, and
 documents in this tree.
@@ -306,11 +306,11 @@ retirement policy stated beside it; [Migration](#aliases) keeps the
 table. No alias is precedent for another.
 
 Source: the writers that render a reference today — `createLLMFriendlyLink` in
-the runner; `linkAddress` in `packages/patterns/notes/reference-address.ts`, a
+the runner; `linkAddress` in `patterns/system/notes/reference-address.ts`, a
 copy of it that a pattern can import; `canonicalAddress` in
-`packages/cli/lib/callable.ts`; `decomposeUrl` in
-`packages/cli/commands/piece.ts`, which renders a `--url`'s space _name_; and
-`renderPosition` in `packages/cli/lib/shuttle/place.ts`, which writes what `pwd`
+`runtime/cli/lib/callable.ts`; `decomposeUrl` in
+`runtime/cli/commands/piece.ts`, which renders a `--url`'s space _name_; and
+`renderPosition` in `runtime/cli/lib/shuttle/place.ts`, which writes what `pwd`
 prints — plus the bare form `addressArgument` prints there.
 
 ## Character inventory
@@ -423,7 +423,7 @@ single `/` roots at the context's space, and neither roots at the context's
 position. The space segment is a DID or a name; a segment holding `:` is a DID,
 and one without is a space name, which a session resolves to a DID — which is
 the rule the CLI already applies to the piece segment (`validatePieceSegment`
-and `namesResolvedParts` in `packages/cli/lib/llm-friendly-ref.ts`), now applied
+and `namesResolvedParts` in `runtime/cli/lib/llm-friendly-ref.ts`), now applied
 to both; `parseReferenceParts` itself holds neither segment to a form.
 
 A **context** is a cell address with parts missing — a space, a piece, a path
@@ -632,7 +632,7 @@ Serves R9.
 A piece is named by its result document — the one its id names, that a slug
 points at and other pieces link to. Its inputs live in a second document, the
 **arguments document**, which the result links to through a hidden field named
-`argument` (`getMetaLink` in `packages/runner/src/link-utils.ts`: "our internal
+`argument` (`getMetaLink` in `runtime/runner/src/link-utils.ts`: "our internal
 and argument cells are linked to by the result cell"). The arguments document is
 a member of the piece, not a variant of it, and is written as one: `#argument`
 on the piece segment, before the path, so the string reads in the order the
@@ -670,7 +670,7 @@ one thing, in one place), R11, and R8 under the exception it states.
 
 **Confirms.** The `#argument` token and its meaning, the `--input` flag, and the
 `#argument`-only rule of `splitArgumentSuffix` in
-`packages/cli/lib/llm-friendly-ref.ts`; `#result` is an addition, the default's
+`runtime/cli/lib/llm-friendly-ref.ts`; `#result` is an addition, the default's
 spelling. The `Owner#member` notation of Javadoc and Ruby documentation is the
 precedent: the member of a named thing.
 
@@ -751,7 +751,7 @@ Serves R10 (an address is passed on whole because there is nothing in it a
 reader would want to strip) and keeps R9 honest: "no new character" is only true
 if the grammar refuses the requirements that are not addressing.
 
-**Confirms.** `packages/cli/README.md`: "No schema is inlined and no
+**Confirms.** `runtime/cli/README.md`: "No schema is inlined and no
 write-redirect flag rides along."
 
 ### D10. Reader and writer share one context
@@ -835,7 +835,7 @@ and then they are the canonical reading.
 | reader, same context | `//S/X@user/items`  | piece written → space from context, path from root, scope from context |
 | reader, no context   | `//S/X@space/items` | a different cell — the requester's difference, not the writer's        |
 
-**Library.** One module, `packages/runner/src/cell-reference.ts`, owns both
+**Library.** One module, `runtime/runner/src/cell-reference.ts`, owns both
 halves and the context between them:
 
 ```text
@@ -1017,12 +1017,12 @@ remain readable through the compatibility alias (R12).
    `contextSpace` and scope `space`, so a caller that passes a space gets
    its context-relative output, and one that passes none gets the complete form
    under [D7](#d7-what-a-writer-writes). The harness handle table and
-   `linkAddress` in `packages/patterns/notes/reference-address.ts` call the
+   `linkAddress` in `patterns/system/notes/reference-address.ts` call the
    shared renderer directly; `canonicalAddress` in
-   `packages/cli/lib/callable.ts` and
-   `decomposeUrl` in `packages/cli/commands/piece.ts` write `//<space>/`, and
+   `runtime/cli/lib/callable.ts` and
+   `decomposeUrl` in `runtime/cli/commands/piece.ts` write `//<space>/`, and
    the name alias is refused. `renderPosition` in
-   `packages/cli/lib/shuttle/place.ts` delegates to `renderCellReference` — its
+   `runtime/cli/lib/shuttle/place.ts` delegates to `renderCellReference` — its
    scope half, `renderScope`, writes the `@scope` suffix D3 keeps. The context
    controls abbreviation: `pwd` passes no context and prints the complete form, a listing
    passes the place and abbreviates its rows, under the listing's own rule that
@@ -1031,10 +1031,10 @@ remain readable through the compatibility alias (R12).
    through `cd` onto the row it named — is the writer migration's test where it
    is used. Every address the CLI publishes is in this grammar.
 3. **Documents and tests.** The live documents that quote the form: the grammar
-   line in `packages/cli/README.md` and `docs/common/verbs/over-the-cli.md`; the
+   line in `runtime/cli/README.md` and `docs/common/verbs/over-the-cli.md`; the
    examples in `docs/tutorial/06-workflow.md`; the doc comment on
-   `packages/cli/lib/llm-friendly-ref.ts` and its `splitArgumentSuffix`; the
-   `#argument` paragraphs and completion in `packages/cli/README.md`; and
+   `runtime/cli/lib/llm-friendly-ref.ts` and its `splitArgumentSuffix`; the
+   `#argument` paragraphs and completion in `runtime/cli/README.md`; and
    `docs/plans/shuttle/grammar.md`, which quotes the forms `pwd` and `ls` print.
    Tests and pattern baselines that hold a rendered reference follow the writer.
 4. **The specifier's pin.** [Pattern imports](pattern-imports/README.md) keep
@@ -1058,16 +1058,16 @@ retirement policy (R12):
 
 | Decision                                                                                                                 | Where                                                                   | This document                                                                                                                     |
 | ------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| The reference is the one syntax; the bare form is an alias that never leads                                              | `packages/cli/README.md`; `llm-friendly-ref.ts` doc comment             | confirms (R1)                                                                                                                     |
+| The reference is the one syntax; the bare form is an alias that never leads                                              | `runtime/cli/README.md`; `llm-friendly-ref.ts` doc comment             | confirms (R1)                                                                                                                     |
 | Space by slash depth; leading `@` namespace rejected                                                                     | [Pattern imports](pattern-imports/README.md#alternatives-considered)    | confirms and extends to the reference (D1)                                                                                        |
 | `@` reserved for the trailing qualifier; the pin lives there                                                             | [Pattern imports](pattern-imports/README.md#specifier-syntax)           | confirms (D2); imports keep their bare pin until additional qualifiers warrant revisiting it                                                                 |
 | Scope is expressible in every layer, on a `space < user < session` lattice                                               | [Scoped cell instances](scoped-cell-instances.md)                       | confirms, and gives `inherit` its written form (D3)                                                                               |
-| The space rides in front only when it differs; the scope only when not the base                                          | `createLLMFriendlyLink`; `packages/cli/README.md`                       | confirms, as the case of a context that knows the space and holds scope `space` (D7, D10)                                         |
-| The positional path is a path against the target cell and never begins with `/`                                          | `packages/cli/README.md`, "Writing the target"                          | confirms as the piece-relative form (R4, D1)                                                                                      |
-| A stored link with no `id` is the base cell's document, path from its root                                               | `parseLinkPrimitive` in `packages/runner/src/link-types.ts`             | confirms as a reader with a one-part context: the base cell (D10)                                                                 |
-| A resolved link rendered without context states its space and scope | `canonicalRef` in `packages/cf-harness/src/handle-table.ts` | the empty context writes every known part of a resolved link (D7)                                               |
+| The space rides in front only when it differs; the scope only when not the base                                          | `createLLMFriendlyLink`; `runtime/cli/README.md`                       | confirms, as the case of a context that knows the space and holds scope `space` (D7, D10)                                         |
+| The positional path is a path against the target cell and never begins with `/`                                          | `runtime/cli/README.md`, "Writing the target"                          | confirms as the piece-relative form (R4, D1)                                                                                      |
+| A stored link with no `id` is the base cell's document, path from its root                                               | `parseLinkPrimitive` in `runtime/runner/src/link-types.ts`             | confirms as a reader with a one-part context: the base cell (D10)                                                                 |
+| A resolved link rendered without context states its space and scope | `canonicalRef` in `runtime/cf-harness/src/handle-table.ts` | the empty context writes every known part of a resolved link (D7)                                               |
 | `#argument` is the one suffix, split off before anything else parses                                                     | `splitArgumentSuffix`                                                   | confirms the token; **replaces** its slot — the member sits on the piece segment, `#` in a path is data — and adds `#result` (D6) |
-| The projection grammar is its own; `--schema @` is the file form                                                         | `packages/cli/README.md`, "Shell completion"                            | confirms as out of scope; records the borrowed characters                                                                         |
+| The projection grammar is its own; `--schema @` is the file form                                                         | `runtime/cli/README.md`, "Shell completion"                            | confirms as out of scope; records the borrowed characters                                                                         |
 | The space is written `/@<space>/`                                                                                        | `parseReferenceParts`; `createLLMFriendlyLink`                          | **replaces** (D1)                                                                                                                 |
 | A bare `@word` is the whole qualifier vocabulary                                                                         | `parseScopedIdSegment`, `CELL_SCOPE_VALUES`                             | **replaces** with the named form; the bare form survives as the scope's abbreviation (D2, D3)                                     |
 

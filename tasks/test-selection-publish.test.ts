@@ -60,12 +60,12 @@ const TOPOLOGY: Suite[] = [{
   id: "workspace-unit",
   recordSurfaces: [{ kind: "unit", scope: "memory" }],
   needs: ["deno"],
-  units: ["packages/memory/test/space.test.ts"],
+  units: ["runtime/memory/test/space.test.ts"],
   unavailable: [],
   whole: [],
   locate: (record) =>
     record.test.k === "unit" && record.test.s === "memory"
-      ? { level: "unit", unit: "packages/memory/test/space.test.ts" }
+      ? { level: "unit", unit: "runtime/memory/test/space.test.ts" }
       : undefined,
   command: () => Promise.resolve([]),
 }];
@@ -80,7 +80,7 @@ const suites = () => Promise.resolve(TOPOLOGY);
 const noPrevious = () => Promise.resolve(undefined);
 
 /** The one unit that topology holds. */
-const UNIT = "packages/memory/test/space.test.ts";
+const UNIT = "runtime/memory/test/space.test.ts";
 
 /**
  * A topology whose one suite places a record by the file it carries, the
@@ -526,7 +526,7 @@ function laneObject(
         hooksMeasurementName(
           "workspace-unit",
           measured,
-          "packages/memory/test/space.test.ts",
+          "runtime/memory/test/space.test.ts",
         ),
         hooks * 1000,
       ),
@@ -591,7 +591,7 @@ describe("publish()", () => {
     // dropped for naming a suite that does not exist.
     expect(manifest!.entries[0]!.suite).toBe("workspace-unit");
     expect(manifest!.entries[0]!.unit).toBe(
-      "packages/memory/test/space.test.ts",
+      "runtime/memory/test/space.test.ts",
     );
     // The failure at c1 that c2 went on to fix is a new real test failure
     // on main, and one there is weighted by where it happened. The 1.5 is
@@ -609,8 +609,8 @@ describe("publish()", () => {
     const measured: Suite = {
       ...TOPOLOGY[0]!,
       measured: [{
-        member: "packages/memory",
-        reachedBy: ["packages/memory/"],
+        member: "runtime/memory",
+        reachedBy: ["runtime/memory/"],
         units: [UNIT],
       }],
     };
@@ -632,7 +632,7 @@ describe("publish()", () => {
     expect(
       manifest.entries.filter((entry) => entry.suite === "coverage-gate")
         .map((entry) => [entry.test, entry.unit]),
-    ).toEqual([[gate, "workspace-unit/packages/memory"]]);
+    ).toEqual([[gate, "workspace-unit/runtime/memory"]]);
     expect(manifest.lanes.flatMap((lane) => lane.batches.map((b) => b.suite)))
       .not.toContain("coverage-gate");
     expect(manifest.lanes.flatMap((lane) => lane.batches.map((b) => b.suite)))
@@ -677,7 +677,7 @@ describe("publish()", () => {
     const manifest = await publishedManifest(created);
     expect(
       manifest.calibration.suites["workspace-unit"]?.unitHooks?.[
-        "packages/memory/test/space.test.ts"
+        "runtime/memory/test/space.test.ts"
       ],
     ).toBeCloseTo(7.5, 0);
     const state = [...created.keys()].find((name) => name.includes("/state/"));
@@ -686,7 +686,7 @@ describe("publish()", () => {
       hooksMeasurementName(
         "workspace-unit",
         false,
-        "packages/memory/test/space.test.ts",
+        "runtime/memory/test/space.test.ts",
       ),
     ]);
   });
@@ -1104,7 +1104,7 @@ describe("publish()", () => {
           ...TOPOLOGY[0]!,
           variant: "server-execution",
           unavailable: [{
-            unit: "packages/memory/test/space.test.ts",
+            unit: "runtime/memory/test/space.test.ts",
             leafName: "space > writes a fact",
             phase: "phase-2",
             reason: "the ON arm cannot run it yet",
@@ -1121,7 +1121,7 @@ describe("publish()", () => {
     expect(manifest!.unavailable).toEqual([{
       suite: "workspace-unit",
       variant: "server-execution",
-      unit: "packages/memory/test/space.test.ts",
+      unit: "runtime/memory/test/space.test.ts",
       leafName: "space > writes a fact",
       phase: "phase-2",
       reason: "the ON arm cannot run it yet",
@@ -1874,8 +1874,8 @@ describe("publish() over an aggregate holding tests the tree has lost", () => {
         [SILENT]: { ...emptyState(), runsByDay: { "2026-08-20": 3 } },
       },
       files: {
-        [DELETED]: "packages/memory/test/erase.test.ts",
-        [SILENT]: "packages/memory/test/unreported.test.ts",
+        [DELETED]: "runtime/memory/test/erase.test.ts",
+        [SILENT]: "runtime/memory/test/unreported.test.ts",
       },
     });
   }
@@ -1992,7 +1992,7 @@ describe("publish() over a state written further ahead than it reads", () => {
           },
         },
       },
-      files: { [KEPT]: "packages/memory/test/space.test.ts" },
+      files: { [KEPT]: "runtime/memory/test/space.test.ts" },
     });
   }
 
@@ -2679,8 +2679,8 @@ describe("publish() reporting what measured sets cost", () => {
     Promise.resolve<Suite[]>([{
       ...TOPOLOGY[0]!,
       measured: [{
-        member: "packages/memory",
-        reachedBy: ["packages/memory/"],
+        member: "runtime/memory",
+        reachedBy: ["runtime/memory/"],
         units: [UNIT],
       }],
     }]);
@@ -2703,7 +2703,7 @@ describe("publish() reporting what measured sets cost", () => {
       )
     );
     expect(said).toContain(
-      "test selection: workspace-unit/packages/memory costs 52s with " +
+      "test selection: workspace-unit/runtime/memory costs 52s with " +
         "coverage on, past LOCAL_COVERAGE_MAX_SECONDS",
     );
   });
@@ -2860,7 +2860,7 @@ describe("the baselines a publish carries", () => {
       object(commit, "pass", at, branch) +
       coverageRecords({
         groups: new Map([["workspace", 900]]),
-        sets: new Map([["workspace-unit/packages/memory", 40]]),
+        sets: new Map([["workspace-unit/runtime/memory", 40]]),
         cold: false,
       }).map(serializeRecordLine).join("");
     const { store, created } = fakeStore({
@@ -2869,7 +2869,7 @@ describe("the baselines a publish carries", () => {
     });
     const carried = {
       suite: "workspace-unit",
-      member: "packages/memory",
+      member: "runtime/memory",
       commit: "c0",
       createdAt: "2026-08-19T23:00:00.000Z",
       uncoveredLines: 41,
@@ -2886,7 +2886,7 @@ describe("the baselines a publish carries", () => {
     expect((await publishedManifest(created)).coverageBaselines).toEqual([
       {
         suite: "workspace-unit",
-        member: "packages/memory",
+        member: "runtime/memory",
         commit: "c1",
         createdAt: "2026-08-20T01:00:00.000Z",
         uncoveredLines: 40,

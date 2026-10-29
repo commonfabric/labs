@@ -64,7 +64,7 @@ default-app integration flow supports trace capture:
 ```sh
 HEADLESS=true API_URL=http://localhost:8000 FRONTEND_URL=http://localhost:5173 \
 CF_CAPTURE_TRIGGER_TRACE=1 \
-deno test -A packages/patterns/integration/default-app.test.ts
+deno test -A patterns/integration/default-app.test.ts
 ```
 
 Use `:5173` when you need the shell to serve the worktree's current code, and
@@ -263,7 +263,7 @@ mutation that caused it.
 
 The trigger index checks itself, under `ENV=test`, which the runner's own test
 task sets. On every registration and removal it asserts that the path trie in
-`packages/runner/src/scheduler/entity-triggers.ts` holds what the per-action
+`runtime/runner/src/scheduler/entity-triggers.ts` holds what the per-action
 record beside it holds, under `arraysOverlap()`, and throws naming the write
 path and the paths the two disagree on. Mutations moving a few paths use full
 scans of the record. Broad mutations use a sorted reference of the recorded
@@ -277,30 +277,30 @@ through `deno run` and so measure without it.
 
 Liveness is checked on request rather than always. With
 `SCHEDULER_LIVENESS_EQUIVALENCE=1`, every exit from the four liveness mutators
-in `packages/runner/src/scheduler/dependency-graph.ts` asserts that the
+in `runtime/runner/src/scheduler/dependency-graph.ts` asserts that the
 incrementally maintained refcounts equal a full rebuild from the demand roots,
 throwing with the mutation site and the drifted nodes. It is off by default
 because it rebuilds the whole graph per mutation. Run the runner suite under it
 after changing liveness maintenance, registration ordering, or edge derivation:
 
 ```bash
-cd packages/runner && ENV=test SCHEDULER_LIVENESS_EQUIVALENCE=1 deno task test
+cd runtime/runner && ENV=test SCHEDULER_LIVENESS_EQUIVALENCE=1 deno task test
 ```
 
 ## Source Paths Worth Checking First
 
 Start with these locations when traces or logs point to worker churn:
 
-- `packages/runner/src/scheduler/facade.ts` — execute orchestration, queueing,
-  and the public diagnosis API; `packages/runner/src/scheduler/` holds the
+- `runtime/runner/src/scheduler/facade.ts` — execute orchestration, queueing,
+  and the public diagnosis API; `runtime/runner/src/scheduler/` holds the
   settle loop (`settle.ts`, `execution.ts`, `work-oracle.ts`), event dispatch
   (`events.ts`), action execution/resubscribe timing (`run.ts`), and trigger
   matching (`invalidation.ts`, `trigger-index.ts`, `entity-triggers.ts`,
   `scheduling-writes.ts`, `dependency-graph.ts`)
-- `packages/runtime-client/src/backends/web-worker/index.ts` — worker message
+- `runtime/runtime-client/src/backends/web-worker/index.ts` — worker message
   entrypoint — and `runtime-processor.ts` — console-facing scheduler IPC
-- `packages/runner/src/storage/cache.ts` — socket event dispatch
-- `packages/html/src/worker/reconciler.ts` — worker flush scheduling
+- `runtime/runner/src/storage/cache.ts` — socket event dispatch
+- `runtime/html/src/worker/reconciler.ts` — worker flush scheduling
 
 ## Next Steps
 

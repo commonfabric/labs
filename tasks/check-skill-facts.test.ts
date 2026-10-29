@@ -50,10 +50,10 @@ async function fixtureRepo(files: Record<string, string>): Promise<string> {
 /** A minimal repo whose one skill carries `skillBody`. */
 function fixtureFiles(skillBody: string): Record<string, string> {
   return {
-    "deno.jsonc": '{ "workspace": ["./packages/ui"] }',
-    "packages/ui/deno.jsonc":
+    "deno.jsonc": '{ "workspace": ["./runtime/ui"] }',
+    "runtime/ui/deno.jsonc":
       '{ "name": "@commonfabric/ui", "exports": { ".": "./src/index.ts" } }',
-    "packages/ui/src/index.ts": "",
+    "runtime/ui/src/index.ts": "",
     "skills/demo/SKILL.md": skillBody,
   };
 }
@@ -82,7 +82,7 @@ async function captureConsole(
 const TREE = new Tree([
   "deno.jsonc",
   "docs/development/skill-audit.md",
-  "packages/runner/src/cell.ts",
+  "runtime/runner/src/cell.ts",
   "scripts/check-local-dev.sh",
   "skills/agent-browser/SKILL.md",
   "skills/agent-browser/scripts/form-automation.sh",
@@ -97,12 +97,12 @@ const TREE = new Tree([
 ], [".claude/skills/lit-component"]);
 
 Deno.test("Tree knows files, directories, and their ancestors", () => {
-  assert(TREE.has("packages/runner/src/cell.ts"));
-  assert(TREE.has("packages/runner/src"));
-  assert(TREE.has("packages"));
-  assert(TREE.isDir("packages/runner"));
-  assertEquals(TREE.isDir("packages/runner/src/cell.ts"), false);
-  assertEquals(TREE.has("packages/runner/src/nope.ts"), false);
+  assert(TREE.has("runtime/runner/src/cell.ts"));
+  assert(TREE.has("runtime/runner/src"));
+  assert(TREE.has("runtime"));
+  assert(TREE.isDir("runtime/runner"));
+  assertEquals(TREE.isDir("runtime/runner/src/cell.ts"), false);
+  assertEquals(TREE.has("runtime/runner/src/nope.ts"), false);
 });
 
 Deno.test("Tree.has resolves a path below a symlinked directory", () => {
@@ -122,7 +122,7 @@ Deno.test("Tree.has rejects a path below an ordinary file", () => {
 
   assert(TREE.has("docs/common/concepts/computed"));
   assertEquals(TREE.has("docs/common/concepts/computed/computed.md"), false);
-  assertEquals(TREE.has("packages/runner/src/cell.ts/nested.ts"), false);
+  assertEquals(TREE.has("runtime/runner/src/cell.ts/nested.ts"), false);
 });
 
 Deno.test("Tree.filesMatching selects and sorts", () => {
@@ -135,8 +135,8 @@ Deno.test("Tree.filesMatching selects and sorts", () => {
 
 Deno.test("citedPath accepts a plain path", () => {
   assertEquals(
-    citedPath("packages/runner/src/cell.ts"),
-    "packages/runner/src/cell.ts",
+    citedPath("runtime/runner/src/cell.ts"),
+    "runtime/runner/src/cell.ts",
   );
 });
 
@@ -158,15 +158,15 @@ Deno.test("citedPath rejects command lines", () => {
   // Skills backtick whole commands; the path inside one is not the citation.
 
   assertEquals(citedPath("./scripts/restart-local-dev.sh --force"), null);
-  assertEquals(citedPath("deno run -A packages/cli/mod.ts"), null);
-  assertEquals(citedPath("cat ~/code/labs/packages/patterns/index.md"), null);
+  assertEquals(citedPath("deno run -A runtime/cli/mod.ts"), null);
+  assertEquals(citedPath("cat ~/code/labs/patterns/index.md"), null);
 });
 
 Deno.test("citedPath rejects globs and stand-ins", () => {
-  assertEquals(citedPath("packages/**"), null);
-  assertEquals(citedPath("packages/ui/src/v2/components/cf-*/cf-*.ts"), null);
+  assertEquals(citedPath("runtime/**"), null);
+  assertEquals(citedPath("runtime/ui/src/v2/components/cf-*/cf-*.ts"), null);
   assertEquals(
-    citedPath("packages/ui/src/v2/components/cf-{name}/cf-{name}.figma.ts"),
+    citedPath("runtime/ui/src/v2/components/cf-{name}/cf-{name}.figma.ts"),
     null,
   );
   assertEquals(citedPath("~/.cache/cf-inspect/<host>/"), null);
@@ -184,7 +184,7 @@ Deno.test("citedPath rejects a token that is only slashes", () => {
 });
 
 Deno.test("isRooted accepts a repo-root directory", () => {
-  assert(isRooted("packages/runner/src/cell.ts", "skills/cf-review", TREE));
+  assert(isRooted("runtime/runner/src/cell.ts", "skills/cf-review", TREE));
   assert(isRooted("scripts/check-local-dev.sh", "skills/cf", TREE));
 });
 
@@ -254,7 +254,7 @@ Deno.test("collectDrift is silent on a doc whose citations all resolve", () => {
     path: "skills/agent-browser/SKILL.md",
     text: [
       "Run `scripts/form-automation.sh` to drive a form.",
-      "The cell lives in `packages/runner/src/cell.ts`.",
+      "The cell lives in `runtime/runner/src/cell.ts`.",
       'Import from "@commonfabric/runner" and "@commonfabric/data-model/value-hash".',
     ].join("\n"),
   }];
@@ -264,12 +264,12 @@ Deno.test("collectDrift is silent on a doc whose citations all resolve", () => {
 Deno.test("collectDrift reports a vanished path with its line", () => {
   const docs = [{
     path: "skills/cf-review/SKILL.md",
-    text: "Line one.\nThe helper is in `packages/runner/src/gone.ts`.\n",
+    text: "Line one.\nThe helper is in `runtime/runner/src/gone.ts`.\n",
   }];
   assertEquals(collectDrift(docs, TREE, EXPORTS), [{
     file: "skills/cf-review/SKILL.md",
     line: 2,
-    message: "path does not exist: packages/runner/src/gone.ts",
+    message: "path does not exist: runtime/runner/src/gone.ts",
   }]);
 });
 
@@ -346,7 +346,7 @@ Deno.test("collectDrift reports a package that declares no exports", () => {
 
 Deno.test("main reports success and returns 0 on a clean repo", async () => {
   const root = await fixtureRepo(fixtureFiles(
-    'Read `packages/ui/src/index.ts`, exported from "@commonfabric/ui".\n',
+    'Read `runtime/ui/src/index.ts`, exported from "@commonfabric/ui".\n',
   ));
   try {
     let code = -1;
@@ -362,7 +362,7 @@ Deno.test("main reports success and returns 0 on a clean repo", async () => {
 
 Deno.test("main reports the drift and returns 1 on a stale citation", async () => {
   const root = await fixtureRepo(fixtureFiles(
-    "Line one.\nRead `packages/ui/src/gone.ts`.\n",
+    "Line one.\nRead `runtime/ui/src/gone.ts`.\n",
   ));
   try {
     let code = -1;
@@ -371,7 +371,7 @@ Deno.test("main reports the drift and returns 1 on a stale citation", async () =
     });
     assertEquals(code, 1);
     assert(err.includes("skills/demo/SKILL.md:2"));
-    assert(err.includes("path does not exist: packages/ui/src/gone.ts"));
+    assert(err.includes("path does not exist: runtime/ui/src/gone.ts"));
     // The report tells the author what to do about it.
     assert(err.includes("placeholder"));
     assert(err.includes("docs/development/skill-audit.md"));
@@ -405,14 +405,14 @@ Deno.test("main reports an unresolvable specifier", async () => {
 
 Deno.test("readTree drops a file the working tree has lost", async () => {
   const root = await fixtureRepo(
-    fixtureFiles("Read `packages/ui/src/index.ts`.\n"),
+    fixtureFiles("Read `runtime/ui/src/index.ts`.\n"),
   );
   try {
-    assert((await readTree(root)).has("packages/ui/src/index.ts"));
+    assert((await readTree(root)).has("runtime/ui/src/index.ts"));
     // Moved aside without staging the deletion: git still holds it in the index,
     // but the citation should break now rather than when the deletion lands.
-    await Deno.remove(join(root, "packages/ui/src/index.ts"));
-    assertEquals((await readTree(root)).has("packages/ui/src/index.ts"), false);
+    await Deno.remove(join(root, "runtime/ui/src/index.ts"));
+    assertEquals((await readTree(root)).has("runtime/ui/src/index.ts"), false);
   } finally {
     await Deno.remove(root, { recursive: true });
   }
@@ -420,16 +420,16 @@ Deno.test("readTree drops a file the working tree has lost", async () => {
 
 Deno.test("readTree marks a symlink so paths below it resolve", async () => {
   const root = await fixtureRepo(
-    fixtureFiles("Read `packages/ui/src/index.ts`.\n"),
+    fixtureFiles("Read `runtime/ui/src/index.ts`.\n"),
   );
   try {
-    await Deno.symlink("../packages/ui", join(root, "skills/ui-link"));
+    await Deno.symlink("../runtime/ui", join(root, "skills/ui-link"));
     await git(root, ["add", "-A"]);
     const tree = await readTree(root);
     // git records the symlink as one entry and says nothing about what is under
     // it, so a path below it resolves; a path below an ordinary file does not.
     assert(tree.has("skills/ui-link/src/index.ts"));
-    assertEquals(tree.has("packages/ui/deno.jsonc/nested.ts"), false);
+    assertEquals(tree.has("runtime/ui/deno.jsonc/nested.ts"), false);
   } finally {
     await Deno.remove(root, { recursive: true });
   }
@@ -446,9 +446,9 @@ Deno.test("readTree surfaces a git failure", async () => {
 
 Deno.test("readWorkspaceExports skips a member with no deno.jsonc", async () => {
   const root = await fixtureRepo({
-    "deno.jsonc": '{ "workspace": ["./packages/ui", "./packages/ghost"] }',
-    "packages/ui/deno.jsonc": '{ "name": "@commonfabric/ui" }',
-    "packages/ghost/README.md": "no deno.jsonc here\n",
+    "deno.jsonc": '{ "workspace": ["./runtime/ui", "./runtime/ghost"] }',
+    "runtime/ui/deno.jsonc": '{ "name": "@commonfabric/ui" }',
+    "runtime/ghost/README.md": "no deno.jsonc here\n",
   });
   try {
     const exports = await readWorkspaceExports(root);
@@ -460,14 +460,14 @@ Deno.test("readWorkspaceExports skips a member with no deno.jsonc", async () => 
 
 Deno.test("readWorkspaceExports rejects invalid JSONC", async () => {
   const root = await fixtureRepo({
-    "deno.jsonc": '{ "workspace": ["./packages/ui"] }',
-    "packages/ui/deno.jsonc": "{ this is not json",
+    "deno.jsonc": '{ "workspace": ["./runtime/ui"] }',
+    "runtime/ui/deno.jsonc": "{ this is not json",
   });
   try {
     await assertRejects(
       () => readWorkspaceExports(root),
       Error,
-      "invalid JSONC in packages/ui/deno.jsonc",
+      "invalid JSONC in runtime/ui/deno.jsonc",
     );
   } finally {
     await Deno.remove(root, { recursive: true });
@@ -479,8 +479,8 @@ Deno.test("readWorkspaceExports surfaces an unreadable member config", async () 
   // rather than an absent member, and must not be skipped silently.
 
   const root = await fixtureRepo({
-    "deno.jsonc": '{ "workspace": ["./packages/ui"] }',
-    "packages/ui/deno.jsonc/placeholder": "",
+    "deno.jsonc": '{ "workspace": ["./runtime/ui"] }',
+    "runtime/ui/deno.jsonc/placeholder": "",
   });
   try {
     await assertRejects(() => readWorkspaceExports(root));
@@ -562,7 +562,7 @@ Deno.test("the scan covers skills, AGENTS.md guides, rules, and hooks", async ()
   assert(paths.has("skills/README.md"), "skills/ not scanned");
   assert(paths.has("AGENTS.md"), "the root AGENTS.md is not scanned");
   assert(
-    paths.has("packages/ts-transformers/AGENTS.md"),
+    paths.has("base/ts-transformers/AGENTS.md"),
     "a package AGENTS.md is not scanned",
   );
   assert(
@@ -584,8 +584,8 @@ Deno.test("a rule resolves its citations against the repo root", async () => {
 
   const root = await fixtureRepo({
     "deno.jsonc": '{ "workspace": [] }',
-    "packages/ui/src/index.ts": "",
-    ".claude/rules/demo.md": "Read `packages/ui/src/index.ts`.\n",
+    "runtime/ui/src/index.ts": "",
+    ".claude/rules/demo.md": "Read `runtime/ui/src/index.ts`.\n",
   });
   try {
     const tree = await readTree(root);
@@ -598,16 +598,16 @@ Deno.test("a rule resolves its citations against the repo root", async () => {
 });
 
 Deno.test("a package AGENTS.md resolves paths inside its own package", async () => {
-  // packages/shell/AGENTS.md cites `shared/app/state.ts`, meaning the file in
+  // runtime/shell/AGENTS.md cites `shared/app/state.ts`, meaning the file in
   // that package. The same token cited by a package that has a `shared/` of its
   // own, without that file in it, is drift.
 
   const root = await fixtureRepo({
     "deno.jsonc": '{ "workspace": [] }',
-    "packages/shell/shared/app/state.ts": "",
-    "packages/shell/AGENTS.md": "State is `shared/app/state.ts`.\n",
-    "packages/other/shared/mod.ts": "",
-    "packages/other/AGENTS.md": "State is `shared/app/state.ts`.\n",
+    "runtime/shell/shared/app/state.ts": "",
+    "runtime/shell/AGENTS.md": "State is `shared/app/state.ts`.\n",
+    "runtime/other/shared/mod.ts": "",
+    "runtime/other/AGENTS.md": "State is `shared/app/state.ts`.\n",
   });
   try {
     const tree = await readTree(root);
@@ -616,7 +616,7 @@ Deno.test("a package AGENTS.md resolves paths inside its own package", async () 
       tree,
       new Map(),
     );
-    assertEquals(drift.map((d) => d.file), ["packages/other/AGENTS.md"]);
+    assertEquals(drift.map((d) => d.file), ["runtime/other/AGENTS.md"]);
   } finally {
     await Deno.remove(root, { recursive: true });
   }
@@ -635,8 +635,8 @@ Deno.test("a relative citation with no matching directory is left alone", async 
 
   const root = await fixtureRepo({
     "deno.jsonc": '{ "workspace": [] }',
-    "packages/other/mod.ts": "",
-    "packages/other/AGENTS.md": "Entry point is `src/index.ts`.\n",
+    "runtime/other/mod.ts": "",
+    "runtime/other/AGENTS.md": "Entry point is `src/index.ts`.\n",
   });
   try {
     const tree = await readTree(root);

@@ -760,12 +760,12 @@ already showed and what `call` and `exec` gained.
 
 **The verb session documents change with the demo script.** Their commands are
 held by `deno task check-verb-session-sync` to what
-`packages/cli/integration/verb-session-demo.sh` runs. They quote the demo's
+`runtime/cli/integration/verb-session-demo.sh` runs. They quote the demo's
 commands and never compose them, so a command that changes changes in the
 script and in both documents together, in one commit.
 
 **Each step carries its own documentation.** `--input`, `--piece`, and
-`cf cell get` appear across the tutorial, `packages/cli/README.md`, and the
+`cf cell get` appear across the tutorial, `runtime/cli/README.md`, and the
 pattern documentation, so a single sweep at the end would leave every
 intermediate state wrong. What each step owes:
 

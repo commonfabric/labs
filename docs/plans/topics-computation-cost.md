@@ -13,8 +13,8 @@ This plan authorizes no live writes by itself. Implementation, synthetic demos,
 and isolated copy rehearsals can proceed before a deployment window is chosen.
 
 The implementation surfaces are
-[the board](../../packages/patterns/topics/main.tsx) and
-[the topic](../../packages/patterns/topics/topic.tsx). Contracts are documented
+[the board](../../patterns/apps/topics/main.tsx) and
+[the topic](../../patterns/apps/topics/topic.tsx). Contracts are documented
 in [collection indexes](../features/collection-indexes.md),
 [aggregates](../features/collection-aggregates.md), and
 [read accounting](../features/read-accounting.md). Authoring examples and
@@ -105,13 +105,13 @@ implementation and prototypes can begin earlier.
         derives its limits runs.
   - [x] Browser instrumentation.
   - [x] Browser workloads, extending the
-        [scale](../../packages/patterns/integration/topic-board-scale.bench.ts)
+        [scale](../../patterns/integration/topic-board-scale.bench.ts)
         and
-        [navigation](../../packages/patterns/integration/topic-board-navigation.bench.ts)
+        [navigation](../../patterns/integration/topic-board-navigation.bench.ts)
         benchmarks.
   - [x] A browser demo with board, topic, backlink, and comment actions —
         landed by #7673 as
-        [`topic-board-demo.test.ts`](../../packages/patterns/integration/topic-board-demo.test.ts),
+        [`topic-board-demo.test.ts`](../../patterns/integration/topic-board-demo.test.ts),
         which states which of its properties a candidate may change
         without invalidating T5's comparison.
   - [x] The baseline report in `docs/history/`, separating pivot production,
@@ -174,7 +174,7 @@ implementation and prototypes can begin earlier.
       would have measured one are gone from the headless tier. The stored
       values are reliable once every writer runs the current topic module and
       legacy writers are retired
-      ([rollout](../../packages/patterns/topics/state-upgrades.md#rollout-and-rollback)).
+      ([rollout](../../patterns/apps/topics/state-upgrades.md#rollout-and-rollback)).
 - [ ] **T5 — Harden accepted changes and prepare release artifacts.** Add
       regression read budgets, run all relevant authored/package/integration
       tests, preserve compatibility baselines, pass the
@@ -258,7 +258,7 @@ whole board bounds the sizes of any tier that seeds one: the
 records its time, memory, and cause. Citations raise the cost further, and
 seeding cost keeps the browser tier to a few citing topics (see
 `DEFAULT_CITING_TOPICS` in
-[the fixture](../../packages/patterns/integration/topic-board-fixture.ts)), so
+[the fixture](../../patterns/integration/topic-board-fixture.ts)), so
 only the headless tier varies E independently of N. Each tier includes a small
 case to expose startup and maintenance overhead that scaling tests can hide.
 
@@ -434,7 +434,7 @@ board's package does not upgrade those existing children.
 2. Confirm the target runtime/compiler supports the operators. A change to
    derived computation alone needs no upgrade step. A change the topic pattern
    makes to its own persisted state is a new step under
-   [Topic state upgrades](../../packages/patterns/topics/state-upgrades.md),
+   [Topic state upgrades](../../patterns/apps/topics/state-upgrades.md),
    which defines the step contract, the mutations allowed while a step is
    pending, the required tests, and the rollout and rollback limits. That
    document also describes when a topic's pending steps run and what stops them;
@@ -454,7 +454,7 @@ board's package does not upgrade those existing children.
    attachment included. Along with the check and apply, rehearse on the clone
    every link-bind the change requires (T2 decides them, and the step 7 manifest
    records them), using
-   [`cf piece link`](../../packages/cli/README.md#linking-piece-inputs). Tests
+   [`cf piece link`](../../runtime/cli/README.md#linking-piece-inputs). Tests
    attached to deployment are packaged/type-checked, not executed there.
    Classify refusals, including missing linked data; a clean compatibility check
    is not an apply or semantic acceptance result.

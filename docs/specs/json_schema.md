@@ -19,7 +19,7 @@ from standard implementations in several ways.
 
 We add several custom fields to the schema that are meaningful to our system.
 The authoritative field inventory is the `JSONSchema` type in
-`packages/api/index.ts`; this section summarizes, it does not define.
+`base/api/index.ts`; this section summarizes, it does not define.
 
 - **`asCell`**: an **array** of wrapper entries describing how the value is
   held rather than stored inline. Entries name the wrapper kind — for example
@@ -27,7 +27,7 @@ The authoritative field inventory is the `JSONSchema` type in
   (a stream interface for connecting events to listeners), or
   `asCell: ["opaque"]` (pass-through-only). Nesting composes:
   `Cell<Cell<T>>` becomes `asCell: ["cell", "cell"]`. See `AsCellType` in
-  `packages/api/index.ts` for the entry shape, and
+  `base/api/index.ts` for the entry shape, and
   [Streams](#streams-are-declarations-not-views) for the one entry that is not
   a view onto a value. (A separate boolean-style `asStream` field existed
   historically; it is no longer part of the type and is not emitted — a couple
@@ -61,7 +61,7 @@ stream and a readable value at the same place.
 
 The `ifc` extension attaches Information Flow Control metadata to schema
 nodes. The key set is defined by the `ifc` field of the `JSONSchema` type in
-`packages/api/index.ts` — as of this writing: `confidentiality`, `integrity`,
+`base/api/index.ts` — as of this writing: `confidentiality`, `integrity`,
 `addIntegrity`, `requiredIntegrity`, `maxConfidentiality`, `ownerPrincipal`,
 `writeAuthorizedBy`, `writePolicyAnyOf`, `exactCopyOf`, `projection`,
 `observes`, and `uiContract`. The compile-time side (CFC authoring aliases and
@@ -284,7 +284,7 @@ Deliberate extensions beyond the 2020-12 vocabulary:
   `required: ["length"]` but not `required: ["x"]`) — mirroring the
   TypeScript structural rule that a `FabricBytes` is assignable to
   `{length: number}`. The nominal brand key (`FABRIC_SPECIAL_OBJECT_BRAND` in
-  `packages/runner/src/fabric-special-object-brand.ts`), which schemas from
+  `runtime/runner/src/fabric-special-object-brand.ts`), which schemas from
   pre-vocabulary compilations name in `required` (current generator emissions
   omit it everywhere), has no runtime existence and counts as present on any
   `FabricSpecialObject`. Property sub-schemas are
@@ -295,10 +295,11 @@ Deliberate extensions beyond the 2020-12 vocabulary:
   hand-written schemas can, and they get no shape enforcement on opaque
   leaves. Each name is the one its class's instances report as `.schemaType`,
   and no list of them is written out: the type `FabricPrimitiveSchemaType`
-  (`packages/data-model/src/api.ts`, which `@commonfabric/api` re-exports) is
-  derived from the class declarations there, and the runtime list
+  (`base/data-model/src/api.ts`, which `@commonfabric/api`
+  re-exports) is derived from the class declarations there, and the runtime list
   `FABRIC_PRIMITIVE_SCHEMA_TYPES`
-  (`packages/data-model/src/fabric-primitives/impl.ts`) from the classes.
+  (`base/data-model/src/fabric-primitives/impl.ts`) from the
+  classes.
 
 A generated schema places each named type in its root `$defs` and refers to
 it by `#/$defs/<name>`. The full TypeScript→schema mapping is specified in

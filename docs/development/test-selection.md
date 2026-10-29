@@ -558,7 +558,7 @@ Six things are worth knowing before reading a failure.
 - **An
   [`ACCEPT_COVERAGE_DEBT` marker](COVERAGE.md#the-measured-set-gate-and-accepting-debt)
   naming anything but a workspace member fails the gate.** Nothing consults it, so a marker naming a source group
-  such as `packages/connectors`, which holds members but is none, would
+  such as `connectors`, which holds members but is none, would
   otherwise pass for one that worked. The gate lists the names it did not
   recognize.
 - **A pull request labelled `ci: full` runs every gate.** Those whose sets
@@ -1028,6 +1028,14 @@ the old name, since that is what a record of that day resolves to. Each
 run moves whatever an alias line written since the previous run gives to
 a new name, and says how many tests it moved.
 
+A lane, and the coverage gate, apply the checkout's own alias lines to the
+manifest they read, as of the day the manifest was generated
+(`manifestUnderAliases` in `tasks/test-selection/manifest.ts`). A manifest
+published before a line landed names what the line renames by the old name, so
+without this a change that renames tests would plan them as tests with no
+history until the next manifest. The same lines rename the files a manifest's
+entries live in and the members its coverage baselines measure.
+
 The list of folded objects holds the days still open, and the first day the
 history holds. A day is closed once it has been read and is
 `COMPACTION_LAG_DAYS` behind the run, which is when the store stops expecting
@@ -1404,7 +1412,7 @@ aggregate in any case: the count falls on its own.
 What to check is that surface's wiring, which
 [the record guide](test-records.md#covering-a-new-test-surface) covers: the
 JUnit output the suite's command declares, the `--preload` naming
-`packages/test-support/src/records/preload.ts` where the surface is `deno test`,
+`base/test-support/src/records/preload.ts` where the surface is `deno test`,
 and the working directory that relative class names are joined onto. Where the
 records do have a file, the file is one no suite has a unit for, and the answer
 is in the topology.
@@ -1567,7 +1575,7 @@ asks for one. The publisher prefixes each line with `test selection: `.
 resolves, without the prefix.
 
 ```
-test selection: workspace-unit/packages/glaze costs 41s with coverage
+test selection: workspace-unit/runtime/glaze costs 41s with coverage
 on, past LOCAL_COVERAGE_MAX_SECONDS of 30s. Its member's tests could be
 split, the run could carry the cost, or the member could go on
 EXCLUDED_FROM_COVERAGE_GATE.
@@ -1584,7 +1592,7 @@ either automatically: which of the three to do is a decision about the
 repository.
 
 ```
-test selection: packages/donut is on EXCLUDED_FROM_COVERAGE_GATE for its
+test selection: runtime/donut is on EXCLUDED_FROM_COVERAGE_GATE for its
 size, and its tests now cost 13m32s with coverage on across 4 lane(s),
 inside the 30 lanes of 3m50s a pull request may take, so its line can come
 off.
@@ -1752,7 +1760,7 @@ running on main. Activity and new manifests are checked every 30 seconds.
 Activity requires the dashboard's GitHub token; the public measurements remain
 available when that lookup fails.
 
-Both follow [the dashboard's rules](../../packages/dashboard/README.md#philosophy-and-values):
+Both follow [the dashboard's rules](../../dashboard/README.md#philosophy-and-values):
 they report on the system, they name tests, and nothing about either is
 aggregated per person.
 
@@ -1911,7 +1919,7 @@ itself.
   it if it is not.
 
 Five properties keep this on the right side of
-[the dashboard's rule](../../packages/dashboard/README.md#philosophy-and-values)
+[the dashboard's rule](../../dashboard/README.md#philosophy-and-values)
 that reporting is about the system and never about individuals. The
 comment's subject is a commit and a test, and no author is named. Nothing
 is counted per author, per team, or per anything, and no history is kept:
@@ -1994,7 +2002,7 @@ test by its own name.
 
 A change to such a member's source could bring its unit into a run only
 through a coverage gate the plan chose, and none of these units belongs to a
-measured set: `packages/identity` because
+measured set: `base/identity` because
 [the coverage gate excludes it](#the-coverage-gate), and the five
 browser halves because a measured set holds only a member's Deno-only
 half. No diff names a directory, so these units reach a lane only on the
@@ -2032,7 +2040,7 @@ each group as a `deno test` of its own and merges their JUnit reports into the
 one path it was handed. A lane groups the files it selects the same way, with a
 report for each group. The topology refuses a `--serial` or `--all-access`
 pattern that names no test file, and so does the runner, which also refuses such
-an `--ignore`. `packages/cli` uses both options, and `packages/dashboard` uses
+an `--ignore`. `runtime/cli` uses both options, and `dashboard` uses
 `--all-access`.
 
 ## A case that fails only when its siblings do not run
@@ -2064,7 +2072,7 @@ independent case:
 }
 ```
 
-`packages/test-support/src/records/preload.ts` is what reads the list, so
+`base/test-support/src/records/preload.ts` is what reads the list, so
 the invocation adds it to whatever preloads and variables the package's
 own test task already passes, and runs from that package's directory.
 Deno resolves `--preload` as a path rather than through the import map,
@@ -2072,7 +2080,7 @@ so it is absolute:
 
 ```bash
 CF_TEST_SKIP_LIST=/tmp/skips.json deno test --no-check --allow-all \
-  --preload="$(git rev-parse --show-toplevel)/packages/test-support/src/records/preload.ts" \
+  --preload="$(git rev-parse --show-toplevel)/base/test-support/src/records/preload.ts" \
   test/glaze.test.ts
 ```
 
@@ -2121,19 +2129,19 @@ at once therefore reads as filling a lane well before it does, and the lane
 summary says how many seconds of its projection stand on units nothing has
 measured.
 
-A step added to `packages/cli/integration/integration.sh` needs an arm of
+A step added to `runtime/cli/integration/integration.sh` needs an arm of
 the script's `case "$SECTION"` table that runs that step and nothing else.
 The `cli-core` suite makes a unit of each arm that runs one step, and of
 each standalone script beside it, and of nothing else; an arm that runs
 several steps is for running the script by hand, and no lane is pointed at
 one. A step no single-step arm runs is a step no lane can run.
-`packages/cli/test/integration-sections.test.ts` fails on one.
-`packages/cli/integration/fuse-exec.sh` is cut the other way. Each arm other
+`runtime/cli/test/integration-sections.test.ts` fails on one.
+`runtime/cli/integration/fuse-exec.sh` is cut the other way. Each arm other
 than `all` is a section of phases over one mount, and the `cli-fuse` suite
 makes a unit of each section. A phase only one section runs belongs to that
 section's unit. A phase several sections run, the prelude among them,
 belongs to the suite rather than to any unit.
-`packages/cli/test/fuse-sections.test.ts` holds the table to every phase
+`runtime/cli/test/fuse-sections.test.ts` holds the table to every phase
 being reachable and to the orderings the phases depend on.
 
 A new test *surface* — a new script, harness, or kind of test — is a new suite

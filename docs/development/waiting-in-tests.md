@@ -22,7 +22,7 @@ is, or before changing the machinery a rule describes.
 
 ## Why avoid `waitFor`
 
-`waitFor(predicate, { timeout, delay })` (in `packages/integration/utils.ts`)
+`waitFor(predicate, { timeout, delay })` (in `runtime/integration/utils.ts`)
 re-runs `predicate` every `delay` milliseconds (50 by default) and throws once
 `timeout` (60 seconds by default) elapses. In a browser test each tick is also a
 DevTools Protocol round-trip. Two problems follow. The timeout puts a ceiling on
@@ -77,9 +77,9 @@ boundary does exist, use it, and neither kind of exception arises.
 
 One bound sits between the two kinds, and is written down here because its cost
 is easy to understate. The browser load summary in
-`packages/patterns/integration/cfc-browser-helpers.ts` gives the worker a budget
+`patterns/integration/cfc-browser-helpers.ts` gives the worker a budget
 to answer the request for its statistics, and a failure report's page probe in
-`packages/integration/shell-page-probe.ts` gives the same read the same budget
+`runtime/integration/shell-page-probe.ts` gives the same read the same budget
 for the worker's logged warnings and errors. Reading them is itself a request,
 and a request carries no deadline, so a worker that has stopped answering would
 hold the collection open for as long as the page lived. An early fire fails no
@@ -142,7 +142,7 @@ Waits split into two groups with different primitives.
   waits for the housekeeping that bring-up starts in the worker, so a settled
   page has neither still running.
 - The higher-level wrappers in
-  `packages/patterns/integration/cfc-browser-helpers.ts` compose the two
+  `patterns/integration/cfc-browser-helpers.ts` compose the two
   primitives above for common waits and interactions. Each of them settles and
   marks the exact rendered target before acting on it; what differs between them
   is only how they recognize that target. `clickCfButton` takes the first match,
@@ -191,7 +191,7 @@ the click addresses the elements that passed the settle check.
 Every marked click runs the same step to get there, `settleAndMarkTargets`, so
 `clickCfButton`, `clickCfButtonsConcurrently`, `clickNthCfButton`,
 `clickTrustedAction` and the note-button helpers in
-`packages/patterns/integration/note-button-helpers.ts` all mark under these
+`patterns/integration/note-button-helpers.ts` all mark under these
 rules. A helper supplies only a finder: which elements qualify, answered from
 the page. Resolving them either side of the settle, requiring the same elements
 both times, and marking them is the shared step's work. `submitViaEnter`
@@ -365,7 +365,7 @@ stimulus, including one delivered to another browser sharing the same piece, use
 two-browser vote test uses it for all of its cross-browser waits.
 
 **Non-browser and off-page waits** have no page to observe. Resolve a `defer()`
-(from `packages/utils/src/defer.ts`) inside a callback the test already registers
+(from `base/utils/src/defer.ts`) inside a callback the test already registers
 — a cell `sink`/`subscribe`, a storage subscription's `next`, a scheduler
 `onError`, a telemetry listener, or a counter incremented inside a test-owned
 transport. A read of a cell that a sink already observes belongs here too: the
@@ -382,7 +382,7 @@ counter the loop moves inside a wave cycle. A cell sink sees none of it, which
 is what made a poll over the engine the reflex in those files.
 
 A set of edges carries them, and
-`packages/runner/test/support/serving-waits.ts` holds the waits built on each:
+`runtime/runner/test/support/serving-waits.ts` holds the waits built on each:
 
 - `Server.watchAdmittedCommits` reports every commit the store admits — a
   session transact, a delegated append, the server's own direct write, and the
@@ -391,7 +391,7 @@ A set of edges carries them, and
   attach. `awaitAdmitted(server, predicate)` sleeps on it and reads the engine
   on each commit.
   `MultiRuntimeHarness.settleUntil` in
-  `packages/patterns/integration/multi-runtime-harness.ts` sleeps on it too,
+  `patterns/integration/multi-runtime-harness.ts` sleeps on it too,
   and settles the harness's worker runtimes before each attempt. Under server
   execution the serving loop writes the surface a `#profile` wish opens, and
   no session's event waits for that write, so
@@ -490,7 +490,7 @@ length; a live value reflects its state at that point. This keeps healthy waits
 from traversing data just for diagnostics.
 
 The runner's llm tests wait on that shape often enough to have a name for it.
-`waitForLlmSettled`, in `packages/runner/test/support/llm-result.ts`, resolves
+`waitForLlmSettled`, in `runtime/runner/test/support/llm-result.ts`, resolves
 once `llm`, `generateText` or `generateObject` has finished a request. It is a
 call to `waitForCellValue` carrying the predicate those builtins settle on,
 `pending === false`, and it holds no wait machinery of its own. Its neighbor
@@ -581,7 +581,7 @@ is why the demand and the wait are not redundant with the read. Its convergence
 also carries a bound of a hundred rounds, and a pull that exhausts it resolves
 anyway, with loads still pending and a warning naming the cell.
 
-`packages/cli/test/test-runner-assertion-reads.test.ts` states the count, for
+`runtime/cli/test/test-runner-assertion-reads.test.ts` states the count, for
 an assertion that holds, one that does not, and one whose value an async
 built-in produces.
 
@@ -589,7 +589,7 @@ built-in produces.
 
 A wait for state a *different* runtime wrote takes the same `defer()`-from-a-sink
 shape, once the arrival it waits on is named. `cf test`'s multi-user mode
-(`packages/cli/lib/multi-user-test-runner.ts`) runs each participant in its own
+(`runtime/cli/lib/multi-user-test-runner.ts`) runs each participant in its own
 worker realm against one shared space, and its `{ label }` / `{ await }` markers
 are writes to a marker document in that space — one per participant, so no
 document has two writers. Announcing a marker commits it after everything the
@@ -624,7 +624,7 @@ run.
 ### Browser-hosted unit tests have a harness backstop
 
 That fail-fast is Deno's, and the browser-hosted unit tests that
-`packages/deno-web-test` runs do not get it — `iframe-sandbox`, `identity`,
+`runtime/deno-web-test` runs do not get it — `iframe-sandbox`, `identity`,
 `static`, and the `ui` browser tests. Their waits are the
 `defer()`-from-a-callback shape described above, but they run inside a page,
 whose event loop the page itself holds open, so a wait that never resolves hangs
@@ -653,7 +653,7 @@ this bound is the most clock-jump-exposed one the repository keeps, is worked
 through in [the rationale
 document](waiting-in-tests-rationale.md#sizing-the-deno-web-test-backstop).
 
-`packages/deno-web-test/README.md` records what the bound does not cover: a test
+`runtime/deno-web-test/README.md` records what the bound does not cover: a test
 blocking the event loop outright, and the stuck test's own work, which goes on
 running in the page afterwards.
 
@@ -670,7 +670,7 @@ Neither of the two teardowns that await one adds a bound of its own, and what
 each is left exposed to differs.
 
 The browser teardown, `disposePageRuntime` in
-`packages/integration/shell-utils.ts`, asks the page through `page.evaluate`,
+`runtime/integration/shell-utils.ts`, asks the page through `page.evaluate`,
 which astral bounds on its own account at about five minutes for these suites
 — [the rationale
 document](waiting-in-tests-rationale.md#sizing-the-deno-web-test-backstop)
@@ -688,7 +688,7 @@ case it still answers. A failure warns rather than throws, since this is
 cleanup: a caller whose work is done has nothing left for it to fail, and a
 `finally` reaching it has a failure of its own to carry.
 
-The in-process suite, `packages/runtime-client/integration/client.test.ts`,
+The in-process suite, `runtime/runtime-client/integration/client.test.ts`,
 binds each client with `await using`, so its teardown is `dispose()` itself
 with nothing between. Nothing bounds that: the worker holds Deno's event loop
 open, so the fail-fast the in-process waits above rely on never fires, and the
@@ -706,19 +706,19 @@ differently enough from each other, that guessing at their timing is where fixed
 delays tend to creep back in.
 
 The **scheduler** delivers a runtime-backed cell's updates through `queueTask`
-(`packages/runner/src/scheduler/diagnostics.ts`), which is `setTimeout(fn, 0)`.
+(`runtime/runner/src/scheduler/diagnostics.ts`), which is `setTimeout(fn, 0)`.
 That is a macrotask, so yielding to the microtask queue never reaches a change
 made through a real cell, however many times the test yields. Wait for these
 with `runtime.idle()`, which resolves once the scheduler has settled.
 
-The **worker reconciler** (`packages/html/src/worker/reconciler.ts`) is
+The **worker reconciler** (`runtime/html/src/worker/reconciler.ts`) is
 synchronous apart from one line. It queues its VDOM ops as it renders and
 flushes them from a `queueMicrotask` callback, which hands the batch to the
 `onOps` callback the test registered. So once the change itself has landed, the
 ops are one microtask away, and a microtask the test queues afterwards runs
 after the flush, because microtasks run in the order they were queued.
 
-The reconciler tests in `packages/html/test/` write plain `Deno.test` and wait
+The reconciler tests in `runtime/html/test/` write plain `Deno.test` and wait
 through `t.settle`, added to the test context by a preload:
 
 ```ts
@@ -736,7 +736,7 @@ so each test runs under a clock that freezes only positive-delay timers, and it
 adds `settle` to the context. `test/clock.d.ts` gives `t.settle` its type, which
 `deno check` sees because it type-checks the package directory as one program.
 The preload is a thin wrapper: it calls `installFakeClock` from the shared
-harness in `packages/test-support/test/clock-preload.ts`, selecting that harness's
+harness in `base/test-support/test/clock-preload.ts`, selecting that harness's
 `freeze-all` mode. The runner preload calls the same harness in its
 `auto-advance` mode (below), so the timer-faking core lives in one place.
 
@@ -770,8 +770,8 @@ announce itself.
 
 ## The runner suite: advancing the runtime's own timers
 
-`packages/runner` loads the same shared harness — its
-`packages/runner/test/clock-preload.ts` calls `installFakeClock` in the
+`runtime/runner` loads the same shared harness — its
+`runtime/runner/test/clock-preload.ts` calls `installFakeClock` in the
 `auto-advance` mode, wired through `--preload` on the package test task — and
 follows the same rule for test sleeps, but it cannot simply freeze positive-delay
 timers the way the reconciler tests do. Runner's own reactivity is time-coupled: the scheduler, the wake
@@ -931,7 +931,7 @@ transport itself delivers each server frame on its own turn, so
 `clock.settle()` drains in-flight deliveries without letting any coalescing
 window elapse.
 
-Both take that turn through `armTurn` in `packages/memory/v2/turn.ts`, which
+Both take that turn through `armTurn` in `runtime/memory/v2/turn.ts`, which
 claims it twice over: a zero-delay timer, which is what `settle()` counts, and
 a `setImmediate`, which is the same turn for a fraction of the cost. Whichever
 arrives first runs the handler and cancels the other. So an outstanding turn
@@ -941,7 +941,7 @@ its event loop for a timer.
 
 ## The runtime-client suite stays on the real clock
 
-`packages/runtime-client` keeps its unit tests on the real clock. Most of its
+`runtime/runtime-client` keeps its unit tests on the real clock. Most of its
 tests need no wait at all, or only a macrotask drain — a `setTimeout(fn, 0)`
 that lets the scheduler's own `queueTask` dispatch land, an awaited round-trip,
 or a sink fire once. Those drains cross one macrotask boundary, carry no
@@ -987,13 +987,13 @@ The reconciler and runner harnesses above install their fake clock through a
 `--preload` that wraps every `Deno.test` in the package, so a test gets the
 frozen clock whether or not it asked for one. That default is deliberate there:
 it catches a wall-clock sleep written anywhere in a suite that is meant to wait
-on events instead. `packages/utils` does not want that default. It is a grab-bag
+on events instead. `base/utils` does not want that default. It is a grab-bag
 of utilities; most of its tests are not about time at all, and some — the
 logger's timing tests, for one — busy-spin against the real `performance.now`,
 which a faked clock would leave spinning forever. Only the `sleep` and `timeout`
 tests want controlled time.
 
-So `packages/utils/test/sleep.test.ts` takes the opposite approach: instead of a
+So `base/utils/test/sleep.test.ts` takes the opposite approach: instead of a
 preload forcing a clock on the whole package, the two suites that want one import
 it and open it themselves. They use `FakeTime` from `@std/testing/time`, opened
 with a `using` declaration so it restores the clock when the block ends:
@@ -1033,7 +1033,7 @@ where an independence check would have to catch it, and that check cannot:
 running the case by itself is what produces the green.
 
 `clickCfButtonAndWaitForText` in
-`packages/patterns/integration/cfc-browser-helpers.ts` is the browser
+`patterns/integration/cfc-browser-helpers.ts` is the browser
 instance. It returns when the expected text is already present, which is what
 an idempotent re-entry wants and what a case whose expected text is also an
 initial state must not have: that case passes having clicked nothing. Such a
@@ -1041,7 +1041,7 @@ case wants an expectation only its own click can produce, or wants to be one
 case with whichever case produces it.
 
 The setup wait in
-`packages/patterns/integration/sqlite-read-clearance-multi-runtime.test.ts` is
+`patterns/integration/sqlite-read-clearance-multi-runtime.test.ts` is
 the other side of the rule, and needs no page. Each of its `STEADY_ROWS`
 entries requires a query to have settled with no error and on a stated row
 count, and the state before the seed is neither: a read of a row-rule-bearing
@@ -1054,7 +1054,7 @@ knowing before applying the rule to another file. A case given its own write
 so that it can stand alone then writes a value some neighbor also writes, and
 in file order the wait is handed the state it was going to observe.
 `waitForCondition` evaluates its predicate once as it installs
-(`packages/integration/utils.ts`, "Check immediately; the condition may
+(`runtime/integration/utils.ts`, "Check immediately; the condition may
 already hold"), so the case observes nothing, and the propagation it appears
 to check is being checked by the neighbor. Give such a case a value no other
 case in the file writes, and its wait has a change to observe in either
@@ -1088,13 +1088,13 @@ either way — the assertion never depends on the wait having been long enough.
 Send something that must arrive after the thing being ruled out, wait for that,
 then assert the thing never came. Any channel that preserves order carries this.
 A `postMessage` between a fixed pair of windows does, and so does a chain of
-them: `packages/iframe-sandbox/test/iframe-csp.browser.test.ts` has each
+them: `base/iframe-sandbox/test/iframe-csp.browser.test.ts` has each
 guest document write a marker back to the host once its load event fires, and
 a CSP error from the same guest travels the same two hops — guest to outer
 frame, outer frame to host — so a test holding the marker holds any error that
 fired. The "subscribes"
 and "cancels subscriptions between documents" tests in
-`packages/iframe-sandbox/test/iframe.browser.test.ts` use the same idea against
+`base/iframe-sandbox/test/iframe.browser.test.ts` use the same idea against
 the update stream: write to a key that is still subscribed, and once the guest
 reports it, an update for the unsubscribed key would already have arrived had
 one been sent.
@@ -1120,7 +1120,7 @@ them.
 A barrier is not the only way out of an interval, and it is not the first
 thing to look for. Where the thing being ruled out is a component failing to
 settle, the settling itself is a positive event, and observing it asserts
-more than any interval could. `packages/runner/test/executor-fan-out.test.ts`'s
+more than any interval could. `runtime/runner/test/executor-fan-out.test.ts`'s
 OW29 storm pin is the worked example: the storm it rules out is a serving
 loop whose cycles keep finding work, which never suspends on its input wait,
 so the test waits for that suspension (`SpaceServer.suspendedOnInput`) and
@@ -1155,7 +1155,7 @@ document](waiting-in-tests-rationale.md#proving-a-negative-the-csp-suite-as-a-wo
 
 A check prevents new integration tests from importing the polling `waitFor`.
 `tasks/check-no-waitfor.ts` scans the `.ts` files under any `integration/`
-directory beneath `packages/` (excluding the `@commonfabric/integration` package,
+directory in a package (excluding the `@commonfabric/integration` package,
 which defines `waitFor`) and fails when one takes `waitFor` as a value from an
 import of that package and is not on the check's allowlist. Two spellings reach
 it and both count: the bare `@commonfabric/integration` specifier, and a relative
@@ -1182,9 +1182,9 @@ check can see: the integration-test files that import the shared `waitFor` from
 The others fall outside the scan and are not on the allowlist — the in-process
 `test/` files that each define their own local `waitFor` poll loop (the check
 never reads a named import there), the `MultiRuntimeHarness.waitFor` method and
-its callers (a different `waitFor`), `packages/runner/integration/sqlite-cfc-commit-eval.test.ts`
+its callers (a different `waitFor`), `runtime/runner/integration/sqlite-cfc-commit-eval.test.ts`
 (which waits through a local helper rather than the shared import), and
-`packages/integration/shell-utils.ts` (inside the excluded package that defines
+`runtime/integration/shell-utils.ts` (inside the excluded package that defines
 `waitFor`). Do not add those to the allowlist: the check never scans them, so the
 stale-entry test would reject the entry.
 
@@ -1210,19 +1210,19 @@ read them as endorsements.
 These observe in-process state that becomes true as a side effect, with no event
 boundary the test can await without adding one to production code.
 
-- `packages/runtime-client/integration/client.test.ts` — the `MockDoc`'s
+- `runtime/runtime-client/integration/client.test.ts` — the `MockDoc`'s
   rendered `innerHTML` waits. The worker's render pipeline applies the HTML with
   no completion callback the test can hook, and a fresh `cell.sync()` round-trip
   has no registered subscription. There is no event boundary to resolve a
   deferred from without adding a render hook to the mock purely for the test.
-- `packages/shell/integration/piece.test.ts` — the one poll that reads a freshly
+- `runtime/shell/integration/piece.test.ts` — the one poll that reads a freshly
   reloaded piece (`cc.get(pieceId, true)`) has no registered sink, so it stays a
   bounded poll on its own sync round trip. The other result-cell reads in this
   file wait through `waitForCellValue`, which sinks on the result cell and reads
   it at quiescence. The equivalent reads in `counter.test.ts` and
   `nested-counter.test.ts` resolve a `defer()` from an existing
   `resultCell.sink(...)`.
-- `packages/runner/test/support/wait-until.ts` — the `waitUntil` the runner's
+- `runtime/runner/test/support/wait-until.ts` — the `waitUntil` the runner's
   server-execution suites once shared. Six test files still wait through it on
   state the serving loop produces as a side effect of its own cycles: an engine
   row, a watermark advance, a stats counter. They are
@@ -1262,7 +1262,7 @@ boundary the test can await without adding one to production code.
 
 ### A pull that drives its own loading
 
-`packages/generated-patterns/integration/pattern-harness.ts` compares a runtime
+`runtime/generated-patterns/integration/pattern-harness.ts` compares a runtime
 `Cell` value, headless. There is no page to attach an in-page waiter to. A
 callback does exist — the harness registers `result.sink(() => {})` to keep the
 result reactive — but that callback is empty and records nothing, so today there
@@ -1289,7 +1289,7 @@ the same kind of root and holds it until the caller cancels, so a wait built on
 scheduler cycle. Where demand is the only thing the pull supplied, the sink
 supplies it too and the loop around the pull was doing nothing.
 
-`packages/runner/test/cfc-inspect-conf-label-builtin.test.ts` is the worked
+`runtime/runner/test/cfc-inspect-conf-label-builtin.test.ts` is the worked
 example. Its waits were a bounded `pull()` poll, on the grounds that the pull
 drives the `inspectConfLabel` builtin's node; they are now single
 `waitForCellValue` calls with no loop and no bound. That the demand is what
@@ -1302,33 +1302,33 @@ reads the result cell as undefined, because nothing ever asked for its value.
 Here the poll measures eventual convergence across timing the test does not
 control, and there is no single "it converged" promise to await.
 
-- `packages/runner/test/scheduler-commit-backpressure.test.ts` — the committed
+- `runtime/runner/test/scheduler-commit-backpressure.test.ts` — the committed
   total or list lands only after the runtime works through several
   backoff-delayed retry attempts, each parked on a real timer. `runtime.idle()`
   returns between retries, so it does not span the wait.
-- `packages/runner/test/memory-v2-pull-reactivity.test.ts` — waits on
+- `runtime/runner/test/memory-v2-pull-reactivity.test.ts` — waits on
   `runtime.scheduler.isDirty(action)`, which reads membership in the scheduler's
   internal dirty set. Nothing fires when one specific action flips to dirty;
   de-polling would mean adding a scheduler hook purely for the test.
-- `packages/runner/test/effect-conflict-recovery.test.ts` — recovery after a
+- `runtime/runner/test/effect-conflict-recovery.test.ts` — recovery after a
   cross-replica conflict is driven autonomously by the runtime's catch-up
   re-queue, and one case deliberately disables the reader-dirty fast path so only
   the timing-sensitive re-queue can recover. The automatic re-run is the behavior
   under test; there is by construction no event to await.
-- `packages/runner/test/memory-v2-reconnect-race.test.ts` and
-  `packages/memory/test/v2-restore-flush.test.ts` — the waits that watch for a
+- `runtime/runner/test/memory-v2-reconnect-race.test.ts` and
+  `runtime/memory/test/v2-restore-flush.test.ts` — the waits that watch for a
   deliberate mid-flight sabotage or a restore replay to reach a specific in-flight
   point. These are race checkpoints the surrounding interleaving depends on;
   bounded polling expresses "wait until the sabotage/replay happened" without
   coupling test control to the race window.
-- `packages/runner/test/memory-v2-stacked-commit.test.ts` — the wait for a
+- `runtime/runner/test/memory-v2-stacked-commit.test.ts` — the wait for a
   conflict rejection to reach the runner, read as the `commit-conflict` logger
   count. `pushCommit`'s catch moves that count synchronously before it calls
   `finalizeRejection`, and the logger exposes counts through readers only, with
   no subscription, so nothing fires when one moves. The commit the test is
   watching must not settle — that is the assertion — so its own promise is not
   the signal either.
-- `packages/runner/integration/sqlite-cfc-commit-eval.test.ts` — the predicates
+- `runtime/runner/integration/sqlite-cfc-commit-eval.test.ts` — the predicates
   read derived pattern result cells that settle only after a full server round
   trip (handler send, scheduler run, server commit, server-side re-derivation,
   re-query). The helper already drains with `runtime.idle()` and
@@ -1342,10 +1342,10 @@ control, and there is no single "it converged" promise to await.
 
 ### A different `waitFor`
 
-`packages/patterns/integration/cfc-group-chat-demo-multi-runtime.test.ts` and
-`packages/patterns/integration/sqlite-read-clearance-multi-runtime.test.ts` call
+`patterns/integration/cfc-group-chat-demo-multi-runtime.test.ts` and
+`patterns/integration/sqlite-read-clearance-multi-runtime.test.ts` call
 `MultiRuntimeHarness.waitFor` (defined in
-`packages/patterns/integration/multi-runtime-harness.ts`), a different method
+`patterns/integration/multi-runtime-harness.ts`), a different method
 that settles several in-process Deno-worker runtimes and reads durable cells
 across them. It is not the `@commonfabric/integration` `waitFor`, has no page,
 and its cross-runtime convergence poll is the honest mechanism for a caller
@@ -1358,7 +1358,7 @@ the arrival, across runtimes](#naming-the-arrival-across-runtimes) describes it.
 
 ### Cross-page joint condition
 
-`packages/patterns/integration/lunch-poll-vote.test.ts` waits on a condition
+`patterns/integration/lunch-poll-vote.test.ts` waits on a condition
 joined across two different browser pages (both must show both voters).
 `waitForCondition` installs its waiter in one page and resolves on that page's
 binding, so it cannot express a two-page condition; the cross-browser
@@ -1366,7 +1366,7 @@ propagation wait stays a poll.
 
 ### Instrumentation one-shots
 
-`packages/patterns/integration/default-app.test.ts` keeps `waitFor` for one-shot
+`patterns/integration/default-app.test.ts` keeps `waitFor` for one-shot
 instrumentation: arm a trace, reset a logger baseline. Each such call returns
 false only until a runtime API is present, so it observes runtime API readiness
 rather than a UI condition, and it is profiling scaffolding rather than an
@@ -1383,7 +1383,7 @@ fall back to the in-page waiter's coarse backstop for something already true.
 
 ### A shared state primitive
 
-`packages/integration/shell-utils.ts`'s `waitForState` compares the shell's
+`runtime/integration/shell-utils.ts`'s `waitForState` compares the shell's
 serialized `AppState` (view plus identity DID), read through
 `globalThis.app.serialize()`. A handful of test files call it directly, but
 `ShellIntegration.goto()` also calls it internally after every navigation, so
@@ -1421,7 +1421,7 @@ logged at `warn` or `error` with how often, and the tail of console messages
 a round trip the others do not need, so a worker that has stopped answering
 costs the report that one line, which says so, and nothing else. The page half
 of that is `readShellPageProbe` in
-`packages/integration/shell-page-probe.ts`; `describeStateWaitFailure` in
+`runtime/integration/shell-page-probe.ts`; `describeStateWaitFailure` in
 `shell-utils.ts` assembles the whole block, and a test may call it directly to
 report a wait of its own the same way.
 
@@ -1439,7 +1439,7 @@ the run waits out the full minute and reports nothing that names the cause.
 than for a wrapped few. A wait that reaches the stuck-condition net renders the
 source the page ran, the arguments it was handed one to a line, the last throw
 the predicate itself made where it made one, and the page it ran out against;
-`describeConditionWaitFailure` in `packages/integration/utils.ts` assembles
+`describeConditionWaitFailure` in `runtime/integration/utils.ts` assembles
 that. The source is usually what names the wait, waits carrying no names of
 their own, and where several sites share one predicate the arguments are what
 tell them apart. The predicate's own throw is the part nothing else can supply:
@@ -1463,7 +1463,7 @@ reported with a second one. Reach for it, rather than pairing the read and the
 render, when adding page context to an error of your own.
 
 The first line of each of these messages comes from `describeThrown` in
-`packages/integration/describe-thrown.ts`, because a failure inside the page
+`runtime/integration/describe-thrown.ts`, because a failure inside the page
 does not arrive as an `Error`. The browser protocol reports an uncaught page
 exception as a detail record, and stringifying one yields `[object Object]`.
 `describeThrown` takes an `Error`'s message, the first line of a page
@@ -1472,7 +1472,7 @@ thrower attaches and Deno prints below the message.
 
 ### A shell script observing another process through a kernel mount
 
-`packages/cli/integration/fuse-exec.sh` drives the FUSE daemon as a separate
+`runtime/cli/integration/fuse-exec.sh` drives the FUSE daemon as a separate
 process through a real mount, and observes it from bash. Its poll loops —
 `wait_for_path`, `wait_for_json`, `resolve_entity_dir`, `wait_for_piece_value`,
 `wait_for_trace_line` and `resolve_traced_write_fh` — stay polls.
