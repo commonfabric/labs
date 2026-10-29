@@ -41,7 +41,8 @@ The values declared `PerSession`, each a `computed()` bound under a new name:
 
 The output-type fields `ChatRoomView.canSend`, `viewer`, `messageRights` and
 `canAdd`, `AddMemberOutput.canAdd`, and `FabriChatPlacementView.canSend` are
-`PerSession<…>` too. `docs/specs/fabrichat/ChatRoomOutput.md` gives the fields
+`PerSession<…>` too, and so is `PlacedRoom.canSend`, the placement's read of the
+room's `canSend`. `docs/specs/fabrichat/ChatRoomOutput.md` gives the fields
 those types, and its Scopes section lists them as per session.
 
 The bindings were renamed for the reason the per-user record gives: the
@@ -111,10 +112,12 @@ scope, the pattern-update proof reports `scope changed` (RUN,
 - `fabrichat/room.tsx`, against 113 baselines: `result.canSend`,
   `result.canAdd`, `result.viewer` and `result.messageRights`, and each of
   them through `$VIEWS.room`, at whichever of those paths the baseline has;
-- `fabrichat/placement.tsx`, against 5 baselines: `result.$VIEWS.chat.canSend`;
-- `fabrichat/adapter.tsx`, whose argument and result carry the placement's
-  view, against 5 baselines: `argument.placement.$VIEWS.chat.canSend`,
-  `result.$VIEWS.chat.canSend` and `result.placement.$VIEWS.chat.canSend`.
+- `fabrichat/placement.tsx`, against 5 baselines: `result.$VIEWS.chat.canSend`,
+  `argument.room.canSend` and `result.room.canSend`;
+- `fabrichat/adapter.tsx`, whose argument and result carry the placement,
+  against 5 baselines: `argument.placement.$VIEWS.chat.canSend`,
+  `result.$VIEWS.chat.canSend`, `result.placement.$VIEWS.chat.canSend`,
+  `argument.placement.room.canSend` and `result.placement.room.canSend`.
 
 In `tasks/pattern-compat-accepted-breaks.ts`, 105 of those 123 pairs are already
 accepted for earlier FabriChat breaks. The nine entries holding them name the

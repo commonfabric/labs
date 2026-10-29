@@ -197,7 +197,8 @@
             "description": "What the room says about itself."
           },
           "canSend": {
-            "description": "Whether the reader can send.",
+            "description": "Whether the reader can send, which each session reads for itself.",
+            "scope": "session",
             "type": "boolean"
           },
           "messages": {
@@ -492,7 +493,8 @@
             "description": "What the room says about itself."
           },
           "canSend": {
-            "description": "Whether the reader can send.",
+            "description": "Whether the reader can send, which each session reads for itself.",
+            "scope": "session",
             "type": "boolean"
           },
           "messages": {

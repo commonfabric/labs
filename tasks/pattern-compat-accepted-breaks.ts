@@ -2372,6 +2372,8 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       // The reader's answers, declared per session, which
       // `fabrichat-room-viewer-per-session-break.md` records.
       "result.$VIEWS.chat.canSend",
+      "argument.room.canSend",
+      "result.room.canSend",
     ],
     reason:
       "the room keeps no activity log, so the placement's data face no longer carries one" +
@@ -2398,6 +2400,8 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "argument.placement.$VIEWS.chat.canSend",
       "result.$VIEWS.chat.canSend",
       "result.placement.$VIEWS.chat.canSend",
+      "argument.placement.room.canSend",
+      "result.placement.room.canSend",
     ],
     reason:
       "the room keeps no activity log, so the data face the adapter re-exports no longer carries one" +
@@ -2438,7 +2442,8 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     record: "docs/history/fabrichat-room-viewer-per-session-break.md",
   },
   {
-    // A placement's `canSend` is declared per session, as the room's is.
+    // A placement's `canSend`, and its read of the room's, are declared per
+    // session, as the room's is.
     pattern: "fabrichat/placement.tsx",
     baselines: [
       "20261015T183227Z-1SJt2XCxddAoN2vt",
@@ -2447,8 +2452,11 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     ],
     paths: [
       "result.$VIEWS.chat.canSend",
+      "argument.room.canSend",
+      "result.room.canSend",
     ],
-    reason: "a placement's `canSend` is declared per session, as the room's is",
+    reason:
+      "a placement's `canSend`, and its read of the room's, are declared per session, as the room's is",
     record: "docs/history/fabrichat-room-viewer-per-session-break.md",
   },
   {
@@ -2464,9 +2472,11 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "argument.placement.$VIEWS.chat.canSend",
       "result.$VIEWS.chat.canSend",
       "result.placement.$VIEWS.chat.canSend",
+      "argument.placement.room.canSend",
+      "result.placement.room.canSend",
     ],
     reason:
-      "the placement's data face the adapter re-exports declares `canSend` per session",
+      "the placement the adapter holds, and its data face the adapter re-exports, declare `canSend` per session",
     record: "docs/history/fabrichat-room-viewer-per-session-break.md",
   },
   {
