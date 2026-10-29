@@ -133,14 +133,26 @@ most-recently-used (MRU) ordering:
 
 Each profile lives in its own space, created with the anonymous
 `PatternFactory.inSpace()` — one allocation per creation, each a new space with
-a random DID owned by the creating user and writable by anyone, since its ACL
-grants the wildcard `"*"` WRITE: a runtime showing a profile writes into the
-profile's space, so a visitor needs more than READ. CFC owner-protects the
+a random DID that owns itself (`selfOwned`) and declares the `profile` kind:
+its ACL grants its own DID OWNER and the wildcard `"*"` WRITE, and the
+creating user, who is not in the list, holds instead a delegation the space's
+key issued over it before being destroyed. The home space records that
+delegation beside the allocation, in the list under the cause
+`{ delegations: <space DID> }`, in the commit that appends the profile link;
+the record is a list so that a delegation issued later, with another
+command or policy, has a place beside it. A runtime loads every profile's
+delegations at startup
+(`Runtime.loadProfileDelegations`) so its sessions on the profile space act
+under the profile's own grant ([profile delegation](../../specs/profile-delegation.md)).
+A profile created before profiles owned themselves names its creator as owner
+and has no delegation; it keeps opening on the creator's grant. The wildcard
+WRITE is there because a runtime showing a profile writes into the profile's
+space, so a visitor needs more than READ. CFC owner-protects the
 profile's data fields that store an owner policy (all but `picture`, as below),
 and its view state is per session; nothing else in the space is protected from
 a visitor (a *named* `inSpace(name)` would put every
 profile created under one name in one space) —
-running `/api/patterns/system/profile-home.tsx`; the link
+running `/api/patterns/system/profile-home/profile-home.tsx`; the link
 is appended to `profiles`. The home Profile tab renders the **profile picker**
 (`profile-picker.tsx`): it lists profiles, lets the user create more inline, pick
 the default, and stamp MRU. There is no `profileName` mirror field anymore.
@@ -189,7 +201,7 @@ part of the housekeeping it starts beside the private inbox ensure
 repair, and a failure is logged and tried again at the worker's next bring-up of
 Home. `cf profile repair-root` makes the same repair, run by an operator across a
 store or by the person over their own Home's profiles (the
-[CLI README](../../../packages/cli/README.md) describes running it). The repair
+[CLI README](../../../runtime/cli/README.md) describes running it). The repair
 links the existing profile as the space cell's `defaultPattern` where the space
 has no root, and where its root is one a space-root ensure created and nothing
 was added to: a client's open of the space by its owner creates one, and so,
@@ -236,7 +248,7 @@ and no one else, as the principal it represents, read as every reader of a
 profile's principal reads one: the claims on the profile's root and on its
 `name`, among them the claim its name field's owner policy installs for its
 owner when the profile is set up. That is one rule (`profileOwnerAt()` in
-`packages/runner/src/profile-owner.ts`), which hosts apply through
+`runtime/runner/src/profile-owner.ts`), which hosts apply through
 `profileOwnership()` and pattern code through `profileOwnerOf()`. Every reader
 of which profiles are the person's requires it: `#profile`, a runtime's
 preferred profile, the guard `retireProfile` keeps on the profile `#profile`
@@ -244,7 +256,12 @@ returns, `cf profile`, and Home's record of the profile acting in each social
 space and its view of those records. A name borrowed from another document, a
 name attested to anyone else, and a document carrying no label at all make no
 one's profile, and a listed profile whose document is absent is left out too,
-as is an entry whose links run in a cycle, which names no profile.
+as is an entry whose links run in a cycle, which names no profile. The rule
+makes one exception, for the shape a profile set up by an older
+`profile-home.tsx` stores: its own `name` cell holds a link to the root of one
+document in the profile's space that holds the name as a string, carries no
+label and names no owner, and that document counts as the profile's own
+(`isLegacyName()`).
 A name stored before names were labeled carries no label on its value, but its
 profile is its owner's through that installed claim;
 `cf profile attest-name` labels the value too. Since the guard and the
@@ -300,8 +317,8 @@ delivered there stays readable. The host's share intake follows the offers in
 the inbox Home holds and in each one it retains, vets each as the user, and
 registers each one that passes in Home's shared-space catalog through Home's
 `registerSharedSpace` stream; it leaves every offer in its inbox. Home creates
-an inbox from `packages/patterns/system/private-inbox.tsx` only when it holds
-none and no profile points at one. An inbox that fails vetting is neither
+an inbox from `patterns/system/private-inbox/private-inbox.tsx` only when it
+holds none and no profile points at one. An inbox that fails vetting is neither
 adopted nor replaced, and Home keeps what it holds, or holds none. While Home
 holds an inbox, it points each profile that points at no inbox at it, through
 the profile's `inbox` field, which is how a sender finds it, and leaves a
@@ -354,7 +371,7 @@ grants nothing: the space's own access-control document decides who may use it.
 
 The home default pattern holds the user's agent queue in
 `defaultPattern.agentQueue`, a piece of
-`packages/patterns/system/agent-queue.tsx`. It is discovered with
+`patterns/system/agent-queue/agent-queue.tsx`. It is discovered with
 `wish({ query: "#agent_queue" })`, a well-known home-space target. A hashtag
 search does not find it, because under `scope: ["~"]` that search reads the
 user's favorites only, and the queue is not a favorite.
@@ -451,7 +468,7 @@ rules.
 
 The home default pattern holds the user's FabriChat manager in
 `defaultPattern.chatManager`, a piece of
-`packages/patterns/fabrichat/manager.tsx`. It is discovered with
+`patterns/system/fabrichat/manager.tsx`. It is discovered with
 `wish({ query: "#chatManager" })`, a well-known home-space target, and
 satisfies the `ChatManagerOutput` contract
 ([FabriChat](../../specs/fabrichat/ChatManagerOutput.md)). Like the agent
@@ -488,7 +505,7 @@ intake among them, and forgetting a room archives its entry.
 ## Custom Home Pattern
 
 The home space's default pattern is the home experience itself — by default,
-`/api/patterns/system/home.tsx`. A Home is created once, by whichever comes
+`/api/patterns/system/home/home.tsx`. A Home is created once, by whichever comes
 first of: its user's first open; the home space's own server, which ensures the
 root once server execution activates the space and its owner resolves; and the
 first write by a handler on a client runtime through a cell a wish handed out
@@ -540,11 +557,11 @@ identity, host and Home space:
 
 ```bash
 cf piece follow -i ./my.key -a http://localhost:8000 \
-  -s "$(cf id did ./my.key)" --cell <home-root> system:system/home.tsx
+  -s "$(cf id did ./my.key)" --cell <home-root> system:system/home/home.tsx
 ```
 
 That adopts the current system pattern and records the origin for future
-updates (`packages/cli/README.md`, "Following a piece source").
+updates (`runtime/cli/README.md`, "Following a piece source").
 
 ### A Home that will not load
 
@@ -610,7 +627,7 @@ To share identity between browser and CLI:
 # 2. Export a matching CLI key with `cf id from-mnemonic`, reading the phrase
 #    from a file (`-- <file>`; or `-` for stdin) so it stays out of shell
 #    history and the process list:
-deno run -A packages/cli/mod.ts id from-mnemonic -- phrase.txt > ./browser.key
+deno run -A runtime/cli/mod.ts id from-mnemonic -- phrase.txt > ./browser.key
 
 # 3. Update the existing Home in place, retaining the tested source package
 cf piece setsrc -i ./browser.key -a http://localhost:8000 \
@@ -629,7 +646,7 @@ The `defaultPattern.defaultAppUrl` setting controls which pattern is used as the
 default app when creating new spaces. When `PiecesController.ensureDefaultPattern()`
 runs for a non-home space, it reads this value from the home space. If set, the
 custom URL is used; otherwise it falls back to
-`/api/patterns/system/default-app.tsx`.
+`/api/patterns/system/default-app/default-app.tsx`.
 
 This enables users to maintain personal forks of the default app pattern (e.g.,
 `default-app-ben.tsx`) with different features or configurations.
@@ -654,11 +671,11 @@ Both the home pattern and the default app pattern follow the same mechanism:
    its creator's `inSpace(..., { root: true })` call
 2. If not, it creates one:
    - **Home space** (`space === userIdentityDID`): uses
-     `/api/patterns/system/home.tsx`
+     `/api/patterns/system/home/home.tsx`
    - **Profile space** (explicit profile creation path): uses
-     `/api/patterns/system/profile-home.tsx`
+     `/api/patterns/system/profile-home/profile-home.tsx`
    - **Other spaces**: reads `defaultAppUrl` from the home space; falls back to
-     `/api/patterns/system/default-app.tsx`
+     `/api/patterns/system/default-app/default-app.tsx`
 3. The pattern is compiled, run, linked as `spaceCell.defaultPattern`, and its
    source URL is stamped as `patternSource` for future updates
 4. `recreateDefaultPattern()` replaces a non-Home root, and refuses an identity

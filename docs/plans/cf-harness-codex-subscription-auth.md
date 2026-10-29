@@ -237,7 +237,7 @@ pre-implementation approval gate.
 ### WP1.1 — Define a normalized model client contract
 
 - [x] Add a dependency-light `HarnessModelClient` contract under
-  `packages/cf-harness/src/model/`.
+  `runtime/cf-harness/src/model/`.
 - [x] Its input carries the selected model, harness transcript, allowed tool
   descriptors, native-model capabilities, stable run/session id, abort signal,
   and attempt observer.
@@ -252,9 +252,7 @@ pre-implementation approval gate.
 
 Expected files:
 
-- `packages/cf-harness/src/model/client.ts`
-- `packages/cf-harness/src/model/types.ts`
-- `packages/cf-harness/test/model-client.test.ts`
+- `runtime/cf-harness/src/model/client.ts`
 
 ### WP1.2 — Adapt the current gateway without changing behavior
 
@@ -270,9 +268,9 @@ Expected files:
 
 Tests to extend first:
 
-- `packages/cf-harness/test/prompt-loop.test.ts`
-- `packages/cf-harness/test/openai-client.test.ts`
-- `packages/cf-harness/test/interactive-chat-service.test.ts`
+- `runtime/cf-harness/test/prompt-loop.test.ts`
+- `runtime/cf-harness/test/openai-client.test.ts`
+- `runtime/cf-harness/test/interactive-chat-service.test.ts`
 
 ### WP1.3 — Generalize attempt provenance
 
@@ -321,9 +319,9 @@ Tests to extend first:
 
 Expected files:
 
-- `packages/cf-harness/src/auth/types.ts`
-- `packages/cf-harness/src/auth/credential-store.ts`
-- `packages/cf-harness/test/credential-store.test.ts`
+- `runtime/cf-harness/src/auth/types.ts`
+- `runtime/cf-harness/src/auth/credential-store.ts`
+- `runtime/cf-harness/test/credential-store.test.ts`
 
 ### WP2.2 — Implement browser PKCE login
 
@@ -396,9 +394,9 @@ Expected files:
 
 Expected files:
 
-- `packages/cf-harness/src/model/openai-codex-responses.ts`
-- `packages/cf-harness/src/model/responses-conversion.ts`
-- `packages/cf-harness/test/openai-codex-responses.test.ts`
+- `runtime/cf-harness/src/model/openai-codex-responses.ts`
+- `runtime/cf-harness/src/model/responses-protocol.ts`
+- `runtime/cf-harness/test/openai-codex-responses.test.ts`
 
 ### WP3.2 — Parse SSE into the normalized result
 
@@ -581,7 +579,7 @@ Expected files:
 
 - [x] Run focused auth, transport, prompt-loop, CLI, resume, subagent, and
   interactive-service tests, including the Loom credential-owner boundary.
-- [x] Run `deno task test` from `packages/cf-harness`; the root
+- [x] Run `deno task test` from `runtime/cf-harness`; the root
   `deno task check` does not type-check this package completely.
 - [ ] Run root formatting, lint, documentation checks, unused-dependency checks,
   and `git diff --check`.
@@ -594,12 +592,13 @@ Expected files:
 
 ### WP6.3 — Documentation and rollout
 
-- [x] Update `packages/cf-harness/README.md` with provider selection, auth
+- [x] Update `runtime/cf-harness/README.md` with provider selection, auth
   commands, local and Loom credential ownership, credential storage warning,
   logout, model listing, and troubleshooting.
-- [x] Update `packages/cf-harness/docs/IMPLEMENTATION_PLAN.md` where its gateway
-  auth discussion would otherwise imply that API keys are the only authenticated
-  path.
+- [x] Update `runtime/cf-harness/docs/IMPLEMENTATION_PLAN.md` (since archived
+  as `docs/history/packages/cf-harness/docs/IMPLEMENTATION_PLAN.md`) where its
+  gateway auth discussion would otherwise imply that API keys are the only
+  authenticated path.
 - [x] Document that API-key usage and ChatGPT subscription usage have different
   billing, workspace policy, retention, and availability.
 - [ ] Ship local CLI support first, then enable Loom behind explicit user

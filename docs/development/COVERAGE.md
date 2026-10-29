@@ -103,7 +103,7 @@ selection](test-selection.md) describes.
 
 ### Authored pattern code is measured by transformer instrumentation
 
-Patterns (the user programs under `packages/patterns`) are not loaded the way an
+Patterns (the user programs under `patterns`) are not loaded the way an
 ordinary module is. Each pattern is compiled through the Common Fabric
 transformer pipeline and then run inside a sandbox. Deno's V8 coverage never
 sees the authored pattern statements execute, so it cannot report which lines of
@@ -165,9 +165,9 @@ can take all three.
 The view is the first. A pattern's view helpers are ordinary functions, and
 nothing calls one until something reads `[UI]`. Reaching for a node is what
 builds the tree, so one assertion that walks to a node covers every helper the
-tree called on the way there. `packages/patterns/test/vnode-helpers.ts` holds
-the walk. Tie the assertion to something the file already claims rather than to
-a node's bare existence:
+tree called on the way there. `patterns/tools/test-support/vnode-helpers.ts`
+holds the walk. Tie the assertion to something the file already claims rather
+than to a node's bare existence:
 `hasText(findNodeById(instance[UI], "gallery-count"), "16 total examples")`
 states the rendered header against the count the same test asserts through
 `totalExamples`, so a gallery that computed its count and rendered nothing
@@ -183,7 +183,7 @@ drives has a body that runs in neither path, so it sits at zero on every run
 rather than moving between them. That is permanent debt rather than flap, and it
 costs one more action apiece to clear.
 
-`packages/patterns/cfc-spec-gallery/main.test.tsx` is the worked example. It
+`patterns/examples/cfc-spec-gallery/main.test.tsx` is the worked example. It
 reads its view, states its name and the four inputs it reports back out, and
 drives every stream the gallery exposes, which takes the file from 385 of its
 522 measured lines to all of them. Before that the integration path was the only
@@ -193,7 +193,7 @@ is what that cost the group on a run where that path's report went missing.
 
 `CF_PATTERN_COVERAGE_DIR` names the directory the `*.pattern-coverage.lcov`
 files are written to. The `cf test` command in
-`packages/cli/commands/test-command.ts` reads it directly. The browser
+`runtime/cli/commands/test-command.ts` reads it directly. The browser
 integration path does not run through `cf test`; there the integration harness
 reads the same variable to decide whether to turn worker coverage on and where to
 write the merged LCOV it pulls back from the browser (see "How the integration
@@ -202,21 +202,21 @@ suites collect authored-pattern coverage").
 ## How the two are scored
 
 `tasks/coverage-metrics.ts` scores LCOV reports. It walks the tracked source
-files under `packages` and `tasks` and counts, for each file, how many lines no
-test covered. The top-level `scripts` directory is left out. The same counting
-serves both readers:
+files under the package directories `LAYOUT.md` names and under `tasks`, and
+counts, for each file, how many lines no test covered. The top-level `scripts`
+directory is left out. The same counting serves both readers:
 
 - **The repository-wide figure** merges every report the full run's lanes wrote
   and rolls the counts up into `coverage-debt: <group> uncovered lines` metrics,
-  for example `coverage-debt: packages/patterns uncovered lines`, and a
+  for example `coverage-debt: patterns uncovered lines`, and a
   `workspace` total. `Status` measures it on a push with
   `tasks/coverage-report.ts`, and it is a trend: nothing fails on it.
 - **A measured set's figure** reads only the reports that set's suite wrote for
   its member, and counts only that member's own source files. That is what the
   [measured-set gate](#the-measured-set-gate-and-accepting-debt) compares.
 
-Authored pattern files under `packages/patterns` are tracked source files, so
-their uncovered lines count toward `coverage-debt: packages/patterns`. Every
+Authored pattern files under `patterns` are tracked source files, so
+their uncovered lines count toward `coverage-debt: patterns`. Every
 authored-pattern coverage stream feeds this one metric: the `pattern-unit`
 suite's coverage (`TN:pattern-runtime`) and the integration suites' coverage
 (`TN:pattern-runtime-integration`) both join the merged report, and a line
@@ -343,7 +343,7 @@ commits, and read the counts per line rather than per group.
 
 ### Diagnostics that fire on wall-clock time
 
-The slow-traverse report in `packages/runner/src/traverse.ts` was one of those
+The slow-traverse report in `runtime/runner/src/traverse.ts` was one of those
 instances. It logged a traversal's counters only when that traversal had taken
 more than 100 milliseconds of real time, so it ran on a loaded machine and did
 not run on an idle one. Thirty-nine lines moved with the load: the body of the
@@ -363,7 +363,7 @@ A test reaches the report by choosing the elapsed time. It can call the
 function directly with a time over the threshold, or it can pin the clock the
 timed path reads, which also proves that the path still reaches the
 diagnostic. The `SchemaObjectTraverser slow-traverse reporting` cases in
-`packages/runner/test/traverse.test.ts` are the worked example of the second.
+`runtime/runner/test/traverse.test.ts` are the worked example of the second.
 They replace `performance.now` — what `logger.timeStart` and `timeEnd` read —
 for the length of one traversal, and advance it from a store read, because
 `traverse()` is synchronous and a test cannot step a clock from outside a call
@@ -408,7 +408,7 @@ some runs and not on others.
 Write a test that produces the second occurrence itself rather than one that
 performs an operation and hopes the suite repeats it. The
 `records one violation for an action caught twice` case in
-`packages/runner/test/scheduler-pull-idempotency.test.ts` is the worked
+`runtime/runner/test/scheduler-pull-idempotency.test.ts` is the worked
 example. It reaches the deduplication guard in `runIdempotencyRecheck()` by
 running one action twice over an input it moves, and it distinguishes a
 deduplicated second detection from a single detection by having the action
@@ -435,7 +435,7 @@ constructs that value reaches the branch directly. `applyPatch()` is a pure
 function over a value tree: its `missing object key` rejection, which the
 client's pending-layer replay reaches when a `remove` names a key a winning
 writer already dropped, is one call over a base object without the key.
-`packages/memory/test/v2-patch-errors.test.ts` is the worked example, and it
+`runtime/memory/test/v2-patch-errors.test.ts` is the worked example, and it
 states one case per rejection the module raises rather than only the line that
 moved — a sibling branch in the same file is the next one to flap.
 [The investigation record](../history/development/coverage-flake-patch-remove-missing-key-2026-08-17.md)
@@ -450,8 +450,8 @@ only behind that. Nothing in the suite asks for a rival holder, so both were
 reached when one case's park happened to chain a re-activation while the rival
 row it had installed for a different purpose still stood. The way out is the
 same one: a lease is a row, so a test writes the row and calls `activate()`. The
-cases are in `packages/runner/test/executor-space-server.test.ts` and
-`packages/runner/test/executor-serving-loop.test.ts`, and
+cases are in `runtime/runner/test/executor-space-server.test.ts` and
+`runtime/runner/test/executor-serving-loop.test.ts`, and
 [their investigation record](../history/development/coverage-flake-executor-contention-paths-2026-08-26.md)
 follows ten lines across three files from a group-level `+10` down to the two
 shards that reached them.
@@ -477,10 +477,10 @@ all.
 Reaching such a branch takes a failing operation, not a failing environment, so
 give the recovery its operation as a parameter.
 `seedResultContainerWhenPullSettles()` in
-`packages/runner/src/builtins/list-result-container-seed.ts` takes the runtime,
+`runtime/runner/src/builtins/list-result-container-seed.ts` takes the runtime,
 the container, a predicate saying whether the coordinator still holds it, the
 pull to wait on, and the logger to report through.
-`packages/runner/test/list-result-container-seed.test.ts` then hands it a pull
+`runtime/runner/test/list-result-container-seed.test.ts` then hands it a pull
 that rejects and a runtime whose commits are refused. Each failure case asserts
 the message key and the error carried with it, so a report that changed which
 failure it named fails rather than staying green on the line count.
@@ -506,7 +506,7 @@ The fetch builtins' completion writeback is the same shape with nothing to
 extract. `tryWriteResult()` already takes the runtime it commits through, and
 so does `startFetch()`, so a test that hands either one a runtime whose commits
 are refused reaches both the arm that carries the refusal back and the throw
-that converts it. `packages/runner/test/fetch-writeback.test.ts` states the
+that converts it. `runtime/runner/test/fetch-writeback.test.ts` states the
 function's three outcomes, because the two that do not write are distinct for
 the caller — inputs that moved mean the request was superseded and is done,
 while a refused commit means the claim is still pending and only this response
@@ -544,7 +544,7 @@ scheduling rather than named by any test.
 
 The server executor's wave withdrawal is one of those. When a foreign space's
 co-hosted engine cannot be resolved, `commitWave()` in
-`packages/runner/src/executor/wave.ts` walks the wave's contributions and
+`runtime/runner/src/executor/wave.ts` walks the wave's contributions and
 withdraws the ones that sealed into that space — an event handler requeues, a
 derivation drops — while everything else commits. Reaching the skip that lets
 everything else through takes a wave holding both a contribution that crossed
@@ -558,7 +558,7 @@ takes its space, lease and replica lookup as arguments and exposes
 `failForeignSpace()` as a method, so a test seals the contributions it wants,
 fails a space, and commits, with nothing else deciding what the wave holds. The
 `an unresolvable foreign space withdraws exactly its own crossings` case in
-`packages/runner/test/executor-wave.test.ts` puts one contribution of each kind
+`runtime/runner/test/executor-wave.test.ts` puts one contribution of each kind
 in the wave and asserts the disposition of each, so a version that withdrew the
 bystander with the crossings fails rather than staying green on the line count.
 State all the arms in the one case rather than only the arm that moved. The
@@ -598,9 +598,9 @@ throws. Prefer such a stand-in to a real reaped child even though one can be
 had, because it lets the case say which signal was sent, which a process that is
 already gone cannot show, and because it spawns nothing.
 `terminateChildProcess()` in
-`packages/connectors/agents/connector/src/child-process.ts` is that function,
+`connectors/agents/connector/src/child-process.ts` is that function,
 and the cases beside it in
-`packages/connectors/agents/connector/test/child-process.test.ts` assert that
+`connectors/agents/connector/test/child-process.test.ts` assert that
 the running child was sent `SIGTERM` and that the reaped one was asked at all,
 so a version that stopped sending it fails rather than staying green on the
 line count.
@@ -654,8 +654,8 @@ Any two adjacent callback arguments sit in this position. The pair that
 produced it here is a request's two endings — the work to start once the
 request commits, and the ending for a request refused before it starts — which
 is the shape of each `enqueuePostCommitLLMWork()` call in
-`packages/runner/src/builtins/llm.ts` and of the served compile path in
-`packages/runner/src/builtins/compile-and-run.ts`. Neither file is where the
+`runtime/runner/src/builtins/llm.ts` and of the served compile path in
+`runtime/runner/src/builtins/compile-and-run.ts`. Neither file is where the
 shape comes from, so a search for it goes by the call sites rather than by what
 they call.
 
@@ -701,7 +701,7 @@ any input tells the two versions apart.
 
 ### A branch only some of the corpus reaches
 
-`packages/ts-transformers` and `packages/schema-generator` move for a reason of
+`base/ts-transformers` and `base/schema-generator` move for a reason of
 their own: their unit suites never reach parts of the analyzer and the
 formatters. What reaches them is the pattern integration suites, compiling
 whatever the pattern corpus happens to contain, in whichever lane the pattern
@@ -714,8 +714,8 @@ from one run to the next.
 These take a unit test, not a pattern. Both packages have `*-flap-coverage`
 test files that build the type or the source they need and call the analyzer or
 the generator directly:
-`packages/ts-transformers/test/policy/capability-analysis-flap-coverage.test.ts`
-and `packages/schema-generator/test/schema-generator-flap-coverage.test.ts`.
+`base/ts-transformers/test/policy/capability-analysis-flap-coverage.test.ts`
+and `base/schema-generator/test/schema-generator-flap-coverage.test.ts`.
 Each case asserts what the branch produces — that a stream argument is
 recorded opaque while a writable argument is recorded read and written, that a
 numeric literal emits a number rather than the string the node carries — so a
@@ -809,15 +809,15 @@ Accept a rise with a marker in the pull request's description, on a line of its
 own and flush against the left margin:
 
 ```text
-ACCEPT_COVERAGE_DEBT: packages/memory +12 lines
+ACCEPT_COVERAGE_DEBT: runtime/memory +12 lines
 ```
 
 The marker names a workspace member that some measured set scores, at whatever
-depth the workspace puts it — `packages/connectors/github/connector` as well as
-`packages/memory` — and accepts the rise for every measured set over that
+depth the workspace puts it — `connectors/github/connector` as well as
+`runtime/memory` — and accepts the rise for every measured set over that
 member. An acceptance naming anything but a member some measured set scores
 fails the gate, since nothing consults it. That covers a member with no measured
-set, a source group such as `packages/connectors` that holds members but is
+set, a source group such as `connectors` that holds members but is
 none, a package that is not there, and a misspelling of one that is. Each is
 refused rather than passed for an acceptance that had no effect. Two markers
 naming one member also fail, since the author meant one number and would be
@@ -862,7 +862,11 @@ reports' zero-hit lines across the files the branch changed. Point `DENO_DIR` at
 a new empty directory for each run, since each lane starts without V8's code
 cache. With your usual Deno cache directory, a module that a test runs in a
 subprocess reports its top-level lines as covered or not depending on whether
-something had run it before.
+something had run it before. A new directory also lacks the native libraries
+that FFI packages such as `@db/sqlite` fetch on first use, and a test that
+allows network access only to `127.0.0.1` cannot fetch them, so copy the
+`plug` directory from your usual Deno cache (the location `deno info` names)
+into each new one.
 
 Take both measurements from the same base. Rebasing between them straddles two
 trees and the delta stops meaning anything, so rebase first and measure after.
@@ -920,7 +924,7 @@ Three things read them:
   drops any older than `LOCAL_COVERAGE_BASELINE_DAYS`.
   `tasks/test-selection/baselines.ts` is where that happens.
 - The dashboard's coverage debt tile
-  (`packages/dashboard/coverage-debt-history.ts`) takes the `workspace`
+  (`dashboard/coverage-debt-history.ts`) takes the `workspace`
   figure of one `main` run attempt a day, the newest of the day's attempts
   that has one, was not measured on a cold compile cache, and passed, and
   charts the run of them. The record store does not say whether an attempt
@@ -942,7 +946,7 @@ changed, so a trend that took a cold run's figure beside a warm one's would show
 a drop the next warm run takes back.
 
 The pattern-integration process owns one shared cache in
-`packages/patterns/integration/pieces-controller.ts`. Its controller helper, the
+`patterns/integration/pieces-controller.ts`. Its controller helper, the
 capability-gate controller, and the serving loop the multi-runtime harness hosts
 on the test's thread all inject that cache into every runtime they create. A
 custom runtime in this suite must do the same. A serving loop that
@@ -1031,10 +1035,10 @@ directory, and these three suites write their LCOV there. The lane's upload
 carries it to the repository-wide figure. A pull request's lanes collect no
 authored-pattern coverage, because no measured set is scored from it.
 
-The pattern unit suite runs each `packages/patterns/**/*.test.tsx` file through
+The pattern unit suite runs each `patterns/**/*.test.tsx` file through
 `cf test` in-process. The two integration suites run browser-driven `deno test`
 files against a running Toolshed server. Both kinds of authored-pattern coverage
-feed the same `coverage-debt: packages/patterns` figure.
+feed the same `coverage-debt: patterns` figure.
 
 The pattern integration suite runs in two server-execution arms, and only the
 arm with the flag off collects authored-pattern coverage. The instrumentation
@@ -1169,7 +1173,7 @@ hits and no spans is not one of those — that is exactly what a realm that
 warm-loaded somebody else's instrumented bytes reports, and those hits key
 against the spans the compiling realm registered.
 
-Integration coverage counts toward the `coverage-debt: packages/patterns` figure
+Integration coverage counts toward the `coverage-debt: patterns` figure
 exactly like unit coverage, which means a broad end-to-end flow that runs a line
 without asserting on it lowers the debt. That trade is deliberate. Crediting
 integration coverage only in a separate, never-gated number would score whatever
@@ -1184,9 +1188,10 @@ A span's file name is whatever the realm that compiled it called the module, and
 that arrives in two shapes. A pattern the controller resolved off disk is named
 relative to the patterns root (`/lunch-poll/main.tsx`), because that is the root
 the resolver was given. A pattern the worker fetched over HTTP is named by its URL
-pathname (`/api/patterns/system/default-app.tsx`), because Toolshed's pattern
-identity is computed over pathname-prefixed names. Stripping the route prefix maps
-the second shape onto the first, and both then resolve against the patterns root.
+pathname (`/api/patterns/system/default-app/default-app.tsx`), because
+Toolshed's pattern identity is computed over pathname-prefixed names. Stripping
+the route prefix maps the second shape onto the first, and both then resolve
+against the patterns root.
 
 That rename runs when the report is written rather than as each realm reports,
 because the realms do not all arrive the same way: the browser dumps are ingested,

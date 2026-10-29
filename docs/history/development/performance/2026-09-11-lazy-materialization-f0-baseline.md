@@ -23,10 +23,10 @@ dispatch's other phases.
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Runtime revision         | `a44d9389c3783768cb2b3ad194751a9964dc7027`                                                                                                                                                                                                                                                                                      |
 | Deno                     | 2.9.4 (aarch64-apple-darwin), Apple M5                                                                                                                                                                                                                                                                                          |
-| Flag default             | `lazyMaterialization` resolves an unset value to `true` in `Runtime`'s constructor ([`runtime.ts`](../../../../packages/runner/src/runtime.ts))                                                                                                                                                                                 |
-| Environment              | `EXPERIMENTAL_LAZY_MATERIALIZATION`, through `EXPERIMENTAL_ENV_VARS` in [`runtime-presets.ts`](../../../../packages/runner/src/runtime-presets.ts)                                                                                                                                                                              |
+| Flag default             | `lazyMaterialization` resolves an unset value to `true` in `Runtime`'s constructor ([`runtime.ts`](../../../../runtime/runner/src/runtime.ts))                                                                                                                                                                                  |
+| Environment              | `EXPERIMENTAL_LAZY_MATERIALIZATION`, through `EXPERIMENTAL_ENV_VARS` in [`runtime-presets.ts`](../../../../runtime/runner/src/runtime-presets.ts)                                                                                                                                                                               |
 | Server and CLI processes | Toolshed and the background piece service read the variable through `experimentalOptionsFromEnv`, as do `cf check` and the pattern test runners; unset means on                                                                                                                                                                 |
-| Browser shell            | Has no build-time define for this flag ([`shell/src/lib/env.ts`](../../../../packages/shell/src/lib/env.ts) declares five others), so it runs the `Runtime` default and cannot be rolled back through the environment                                                                                                           |
+| Browser shell            | Has no build-time define for this flag ([`shell/src/lib/env.ts`](../../../../runtime/shell/src/lib/env.ts) declares five others), so it runs the `Runtime` default and cannot be rolled back through the environment                                                                                                            |
 | Deployed clients         | `experimentalOptionsForDeployedClient`, which `cf` and the other deployed hosts call, resolves the flag by `adoptServerExperimentalOptions`: an explicit environment value wins; otherwise the posture the server publishes, when `CF_ADOPT_SERVER_FLAGS` is not `false` and the server answers; otherwise the built-in default |
 | Lift arguments           | Marked lazy when the flag is on; the mark is cleared before the result is written                                                                                                                                                                                                                                               |
 | Handler arguments        | Never marked; eager in both flag postures                                                                                                                                                                                                                                                                                       |
@@ -46,23 +46,23 @@ at the pinned revision, found by searching for their names:
   transaction.
 - **The mark.** `markLazyMaterialize` and `isLazyMaterialize` on
   `IExtendedStorageTransaction`
-  ([`storage/interface.ts`](../../../../packages/runner/src/storage/interface.ts)),
+  ([`storage/interface.ts`](../../../../runtime/runner/src/storage/interface.ts)),
   implemented on the transaction and on `TransactionWrapper` in
-  [`extended-storage-transaction.ts`](../../../../packages/runner/src/storage/extended-storage-transaction.ts),
+  [`extended-storage-transaction.ts`](../../../../runtime/runner/src/storage/extended-storage-transaction.ts),
   with the per-layer set in
-  [`reactivity-log.ts`](../../../../packages/runner/src/storage/reactivity-log.ts).
+  [`reactivity-log.ts`](../../../../runtime/runner/src/storage/reactivity-log.ts).
   `validateAndTransform` in
-  [`schema.ts`](../../../../packages/runner/src/schema.ts) branches to the view
+  [`schema.ts`](../../../../runtime/runner/src/schema.ts) branches to the view
   on a marked transaction and keeps a marked transaction rather than swapping a
   finished one for a fresh read; `createQueryResultProxy` in
-  [`query-result-proxy.ts`](../../../../packages/runner/src/query-result-proxy.ts)
+  [`query-result-proxy.ts`](../../../../runtime/runner/src/query-result-proxy.ts)
   pins a schema-less proxy to its transaction when marked.
 - **The refusal.** `noteSchemaRefusal` and `takeSchemaRefusal` on the same
   interface, recorded by the view in
-  [`schema-view.ts`](../../../../packages/runner/src/schema-view.ts), by the
+  [`schema-view.ts`](../../../../runtime/runner/src/schema-view.ts), by the
   unresolved-input arm in `schema.ts`, and by the collection index key builtin
   in
-  [`builtins/collection-index-key.ts`](../../../../packages/runner/src/builtins/collection-index-key.ts).
+  [`builtins/collection-index-key.ts`](../../../../runtime/runner/src/builtins/collection-index-key.ts).
   `clearSchemaRefusal`, on the same interface, is how the view withdraws a
   refusal it catches itself, so that only the refusals a reader saw stay
   recorded. The lift path's post-run in `runner.ts` is the one site that takes a
@@ -83,7 +83,7 @@ sets it on the same way.
 ### The lift path
 
 `#instantiateJavaScriptActionNode` in
-[`runner.ts`](../../../../packages/runner/src/runner.ts) marks the action's
+[`runner.ts`](../../../../runtime/runner/src/runner.ts) marks the action's
 transaction when the flag is on, reads the argument with the transaction bound
 to the schema, runs the body, and in its post-run clears the mark and takes any
 recorded refusal before normalizing and writing the result. A refusal thrown out
@@ -111,7 +111,7 @@ unmarked, so they read eagerly.
 transaction. In dispatch order, the reads it and the scheduler take are:
 
 1. **Dependency preflight**, in
-   [`preflightQueuedEventDependencies`](../../../../packages/runner/src/scheduler/events.ts).
+   [`preflightQueuedEventDependencies`](../../../../runtime/runner/src/scheduler/events.ts).
    The handler's `populateDependencies` reads the writable inputs the argument
    binding declares, or the node's declared reads when it names none, through
    `#populateDeclaredSchedulerReads`, which calls `.get()` on each one with the
@@ -147,7 +147,7 @@ transaction. In dispatch order, the reads it and the scheduler take are:
    conditional: one under server execution, one on the redelivery fast path for
    a reactive result.
 7. **Trusted-write collection**, `trustedEventWriteCandidatesFromTransaction` in
-   [`scheduler/reactivity.ts`](../../../../packages/runner/src/scheduler/reactivity.ts),
+   [`scheduler/reactivity.ts`](../../../../runtime/runner/src/scheduler/reactivity.ts),
    after the body returns: reads the transaction's write log, not cells.
 8. **Commit**, on the dispatch transaction, with the read log as its read set.
 
@@ -156,7 +156,7 @@ materializations the dispatch takes whatever the body reads; what the body reads
 in 5 is eager too. The handler's post-run does not consult `takeSchemaRefusal`,
 so a refusal recorded on a handler transaction goes unread. One site records a
 refusal without consulting the mark: `resolveCollectionKey` in
-[`builtins/collection-index-key.ts`](../../../../packages/runner/src/builtins/collection-index-key.ts)
+[`builtins/collection-index-key.ts`](../../../../runtime/runner/src/builtins/collection-index-key.ts)
 notes one whenever a cell key resolves through a document the replica does not
 hold. A handler reaching it through a collection index lookup, and catching the
 throw, commits whatever it wrote before.
@@ -178,20 +178,20 @@ These stay whatever F2 and F4 decide:
 Three files stand nearest the handler question, and only two exercise a
 dispatched handler:
 
-- [`lazy-materialization-runner.test.ts`](../../../../packages/runner/test/lazy-materialization-runner.test.ts)
+- [`lazy-materialization-runner.test.ts`](../../../../runtime/runner/test/lazy-materialization-runner.test.ts)
   marks a transaction by hand and reads a cell through it. It covers the view
   and the refusal on a marked read. It instantiates no lift and dispatches no
   handler, so it is not evidence about either runner path.
-- [`stream-handler-unresolved-argument.test.ts`](../../../../packages/runner/test/stream-handler-unresolved-argument.test.ts)
+- [`stream-handler-unresolved-argument.test.ts`](../../../../runtime/runner/test/stream-handler-unresolved-argument.test.ts)
   dispatches to a compiled handler whose argument does not resolve, and pins the
   withdraw-and-re-run disposition with the flag on its default.
-- [`scheduler-event-handler-not-run.test.ts`](../../../../packages/runner/test/scheduler-event-handler-not-run.test.ts)
+- [`scheduler-event-handler-not-run.test.ts`](../../../../runtime/runner/test/scheduler-event-handler-not-run.test.ts)
   pins the scheduler's handling of `dispatchedHandlerNotRun` for client
   dispatches: re-run, park on loads, backoff limit, one-shot, and the
   events-down echo.
 
 The lift path's flag-sensitive behavior is pinned by
-[`patterns-lift.test.ts`](../../../../packages/runner/test/patterns-lift.test.ts)
+[`patterns-lift.test.ts`](../../../../runtime/runner/test/patterns-lift.test.ts)
 (a forwarding lift runs once under the view and twice eager) and the view itself
 by `schema-view.test.ts`, `lazy-view-epoch.bench.ts`,
 `query-result-proxy-transaction-lifetime.test.ts`,
@@ -205,7 +205,7 @@ pin how the flag is read and published.
 
 ### Method
 
-[`handler-dispatch-cost.bench.ts`](../../../../packages/runner/test/handler-dispatch-cost.bench.ts)
+[`handler-dispatch-cost.bench.ts`](../../../../runtime/runner/test/handler-dispatch-cost.bench.ts)
 compiles one pattern with six handlers over a `votes` list and an `out` counter,
 seeds the list with 74, 296, or 1,184 inline rows of the same shape the [scalar
 read width baseline](2026-09-11-lazy-scalar-read-width.md) used, and sends one

@@ -100,8 +100,8 @@ describe("check-address-examples", () => {
     });
 
     it("returns `source` for TypeScript", () => {
-      expect(governedKind("packages/cli/lib/callable.ts")).toBe("source");
-      expect(governedKind("packages/patterns/notes/notes.tsx")).toBe("source");
+      expect(governedKind("runtime/cli/lib/callable.ts")).toBe("source");
+      expect(governedKind("patterns/system/notes/notes.tsx")).toBe("source");
     });
 
     it("returns `null` for a file under `docs/history/`", () => {
@@ -110,7 +110,7 @@ describe("check-address-examples", () => {
 
     it("returns `null` for a file of another kind", () => {
       expect(governedKind("deno.jsonc")).toBe(null);
-      expect(governedKind("packages/cli/README.txt")).toBe(null);
+      expect(governedKind("runtime/cli/README.txt")).toBe(null);
     });
   });
 
@@ -243,7 +243,7 @@ describe("check-address-examples", () => {
     it("returns `null` for a token that is not rooted", () => {
       expect(addressExample("items/0/title")).toBe(null);
       expect(addressExample("./title")).toBe(null);
-      expect(addressExample("packages/cli/lib/callable.ts")).toBe(null);
+      expect(addressExample("runtime/cli/lib/callable.ts")).toBe(null);
     });
 
     it("returns `null` for a span holding whitespace", () => {

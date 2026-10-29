@@ -232,10 +232,10 @@ measurements, and a separate evidence disposition remained outstanding.
 ## Reproduction and retained evidence
 
 The checked-in probes live in
-[`tools/server-execution-topics`](../../../../tools/server-execution-topics).
+[`tools/server-execution-topics`](../../../../scripts/server-execution-topics).
 Compact raw outputs and the exact index ablation are in its
-[`evidence/2026-09-09`](../../../../tools/server-execution-topics/evidence/2026-09-09)
-directory; its [manifest](../../../../tools/server-execution-topics/evidence/2026-09-09/manifest.json)
+[`evidence/2026-09-09`](../../../../scripts/server-execution-topics/evidence/2026-09-09)
+directory; its [manifest](../../../../scripts/server-execution-topics/evidence/2026-09-09/manifest.json)
 binds raw results to runtime heads, script snapshots, commands, flags, and hashes.
 The initial watch run did not independently capture flags; the complete 83ee
 capture reproduced its counts. Run the probes from the recorded checkout with Deno 2.9.4:

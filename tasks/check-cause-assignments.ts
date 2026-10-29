@@ -11,7 +11,7 @@
  * the compiler can do this, so the gate compiles every pattern with the base
  * revision's compiler and with the change's, and compares the two builds of
  * each pattern whose source files are the same on both sides.
- * `packages/runner/src/cause-assignment.ts` describes how a cell is told
+ * `runtime/runner/src/cause-assignment.ts` describes how a cell is told
  * apart from its neighbors across the two builds.
  *
  * A move the repository decides to ship is declared in
@@ -47,12 +47,12 @@ import {
  * cell is one it does not see.
  */
 export const COMPILER_PATHS: readonly string[] = [
-  "packages/js-compiler/",
-  "packages/runner/src/builder/",
-  "packages/runner/src/builtins/",
-  "packages/runner/src/harness/",
-  "packages/schema-generator/src/",
-  "packages/ts-transformers/src/",
+  "base/js-compiler/",
+  "runtime/runner/src/builder/",
+  "runtime/runner/src/builtins/",
+  "runtime/runner/src/harness/",
+  "base/schema-generator/src/",
+  "base/ts-transformers/src/",
 ];
 
 /**
@@ -61,7 +61,7 @@ export const COMPILER_PATHS: readonly string[] = [
  * compiling, a change to any of which can change its verdict.
  */
 export const GATE_PATHS: readonly string[] = [
-  "packages/runner/src/cause-assignment.ts",
+  "runtime/runner/src/cause-assignment.ts",
   "tasks/cause-assignments-accepted-moves.ts",
   "tasks/cause-assignments-dump.ts",
   "tasks/cause-assignments-lib.ts",

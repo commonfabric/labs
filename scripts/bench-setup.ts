@@ -16,15 +16,15 @@ import {
   type EntryConfig,
   newPiece,
   type SpaceConfig,
-} from "../packages/cli/lib/piece.ts";
+} from "../runtime/cli/lib/piece.ts";
 
 //
 // Path resolution
 //
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
-const NOTE_PATTERN = `${REPO_ROOT}/packages/patterns/notes/note.tsx`;
-const TODO_PATTERN = `${REPO_ROOT}/packages/patterns/todo-list/todo-list.tsx`;
+const NOTE_PATTERN = `${REPO_ROOT}/patterns/system/notes/note.tsx`;
+const TODO_PATTERN = `${REPO_ROOT}/patterns/examples/todo-list/todo-list.tsx`;
 
 //
 // Content
@@ -95,8 +95,8 @@ The runtime processes cell updates in topological order (dependencies before dep
 ## References
 
 - docs/common/concepts/reactivity.md
-- packages/runner/src/scheduler.ts
-- packages/fuse/cell-bridge.ts`,
+- runtime/runner/src/scheduler.ts
+- runtime/fuse/cell-bridge.ts`,
   },
   {
     title: "FUSE filesystem spec summary",
@@ -162,7 +162,7 @@ function parseArgs(args: string[]): {
   return {
     apiUrl: parsed["api-url"] ?? "http://localhost:8000",
     identity: parsed["identity"] ?? "/tmp/bench.key",
-    rootPath: parsed["root"] ?? `${REPO_ROOT}/packages/patterns`,
+    rootPath: parsed["root"] ?? `${REPO_ROOT}/patterns`,
     quiet,
   };
 }

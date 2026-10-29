@@ -1,7 +1,7 @@
 # CFC Runner Implementation Plan
 
 This document is the implementation plan for adding commit-boundary Contextual
-Flow Control (CFC) enforcement to `packages/runner`.
+Flow Control (CFC) enforcement to `runtime/runner`.
 
 It is intentionally self-contained. It describes:
 
@@ -604,9 +604,9 @@ These must hold once enforcement is enabled:
 
 Primary files:
 
-- `packages/runner/src/storage/interface.ts`
-- `packages/runner/src/storage/extended-storage-transaction.ts`
-- new files under `packages/runner/src/cfc/`
+- `runtime/runner/src/storage/interface.ts`
+- `runtime/runner/src/storage/extended-storage-transaction.ts`
+- new files under `runtime/runner/src/cfc/`
 
 Tasks:
 
@@ -631,9 +631,9 @@ Acceptance:
 
 Primary files:
 
-- `packages/runner/src/storage/interface.ts`
-- `packages/runner/src/storage/extended-storage-transaction.ts`
-- `packages/runner/src/storage/v2-transaction.ts`
+- `runtime/runner/src/storage/interface.ts`
+- `runtime/runner/src/storage/extended-storage-transaction.ts`
+- `runtime/runner/src/storage/v2-transaction.ts`
 
 Tasks:
 
@@ -665,11 +665,11 @@ Acceptance:
 
 Primary files:
 
-- `packages/runner/src/storage/interface.ts`
-- `packages/runner/src/storage/v2-transaction.ts`
-- `packages/runner/src/storage/transaction-inspection.ts`
-- `packages/runner/src/storage/reactivity-log.ts`
-- new files under `packages/runner/src/cfc/`
+- `runtime/runner/src/storage/interface.ts`
+- `runtime/runner/src/storage/v2-transaction.ts`
+- `runtime/runner/src/storage/transaction-inspection.ts`
+- `runtime/runner/src/storage/reactivity-log.ts`
+- new files under `runtime/runner/src/cfc/`
 
 Tasks:
 
@@ -712,10 +712,10 @@ Acceptance:
 
 Primary files:
 
-- `packages/runner/src/schema.ts`
-- `packages/runner/src/traverse.ts`
-- `packages/runner/src/cell.ts`
-- `packages/runner/src/link-utils.ts`
+- `runtime/runner/src/schema.ts`
+- `runtime/runner/src/traverse.ts`
+- `runtime/runner/src/cell.ts`
+- `runtime/runner/src/link-utils.ts`
 
 Tasks:
 
@@ -744,11 +744,11 @@ Acceptance:
 
 Primary files:
 
-- `packages/runner/src/storage/v2.ts`
-- `packages/runner/src/storage/v2-document.ts`
-- `packages/memory/v2.ts`
-- `packages/memory/v2/engine.ts`
-- `packages/runner/src/storage/interface.ts`
+- `runtime/runner/src/storage/v2.ts`
+- `runtime/runner/src/storage/v2-document.ts`
+- `runtime/memory/v2.ts`
+- `runtime/memory/v2/engine.ts`
+- `runtime/runner/src/storage/interface.ts`
 
 Tasks:
 
@@ -782,9 +782,9 @@ Acceptance:
 
 Primary files:
 
-- new files under `packages/runner/src/cfc/`
-- `packages/runner/src/schema.ts`
-- `packages/runner/src/traverse.ts`
+- new files under `runtime/runner/src/cfc/`
+- `runtime/runner/src/schema.ts`
+- `runtime/runner/src/traverse.ts`
 
 Tasks:
 
@@ -837,11 +837,11 @@ Acceptance:
 
 Primary files:
 
-- `packages/runner/src/scheduler.ts`
-- `packages/runner/src/cell.ts`
-- `packages/runner/src/runner.ts`
-- `packages/runner/src/runtime.ts`
-- `packages/runner/src/storage/extended-storage-transaction.ts`
+- `runtime/runner/src/scheduler.ts`
+- `runtime/runner/src/cell.ts`
+- `runtime/runner/src/runner.ts`
+- `runtime/runner/src/runtime.ts`
+- `runtime/runner/src/storage/extended-storage-transaction.ts`
 
 Tasks:
 
@@ -877,13 +877,13 @@ Acceptance:
 
 Primary files:
 
-- `packages/runner/src/runner.ts`
-- `packages/runner/src/builder/module.ts`
-- `packages/runner/src/builder/to-encodable-form.ts`
-- `packages/runner/src/harness/executable-registry.ts`
-- `packages/runner/src/storage/interface.ts`
-- `packages/memory/v2.ts`
-- new files under `packages/runner/src/cfc/`
+- `runtime/runner/src/runner.ts`
+- `runtime/runner/src/builder/module.ts`
+- `runtime/runner/src/builder/to-encodable-form.ts`
+- `runtime/runner/src/harness/executable-registry.ts`
+- `runtime/runner/src/storage/interface.ts`
+- `runtime/memory/v2.ts`
+- new files under `runtime/runner/src/cfc/`
 
 Tasks:
 
@@ -933,9 +933,9 @@ Acceptance:
 
 Primary files:
 
-- new files under `packages/runner/src/cfc/`
-- `packages/runner/src/builtins/`
-- `packages/runner/src/traverse.ts`
+- new files under `runtime/runner/src/cfc/`
+- `runtime/runner/src/builtins/`
+- `runtime/runner/src/traverse.ts`
 
 Tasks:
 
@@ -955,12 +955,12 @@ Acceptance:
 
 Primary files:
 
-- `packages/runner/src/builtins/fetch.ts`
-- `packages/runner/src/builtins/fetch-program.ts`
-- `packages/runner/src/builtins/stream-data.ts`
-- `packages/runner/src/builtins/llm.ts`
-- `packages/runner/src/builtins/llm-dialog.ts`
-- new files under `packages/runner/src/cfc/`
+- `runtime/runner/src/builtins/fetch.ts`
+- `runtime/runner/src/builtins/fetch-program.ts`
+- `runtime/runner/src/builtins/stream-data.ts`
+- `runtime/runner/src/builtins/llm.ts`
+- `runtime/runner/src/builtins/llm-dialog.ts`
+- new files under `runtime/runner/src/cfc/`
 
 Tasks:
 
@@ -987,10 +987,10 @@ Acceptance:
 
 Primary files:
 
-- `packages/html/src/`
-- `packages/runner/src/scheduler.ts`
-- `packages/ts-transformers/src/`
-- `packages/schema-generator/src/`
+- `runtime/html/src/`
+- `runtime/runner/src/scheduler.ts`
+- `base/ts-transformers/src/`
+- `base/schema-generator/src/`
 
 Tasks:
 
@@ -1096,9 +1096,9 @@ content-addressed adjunct read/write APIs.
 
 Primary files:
 
-- `packages/runner/src/storage/`
-- `packages/memory/`
-- new files under `packages/runner/src/cfc/`
+- `runtime/runner/src/storage/`
+- `runtime/memory/`
+- new files under `runtime/runner/src/cfc/`
 
 Tasks:
 
@@ -1129,16 +1129,16 @@ labels, stored link-field labels, diagnostics, and persisted link metadata.
 
 Primary files:
 
-- `packages/runner/src/link-resolution.ts`
-- `packages/runner/src/cell.ts`
-- `packages/runner/src/query-result-proxy.ts`
-- `packages/runner/src/schema.ts`
-- `packages/runner/src/data-updating.ts`
-- `packages/runner/src/cfc/types.ts`
-- `packages/runner/src/cfc/canonical.ts`
-- `packages/runner/src/cfc/label-view.ts`
-- `packages/runner/src/cfc/prepare.ts`
-- `packages/runner/src/storage/extended-storage-transaction.ts`
+- `runtime/runner/src/link-resolution.ts`
+- `runtime/runner/src/cell.ts`
+- `runtime/runner/src/query-result-proxy.ts`
+- `runtime/runner/src/schema.ts`
+- `runtime/runner/src/data-updating.ts`
+- `runtime/runner/src/cfc/types.ts`
+- `runtime/runner/src/cfc/canonical.ts`
+- `runtime/runner/src/cfc/label-view.ts`
+- `runtime/runner/src/cfc/prepare.ts`
+- `runtime/runner/src/storage/extended-storage-transaction.ts`
 
 Tasks:
 

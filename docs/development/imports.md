@@ -168,7 +168,7 @@ is what `no-external-import` means by "use import maps":
 import * as nodeCrypto from "@node/crypto";
 ```
 
-`packages/cli`, `packages/data-model`, and `packages/toolshed` each carry one
-of these aliases. A module that genuinely cannot depend on a Node built-in —
-because it also loads in a browser — is a different case, and belongs under
-`cf-imports/no-inline-module-import` with its reason written down.
+`runtime/cli`, `base/data-model`, and `runtime/toolshed` each
+carry one of these aliases. A module that genuinely cannot depend on a Node
+built-in — because it also loads in a browser — is a different case, and belongs
+under `cf-imports/no-inline-module-import` with its reason written down.

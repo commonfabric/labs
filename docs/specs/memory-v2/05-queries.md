@@ -96,7 +96,7 @@ Starting from a set of root entities, the server follows references embedded in
 entity values, guided by a schema that constrains which paths to explore and
 which linked entities to include.
 
-The traversal code in `packages/runner/src/traverse.ts` is **shared between
+The traversal code in `runtime/runner/src/traverse.ts` is **shared between
 client and server**. The client reaches `SchemaObjectTraverser` through
 `schema.ts` for validation and transformation; the server reaches the same
 traverser through `@commonfabric/runner/graph-query`, which drives it over
@@ -471,7 +471,7 @@ with `prefixItems` omitted when the merged prefix is empty.
 
 Neither operation is a complete JSON Schema intersection, and neither resolves
 `$ref` values. See `combineSchemaForLink`, `combineSchema`, and `narrowSchema`
-in `packages/runner/src/traverse.ts` for the implementation.
+in `runtime/runner/src/traverse.ts` for the implementation.
 
 ### 5.3.5 Schema Tracker
 
@@ -512,7 +512,7 @@ Given a `SchemaQuery`, the server:
 5. Returns the `FactSet` along with the schema tracker (for watch setup).
 
 The initial execution and every later schema-watch refresh MUST use the same
-traversal semantics as `packages/runner/src/traverse.ts`. The server MAY cache
+traversal semantics as `runtime/runner/src/traverse.ts`. The server MAY cache
 bookkeeping such as reachable-entity sets or dirty roots, but the result sent to
 clients must be equivalent to rerunning `graph.query` with the shared traversal
 code against the current committed state.

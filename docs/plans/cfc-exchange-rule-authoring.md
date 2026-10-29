@@ -305,7 +305,7 @@ label-referenced module manifests. Do not merge dynamic artifacts into
 
 ### WP1.1 — Model legacy and module references explicitly
 
-- [x] Add a discriminated policy-reference union in `packages/api/cfc.ts` and
+- [x] Add a discriminated policy-reference union in `base/api/cfc.ts` and
   runner CFC types. Preserve the legacy `{ name, subject, hash }` variant.
 - [x] Add the exact module variant fixed in Stage 0. Keep the canonical record
   digest present even though the module is content-addressed.
@@ -316,22 +316,22 @@ label-referenced module manifests. Do not merge dynamic artifacts into
 
 Likely files:
 
-- `packages/api/cfc.ts`
-- `packages/api/cfc-atoms.ts`
-- `packages/runner/src/cfc/types.ts`
-- `packages/runner/src/cfc/label-field-classification.ts`
-- `packages/runner/src/cfc/label-representation.ts`
+- `base/api/cfc.ts`
+- `base/api/cfc-atoms.ts`
+- `runtime/runner/src/cfc/types.ts`
+- `runtime/runner/src/cfc/label-field-classification.ts`
+- `runtime/runner/src/cfc/label-representation.ts`
 
 Focused tests:
 
-- `packages/api/test/cfc-surface.test.ts`
-- `packages/api/test/cfc-atom-mints.test.ts`
-- `packages/runner/test/cfc-label-representation.test.ts`
-- `packages/runner/test/cfc-commitment-matching.test.ts`
+- `base/api/test/cfc-surface.test.ts`
+- `base/api/test/cfc-atom-mints.test.ts`
+- `runtime/runner/test/cfc-label-representation.test.ts`
+- `runtime/runner/test/cfc-commitment-matching.test.ts`
 
 ### WP1.2 — Extract canonical policy-template validation and digesting
 
-- [x] Refactor `packages/runner/src/cfc/policy.ts` so legacy deployment records
+- [x] Refactor `runtime/runner/src/cfc/policy.ts` so legacy deployment records
   and compiler-produced templates share one canonical validator and digest
   projection.
 - [x] Version the template projection independently from module identity.
@@ -345,9 +345,9 @@ Focused tests:
 
 Focused tests:
 
-- `packages/runner/test/cfc-policy.test.ts`
-- `packages/runner/test/cfc-atom-pattern.test.ts`
-- new `packages/runner/test/cfc-policy-template.test.ts`
+- `runtime/runner/test/cfc-policy.test.ts`
+- `runtime/runner/test/cfc-atom-pattern.test.ts`
+- new `runtime/runner/test/cfc-policy-template.test.ts`
 
 ### WP1.3 — Add the per-evaluation referenced-policy resolver
 
@@ -369,18 +369,18 @@ Focused tests:
 
 Likely files:
 
-- `packages/runner/src/cfc/policy.ts`
-- `packages/runner/src/cfc/exchange-eval.ts`
-- `packages/runner/src/cfc/canonical.ts`
-- `packages/runner/src/cfc/types.ts`
-- `packages/runner/src/cfc/prepare.ts`
-- `packages/runner/src/storage/extended-storage-transaction.ts`
+- `runtime/runner/src/cfc/policy.ts`
+- `runtime/runner/src/cfc/exchange-eval.ts`
+- `runtime/runner/src/cfc/canonical.ts`
+- `runtime/runner/src/cfc/types.ts`
+- `runtime/runner/src/cfc/prepare.ts`
+- `runtime/runner/src/storage/extended-storage-transaction.ts`
 
 Focused tests:
 
-- `packages/runner/test/cfc-exchange-eval.test.ts`
-- `packages/runner/test/cfc-policy-boundary.test.ts`
-- new `packages/runner/test/cfc-referenced-policy-resolver.test.ts`
+- `runtime/runner/test/cfc-exchange-eval.test.ts`
+- `runtime/runner/test/cfc-policy-boundary.test.ts`
+- new `runtime/runner/test/cfc-referenced-policy-resolver.test.ts`
 - one prepare/commit invalidation test for absent→present/deleted manifest
   state or reference-digest substitution; same-digest body mutation must be
   impossible
@@ -413,9 +413,9 @@ Focused tests:
 
 Likely files:
 
-- `packages/api/cfc.ts`
-- `packages/api/cfc-authoring.ts`
-- `packages/api/index.ts`
+- `base/api/cfc.ts`
+- `base/api/cfc-authoring.ts`
+- `base/api/index.ts`
 - a dependency-light runner authoring module for the private brand
 
 ### WP2.2 — Statically validate and lower declarations
@@ -435,15 +435,15 @@ Likely files:
 
 Likely files:
 
-- `packages/ts-transformers/src/core/transformers.ts`
-- a new `packages/ts-transformers/src/transformers/cfc-policy-authoring.ts`
-- `packages/ts-transformers/src/mod.ts`
-- `packages/runner/src/harness/engine.ts`
+- `base/ts-transformers/src/core/transformers.ts`
+- a new `base/ts-transformers/src/transformers/cfc-policy-authoring.ts`
+- `base/ts-transformers/src/mod.ts`
+- `runtime/runner/src/harness/engine.ts`
 
 Focused tests:
 
-- extend `packages/ts-transformers/test/cfc-authoring.test.ts`
-- add focused fixtures under `packages/ts-transformers/test/fixtures/`
+- extend `base/ts-transformers/test/cfc-authoring.test.ts`
+- add focused fixtures under `base/ts-transformers/test/fixtures/`
 - inspect one local and one `cf:`-imported fixture with `--show-transformed`
 
 ### WP2.3 — Persist and cold-load manifests
@@ -466,8 +466,8 @@ result types and relevant compilation-cache/deploy path.
 Focused tests:
 
 - compiler cache write/read/restart tests
-- `packages/runner/test/fabric-imports-engine.test.ts`
-- `packages/runner/test/fabric-imports-pattern-manager.test.ts`
+- `runtime/runner/test/fabric-imports-engine.test.ts`
+- `runtime/runner/test/fabric-imports-pattern-manager.test.ts`
 - a tampered-manifest rejection test
 
 ### Stage 2 completion gate
@@ -495,16 +495,16 @@ Focused tests:
 
 Likely files:
 
-- `packages/api/cfc.ts`
-- `packages/schema-generator/src/formatters/common-fabric-formatter.ts`
-- `packages/ts-transformers/src/transformers/schema-generator.ts`
+- `base/api/cfc.ts`
+- `base/schema-generator/src/formatters/common-fabric-formatter.ts`
+- `base/ts-transformers/src/transformers/schema-generator.ts`
 - `docs/specs/ts-transformer/cfc_authoring_contract.md`
 
 Focused tests:
 
-- `packages/schema-generator/test/schema/cfc-authoring.test.ts`
-- `packages/ts-transformers/test/cfc-authoring.test.ts`
-- `packages/ts-transformers/test/schema-generator-coverage.test.ts`
+- `base/schema-generator/test/schema/cfc-authoring.test.ts`
+- `base/ts-transformers/test/cfc-authoring.test.ts`
+- `base/ts-transformers/test/schema-generator-coverage.test.ts`
 
 ### WP3.2 — Bind the concrete subject at label creation
 
@@ -522,17 +522,17 @@ Focused tests:
 
 Likely files:
 
-- `packages/runner/src/cfc/prepare.ts`
-- `packages/runner/src/cfc/schema-merge.ts`
-- `packages/runner/src/cfc/metadata.ts`
-- schema/label minting helpers in `packages/runner/src/cfc.ts`
+- `runtime/runner/src/cfc/prepare.ts`
+- `runtime/runner/src/cfc/schema-merge.ts`
+- `runtime/runner/src/cfc/metadata.ts`
+- schema/label minting helpers in `runtime/runner/src/cfc.ts`
 
 Focused tests:
 
 - new authored-schema-to-persisted-label test
-- `packages/runner/test/cfc-schema-merge.test.ts`
-- `packages/runner/test/cfc-boundary.test.ts`
-- `packages/runner/test/cfc-cross-space-integrity.test.ts`
+- `runtime/runner/test/cfc-schema-merge.test.ts`
+- `runtime/runner/test/cfc-boundary.test.ts`
+- `runtime/runner/test/cfc-cross-space-integrity.test.ts`
 
 ### WP3.3 — Add authored OR only after direct references work
 
@@ -561,7 +561,7 @@ The examples are part of the feature, not cleanup after it.
 
 ### WP4.1 — Add a small canonical example suite
 
-Create `packages/patterns/cfc-exchange-rules/` as a demo-quality, copyable
+Create `patterns/examples/cfc-exchange-rules/` as a demo-quality, copyable
 authoring example rather than adding more cases to the already broad CFC spec
 gallery.
 
@@ -575,7 +575,7 @@ gallery.
 - [x] `README.md`: explain the one-clause authority bound, the difference
   between concrete atoms and atom patterns, and why an unresolved policy fails
   closed.
-- [x] Add the directory to `packages/patterns/index.md` as a `demo`; do not
+- [x] Add the directory to `patterns/index.md` as a `demo`; do not
   present it as an application-style exemplar.
 
 Use an integrity family that actually ships for the first runnable example.
@@ -612,14 +612,14 @@ browser test.
 
 ### WP4.3 — Verification gates
 
-- [x] `deno task cf test packages/patterns/cfc-exchange-rules/`
+- [x] `deno task cf test patterns/examples/cfc-exchange-rules/`
 - [x] `deno task check`
-- [x] `deno task --cwd packages/api test`
-- [ ] `deno task --cwd packages/schema-generator test` — blocked before test
-  execution by the pre-existing `packages/utils/src/arrays.ts:91`
+- [x] `deno task --cwd base/api test`
+- [ ] `deno task --cwd base/schema-generator test` — blocked before test
+  execution by the pre-existing `base/utils/src/arrays.ts:91`
   `string | undefined` type error. The focused CFC schema suite passes.
-- [x] `deno task --cwd packages/ts-transformers test`
-- [x] `deno task --cwd packages/runner test`
+- [x] `deno task --cwd base/ts-transformers test`
+- [x] `deno task --cwd runtime/runner test`
 - [x] `deno task check-docs specs plans common`
 - [x] Run the focused cross-space/federation-equivalent integration case
   required by the Stage 0 transport: copy source→destination, restart without
@@ -752,7 +752,7 @@ normatively and corrects the concept examples before runtime work.
 
 ### WP7.3 — Add concept examples as executable tests
 
-Extend `packages/patterns/cfc-exchange-rules/` with small examples:
+Extend `patterns/examples/cfc-exchange-rules/` with small examples:
 
 - [ ] owner-only bootstrap with no grant;
 - [ ] standing grant accepted through a trusted review surface;
@@ -802,7 +802,7 @@ compile. The runner must enforce the semantics in the same landing sequence.
   semantically identical output, with an explicit test guarding the boundary.
 - [x] Old module-policy manifests remain resolvable for old labels.
 - [x] Live CFC authoring docs, API reference, component/examples docs, and
-  `packages/patterns/index.md` match shipped behavior.
+  `patterns/index.md` match shipped behavior.
 - [x] Change-owned focused checks, the API/transformer/runner package tasks,
   docs, and root `deno task check` pass. The schema-generator package-task
   baseline is recorded in WP4.3.

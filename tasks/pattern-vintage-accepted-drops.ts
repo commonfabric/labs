@@ -1,3 +1,4 @@
+import { mainNamesPattern } from "@commonfabric/runner";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 /**
@@ -41,7 +42,7 @@ import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
  * granted for.
  */
 export interface AcceptedStateDrop {
-  /** Pattern key: the path relative to `packages/patterns`. */
+  /** Pattern key: the path relative to `patterns`. */
   pattern: string;
 
   /**
@@ -78,7 +79,7 @@ export interface AcceptedStateDrop {
 
 export const ACCEPTED_STATE_DROPS: readonly AcceptedStateDrop[] = [
   {
-    pattern: "topics/main.tsx",
+    pattern: "apps/topics/main.tsx",
     paths: [
       // The unsigned caller retires. The per-topic display names it fed go
       // with it, and are listed once below among the narrowed demand rather
@@ -94,7 +95,7 @@ export const ACCEPTED_STATE_DROPS: readonly AcceptedStateDrop[] = [
       //
       // These sit in this entry rather than their own because `acceptedDropsFor`
       // takes the FIRST entry matching a pattern and window: a second entry for
-      // `topics/main.tsx` covering the same vintages would shadow this one
+      // `apps/topics/main.tsx` covering the same vintages would shadow this one
       // instead of adding to it, and the paths above would silently stop
       // applying. Two breaks on one pattern inside one window share an entry.
       //
@@ -159,7 +160,7 @@ export const ACCEPTED_STATE_DROPS: readonly AcceptedStateDrop[] = [
     record: "docs/history/topics-crossref-identity-break.md",
   },
   {
-    pattern: "topics/topic.tsx",
+    pattern: "apps/topics/topic.tsx",
     // The topic's own edge row, whole. A topic no longer derives one: inbound
     // references are read out of the board's pivot and published as
     // `referencedBy`, so nothing reads this path.
@@ -205,7 +206,7 @@ export const ACCEPTED_STATE_DROPS: readonly AcceptedStateDrop[] = [
     // honest about: they are current-day views, and a pinned vintage replayed
     // weeks after capture holds no votes cast "today" — the stored `votes`
     // themselves survive unchanged.
-    pattern: "lunch-poll/main.tsx",
+    pattern: "apps/lunch-poll/main.tsx",
     paths: [
       "adminName",
       "myName",
@@ -230,7 +231,7 @@ export const ACCEPTED_STATE_DROPS: readonly AcceptedStateDrop[] = [
   {
     // The card half of the same decision: it published the viewer's name as
     // `me`, now removed, and derived joined-ness/host status from it.
-    pattern: "lunch-poll/participant-identity-card.tsx",
+    pattern: "apps/lunch-poll/participant-identity-card.tsx",
     paths: ["me", "isJoined", "isAdmin"],
     capturedThrough: "2026-07-30T21-32-46.548Z",
     reason: "Lunch-poll identity moved from display names to profile cells. " +
@@ -248,27 +249,27 @@ export const acceptedDropKey = (pattern: string, path: string): string =>
  * Whether a registry key addresses the pattern a manifest names.
  *
  * A manifest entry names its pattern by repo-relative path
- * (`/packages/patterns/topics/topic.tsx`) or by the route the toolshed serves
- * it at, while a registry key is written relative to `packages/patterns`. So
- * a key is matched as a path SUFFIX rather than a bare one: `endsWith` alone
- * would also claim a `subtopics/main.tsx` that no entry mentions, and the
- * leading `/` is what makes the segment boundary part of the test.
+ * (`/patterns/apps/topics/topic.tsx`) or by the route the toolshed serves it
+ * at, and a manifest recorded before the patterns were sorted into categories
+ * names it by the key it had then, while a registry key is the key it has now,
+ * written relative to `patterns`. So a key, or the key it had before it moved,
+ * is matched as a path SUFFIX rather than a bare one: `endsWith` alone would
+ * also claim a `subtopics/main.tsx` that no entry mentions, and the leading
+ * `/` is what makes the segment boundary part of the test.
  *
  * Exported because the guards that hold these registries to a floor have to
  * ask the same question this asks, and a floor that judged membership by its
  * own rule would let a spelling this accepts walk straight around it.
  */
 export function patternKeyClaims(patternPath: string, key: string): boolean {
-  return patternPath === key || patternPath.endsWith(`/${key}`);
+  return patternPath === key || mainNamesPattern(patternPath, key);
 }
 
 /**
  * The paths accepted as dropped for one pattern, in one vintage.
  *
- * A manifest entry names its pattern by repo-relative path
- * (`/packages/patterns/topics/topic.tsx`), so the key is matched as a path
- * suffix rather than a bare one: `endsWith("topics/main.tsx")` alone would also
- * claim a `subtopics/main.tsx` that no entry mentions.
+ * A manifest entry names its pattern by path, so the key is matched the way
+ * {@link patternKeyClaims} matches it.
  *
  * `stamp` is the replayed vintage's capture stamp, and an entry answers only
  * for the vintages it was granted over. Stamps are ISO-8601 with `:` replaced,

@@ -34,7 +34,7 @@ perSession cell in a `.map()`:
 
 Underlying this is a runner rule: following a link into a **narrower** scope
 (`perSession` is narrower than `space`) is blocked from a space-scoped reading
-context, **silently** (`packages/runner/src/scope.ts:61-69`, enforced via
+context, **silently** (`runtime/runner/src/scope.ts:61-69`, enforced via
 `traverse.ts`/`link-resolution.ts`, pinned by `schema-links.test.ts`). When the
 mapped rows are plain objects emitted by a `computed()`, the per-row `computed`
 runs in that space-scoped context and the follow is blocked; mapping a live cell
@@ -86,7 +86,7 @@ it; a client runtime runs only its own session's. Where that list is large or
 feeds other derivations, keep the rows cells, render each with a row pattern
 handed the row and the perSession cell as inputs, and read the cell at the row
 pattern's top level. FabriChat's message row
-(`packages/patterns/fabrichat/message-row.tsx`) reads its session's editor and
+(`patterns/system/fabrichat/message-row.tsx`) reads its session's editor and
 picker state that way, for each message cell of a list the room's `computed()`
 produces. See
 [per-viewer work](../../../common/patterns/multi-user-patterns.md#per-viewer-work).
@@ -99,5 +99,5 @@ perSession doesn't.
 **Known-good references:**
 `lot-watch/main.tsx` (`sightingRows`, spot picker) and
 `parking-coordinator/main.tsx` (`adminPeopleData`/`adminSpotsData`) both bake the
-flag into the producing computed. `cozy-poll/main.tsx` maps `options`
+flag into the producing computed. `patterns/apps/cozy-poll/main.tsx` maps `options`
 directly and needs no change.

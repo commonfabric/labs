@@ -169,9 +169,9 @@ if [[ -n "${CODEX_SANDBOX:-}" ]]; then
     KEEP_ALIVE=true
 fi
 
-SHELL_LOG="$SCRIPT_DIR/../packages/shell/local-dev-shell.log"
-TOOLSHED_LOG="$SCRIPT_DIR/../packages/toolshed/local-dev-toolshed.log"
-CONSOLE_LOG="$SCRIPT_DIR/../packages/cf-harness/local-dev-console.log"
+SHELL_LOG="$SCRIPT_DIR/../runtime/shell/local-dev-shell.log"
+TOOLSHED_LOG="$SCRIPT_DIR/../runtime/toolshed/local-dev-toolshed.log"
+CONSOLE_LOG="$SCRIPT_DIR/../runtime/cf-harness/local-dev-console.log"
 SHELL_PID=""
 TOOLSHED_PID=""
 CONSOLE_PID=""
@@ -337,13 +337,13 @@ wait_for_listen() {
 }
 
 # Start shell dev server in background
-cd "$SCRIPT_DIR/../packages/shell"
+cd "$SCRIPT_DIR/../runtime/shell"
 TOOLSHED_PORT="$TOOLSHED_PORT" deno task dev-local > "$SHELL_LOG" 2>&1 &
 SHELL_PID=$!
 
 # Start toolshed dev server in background
 # We pass --port= as CLI arg because deno --watch doesn't pass env vars to subprocess
-cd "$SCRIPT_DIR/../packages/toolshed"
+cd "$SCRIPT_DIR/../runtime/toolshed"
 WATCH_FLAG=""
 if [[ "$WATCH" == "true" ]]; then
     WATCH_FLAG="--watch"
@@ -412,7 +412,7 @@ console_unavailable() {
     echo "" >&2
     echo "Error: cf-harness console did not start: $reason" >&2
     echo "  The shell and toolshed are unaffected and still running." >&2
-    echo "  Console log: packages/cf-harness/local-dev-console.log" >&2
+    echo "  Console log: runtime/cf-harness/local-dev-console.log" >&2
     kill_tree "$CONSOLE_PID"
     CONSOLE_PID=""
     CONSOLE_STATUS="$reason"
@@ -438,10 +438,10 @@ if [[ "$CF_HARNESS" == "true" ]]; then
     # `--instance` is how the identity and space are read off a loom instance;
     # without one, `CF_IDENTITY` and `CF_SPACE` name them and their absence is
     # the launcher's named error.
-    # The toolshed above runs in `packages/toolshed`, so an unset `MEMORY_DIR`
+    # The toolshed above runs in `runtime/toolshed`, so an unset `MEMORY_DIR`
     # leaves it on that directory's own `cache/memory`, which is the store the
     # console then has to read.
-    CONSOLE_STORE=${MEMORY_DIR:-"$(cd "$SCRIPT_DIR/../packages/toolshed" && pwd)/cache/memory"}
+    CONSOLE_STORE=${MEMORY_DIR:-"$(cd "$SCRIPT_DIR/../runtime/toolshed" && pwd)/cache/memory"}
     export CONSOLE_PORT TOOLSHED_API_URL CONSOLE_STORE \
         CF_HARNESS_ALLOW_SKILL_SCRIPTS_FLAG CF_HARNESS_ALLOW_BROWSER_HOST_FLAG
     CONSOLE_ARGS=()
@@ -457,7 +457,7 @@ if [[ "$CF_HARNESS" == "true" ]]; then
         # The console resolves its own store from `--store` above; an inherited
         # `MEMORY_DIR` would be the toolshed's `file://` spelling of it.
         unset MEMORY_DIR
-        exec deno task --cwd packages/cf-harness console:launch "${CONSOLE_ARGS[@]}"
+        exec deno task --cwd runtime/cf-harness console:launch "${CONSOLE_ARGS[@]}"
     ) > "$CONSOLE_LOG" 2>&1 &
     CONSOLE_PID=$!
 
@@ -512,10 +512,10 @@ if [[ "$CF_HARNESS" == "true" ]]; then
 elif [[ -n "$CONSOLE_STATUS" ]]; then
     echo "  Console:  NOT RUNNING — $CONSOLE_STATUS"
 fi
-echo "Shell log file: packages/shell/local-dev-shell.log"
-echo "Toolshed log file: packages/toolshed/local-dev-toolshed.log"
+echo "Shell log file: runtime/shell/local-dev-shell.log"
+echo "Toolshed log file: runtime/toolshed/local-dev-toolshed.log"
 if [[ "$CF_HARNESS" == "true" || -n "$CONSOLE_STATUS" ]]; then
-    echo "Console log file: packages/cf-harness/local-dev-console.log"
+    echo "Console log file: runtime/cf-harness/local-dev-console.log"
 fi
 
 if [[ "$KEEP_ALIVE" == "true" ]]; then

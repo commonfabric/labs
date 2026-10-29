@@ -50,15 +50,15 @@ A pattern is the exception, and it is a hard one. A pattern compiles against
 the `commonfabric` module and nothing else, so it cannot reach this module at
 all. A pattern that has to inspect a DID states the shape it accepts in its own
 source, and says which shape that is and why, the way
-`packages/patterns/system/private-inbox.tsx` states the DID shape an offer's
-`space` and `from` must take. The `DID` type is available to a pattern, since `packages/api`
-declares a standalone copy of it.
+`patterns/system/private-inbox/private-inbox.tsx` states the DID shape an
+offer's `space` and `from` must take. The `DID` type is available to a pattern,
+since `base/api` declares a standalone copy of it.
 
 ## Asking a narrower question
 
 A caller that needs more than "is this a DID" asks for it explicitly, on top of
 these, and says at the point of asking why the narrower question is the right
-one. `packages/toolshed/lib/space-authority.ts` is the worked example: the
+one. `runtime/toolshed/lib/space-authority.ts` is the worked example: the
 space DID it is handed becomes an ACL document key, a channel-id input, and an
 on-disk filename all at once, so it pins the string to
 `^did:key:z[1-9A-HJ-NP-Za-km-z]{20,120}$` and says so. That is a different
@@ -76,14 +76,14 @@ direction-override characters, and uppercase method names after `did:`, so two
 spellings of one principal could both pass, or a room could make a principal
 read as something it is not. The custody seal shows its seats and readers
 through it, and `representsPrincipalSubject` in
-`packages/runner/src/cfc/represents-principal.ts` reads a `represents-principal`
+`runtime/runner/src/cfc/represents-principal.ts` reads a `represents-principal`
 subject only when it holds.
 
 ## Values that must not be a DID
 
 The mirror of the rule. A space is addressed either by its DID or by a name,
 and a legacy name is turned into a DID by deriving a key from the name itself
-(`legacySpaceDid` in `packages/identity/src/legacy-space.ts`). A name that is also a
+(`legacySpaceDid` in `base/identity/src/legacy-space.ts`). A name that is also a
 DID therefore addresses one space when it travels as a name and a different
 space when it travels as a DID — the same string, two spaces, decided by the
 route it took.
@@ -97,7 +97,7 @@ generic message will do:
   every path that opens a space by legacy name. `PatternFactory.inSpace(name)`
   is not one of them: its name resolves through an allocation record in the
   calling space, to a space with a random DID, and is never derived.
-- `appViewToUrlPath` and `isAppView` in `packages/navigation/src/view.ts` — a
+- `appViewToUrlPath` and `isAppView` in `runtime/navigation/src/view.ts` — a
   view's URL is read back by `urlToAppView`, which routes a DID-shaped first
   segment to `spaceDid`, so a DID-shaped name would not survive the round trip.
 

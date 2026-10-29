@@ -57,11 +57,11 @@ deltas print, and `--storage-stats` adds the storage rows. This is the fastest
 way to see a read count explode, and it needs no conversion work.
 
 Its counts are exact; its milliseconds are not the product's.
-`packages/cli/lib/test-runner.ts` enables idempotency verification by default.
+`runtime/cli/lib/test-runner.ts` enables idempotency verification by default.
 Use `--no-idempotency-check` for timing experiments so verification replay does
 not distort the measurement. Keep verification enabled for correctness checks.
 The single-runtime runner also reports per-step read costs, including work
-triggered by assertions and render steps; `packages/cli/README.md` defines each
+triggered by assertions and render steps; `runtime/cli/README.md` defines each
 counter and its measurement boundary.
 
 **Browser integration test.** What the pattern test cannot see: rendering, the
@@ -69,15 +69,15 @@ main-thread/worker split, IPC, cold load, and anything about how cost scales
 with what is on screen. Promote the test using
 `skills/pattern-test-to-integration/SKILL.md`, which owns that conversion and
 the scale knob the measurement below depends on. Then instrument it from
-`packages/patterns/integration/cfc-browser-helpers.ts`: `StepTimer` and
-`logStepTimings` for phase wall-clock, and `collectBrowserLoadSummary` for the
-worker's scheduler/runner/storage rows plus main-thread IPC.
+`patterns/integration/cfc-browser-helpers.ts`: `StepTimer` and `logStepTimings`
+for phase wall-clock, and `collectBrowserLoadSummary` for the worker's
+scheduler/runner/storage rows plus main-thread IPC.
 
 **Benchmarks.** For anything that must stay fast, a bench file is how it is
 defended; `docs/development/BENCHMARKS.md` owns that lane, including
-`packages/patterns/integration/topic-board-scale.bench.ts`, which measures a
-board's cold load across sizes and documents why its larger sizes are declared
-but skipped. Read it before adding a bench rather than inventing a shape.
+`patterns/integration/topic-board-scale.bench.ts`, which measures a board's cold
+load across sizes and documents why its larger sizes are declared but skipped.
+Read it before adding a bench rather than inventing a shape.
 
 **The transformer's emitted schema.** A derivation's cost often starts with how
 much it declared it would read. `deno task cf check <file> --show-transformed`
@@ -155,7 +155,7 @@ failing to cut synchronous work. Neither replaces the other — the count for
 frequency, the span for width.
 
 **Frames are the sync point.** `waitForSettled` in
-`packages/runner/src/executor/watermark.ts` resolves when the space's watermark
+`runtime/runner/src/executor/watermark.ts` resolves when the space's watermark
 covers a given commit, riding the ordinary subscription, so it waits on a frame
 rather than polling for a rendered consequence. It is what "the server is done"
 means under ON, and `runtime.idle()` is not: a flag-ON client goes idle over its
@@ -201,7 +201,7 @@ by more than the differences under test. So logger rows tell you **which key,
 and how many times**; they do not reliably tell you where the time went.
 
 A V8 sampling profile of the runtime worker does. `CdpWorkerProfiler` and
-`renderProfileReport` (`packages/integration/cdp-profiler.ts`, exported from
+`renderProfileReport` (`runtime/integration/cdp-profiler.ts`, exported from
 `@commonfabric/integration`) attach to the worker and produce both a
 `.cpuprofile` that Chrome DevTools and speedscope load, and a ranked self-time
 report. Two things about using it here: the profiler picks the worker out of the
@@ -220,12 +220,12 @@ stays in the scenario, written out: which iterations or phases to capture, the
 sampling interval, the output prefix and label that carry the board size or the
 phase, and the environment knob that turns capture on.
 
-`packages/patterns/integration/default-app.test.ts` is the maintained example to
-lift from, and that is the reason for the split rather than a full helper: the
-half a measurer edits every time has to stay visible where they are already
-reading. A perf harness is otherwise throwaway — built for one investigation,
-driven by knobs nobody else needs, and not committed — so duplicating the parts
-that differ costs less than a seam every future scenario has to be bent through.
+`patterns/integration/default-app.test.ts` is the maintained example to lift
+from, and that is the reason for the split rather than a full helper: the half a
+measurer edits every time has to stay visible where they are already reading. A
+perf harness is otherwise throwaway — built for one investigation, driven by
+knobs nobody else needs, and not committed — so duplicating the parts that
+differ costs less than a seam every future scenario has to be bent through.
 
 ## Narrowing, until a phase becomes a source
 
@@ -347,8 +347,8 @@ the other end of the stack from where the symptom appeared.
 
 Seed list, not a boundary — these are the causes this codebase has actually
 produced, and the point is the shape of each, so you recognize the next one.
-`packages/patterns/topics/main.tsx` carries several of them as comments on the
-code that resolves them.
+`patterns/apps/topics/main.tsx` carries several of them as comments on the code
+that resolves them.
 
 - **The read is too wide.** The transformer shrinks a derivation's input schema
   to the paths it can see the body reach, and gives up when it cannot see — a
@@ -392,9 +392,9 @@ code that resolves them.
   derivation was made from, which a load repeats either way — so measure both
   before promising a faster load. The FabriChat manager's per-user rooms and
   people are the worked case, and
-  `packages/patterns/integration/fabrichat-manager-sessions-multi-runtime.test.ts`
-  is the check that pins it: a later session's session-scoped writes are the
-  same with one room and with three.
+  `patterns/integration/fabrichat-manager-sessions-multi-runtime.test.ts` is the
+  check that pins it: a later session's session-scoped writes are the same with
+  one room and with three.
 - **An append re-walks the list against its element schema.** Appending to a
   growing array is free, and so is appending a piece to one. Appending a piece
   whose declared shape is wide re-walks every element already there, once per
@@ -411,7 +411,7 @@ code that resolves them.
   changes for a cell and includes the positional index for an inline value — so
   an inline element makes identity equal position, and any reorder or prepend
   re-addresses every downstream cell and rebuilds its subtree.
-  `packages/runner/src/builtins/map.ts` states the rule at its source. The
+  `runtime/runner/src/builtins/map.ts` states the rule at its source. The
   symptom is churn rather than slowness in any one place, and no timer shows it
   — the work is fast every time, there is just N times more of it than there
   should be. What shows it is snapshotting the rendered tree across successive
@@ -452,14 +452,14 @@ product, and it is easy to miss for the reason the widest demand is the default:
 the spelling that produces it looks like the obvious way to keep a piece running
 while you write to it.
 
-`packages/patterns/integration/topic-board-fixture.ts` holds a board live with
+`patterns/integration/topic-board-fixture.ts` holds a board live with
 `getResult(board.getCell()).sink(() => {})` so each write lands against a
 current list. That is a schemaless sink on the piece cell, so every write
 re-materializes the whole board. Narrowing it to the board's own `index` — what
-`packages/patterns/integration/topic-create-onscreen.test.ts` does behind a
-knob, keeping the wide spelling available so the difference stays measurable —
-took the off-screen growth of a create across a size sweep from 3.70× to 1.70×,
-and the traversals slow enough to report over a fifty-topic run from 101 to 9.
+`patterns/integration/topic-create-onscreen.test.ts` does behind a knob, keeping
+the wide spelling available so the difference stays measurable — took the
+off-screen growth of a create across a size sweep from 3.70× to 1.70×, and the
+traversals slow enough to report over a fifty-topic run from 101 to 9.
 
 So before reading any curve: ask what the harness demands, and whether the
 product demands the same thing. A browser rendering a board demands its view; an
@@ -498,8 +498,8 @@ this repo has been burned by it.
 - **Never sleep to stabilize a measurement.** A sleep sets a floor on the number
   you are trying to reduce and makes it depend on scheduling luck.
   `docs/development/waiting-in-tests.md` is binding here, and the waits in
-  `packages/patterns/integration/cfc-browser-helpers.ts` are the event-driven
-  primitives to reach for.
+  `patterns/integration/cfc-browser-helpers.ts` are the event-driven primitives
+  to reach for.
 - **State the board size, the machine, and which side is which** in any number
   you report. A ratio without a size is not reproducible.
 

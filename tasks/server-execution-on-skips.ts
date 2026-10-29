@@ -65,10 +65,10 @@ export type ServerExecutionOnSkip = {
 };
 
 const SUITE_PACKAGE_DIR: Record<ServerExecutionSuite, string> = {
-  patterns: "packages/patterns",
-  runner: "packages/runner",
-  "runtime-client": "packages/runtime-client",
-  shell: "packages/shell",
+  patterns: "patterns",
+  runner: "runtime/runner",
+  "runtime-client": "runtime/runtime-client",
+  shell: "runtime/shell",
 };
 
 /**

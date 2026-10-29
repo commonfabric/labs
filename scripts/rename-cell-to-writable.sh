@@ -1,5 +1,5 @@
 #!/bin/bash
-# Script to rename Cell<T> to Writable<T> in packages/patterns
+# Script to rename Cell<T> to Writable<T> in patterns
 #
 # This script:
 # 1. Replaces Cell< with Writable< (type annotations only)
@@ -9,7 +9,7 @@
 
 set -e
 
-PATTERNS_DIR="packages/patterns"
+PATTERNS_DIR="patterns"
 
 echo "=== Step 1: Replacing Cell< with Writable< in type annotations ==="
 
@@ -58,5 +58,5 @@ echo ""
 echo "=== Done! ==="
 echo ""
 echo "Next steps:"
-echo "1. Review changes: git diff packages/patterns | head -200"
-echo "2. Test patterns: deno task cf check packages/patterns/todo-list.tsx --no-run"
+echo "1. Review changes: git diff patterns | head -200"
+echo "2. Test patterns: deno task cf check patterns/examples/todo-list.tsx --no-run"
