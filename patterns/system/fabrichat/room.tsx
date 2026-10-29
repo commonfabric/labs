@@ -2224,9 +2224,11 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
     );
     // Hidden by a prop rather than a branch, and `hidden` until the prop has a
     // value, as `FabriChatMessageRow` says. Read through the room's viewer,
-    // the session's own, which holds the profile once the wish finds it.
+    // the session's own, which holds the profile once the wish finds it. The
+    // profile is a cell there, whose handle is never absent, so its value is
+    // what is tested.
     const setupDisplay = computed((): PerSession<ChatDisplay> =>
-      room.viewer.profile === undefined ? "block" : "none"
+      room.viewer.profile?.get() === undefined ? "block" : "none"
     );
 
     return {
