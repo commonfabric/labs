@@ -126,29 +126,57 @@ export interface DelegationLinkRow {
   notBefore?: number;
 
   /**
-   * `true` for a delegation in a chain a runtime would hold: every link
-   * decodes and verifies, each is issued by the previous audience, all are
-   * over one space, and the chain is no longer than the server admits.
-   * Otherwise why the chain would be refused, on each of its rows.
+   * `true` for a delegation in a chain a runtime would hold and present
+   * now, as {@link checkPresentableChain} judges it. Otherwise why the
+   * chain would be refused, or held but not presented, on each of its rows.
    */
   verified: true | string;
 }
 
 /**
+ * Holds `chain` to the rules a runtime applies to a chain it is handed and
+ * then to one it presents, both through a `DelegationStore` of its own:
+ * `add` decodes and verifies every link, checks each is issued by the
+ * previous audience, that all are over one space, and that the chain is no
+ * longer than the server admits; `chainFor` then checks that every link
+ * holds at `nowSeconds` and covers opening a space. Returns the decoded
+ * chain. Whom the chain ends at is the caller's to judge.
+ *
+ * @throws A `DelegationError` saying what is wrong with the chain.
+ */
+async function checkPresentableChain(
+  chain: readonly Uint8Array[],
+  nowSeconds: number,
+): Promise<readonly Delegation[]> {
+  const store = new DelegationStore();
+  const decoded = await store.add(chain);
+  const { sub } = decoded[0].payload;
+  const { aud } = decoded[decoded.length - 1].payload;
+  if (sub === null || store.chainFor(sub, aud, nowSeconds) === undefined) {
+    throw new DelegationError(
+      "no session presents the chain now: a delegation in it has expired, is not yet valid, or does not cover opening a space",
+    );
+  }
+  return decoded;
+}
+
+/**
  * Describes each delegation of each chain, holding each chain to the rules
- * a runtime's delegation store applies (`DelegationStore.add`) without
- * refusing any: a chain that would not be held is described with what is
- * wrong with it, on each of its rows. A link that does not decode is a row
- * with its position, the reason, and nothing else known.
+ * a runtime applies to a chain it holds and presents
+ * ({@link checkPresentableChain}) at `nowSeconds`, by default now, without
+ * refusing any: a chain that would not be presented is described with what
+ * is wrong with it, on each of its rows. A link that does not decode is a
+ * row with its position, the reason, and nothing else known.
  */
 export async function describeDelegationChains(
   chains: readonly (readonly Uint8Array[])[],
+  nowSeconds = Math.floor(Date.now() / 1000),
 ): Promise<DelegationLinkRow[]> {
   const rows: DelegationLinkRow[] = [];
   for (const [chain, links] of chains.entries()) {
     let verified: true | string = true;
     try {
-      await new DelegationStore().add(links);
+      await checkPresentableChain(links, nowSeconds);
     } catch (error) {
       verified = error instanceof Error ? error.message : String(error);
     }
@@ -226,17 +254,19 @@ export interface DelegationChainHolder {
 
 /**
  * Hands `holder` every chain the files at `paths` carry, in order, and
- * returns how many. Throws for a holder whose sessions present no chain, and
- * naming the file and the chain for one that ends at a key other than
- * `principal`, which no session of the holder's could present, or that the
- * holder refuses; the chains before it are held. A chain file is named by
- * its caller, so a chain in it that cannot be held is an error rather than
- * a warning.
+ * returns how many. Throws for a holder whose sessions present no chain,
+ * and naming the file and the chain for one that no session presents at
+ * `nowSeconds`, by default now ({@link checkPresentableChain}), one that
+ * ends at a key other than `principal`, which no session of the holder's
+ * could present, or one the holder refuses; the chains before it are held.
+ * A chain file is named by its caller, so a chain in it that cannot be held
+ * is an error rather than a warning.
  */
 export async function holdDelegationChainFiles(
   holder: DelegationChainHolder,
   paths: readonly string[],
   principal: DIDKey,
+  nowSeconds = Math.floor(Date.now() / 1000),
 ): Promise<number> {
   if (paths.length === 0) return 0;
   const add = holder.addDelegationChain;
@@ -251,16 +281,15 @@ export async function holdDelegationChainFiles(
     for (const [i, chain] of chains.entries()) {
       const refused = (reason: string): Error =>
         new Error(`Chain ${i} of ${path} cannot be held: ${reason}`);
-      let last: Delegation;
+      let decoded: readonly Delegation[];
       try {
-        last = await decodeDelegation(chain[chain.length - 1]);
+        decoded = await checkPresentableChain(chain, nowSeconds);
       } catch (error) {
         throw refused(error instanceof Error ? error.message : String(error));
       }
-      if (last.payload.aud !== principal) {
-        throw refused(
-          `it ends at ${last.payload.aud}, not at the identity ${principal}`,
-        );
+      const { aud } = decoded[decoded.length - 1].payload;
+      if (aud !== principal) {
+        throw refused(`it ends at ${aud}, not at the identity ${principal}`);
       }
       try {
         await add.call(holder, chain);

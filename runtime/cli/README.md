@@ -3426,8 +3426,9 @@ CLI connects.
   exist; without `--out`, the chain is written to stdout.
 - `cf delegation show <file>` describes each delegation of each chain the file
   holds: its CID, issuer, audience, subject, command, expiry, and whether a
-  runtime would hold the chain, with what is wrong with it where it would not.
-  `--json` prints the rows as JSON.
+  runtime would hold the chain and present it now, with what is wrong with it
+  where it would not, an expired link among them. `--json` prints the rows as
+  JSON.
 
 A chain file is JSON naming its format, `commonfabric/delegation-chains`, and
 listing chains, each the delegations' envelope bytes root first in base64url.
@@ -3441,6 +3442,7 @@ The `cf piece` and `cf cell` commands, which carry these options, hold the
 chains in the files `--delegations <path>` names, repeatable, or the one
 `CF_DELEGATIONS` names, before they open any space, Home included, so a session
 on a space a chain is over presents it. A file that cannot be read, a chain in
-it that ends at a key other than the identity, or one the runtime refuses, fails
-the command rather than warning: the caller named the file. The delegations your
-own Home records for your profiles are held without naming anything.
+it that ends at a key other than the identity, one no session would present
+then, expired or not yet valid, or one the runtime refuses, fails the command
+rather than warning: the caller named the file. The delegations your own Home
+records for your profiles are held without naming anything.

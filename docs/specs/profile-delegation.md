@@ -561,19 +561,20 @@ part of this design.
    the chain the identity's own sessions present where it holds the space
    through one, as a profile's owner does through Home's record and a key
    delegated to in turn does through a chain file
-   (`StorageManager.delegationChainFor`). The chain travels as a file in a format
-   of this repository's own (`delegation-chain-text.ts` in the identity
-   package): JSON naming the format and listing chains, each its
+   (`StorageManager.delegationChainFor`). The chain travels as a file in a
+   format of this repository's own (`delegation-chain-text.ts` in the
+   identity package): JSON naming the format and listing chains, each its
    delegations' envelope bytes root first, so a holder never reconstructs
    a chain. The UCAN working group's container format, a CBOR bag of
    tokens in no order whose recipient links them itself, is the
    interchange form other UCAN tooling reads; emitting and reading it is a
    later feature, for when something on the other side speaks it.
-   `cf delegation show` describes a chain file, and `--delegations` or
-   `CF_DELEGATIONS` names the files whose chains a `cf` runtime holds
-   when it connects. An issued
-   delegation can carry an expiry, which the server already holds a
-   session to. A Home-space affordance for the same, and a daemon that
+   `cf delegation show` describes a chain file, and says whether a runtime
+   would present each chain now. `--delegations` or `CF_DELEGATIONS` names
+   the files whose chains a `cf` runtime holds when it connects, and a
+   chain in one that no session would present then, expired or not yet
+   valid, fails the command. An issued delegation can carry an expiry,
+   which the server already holds a session to. A Home-space affordance for the same, and a daemon that
    holds a chain from elsewhere than a file, are left for the hosts that
    need them. When one does, the delegatee's inbox is the channel: the
    issuer delivers the chain there as an offer, and the holder reads what

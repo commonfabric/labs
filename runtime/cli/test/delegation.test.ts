@@ -279,6 +279,36 @@ describe("delegation", () => {
       ]);
     });
 
+    it("says a chain whose link has expired would not be presented, and calls it verified before then", async () => {
+      const chain = await issueDelegationChain({
+        signer: core,
+        space,
+        to: agent.did(),
+        held: [rootToCore.bytes],
+        expiresAt: NOW + 60,
+        nowSeconds: NOW,
+      });
+      const after = await describeDelegationChains([chain], NOW + 61);
+      expect(after.map((row) => row.verified)).toEqual([
+        expect.stringContaining("no session presents the chain now"),
+        expect.stringContaining("no session presents the chain now"),
+      ]);
+      const before = await describeDelegationChains([chain], NOW + 60);
+      expect(before.map((row) => row.verified)).toEqual([true, true]);
+    });
+
+    it("says a chain whose link is not yet valid would not be presented", async () => {
+      const notYet = await issueDelegation(spaceKey, {
+        aud: core.did(),
+        sub: space,
+        cmd: "/memory",
+        pol: [],
+        nbf: NOW + 60,
+      });
+      const rows = await describeDelegationChains([[notYet.bytes]], NOW);
+      expect(rows[0].verified).toContain("no session presents the chain now");
+    });
+
     it("says why a link does not decode, and describes the next chain", async () => {
       const rows = await describeDelegationChains([
         [new Uint8Array([1, 2, 3])],
@@ -389,6 +419,28 @@ describe("delegation", () => {
           `Chain 0 of ${path} cannot be held: it ends at ${agent.did()}, not at the identity ${core.did()}`,
         );
       expect(recorder.held).toEqual([]);
+    });
+
+    it("throws naming the file and the chain no session presents now, holding nothing from it", async () => {
+      const toAgent = await issueDelegationChain({
+        signer: core,
+        space,
+        to: agent.did(),
+        held: [rootToCore.bytes],
+        expiresAt: NOW + 60,
+        nowSeconds: NOW,
+      });
+      const path = await chainFile("expired.json", [toAgent]);
+      const recorder = holder();
+      await expect(
+        holdDelegationChainFiles(recorder, [path], agent.did(), NOW + 61),
+      ).rejects.toThrow(
+        `Chain 0 of ${path} cannot be held: no session presents the chain now`,
+      );
+      expect(recorder.held).toEqual([]);
+      expect(
+        await holdDelegationChainFiles(recorder, [path], agent.did(), NOW),
+      ).toBe(1);
     });
 
     it("throws naming the file and the chain the holder refuses, after handing it the chains before", async () => {
