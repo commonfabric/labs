@@ -48,10 +48,12 @@ This limits uniqueness to a profile and emoji: one authenticated actor using
 different profiles can appear more than once.
 
 FabriChat's reaction rows identify the viewer's reactions and offer removal
-controls by comparing `reactorProfile` with the viewer's profile. Unlike message
-rights, these controls are based on profile identity. Changing profiles hides
-the removal control for an earlier reaction; selecting another actor's profile
-can offer a removal that the stream refuses.
+controls by comparing each reaction's `authored-by` attestation with the owner
+of the viewer's profile, as `profileOwnerOf()` determines it. As with message
+rights, switching between profiles owned by one principal retains the removal
+control; a profile with no verified owner offers none. This display uses the
+profile's owner, while the stream checks the authenticated actor. Selecting
+another actor's profile can offer a removal that the stream refuses.
 
 The room adds none where the sender's profile already has one with
 that emoji, so adding a reaction that's already there, or removing one that

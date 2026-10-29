@@ -8,8 +8,10 @@ import {
   type Cell,
   inSpaceRootCause,
   type MemorySpace,
+  readResultSchemaMeta,
   Runtime,
   type RuntimeProgram,
+  writeResultSchemaMeta,
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
@@ -889,6 +891,171 @@ describe("share-intake", () => {
       ).toContain("granted later");
     });
 
+    it("is registered once its space comes to grant its sender, with no other change to its inbox", async () => {
+      const space = await offeredSpace({ [someoneElse]: "WRITE" });
+      const intake = start();
+      await deliver([offerOf(space, "granted alone")]);
+      await runtime.idle();
+      await intake.idle();
+      expect(intake.accessForTestingOnly.decisionsFor(sender, "granted alone"))
+        .toEqual(["sender-not-member"]);
+
+      await new ACLManager(runtime, space).set(sender, "WRITE");
+
+      expect(registeredIds(await registeredThrough("granted alone")))
+        .toEqual(["granted alone"]);
+    });
+
+    it("is registered once its space's root is linked, with no other change to its inbox", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" }, { root: false });
+      const intake = start();
+      await deliver([offerOf(space, "rooted later")]);
+      await runtime.idle();
+      await intake.idle();
+      expect(intake.accessForTestingOnly.decisionsFor(sender, "rooted later"))
+        .toEqual(["space-root-missing"]);
+
+      await placeRoom(space, true);
+
+      expect(registeredIds(await registeredThrough("rooted later")))
+        .toEqual(["rooted later"]);
+    });
+
+    it("is registered once the host lets the owner into its space again, with no other change to its inbox", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      let refused = true;
+      using _refused = stub(
+        storage,
+        "spaceAccessError",
+        (each) =>
+          refused && each === space ? new Error("access refused") : undefined,
+      );
+      const changed: ((space: MemorySpace) => void)[] = [];
+      using _watching = stub(
+        storage,
+        "subscribeSpaceAccessChange",
+        (observer: (space: MemorySpace) => void) => {
+          changed.push(observer);
+          return () => changed.splice(changed.indexOf(observer), 1);
+        },
+      );
+      const intake = start();
+      await deliver([offerOf(space, "let in")]);
+      await runtime.idle();
+      await intake.idle();
+      expect(intake.accessForTestingOnly.decisionsFor(sender, "let in"))
+        .toEqual(["recipient-access-refused"]);
+
+      refused = false;
+      for (const observer of [...changed]) observer(space);
+
+      expect(registeredIds(await registeredThrough("let in")))
+        .toEqual(["let in"]);
+    });
+
+    it("is registered once its `loom` space's root comes to store a Loom's result schema, with no other change to its inbox", async () => {
+      const space = await loomSpace({ [sender]: "WRITE" });
+      const root = await runtime.getSpaceCell(space).key("defaultPattern")
+        .pull();
+      const schema = readResultSchemaMeta(root);
+      if (schema === undefined) throw new Error("The Loom stored no schema");
+      await runtime.editWithRetry((tx) =>
+        writeResultSchemaMeta(root.withTx(tx), {})
+      );
+      const intake = start();
+      await deliver([offerOf(space, "schema repaired", { kind: "loom" })]);
+      await runtime.idle();
+      await intake.idle();
+      expect(
+        intake.accessForTestingOnly.decisionsFor(sender, "schema repaired"),
+      ).toEqual(["space-root-mismatch"]);
+
+      await runtime.editWithRetry((tx) =>
+        writeResultSchemaMeta(root.withTx(tx), schema)
+      );
+
+      expect(registeredIds(await registeredThrough("schema repaired")))
+        .toEqual(["schema repaired"]);
+    });
+
+    it("is registered once its space comes to grant its sender, though another inbox that held it too is given up", async () => {
+      const space = await offeredSpace({ [someoneElse]: "WRITE" });
+      const retained = await inboxIn(
+        await runtime.createSpace({ grants: { "*": "WRITE" } }),
+      );
+      await setHome("retainedPrivateInboxes", [retained]);
+      const intake = start();
+      await deliver([offerOf(space, "held twice")]);
+      await runtime.idle();
+      await intake.idle();
+      await deliver([offerOf(space, "held twice")], retained);
+      await runtime.idle();
+      await intake.idle();
+      await setHome("retainedPrivateInboxes", []);
+      await runtime.idle();
+      await intake.idle();
+      expect(intake.accessForTestingOnly.followedInboxes).toBe(1);
+      expect(intake.accessForTestingOnly.decisionsFor(sender, "held twice"))
+        .toEqual(["sender-not-member"]);
+
+      await new ACLManager(runtime, space).set(sender, "WRITE");
+
+      expect(registeredIds(await registeredThrough("held twice")))
+        .toEqual(["held twice"]);
+    });
+
+    it("stops following a space once nothing in an inbox waits on it", async () => {
+      const space = await offeredSpace({ [someoneElse]: "WRITE" });
+      const intake = start();
+      await deliver([offerOf(space, "settled")]);
+      await runtime.idle();
+      await intake.idle();
+      expect(intake.accessForTestingOnly.followedSpaces).toBe(1);
+
+      await new ACLManager(runtime, space).set(sender, "WRITE");
+      await registeredThrough("settled");
+      await runtime.idle();
+      await intake.idle();
+
+      expect(intake.accessForTestingOnly.followedSpaces).toBe(0);
+    });
+
+    it("stops following a space once its inbox no longer holds the row waiting on it", async () => {
+      const space = await offeredSpace({ [someoneElse]: "WRITE" });
+      const intake = start();
+      await deliver([offerOf(space, "withdrawn")]);
+      await runtime.idle();
+      await intake.idle();
+      expect(intake.accessForTestingOnly.followedSpaces).toBe(1);
+
+      await runtime.editWithRetry((tx) =>
+        inbox.withTx(tx).key("offers" as never).set([] as never)
+      );
+      await runtime.idle();
+      await intake.idle();
+
+      expect(intake.accessForTestingOnly.followedSpaces).toBe(0);
+    });
+
+    it("stops following a space once the inbox holding the row waiting on it is given up", async () => {
+      const space = await offeredSpace({ [someoneElse]: "WRITE" });
+      const retained = await inboxIn(
+        await runtime.createSpace({ grants: { "*": "WRITE" } }),
+      );
+      await setHome("retainedPrivateInboxes", [retained]);
+      const intake = start();
+      await deliver([offerOf(space, "given up")], retained);
+      await runtime.idle();
+      await intake.idle();
+      expect(intake.accessForTestingOnly.followedSpaces).toBe(1);
+
+      await setHome("retainedPrivateInboxes", []);
+      await runtime.idle();
+      await intake.idle();
+
+      expect(intake.accessForTestingOnly.followedSpaces).toBe(0);
+    });
+
     it("is accepted by Home's chat manager, in its space, keeping an archived entry archived, once registered", async () => {
       const space = await offeredSpace({ [sender]: "WRITE" });
       const intake = start();
@@ -1593,42 +1760,138 @@ describe("share-intake", () => {
   });
 
   describe("reading Home", () => {
+    /**
+     * Home, as the intake reads it, but for a read of its `field`, or of
+     * `inner` within it when named, that fails once `failNextRead()` is
+     * called, as one would while the connection to the host is down.
+     */
+    function flakyHome(field: string, inner?: string): {
+      home: Cell<unknown>;
+      failNextRead(): void;
+    } {
+      let failing = false;
+      const read = {
+        asSchema: (schema: unknown) => {
+          const cell =
+            (inner === undefined
+              ? home.key(field as never)
+              : home.key(field as never).key(inner as never)).asSchema(
+                schema as never,
+              );
+          return {
+            sink: (callback: () => void) => cell.sink(callback),
+            pull: () => {
+              if (!failing) return cell.pull();
+              failing = false;
+              return Promise.reject(new Error("connection lost"));
+            },
+          };
+        },
+      };
+      const flaky = {
+        key: (name: string) =>
+          name !== field
+            ? home.key(name as never)
+            : inner === undefined
+            ? read
+            : { key: () => read },
+      };
+      return {
+        home: flaky as never,
+        failNextRead: () => {
+          failing = true;
+        },
+      };
+    }
+
     it("logs a failed scan, and takes up its inboxes when Home's holders next change", async () => {
       const space = await offeredSpace({ [sender]: "WRITE" });
-      let failures = 1;
-      // Home, but for a first read of its held inbox that fails.
-      const failing = {
-        key: (name: string) =>
-          name !== "privateInbox" ? home.key(name as never) : {
-            asSchema: (schema: unknown) => {
-              const cell = home.key(name as never).asSchema(schema as never);
-              return {
-                sink: (callback: () => void) => cell.sink(callback),
-                pull: () =>
-                  failures-- > 0
-                    ? Promise.reject(new Error("read failed"))
-                    : cell.pull(),
-              };
-            },
-          },
-      };
-      const before = scanFailuresLogged();
-      const intake = startShareIntakeOf(
-        runtime,
-        failing as never,
-        identity.did(),
+      const adopted = await inboxIn(
+        await runtime.createSpace({ grants: { "*": "WRITE" } }),
       );
+      await deliver([offerOf(space, "after a failed scan")], adopted);
+      const flaky = flakyHome("privateInbox");
+      const intake = startShareIntakeOf(runtime, flaky.home, identity.did());
       if (intake === undefined) throw new Error("Home has no stream");
       after = () => intake.stop();
-      await deliver([offerOf(space, "after a failed scan")]);
+      await runtime.idle();
+      await intake.idle();
+      const before = scanFailuresLogged();
+      flaky.failNextRead();
+      await setHome("privateInbox", { piece: adopted });
       await runtime.idle();
       await intake.idle();
       expect(scanFailuresLogged() - before).toBe(1);
-      await setHome("retainedPrivateInboxes", []);
+
+      await setHome("retainedPrivateInboxes", [inbox]);
 
       expect(
         registeredIds(await registeredThrough("after a failed scan")),
       ).toEqual(["after a failed scan"]);
+    });
+
+    it("takes up what Home holds again when the connection to the host comes back, with no other change, after reading it fails", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      const adopted = await inboxIn(
+        await runtime.createSpace({ grants: { "*": "WRITE" } }),
+      );
+      await deliver([offerOf(space, "adopted while down")], adopted);
+      const flaky = flakyHome("privateInbox");
+      const restored: (() => void)[] = [];
+      using _restoring = stub(
+        storage,
+        "subscribeConnectionRestored",
+        (observer: () => void) => {
+          restored.push(observer);
+          return () => restored.splice(restored.indexOf(observer), 1);
+        },
+      );
+      const intake = startShareIntakeOf(runtime, flaky.home, identity.did());
+      if (intake === undefined) throw new Error("Home has no stream");
+      after = () => intake.stop();
+      await runtime.idle();
+      await intake.idle();
+      const before = scanFailuresLogged();
+      flaky.failNextRead();
+      await setHome("privateInbox", { piece: adopted });
+      await runtime.idle();
+      await intake.idle();
+      expect(scanFailuresLogged() - before).toBe(1);
+
+      for (const observer of [...restored]) observer();
+
+      expect(registeredIds(await registeredThrough("adopted while down")))
+        .toEqual(["adopted while down"]);
+    });
+
+    it("takes up an inbox again when the connection to the host comes back, with no other change, after its scan fails reading Home's profile records", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      const flaky = flakyHome("sharedSpaces", "profiles");
+      const restored: (() => void)[] = [];
+      using _restoring = stub(
+        storage,
+        "subscribeConnectionRestored",
+        (observer: () => void) => {
+          restored.push(observer);
+          return () => restored.splice(restored.indexOf(observer), 1);
+        },
+      );
+      const intake = startShareIntakeOf(runtime, flaky.home, identity.did());
+      if (intake === undefined) throw new Error("Home has no stream");
+      after = () => intake.stop();
+      await runtime.idle();
+      await intake.idle();
+      const before = scanFailuresLogged();
+      flaky.failNextRead();
+      await deliver([offerOf(space, "scanned once more")]);
+      await runtime.idle();
+      await intake.idle();
+      expect(scanFailuresLogged() - before).toBe(1);
+
+      for (const observer of [...restored]) observer();
+
+      expect(registeredIds(await registeredThrough("scanned once more")))
+        .toEqual(["scanned once more"]);
     });
 
     it("follows the inbox Home holds when what it retains is not a list", async () => {
@@ -1702,6 +1965,51 @@ describe("share-intake", () => {
       expect(
         registeredIds(await registeredThrough("after the failed read")),
       ).toEqual(["read again", "after the failed read"]);
+    });
+
+    it("vets the offer again when the connection to the host comes back, with no other change to its inbox, after reading its space's access list fails", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      const original = ACLManager.prototype.getStored;
+      let failures = 1;
+      using _flaky = stub(
+        ACLManager.prototype,
+        "getStored",
+        function (this: ACLManager) {
+          return failures-- > 0
+            ? Promise.reject(new Error("connection lost"))
+            : original.call(this);
+        },
+      );
+      const restored: (() => void)[] = [];
+      using _restoring = stub(
+        storage,
+        "subscribeConnectionRestored",
+        (observer: () => void) => {
+          restored.push(observer);
+          return () => restored.splice(restored.indexOf(observer), 1);
+        },
+      );
+      const intake = start();
+      await deliver([offerOf(space, "read once more")]);
+      await runtime.idle();
+      await intake.idle();
+      expect(intake.accessForTestingOnly.decisionsFor(sender, "read once more"))
+        .toEqual([]);
+
+      for (const observer of [...restored]) observer();
+
+      expect(registeredIds(await registeredThrough("read once more")))
+        .toEqual(["read once more"]);
+      // Decided, so a later restored connection vets nothing again.
+      await runtime.idle();
+      await intake.idle();
+      for (const observer of [...restored]) observer();
+      await runtime.idle();
+      await intake.idle();
+      expect(intake.accessForTestingOnly.decisionsFor(sender, "read once more"))
+        .toEqual(["sent"]);
+      intake.stop();
+      expect(restored).toEqual([]);
     });
 
     it("logs the failure, and vets the offer again when its inbox next changes, when the host cannot tell its space's kind", async () => {

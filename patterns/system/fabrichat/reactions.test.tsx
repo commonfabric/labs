@@ -7,7 +7,6 @@
  */
 import {
   action,
-  type AddIntegrity,
   assert,
   type Cell,
   pattern,
@@ -21,6 +20,7 @@ import {
   type MessagesValue,
   type ReactionsValue,
 } from "./room-records.tsx";
+import { profileGesture, testRoomProfile } from "./room-test-fixture.ts";
 import { FabriChatRoomCore } from "./room.tsx";
 import {
   CHAT_DELETE_ACTION,
@@ -30,18 +30,11 @@ import {
   CHAT_SEND_ACTION,
   CHAT_SEND_SURFACE,
   CHAT_UNREACT_ACTION,
-  type ChatProfile,
   type ChatReaction,
 } from "./schemas.tsx";
 
 type RoomArg = Parameters<typeof FabriChatRoomCore>[0];
 type RowArg = Parameters<typeof FabriChatMessageRow>[0];
-
-// A labeled stand-in for a viewer's `#profile`.
-type TestProfile = AddIntegrity<
-  ChatProfile,
-  readonly ["fabrichat-test-profile"]
->;
 
 const sendGesture = {
   surface: CHAT_SEND_SURFACE,
@@ -81,8 +74,10 @@ const heldCount = (
 
 export default pattern(() => {
   const messages = Writable.of<MessagesValue>([] as MessagesValue);
-  const aliceProfile = Writable.of<TestProfile>({ name: "Alice" });
-  const bobProfile = Writable.of<TestProfile>({ name: "Bob" });
+  const ownAlice = testRoomProfile({});
+  const ownBob = testRoomProfile({});
+  const aliceProfile = ownAlice.profile;
+  const bobProfile = ownBob.profile;
   // The first message's reaction list, held apart from the message, whose link
   // to it a deletion drops.
   const firstReactions = Writable.of<{ list?: Writable<ReactionsValue> }>({});
@@ -126,6 +121,9 @@ export default pattern(() => {
 
   return {
     [TESTS]: [
+      // Both profiles belong to this lane's one authenticated actor.
+      { action: ownAlice.initialize, trustedUi: profileGesture },
+      { action: ownBob.initialize, trustedUi: profileGesture },
       {
         action: alice.sendMessage,
         event: typed("First"),
@@ -164,7 +162,7 @@ export default pattern(() => {
       },
       {
         assertion: assert(() =>
-          talliesText(aliceOnFirst.tallies) === "👍🏽 2*, 🎉 1"
+          talliesText(aliceOnFirst.tallies) === "👍🏽 2*, 🎉 1*"
         ),
       },
       {
