@@ -397,9 +397,9 @@ everything stored was authored under the write-access group's trust —
 for a decision consumer is code provenance, not author trust:
 pull-request runs execute unmerged code, and failure-rate or duration
 baselines come from runs of the head of `main` — `ci.event` `"push"`,
-`"schedule"` or `"workflow_dispatch"` — whose code the tree itself
-carries. `isMainRun` in `@commonfabric/test-support/records` is that
-rule. Both fields are stamped from the trusted event payload. A fork
+`"schedule"`, `"workflow_dispatch"` or `"workflow_run"` — whose code the
+tree itself carries. `isMainRun` in `@commonfabric/test-support/records` is
+that rule. Both fields are stamped from the trusted event payload. A fork
 run and a same-repository run of a pull request are therefore read
 alike, and what `ci.fork` keeps a run out of is a baseline rather than
 the data. It is set for a payload that did not name both repositories as

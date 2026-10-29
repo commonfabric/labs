@@ -9,9 +9,16 @@ name: Tomorrow's Test Order
 # commit of each Pacific day. This run fails when a test fails under the next
 # day's seed.
 #
-# 11:00 UTC is 04:00 in the Pacific zone in summer and 03:00 in winter. Either
-# way it is early on a Pacific day, so one schedule entry serves the whole
-# year, and a run that starts hours late still asks for the same next day.
+# The suites run once per seed, the first time this workflow finds that CI
+# passed on the head of main. A head CI failed on would fail this run for
+# reasons that have nothing to do with the order. The workflow starts each time
+# CI finishes on a push to main, and once a day at 02:30 UTC, which is the
+# evening of a Pacific day in summer and in winter. When no run has run the
+# seed, the evening run runs the suites, which covers a day when nothing
+# landed, unless CI has not passed on the head of main. Then it fails instead,
+# so that the seed going untested is seen.
+# tasks/test-order-tomorrow.ts decides; a run dispatched by hand runs the
+# suites without asking.
 #
 # The suites are the CI workflow's own, called with the seed, which runs every
 # test the way a push to main does. The CI workflow skips the job that gates
@@ -19,18 +26,42 @@ name: Tomorrow's Test Order
 # called. The records relay follows this workflow, and the records carry the
 # seed they ran under, which keeps them apart from the commit's own runs.
 on:
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
+    branches:
+      - main
   schedule:
-    - cron: "0 11 * * *" # Daily, 11:00 UTC
+    - cron: "30 2 * * *" # Daily, 02:30 UTC
   workflow_dispatch: {} # Allow manual trigger
+
+# The runs CI passing on main started wait for one another, so that each sees
+# whether the one before it ran the seed. GitHub keeps only the newest waiting
+# run and cancels the others, which loses nothing, since each decides from the
+# head of main as it stood when its event fired, and the newest waiting run's
+# is the newest. The evening run waits only for itself, so that nothing
+# displaces it. A run that will skip every job, which is any run that CI
+# failing or a pull request's CI started, and a run dispatched by hand, waits
+# for nothing and displaces nothing.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'schedule' && 'evening' || (github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success') && 'deciding' || github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   seed:
     name: "Tomorrow's seed"
+    if: >-
+      github.event_name != 'workflow_run' || (
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'success' )
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
     outputs:
       seed: ${{ steps.seed.outputs.seed }}
+      run: ${{ steps.decide.outputs.run }}
     steps:
       - name: 📥 Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -47,11 +78,33 @@ jobs:
           seed=$(deno task -q test-seed --tomorrow)
           echo "seed=$seed" >> "$GITHUB_OUTPUT"
 
+      - name: 🔍 Decide whether this run runs the suites under the seed
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          SEED: ${{ steps.seed.outputs.seed }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          case "$EVENT" in
+            workflow_dispatch) set -- ;;
+            schedule) set -- --evening "$SEED" ;;
+            *) set -- "$SEED" ;;
+          esac
+          if [ $# -eq 0 ]; then
+            run=true
+          else
+            run=$(deno run --allow-env --allow-net=api.github.com \
+              tasks/test-order-tomorrow.ts "$@")
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
   # The name is what the run's checks on the commit are listed under, so it
-  # has to tell them apart from the checks of the CI workflow's own run.
+  # has to tell them apart from the checks of the CI workflow's own run. The
+  # seed in it is how tasks/test-order-tomorrow.ts finds the runs of a seed.
   ci:
-    name: "Tomorrow's order"
+    name: "Tomorrow's order (${{ needs.seed.outputs.seed }})"
     needs: seed
+    if: needs.seed.outputs.run == 'true'
     uses: ./.github/workflows/deno.yml
     with:
       shuffle-seed: ${{ needs.seed.outputs.seed }}
