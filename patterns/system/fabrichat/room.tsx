@@ -105,7 +105,11 @@ import {
   type TitlesCell,
   viewKeyOf,
 } from "./room-records.tsx";
-import { bodyText, FabriChatMessageRow } from "./message-row.tsx";
+import {
+  bodyText,
+  FabriChatMessageRow,
+  type RowFacts,
+} from "./message-row.tsx";
 import {
   type AboutRecord,
   type AddMemberDelivery,
@@ -1577,9 +1581,8 @@ export const FabriChatRoomCore = pattern<
   const cannotSendForSession = computed(
     (): PerSession<boolean | Default<true>> => !canSendForSession,
   );
-  // It defaults to `false`. The rows' map takes it as an argument, and a room
-  // whose rows were stored while the map took another has no value for it
-  // there.
+  // It defaults to `false`, which a reader reads until this session has
+  // derived it.
   const isOwnerForSession = computed(
     (): PerSession<boolean | Default<false>> => isOwnerOf(messages),
   );
@@ -1616,6 +1619,32 @@ export const FabriChatRoomCore = pattern<
           )
           : NO_MESSAGE_RIGHTS),
       }));
+    },
+  );
+  // What every row offers its reader, by the message's key: which of the
+  // controls that act on the message show, derived once for the whole list
+  // for the session, so a row reads its own entry rather than deriving its
+  // rights for itself.
+  const rowFactsForSession = computed(
+    (): PerSession<
+      Record<string, RowFacts> | Default<Record<string, never>>
+    > => {
+      const editing = composer.get()?.editing;
+      const editingKey = editing === undefined ? undefined : viewKeyOf(editing);
+      const byKey: Record<string, RowFacts> = {};
+      for (const rights of messageRightsForSession) {
+        const key = viewKeyOf(rights.message);
+        if (key === undefined) continue;
+        byKey[key] = {
+          edit: rights.canEdit ? "inline-flex" : "none",
+          delete: rights.canDelete ? "inline-flex" : "none",
+          obliterate: rights.canObliterate ? "inline-flex" : "none",
+          // An open editor closes once the message no longer takes an edit
+          // from the reader, as when an OWNER deletes it.
+          editor: rights.canEdit && key === editingKey ? "block" : "none",
+        };
+      }
+      return byKey;
     },
   );
   // The title a member last set outranks the one the room was created with.
@@ -1956,7 +1985,7 @@ export const FabriChatRoomCore = pattern<
               composer={composer}
               places={places}
               cannotWrite={cannotSendForSession}
-              isOwner={isOwnerForSession}
+              rowFacts={rowFactsForSession}
               ownersMayObliterate={ownersMayObliterate}
               messages={messages}
               canJoin={canJoin}
@@ -2067,7 +2096,7 @@ export const FabriChatRoomCore = pattern<
               composer={composer}
               places={places}
               cannotWrite={cannotSendForSession}
-              isOwner={isOwnerForSession}
+              rowFacts={rowFactsForSession}
               ownersMayObliterate={ownersMayObliterate}
               messages={messages}
               canJoin={canJoin}
