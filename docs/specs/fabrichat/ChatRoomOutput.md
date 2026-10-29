@@ -36,22 +36,22 @@ interface ChatRoomOutput {
   messages: ChatMessageList;
 
   /** Whether this reader can send, edit, delete, and react. */
-  canSend: PerSession<boolean>;
+  canSend: boolean;
 
   /** Who is reading the room: their profile, its principal, their access. */
-  viewer: PerSession<{
+  viewer: {
     profile?: Cell<ChatProfile>;
     principal?: string;
     role?: "OWNER" | "WRITE" | "READ" | "none";
-  }>;
+  };
 
   /** What this reader may do to each message, oldest first. */
-  messageRights: PerSession<{
+  messageRights: {
     message: Cell<ChatMessage>;
     canEdit: boolean;
     canDelete: boolean;
     canObliterate: boolean;
-  }[]>;
+  }[];
 
   sendMessage: Stream<{
     body: string;
@@ -75,7 +75,7 @@ interface ChatRoomOutput {
   }>;
 
   /** Whether this reader can add someone to the room's space. */
-  canAdd: PerSession<boolean>;
+  canAdd: boolean;
 
   /** The outcome of each of this reader's adds, by its `requestId`. */
   addRequests: Record<
@@ -244,9 +244,7 @@ space.
 - **`canSend`** says whether the reader can send, edit, delete, and react right
   now: their access is WRITE or OWNER, and their profile resolves. It lets a
   client tell a READ member why their gestures would be refused before they
-  make one. Like the other values computed for the reader, it is the session's
-  own (see [scopes](#scopes)), absent until the session has derived it, and a
-  client reads an absent `canSend` as `false`.
+  make one.
 - **`viewer`** says who is reading the room. Its `profile` is the reader's
   profile, absent until it resolves, as a link to the profile itself: the link
   `sendMessage` records as a message's `authorProfile`, so a client tells the
@@ -295,8 +293,8 @@ space.
 
 ## Scopes
 
-A room's fields fall into three [scopes](../scoped-cell-instances.md#summary),
-and the difference matters to a client:
+A room's fields fall into two [scopes](../scoped-cell-instances.md#summary),
+plus values computed for each reader, and the difference matters to a client:
 
 - **`PerSpace`**: one instance for the whole room, the same for everyone the
   room's space admits. That is nearly everything: `about`, the messages,
@@ -310,13 +308,10 @@ and the difference matters to a client:
   Read access is a property of the principal, so every session of one user
   derives the same entries and principals. Passing the room's link to someone
   else passes none of these: they read their own.
-- **`PerSession`**: one instance per session. That is `canSend`, `canAdd`,
-  `viewer`, and `messageRights`, which each session derives from the reader's
-  own access and profile. A session's profile can resolve later than another
-  session's of the same person, so each session reads its own answer: one
-  whose profile hasn't resolved yet can't tell another, whose profile has, that
-  it can't send. Each is a small document per session per room. A placement
-  carries `canSend` as well, per session in the same way.
+- **Computed for each reader**: `canSend`, `canAdd`, `viewer`, and
+  `messageRights`. Each is derived when it's read, from the reader's own access
+  and profile, so each reader sees their own answer, and it needs no instance
+  and no write. A placement carries `canSend` and `canAdd` as well.
 
 Some values are derived when they're read, and stored nowhere, so reading them
 needs no instance of anything: `participants`, `roster`, and everything in
