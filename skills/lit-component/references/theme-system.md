@@ -248,7 +248,7 @@ without theme context:
 ## Base CSS Variables
 
 Components inherit base CSS variables from `BaseElement.baseStyles`. These are
-defined in `packages/ui/src/v2/styles/variables.ts`.
+defined in `runtime/ui/src/v2/styles/variables.ts`.
 
 ### Available Base Variables
 

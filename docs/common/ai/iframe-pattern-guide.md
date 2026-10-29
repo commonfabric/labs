@@ -14,7 +14,7 @@ No other pattern guide is required for this shape.
 Keep these files together:
 
 ```text
-packages/patterns/quick-notes/
+patterns/examples/quick-notes/
 ├── contract.ts  # input, durable state, output, scopes, optional resources
 ├── guest.ts     # the iframe application; guest.tsx is also accepted
 ├── guest.html   # optional custom document shell
@@ -314,7 +314,7 @@ The guest wears the theme of the page around its iframe. The nearest `cf-theme`
 above the `cf-iframe` provides it: before the guest's own styles, the guest
 receives that theme's `--cf-theme-*` custom properties declared on `:root`,
 followed by a base stylesheet written against them:
-[`guest-base-sheet.ts`](../../../packages/ui/src/v2/components/cf-theme/guest-base-sheet.ts).
+[`guest-base-sheet.ts`](../../../runtime/ui/src/v2/components/cf-theme/guest-base-sheet.ts).
 The guest's root also carries the resolved scheme as `data-color-scheme`
 (`light` or `dark`). The sheet styles `html`, `body`, headings, links, buttons,
 form fields, code, and rules, and provides these classes:
@@ -505,7 +505,7 @@ pointer is down, publish the shape's position as a facet and draw peers' facets
 over the stored positions. On release, write the position to the Cell, and
 clear the facet only after that write and a `pull()` have settled, so peers do
 not see the shape return to where it was in between.
-`packages/patterns/iframe-cursor-canvas/` is a complete example.
+`patterns/examples/iframe-cursor-canvas/` is a complete example.
 
 ## Optional streams
 
@@ -707,17 +707,17 @@ A built-in that already returns a stream needs no verb of its own:
 `llmDialog()` returns `addMessage`, which the frame can take directly, with the
 stream's event type `BuiltInLLMMessage` in `IframeStreamEvents`.
 
-`packages/patterns/iframe-verb-list/` is a complete example.
+`patterns/examples/iframe-verb-list/` is a complete example.
 
 ## Generate the wrapper
 
 Run the checked-in helper from the repository root:
 
 ```bash
-deno run -A tools/write-iframe-wrapper.ts \
-  --contract packages/patterns/quick-notes/contract.ts \
-  --guest packages/patterns/quick-notes/guest.ts \
-  --out packages/patterns/quick-notes/main.tsx
+deno run -A scripts/write-iframe-wrapper.ts \
+  --contract patterns/examples/quick-notes/contract.ts \
+  --guest patterns/examples/quick-notes/guest.ts \
+  --out patterns/examples/quick-notes/main.tsx
 ```
 
 The helper refuses to overwrite a file. Pass `--force` when regenerating the
@@ -738,9 +738,9 @@ helper supplies a complete document with `<div id="root"></div>`.
 Format and compile the result:
 
 ```bash
-deno fmt packages/patterns/quick-notes
-deno check packages/patterns/quick-notes/guest.ts
-deno task cf check packages/patterns/quick-notes/main.tsx --no-run
+deno fmt patterns/examples/quick-notes
+deno check patterns/examples/quick-notes/guest.ts
+deno task cf check patterns/examples/quick-notes/main.tsx --no-run
 ```
 
 If the pattern is intentionally outside the repository, pass its directory as
@@ -772,7 +772,7 @@ test -e .cf/iframe-pattern.key || \
 export CF_API_URL=http://localhost:8000
 export CF_IDENTITY=.cf/iframe-pattern.key
 export CF_SPACE="$(deno task cf space create --label "Iframe quick notes")"
-deno task cf piece new packages/patterns/quick-notes/main.tsx \
+deno task cf piece new patterns/examples/quick-notes/main.tsx \
   --root . --slug quick-notes
 ```
 

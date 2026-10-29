@@ -72,13 +72,13 @@ export default pattern(() => {
 
 ```bash
 # Run a specific test
-deno task cf test packages/patterns/my-pattern/main.test.tsx
+deno task cf test patterns/my-pattern/main.test.tsx
 
 # Run with verbose output
-deno task cf test packages/patterns/my-pattern/main.test.tsx --verbose
+deno task cf test patterns/my-pattern/main.test.tsx --verbose
 
 # Run all tests in a directory
-deno task cf test packages/patterns/my-pattern/
+deno task cf test patterns/my-pattern/
 ```
 
 ### Testing labeled data
@@ -91,7 +91,7 @@ accepts `off`, `derive` (the runtime's `observe`), `observe`, and `persist`.
 The run prints the resolved posture. When CFC denies something — a write,
 including one the pattern's own setup makes — `--cfc-denials` prints each
 denial with the reasons behind it. The
-[CLI guide](../../../packages/cli/README.md#pattern-test-cfc-posture-and-labeled-fixtures)
+[CLI guide](../../../runtime/cli/README.md#pattern-test-cfc-posture-and-labeled-fixtures)
 shows how a test declares a local SQLite store with per-column `ifc` labels and
 explains the per-step CFC preparation timings.
 
@@ -99,15 +99,15 @@ explains the per-step CFC preparation timings.
 
 A test pattern's imports resolve within its root directory. Without `--root`,
 `cf test` anchors at the nearest ancestor whose `deno.json(c)` declares a
-package name — `packages/patterns` for this repository's patterns — so imports
-that span the package (shared helpers such as `test/vnode-helpers.ts`, sibling
-patterns, `cfc/` modules) resolve without a flag. A config file with no `name`,
-such as a workspace member stub that only defines tasks, does not anchor the
-root. Pass `--root` to anchor somewhere else; an import that climbs above the
-root fails naming the import and the importing file. CI's `pattern-unit` suite
-(the `pattern-tests` target in `tasks/integration.ts`) passes `--root
-packages/patterns` explicitly, so a bare local run resolves imports the same way
-CI does.
+package name — `patterns` for this repository's patterns — so imports
+that span the package (shared helpers such as
+`tools/test-support/vnode-helpers.ts`, sibling patterns, `cfc/` modules) resolve
+without a flag. A config file with no `name`, such as a workspace member stub
+that only defines tasks, does not anchor the root. Pass `--root` to anchor
+somewhere else; an import that climbs above the root fails naming the import and
+the importing file. CI's `pattern-unit` suite (the `pattern-tests` target in
+`tasks/integration.ts`) passes `--root patterns` explicitly, so a bare local run
+resolves imports the same way CI does.
 
 ### The test's space and its access list
 
@@ -166,10 +166,10 @@ assertion is the record `assert()` produces — see
 ## Walking the Rendered Tree
 
 Both actions and assertions often need to reach into what a pattern rendered.
-`packages/patterns/test/vnode-helpers.ts` is the one place those helpers live;
-import from it rather than writing a private copy in a test file. Each helper
-resolves cells as it walks, so a test does not have to unwrap reactive values
-by hand.
+`patterns/tools/test-support/vnode-helpers.ts` is the one place those helpers
+live; import from it rather than writing a private copy in a test file. Each
+helper resolves cells as it walks, so a test does not have to unwrap reactive
+values by hand.
 
 Reading a single node:
 
@@ -234,7 +234,7 @@ the rendered tree to the node, read the prop, and send it an event:
 ```tsx
 // Shown at module scope.
 import { action, pattern, UI } from "commonfabric";
-import { findElementByText, propsOf } from "../test/vnode-helpers.ts";
+import { findElementByText, propsOf } from "../../tools/test-support/vnode-helpers.ts";
 import MapDemo from "./map-demo.tsx";
 
 export default pattern(() => {
@@ -252,11 +252,11 @@ export default pattern(() => {
 });
 ```
 
-`packages/patterns/map-demo.test.tsx` drives both an inline arrow and a bound
-handler this way. `fireEvent(node, prop, event)` in the vnode helpers does the
-same for any event prop, and fails when the node binds nothing under it;
+`patterns/examples/map-demo/map-demo.test.tsx` drives both an inline arrow and a
+bound handler this way. `fireEvent(node, prop, event)` in the vnode helpers does
+the same for any event prop, and fails when the node binds nothing under it;
 `fireClick(node)` is its `onClick` case, with an empty event.
-`packages/patterns/scoped-group-chat/submit-on-enter.test.tsx` presses Enter in
+`patterns/examples/scoped-group-chat/submit-on-enter.test.tsx` presses Enter in
 a `cf-input` by firing its `oncf-submit`.
 
 Prefer an exported `Stream<T>` when you own the pattern: it states the entry
@@ -304,7 +304,7 @@ return {
 };
 ```
 
-`packages/cli/test/fixtures/action-event/policy-link-typed.test.tsx` is this
+`runtime/cli/test/fixtures/action-event/policy-link-typed.test.tsx` is this
 example whole, and `policy-link-inferred.test.tsx` beside it is the refused
 form.
 
@@ -620,4 +620,4 @@ const assert_total_correct = assert(() => {
 - [Pattern Testing Spec](../../specs/PATTERN_TESTING_SPEC.md) - Technical specification
 - [Coverage in CI](../../development/COVERAGE.md) - How the pattern unit tests
   run here feed the repository-wide coverage figure
-- [Patterns package test lanes](../../../packages/patterns/deno.jsonc) - Where each kind of test (plain Deno unit test, pattern test, integration test) lives in the patterns package and how each is discovered and run
+- [Patterns package test lanes](../../../patterns/deno.jsonc) - Where each kind of test (plain Deno unit test, pattern test, integration test) lives in the patterns package and how each is discovered and run

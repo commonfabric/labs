@@ -110,42 +110,42 @@ export async function candidateSurfaces(root: string): Promise<string[]> {
  */
 const NOT_A_TEST_SURFACE: ReadonlyArray<{ path: string; reason: string }> = [
   {
-    path: "packages/deno-web-test/test/broken-config-project/pass.test.ts",
+    path: "runtime/deno-web-test/test/broken-config-project/pass.test.ts",
     reason: "a project the harness runs to prove it reports a bad config",
   },
   {
-    path: "packages/deno-web-test/test/bundle-project/bundled.test.ts",
+    path: "runtime/deno-web-test/test/bundle-project/bundled.test.ts",
     reason: "a project the harness runs to prove it bundles before serving",
   },
   {
-    path: "packages/deno-web-test/test/commands-project/press.test.ts",
+    path: "runtime/deno-web-test/test/commands-project/press.test.ts",
     reason: "a project the harness runs to prove a test can press trusted keys",
   },
   {
-    path: "packages/deno-web-test/test/late-registration-project/late.test.ts",
+    path: "runtime/deno-web-test/test/late-registration-project/late.test.ts",
     reason: "a project the harness runs to prove a run with a test it never " +
       "ran claims nothing",
   },
   {
-    path: "packages/deno-web-test/test/load-error-project/loads.test.ts",
+    path: "runtime/deno-web-test/test/load-error-project/loads.test.ts",
     reason: "a project the harness runs to prove a run with a file that " +
       "failed to load claims nothing",
   },
   {
-    path: "packages/deno-web-test/test/load-error-project/throws.test.ts",
+    path: "runtime/deno-web-test/test/load-error-project/throws.test.ts",
     reason: "a project the harness runs to prove a run with a file that " +
       "failed to load claims nothing",
   },
   {
-    path: "packages/deno-web-test/test/project-with-config/ed25519.test.ts",
+    path: "runtime/deno-web-test/test/project-with-config/ed25519.test.ts",
     reason: "a project the harness runs to prove it reads a project config",
   },
   {
-    path: "packages/deno-web-test/test/success-project/add.test.ts",
+    path: "runtime/deno-web-test/test/success-project/add.test.ts",
     reason: "a project the harness runs to prove a passing run reports green",
   },
   {
-    path: "packages/deno-web-test/test/timeout-project/hang.test.ts",
+    path: "runtime/deno-web-test/test/timeout-project/hang.test.ts",
     reason: "a project the harness runs to prove it reports a wedged test",
   },
   {
@@ -153,22 +153,22 @@ const NOT_A_TEST_SURFACE: ReadonlyArray<{ path: string; reason: string }> = [
     reason: "the root `deno task test` runner, named like a test module",
   },
   {
-    path: "packages/cli/test/fixtures/",
+    path: "runtime/cli/test/fixtures/",
     reason: "pattern tests the CLI's own tests hand to `cf test`, to check " +
       "what it reports for each",
   },
   {
-    path: "packages/cli/integration/bulk-ops-demo.sh",
+    path: "runtime/cli/integration/bulk-ops-demo.sh",
     reason: "a tour of the bulk commands, quoted by the documentation the " +
       "verb-session gate holds to it rather than run as a test",
   },
   {
-    path: "packages/cli/integration/read-write-demo.sh",
+    path: "runtime/cli/integration/read-write-demo.sh",
     reason: "a tour of the read and write commands, quoted by the " +
       "documentation the verb-session gate holds to it",
   },
   {
-    path: "packages/cli/integration/verb-session-demo.sh",
+    path: "runtime/cli/integration/verb-session-demo.sh",
     reason: "the walkthrough the verb-session gate holds the documentation " +
       "to, read rather than run",
   },

@@ -1,7 +1,7 @@
 # Traversal and Schema Query
 
 This document specifies the current behavior of the traversal subsystem implemented
-in `packages/runner/src/traverse.ts`.
+in `runtime/runner/src/traverse.ts`.
 
 ## Status
 
@@ -380,11 +380,11 @@ Traversal is intentionally not a full JSON-Schema validator. Notable differences
 
 Behavior in this spec is verified by:
 
-- `packages/runner/test/traverse.test.ts`
-- `packages/runner/test/handle-declared-by-definition.test.ts`
-- `packages/runner/test/query.test.ts`
-- `packages/runner/test/schema-view.test.ts`
-- `packages/runner/test/recursive-handle-union.test.ts`
+- `runtime/runner/test/traverse.test.ts`
+- `runtime/runner/test/handle-declared-by-definition.test.ts`
+- `runtime/runner/test/query.test.ts`
+- `runtime/runner/test/schema-view.test.ts`
+- `runtime/runner/test/recursive-handle-union.test.ts`
 
 These include regression tests for:
 

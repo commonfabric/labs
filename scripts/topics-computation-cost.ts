@@ -33,13 +33,13 @@ import {
   type PhaseRecord,
   type ProbeCase,
   probeCases,
-} from "../packages/patterns/integration/topics-cost-cases.ts";
+} from "../patterns/integration/topics-cost-cases.ts";
 import {
   buildTopicsFixture,
   DEFAULT_TOPICS_FIXTURE_MODE,
   TOPICS_FIXTURE_MODES,
   type TopicsFixtureMode,
-} from "../packages/patterns/integration/topics-headless-fixture.ts";
+} from "../patterns/integration/topics-headless-fixture.ts";
 import {
   assignedLimitsNotExceeded,
   GATED_MEASURES,
@@ -50,11 +50,11 @@ import {
   type ReadBudgetLimits,
   TOPICS_READ_BUDGET_GROUPS,
   variantsAssignedTo,
-} from "../packages/patterns/integration/topics-read-budget.ts";
+} from "../patterns/integration/topics-read-budget.ts";
 import {
   READ_BUDGET_VARIANTS,
   type ReadBudgetVariantName,
-} from "../packages/patterns/integration/topics-read-budget-variants.ts";
+} from "../patterns/integration/topics-read-budget-variants.ts";
 
 /** The repository root, where a child process finds the workspace config. */
 const REPOSITORY_ROOT = fromFileUrl(new URL("..", import.meta.url));

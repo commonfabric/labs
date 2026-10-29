@@ -64,12 +64,12 @@ against a practice the team is already committed to repeating every phase.
 
 | Fact | Where |
 | --- | --- |
-| Crash-consistent snapshot via `VACUUM INTO`; never mutates source, never runs the engine's DDL-on-open path; produces one file with no `-wal`/`-shm` | `packages/memory/v2/dump.ts` |
-| A space is one SQLite file whose name encodes its DID; directory mode nests under `engine-v3/` with the **literal** DID as the stem, single-file mode percent-encodes it | `packages/memory/v2/storage-path.ts` |
-| The store dir defaults to `./cache/memory/` relative to cwd — so storage is already isolated per checkout | `packages/toolshed/env.ts` (`MEMORY_DIR`) |
-| The dump endpoint is hard-off in production: fail-closed env allowlist, no override, and "a prod form is a separate mechanism" | `packages/toolshed/routes/storage/memory/memory-dump-policy.ts` |
-| `cf inspect --remote` fetches snapshots into `~/.cache/cf-inspect/<host>/` | `packages/state-inspector/remote.ts` |
-| Genesis/ACL ride inside the store (`of:<space>` doc), so existing team keys authorize on a copy | `packages/memory/v2/server.ts` |
+| Crash-consistent snapshot via `VACUUM INTO`; never mutates source, never runs the engine's DDL-on-open path; produces one file with no `-wal`/`-shm` | `runtime/memory/v2/dump.ts` |
+| A space is one SQLite file whose name encodes its DID; directory mode nests under `engine-v3/` with the **literal** DID as the stem, single-file mode percent-encodes it | `runtime/memory/v2/storage-path.ts` |
+| The store dir defaults to `./cache/memory/` relative to cwd — so storage is already isolated per checkout | `runtime/toolshed/env.ts` (`MEMORY_DIR`) |
+| The dump endpoint is hard-off in production: fail-closed env allowlist, no override, and "a prod form is a separate mechanism" | `runtime/toolshed/routes/storage/memory/memory-dump-policy.ts` |
+| `cf inspect --remote` fetches snapshots into `~/.cache/cf-inspect/<host>/` | `runtime/state-inspector/remote.ts` |
+| Genesis/ACL ride inside the store (`of:<space>` doc), so existing team keys authorize on a copy | `runtime/memory/v2/server.ts` |
 | `cf inspect` is read-only by contract — "it explains, it never reproduces or replays" | `skills/state-inspector/SKILL.md` |
 
 ## Identity: same-DID, and it is not close
@@ -79,20 +79,20 @@ unbounded data migration, and it degrades exactly the fidelity the rehearsal
 exists to buy.
 
 **What would survive a re-key.** Entity ids are content-addressed from
-`{source, cause}`, and `createRef` (`packages/runner/src/create-ref.ts`) adds
+`{source, cause}`, and `createRef` (`runtime/runner/src/create-ref.ts`) adds
 no space DID of its own, so every stored document keeps its id. A cause can
 hold a link that names its space, though, so an id derived again after a re-key
 can differ from the one stored. Links are another matter. Only a link written relative to a base document
 elides a `space` that matches the base's (the `base` elision in
-`packages/runner/src/link-utils.ts`); the links a pattern binds into a child's
+`runtime/runner/src/link-utils.ts`); the links a pattern binds into a child's
 argument name their space outright, so a re-key would have to rewrite each of
 them.
 
 **What would break.**
 
 1. **CFC labels name the space.** `CfcSpaceAtom` and `HasRole` carry a space
-   DID (`packages/api/cfc.ts`), and `space` is a *commitment* field —
-   equality-consumed (`packages/runner/src/cfc/label-field-classification.ts`).
+   DID (`base/api/cfc.ts`), and `space` is a *commitment* field —
+   equality-consumed (`runtime/runner/src/cfc/label-field-classification.ts`).
    At render the runtime mints `HasRole(actingPrincipal, space, reader)` from
    the **actual** space and correlates it against the stored label
    (`render-ceiling.ts`, `space-membership.ts`). A stored `Space(did:PROD)` atom
@@ -142,7 +142,7 @@ open throughout — the live-server condition.
 **Migration-on-open is safe on a copy.** `Engine.open` is forward-only and
 idempotent: `CREATE TABLE IF NOT EXISTS` plus a fixed list of guarded
 `migrate*` steps, all applied under `create: true`
-(`packages/memory/v2/engine.ts`). Running it against a VACUUM-INTO copy is the
+(`runtime/memory/v2/engine.ts`). Running it against a VACUUM-INTO copy is the
 ordinary path — the copy is a complete database, not a partial one. This is
 precisely why `dump.ts` refuses to run it against the *source*.
 
@@ -218,7 +218,7 @@ Operation (layer 4), and memory is Foundation (layer 1). Operator tooling over
 the memory layer is exactly what layer 4 is. `state-inspector` already imports
 `@commonfabric/memory/v2/dump` and already owns remote acquisition and the cache
 layout, so the mechanism goes there and the command surface goes in
-`packages/cli/commands/space.ts`.
+`runtime/cli/commands/space.ts`.
 
 Two rejected alternatives:
 
@@ -255,7 +255,7 @@ The write-storm history and the mis-pointed-client hazard drive four rails.
    a `.cf-clone` marker; the toolshed prints a startup banner naming the clone
    and its source when its store dir contains one. Both halves are now built:
    the marker ships with `cf space clone`, and the banner with
-   `packages/toolshed/lib/clone-banner.ts`. A printed hint from `cf space clone`
+   `runtime/toolshed/lib/clone-banner.ts`. A printed hint from `cf space clone`
    alone was weak, and "make prod-vs-clone unmistakable" was the explicit ask.
    Note the banner fires at boot and then scrolls away — it does not help
    someone returning to a browser tab an hour later; surfacing clone-ness in the
@@ -270,7 +270,7 @@ The write-storm history and the mis-pointed-client hazard drive four rails.
    deterministic commit/settle counters for *orchestrated diagnostics runs* of
    a live runtime. Churn's niche is retrospective and offline — any store, any
    time window, no instrumentation required at incident time. Within the
-   state-inspector, `hotEntities` (`packages/state-inspector/queries.ts`)
+   state-inspector, `hotEntities` (`runtime/state-inspector/queries.ts`)
    gives all-time write counts per entity with no time dimension, which cannot
    show a storm starting or a settle completing. Churn is what makes "watch
    commit rates" executable against the flight recorder, and it earns its keep
@@ -349,7 +349,7 @@ its own change: every existing store depends on it, so removing it is a
 migration, not a drive-by.
 
 **Build (increment 2, optional).** Toolshed clone banner. **Shipped** —
-`packages/toolshed/lib/clone-banner.ts` reads the `.cf-clone` marker at
+`runtime/toolshed/lib/clone-banner.ts` reads the `.cf-clone` marker at
 startup and prints the clone's provenance, so a served clone is visible in
 the log an operator is already watching rather than only on disk.
 

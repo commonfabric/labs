@@ -30,12 +30,12 @@ describe("test-records-gather", () => {
     it("returns the four fields of a full specification", () => {
       expect(
         parseJUnitSpec(
-          "kind=unit,scope=cli,prefix=packages/cli,glob=out/*.xml",
+          "kind=unit,scope=cli,prefix=runtime/cli,glob=out/*.xml",
         ),
       ).toEqual({
         kind: "unit",
         scope: "cli",
-        prefix: "packages/cli",
+        prefix: "runtime/cli",
         glob: "out/*.xml",
       });
     });
@@ -120,7 +120,7 @@ describe("test-records-gather", () => {
         junit: [{
           kind: "unit",
           scope: "cli",
-          prefix: "packages/cli",
+          prefix: "runtime/cli",
           glob: join(dir, "*.xml"),
         }],
         spoolDir: held.dir,
@@ -150,7 +150,7 @@ describe("test-records-gather", () => {
         },
         outcome: "pass",
         durationMs: 250,
-        file: "packages/cli/test/alpha.test.ts",
+        file: "runtime/cli/test/alpha.test.ts",
       });
     });
 
@@ -325,7 +325,7 @@ describe("test-records-gather", () => {
           junit: [{
             kind: "integration",
             scope: "bakery",
-            prefix: "packages/bakery",
+            prefix: "runtime/bakery",
             glob: join(dir, "*.xml"),
           }],
           variant: "wood-fired",
@@ -338,7 +338,7 @@ describe("test-records-gather", () => {
           test: { k: "integration", s: "bakery", n: "oven", v: "wood-fired" },
           outcome: "pass",
           durationMs: 3500,
-          file: "packages/bakery/oven.test.ts",
+          file: "runtime/bakery/oven.test.ts",
         }]);
       } finally {
         await Deno.remove(dir, { recursive: true });

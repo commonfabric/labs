@@ -5,7 +5,7 @@ in a space: `"OWNER"`, `"WRITE"`, `"READ"`, or `"none"`, and `undefined` while
 that is not known. It is what a pattern consults to decide what to offer a
 person, such as whether to show the controls only an owner can use, or whether
 a room it lists is one they belong to. The implementation is
-`packages/runner/src/builder/space-access.ts`, which also holds
+`runtime/runner/src/builder/space-access.ts`, which also holds
 `spaceMembers(target)`, the principals that space's access list names,
 described [below](#a-spaces-members), and `spaceOf(target)`, the DID of that
 same space, described [below](#the-spaces-own-did).
@@ -23,7 +23,7 @@ The level is the principal's membership as the space's access list states it:
 the principal's entry in the list (the document `of:<space DID>`), else the
 list's `"*"` entry. A space's own DID is no exception, and holds only what the
 list grants it. `spaceReaderRole()` in
-`packages/runner/src/cfc/space-membership.ts` makes that decision, and it is the
+`runtime/runner/src/cfc/space-membership.ts` makes that decision, and it is the
 same function the render membership lookup uses, so a pattern and the renderer
 read one list the same way, and the same way the memory server resolves a listed
 principal.
@@ -159,7 +159,7 @@ runs it again through `Scheduler.invalidateAction()` when the verdict changes.
 Each registration lasts until the next change for that space, or until the
 scheduler unsubscribes the action; a run that still asks registers again. The
 runtime owns that registration (`Runtime.spaceAccessWatch`, a `SpaceAccessWatch`
-in `packages/runner/src/space-access-watch.ts`) and cancels its subscription
+in `runtime/runner/src/space-access-watch.ts`) and cancels its subscription
 when it is disposed, so a storage manager that outlives the runtime keeps no
 hold on it.
 
@@ -235,7 +235,7 @@ that has to name a space, such as an invitation to a room it has just created
 with `PatternFactory.inSpace()`, which its recipient checks with
 `isWellFormedDID()` before acting on it. It shares the internal resolution of
 `target` with `spaceAccess(target)`, in
-`packages/runner/src/builder/space-access.ts`, so the two always name the same
+`runtime/runner/src/builder/space-access.ts`, so the two always name the same
 space.
 
 It can be called where `spaceAccess(target)` can: in a handler or a reactive

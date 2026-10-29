@@ -24,9 +24,9 @@ that case is a per-write question, which SC-23 left transaction-global.
 ## The class
 
 The write machinery reads below carry `writeDestinationRead`
-([`reactivity-log.ts`](../../packages/runner/src/storage/reactivity-log.ts)),
+([`reactivity-log.ts`](../../runtime/runner/src/storage/reactivity-log.ts)),
 and `deriveFlowJoin()` in
-[`prepare.ts`](../../packages/runner/src/cfc/prepare.ts) drops a read
+[`prepare.ts`](../../runtime/runner/src/cfc/prepare.ts) drops a read
 carrying it. The read walk the join is built from, `forEachFlowObservation()`,
 still visits it and classifies it, which is what leaves every other consumer
 of that walk alone — the next section but two.
@@ -35,7 +35,7 @@ of that walk alone — the next section but two.
 before choosing between delivering the value as an event and storing it. The
 stream marker is a scalar at one known key of the stored value, named by
 `STREAM_MARKER_KEY` in
-[`builder/types.ts`](../../packages/runner/src/builder/types.ts), and
+[`builder/types.ts`](../../runtime/runner/src/builder/types.ts), and
 `CellImpl.isStream()` reads that key's own path. Reading the marker's path
 rather than the whole resolved value is the narrower question and is worth
 asking that way on its own; it is not what earns the exclusion, because a
@@ -46,7 +46,7 @@ caller, so `set()` passes the marker and `sink()` does not: the same probe
 made to decide whether to add a listener is an ordinary observation and joins.
 
 **The destination comparison.** `normalizeAndDiff()` in
-[`data-updating.ts`](../../packages/runner/src/data-updating.ts) walks the
+[`data-updating.ts`](../../runtime/runner/src/data-updating.ts) walks the
 value a caller handed to `set()` against what is stored at the destination and
 emits a change for each path where the two differ. The read it makes of the
 destination to do that carries the marker.
@@ -129,7 +129,7 @@ consume.
 
 Third, nothing a pattern writes can put the marker on a read. The symbol
 keying it is private to
-[`reactivity-log.ts`](../../packages/runner/src/storage/reactivity-log.ts),
+[`reactivity-log.ts`](../../runtime/runner/src/storage/reactivity-log.ts),
 so only runtime code importing `writeDestinationRead` can set it, and the
 runner's public surface does not export it.
 

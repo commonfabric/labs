@@ -45,8 +45,10 @@
 import { exists } from "@std/fs";
 import * as path from "@std/path";
 import {
+  ALIAS_DIRECTORY,
   enclosingNames,
   FragmentWriter,
+  loadAliasResolver,
   NAME_SEPARATOR,
   readRegistrations,
   readWholeRuns,
@@ -119,11 +121,12 @@ import {
   measuredSetName,
   measuredSets,
 } from "./test-topology/coverage-gates.ts";
-import type {
-  Manifest,
-  ManifestEntry,
-  UnschedulableEntry,
-  WithheldReason,
+import {
+  type Manifest,
+  type ManifestEntry,
+  manifestUnderAliases,
+  type UnschedulableEntry,
+  type WithheldReason,
 } from "./test-selection/manifest.ts";
 import {
   DISCRETIONARY_SECONDS,
@@ -2204,7 +2207,18 @@ export async function resolveManifest(
   options: Pick<LaneOptions, "at" | "root">,
   deps: Pick<LaneDeps, "manifest">,
 ): Promise<ManifestFetch> {
-  return await deps.manifest({ at: manifestMoment(options) });
+  const fetched = await deps.manifest({ at: manifestMoment(options) });
+  if (fetched.manifest === undefined) return fetched;
+  // The checkout's alias lines are part of the tree the plan is a function
+  // of: a manifest published before a line landed names what it renames by
+  // the old name.
+  const resolver = await loadAliasResolver(
+    path.join(options.root, ALIAS_DIRECTORY),
+  );
+  return {
+    ...fetched,
+    manifest: manifestUnderAliases(fetched.manifest, resolver),
+  };
 }
 
 /** The manifest this commit belongs to, and what the change touched. */

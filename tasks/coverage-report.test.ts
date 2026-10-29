@@ -44,7 +44,7 @@ const REPOSITORY = path.dirname(
 );
 
 /** The workspace member those tests write a set report for. */
-const MEMBER = "packages/leb128";
+const MEMBER = "base/leb128";
 
 /** The suite whose units measure that member. */
 const SUITE = "workspace-unit";
@@ -98,10 +98,10 @@ async function workspaceOfTwo(): Promise<{ root: string; alpha: string }> {
   const source = ["export const covered = 1;", "export const uncovered = 2;"]
     .join("\n");
   const root = await directoryOf({
-    "packages/alpha/src/mod.ts": source,
-    "packages/beta/src/mod.ts": source,
+    "runtime/alpha/src/mod.ts": source,
+    "runtime/beta/src/mod.ts": source,
   });
-  return { root, alpha: path.join(root, "packages/alpha/src/mod.ts") };
+  return { root, alpha: path.join(root, "runtime/alpha/src/mod.ts") };
 }
 
 /**
@@ -301,8 +301,8 @@ describe("coverage-report", () => {
           }),
         ).toEqual([
           { name: coverageMetricForGroup("workspace"), uncoveredLines: 3 },
-          { name: coverageMetricForGroup("packages/alpha"), uncoveredLines: 1 },
-          { name: coverageMetricForGroup("packages/beta"), uncoveredLines: 2 },
+          { name: coverageMetricForGroup("runtime/alpha"), uncoveredLines: 1 },
+          { name: coverageMetricForGroup("runtime/beta"), uncoveredLines: 2 },
         ]);
       } finally {
         await Deno.remove(root, { recursive: true });
@@ -485,7 +485,7 @@ describe("coverage-report", () => {
     it("returns a summary naming the workspace figure", () => {
       const figures: CoverageDebtMetric[] = [
         { name: coverageMetricForGroup("workspace"), uncoveredLines: 12 },
-        { name: coverageMetricForGroup("packages/memory"), uncoveredLines: 3 },
+        { name: coverageMetricForGroup("runtime/memory"), uncoveredLines: 3 },
       ];
       const summary = summarize(figures);
       expect(summary).toContain("12 uncovered lines");

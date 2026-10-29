@@ -20,11 +20,11 @@ Follow the source hierarchy from highest to lowest authority:
 
 2. **Working code (tests and patterns)**:
    - Examine test files to understand expected behavior
-   - Look at working pattern examples in `packages/patterns/`
+   - Look at working pattern examples in `patterns/`
    - These show what actually works in practice
 
 3. **Runtime implementation**:
-   - Read runtime code in `packages/runner/`, `packages/memory/`, etc.
+   - Read runtime code in `runtime/runner/`, `runtime/memory/`, etc.
    - Understand actual implementation details
    - Compare against documented behavior
 

@@ -40,14 +40,14 @@ function suite(partial: Partial<Suite> & { id: string }): Suite {
 describe("the tree half of the drift guard", () => {
   it("passes a file some suite enumerates", () => {
     const suites = [
-      suite({ id: "workspace-unit", units: ["packages/bakery/glaze.test.ts"] }),
+      suite({ id: "workspace-unit", units: ["runtime/bakery/glaze.test.ts"] }),
     ];
-    expect(checkTree(suites, ["packages/bakery/glaze.test.ts"])).toEqual([]);
+    expect(checkTree(suites, ["runtime/bakery/glaze.test.ts"])).toEqual([]);
   });
 
   it("fails a file no suite accounts for", () => {
     const findings = checkTree([suite({ id: "workspace-unit" })], [
-      "packages/bakery/glaze.test.ts",
+      "runtime/bakery/glaze.test.ts",
     ]);
     expect(findings.map((finding) => finding.fails)).toEqual([true]);
     expect(findings[0]!.message).toContain("claimed by no suite");
@@ -57,9 +57,9 @@ describe("the tree half of the drift guard", () => {
     // A workspace member that runs whole, or a directory one task owns,
     // accounts for what it contains.
     const suites = [
-      suite({ id: "workspace-unit", units: ["packages/bakery"] }),
+      suite({ id: "workspace-unit", units: ["runtime/bakery"] }),
     ];
-    expect(checkTree(suites, ["packages/bakery/glaze.test.ts"])).toEqual([]);
+    expect(checkTree(suites, ["runtime/bakery/glaze.test.ts"])).toEqual([]);
   });
 
   it("reads no unit of a suite that maps changes itself as a directory", () => {
@@ -80,22 +80,22 @@ describe("the tree half of the drift guard", () => {
 
   it("lets a default suite and a variant suite claim one file", () => {
     const suites = [
-      suite({ id: "package-integration", units: ["packages/oven/a.test.ts"] }),
+      suite({ id: "package-integration", units: ["runtime/oven/a.test.ts"] }),
       suite({
         id: "package-integration-on",
         variant: "server-execution",
-        units: ["packages/oven/a.test.ts"],
+        units: ["runtime/oven/a.test.ts"],
       }),
     ];
-    expect(checkTree(suites, ["packages/oven/a.test.ts"])).toEqual([]);
+    expect(checkTree(suites, ["runtime/oven/a.test.ts"])).toEqual([]);
   });
 
   it("fails two suites claiming one file under the same variant", () => {
     const suites = [
-      suite({ id: "one", units: ["packages/oven/a.test.ts"] }),
-      suite({ id: "other", units: ["packages/oven/a.test.ts"] }),
+      suite({ id: "one", units: ["runtime/oven/a.test.ts"] }),
+      suite({ id: "other", units: ["runtime/oven/a.test.ts"] }),
     ];
-    const findings = checkTree(suites, ["packages/oven/a.test.ts"]);
+    const findings = checkTree(suites, ["runtime/oven/a.test.ts"]);
     expect(findings.map((finding) => finding.fails)).toEqual([true]);
     expect(findings[0]!.message).toContain("one and other");
   });
@@ -106,13 +106,13 @@ describe("the tree half of the drift guard", () => {
         id: "package-integration-on",
         variant: "server-execution",
         unavailable: [{
-          unit: "packages/oven/a.test.ts",
+          unit: "runtime/oven/a.test.ts",
           phase: "phase-3",
           reason: "the surface it exercises has not landed",
         }],
       }),
     ];
-    expect(checkTree(suites, ["packages/oven/a.test.ts"])).toEqual([]);
+    expect(checkTree(suites, ["runtime/oven/a.test.ts"])).toEqual([]);
   });
 
   it("accepts a script a suite names as a source of its own", () => {
@@ -122,10 +122,10 @@ describe("the tree half of the drift guard", () => {
       suite({
         id: "cli-core",
         units: ["integration.sh verbs"],
-        sources: ["packages/cli/integration/integration.sh"],
+        sources: ["runtime/cli/integration/integration.sh"],
       }),
     ];
-    expect(checkTree(suites, ["packages/cli/integration/integration.sh"]))
+    expect(checkTree(suites, ["runtime/cli/integration/integration.sh"]))
       .toEqual([]);
   });
 });
@@ -136,9 +136,9 @@ describe("the store half of the drift guard", () => {
 
   const bakery = suite({
     id: "workspace-unit",
-    units: ["packages/bakery/test/glaze.test.ts"],
+    units: ["runtime/bakery/test/glaze.test.ts"],
     locate: (record) =>
-      record.file === "packages/bakery/test/glaze.test.ts"
+      record.file === "runtime/bakery/test/glaze.test.ts"
         ? { level: "unit", unit: record.file }
         : undefined,
   });
@@ -146,7 +146,7 @@ describe("the store half of the drift guard", () => {
   it("passes a recorded identity exactly one suite claims", () => {
     const findings = checkStore([bakery], [{
       test: { k: "unit", s: "bakery", n: "glaze > sets" },
-      file: "packages/bakery/test/glaze.test.ts",
+      file: "runtime/bakery/test/glaze.test.ts",
       commit: HERE,
     }], HERE);
     expect(findings.filter((finding) => finding.fails)).toEqual([]);
@@ -155,7 +155,7 @@ describe("the store half of the drift guard", () => {
   it("fails an identity no suite recognizes", () => {
     const findings = checkStore([bakery], [{
       test: { k: "unit", s: "bakery", n: "icing > sets" },
-      file: "packages/bakery/icing.test.ts",
+      file: "runtime/bakery/icing.test.ts",
       commit: HERE,
     }], HERE);
     expect(
@@ -169,7 +169,7 @@ describe("the store half of the drift guard", () => {
     const twin = suite({ ...bakery, id: "runner-unit" });
     const findings = checkStore([bakery, twin], [{
       test: { k: "unit", s: "bakery", n: "glaze > sets" },
-      file: "packages/bakery/test/glaze.test.ts",
+      file: "runtime/bakery/test/glaze.test.ts",
       commit: HERE,
     }], HERE);
     expect(
@@ -195,7 +195,7 @@ describe("the store half of the drift guard", () => {
       },
       {
         test: { k: "unit", s: "bakery", n: "glaze > sets" },
-        file: "packages/bakery/test/glaze.test.ts",
+        file: "runtime/bakery/test/glaze.test.ts",
         commit: HERE,
       },
     ], HERE);
@@ -225,11 +225,11 @@ describe("the store half of the drift guard", () => {
   it("reports no gate as never recorded, since the job running it records them after", () => {
     const measured = suite({
       id: "workspace-unit",
-      units: ["packages/bakery/test/glaze.test.ts"],
+      units: ["runtime/bakery/test/glaze.test.ts"],
       measured: [{
-        member: "packages/bakery",
-        reachedBy: ["packages/bakery/"],
-        units: ["packages/bakery/test/glaze.test.ts"],
+        member: "runtime/bakery",
+        reachedBy: ["runtime/bakery/"],
+        units: ["runtime/bakery/test/glaze.test.ts"],
       }],
     });
     const messages = checkStore(
@@ -247,7 +247,7 @@ describe("the store half of the drift guard", () => {
     // source unless the finding carries them.
     const findings = checkStore([bakery], [{
       test: { k: "unit", s: "bakery", n: "icing > sets" },
-      file: "packages/bakery/icing.test.ts",
+      file: "runtime/bakery/icing.test.ts",
       commit: HERE,
       from: "test-records-test-3-a1",
     }], HERE);
@@ -258,7 +258,7 @@ describe("the store half of the drift guard", () => {
     ).toEqual([
       'no suite claims the recorded identity ["unit","bakery","icing > ' +
       'sets"], recorded by test-records-test-3-a1 from ' +
-      "packages/bakery/icing.test.ts",
+      "runtime/bakery/icing.test.ts",
     ]);
   });
 
@@ -312,7 +312,7 @@ describe("the store half of the drift guard", () => {
     const findings = checkStore([bakery], [
       {
         test: { k: "unit", s: "bakery", n: "glaze > sets" },
-        file: "packages/bakery/test/glaze.test.ts",
+        file: "runtime/bakery/test/glaze.test.ts",
         commit: HERE,
         from: "test-records-test-1-a1",
       },
@@ -336,7 +336,7 @@ describe("the store half of the drift guard", () => {
     // a disagreement would fail the default branch for deleting a test.
     const findings = checkStore([bakery], [{
       test: { k: "unit", s: "bakery", n: "icing > sets" },
-      file: "packages/bakery/icing.test.ts",
+      file: "runtime/bakery/icing.test.ts",
       commit: "9a8b7c6d",
     }], HERE);
     expect(findings.map((finding) => finding.fails)).toEqual([true]);
@@ -349,7 +349,7 @@ describe("the store half of the drift guard", () => {
     // so the guard cannot say whether it agrees with it.
     const findings = checkStore([bakery], [{
       test: { k: "unit", s: "bakery", n: "icing > sets" },
-      file: "packages/bakery/icing.test.ts",
+      file: "runtime/bakery/icing.test.ts",
     }], HERE);
     expect(findings.map((finding) => finding.fails)).toEqual([true]);
     expect(findings[0]!.message).toContain("no commit");
@@ -358,7 +358,7 @@ describe("the store half of the drift guard", () => {
   it("judges records from this commit", () => {
     const findings = checkStore([bakery], [{
       test: { k: "unit", s: "bakery", n: "icing > sets" },
-      file: "packages/bakery/icing.test.ts",
+      file: "runtime/bakery/icing.test.ts",
       commit: HERE,
     }], HERE);
     expect(
@@ -372,7 +372,7 @@ describe("the store half of the drift guard", () => {
     const withSkip = suite({
       ...bakery,
       unavailable: [{
-        unit: "packages/bakery/test/glaze.test.ts",
+        unit: "runtime/bakery/test/glaze.test.ts",
         reason: "the surface it exercises has not landed",
       }],
     });
@@ -398,18 +398,18 @@ describe("what the tree half looks at", () => {
 
   it("finds every shape Deno takes for a test file", async () => {
     const root = await tree([
-      "packages/oven/test/bake.test.ts",
-      "packages/oven/test/glaze.test.tsx",
-      "packages/oven/test/proof_test.ts",
-      "packages/oven/test/test.ts",
-      "packages/oven/src/oven.ts",
+      "runtime/oven/test/bake.test.ts",
+      "runtime/oven/test/glaze.test.tsx",
+      "runtime/oven/test/proof_test.ts",
+      "runtime/oven/test/test.ts",
+      "runtime/oven/src/oven.ts",
     ]);
     try {
       expect(await candidateSurfaces(root)).toEqual([
-        "packages/oven/test/bake.test.ts",
-        "packages/oven/test/glaze.test.tsx",
-        "packages/oven/test/proof_test.ts",
-        "packages/oven/test/test.ts",
+        "runtime/oven/test/bake.test.ts",
+        "runtime/oven/test/glaze.test.tsx",
+        "runtime/oven/test/proof_test.ts",
+        "runtime/oven/test/test.ts",
       ]);
     } finally {
       await Deno.remove(root, { recursive: true });
@@ -418,12 +418,12 @@ describe("what the tree half looks at", () => {
 
   it("finds a shell script only where an integration directory holds it", async () => {
     const root = await tree([
-      "packages/cli/integration/acl.sh",
-      "packages/cli/support/release.sh",
+      "runtime/cli/integration/acl.sh",
+      "runtime/cli/support/release.sh",
     ]);
     try {
       expect(await candidateSurfaces(root)).toEqual([
-        "packages/cli/integration/acl.sh",
+        "runtime/cli/integration/acl.sh",
       ]);
     } finally {
       await Deno.remove(root, { recursive: true });
@@ -433,9 +433,9 @@ describe("what the tree half looks at", () => {
   it("finds a test anywhere in the repository and nowhere it ignores", async () => {
     const root = await tree([
       ".claude/scripts/hook.test.ts",
-      ".claude/worktrees/copy/packages/oven/test/c.test.ts",
-      "packages/oven/node_modules/dep/a.test.ts",
-      "packages/oven/test/c.test.ts",
+      ".claude/worktrees/copy/runtime/oven/test/c.test.ts",
+      "runtime/oven/node_modules/dep/a.test.ts",
+      "runtime/oven/test/c.test.ts",
     ]);
     try {
       await Deno.writeTextFile(
@@ -444,7 +444,7 @@ describe("what the tree half looks at", () => {
       );
       expect(await candidateSurfaces(root)).toEqual([
         ".claude/scripts/hook.test.ts",
-        "packages/oven/test/c.test.ts",
+        "runtime/oven/test/c.test.ts",
       ]);
     } finally {
       await Deno.remove(root, { recursive: true });
@@ -455,7 +455,7 @@ describe("what the tree half looks at", () => {
     // A file that gets registered or deleted takes its line with it,
     // which is what stops the list describing a tree nobody has.
     const findings = checkTree([], [], {
-      fixtures: [{ path: "packages/gone.test.ts", reason: "moved away" }],
+      fixtures: [{ path: "runtime/gone.test.ts", reason: "moved away" }],
     });
     expect(findings.map((finding) => finding.fails)).toEqual([true]);
     expect(findings[0]!.message).toContain("no longer holds it");
@@ -823,7 +823,7 @@ describe("reading a run's records", () => {
           test: { k: "unit", s: "oven", n: "bakes" },
           outcome: "pass",
           durationMs: 1,
-          file: "packages/oven/test/bake.test.ts",
+          file: "runtime/oven/test/bake.test.ts",
         }),
         JSON.stringify({
           line: "record",
@@ -841,7 +841,7 @@ describe("reading a run's records", () => {
       ]);
       // The file the producer knew travels with the record, because it
       // is what locates a unit identity.
-      expect(records[0]!.file).toBe("packages/oven/test/bake.test.ts");
+      expect(records[0]!.file).toBe("runtime/oven/test/bake.test.ts");
       expect(records[1]!.test.v).toBe("server-execution");
     } finally {
       await Deno.remove(at);
@@ -930,15 +930,15 @@ describe("what the guard declines to fail on", () => {
     // topology claims what it produced.
     const bakery = suite({
       id: "workspace-unit",
-      units: ["packages/bakery/test/glaze.test.ts"],
+      units: ["runtime/bakery/test/glaze.test.ts"],
       locate: () => ({
         level: "unit",
-        unit: "packages/bakery/test/glaze.test.ts",
+        unit: "runtime/bakery/test/glaze.test.ts",
       }),
     });
     const record = {
       test: { k: "unit", s: "bakery", n: "glaze > sets" },
-      file: "packages/bakery/test/glaze.test.ts",
+      file: "runtime/bakery/test/glaze.test.ts",
       commit: "c1",
     };
     expect(checkStore([bakery], [record, record, record], "c1"))

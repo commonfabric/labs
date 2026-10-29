@@ -41,7 +41,7 @@ invites.
 ## 1. Find the phase
 
 ```bash
-deno task cf test packages/patterns/<pattern>/<name>.test.tsx --verbose --stats-threshold 0
+deno task cf test patterns/<pattern>/<name>.test.tsx --verbose --stats-threshold 0
 ```
 
 No browser, no shell, no rendering — the cheapest rung that can see a read count
@@ -66,13 +66,13 @@ Two traps in the output itself:
 many per-step scheduler action deltas print.
 
 The counts this rung prints are exact. Its milliseconds are not the product's:
-[`test-runner.ts`](../../../packages/cli/lib/test-runner.ts) enables idempotency
+[`test-runner.ts`](../../../runtime/cli/lib/test-runner.ts) enables idempotency
 verification by default, adding a verification replay. Use
 `--no-idempotency-check` for timing experiments; keep the default for
 correctness checks. The read-cost report excludes the verification transaction.
 It includes work demanded by assertions and render steps, which may be more
 expensive than the preceding action.
-[The CLI reference](../../../packages/cli/README.md#pattern-test-read-costs)
+[The CLI reference](../../../runtime/cli/README.md#pattern-test-read-costs)
 defines the four counters and their measurement boundaries.
 
 ## 1b. Define the visible transition before comparing implementations
@@ -128,7 +128,7 @@ boundary never appear in a profile taken on the other, so pick the bracket that
 matches the capture:
 
 - **Profiling the `cf test` process.** Wrap the phase the way
-  [`packages/cli/lib/test-runner.ts`](../../../packages/cli/lib/test-runner.ts)
+  [`runtime/cli/lib/test-runner.ts`](../../../runtime/cli/lib/test-runner.ts)
   does in its `withPhase` helper: multi-segment keys, `logger.timeStart()` /
   `logger.timeEnd()` around the body, `performance.mark()` at both boundaries
   with a `performance.measure()` across the pair, and a `console.timeStamp()` at
@@ -144,11 +144,11 @@ matches the capture:
   from inside it with `node:inspector`, which Deno implements — connect a
   `Session`, `Profiler.enable`, `Profiler.start` around the phase, and
   `Profiler.stop` to a file. It needs `--allow-sys`, of which the `cf` launcher
-  passes only `--allow-sys=networkInterfaces,uid`, so run `packages/cli/mod.ts`
+  passes only `--allow-sys=networkInterfaces,uid`, so run `runtime/cli/mod.ts`
   directly with the launcher's own flag set and `--allow-sys` in place of that
   one. Rank it with the same self-time arithmetic
   `renderProfileReport` uses in
-  [`cdp-profiler.ts`](../../../packages/integration/cdp-profiler.ts).
+  [`cdp-profiler.ts`](../../../runtime/integration/cdp-profiler.ts).
 - **Profiling the browser worker.** The interval has to come from the capture
   itself: start the profiler when the phase starts and stop it when the phase
   ends, so the profile _is_ the phase. That is what the phase-scoped capture in
@@ -168,7 +168,7 @@ Start the capture when the phase starts and stop it when the phase ends. The
 profile is then the phase, and its ranking answers a question about that phase
 rather than about the whole run — which is the whole reason to bother scoping
 it. The seams are in
-[`packages/integration/cdp-profiler.ts`](../../../packages/integration/cdp-profiler.ts):
+[`runtime/integration/cdp-profiler.ts`](../../../runtime/integration/cdp-profiler.ts):
 
 - `attachWorkerProfiler(wsEndpoint)` — connects and waits for the runtime
   worker, returning `undefined` rather than throwing;
@@ -178,13 +178,13 @@ it. The seams are in
 - `writeWorkerProfile(profiler, { pathPrefix, label })` — writes the
   `.cpuprofile` and the ranked self-time report.
 
-[`packages/patterns/integration/default-app.test.ts`](../../../packages/patterns/integration/default-app.test.ts)
+[`patterns/integration/default-app.test.ts`](../../../patterns/integration/default-app.test.ts)
 is the maintained example to lift the gating and naming from. Read the ranked
 report first; open the `.cpuprofile` in Chrome DevTools or speedscope when the
 ranking is not enough.
 
 For the logger's own view of the same run, `collectBrowserLoadSummary` in
-[`packages/patterns/integration/cfc-browser-helpers.ts`](../../../packages/patterns/integration/cfc-browser-helpers.ts)
+[`patterns/integration/cfc-browser-helpers.ts`](../../../patterns/integration/cfc-browser-helpers.ts)
 reads the worker's scheduler, runner and storage rows plus main-thread IPC, with
 `count`, `p50`, `p95` and `max` per row. It keeps the top rows by total, so a
 row recording set sizes rather than milliseconds will evict real timings — read
@@ -476,7 +476,7 @@ For labeled built-in results, also test the persisted field labels. Give source
 fields distinct confidentiality and integrity labels, pass their references
 through the actual derivations, and inspect the downstream field views. When a
 field path crosses a link, use the resolved view from
-[`cfcLabelViewForResolvedCellWithStatus`](../../../packages/runner/src/cfc/label-view.ts)
+[`cfcLabelViewForResolvedCellWithStatus`](../../../runtime/runner/src/cfc/label-view.ts)
 and check `readFailed`: a failed metadata read is not an absent label, and a
 view of only the intermediate link document can miss the target's labels. Record
 the flow-label and enforcement settings with the result. Include a rebuilt
@@ -634,10 +634,10 @@ process:
   loop's worker included; `heapTotal`, `heapUsed` and `external` cover the thread
   that answers the request, so they leave a worker's heap out. Reading `rss`
   here measures the server at the address queried, however many other servers
-  the machine runs; `packages/runner/integration/derive_array_leak.test.ts`
+  the machine runs; `runtime/runner/integration/derive_array_leak.test.ts`
   measures its server this way.
 - `documentCaches` — the memory server's decoded-document cache, one entry per
-  open space (`Engine.documentCache` in `packages/memory/v2/engine.ts`) under
+  open space (`Engine.documentCache` in `runtime/memory/v2/engine.ts`) under
   the server's `totalBudgetBytes` (beside it the total `bytes`, and
   `totalBudgetEvictions`: entries given up to hold that total rather than a
   space's own bounds): per space, `entries` and `bytes` against `budgetBytes`
@@ -675,7 +675,7 @@ process:
   a snapshot has no row before it to resume from, so roughly one rebuild per
   snapshot interval is a non-resume for a reason unrelated to residency.
 - `commitRates` — the memory server's commit rates (`CommitRateTracker` in
-  `packages/memory/v2/commit-rates.ts`): the busiest of the spaces with a
+  `runtime/memory/v2/commit-rates.ts`): the busiest of the spaces with a
   commit in the last ten minutes, and for each the busiest of the sessions
   that committed to it. A space and a writer both carry `minute` and
   `tenMinutes`, the commits of the last sixty seconds and of the last ten
@@ -713,7 +713,7 @@ process:
   sessions over the memory protocol's `session.report`
   ([`04-protocol.md` §4.14](../../specs/memory-v2/04-protocol.md)), best-effort
   and only from clients whose server advertises `sessionReportV1`, kept by
-  `SessionReportLog` in `packages/memory/v2/session-reports.ts`. The one
+  `SessionReportLog` in `runtime/memory/v2/session-reports.ts`. The one
   reporter is the scheduler's remote-echo breaker
   ([plan](../../plans/scheduler-remote-echo-breaker.md)): `echoBreaker.trips`
   counts the times a client began deferring an action that kept rewriting a
@@ -838,7 +838,7 @@ instance ID, reserved generation field, and instance start time. The report is
 `null` when the client supplied none or a malformed report. This is self-reported attribution, not device or
 code attestation; it names no browser or individual tab, and multiple runtime
 instances may belong to one process. See
-[client attribution](../../../packages/memory/README.md#client-attribution)
+[client attribution](../../../runtime/memory/README.md#client-attribution)
 for host wiring and report lifetime.
 
 The row distinguishes direct watch declarations (`directWatchCount`) from
@@ -935,7 +935,7 @@ and `commitRates` on that instance says which space and whose sessions made it
 so.
 
 The defaults are held to the Topics space's own history by
-`packages/memory/test/commit-rates-traces.test.ts`, which replays ten-minute
+`runtime/memory/test/commit-rates-traces.test.ts`, which replays ten-minute
 stretches of the space's 2026-08-18 export through the tracker. The densest
 stretches of the July 2026 storms ran at four to seven hundred commits a
 minute and are reported within the sustained window plus the first minute

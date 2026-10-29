@@ -28,8 +28,8 @@ being handled.
 A pattern treats `undefined` as "no one", and refuses whatever needs someone.
 
 The choice is made in one place, `Runtime.actingPrincipalFor()` in
-`packages/runner/src/runtime.ts`, and `currentPrincipal()` is a frame check in
-front of it (`packages/runner/src/builder/current-principal.ts`). Runtime code
+`runtime/runner/src/runtime.ts`, and `currentPrincipal()` is a frame check in
+front of it (`runtime/runner/src/builder/current-principal.ts`). Runtime code
 that needs the actor of a handler run calls that method rather than choosing
 again.
 
@@ -176,14 +176,14 @@ Until both are settled, a pattern shows the viewer by resolving `#profile`, as
 
 ## Tests
 
-`packages/runner/test/current-principal.test.ts` covers the helper on both
+`runtime/runner/test/current-principal.test.ts` covers the helper on both
 kinds of runtime — including the run on another user's instance, the run with no
 actor, and the read scope it leaves alone — and the function in each kind of
 frame, in a compiled pattern, and against an `authored-by` claim written in the
 same handler. The `currentPrincipal()` case in
-`packages/runner/test/executor-trust-attribution.test.ts` drives a handler
+`runtime/runner/test/executor-trust-attribution.test.ts` drives a handler
 through the live serving loop, with a payload naming someone else.
-`packages/runner/test/cfc/authored-by-writer.test.ts` covers the claim on a
+`runtime/runner/test/cfc/authored-by-writer.test.ts` covers the claim on a
 position that declares a writer and no gesture: on a client, on a served run
 with an actor and with none, reached through another handler's `send()`, and
 against claims naming someone other than the acting principal. Its owner cases
@@ -194,19 +194,19 @@ initialization on nobody's behalf. Its serving-loop cases cover a run of the
 loop's own under a principal's snapshot, which labels what it initializes for
 that principal and binds them as owner, and a demanded derivation with no
 actor under its demander's snapshot, which is refused both.
-`packages/runner/test/executor-space-root-ensure.test.ts` covers the root's
+`runtime/runner/test/executor-space-root-ensure.test.ts` covers the root's
 deferred start taking the owner's snapshot from the ensure, and
-`packages/runner/test/executor-effect-channel.test.ts` a served handler's
+`runtime/runner/test/executor-effect-channel.test.ts` a served handler's
 navigation target, returned or only called, taking the firing actor's.
 
-`packages/runner/test/cfc-current-principal-confidentiality.test.ts` covers the
+`runtime/runner/test/cfc-current-principal-confidentiality.test.ts` covers the
 reader binding, under "a document created under a labeled parent": an item
 another principal appends to an owner-private list, a document nested in it,
 the owner's own append, a list whose policy names no `User` reader, an
 existing document linked into the list, both one stored as present but
 `undefined` and one whose id the transaction also creates in another scope,
 and an existing store another principal writes.
-`packages/patterns/integration/owner-private-inbox-multi-runtime.test.ts`
+`patterns/integration/owner-private-inbox-multi-runtime.test.ts`
 drives the same append through compiled patterns in separate runtimes, under
 either server-execution posture. With server execution on, it also refuses a
 stranger's served copy of the appended items.

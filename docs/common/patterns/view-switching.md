@@ -44,7 +44,7 @@ export default pattern<{ activeView: Writable<string> }>(({ activeView }) => {
 
 When `activeView` changes, the `computed` re-runs and returns a different sub-pattern. The runtime extracts its `[UI]` and renders it in place.
 
-**Real example:** `packages/patterns/catalog/ui/story-renderer.tsx` — the UI component catalog uses this pattern with 25+ views.
+**Real example:** `patterns/dev/catalog/ui/story-renderer.tsx` — the UI component catalog uses this pattern with 25+ views.
 
 ## Approach 2: Update a Cell Pointer
 
@@ -113,7 +113,7 @@ This is useful when:
 
 **Key point:** The items stored in `activeItem` must be cells with `[UI]` (i.e., pattern instances), not plain data objects. Placing a plain data object in `activeItem` and using `<cf-render>` will render nothing. If you need to select plain data and display it, use Approach 1 (switch on a string) or render the data's fields directly in JSX.
 
-**Rendering anonymous cells:** Use `<cf-render $cell={piece} />` to render any cell's `[UI]`, even if you don't know its type. See `packages/patterns/system/piece-grid.tsx` for an example rendering a grid of arbitrary pieces.
+**Rendering anonymous cells:** Use `<cf-render $cell={piece} />` to render any cell's `[UI]`, even if you don't know its type. See `patterns/system/piece-grid/piece-grid.tsx` for an example rendering a grid of arbitrary pieces.
 
 ## Approach 3: Tabs
 
@@ -133,7 +133,7 @@ const activeTab = new Writable("spaces").for("activeTab");
 </cf-tabs>
 ```
 
-The `.for("activeTab")` call makes the tab state durable (persisted by key). See `packages/patterns/system/home.tsx`.
+The `.for("activeTab")` call makes the tab state durable (persisted by key). See `patterns/system/home/home.tsx`.
 
 ## When to Use Which
 

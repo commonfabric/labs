@@ -26,7 +26,7 @@ db_view() {
   
   local repo_root
   repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "Error: not in a git repo" >&2; return 1; }
-  local db_file=$(find "$repo_root/packages/toolshed/cache/memory/" -maxdepth 1 -name "did:key:*$space.sqlite" -print -quit)
+  local db_file=$(find "$repo_root/runtime/toolshed/cache/memory/" -maxdepth 1 -name "did:key:*$space.sqlite" -print -quit)
   
   if [[ -z "$db_file" ]]; then
     echo "Error: Database file not found for space '$space'" >&2

@@ -84,7 +84,7 @@ the canonical workflow.
 Before debugging "missing" data, compare the CLI DID:
 
 ```bash
-deno run -A packages/cli/mod.ts id did "$CF_IDENTITY"
+deno run -A runtime/cli/mod.ts id did "$CF_IDENTITY"
 ```
 
 with the DID the page is signed in as, which

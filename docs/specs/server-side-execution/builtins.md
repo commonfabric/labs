@@ -6,7 +6,7 @@ serving loop from its row plus the referenced sections.
 
 ## Anchors
 
-- Inventory: `packages/runner/src/builtins/` (registered via
+- Inventory: `runtime/runner/src/builtins/` (registered via
   `registerBuiltins(runtime)` in `index.ts`).
 - Raw builtin shape (from `navigate-to.ts`): a factory
   `(inputsCell, sendResult, addCancel, cause, parentCell, runtime) =>

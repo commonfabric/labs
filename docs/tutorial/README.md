@@ -49,7 +49,7 @@ also read "vertically": learn a concept, then immediately open the hood on it.
 
 ## Conventions in this tutorial
 
-- File references like `packages/runner/src/scheduler.ts` are relative to the
+- File references like `runtime/runner/src/scheduler.ts` are relative to the
   repository root and are the ground truth; when this tutorial and the code
   disagree, the code wins.
 - Code in patterns imports from the `commonfabric` module.

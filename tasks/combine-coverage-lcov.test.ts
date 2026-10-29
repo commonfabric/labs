@@ -14,10 +14,10 @@ const ROOT = path.join(import.meta.dirname!, "..");
 Deno.test("normalizeSourcePath strips a GitHub-hosted workspace root", () => {
   assertEquals(
     normalizeSourcePath(
-      "/home/runner/work/labs/labs/packages/runner/src/mod.ts",
+      "/home/runner/work/labs/labs/runtime/runner/src/mod.ts",
       "labs",
     ),
-    "packages/runner/src/mod.ts",
+    "runtime/runner/src/mod.ts",
   );
 });
 
@@ -66,7 +66,7 @@ Deno.test("mergeLcovReports sums line coverage for a file seen in two jobs", () 
   // include the function/branch records deno emits, which the merge drops.
 
   const jobA = [
-    "SF:/home/runner/work/labs/labs/packages/a/mod.ts",
+    "SF:/home/runner/work/labs/labs/runtime/a/mod.ts",
     "FN:1,add",
     "FNDA:1,add",
     "FNF:1",
@@ -81,7 +81,7 @@ Deno.test("mergeLcovReports sums line coverage for a file seen in two jobs", () 
     "end_of_record",
   ].join("\n");
   const jobB = [
-    "SF:/data/_work/labs/labs/packages/a/mod.ts",
+    "SF:/data/_work/labs/labs/runtime/a/mod.ts",
     "DA:1,0",
     "DA:2,5",
     "LH:1",
@@ -100,7 +100,7 @@ Deno.test("mergeLcovReports sums line coverage for a file seen in two jobs", () 
   assertEquals(
     lcov,
     [
-      "SF:packages/a/mod.ts",
+      "SF:runtime/a/mod.ts",
       // line 1: 1 + 0 = 1 (hit); line 2: 0 + 5 = 5 (now hit thanks to job B).
       "DA:1,1",
       "DA:2,5",
@@ -114,7 +114,7 @@ Deno.test("mergeLcovReports sums line coverage for a file seen in two jobs", () 
 
 Deno.test("mergeLcovReports keeps a line uncovered in every job", () => {
   const report = [
-    "SF:/home/runner/work/labs/labs/packages/a/mod.ts",
+    "SF:/home/runner/work/labs/labs/runtime/a/mod.ts",
     "DA:5,0",
     "LH:0",
     "LF:1",
@@ -126,7 +126,7 @@ Deno.test("mergeLcovReports keeps a line uncovered in every job", () => {
   assertEquals(
     lcov,
     [
-      "SF:packages/a/mod.ts",
+      "SF:runtime/a/mod.ts",
       "DA:5,0",
       "LF:1",
       "LH:0",
@@ -151,7 +151,7 @@ Deno.test("combineCoverageLcov merges reports from a directory tree", async () =
     await Deno.writeTextFile(
       path.join(dir, "workspace.lcov"),
       [
-        "SF:/home/runner/work/labs/labs/packages/a/mod.ts",
+        "SF:/home/runner/work/labs/labs/runtime/a/mod.ts",
         "DA:1,1",
         "LF:1",
         "LH:1",
@@ -194,7 +194,7 @@ Deno.test("combineCoverageLcov merges reports from a directory tree", async () =
       [
         "TN:pattern-runtime",
         "SF:cf-mount/fid/main.tsx",
-        "SF:packages/a/mod.ts",
+        "SF:runtime/a/mod.ts",
       ],
     );
     assertEquals(lcov.endsWith("\n"), true);
@@ -233,7 +233,7 @@ Deno.test("main combines reports and writes the output file", async () => {
     await Deno.writeTextFile(
       path.join(inputDir, "workspace.lcov"),
       [
-        "SF:/home/runner/work/labs/labs/packages/a/mod.ts",
+        "SF:/home/runner/work/labs/labs/runtime/a/mod.ts",
         "DA:1,1",
         "LF:1",
         "LH:1",
@@ -253,7 +253,7 @@ Deno.test("main combines reports and writes the output file", async () => {
     assertEquals(
       await Deno.readTextFile(outputPath),
       [
-        "SF:packages/a/mod.ts",
+        "SF:runtime/a/mod.ts",
         "DA:1,1",
         "LF:1",
         "LH:1",
@@ -282,7 +282,7 @@ Deno.test("the CLI entry point runs the task as a process", async () => {
     await Deno.writeTextFile(
       path.join(inputDir, "workspace.lcov"),
       [
-        "SF:/home/runner/work/labs/labs/packages/a/mod.ts",
+        "SF:/home/runner/work/labs/labs/runtime/a/mod.ts",
         "DA:1,1",
         "LF:1",
         "LH:1",
@@ -313,7 +313,7 @@ Deno.test("the CLI entry point runs the task as a process", async () => {
     assertEquals(
       await Deno.readTextFile(outputPath),
       [
-        "SF:packages/a/mod.ts",
+        "SF:runtime/a/mod.ts",
         "DA:1,1",
         "LF:1",
         "LH:1",
