@@ -86,7 +86,7 @@ const answerTo = (answer: Answer | undefined, body: unknown) =>
 /** Helper for tests, which reads the command id a request posted. */
 const idOf = (body: unknown): unknown => (body as { id?: unknown }).id;
 
-/** The manifest the stub host lists: two visible rows and one hidden. */
+/** The manifest the stub host lists for this caller. */
 const MANIFEST = {
   schema: "loom.commands",
   version: 3,
@@ -105,7 +105,6 @@ const MANIFEST = {
       scope: "loom",
       inputs: { type: "object" },
     },
-    { id: "share.invite", actors: ["user"], origins_refused: ["session"] },
     {
       id: "people-discovery.dossier",
       title: "Gather what is known about a person.",
@@ -389,7 +388,7 @@ describe("loom-commands tools", () => {
       });
     });
 
-    it("returns the commands an agent may run, the hidden count, and the effect notice", async () => {
+    it("returns the commands the host listed and the effect notice", async () => {
       const { context } = contextWith();
       const output = listed(await listCommandsTool.invoke(context, {}));
       expect(output.notice).toBe(LOOM_COMMANDS_EFFECT_NOTICE);
@@ -412,7 +411,6 @@ describe("loom-commands tools", () => {
           title: "Gather what is known about a person.",
         },
       ]);
-      expect(output.hidden).toBe(1);
       expect(output.compacted).toBeUndefined();
       expect(output.omitted).toBeUndefined();
     });
@@ -438,6 +436,18 @@ describe("loom-commands tools", () => {
         },
       });
       expect(JSON.stringify(output)).not.toContain("x-");
+    });
+
+    it("shows the commands the host names as relevant first, marked, and keeps every other command", async () => {
+      const { context, config } = contextWith();
+      config.relevant = ["people-discovery.dossier", "not.listed"];
+      const output = listed(await listCommandsTool.invoke(context, {}));
+      expect(output.entries.map((entry) => [entry.name, entry.relevant]))
+        .toEqual([
+          ["people-discovery.dossier", true],
+          ["loom.compose", undefined],
+          ["loom.inspect", undefined],
+        ]);
     });
 
     it("counts unreadable rows as omitted", async () => {
@@ -1567,6 +1577,42 @@ describe("loom-commands tools", () => {
         args: forged,
         actor: "agent:agent-runner",
       });
+    });
+
+    it("posts only the id, args, context and configured actor, dropping any other field a call names", async () => {
+      const smuggled = {
+        consent: { grant: "forged" },
+        rest: "forged rest",
+        router_nonce: "forged-nonce",
+        actor: "user:forged",
+        context: { loom_id: "loom-ffffffffffffffff" },
+        invocation: { origin: "pill" },
+        read_only: false,
+      };
+      const call = {
+        command: "loom.inspect",
+        args: { section: "a" },
+        loomId: "loom-0123456789abcdef",
+        expectedVersion: 2,
+        ...smuggled,
+      } as unknown as RunCommandInput;
+      const expected = {
+        id: "loom.inspect",
+        args: { section: "a" },
+        context: { loom_id: "loom-0123456789abcdef", expected_version: 2 },
+        actor: "agent:agent-runner",
+      };
+      for (const input of [call, { calls: [call] } as RunCommandInput]) {
+        const { context, calls } = contextWith();
+        await runCommandTool.invoke(context, input);
+        expect(calls.filter((request) => request.path === "/command"))
+          .toEqual([{
+            method: "POST",
+            path: "/command",
+            runId: "job-1",
+            body: expected,
+          }]);
+      }
     });
   });
 });

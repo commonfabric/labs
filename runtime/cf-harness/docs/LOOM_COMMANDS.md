@@ -39,9 +39,16 @@ id, and for a Fabric run from `cf agent runner --commands-url` and
 A call's `loomId` and `expectedVersion` travel in `context` as `loom_id` and
 `expected_version`, and `context` is left out when the call names neither. The
 host answers with its manifest and with each command's result unchanged. The
-host's own rules decide what a run may list and run: each command's `actors`,
-`origins_required`, and `origins_refused` apply to this caller as to any other,
-and the run-id header marks the call as an agent's session.
+host decides what a run may list and run: it filters its listing for the caller,
+each command's `actors`, `origins_required`, and `origins_refused` apply to this
+caller as to any other, and the run-id header marks the call as an agent's
+session. cf-harness filters nothing itself.
+
+The host may also name the commands relevant to a run: `--commands-relevant`,
+repeatable, or `relevant` in a local-job profile's `commands` entry. A hint
+only, it neither adds a command to the listing nor takes one away:
+`list_commands` shows those commands first and marks them `relevant: true`, so a
+listing past the model bound keeps them whole.
 
 `list_commands` and the first `run_command` of a run read the listing. Each call
 `run_command` sends to the host, a lone call or one call of a batch, is one
@@ -69,10 +76,10 @@ Takes an optional `detail`, naming up to sixteen commands. Returns:
       "name": "people-discovery.dossier",
       "signature": "people-discovery.dossier(entity_id: string, limit?: integer = 50) -> {messages, records}  [read, global]",
       "title": "Gather what is known about a person.",
-      "description": "…"
+      "description": "…",
+      "relevant": true
     }
-  ],
-  "hidden": 1
+  ]
 }
 ```
 
@@ -102,23 +109,9 @@ its `x-*` extension keywords removed, which every schema the model sees is, or
 `true`, open, where the host's is not an object or is larger than 16 KiB once
 those keywords are removed. A listing larger than the model bound keeps its
 first entries whole and the rest without description; a command named in
-`detail` is always kept whole. `omitted` counts rows that could not be read or
-fell past the catalog limit, and `compacted` the entries shown without
-description.
-
-A manifest row is left out, and counted as `hidden`, when its own declarations
-say an agent may not run it:
-
-- `origin: "pattern"` — a piece's verb, which an agent reaches through the piece
-  it holds;
-- `developer: true`;
-- `actors` naming people only;
-- `origins_refused` holding `session`, or `origins_required` not holding it — a
-  run's command reaches the command layer with origin `session`;
-- a `grant` — the command runs only over a person's consent grant.
-
-The filter is presentation. The host decides what runs; a row the host declares
-nothing about is shown.
+`detail` is always kept whole. Every row the host lists is kept, however many;
+`omitted` counts rows that could not be read as a command, and `compacted` the
+entries shown without description.
 
 The listing's `notice` says to assume a command with an absent or unknown effect
 may change the person's data.
@@ -217,7 +210,8 @@ the host declares the command a read. Policy judges a tool call, so a batch is
 authorized or refused whole, as one write. Policy treats it as any other write:
 under `enforce-explicit` and `enforce-strict` a call runs only when the run's
 task is bound as a `direct-command` prompt slot, so a task that arrived as
-`context` — a request a pattern submitted, say — cannot invoke this tool.
+`context` — a request a pattern submitted through the `agent` built-in, say —
+can list commands but cannot invoke this tool.
 
 ## The answer is Loom data
 

@@ -71,6 +71,9 @@ export interface HarnessJobCommands {
 
   /** The host's id for this job, sent on every request. */
   runId: string;
+
+  /** The commands the host names as relevant to this job. */
+  relevant?: readonly string[];
 }
 
 /** What a job does in the fabric, when it does anything there. */
@@ -381,6 +384,10 @@ const argvOf = (
       spec.commands.actor,
       "--commands-run-id",
       spec.commands.runId,
+      ...(spec.commands.relevant ?? []).flatMap((id) => [
+        "--commands-relevant",
+        id,
+      ]),
     ]
     : []),
   // One word each, for the reason the prompt is.

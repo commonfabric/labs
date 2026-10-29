@@ -282,11 +282,12 @@ describe("runHarnessJob()", () => {
     });
   });
 
-  it("passes the job's command endpoint, actor and own id into the harness", async () => {
+  it("passes the job's command endpoint, actor, own id and relevant commands into the harness", async () => {
     const commands = {
       url: "http://127.0.0.1:8080",
       actor: "agent:agent-runner",
       runId: "job-own-id",
+      relevant: ["search.run", "person.find"],
     };
     const { result, seen } = await runScripted(
       plainSpec({ tools: ["list_commands", "run_command"], commands }),

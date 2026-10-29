@@ -122,6 +122,12 @@ export interface LocalJobCommands {
 
   /** The actor every command runs as, passed to the host as given. */
   actor: string;
+
+  /**
+   * The commands relevant to the profile's jobs, which `list_commands` shows
+   * first and marks; every other command stays listed.
+   */
+  relevant?: string[];
 }
 
 /** A profile's fabric session, as the host file states it. */
@@ -293,9 +299,14 @@ const profileOf = (name: string, value: unknown): LocalJobProfile => {
   if (
     commands !== undefined &&
     (!isObjectNotArray(commands) || !isHttpUrl(commands.url) ||
-      typeof commands.actor !== "string" || commands.actor === "")
+      typeof commands.actor !== "string" || commands.actor === "" ||
+      (commands.relevant !== undefined &&
+        (!Array.isArray(commands.relevant) ||
+          !commands.relevant.every((id) => typeof id === "string"))))
   ) {
-    fail("`commands` must name an http(s) `url` and an `actor`");
+    fail(
+      "`commands` must name an http(s) `url` and an `actor`, and any `relevant` commands as a list of ids",
+    );
   }
   if (model !== undefined && typeof model !== "string") {
     fail("`model` must be a string");
@@ -382,6 +393,9 @@ const profileOf = (name: string, value: unknown): LocalJobProfile => {
         commands: {
           url: (commands as LocalJobCommands).url,
           actor: (commands as LocalJobCommands).actor,
+          ...((commands as LocalJobCommands).relevant !== undefined
+            ? { relevant: [...(commands as LocalJobCommands).relevant!] }
+            : {}),
         },
       }
       : {}),

@@ -270,6 +270,7 @@ const CLI_STRING_FLAGS = [
   "commands-url",
   "commands-actor",
   "commands-run-id",
+  "commands-relevant",
   "fabric-api-url",
   "fabric-identity",
   "fabric-space",
@@ -308,6 +309,7 @@ const CLI_COLLECT_FLAGS = [
   "host-mount",
   "handle-value-origin",
   "input-cell",
+  "commands-relevant",
 ] as const;
 
 export type CfHarnessCliOutputMode = (typeof CLI_OUTPUT_MODES)[number];
@@ -641,7 +643,7 @@ Options:
                                 research requires a documentation corpus or pattern index (query_docs is a deprecated input alias),
                                 loom_compose, loom_inspect, and loom_authoring_context require --loom-authoring-config (or CF_HARNESS_LOOM_AUTHORING_CONFIG),
                                 the eight read-only loom_* tools require --loom-retrieval-config (or CF_HARNESS_LOOM_RETRIEVAL_CONFIG),
-                                and list_commands and run_command require the three --commands-* flags
+                                and list_commands and run_command require --commands-url, --commands-actor and --commands-run-id
   --allow-skill-scripts         Run skill scripts in the sandbox, for every skill this run holds,
                                 registry and acquired alike. Off unless named.
   --allow-skill-script <spec>   Allow one exact skill script (repeatable: skill:scripts/path,
@@ -733,7 +735,9 @@ Options:
                                 and run_command (GET <url>/commands, POST <url>/command)
   --commands-actor <actor>      The actor run_command runs every command as
   --commands-run-id <id>        The host's id for this run, sent on every command request;
-                                all three --commands-* flags go together
+                                --commands-url, --commands-actor and --commands-run-id go together
+  --commands-relevant <id>      A command relevant to this run, which list_commands shows first
+                                and marks (repeatable; needs --commands-url)
   --fabric-api-url <url>        Deployed Fabric API URL for the fabric-session tools (run_pattern, assign_slug, resolve_piece, call_verb, read_value)
   --fabric-identity <path>      PKCS#8 identity keyfile for the fabric session
   --fabric-space <space>        Target space (name or did:key) for the fabric-session tools;
@@ -1111,17 +1115,30 @@ const parseHandleValueOrigins = (
 };
 
 /**
- * The command endpoint the three `--commands-*` flags name, or `undefined`
- * when none is given. They go together, and the endpoint they name is
+ * The command endpoint `--commands-url`, `--commands-actor` and
+ * `--commands-run-id` name, with the commands `--commands-relevant` names as
+ * relevant to the run, or `undefined` when none is given. The three go
+ * together, the relevant commands need them, and the endpoint they name is
  * checked at parse.
  */
 const commandsConfigOf = (
   url: unknown,
   actor: unknown,
   runId: unknown,
+  relevant: string | readonly string[] | undefined,
 ): HarnessLoomCommandsConfig | undefined => {
+  const named = relevant === undefined
+    ? []
+    : typeof relevant === "string"
+    ? [relevant]
+    : [...relevant];
   const given = [url, actor, runId].filter((value) => value !== undefined);
-  if (given.length === 0) return undefined;
+  if (given.length === 0) {
+    if (named.length > 0) {
+      throw new Error("--commands-relevant needs --commands-url.");
+    }
+    return undefined;
+  }
   if (
     given.length < 3 ||
     typeof url !== "string" || typeof actor !== "string" ||
@@ -1131,7 +1148,12 @@ const commandsConfigOf = (
       "--commands-url, --commands-actor and --commands-run-id go together.",
     );
   }
-  const config = { url, actor, runId };
+  const config = {
+    url,
+    actor,
+    runId,
+    ...(named.length > 0 ? { relevant: named } : {}),
+  };
   validateLoomCommandsConfig(config);
   return config;
 };
@@ -1969,6 +1991,7 @@ export const parseCfHarnessCliArgs = async (
     args["commands-url"],
     args["commands-actor"],
     args["commands-run-id"],
+    args["commands-relevant"] as string | readonly string[] | undefined,
   );
   const inputCells = parseInputCells(
     args["input-cell"] as string | readonly string[] | undefined,

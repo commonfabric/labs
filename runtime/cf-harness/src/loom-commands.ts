@@ -3,12 +3,11 @@
  * endpoint: `GET <url>/commands` lists them and `POST <url>/command` runs
  * one. Every request carries the run id the host gave this run, so the host
  * attributes the call to the job it started, and every command names the
- * actor the host configured. The host decides what runs; each command's own
- * declarations are its limits. Nothing here names a command.
+ * actor the host configured. The host decides what it lists for this caller
+ * and what runs. Nothing here names a command.
  *
  * What this module adds is the reading: a manifest row becomes a
- * `HarnessCallableDescriptor`, rows whose own declarations say an agent may
- * not run them are left out, and a command's answer is checked to be the
+ * `HarnessCallableDescriptor`, and a command's answer is checked to be the
  * JSON object the command layer returns.
  */
 
@@ -20,7 +19,6 @@ import type {
   HarnessCallableEffect,
 } from "./contracts/callable.ts";
 import {
-  HARNESS_COMMAND_CATALOG_LIMIT,
   HARNESS_COMMAND_DESCRIPTION_MAX_LENGTH,
   HARNESS_COMMAND_ID_MAX_LENGTH,
   HARNESS_COMMAND_ID_PATTERN,
@@ -40,6 +38,13 @@ export interface HarnessLoomCommandsConfig {
 
   /** The host's id for the job this run serves, sent on every request. */
   runId: string;
+
+  /**
+   * Ids of the commands the host names as relevant to this run, which
+   * `list_commands` shows first and marks. A hint only: it neither adds a
+   * command to the listing nor takes one away.
+   */
+  relevant?: readonly string[];
 }
 
 /** The header that carries {@link HarnessLoomCommandsConfig.runId}. */
@@ -64,14 +69,8 @@ export interface LoomCommandEntry extends HarnessCallableDescriptor {
 export interface LoomCommandCatalog {
   entries: LoomCommandEntry[];
 
-  /** Rows left out because their declarations say an agent may not run them. */
-  hidden: number;
-
   /** Rows left out because they could not be read as a command. */
   malformed: number;
-
-  /** Rows left out past the catalog limit. */
-  omitted: number;
 }
 
 /** One command to run, its arguments checked by the caller. */
@@ -138,34 +137,13 @@ export const validateLoomCommandsConfig = (
       "Commands require a run id of printable, unspaced ASCII characters.",
     );
   }
-};
-
-/**
- * Whether a manifest row's own declarations say an agent may not run it. A
- * run's command reaches the command layer as an `agent:` actor with origin
- * `session`, so a row is left out when it is a pattern's verb (an
- * agent calls a piece's verbs through `call_verb` on the piece it holds), a
- * developer command, one whose actors are all people, one that refuses or
- * does not require the `session` origin, or one that runs only over a
- * person's consent grant. The host decides what may run; this decides only
- * what is shown, and a row the host declares nothing about is
- * shown.
- */
-export const isHiddenFromAgents = (row: Record<string, unknown>): boolean => {
-  const strings = (key: string): string[] =>
-    Array.isArray(row[key])
-      ? (row[key] as unknown[]).filter((entry) => typeof entry === "string")
-      : [];
-  const actors = strings("actors");
-  const required = strings("origins_required");
-  return row.origin === "pattern" ||
-    row.developer === true ||
-    (actors.length > 0 &&
-      !actors.some((actor) => actor.startsWith("agent:"))) ||
-    strings("origins_refused").includes("session") ||
-    (required.length > 0 && !required.includes("session")) ||
-    (row.grant !== undefined && row.grant !== null && row.grant !== false &&
-      row.grant !== "");
+  if (
+    config.relevant !== undefined &&
+    (!Array.isArray(config.relevant) ||
+      !config.relevant.every((id) => typeof id === "string"))
+  ) {
+    throw new Error("Relevant commands must be a list of command ids.");
+  }
 };
 
 /** Helper for projection, which keeps a nonempty string cut to `max`. */
@@ -236,30 +214,24 @@ export const loomCommandEntryOfRow = (
 };
 
 /**
- * Reads a manifest's command rows as the catalog an agent sees: hidden rows
- * and unreadable rows left out and counted, and at most the contract's
- * catalog limit of entries kept, in the manifest's order.
+ * Reads a manifest's command rows as the catalog an agent sees: every row
+ * the host listed, in its order, but those that cannot be read as a command,
+ * which are left out and counted.
  */
 export const loomCommandCatalogOf = (
   commands: readonly unknown[],
 ): LoomCommandCatalog => {
   const entries: LoomCommandEntry[] = [];
-  let hidden = 0;
   let malformed = 0;
-  let omitted = 0;
   for (const row of commands) {
     const entry = isRecord(row) ? loomCommandEntryOfRow(row) : undefined;
     if (entry === undefined) {
       malformed += 1;
-    } else if (isHiddenFromAgents(row as Record<string, unknown>)) {
-      hidden += 1;
-    } else if (entries.length < HARNESS_COMMAND_CATALOG_LIMIT) {
-      entries.push(entry);
     } else {
-      omitted += 1;
+      entries.push(entry);
     }
   }
-  return { entries, hidden, malformed, omitted };
+  return { entries, malformed };
 };
 
 /** Most names a refused unknown command is offered in its place. */

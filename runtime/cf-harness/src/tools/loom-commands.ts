@@ -110,8 +110,9 @@ export type ListCommandsErrorCode =
 
 /**
  * One command as `list_commands` shows it: its signature line, which carries
- * its parameters, output names, effect, and target, and its title. A command
- * named in `detail` also carries its full argument schema.
+ * its parameters, output names, effect, and target, its title, and whether
+ * the host names it as relevant to this run. A command named in `detail`
+ * also carries its full argument schema.
  */
 export interface LoomCommandListing {
   name: string;
@@ -120,6 +121,9 @@ export interface LoomCommandListing {
   signature: string;
   title?: string;
   description?: string;
+
+  /** The host names the command as relevant to this run. */
+  relevant?: true;
 
   /** The full argument schema; only for a command named in `detail`. */
   inputSchema?: LoomCommandEntry["inputSchema"];
@@ -136,13 +140,10 @@ export type ListCommandsOutput =
       | Omit<LoomCommandListing, "inputSchema" | "description">
     )[];
 
-    /** Rows the host listed whose declarations say an agent may not run them. */
-    hidden: number;
-
     /** Entries shown without their schema and description, past the bound. */
     compacted?: number;
 
-    /** Rows left out because they could not be read, or past the limit. */
+    /** Rows left out because they could not be read. */
     omitted?: number;
   }
   | {
@@ -293,12 +294,13 @@ const catalogSourceOf = (
 
 /**
  * Helper for `list_commands`, which shows one entry as a listing: its
- * signature and title always, its description unless compacted, and its
- * schema only when `whole`.
+ * signature and title always, its `relevant` mark when the host names it,
+ * its description unless compacted, and its schema only when `whole`.
  */
 const listingOf = (
   entry: LoomCommandEntry,
   whole: boolean,
+  relevant: boolean,
 ): LoomCommandListing => ({
   name: entry.name,
   signature: renderCommandSignature(entry),
@@ -306,6 +308,7 @@ const listingOf = (
   ...(entry.description !== undefined
     ? { description: entry.description }
     : {}),
+  ...(relevant ? { relevant: true } : {}),
   ...(whole ? { inputSchema: entry.inputSchema } : {}),
 });
 
@@ -325,7 +328,7 @@ export const listCommandsTool: HarnessToolDefinition<
     title: "List Commands",
     effectClass: "read",
     description:
-      `List the commands this run's host lets it run on the person's data, each as a signature line \`name(param: type, optional?: type = default) -> {output fields}  [effect, target]\` with its title; name commands in detail for their full description and JSON schema.`,
+      `List the commands this run's host lets it run on the person's data, each as a signature line \`name(param: type, optional?: type = default) -> {output fields}  [effect, target]\` with its title; commands marked relevant to this run come first; name commands in detail for their full description and JSON schema.`,
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -367,18 +370,26 @@ export const listCommandsTool: HarnessToolDefinition<
         ? input.detail.filter((name) => typeof name === "string")
         : [],
     );
+    // The commands the host names as relevant lead, so a listing past the
+    // model bound keeps them whole.
+    const relevant = new Set(context.loomCommands?.relevant ?? []);
+    const ordered = [
+      ...catalog.entries.filter((entry) => relevant.has(entry.name)),
+      ...catalog.entries.filter((entry) => !relevant.has(entry.name)),
+    ];
     const bounded = boundCatalogForModel(
-      catalog.entries.map((entry) => listingOf(entry, detail.has(entry.name))),
+      ordered.map((entry) =>
+        listingOf(entry, detail.has(entry.name), relevant.has(entry.name))
+      ),
       (entry) => entry.name,
       [...detail],
     );
-    const omitted = catalog.malformed + catalog.omitted;
+    const omitted = catalog.malformed;
     return {
       outputId,
       status: "ok",
       notice: LOOM_COMMANDS_EFFECT_NOTICE,
       entries: bounded.entries,
-      hidden: catalog.hidden,
       ...(bounded.compacted !== undefined
         ? { compacted: bounded.compacted }
         : {}),

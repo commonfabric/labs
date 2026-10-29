@@ -7959,6 +7959,38 @@ Deno.test("parseCfHarnessCliArgs reads the host command endpoint from its three 
   assertEquals(absent.loomCommands, undefined);
 });
 
+Deno.test("parseCfHarnessCliArgs reads each repeated --commands-relevant, and refuses one without an endpoint", async () => {
+  const endpoint = [
+    "--commands-url",
+    "http://127.0.0.1:8080",
+    "--commands-actor",
+    "agent:agent-runner",
+    "--commands-run-id",
+    "job-1",
+  ];
+  const relevant = [
+    "--commands-relevant",
+    "search.run",
+    "--commands-relevant",
+    "person.find",
+  ];
+  const parsed = await parseCfHarnessCliArgs(
+    ["--prompt", "hi", ...endpoint, ...relevant],
+    { cwd: "/tmp/project", env: {} },
+  );
+  if ("help" in parsed) throw new Error("expected config result");
+  assertEquals(parsed.loomCommands?.relevant, ["search.run", "person.find"]);
+  await assertRejects(
+    () =>
+      parseCfHarnessCliArgs(
+        ["--prompt", "hi", ...relevant],
+        { cwd: "/tmp/project", env: {} },
+      ),
+    Error,
+    "--commands-relevant needs --commands-url.",
+  );
+});
+
 Deno.test("parseCfHarnessCliArgs rejects the command flags given apart or naming an invalid endpoint", async () => {
   const flags = {
     url: ["--commands-url", "http://127.0.0.1:8080"],

@@ -13,7 +13,6 @@ import {
 import {
   createLoomCommandCatalogSource,
   type HarnessLoomCommandsConfig,
-  isHiddenFromAgents,
   listLoomCommands,
   LOOM_COMMAND_OUTPUTS_LIMIT,
   loomCommandCatalogOf,
@@ -88,56 +87,22 @@ describe("loom-commands", () => {
       ).toThrow("actor");
     });
 
+    it("throws for relevant commands that are not a list of ids", () => {
+      for (const relevant of ["search.run", [7]]) {
+        expect(() =>
+          validateLoomCommandsConfig({
+            ...configFor(UNREACHABLE),
+            relevant: relevant as unknown as string[],
+          })
+        ).toThrow("Relevant commands");
+      }
+    });
+
     it("throws for an empty run id, or one a header cannot carry", () => {
       for (const runId of ["", "job 1", "job\n1", "jöb"]) {
         expect(() =>
           validateLoomCommandsConfig({ ...configFor(UNREACHABLE), runId })
         ).toThrow("run id");
-      }
-    });
-  });
-
-  describe("isHiddenFromAgents()", () => {
-    it("returns `false` for a row that declares nothing about who may run it", () => {
-      expect(isHiddenFromAgents({ id: "loom.compose" })).toBe(false);
-    });
-
-    it("returns `true` for a pattern's verb and a developer command", () => {
-      expect(isHiddenFromAgents({ id: "pv.abc", origin: "pattern" })).toBe(
-        true,
-      );
-      expect(isHiddenFromAgents({ id: "dev.x", developer: true })).toBe(true);
-      expect(isHiddenFromAgents({ id: "x", origin: "builtin" })).toBe(false);
-    });
-
-    it("returns `true` when every declared actor is a person, and `false` when one is an agent", () => {
-      expect(isHiddenFromAgents({ id: "x", actors: ["user"] })).toBe(true);
-      expect(isHiddenFromAgents({ id: "x", actors: ["user", "agent:ask"] }))
-        .toBe(false);
-      expect(isHiddenFromAgents({ id: "x", actors: [] })).toBe(false);
-      expect(isHiddenFromAgents({ id: "x", actors: "user" })).toBe(false);
-    });
-
-    it("returns `true` for a row that refuses the `session` origin", () => {
-      expect(
-        isHiddenFromAgents({ id: "x", origins_refused: ["session"] }),
-      ).toBe(true);
-      expect(isHiddenFromAgents({ id: "x", origins_refused: ["script"] }))
-        .toBe(false);
-    });
-
-    it("returns `true` for a row requiring an origin other than `session`, and `false` for one requiring it", () => {
-      expect(isHiddenFromAgents({ id: "x", origins_required: ["script"] }))
-        .toBe(true);
-      expect(isHiddenFromAgents({ id: "x", origins_required: ["session"] }))
-        .toBe(false);
-    });
-
-    it("returns `true` for a row that runs only over a consent grant", () => {
-      expect(isHiddenFromAgents({ id: "x", grant: "connector" })).toBe(true);
-      expect(isHiddenFromAgents({ id: "x", grant: true })).toBe(true);
-      for (const grant of [null, false, ""]) {
-        expect(isHiddenFromAgents({ id: "x", grant })).toBe(false);
       }
     });
   });
@@ -278,29 +243,30 @@ describe("loom-commands", () => {
   });
 
   describe("loomCommandCatalogOf()", () => {
-    it("keeps visible rows in order and counts hidden and unreadable ones", () => {
+    it("keeps every row the host listed, in order, whatever it declares, and counts unreadable ones", () => {
       const catalog = loomCommandCatalogOf([
         { id: "loom.compose" },
-        { id: "share.invite", actors: ["user"] },
+        { id: "share.invite", actors: ["user"], origins_refused: ["session"] },
         "not a row",
         { id: "-bad" },
-        { id: "loom.inspect" },
+        { id: "pv.abc", origin: "pattern" },
       ]);
       expect(catalog.entries.map((entry) => entry.name)).toEqual([
         "loom.compose",
-        "loom.inspect",
+        "share.invite",
+        "pv.abc",
       ]);
-      expect(catalog).toMatchObject({ hidden: 1, malformed: 2, omitted: 0 });
+      expect(catalog).toEqual(expect.objectContaining({ malformed: 2 }));
     });
 
-    it("keeps at most the contract's catalog limit and counts the rest", () => {
+    it("keeps every row past the Weaver's client-command catalog limit", () => {
       const rows = Array.from(
-        { length: HARNESS_COMMAND_CATALOG_LIMIT + 2 },
+        { length: HARNESS_COMMAND_CATALOG_LIMIT + 70 },
         (_, index) => ({ id: `cmd.n${index}` }),
       );
-      const catalog = loomCommandCatalogOf(rows);
-      expect(catalog.entries).toHaveLength(HARNESS_COMMAND_CATALOG_LIMIT);
-      expect(catalog.omitted).toBe(2);
+      expect(loomCommandCatalogOf(rows).entries).toHaveLength(
+        HARNESS_COMMAND_CATALOG_LIMIT + 70,
+      );
     });
   });
 
