@@ -2455,7 +2455,7 @@ adjustments:
   name, a rest parameter, a function expression reading `arguments`, or an
   array parameter whose receiver resolves to no ref — each element is read
   whole (`ARRAY_CALLBACK_PARAMETERS`;
-  `packages/patterns/regression/array-callback-reads.test.tsx`). The left
+  `patterns/dev/regression/array-callback-reads.test.tsx`). The left
   operand of a `??`
   / `||` fallback resolves to a single source ref, which reaches a root through
   a member/call spine and consumes nothing else; an operand whose spine passes
@@ -2482,7 +2482,7 @@ adjustments:
   returning `[...rows].sort(by)` narrows `rows` to what `by` reads, while
   `const sorted = [...rows].sort(by); sorted.map(...)` keeps it whole
   (`test/policy/capability-analysis-value-refs.test.ts`;
-  `packages/patterns/regression/spread-copy-read.test.tsx`). The left operand
+  `patterns/dev/regression/spread-copy-read.test.tsx`). The left operand
   of `??` and `||` is the expression's value
   whenever it is there, so it leaves when the expression does. A helper's
   summary carries what the helper let leave whole, and the caller charges it to
@@ -2792,7 +2792,7 @@ computation's input schema:
   among them, are read as values (`mayHoldElementsWithoutIdentity` in
   `policy/capability-analysis.ts`;
   `test/policy/capability-analysis-value-refs.test.ts`;
-  `packages/patterns/regression/primitive-array-copy-write.test.tsx`).
+  `patterns/dev/regression/primitive-array-copy-write.test.tsx`).
 - Scheduler completeness is separate from path retention: identity-only roots
   are passthrough, and `hasCompleteSchedulerScopeSummary` rejects passthrough or
   wildcard summaries. Thus identity/comparable tracking can preserve a

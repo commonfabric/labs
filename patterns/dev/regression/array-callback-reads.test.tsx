@@ -15,7 +15,7 @@
  * conditional's other branch is a second array or an array literal of
  * objects.
  *
- * Run: deno task cf test packages/patterns/regression/array-callback-reads.test.tsx
+ * Run: deno task cf test patterns/dev/regression/array-callback-reads.test.tsx
  */
 import { assert, lift, pattern, TESTS, Writable } from "commonfabric";
 

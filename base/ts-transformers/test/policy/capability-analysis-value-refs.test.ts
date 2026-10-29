@@ -497,7 +497,7 @@ export default lift(({ rows }: { rows: Row[] }): string => {
     it("narrows a builder's returned sorted copy to the fields its comparator reads", async () => {
       // A builder's result is handed on by reference, so whoever reads the
       // copy's elements reads the stored rows whole
-      // (`packages/patterns/kept-element-references.test.tsx`).
+      // (`patterns/dev/checks/kept-element-references.test.tsx`).
 
       const fields = await liftRowFields(`
 import { lift } from "commonfabric";

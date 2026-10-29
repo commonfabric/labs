@@ -9,7 +9,7 @@
  * every slot ends up naming the newest value. An array whose element type
  * admits `null`, or mixes numbers with objects, holds such values too.
  *
- * Run: deno task cf test packages/patterns/regression/primitive-array-copy-write.test.tsx
+ * Run: deno task cf test patterns/dev/regression/primitive-array-copy-write.test.tsx
  */
 import {
   action,

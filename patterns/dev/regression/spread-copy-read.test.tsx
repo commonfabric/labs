@@ -9,7 +9,7 @@
  * the builder reads that member as `undefined`. Each case reads `name` only
  * through the copy, after something else has read `id`.
  *
- * Run: deno task cf test packages/patterns/regression/spread-copy-read.test.tsx
+ * Run: deno task cf test patterns/dev/regression/spread-copy-read.test.tsx
  */
 import { assert, lift, pattern, TESTS, Writable } from "commonfabric";
 
