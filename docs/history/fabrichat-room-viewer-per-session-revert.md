@@ -25,7 +25,7 @@ its counterpart's own control" with server execution off, reading the room's
 `canAdd` as `undefined` where it expected `false`.
 
 Run locally with server execution on, `fabrichat-join` failed the same way
-once in five runs at #9360's merge, and passed five of five at its parent
+once in six runs at #9360's merge, and passed five of five at its parent
 (RUN). Why the owner's add control sometimes never showed was not found. With
 `main` failing in two lanes for a reason not understood, the change was
 reverted rather than fixed forward.
