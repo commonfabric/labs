@@ -2630,9 +2630,15 @@ type OmitSecTwo<T> = Omit<{ x: T; z: 1 } | { x: Confidential<string, readonly ["
               .toThrow("A scope wrapper cannot be a member of a union.");
           });
 
+          it("refuses `PickScoped<any>`, whose `x` is written in `T` beside a scope wrapper, and reads as `any`", async () => {
+            // `any` may be a wrapper's, which the result side cannot read.
+
+            await expect(schemasOf(DECLARATIONS, "PickScoped<any>")).rejects
+              .toThrow("reads as `any` here");
+          });
+
           for (
             const [a, x] of [
-              ["PickScoped<any>", true],
               ["PickSec<number>", {
                 anyOf: [
                   { type: "number" },
@@ -2672,6 +2678,102 @@ type OmitSecTwo<T> = Omit<{ x: T; z: 1 } | { x: Confidential<string, readonly ["
             }
           });
         });
+
+        describe("over an intersection whose parts declare one property", () => {
+          // The property has a declaration from each part and none of its
+          // own, so each side reads it as all of them at once.
+
+          const DECLARATIONS = `import type { Integrity } from "commonfabric";
+type SecretAny = Confidential<any, readonly ["s"]>;
+type IntAny = Integrity<any, readonly ["j"]>;
+type PickAnySecPart<T> = Pick<{ x: T } & { x: SecretAny; y: 1 }, "x">;`;
+
+          for (
+            const [a, ifc] of [
+              ['Pick<{ x: SecretAny } & { x: SecretAny; y: 1 }, "x">', {
+                confidentiality: ["s"],
+              }],
+              ['Omit<{ x: SecretAny } & { x: SecretAny; y: 1 }, "y">', {
+                confidentiality: ["s"],
+              }],
+              ['Pick<{ x: IntAny } & { x: SecretAny; y: 1 }, "x">', {
+                integrity: ["j"],
+                confidentiality: ["s"],
+              }],
+              ["PickAnySecPart<number>", { confidentiality: ["s"] }],
+            ] as const
+          ) {
+            it(`reads \`x\` of \`${a}\` as every declaration of it, on both sides`, async () => {
+              const expected = {
+                type: "object",
+                properties: { x: { ifc } },
+                required: ["x"],
+              };
+              expect(await schemasOf(DECLARATIONS, a)).toEqual({
+                input: expected,
+                output: expected,
+              });
+            });
+          }
+
+          it("refuses `PickAnySecPart<Sec<string>>`, whose part written in `T` reads as a labeled type beside `SecretAny`", async () => {
+            await expect(
+              schemasOf(DECLARATIONS, "PickAnySecPart<Sec<string>>"),
+            ).rejects.toThrow(
+              "is declared by several members of a union or an intersection",
+            );
+          });
+        });
+      });
+    });
+
+    describe("a user's mapped type giving a member a value of its own", () => {
+      // The member keeps the declaration of the one it maps, which says what
+      // that one is, not what the mapping makes of it, so each side reads it
+      // by its type.
+
+      const schemasOf = async (a: string) => {
+        const files = await transformFiles({
+          "/main.tsx": `/// <cts-enable />
+import { Confidential, pattern } from "commonfabric";
+type Sec<T> = Confidential<T, readonly ["a"]>;
+type SecretAny = Confidential<any, readonly ["s"]>;
+type Boxed<T> = { [P in keyof T]: { v: T[P] } };
+export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
+        }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+        const { input, output } = patternSchemas(
+          parseModule(files["/main.tsx"]!),
+        );
+        return {
+          input: (input.properties as Schema).a,
+          output: (output.properties as Schema).a,
+        };
+      };
+
+      it("reads `x` of `Boxed<{ x: Sec<string> }>` as the object the mapping makes, on both sides", async () => {
+        const expected = {
+          type: "object",
+          properties: {
+            x: {
+              type: "object",
+              properties: {
+                v: { type: "string", ifc: { confidentiality: ["a"] } },
+              },
+              required: ["v"],
+            },
+          },
+          required: ["x"],
+        };
+        expect(await schemasOf("Boxed<{ x: Sec<string> }>")).toEqual({
+          input: expected,
+          output: expected,
+        });
+      });
+
+      it("refuses `Boxed<{ x: SecretAny }>`, whose `x` is declared as `SecretAny`, which the value the mapping gives it does not keep", async () => {
+        await expect(schemasOf("Boxed<{ x: SecretAny }>")).rejects.toThrow(
+          "A mapped type gives `x` a value of its own",
+        );
       });
     });
 
