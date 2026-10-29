@@ -61,6 +61,33 @@ describe("scope-placement", () => {
       }], {})).toBeUndefined();
     });
 
+    it("returns `undefined` for the scope a cell's own slot is read in", () => {
+      // The outermost handle's cap, or the scope beside a stack no handle of
+      // which declares one, is the whole value's.
+
+      expect(memberScopeWithin([
+        { type: "string", asCell: [{ kind: "cell", scope: "user" }, "cell"] },
+        { type: "string", asCell: ["cell", "cell"], scope: "user" },
+      ], {})).toBeUndefined();
+    });
+
+    it("returns a scope inside a cell the value is, with no member", () => {
+      expect(memberScopeWithin([
+        { type: "string", asCell: ["cell", { kind: "cell", scope: "user" }] },
+      ], {})).toEqual({ scope: "user", member: undefined });
+    });
+
+    it("returns the scope beside a cell whose outermost handle declares its own, with no member", () => {
+      // The handle's cap is the whole value's, and the scope beside it that
+      // of what the cell holds.
+
+      expect(memberScopeWithin([{
+        type: "string",
+        asCell: [{ kind: "cell", scope: "user" }],
+        scope: "session",
+      }], {})).toEqual({ scope: "session", member: undefined });
+    });
+
     it("returns a nested member's scope beside the whole value's, with its path", () => {
       expect(memberScopeWithin([{
         properties: {

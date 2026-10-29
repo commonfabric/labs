@@ -1183,6 +1183,16 @@ describe("SchemaGenerator", () => {
         propertyA({ scope: "user" }),
       ],
       [
+        "keeps the cap of a cell whose inner handle declares none beside `any` as the value's scope",
+        `type M1 = { a: PerUser<Cell<Cell<string>>> }; type M2 = { a: any };`,
+        propertyA({ scope: "user" }),
+      ],
+      [
+        "keeps the scope beside a cell stack no handle of which declares one beside `any` as the value's scope",
+        `type M1 = { a: Cell<Cell<PerUser<string>>> }; type M2 = { a: any };`,
+        propertyA({ scope: "user" }),
+      ],
+      [
         "returns the labeled `never` a declaration states beside a primitive",
         `
           type M1 = { a: string };
@@ -1757,7 +1767,7 @@ describe("SchemaGenerator", () => {
         type M2 = { a: any };
       `);
       const message = "A value intersected with `any` accepts any value and " +
-        "describes none of the members of what it is intersected with, so " +
+        "describes nothing inside what it is intersected with, so " +
         "it cannot keep the scope `user` declared on `x`";
 
       expect(byType).toThrow(message);
@@ -1791,12 +1801,58 @@ describe("SchemaGenerator", () => {
         "Node",
       );
       const message = "A value intersected with `any` accepts any value and " +
-        "describes none of the members of what it is intersected with, so " +
+        "describes nothing inside what it is intersected with, so " +
         "it cannot keep the scope `user` declared on `x`";
 
       expect(byType).toThrow(message);
       expect(byNode).toThrow(message);
     });
+
+    for (
+      const [declared, declarations, scope] of [
+        [
+          "an inner handle of the value",
+          `type M1 = { a: Cell<PerUser<Cell<string>>> }; type M2 = { a: any };`,
+          "user",
+        ],
+        [
+          "an inner handle of an arm of the value",
+          `
+            type M1 = { a: Cell<PerUser<Cell<string>>> | null };
+            type M2 = { a: any };
+          `,
+          "user",
+        ],
+        [
+          "an inner handle of the value beside the scope it is read in",
+          `
+            type M1 = { a: Cell<PerUser<Cell<PerSession<string>>>> };
+            type M2 = { a: any };
+          `,
+          "user",
+        ],
+        [
+          "what a cell whose handle declares its own holds",
+          `
+            type M1 = { a: PerUser<Cell<PerSession<string>>> };
+            type M2 = { a: any };
+          `,
+          "session",
+        ],
+      ] as const
+    ) {
+      it(`throws for a scope declared on ${declared} beside a declaration typed as \`any\``, async () => {
+        // The value keeps the scope its own slot is read in and describes no
+        // cell, so the write path would never see a scope inside one.
+
+        const { byType, byNode } = await schemasOfBothPaths(declarations);
+        const message = `cannot keep the scope \`${scope}\` declared inside ` +
+          "a cell there";
+
+        expect(byType).toThrow(message);
+        expect(byNode).toThrow(message);
+      });
+    }
 
     it("labels every arm of a labeled union beside another declaration", async () => {
       // The union's label is on whatever data its payload may hold, so it

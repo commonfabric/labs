@@ -249,9 +249,24 @@ describe("intersection-property-schema", () => {
         { a: { x: PerUser<string> } } & { a: any }
       >();
     `)).rejects.toThrow(
-      "A value intersected with `any` accepts any value and describes none " +
-        "of the members of what it is intersected with, so it cannot keep " +
-        "the scope `user` declared on `x`",
+      "A value intersected with `any` accepts any value and describes " +
+        "nothing inside what it is intersected with, so it cannot keep the " +
+        "scope `user` declared on `x`",
+    );
+  });
+
+  it("throws for a scope on an inner handle of a cell beside a declaration typed as `any`", async () => {
+    await expect(schemasOf(`
+      import { toSchema } from "commonfabric";
+      import type { Cell, PerUser } from "commonfabric";
+      export const schema = toSchema<
+        { a: Cell<PerUser<Cell<string>>> } & { a: any }
+      >();
+    `)).rejects.toThrow(
+      "cannot keep the scope `user` declared inside a cell there. That data " +
+        "would be stored in the scope of the whole value instead, which " +
+        "without a scope of its own is one copy shared by everyone in the " +
+        "space. Declare that value without `any`.",
     );
   });
 });

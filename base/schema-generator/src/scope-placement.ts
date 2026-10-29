@@ -210,12 +210,16 @@ export const assertScopeDeclarationsAreReachable = (
 const LOCAL_DEFINITION_PREFIX = "#/$defs/";
 
 /**
- * A scope declared on a member of a value, and that member's path from the
- * value: property names, after a dot or, where a name is no identifier,
- * quoted in brackets (`[""]`), `[number]` for an element and `[string]` for
- * the value under any other key.
+ * A scope declared inside a value, and where: on a member, at that member's
+ * path from the value (property names, after a dot or, where a name is no
+ * identifier, quoted in brackets (`[""]`), `[number]` for an element and
+ * `[string]` for the value under any other key), or, where `member` is
+ * `undefined`, inside a cell the value itself is (`scopeInsideCellAt()`).
  */
-export type MemberScope = { readonly scope: string; readonly member: string };
+export type MemberScope = {
+  readonly scope: string;
+  readonly member: string | undefined;
+};
 
 /** A property name a path can write after a dot, as `a.b`. */
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
@@ -258,11 +262,36 @@ const scopeDeclaredAt = (schema: MutableJSONSchemaObj): string | undefined => {
 };
 
 /**
- * The first scope a member of `schemas` declares, anywhere in their values
- * and through the definitions in `definitions` their local references reach
- * (`scopeDeclaredAt()`), or `undefined` where none does. A schema's own scope,
- * at its top level or on an arm of it, is the whole value's and not a
- * member's. A definition `definitions` does not hold yet is passed over.
+ * The first scope `schema` declares past the one its own slot is read in
+ * (`topLevelScope()`), or `undefined` where it declares none: on a handle
+ * inside the outermost one of its cell stack (`asCell`), or beside a stack
+ * whose outermost handle declares its own, where it is the scope of what the
+ * cell holds.
+ */
+const scopeInsideCellAt = (
+  schema: MutableJSONSchemaObj,
+): string | undefined => {
+  const [outermost, ...inner] = Array.isArray(schema.asCell)
+    ? schema.asCell
+    : [];
+  for (const entry of inner) {
+    if (isObjectOrArray(entry) && typeof entry.scope === "string") {
+      return entry.scope;
+    }
+  }
+  return isObjectOrArray(outermost) && typeof outermost.scope === "string" &&
+      typeof schema.scope === "string"
+    ? schema.scope
+    : undefined;
+};
+
+/**
+ * The first scope declared inside `schemas`, on a member anywhere in their
+ * values (`scopeDeclaredAt()`) or inside a cell one of them is
+ * (`scopeInsideCellAt()`), through the definitions in `definitions` their
+ * local references reach, or `undefined` where none is. The scope a schema's
+ * own slot is read in, at its top level or on an arm of it, is the whole
+ * value's. A definition `definitions` does not hold yet is passed over.
  */
 export const memberScopeWithin = (
   schemas: readonly MutableJSONSchema[],
@@ -278,8 +307,10 @@ export const memberScopeWithin = (
     const visited = member === undefined ? visitedAtValue : visitedAsMember;
     if (!isObjectOrArray(node) || visited.has(node)) return undefined;
     visited.add(node);
-    const scope = member === undefined ? undefined : scopeDeclaredAt(node);
-    if (scope !== undefined) return { scope, member: member! };
+    const scope = member === undefined
+      ? scopeInsideCellAt(node)
+      : scopeDeclaredAt(node);
+    if (scope !== undefined) return { scope, member };
     let found: MemberScope | undefined;
     if (
       typeof node.$ref === "string" &&
@@ -306,12 +337,12 @@ export const memberScopeWithin = (
 };
 
 /**
- * The error raised for a scope a member declares inside a value that may hold
- * its constituents' data anywhere and describes none of their members: one
- * an intersection whose constituents cannot be merged falls back to
+ * The error raised for a scope declared inside a value that may hold its
+ * constituents' data anywhere and describes nothing inside them: one an
+ * intersection whose constituents cannot be merged falls back to
  * (`"unsupported"`), or one intersected with `any` (`"any"`). The write path
- * never sees the member's scope there, and would store its data with the
- * whole value's.
+ * never sees that scope there, and would store its data with the whole
+ * value's. A whole value's own scope is the alternative only to a member's.
  */
 export const memberScopeDroppedError = (
   { scope, member }: MemberScope,
@@ -320,21 +351,25 @@ export const memberScopeDroppedError = (
   new Error(
     (from === "any"
       ? `A value intersected with \`any\` accepts any value and describes ` +
-        `none of the members of what it is intersected with`
+        `nothing inside what it is intersected with`
       : `An intersection whose constituents cannot be merged falls back to ` +
-        `a schema that accepts any object and describes none of its ` +
-        `members`) +
-      `, so it cannot keep the scope \`${scope}\` declared on ` +
-      `\`${member}\`. That data would be stored in the scope of the whole ` +
-      `value instead, which without a scope of its own is one copy shared ` +
-      `by everyone in the space. ` +
+        `a schema that accepts any object and describes nothing inside ` +
+        `them`) +
+      `, so it cannot keep the scope \`${scope}\` declared ` +
+      (member === undefined ? `inside a cell there` : `on \`${member}\``) +
+      `. That data would be stored in the scope of the whole value ` +
+      `instead, which without a scope of its own is one copy shared by ` +
+      `everyone in the space. ` +
       (from === "any"
-        ? `Declare that value without \`any\`, or scope the whole value ` +
-          `(\`PerUser<{ x: string }>\` rather than ` +
-          `\`{ x: PerUser<string> }\`).`
+        ? `Declare that value without \`any\`` +
+          (member === undefined ? "" : `, or scope the whole value ` +
+            `(\`PerUser<{ x: string }>\` rather than ` +
+            `\`{ x: PerUser<string> }\`)`)
         : `Declare the intersection with constituents that merge, as ` +
-          `\`{ x: PerUser<string> } & { items: string[] }\` does, or ` +
-          `scope the whole value (\`PerUser<{ x: string } & string[]>\`).`),
+          `\`{ x: PerUser<string> } & { items: string[] }\` does` +
+          (member === undefined ? "" : `, or scope the whole value ` +
+            `(\`PerUser<{ x: string } & string[]>\`)`)) +
+      ".",
   );
 
 /**
