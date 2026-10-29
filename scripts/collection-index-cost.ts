@@ -3,11 +3,11 @@ import { Identity } from "@commonfabric/identity";
 import { utf8Compare } from "@commonfabric/utils/utf8";
 import { expect } from "@std/expect";
 
-import { listElementKeys } from "../packages/runner/src/builtins/list-element-keys.ts";
-import type { Cell } from "../packages/runner/src/cell.ts";
-import { Runtime } from "../packages/runner/src/runtime.ts";
-import { EmulatedStorageManager } from "../packages/runner/src/storage/v2-emulate.ts";
-import type { RuntimeTelemetryEvent } from "../packages/runner/src/telemetry.ts";
+import { listElementKeys } from "../runtime/runner/src/builtins/list-element-keys.ts";
+import type { Cell } from "../runtime/runner/src/cell.ts";
+import { Runtime } from "../runtime/runner/src/runtime.ts";
+import { EmulatedStorageManager } from "../runtime/runner/src/storage/v2-emulate.ts";
+import type { RuntimeTelemetryEvent } from "../runtime/runner/src/telemetry.ts";
 
 interface Row {
   label: string;

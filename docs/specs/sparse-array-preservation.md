@@ -105,29 +105,30 @@ Read path:   storage → traverseDAG → normalizeAndDiff → builtins (map, etc
 These layers handle sparse arrays correctly and are less likely to regress
 because their sparse support was part of the original design:
 
-- **`packages/data-model/src/convertible-js.ts`** —
+- **`base/data-model/src/convertible-js.ts`** —
   `shallowFabricFromConvertibleJsValue` and `fabricFromConvertibleJsValue` use
   `i in arr` checks. An accepted array that needs a copy goes through
   `cloneHelper()`, which rebuilds it with `new Array(length)` and copies only
   the indices that are present; one that is already a valid deep-frozen
   `FabricValue` crosses by identity, holes and all.
-- **`packages/data-model/src/codec-json/JsonCodecEngine.ts`** — Encodes a run of
-  holes as a single hole-tagged count; decoding rebuilds them as true holes.
-- **`packages/data-model/src/value-hash/ValueHasher.ts`** — Feeds holes to the hash
+- **`base/data-model/src/codec-json/JsonCodecEngine.ts`** —
+  Encodes a run of holes as a single hole-tagged count; decoding rebuilds them
+  as true holes.
+- **`base/data-model/src/value-hash/ValueHasher.ts`** — Feeds holes to the hash
   directly, coalescing each run into one hole entry.
 
-### Value validation (`packages/data-model/src/types/validation.ts`)
+### Value validation (`base/data-model/src/types/validation.ts`)
 
 `isValidFabricValueLayer()` and `isValidFabricValue()` accept sparse arrays —
 holes are valid fabric structure. `isValidFabricValue()` uses `for` + `i in`
 because it needs early return, skipping holes rather than validating them as
 values.
 
-### v2-transaction write path (`packages/runner/src/storage/v2-transaction.ts`)
+### v2-transaction write path (`runtime/runner/src/storage/v2-transaction.ts`)
 
 The hot write path plans each write with `planMutablePathWrite()` and
 carries it out with the plan's `apply()`, which calls `cloneForMutation`
-(in `packages/data-model/src/value-clone.ts`) to shallow-thaw the
+(in `base/data-model/src/value-clone.ts`) to shallow-thaw the
 spine and then mutates the leaf parent in place. `cloneForMutation`'s
 shallow-thaw step uses `cloneIfNecessary({ frozen: false, deep: false })`
 on each spine container, which for arrays preserves sparseness: it
@@ -151,7 +152,7 @@ The leaf write itself is one of:
   reaches the leaf: `planMutablePathWrite()` refuses it with an
   `InvalidArrayLengthError` before the write mutates anything.
 
-### Cell write path (`packages/runner/src/data-updating.ts`)
+### Cell write path (`runtime/runner/src/data-updating.ts`)
 
 Objects in arrays are anchored into entity documents inside
 `normalizeAndDiff()`'s array branch, driven by the writer's anchor id source
@@ -163,7 +164,7 @@ only for present object elements.
 The cell `push` method concatenates arrays using `forEach` on the original
 (sparse) array, then a `for` loop for the appended (dense) values.
 
-### Cell read path (`packages/runner/src/traverse.ts`)
+### Cell read path (`runtime/runner/src/traverse.ts`)
 
 `traverseDAG` reconstructs arrays from storage. It uses `forEach` on
 `doc.value`, assigning populated elements by index into `new Array(len)`. The
@@ -175,7 +176,7 @@ because it has early `return undefined` exits (broken redirects, schema
 mismatches). It pre-allocates with `new Array(len)` and uses indexed assignment
 instead of `push`.
 
-### Diff engine (`packages/runner/src/data-updating.ts`)
+### Diff engine (`runtime/runner/src/data-updating.ts`)
 
 `normalizeAndDiff` compares the new array against the current array to produce a
 changeset. It uses `for` + `i in` (not `forEach`) because it needs to detect
@@ -201,7 +202,7 @@ far a grow reaches; the commit that follows still does.
 The `hasPath` function uses `index in value` (not `value[index] !== undefined`)
 to correctly report that a path through a hole does not exist.
 
-### Map builtin (`packages/runner/src/builtins/map.ts`)
+### Map builtin (`runtime/runner/src/builtins/map.ts`)
 
 The identity-based reconciliation loop uses `for` + `i in list` to skip holes.
 It pre-allocates `new Array(list.length)` and uses indexed assignment instead of
@@ -217,7 +218,7 @@ changes reactively:
   value returning after its entry was released is set up again on the same
   result cell, whose id is deterministic, so it recovers what it persisted.
 
-### Hashing boundary (`packages/data-model/src/value-hash/ValueHasher.ts`)
+### Hashing boundary (`base/data-model/src/value-hash/ValueHasher.ts`)
 
 Holes are hashed as themselves. `ValueHasher`'s `#feedArray()` walks the array
 by index and, on reaching an absent one, coalesces the whole run of consecutive
@@ -251,24 +252,24 @@ the preferred entry point in runner code.
 
 Test coverage verifies sparse preservation at each layer:
 
-- **`packages/data-model/test/types/validation.test.ts`** —
+- **`base/data-model/test/types/validation.test.ts`** —
   `isValidFabricValueLayer()` accepts sparse arrays.
-- **`packages/data-model/test/convertible-js.test.ts`** — 
+- **`base/data-model/test/convertible-js.test.ts`** — 
   `fabricFromConvertibleJsValue()` preserves holes.
-- **`packages/runner/test/cell-core.test.ts`** — sparse-array writes through
+- **`runtime/runner/test/cell-core.test.ts`** — sparse-array writes through
   the full Cell write path (which lands in a planned write's `apply()`) preserve
   holes; the helper's `cloneForMutation` + leaf-mutation steps round-trip
   sparseness.
-- **`packages/runner/test/array-push-mergeable.test.ts`** — `push` onto a
+- **`runtime/runner/test/array-push-mergeable.test.ts`** — `push` onto a
   sparse array preserves the existing holes, including when the cell had no
   prior value and when a concurrent edit touches a hole.
-- **`packages/runner/test/traverse.test.ts`** — Sparse array roundtrip through
+- **`runtime/runner/test/traverse.test.ts`** — Sparse array roundtrip through
   `traverse` preserves holes (both `traverseDAG` and schema-driven
   `traverseArrayWithSchema` paths).
-- **`packages/runner/test/data-updating.test.ts`** — All four hole transition
+- **`runtime/runner/test/data-updating.test.ts`** — All four hole transition
   cases (hole-to-hole, value-to-hole, hole-to-value, value-to-value); `hasPath`
   returns false through holes.
-- **`packages/runner/test/patterns-core.test.ts`** — End-to-end test: maps over
+- **`runtime/runner/test/patterns-core.test.ts`** — End-to-end test: maps over
   `[10, <hole>, 30]` and verifies output is `[20, <hole>, 60]` with holes
   preserved through the full pipeline.
 

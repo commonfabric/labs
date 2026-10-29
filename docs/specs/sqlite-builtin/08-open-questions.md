@@ -20,7 +20,7 @@ during design are marked **[resolved]** with the decision.
 3. **[resolved] Transformer support for `sqliteQuery<Row>`.** Routine: the
    transformer already lowers type arguments to schemas for `toSchema<T>`,
    `generateObject`, and `lift`. Add a registry entry + a schema-injection rule —
-   see [`packages/ts-transformers/docs/adding-type-arg-schema-lowering.md`](../../../packages/ts-transformers/docs/adding-type-arg-schema-lowering.md)
+   see [`base/ts-transformers/docs/adding-type-arg-schema-lowering.md`](../../../base/ts-transformers/docs/adding-type-arg-schema-lowering.md)
    and Phase 5 of the
    [implementation plan](../../history/specs/sqlite-builtin/implementation-plan.md).
    Not a gating risk.

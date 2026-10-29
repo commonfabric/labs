@@ -12,14 +12,14 @@
 Without self-serve, the only way to mint an ingest channel is
 `deno task provision-ingest-channel`, run on the deployed host with the
 toolshed's private identity
-(`packages/toolshed/scripts/provision-ingest-channel.ts`). Every user
+(`runtime/toolshed/scripts/provision-ingest-channel.ts`). Every user
 onboarding a device would be an admin ticket to whoever holds the Ansible
 vault password. That does not scale past a handful of people, and it would
 block the iOS location beacon's first-run experience entirely. The operator
 script remains for channels an operator provisions.
 
 There is also a sharper, quieter problem. `MEMORY_ACL_MODE` now defaults to
-`enforce` (`packages/toolshed/env.ts:230`) and ingest writes into the *user's*
+`enforce` (`runtime/toolshed/env.ts:230`) and ingest writes into the *user's*
 space under the *operator's* identity. If the operator DID is neither in
 `MEMORY_SERVICE_DIDS` nor granted per-space, POSTs **return 200 while nothing
 commits** — indistinguishable from a typo'd space DID. A channel can be born
@@ -34,7 +34,7 @@ get legitimately-minted `ExternalIngest` marks written there. Two facts make
 this harder than it looks:
 
 1. **First-party HTTP auth authenticates but does not authorize.**
-   `verifyFirstPartyHttpRequest` (`packages/runner/src/toolshed-http-auth.ts:350`)
+   `verifyFirstPartyHttpRequest` (`runtime/runner/src/toolshed-http-auth.ts:350`)
    is a real Ed25519 proof over method + authority + path + body hash + user DID
    + freshness. It proves control of a `did:key` and nothing more.
    `first-party-http-auth.ts:19` carries `TODO(auth): Check that the verified
@@ -79,14 +79,14 @@ attacker authored and durably appends marked records. Confused deputy, restored
 through a different door.
 
 This is not fixable by reading more carefully: **there is no per-document write
-attribution**. `packages/runner/src/cfc/grants.ts:64-73` states that grants
+attribution**. `runtime/runner/src/cfc/grants.ts:64-73` states that grants
 hosted in shared spaces "need per-document write-attribution verification —
 future work on its own track." The server cannot ask "was this written by the
 space's owner?"
 
 *Correction worth recording:* a user's **home/identity** space genesises as
 `{ [signer]: "OWNER" }` on its first open (`#createInitializedSession` in
-`packages/runner/src/storage/v2.ts`), and every other new space is born through
+`runtime/runner/src/storage/v2.ts`), and every other new space is born through
 `StorageManager.createSpace(acl, { root?, spaceKind? })` with the genesis
 document its creator passes, which `Runtime.createSpace()` writes as
 `{ [creator]: "OWNER" }` plus any grants the creator chose. Opening a space that
@@ -106,17 +106,17 @@ has minted.
 
 Get a cryptographically verified caller DID from `requireFirstPartyHttpAuth()`,
 then authorize against the record that already governs the space — its ACL
-document at `of:<space DID>` (`packages/memory/v2/server.ts:267`).
+document at `of:<space DID>` (`runtime/memory/v2/server.ts:267`).
 
 ```ts
 // Shown for illustration only.
-// packages/toolshed/lib/space-authority.ts
+// runtime/toolshed/lib/space-authority.ts
 const acl = await new ACLManager(runtime, space).get();
 if (acl?.[callerDid] !== "OWNER") return forbidden();
 ```
 
 **A narrow, explicit grant — deliberately not `spaceReaderRole`.**
-`packages/runner/src/cfc/space-membership.ts:55` is the canonical membership
+`runtime/runner/src/cfc/space-membership.ts:55` is the canonical membership
 oracle, and it is the right shape, but it is scoped to the §4.9.3 *render* fit
 and folds in two implicit-owner branches that are correct there and wrong
 here: `serviceDids.includes(principal)`, and a wildcard
@@ -151,7 +151,7 @@ authority. So: a narrow predicate, in a toolshed seam, with its own tests.
   one and never against `createdBy`. Control follows the space through key
   rotation and multi-owner spaces.
 - **It is the shape the runtime is already heading toward.**
-  `packages/api/cfc.ts:66-71` already describes the `ExternalIngest` mark as "an
+  `base/api/cfc.ts:66-71` already describes the `ExternalIngest` mark as "an
   owner-granted, revocable append authority held by an outside service." This
   makes the registration literally that. When CFC grant records
   (`audience`/`expiresAt`/`revoked`, `docs/specs/cfc-persisted-declassification.md:63-75`)
@@ -185,9 +185,9 @@ Four forks were resolved explicitly rather than by default:
 The memory server grants a principal signing **as a space DID** implicit
 `OWNER` while that space has no ACL document and no history — that is what its
 genesis commit needs — and grants it only what the ACL says after that
-(`#resolveCapability` in `packages/memory/v2/server.ts`). ACL mutation requires
+(`#resolveCapability` in `runtime/memory/v2/server.ts`). ACL mutation requires
 OWNER, and on an already-valid ACL the only constraints are shape plus "at least
-one concrete OWNER survives" (`packages/memory/acl.ts`). New spaces are created
+one concrete OWNER survives" (`runtime/memory/acl.ts`). New spaces are created
 with a random key that signs genesis and is then dropped
 ([random space identities](../specs/random-space-identities.md)). A space
 created before that, however, was given a key derived from a public passphrase
@@ -305,16 +305,16 @@ would take the channel down with it. Rotate and revoke are addressed to the
 channel's space, which the CLI reads off the caller's own list, or takes from
 `--space` for a channel that list does not hold. The CLI is the only client that can sign
 today — the shell cannot sign at all (zero references to `toolshed-http-auth`
-across `packages/shell`, `packages/lib-shell`, `packages/runtime-client`), and
+across `runtime/shell`, `runtime/lib-shell`, `runtime/runtime-client`), and
 the in-pattern `fetch` builtin is bound to the three-entry allowlist above.
 
 **This is a real limitation, stated plainly:** CLI signing needs a plaintext
-PKCS#8 key file on disk (`packages/cli/lib/identity.ts:33-37`), while a shell
+PKCS#8 key file on disk (`runtime/cli/lib/identity.ts:33-37`), while a shell
 user's key lives behind a passkey. So v1 self-serve is a power-user path. It
 still meets the goal — a user with their own identity key needs no operator —
 and it is strictly better than an Ansible-vault ticket. The pleasant path (a
 `cf-ingest-channel` component mirroring `cf-webhook`'s `cf-secret-viewer`
-reveal, `packages/ui/src/v2/components/cf-webhook/cf-webhook.ts:116-124`, plus a
+reveal, `runtime/ui/src/v2/components/cf-webhook/cf-webhook.ts:116-124`, plus a
 QR the beacon scans) is the natural follow-on, and POST-only verbs are what keep
 it reachable.
 
@@ -433,7 +433,7 @@ revoked?: { at: string; by: string }; // an audit record, not a deletion
 
 These are the exact envelope fields of `CfcGrant`
 (`docs/specs/cfc-persisted-declassification.md:63-75`), which is real code
-(`packages/runner/src/cfc/grants.ts`) — but not usable as-is here, since grant
+(`runtime/runner/src/cfc/grants.ts`) — but not usable as-is here, since grant
 writes require a trusted builtin identity and `space === owner`
 (`grants.ts:411-421`), which the toolshed operator cannot satisfy on a user's
 behalf. Adopting the *shape* now means the eventual migration is a lookup swap
@@ -463,7 +463,7 @@ repository-wide `isDID` answers only whether a string is a DID, so it admits
 newlines and case variants after the prefix,
 and that same string feeds the hosted-space check, the ACL key, the `\n`-joined
 id derivation, and the on-disk `.sqlite` filename
-(`packages/memory/.../storage-path.ts:69`) — on a case-insensitive filesystem,
+(`runtime/memory/.../storage-path.ts:69`) — on a case-insensitive filesystem,
 two case-variant DIDs open the same engine while deriving different channel ids.
 
 `installId` stays constrained by `isValidSegment` (`ingest.utils.ts:38-41`).
@@ -763,7 +763,7 @@ straight around the bound built to stop it.
   passed `{ channel: registration.space, audience: registration.installId }`
   (`ingest.utils.ts:286-289`), while `VouchedChannel.channel` is documented as
   "the ingest channel — its dedicated space DID"
-  (`packages/toolshed/lib/custody-ingest.ts:38-40`). Channels are distinguishable
+  (`runtime/toolshed/lib/custody-ingest.ts:38-40`). Channels are distinguishable
   by `audience`, so this is not fatal — but "which records arrived under the
   token I just revoked?" is unanswerable for a revoked-then-recreated channel
   reusing an `installId`. Recording the channel id on the mark is the fix; it
@@ -783,7 +783,7 @@ straight around the bound built to stop it.
 The central security property was **not testable in the existing harness**:
 `ingest.utils.test.ts` uses `StorageManager.emulate`, whose server is built with
 no `acl` option, so `#aclMode()` is `"off"` and nothing is authorized. This
-change therefore adds `packages/toolshed/lib/test-support/memory-acl.ts` — a
+change therefore adds `runtime/toolshed/lib/test-support/memory-acl.ts` — a
 real memory-v2 server with `acl: { mode: "enforce" }` over a loopback transport,
 plus arbitrary-shape ACL genesis as the space identity.
 

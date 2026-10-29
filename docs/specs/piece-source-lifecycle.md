@@ -327,7 +327,7 @@ program re-instantiates it on each release of the parent, so an origin of its
 own would be followed twice. The profile a person creates from the profile
 surfaces is a child in a space of its own, and follows `profile-home.tsx` as the
 deployment ships it; the chat room a Loom's root makes in the Loom's space is a
-child a handler made, and follows `fabrichat/room.tsx`. Both halves are
+child a handler made, and follows `system/fabrichat/room.tsx`. Both halves are
 required. A
 module's name alone is author-controlled — a locally compiled program may call a
 file anything — and it is the followed parent that says the name was a route the
@@ -1652,51 +1652,51 @@ rejected without offering confirmation.
 
 The implementation evidence for this table is concentrated in:
 
-- [`packages/runner/src/runner.ts`](../../packages/runner/src/runner.ts) for
+- [`runtime/runner/src/runner.ts`](../../runtime/runner/src/runner.ts) for
   current pattern, origin, and repository metadata and the in-place watcher;
-- [`packages/runner/src/compilation-cache/cell-cache.ts`](../../packages/runner/src/compilation-cache/cell-cache.ts)
+- [`runtime/runner/src/compilation-cache/cell-cache.ts`](../../runtime/runner/src/compilation-cache/cell-cache.ts)
   and
-  [`packages/runner/src/pattern-manager.ts`](../../packages/runner/src/pattern-manager.ts)
+  [`runtime/runner/src/pattern-manager.ts`](../../runtime/runner/src/pattern-manager.ts)
   for verified source closures and cross-space closure replication;
-- [`packages/cli/commands/piece.ts`](../../packages/cli/commands/piece.ts) and
-  [`packages/cli/lib/piece.ts`](../../packages/cli/lib/piece.ts) for local-file
+- [`runtime/cli/commands/piece.ts`](../../runtime/cli/commands/piece.ts) and
+  [`runtime/cli/lib/piece.ts`](../../runtime/cli/lib/piece.ts) for local-file
   creation and source replacement;
-- [`packages/runtime-client/src/runtime-client.ts`](../../packages/runtime-client/src/runtime-client.ts)
+- [`runtime/runtime-client/src/runtime-client.ts`](../../runtime/runtime-client/src/runtime-client.ts)
   and
-  [`packages/runtime-client/src/backends/runtime-processor.ts`](../../packages/runtime-client/src/backends/runtime-processor.ts)
+  [`runtime/runtime-client/src/backends/runtime-processor.ts`](../../runtime/runtime-client/src/backends/runtime-processor.ts)
   for piece creation from a fetched program, which records a detached creation
   revision;
-- [`packages/runner/src/source-reconciler.ts`](../../packages/runner/src/source-reconciler.ts)
+- [`runtime/runner/src/source-reconciler.ts`](../../runtime/runner/src/source-reconciler.ts)
   and
-  [`packages/runner/src/piece-origin-kind.ts`](../../packages/runner/src/piece-origin-kind.ts)
+  [`runtime/runner/src/piece-origin-kind.ts`](../../runtime/runner/src/piece-origin-kind.ts)
   for the one mechanism that follows an origin, the origin kinds it dispatches
   on, and opening a piece the runtime supplies;
-- [`packages/runner/src/builtins/wish.ts`](../../packages/runner/src/builtins/wish.ts)
+- [`runtime/runner/src/builtins/wish.ts`](../../runtime/runner/src/builtins/wish.ts)
   for the profile and suggestion surfaces the runtime instantiates and the
   `system:` origins they claim;
-- [`packages/piece/src/ops/pieces-controller.ts`](../../packages/piece/src/ops/pieces-controller.ts)
+- [`runtime/piece/src/ops/pieces-controller.ts`](../../runtime/piece/src/ops/pieces-controller.ts)
   for system-root origin stamping and pre-start reconciliation;
-- [`packages/piece/src/ops/piece-origin.ts`](../../packages/piece/src/ops/piece-origin.ts)
+- [`runtime/piece/src/ops/piece-origin.ts`](../../runtime/piece/src/ops/piece-origin.ts)
   for origin classification, resolving historical origins, and
   reading a piece's source state;
-- [`packages/piece/src/ops/piece-controller.ts`](../../packages/piece/src/ops/piece-controller.ts)
+- [`runtime/piece/src/ops/piece-controller.ts`](../../runtime/piece/src/ops/piece-controller.ts)
   for detach, revert, repoint, compatibility checks, and direct-edit
   transitions;
-- [`packages/ui/src/v2/components/cf-piece-menu/cf-piece-menu.ts`](../../packages/ui/src/v2/components/cf-piece-menu/cf-piece-menu.ts)
+- [`runtime/ui/src/v2/components/cf-piece-menu/cf-piece-menu.ts`](../../runtime/ui/src/v2/components/cf-piece-menu/cf-piece-menu.ts)
   and
-  [`packages/ui/src/v2/components/cf-render/cf-render.ts`](../../packages/ui/src/v2/components/cf-render/cf-render.ts)
+  [`runtime/ui/src/v2/components/cf-render/cf-render.ts`](../../runtime/ui/src/v2/components/cf-render/cf-render.ts)
   for the piece menu, its source and origin panels, and the right-click that
   opens them;
-- [`packages/patterns/system/common-fabric.tsx`](../../packages/patterns/system/common-fabric.tsx),
-  [`packages/patterns/system/omnibox-fab.tsx`](../../packages/patterns/system/omnibox-fab.tsx),
+- [`patterns/system/common-fabric/common-fabric.tsx`](../../patterns/system/common-fabric/common-fabric.tsx),
+  [`patterns/system/omnibox-fab/omnibox-fab.tsx`](../../patterns/system/omnibox-fab/omnibox-fab.tsx),
   and
-  [`packages/patterns/system/suggestion.tsx`](../../packages/patterns/system/suggestion.tsx)
+  [`patterns/system/suggestion/suggestion.tsx`](../../patterns/system/suggestion/suggestion.tsx)
   for the current indexed-URL UI flow;
-- [`packages/patterns/examples/write-and-run.tsx`](../../packages/patterns/examples/write-and-run.tsx)
+- [`patterns/examples/write-and-run/write-and-run.tsx`](../../patterns/examples/write-and-run/write-and-run.tsx)
   and
-  [`packages/runner/src/builtins/compile-and-run.ts`](../../packages/runner/src/builtins/compile-and-run.ts)
+  [`runtime/runner/src/builtins/compile-and-run.ts`](../../runtime/runner/src/builtins/compile-and-run.ts)
   for the example LLM-backed creation machinery; and
-- [`packages/runner/src/schemas.ts`](../../packages/runner/src/schemas.ts) for
+- [`runtime/runner/src/schemas.ts`](../../runtime/runner/src/schemas.ts) for
   the unused lineage declarations.
 
 ## Implemented foundations to preserve

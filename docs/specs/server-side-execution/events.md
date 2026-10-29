@@ -5,10 +5,10 @@ Normative spec for Phase 3 (D-v2-1). Assumes
 
 ## Anchors
 
-- Event machinery: `packages/runner/src/scheduler/events.ts`
+- Event machinery: `runtime/runner/src/scheduler/events.ts`
   (`queueSchedulerEvent`, `addSchedulerEventHandler`,
   `SchedulerEventQueueState`), durable identity in
-  `packages/runner/src/scheduler/event-identity.ts`, preflight in
+  `runtime/runner/src/scheduler/event-identity.ts`, preflight in
   `event-preflight-dependencies.ts`. The server-side handler run reuses
   this machinery inside the SpaceServer's runtime — do not build a second
   event executor.
@@ -574,7 +574,7 @@ loop's duty).
   not a CFC verdict. So is a CFC refusal that is not wholly a verdict,
   which keeps the retryable `StorageTransactionAborted` name: prepare
   could not evaluate an input the transaction did not have, or the
-  prepared state drifted (`packages/runner/src/cfc/verdict-reason.ts`),
+  prepared state drifted (`runtime/runner/src/cfc/verdict-reason.ts`),
   and a fresh attempt may land the write that sealing an error would
   end. An explicit handler abort is a handler-error consequence, not an
   infrastructure retry.

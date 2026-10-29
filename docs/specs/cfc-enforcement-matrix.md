@@ -14,11 +14,11 @@ subsumes another. Their current homes and defaults:
 
 | Dial | Values (weak → strict) | `Runtime` default | Governs |
 |---|---|---|---|
-| `cfcEnforcementMode` | `disabled` · `observe` · `enforce-explicit` · `enforce-strict` | `enforce-strict` | whether a boundary **reason rejects** the commit ([types.ts](../../packages/runner/src/cfc/types.ts) `cfcEnforcementStrictness`) |
+| `cfcEnforcementMode` | `disabled` · `observe` · `enforce-explicit` · `enforce-strict` | `enforce-strict` | whether a boundary **reason rejects** the commit ([types.ts](../../runtime/runner/src/cfc/types.ts) `cfcEnforcementStrictness`) |
 | `cfcFlowLabels` | `off` · `observe` · `persist` | `persist` | whether the per-tx **flow join is derived and persisted** as `derived` label components (S16) |
 | `cfcWriteFloor` | `off` · `observe` · `enforce` | `enforce` | whether the **write-side `requiredIntegrity` floor** (SC-18, Epic D3) is checked against the written value's integrity |
-| `cfcTriggerReadGating` | `false` · `true` | `true` | whether the **§8.9.2 trigger reads** — the addresses whose invalidating writes scheduled this run — join the enforcement consumed sets: the sink-request ceiling and the `requiredIntegrity` input gate (SC-3 / H5; [runtime.ts](../../packages/runner/src/runtime.ts) `cfcTriggerReadGating`, [types.ts](../../packages/runner/src/cfc/types.ts) `CfcTriggerReadGating`, consumed in [prepare.ts](../../packages/runner/src/cfc/prepare.ts) `triggerReadSources`) |
-| `cfcPolicyEvaluation` | `off` · `observe` · `enforce` | `enforce` | whether the **exchange-rule evaluator** (spec §4.4.5, Epic B5) rewrites gated labels to a fueled fixpoint before the sink-request ceiling and `requiredIntegrity` input gates fit them. `observe` evaluates + diagnoses divergence but decides on the *un-rewritten* label; `enforce` decides on the *rewritten* label and **fails closed on fuel exhaustion or policy-lookup failure**. ([runtime.ts](../../packages/runner/src/runtime.ts) `cfcPolicyEvaluation` + `cfcPolicyRecords`, consumed in [prepare.ts](../../packages/runner/src/cfc/prepare.ts) `evaluateGatedConfidentiality`) |
+| `cfcTriggerReadGating` | `false` · `true` | `true` | whether the **§8.9.2 trigger reads** — the addresses whose invalidating writes scheduled this run — join the enforcement consumed sets: the sink-request ceiling and the `requiredIntegrity` input gate (SC-3 / H5; [runtime.ts](../../runtime/runner/src/runtime.ts) `cfcTriggerReadGating`, [types.ts](../../runtime/runner/src/cfc/types.ts) `CfcTriggerReadGating`, consumed in [prepare.ts](../../runtime/runner/src/cfc/prepare.ts) `triggerReadSources`) |
+| `cfcPolicyEvaluation` | `off` · `observe` · `enforce` | `enforce` | whether the **exchange-rule evaluator** (spec §4.4.5, Epic B5) rewrites gated labels to a fueled fixpoint before the sink-request ceiling and `requiredIntegrity` input gates fit them. `observe` evaluates + diagnoses divergence but decides on the *un-rewritten* label; `enforce` decides on the *rewritten* label and **fails closed on fuel exhaustion or policy-lookup failure**. ([runtime.ts](../../runtime/runner/src/runtime.ts) `cfcPolicyEvaluation` + `cfcPolicyRecords`, consumed in [prepare.ts](../../runtime/runner/src/cfc/prepare.ts) `evaluateGatedConfidentiality`) |
 
 They are orthogonal because they gate different things: the **enforcement mode**
 decides what happens to a recorded reason (ignore / diagnose / reject); the
@@ -46,11 +46,11 @@ conforming, and the conforming ones are reachable only along a partial order.
   **includes the missing-policy case**: a write that touches a labeled doc with
   **no resolvable schema/policy input** records a
   `missing schema write-policy input` reason
-  ([prepare.ts](../../packages/runner/src/cfc/prepare.ts)), and the enforcement
+  ([prepare.ts](../../runtime/runner/src/cfc/prepare.ts)), and the enforcement
   ladder rejects any reasoned transaction under both enforcing modes
-  ([extended-storage-transaction.ts](../../packages/runner/src/storage/extended-storage-transaction.ts));
+  ([extended-storage-transaction.ts](../../runtime/runner/src/storage/extended-storage-transaction.ts));
   asserted under explicit mode in
-  [cfc-boundary.test.ts](../../packages/runner/test/cfc-boundary.test.ts)
+  [cfc-boundary.test.ts](../../runtime/runner/test/cfc-boundary.test.ts)
   ("missing schema write-policy input"). "Explicit" refers to which checks
   *run* — those whose declared inputs (policy, resolvable schema) are present —
   not to tolerating absent policy on labeled docs; that case is already
@@ -59,17 +59,17 @@ conforming, and the conforming ones are reachable only along a partial order.
   strict-only fail-closed rejects. The one implemented today is the writer-fit
   misfit variant (SC-18b): the `canWrite` confidentiality misfit **rejects**
   rather than persist-and-flag (H4,
-  [prepare.ts](../../packages/runner/src/cfc/prepare.ts) writer-fit,
-  [cfc-writer-fit.test.ts](../../packages/runner/test/cfc-writer-fit.test.ts));
+  [prepare.ts](../../runtime/runner/src/cfc/prepare.ts) writer-fit,
+  [cfc-writer-fit.test.ts](../../runtime/runner/test/cfc-writer-fit.test.ts));
   future checks that want a persist-and-flag grace under explicit put their
   reject here, same shape.
 
 The ladder is closed, and both places a mode is installed refuse a name off it
 rather than land on no rung. `resolveCfcDials`
-([posture-report.ts](../../packages/runner/src/cfc/posture-report.ts)) is where
+([posture-report.ts](../../runtime/runner/src/cfc/posture-report.ts)) is where
 every `Runtime` resolves its dials, and it throws when `cfcEnforcementMode` is
 stated and is not one of the four names above; `setCfcEnforcementMode`
-([extended-storage-transaction.ts](../../packages/runner/src/storage/extended-storage-transaction.ts))
+([extended-storage-transaction.ts](../../runtime/runner/src/storage/extended-storage-transaction.ts))
 throws the same way for the mid-transaction lever, which is on the public
 transaction interface and so reachable from any code holding a transaction. A
 transaction holding
@@ -170,7 +170,7 @@ dial is not yet producing. The states a deployment is expected to pass through:
 | **Explicit + flow** | `enforce-explicit` | `persist` | `off` | `false` | Flow labels persisted (H2, inv-9 active); floor not yet dialed. |
 | **Explicit + floor observe** | `enforce-explicit` | `persist` | `observe` | `false` | Add the write floor as diagnostics (D3 dial-up step). |
 | **Explicit + floor enforce** | `enforce-explicit` | `persist` | `enforce` | `false` | Floor rejects; complete on flow-endorsed writes (flow persists). |
-| **Strict — the shipped default** | `enforce-strict` | `persist` | `enforce` | `true` | Writer-fit fail-closed (H4); render ceiling consumes derived labels (H3b); trigger reads gated, multi-hop complete since flow persists. Where the core pins in `presetCfcOptions` hold every preset — the server host ([toolshed/index.ts](../../packages/toolshed/index.ts)) and the shell among them — and where an unconfigured `Runtime` resolves too, so the two agree without the hosts depending on the default. |
+| **Strict — the shipped default** | `enforce-strict` | `persist` | `enforce` | `true` | Writer-fit fail-closed (H4); render ceiling consumes derived labels (H3b); trigger reads gated, multi-hop complete since flow persists. Where the core pins in `presetCfcOptions` hold every preset — the server host ([toolshed/index.ts](../../runtime/toolshed/index.ts)) and the shell among them — and where an unconfigured `Runtime` resolves too, so the two agree without the hosts depending on the default. |
 
 Trigger gating may flip to `true` at any of these states (ordering constraint
 #4: it is sound anywhere) — the table shows it flipping at the end state
@@ -196,16 +196,16 @@ warning, not an error.
 
 H4's code step (separate PR) implements the strict-only rejects at the
 enforcement ladder
-([extended-storage-transaction.ts](../../packages/runner/src/storage/extended-storage-transaction.ts)),
+([extended-storage-transaction.ts](../../runtime/runner/src/storage/extended-storage-transaction.ts)),
 each gated so `enforce-explicit` keeps today's behavior.
 
 **Not part of the delta: missing-policy.** A write touching a labeled document
 with no resolvable schema/policy input **already rejects under
 `enforce-explicit`**: the prepare pass records a
 `missing schema write-policy input for <id>` reason
-([prepare.ts](../../packages/runner/src/cfc/prepare.ts)), the ladder rejects
+([prepare.ts](../../runtime/runner/src/cfc/prepare.ts)), the ladder rejects
 any reasoned transaction under both enforcing modes, and
-[cfc-boundary.test.ts](../../packages/runner/test/cfc-boundary.test.ts)
+[cfc-boundary.test.ts](../../runtime/runner/test/cfc-boundary.test.ts)
 asserts the reject in explicit mode. Its SC-18c error contract (a stable reason
 string naming the target) is likewise already shipped. H4 must **not** move
 this check behind the strict gate — that would weaken the shipped shell
@@ -295,13 +295,13 @@ The strict-only delta is:
   ones. It carries no `receipt-exists` pin, because every participant of a
   shared space installs the same content-addressed document, and a permanent
   rejection there would drop the participant's labeled write. Implementation in
-  [prepare.ts](../../packages/runner/src/cfc/prepare.ts) (`prepareBoundaryCommit`
+  [prepare.ts](../../runtime/runner/src/cfc/prepare.ts) (`prepareBoundaryCommit`
   flow-persist stamping), asserted both ways in
-  [cfc-writer-fit.test.ts](../../packages/runner/test/cfc-writer-fit.test.ts).
+  [cfc-writer-fit.test.ts](../../runtime/runner/test/cfc-writer-fit.test.ts).
   Landing this also closed a reasoned-tx fail-open: `prepareCfc` now marks any
   transaction with recorded reasons CFC-relevant (`prepare-reasons`), so a
   reasoned tx whose reads never tripped an eager relevance mark cannot slip the
-  ladder ([extended-storage-transaction.ts](../../packages/runner/src/storage/extended-storage-transaction.ts)).
+  ladder ([extended-storage-transaction.ts](../../runtime/runner/src/storage/extended-storage-transaction.ts)).
 
   The DECLARED half of the ceiling also admits an owner case, in one
   direction. A `PersonalSpace(owner)` LABEL clause answers a
@@ -342,7 +342,7 @@ The strict-only delta is:
   stream's link so that the firing client, the serving space's drain and
   another space's outbox delivery all address the same document with no
   coordination (`STREAM_ENTRIES_DOC_PREFIX` and `streamEntriesDocId` in
-  [`packages/memory/v2.ts`](../../packages/memory/v2.ts); the code and
+  [`runtime/memory/v2.ts`](../../runtime/memory/v2.ts); the code and
   [`events.md`](./server-side-execution/events.md) also call it the stream's
   sidecar, which in this section is otherwise a background piece). A pattern
   names the data it declares policy on, and it names neither of these, so
@@ -390,7 +390,7 @@ The strict-only delta is:
   compiler — the `cid:` document its bytes live in, the identities of its
   imports, and the predecessor identities its writer authority descends from
   ([`module-loading.md`](./module-loading.md), and the write side in
-  [`cell-cache.ts`](../../packages/runner/src/compilation-cache/cell-cache.ts)).
+  [`cell-cache.ts`](../../runtime/runner/src/compilation-cache/cell-cache.ts)).
   The cache addresses it by the cause `pattern:<identity>`, or
   `compileCache:<runtimeVersion>/<identity>` for the compiled set, whose
   `<identity>` is the module's content-derived Merkle identity. The entity id
@@ -491,7 +491,7 @@ The strict-only delta is:
   answering a model with the values a piece computed — there is no request
   to record and no commit to gate, so that tool measures the release itself,
   against a public ceiling, through `describeSinkReleaseRefusal`
-  ([run-pattern.ts](../../packages/cf-harness/src/tools/run-pattern.ts)).
+  ([run-pattern.ts](../../runtime/cf-harness/src/tools/run-pattern.ts)).
   What it measures is the values a `resultSchema` asks for. The result
   reference it returns names the result without carrying it, so a call that
   asks for no values is not measured, and a refusal withholds the values
@@ -577,7 +577,7 @@ The strict-only delta is:
   Piece setup records a separate authenticated claim for its argument, result
   and internal stores on the transaction preparing them. That claim selects
   derived-only persistence even when setup commits before the nodes start:
-  [`PiecesController.setupPersistent()`](../../packages/piece/src/ops/pieces-controller.ts)
+  [`PiecesController.setupPersistent()`](../../runtime/piece/src/ops/pieces-controller.ts)
   is one such path. It creates no lifetime enrollment and carries no authority
   into the next transaction. Starting the piece establishes the live enrollment
   its later writes use.
@@ -804,19 +804,19 @@ The strict-only delta is:
   cover the admission of LLM requests whose sink has no configured ceiling.
 
   Implementation in
-  [prepare.ts](../../packages/runner/src/cfc/prepare.ts)
+  [prepare.ts](../../runtime/runner/src/cfc/prepare.ts)
   (`prepareBoundaryCommit` writer-fit),
-  [runner.ts](../../packages/runner/src/runner.ts)
+  [runner.ts](../../runtime/runner/src/runner.ts)
   (`recordRuntimeOwnedStore`),
-  [runtime-owned-store.ts](../../packages/runner/src/builtins/runtime-owned-store.ts)
+  [runtime-owned-store.ts](../../runtime/runner/src/builtins/runtime-owned-store.ts)
   (`ownedCell`, which a builtin mints its own state store through where the
   mint and the scoping sit together, and the two helpers beside it for the
   sites where they do not), and
-  [data-updating.ts](../../packages/runner/src/data-updating.ts)
+  [data-updating.ts](../../runtime/runner/src/data-updating.ts)
   (`anchorValueAsEntity`), asserted condition by condition in
-  [cfc-writer-fit.test.ts](../../packages/runner/test/cfc-writer-fit.test.ts),
+  [cfc-writer-fit.test.ts](../../runtime/runner/test/cfc-writer-fit.test.ts),
   and against the cross-space representation transform in
-  [cfc-label-metadata-protection.test.ts](../../packages/runner/test/cfc-label-metadata-protection.test.ts).
+  [cfc-label-metadata-protection.test.ts](../../runtime/runner/test/cfc-label-metadata-protection.test.ts).
 
 - **Future strict-only fail-closed cases.** Any new check that wants a
   persist-and-flag grace under explicit puts its reject at the strict level,
@@ -848,10 +848,10 @@ the write without altering the persisted label. Tracked in
 ## Provenance
 
 Grounded in the four implemented dials — `cfcEnforcementMode`
-([types.ts](../../packages/runner/src/cfc/types.ts)), `cfcFlowLabels` (H1),
+([types.ts](../../runtime/runner/src/cfc/types.ts)), `cfcFlowLabels` (H1),
 `cfcWriteFloor` (D3, #4479), and `cfcTriggerReadGating` (H5, #4488) — plus the
 SC-13 rollout constraint in `cfc-spec-changes.md` and the current host
 postures: shell
-([lib-shell/src/runtime.ts](../../packages/lib-shell/src/runtime.ts):
+([lib-shell/src/runtime.ts](../../runtime/lib-shell/src/runtime.ts):
 `enforce-strict` + flow `persist`); toolshed (the `productionServer` preset's
 pins, `enforce-strict` + flow `persist`).

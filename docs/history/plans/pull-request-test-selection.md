@@ -3619,7 +3619,7 @@ Narrower measurements do still gate pull requests, and they are the
 subject of [the next section](#the-measured-set).
 
 It is a dashboard tile instead, and the tile follows [the dashboard's
-rules](../../../packages/dashboard/README.md#philosophy-and-values). It shows
+rules](../../../dashboard/README.md#philosophy-and-values). It shows
 the count of uncovered lines and, under it, what a median day does to that
 count, which is the part somebody can act on. It is not a percentage:
 a coverage percentage is exactly the kind of figure that stops meaning

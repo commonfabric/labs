@@ -53,7 +53,7 @@ can run their own spaces or use hosted versions.
 4. Install the Git hooks: `deno task install-hooks` (optional)
    - Put `cf` on PATH once: `deno task install-cf`. The copy it installs serves
      every checkout, and shell completion needs it — see
-     [Installing `cf` on PATH](./packages/cli/README.md#installing-cf-on-path).
+     [Installing `cf` on PATH](./runtime/cli/README.md#installing-cf-on-path).
 5. Start local dev servers: `./scripts/start-local-dev.sh`
 6. Access the application at <http://localhost:8000>
 7. If you're contributing regularly, consider setting up a test-reporting key
@@ -81,22 +81,23 @@ _New Common Fabric employees are encouraged to visit go/trailhead._
 
 ## Architecture
 
-This is a multi-package monorepo with several key components:
+This repository holds many packages. [LAYOUT.md](./LAYOUT.md) says what each
+directory at the top of the repository holds. The main components are:
 
-**Backend ([Toolshed](./packages/toolshed))**: The hosted platform backend,
+**Backend ([Toolshed](./runtime/toolshed))**: The hosted platform backend,
 written in Deno2, that provides the distributed runtime and storage.
 
-**Frontend ([Shell](./packages/shell))**: A web client interface written with
-Lit Web Components for interacting with Common Fabric spaces.
+**Frontend ([Shell](./runtime/shell))**: A web client interface written with Lit
+Web Components for interacting with Common Fabric spaces.
 
 **CLI (cf)**: Command-line interface for managing pieces, linking patterns, and
 deploying to spaces. Run `deno task cf --help` for command reference.
 
-**UI Components ([packages/ui](./packages/ui))**: Custom VDOM layer and `cf-`
+**UI Components ([runtime/ui](./runtime/ui))**: Custom VDOM layer and `cf-`
 prefixed components for pattern UIs.
 
-**Examples & Patterns ([packages/patterns](./packages/patterns))**: Example
-patterns for building with Common Fabric.
+**Examples & Patterns ([patterns](./patterns))**: Example patterns for building
+with Common Fabric.
 
 **Pattern Development**: Patterns can be developed using the repo-local
 `skills/pattern-dev/` skill package. Claude compatibility still exposes this as
@@ -147,10 +148,10 @@ When adding or rolling repository dependencies, follow the
 ## Running the backend
 
 For a more detailed guide, see
-[./packages/toolshed/README.md](./packages/toolshed/README.md).
+[./runtime/toolshed/README.md](./runtime/toolshed/README.md).
 
 ```bash
-cd ./packages/toolshed
+cd ./runtime/toolshed
 deno task dev
 ```
 
@@ -166,7 +167,7 @@ frontend together. See
 
 ```bash
 # Against local backend (use dev-local, NOT dev)
-cd ./packages/shell
+cd ./runtime/shell
 TOOLSHED_PORT=8000 deno task dev-local
 ```
 
@@ -179,7 +180,7 @@ at <http://localhost:8000>, where toolshed proxies to shell.
 If you are not running a local backend, you can point to the cloud:
 
 ```shell
-cd ./packages/shell
+cd ./runtime/shell
 deno task dev
 ```
 
@@ -363,4 +364,4 @@ restricted to team members only.)
   [pattern documentation](./docs/common/).
 - **rapids:** the name of our staging toolshed server.
 - **toolshed:** the backend server software that hosts the runtime. See
-  [packages/toolshed](./packages/toolshed).
+  [runtime/toolshed](./runtime/toolshed).

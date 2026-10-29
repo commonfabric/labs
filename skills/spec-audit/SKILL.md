@@ -20,17 +20,17 @@ load-bearing evidence quickly.
   passing tests.
 - Ground implementation claims in the relevant canonical constant or source,
   targeted tests, and—where output shape matters—the
-  `packages/ts-transformers/test/fixtures/**` input/expected corpus. Inspect
-  live emission with `deno task cf check <file> --show-transformed --no-run`.
+  `base/ts-transformers/test/fixtures/**` input/expected corpus. Inspect live
+  emission with `deno task cf check <file> --show-transformed --no-run`.
 - Canonical constants the specs cite (spot-check the citations still resolve):
   `CFC_TRANSFORMER_STAGES` (cf-pipeline.ts),
   `COMMONFABRIC_RUNTIME_EXPORT_REGISTRY` (+ its runner-factory guard test),
   `CrossStageState`, `getExpressionContainerKind`,
   `SES_SELF_CONTAINED_CALLBACK_BOUNDARIES`, wrapper vocabulary in
   `schema-generator/src/typescript/wrapper-names.ts`,
-  `CFC_CANONICAL_ALIAS_NAMES` in `packages/api/cfc.ts`, and the `JSONSchema`
-  type in `packages/api/index.ts`. Mechanical stage claims are pinned by
-  `packages/ts-transformers/test/spec-sync.test.ts`.
+  `CFC_CANONICAL_ALIAS_NAMES` in `base/api/cfc.ts`, and the `JSONSchema` type in
+  `base/api/index.ts`. Mechanical stage claims are pinned by
+  `base/ts-transformers/test/spec-sync.test.ts`.
 - Cross-package contracts with no single home (historically the blind spot):
   transformer emission ↔ runner sandbox verifier (`@commonfabric/utils` sandbox
   contract); pattern-coverage ↔ runner line-offset/cache couplings

@@ -4,7 +4,7 @@ import {
   type CompileCacheVersionCommands,
   main,
 } from "./compile-cache-version.ts";
-import { OUTPUT_VERSION_MEMO_PATH } from "../packages/runner/src/compilation-cache/compile-cache-output-memo.deno.ts";
+import { OUTPUT_VERSION_MEMO_PATH } from "../runtime/runner/src/compilation-cache/compile-cache-output-memo.deno.ts";
 
 const VERSION = "cf/esm-compile/OutputVersion001";
 

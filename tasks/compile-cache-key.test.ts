@@ -2,8 +2,8 @@ import { beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { currentCompilerFingerprint } from "./compile-cache-key.ts";
-import { VERSION_NAMESPACE } from "../packages/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
-import { getCompileCacheRuntimeVersion } from "../packages/runner/src/compilation-cache/cell-cache.ts";
+import { VERSION_NAMESPACE } from "../runtime/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
+import { getCompileCacheRuntimeVersion } from "../runtime/runner/src/compilation-cache/cell-cache.ts";
 
 describe("compile-cache-key", () => {
   // Walking and hashing the fingerprint inputs reads on the order of a

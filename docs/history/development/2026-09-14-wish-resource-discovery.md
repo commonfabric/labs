@@ -22,10 +22,10 @@ requires a compiled wish-to-SQLite composition test before implementation.
 
 ## How wish works
 
-- [`WishParams` and `WishState`](../../../packages/api/index.ts) expose query,
+- [`WishParams` and `WishState`](../../../base/api/index.ts) expose query,
   path, schema, scope, headless, result, candidates, optional error, and UI. The
   result can be undefined; there is no separate pending field.
-- [`wish.ts`](../../../packages/runner/src/builtins/wish.ts) `parseWishTarget`
+- [`wish.ts`](../../../runtime/runner/src/builtins/wish.ts) `parseWishTarget`
   separates slash paths and hashtag paths. `resolveBase` tries space targets,
   home targets, then hashtag search. Free-form requests use the suggestion
   machinery rather than a deterministic resource query.
@@ -54,11 +54,11 @@ requires a compiled wish-to-SQLite composition test before implementation.
 - `wishOutputScope` uses explicit result-schema scope when supplied; otherwise
   home-dependent queries narrow to at least user scope. Current-space-only
   discovery avoids implicit home dependence; data permissions still apply.
-- [`backlinks-index.tsx`](../../../packages/patterns/system/backlinks-index.tsx)
+- [`backlinks-index.tsx`](../../../patterns/system/backlinks-index/backlinks-index.tsx)
   derives mentionables from registered pieces, excluding `isMentionable: false`,
   and recursively includes exported mentionables to depth five. Ordinary
   registration is therefore a publication route for a provider.
-- [`CLI wish`](../../../packages/cli/lib/wish.ts) uses the same builtin with
+- [`CLI wish`](../../../runtime/cli/lib/wish.ts) uses the same builtin with
   `headless: true`, but `WishReadResult` returns the resolved value/error, not
   the complete candidates array. It is useful for inspection, but its current
   public result alone cannot establish uniqueness.
@@ -102,10 +102,10 @@ consequence of discovery.
 
 ## SQLite boundary
 
-[`sqlite-source.ts`](../../../packages/cli/lib/sqlite-source.ts) derives a
+[`sqlite-source.ts`](../../../runtime/cli/lib/sqlite-source.ts) derives a
 stable `(space, path)` handle identity and preserves existing handle contracts
 on relinking.
-[`DiskSourceRegistry`](../../../packages/memory/v2/sqlite/disk-source.ts) is an
+[`DiskSourceRegistry`](../../../runtime/memory/v2/sqlite/disk-source.ts) is an
 in-memory map keyed by `(space, id)` on the memory server. Disk paths stay
 server-side; an unregistered ID falls back to the cell-derived database path. A
 discoverable handle therefore does not prove a disk source is live.
@@ -113,7 +113,7 @@ discoverable handle therefore does not prove a disk source is live.
 The [SQLite API](../../specs/sqlite-builtin/01-api.md) defines `SqliteDb` as a
 branded cell with query/exec methods; its readable descriptor is not a
 substitute for the reference. Injected disk sources remain read-only.
-[`sqlite-builtins.ts`](../../../packages/runner/src/builtins/sqlite-builtins.ts)
+[`sqlite-builtins.ts`](../../../runtime/runner/src/builtins/sqlite-builtins.ts)
 guards absent database inputs, reports malformed handles as query errors, and
 requires session result scope under a runtime read ceiling. Discovery must
 preserve those properties and external-write invalidation.

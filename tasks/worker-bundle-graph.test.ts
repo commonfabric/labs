@@ -15,15 +15,15 @@
 
 import { assert, assertEquals } from "@std/assert";
 
-const WORKER_ENTRY = "packages/runtime-client/src/backends/web-worker/index.ts";
+const WORKER_ENTRY = "runtime/runtime-client/src/backends/web-worker/index.ts";
 
 /** Server-only modules the worker's CODE-reachable set must not hold:
  * the memory v2 server, its engine, and the sqlite disk source (the
  * engine's storage backend — present iff the engine side leaked). */
 const FORBIDDEN_SUFFIXES = [
-  "packages/memory/v2/server.ts",
-  "packages/memory/v2/engine.ts",
-  "packages/memory/v2/sqlite/disk-source.ts",
+  "runtime/memory/v2/server.ts",
+  "runtime/memory/v2/engine.ts",
+  "runtime/memory/v2/sqlite/disk-source.ts",
 ];
 
 /** Modules the code walk MUST reach — the sanity floor that keeps this
@@ -31,8 +31,8 @@ const FORBIDDEN_SUFFIXES = [
  * (the module whose import regressed) and the browser-safe memory
  * surface it now imports from. */
 const REQUIRED_SUFFIXES = [
-  "packages/runner/src/executor/wave.ts",
-  "packages/memory/v2.ts",
+  "runtime/runner/src/executor/wave.ts",
+  "runtime/memory/v2.ts",
 ];
 
 type DenoInfoDependency = {

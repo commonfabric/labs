@@ -34,19 +34,19 @@ stores each module's text as one, and its records link to them.
 ## Motivation
 
 A link's `schema` field (`CellLinkRefPayload`,
-`packages/runner/src/sigil-types.ts`) holds a complete, self-contained JSON
+`runtime/runner/src/sigil-types.ts`) holds a complete, self-contained JSON
 Schema — including its whole `$defs` closure — inlined verbatim into the
 stored document. Nothing deduplicates it at rest. The same schema is
 duplicated on three surfaces:
 
 1. **At rest, per link.** Every schema-bearing link in a stored document
    carries a full copy. Prolific writers include every rendered VDOM prop
-   link (`packages/html/src/worker/reconciler.ts`), pattern bindings, and
+   link (`runtime/html/src/worker/reconciler.ts`), pattern bindings, and
    result links. Narrowing multiplies the problem: `schemaAtPath` re-attaches
    the reachable `$defs` closure to every narrowed variant, so N views into
    one type store N overlapping closures.
 2. **Client→server, per watch.** `SpaceReplica.#refreshWatchSet()`
-   (`packages/runner/src/storage/v2.ts`) sends one watch spec per (doc,
+   (`runtime/runner/src/storage/v2.ts`) sends one watch spec per (doc,
    selector), each with the full inline selector schema. No compression
    exists in this direction, and a reconnect the server cannot resume
    re-sends the entire accumulated watch set — the payload grows
@@ -63,23 +63,23 @@ durable schema identity: a name that is valid in storage, in queries, and
 across sessions. The system already has the pieces:
 
 - **Schema hashing and interning** — `internSchemaAsTaggedHashString`
-  (`packages/data-model-schema/src/schema-intern.ts`) produces a
+  (`base/data-model-schema/src/schema-intern.ts`) produces a
   `fid1:` tagged hash; the intern table already gives structurally equal
   schemas one identity per process.
 - **Content-addressed schema documents** — CFC persists schemas as
   `cid:<taggedHash>` documents (`ensureSchemaDocument`,
-  `packages/runner/src/cfc/prepare.ts`) through the shared
+  `runtime/runner/src/cfc/prepare.ts`) through the shared
   schema-document staging (registration, per-transaction dedupe,
   confirmed-persistence elision), with client-side hash verification on
   read and traversal support: the server's
   graph traversal synthesizes a link from the `cfc.schemaHash` field and
   includes the schema document in query results and watch sets
-  (`cfcMetaToSigilLink`, `packages/runner/src/traverse.ts`).
+  (`cfcMetaToSigilLink`, `runtime/runner/src/traverse.ts`).
 - **Cycle condensation** — module identity hashing already condenses
   strongly connected components so import cycles hash as a unit
-  (`computeModuleHashes`, `packages/runner/src/harness/module-identity.ts`).
+  (`computeModuleHashes`, `runtime/runner/src/harness/module-identity.ts`).
 - **A reserved namespace** — `REQUEST_SCHEMA_CAS_REF_PREFIX`
-  (`packages/memory/v2/schema-table-links.ts`) reserves `schema-cas@1:` for
+  (`runtime/memory/v2/schema-table-links.ts`) reserves `schema-cas@1:` for
   transport; the storage-side counterpart is this design.
 
 ## Design
@@ -307,7 +307,7 @@ simply a schema whose only member is an external `$ref`:
 This keeps the payload type, the three schema-position walkers
 (`mapLinkSchemas`, `findSyncSchemaRef`, `containsSyncSchemaRefString` — which
 must all learn the new form in one change; the walker-agreement test in
-`packages/memory/test/v2-sync-schema-table.test.ts` pins that), and the
+`runtime/memory/test/v2-sync-schema-table.test.ts` pins that), and the
 schema-combination path structurally unchanged: a reference dereferences to
 exactly the schema that would have been inline.
 
@@ -319,7 +319,7 @@ in the target space (same transaction), and stamps the reference.
 vocabulary, not links; they adopt the same reference form on the same
 schedule as the link flip, which retires the standing "`$alias` schemas
 travel inline indefinitely" carve-out in
-`packages/memory/v2/schema-table-links.ts`.
+`runtime/memory/v2/schema-table-links.ts`.
 
 ### References in result-schema metadata
 
@@ -355,7 +355,7 @@ the enforcement or was written out of band. Keeping the grammar to two
 forms is what lets a reader recompose a reference without merging two
 schema-resource scopes.
 
-The writer (`writeResultSchemaMeta`, `packages/runner/src/result-schema-meta.ts`)
+The writer (`writeResultSchemaMeta`, `runtime/runner/src/result-schema-meta.ts`)
 decomposes the schema as a link writer does, registers the closure, and
 stamps the reference; the transaction's schema-document staging reads the
 `schema` member of a written document — or a write made at that member —
@@ -432,7 +432,7 @@ local store at the reading seams:
   server registers through traversal without one) retains for the process
   lifetime; its entries are a cache over its own store, so a size cap there
   is safe if ever needed — an evicted document is one local read away.
-- `resolveSchemaRefs` (`packages/runner/src/cfc/schema-refs.ts`) extends
+- `resolveSchemaRefs` (`runtime/runner/src/cfc/schema-refs.ts`) extends
   from `#/$defs/<name>`-only to `cid:` refs (with optional `#/$defs/<name>`
   fragment), resolving through the registry. An unresolvable ref keeps the
   existing fail-closed contract: `resolveSchema` returns `false`, and

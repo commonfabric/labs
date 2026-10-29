@@ -41,7 +41,7 @@ by the server, beside the client-supplied display name.
 
 `cf-code-editor` joins only while collaborative editing is active and a
 `participantName` is set, through `RuntimeClient.joinPresenceRoom()`
-([`../../packages/runtime-client/README.md`](../../packages/runtime-client/README.md)).
+([`../../runtime/runtime-client/README.md`](../../runtime/runtime-client/README.md)).
 A room belongs to a field, not to a person: each editor joins the room of the
 field it is bound to, and everyone editing that field meets there, with one
 entry per browser tab. A tab with editors for two different fields is in both
@@ -91,7 +91,7 @@ stamps on a record does not cross into the guest. A relay's refusal of the
 guest's join or of its publication reaches the guest in the relay's words,
 since it concerns what the guest did, and any other failure reaches it as a
 category alone.
-[`../../packages/iframe-sandbox/README.md`](../../packages/iframe-sandbox/README.md)
+[`../../base/iframe-sandbox/README.md`](../../base/iframe-sandbox/README.md)
 covers the guest API, and
 [`../common/ai/iframe-pattern-guide.md`](../common/ai/iframe-pattern-guide.md)
 the authoring contract.

@@ -26,7 +26,7 @@ into explicit graph nodes, and harden the result.**
 
 ## The pipeline
 
-`packages/ts-transformers/src/cf-pipeline.ts` defines ~20 transformer stages
+`base/ts-transformers/src/cf-pipeline.ts` defines ~20 transformer stages
 that run in strict order over the TypeScript AST. You don't need to know
 all of them; you need the five jobs they implement:
 
@@ -79,7 +79,7 @@ deno task cf check pattern.tsx --show-transformed --no-run
 ## Types → JSON schemas
 
 The `schema-generator` package walks TypeScript types with a chain of
-formatters (`packages/schema-generator/src/`); the Common Fabric–specific
+formatters (`base/schema-generator/src/`); the Common Fabric–specific
 one handles the branded wrapper types:
 
 | You write | Schema emitted |
@@ -98,7 +98,7 @@ handle (write-capable) instead of a plain value; `default` fills missing
 documents; `scope` selects the storage partition (Chapter 9).
 
 A real before/after, from the transformer test fixtures
-(`packages/ts-transformers/test/fixtures/handler-schema/simple-handler.input.tsx`
+(`base/ts-transformers/test/fixtures/handler-schema/simple-handler.input.tsx`
 and its `.expected.jsx`):
 
 ```tsx
@@ -132,10 +132,10 @@ it can write.
 
 After transformation, executing the module is cheap and safe: calling
 `pattern(inputSchema, outputSchema, fn)` and then instantiating it runs the
-body **once** inside a tracking frame (`packages/runner/src/builder/`).
+body **once** inside a tracking frame (`runtime/runner/src/builder/`).
 Every `computed`/`lift`/`handler`/sub-pattern call registers a node; the
 result is a frozen, serializable description
-(`packages/runner/src/builder/types.ts`):
+(`runtime/runner/src/builder/types.ts`):
 
 ```ts
 // Shown for illustration only.
@@ -163,19 +163,19 @@ placeholder, not a number.
 Each node's code carries an `$implRef` — a stable, content-derived identity
 for the implementation: `{ identity, symbol }`, the defining module's
 content identity plus the artifact's export symbol
-(`packages/runner/src/builder/types.ts`). It is deliberately ordinal-free —
+(`runtime/runner/src/builder/types.ts`). It is deliberately ordinal-free —
 where the function sits in the file doesn't participate, only its content.
 It serves three masters:
 
 - **Caching**: compiled implementations are resolved and cached by ref
-  (`packages/runner/src/harness/executable-registry.ts`, with compiled
-  records in `packages/runner/src/compilation-cache/`), so re-loading a
+  (`runtime/runner/src/harness/executable-registry.ts`, with compiled
+  records in `runtime/runner/src/compilation-cache/`), so re-loading a
   piece doesn't recompile unchanged nodes.
 - **Stable scheduling**: the scheduler identifies actions across re-runs by
   a content-addressed implementation fingerprint (the implementation hash).
 - **Provenance**: verified-source tracking ties running code back to the
   exact source that produced it (this also feeds the CFC contextual
-  flow-control machinery in `packages/runner/src/cfc/` — Chapter 10).
+  flow-control machinery in `runtime/runner/src/cfc/` — Chapter 10).
 
 The `js-compiler` package does the actual TypeScript-to-JS emission: one
 CommonJS body per authored file, which the runtime's module-record loader and
@@ -188,7 +188,7 @@ client.
 Compiled pattern code executes inside an SES (hardened JavaScript)
 environment in the runtime's process — that's the time-capability gate on
 `Date.now()` from Chapter 3. For fully untrusted *rendered* content there's a second,
-stronger boundary: `packages/iframe-sandbox` runs guest HTML/JS inside a
+stronger boundary: `base/iframe-sandbox` runs guest HTML/JS inside a
 double iframe (an outer `srcdoc` iframe that pins a strict
 Content-Security-Policy, enclosing an inner iframe with the guest code),
 with all data access mediated by a postMessage IPC protocol

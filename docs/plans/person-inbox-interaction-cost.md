@@ -185,7 +185,7 @@ what a result demands.
 ## Stage 1 — Stop the dereference-trace set from growing — **not built**
 
 **Where.** `ExtendedStorageTransaction.recordCfcDereferenceTrace`
-(`packages/runner/src/storage/extended-storage-transaction.ts`).
+(`runtime/runner/src/storage/extended-storage-transaction.ts`).
 
 **What this stage asked first.** Whether the scanned set grows. It does not.
 `dereferenceTracesRecorded` and `dereferenceTracesMax` were added to
@@ -209,7 +209,7 @@ time, so it is worth tidying but is no longer a performance item.
 ## Stage 2 — Make the per-read scan not linear — **landed**
 
 **Where.** `probeBelongsToDereference` inside `forEachFlowObservation`
-(`packages/runner/src/cfc/prepare.ts`), reached from `prepareForCommit` →
+(`runtime/runner/src/cfc/prepare.ts`), reached from `prepareForCommit` →
 `probeFlowLabelWork` → `flowLabelWorkExists`.
 
 **What was wrong.** For each of the transaction's read activities, the probe
@@ -218,7 +218,7 @@ source recorded for that document — up to 249 of them, once per read, with a
 closure allocated per comparison.
 
 **What landed.** `PathPrefixIndex`
-(`packages/runner/src/cfc/path-prefix-index.ts`) indexes those sources by path
+(`runtime/runner/src/cfc/path-prefix-index.ts`) indexes those sources by path
 segment, so the query costs the read path's length rather than the set's size.
 `isPrefix` treats `"*"` as matching any segment on either side, so the walk
 carries a frontier rather than a single node; a test compares the index against
@@ -290,7 +290,7 @@ the link is the stored form of exactly that — either by widening the shared
 predicate or by passing a local `acceptOpaqueValue` at this call site.
 
 What is missing is a test that fails without it.
-`packages/piece/test/scoped-input-write.test.ts` guards the same-session case,
+`runtime/piece/test/scoped-input-write.test.ts` guards the same-session case,
 which passes today; the refusal needs a client whose session is not the one
 that minted the link, and an attempt to build that in-process did not
 reproduce — a second `PiecesController` over the same space did not fail the
@@ -313,7 +313,7 @@ space. Two defects, worth splitting:
   Object]`, Cliffy having replaced the thrown `ConflictError` before
   `renderCliError` saw it; recovering the message needed a patch to
   `Command.prototype.handleError`. A commit failure now throws a real `Error`
-  (`commitFailure`, `packages/piece/src/ops/utils.ts`), so the same refusals
+  (`commitFailure`, `runtime/piece/src/ops/utils.ts`), so the same refusals
   print `ConflictError: stale confirmed read: …`. This one went first because
   every later investigation of the retry defect is blind without it.
 

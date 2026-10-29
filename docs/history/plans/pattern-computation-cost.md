@@ -55,7 +55,7 @@ contains the observed headless counts and the aggregate baseline matrix.
 ## Problem
 
 The vote path in
-[`packages/patterns/lunch-poll/main.tsx`](../../../packages/patterns/lunch-poll/main.tsx)
+[`packages/patterns/lunch-poll/main.tsx`](../../../patterns/apps/lunch-poll/main.tsx)
 is the worked example. `tallyOptions` is a group-by over votes joined against a
 roster, hand-written as nested scans: for each of the options it filters the
 whole vote list, then filters that result three more times by vote color, then
@@ -89,10 +89,10 @@ Three properties of the system produce that, and each needs a different repair.
 
 **The algebra has no middle.** `map`, `filter`, and `flatMap` have incremental
 builtins under
-[`packages/runner/src/builtins/`](../../../packages/runner/src/builtins) that
+[`packages/runner/src/builtins/`](../../../runtime/runner/src/builtins) that
 key elements by normalized link address and reuse per-element runs across
 changes. `reduce` has none — its doc comment on
-[`packages/runner/src/cell.ts`](../../../packages/runner/src/cell.ts) records
+[`packages/runner/src/cell.ts`](../../../runtime/runner/src/cell.ts) records
 that it re-runs the whole reduction when any element changes — and there is no
 `groupBy`, no `keyBy`, no join, and no read-side index. A tally is a group-by
 and a join. Neither has a declarative spelling, so it is written as scans.
@@ -122,7 +122,7 @@ than competing with them.
 
 - **Incremental collection builtins.** `map`, `filter`, `flatMap` and their
   `WithPattern` forms, registered in
-  [`packages/runner/src/builtins/index.ts`](../../../packages/runner/src/builtins/index.ts).
+  [`packages/runner/src/builtins/index.ts`](../../../runtime/runner/src/builtins/index.ts).
   `map.ts` documents the element-identity rules every new operator must follow.
 - **A declarative query surface.** The SQLite builtin ships;
   [`docs/specs/sqlite-builtin/`](../../specs/sqlite-builtin/README.md) is
@@ -137,12 +137,12 @@ than competing with them.
 - **Per-step counters.**
   `deno task cf test <file> --verbose --stats-threshold 0` prints per-step
   timing and per-action run deltas from
-  [`packages/cli/lib/test-runner.ts`](../../../packages/cli/lib/test-runner.ts).
+  [`packages/cli/lib/test-runner.ts`](../../../runtime/cli/lib/test-runner.ts).
 - **Read-width feedback.** `deno task cf check <file> --show-transformed` shows
   the emitted input schema, whose size is a usable proxy for how much a
   derivation declared it would read.
 - **A write-side benchmark.**
-  [`packages/patterns/integration/lunch-poll-vote-burst.bench.ts`](../../../packages/patterns/integration/lunch-poll-vote-burst.bench.ts)
+  [`packages/patterns/integration/lunch-poll-vote-burst.bench.ts`](../../../patterns/integration/lunch-poll-vote-burst.bench.ts)
   measures a hundred-vote burst to settle. It exercises the write path; the read
   path this plan targets needs its own.
 
@@ -212,7 +212,7 @@ only one that helps patterns nobody rewrites. Do it first.
       Reports cover assertion, render, and settle steps as well as actions;
       initialization is separate. Totals collect completion events, including
       actions absent from the final graph snapshot. The
-      [CLI reference](../../../packages/cli/README.md#pattern-test-read-costs)
+      [CLI reference](../../../runtime/cli/README.md#pattern-test-read-costs)
       defines each counter and its boundary.
 - [ ] **A3. Give a pattern test a budget.** Opt-in per pattern, not a
       repository-wide gate, so a pattern can defend its own hot path the way a
@@ -451,7 +451,7 @@ interaction.
 - [ ] **D2. Re-run the Track A baseline after each stage of it lands**, so the
       per-access improvement is attributed rather than assumed.
 - [ ] **D3. Audit and measure the scoped snapshot memo.** `getSnapshotMemo()` in
-      [`packages/runner/src/storage/extended-storage-transaction.ts`](../../../packages/runner/src/storage/extended-storage-transaction.ts)
+      [`packages/runner/src/storage/extended-storage-transaction.ts`](../../../runtime/runner/src/storage/extended-storage-transaction.ts)
       maintains separate memos by read epoch and ambient metadata identity.
       Child-view label derivation in `deriveDereferenceLabelView` uses an
       ambient-read-meta scope. Measure reuse within these scopes with Track A's
@@ -492,7 +492,7 @@ Independent of every other track, cheap, and worth doing this week.
       scan over a reactive collection inside a `computed` body is detectable
       statically. Emit a diagnostic naming the shape and the cheaper spelling,
       through the `TransformationDiagnostic` collector in
-      [`packages/ts-transformers/src/cf-pipeline.ts`](../../../packages/ts-transformers/src/cf-pipeline.ts).
+      [`packages/ts-transformers/src/cf-pipeline.ts`](../../../base/ts-transformers/src/cf-pipeline.ts).
       Ship it as a warning first; the false-positive rate decides whether it
       ever becomes an error.
 

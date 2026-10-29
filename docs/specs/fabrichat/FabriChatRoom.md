@@ -20,7 +20,7 @@ The room keeps these `PerSpace` values, shared by everyone the space admits:
   space's store, which the send reads to check it and the room never writes.
 - Those who joined the room: profile links, in the order they were added, a
   roster only `addParticipant` writes
-  (`packages/patterns/loom/participants.tsx`).
+  (`patterns/system/loom/participants.tsx`).
 - The title a member last set: one keyed record, absent until a member sets
   one, which only `commitSetTitle` writes. `about.title` is computed from it
   and, where it is absent, from the title `about.record` holds.
@@ -45,10 +45,13 @@ the messages' authors, keyed by profile cell. A room with `about`, which only a
 manager creates, is its space's root, and reads only its own roster: its
 `#default` is itself. `roster` is computed from those who joined alone.
 `messages` (its `count`, `oldestAt`, `newestAt`, `latest`, and `threads`) is
-computed from the messages, and `canSend` from the reader's access and profile,
-when they're read. Neither is stored. `viewer` and `messageRights` are computed
-for each reader too, `viewer` from their profile and access, and
-`messageRights` from those and the messages, for every message at once.
+computed from the messages when it's read, and isn't stored. `canSend`,
+`canAdd`, `viewer`, and `messageRights` are computed for each session, in a
+`PerSession` instance of each: `canSend` from the reader's access and profile,
+`canAdd` from their access, `viewer` from their profile and access, and
+`messageRights` from those and the messages, for every message at once. So
+are the values the room's rendering derives from them, such as whether its
+composers are disabled.
 
 `participantEntries` is computed from `participants`, reading whose own profile
 each is with `profileOwnerOf()`, and
@@ -239,8 +242,8 @@ which records its outcomes in `threadTitleRequests`, and by `commitSend` and
 `commitThreadSend` for a send that titles the thread it starts. Its record's
 policy names those three, and a later schema can neither add a writer to a
 stored policy nor drop one.
-`canSend` is computed for each viewer from their access and whether their
-profile resolves.
+`canSend` is computed for each session from the reader's access and whether
+their profile resolves.
 
 ## Configuration
 

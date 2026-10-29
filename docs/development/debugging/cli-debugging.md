@@ -26,7 +26,7 @@ unique key you use for normal development — see
 
 ```bash
 mkdir -p .cf
-deno run -A packages/cli/mod.ts id new > .cf/shared-dev.key
+deno run -A runtime/cli/mod.ts id new > .cf/shared-dev.key
 export CF_IDENTITY="$PWD/.cf/shared-dev.key"
 ```
 
@@ -97,7 +97,7 @@ When the question is "what did the compiler emit?", use `cf check` with
 `--show-transformed` instead of reaching for ad hoc test harness code.
 
 ```bash
-deno task cf check ./packages/patterns/my-pattern.tsx --root $(pwd) --show-transformed
+deno task cf check ./patterns/my-pattern.tsx --root $(pwd) --show-transformed
 ```
 
 This is the fastest way to inspect how `ts-transformers` rewrote:
@@ -111,7 +111,7 @@ It also works on fixture inputs while debugging the compiler itself:
 
 ```bash
 deno task cf check \
-  packages/ts-transformers/test/fixtures/jsx-expressions/jsx-property-access.input.tsx \
+  base/ts-transformers/test/fixtures/jsx-expressions/jsx-property-access.input.tsx \
   --root $(pwd) \
   --show-transformed
 ```

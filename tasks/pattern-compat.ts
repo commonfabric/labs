@@ -3,7 +3,7 @@
 /**
  * Tier 1 pattern-update gate. Compiles every authored pattern, then proves its
  * argument/result contract can still be applied over every contract recorded
- * for it under `packages/patterns/baselines/`.
+ * for it under `patterns/baselines/`.
  *
  * The rule this enforces is the one `cf piece setsrc` enforces
  * (`assertPatternSchemasBackwardCompatible`); the automatic updater applies a
@@ -28,7 +28,7 @@
 
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { FragmentWriter } from "@commonfabric/test-support/records";
-import { createRuntime } from "../packages/cli/lib/dev.ts";
+import { createRuntime } from "../runtime/cli/lib/dev.ts";
 import {
   BASELINES_DIR,
   collectAllPatternFiles,
@@ -45,7 +45,7 @@ import {
 import {
   DEFAULT_APP_PATTERN_SOURCE,
   HOME_PATTERN_SOURCE,
-} from "../packages/piece/src/system-pattern-url.ts";
+} from "../runtime/piece/src/system-pattern-url.ts";
 import {
   acceptedBreakKey,
   checkPattern,
@@ -124,7 +124,7 @@ async function main() {
   const contracts = new Map<string, PatternContract>();
 
   /**
-   * Files that yielded no contract, and why. Most of `packages/patterns` is not
+   * Files that yielded no contract, and why. Most of `patterns` is not
    * a pattern entry — `schemas.tsx`, `auth-types.ts`, client helpers — and a
    * module with no pattern default export has no update contract to check, so
    * it is skipped rather than failed. It only becomes a finding if baselines
