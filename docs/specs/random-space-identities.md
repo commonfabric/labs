@@ -163,13 +163,13 @@ it for everyone, for good. Nothing else a principal does ends a space:
 removing members, forgetting it in a list, or losing every reference to it
 leaves it in place.
 
-- Only the space's sole member deletes it, holding OWNER: the access list's
-  one entry has to be the deleting principal, or, for a space that owns itself,
-  the space's own DID, which the deleting principal acts for through a
-  delegation chain. A space with other members is deleted once an OWNER has
-  removed them, each removal an ordinary access-list change of its own. Other
-  holders of a delegation are not members of the list, and lose access with no
-  change of their own first.
+- Only the space's sole member deletes it, holding OWNER: the access list's one
+  entry has to be the deleting principal, or, for a space that owns itself, the
+  space's own DID, which the deleting principal acts for through a [delegation
+  chain](memory-v2/04-protocol.md#proof-chains). A space with other members is
+  deleted once an OWNER has removed them, each removal an ordinary access-list
+  change of its own. Other holders of a delegation are not members of the list,
+  and lose access with no change of their own first.
 - Deletion is one access-list-only commit, which replaces the access list
   with a tombstone naming the deleting principal. It writes the
   access-control document and never removes it.

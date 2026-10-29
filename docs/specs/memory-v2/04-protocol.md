@@ -1825,25 +1825,28 @@ tombstone rather than an access list:
 `by` names the committing principal, and the tombstone holds nothing else. The
 server admits it only when the stored ACL is valid and its one entry is at
 OWNER, naming either the committing principal or the principal the session's
-capability resolves to through a verified proof chain, the chain's root issuer.
-For an ordinary space that entry is the deleting principal's own, so another
-member has to be removed, visibly and through the ordinary check, before the
-space can be deleted. That asks no authority an OWNER does not already hold. A
-self-owned space, whose list names the space's own DID and whose owner acts
-through a delegation from it, is deleted through the chain, as every other OWNER
-act on it is. A delegation is not an entry in the list, so another holder of one
-loses access with no commit of its own first, as it does when an owner replaces
-the list; and since `by` still names the committing principal, the tombstone is
-the one place such a space records the identity that acted for it. A principal
-never deletes its own Home space, whose DID is the principal's own identity,
-through a chain or without one. From the deletion commit on, the server refuses
-every command any principal sends the space, a service DID's included, with a
-permanent `AuthorizationError` carrying `deleted: true`, revokes the sessions
-open on it, as it revokes those any ACL commit deauthorizes but with the
-`session/revoked` reason `deleted`, and admits no further commit to it, so no
-principal can undo the deletion. A tombstone is not an access list, so a server
-rolled back to a release that does not know tombstones finds the ACL malformed,
-and refuses the space to every principal but a service DID.
+capability resolves to through a verified proof chain, the chain's root issuer
+("Proof chains" below). For an ordinary space that entry is the deleting
+principal's own, so another member has to be removed, visibly and through the
+ordinary check, before the space can be deleted. That asks no authority an OWNER
+does not already hold. A self-owned space, whose list names the space's own DID
+and whose owner acts through a delegation from it, is deleted through the chain,
+as every other OWNER act on it is. A server whose access-list policy admits no
+delegations, and so advertises no `sessionOpenProofs`, refuses every chain, and
+there only an entry naming the committing principal admits a deletion. A
+delegation is not an entry in the list, so another holder of one loses access
+with no commit of its own first, as it does when an owner replaces the list; and
+since `by` still names the committing principal, the tombstone is the one place
+such a space records the identity that acted for it. A principal never deletes
+its own Home space, whose DID is the principal's own identity, through a chain
+or without one. From the deletion commit on, the server refuses every command
+any principal sends the space, a service DID's included, with a permanent
+`AuthorizationError` carrying `deleted: true`, revokes the sessions open on it,
+as it revokes those any ACL commit deauthorizes but with the `session/revoked`
+reason `deleted`, and admits no further commit to it, so no principal can undo
+the deletion. A tombstone is not an access list, so a server rolled back to a
+release that does not know tombstones finds the ACL malformed, and refuses the
+space to every principal but a service DID.
 
 The shape and genesis rules are catalogued as **INV-12** (ACL mutation commit
 shape) and **INV-13** (ACL genesis precedence and authority), and deleting a

@@ -735,17 +735,19 @@ chain.
 
 The chain clause serves a self-owned space, whose list names the space's own DID
 at OWNER and whose owner acts through a delegation the space issued. A session
-presenting a verified proof chain resolves its capability from the chain's root
-issuer, and that is the test the server applies to every OWNER act on such a
-space, replacing its list included; deleting it takes the same test and no
-detour through a list naming the deleting principal. It is a different rule from
-the sole-member clause, and deliberately so. A delegation is a proof the owner
-hands out, not an entry in the list, so the server cannot see whether the owner
-also delegated to other identities, and a clause that required it to would leave
-any such space impossible to delete. Those other holders lose access with no
-commit of their own first, as they do when an owner replaces the list. `by`
-names the committing principal, not the root issuer, so for such a space the
-tombstone is the one place the identity that acted for the space appears.
+presenting a verified proof chain
+([`04-protocol.md`](04-protocol.md#proof-chains) §4.5.1, "Proof chains")
+resolves its capability from the chain's root issuer, and that is the test the
+server applies to every OWNER act on such a space, replacing its list included;
+deleting it takes the same test and no detour through a list naming the deleting
+principal. It is a different rule from the sole-member clause, and deliberately
+so. A delegation is a proof the owner hands out, not an entry in the list, so
+the server cannot see whether the owner also delegated to other identities, and
+a clause that required it to would leave any such space impossible to delete.
+Those other holders lose access with no commit of their own first, as they do
+when an owner replaces the list. `by` names the committing principal, not the
+root issuer, so for such a space the tombstone is the one place the identity
+that acted for the space appears.
 
 The clauses are checked after INV-12's shape clauses, in this order:
 
@@ -776,9 +778,14 @@ created under [random space identities](../random-space-identities.md) has no
 such key left, but a legacy space's key can be recomputed from its name.
 
 Layer: server admission (`#validateAclCommit` and the capability check in
-`packages/memory/v2/server.ts`, with the ACL state a tombstone gives in
-`readAclState`); client emission (`writeAcl()` in
-`packages/runner/src/acl-manager.ts`).
+`runtime/memory/v2/server.ts`, with the ACL state a tombstone gives in
+`readAclState`, and the session's `capabilityPrincipal`, which
+`verifySessionOpenProofs` in `runtime/memory/v2/session-open-auth.ts` sets to a
+verified chain's root issuer); client emission (`writeAcl()` in
+`runtime/runner/src/acl-manager.ts`). The chain clause applies only where the
+server admits delegations (`acl.delegations`, which toolshed sets from
+`MEMORY_ACL_DELEGATIONS`, on unless set false): a server that admits none
+refuses every chain, and there the clause's other branch is the only one.
 
 Soundness direction: none — exact. Over-acceptance destroys a space a member
 the list names other than the deleting principal or its chain's root issuer

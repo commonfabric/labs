@@ -261,7 +261,7 @@ through machinery the runtime already has, not a retry or a poll of its own:
   come first: raised before the answer arrives, it would run the handler again
   against a space still unanswered. If the space's load fails instead, with no
   answer coming, the event fails as an event whose required load failed does
-  (`finalize()` in `packages/runner/src/scheduler/events.ts`), and is not run
+  (`finalize()` in `runtime/runner/src/scheduler/events.ts`), and is not run
   again.
 
 A runtime with no memory server it can ask about the space, such as one whose
