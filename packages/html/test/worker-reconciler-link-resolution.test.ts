@@ -351,7 +351,119 @@ describe("worker reconciler link resolution", () => {
         snapshotHandles: inlinePointer.snapshotHandles() +
           rootPointer.snapshotHandles(),
       }).toEqual({ inline: [target], root: [target], snapshotHandles: 0 });
+
+      // The view a binding hands the host carries the target's stored label
+      // for either target, read without a snapshot handle.
+      const ops: VDomOp[] = [];
+      const reconciler = new WorkerReconciler({
+        onOps: (batch) => {
+          for (const op of batch) ops.push(op);
+        },
+      });
+      try {
+        reconciler.mount({
+          type: "vnode",
+          name: "div",
+          props: {},
+          children: [
+            {
+              type: "vnode",
+              name: "cf-render",
+              props: { $cell: inlinePointer.cell },
+              children: [],
+            },
+            {
+              type: "vnode",
+              name: "cf-render",
+              props: { $cell: rootPointer.cell },
+              children: [],
+            },
+          ],
+        } as unknown as WorkerVNode);
+        await runtime.idle();
+        reconciler.flush();
+        const bound = ops.flatMap((op) =>
+          op.op === "set-binding" && op.propName === "cell"
+            ? [
+              op.cellRef.cfcLabelView?.entries.flatMap((entry) =>
+                entry.label.confidentiality ?? []
+              ),
+            ]
+            : []
+        );
+        expect({
+          bound,
+          snapshotHandles: inlinePointer.snapshotHandles() +
+            rootPointer.snapshotHandles(),
+        }).toEqual({ bound: [[target], [target]], snapshotHandles: 0 });
+      } finally {
+        reconciler.unmount();
+      }
     } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("marks a piece boundary on a result field that links to another pattern's result", async () => {
+    // A sub-pattern included as a field of its parent's result is a link to
+    // the sub-pattern's own result document, whose root the child resolves
+    // to, so the boundary names that document.
+
+    const owner = await Identity.fromPassphrase("link resolution sub owner");
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: StorageManager.emulate({ as: owner }),
+    });
+    const ops: VDomOp[] = [];
+    const reconciler = new WorkerReconciler({
+      onOps: (batch) => {
+        for (const op of batch) ops.push(op);
+      },
+    });
+    const parent = runtime.getCell<unknown>(
+      owner.did(),
+      "link resolution sub parent",
+    );
+    const child = runtime.getCell<unknown>(
+      owner.did(),
+      "link resolution sub child",
+    );
+    try {
+      const seeded = await runtime.editWithRetry((tx) => {
+        for (
+          const [cell, name] of [[child, "child"], [parent, "parent"]] as const
+        ) {
+          const writable = cell.withTx(tx);
+          writable.setMetaRaw("patternIdentity", {
+            identity: `link-resolution-${name}`,
+            symbol: "default",
+          }, rawMetaWriteAuthorization);
+        }
+        child.withTx(tx).set({ $UI: vnode("Child") });
+        parent.withTx(tx).set({ $UI: vnode("Parent"), detail: child });
+      });
+      expect(seeded.error).toBeUndefined();
+
+      reconciler.mount({
+        type: "vnode",
+        name: "div",
+        props: {},
+        children: [parent.key("detail") as Cell<WorkerVNode>],
+      });
+      await runtime.idle();
+      reconciler.flush();
+      expect(createdTexts(ops)).toEqual(["Child"]);
+      const boundaries = ops.flatMap((op) =>
+        op.op === "set-piece-boundary"
+          ? [{ id: op.cellRef.id, path: op.cellRef.path }]
+          : []
+      );
+      expect(boundaries).toEqual([{
+        id: child.getAsNormalizedFullLink().id,
+        path: [],
+      }]);
+    } finally {
+      reconciler.unmount();
       await runtime.dispose();
     }
   });

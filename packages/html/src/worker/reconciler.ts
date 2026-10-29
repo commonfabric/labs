@@ -1786,7 +1786,9 @@ export class WorkerReconciler {
     try {
       labelView = cfcLabelViewForCell(cell);
       if (labelView === undefined) {
-        labelView = cfcLabelViewForCell(cell.resolveAsCell());
+        labelView = cfcLabelViewForCell(
+          cell.resolveAsCell({ inlineArrayItemsInPlace: true }),
+        );
       }
     } catch {
       labelView = undefined;
@@ -1822,7 +1824,9 @@ export class WorkerReconciler {
    */
   #resolveCellLabelView(cell: Cell<unknown>): CfcLabelView | undefined {
     return cfcLabelViewSourceForCell(cell).view ??
-      cfcLabelViewSourceForCell(cell.resolveAsCell()).view;
+      cfcLabelViewSourceForCell(
+        cell.resolveAsCell({ inlineArrayItemsInPlace: true }),
+      ).view;
   }
 
   /**
