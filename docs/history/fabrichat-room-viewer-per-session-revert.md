@@ -96,5 +96,4 @@ which names this record. Every other FabriChat entry is as it was before #9360.
 
 ## The rulings
 
-- 2026-10-29, @danfuzz: RULING TO BE RECORDED HERE BEFORE THIS LANDS, in
-  place of this line.
+- 2026-10-29, @danfuzz decided to revert.
