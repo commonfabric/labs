@@ -593,46 +593,51 @@ const forEachIfcLabels = (
 };
 
 /**
- * The labels of a value that may be any of `arms`, a union's, of which those
- * in `accepting` accept any value, joined (`joinMemberIfcLabels()`): an arm
- * accepting anything contributes the labels it states, and any other arm
- * those it states and each confidentiality atom anywhere in its value,
- * through the definitions in `definitions` its references reach.
+ * The labels of the whole of a value that may be any of `arms`, a union's:
+ * every restriction an arm states anywhere in its value, through the
+ * definitions in `definitions` its references reach, combined
+ * (`combineIfcLabels()`), since the value may hold that arm's data anywhere,
+ * and the evidence every arm states alike of its whole value
+ * (`joinMemberIfcLabels()`), since the value is provably the payload of each
+ * arm's policy only where every arm says so. A restriction other than
+ * confidentiality that two arms state differently is refused, as one value
+ * can hold only one.
  */
 const reducedArmLabels = (
   arms: readonly MutableJSONSchema[],
-  accepting: readonly MutableJSONSchema[],
   definitions: Readonly<Record<string, MutableJSONSchema>>,
-): IfcLabels | undefined =>
-  joinMemberIfcLabels(
+): IfcLabels | undefined => {
+  let restrictions: IfcLabels = {};
+  for (const arm of arms) {
+    forEachIfcLabels(arm, definitions, (found) => {
+      const stated = restrictionsAndEvidence(found).restrictions;
+      if (stated) restrictions = combineIfcLabels(restrictions, stated);
+    });
+  }
+  const evidence = joinMemberIfcLabels(
     {},
-    arms.map((arm): IfcLabels => {
-      const declared = isObjectNotArray(arm) && isObjectNotArray(arm.ifc)
-        ? arm.ifc
-        : {};
-      if (accepting.includes(arm)) return declared;
-      let confidentiality: IfcLabels = {};
-      forEachIfcLabels(arm, definitions, (found) => {
-        confidentiality = combineIfcLabels(confidentiality, {
-          confidentiality: found.confidentiality,
-        });
-      });
-      return { ...declared, ...confidentiality };
-    }),
+    arms.map((arm) =>
+      restrictionsAndEvidence(
+        isObjectNotArray(arm) && isObjectNotArray(arm.ifc) ? arm.ifc : {},
+      ).evidence ?? {}
+    ),
   );
+  const labels = { ...restrictions, ...evidence };
+  return Object.keys(labels).length > 0 ? labels : undefined;
+};
 
 /**
  * The schema of a union whose `arms` include one accepting any value, as
  * `any` or a bare `unknown` does (`acceptsAnyValue()`, `isUnknownValue()`),
  * where some arm states a label anywhere in its value: the arm the checker
  * reduces the union to, `any | X` to `any` and `unknown | X` to `unknown`,
- * `any` winning, labeled with the arms' labels joined as a value that may be
- * any of them is (`joinMemberIfcLabels()`). That is each confidentiality atom
- * any arm states anywhere in its value, through its references, and each
- * other label every arm states alike, so an arm accepting anything that
- * states none leaves the value no evidence. The labels go on the whole value
- * because the runtime keeps a union arm's labels only beside arms that cannot
- * hold the same values, and an arm accepting anything can hold any. The arms
+ * `any` winning, labeled with the arms' labels as the whole of a value that
+ * may be any of them (`reducedArmLabels()`): every restriction any arm states
+ * anywhere in its value, and the evidence every arm states alike, so an arm
+ * accepting anything that states none leaves the value no evidence. The
+ * labels go on the whole value because the runtime keeps a union arm's labels
+ * only beside arms that cannot hold the same values, and an arm accepting
+ * anything can hold any. The arms
  * are recorded (`GenerationContext.schemaOrigins`, `"reduction"`) for a
  * reading that maps the value one arm at a time, as `Pick` and `Omit` do. An
  * option accepting no value, as `never` gives, is no arm of the union, and is
@@ -678,14 +683,13 @@ export const reducedLabeledUnion = (
       unwritten: [...unwritten],
       kept,
       arms,
-      accepting,
     });
   };
   if (!labeled) {
     if (arms.includes(true)) readOnceWritten(undefined);
     return undefined;
   }
-  const labels = reducedArmLabels(arms, accepting, context.definitions);
+  const labels = reducedArmLabels(arms, context.definitions);
   readOnceWritten(labels);
   const unknown = accepting.find(isUnknownValue);
   const base: MutableJSONSchemaObj =
@@ -733,8 +737,8 @@ export const withReducedArmsLabeled = (
  * A value settled to accept any value, which met definitions not yet written
  * (`unwritten`) in `definitions`, and the labels it kept: one an
  * intersection the checker gives `any` settled to (`labelsBesideAnyValue()`),
- * or a union of `arms`, of which those in `accepting` accept any value,
- * reduced to them (`reducedLabeledUnion()`) or made `true` by one.
+ * or a union of `arms`, reduced to those accepting any value
+ * (`reducedLabeledUnion()`) or made `true` by one.
  */
 export type AnyValueBesideUnwritten =
   & {
@@ -747,7 +751,6 @@ export type AnyValueBesideUnwritten =
     | {
       readonly within: "union";
       readonly arms: readonly MutableJSONSchema[];
-      readonly accepting: readonly MutableJSONSchema[];
     }
   );
 
@@ -757,7 +760,7 @@ export type AnyValueBesideUnwritten =
  * reference met inside its own definition, as recursion meets it, names a
  * definition whose labels could not be read there. A union's are the labels
  * its arms state, read as its reduction reads them (`reducedArmLabels()`), to
- * which a written definition adds confidentiality alone. For a union, only a
+ * which a written definition adds restrictions alone. For a union, only a
  * definition `schema`, the schema generated, holds counts: one it does not
  * hold took the union inside it with it, as a recursion through its own
  * argument does, read again one level down and absorbed by the level above.
@@ -776,7 +779,7 @@ export const assertAnyValuesKeptLabels = (
         Object.hasOwn(emitted, name)
       );
       if (unwritten.length === 0) continue;
-      const stated = reducedArmLabels(value.arms, value.accepting, definitions);
+      const stated = reducedArmLabels(value.arms, definitions);
       if (stated !== undefined && !holdsIfcLabels(kept ?? {}, stated)) {
         const names = unwritten.map((name) => `\`${name}\``).join(", ");
         const inside = unwritten.length === 1

@@ -137,6 +137,51 @@ describe("ifc-labels", () => {
       ).toBeUndefined();
     });
 
+    it("labels the value with every restriction an arm states anywhere in its value, the arm accepting anything included", () => {
+      // The value may hold an arm's data anywhere, so an arm's restriction
+      // goes on the whole value, as it does beside `any` in an intersection.
+
+      expect(
+        reducedLabeledUnion(
+          [{ ifc: { exactCopyOf: ["p"] } }, labeled],
+          contextWith(),
+        ),
+      ).toEqual({ ifc: { exactCopyOf: ["p"], confidentiality: ["a"] } });
+      expect(
+        reducedLabeledUnion([true, {
+          type: "object",
+          properties: { x: { type: "string", ifc: { exactCopyOf: ["p"] } } },
+        }], contextWith()),
+      ).toEqual({ ifc: { exactCopyOf: ["p"] } });
+    });
+
+    it("labels the value with evidence every arm states of its whole value, and none an arm states of a part", () => {
+      expect(
+        reducedLabeledUnion([{ ifc: { integrity: ["i"] } }, {
+          type: "object",
+          ifc: { integrity: ["i"] },
+        }], contextWith()),
+      ).toEqual({ ifc: { integrity: ["i"] } });
+      expect(
+        reducedLabeledUnion([true, {
+          type: "object",
+          properties: { x: { type: "string", ifc: { integrity: ["i"] } } },
+        }], contextWith()),
+      ).toBe(true);
+    });
+
+    it("throws for arms that state a restriction other than confidentiality differently", () => {
+      // The whole value can hold only one.
+
+      expect(() =>
+        reducedLabeledUnion([
+          true,
+          { type: "object", ifc: { exactCopyOf: ["p"] } },
+          { type: "array", ifc: { exactCopyOf: ["q"] } },
+        ], contextWith())
+      ).toThrow("One value declares `ifc.exactCopyOf` twice");
+    });
+
     it("records a union an arm of which reaches a definition not written yet, with the labels it kept", () => {
       // `Node` is still being generated, so it is not among the definitions.
 
@@ -155,7 +200,6 @@ describe("ifc-labels", () => {
         unwritten: ["Node"],
         kept: { confidentiality: ["a"] },
         arms,
-        accepting: [true],
       }]);
     });
 

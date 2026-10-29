@@ -3925,6 +3925,45 @@ describe("Schema: CFC authoring aliases", () => {
     }
 
     for (
+      const [member, inner] of [
+        ['{ x: Exact<string, readonly ["p"]> }', {
+          ifc: { exactCopyOf: ["p"] },
+        }],
+        ['Exact<{ x: string }, readonly ["p"]> | Sec<{ x: string; z: 1 }>', {
+          ifc: { exactCopyOf: ["p"], confidentiality: ["a"] },
+        }],
+      ] as const
+    ) {
+      it(`keeps every restriction a member states anywhere on the whole of \`T | ${member}\` under bindings, \`T\` bound to \`any\``, async () => {
+        // The value may hold a member's data anywhere, so a restriction of any
+        // kind goes on the whole value, as it does beside `any` in an
+        // intersection.
+
+        const { value, diagnostics } = await generate(`
+          type Sec<T> = Confidential<T, readonly ["a"]>;
+          type Exact<T, P extends readonly string[]> = Cfc<T, { exactCopyOf: P }>;
+          type Outer<T> = Confidential<{ inner: T | ${member} }, readonly ["b"]>;
+          interface Holder { value: Outer<any> }
+        `);
+        expect((value as any).properties.inner).toEqual(inner);
+        expect(diagnostics).toEqual([]);
+      });
+    }
+
+    it("refuses `T | Exact<A, P> | Exact<B, Q>` under bindings, `T` bound to `any`, whose members state `exactCopyOf` differently", async () => {
+      // The whole value can hold only one.
+
+      await expect(generate(`
+        type Exact<T, P extends readonly string[]> = Cfc<T, { exactCopyOf: P }>;
+        type Outer<T> = Confidential<
+          { inner: T | Exact<{ x: string }, readonly ["p"]> | Exact<{ y: string }, readonly ["q"]> },
+          readonly ["b"]
+        >;
+        interface Holder { value: Outer<any> }
+      `)).rejects.toThrow("One value declares `ifc.exactCopyOf` twice");
+    });
+
+    for (
       const [argument, inner] of [
         ["any", {
           type: "object",

@@ -2951,6 +2951,23 @@ type Outer<T> = Confidential<{ inner: Omit<T | never | Confidential<{ x: string 
           }
         });
 
+        it("keeps an `ExactCopy` a member states, with the members' confidentiality, on the whole of a union a binding makes `any`, on both sides", async () => {
+          // The value may hold the member's data anywhere, so its restriction
+          // goes on the whole value, as confidentiality does.
+
+          const { input, output } = await schemasOf(
+            `import type { ExactCopy } from "commonfabric";
+${DECLARATIONS}
+type Outer<T> = Confidential<{ inner: T | ExactCopy<One, readonly ["p"]> | Sec<Two> }, readonly ["outer"]>;`,
+            "Outer<any>",
+          );
+          for (const side of [input, output]) {
+            expect(
+              ((side as Schema).properties as Record<string, Schema>).inner,
+            ).toEqual({ ifc: { exactCopyOf: ["p"], confidentiality: ["a"] } });
+          }
+        });
+
         it("refuses a scope wrapper beside a member a binding makes `any`, on both sides", async () => {
           // A member that is `true` makes a union `true`, but not one with
           // a member that declares a scope, which no member of a union can.

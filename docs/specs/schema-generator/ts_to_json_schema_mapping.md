@@ -1040,11 +1040,16 @@ Default paths of §7:
   accepts any value, `any` or a bare `unknown`, and some member states a
   label anywhere in its value, the union is that member, as the checker
   reduces `any | X` to `any` and `unknown | X` to `unknown`, `any` winning.
-  It is labeled with the members' labels joined, as a value that may be any
-  of them (`reducedLabeledUnion` in `ifc-labels.ts`, `joinMemberIfcLabels`):
-  every confidentiality atom any member states anywhere in its value,
-  through its references, and each other label every member states alike,
-  so a member accepting anything that states none leaves no evidence. The
+  It is labeled as the whole of a value that may be any of them
+  (`reducedLabeledUnion` in `ifc-labels.ts`): with every restriction any
+  member states anywhere in its value, through its references, since the
+  value may hold that member's data anywhere, as `any` keeps them in an
+  intersection (§9); and with the evidence every member states alike of its
+  whole value, so a member accepting anything that states none leaves no
+  evidence. Confidentiality atoms combine; a restriction of another kind two
+  members state differently, as two `exactCopyOf` lists, is refused ("One
+  value declares `ifc.exactCopyOf` twice"), since one value can hold only
+  one. The
   labels go on the whole value, not on an arm, because the runtime keeps a
   union arm's labels only beside arms that cannot hold the same values
   (`assertNoDivergentIfcBranches` in `packages/runner/src/cfc/schema-merge.ts`),
@@ -1066,7 +1071,7 @@ Default paths of §7:
   A member that reaches a definition still being generated, as a recursive
   type's own member does, holds labels that cannot be read there. Once
   generation is done, the union is read again, and refused where its members
-  then state a confidentiality atom it did not keep ("A union with a member
+  then state a restriction it did not keep ("A union with a member
   accepting any value is that member, with the labels of every member, but
   it meets `Node` inside the definition of `Node`, where those labels cannot
   be read yet."), as is such a union that states no label of its own and a
