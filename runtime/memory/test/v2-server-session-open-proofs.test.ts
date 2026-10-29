@@ -430,6 +430,77 @@ describe("v2-server-session-open-proofs", () => {
     }
   });
 
+  it("sends an idle presence member nothing once its chain's expiry has passed", async () => {
+    // The member makes no request after its expiry, so nothing ends its
+    // session or its membership; delivery alone has to withhold the push.
+
+    const clock = { now: 1_000_000 };
+    const server = createServer(
+      "memory://proofs-expiry-presence",
+      { mode: "enforce", delegations: true },
+      clock,
+    );
+    const room = "room-0123456789abcdefghijklmnop";
+    const presence = async (
+      { connection, messages }: Harness,
+      sessionId: string,
+      request: Record<string, unknown>,
+    ) => {
+      await connection.receive(encodeMemoryBoundary({
+        requestId: nextRequestId("presence"),
+        space: space.did(),
+        sessionId,
+        room,
+        ...request,
+      }));
+      return nextResponse(messages);
+    };
+    try {
+      await initializeSelfOwnedSpace(server);
+      const owner = await connect(server);
+      const ownerOpened = await openSession(owner, space.did());
+      expectExists(ownerOpened.ok, "the space identity opens its own space");
+      const member = await connect(server);
+      const expiring = await issueDelegation(space, {
+        aud: alice.did(),
+        sub: space.did(),
+        cmd: "/memory",
+        pol: [],
+        exp: clock.now + 100,
+      });
+      const memberOpened = await openSession(member, alice.did(), [expiring]);
+      expectExists(memberOpened.ok, "the chain holds at open");
+      const memberId = memberOpened.ok.sessionId;
+      const ownerId = ownerOpened.ok.sessionId;
+
+      expectExists(
+        (await presence(member, memberId, { type: "presence.join" })).ok,
+      );
+      expectExists(
+        (await presence(owner, ownerId, { type: "presence.join" })).ok,
+      );
+      const publish = (revision: number) =>
+        presence(owner, ownerId, {
+          type: "presence.publish",
+          revision,
+          name: "Owner",
+          facets: { caret: { focused: true } },
+        });
+
+      expectExists((await publish(1)).ok);
+      expect(member.messages.map((message) => message.type)).toEqual([
+        "presence/upsert",
+      ]);
+      member.messages.length = 0;
+
+      clock.now += 101;
+      expectExists((await publish(2)).ok);
+      expect(member.messages).toEqual([]);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("takes the deadline of the chain a same-connection reopen presents, in both directions", async () => {
     const clock = { now: 1_000_000 };
     const server = createServer(

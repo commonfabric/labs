@@ -1800,6 +1800,13 @@ class Connection {
   /** Pushes one presence message to this connection's peer. */
   sendPresence(message: PresenceUpsertMessage | PresenceRemoveMessage): void {
     if (this.#closed) return;
+    // A recipient whose proof chain has expired is sent nothing, as in the
+    // delivery loop: the grant it joined under is gone, and its next request
+    // ends it and its membership.
+    const handle = this.#sessions.get(
+      sessionKey(message.space, message.sessionId),
+    );
+    if (handle !== undefined && this.#delegationEnded(handle)) return;
     this.#send(message);
   }
 

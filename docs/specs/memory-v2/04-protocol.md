@@ -1942,7 +1942,8 @@ The chain is held to after admission as it is at admission. A session opened
 with a chain carries the chain's earliest `exp`; from the second after it,
 the session is refused every request with a permanent
 `AuthorizationError`, is ended with `session/revoked` at the first such
-request, and is sent no `session/effect`. That refusal comes before the
+request, and is sent no `session/effect`, `presence/upsert`, or
+`presence/remove`. That refusal comes before the
 lease's, so a session whose chain and lease have both run out is ended rather
 than told to renew. Nothing renews the chain: a client whose delegation has a
 later expiry opens the session again with a current chain, and every open,
