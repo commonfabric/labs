@@ -560,6 +560,21 @@ That is a change to what a commit records and to what a scoped cell is keyed
 by, and it is deferred until unlinkability from readers of the space becomes
 a requirement.
 
+Issuing and revoking a delegation are not symmetric in what they disclose.
+Issuing discloses nothing to readers of the space: the delegation goes to
+its holder and to the issuer's Home, and the server sees it on opens, and
+no document in the space changes. Revoking one through the revocation
+document ("Rotation and revocation") discloses a CID, which tells a reader
+holding no delegation bytes only that some delegation was refused; the
+document names neither the delegation's parties nor who revoked it, for
+that reason, and the commit that writes it is attributed as every commit
+is. Revoking the root is the exception: the emergency exit replaces the
+access list with one that names an identity the user holds, which is the
+one act that publishes the link between the profile and that identity in a
+document every reader holds. A user who needs the link kept private
+revokes by expiry and by the revocation document, and keeps the exit for
+the emergency it is named for.
+
 ## Rotation and revocation
 
 - **Adding a key** (a device, an agent): the core identity issues a
@@ -571,8 +586,12 @@ a requirement.
   renewing it; the server holds a session to its chain's expiry after
   admission. For a revocation that cannot wait, the space holds a
   revocation document beside its access list, `of:<space>/revocations`,
-  listing the CIDs of refused delegations; writing it needs OWNER, by the
-  same whole-document rule as the access list (INV-12). The server refuses
+  listing the CIDs of refused delegations and nothing else: no audience,
+  no issuer, and no revoker, since a CID is opaque to a reader who does
+  not hold the delegation's bytes, and naming any of those would publish
+  in a document every reader holds what the chain keeps out of them.
+  Writing it needs OWNER, by the same whole-document rule as the access
+  list (INV-12). The server refuses
   an open whose chain contains a listed CID, and a commit that touches the
   document sweeps the space's open sessions the way an access-list commit
   does (`#revokeDeauthorizedSessions`), ending every session whose chain
