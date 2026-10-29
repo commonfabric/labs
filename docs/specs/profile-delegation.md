@@ -565,10 +565,13 @@ Issuing discloses nothing to readers of the space: the delegation goes to
 its holder and to the issuer's Home, and the server sees it on opens, and
 no document in the space changes. Revoking one through the revocation
 document ("Rotation and revocation") discloses a CID, which tells a reader
-holding no delegation bytes only that some delegation was refused; the
-document names neither the delegation's parties nor who revoked it, for
-that reason, and the commit that writes it is attributed as every commit
-is. Revoking the root is the exception: the emergency exit replaces the
+holding no delegation bytes only that some delegation was refused, since
+the random nonce and the issuer's signature in the bytes keep a CID from
+being rebuilt and tested against a known identity; the document names
+neither the delegation's parties nor who revoked it, and the commit that
+writes it is attributed as every commit is. The bytes themselves are what
+a reader would need, which is why a chain delivered through a space other
+readers can open, the inbox among them, makes its CIDs testable by them. Revoking the root is the exception: the emergency exit replaces the
 access list with one that names an identity the user holds, which is the
 one act that publishes the link between the profile and that identity in a
 document every reader holds. A user who needs the link kept private
@@ -587,9 +590,13 @@ the emergency it is named for.
   admission. For a revocation that cannot wait, the space holds a
   revocation document beside its access list, `of:<space>/revocations`,
   listing the CIDs of refused delegations and nothing else: no audience,
-  no issuer, and no revoker, since a CID is opaque to a reader who does
-  not hold the delegation's bytes, and naming any of those would publish
-  in a document every reader holds what the chain keeps out of them.
+  no issuer, and no revoker. A CID is opaque to a reader who does not
+  hold the delegation's bytes, and the bytes cannot be rebuilt from the
+  parties: the payload carries a nonce the issuer draws at random, and the
+  envelope carries the issuer's signature, so a reader who knows every
+  public field still cannot test a CID against an identity. Naming a party
+  in the document would publish, in a document every reader holds, what
+  the chain keeps out of them.
   Writing it needs OWNER, by the same whole-document rule as the access
   list (INV-12). The server refuses
   an open whose chain contains a listed CID, and a commit that touches the
