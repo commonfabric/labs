@@ -265,6 +265,10 @@ and exporting it would only serve the test.
 
 ### Putting a cell link in an event
 
+Before dispatching an action step, both test runners pull its `event` payload,
+including computed fields that supply cell links. A projected link needs no
+earlier assertion or render to make it ready for the action.
+
 A step's `event` may carry a link to a cell, such as one element of a stored
 list. The steps are part of the test pattern's own result, and that result's
 schema comes from the types of what the test returns. So where the linked

@@ -22,6 +22,15 @@ describe(
   { sanitizeOps: false, sanitizeResources: false },
   () => {
     describe("an action step's event payload", () => {
+      it("resolves a projected cell link before sending a cold payload", async () => {
+        const { passed, failed } = await runTests(
+          resolve(FIXTURES, "projected-link.test.tsx"),
+          { root: FIXTURES },
+        );
+        expect(failed).toBe(0);
+        expect(passed).toBe(2);
+      });
+
       it("reaches the handler as authored, for a primitive and an object", async () => {
         const { passed, failed } = await runTests(
           resolve(FIXTURES, "event-payload.test.tsx"),

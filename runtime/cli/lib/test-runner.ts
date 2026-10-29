@@ -230,7 +230,6 @@ type HarnessTestStepMeta = {
   readBudget?: unknown;
   action?: unknown;
   assertion?: unknown;
-  event?: unknown;
   trustedUi?: unknown;
   render?: unknown;
   skip?: boolean;
@@ -253,13 +252,6 @@ const testStepPeekSchema = internSchema(
     properties: {
       action: { type: "unknown" },
       assertion: { type: "unknown" },
-      // The payload is what the step sends, so it is read as authored: an
-      // object arrives as an object, reaching the handler as a reference into
-      // this step rather than a snapshot of it. `type: "unknown"` marks a
-      // value the traversal must not descend into, which is right for the
-      // fields this schema only tests for presence and wrong here, where it
-      // drops an object payload to `undefined`.
-      event: true,
       trustedUi: {
         type: "object",
         properties: {
@@ -1986,9 +1978,12 @@ export async function runTestPattern(
           // with renderer-trusted provenance when the step declares `trustedUi`.
           await withPhase(
             ["runTestPattern", "step", actionName, "send"],
-            () => {
+            async () => {
+              // Demand the payload's lazy fields before snapshotting the
+              // event, including links produced by an unread projection.
+              const event = await stepCell.key("event").asSchema(true).pull();
               actionStream.send(
-                buildActionEvent(stepValue.event, stepValue.trustedUi),
+                buildActionEvent(event, stepValue.trustedUi),
               );
             },
           );
