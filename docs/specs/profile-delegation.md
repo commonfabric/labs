@@ -344,7 +344,7 @@ equal the named principal, exactly as it must equal `iss` on a signed open.
 
 ### Verification
 
-The server's `session.open` verifier (`packages/memory/v2/session-open-auth.ts`)
+The server's `session.open` verifier (`runtime/memory/v2/session-open-auth.ts`)
 verifies the signature as it does now, then, when `prf` is present:
 
 1. `proofs.length === prf.length`, and the CID of `proofs[i]`, computed
@@ -390,7 +390,7 @@ act ever reaches a profile space, and the emergency exit below depends on it.
 
 Capability resolution is the one point where the chain changes the server's
 behavior, and it is deliberately the same point `actingAs: "space-owner"`
-uses today (`packages/memory/v2/server.ts`, the OW31 binding), where the
+uses today (`runtime/memory/v2/server.ts`, the OW31 binding), where the
 server already resolves a capability for a principal other than the one that
 signed the open. The difference is in what authorizes the substitution: the
 binding is admitted by operator configuration (the delegating-principal
@@ -415,7 +415,7 @@ present, verify them and ensure consistency with ACL",
 
 The runtime's storage manager opens a session to a space with a
 `SessionPrincipal`, whose `authorizeSessionOpen` builds the signed invocation
-(`packages/runner/src/storage/v2-remote-session.ts`,
+(`runtime/runner/src/storage/v2-remote-session.ts`,
 `createSignedSessionOpenAuth`). The pieces are:
 
 - The remote session factory holds a delegation store
@@ -644,19 +644,19 @@ part of this design.
 
 | Concern | Where |
 | --- | --- |
-| Delegation codec: DAG-CBOR envelope, CID, varsig; issue and verify | a new module in `packages/identity`, in-house for the closed shape, with reference test vectors |
-| Verify a signed open; add chain verification and root-issuer output | `packages/memory/v2/session-open-auth.ts` |
-| Resolve the session capability for the root issuer | `packages/memory/v2/server.ts`, session.open admission beside the `actingAs` binding |
-| Persist the proofs with the open's authorization | `packages/memory/v2/engine.ts`, `authorization` table |
-| Home predicate by declared kind beside self-ownership | the acting-as binding in `packages/memory/v2/server.ts`, and the root ensure's `isHomeSpace` in `packages/runner/src/executor/space-server.ts` |
-| Create a space that owns itself; sign the delegation before the key is dropped | `StorageManager.createSelfOwnedSpace` in `packages/runner/src/storage/v2.ts`; `inSpace(..., { selfOwned: true })` through `Runtime.createSpace` |
+| Delegation codec: DAG-CBOR envelope, CID, varsig; issue and verify | a new module in `base/identity`, in-house for the closed shape, with reference test vectors |
+| Verify a signed open; add chain verification and root-issuer output | `runtime/memory/v2/session-open-auth.ts` |
+| Resolve the session capability for the root issuer | `runtime/memory/v2/server.ts`, session.open admission beside the `actingAs` binding |
+| Persist the proofs with the open's authorization | `runtime/memory/v2/engine.ts`, `authorization` table |
+| Home predicate by declared kind beside self-ownership | the acting-as binding in `runtime/memory/v2/server.ts`, and the root ensure's `isHomeSpace` in `runtime/runner/src/executor/space-server.ts` |
+| Create a space that owns itself; sign the delegation before the key is dropped | `StorageManager.createSelfOwnedSpace` in `runtime/runner/src/storage/v2.ts`; `inSpace(..., { selfOwned: true })` through `Runtime.createSpace` |
 | Record the delegation in the calling space, beside the allocation | `Runtime.resolveInSpaceNameSync`, under `delegationsCause` |
 | Hold Home's recorded delegations at startup | `Runtime.loadProfileDelegations`, called by the runtime-client worker and the `cf` CLI |
-| Issue a chain to another key; describe and hold chain files | `cf delegation` over `packages/cli/lib/delegation.ts`, the chain-file codec in `packages/identity/src/delegation-chain-text.ts`, and `loadPieces` holding the files `--delegations` names |
-| Present chains under emulation | the emulated session factory in `packages/runner/src/storage/v2-emulate.ts` |
-| Build the signed open with `prf` and proofs | `packages/runner/src/storage/v2-remote-session.ts`, `createSignedSessionOpenAuth` |
-| Keep the chain across reopens | `packages/memory/v2/client.ts`, the session's reopen descriptor |
-| Delegation store, keyed by space DID | `packages/runner/src/storage/v2.ts`, storage manager mount |
+| Issue a chain to another key; describe and hold chain files | `cf delegation` over `runtime/cli/lib/delegation.ts`, the chain-file codec in `base/identity/src/delegation-chain-text.ts`, and `loadPieces` holding the files `--delegations` names |
+| Present chains under emulation | the emulated session factory in `runtime/runner/src/storage/v2-emulate.ts` |
+| Build the signed open with `prf` and proofs | `runtime/runner/src/storage/v2-remote-session.ts`, `createSignedSessionOpenAuth` |
+| Keep the chain across reopens | `runtime/memory/v2/client.ts`, the session's reopen descriptor |
+| Delegation store, keyed by space DID | `runtime/runner/src/storage/v2.ts`, storage manager mount |
 | Sign genesis as the profile key; issue the delegation; destroy the key | the profile creation path (`profile-create.tsx`) and `StorageManager.createSpace` |
 | Record the delegation beside the profile link | the Home default pattern's `profiles` entries |
 | Protocol description | `memory-v2/04-protocol.md` §4.5 |
