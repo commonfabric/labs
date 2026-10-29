@@ -7,7 +7,7 @@ import {
   type UiPromptSlotProps,
   type VNode,
 } from "@commonfabric/api";
-import { isPlainObject } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/js-values/types";
 
 import { isCell } from "../cell.ts";
 import { KeepAsCell } from "../link-utils.ts";
