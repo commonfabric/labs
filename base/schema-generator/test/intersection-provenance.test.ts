@@ -1722,6 +1722,56 @@ describe("SchemaGenerator", () => {
       expect(byNode).toThrow(message);
     });
 
+    it("throws for a scope declared on a member of a declaration beside one typed as `any`", async () => {
+      // The property accepts any value, so the write path would never see
+      // the member's scope.
+
+      const { byType, byNode } = await schemasOfBothPaths(`
+        type M1 = { a: { x: PerUser<string> } };
+        type M2 = { a: any };
+      `);
+      const message = "A value intersected with `any` accepts any value and " +
+        "describes none of the members of what it is intersected with, so " +
+        "it cannot keep the scope `user` declared on `x`";
+
+      expect(byType).toThrow(message);
+      expect(byNode).toThrow(message);
+    });
+
+    it("throws for a scope declared on a member of a whole intersection with `any` by the node path alone", async () => {
+      // The checker gives the type path `any` itself, which holds nothing of
+      // the constituent beside it; the node path reads both.
+
+      const { byType, byNode } = await schemasOfBothPaths(`
+        type M1 = { x: PerUser<string> };
+        type M2 = any;
+      `);
+
+      expect(byType()).toEqual(true);
+      expect(byNode).toThrow("cannot keep the scope `user` declared on `x`");
+    });
+
+    it("throws where `any` meets a definition whose member declares a scope, once it is written", async () => {
+      // `Node` is still being generated where its own member meets `any`, so
+      // the scope its member declares is read once generation is done.
+
+      const { byType, byNode } = await schemasOfBothPaths(
+        `
+          interface Node {
+            x: PerUser<string>;
+            child?: { c: Node } & { c: any };
+          }
+        `,
+        "Node",
+      );
+      const message = "A value intersected with `any` accepts any value and " +
+        "describes none of the members of what it is intersected with, so " +
+        "it cannot keep the scope `user` declared on `x`";
+
+      expect(byType).toThrow(message);
+      expect(byNode).toThrow(message);
+    });
+
     it("labels every arm of a labeled union beside another declaration", async () => {
       // The union's label is on whatever data its payload may hold, so it
       // labels each arm whole, `x` included in the arm that declares `z`. The

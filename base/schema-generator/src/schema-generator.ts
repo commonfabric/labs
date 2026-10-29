@@ -102,7 +102,7 @@ import {
 } from "./unread-type-diagnostics.ts";
 import { dedupeByValueEqual } from "./value-equality.ts";
 import {
-  assertFallbacksKeptNoMemberScope,
+  assertAnyValuesKeptNoMemberScope,
   assertScopeDeclarationsAreReachable,
 } from "./scope-placement.ts";
 import {
@@ -2157,7 +2157,7 @@ export class SchemaGenerator {
       result,
       context.anyValuesBySchema,
     );
-    assertFallbacksKeptNoMemberScope(context.anyValuesBesideUnwritten);
+    assertAnyValuesKeptNoMemberScope(context.anyValuesBesideUnwritten);
     assertScopeDeclarationsAreReachable(result);
     return result;
   }

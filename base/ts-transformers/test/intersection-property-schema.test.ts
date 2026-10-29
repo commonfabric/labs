@@ -240,4 +240,18 @@ describe("intersection-property-schema", () => {
       }>();
     `)).rejects.toThrow("cannot keep the scope `user` declared on `x`");
   });
+
+  it("throws for a scope a member declares beside a declaration typed as `any`", async () => {
+    await expect(schemasOf(`
+      import { toSchema } from "commonfabric";
+      import type { PerUser } from "commonfabric";
+      export const schema = toSchema<
+        { a: { x: PerUser<string> } } & { a: any }
+      >();
+    `)).rejects.toThrow(
+      "A value intersected with `any` accepts any value and describes none " +
+        "of the members of what it is intersected with, so it cannot keep " +
+        "the scope `user` declared on `x`",
+    );
+  });
 });

@@ -275,42 +275,51 @@ export const memberScopeWithin = (
 };
 
 /**
- * The error raised for a scope a member declares inside an intersection
- * whose constituents cannot be merged. The fallback it gets describes none of
- * its members, so the write path never sees the member's scope and stores its
- * data with the whole value's.
+ * The error raised for a scope a member declares inside a value that may hold
+ * its constituents' data anywhere and describes none of their members: one
+ * an intersection whose constituents cannot be merged falls back to
+ * (`"unsupported"`), or one intersected with `any` (`"any"`). The write path
+ * never sees the member's scope there, and would store its data with the
+ * whole value's.
  */
-export const scopeInsideUnmergedIntersectionError = (
+export const memberScopeDroppedError = (
   { scope, member }: MemberScope,
+  from: AnyValueBesideUnwritten["from"],
 ): Error =>
   new Error(
-    `An intersection whose constituents cannot be merged falls back to a ` +
-      `schema that accepts any object and describes none of its members, ` +
-      `so it cannot keep the scope \`${scope}\` declared on ` +
+    (from === "any"
+      ? `A value intersected with \`any\` accepts any value and describes ` +
+        `none of the members of what it is intersected with`
+      : `An intersection whose constituents cannot be merged falls back to ` +
+        `a schema that accepts any object and describes none of its ` +
+        `members`) +
+      `, so it cannot keep the scope \`${scope}\` declared on ` +
       `\`${member}\`. That data would be stored in the scope of the whole ` +
       `value instead, which without a scope of its own is one copy shared ` +
-      `by everyone in the space. Declare the intersection with constituents ` +
-      `that merge, as \`{ x: PerUser<string> } & { items: string[] }\` ` +
-      `does, or scope the whole value (\`PerUser<{ x: string } & ` +
-      `string[]>\`).`,
+      `by everyone in the space. ` +
+      (from === "any"
+        ? `Declare that value without \`any\`, or scope the whole value ` +
+          `(\`PerUser<{ x: string }>\` rather than ` +
+          `\`{ x: PerUser<string> }\`).`
+        : `Declare the intersection with constituents that merge, as ` +
+          `\`{ x: PerUser<string> } & { items: string[] }\` does, or ` +
+          `scope the whole value (\`PerUser<{ x: string } & string[]>\`).`),
   );
 
 /**
- * Refuses a fallback in `values`, one an intersection whose constituents
- * cannot be merged fell back to (`"unsupported"`), that met definitions
- * before they were written where one declares a scope on a member now that
- * it is, as the fallback is refused where its constituents' members declare
- * one it can read (`scopeInsideUnmergedIntersectionError()`).
+ * Refuses a value in `values` that met definitions before they were written
+ * where one declares a scope on a member now that it is, as such a value is
+ * refused where its constituents' members declare one it can read
+ * (`memberScopeDroppedError()`).
  */
-export const assertFallbacksKeptNoMemberScope = (
+export const assertAnyValuesKeptNoMemberScope = (
   values: readonly AnyValueBesideUnwritten[],
 ): void => {
   for (const { from, definitions, unwritten } of values) {
-    if (from !== "unsupported") continue;
     const found = memberScopeWithin(
       unwritten.map((name) => ({ $ref: `${LOCAL_DEFINITION_PREFIX}${name}` })),
       definitions,
     );
-    if (found) throw scopeInsideUnmergedIntersectionError(found);
+    if (found) throw memberScopeDroppedError(found, from);
   }
 };

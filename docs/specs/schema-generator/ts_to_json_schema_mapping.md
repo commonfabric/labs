@@ -1248,7 +1248,14 @@ Default paths of §7:
   declarations beside the one that declares `any`, the property accepts any
   value and keeps what would otherwise fail open. It keeps the scope a
   declaration states, read from its type's brand or, where its type is `any`,
-  from its schema, a cell's cap counting as its scope. It keeps every
+  from its schema, a cell's cap counting as its scope. A scope a member of a
+  declaration declares cannot be kept by a value that describes no member,
+  and is refused ("A value intersected with `any` accepts any value and
+  describes none of the members of what it is intersected with, so it cannot
+  keep the scope `user` declared on `x` …"), as an unsupported intersection's
+  fallback refuses one; `{ a: { x: PerUser<string> } } & { a: any }` is
+  refused where `{ a: PerUser<{ x: string }> } & { a: any }` gives `a`
+  `{ scope: "user" }`. It keeps every
   restriction a declaration states anywhere in its value, through its
   references, on the whole value, which may hold that declaration's data
   anywhere: every `ifc` key but the evidence keys `integrity` and
@@ -2285,7 +2292,7 @@ Everything that throws, with source (test-pinned unless noted):
 | Scope wrapper as a union member beside a value other than `null` or `undefined` | `A scope wrapper cannot be a member of a union.` | `common-fabric-formatter.ts`, `scope-placement.ts` |
 | Scope wrapper around a cell beside anything, `null` and `undefined` included | `A scope wrapper around a cell cannot hold anything beside the cell` | `common-fabric-formatter.ts` |
 | Scope wrapper beside `null` or `undefined` in a written union whose members do not read as wrappers or `null` or `undefined` | ``A scope wrapper beside `null` or `undefined` is read from the union written around it`` | `common-fabric-formatter.ts` |
-| A scope a member declares inside an intersection whose constituents cannot be merged | `An intersection whose constituents cannot be merged falls back to a schema that accepts any object and describes none of its members` | `scope-placement.ts` |
+| A scope a member declares inside an intersection whose constituents cannot be merged, or beside `any` | `An intersection whose constituents cannot be merged falls back to a schema that accepts any object and describes none of its members` / ``A value intersected with `any` accepts any value and describes none of the members`` | `scope-placement.ts` |
 | An `ifc` key other than `confidentiality` declared differently by nested wrappers, or by a `$ref` and its definition | ``One value declares `ifc.<key>` twice, as … and as ….`` | `ifc-labels.ts` |
 | Circular type alias (wrapper chain) | `Circular type alias detected: A -> B -> …` | `type-utils.ts` |
 | Circular type alias (union alias) | `Circular type alias detected: <name>` | `union-formatter.ts` |
