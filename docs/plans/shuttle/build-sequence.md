@@ -1,23 +1,23 @@
 # Shuttle — build sequence
 
 Satellite of [`README.md`](README.md): the order of construction,
-as small landable pull requests. Stage A is seam work inside `packages/cli`
+as small landable pull requests. Stage A is seam work inside `runtime/cli`
 — each PR stands on its own merits there, shuttle or no shuttle, because a
 seam that lets a sibling inject a connection is the same seam that lets a
 unit test run the action body (the documented rationale of the
 `*FromCommand` family). Stage B is the shell itself, in vertical slices,
-under `packages/cli/lib/shuttle/`. A-PRs go first in line because they gate
+under `runtime/cli/lib/shuttle/`. A-PRs go first in line because they gate
 everything and review latency is the scarce resource; B milestones start as
 soon as their named prerequisites land.
 
-## Stage A — seams in `packages/cli`
+## Stage A — seams in `runtime/cli`
 
 **A1 — the library seams a place reads through.** Done (#6626). Each is
 reachable on its own, without the module that builds the command tree:
 `lib/piece`, `commands/piece`, `lib/wish`, `lib/piece-render`, and
 `lib/llm-friendly-ref`, which a place reads every reference operand through.
 The completion listing is the one that took work: `listCellKeys`
-(`packages/cli/lib/cell-listing.ts`) sits behind a `PieceResolutionDeps` seam
+(`runtime/cli/lib/cell-listing.ts`) sits behind a `PieceResolutionDeps` seam
 with `keysOf` beside it, and the providers are designed to fail silently and
 empty — right for tab completion, wrong for `ls` — so the listing raises its
 errors and completion's provider dispatch swallows them at its own call site.
@@ -26,7 +26,7 @@ The shell reads four of them — `lib/piece`, `lib/wish`,
 beside them and `commands/piece` read by the command rather than by a place;
 `lib/piece-render` waits for the milestone that renders a piece. Each is
 reached by relative path, the view substrate with them: the shell is this
-package's own code, so `packages/cli/deno.jsonc` carries `.` alone, under the
+package's own code, so `runtime/cli/deno.jsonc` carries `.` alone, under the
 rule the map states.
 
 **A2 — connection injection for the write path.** Done (#6646). The write
@@ -91,21 +91,21 @@ posture; `receipted` (`lib/write-receipt.ts`), which memoizes the write
 receipt for the life of the process; and a connection's own settings —
 the LLM endpoint, the base URL a pattern's relative `fetch` resolves
 against, and the ambient experimental flags a `Runtime` applies — which
-land in globals under `packages/llm` and `packages/runner` that no
+land in globals under `base/llm` and `runtime/runner` that no
 connection owns. Part of that is mechanically enforced and the rest is
 prose: `claimProcessDeployment` (`lib/process-deployment.ts`) refuses a
 connection to a second *deployment*, a weaker bound than the limit and
 the one where those settings actually fight, since a verb reaching an
 un-injected library function opens another connection to the same
 deployment as a matter of course. The three declarations that name the
-limit are all in `packages/cli`; the inventory, both bounds, and the
+limit are all in `runtime/cli`; the inventory, both bounds, and the
 globals in the other two packages, recorded there and nowhere else, are
 in item 6 of [`runtime-integration.md`](runtime-integration.md).
 
 ## Stage B — the shell itself
 
 **B0 — scaffold** (after A1). Done (#6741). The shell needs no
-configuration of its own. It sits under `packages/cli/lib/shuttle/`, so
+configuration of its own. It sits under `runtime/cli/lib/shuttle/`, so
 `deno task check` reaches it through that package's path entry, its tests run
 under that package's runner, and its uncovered lines land in that package's
 coverage group. What a package of its own would have needed — a path in the
@@ -120,7 +120,7 @@ built into the first list.
 Landed:
 
 - **B1a — the place value and its owner module**
-  (`packages/cli/lib/shuttle/place.ts`). The whole pair, position *and* scope,
+  (`runtime/cli/lib/shuttle/place.ts`). The whole pair, position *and* scope,
   because scope is half of what a place is (decision 20): `cd` over relative
   references read by the shared reader — a `.` or `..` head with its member
   and qualifier, and a literal path — `-`, `/`, and rooted and complete
@@ -137,7 +137,7 @@ Landed:
   caller resolves the name and hands the move back with the space it resolved
   to, and the place is landed or refused there.
 - **B1b (slice 1) — the held connection**
-  (`packages/cli/lib/shuttle/connection.ts`). One `PiecesController` for the
+  (`runtime/cli/lib/shuttle/connection.ts`). One `PiecesController` for the
   process, opened on the first ask and served to every ask after, where `cf`
   builds one per invocation. The connection half of the ambient record maps
   onto `SpaceConfig` and is handed to `loadPieces`, so shuttle reaches the
@@ -155,7 +155,7 @@ Landed:
   revisits this trade rather than inheriting it. No verb reaches the
   connection yet, and the place is untouched.
 
-- **B1b (slice 2) — the line grammar** (`packages/cli/lib/shuttle/line.ts`). How
+- **B1b (slice 2) — the line grammar** (`runtime/cli/lib/shuttle/line.ts`). How
   a line becomes tokens, and how a value prints as one of them. `cf` is
   handed words the operating system's shell already split; shuttle is handed
   the line, and both halves are its own. The split is POSIX quoting —
@@ -174,7 +174,7 @@ Landed:
   yet.
 
 - **B1b (slice 3) — `ls`, and the vocabulary a segment speaks**
-  (`packages/cli/lib/shuttle/listing.ts`). What stands at a place — a space root's
+  (`runtime/cli/lib/shuttle/listing.ts`). What stands at a place — a space root's
   facets, the slugs the index records, the space's pieces, the keys directly
   under the cell a place names — read over the held connection through
   `listSpaceSlugs`, `listPieces` and a cell read named through `keysOf`, each
@@ -203,10 +203,10 @@ Landed:
   target, so a listing prints it behind the `.` head, `./#tag`;
   [`grammar.md`](grammar.md) carries the ruling. Which keys are spelled through
   which door is pinned case by case in
-  `packages/cli/test/shuttle-place.test.ts`, so the record moves when the
+  `runtime/cli/test/shuttle-place.test.ts`, so the record moves when the
   behavior does and not otherwise.
 
-- **B1b (slice 4) — the verbs** (`packages/cli/lib/shuttle/verbs.ts`). A line
+- **B1b (slice 4) — the verbs** (`runtime/cli/lib/shuttle/verbs.ts`). A line
   splits, its first token names a verb, and the tokens after it are that
   verb's operands: `cd`, `ls`, `pwd`, `get` and `wish`, over the one held
   connection and over the listing above. Nothing writes. A verb returns what
@@ -301,7 +301,7 @@ Landed:
   of its own.
 
 - **B1d — the option grammar, and `help`**
-  (`packages/cli/lib/shuttle/options.ts`). What a token after the verb is for.
+  (`runtime/cli/lib/shuttle/options.ts`). What a token after the verb is for.
   The split says where a token ends; this says whether it is an option or an
   operand, and the rule is POSIX's: a token opening with `-` is an option up to
   a bare `--`, `-` on its own is an operand — the previous place and the stdin
@@ -484,7 +484,7 @@ Landed:
   decision 29 rules what each is over.
 
   `up` and `down` walk the lines this run typed
-  (`packages/cli/lib/shuttle/history.ts`), which is a value beside the
+  (`runtime/cli/lib/shuttle/history.ts`), which is a value beside the
   buffer and nothing outside the process reads. They are ordinary rows of
   B1c's binding table, `ctrl-p` and `ctrl-n` beside them, since the buffer a
   prompt holds is one row and a vertical motion over it has nowhere else to
@@ -495,7 +495,7 @@ Landed:
   running it, and `ctrl-c` — drops the edits and returns the traversal to it.
 
   `tab` completes the token the line ends in
-  (`packages/cli/lib/shuttle/completion.ts`): a verb where the line names
+  (`runtime/cli/lib/shuttle/completion.ts`): a verb where the line names
   none, and where it names one, whatever that verb's arity declares its next
   operand completes — a slot declared on the two arms that have an operand
   and unspellable on the arm that has none, so a verb cannot be added without
@@ -575,7 +575,7 @@ Governed by [`views.md`](views.md). Landing in slices.
 Landed:
 
 - **B3a — the settle discipline, the value view, and watches as session
-  objects.** `sinkCellValue` (`packages/cli/lib/piece.ts`) is the subscription
+  objects.** `sinkCellValue` (`runtime/cli/lib/piece.ts`) is the subscription
   seam: it resolves the target the way a read does, sinks the cell, and reports
   once per quiet runtime through a reentrancy guard plus `runtime.idle()` —
   `renderVDomToHtml`'s guard, and no timer anywhere under it. Starting the piece
@@ -673,7 +673,7 @@ Still to land:
   it reports the link marker and a write through that link settles nothing it
   can see. What closes it is a resolved cell for an arguments path —
   `PiecePropIo.get` builds one for the read and `getCell()` hands back the
-  unresolved root, so the seam is `packages/piece`'s to offer rather than
+  unresolved root, so the seam is `runtime/piece`'s to offer rather than
   shuttle's to assemble. Until then `watch` refuses the `#argument` member, and
   the refusal names what does work: `get .#argument/<path>`, which reads that
   cell, and `watch <ref>`, which watches the result the pattern computes from
@@ -682,7 +682,7 @@ Still to land:
   so what the seam costs is the refusal and nothing under it.
 - **The list view,** and with it `enter` drill and `backspace` up. It rests on
   `SpaceReplica.sinkDocument`, which is on neither `IStorageProvider` nor
-  `ISpaceReplica`, so the seam question is `packages/runner`'s to settle before
+  `ISpaceReplica`, so the seam question is `runtime/runner`'s to settle before
   shuttle reaches it. It opens with the two experiments and the
   raw-document-subscription proving test from issue
   [#6534](https://github.com/commonfabric/labs/issues/6534), falling back to
@@ -800,9 +800,9 @@ its own slice when scheduled.
 - Every stage-A PR carries the unit tests its seam enables; a seam PR
   without tests is the shape the `FromCommand` rationale exists to
   prevent.
-- `packages/cli` coverage gates apply to stage A; the extraction PRs are
+- `runtime/cli` coverage gates apply to stage A; the extraction PRs are
   coverage-positive by construction, which is the order's second reason.
-- A slice adds no configuration of its own: the shell is `packages/cli`'s
+- A slice adds no configuration of its own: the shell is `runtime/cli`'s
   code, so it rides that package's entry in `deno task check`'s path list, its
   test runner, and its coverage group. A test file that stands in for a
   process-wide member — an environment variable, a `Deno` member — goes in that

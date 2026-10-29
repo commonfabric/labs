@@ -5,7 +5,7 @@ rarely need these terms — for author-facing concepts see the
 [main glossary](../common/concepts/glossary.md).
 
 The full treatment is [the memory v2 specification](../specs/memory-v2/README.md);
-this page gives the vocabulary a reader of `packages/runner/src/storage/` needs
+this page gives the vocabulary a reader of `runtime/runner/src/storage/` needs
 to follow the code.
 
 ## Entity document

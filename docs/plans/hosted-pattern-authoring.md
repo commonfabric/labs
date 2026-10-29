@@ -123,7 +123,7 @@ and recovered after a service restart. No stage can publish source yet.
   repair followed by success, cancellation, and process recovery.
 
 The harness fabric session
-(`packages/cf-harness/src/fabric-session.ts`) provides a host-side,
+(`runtime/cf-harness/src/fabric-session.ts`) provides a host-side,
 authorization-verified runtime target with no fabric credential inside the
 sandbox; the adapter builds on it rather than constructing its own.
 
@@ -195,7 +195,7 @@ once and every failure leaves it unchanged.
   and final source revision.
 
 The harness handle table and diagnostic scrubber
-(`packages/cf-harness/src/handle-table.ts`) redact fabric identifiers at the
+(`runtime/cf-harness/src/handle-table.ts`) redact fabric identifiers at the
 model boundary; the identifier-free progress events here are a separate
 person-facing projection, but they reuse that scrubber rather than
 reimplementing identifier detection.

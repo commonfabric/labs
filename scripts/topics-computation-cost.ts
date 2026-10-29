@@ -1,7 +1,7 @@
 /**
- * Measures the Topics board's mention pivot, each topic's backlink lookup, and
- * a topic's comment and link aggregates over the headless Topics fixture,
- * across topic counts, mention graphs, thread lengths, and demand workloads.
+ * Measures the Topics board's mention pivot and each topic's backlink lookup
+ * over the headless Topics fixture, across topic counts, mention graphs, and
+ * demand workloads.
  * The "Topics computation cost probe" section of
  * `docs/development/BENCHMARKS.md` documents the matrix, the options, and the
  * output.
@@ -33,13 +33,13 @@ import {
   type PhaseRecord,
   type ProbeCase,
   probeCases,
-} from "../packages/patterns/integration/topics-cost-cases.ts";
+} from "../patterns/integration/topics-cost-cases.ts";
 import {
   buildTopicsFixture,
   DEFAULT_TOPICS_FIXTURE_MODE,
   TOPICS_FIXTURE_MODES,
   type TopicsFixtureMode,
-} from "../packages/patterns/integration/topics-headless-fixture.ts";
+} from "../patterns/integration/topics-headless-fixture.ts";
 import {
   assignedLimitsNotExceeded,
   GATED_MEASURES,
@@ -50,11 +50,11 @@ import {
   type ReadBudgetLimits,
   TOPICS_READ_BUDGET_GROUPS,
   variantsAssignedTo,
-} from "../packages/patterns/integration/topics-read-budget.ts";
+} from "../patterns/integration/topics-read-budget.ts";
 import {
   READ_BUDGET_VARIANTS,
   type ReadBudgetVariantName,
-} from "../packages/patterns/integration/topics-read-budget-variants.ts";
+} from "../patterns/integration/topics-read-budget-variants.ts";
 
 /** The repository root, where a child process finds the workspace config. */
 const REPOSITORY_ROOT = fromFileUrl(new URL("..", import.meta.url));
@@ -371,7 +371,7 @@ async function measureCase(
     progress: (line) => console.error(line),
     variant: variant === undefined
       ? undefined
-      : READ_BUDGET_VARIANTS[variant](probeCase),
+      : READ_BUDGET_VARIANTS[variant](),
   });
   await Deno.writeTextFile(
     sampleFile,

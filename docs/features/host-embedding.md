@@ -35,7 +35,7 @@ weeks later.
 | 4 | `getCfcLabel` egress check | API | `ui` (label shape in `runner`) | yes | `src/v2/core/cfc-label.test.ts` — `cfcLabelViewIsPublic (egress check)` |
 | 5 | Guarded-define idiom | API | `ui` | yes | `src/v2/components/host-embedding-guarded-define.test.ts` |
 | 6 | Trusted-mark threat model | policy record | `runner` | n/a | `test/cfc-ui-contract.test.ts` — `host embedding contract: trusted-mark threat model` |
-| 7 | Pinning is owner-gated | policy record | `patterns` | n/a | `system/profile-home.owner-gated.test.ts` |
+| 7 | Pinning is owner-gated | policy record | `patterns` | n/a | `system/profile-home/profile-home.owner-gated.test.ts` |
 | 8 | Snapshot sharing | trusted host API | `runtime-client`, `runner` | available | `runtime-client/test/backends/snapshot-share.test.ts`; `runtime-client/test/snapshot-share.test.ts` |
 | 9 | Custody seal and trust configuration | trusted host API | `runtime-client`, `runner`, `ui` | available | `runtime-client/test/backends/custody-seal.test.ts`; `runtime-client/test/custody-seal.test.ts`; `runtime-client/test/backends/initialization-data-reach.test.ts`; `ui/src/v2/components/cf-custody-seal/` |
 | 10 | Native reviewed controls | trusted host API | `runner` | available | `runner/test/native-ui.test.ts` |
@@ -58,7 +58,7 @@ profiles, `#profile` renders the trusted create surface inline
 default-first, then most-recently-used — **pending CT-1829**, which is
 settling single-result semantics; do not bind to a fixed ordering.
 
-**Test.** `packages/runner/test/wish.test.ts`,
+**Test.** `runtime/runner/test/wish.test.ts`,
 `describe("host embedding contract: profile wish targets")`.
 
 A host renders the profile by mounting a thin wrapper pattern that
@@ -72,7 +72,7 @@ re-implementing resolution host-side. Full wish semantics:
 
 **Contract.** `runtimeContext` (value `RuntimeClient | undefined`, key
 `"runtime"`) and `spaceContext` (value `DID | undefined`, key
-`"space"`), exported from `packages/ui/src/v2/runtime-context.ts`, are
+`"space"`), exported from `runtime/ui/src/v2/runtime-context.ts`, are
 the only two contexts a host must provide: `runtimeContext` once at the
 root, `spaceContext` per mount container. All other contexts degrade
 gracefully without a provider. The host bundle must share the same
@@ -82,7 +82,7 @@ identity matches.
 ```ts
 import { runtimeContext, spaceContext } from "@commonfabric/ui";
 
-// The published seam (packages/ui/src/v2/runtime-context.ts, 8 lines):
+// The published seam (runtime/ui/src/v2/runtime-context.ts, 8 lines):
 //   runtimeContext = createContext<RuntimeClient | undefined>("runtime")
 //   spaceContext   = createContext<DID | undefined>("space")
 export const hostProvidedContexts = [runtimeContext, spaceContext] as const;
@@ -91,7 +91,7 @@ export const hostProvidedContexts = [runtimeContext, spaceContext] as const;
 (The import above is live — this doc block itself type-checks against
 the real export, so a rename fails the docs check.)
 
-**Test.** `packages/ui/src/v2/runtime-context.test.ts`.
+**Test.** `runtime/ui/src/v2/runtime-context.test.ts`.
 
 **Theme.** The look needs no context for token-based styling: a host themes
 what it mounts by setting the `--cf-theme-*` custom properties on an ancestor,
@@ -114,9 +114,9 @@ themes by CSS with no `cf-theme` above its iframes provides them nothing; the
 labs shell and Loom's pattern pane each have one at their root. A host that
 wants its own presentation sets `presentation` on the iframe or provides a
 nearer `iframePresentationContext`, as
-[the iframe presentation contract](../../packages/iframe-sandbox/README.md#guest-presentation)
+[the iframe presentation contract](../../base/iframe-sandbox/README.md#guest-presentation)
 describes. Tests:
-`packages/ui/src/v2/components/cf-theme/guest-presentation.browser.test.ts`.
+`runtime/ui/src/v2/components/cf-theme/guest-presentation.browser.test.ts`.
 
 ---
 
@@ -140,14 +140,14 @@ DOM). A host embeds by listening for:
   ```ts
   import type { DID } from "@commonfabric/identity";
 
-  // packages/lib-shell/src/runtime.ts
+  // runtime/lib-shell/src/runtime.ts
   export type RuntimeNavigationTarget = { spaceDid: DID; pieceId: string };
   ```
 
   ```ts
   import type { DID } from "@commonfabric/identity";
 
-  // Condensed from packages/navigation/src/view.ts
+  // Condensed from runtime/navigation/src/view.ts
   type PieceViewRef = {
     pieceId?: string;
     // A slug naming a collection, and the member it selects.
@@ -175,10 +175,10 @@ DOM). A host embeds by listening for:
   [Common Fabric URLs](../specs/fabric-urls.md). No deployment is planned; the
   current event behavior remains authoritative.
 
-**Test.** `packages/navigation/test/navigate-contract.test.ts` (event
-names and detail shapes) and `packages/navigation/test/navigate.test.ts`
+**Test.** `runtime/navigation/test/navigate-contract.test.ts` (event
+names and detail shapes) and `runtime/navigation/test/navigate.test.ts`
 (the `cf-open-external` cancellation contract); the pattern-side shape is
-also guarded by `packages/shell/test/runtime-navigation.test.ts`.
+also guarded by `runtime/shell/test/runtime-navigation.test.ts`.
 
 ---
 
@@ -289,7 +289,7 @@ observes the link itself and resolves again when its target changes.
 ```ts
 import type { DID } from "@commonfabric/identity";
 
-// packages/ui/src/v2/components/cf-render/cf-render.ts
+// runtime/ui/src/v2/components/cf-render/cf-render.ts
 export const PIECE_CONTEXT_MENU_EVENT = "cf-piece-context-menu";
 
 export interface PieceContextMenuDetail {
@@ -311,12 +311,12 @@ announces, so a right-click on a tile inside a piece names the tile.
 See [docs/specs/piece-source-lifecycle.md](../specs/piece-source-lifecycle.md)
 for what an origin means.
 
-**Test.** `packages/ui/src/v2/components/cf-render/cf-render.test.ts`,
+**Test.** `runtime/ui/src/v2/components/cf-render/cf-render.test.ts`,
 `describe("CFRender piece context menu")` — the event name, the detail shape, and
-when the click is taken. `packages/ui/src/v2/components/cf-piece-menu/cf-piece-menu.test.ts`
+when the click is taken. `runtime/ui/src/v2/components/cf-piece-menu/cf-piece-menu.test.ts`
 — the entries, lifecycle actions, compatibility confirmation, and their test
 hooks. The menu's DOM behavior is driven end to end by
-`packages/shell/integration/piece-menu.test.ts`.
+`runtime/shell/integration/piece-menu.test.ts`.
 
 ---
 
@@ -333,20 +333,20 @@ are public; `integrity` atoms are orthogonal and do not make a value
 confidential.
 
 ```ts
-// packages/runner/src/cfc/label-view-core.ts
+// runtime/runner/src/cfc/label-view-core.ts
 export type IFCLabel = { confidentiality?: unknown[]; integrity?: unknown[] };
 export type CfcLabelViewEntry = { path: readonly string[]; label: IFCLabel };
 export type CfcLabelView = { version: 1; entries: CfcLabelViewEntry[] };
 ```
 
 The predicate is exported as `cfcLabelViewIsPublic` in
-`packages/ui/src/v2/core/cfc-label.ts`. This seam is load-bearing as
+`runtime/ui/src/v2/core/cfc-label.ts`. This seam is load-bearing as
 `Confidential` / `ProjectionOf` land structurally (CT-1658 / CT-1660):
 those `confidentiality` clauses become populated, and a check written
 against this predicate keeps failing closed. Any change to label
 semantics or granularity must account for this egress seam.
 
-**Test.** `packages/ui/src/v2/core/cfc-label.test.ts`,
+**Test.** `runtime/ui/src/v2/core/cfc-label.test.ts`,
 `describe("cfcLabelViewIsPublic (egress check)")`.
 
 ---
@@ -360,7 +360,7 @@ labs#4286). Each component's `index.ts` guards its define:
 
 ```ts
 // Shown at module scope.
-// e.g. packages/ui/src/v2/components/cf-render/index.ts
+// e.g. runtime/ui/src/v2/components/cf-render/index.ts
 import { CFRender } from "./cf-render.ts";
 
 if (!customElements.get("cf-render")) {
@@ -372,7 +372,7 @@ This is what lets a host deep-import the full component set into one
 bundle and re-mount freely.
 
 **Test.**
-`packages/ui/src/v2/components/host-embedding-guarded-define.test.ts`.
+`runtime/ui/src/v2/components/host-embedding-guarded-define.test.ts`.
 
 ---
 
@@ -381,7 +381,7 @@ bundle and re-mount freely.
 Not a bindable API — a statement upstream commits to honor.
 
 The trusted-event mark (the `uiContract` machinery in
-`packages/runner/src/cfc/`) certifies that an event flow **originated
+`runtime/runner/src/cfc/`) certifies that an event flow **originated
 from the rendered surface** — an anti-confused-deputy defense against
 in-runtime pattern code exercising delegated authority it was not
 handed through the real UI. It certifies *surface origin*, not *human
@@ -396,7 +396,7 @@ right posture is a sanctioned headless issuance path, **not** a
 weakening of the in-runtime surface-origin defense, which does real
 work against confused-deputy pattern code.
 
-**Test.** `packages/runner/test/cfc-ui-contract.test.ts`,
+**Test.** `runtime/runner/test/cfc-ui-contract.test.ts`,
 `describe("host embedding contract: trusted-mark threat model")` — an
 unmarked event with a lookalike provenance is rejected; the same
 provenance carrying the renderer mark is accepted.
@@ -410,7 +410,7 @@ Not a bindable API — a statement upstream commits to honor.
 Pinning an element to a profile is authorized by **ownership**, not by
 a trusted-UI gesture: the single authorized writer of profile
 `elements` (`mutateElements` in
-`packages/patterns/system/profile-home.tsx`) is typed
+`patterns/system/profile-home/profile-home.tsx`) is typed
 `OwnerProtectedProfileWrite` — `WriteAuthorizedBy` plus owner
 principal, with **no `uiContract`**. Creating a profile, by contrast,
 *is* gesture-gated: `profile-create.tsx` carries the only `uiContract`
@@ -424,7 +424,7 @@ gesture-gated) with the pin seam (correctly owner-gated). Richer
 pin/arrange flows ride the UI-variants abstraction (`UI` / `CHIP_UI` /
 `TILE_UI` + `cf-render variant=…`), not a new authorization gate.
 
-**Test.** `packages/patterns/system/profile-home.owner-gated.test.ts` —
+**Test.** `patterns/system/profile-home/profile-home.owner-gated.test.ts` —
 asserts against the real pattern sources that the pin writer carries no
 `uiContract` while the create surface does, and that `addPiece` is a
 `Stream`.
@@ -469,9 +469,9 @@ closes or replaces a confirmation; client detachment and backend disposal also
 discard pending consent. The worker retains the consent object; only the preview
 crosses IPC.
 
-**Tests.** `packages/runtime-client/test/backends/snapshot-share.test.ts` covers
+**Tests.** `runtime/runtime-client/test/backends/snapshot-share.test.ts` covers
 source-schema rejection, preview binding, client isolation, one-use consent, and
-disposal. `packages/runtime-client/test/snapshot-share.test.ts` holds the public
+disposal. `runtime/runtime-client/test/snapshot-share.test.ts` holds the public
 client API and wire shapes.
 
 ---
@@ -599,12 +599,12 @@ reviewed definition and the values it displayed (`controlRef`,
 `displayDigest`). This runtime builds neither that attestation nor a renderer's
 render binding, and no check here reads either.
 
-**Tests.** `packages/runner/test/native-ui.test.ts` covers a gated write
+**Tests.** `runtime/runner/test/native-ui.test.ts` covers a gated write
 committing through a real handler and one bound to another action being
 refused, the provenance and payload sent, capture of the descriptor, a
 replaced payload `provenance`, an unmarked copy matching nothing, the event
 counting as a trusted gesture and its copy not, and the binding being out of a
-pattern's reach. `packages/runtime-client/test/send-reviewed.test.ts` drives
+pattern's reach. `runtime/runtime-client/test/send-reviewed.test.ts` drives
 `sendReviewed()` from a real `RuntimeClient`, with the handler run in the
 worker and under server execution: a gated write committing, one bound to
 another surface or action refused with its reason, a payload `provenance`
@@ -613,8 +613,8 @@ handling resolving `sendStrict()` without `awaitHandling`, a reviewed grant
 changing a space's access list for an `OWNER` and refused for a member without
 one, the same grant changing nothing through `sendStrict()`, the event the
 worker delivers, and the requests it refuses.
-`packages/runner/test/builder/space-access-change.test.ts` and
-`packages/runner/test/executor-space-access-change.test.ts` cover a native
+`runtime/runner/test/builder/space-access-change.test.ts` and
+`runtime/runner/test/executor-space-access-change.test.ts` cover a native
 control's grant and revoke on a client and on a serving runtime.
 
 ---
@@ -665,24 +665,24 @@ only when the host holds what a renderer holds:
 The FabriChat client requirements state the same obligations as six rules for
 a native chat client
 ([`clients.md`](../specs/fabrichat/clients.md#writing-the-reviewed-gesture-requirement)),
-and `bindNativeUiControl()` in `packages/runner/src/native-ui.ts` is where a
+and `bindNativeUiControl()` in `runtime/runner/src/native-ui.ts` is where a
 host binds a control to them (§10). The CFC specification's side is §8.15.9.1
 of `cfc/08-15-write-authority.md`, as commonfabric/specs pull request 55
 proposes it.
 
 ### Gates that fall short
 
-`isTrustedGesture()` in `packages/runner/src/cfc/ui-contract.ts` admits a
+`isTrustedGesture()` in `runtime/runner/src/cfc/ui-contract.ts` admits a
 marked event of `dom` or `native` origin, so a native reviewed act is a trusted
 gesture, and these gates admit one as they admit a gesture on the rendered
 surface:
 
 - `grantSpaceAccess()` and `revokeSpaceAccess()`, through the handler frame's
   `trustedGesture`, which the runner sets from `isTrustedGesture()` when the run
-  starts and `packages/runner/src/builder/space-access-change.ts` checks, on a
+  starts and `runtime/runner/src/builder/space-access-change.ts` checks, on a
   client and on a serving runtime alike;
 - `commitSnapshotShare()` (§8) and `commitCustodySeal()` (§9), through
-  `isTrustedGestureOn()` in `packages/runner/src/cfc/host-review.ts`. A host
+  `isTrustedGestureOn()` in `runtime/runner/src/cfc/host-review.ts`. A host
   confirms either through `RuntimeClient.commitSnapshotShare(id)` or
   `RuntimeClient.commitCustodySeal(id)`, and the worker builds the gesture
   itself with `hostGestureProvenance()`, which records `native` origin;
@@ -745,13 +745,13 @@ Two other requests bring Home up as a side effect: `createSpace()`, and
 `start: false`. A host that makes one of those anyway still gets the
 housekeeping, but neither is the contract.
 
-**Test.** `packages/runtime-client/test/backends/runtime-processor.test.ts`,
+**Test.** `runtime/runtime-client/test/backends/runtime-processor.test.ts`,
 `describe("ensuring an existing Home only")`, holds that the request brings up
 an existing Home and starts the housekeeping, and that it creates and starts
 nothing where there is no Home. The cases beside it, in the same file's home
 pattern IPC block, hold each housekeeping step running once per worker and Home
 opening when a step fails.
-`packages/runtime-client/test/runtime-client.test.ts`,
+`runtime/runtime-client/test/runtime-client.test.ts`,
 `describe("ensureHomePatternRunning()")`, holds the request the client sends
 and the `undefined` it returns where no Home was brought up.
 

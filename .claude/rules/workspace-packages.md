@@ -1,7 +1,10 @@
 ---
 paths:
   - "deno.jsonc"
-  - "packages/*/deno.jsonc"
+  - "base/*/deno.jsonc"
+  - "patterns/deno.jsonc"
+  - "runtime/*/deno.jsonc"
+  - "connectors/*/*/deno.jsonc"
 ---
 
 # Workspace package configuration
@@ -37,10 +40,10 @@ on one that does not.
 
 A package whose tests include some that need a browser keeps them out of
 `deno-test`, in a `"browser-test"` entry of their own, and its `test` task names
-both. `packages/ui/deno.jsonc` is the worked example. Its `deno-test` ignores
+both. `runtime/ui/deno.jsonc` is the worked example. Its `deno-test` ignores
 `**/*.browser.test.ts`, and its `browser-test` runs exactly those files, so the
 two halves share no file. A package can also run its Deno tests in a browser.
-`packages/static/deno.jsonc` does: its `deno-test` has no `--ignore`, and its
+`base/static/deno.jsonc` does: its `deno-test` has no `--ignore`, and its
 `browser-test` runs the same `test/*.test.ts` files in a browser, so the two
 halves share every browser file. The coverage gate reads `deno-test` as the
 package's Deno-only half, and the package's measured set holds that half's tests
@@ -68,7 +71,7 @@ entry is the one Deno resolves: a `deno.json` beside a `deno.jsonc` is taken
 whole and the other file ignored, so a `test` task written in the ignored one
 counts for nothing.
 
-`packages/utils/deno.jsonc` is a correct minimal example.
+`base/utils/deno.jsonc` is a correct minimal example.
 
 ## A new package is three edits
 
@@ -100,10 +103,12 @@ before you push:
 `deno task check-package-cycles` fails when a package's production source can
 reach back to itself through another package. It counts an import by package
 name and a relative path that climbs into another package alike, and it ignores
-test code, which reaches wherever it needs to. It is the mechanical floor under
-"Dependencies run downward" in `AGENTS.md`, and only the floor: a cycle is
-caught, an import that merely runs up the stack is not. That paragraph's worked
-example is where to put a module each side seems to want.
+test code, which reaches wherever it needs to.
+`deno task check-dependency-direction` reads the same imports and fails on one
+that runs from a package to a later layer of "Pace Layers" in `AGENTS.md`, or
+from a pattern to a later category. Neither sees the order of the packages
+inside `runtime/`, which rests on review. That section's worked example is
+where to put a module each side seems to want.
 
 The cycles that predate the gate are listed in `ALLOWLIST` in
 `tasks/check-package-cycles.ts`, each with what the two sides take from each
@@ -114,7 +119,7 @@ until its entry is deleted.
 
 What a package offers only to other packages' tests goes behind an entry named
 `./for-testing-only`, and no other entry or barrel reaches it.
-`packages/data-model/deno.jsonc` is the example. Nothing checks that only tests
-and benchmarks import it, so the rest of the convention, from naming to who may
-import it, is `docs/development/DEVELOPMENT.md`, § Offering test-only code to
-other packages.
+`base/data-model/deno.jsonc` is the example. Nothing checks
+that only tests and benchmarks import it, so the rest of the convention, from
+naming to who may import it, is `docs/development/DEVELOPMENT.md`, § Offering
+test-only code to other packages.

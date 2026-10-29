@@ -79,7 +79,7 @@ Losing that address is the case these notes do not solve; see
 ### What produces one
 
 Only JavaScript handler dispatches.
-`handleJavaScriptHandlerResult` (`packages/runner/src/runner.ts`) mints the
+`handleJavaScriptHandlerResult` (`runtime/runner/src/runner.ts`) mints the
 receipt cell **unconditionally at its top**, before any branching, and all three
 downstream sub-paths resolve to that one address — a second `Cell` object is
 minted later for it, so the sharing is address-level, not object-level: the
@@ -101,7 +101,7 @@ runtime produces none, the response omits `receipt` — absent, never fabricated
 **Not every receipt comes from `cf piece call`.** Shell clicks and
 pattern-internal chains also dispatch handlers and write receipts with
 deterministic ids: `queueSchedulerEvent`
-(`packages/runner/src/scheduler/events.ts`, behind the `queueEvent` facade) sets
+(`runtime/runner/src/scheduler/events.ts`, behind the `queueEvent` facade) sets
 `id = args.eventId ?? mintEventId(eventLink, originTx)`. The fallback branch is
 a per-transaction key plus a sequence, or a random UUID — so those receipts are
 **not** re-derivable, and only dispatches that supply an id are nameable at all.
@@ -111,7 +111,7 @@ client: replay safety helps every dispatch, nameable or not.
 
 **Should recovery ever get a name, `invocation` not `receipt`.** CFC single-use grants write a
 *consumption receipt* under the reserved `grant:cfc:` scheme
-(`packages/runner/src/cfc/grants.ts`), deliberately avoiding the `resultFor`
+(`runtime/runner/src/cfc/grants.ts`), deliberately avoiding the `resultFor`
 idiom so `noteSystemWrite` gates it. `cf receipt` would be ambiguous between the
 two and invite the expectation that it reads the policy-state kind.
 
@@ -156,7 +156,7 @@ scope argument**, so receipts are space-scoped today.
 **`$event` is not the caller's id.** A caller-supplied id is bound to the
 session that chose it and to the stream it was sent to before it becomes an
 event id: `scopeCallerEventId`
-(`packages/runner/src/scheduler/event-identity.ts`) hashes
+(`runtime/runner/src/scheduler/event-identity.ts`) hashes
 `{caller, id, path, scope, session, space}` — the id string, the session, and
 the whole stream link — into `evt:caller:<hash>`, and `Cell.send` routes every
 supplied id through it. That binding is deliberate: two verbs sharing input
@@ -225,7 +225,7 @@ plus a handler execution and a refused commit.
 
 ## Errors and output conventions
 
-These notes inherit `packages/cli/README.md` §"Output Conventions" rather than
+These notes inherit `runtime/cli/README.md` §"Output Conventions" rather than
 restating them: **stdout carries command output only, with hints and diagnostics
 on stderr**, and **`-q/--quiet` suppresses the hint and next-step blocks**
 without touching the log floor, deliberately, because consumers parse `--quiet`
@@ -276,7 +276,7 @@ an address emitted by one command is accepted by the next without reshaping.
 | Kinded URI | `computed:fid1:…` | **refused, by name** | a *different* entity from the `of:` one over the same hash |
 
 **Where the scheme is understood.** `entityIdFrom`
-(`packages/runner/src/create-ref.ts`) is the entity-specific intake seam: it
+(`runtime/runner/src/create-ref.ts`) is the entity-specific intake seam: it
 accepts the `of:` scheme and **refuses `computed:` rather than stripping it**,
 because stripping would rename an id to its `of:` sibling, a different
 entity. Not one layer lower: `FabricHash.fromString` parses any tagged hash,
@@ -419,7 +419,7 @@ first condition arrives on its own.
   `--show-links` shape, and its examples teach hand-written invocation ids
   beside the session that scopes them — safe now that an id names an
   invocation only within its session.
-- `packages/cli/README.md` §"Output Conventions" is the source these notes
+- `runtime/cli/README.md` §"Output Conventions" is the source these notes
   inherit their stdout/stderr rules from. It also carries the projection and
   filter contract the read layer extends.
 

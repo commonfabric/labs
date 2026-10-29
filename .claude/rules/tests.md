@@ -35,9 +35,9 @@ A test that needs a real browser but not a running product goes in a
 package that splits its tests this way matches the pattern twice: once as an
 `--ignore` that keeps the file out of plain `deno test` discovery, and once as
 the argument list handed to `deno-web-test`. Both are globs, so there is no list
-to add the file to. `packages/ui` and `packages/iframe-sandbox` write the two
+to add the file to. `runtime/ui` and `base/iframe-sandbox` write the two
 halves as separate `deno-test` and `browser-test` tasks, and
-`packages/dashboard` spreads the pair across a runner script and the task that
+`dashboard` spreads the pair across a runner script and the task that
 runner calls. Where the pair is written changes; what it matches does not.
 
 Two things break it, and the second is what makes the first hard to notice.
@@ -45,7 +45,7 @@ Two things break it, and the second is what makes the first hard to notice.
 A browser-only test under any other name lands in the plain Deno pass, where it
 fails on the first browser global it touches. So use the name whenever the test
 needs a browser, whatever its subject.
-`packages/ui/src/v2/components/cf-svg/sanitize-svg.browser.test.ts` is the case
+`runtime/ui/src/v2/components/cf-svg/sanitize-svg.browser.test.ts` is the case
 to keep in mind: it is not a component test at all, and needs a browser for
 `DOMParser` alone.
 
@@ -61,8 +61,8 @@ including when to use this route rather than the browser integration lane.
 ## Shape of a unit test file
 
 First check which kind of file you are in. A `*.test.tsx` under
-`packages/patterns`, and a scattering elsewhere such as those under
-`packages/piece/test/vintages`, is a **pattern test** — itself a pattern,
+`patterns`, and a scattering elsewhere such as those under
+`runtime/piece/test/vintages`, is a **pattern test** — itself a pattern,
 driving another with `action()` and asserting with `assert()` from
 `commonfabric`, run by `deno task cf test`. Nothing in this section applies
 to one.
@@ -112,8 +112,8 @@ surrounding code:
   rule wins.
 
 On placement: a test goes in the package's `test/` tree, mirroring `src/`. The
-exception is a directory of independent components, `packages/ui` and
-`packages/patterns` among them, where each test sits beside its component and
+exception is a directory of independent components, `runtime/ui` and
+`patterns` among them, where each test sits beside its component and
 belongs there.
 
 The "Which comparison decides the outcome?" section is the one to read before
@@ -124,13 +124,13 @@ value such as a `FabricHash`.
 
 `deno task check-no-waitfor` fails the build when an integration test imports
 the polling `waitFor` from `@commonfabric/integration`. Only `integration/`
-directories under `packages/` are in scope; a unit test's poll has no gate, and
+directories in packages are in scope; a unit test's poll has no gate, and
 the rule below is what holds it. Reach for the primitive that
 resolves on the thing actually happening:
 
 - In a browser test: `awaitViewSettled(page)` for "the view is interactive",
   then `waitForText`, `clickCfButton`, `clickCfButtonAndWaitForText` and the
-  rest of `packages/patterns/integration/cfc-browser-helpers.ts`.
+  rest of `patterns/integration/cfc-browser-helpers.ts`.
 - With no page: resolve a `defer()` from a callback the test already registers
   — a cell sink, a subscription's `next`, the scheduler's `onError`.
 

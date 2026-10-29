@@ -7,26 +7,26 @@ MUST/NEVER language is binding on implementers.
 
 ## Anchors
 
-- Scheduler: `packages/runner/src/scheduler/` (`execution.ts`,
+- Scheduler: `runtime/runner/src/scheduler/` (`execution.ts`,
   `dependency-graph.ts`, `events.ts`, `event-identity.ts`). The scheduler
   already runs graphs to fixpoint on a client runtime; the serving loop
   hosts THAT scheduler server-side. Do not write a new scheduler.
-- Runtime construction: `packages/runner/src/runtime.ts` (`new Runtime`),
-  builtin registration `packages/runner/src/builtins/index.ts`
+- Runtime construction: `runtime/runner/src/runtime.ts` (`new Runtime`),
+  builtin registration `runtime/runner/src/builtins/index.ts`
   (`registerBuiltins(runtime)`).
 - Store: engine-v3 sqlite per space DID (the on-disk layout is
   composed by `resolveMemoryEngineStoreRootUrl` and
-  `resolveSpaceStoreUrl` in `packages/memory/v2/storage-path.ts`),
+  `resolveSpaceStoreUrl` in `runtime/memory/v2/storage-path.ts`),
   tables `commit`, `revision`, `head`, `branch`, and `execution_lease`
-  in the reduced §2 shape (`packages/memory/v2/engine.ts` schema;
-  `packages/memory/v2/execution-lease.ts` holder side). The v1
+  in the reduced §2 shape (`runtime/memory/v2/engine.ts` schema;
+  `runtime/memory/v2/execution-lease.ts` holder side). The v1
   branch's richer shape was prior art, not substrate (its `engine.ts`:
   branch PK, `lease_generation`, `host_id`, `on_behalf_of`, state
   `active|draining|revoked`, `expires_at`) and none of it carried
   over.
-- Memory server + protocol: `packages/memory/v2.ts`, mounted in toolshed
+- Memory server + protocol: `runtime/memory/v2.ts`, mounted in toolshed
   at `/api/storage/memory`
-  (`packages/toolshed/routes/storage/memory/memory.routes.ts`).
+  (`runtime/toolshed/routes/storage/memory/memory.routes.ts`).
 
 ## 1. Components
 
@@ -102,9 +102,9 @@ if that fails too, it counts as a failure park like any other. A
 space whose serving fails every time is therefore rebuilt at a widening
 interval rather than in a tight loop. Impl: `host.ts`'s park handler,
 the failure arm of `#activateInner`, and `#reactivateAfterPark`; pinned
-in `packages/runner/test/executor-serving-loop.test.ts`,
-`packages/runner/test/executor-events-down.test.ts`, and
-`packages/runner/test/executor/activation-lease.test.ts`.
+in `runtime/runner/test/executor-serving-loop.test.ts`,
+`runtime/runner/test/executor-events-down.test.ts`, and
+`runtime/runner/test/executor/activation-lease.test.ts`.
 
 What activation LOADS (RULED 2026-08-02): there is NO piece-start
 policy in v2. The space is ONE lazy reactive graph, and activation
@@ -210,7 +210,7 @@ is TENURE-scoped, and the request itself is a one-shot in-process
 signal, not a durable row — loss across a process crash in the
 staged-but-underived window is the OW46 silent-park observability
 family. Impl: `host.ts`'s `#endTenure`; pinned in
-`packages/runner/test/executor-warm-request.test.ts`. One deliberate
+`runtime/runner/test/executor-warm-request.test.ts`. One deliberate
 side effect, stated: the warm notice rides `noteExecutorCommit`, whose
 dirtiness marking means a foreign provisioning batch's staged writes
 now also PUSH to any client session subscribed to those docs in the
@@ -534,7 +534,7 @@ mid-wave belong to the NEXT wave — natural double-buffering, no timers):
   // preflight holds for an invalid input ends the run of handlers, so
   // the settle runs that input first.
   run scheduler to QUIESCENCE — scheduler.idle()
-  (Scheduler.idle() in packages/runner/src/scheduler/facade.ts)
+  (Scheduler.idle() in runtime/runner/src/scheduler/facade.ts)
   resolves; it
   awaits queued AND parked events, running actions, and demanded pull
   work — the eager/idle-scheduled actions and their cascades included.
@@ -741,7 +741,7 @@ executing:
 
 - Every run (handler, computed, eager action) executes in a transaction
   that logs each read — doc, path, version (the reactivity log,
-  `packages/runner/src/storage/reactivity-log.ts`). The scheduler
+  `runtime/runner/src/storage/reactivity-log.ts`). The scheduler
   subscribes the node to exactly its LAST run's read set.
 - **Dynamic dependencies are one-run-late, and that is sound**: a node
   cannot newly read C except as a consequence of a change in something
@@ -776,8 +776,9 @@ executing:
   which the removed fan-out had covered incidentally). The foreign
   commit is never home input — W and the input batch stay per home
   space.
-  Foreign SCOPED reads are the exception: fail-closed refused until
-  the grant-scoped read design's resolution lands — protocol.md §2.)*
+  A foreign SCOPED read is admitted on the reading actor's own READ
+  grant in the foreign space's access list and refused otherwise —
+  protocol.md §2's grant-scoped read.)*
 - **Scope discovery is part of read discovery**: a run's scope is the
   narrowest scope of anything it read, so it too is discovered by
   running. A narrowing discovery writes the broad-slot redirect AND
@@ -869,7 +870,7 @@ CREATE TABLE scheduler_basis (
                             --   M2 re-keying; scope_key vocabulary
                             --   is the shared `resolveScopeKey` in
                             --   the wire-shape module —
-                            --   packages/memory/v2.ts — per
+                            --   runtime/memory/v2.ts — per
                             --   LD3, key-vocabulary.md §3)
   entity_space     TEXT,    -- the input doc's space: foreign reads
                             --   are logged reads too (cross-space
@@ -971,7 +972,7 @@ spine. A migration driven off the six-table enumeration leaves the
 floor table behind and fails the plan's stage-C criterion for a
 reason that reads like a mystery.
 `migrateSchedulerObservationTablesToBasis` in
-`packages/memory/v2/engine.ts` drives the drop from the seven-table
+`runtime/memory/v2/engine.ts` drives the drop from the seven-table
 list above; anything that re-derives that list must too.
 
 **NO BACKFILL** (D10). `scheduler_read_index` and
@@ -1007,11 +1008,11 @@ here so no one re-derives it mid-PR:
 Dev tooling and live docs read these tables directly and break
 silently, since no product test exercises them:
 
-- `packages/state-inspector` — `hasSchedulerBasisTable` in `db.ts`
+- `runtime/state-inspector` — `hasSchedulerBasisTable` in `db.ts`
   and the basis-row count in `queries.ts` name the table directly, so
   the inspector follows any change to it by hand;
 - the `cf inspect` CLI surface that renders that output;
-- `packages/memory/v2/sqlite/guard.ts` — the `CORE_TABLE_NAMES`
+- `runtime/memory/v2/sqlite/guard.ts` — the `CORE_TABLE_NAMES`
   blocklist that a pattern statement may never reference lists
   `scheduler_basis` and none of the dropped names; a table added to
   the engine goes IN, or pattern SQL gains a reachable engine table;
@@ -1026,7 +1027,7 @@ PRs): C.2 carries this migration; C.1 deletes the certificate
 surface it ships beside (`completeSchedulerScopeSummary`
 / `completeActionScopeSummary` — README §5), and that half is NOT a
 hand edit: ~110 fixture files under
-`packages/ts-transformers/test/fixtures/` embed the emitted marker,
+`base/ts-transformers/test/fixtures/` embed the emitted marker,
 so the GOLDEN-REGENERATION procedure is a required step of the
 change, not a follow-up. Plan Phase 1 stage C sizes the full
 surface. (The OFF-arm observation-adoption path, the one certificate
@@ -1263,17 +1264,21 @@ the 2026-08-24 ruling; the owner may re-rule it).
   seq is what the wave CLAIMS its view covers, and the view its
   runs read is the replica's, which can sit below it: a commit admitted
   between a run's reads and the seal that opens the wave is counted in
-  the basis and absent from the view. The concurrency rule's per-doc CAS
-  is what covers the gap, and its pure-derivation arm says how.
+  the basis and absent from the view. The concurrency rule below is
+  what covers the gap: its pure-derivation arm holds a written doc to
+  the replica's view at the seal, and its non-re-derivable arm holds
+  the run's recorded reads to the store's heads.
 - Failure isolation is per action: an aborted tx discards only its own
   writes; the wave keeps the rest.
 - A derivation run that read the value of a document its runtime refuses
-  by construction (protocol.md §2's foreign scoped read refusal) aborts
-  its tx rather than sealing it. What it derived came from an absence
-  that is not the document's state, and sealing it would overwrite the
-  instance a runtime that can read the document derives. The refusal is
-  the same on every run, so the abort takes no retry; the run's reads stay
-  subscribed, and a change to any other input runs it again.
+  (protocol.md §2's grant-scoped read), or one whose actor's grant it is
+  still asking for, aborts its tx rather than sealing it. What it derived
+  came from an absence that is not the document's state, and sealing it
+  would overwrite the instance a runtime that can read the document
+  derives. A refusal is the same on every run until the foreign space's
+  access list changes, so the abort takes no retry; the run's reads stay
+  subscribed, and a change to any other input, or the admitted instance
+  landing, runs it again.
 - A derivation run that read, through a link, an absent user- or
   session-scoped instance of a document another derivation registered in
   this runtime declares as a write (a builtin's stores included) aborts its
@@ -1283,14 +1288,20 @@ the 2026-08-24 ruling; the owner may re-rule it).
   stays subscribed, so it runs again once the instance is produced.
 - On a client (OFF arm, and speculation in the ON arm) seal == commit /
   overlay-apply as today — one abstraction, two destinations. Anchor:
-  `packages/runner/src/storage/extended-storage-transaction.ts`.
+  `runtime/runner/src/storage/extended-storage-transaction.ts`.
 
 **Mid-wave concurrency rule**: the wave commit CASes PER DOC against
 the wave's read basis, and conflict handling is PER WRITE CLASS.
 A write's class is determined by the producing RUN's kind — every
 write of an event-handler run is non-re-derivable; every write of a
-derivation run is a pure derivation write (RULED 2026-08-05). The
-classes:
+derivation run is a pure derivation write (RULED 2026-08-05).
+Re-derivable names who re-arms a withdrawn write, not whether it can be
+recovered: the dependency graph re-runs a derivation on its own when an
+input it recorded moves, while nothing in the graph points back at an
+event, so the wave re-arms a handler's write itself by withholding the
+event's mark and watermark advance along with the write, and the drain
+replays the event. Both arms recover by running code again; only the
+first does so for free. The classes:
 
 - **Pure derivation writes**: a doc whose head advanced past the basis
   (a concurrent authored commit landed mid-wave) has its derived write
@@ -1336,19 +1347,73 @@ classes:
   to unconsequenced (requeue) rather than lose them. events.md §4's
   atomicity survives the retry: the watermark advance and its
   consequences move TOGETHER into the rebased commit, never
-  separately. This class CASes against the wave's basis alone — the
-  pure-derivation arm's lower basis does not carry here. Its conflict
-  arm rebases or requeues rather than dropping, and requeueing against
-  a seq the replica has not caught up to yet is the sustained-traffic
-  livelock this section forbids.
+  separately. This class CASes against the wave's basis, and an
+  `event-handler` contribution is held to its recorded reads as well
+  (PROPOSED 2026-10-23, awaiting ruling). Each confirmed read in its
+  sealed transaction is held to the store's head at the read's path,
+  under the intrusion exemption above: a commit after the read's seq
+  that wrote the path and that the tenure's own derived commits do not
+  account for makes the read STALE. The check is made again inside the
+  store transaction that commits the wave, as every written document's
+  head is: the batch carries each contribution's reads, a commit admitted
+  between the wave's own check and that transaction stales a read there,
+  and the refusal names the read, so that the event requeues alone and
+  the wave re-attempts. The reads held are the home space's, as a
+  client commit's are: a client's transaction commits once per space it
+  wrote, each commit carrying that space's reads, and a space it only
+  read gets no commit and no validation, so a read in another space is
+  held to nothing on either arm. The reads are what the client arm
+  validates, and the replica gap above is why the basis cannot stand in
+  for them here: a commit admitted before the seal opened the wave sits
+  at or below the basis while the run that read the doc never saw it,
+  and the write landing anyway is a blind write computed from state the
+  store had already replaced — the shape that lands a handler's
+  `set(read + 1)` over a peer's value the serving replica had not taken.
+  The pure-derivation arm's view check does not carry here, because it
+  is taken on the docs a run WROTE; a handler's reads are what decide
+  its writes, and the two need not be the same docs.
+
+  A stale read requeues the event WHOLE, ahead of every per-doc
+  disposition — supersession, the basis CAS, and the rebase never run
+  for it. The run's output as a whole rests on what it read, and the
+  wave cannot tell which write a read decided: a write the firing
+  session later overwrote may be the one a fresh read would not have
+  made, in favor of one it would, and a patch that commutes with the
+  concurrent write on paths may carry a value computed from the path
+  that moved. Rebase keeps its place for a contribution whose reads are
+  all current and whose written doc moved under it — a blind append or
+  increment on a doc the run never read, a bookkeeping advance. Reads
+  are recorded per path and checked per path, so a concurrent write to
+  a path the run did not read conflicts with nothing.
+
+  A requeued event re-drains once the replica's confirmed seq for every
+  doc a stale read named has reached the seq of the commit that made
+  the read stale — the catch-up gate. Replaying it earlier would read
+  the same replica state, seal the same write, and conflict the same
+  way, which is the sustained-traffic livelock this section forbids;
+  gated, each lap waits for the delivery of one frame and no longer.
+  Nothing bounds the laps themselves: a document written faster than
+  the loop replays conflicts on every lap, and `events.staleReadRequeues`
+  (§7) is where that shows. A requeue decided at the commit step, for a
+  stale read or a semantic rebase conflict alike, carries the order
+  events.md §2 promises: every `event-handler` contribution in the wave
+  whose durable entry sits later in the same stream requeues with it,
+  and the drain holds those entries behind the requeued head (events.md
+  §5's arrival-order barrier) until its replay commits. Derivations
+  downstream of the withdrawn writes need no fold beyond the read
+  closure: the replay's commit dirties the runs whose recorded reads it
+  touches, and a replay that writes what the store already holds
+  commits nothing, leaving values computed from exactly that state in
+  place.
 
 **A consequence write the firing session overwrote is SUPERSEDED.** An
 event's consequence takes effect at the event's place in the order of
 the session that fired it, wherever its commit lands. That session
 committed the event and rendered the handler's speculative echo
 (speculation.md), so whatever it wrote afterward it wrote over that
-echo. Before the CAS above, each write of an `event-handler` contribution
-delivering a durable entry is checked against the authored commits of
+echo. After the stale-read check and before the CAS above, each write of
+an `event-handler` contribution delivering a durable entry, its reads all
+current, is checked against the authored commits of
 the entry's firing session — the `firedAt` user and session the run acts
 as — after the entry's seq. A patch at or below a path one of those
 commits overwrote is DROPPED from the consequence, and so is a whole-doc
@@ -1356,10 +1421,12 @@ commits overwrote is DROPPED from the consequence, and so is a whole-doc
 path with a `set` or `delete` (the root) or with a `replace`, `add` or
 `remove` patch; a write that merges into existing content (`append`,
 `splice`, `increment`, and the like) overwrites nothing. The rule holds
-wherever the session's write fell: before the wave's basis, which is
-where a requeued or late-drained handler finds it, or mid-wave, where the
-overlap would otherwise requeue the event and the requeued run would
-write over it again. The event still completes: its other writes, its
+wherever the session's write fell: below the wave's basis, which is
+where a requeued or late-drained handler finds it — a run that read the
+doc before the write reached its replica is requeued on the stale read,
+and its replay meets the write here — or mid-wave, for a doc the run
+wrote without reading, where the overlap would otherwise requeue the
+event. The event still completes: its other writes, its
 consequence mark and its watermark advance ride the wave commit, and
 `consequenceOf` names it, so a wave whose consequence lost every domain
 write still commits that entry's consequence, and an entry held behind
@@ -1892,21 +1959,22 @@ timer interval or each cycle with a durable commit.
 Exposed via the existing `/api/health/stats` shape, replacing v1's pool block:
 `servingLoop: { activeSpaces, waves, wavesBudgetExhausted, exhaustedAdvances,
 supersededWrites, authoredSeen, effectAcks, derivedCommits, structureLoadFailures,
-structureLoadDeferred, structureLoadStuck, structureLoadTerminal,
+structureLoadRefused, structureLoadDeferred, structureLoadStuck, structureLoadTerminal,
 structureLoadConfirmationsSkipped, structureLoadRearmed, watermarkClamped,
 storeReads, storeRefreshes, unstampedSealRefusals, foreignWriteRefusals,
 foreignEngineFailures, warmRequests, watermarkLag, demandArrivals,
 undemandedNarrowingRuns, earlyEmitRefusals, demand: {demandedRows,
 demandedInstances, demandedInstancesMax, demandedPairs, demandedWriters,
 demandedWritersMax, demandRootEnters, demandRootLeaves, notCurrentRearms,
-demandPasses, demandPassMs, demandKeysReconciled, structureRootsPreloaded,
-pushGrowthWakes, watchWakes, warmWakes}, settle:
+demandPasses, demandPassMs, demandKeysReconciled, ownedDefaultSeeds,
+structureRootsPreloaded, pushGrowthWakes, watchWakes, warmWakes}, settle:
 {series, dropped}, settleAdvances: {count, lastDelta, series, dropped}, events:
 {appended, processed, coalescedPerWaveMax, skippedIdempotent,
 drainInFlightSkips, visibilityBarriers, visibilityRecoveries,
 visibilityDeferrals, deferredRescansArmed, deferredRescansFired,
 lt1LeftoversPurged, lt1LateSealsRefused, orphanDeliveriesRefused,
-handlerNotRunDeferrals, arrivalHeldDeferrals, loadParkDeferrals,
+handlerNotRunDeferrals, staleReadRequeues, arrivalHeldDeferrals,
+loadParkDeferrals,
 loadParkFailures, deliveryDeferralsActive, deliveryFailuresActive,
 maxAccumulatedDeliveryFailureMs, deliveryFailureWakesArmed,
 deliveryFailureWakesFired, needsAttention: {total, byPhase},
@@ -1924,6 +1992,12 @@ that threw / could not land yet — never-a-piece id classes are EXCLUDED from
 piece demand and count nothing, RULED 2026-08-07; `structureLoadFailures` also
 counts a piece-start commit that failed AFTER its start resolved (the §3d
 piece-start site's surfaced fire-and-forget failure, stage P2-F);
+`structureLoadRefused` counts the loads a start refused because the piece's
+stored setup is a record of another build that numbered its cells holding state
+differently (`PieceStateMovedError`, `docs/specs/computed-cell-identity.md`), on
+the start's first commit or a retry. A root the demand cycle refused parks as a
+terminal one does, until a commit to it re-arms it, and is re-armed at once
+where such a commit landed while the refusing pass ran;
 `structureLoadStuck` counts roots whose CONSECUTIVE-deferral streak crossed the
 space server's stuck threshold — once per crossing, with a WARN naming the space
 and root at the crossing and at each doubling of the streak — so a
@@ -1969,7 +2043,12 @@ head above W. An event-visibility floor can constrain the same cycle, so the
 counter does not isolate the marginal effect of the shadow floor. The shadow
 clamp covers inbound foreign novelty still hidden by a parked own write; it
 is honesty, not failure,
-and lifts by itself; `storeReads` counts the engine reads that the store
+and lifts by itself; `events.staleReadRequeues` counts events requeued at
+the wave commit for a stale recorded read (§3d), once per requeue, the
+later entries of the stream folded in behind one included — a count that
+climbs on one stream names a document written faster than the loop
+replays the handler reading it, which the catch-up gate bounds per lap
+and nothing bounds in total; `storeReads` counts the engine reads that the store
 read-through posture (§1 plane (a)) performs for serving replicas, and
 `storeRefreshes` counts the held documents it re-reads off the feed, both
 zero while the posture is off; `unstampedSealRefusals` counts write-carrying
@@ -2030,6 +2109,17 @@ time, review MINOR-3);
 `demandKeysReconciled` the instance keys the passes reconciled, accumulated
 over the passes whose reconcile completed, so a pass that throws partway adds
 nothing.
+`ownedDefaultSeeds` the (piece root, demanding pair) seedings the passes
+completed — the ARRIVAL SEED: a pattern-owned cell declaring a default at a
+scope narrower than its result (scoped-cell-instances.md, "A pattern-owned
+cell narrower than its result starts from its declared default for each
+actor instance") is seeded in a demanding pair's instance when the pair's
+demand for a loaded root arrives, as the piece's start seeds it for the
+identity the start runs under. A viewer whose runtime runs none of the
+pattern never starts the piece; without the seed its first write into such
+a cell would create the instance holding that one field alone. The pass
+awaits the seeds ahead of the arrival re-arm, so a node re-run for the
+arriving demander reads the seeded instance.
 The pass reads the demand set per session (`demandForSpace`): the memory
 server keeps each session's share and hands back the same object until a
 write to that session's watches, views, delivered entities, graph misses, or
@@ -2189,5 +2279,5 @@ starves) work against a stale liveness answer. Review test for a diff
 that adds such a site without the bracket: reject it. Verification:
 run the runner suite with `SCHEDULER_LIVENESS_EQUIVALENCE=1` (the
 every-mutation equivalence hook in
-`packages/runner/src/scheduler/dependency-graph.ts` checks the
+`runtime/runner/src/scheduler/dependency-graph.ts` checks the
 incremental state against the full rebuild at each mutator exit).

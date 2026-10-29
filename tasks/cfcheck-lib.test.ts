@@ -10,10 +10,10 @@ import {
 
 /** Four patterns, spread across the trees the collector walks. */
 const CORPUS = [
-  "packages/connectors/agents/debug-view/logic.ts",
-  "packages/patterns/counter/counter.tsx",
-  "packages/patterns/form-demo.tsx",
-  "packages/patterns/system/home.tsx",
+  "connectors/agents/debug-view/logic.ts",
+  "patterns/examples/counter/counter.tsx",
+  "patterns/examples/form-demo/form-demo.tsx",
+  "patterns/system/home/home.tsx",
 ];
 
 describe("cfcheck-lib", () => {
@@ -72,22 +72,24 @@ describe("cfcheck-lib", () => {
     it("takes the one pattern a whole path names", () => {
       // What a lane passes: a unit is a whole path, and the lane is
       // charged for the units it asked for and no others.
-      expect(patternsToCheck(CORPUS, ["packages/patterns/form-demo.tsx"]))
-        .toEqual(["packages/patterns/form-demo.tsx"]);
+      expect(
+        patternsToCheck(CORPUS, ["patterns/examples/form-demo/form-demo.tsx"]),
+      )
+        .toEqual(["patterns/examples/form-demo/form-demo.tsx"]);
     });
 
     it("takes every pattern a term matches", () => {
-      expect(patternsToCheck(CORPUS, ["packages/patterns/"])).toEqual([
-        "packages/patterns/counter/counter.tsx",
-        "packages/patterns/form-demo.tsx",
-        "packages/patterns/system/home.tsx",
+      expect(patternsToCheck(CORPUS, ["patterns/"])).toEqual([
+        "patterns/examples/counter/counter.tsx",
+        "patterns/examples/form-demo/form-demo.tsx",
+        "patterns/system/home/home.tsx",
       ]);
     });
 
     it("takes a pattern under either of two terms", () => {
       expect(patternsToCheck(CORPUS, ["form-demo", "home.tsx"])).toEqual([
-        "packages/patterns/form-demo.tsx",
-        "packages/patterns/system/home.tsx",
+        "patterns/examples/form-demo/form-demo.tsx",
+        "patterns/system/home/home.tsx",
       ]);
     });
 
@@ -99,7 +101,7 @@ describe("cfcheck-lib", () => {
   describe("selectionFor()", () => {
     it("takes the patterns the command line names", () => {
       expect(selectionFor(CORPUS, ["--only", "home.tsx"]))
-        .toEqual(["packages/patterns/system/home.tsx"]);
+        .toEqual(["patterns/system/home/home.tsx"]);
     });
 
     it("takes the whole corpus given no term", () => {

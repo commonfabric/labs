@@ -32,7 +32,7 @@ default and stay ambient-OFF, so they are unmarked for the older reason: the
 flip does not reach them (`docs/specs/test-records.md`). One record is one JSON
 line; one uploaded object is a run's context line followed by its record lines.
 The schema, the line codecs, and their validators live in
-`packages/test-support/src/records/`.
+`base/test-support/src/records/`.
 
 Records carry only public-repository material: names, hashes, durations. No
 usernames, hostnames, tokens, or log text — that discipline is what makes
@@ -46,12 +46,20 @@ Renaming a test renames its identity and splits its history. When the
 continuity matters, append a line mapping the old identity to the new one
 with the date. The line goes in `tasks/test-identity-aliases/`, in the file
 named after the test file that holds the test: a rename in
-`packages/runner/test/link-utils.test.ts` is a line in
+`runtime/runner/test/link-utils.test.ts` is a line in
 `link-utils.test.ts.jsonl`, and a test file with no alias file yet gets a
 new one. Only the last path segment names the file,
 so test files of one name share one, and a test file that moves keeps the
 one it has. A line mapping a whole scope, for a package rename, goes in
-`whole-scope.jsonl`. Every reader takes the directory as a single set of
+`whole-scope.jsonl`. A line mapping a moved directory or file to its new path
+goes in `moved-paths.jsonl`. It renames every identity whose name holds that
+path, such as a pattern test's file or an item that `deno task cfcheck` reports:
+
+```json
+{"date": "2026-12-01", "from": {"p": "packages/runner"}, "to": {"p": "runtime/runner"}}
+```
+
+Every reader takes the directory as a single set of
 aliases, so which file holds a line changes nothing about what it means;
 the division keeps two changes that rename tests in different test files
 from appending to the same file, and so from conflicting when they merge.
@@ -320,7 +328,7 @@ https://storage.googleapis.com/storage/v1/b/cf-ci-metadata/o?prefix=labs/test-re
 ```
 
 Objects are gzip-encoded NDJSON served with transcoding, so a plain fetch
-receives text. `packages/test-support/src/records/store-reader.ts` is the
+receives text. `base/test-support/src/records/store-reader.ts` is the
 validating reader; the readers built on it:
 
 - `tasks/test-records-report.ts` — collisions, high-churn identity
@@ -345,7 +353,7 @@ validating reader; the readers built on it:
   on a daily schedule, which is the only place its identity can be
   assumed; there is no key for it and no way to run the writing half by
   hand.
-- `packages/dashboard/test-records-history.ts` — the dashboard's collector:
+- `dashboard/test-records-history.ts` — the dashboard's collector:
   cached per-identity daily series shaped for `trend.ts`.
 
 Readers that join history across renames apply the alias file through
@@ -409,7 +417,7 @@ the modules under `tasks/test-topology/`, and never a new job: the lanes run
 what the topology declares and ship its records. A suite whose runner emits
 JUnit declares each report, with its kind, scope and file prefix, in the
 invocations its `command()` returns, and passes a `--preload` naming
-`packages/test-support/src/records/preload.ts` where the surface is `deno test`.
+`base/test-support/src/records/preload.ts` where the surface is `deno test`.
 `preloadArgument()` from `@commonfabric/test-support/records` returns that flag;
 Deno resolves `--preload` as a path rather than through the import map, so it
 must be absolute and no caller writes it out.
@@ -527,7 +535,7 @@ suite knows as its unit.
 
 A harness with per-result callbacks
 appends records through `FragmentWriter` (see the hooks in
-`packages/cli/lib/test-runner.ts` and `packages/deno-web-test/runner.ts`).
+`runtime/cli/lib/test-runner.ts` and `runtime/deno-web-test/runner.ts`).
 Anything else wraps its command:
 
 ```
@@ -559,7 +567,7 @@ A harness a test drives as a child process takes it the other way round,
 since the child reads its own environment: the test hands the child an
 empty `CF_TEST_RECORDS_DIR`, which is recording off. `tasks/integration.ts`
 does that for the `cf` children whose files it times itself, and
-`packages/deno-web-test/test/utils.ts` for the fixture projects it runs the
+`runtime/deno-web-test/test/utils.ts` for the fixture projects it runs the
 browser harness over.
 
 Two narrower checks back the rule up. The pattern runner and the browser
@@ -570,7 +578,7 @@ inherited. And the record parser every reader shares drops a record whose
 repository root. The parser cannot tell every fixture's record from a real
 one: a run whose working directory is the fixture's own directory names its
 files without climbing at all. Neither check reaches a fixture kept inside
-the repository, such as those under `packages/cli/test/fixtures`. For those,
+the repository, such as those under `runtime/cli/test/fixtures`. For those,
 the caller's decision not to record is the only thing that keeps them out of
 the store.
 
@@ -586,7 +594,7 @@ nothing. And where the bdd re-export loaded before the preload, a skip
 list is what makes the preload end the run rather than warn and carry on.
 An empty value is unset for that variable too, so naming it beside
 `CF_TEST_RECORDS_DIR` is the whole of it.
-`packages/test-support/test/records/preload.test.ts` starts a recording
+`base/test-support/test/records/preload.test.ts` starts a recording
 child on purpose, and names both.
 
 Every test must finish within sixty seconds in CI, not counting setup; a

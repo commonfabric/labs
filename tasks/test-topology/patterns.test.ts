@@ -42,16 +42,15 @@ function arms(defaultEnabled: boolean): { on: string; off: string } {
 
 describe("the pattern and package suites", () => {
   it("requires the Home catalog integration for changes to its authored sources", async () => {
-    const catalog =
-      "packages/patterns/integration/home-shared-space-catalog.test.ts";
+    const catalog = "patterns/integration/home-shared-space-catalog.test.ts";
     for (const defaultEnabled of [false, true]) {
       const loaded = await loadPatternSuites(root, defaultEnabled);
       for (const id of Object.values(arms(defaultEnabled))) {
         const suite = pick(loaded, id);
         for (
           const source of [
-            "packages/patterns/system/home.tsx",
-            "packages/patterns/system/shared-space-catalog.ts",
+            "patterns/system/home/home.tsx",
+            "patterns/system/shared-space/shared-space-catalog.ts",
             catalog,
           ]
         ) {
@@ -64,13 +63,87 @@ describe("the pattern and package suites", () => {
     }
   });
 
+  it("requires the Topics pivot integration for changes to the board's and a topic's sources", async () => {
+    const pivot = "patterns/integration/topic-board-pivot-sessions.test.ts";
+    for (const defaultEnabled of [false, true]) {
+      const loaded = await loadPatternSuites(root, defaultEnabled);
+      for (const id of Object.values(arms(defaultEnabled))) {
+        const suite = pick(loaded, id);
+        for (
+          const source of [
+            "patterns/apps/topics/main.tsx",
+            "patterns/apps/topics/topic.tsx",
+            pivot,
+          ]
+        ) {
+          expect(suite.unitsForChange?.(new Set([source]))).toContain(pivot);
+        }
+        expect(
+          suite.unitsForChange?.(
+            new Set(["patterns/apps/topics/README.md"]),
+          ),
+        ).toEqual([]);
+      }
+    }
+  });
+
+  it("requires the Topics measurements for changes to the authored sources and shared measurement inputs", async () => {
+    const measurements = [
+      "topics-headless-fixture",
+      "topics-lazy-lookup-reruns",
+      "topics-read-budget-small-and-threads",
+      "topics-read-budget-single-bucket",
+      "topics-read-budget-high-degree",
+      "topics-read-budget-mentions-16",
+      "topics-browser-measurement",
+    ].map((name) => `patterns/integration/${name}.test.ts`).sort();
+    for (const defaultEnabled of [false, true]) {
+      const loaded = await loadPatternSuites(root, defaultEnabled);
+      for (const id of Object.values(arms(defaultEnabled))) {
+        const suite = pick(loaded, id);
+        for (const source of ["main.tsx", "topic.tsx"]) {
+          expect(
+            suite.unitsForChange?.(
+              new Set([`patterns/apps/topics/${source}`]),
+            ),
+          ).toEqual([
+            ...measurements,
+            "patterns/integration/topic-board-pivot-sessions.test.ts",
+          ].sort());
+        }
+        for (
+          const input of [
+            "topics-headless-fixture.ts",
+            "topics-cost-cases.ts",
+            "topics-read-budget.ts",
+            "topics-read-budget-limits.ts",
+            "topics-read-budget-suite.ts",
+            "topics-browser-measurement.ts",
+            "topics-browser-measurement-core.ts",
+            "topics-browser-posture.ts",
+            "topics-navigation-helpers.ts",
+          ]
+        ) {
+          expect(
+            suite.unitsForChange?.(
+              new Set([`patterns/integration/${input}`]),
+            ),
+          ).toEqual(measurements);
+        }
+        for (const file of measurements) {
+          expect(suite.unitsForChange?.(new Set([file]))).toEqual([file]);
+        }
+      }
+    }
+  });
+
   it("runs the chosen files where the package lives", async () => {
     const suite = byId("pattern-integration");
     const [invocation] = await suite.command(
       [{ unit: suite.units[0]!, skip: [] }],
       { root, outputDir: await outputDir(), spoolDir: "/spool" },
     );
-    expect(invocation!.cwd).toBe(`${root}/packages/patterns`);
+    expect(invocation!.cwd).toBe(`${root}/patterns`);
     expect(invocation!.env?.HEADLESS).toBe("1");
     expect(invocation!.junit?.[0]?.scope).toBe("patterns");
   });
@@ -189,6 +262,38 @@ describe("the pattern and package suites", () => {
     }
   });
 
+  it("runs each arm's suites under its lane's environment, before and after a default flip", async () => {
+    const current = serverExecutionCiLane("default").enabled;
+    for (const defaultEnabled of [current, !current]) {
+      const suites = [
+        ...await loadPatternSuites(root, defaultEnabled),
+        ...await loadPackageIntegrationSuites(root, defaultEnabled),
+      ];
+      for (
+        const [id, role] of [
+          ["pattern-integration", "default"],
+          ["package-integration", "default"],
+          ["pattern-integration-opposite", "opposite"],
+          ["package-integration-opposite", "opposite"],
+        ] as const
+      ) {
+        const lane = serverExecutionCiLane(role, defaultEnabled);
+        const suite = suites.find((candidate) => candidate.id === id)!;
+        const [invocation] = await suite.command(
+          [{ unit: suite.units[0]!, skip: [] }],
+          { root, outputDir: await outputDir(), spoolDir: "/spool" },
+        );
+        const label = `${id} with the default ${defaultEnabled}`;
+        expect(invocation!.env, label).toMatchObject(lane.environment);
+        // Web view-scoped replication rides the ON arm, whichever role it is.
+        expect(
+          invocation!.env?.EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION,
+          label,
+        ).toBe(lane.enabled ? "true" : undefined);
+      }
+    }
+  });
+
   it("names a skip list only where a leaf inside a unit is skipped", async () => {
     const suite = byId("pattern-integration");
     const out = await outputDir();
@@ -222,7 +327,7 @@ describe("the pattern and package suites", () => {
       },
     );
     expect(invocation!.env?.DENO_COVERAGE_DIR).toBe(
-      "/cov/packages__patterns",
+      "/cov/patterns",
     );
   });
 
@@ -231,8 +336,8 @@ describe("the pattern and package suites", () => {
     // records under its own scope, so a batch holding files from two of
     // them runs twice and reports twice.
     const suite = byId("package-integration");
-    const runner = suite.units.find((u) => u.startsWith("packages/runner/"))!;
-    const shell = suite.units.find((u) => u.startsWith("packages/shell/"))!;
+    const runner = suite.units.find((u) => u.startsWith("runtime/runner/"))!;
+    const shell = suite.units.find((u) => u.startsWith("runtime/shell/"))!;
     const made = await suite.command(
       [{ unit: runner, skip: [] }, { unit: shell, skip: [] }],
       { root, outputDir: await outputDir(), spoolDir: "/spool" },
@@ -245,7 +350,7 @@ describe("the pattern and package suites", () => {
   it("owns the deployed-topology posture gate", async () => {
     const suite = byId("deployed-topology");
     expect(suite.units).toEqual([
-      "packages/cf-harness/integration/fabric-session-posture-gate.test.ts",
+      "runtime/cf-harness/integration/fabric-session-posture-gate.test.ts",
     ]);
     expect(suite.needs).toContain("toolshed");
     const made = await suite.command(
@@ -262,7 +367,7 @@ describe("the pattern and package suites", () => {
     // run and hard-codes the directory it walks, so a lane can ask for
     // the suite or not, and nothing finer.
     const suite = byId("pattern-reload");
-    expect(suite.units).toEqual(["packages/patterns/integration/reload"]);
+    expect(suite.units).toEqual(["patterns/integration/reload"]);
     const [invocation] = await suite.command(
       [{ unit: suite.units[0]!, skip: [] }],
       { root, outputDir: "/out", spoolDir: "/spool" },
@@ -278,15 +383,15 @@ describe("the pattern and package suites", () => {
     expect(
       suite.locate({
         test: { k: "integration", s: "patterns", n: "reloads" },
-        file: "packages/patterns/integration/reload/default-app.test.ts",
+        file: "patterns/integration/reload/default-app.test.ts",
       }),
-    ).toEqual({ level: "unit", unit: "packages/patterns/integration/reload" });
+    ).toEqual({ level: "unit", unit: "patterns/integration/reload" });
     // A file elsewhere under the same scope belongs to the integration
     // suite, which claims it by being the suite that enumerates it.
     expect(
       suite.locate({
         test: { k: "integration", s: "patterns", n: "counts" },
-        file: "packages/patterns/integration/counter.test.ts",
+        file: "patterns/integration/counter.test.ts",
       }),
     ).toBeUndefined();
   });
@@ -367,8 +472,8 @@ describe("enumerating a tree that cannot be read", () => {
     // walked, and each has its own rethrow.
     for (
       const directory of [
-        "packages/patterns/integration",
-        "packages/connectors/agents/debug-view",
+        "patterns/integration",
+        "connectors/agents/debug-view",
       ]
     ) {
       const root = await obstructed(directory);
@@ -378,7 +483,7 @@ describe("enumerating a tree that cannot be read", () => {
   });
 
   it("raises for a package integration directory it cannot read", async () => {
-    const root = await obstructed("packages/runner/integration");
+    const root = await obstructed("runtime/runner/integration");
     await expect(loadPackageIntegrationSuites(root)).rejects.toThrow();
     await Deno.remove(root, { recursive: true });
   });

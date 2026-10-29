@@ -5,18 +5,18 @@
  * one is compatible with it. Tier 2 records a real prior STATE per pattern and
  * proves the next version can still read it. This module owns the fixture
  * layout the second one needs, and nothing else — capture and replay live in
- * `packages/piece/test/state-continuity-harness.ts`, the task shell in
+ * `runtime/piece/test/state-continuity-harness.ts`, the task shell in
  * `pattern-vintage.ts`.
  *
  * Layout:
  *
- *     packages/piece/test/vintages/<test key>/pinned/<iso>-<identity>.sqlite
- *     packages/piece/test/vintages/<test key>/pinned/<iso>-<identity>.sqlite.spaces/<did>.sqlite
+ *     runtime/piece/test/vintages/<test key>/pinned/<iso>-<identity>.sqlite
+ *     runtime/piece/test/vintages/<test key>/pinned/<iso>-<identity>.sqlite.spaces/<did>.sqlite
  *
- * `<test key>` is the repo path under `packages/patterns/` of the TEST that
+ * `<test key>` is the repo path under `patterns/` of the TEST that
  * produced the fixture, so a fixture sits next to nothing and is found by path
  * alone. Keyed by test rather than by pattern because a test need not be named
- * after what it drives — `topics/main.tsx` is tested by `topics/topics.test.tsx`
+ * after what it drives — `apps/topics/main.tsx` is tested by `apps/topics/topics.test.tsx`
  * — and one fixture routinely covers several patterns.
  *
  * The `.sqlite.spaces/` directory carries the run's OTHER spaces — a capture
@@ -24,10 +24,10 @@
  * and a fixture that held only the first would record roots whose state it does
  * not have. It is part of the FIXTURE, not a fixture itself, so
  * `parseVintagePath` declines everything inside one. Its shape lives in
- * `packages/piece/test/vintage-layout.ts`, which the snapshot/restore side needs
+ * `runtime/piece/test/vintage-layout.ts`, which the snapshot/restore side needs
  * too and which imports nothing itself.
  *
- * The tree is deliberately NOT under `packages/patterns/`, which is the
+ * The tree is deliberately NOT under `patterns/`, which is the
  * obvious home for it and the wrong one. `tasks/build-binaries.ts` passes that
  * whole directory to `deno compile --include`, which is recursive and takes
  * arbitrary non-source files — measured, and neither `deno.json`'s `exclude`
@@ -81,10 +81,10 @@
 
 import { utf8Compare } from "@commonfabric/utils/utf8";
 
-import { VINTAGE_SPACES_SUFFIX } from "../packages/piece/test/vintage-layout.ts";
+import { VINTAGE_SPACES_SUFFIX } from "../runtime/piece/test/vintage-layout.ts";
 
 /** Root of the committed fixture tree. See the note above on why it is here. */
-export const VINTAGES_DIR = "packages/piece/test/vintages";
+export const VINTAGES_DIR = "runtime/piece/test/vintages";
 
 /** Vintages that are never pruned and are the gate's real coverage. */
 export const PINNED = "pinned";
@@ -96,7 +96,7 @@ export const VINTAGE_SUFFIX = ".sqlite";
 
 export interface VintageRef {
   /**
-   * TEST path relative to `packages/patterns/`, e.g. `system/home.test.tsx`.
+   * TEST path relative to `patterns/`, e.g. `system/home/home.test.tsx`.
    * Named for the test, not the pattern: the fixture covers whatever that
    * test instantiates, which is routinely several patterns.
    */

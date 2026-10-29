@@ -137,10 +137,11 @@ fund the service. These must be developed alongside confidential hosting.
 - **Diagnostics:** the health surface is public today: `/api/health/stats`
   exposes per-space session IDs and principals without authentication.
   `/api/health/document-interests` also exposes delegated identities and
-  connection liveness.
+  connection liveness, application and build provenance, runtime instance IDs,
+  and client-reported start times.
   Restrict these surfaces to authenticated operators before claiming operator
   exclusion. The immediate follow-up is shared operator-diagnostics middleware
-  based on the [memory-dump gate](../../packages/toolshed/routes/storage/memory/memory-dump.index.ts):
+  based on the [memory-dump gate](../../runtime/toolshed/routes/storage/memory/memory-dump.index.ts):
   explicit opt-in, CF1 first-party signature verification against a DID
   allowlist, and an audit log per request. The shared gate must refuse production
   mounting and require an explicitly configured, recognized non-production

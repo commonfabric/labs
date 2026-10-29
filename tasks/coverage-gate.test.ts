@@ -110,7 +110,7 @@ function runsMeasuring(commit: string, uncoveredLines: number): ParentRuns {
             figures: {
               groups: new Map(),
               sets: new Map([[
-                "workspace-unit/packages/bakery",
+                "workspace-unit/runtime/bakery",
                 uncoveredLines,
               ]]),
               cold: false,
@@ -132,7 +132,7 @@ function chosen(
 }
 
 /** A set over `member`, and the suites declaring it. */
-function bakery(member = "packages/bakery"): {
+function bakery(member = "runtime/bakery"): {
   suites: Suite[];
   changed: Set<string>;
 } {
@@ -164,31 +164,31 @@ describe("coverage-gate", () => {
     it("joins the reports several lanes wrote for one set", async () => {
       const { reports } = await reportsFor([
         [
-          "lane-1/coverage/lcov/sets/workspace-unit/packages__bakery/coverage.lcov",
+          "lane-1/coverage/lcov/sets/workspace-unit/runtime__bakery/coverage.lcov",
           "a",
         ],
         [
-          "lane-3/coverage/lcov/sets/workspace-unit/packages__bakery/coverage.lcov",
+          "lane-3/coverage/lcov/sets/workspace-unit/runtime__bakery/coverage.lcov",
           "b",
         ],
       ]);
-      expect(reports.get("workspace-unit/packages__bakery")).toHaveLength(2);
+      expect(reports.get("workspace-unit/runtime__bakery")).toHaveLength(2);
     });
 
     it("keeps two suites' reports over one member apart", async () => {
       const { reports } = await reportsFor([
         [
-          "lane-1/coverage/lcov/sets/workspace-unit/packages__bakery/coverage.lcov",
+          "lane-1/coverage/lcov/sets/workspace-unit/runtime__bakery/coverage.lcov",
           "a",
         ],
         [
-          "lane-1/coverage/lcov/sets/bakery-e2e/packages__bakery/coverage.lcov",
+          "lane-1/coverage/lcov/sets/bakery-e2e/runtime__bakery/coverage.lcov",
           "b",
         ],
       ]);
       expect([...reports.keys()].sort()).toEqual([
-        "bakery-e2e/packages__bakery",
-        "workspace-unit/packages__bakery",
+        "bakery-e2e/runtime__bakery",
+        "workspace-unit/runtime__bakery",
       ]);
     });
 
@@ -197,37 +197,37 @@ describe("coverage-gate", () => {
       // nothing here works a member back out of the name.
       const { reports } = await reportsFor([[
         "lane-1/coverage/lcov/sets/workspace-unit/" +
-        "packages__connectors__github/coverage.lcov",
+        "connectors__github/coverage.lcov",
         "a",
       ]]);
       expect([...reports.keys()])
-        .toEqual(["workspace-unit/packages__connectors__github"]);
+        .toEqual(["workspace-unit/connectors__github"]);
     });
 
     it("scores a set from the directory its own suite names", async () => {
       const { root, lcov } = await workspace(
-        "packages/connectors/github",
+        "connectors/github",
         4,
         1,
       );
       const suites = [suite("workspace-unit", [{
-        member: "packages/connectors/github",
-        reachedBy: ["packages/connectors/github/"],
-        units: ["packages/connectors/github/one.test.ts"],
+        member: "connectors/github",
+        reachedBy: ["connectors/github/"],
+        units: ["connectors/github/one.test.ts"],
       }])];
       const { reports } = await reportsFor([[
         "lane-1/coverage/lcov/sets/workspace-unit/" +
-        "packages__connectors__github/coverage.lcov",
+        "connectors__github/coverage.lcov",
         lcov,
       ]]);
       const report = await runGate(gateInput({
         root,
         gate: chosen(
           suites,
-          new Set(["packages/connectors/github/src/main.ts"]),
+          new Set(["connectors/github/src/main.ts"]),
         ),
         reports,
-        members: ["packages/connectors/github"],
+        members: ["connectors/github"],
       }));
       expect(report.verdicts[0]?.uncoveredLines).toBe(3);
     });
@@ -259,21 +259,21 @@ describe("coverage-gate", () => {
     const baselines: CoverageBaseline[] = [
       {
         suite: "workspace-unit",
-        member: "packages/bakery",
+        member: "runtime/bakery",
         commit: "newest",
         createdAt: "2026-09-03T00:00:00.000Z",
         uncoveredLines: 5,
       },
       {
         suite: "workspace-unit",
-        member: "packages/bakery",
+        member: "runtime/bakery",
         commit: "older",
         createdAt: "2026-09-01T00:00:00.000Z",
         uncoveredLines: 9,
       },
       {
         suite: "bakery-e2e",
-        member: "packages/bakery",
+        member: "runtime/bakery",
         commit: "newest",
         createdAt: "2026-09-03T00:00:00.000Z",
         uncoveredLines: 900,
@@ -288,7 +288,7 @@ describe("coverage-gate", () => {
       const found = await nearestBaseline(
         baselines,
         "workspace-unit",
-        "packages/bakery",
+        "runtime/bakery",
         onBranch("newest", "older"),
       );
       expect(found?.commit).toBe("newest");
@@ -298,7 +298,7 @@ describe("coverage-gate", () => {
       const found = await nearestBaseline(
         baselines,
         "workspace-unit",
-        "packages/bakery",
+        "runtime/bakery",
         onBranch("older"),
       );
       expect(found?.uncoveredLines).toBe(9);
@@ -311,14 +311,14 @@ describe("coverage-gate", () => {
       const reversed: CoverageBaseline[] = [
         {
           suite: "workspace-unit",
-          member: "packages/bakery",
+          member: "runtime/bakery",
           commit: "older",
           createdAt: "2026-09-09T00:00:00.000Z",
           uncoveredLines: 9,
         },
         {
           suite: "workspace-unit",
-          member: "packages/bakery",
+          member: "runtime/bakery",
           commit: "newest",
           createdAt: "2026-09-01T00:00:00.000Z",
           uncoveredLines: 5,
@@ -327,7 +327,7 @@ describe("coverage-gate", () => {
       const found = await nearestBaseline(
         reversed,
         "workspace-unit",
-        "packages/bakery",
+        "runtime/bakery",
         onBranch("newest", "older"),
       );
       expect(found?.commit).toBe("newest");
@@ -338,7 +338,7 @@ describe("coverage-gate", () => {
         await nearestBaseline(
           baselines,
           "workspace-unit",
-          "packages/bakery",
+          "runtime/bakery",
           () => Promise.resolve(undefined),
         ),
       ).toBeUndefined();
@@ -348,7 +348,7 @@ describe("coverage-gate", () => {
       const found = await nearestBaseline(
         baselines,
         "bakery-e2e",
-        "packages/bakery",
+        "runtime/bakery",
         onBranch("newest", "older"),
       );
       expect(found?.uncoveredLines).toBe(900);
@@ -357,20 +357,20 @@ describe("coverage-gate", () => {
 
   describe("the coverage gate", () => {
     it("passes a set that covers as much as the baseline did", async () => {
-      const { root, lcov } = await workspace("packages/bakery", 10, 6);
+      const { root, lcov } = await workspace("runtime/bakery", 10, 6);
       const { suites, changed } = bakery();
       const { reports } = await reportsFor([[
-        "lane-1/coverage/lcov/sets/workspace-unit/packages__bakery/coverage.lcov",
+        "lane-1/coverage/lcov/sets/workspace-unit/runtime__bakery/coverage.lcov",
         lcov,
       ]]);
       const report = await runGate(gateInput({
         root,
         gate: chosen(suites, changed),
         reports,
-        members: ["packages/bakery"],
+        members: ["runtime/bakery"],
         baselines: [{
           suite: "workspace-unit",
-          member: "packages/bakery",
+          member: "runtime/bakery",
           commit: "abc",
           createdAt: "2026-09-01T00:00:00.000Z",
           uncoveredLines: 4,
@@ -382,20 +382,20 @@ describe("coverage-gate", () => {
     });
 
     it("fails a set that covers less than the baseline did", async () => {
-      const { root, lcov } = await workspace("packages/bakery", 10, 6);
+      const { root, lcov } = await workspace("runtime/bakery", 10, 6);
       const { suites, changed } = bakery();
       const { reports } = await reportsFor([[
-        "lane-1/coverage/lcov/sets/workspace-unit/packages__bakery/coverage.lcov",
+        "lane-1/coverage/lcov/sets/workspace-unit/runtime__bakery/coverage.lcov",
         lcov,
       ]]);
       const report = await runGate(gateInput({
         root,
         gate: chosen(suites, changed),
         reports,
-        members: ["packages/bakery"],
+        members: ["runtime/bakery"],
         baselines: [{
           suite: "workspace-unit",
-          member: "packages/bakery",
+          member: "runtime/bakery",
           commit: "abc",
           createdAt: "2026-09-01T00:00:00.000Z",
           uncoveredLines: 1,
@@ -410,21 +410,21 @@ describe("coverage-gate", () => {
     });
 
     it("accepts a rise the description allows", async () => {
-      const { root, lcov } = await workspace("packages/bakery", 10, 6);
+      const { root, lcov } = await workspace("runtime/bakery", 10, 6);
       const { suites, changed } = bakery();
       const { reports } = await reportsFor([[
-        "lane-1/coverage/lcov/sets/workspace-unit/packages__bakery/coverage.lcov",
+        "lane-1/coverage/lcov/sets/workspace-unit/runtime__bakery/coverage.lcov",
         lcov,
       ]]);
       const report = await runGate(gateInput({
         root,
         gate: chosen(suites, changed),
         reports,
-        members: ["packages/bakery"],
-        accepted: new Map([["packages/bakery", 3]]),
+        members: ["runtime/bakery"],
+        accepted: new Map([["runtime/bakery", 3]]),
         baselines: [{
           suite: "workspace-unit",
-          member: "packages/bakery",
+          member: "runtime/bakery",
           commit: "abc",
           createdAt: "2026-09-01T00:00:00.000Z",
           uncoveredLines: 1,
@@ -437,21 +437,21 @@ describe("coverage-gate", () => {
     });
 
     it("fails a rise larger than the description allows", async () => {
-      const { root, lcov } = await workspace("packages/bakery", 10, 6);
+      const { root, lcov } = await workspace("runtime/bakery", 10, 6);
       const { suites, changed } = bakery();
       const { reports } = await reportsFor([[
-        "lane-1/coverage/lcov/sets/workspace-unit/packages__bakery/coverage.lcov",
+        "lane-1/coverage/lcov/sets/workspace-unit/runtime__bakery/coverage.lcov",
         lcov,
       ]]);
       const report = await runGate(gateInput({
         root,
         gate: chosen(suites, changed),
         reports,
-        members: ["packages/bakery"],
-        accepted: new Map([["packages/bakery", 1]]),
+        members: ["runtime/bakery"],
+        accepted: new Map([["runtime/bakery", 1]]),
         baselines: [{
           suite: "workspace-unit",
-          member: "packages/bakery",
+          member: "runtime/bakery",
           commit: "abc",
           createdAt: "2026-09-01T00:00:00.000Z",
           uncoveredLines: 1,
@@ -462,38 +462,38 @@ describe("coverage-gate", () => {
     });
 
     it("reports rather than fails a set with no baseline", async () => {
-      const { root, lcov } = await workspace("packages/bakery", 10, 6);
+      const { root, lcov } = await workspace("runtime/bakery", 10, 6);
       const { suites, changed } = bakery();
       const { reports } = await reportsFor([[
-        "lane-1/coverage/lcov/sets/workspace-unit/packages__bakery/coverage.lcov",
+        "lane-1/coverage/lcov/sets/workspace-unit/runtime__bakery/coverage.lcov",
         lcov,
       ]]);
       const report = await runGate(gateInput({
         root,
         gate: chosen(suites, changed),
         reports,
-        members: ["packages/bakery"],
+        members: ["runtime/bakery"],
       }));
       expect(report.ok).toBe(true);
       expect(report.verdicts[0]?.outcome).toBe("no-baseline");
     });
 
     it("reports rather than fails against a tree the branch lacks", async () => {
-      const { root, lcov } = await workspace("packages/bakery", 10, 6);
+      const { root, lcov } = await workspace("runtime/bakery", 10, 6);
       const { suites, changed } = bakery();
       const { reports } = await reportsFor([[
-        "lane-1/coverage/lcov/sets/workspace-unit/packages__bakery/coverage.lcov",
+        "lane-1/coverage/lcov/sets/workspace-unit/runtime__bakery/coverage.lcov",
         lcov,
       ]]);
       const report = await runGate(gateInput({
         root,
         gate: chosen(suites, changed),
         reports,
-        members: ["packages/bakery"],
+        members: ["runtime/bakery"],
         nearest: () => Promise.resolve(undefined),
         baselines: [{
           suite: "workspace-unit",
-          member: "packages/bakery",
+          member: "runtime/bakery",
           commit: "abc",
           createdAt: "2026-09-01T00:00:00.000Z",
           uncoveredLines: 1,
@@ -504,21 +504,21 @@ describe("coverage-gate", () => {
     });
 
     it("reports rather than fails when the run has a failing test", async () => {
-      const { root, lcov } = await workspace("packages/bakery", 10, 6);
+      const { root, lcov } = await workspace("runtime/bakery", 10, 6);
       const { suites, changed } = bakery();
       const { reports } = await reportsFor([[
-        "lane-1/coverage/lcov/sets/workspace-unit/packages__bakery/coverage.lcov",
+        "lane-1/coverage/lcov/sets/workspace-unit/runtime__bakery/coverage.lcov",
         lcov,
       ]]);
       const report = await runGate(gateInput({
         root,
         gate: chosen(suites, changed),
         reports,
-        members: ["packages/bakery"],
+        members: ["runtime/bakery"],
         testsFailed: true,
         baselines: [{
           suite: "workspace-unit",
-          member: "packages/bakery",
+          member: "runtime/bakery",
           commit: "abc",
           createdAt: "2026-09-01T00:00:00.000Z",
           uncoveredLines: 1,
@@ -531,17 +531,17 @@ describe("coverage-gate", () => {
     it("fails a chosen gate whose report names no line of the member", async () => {
       // An empty report is a lane that measured nothing, so a rise in
       // the set cannot be ruled out.
-      const { root } = await workspace("packages/bakery", 10, 6);
+      const { root } = await workspace("runtime/bakery", 10, 6);
       const { suites, changed } = bakery();
       const { reports } = await reportsFor([[
-        "lane-1/coverage/lcov/sets/workspace-unit/packages__bakery/coverage.lcov",
+        "lane-1/coverage/lcov/sets/workspace-unit/runtime__bakery/coverage.lcov",
         "",
       ]]);
       const report = await runGate(gateInput({
         root,
         gate: chosen(suites, changed),
         reports,
-        members: ["packages/bakery"],
+        members: ["runtime/bakery"],
       }));
       expect(report.ok).toBe(false);
       expect(report.verdicts[0]?.outcome).toBe("nothing-measured");
@@ -550,15 +550,15 @@ describe("coverage-gate", () => {
     });
 
     it("scores a chosen gate's set one of whose reports names no line of the member", async () => {
-      const { root, lcov } = await workspace("packages/bakery", 10, 6);
+      const { root, lcov } = await workspace("runtime/bakery", 10, 6);
       const { suites, changed } = bakery();
       const { reports } = await reportsFor([
         [
-          "lane-1/coverage/lcov/sets/workspace-unit/packages__bakery/coverage.lcov",
+          "lane-1/coverage/lcov/sets/workspace-unit/runtime__bakery/coverage.lcov",
           lcov,
         ],
         [
-          "lane-2/coverage/lcov/sets/workspace-unit/packages__bakery/coverage.lcov",
+          "lane-2/coverage/lcov/sets/workspace-unit/runtime__bakery/coverage.lcov",
           "",
         ],
       ]);
@@ -566,10 +566,10 @@ describe("coverage-gate", () => {
         root,
         gate: chosen(suites, changed),
         reports,
-        members: ["packages/bakery"],
+        members: ["runtime/bakery"],
         baselines: [{
           suite: "workspace-unit",
-          member: "packages/bakery",
+          member: "runtime/bakery",
           commit: "abc",
           createdAt: "2026-09-01T00:00:00.000Z",
           uncoveredLines: 4,
@@ -581,17 +581,17 @@ describe("coverage-gate", () => {
     });
 
     it("fails a chosen gate whose report names no line of the member in a run with a failing test", async () => {
-      const { root } = await workspace("packages/bakery", 10, 6);
+      const { root } = await workspace("runtime/bakery", 10, 6);
       const { suites, changed } = bakery();
       const { reports } = await reportsFor([[
-        "lane-1/coverage/lcov/sets/workspace-unit/packages__bakery/coverage.lcov",
+        "lane-1/coverage/lcov/sets/workspace-unit/runtime__bakery/coverage.lcov",
         "",
       ]]);
       const report = await runGate(gateInput({
         root,
         gate: chosen(suites, changed),
         reports,
-        members: ["packages/bakery"],
+        members: ["runtime/bakery"],
         testsFailed: true,
       }));
       expect(report.ok).toBe(false);
@@ -601,17 +601,17 @@ describe("coverage-gate", () => {
     it("reports rather than fails a gate the plan did not choose", async () => {
       // A gate the plan passed over forced nothing, so nothing measured
       // its set, and a report a lane left for it is not read.
-      const { root } = await workspace("packages/bakery", 10, 6);
+      const { root } = await workspace("runtime/bakery", 10, 6);
       const { suites, changed } = bakery();
       const { reports } = await reportsFor([[
-        "lane-1/coverage/lcov/sets/workspace-unit/packages__bakery/coverage.lcov",
+        "lane-1/coverage/lcov/sets/workspace-unit/runtime__bakery/coverage.lcov",
         "",
       ]]);
       const report = await runGate(gateInput({
         root,
         gate: { sets: [], reached: reachedSets(suites, changed) },
         reports,
-        members: ["packages/bakery"],
+        members: ["runtime/bakery"],
       }));
       expect(report.ok).toBe(true);
       expect(report.verdicts.map((verdict) => verdict.outcome))
@@ -622,21 +622,21 @@ describe("coverage-gate", () => {
     });
 
     it("reports rather than fails a set measured through an excused failure", async () => {
-      const { root, lcov } = await workspace("packages/bakery", 10, 6);
+      const { root, lcov } = await workspace("runtime/bakery", 10, 6);
       const { suites, changed } = bakery();
       const { reports } = await reportsFor([[
-        "lane-1/coverage/lcov/sets/workspace-unit/packages__bakery/coverage.lcov",
+        "lane-1/coverage/lcov/sets/workspace-unit/runtime__bakery/coverage.lcov",
         lcov,
       ]]);
       const report = await runGate(gateInput({
         root,
         gate: chosen(suites, changed),
         reports,
-        marked: new Set(["workspace-unit/packages__bakery"]),
-        members: ["packages/bakery"],
+        marked: new Set(["workspace-unit/runtime__bakery"]),
+        members: ["runtime/bakery"],
         baselines: [{
           suite: "workspace-unit",
-          member: "packages/bakery",
+          member: "runtime/bakery",
           commit: "abc",
           createdAt: "2026-09-01T00:00:00.000Z",
           uncoveredLines: 1,
@@ -647,16 +647,16 @@ describe("coverage-gate", () => {
     });
 
     it("fails an acceptance that names neither a member nor a group", async () => {
-      const { root } = await workspace("packages/bakery", 10, 6);
+      const { root } = await workspace("runtime/bakery", 10, 6);
       const { suites, changed } = bakery();
       const report = await runGate(gateInput({
         root,
         gate: chosen(suites, changed),
-        members: ["packages/bakery"],
-        accepted: new Map([["packages/bakery/src/oven", 3]]),
+        members: ["runtime/bakery"],
+        accepted: new Map([["runtime/bakery/src/oven", 3]]),
       }));
       expect(report.ok).toBe(false);
-      expect(report.unknownAcceptances).toEqual(["packages/bakery/src/oven"]);
+      expect(report.unknownAcceptances).toEqual(["runtime/bakery/src/oven"]);
       expect(formatGateReport(report).join("\n"))
         .toContain("nothing would ever consult them");
     });
@@ -664,13 +664,13 @@ describe("coverage-gate", () => {
     it("fails an acceptance naming anything but a workspace member", async () => {
       // A name shaped like a directory the repository-wide figure rolls up
       // to is read by nothing, so it has no effect, and says so.
-      const { root } = await workspace("packages/bakery", 10, 6);
+      const { root } = await workspace("runtime/bakery", 10, 6);
       const { suites, changed } = bakery();
       const report = await runGate(gateInput({
         root,
         gate: chosen(suites, changed),
-        members: ["packages/bakery"],
-        accepted: new Map([["tasks", 3], ["packages/bakery", 4]]),
+        members: ["runtime/bakery"],
+        accepted: new Map([["tasks", 3], ["runtime/bakery", 4]]),
       }));
       expect(report.ok).toBe(false);
       expect(report.unknownAcceptances).toEqual(["tasks"]);
@@ -678,26 +678,26 @@ describe("coverage-gate", () => {
     it("fails an acceptance naming a member no measured set scores", async () => {
       // A workspace member whose rise nothing gates is read by nothing, so
       // an acceptance naming it has no effect, and says so.
-      const { root } = await workspace("packages/bakery", 10, 6);
+      const { root } = await workspace("runtime/bakery", 10, 6);
       const { suites, changed } = bakery();
       const report = await runGate(gateInput({
         root,
         gate: chosen(suites, changed),
-        members: ["packages/bakery", "packages/pantry"],
-        measured: ["packages/bakery"],
-        accepted: new Map([["packages/pantry", 3]]),
+        members: ["runtime/bakery", "runtime/pantry"],
+        measured: ["runtime/bakery"],
+        accepted: new Map([["runtime/pantry", 3]]),
       }));
       expect(report.ok).toBe(false);
-      expect(report.unknownAcceptances).toEqual(["packages/pantry"]);
+      expect(report.unknownAcceptances).toEqual(["runtime/pantry"]);
     });
 
     it("fails a chosen gate whose set no lane wrote a report for", async () => {
-      const { root } = await workspace("packages/bakery", 10, 6);
+      const { root } = await workspace("runtime/bakery", 10, 6);
       const { suites, changed } = bakery();
       const report = await runGate(gateInput({
         root,
         gate: chosen(suites, changed),
-        members: ["packages/bakery"],
+        members: ["runtime/bakery"],
       }));
       expect(report.ok).toBe(false);
       expect(report.verdicts[0]?.outcome).toBe("no-report");
@@ -706,12 +706,12 @@ describe("coverage-gate", () => {
     });
 
     it("fails a chosen gate with no report in a run with a failing test", async () => {
-      const { root } = await workspace("packages/bakery", 10, 6);
+      const { root } = await workspace("runtime/bakery", 10, 6);
       const { suites, changed } = bakery();
       const report = await runGate(gateInput({
         root,
         gate: chosen(suites, changed),
-        members: ["packages/bakery"],
+        members: ["runtime/bakery"],
         testsFailed: true,
       }));
       expect(report.ok).toBe(false);
@@ -721,8 +721,8 @@ describe("coverage-gate", () => {
     it("records a rise in a set the change does not reach, and fails nothing", async () => {
       // A run of every test chooses every gate, and the change reached
       // only one of them; the rest are judged for their records alone.
-      const { root, lcov } = await workspace("packages/bakery", 10, 6);
-      const members = ["packages/bakery", "packages/cellar"];
+      const { root, lcov } = await workspace("runtime/bakery", 10, 6);
+      const members = ["runtime/bakery", "runtime/cellar"];
       const suites = [suite(
         "workspace-unit",
         members.map((member) => ({
@@ -732,7 +732,7 @@ describe("coverage-gate", () => {
         })),
       )];
       const { reports } = await reportsFor([[
-        "lane-1/coverage/lcov/sets/workspace-unit/packages__bakery/" +
+        "lane-1/coverage/lcov/sets/workspace-unit/runtime__bakery/" +
         "coverage.lcov",
         lcov,
       ]]);
@@ -740,13 +740,13 @@ describe("coverage-gate", () => {
         root,
         gate: {
           sets: reachedSets(suites, new Set(members.map((m) => `${m}/x.ts`))),
-          reached: reachedSets(suites, new Set(["packages/cellar/x.ts"])),
+          reached: reachedSets(suites, new Set(["runtime/cellar/x.ts"])),
         },
         reports,
-        members: ["packages/bakery"],
+        members: ["runtime/bakery"],
         baselines: [{
           suite: "workspace-unit",
-          member: "packages/bakery",
+          member: "runtime/bakery",
           commit: "abc",
           createdAt: "2026-09-01T00:00:00.000Z",
           uncoveredLines: 1,
@@ -756,8 +756,8 @@ describe("coverage-gate", () => {
         report.verdicts.map((verdict) => [verdict.member, verdict.outcome]),
       )
         .toEqual([
-          ["packages/bakery", "rose"],
-          ["packages/cellar", "no-report"],
+          ["runtime/bakery", "rose"],
+          ["runtime/cellar", "no-report"],
         ]);
       // The set the change reached had no report, which fails; the rise
       // in the one it did not reach fails nothing.
@@ -769,22 +769,22 @@ describe("coverage-gate", () => {
     });
 
     it("fails nothing on the default branch, whatever it finds", async () => {
-      const { root, lcov } = await workspace("packages/bakery", 10, 6);
+      const { root, lcov } = await workspace("runtime/bakery", 10, 6);
       const { suites, changed } = bakery();
       const { reports } = await reportsFor([[
-        "lane-1/coverage/lcov/sets/workspace-unit/packages__bakery/coverage.lcov",
+        "lane-1/coverage/lcov/sets/workspace-unit/runtime__bakery/coverage.lcov",
         lcov,
       ]]);
       const report = await runGate(gateInput({
         root,
         gate: { sets: reachedSets(suites, changed), reached: [] },
         reports,
-        members: ["packages/bakery"],
-        accepted: new Map([["packages/pantry", 3]]),
+        members: ["runtime/bakery"],
+        accepted: new Map([["runtime/pantry", 3]]),
         defaultBranch: true,
         baselines: [{
           suite: "workspace-unit",
-          member: "packages/bakery",
+          member: "runtime/bakery",
           commit: "abc",
           createdAt: "2026-09-01T00:00:00.000Z",
           uncoveredLines: 1,
@@ -792,11 +792,11 @@ describe("coverage-gate", () => {
       }));
       expect(report.ok).toBe(true);
       expect(report.verdicts[0]?.outcome).toBe("rose");
-      expect(report.unknownAcceptances).toEqual(["packages/pantry"]);
+      expect(report.unknownAcceptances).toEqual(["runtime/pantry"]);
     });
 
     it("fails nothing for a gate the run excuses as too flaky to judge by", async () => {
-      const { root } = await workspace("packages/bakery", 10, 6);
+      const { root } = await workspace("runtime/bakery", 10, 6);
       const { suites, changed } = bakery();
       const report = await runGate(gateInput({
         root,
@@ -804,7 +804,7 @@ describe("coverage-gate", () => {
         excused: new Set([
           JSON.stringify(["gate", "bakery", "coverage-gate workspace-unit"]),
         ]),
-        members: ["packages/bakery"],
+        members: ["runtime/bakery"],
       }));
       expect(report.verdicts[0]?.outcome).toBe("no-report");
       expect(report.verdicts[0]?.gating).toBe(false);
@@ -815,16 +815,16 @@ describe("coverage-gate", () => {
       // A lane may write a report for a member it sampled a few tests
       // from. Its gate was not chosen, so such a report is not one of its
       // numbers.
-      const { root, lcov } = await workspace("packages/bakery", 10, 6);
+      const { root, lcov } = await workspace("runtime/bakery", 10, 6);
       const { suites, changed } = bakery();
       const { reports } = await reportsFor([
         [
-          "lane-1/coverage/lcov/sets/workspace-unit/packages__bakery/" +
+          "lane-1/coverage/lcov/sets/workspace-unit/runtime__bakery/" +
           "coverage.lcov",
           lcov,
         ],
         [
-          "lane-1/coverage/lcov/sets/workspace-unit/packages__cellar/" +
+          "lane-1/coverage/lcov/sets/workspace-unit/runtime__cellar/" +
           "coverage.lcov",
           lcov,
         ],
@@ -833,14 +833,14 @@ describe("coverage-gate", () => {
         root,
         gate: chosen(suites, changed),
         reports,
-        members: ["packages/bakery"],
+        members: ["runtime/bakery"],
       }));
       expect(report.verdicts.map((verdict) => verdict.set))
-        .toEqual(["workspace-unit/packages/bakery"]);
+        .toEqual(["workspace-unit/runtime/bakery"]);
     });
 
     it("says there is nothing to compare when the change reaches no set", async () => {
-      const { root } = await workspace("packages/bakery", 10, 6);
+      const { root } = await workspace("runtime/bakery", 10, 6);
       const { suites } = bakery();
       const report = await runGate(gateInput({
         root,
@@ -853,8 +853,8 @@ describe("coverage-gate", () => {
     });
 
     it("adds up what several lanes measured for one set", async () => {
-      const { root } = await workspace("packages/bakery", 4, 0);
-      const file = path.join(root, "packages/bakery/src/main.ts");
+      const { root } = await workspace("runtime/bakery", 4, 0);
+      const file = path.join(root, "runtime/bakery/src/main.ts");
       // Two lanes ran different halves of the set, so a line either of them
       // covered is covered.
       const first =
@@ -864,11 +864,11 @@ describe("coverage-gate", () => {
       const { suites, changed } = bakery();
       const { reports } = await reportsFor([
         [
-          "lane-1/coverage/lcov/sets/workspace-unit/packages__bakery/coverage.lcov",
+          "lane-1/coverage/lcov/sets/workspace-unit/runtime__bakery/coverage.lcov",
           first,
         ],
         [
-          "lane-2/coverage/lcov/sets/workspace-unit/packages__bakery/coverage.lcov",
+          "lane-2/coverage/lcov/sets/workspace-unit/runtime__bakery/coverage.lcov",
           second,
         ],
       ]);
@@ -876,7 +876,7 @@ describe("coverage-gate", () => {
         root,
         gate: chosen(suites, changed),
         reports,
-        members: ["packages/bakery"],
+        members: ["runtime/bakery"],
       }));
       expect(report.verdicts[0]?.uncoveredLines).toBe(2);
     });
@@ -902,7 +902,7 @@ describe("coverage-gate", () => {
       const { found, said } = await reading("abc", runsMeasuring("abc", 4));
       expect(found).toEqual([{
         suite: "workspace-unit",
-        member: "packages/bakery",
+        member: "runtime/bakery",
         commit: "abc",
         createdAt: "2026-09-01T00:00:00Z",
         uncoveredLines: 4,
@@ -928,7 +928,7 @@ describe("coverage-gate", () => {
   });
 
   describe("the records it leaves", () => {
-    const members = ["packages/a", "packages/b", "packages/c", "packages/d"];
+    const members = ["runtime/a", "runtime/b", "runtime/c", "runtime/d"];
     const suites = [suite(
       "workspace-unit",
       members.map((member) => ({
@@ -952,10 +952,10 @@ describe("coverage-gate", () => {
     it("fails a rise, passes a comparison that found none, and skips an accepted rise", () => {
       const records = gateRecords(suites, {
         verdicts: [
-          verdict("packages/a", "rose", 3),
-          verdict("packages/b", "passed", 4),
-          verdict("packages/c", "accepted", 5),
-          verdict("packages/d", "no-baseline", 6),
+          verdict("runtime/a", "rose", 3),
+          verdict("runtime/b", "passed", 4),
+          verdict("runtime/c", "accepted", 5),
+          verdict("runtime/d", "no-baseline", 6),
         ],
         unknownAcceptances: [],
         ok: false,
@@ -973,9 +973,9 @@ describe("coverage-gate", () => {
     it("skips a gate that measured nothing or measured through a failure", () => {
       const records = gateRecords(suites, {
         verdicts: [
-          verdict("packages/a", "no-report", 1),
-          verdict("packages/b", "nothing-measured", 1),
-          verdict("packages/c", "not-scored", 1),
+          verdict("runtime/a", "no-report", 1),
+          verdict("runtime/b", "nothing-measured", 1),
+          verdict("runtime/c", "not-scored", 1),
         ],
         unknownAcceptances: [],
         ok: false,
@@ -986,7 +986,7 @@ describe("coverage-gate", () => {
 
     it("records nothing for a gate the plan did not choose", () => {
       expect(gateRecords(suites, {
-        verdicts: [verdict("packages/a", "not-chosen")],
+        verdicts: [verdict("runtime/a", "not-chosen")],
         unknownAcceptances: [],
         ok: true,
       })).toEqual([]);
@@ -1237,7 +1237,7 @@ describe("coverage-gate", () => {
       { root: string; commit: string; reports: string; suites: Suite[] }
     > {
       const root = await Deno.makeTempDir({ prefix: "coverage-gate-job-" });
-      const member = "packages/bakery";
+      const member = "runtime/bakery";
       await Deno.writeTextFile(
         path.join(root, "deno.jsonc"),
         JSON.stringify({ workspace: [`./${member}`] }),
@@ -1281,7 +1281,7 @@ describe("coverage-gate", () => {
       const reports = path.join(root, "artifacts");
       const at = path.join(
         reports,
-        "lane-1/coverage/lcov/sets/workspace-unit/packages__bakery",
+        "lane-1/coverage/lcov/sets/workspace-unit/runtime__bakery",
       );
       await Deno.mkdir(at, { recursive: true });
       await Deno.writeTextFile(
@@ -1319,7 +1319,7 @@ describe("coverage-gate", () => {
             manifest: () =>
               withBaselines([{
                 suite: "workspace-unit",
-                member: "packages/bakery",
+                member: "runtime/bakery",
                 commit,
                 createdAt: "2026-09-01T00:00:00.000Z",
                 uncoveredLines: 4,
@@ -1331,7 +1331,7 @@ describe("coverage-gate", () => {
       }
       expect(status).toBe(0);
       const said = lines.join("\n");
-      expect(said).toContain("workspace-unit/packages/bakery");
+      expect(said).toContain("workspace-unit/runtime/bakery");
       expect(said).toContain("no rise");
     });
 
@@ -1341,18 +1341,18 @@ describe("coverage-gate", () => {
       // nothing by score, so it chooses no gate and there is nothing to
       // compare; at a scale of one it chooses the gate.
       const { root, commit, reports, suites } = await job(10, 6);
-      const other = "packages/bakery/two.test.ts";
+      const other = "runtime/bakery/two.test.ts";
       await Deno.writeTextFile(path.join(root, other), "// another\n");
       const unit = suite("workspace-unit", [{
-        member: "packages/bakery",
-        reachedBy: ["packages/bakery/"],
+        member: "runtime/bakery",
+        reachedBy: ["runtime/bakery/"],
         units: [...suites[0]!.units, other],
       }]);
       const topology = [unit, coverageGateSuite([unit])];
       const manifest = sampleManifest({
         coverageBaselines: [{
           suite: "workspace-unit",
-          member: "packages/bakery",
+          member: "runtime/bakery",
           commit,
           createdAt: "2026-09-01T00:00:00.000Z",
           uncoveredLines: 4,
@@ -1406,7 +1406,7 @@ describe("coverage-gate", () => {
             manifest: () =>
               withBaselines([{
                 suite: "workspace-unit",
-                member: "packages/bakery",
+                member: "runtime/bakery",
                 commit,
                 createdAt: "2026-09-01T00:00:00.000Z",
                 uncoveredLines: 1,
@@ -1435,7 +1435,7 @@ describe("coverage-gate", () => {
             "--reports",
             reports,
             "--body",
-            "ACCEPT_COVERAGE_DEBT: packages/bakery +3 lines",
+            "ACCEPT_COVERAGE_DEBT: runtime/bakery +3 lines",
           ],
           root,
           {
@@ -1443,7 +1443,7 @@ describe("coverage-gate", () => {
             manifest: () =>
               withBaselines([{
                 suite: "workspace-unit",
-                member: "packages/bakery",
+                member: "runtime/bakery",
                 commit,
                 createdAt: "2026-09-01T00:00:00.000Z",
                 uncoveredLines: 1,
@@ -1470,7 +1470,7 @@ describe("coverage-gate", () => {
             "--reports",
             reports,
             "--body",
-            "ACCEPT_COVERAGE_DEBT: packages/bakery 3 lines",
+            "ACCEPT_COVERAGE_DEBT: runtime/bakery 3 lines",
           ],
           root,
           {
@@ -1503,7 +1503,7 @@ describe("coverage-gate", () => {
         else Deno.env.set("GITHUB_STEP_SUMMARY", before);
       }
       expect(await Deno.readTextFile(summary))
-        .toContain("workspace-unit/packages/bakery");
+        .toContain("workspace-unit/runtime/bakery");
       await Deno.remove(summary);
     });
 
@@ -1518,7 +1518,7 @@ describe("coverage-gate", () => {
           manifest: () =>
             withBaselines([{
               suite: "workspace-unit",
-              member: "packages/bakery",
+              member: "runtime/bakery",
               commit,
               createdAt: "2026-09-01T00:00:00.000Z",
               uncoveredLines: 1,
@@ -1571,7 +1571,7 @@ describe("coverage-gate", () => {
             manifest: () =>
               withBaselines([{
                 suite: "workspace-unit",
-                member: "packages/bakery",
+                member: "runtime/bakery",
                 commit,
                 createdAt: "2026-09-01T00:00:00.000Z",
                 uncoveredLines: 1,
@@ -1601,7 +1601,7 @@ describe("coverage-gate", () => {
             "--reports",
             reports,
             "--body",
-            "ACCEPT_COVERAGE_DEBT: packages/bakery 3 lines",
+            "ACCEPT_COVERAGE_DEBT: runtime/bakery 3 lines",
           ],
           root,
           {
@@ -1665,7 +1665,7 @@ describe("coverage-gate", () => {
             manifest: () =>
               withBaselines([{
                 suite: "workspace-unit",
-                member: "packages/bakery",
+                member: "runtime/bakery",
                 commit,
                 createdAt: "2026-09-01T00:00:00.000Z",
                 uncoveredLines: 9,
@@ -1735,7 +1735,7 @@ describe("coverage-gate", () => {
               manifest: () =>
                 withBaselines([{
                   suite: "workspace-unit",
-                  member: "packages/bakery",
+                  member: "runtime/bakery",
                   commit,
                   createdAt: "2026-09-01T00:00:00.000Z",
                   uncoveredLines: baseline,
@@ -1778,7 +1778,7 @@ describe("coverage-gate", () => {
         )
           .toBe(true);
         expect(body).toContain(
-          "| workspace-unit/packages/bakery | 1 | 4 | +3 | rose |",
+          "| workspace-unit/runtime/bakery | 1 | 4 | +3 | rose |",
         );
         expect(body).toContain("other uncovered lines of the same package");
       });
@@ -1794,7 +1794,7 @@ describe("coverage-gate", () => {
           "The coverage gate in the <strong>Status</strong> job passes.",
         );
         expect(body).toContain(
-          "| workspace-unit/packages/bakery | 4 | 4 | +0 | no rise |",
+          "| workspace-unit/runtime/bakery | 4 | 4 | +0 | no rise |",
         );
         expect(body.trimEnd().endsWith("</details>")).toBe(true);
       });
@@ -1803,7 +1803,7 @@ describe("coverage-gate", () => {
         const { status, written } = await comment(4, [
           ...asked,
           "--body",
-          "ACCEPT_COVERAGE_DEBT: packages/bakery 3 lines",
+          "ACCEPT_COVERAGE_DEBT: runtime/bakery 3 lines",
         ]);
         expect(status).toBe(1);
         expect(written).toMatchObject({ prNumber: 4211, state: "regressed" });
@@ -1827,7 +1827,7 @@ describe("coverage-gate", () => {
           ...asked,
           "--tests-failed",
           "--body",
-          "ACCEPT_COVERAGE_DEBT: packages/bakery 3 lines",
+          "ACCEPT_COVERAGE_DEBT: runtime/bakery 3 lines",
         ]);
         expect(status).toBe(1);
         expect(written).toMatchObject({ state: "regressed" });
@@ -1863,7 +1863,7 @@ describe("coverage-gate", () => {
         "--reports",
         "downloaded",
         "--body",
-        "ACCEPT_COVERAGE_DEBT: packages/bakery +3 lines",
+        "ACCEPT_COVERAGE_DEBT: runtime/bakery +3 lines",
         "--tests-failed",
       ], "/tmp/root");
       expect(options?.base).toBe("origin/main");
@@ -1980,8 +1980,8 @@ describe("coverage-gate", () => {
 
   describe("two sets over one member", () => {
     it("accepts both sets over one member from one marker", async () => {
-      const { root, lcov } = await workspace("packages/bakery", 10, 6);
-      const member = "packages/bakery";
+      const { root, lcov } = await workspace("runtime/bakery", 10, 6);
+      const member = "runtime/bakery";
       const suites = [
         suite("workspace-unit", [{
           member,
@@ -1996,11 +1996,11 @@ describe("coverage-gate", () => {
       ];
       const { reports } = await reportsFor([
         [
-          "lane-1/coverage/lcov/sets/workspace-unit/packages__bakery/coverage.lcov",
+          "lane-1/coverage/lcov/sets/workspace-unit/runtime__bakery/coverage.lcov",
           lcov,
         ],
         [
-          "lane-1/coverage/lcov/sets/bakery-e2e/packages__bakery/coverage.lcov",
+          "lane-1/coverage/lcov/sets/bakery-e2e/runtime__bakery/coverage.lcov",
           lcov,
         ],
       ]);

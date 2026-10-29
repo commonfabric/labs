@@ -24,8 +24,8 @@
  * layering claim would collapse most of the workspace into one group and say
  * nothing. Excluded, therefore: any file under a `test`, `tests`, `integration`,
  * or `bench` directory inside a package, and any file named `*.test.*` or
- * `*.bench.*` wherever it sits, which is how `packages/ui` and
- * `packages/patterns` keep a test beside its subject.
+ * `*.bench.*` wherever it sits, which is how `runtime/ui` and
+ * `patterns` keep a test beside its subject.
  *
  * An edge is one file naming another package, either by package name
  * (`@commonfabric/runner`, or a subpath export of it) or by a relative path
@@ -34,10 +34,10 @@
  * would leave a hole. Which package a file or a specifier belongs to is decided
  * by the workspace member list rather than by the shape of the path, because
  * neither follows from the other. A member's directory name is not its package
- * name — `packages/connectors/agents/connector` publishes
+ * name — `connectors/agents/connector` publishes
  * `@commonfabric/agents-connector` — and a member can sit several directories
- * below `packages`, as that one does, so the longest matching member owns a
- * file rather than the first path segment.
+ * below the directory holding its package, as that one does, so the longest
+ * matching member owns a file rather than the first path segment.
  *
  * A type-only import counts. It disappears before the code runs, so it cannot
  * deadlock a module graph, but it still means one package's source cannot be
@@ -54,12 +54,13 @@
 import { walk } from "@std/fs/walk";
 import { parse as parseJsonc } from "@std/jsonc";
 import { dirname, fromFileUrl, relative, resolve } from "@std/path";
+import { packageDirOf, withoutPackageParent } from "./package-layout.ts";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
 /** A cycle that exists today and is not this check's job to fix. */
 export interface AllowedCycle {
-  /** Package directory names, sorted, exactly as the cycle stands today. */
+  /** Member names, sorted, exactly as the cycle stands today. */
   readonly packages: readonly string[];
 
   /** What the two sides take from each other. */
@@ -124,11 +125,12 @@ export function extractSpecifiers(source: string): string[] {
 }
 
 /**
- * The workspace member holding a repo-relative path, as its directory under
- * `packages/`, or undefined for a path in no member.
+ * The workspace member holding a repo-relative path, named by its directory
+ * with the package's parent directory removed, or undefined for a path in no
+ * member.
  *
- * The longest matching member wins, because a member can sit several
- * directories below `packages`: `packages/connectors/agents/connector` is its
+ * The longest matching member wins, because a member can sit inside another
+ * member's package directory: `connectors/agents/connector` is its
  * own package, and a file of its own is not a file of anything named
  * `connectors`.
  */
@@ -136,9 +138,18 @@ export function packageOfPath(
   path: string,
   members: readonly string[],
 ): string | undefined {
+  const dir = memberDirOf(path, members);
+  return dir === undefined ? undefined : withoutPackageParent(dir);
+}
+
+/** The directory of the longest member holding `path`. */
+function memberDirOf(
+  path: string,
+  members: readonly string[],
+): string | undefined {
   let found: string | undefined;
   for (const dir of members) {
-    if (!path.startsWith(`packages/${dir}/`)) continue;
+    if (!path.startsWith(`${dir}/`)) continue;
     if (found === undefined || dir.length > found.length) found = dir;
   }
   return found;
@@ -153,13 +164,13 @@ export function isProductionSource(
   path: string,
   members: readonly string[],
 ): boolean {
-  const dir = packageOfPath(path, members);
+  const dir = memberDirOf(path, members);
   if (dir === undefined) return false;
   const dot = path.lastIndexOf(".");
   if (dot === -1 || !CODE_EXTENSIONS.has(path.slice(dot))) return false;
   // Only the segments below the package decide this, so a member whose own
   // directory is named `test` does not exclude itself.
-  const inside = path.slice(`packages/${dir}/`.length).split("/");
+  const inside = path.slice(`${dir}/`.length).split("/");
   const base = inside[inside.length - 1];
   if (/\.(test|bench)\.[^.]+$/.test(base)) return false;
   return !inside.slice(0, -1).some((s) => TEST_DIRECTORIES.has(s));
@@ -181,7 +192,7 @@ export function resolveRelative(fromPath: string, specifier: string): string {
 
 /** The workspace, as this check needs to see it. */
 export interface Workspace {
-  /** Every member's directory under `packages/`, which may itself be nested. */
+  /** Every package member's repo-relative directory, which may be nested. */
   readonly members: readonly string[];
 
   /** Package name to member directory, for the members that declare a name. */
@@ -201,9 +212,8 @@ export async function readWorkspace(root: string): Promise<Workspace> {
   for (const member of listed) {
     if (typeof member !== "string") continue;
     const dir = member.replace(/^\.\//, "");
-    if (!dir.startsWith("packages/")) continue;
-    const packageDir = dir.slice("packages/".length);
-    members.push(packageDir);
+    if (packageDirOf(dir) === undefined) continue;
+    members.push(dir);
     for (const file of ["deno.jsonc", "deno.json"]) {
       let text: string;
       try {
@@ -212,7 +222,9 @@ export async function readWorkspace(root: string): Promise<Workspace> {
         continue;
       }
       const parsed = parseJsonc(text) as { name?: unknown } | null;
-      if (typeof parsed?.name === "string") names.set(parsed.name, packageDir);
+      if (typeof parsed?.name === "string") {
+        names.set(parsed.name, withoutPackageParent(dir));
+      }
       break;
     }
   }
@@ -269,11 +281,19 @@ async function walkFiles(root: string): Promise<string[]> {
   return paths;
 }
 
+/** Every production source file of `workspace`'s packages, repo-relative. */
+export async function productionPaths(
+  root: string,
+  workspace: Workspace,
+): Promise<string[]> {
+  return (await gitTrackedFiles(root) ?? await walkFiles(root))
+    .filter((path) => isProductionSource(path, workspace.members));
+}
+
 /** Every import edge between two different packages' production source. */
 export async function buildEdges(root: string): Promise<Edge[]> {
   const workspace = await readWorkspace(root);
-  const paths = (await gitTrackedFiles(root) ?? await walkFiles(root))
-    .filter((path) => isProductionSource(path, workspace.members));
+  const paths = await productionPaths(root, workspace);
   const edges: Edge[] = [];
   for (const path of paths) {
     const from = packageOfPath(path, workspace.members);

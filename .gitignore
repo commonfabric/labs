@@ -5,7 +5,7 @@ dist
 .DS_Store
 # The compile-cache output version a source checkout records for itself
 # (`deno task compile-cache-version --memo`), keyed by the tree it describes.
-/packages/runner/src/compilation-cache/.compile-cache-output-version.json*
+/runtime/runner/src/compilation-cache/.compile-cache-output-version.json*
 .vscode
 __pycache__
 cache
@@ -62,7 +62,7 @@ CLAUDE.local.md
 docs/.doccheck*
 
 # Temp deno configs written at the repo root by `runDenoCheckWithTemporaryConfig`
-# (packages/test-support/src/isolated-deno.ts). It removes each one in a
+# (base/test-support/src/isolated-deno.ts). It removes each one in a
 # `finally`, so these survive only when a run is interrupted -- at which point
 # `git add -A` will happily commit one, and `deno fmt --check` then rejects it.
 .deno.standard-decorators.*.json
