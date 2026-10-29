@@ -130,6 +130,8 @@ export interface HarnessSessionConfig {
   sandboxRunscUnshare?: string;
   /** The `setpriv` that ties what pasta runs to pasta. */
   sandboxRunscSetpriv?: string;
+  /** The host ports a container under pasta reaches, and the only ones. */
+  sandboxRunscForwardedHostPorts?: readonly number[];
 
   /** How the sandbox runtime was selected, as the run records it. */
   sandboxRuntimeChoice?: SandboxRuntimeChoice;
@@ -353,6 +355,11 @@ export const harnessSessionEngineOptions = (
       : {}),
     ...(config.sandboxRunscSetpriv !== undefined
       ? { sandboxRunscSetpriv: config.sandboxRunscSetpriv }
+      : {}),
+    ...(config.sandboxRunscForwardedHostPorts !== undefined
+      ? {
+        sandboxRunscForwardedHostPorts: config.sandboxRunscForwardedHostPorts,
+      }
       : {}),
     ...(config.sandboxRuntimeChoice !== undefined
       ? { sandboxRuntimeChoice: config.sandboxRuntimeChoice }

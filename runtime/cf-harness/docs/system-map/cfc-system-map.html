@@ -670,8 +670,8 @@
     // The state of this repository the map describes. Bump both when the
     // map is re-verified; the stamp is drawn in the canvas's top-left corner.
     const SNAPSHOT = {
-      date: "2026-10-09",
-      sha: "06d187bf3a",
+      date: "2026-10-29",
+      sha: "60cd866374",
     };
     const W = 2760, H = 1840;
     const bands = [
@@ -1823,7 +1823,7 @@
         kind: "Outside",
         band: "outside",
         body:
-          `<p>Reached through the harness's web tools: the <code>web_fetch</code> and <code>web_search</code> child profiles, or a parent with an explicit <code>web_fetch</code> allowlist. Two-way risk: the request body can carry information out; the response is untrusted content coming in.</p><p>The sandbox is a second route. Its network mode defaults to <code>sandbox</code>, runsc's own network, which on macOS is the VM's network, on Linux with no <code>pasta</code> configured (a named <code>runsc</code> configured by hand) loopback alone, and under the Linux default <code>pasta</code>'s: a network namespace of pasta's with egress through the host's sockets and the host at <code>host.docker.internal</code>, in a PID namespace of pasta's too, so it offers no sandbox sessions. <code>curl</code> is the only network-shaped command bash inspects (it allows loopback hosts and <code>host.docker.internal</code> only), so a sandboxed shell in any profile can reach the network by other means.</p><p>A browser host attached to a run loads pages from here too, outside the harness: the harness decides what it sends the host, and the page decides what it does with what the host enters.</p>`,
+          `<p>Reached through the harness's web tools: the <code>web_fetch</code> and <code>web_search</code> child profiles, or a parent with an explicit <code>web_fetch</code> allowlist. Two-way risk: the request body can carry information out; the response is untrusted content coming in.</p><p>The sandbox is a second route. Its network mode defaults to <code>sandbox</code>, runsc's own network, which on macOS is the VM's network, on Linux with no <code>pasta</code> configured (a named <code>runsc</code> configured by hand, forwarding no host ports) loopback alone, and under <code>pasta</code>'s, which the Linux default and any Linux run that forwards host ports get: a network namespace of pasta's with egress through the host's sockets and the host at <code>host.docker.internal</code>, on every port of the host's loopback or only on those <code>CFC_VM_FORWARD_PORTS</code> lists, in a PID namespace of pasta's too, so it offers no sandbox sessions. <code>curl</code> is the only network-shaped command bash inspects (it allows loopback hosts and <code>host.docker.internal</code> only), so a sandboxed shell in any profile can reach the network by other means.</p><p>A browser host attached to a run loads pages from here too, outside the harness: the harness decides what it sends the host, and the page decides what it does with what the host enters.</p>`,
         threats: ["t1", "t2", "t21"],
         close: [
           "<code>web_fetch</code> applies bounds and redirect checks but stamps no label and no ExternalIngest mark on what it returns.",

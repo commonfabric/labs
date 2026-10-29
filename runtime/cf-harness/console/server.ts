@@ -1399,6 +1399,7 @@ const resolveConsoleRunscConfig = (
     ...(options.sandboxRunscSetpriv !== undefined
       ? { setpriv: options.sandboxRunscSetpriv }
       : {}),
+    forwardedHostPorts: options.sandboxRunscForwardedHostPorts,
     additionalMounts: options.additionalMounts,
     ...(platform !== undefined ? { platform } : {}),
     homeDir: env.HOME,

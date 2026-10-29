@@ -170,19 +170,11 @@ export const linuxRunscRootfs = (
 export type { RunscNetworkMode };
 
 /**
- * How `pasta` (from passt) gives a container on Linux the `sandbox` network:
- * a network namespace of its own, whose one interface pasta translates to
- * the host's sockets, so the container has egress and reaches the host at
- * the gateway address, and sees none of the host's interfaces. The
- * addresses are fixed, slirp's, IPv4 alone, so the hosts file the container
- * gets can name the host by a constant. No port of the container's is
- * forwarded to the host, and none of the host's into the container: the host
- * is reached at the gateway alone. Pasta's own messages go to a log file the
- * runtime names, not into a call's output, but for two warnings about user
- * mappings that root's pasta writes to its stderr, which the call shares,
- * whatever its flags say.
+ * Helper for {@link PASTA_ARGS} and {@link pastaArgs}: what pasta is given,
+ * with `toHost` the ports `-T` forwards from a container's loopback to the
+ * host's, `none` for none.
  */
-export const PASTA_ARGS: readonly string[] = [
+const pastaNetworkArgs = (toHost: string): readonly string[] => [
   "--config-net",
   "--quiet",
   "-4",
@@ -197,10 +189,26 @@ export const PASTA_ARGS: readonly string[] = [
   "-u",
   "none",
   "-T",
-  "none",
+  toHost,
   "-U",
   "none",
 ];
+
+/**
+ * How `pasta` (from passt) gives a container on Linux the `sandbox` network:
+ * a network namespace of its own, whose one interface pasta translates to
+ * the host's sockets, so the container has egress and reaches the host at
+ * the gateway address, and sees none of the host's interfaces. The
+ * addresses are fixed, slirp's, IPv4 alone, so the hosts file the container
+ * gets can name the host by a constant. No port of the container's is
+ * forwarded to the host, and none of the host's into the container: the host
+ * is reached at the gateway alone, on every port its loopback serves. A run
+ * that forwards host ports is given {@link pastaArgs} instead. Pasta's own
+ * messages go to a log file the runtime names, not into a call's output, but
+ * for two warnings about user mappings that root's pasta writes to its
+ * stderr, which the call shares, whatever its flags say.
+ */
+export const PASTA_ARGS: readonly string[] = pastaNetworkArgs("none");
 
 /**
  * What pasta is given beside {@link PASTA_ARGS} for root: no user namespace
@@ -234,16 +242,57 @@ export const UNSHARE_ARGS: readonly string[] = [
  */
 export const SETPRIV_ARGS: readonly string[] = ["--pdeathsig", "KILL"];
 
-/** The address a container under pasta reaches the host at. */
+/**
+ * The gateway of a container under pasta, where it reaches the host unless
+ * the run forwards host ports, and where DNS is answered either way.
+ */
 export const PASTA_HOST_ADDRESS = "10.0.2.2";
 
-/** Where a container under pasta gets {@link PASTA_HOSTS_FILE}. */
+/** Where a container under pasta gets its hosts file. */
 export const PASTA_HOSTS_PATH = "/etc/hosts";
 
-/** The hosts file a container under pasta gets, naming the host. */
-export const PASTA_HOSTS_FILE = "127.0.0.1\tlocalhost\n" +
+/** A hosts file naming `host.docker.internal` at `hostAddress`. */
+const pastaHostsFile = (hostAddress: string): string =>
+  "127.0.0.1\tlocalhost\n" +
   "::1\tlocalhost ip6-localhost ip6-loopback\n" +
-  `${PASTA_HOST_ADDRESS}\thost.docker.internal\n`;
+  `${hostAddress}\thost.docker.internal\n`;
+
+/**
+ * The hosts file a container under pasta gets where the run forwards no host
+ * ports: `host.docker.internal` is the gateway.
+ */
+export const PASTA_HOSTS_FILE = pastaHostsFile(PASTA_HOST_ADDRESS);
+
+/**
+ * The hosts file a container under pasta gets where the run forwards host
+ * ports: `host.docker.internal` is the container's own loopback, where pasta
+ * takes each forwarded port to the host's.
+ */
+export const PASTA_FORWARDING_HOSTS_FILE = pastaHostsFile("127.0.0.1");
+
+/**
+ * What pasta is given for a container: {@link PASTA_ARGS} where `ports` is
+ * `undefined`. Given `ports`, the container reaches those ports of the host's
+ * loopback and no other port of it, and none at all for an empty list: the
+ * gateway does not lead to the host (`--no-map-gw`), and pasta forwards each
+ * port from the container's loopback to the host's (`-T`), listening on it
+ * there, so that a command in the container cannot listen on a forwarded
+ * port itself. The gateway answers DNS, as it does for {@link PASTA_ARGS}.
+ * Egress is kept, and with it the host's own addresses on its other
+ * interfaces, as for any destination.
+ */
+export const pastaArgs = (ports?: readonly number[]): readonly string[] =>
+  ports === undefined ? PASTA_ARGS : [
+    ...pastaNetworkArgs(ports.length > 0 ? ports.join(",") : "none"),
+    "--no-map-gw",
+    "--dns-forward",
+    PASTA_HOST_ADDRESS,
+    // Named as the nameserver too: pasta otherwise warns, into the stderr
+    // every call shares, that it finds no nameserver it can reach without
+    // the gateway.
+    "--dns",
+    PASTA_HOST_ADDRESS,
+  ];
 
 export interface RunscSandboxConfig {
   /**
@@ -293,6 +342,13 @@ export interface RunscSandboxConfig {
    */
   setpriv?: string;
   /**
+   * The ports of the host's loopback a container under pasta reaches, and
+   * the only ones, as {@link pastaArgs} says; absent where it reaches every
+   * port the host's loopback serves. Given only with `networkHelper` under
+   * the `sandbox` network mode.
+   */
+  forwardedHostPorts?: readonly number[];
+  /**
    * CFC policy file, as a canonical absolute path; `--cfc` is passed exactly
    * when this is set.
    */
@@ -335,6 +391,10 @@ export interface ResolveRunscSandboxConfigOptions {
   unshare?: string;
   /** The `setpriv` binary; see {@link RunscSandboxConfig}. */
   setpriv?: string;
+
+  /** The host ports a container reaches; see {@link RunscSandboxConfig}. */
+  forwardedHostPorts?: readonly number[];
+
   cfcPolicyPath?: string;
   scratchDir?: string;
   runId?: string;
@@ -725,6 +785,24 @@ export const resolveRunscSandboxConfig = (
   // may cover it or sit in it.
   const underPasta = options.networkHelper !== undefined &&
     (options.networkMode ?? DEFAULT_RUNSC_NETWORK_MODE) === "sandbox";
+  if (options.forwardedHostPorts !== undefined) {
+    // Forwarded by pasta alone: anywhere else the ports would be dropped,
+    // and the container would reach what the run said it should not.
+    if (!underPasta) {
+      throw new Error(
+        "forwarded host ports are forwarded by pasta, which this " +
+          "configuration does not run: it names no `networkHelper`, or a " +
+          "network mode other than `sandbox`",
+      );
+    }
+    for (const port of options.forwardedHostPorts) {
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        throw new Error(
+          `forwarded host port must be a port number from 1 to 65535: \`${port}\``,
+        );
+      }
+    }
+  }
   const roots = [
     workspaceMountPath,
     ...additionalMounts.map((m) => m.sandboxPath),
@@ -972,6 +1050,13 @@ export const resolveRunscSandboxConfig = (
           options.setpriv,
           canonicalHostPath("setpriv binary", options.setpriv),
         ),
+      }
+      : {}),
+    ...(options.forwardedHostPorts !== undefined
+      ? {
+        forwardedHostPorts: Object.freeze([
+          ...new Set(options.forwardedHostPorts),
+        ]),
       }
       : {}),
     ...(cfcPolicyPath !== undefined ? { cfcPolicyPath } : {}),
@@ -1465,7 +1550,13 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       // Written aside and renamed into place, so a container that binds the
       // file as it is rewritten never finds it empty.
       const aside = `${this.#hostsFile()}.${crypto.randomUUID()}`;
-      await Deno.writeTextFile(aside, PASTA_HOSTS_FILE, { mode: 0o644 });
+      await Deno.writeTextFile(
+        aside,
+        this.config.forwardedHostPorts !== undefined
+          ? PASTA_FORWARDING_HOSTS_FILE
+          : PASTA_HOSTS_FILE,
+        { mode: 0o644 },
+      );
       await Deno.rename(aside, this.#hostsFile());
     }
     return dir;
@@ -1501,7 +1592,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       );
     }
     const underPasta = [
-      ...PASTA_ARGS,
+      ...pastaArgs(this.config.forwardedHostPorts),
       ...(this.config.unshare !== undefined ? PASTA_ROOT_ARGS : []),
       "--log-file",
       joinHostPath(this.config.scratchDir, "pasta.log"),
