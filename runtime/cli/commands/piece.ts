@@ -3173,6 +3173,7 @@ export interface PieceCLIOptions {
    * `CF_DELEGATIONS`, or each `--delegations` written.
    */
   delegations?: string | string[];
+
   space?: string;
 
   /**

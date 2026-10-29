@@ -1,11 +1,7 @@
 import { Command } from "@cliffy/command";
 import { Table } from "@cliffy/table";
-import {
-  type DIDKey,
-  encodeDelegationChains,
-  legacySpaceDid,
-} from "@commonfabric/identity";
-import { isDID } from "@commonfabric/identity/did";
+import { type DIDKey, encodeDelegationChains } from "@commonfabric/identity";
+import { isDIDKey } from "@commonfabric/identity/did";
 
 import { cliText } from "../lib/cli-name.ts";
 import {
@@ -48,10 +44,13 @@ async function issue(options: IssueOptions): Promise<void> {
     : nowSeconds() + options.expiresIn;
   const pieces = await loadPieces(config);
   try {
+    // The connection's signer is typed without the key pair a delegation's
+    // issuer is, so the identity is loaded for signing on its own.
     const signer = await loadIdentity(config.identity);
-    const space = (isDID(config.space)
-      ? config.space
-      : await legacySpaceDid(config.space)) as DIDKey;
+    const space = pieces.getSpace();
+    if (!isDIDKey(space)) {
+      throw new Error(`The space ${space} is not a did:key`);
+    }
     const chain = await issueDelegationChain({
       signer,
       space,
