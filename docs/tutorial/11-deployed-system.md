@@ -6,7 +6,7 @@ all the machinery visible.
 
 ## Toolshed: the server
 
-Toolshed (`packages/toolshed`) is a single Deno server that hosts everything
+Toolshed (`runtime/toolshed`) is a single Deno server that hosts everything
 the product needs server-side. Its route groups (`app.ts`) tell the story:
 
 - `storage/memory` — **the** sync endpoint: `GET /api/storage/memory` with a
@@ -39,7 +39,7 @@ environment-driven (`HOST`, `PORT`, `MEMORY_DIR`/`DB_PATH`, `CACHE_DIR`,
 
 ## Shell: the browser client
 
-The shell (`packages/shell`) is deliberately thin — a login screen, a
+The shell (`runtime/shell`) is deliberately thin — a login screen, a
 header, and a piece renderer around the runtime:
 
 - **Boot.** The page loads, opens the IndexedDB key store, and either runs
@@ -117,17 +117,17 @@ Common Fabric.
 ## Where to go from here
 
 - **Build something**: re-read [Chapter 6](06-workflow.md) and start from
-  `packages/patterns/counter/`; the catalog stories
-  (`packages/patterns/catalog/stories/`) are the best UI reference.
+  `patterns/examples/counter/`; the catalog stories
+  (`patterns/dev/catalog/stories/`) are the best UI reference.
 - **Runtime work**: `docs/development/DEVELOPMENT.md` for style and
   principles, `docs/development/debugging/` for the error reference; the
-  scheduler (`packages/runner/src/scheduler.ts`) and the v2 engine
-  (`packages/memory/v2/engine.ts`) are the two files most worth reading
+  scheduler (`runtime/runner/src/scheduler.ts`) and the v2 engine
+  (`runtime/memory/v2/engine.ts`) are the two files most worth reading
   end to end.
 - **Areas to watch in the code**: per-space ACL enforcement is enabled by
   default through `MEMORY_ACL_MODE` (Ch. 10), with explicit `observe` and `off`
   rollout overrides; branch
   infrastructure exists in the storage engine's schema while merge remains
   open (Ch. 9); and the CFC flow-control layer is evolving quickly
-  (`packages/runner/src/cfc/`, specs in `docs/specs/cfc-*.md`, demo
-  patterns in `packages/patterns/cfc-*`).
+  (`runtime/runner/src/cfc/`, specs in `docs/specs/cfc-*.md`, demo
+  patterns in `patterns/cfc-*`).

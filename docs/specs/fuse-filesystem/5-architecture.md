@@ -11,7 +11,7 @@
                     /dev/fuse fd
                          |
               +---------------------------+
-              |  Deno FUSE Child Process   |   packages/fuse/
+              |  Deno FUSE Child Process   |   runtime/fuse/
               |                            |
               |  libfuse (via Deno.dlopen) |
               |   - single-threaded mode   |
@@ -42,7 +42,7 @@
 The FUSE child process calls libfuse via `Deno.dlopen()`. All filesystem logic —
 FUSE operations, cell access, caching, inode management — lives in TypeScript.
 `cf fuse mount` foreground mode starts one FFI-owning child process and waits for
-it without adding a supervisor; direct `deno run packages/fuse/mod.ts` is a
+it without adding a supervisor; direct `deno run runtime/fuse/mod.ts` is a
 single-process invocation of the same child entrypoint. Background mounts add a
 small Deno supervisor process outside libfuse; the supervisor starts the FUSE
 child, records the child PID in mount state, forwards termination, and waits for
@@ -166,14 +166,14 @@ C API is too painful to bind), a fallback architecture splits the work:
 
 ```
               +---------------------+
-              |   Rust FUSE Layer   |   packages/fuse-daemon/
+              |   Rust FUSE Layer   |   runtime/fuse-daemon/
               |   (fuser crate)     |
               +---------------------+
                          |
                     IPC (JSON-RPC over Unix socket)
                          |
               +---------------------+
-              |   Deno Service      |   packages/fuse/
+              |   Deno Service      |   runtime/fuse/
               +---------------------+
 ```
 
@@ -211,7 +211,7 @@ Worth a quick spike before committing to raw FFI.
 ## Package Structure
 
 ```
-packages/
+runtime/
   fuse/                          # Deno package (new)
     deno.jsonc
     mod.ts                       # Entry point

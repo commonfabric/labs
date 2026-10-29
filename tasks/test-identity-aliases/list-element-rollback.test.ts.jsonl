@@ -1,0 +1,1 @@
+{"date":"2026-10-27","from":{"k":"unit","s":"runner","n":"list element rollback > drops a created entry and stops its piece when the setup aborts"},"to":{"k":"unit","s":"runner","n":"list element rollback > drops a created entry when the setup aborts"}}

@@ -2,11 +2,11 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
-  byDayThenName,
-  chunksByRun,
+  CHUNK,
   dayPartitions,
   inputChoice,
   livePrevious,
+  liveStore,
   namingSurfaces,
   parseArgs,
   partitionOf,
@@ -60,12 +60,12 @@ const TOPOLOGY: Suite[] = [{
   id: "workspace-unit",
   recordSurfaces: [{ kind: "unit", scope: "memory" }],
   needs: ["deno"],
-  units: ["packages/memory/test/space.test.ts"],
+  units: ["runtime/memory/test/space.test.ts"],
   unavailable: [],
   whole: [],
   locate: (record) =>
     record.test.k === "unit" && record.test.s === "memory"
-      ? { level: "unit", unit: "packages/memory/test/space.test.ts" }
+      ? { level: "unit", unit: "runtime/memory/test/space.test.ts" }
       : undefined,
   command: () => Promise.resolve([]),
 }];
@@ -80,7 +80,7 @@ const suites = () => Promise.resolve(TOPOLOGY);
 const noPrevious = () => Promise.resolve(undefined);
 
 /** The one unit that topology holds. */
-const UNIT = "packages/memory/test/space.test.ts";
+const UNIT = "runtime/memory/test/space.test.ts";
 
 /**
  * A topology whose one suite places a record by the file it carries, the
@@ -311,64 +311,21 @@ describe("test-selection-publish", () => {
     });
   });
 
-  describe("byDayThenName()", () => {
-    it("interleaves the two areas by the day they recorded", () => {
-      // Sorted by name alone, every local object lands after every
-      // continuous-integration one, and the fold would judge a
-      // workstation's failure against a state from days later.
-      const ordered = [
-        LOCAL("2026/08/20", "ianh"),
-        CI("2026/08/18", "1"),
-        LOCAL("2026/08/19", "ianh"),
-        CI("2026/08/20", "2"),
-      ].sort(byDayThenName);
-      expect(ordered.map(partitionOf)).toEqual([
-        "2026/08/18",
-        "2026/08/19",
-        "2026/08/20",
-        "2026/08/20",
-      ]);
-    });
+  describe("liveStore()", () => {
+    it("asks Cloud Storage to decode an aggregate before Deno reads it", async () => {
+      const requests: Request[] = [];
+      const fetchImpl = (
+        input: string | URL | Request,
+        init?: RequestInit,
+      ): Promise<Response> => {
+        requests.push(new Request(input, init));
+        return Promise.resolve(new Response('{"complete":true}'));
+      };
+      const store = liveStore("bucket", fetchImpl);
 
-    it("falls back to the name inside one day", () => {
-      const ordered = [CI("2026/08/20", "2"), CI("2026/08/20", "1")]
-        .sort(byDayThenName);
-      expect(ordered[0]).toBe(CI("2026/08/20", "1"));
-    });
-  });
-
-  describe("chunksByRun()", () => {
-    const lane = (run: string, n: number) =>
-      `labs/test-records/submissions/ci/v1/2026/08/20/run-${run}-tests-${n}-a1.ndjson`;
-
-    it("holds a workflow run's objects in one chunk", () => {
-      // The second chunk would otherwise begin part way through run 2,
-      // and the fold would judge what that run broke in two halves.
-      const names = [lane("1", 1), lane("2", 1), lane("2", 2), lane("3", 1)];
-      expect([...chunksByRun(names, 2)]).toEqual([
-        [lane("1", 1), lane("2", 1), lane("2", 2)],
-        [lane("3", 1)],
-      ]);
-    });
-
-    it("cuts at the size where a run ends there", () => {
-      const names = [lane("1", 1), lane("1", 2), lane("2", 1), lane("3", 1)];
-      expect([...chunksByRun(names, 2)]).toEqual([
-        [lane("1", 1), lane("1", 2)],
-        [lane("2", 1), lane("3", 1)],
-      ]);
-    });
-
-    it("reads each workstation object as a run of its own", () => {
-      const names = [
-        LOCAL("2026/08/20", "a"),
-        LOCAL("2026/08/20", "b"),
-        LOCAL("2026/08/20", "c"),
-      ];
-      expect([...chunksByRun(names, 2)]).toEqual([
-        names.slice(0, 2),
-        names.slice(2),
-      ]);
+      expect(await store.readText("state.json.gz")).toBe('{"complete":true}');
+      expect(requests.length).toBe(1);
+      expect(requests[0]!.headers.get("accept-encoding")).toBe("identity");
     });
   });
 });
@@ -569,7 +526,7 @@ function laneObject(
         hooksMeasurementName(
           "workspace-unit",
           measured,
-          "packages/memory/test/space.test.ts",
+          "runtime/memory/test/space.test.ts",
         ),
         hooks * 1000,
       ),
@@ -634,7 +591,7 @@ describe("publish()", () => {
     // dropped for naming a suite that does not exist.
     expect(manifest!.entries[0]!.suite).toBe("workspace-unit");
     expect(manifest!.entries[0]!.unit).toBe(
-      "packages/memory/test/space.test.ts",
+      "runtime/memory/test/space.test.ts",
     );
     // The failure at c1 that c2 went on to fix is a new real test failure
     // on main, and one there is weighted by where it happened. The 1.5 is
@@ -652,8 +609,8 @@ describe("publish()", () => {
     const measured: Suite = {
       ...TOPOLOGY[0]!,
       measured: [{
-        member: "packages/memory",
-        reachedBy: ["packages/memory/"],
+        member: "runtime/memory",
+        reachedBy: ["runtime/memory/"],
         units: [UNIT],
       }],
     };
@@ -675,7 +632,7 @@ describe("publish()", () => {
     expect(
       manifest.entries.filter((entry) => entry.suite === "coverage-gate")
         .map((entry) => [entry.test, entry.unit]),
-    ).toEqual([[gate, "workspace-unit/packages/memory"]]);
+    ).toEqual([[gate, "workspace-unit/runtime/memory"]]);
     expect(manifest.lanes.flatMap((lane) => lane.batches.map((b) => b.suite)))
       .not.toContain("coverage-gate");
     expect(manifest.lanes.flatMap((lane) => lane.batches.map((b) => b.suite)))
@@ -720,7 +677,7 @@ describe("publish()", () => {
     const manifest = await publishedManifest(created);
     expect(
       manifest.calibration.suites["workspace-unit"]?.unitHooks?.[
-        "packages/memory/test/space.test.ts"
+        "runtime/memory/test/space.test.ts"
       ],
     ).toBeCloseTo(7.5, 0);
     const state = [...created.keys()].find((name) => name.includes("/state/"));
@@ -729,7 +686,7 @@ describe("publish()", () => {
       hooksMeasurementName(
         "workspace-unit",
         false,
-        "packages/memory/test/space.test.ts",
+        "runtime/memory/test/space.test.ts",
       ),
     ]);
   });
@@ -1147,7 +1104,7 @@ describe("publish()", () => {
           ...TOPOLOGY[0]!,
           variant: "server-execution",
           unavailable: [{
-            unit: "packages/memory/test/space.test.ts",
+            unit: "runtime/memory/test/space.test.ts",
             leafName: "space > writes a fact",
             phase: "phase-2",
             reason: "the ON arm cannot run it yet",
@@ -1164,7 +1121,7 @@ describe("publish()", () => {
     expect(manifest!.unavailable).toEqual([{
       suite: "workspace-unit",
       variant: "server-execution",
-      unit: "packages/memory/test/space.test.ts",
+      unit: "runtime/memory/test/space.test.ts",
       leafName: "space > writes a fact",
       phase: "phase-2",
       reason: "the ON arm cannot run it yet",
@@ -1917,8 +1874,8 @@ describe("publish() over an aggregate holding tests the tree has lost", () => {
         [SILENT]: { ...emptyState(), runsByDay: { "2026-08-20": 3 } },
       },
       files: {
-        [DELETED]: "packages/memory/test/erase.test.ts",
-        [SILENT]: "packages/memory/test/unreported.test.ts",
+        [DELETED]: "runtime/memory/test/erase.test.ts",
+        [SILENT]: "runtime/memory/test/unreported.test.ts",
       },
     });
   }
@@ -2035,7 +1992,7 @@ describe("publish() over a state written further ahead than it reads", () => {
           },
         },
       },
-      files: { [KEPT]: "packages/memory/test/space.test.ts" },
+      files: { [KEPT]: "runtime/memory/test/space.test.ts" },
     });
   }
 
@@ -2722,8 +2679,8 @@ describe("publish() reporting what measured sets cost", () => {
     Promise.resolve<Suite[]>([{
       ...TOPOLOGY[0]!,
       measured: [{
-        member: "packages/memory",
-        reachedBy: ["packages/memory/"],
+        member: "runtime/memory",
+        reachedBy: ["runtime/memory/"],
         units: [UNIT],
       }],
     }]);
@@ -2746,7 +2703,7 @@ describe("publish() reporting what measured sets cost", () => {
       )
     );
     expect(said).toContain(
-      "test selection: workspace-unit/packages/memory costs 52s with " +
+      "test selection: workspace-unit/runtime/memory costs 52s with " +
         "coverage on, past LOCAL_COVERAGE_MAX_SECONDS",
     );
   });
@@ -2903,7 +2860,7 @@ describe("the baselines a publish carries", () => {
       object(commit, "pass", at, branch) +
       coverageRecords({
         groups: new Map([["workspace", 900]]),
-        sets: new Map([["workspace-unit/packages/memory", 40]]),
+        sets: new Map([["workspace-unit/runtime/memory", 40]]),
         cold: false,
       }).map(serializeRecordLine).join("");
     const { store, created } = fakeStore({
@@ -2912,7 +2869,7 @@ describe("the baselines a publish carries", () => {
     });
     const carried = {
       suite: "workspace-unit",
-      member: "packages/memory",
+      member: "runtime/memory",
       commit: "c0",
       createdAt: "2026-08-19T23:00:00.000Z",
       uncoveredLines: 41,
@@ -2929,12 +2886,68 @@ describe("the baselines a publish carries", () => {
     expect((await publishedManifest(created)).coverageBaselines).toEqual([
       {
         suite: "workspace-unit",
-        member: "packages/memory",
+        member: "runtime/memory",
         commit: "c1",
         createdAt: "2026-08-20T01:00:00.000Z",
         uncoveredLines: 40,
       },
       carried,
     ]);
+  });
+});
+
+describe("publish() over a day read from its raw objects", () => {
+  const NOW = new Date("2026-08-20T23:00:00.000Z");
+
+  /**
+   * The failures of the test the aggregate holds once a day of raw
+   * objects is folded: main's first record of the test at 14:00, a
+   * chunk's worth of main's runs of another test, and a workstation's
+   * failure of the test at `at`. The workstation's object sorts after
+   * every other by name, whenever it ran, so it is read in a later chunk.
+   */
+  async function failuresWith(at: string) {
+    const others = Object.fromEntries(
+      Array.from({ length: CHUNK }, (_, index) => [
+        CI(DAY, `2${index}`),
+        object(
+          `o${index}`,
+          "pass",
+          "2026-08-20T13:00:00.000Z",
+          "main",
+          undefined,
+          "another",
+        ),
+      ]),
+    );
+    const { store, created } = fakeStore({
+      [CI(DAY, "1")]: object("c1", "pass", "2026-08-20T14:00:00.000Z"),
+      ...others,
+      [LOCAL(DAY, "ianh")]: localObject("c9", at),
+    });
+    expect(
+      await publish(
+        ["--bootstrap", "--days", "1"],
+        store,
+        NOW,
+        suites,
+        noPrevious,
+      ),
+    ).toBe(0);
+    const written = [...created.keys()].find((name) =>
+      name.startsWith(statePrefix())
+    )!;
+    return parseAggregate(await gunzipToText(created.get(written)!))!
+      .states[JSON.stringify(["unit", "memory", "space > writes"])]!
+      .failuresByDay;
+  }
+
+  it("counts a workstation's failure from after main recorded the test", async () => {
+    expect(await failuresWith("2026-08-20T15:00:00.000Z"))
+      .toEqual({ "2026-08-20": 1 });
+  });
+
+  it("counts none from before it, though its object is read after", async () => {
+    expect(await failuresWith("2026-08-20T09:00:00.000Z")).toEqual({});
   });
 });

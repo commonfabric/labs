@@ -4,14 +4,16 @@ A runtime holds a stored document because its memory session watches it. A
 watch names a root document and a selector (a path and a schema); the server
 keeps the session up to date with the root and with every document the schema
 reaches from it through links. The union of a session's watches is what the
-runtime's replica of the space holds. This document describes how the runtime
-removes the watches nothing needs any more, and drops the documents they kept
-loaded, so that a long-lived runtime that opens and closes many pieces does not
-hold every document it ever loaded.
+runtime's replica of the space holds, apart from a document the server retracted
+while something here still read it, which the replica keeps for that reader
+until the next release pass. This document describes how the runtime removes
+the watches nothing needs any more, and drops the documents they kept loaded, so
+that a long-lived runtime that opens and closes many pieces does not hold every
+document it ever loaded.
 
 The implementation is `SpaceReplica.releaseUnread()` in
-`packages/runner/src/storage/v2.ts`, driven by
-`Runtime.releaseUnreadDocuments()` in `packages/runner/src/runtime.ts`. The wire
+`runtime/runner/src/storage/v2.ts`, driven by
+`Runtime.releaseUnreadDocuments()` in `runtime/runner/src/runtime.ts`. The wire
 message it relies on is `session.watch.remove`, section 4.3.9 of
 [`../specs/memory-v2/04-protocol.md`](../specs/memory-v2/04-protocol.md).
 
@@ -46,7 +48,7 @@ comes next.
 
 An event handler is not a reader between events. Before a handler runs, the
 scheduler loads its inputs and waits for them (the presync and the preflight in
-`packages/runner/src/scheduler/events.ts`), so a handler whose inputs were
+`runtime/runner/src/scheduler/events.ts`), so a handler whose inputs were
 released loads them again when its next event arrives.
 
 ## When documents are released
@@ -54,14 +56,16 @@ released loads them again when its next event arrives.
 A release pass runs when something that read documents has gone: when a piece
 is stopped (`Runner.stop()`, which also runs when the runtime restarts a
 piece), and when a host's client departs
-(`RuntimeProcessor.disposeClient()` in `packages/runtime-client`). A host may
+(`RuntimeProcessor.disposeClient()` in `runtime/runtime-client`). A host may
 also call `Runtime.releaseUnreadDocuments()` itself. The pass waits until the
 scheduler is idle. Passes run one after another, never two at once.
 
 A pass that has watches to remove first gives each document the replica keeps,
-as above, a watch of its own where it has none, with a selector that follows no
-links: a document that something reads only through a link from another
-document is otherwise watched only as part of that document's watch. It then
+as above, and the session still delivers, a watch of its own where it has none,
+with a selector that follows no links: a document that something reads only
+through a link from another document is otherwise watched only as part of that
+document's watch. A kept document the server retracted gets none, as below. It
+then
 removes the watches rooted at each document the replica does not keep and that
 was neither loaded nor read since the previous pass began, so no removal can
 take a kept document from the session. The server answers with `removes` naming
@@ -81,22 +85,35 @@ not load it again, so dropping it would leave the action with no value and no
 later changes. If the space refuses the watch outright, the document is removed
 and dropped like the others, so that its readers meet the refusal.
 
-A removal the server sends for any other reason, such as the retraction of an
-instance whose lease has lapsed, empties the document in the same way, whatever
-holds it.
+A removal the server pushes, for a document a write's re-walk no longer reaches
+or for an instance whose lease has lapsed, stands: the document leaves the
+watch list, and nothing asks the server for it again. One the replica holds
+keeps its value, unwatched, for the reader that holds it, so an action in the
+middle of reading it finishes with the value it had; the first release pass to
+find it held by nothing drops it, and a read after that loads it as it now
+stands. One nothing holds is emptied and dropped at once.
 
-The server records which documents a session's watches reach, not which watch
-reached each one, so it answers the removal of a watch it walked by walking the
-remaining watches of that watch's branch again. That is less than watching the
-space from scratch, for two reasons. A branch the removal names no watch of
-keeps its graph. And some watches were never walked at all: when such a watch
-was added, the graph of its branch already covered every root of it. Removing
-one of those costs nothing. The server records those covered watches. A watch
-is covered by the graph as a whole, and several walked watches may contribute
-to that graph. So when a walked watch is removed, the server checks each
-covered watch of the branch against the rebuilt graph. One still covered stays
-unwalked. One no longer covered is walked into the rebuilt graph, so the
-documents it names stay delivered.
+The server attributes each document it tracks to what reached it: a watch's
+root to the watch, a document reached through a link to the document holding
+the link, a schema document to the document whose selector or `cfc` envelope
+names it, and the schema closure a delivered document's content refers to, to
+that document. A removal releases the removed watches' roots. A document whose
+last reaching watch, link, or schema reference lets go leaves the session,
+together with what only it reached, and the answer names each in `removes`. A
+document another watch or link still reaches stays. One that lost a record and
+keeps another is walked again under the records it keeps once the retirements
+have settled, so that what only the lost record's walk reached is released; a
+document that lost nothing is not walked. A watch whose root a permissive watch
+already covered was never walked; when that cover goes, the server walks the
+root on its own, so the documents it names stay delivered.
+
+A write that edits a link away retracts in the same way: the refresh that
+re-walks the changed document releases what the walk no longer reaches, and the
+pushed frame names it in `removes`. A document the server retires and reaches
+again in one pass, as a schema document is when the document that kept it goes
+and one that still names it is delivered after, is delivered, not retracted.
+So a document stays loaded in a runtime
+only while something reaches it, not until the next full evaluation.
 
 A server that does not advertise `watchRemoveV1` could only be asked to remove
 a watch by replacing the whole watch set, which sends the whole union back.
@@ -121,7 +138,7 @@ stands on the server:
 
 `getLoggerCounts().sizes.storage` reports a runtime's `documents` and
 `watchedDocuments`, in total and per space under `bySpace`.
-`packages/runner/test/document-release.profile.ts` stores forty todo lists and
+`runtime/runner/test/document-release.profile.ts` stores forty todo lists and
 has a second runtime open each one (load, start, subscribe to its result) and
 close it again (cancel the subscription, stop it, let go of its cells),
 printing those sizes as it goes; `--no-release` runs it against a server

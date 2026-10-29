@@ -9,7 +9,7 @@
 deno task test
 
 # Run tests for specific package
-cd packages/runner
+cd runtime/runner
 deno task test
 ```
 
@@ -29,14 +29,31 @@ files, which is useful while working inside one package and is not a
 substitute: the root check is the one continuous integration runs, and it
 covers trees no package's own check reaches.
 
+### What a run ends with
+
+The root `deno task test`, `deno task integration`, and every
+continuous-integration lane end with a block headed `test summary`, built by
+`tasks/test-summary.ts`. A passing run's block is one line of counts. A failing
+run's block gives, for each of its first twenty failing tests, its name, its
+file, a command that runs it again where its kind of test has one, and the first
+lines of its error, and counts the rest. For a command that failed
+without a failing test to explain it, the block quotes the end of that
+command's output. The block ends with where the full logs are, so reading the
+end of the output is enough to know what failed and what to run next.
+
+The root `deno task test` writes each package's output to a log file rather
+than to the console. A failing run keeps the directory of logs and names it in
+the block; a passing run deletes it. A lane also writes the block into the
+job's step summary, and raises an error annotation for each of its first ten
+failing tests, which the pull request's checks and `gh run view` show.
+
 ### Running one test by name
 
 Use `--filter` on a package's `test` task, not on the root one. The root task
-runs `tasks/test.ts`, which reads no arguments. A flag passed to it is ignored,
-and the whole workspace suite runs.
+runs `tasks/test.ts`, which takes no arguments and refuses a run given any.
 
 ```bash
-cd packages/runner
+cd runtime/runner
 deno task test --filter "test name"
 ```
 
@@ -44,14 +61,13 @@ deno task test --filter "test name"
 only. In a file written with `describe()` and `it()`, the top-level test is the
 `describe()`, and each `it()` inside it runs as a step of that test. So the
 pattern has to match the `describe()` name, and the whole block runs. A pattern
-that matches only an `it()` description matches nothing. The run then reports
-`0 passed | 0 failed`, with every test filtered out, and exits successfully, so
-check the passed count.
+that matches only an `it()` description matches nothing, and the package's
+`test` task then fails, saying the filter matched no test.
 
 The flag is passed to the `deno test` that the package's own task invokes, so
 the preload, the permissions, and the file globs that package's tests need are
 all still applied. The same holds for the packages that run their tests through
-a script, `packages/cli` and `packages/piece` among them. Each of those scripts
+a script, `runtime/cli` and `runtime/piece` among them. Each of those scripts
 passes on the arguments it receives.
 
 `deno task` appends the extra arguments to the end of the task's command line.
@@ -70,7 +86,7 @@ The package's `test` task in its `deno.jsonc` names what it runs, and
 prints each command line as it runs it, which shows where the flag was
 appended.
 
-A package can run a test runner of its own, as `packages/identity` does, and
+A package can run a test runner of its own, as `base/identity` does, and
 appended arguments reach whatever that runner does with them, which its own
 source says.
 
@@ -148,20 +164,19 @@ written as its full describe chain:
 
 ```json
 {
-  "packages/patterns/integration/cf-render.test.ts": [
+  "patterns/integration/cf-render.test.ts": [
     "cf-render integration test > should load the nested counter piece and verify initial state"
   ]
 }
 ```
 
 Reading that file is the registration preload's job, and `tasks/integration.ts`
-hands `deno test` that preload only for a run that writes a JUnit report. So
-the run needs `--junit-dir` as well. The name after the package selects test
-files rather than tests:
+hands `deno test` that preload on every run. The name after the package selects
+test files rather than tests:
 
 ```bash
 HEADLESS=1 CF_TEST_SKIP_LIST=/tmp/skip.json \
-  deno task integration --junit-dir=/tmp/junit patterns cf-render
+  deno task integration patterns cf-render
 ```
 
 A name in the list that is the title of a file's outermost `describe()`,
@@ -284,7 +299,7 @@ choose:
   one alone. A pattern test states its expectations as a sequence, each one
   about the state the step before it left, so their order is the test rather
   than an accident of it.
-- The CLI's shell harnesses under `packages/cli/integration/` run in a fixed
+- The CLI's shell harnesses under `runtime/cli/integration/` run in a fixed
   order for that same reason: each is one scenario driven end to end.
 - `deno task integration pattern-tests` runs each `.test.tsx` file in a
   `cf test` process of its own, five at a time. Each process has its own
@@ -314,7 +329,7 @@ the checkout, prints the seed on standard output and the line naming it on
 standard error. `deno task check-test-shuffle` fails when a command that
 starts a test runner does not carry a seed, and lists the runners this
 repository owns along with the ones whose order is the test.
-`packages/test-support/src/shuffle.ts` holds the seed and the permutation.
+`base/test-support/src/shuffle.ts` holds the seed and the permutation.
 `tasks/test-topology.test.ts` fails on a `deno test` that a manifest, a
 workflow, or a shell script writes without `--no-check`; a lane passes the flag
 to every `deno test` it builds whatever the task says.
@@ -376,7 +391,7 @@ the test result.
 ### Starting Chrome without the launcher
 
 Astral's `launch()` and the integration browser launcher in
-`packages/integration/browser-process.ts` both build Chrome's arguments with
+`runtime/integration/browser-process.ts` both build Chrome's arguments with
 Astral's `generateBinArgs`. Those arguments include `--use-mock-keychain`, which
 makes Chrome on macOS use an in-memory keychain in place of the login keychain,
 and `--password-store=basic`, which makes Chrome on Linux keep its secrets in
@@ -395,7 +410,7 @@ keychain password.
 ### Browser process cleanup
 
 The integration browser launcher uses the installed Chrome selected by
-`packages/integration/astral-adapter.ts`; `ASTRAL_BIN_PATH` overrides that
+`runtime/integration/astral-adapter.ts`; `ASTRAL_BIN_PATH` overrides that
 selection. Chrome launches include `--disable-updater-scheduler` so an
 ephemeral test profile cannot start maintenance of the installed browser.
 Detached updater crash handlers can inherit Chrome's stderr and keep it open
@@ -440,12 +455,12 @@ file share a browser with the tests in the others, so a file that only passes
 after some particular sibling has run is relying on something no longer written
 down anywhere. Each file has to stand on its own.
 
-A package whose tests all need a browser, `packages/identity` among them, hands
+A package whose tests all need a browser, `base/identity` among them, hands
 its whole test directory to `deno-web-test` and has no such split to get wrong.
 
 Name a test that way whenever it needs a browser, including when its subject is
 not a component.
-`packages/ui/src/v2/components/cf-svg/sanitize-svg.browser.test.ts` needs a
+`runtime/ui/src/v2/components/cf-svg/sanitize-svg.browser.test.ts` needs a
 browser for `DOMParser` and for nothing else. Under any other name the glob
 does not reach it and the plain `deno test` pass collects it instead.
 
@@ -458,7 +473,7 @@ A `KeyboardEvent` a test dispatches is untrusted: listeners see it, but the
 browser takes no default action, so it moves no focus and checks no checkbox.
 A test of Tab order, or of what a key does by default, presses the key through
 `pressKey` from `@commonfabric/deno-web-test/commands`, which
-[the deno-web-test README](../../packages/deno-web-test/README.md#pressing-keys)
+[the deno-web-test README](../../runtime/deno-web-test/README.md#pressing-keys)
 describes.
 
 Use this route for a narrow browser boundary such as event propagation or
@@ -487,7 +502,7 @@ uses the separate relay-connected shell on port 5263 started below. Run this
 relay in another terminal from the repository root:
 
 ```bash
-deno run -A packages/patterns/integration/storage-network-gate-server.ts http://127.0.0.1:8089 58848 58849
+deno run -A patterns/integration/storage-network-gate-server.ts http://127.0.0.1:8089 58848 58849
 ```
 
 The relay accepts a loopback API URL, a relay port, and a control port. It binds
@@ -496,13 +511,13 @@ includes every connected reader. Use free ports and substitute them consistently
 Start a separate shell against the relay in another terminal:
 
 ```bash
-TOOLSHED_PORT=58848 SHELL_PORT=5263 EXPERIMENTAL_SERVER_EXECUTION=false deno task --cwd packages/shell dev-local
+TOOLSHED_PORT=58848 SHELL_PORT=5263 EXPERIMENTAL_SERVER_EXECUTION=false deno task --cwd runtime/shell dev-local
 ```
 
 After the shell reports that it is listening, run the browser test:
 
 ```bash
-API_URL=http://127.0.0.1:8089 FRONTEND_URL=http://127.0.0.1:5263/ EXPERIMENTAL_SERVER_EXECUTION=false CF_ROW_RECONNECT_CONTROL_URL=http://127.0.0.1:58849/ CF_ROW_REPRO_ARTIFACT_DIR=/tmp/row-reconnect deno test --no-check -A packages/patterns/integration/reactive-vote-rows-browser.test.ts
+API_URL=http://127.0.0.1:8089 FRONTEND_URL=http://127.0.0.1:5263/ EXPERIMENTAL_SERVER_EXECUTION=false CF_ROW_RECONNECT_CONTROL_URL=http://127.0.0.1:58849/ CF_ROW_REPRO_ARTIFACT_DIR=/tmp/row-reconnect deno test --no-check -A patterns/integration/reactive-vote-rows-browser.test.ts
 ```
 
 Each outage asserts that the relay closed live socket endpoints before the
@@ -522,20 +537,29 @@ current value. CI keeps stable `default` and
 `opposite` roles; `tasks/server-execution-ci.ts` derives their actual ON/OFF
 posture from the first-party default constant. The opposite toolshed binary is
 built with an explicit inverse so its browser shell, server, and test processes
-stay aligned. [EXPERIMENTAL_OPTIONS.md](EXPERIMENTAL_OPTIONS.md#serverexecution)
-covers the flag itself.
+stay aligned. Whichever role resolves ON also runs with
+`EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true` on its Toolshed servers, its
+baked shell, and the test processes of its package-integration and
+pattern-integration suites, so the ON arm's browsers receive only what their
+views need, and its posture probe checks that the toolshed publishes it.
+[EXPERIMENTAL_OPTIONS.md](EXPERIMENTAL_OPTIONS.md#serverexecution) covers the
+flag itself.
 
 Running an explicit posture locally means putting the flag on every process the
 test spans, not only the one `deno test` starts. A pattern integration test
 drives a runtime in the test process and commits through a toolshed, and the
 per-class commit admission rows are enforced by the memory server under the
 flag, so a test process on the ON arm talking to a toolshed on the OFF arm is
-on neither arm. Start the servers with it too:
+on neither arm. Start the servers with it too. CI's ON arm also runs with web
+view-scoped replication, so reproducing one of its failures takes that flag on
+the same processes:
 
 ```bash
-EXPERIMENTAL_SERVER_EXECUTION=true ./scripts/start-local-dev.sh
-cd packages/patterns
-EXPERIMENTAL_SERVER_EXECUTION=true API_URL=http://localhost:8000/ \
+EXPERIMENTAL_SERVER_EXECUTION=true EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true \
+  ./scripts/start-local-dev.sh
+cd patterns
+EXPERIMENTAL_SERVER_EXECUTION=true EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true \
+  API_URL=http://localhost:8000/ \
   deno test --no-check -A ./integration/<name>.test.ts
 ```
 
@@ -549,8 +573,10 @@ curl -fsS http://localhost:8000/api/health/stats | jq -e '.servingLoop != null'
 `servingLoop` is null on the OFF arm and an object on the ON arm. A lane makes
 this check against every Toolshed server its capabilities start, through
 `verifyServerExecutionPosture()` in `tasks/server-execution-ci.ts`. That
-function also checks the shell half, the define baked into the shell, which
-`/api/meta` reports as `shellServerExecutionDefine`.
+function also checks the shell half of server execution, the define baked into
+the shell, which `/api/meta` reports as `shellServerExecutionDefine`. The web
+view-scoped define the ON arm's shell bakes is not reported; the bake table in
+`cachedBinaries()` sets it, and the binary cache key covers that table.
 
 The toolshed log records the same thing, but it accumulates NUL bytes, so
 `grep` can decide it is binary and print nothing rather than the line that is
@@ -636,7 +662,7 @@ console error marked `[served]`, under `allowConsoleErrors`. A logger warning
 it logs is listed under the file as a serving-loop warning and fails nothing,
 since the loop warns about work it goes on to recover from, a dropped wave
 contribution among them. A performance diagnostic, a warning
-`packages/cli/lib/perf-diagnostic-logs.ts` names, is left out of that list as
+`runtime/cli/lib/perf-diagnostic-logs.ts` names, is left out of that list as
 it is left out of the test's own warnings. A multi-user run's serving loop runs in the
 orchestrator, where no counts are taken. A served handler runs under the
 serving runtime's CFC posture rather than the test's.
@@ -668,6 +694,33 @@ and `ensureSpaceRoots`, which defaults to `false` here, the switch the serving
 loop keeps for tests. `prepareStorageManager` hands the test each serving
 runtime's storage manager before the runtime is built, which is where a stub on
 one of its providers goes.
+
+Either shape runs its loop in a Worker of the test's process when
+`SERVER_EXECUTION_WORKER` is `true` in the environment, as a toolshed does under
+that variable
+([`EXPERIMENTAL_OPTIONS.md`](EXPERIMENTAL_OPTIONS.md#server_execution_worker)),
+unless its `worker` option says otherwise, over a store in a temporary
+directory, since a worker cannot open a non-persistent one. `serving.host` is
+then the loop's handle, with `stats()` and `close()`, and its `host` is
+`undefined`; on this thread `serving.host.host` is the `ExecutorHost`. Either
+way `serving.host.diagnostics()` returns the logger counts and timing statistics
+of the realm the loop runs in, which is where a test reads a refusal the serving
+loop's own CFC gate logged, since the test process's loggers do not reach a
+worker. A worker takes no closure, so a test that passes
+`prepareStorageManager`, `fetch`, `moduleByteCache`, a policy field holding a
+function, a diagnostic hook other than `onActivationSettled` or `onSpaceParked`,
+or verbs built from closures to the host says `worker: false` and runs its loop
+on this thread whatever the environment. A caller that can do without one asks
+`runsInWorker()` where the loop will run and passes it only on this thread, as
+the multi-runtime harness does with the suite's compile byte cache. The store
+read-through is selected the same way: a `policy` that leaves `storeReadThrough`
+unset takes it from `SERVER_EXECUTION_STORE_READ_THROUGH`
+([`EXPERIMENTAL_OPTIONS.md`](EXPERIMENTAL_OPTIONS.md#server_execution_store_read_through)),
+so a lane runs every test that does not decide the posture itself under it, and
+a `policy` that leaves `flushDeadlineMs` or `flushDeadlineMaxMs` unset takes
+`SERVER_EXECUTION_FLUSH_DEADLINE_MS` and
+`SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS` when they are positive decimal
+integers, which is how a benchmark measures a cadence.
 
 The serving loop's work runs in the serving context, which the runner carries
 per async context and `inServingContext()` reports, so a test whose clients
@@ -709,7 +762,7 @@ A test that should follow whichever posture a run resolves, rather than fixing
 one, resolves it as a deployed entry point does — the explicit
 `EXPERIMENTAL_SERVER_EXECUTION`, else `SERVER_EXECUTION_DEFAULT_ENABLED` — and
 starts a serving server for ON and a plain one for OFF. The pattern
-`MultiRuntimeHarness` and `packages/cli/test/agent-connections.serial.test.ts`
+`MultiRuntimeHarness` and `runtime/cli/test/agent-connections.serial.test.ts`
 do this, so each runs on whichever arm the CI role selects. A test over the
 harness whose expectations differ by arm asks `resolveServerExecution()`,
 beside the harness, which arm that is.
@@ -759,7 +812,7 @@ A test launched from a script can read `Deno.execPath()` directly, as
 
 That a task's `deno` is the running one rather than one found on `PATH` is what
 makes the computed form name the right binary, so
-`packages/test-support/src/isolated-deno.test.ts` holds it in place: it runs a
+`base/test-support/src/isolated-deno.test.ts` holds it in place: it runs a
 task with a decoy `deno` as the only entry on the child's `PATH` and fails if the
 decoy is the one that runs.
 
@@ -795,7 +848,7 @@ A test, a test harness, or a runtime transport that starts a Deno web worker
 ends it that way. A termination needs the wait wherever it can be the last thing
 its process does, and under a shuffled order, or in a lane that runs one test
 from a file, any test's termination can be.
-`packages/runtime-client/test/client/transport-web-worker-coverage.test.ts`
+`runtime/runtime-client/test/client/transport-web-worker-coverage.test.ts`
 fails when the runtime worker loses its profile. A Node `worker_threads` worker
 cannot be waited for this way, because Deno releases its locks when it is
 terminated.
@@ -833,7 +886,7 @@ proving nothing, and what rewording a description costs in recorded history.
 
 **Integration test example:**
 
-Integration tests are executable scripts that connect to a real backend and test full workflows. They are located in `packages/runner/integration/` and follow this pattern:
+Integration tests are executable scripts that connect to a real backend and test full workflows. They are located in `runtime/runner/integration/` and follow this pattern:
 
 ```typescript
 // Shown for illustration only.
@@ -880,21 +933,21 @@ Deno.exit(0);
 
 **Adding integration tests:**
 
-When adding runtime features, consider adding integration tests to `packages/runner/integration/` that verify the feature works end-to-end. See existing tests like `basic-persistence.test.ts` or `array_push.test.ts` for examples.
+When adding runtime features, consider adding integration tests to `runtime/runner/integration/` that verify the feature works end-to-end. See existing tests like `basic-persistence.test.ts` or `array_push.test.ts` for examples.
 
 ### Diagnostics a test must not fail on
 
 Some of the runtime's warnings report wall time rather than behavior: the
-slow-traversal report in `packages/runner/src/traverse.ts`, above 100ms, and
-the slow-`Cell.get` report in `packages/runner/src/cell.ts`, above 50ms. A busy
+slow-traversal report in `runtime/runner/src/traverse.ts`, above 100ms, and
+the slow-`Cell.get` report in `runtime/runner/src/cell.ts`, above 50ms. A busy
 machine crosses those thresholds and an idle one does not, so a test that
 counted such a warning would pass or fail on how loaded the machine was.
 
-`packages/cli/lib/perf-diagnostic-logs.ts` holds the one list of them, by
+`runtime/cli/lib/perf-diagnostic-logs.ts` holds the one list of them, by
 logger name and key prefix, and both places that hold a run's warnings to
 account read it: the pattern test runner, which fails a test on a logger
 warning the pattern did not allow, and the stderr budget the CLI tests assert
-in `packages/cli/test/utils.ts`. A new timing-triggered warning belongs on that
+in `runtime/cli/test/utils.ts`. A new timing-triggered warning belongs on that
 list. A warning about behavior does not, and must keep failing tests.
 
 The budget drops records rather than lines. A logger hands the console the
@@ -995,7 +1048,7 @@ The call names the file, and that is the declaration every test path reads:
 test behaves the way it does deployed without the test restating anything. The
 path resolves against the module that reads it, so `./data/cities.json` is the
 file beside the pattern under whichever root the test's own runner assembles
-the program with — a test lane rooted at `packages/patterns` and a gate rooted
+the program with — a test lane rooted at `patterns` and a gate rooted
 at the repository reach the same file. A file the source cannot name — one read
 by a computed path — is added where the test builds the program: `cf test`
 takes repeatable `--datafile` paths, a `generated-patterns` scenario names them

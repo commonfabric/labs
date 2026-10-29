@@ -555,21 +555,20 @@ would otherwise be free to disagree — one ignoring, one refusing — over data
 that cloning carries perfectly well and that a peer can send.
 
 **An absent field is not the same as one present holding `undefined`.** Where a
-codec gives a field a default, the default applies to a field that is *absent*;
-a field that is present and not of the type the codec requires is a
-malformation, `undefined` included. The distinction is worth stating because
-this format carries `undefined` directly, so unlike under JSON a peer can send
-one on purpose — and defaulting it would silently answer a question the wire
-did ask.
+codec's state has an optional field, what its absence means applies to a field
+that is *absent*; a field that is present and not of the type the codec
+requires is a malformation, `undefined` included. The distinction is worth
+stating because this format carries `undefined` directly, so unlike under JSON
+a peer can send one on purpose — and reading it as absent would silently answer
+a question the wire did ask.
 
-`RegExp@1` is the codec this reaches. All three of its fields default: `flavor`
-to `es2025`, and `source` and `flags` to the empty string, so `{}` decodes to
-an empty `es2025` pattern. That is what lets a narrower encoder omit what it
-has nothing to say about. `{ source: undefined }` is refused, being a `source`
-that is present and not a string.
-
-`Unavailable@1` has the same distinction on its two optional fields. An absent
+`Unavailable@1` is the codec this reaches, on its two optional fields. An absent
 `errorKind` is the state of a transient reason and an absent `errorMessage`
 that of an error with no stored message; `{ reason: "error", errorKind:
 undefined }` and `{ reason: "error", errorKind: "sync", errorMessage:
 undefined }` are refused, each being a field that is present and not a string.
+
+`RegExp@1` has no optional field. `source`, `flags` and `flavor` are all
+required, as they are under JSON (`3-json-encoding.md` Section 3), and there is
+no default flavor, so `{}`, `{ source: "a", flags: "g" }` and
+`{ source: undefined, flags: "g", flavor: "es2025" }` are all refused.

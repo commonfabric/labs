@@ -30,8 +30,8 @@ extends beyond the generated wrapper.
 
 Keep the authored surface small:
 
-- Put the files under `packages/patterns/iframe-<name>/`. The `iframe-` prefix
-  is load-bearing: pattern discovery uses it to recognize `guest.ts` and
+- Put the files under `patterns/iframe-<name>/`. The `iframe-` prefix is
+  load-bearing: pattern discovery uses it to recognize `guest.ts` and
   `guest.tsx` as browser sources rather than additional pattern entries.
 - `contract.ts` names the input, durable state, and output data shapes and their
   defaults.
@@ -52,25 +52,25 @@ Keep the authored surface small:
 Generate the wrapper with:
 
 ```bash
-deno run -A tools/write-iframe-wrapper.ts \
-  --contract packages/patterns/iframe-<name>/contract.ts \
-  --guest packages/patterns/iframe-<name>/guest.ts \
-  --out packages/patterns/iframe-<name>/main.tsx
+deno run -A scripts/write-iframe-wrapper.ts \
+  --contract patterns/iframe-<name>/contract.ts \
+  --guest patterns/iframe-<name>/guest.ts \
+  --out patterns/iframe-<name>/main.tsx
 ```
 
 Add `--react` when the authored guest is React TSX, as required by the React
 guide. For a contract that declares `streams`, the output is `frame.tsx`.
 
-Add `--html packages/patterns/iframe-<name>/guest.html` when the guest needs a
-custom document shell, and `--force` only when regenerating the named output.
-The HTML shell must contain `<!-- PATTERN_IFRAME_SCRIPT -->` exactly once.
+Add `--html patterns/iframe-<name>/guest.html` when the guest needs a custom
+document shell, and `--force` only when regenerating the named output. The HTML
+shell must contain `<!-- PATTERN_IFRAME_SCRIPT -->` exactly once.
 
 Validate the generated pattern with:
 
 ```bash
-deno fmt packages/patterns/iframe-<name>
-deno check packages/patterns/iframe-<name>/<guest-file>
-deno task cf check packages/patterns/iframe-<name>/main.tsx --no-run
+deno fmt patterns/iframe-<name>
+deno check patterns/iframe-<name>/<guest-file>
+deno task cf check patterns/iframe-<name>/main.tsx --no-run
 ```
 
 Replace `<guest-file>` with the authored `guest.ts` or `guest.tsx` filename.

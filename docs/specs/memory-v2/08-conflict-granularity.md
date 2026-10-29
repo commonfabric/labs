@@ -129,7 +129,7 @@ it is guarded two ways:
   refused where its last segment is written as an index and the path above
   that segment holds an array in either document, and an op at a key of a
   plain object passes however the key is written; and
-- a generator test (`packages/runner/test/memory-v2-native-commit.test.ts`,
+- a generator test (`runtime/runner/test/memory-v2-native-commit.test.ts`,
   "v2 patch generator never emits indexed-array add/remove/move") drives every
   array idiom through real cell writes and asserts the emitted ops.
 
@@ -191,7 +191,7 @@ create happened is value-dependent, so the static op tag cannot express it. The
 writer records it instead: the mergeable-op build stamps the wire op's
 `createsKey` flag when its transaction base held no value at the path (see
 `runner storage/mergeable-ops.ts` and the `createsKey` field in
-`packages/memory/v2.ts`), and `patchOpChangesParentKeySet` injects the parent for
+`runtime/memory/v2.ts`), and `patchOpChangesParentKeySet` injects the parent for
 a flagged op. So a cross-session shape-only reader of the parent now conflicts
 with a create-from-absent mergeable op, but not with an append to an
 already-present child.

@@ -31,12 +31,17 @@ interface ChatRoomPolicy {
 
   /** The most message windows a session can have open. */
   maxOpenWindows: number;
+
+  /** The most attachments a message may have; absent for 10. */
+  maxAttachments?: number;
 }
 ```
 
-A plain object, with every key present. A room enforces `ownersMayObliterate`
-and `deletionIsObliteration`, and holds `maxWindowCount` of its newest
-messages in `messages.latest`; it states `keepsHistory`,
+A plain object, with every key present but `maxAttachments`, which a policy
+stated before rooms took attachments doesn't hold, and which then means 10. A
+room enforces `ownersMayObliterate`, `deletionIsObliteration` and
+`maxAttachments`, and holds `maxWindowCount` of its newest messages in
+`messages.latest`; it states `keepsHistory`,
 `proposedTimeMaxAgeNsec`, `proposedTimeMaxLeadNsec`,
 `recentActivityWindowNsec`, and `maxOpenWindows` for the policy's shape, and
 reads none of them. Each duration is a
@@ -85,6 +90,10 @@ The policy document is labeled `authored-by` the principal who wrote it (see
   [`ChatMessageList`](ChatMessageList.md#fields)).
 - **`maxOpenWindows`**: stated and read by nothing. A room offers no message
   windows.
+- **`maxAttachments`**: the most attachments a message may have (see
+  [`ChatMessage`](ChatMessage.md#fields)); a send attaching more is refused.
+  Absent, it is 10, so a policy that doesn't state it is still stated
+  correctly for a room that allows 10.
 
 ## When it changes
 

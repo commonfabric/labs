@@ -45,8 +45,10 @@
 import { exists } from "@std/fs";
 import * as path from "@std/path";
 import {
+  ALIAS_DIRECTORY,
   enclosingNames,
   FragmentWriter,
+  loadAliasResolver,
   NAME_SEPARATOR,
   readRegistrations,
   readWholeRuns,
@@ -119,11 +121,12 @@ import {
   measuredSetName,
   measuredSets,
 } from "./test-topology/coverage-gates.ts";
-import type {
-  Manifest,
-  ManifestEntry,
-  UnschedulableEntry,
-  WithheldReason,
+import {
+  type Manifest,
+  type ManifestEntry,
+  manifestUnderAliases,
+  type UnschedulableEntry,
+  type WithheldReason,
 } from "./test-selection/manifest.ts";
 import {
   DISCRETIONARY_SECONDS,
@@ -133,7 +136,20 @@ import {
   RERUN_BUDGET_SECONDS,
   RERUN_EXECUTIONS,
 } from "./test-selection/policy.ts";
-import { say } from "./step-summary.ts";
+import { appendSummary, say } from "./step-summary.ts";
+import {
+  errorExcerpt,
+  type FailedCommand,
+  passed,
+  printSummary,
+  type RunSummary,
+  summaryLines,
+  type TestResult,
+  testTitle,
+  unitRerun,
+} from "./test-summary.ts";
+import { ALL_PACKAGES, integrationRerun } from "./integration.ts";
+import { getPackageName, readWorkspaceMembers } from "./workspace-tests.ts";
 import { outcomesOf, verdictOf } from "./test-selection/report.ts";
 import { duration } from "./test-selection/duration.ts";
 import { writeLcovReport } from "./write-coverage-lcov.ts";
@@ -1139,8 +1155,11 @@ export async function runBatch(
   seconds: number;
   unexplained: number;
   executions: Execution[];
+  failures: Map<TestRecord, string>;
 }> {
   const records: TestRecord[] = [];
+  // The message each failing record's report gave it.
+  const failures = new Map<TestRecord, string>();
   const conflicts: TestRecord[] = [];
   // What each pass recorded, kept apart from the other passes. Whether a
   // pass ran what it was asked to is a statement about that pass, and a
@@ -1274,6 +1293,9 @@ export async function runBatch(
         records.push(record);
       }
       for (const conflict of collected.conflicts) conflicts.push(conflict);
+      for (const [record, message] of collected.failures) {
+        failures.set(record, message);
+      }
       for (const [file, names] of await readRegistrations(batchSpool)) {
         register(file, names);
       }
@@ -1385,6 +1407,7 @@ export async function runBatch(
     seconds,
     unexplained,
     executions,
+    failures,
   };
 }
 
@@ -1409,8 +1432,7 @@ export interface Accounting {
    * Identities a pass was asked to run that the tree holds no test for,
    * as the names that pass's test processes registered show, and that no
    * pass left unaccounted for. A manifest carries one for a test renamed
-   * since it was published, and for a test only a branch ever ran, in a
-   * file the tree still holds.
+   * since it was published, in a file the tree still holds.
    * An invocation that stopped cannot have left one of these unrecorded,
    * since there was nothing to record, so an excusal stands beside them.
    */
@@ -1462,9 +1484,9 @@ export interface Missed {
  * An identity that went unaccounted for while its unit recorded costs an
  * excusal rather than the run, unless what the pass registered shows the
  * tree holds no such test. A manifest is hours old by construction, and it
- * holds every identity any run recorded in a file the tree still holds, so
- * it names tests renamed since and tests that only a branch ever ran. No run
- * of this tree can record one of those, and its missing record says
+ * holds every identity the default branch recorded in a file the tree
+ * still holds, so it names tests renamed since. No run of this tree can
+ * record one of those, and its missing record says
  * nothing about whether an invocation stopped, so it is set apart as
  * absent and an excusal stands beside it. Where the pass's registrations
  * say nothing about a unit, as for a suite whose processes leave no name
@@ -1621,8 +1643,7 @@ export function describeAccounting(
   // one, and this is where its author sees that it needs one.
   section(
     `${suite}: ${accounting.absent.length} identities the tree holds no ` +
-      `test for, which a rename since the manifest, or a test only a ` +
-      `branch ran, would explain:`,
+      `test for, which a rename since the manifest would explain:`,
     accounting.absent,
   );
   section(
@@ -2186,7 +2207,18 @@ export async function resolveManifest(
   options: Pick<LaneOptions, "at" | "root">,
   deps: Pick<LaneDeps, "manifest">,
 ): Promise<ManifestFetch> {
-  return await deps.manifest({ at: manifestMoment(options) });
+  const fetched = await deps.manifest({ at: manifestMoment(options) });
+  if (fetched.manifest === undefined) return fetched;
+  // The checkout's alias lines are part of the tree the plan is a function
+  // of: a manifest published before a line landed names what it renames by
+  // the old name.
+  const resolver = await loadAliasResolver(
+    path.join(options.root, ALIAS_DIRECTORY),
+  );
+  return {
+    ...fetched,
+    manifest: manifestUnderAliases(fetched.manifest, resolver),
+  };
 }
 
 /** The manifest this commit belongs to, and what the change touched. */
@@ -2762,6 +2794,13 @@ export async function runLane(
   // runs again once every batch has run.
   const reruns: Rerun[] = [];
   let rerun: Reruns | undefined;
+  // What the lane's closing summary says: every test its batches reported,
+  // by identity, and what failed with no failing test to say why.
+  const tests = new Map<string, TestResult>();
+  const annotated = new Set<string>();
+  let members: Map<string, string> | undefined;
+  const commands: FailedCommand[] = [];
+  const notes: string[] = [];
   try {
     for (const batch of batches) {
       // Two capabilities may export the same name and mean different
@@ -2800,6 +2839,53 @@ export async function runLane(
       // satisfying any weaker test.
       const excusing = accounting.unaccounted.length === 0;
       describeAccounting(batch.suite.id, accounting, excusing);
+      addLaneResults(
+        tests,
+        result.records,
+        result.failures,
+        new Set([
+          ...accounting.gating,
+          ...(excusing ? [] : accounting.excused),
+        ]),
+      );
+      const failing = [...tests.values()].filter(({ record }) =>
+        record.outcome === "fail"
+      );
+      if (
+        members === undefined &&
+        failing.some(({ record }) => record.test.k === "unit")
+      ) {
+        try {
+          members = new Map(
+            (await readWorkspaceMembers(path.join(options.root, "deno.jsonc")))
+              .map((member) => [getPackageName(member), member]),
+          );
+        } catch (error) {
+          members = new Map();
+          console.warn(
+            "ci-lane: could not look up unit-test rerun commands:",
+            error,
+          );
+        }
+      }
+      for (const test of failing) {
+        const rerun = laneRerun(test.record, members ?? new Map());
+        if (rerun !== undefined) test.rerun = rerun;
+      }
+      annotateLaneFailures(failing, annotated);
+      for (const { name } of accounting.silent) {
+        commands.push({
+          label: `${batch.suite.id} ${name}`,
+          reason: "ran no test",
+        });
+      }
+      if (result.unexplained > 0) {
+        commands.push({
+          label: batch.suite.id,
+          reason: `${result.unexplained} command(s) failed having recorded ` +
+            "no failing test",
+        });
+      }
       if (
         accounting.gating.length > 0 || accounting.silent.length > 0 ||
         result.unexplained > 0 ||
@@ -2820,6 +2906,7 @@ export async function runLane(
     }
     if (stop.signal !== undefined) {
       ok = false;
+      notes.push(`Stopped by ${stop.signal} before finishing its plan.`);
       console.log(
         `ci-lane: stopped by ${stop.signal} before finishing its plan; ` +
           `it passes the signal on to whatever test command is running ` +
@@ -2883,7 +2970,10 @@ export async function runLane(
   const converted = stop.signal === undefined
     ? await convertCoverage(options)
     : { ok: true, reports: [] };
-  if (!converted.ok) ok = false;
+  if (!converted.ok) {
+    ok = false;
+    notes.push("Converting a coverage profile lost a tracked file.");
+  }
   // A signal can arrive while the conversion runs, and a lane told to stop
   // has failed whenever it was told.
   if (stop.signal !== undefined) ok = false;
@@ -2923,7 +3013,125 @@ export async function runLane(
     ]);
   }
   describeCoverage(coverage, converted.reports, marked);
+  const summary: RunSummary = {
+    tests: [...tests.values()],
+    commands,
+    notes,
+    logs: "the output above" +
+      (!ok && temp !== undefined
+        ? `, and ${workDir}, which the job uploads as its lane-failure artifact`
+        : ""),
+    seconds: (performance.now() - startedAt) / 1000,
+  };
+  if (!ok && passed(summary)) {
+    notes.push("The lane failed for a reason the output above gives.");
+  }
+  reportLane(summary, Deno.env.get, annotated);
   return ok;
+}
+
+/**
+ * A command that runs a test a lane ran again on a developer's machine,
+ * where its kind of test has one. `members` maps the scope of a unit test
+ * to the directory of the workspace member it belongs to.
+ */
+export function laneRerun(
+  record: TestRecord,
+  members: ReadonlyMap<string, string>,
+): string | undefined {
+  const { k, s, n } = record.test;
+  const member = members.get(s);
+  if (k === "unit" && member !== undefined) return unitRerun(member, n);
+  if (k === "pattern") return integrationRerun("pattern-tests", n);
+  if (k === "integration" && ALL_PACKAGES.includes(s)) {
+    return integrationRerun(s, record.file);
+  }
+  return undefined;
+}
+
+/**
+ * Adds a batch's records to `tests`, by identity. A failure whose identity
+ * is in `failing`, which is what the lane fails for, takes the place of
+ * any other outcome of the same test, with the first message any of its
+ * failing records carries. Any other failure was excused and does not
+ * fail the lane, so it is left out.
+ */
+export function addLaneResults(
+  tests: Map<string, TestResult>,
+  records: readonly TestRecord[],
+  failures: ReadonlyMap<TestRecord, string>,
+  failing: ReadonlySet<string>,
+): void {
+  for (const record of records) {
+    const key = testIdentityKey(record.test);
+    const known = tests.get(key);
+    if (record.outcome !== "fail") {
+      if (known === undefined) tests.set(key, { record });
+      continue;
+    }
+    if (!failing.has(key)) continue;
+    const kept = known?.record.outcome === "fail" ? known : { record };
+    const message = kept.message ?? failures.get(record);
+    if (message !== undefined) kept.message = message;
+    tests.set(key, kept);
+  }
+}
+
+/** How many failing tests a lane raises an error annotation for. */
+export const ANNOTATED_FAILURES = 10;
+
+/**
+ * Raises GitHub Actions annotations for failing identities not in `annotated`,
+ * up to the lane's limit. The same set spans batches and the closing summary.
+ */
+export function annotateLaneFailures(
+  tests: readonly TestResult[],
+  annotated: Set<string>,
+  env: (name: string) => string | undefined = Deno.env.get,
+): void {
+  if (env("GITHUB_ACTIONS") !== "true") return;
+  for (const test of tests) {
+    if (annotated.size >= ANNOTATED_FAILURES) break;
+    if (test.record.outcome !== "fail") continue;
+    const key = testIdentityKey(test.record.test);
+    if (annotated.has(key)) continue;
+    console.log(errorAnnotation(test));
+    annotated.add(key);
+  }
+}
+
+/**
+ * Ends a lane's output with its summary and adds the summary to the job's
+ * step summary. Inside GitHub Actions it annotates failures the batches have
+ * not already annotated, within the lane's limit.
+ */
+export function reportLane(
+  summary: RunSummary,
+  env: (name: string) => string | undefined = Deno.env.get,
+  annotated: Set<string> = new Set(),
+): void {
+  printSummary(summary);
+  appendSummary(["```text", ...summaryLines(summary), "```", ""].join("\n"));
+  annotateLaneFailures(summary.tests, annotated, env);
+}
+
+/** The workflow command that raises an error annotation for a failing test. */
+export function errorAnnotation(test: TestResult): string {
+  const { file } = test.record;
+  const data = (text: string) =>
+    text.replaceAll("%", "%25").replaceAll("\r", "%0D")
+      .replaceAll("\n", "%0A");
+  const property = (text: string) =>
+    data(text).replaceAll(":", "%3A").replaceAll(",", "%2C");
+  const properties = [
+    ...(file === undefined ? [] : [`file=${property(file)}`]),
+    `title=${property(testTitle(test.record))}`,
+  ];
+  const message = [
+    ...(test.rerun === undefined ? [] : [`rerun: ${test.rerun}`]),
+    ...errorExcerpt(test.message ?? "failed"),
+  ];
+  return `::error ${properties.join(",")}::${data(message.join("\n"))}`;
 }
 
 /**

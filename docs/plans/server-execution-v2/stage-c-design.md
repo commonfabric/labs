@@ -2157,7 +2157,7 @@ register OW38 (i)):
   the authored event commit's ADMISSION on the server (the feed's
   admitted-commit notice for the client's append; the append's seq) to
   W COVERING it (the wave commit whose `derivedThrough` ≥ that seq —
-  `waitForSettled(space, seq)`, `packages/runner/src/executor/
+  `waitForSettled(space, seq)`, `runtime/runner/src/executor/
   watermark.ts`, is the instrument; server-side timestamps in a
   bounded per-space series exposed through the §7 block, alongside the
   existing per-wave `scheduler/execute/settle` timing). **Sub-second at

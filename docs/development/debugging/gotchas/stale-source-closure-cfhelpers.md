@@ -16,7 +16,7 @@ violation surfaces only when the compiled cache misses: the compile-cache tag
 is a fingerprint of compiler inputs, so any compiler iteration rotates it, and
 the cold-load path recompiles the stored source. The transformer's
 anti-double-injection guard (`checkCFHelperVar` in
-`packages/ts-transformers/src/core/cf-helpers.ts`) then rejects the already-
+`base/ts-transformers/src/core/cf-helpers.ts`) then rejects the already-
 injected source.
 
 Content-hash verification does not catch this: it proves *integrity* (the

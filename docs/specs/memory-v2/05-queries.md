@@ -96,7 +96,7 @@ Starting from a set of root entities, the server follows references embedded in
 entity values, guided by a schema that constrains which paths to explore and
 which linked entities to include.
 
-The traversal code in `packages/runner/src/traverse.ts` is **shared between
+The traversal code in `runtime/runner/src/traverse.ts` is **shared between
 client and server**. The client reaches `SchemaObjectTraverser` through
 `schema.ts` for validation and transformation; the server reaches the same
 traverser through `@commonfabric/runner/graph-query`, which drives it over
@@ -311,11 +311,15 @@ nothing else, so a subscription's delivered shape does not depend on the
 order in which documents changed or on which query first reached a
 document. Coverage follows the same rule: a later query naming a document
 an earlier evaluation reached is covered by existing watch state when the
-tracker already covers its selector. A server records each watch it leaves
-unwalked on that ground, since nothing in the tracker is attributable to it.
-Removing such a watch changes nothing. Removing a walked watch rebuilds its
-branch's tracker from the walked watches that remain. The server then walks
-each recorded watch of that branch that the rebuilt tracker no longer covers.
+tracker already covers its selector. A server attributes each tracker record
+to what reached it: a watch root to its watch, a linked document to the
+document holding the link, a schema document to each delivered document whose
+refs reach it, directly or through the schema documents between. A covered
+root or link attributes to the record covering it. A record whose last
+walking referrer lets go retires, and the referrers it covered are walked on
+their own. Removing a watch releases its roots, and a write re-walks the
+changed document and releases what the re-walk does not reach again. Either
+way the documents nothing reaches any more leave the result.
 
 Content-addressed schema documents ride the same mechanism
 (`docs/specs/content-addressed-schemas.md`): a link or selector schema
@@ -467,7 +471,7 @@ with `prefixItems` omitted when the merged prefix is empty.
 
 Neither operation is a complete JSON Schema intersection, and neither resolves
 `$ref` values. See `combineSchemaForLink`, `combineSchema`, and `narrowSchema`
-in `packages/runner/src/traverse.ts` for the implementation.
+in `runtime/runner/src/traverse.ts` for the implementation.
 
 ### 5.3.5 Schema Tracker
 
@@ -508,7 +512,7 @@ Given a `SchemaQuery`, the server:
 5. Returns the `FactSet` along with the schema tracker (for watch setup).
 
 The initial execution and every later schema-watch refresh MUST use the same
-traversal semantics as `packages/runner/src/traverse.ts`. The server MAY cache
+traversal semantics as `runtime/runner/src/traverse.ts`. The server MAY cache
 bookkeeping such as reachable-entity sets or dirty roots, but the result sent to
 clients must be equivalent to rerunning `graph.query` with the shared traversal
 code against the current committed state.

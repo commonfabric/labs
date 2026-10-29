@@ -49,7 +49,7 @@ return {
 };
 ```
 
-This mirrors what `packages/patterns/scrabble/scrabble.tsx` does for its
+This mirrors what `patterns/showcase/scrabble/scrabble.tsx` does for its
 `players`, `board`, `bag` etc.
 
 ## 3. Don't `.get()` a per-scope cell from JSX `onClick`
@@ -93,7 +93,7 @@ const joinAs = handler<{ name?: string }, { joinName: NameCell; ... }>(
 reports ``Expected true, got `undefined` ``.
 
 Reactive output reads can resolve to `undefined` before defaults hydrate.
-Scrabble's tests (`packages/patterns/scrabble/scrabble.test.tsx`) sidestep this
+Scrabble's tests (`patterns/showcase/scrabble/scrabble.test.tsx`) sidestep this
 by always running an action before the first assertion. Follow the same
 pattern: structure the test as a sequence of `{ action }, { assertion }` pairs
 and skip the pre-action sanity check.
@@ -137,7 +137,7 @@ hydrated yet at the moment the computed first runs, so the `?? []` guard is stil
 required (this is why pitfall #4's "run an action first" trick works for tests
 but render code can't). Handlers/actions run in a settled context, so the same
 chained reads there are usually safe; the danger is the always-evaluating render
-computeds. Fixed across `packages/patterns/factory-outputs/parking-coordinator/main.tsx`.
+computeds. Fixed across `patterns/dev/factory-outputs/parking-coordinator/main.tsx`.
 
 ⚠️ **Don't take this `?? []` recipe into a NESTED `.map()`.** Inside an outer
 `rows.map((row) => …)`, an inner `(cellCall() ?? []).map((el) => …)` whose
@@ -180,15 +180,15 @@ registerProfile(sharedProfiles, profile);
 Rule of thumb: scope controls _who reads which instance_, not _who owns the
 data_. Anything that must be visible to other users belongs in a space-scoped
 cell; use `PerUser` for the pointer, not the shared record. Fixed in
-`packages/patterns/cfc-group-chat-demo/trusted.tsx`; guarded by the
+`patterns/examples/cfc-group-chat-demo/trusted.tsx`; guarded by the
 multi-runtime test
-`packages/patterns/integration/cfc-group-chat-demo-multi-runtime.test.ts`.
+`patterns/integration/cfc-group-chat-demo-multi-runtime.test.ts`.
 
 The runtime now **warns loudly at the write site** instead of leaving this a
 fully silent hole for other readers: storing a narrower-scoped link in a
 broader-scoped slot logs `Storing a <scope>-scoped link in <scope>-scoped
 data …` (`data-updating.ts`, scope-isolation write guard; unit pins in
-`packages/runner/test/data-updating.test.ts`). The warn fires where the
+`runtime/runner/test/data-updating.test.ts`). The warn fires where the
 slot's shape says the author wanted shared data: the slot's schema doesn't
 match `undefined` and has no effective `default`, **and** the parent schema
 lists the slot in `required` (approximating — not proving — that a read
@@ -263,13 +263,13 @@ type Draft = Writable<PerUser<string>>;
 ```
 
 When the slot exists to receive a reference to an existing cell, scope the
-handle. `packages/runner/test/pattern-scope.test.ts` pins these behaviors.
+handle. `runtime/runner/test/pattern-scope.test.ts` pins these behaviors.
 
 ## See Also
 
 - `docs/specs/scoped-cell-instances.md` — the underlying scope model
-- `packages/patterns/scoped-group-chat/` — canonical scope-aware pattern
-- `packages/patterns/scrabble/scrabble.tsx` — name-as-identity idiom
-- `packages/patterns/cozy-poll/` — applies all of the above
-- `packages/patterns/scoped-user-directory/` — verification of the link-pointer
+- `patterns/examples/scoped-group-chat/` — canonical scope-aware pattern
+- `patterns/showcase/scrabble/scrabble.tsx` — name-as-identity idiom
+- `patterns/apps/cozy-poll/` — applies all of the above
+- `patterns/examples/scoped-user-directory/` — verification of the link-pointer
   technique (per-user pointer into a per-space array)

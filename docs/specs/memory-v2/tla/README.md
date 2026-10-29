@@ -75,7 +75,7 @@ Repaired result certifies the rule, not the whole pipeline:
   therefore does NOT exercise is the declared-set scan's VALIDATION role:
   a buggy client omitting a live layer whose write is durably integrated.
   That enforcement is checked by the engine unit tests
-  (`packages/memory/test/v2-sparse-pending-dependencies.test.ts`) and the
+  (`runtime/memory/test/v2-sparse-pending-dependencies.test.ts`) and the
   differential harness's sparse mutation; a `SkipLayers` build choice —
   a violation witness under session-wide exclusion, a pass under the
   declared-set form the model now scans with — is the natural refinement
@@ -168,7 +168,7 @@ or missed contributor directly.
   model therefore under-approximates the matcher and is a sound bug-finder
   for admission logic, but it does NOT check the matcher's own
   refinements — that is the differential harness's job
-  (`packages/memory/test/v2-differential-consistency.test.ts`).
+  (`runtime/memory/test/v2-differential-consistency.test.ts`).
 - **The client's view is a mode.** `ViewMode = "replay"` is the view every
   earlier row certifies: a build observes the confirmed contributors it has
   integrated plus its own pending layers, which is the server's own
@@ -265,7 +265,10 @@ a live session (`SpaceReplica.reset()` on route replacement, `AllowReset`), the
 session can EXPIRE while disconnected (a re-establishing reconnect instead of a
 resume), and the watch union can SHRINK — a lossy `Unwatch` whose removal frame
 the client may fail to absorb, down to the zero-watch union, so a reconnect can
-face a declared holding the union no longer covers (union growth is not
+face a declared holding the union no longer covers. The union is what the
+watches reach, so `Unwatch` stands both for a watch removed and for a refresh
+whose re-walk no longer reaches a document (`04-protocol.md` §4.6.3), whose
+removal frame is lossy the same way (union growth is not
 modeled: a grown union's never-held documents are ordinary deliveries,
 indistinguishable from initial delivery). `Mode` selects the diff base:
 `memory` is the server's own memory on resume and nothing on re-establishment
@@ -296,12 +299,12 @@ TLC:
   confirmed seq the server never sent — the replica in the model advances
   only by absorbed delivery, so a promotion-shaped over-declaration is
   unreachable here. Pinned by
-  `packages/runner/test/memory-v2-reconnect-holdings.test.ts` (an own
+  `runtime/runner/test/memory-v2-reconnect-holdings.test.ts` (an own
   accepted write leaves the declared seq at the delivered frame's).
 - **Branch identity.** Document state is a bare seq, so a same-id document on
   another branch is not representable; the wire type carries `branch` and the
   diff keys by it. Pinned by the cross-branch case in
-  `packages/memory/test/v2-session-holdings.test.ts`.
+  `runtime/memory/test/v2-session-holdings.test.ts`.
 - **The parse.** Malformed holdings fail the message rather than degrade to
   full delivery. Pinned at the wire boundary in the same file, with
   `v2-client-holdings.test.ts` covering which requests carry the declaration
@@ -332,4 +335,4 @@ existing modes in both models — the violated configs are regression witnesses
 (they document *why* the current shape is what it is), not dead code. If TLC
 finds a violation in a mode expected to pass, the trace is the ticket:
 minimal, complete, and replayable against the real engine as a unit test
-(compare `packages/memory/test/v2-engine.test.ts` harness).
+(compare `runtime/memory/test/v2-engine.test.ts` harness).

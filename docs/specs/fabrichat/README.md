@@ -20,9 +20,10 @@ departs from this design.
   - [`ChatMessage`](ChatMessage.md)
   - [`ChatMessageList`](ChatMessageList.md): a room's messages: facts, the
     newest, and its threads.
-  - [`ChatReply`](ChatReply.md): what a reply replies to, and where it's shown.
-  - [`ChatThreadSummary`](ChatThreadSummary.md): a thread's reply count and
-    latest reply time.
+  - [`ChatReply`](ChatReply.md): the thread a message joins, the message it
+    quotes, and where it's shown.
+  - [`ChatThreadSummary`](ChatThreadSummary.md): a thread's title, reply count,
+    latest reply time, and newest messages.
   - [`ChatReaction`](ChatReaction.md)
   - [`ChatRoomAbout`](ChatRoomAbout.md)
   - [`ChatRoomPolicy`](ChatRoomPolicy.md): a room's policy, stated correctly.
@@ -130,7 +131,7 @@ provide, the document says so, under the heading "Prerequisites".
   from either member's side by the other member's principal.
 - **Group room.** Any other room. Two group rooms can have the same members.
 - **Container.** A space that shows chats among other things, such as a space
-  whose root is the `loom` pattern (`packages/patterns/loom/`). A container
+  whose root is the `loom` pattern (`patterns/system/loom/`). A container
   may name its own chat, a room in its space, as the `loom` pattern's root
   does with its `chatRoom` link, and its `ensureChatRoom` creates that room,
   with no panel showing it.
@@ -264,7 +265,7 @@ names the ones it needs, and they are gathered here:
 
 ## Implementation status
 
-The four patterns are in `packages/patterns/fabrichat/`: `room.tsx`,
+The four patterns are in `patterns/system/fabrichat/`: `room.tsx`,
 `manager.tsx`, `placement.tsx`, and `adapter.tsx`, with the contracts' records
 in `schemas.tsx`. The room's stored records and the handlers that write them are
 in `room-records.tsx`, and one message's rendering in `message-row.tsx`. The
@@ -292,7 +293,7 @@ design, as below.
   [`clients.md`](clients.md#the-sanctioned-issuing-path)).
 - **A room keeps its own participants.** A room in a space of its own keeps
   the space's participants through `addParticipant`, the roster's one writer
-  (`packages/patterns/loom/participants.tsx`): the manager that creates or
+  (`patterns/system/loom/participants.tsx`): the manager that creates or
   accepts the room adds its user, from an event that follows. As a stop-gap, a
   member whose manager has done neither is not on the roster, and is shown
   among the participants only once they write, as an author. A room in an
@@ -339,8 +340,9 @@ design, as below.
   click to the viewer's manager's `openDirect` itself, since a reviewed gesture
   does not carry across a `send` from another handler. It names the participant
   by their profile, bound as its control's `name`, which crosses into the
-  click's event as the profile's cell; the manager reads the counterpart from
-  the profile's `represents-principal` label, and offers the room through the
+  click's event as the profile's cell; the manager reads the counterpart as
+  the principal whose own profile it is (`profileOwnerOf()`), and offers the
+  room through the
   share inbox the profile points at. A chip a room rendered before its control
   named a profile names the participant's principal instead, as
   `target.dataset.counterpart`, which the manager still reads.
@@ -365,8 +367,9 @@ design, as below.
   guarantees, so the room keeps no memory of the events it has acted on, and
   a rendered control sends no `requestId`.
 - **Thread summaries.** `messages.threads` is derived in the pass that places
-  each message in the views, which walks each reply chain once for the whole
-  room. So the summaries together cost one walk of the messages rather than one
+  each message in the views, which groups the messages by the thread each one
+  names, once for the whole room. So the summaries together, with each one's
+  newest messages and title, cost one pass over the messages rather than one
   per message, and no stored counter can drift from the threads it counts. A
   change to the messages derives them again, as it does `latest`.
 - **Notices and offers.** A manager's notice id is `[recipient, requestId]` as

@@ -51,24 +51,27 @@ function excuses(file: string): boolean {
 describe("typecheck", () => {
   describe("scopeOfPath()", () => {
     it("returns the workspace member owning a path", () => {
-      expect(scopeOfPath("packages/runner")).toBe("runner");
-      expect(scopeOfPath("packages/cli/lib")).toBe("cli");
-      expect(scopeOfPath("packages/patterns/catalog/ui/controls")).toBe(
+      expect(scopeOfPath("runtime/runner")).toBe("runner");
+      expect(scopeOfPath("runtime/cli/lib")).toBe("cli");
+      expect(scopeOfPath("patterns/dev/catalog/ui/controls")).toBe(
         "patterns",
       );
-      expect(scopeOfPath("packages/connectors/agents/connector")).toBe(
+      expect(scopeOfPath("connectors/agents/connector")).toBe(
         "connectors/agents/connector",
       );
       expect(
-        scopeOfPath("packages/connectors/github/connector/src/client.ts"),
+        scopeOfPath("connectors/github/connector/src/client.ts"),
       ).toBe(
         "connectors/github/connector",
       );
-      expect(scopeOfPath("packages/connectors/github/host/src/host.ts")).toBe(
+      expect(scopeOfPath("connectors/github/host/src/host.ts")).toBe(
         "connectors/github/host",
       );
-      expect(scopeOfPath("packages/connectors/pattern-sources.ts")).toBe(
+      expect(scopeOfPath("connectors/pattern-sources.ts")).toBe(
         "connectors",
+      );
+      expect(scopeOfPath("base/data-model/src/x.ts")).toBe(
+        "data-model",
       );
       expect(scopeOfPath(".claude/scripts")).toBe(".claude");
       expect(scopeOfPath("tasks/typecheck.ts")).toBe("tasks");
@@ -80,11 +83,11 @@ describe("typecheck", () => {
     it("groups every configured path under its scope", async () => {
       const byScope = await collectPathsByScope(REPO_ROOT);
       // Directory entries survive as-is under their member's scope.
-      expect(byScope.get("runner")).toContain("packages/runner");
-      expect(byScope.get("test-support")).toContain("packages/test-support");
+      expect(byScope.get("runner")).toContain("runtime/runner");
+      expect(byScope.get("test-support")).toContain("base/test-support");
       // Glob entries expand to repository-relative files.
       expect(byScope.get("scripts")).toContain("scripts/bundle.ts");
-      expect(byScope.get("ui")).toContain("packages/ui");
+      expect(byScope.get("ui")).toContain("runtime/ui");
       expect(byScope.get("tasks")).toContain("tasks");
       // Every path in every group belongs to the group's scope.
       for (const [scope, paths] of byScope) {
@@ -145,7 +148,7 @@ describe("typecheck", () => {
       // Rooted at an absolute directory, since `collectPatternFiles()`
       // otherwise resolves its default against the working directory, which
       // for a test run is the package rather than the repository.
-      const patternsRoot = join(REPO_ROOT, "packages", "patterns");
+      const patternsRoot = join(REPO_ROOT, "patterns");
       const owned = new Set(
         (await collectPatternFiles(patternsRoot)).map((file) =>
           relative(REPO_ROOT, file)
@@ -157,7 +160,7 @@ describe("typecheck", () => {
       const straddling = new Set<string>();
       const excusedOwned = new Map<UncheckedTree, boolean>();
       for await (
-        const entry of walk(join(REPO_ROOT, "packages", "patterns"), {
+        const entry of walk(join(REPO_ROOT, "patterns"), {
           includeDirs: false,
           exts: MODULE_EXTENSIONS,
         })
@@ -196,15 +199,15 @@ describe("typecheck", () => {
 
       for (
         const file of [
-          "packages/patterns/example/main.test.ts",
-          "packages/patterns/example/main.test.tsx",
+          "patterns/example/main.test.ts",
+          "patterns/example/main.test.tsx",
         ]
       ) {
         expect(isPatternSource(file), file).toBe(false);
       }
       // Paired with the other direction, so a predicate that rejected
       // everything would not pass as an exclusion.
-      expect(isPatternSource("packages/patterns/example/main.tsx")).toBe(true);
+      expect(isPatternSource("patterns/example/main.tsx")).toBe(true);
     });
 
     it("records no entry that matches nothing in the tree", async () => {
@@ -254,17 +257,16 @@ describe("typecheck", () => {
       try {
         for (
           const [directory, file] of [
-            ["iframe-board", "guest.ts"],
-            ["iframe-board/nested-canvas", "guest.tsx"],
-            ["iframe-board", "contract.ts"],
-            ["plain-name", "guest.ts"],
-            ["plain-name", "guest.tsx"],
-            ["plain-name", "contract.ts"],
+            ["showcase/iframe-board", "guest.ts"],
+            ["showcase/iframe-board/nested-canvas", "guest.tsx"],
+            ["showcase/iframe-board", "contract.ts"],
+            ["showcase/plain-name", "guest.ts"],
+            ["showcase/plain-name", "guest.tsx"],
+            ["showcase/plain-name", "contract.ts"],
           ]
         ) {
           const path = join(
             root,
-            "packages",
             "patterns",
             ...directory.split("/"),
           );
@@ -274,19 +276,19 @@ describe("typecheck", () => {
 
         const patterns = (await collectPathsByScope(root)).get("patterns") ??
           [];
-        expect(patterns).toContain("packages/patterns/iframe-board/guest.ts");
+        expect(patterns).toContain("patterns/showcase/iframe-board/guest.ts");
         expect(patterns).toContain(
-          "packages/patterns/iframe-board/nested-canvas/guest.tsx",
+          "patterns/showcase/iframe-board/nested-canvas/guest.tsx",
         );
         expect(patterns).toContain(
-          "packages/patterns/iframe-board/contract.ts",
+          "patterns/showcase/iframe-board/contract.ts",
         );
-        expect(patterns).not.toContain("packages/patterns/plain-name/guest.ts");
+        expect(patterns).not.toContain("patterns/showcase/plain-name/guest.ts");
         expect(patterns).not.toContain(
-          "packages/patterns/plain-name/guest.tsx",
+          "patterns/showcase/plain-name/guest.tsx",
         );
         expect(patterns).not.toContain(
-          "packages/patterns/plain-name/contract.ts",
+          "patterns/showcase/plain-name/contract.ts",
         );
       } finally {
         await Deno.remove(root, { recursive: true });
@@ -312,12 +314,12 @@ describe("typecheck", () => {
 
     it("reaches every group importing a changed file, however indirectly", async () => {
       const root = await tree({
-        "packages/base/mod.ts": "export const base = 1;\n",
-        "packages/middle/mod.ts": 'export { base } from "../base/mod.ts";\n',
-        "packages/top/mod.test.ts":
+        "runtime/base/mod.ts": "export const base = 1;\n",
+        "runtime/middle/mod.ts": 'export { base } from "../base/mod.ts";\n',
+        "runtime/top/mod.test.ts":
           'import { base } from "../middle/mod.ts";\n' +
           "console.log(base);\n",
-        "packages/apart/mod.ts": "export const apart = 1;\n",
+        "runtime/apart/mod.ts": "export const apart = 1;\n",
       });
       try {
         const reached = await scopesReached(
@@ -325,19 +327,19 @@ describe("typecheck", () => {
           new Map(
             ["apart", "base", "middle", "top"].map((
               scope,
-            ) => [scope, [`packages/${scope}`]]),
+            ) => [scope, [`runtime/${scope}`]]),
           ),
         );
-        expect(reached(new Set(["packages/base/mod.ts"])))
+        expect(reached(new Set(["runtime/base/mod.ts"])))
           .toEqual(["base", "middle", "top"]);
-        expect(reached(new Set(["packages/top/mod.test.ts"])))
+        expect(reached(new Set(["runtime/top/mod.test.ts"])))
           .toEqual(["top"]);
         // A file that is no module still belongs to its group's check.
-        expect(reached(new Set(["packages/apart/README.md"])))
+        expect(reached(new Set(["runtime/apart/README.md"])))
           .toEqual(["apart"]);
         // A member's manifest decides how its modules resolve, so it
         // reaches whatever imports them.
-        expect(reached(new Set(["packages/middle/deno.json"])))
+        expect(reached(new Set(["runtime/middle/deno.json"])))
           .toEqual(["middle", "top"]);
         // The lock file decides that for every module.
         expect(reached(new Set(["deno.lock"])))
@@ -357,15 +359,15 @@ describe("typecheck", () => {
         "types/ambient.d.ts": 'import type { Shape } from "./shape.ts";\n' +
           "declare global { const shape: Shape; }\n",
         "types/shape.ts": "export type Shape = { sides: number };\n",
-        "packages/base/mod.ts": "export const base = 1;\n",
-        "packages/apart/mod.ts": "export const apart = 1;\n",
+        "runtime/base/mod.ts": "export const base = 1;\n",
+        "runtime/apart/mod.ts": "export const apart = 1;\n",
       });
       try {
         const reached = await scopesReached(
           root,
           new Map([
-            ["apart", ["packages/apart"]],
-            ["base", ["packages/base"]],
+            ["apart", ["runtime/apart"]],
+            ["base", ["runtime/base"]],
           ]),
         );
         // Through the file the manifest names, and through what it imports.
@@ -379,15 +381,15 @@ describe("typecheck", () => {
 
     it("reaches the importers of a member naming a declaration file", async () => {
       const root = await tree({
-        "deno.jsonc": JSON.stringify({ workspace: ["./packages/base"] }),
-        "packages/base/deno.json": JSON.stringify({
+        "deno.jsonc": JSON.stringify({ workspace: ["./runtime/base"] }),
+        "runtime/base/deno.json": JSON.stringify({
           compilerOptions: { types: ["./ambient.d.ts"] },
         }),
-        "packages/base/ambient.d.ts": "declare const ambient: number;\n",
-        "packages/base/mod.ts": "export const base = 1;\n",
-        "packages/top/mod.test.ts": 'import { base } from "../base/mod.ts";\n' +
+        "runtime/base/ambient.d.ts": "declare const ambient: number;\n",
+        "runtime/base/mod.ts": "export const base = 1;\n",
+        "runtime/top/mod.test.ts": 'import { base } from "../base/mod.ts";\n' +
           "console.log(base);\n",
-        "packages/apart/mod.ts": "export const apart = 1;\n",
+        "runtime/apart/mod.ts": "export const apart = 1;\n",
       });
       try {
         const reached = await scopesReached(
@@ -395,10 +397,10 @@ describe("typecheck", () => {
           new Map(
             ["apart", "base", "top"].map((
               scope,
-            ) => [scope, [`packages/${scope}`]]),
+            ) => [scope, [`runtime/${scope}`]]),
           ),
         );
-        expect(reached(new Set(["packages/base/ambient.d.ts"])))
+        expect(reached(new Set(["runtime/base/ambient.d.ts"])))
           .toEqual(["base", "top"]);
       } finally {
         await Deno.remove(root, { recursive: true });
@@ -410,16 +412,15 @@ describe("typecheck", () => {
       // holds the deleted module, so the import naming it is what leads
       // back to the group whose check it breaks.
       const root = await tree({
-        "packages/top/mod.test.ts":
-          'import { gone } from "../base/gone.ts";\n' +
+        "runtime/top/mod.test.ts": 'import { gone } from "../base/gone.ts";\n' +
           "console.log(gone);\n",
       });
       try {
         const reached = await scopesReached(
           root,
-          new Map([["top", ["packages/top"]]]),
+          new Map([["top", ["runtime/top"]]]),
         );
-        expect(reached(new Set(["packages/base/gone.ts"]))).toEqual(["top"]);
+        expect(reached(new Set(["runtime/base/gone.ts"]))).toEqual(["top"]);
       } finally {
         await Deno.remove(root, { recursive: true });
       }
@@ -427,17 +428,17 @@ describe("typecheck", () => {
 
     it("reaches a group importing a module under a query", async () => {
       const root = await tree({
-        "packages/base/mod.ts": "export const base = 1;\n",
-        "packages/top/mod.test.ts":
+        "runtime/base/mod.ts": "export const base = 1;\n",
+        "runtime/top/mod.test.ts":
           'import { base } from "../base/mod.ts?fresh";\n' +
           "console.log(base);\n",
       });
       try {
         const reached = await scopesReached(
           root,
-          new Map([["base", ["packages/base"]], ["top", ["packages/top"]]]),
+          new Map([["base", ["runtime/base"]], ["top", ["runtime/top"]]]),
         );
-        expect(reached(new Set(["packages/base/mod.ts"])))
+        expect(reached(new Set(["runtime/base/mod.ts"])))
           .toEqual(["base", "top"]);
       } finally {
         await Deno.remove(root, { recursive: true });
@@ -448,10 +449,10 @@ describe("typecheck", () => {
       // A test reaching another package through a fixture is checked
       // against that package all the same, so the fixture is a way in.
       const root = await tree({
-        "packages/base/mod.ts": "export const base = 1;\n",
-        "packages/top/fixtures/helper.ts":
+        "runtime/base/mod.ts": "export const base = 1;\n",
+        "runtime/top/fixtures/helper.ts":
           'export { base } from "../../base/mod.ts";\n',
-        "packages/top/mod.test.ts":
+        "runtime/top/mod.test.ts":
           'import { base } from "./fixtures/helper.ts";\n' +
           "console.log(base);\n",
       });
@@ -459,11 +460,11 @@ describe("typecheck", () => {
         const reached = await scopesReached(
           root,
           new Map([
-            ["base", ["packages/base"]],
-            ["top", ["packages/top/mod.test.ts"]],
+            ["base", ["runtime/base"]],
+            ["top", ["runtime/top/mod.test.ts"]],
           ]),
         );
-        expect(reached(new Set(["packages/base/mod.ts"])))
+        expect(reached(new Set(["runtime/base/mod.ts"])))
           .toEqual(["base", "top"]);
       } finally {
         await Deno.remove(root, { recursive: true });
@@ -619,19 +620,19 @@ describe("typecheck", () => {
       const matches = (file: string) =>
         dropped.some((pattern) => pattern.test(file));
 
-      expect(matches("packages/shell/dist/bundle.ts")).toBe(true);
-      expect(matches("packages/x/node_modules/dep/index.js")).toBe(true);
+      expect(matches("runtime/shell/dist/bundle.ts")).toBe(true);
+      expect(matches("runtime/x/node_modules/dep/index.js")).toBe(true);
       expect(matches("docs/history/old-plan.ts")).toBe(true);
-      expect(matches("packages/runner/src/runner.ts")).toBe(false);
+      expect(matches("runtime/runner/src/runner.ts")).toBe(false);
       // A directory whose name merely starts with an excluded one stays.
-      expect(matches("packages/x/distribution/index.ts")).toBe(false);
+      expect(matches("runtime/x/distribution/index.ts")).toBe(false);
       expect(matches("docs/history-of-things/note.ts")).toBe(false);
       // And a subcommand's own exclusion is not the type check's. These two
       // trees are named by `test` and `fmt` blocks in their members, and
       // `deno check` opens both, so dropping them would leave the gate
       // claiming less than it covers.
-      expect(matches("packages/patterns/integration/all.test.ts")).toBe(false);
-      expect(matches("packages/js-compiler/test/fixtures/program.ts")).toBe(
+      expect(matches("patterns/integration/all.test.ts")).toBe(false);
+      expect(matches("base/js-compiler/test/fixtures/program.ts")).toBe(
         false,
       );
     });
@@ -679,24 +680,24 @@ describe("typecheck", () => {
       try {
         await Deno.writeTextFile(
           join(root, "deno.jsonc"),
-          `{ "workspace": ["./packages/thing"], "exclude": ["**/dist/"] }`,
+          `{ "workspace": ["./runtime/thing"], "exclude": ["**/dist/"] }`,
         );
-        await Deno.mkdir(join(root, "packages", "thing"), { recursive: true });
+        await Deno.mkdir(join(root, "runtime", "thing"), { recursive: true });
         await Deno.writeTextFile(
-          join(root, "packages", "thing", "deno.jsonc"),
+          join(root, "runtime", "thing", "deno.jsonc"),
           `{ "exclude": ["generated/"] }`,
         );
 
-        const dropped = await excludedByManifest(root, ["packages/thing"]);
+        const dropped = await excludedByManifest(root, ["runtime/thing"]);
         const matches = (file: string) =>
           dropped.some((pattern) => pattern.test(file));
 
-        expect(matches("packages/thing/generated/schema.ts")).toBe(true);
+        expect(matches("runtime/thing/generated/schema.ts")).toBe(true);
         // Resolved against the member, so the same name elsewhere survives.
-        expect(matches("packages/other/generated/schema.ts")).toBe(false);
+        expect(matches("runtime/other/generated/schema.ts")).toBe(false);
         expect(matches("generated/schema.ts")).toBe(false);
         // And the root's own exclusions still apply everywhere.
-        expect(matches("packages/thing/dist/out.js")).toBe(true);
+        expect(matches("runtime/thing/dist/out.js")).toBe(true);
       } finally {
         await Deno.remove(root, { recursive: true });
       }
@@ -706,8 +707,8 @@ describe("typecheck", () => {
 
 describe("selectScopes()", () => {
   const byScope = new Map([
-    ["memory", ["packages/memory/mod.ts"]],
-    ["runner", ["packages/runner/mod.ts"]],
+    ["memory", ["runtime/memory/mod.ts"]],
+    ["runner", ["runtime/runner/mod.ts"]],
   ]);
 
   it("returns every scope when the command line names none", () => {
@@ -720,7 +721,7 @@ describe("selectScopes()", () => {
   it("returns only the scopes the command line names", () => {
     const selected = selectScopes(byScope, ["--scope=runner"]);
     expect([...selected.keys()]).toEqual(["runner"]);
-    expect(selected.get("runner")).toEqual(["packages/runner/mod.ts"]);
+    expect(selected.get("runner")).toEqual(["runtime/runner/mod.ts"]);
   });
 
   it("refuses a scope that no group covers", () => {
@@ -783,7 +784,7 @@ describe("runTypecheck() with a reload", () => {
     const log = console.log;
     console.log = (line: string) => lines.push(line);
     try {
-      await runTypecheck(new Map([["oven", ["packages/oven/mod.ts"]]]), {
+      await runTypecheck(new Map([["oven", ["runtime/oven/mod.ts"]]]), {
         reload: true,
         check: (scope) =>
           Promise.resolve({ scope, durationMs: 1, success: true, output: "" }),

@@ -1,0 +1,121 @@
+/**
+ * Reports the share of recent completed runs that passed on the first attempt,
+ * which is the dashboard's signal for flakiness, with a history strip carrying
+ * the newest runs in the trust window. A cancelled attempt with no job a runner
+ * ran ending in anything but success, other than by a concurrency group
+ * cancelling it, is not a try and is passed over, as when a newer run replaces
+ * a run or its jobs, queued or running. A run passes on the first try when
+ * exactly one try is left and it succeeded. A try that did not succeed, a
+ * cancelled attempt in which a job timed out, was stopped by a person, or
+ * failed on a runner among them, makes the run a failure, and so does a second
+ * try whatever its result, since the run needed a rerun. A run with no try left
+ * is left out of the share. One factory builds the labs, loom, and weaver
+ * instances against their own repository and workflow. Each tile links to its
+ * repository's page, and each cell of its strip to its run.
+ */
+
+import { maxOf, minOf } from "@commonfabric/utils/math";
+import {
+  runSource,
+  type Run,
+  type Status,
+  type Tile,
+  type TileView,
+} from "../types.ts";
+import { shortName } from "../ci-jobs-page.ts";
+import { CompletedAttempts } from "../completed-attempts.ts";
+import { strip } from "../lib.ts";
+import { repoPageHref } from "../repo-page-href.ts";
+import {
+  CI_WORKFLOW,
+  LOOM_CI_WORKFLOW,
+  LOOM_REPO,
+  REPO,
+  TRUST_GOOD,
+  TRUST_RUNS_MAX,
+  TRUST_WARN,
+  WEAVER_CI_WORKFLOW,
+  WEAVER_REPO,
+} from "../config.ts";
+
+type TrustOutcome = "green" | "red" | "run" | "gray";
+
+/**
+ * Scores `run` by the attempts left once every cancelled attempt in which
+ * every job a runner ran succeeded, or was cancelled by a concurrency group,
+ * is passed over: green when exactly one is left and it succeeded, gray when
+ * none is, and red otherwise, so a rerun makes a run red whatever its result.
+ * An unfinished run is left out of the share too. Reads attempts in order and
+ * stops once the outcome is decided. Rejects when an earlier attempt, or a
+ * cancelled attempt's job listing or a cancelled job's annotations, cannot be
+ * read from GitHub.
+ */
+async function trustOutcome(
+  run: Run,
+  attempts: CompletedAttempts,
+): Promise<TrustOutcome> {
+  if (run.status === "in_progress") return "run";
+  if (run.status !== "completed" || !run.conclusion) return "gray";
+  let passed = false;
+  for (let attempt = 1; attempt <= run.run_attempt; attempt++) {
+    const tried = await attempts.get(run, attempt);
+    if (await attempts.cancelledWithoutVerdict(tried)) continue;
+    if (passed || tried.conclusion !== "success") return "red";
+    passed = true;
+  }
+  return passed ? "green" : "gray";
+}
+
+function makeCiTrust(opts: { label: string; repo: string; workflow: string }): Tile {
+  const attempts = new CompletedAttempts(opts.repo);
+  const source = runSource(opts.repo, opts.workflow, "main");
+  return {
+    label: opts.label,
+    repo: opts.repo,
+    intervalMs: 30_000,
+    runSources: [source],
+    async collect(ctx): Promise<TileView> {
+      const runs = await ctx.runsFor(source);
+      const recent = runs.slice(0, TRUST_RUNS_MAX);
+      attempts.observe(recent);
+      const scored = await Promise.all(recent.map(async (run) => ({
+        run,
+        outcome: await trustOutcome(run, attempts),
+      })));
+      const counted = scored.filter(({ outcome }) => outcome === "green" || outcome === "red");
+      const firstTryGreen = counted.filter(({ outcome }) => outcome === "green").length;
+      const pct = counted.length ? (firstTryGreen / counted.length) * 100 : 0;
+      const s: Status = counted.length === 0
+        ? "unknown"
+        : pct >= TRUST_GOOD ? "good" : pct >= TRUST_WARN ? "warn" : "bad";
+      const runSummary = counted.length === scored.length
+        ? `last ${scored.length} runs`
+        : `${counted.length} of last ${scored.length} runs`;
+      const cells = [...scored].reverse().map(({ run, outcome }) => ({
+        outcome,
+        href: run.html_url,
+      }));
+      const times = scored.flatMap(({ run }) => {
+        const createdAt = Date.parse(run.created_at);
+        return Number.isFinite(createdAt) ? [createdAt] : [];
+      });
+      const spanMs = times.length === scored.length && times.length >= 2
+        ? maxOf(times) - minOf(times)
+        : 0;
+      return {
+        status: s,
+        value: `${pct.toFixed(1)}%`,
+        sub: `first-try green · ${runSummary}`,
+        extra: strip(cells, spanMs > 0),
+        duration: spanMs,
+        alignChartBottom: true,
+        href: repoPageHref(shortName(opts.repo)),
+        hint: "repository ↗",
+      };
+    },
+  };
+}
+
+export const labsCiTrust = makeCiTrust({ label: "labs ci trust", repo: REPO, workflow: CI_WORKFLOW });
+export const loomCiTrust = makeCiTrust({ label: "loom ci trust", repo: LOOM_REPO, workflow: LOOM_CI_WORKFLOW });
+export const weaverCiTrust = makeCiTrust({ label: "weaver ci trust", repo: WEAVER_REPO, workflow: WEAVER_CI_WORKFLOW });

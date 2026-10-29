@@ -15,20 +15,20 @@ loading rather than a redesign of all subscriptions.
 
 ## What the implementation establishes
 
-- [`engine.ts`](../../../../packages/memory/v2/engine.ts)'s content-addressed
+- [`engine.ts`](../../../../runtime/memory/v2/engine.ts)'s content-addressed
   commit validation refuses patches, deletion, non-space scope, content that
   does not hash to its ID, and changes to an existing document's envelope.
   An identical re-set is elided. Immutability holds within the document's
   space and branch; the hash identifies `.value`, not the entire envelope.
-- [`storage/v2.ts`](../../../../packages/runner/src/storage/v2.ts)'s
+- [`storage/v2.ts`](../../../../runtime/runner/src/storage/v2.ts)'s
   `#syncCfcSchemaDocument` sends schema and label IDs through ordinary
   `provider.sync`. The remote `SpaceReplica.pull` path queues a watch refresh,
   records successful selectors in `#watchSelectorTracker`, and removes them
   only on failure in that path. Thus a one-time schema load can become an
   enduring subscription. The local store read-through already avoids watches.
-- [`client.ts`](../../../../packages/memory/v2/client.ts)'s
+- [`client.ts`](../../../../runtime/memory/v2/client.ts)'s
   `SpaceSession.queryGraph` already issues a one-time `graph.query`.
-  [`server.ts`](../../../../packages/memory/v2/server.ts)'s `graphQuery`
+  [`server.ts`](../../../../runtime/memory/v2/server.ts)'s `graphQuery`
   authenticates the current session and evaluates the graph without installing
   a session watch. Query assembly includes required schema dependencies.
   No new wire message is needed to fetch without subscribing.
@@ -86,7 +86,7 @@ direct roots versus dependencies; the document-interest diagnostic exposes
 that distinction.
 
 There are also independent retention owners. The
-[`schema registry`](../../../../packages/runner/src/schema-registry.ts)
+[`schema registry`](../../../../runtime/runner/src/schema-registry.ts)
 holds strong references across overlapping runtime leases, and a server realm
 without leases retains them for its process lifetime. Query evaluation and
 engine caches can also retain documents without a session watch. Fetch-once is

@@ -428,55 +428,55 @@ interface Exclusion {
  */
 const exclusions: readonly Exclusion[] = [
   {
-    member: "packages/generated-patterns",
+    member: "runtime/generated-patterns",
     kind: "source",
     reason: "Its test task defines no tests. Its test files run in the " +
       "`generated-patterns` suite.",
   },
   {
-    member: "packages/home-schemas",
+    member: "base/home-schemas",
     kind: "source",
     reason: "It has no tests.",
   },
   {
-    member: "packages/patterns",
+    member: "patterns",
     kind: "source",
     reason: "Authored pattern code is measured by transformer " +
       "instrumentation in the pattern unit and integration suites. The " +
       "package's own `deno test` ignores the pattern files deliberately.",
   },
   {
-    member: "packages/runner",
+    member: "runtime/runner",
     kind: "size",
     reason: "Its whole set is past what the most lanes a run may take " +
       "hold together.",
   },
   {
-    member: "packages/cli",
+    member: "runtime/cli",
     kind: "source",
     reason: "The command line's real coverage comes from the integration " +
       "script rather than from these tests, so a gate on them would fail " +
       "a change whose lines only the integration script runs.",
   },
   {
-    member: "packages/identity",
+    member: "base/identity",
     kind: "source",
     reason: "Every one of its tests runs in a browser through " +
       "deno-web-test. It has no Deno-only half to measure.",
   },
   {
-    member: "packages/deno-web-test",
+    member: "runtime/deno-web-test",
     kind: "source",
     reason: "Its tests drive the browser harness end to end.",
   },
   {
-    member: "packages/toolshed",
+    member: "runtime/toolshed",
     kind: "source",
     reason: "Its tests want the service's own environment and its " +
       "initialized database.",
   },
   {
-    member: "packages/integration",
+    member: "runtime/integration",
     kind: "source",
     reason: "The coverage metric counts none of its lines, since it " +
       "leaves out every path with an `integration` directory in it, so a " +

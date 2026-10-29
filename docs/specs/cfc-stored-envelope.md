@@ -6,7 +6,7 @@ document holds. The envelope names the schema its labels were derived
 against and carries a label map: one entry per labeled path, each entry
 holding the path and the label that applies there. Its stored shapes are
 `StoredCfcMetadata` in
-[types.ts](../../packages/runner/src/cfc/types.ts), and version 2's
+[types.ts](../../runtime/runner/src/cfc/types.ts), and version 2's
 content-addressed labels are
 [content-addressed-cfc-labels.md](content-addressed-cfc-labels.md).
 
@@ -38,7 +38,7 @@ of the classification below.
 
 ## Reading the reserved position
 
-[metadata.ts](../../packages/runner/src/cfc/metadata.ts) is the only module
+[metadata.ts](../../runtime/runner/src/cfc/metadata.ts) is the only module
 that produces labels from what stands at `["cfc"]`. Its
 `interpretStoredEnvelope` is the one place that decides which of three
 outcomes a stored value gets:
@@ -124,24 +124,24 @@ unlabeled:
 
 | Consumer | What it does |
 |---|---|
-| The prepare pass ([prepare.ts](../../packages/runner/src/cfc/prepare.ts)) | Propagates out of `prepareCfc()`, so the boundary verification fails loudly rather than deriving a join from labels it never read |
+| The prepare pass ([prepare.ts](../../runtime/runner/src/cfc/prepare.ts)) | Propagates out of `prepareCfc()`, so the boundary verification fails loudly rather than deriving a join from labels it never read |
 | `loadStoredCfcEnvelope` (same file) | Converts to `{status: "unreadable"}`, which the commit boundary records as a reason and rejects in enforcing modes |
 | `storedCfcMetadataAppliesToPath` | Reports that policy applies, so the write it gates reaches the same envelope at prepare time |
-| The dereference label view ([label-view-state.ts](../../packages/runner/src/cfc/label-view-state.ts)) | Rethrows where every other failure yields no view, because this view feeds the flow join |
-| The link-write merge ([data-updating.ts](../../packages/runner/src/data-updating.ts)) | Keeps the write CFC-relevant, routing it to prepare |
-| The stored-schema lookup ([cell.ts](../../packages/runner/src/cell.ts)) | Propagates, so the write throws where it is made rather than serving the document schemaless. This is the arm that catches a write no other gate would: a transaction writing through a cell whose schema declares no policy is CFC-relevant only because the document's stored envelope says so, and an envelope no reader can interpret answers that question by failing |
-| The compilation cache ([cell-cache.ts](../../packages/runner/src/compilation-cache/cell-cache.ts)), the pattern manager ([pattern-manager.ts](../../packages/runner/src/pattern-manager.ts)), and the agent connector's graph ([fabric-graph.ts](../../packages/connectors/agents/connector/src/fabric-graph.ts)) | Propagate |
-| The display label view ([label-view.ts](../../packages/runner/src/cfc/label-view.ts)) | Records the read as failed; the fail-closed variant merges a blocking entry into the view it hands back |
-| The label-introspection builtin ([label-introspection.ts](../../packages/runner/src/cfc/label-introspection.ts)) | Declines to answer, the same as for a target it cannot observe — it discloses a label rather than reading a payload, so declining is the refusal, and a write the caller then makes still reaches the envelope at the gates above |
-| The label-erasure guard ([extended-storage-transaction.ts](../../packages/runner/src/storage/extended-storage-transaction.ts)) | Counts an uninterpretable envelope as a label map, so a root write replacing one with nothing records as an erasure |
+| The dereference label view ([label-view-state.ts](../../runtime/runner/src/cfc/label-view-state.ts)) | Rethrows where every other failure yields no view, because this view feeds the flow join |
+| The link-write merge ([data-updating.ts](../../runtime/runner/src/data-updating.ts)) | Keeps the write CFC-relevant, routing it to prepare |
+| The stored-schema lookup ([cell.ts](../../runtime/runner/src/cell.ts)) | Propagates, so the write throws where it is made rather than serving the document schemaless. This is the arm that catches a write no other gate would: a transaction writing through a cell whose schema declares no policy is CFC-relevant only because the document's stored envelope says so, and an envelope no reader can interpret answers that question by failing |
+| The compilation cache ([cell-cache.ts](../../runtime/runner/src/compilation-cache/cell-cache.ts)), the pattern manager ([pattern-manager.ts](../../runtime/runner/src/pattern-manager.ts)), and the agent connector's graph ([fabric-graph.ts](../../connectors/agents/connector/src/fabric-graph.ts)) | Propagate |
+| The display label view ([label-view.ts](../../runtime/runner/src/cfc/label-view.ts)) | Records the read as failed; the fail-closed variant merges a blocking entry into the view it hands back |
+| The label-introspection builtin ([label-introspection.ts](../../runtime/runner/src/cfc/label-introspection.ts)) | Declines to answer, the same as for a target it cannot observe — it discloses a label rather than reading a payload, so declining is the refusal, and a write the caller then makes still reaches the envelope at the gates above |
+| The label-erasure guard ([extended-storage-transaction.ts](../../runtime/runner/src/storage/extended-storage-transaction.ts)) | Counts an uninterpretable envelope as a label map, so a root write replacing one with nothing records as an erasure |
 
 Other code looks at the reserved position for purposes that produce no
 labels, and the rule does not reach it. The delivery seams read the
 documents an envelope names rather than the labels it carries —
-`loadLabelSchemaDoc` ([traverse.ts](../../packages/runner/src/traverse.ts))
+`loadLabelSchemaDoc` ([traverse.ts](../../runtime/runner/src/traverse.ts))
 follows the schema document and the label documents into the query result
 and watch set, over `cfcEnvelopeLabelDocumentHashes`
-([label-documents.ts](../../packages/runner/src/cfc/label-documents.ts)),
+([label-documents.ts](../../runtime/runner/src/cfc/label-documents.ts)),
 the one scan every seam applies — and the prepare pass's
 self-minted-document scan asks only whether a write carried a `cfc` member
 at all. An envelope those walks cannot make sense of delivers nothing extra,
@@ -161,15 +161,15 @@ are memoized by the identity of the stored label map, never failures.
 
 ## Where this is pinned
 
-- [cfc-envelope-version-guard.test.ts](../../packages/runner/test/cfc-envelope-version-guard.test.ts)
+- [cfc-envelope-version-guard.test.ts](../../runtime/runner/test/cfc-envelope-version-guard.test.ts)
   — every reader refuses the same stored values, across the shapes an
   envelope can be damaged or postdated in;
   the commit path rejects a write whose target or read source carries one; a
   document storing nothing at the reserved position reads as unlabeled.
-- [cfc-content-addressed-labels.test.ts](../../packages/runner/test/cfc-content-addressed-labels.test.ts)
+- [cfc-content-addressed-labels.test.ts](../../runtime/runner/test/cfc-content-addressed-labels.test.ts)
   — a version-2 entry naming a label document nothing backs, one naming a
   document that does not hold a label, one whose content does not hash to
   its id, and a reference in a version-1 envelope.
-- [cfc/verifier-metadata.test.ts](../../packages/runner/test/cfc/verifier-metadata.test.ts)
+- [cfc/verifier-metadata.test.ts](../../runtime/runner/test/cfc/verifier-metadata.test.ts)
   — a transaction that consumed an uninterpretable envelope is refused even
   when its write target declares no gate.

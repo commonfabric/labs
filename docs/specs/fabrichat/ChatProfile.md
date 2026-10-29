@@ -28,10 +28,15 @@ with the new one everywhere, including on everything they sent before the
 change. FabriChat stores no name or avatar of its own, so a name someone has
 stopped using isn't kept in any room's history.
 
-A profile also says whose it is. Its value carries a `represents-principal`
-label naming its owner, and that is what a client compares with a message's
-`authored-by` label to show the message as verified (see
-[`clients.md`](clients.md#showing-a-room)).
+A profile also says whose it is: the person `profileOwnerOf()` names, by the
+one rule every reader of a person's profiles applies
+([`HOME_SPACE.md`](../../common/conventions/HOME_SPACE.md)). Its name, followed
+through every link, stays within the profile's own documents, and its label
+names that person alone as the principal the profile represents. A profile
+that is no one's names no one: a manager refuses a request that names a member
+or a counterpart by it. A client compares the principal the profile's label
+represents with a message's `authored-by` label to show the message as verified
+(see [`clients.md`](clients.md#showing-a-room)).
 
 A profile also says where to offer the person a room: its `inbox` points at
 their share inbox ([`private-inbox.md`](../../features/private-inbox.md)).

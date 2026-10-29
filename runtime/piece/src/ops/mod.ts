@@ -1,0 +1,182 @@
+export {
+  type ApplyOptions,
+  applyPlan,
+  type ApplyReport,
+  type ApplyRow,
+  type ApplySessions,
+  type ApplyVerdict,
+  type PlanOperation,
+  type ReferenceOp,
+  type WorkRow,
+} from "./bulk-apply.ts";
+export {
+  acceptUnretained,
+  canonicalPieceAddress,
+  decodePlan,
+  deriveRollbackPlan,
+  encodePlan,
+  type PieceExpect,
+  type PieceOp,
+  type PiecePlan,
+  type PiecePlanHeader,
+  type PiecePlanRow,
+  type PlanEnumeration,
+  type RegisteredOutside,
+  type RepairOp,
+  type RestoreOp,
+  type RetargetOp,
+  type RetargetSource,
+  type RollbackDerivationOptions,
+  type SurveyProblem,
+} from "./bulk-plan.ts";
+export { type RollbackOptions, rollbackPieces } from "./bulk-rollback.ts";
+export {
+  readRestorableSource,
+  type RestorableRevision,
+  type RestorableSource,
+  type RestoreOptions,
+  type RestoreOutcome,
+  restorePiece,
+  type RestoreTarget,
+  selectRestoreRevision,
+} from "./piece-restore.ts";
+export {
+  assertPlanRunsFixer,
+  collectLinkPaths,
+  type DocumentChange,
+  documentChanges,
+  evaluateFixer,
+  type Fixer,
+  type FixerOutcome,
+  type RepairOptions,
+  repairPieces,
+  type RepairReport,
+  type RepairRow,
+  type RepairVerdict,
+} from "./bulk-repair.ts";
+export {
+  diffPlan,
+  type PatternRef,
+  type PieceDiffRow,
+  type PieceDiffStatus,
+  type PlanDiff,
+} from "./bulk-diff.ts";
+export {
+  HOLDER_PHASE,
+  isSourceRetained,
+  LIST_PHASE,
+  type PiecePin,
+  type PieceSelector,
+  type PlannedRetarget,
+  readPiecePin,
+  type SelectedPiece,
+  selectPieces,
+  type SurveyOptions,
+  surveyPieces,
+  type SurveyResult,
+  type TallyEntry,
+} from "./bulk-survey.ts";
+export { PiecesController } from "./pieces-controller.ts";
+export {
+  ensurePrivateInboxOf,
+  INBOX_ADOPTION_REFUSALS,
+  type InboxAdoptionRefusal,
+  inboxPieceLinkSchema,
+  type PrivateInboxEnsure,
+  type PrivateInboxRequestOutcome,
+  requestPrivateInboxOf,
+} from "./private-inbox.ts";
+export {
+  type JoinVisitDecision,
+  joinVisitedRoomOf,
+} from "./join-visited-room.ts";
+export {
+  type OfferDecision,
+  type OfferRefusal,
+  ShareIntake,
+  startShareIntakeOf,
+} from "./share-intake.ts";
+export {
+  CHAT_ROOM_SPACE_KIND,
+  LOOM_SPACE_KIND,
+  type SpaceRefusal,
+  vetSpace,
+} from "./space-vetting.ts";
+export {
+  type PatternCompatibilityReport,
+  type PatternUpdateReceipt,
+  PieceController,
+  piecePatternPointer,
+  type PiecePatternRef,
+  type PiecePatternSourceRef,
+  type PieceSourceAction,
+  type PieceSourceActionResult,
+  PieceSourceChangedError,
+  type PieceSourceCompatibilityIssues,
+  type PreparedPieceSourceChange,
+} from "./piece-controller.ts";
+export {
+  acceptEnteredOrigin,
+  classifyOrigin,
+  type PieceOrigin,
+  PieceOriginError,
+  type PieceOriginKind,
+  type PieceSourceRevisionSource,
+  type PieceSourceRevisionState,
+  type PieceSourceState,
+  readPieceOrigin,
+  readPieceSourceMetadata,
+  readPieceSourceRevision,
+  readPieceSourceState,
+  type ResolvedPieceOriginSource,
+  resolvePieceOriginSource,
+} from "./piece-origin.ts";
+
+export {
+  assertPieceInputPath,
+  PieceInputPathError,
+} from "./piece-input-path.ts";
+export {
+  completeServedRegistration,
+  confirmServedInstantiate,
+  confirmServedRegistration,
+  confirmServedSetSource,
+  finishServedRegistration,
+  prepareServedRegistration,
+  servedInstantiatePiece,
+  type ServedInstantiateReceipt,
+  type ServedInstantiateRequest,
+  ServedLifecycleRefusal,
+  type ServedLifecycleRefusalCode,
+  type ServedPatternRef,
+  type ServedPatternSource,
+  type ServedRegistrationOutcome,
+  type ServedRegistrationPreparation,
+  servedSetPieceSource,
+  type ServedSetSourceReceipt,
+  type ServedSetSourceRequest,
+  servedUploadPattern,
+} from "./served-lifecycle.ts";
+export {
+  buildServedLifecycleVerb,
+  runServedLifecycleVerb,
+  type ServedLifecycleReceipts,
+  servedLifecycleRunner,
+  type ServedLifecycleVerbDescriptor,
+  type ServedLifecycleVerbRunner,
+} from "./served-lifecycle-verbs.ts";
+
+export {
+  inspectProfileNameProtection,
+  type ProfileNameProtectionInspection,
+  repairProfileNameProtection,
+} from "./profile-name-protection.ts";
+
+export {
+  inspectProfileSpaceRoot,
+  listedProfiles,
+  type ProfileSpaceRootInspection,
+  type ProfileSpaceRootStatus,
+  repairProfileRootsOf,
+  repairProfileSpaceRoot,
+} from "./profile-space-root.ts";

@@ -1,0 +1,159 @@
+import { describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
+import { Identity } from "@commonfabric/identity";
+import { sha256 } from "@commonfabric/content-hash";
+import {
+  readRoutedBase64,
+  routedStatementPayload,
+  RoutedWriter,
+  verifyRoutedProof,
+} from "../v2/routed-wire.ts";
+const router = await Identity.fromRaw(new Uint8Array(32).fill(71));
+const other = await Identity.fromRaw(new Uint8Array(32).fill(72));
+const principal = await Identity.fromRaw(new Uint8Array(32).fill(73));
+const epoch = new Uint8Array(16).fill(21),
+  context = new Uint8Array(16).fill(22),
+  value = new Uint8Array(32).fill(23);
+const now = 1_800_000_000, deployment = "auth-boundary-probe";
+const options = { router: router.did(), deployment, epoch, context, now };
+async function proof(
+  {
+    iat = now,
+    exp = now + 600,
+    issued = now,
+    expires = now + 60,
+    received = now,
+    receiptPrincipal = principal.did(),
+  } = {},
+) {
+  const statement = await routedStatementPayload({
+    principal: principal.did(),
+    router: router.did(),
+    deployment,
+    challenge: value,
+    iat,
+    exp,
+  }).sign(principal);
+  const challenge = await new RoutedWriter("mrc1").text(deployment).text(
+    router.did(),
+  ).fixed(epoch).fixed(context).fixed(value).time(issued).time(expires).sign(
+    router,
+  );
+  const receipt = await new RoutedWriter("mrr1").fixed(sha256(challenge)).text(
+    receiptPrincipal,
+  ).fixed(sha256(statement)).time(received).sign(router);
+  return { statement, challenge, receipt };
+}
+const good = await proof(), variant = await proof({ exp: now + 599 });
+const cases = [
+  ["valid", good, options, true],
+  ["differentRouter", good, { ...options, router: other.did() }, false],
+  [
+    "differentEpoch",
+    good,
+    { ...options, epoch: new Uint8Array(16).fill(24) },
+    false,
+  ],
+  ["differentContext", good, {
+    ...options,
+    context: new Uint8Array(16).fill(25),
+  }, false],
+  ["differentDeployment", good, { ...options, deployment: "another" }, false],
+  ["expiredLease", good, { ...options, now: now + 600 }, false],
+  ["leaseAtTenMinutes", await proof({ exp: now + 600 }), options, true],
+  ["leaseOverTenMinutes", await proof({ exp: now + 601 }), options, false],
+  ["leaseOfTheOldHour", await proof({ exp: now + 3600 }), options, false],
+  // A statement signed before its receipt: the issue-time bound is the one a
+  // compromised router cannot move, since the client signed it.
+  [
+    "leaseAtTenMinutesFromAnEarlierIssue",
+    await proof({ iat: now - 100, exp: now + 500 }),
+    options,
+    true,
+  ],
+  [
+    "leaseOverTenMinutesFromAnEarlierIssue",
+    await proof({ iat: now - 100, exp: now + 501 }),
+    options,
+    false,
+  ],
+  [
+    "issuedAtTheSkewBound",
+    await proof({ iat: now + 120, exp: now + 600 }),
+    options,
+    true,
+  ],
+  [
+    "issuedPastTheSkewBound",
+    await proof({ iat: now + 121, exp: now + 600 }),
+    options,
+    false,
+  ],
+  ["receiptAtChallengeExpiry", await proof({ received: now + 60 }), {
+    ...options,
+    now: now + 60,
+  }, false],
+  [
+    "challengeOverOneMinute",
+    await proof({ expires: now + 61 }),
+    options,
+    false,
+  ],
+  [
+    "validSignatureButDifferentExactStatement",
+    { ...good, statement: variant.statement },
+    options,
+    false,
+  ],
+  [
+    "receiptPrincipalMismatch",
+    await proof({ receiptPrincipal: other.did() }),
+    options,
+    false,
+  ],
+  [
+    "positiveSkewFullLeaseExceedsReceiptBound",
+    await proof({ iat: now + 1, exp: now + 601 }),
+    options,
+    false,
+  ],
+  [
+    "positiveSkewCappedToReceiptLease",
+    await proof({ iat: now + 1, exp: now + 600 }),
+    options,
+    true,
+  ],
+];
+describe("routed wire proof authority", () => {
+  for (const [name, p, o, expected] of cases) {
+    it(String(name), async () => {
+      let accepted = false;
+      try {
+        await verifyRoutedProof(
+          p as Awaited<ReturnType<typeof proof>>,
+          o as typeof options,
+        );
+        accepted = true;
+      } catch { /* Expected admission denial. */ }
+      expect(accepted).toBe(expected);
+    });
+  }
+});
+
+describe("readRoutedBase64()", () => {
+  it("returns the bytes of canonical text", () => {
+    expect(readRoutedBase64("AQI")).toEqual(new Uint8Array([1, 2]));
+  });
+
+  it("throws the routed denial for nonzero bits past the last whole byte", () => {
+    expect(() => readRoutedBase64("AQJ")).toThrow(
+      "Routed memory request denied",
+    );
+  });
+
+  it("throws the routed denial for a lone final character", () => {
+    expect(() => readRoutedBase64("AQIDB")).toThrow(
+      "Routed memory request denied",
+    );
+  });
+});

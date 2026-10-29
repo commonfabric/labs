@@ -43,10 +43,10 @@ contribute their own entry when they join**:
   is **visitable** (clicking it opens that user's live profile). No cross-user
   profile enumeration is ever required.
 
-This is the same shape used by `packages/patterns/scrabble/scrabble.tsx`
+This is the same shape used by `patterns/showcase/scrabble/scrabble.tsx`
 (a `PerSpace` `players` roster + a join handler that `push`es the current
 player — its join sources the name and profile from the shared profile this
-way) and `packages/patterns/scoped-user-directory/main.tsx` (a `PerSpace`
+way) and `patterns/examples/scoped-user-directory/main.tsx` (a `PerSpace`
 `directory` + a `PerUser` `me` pointer). The only addition here is sourcing the display
 name/picture from the shared profile instead of a free-text field.
 
@@ -116,7 +116,7 @@ live link for the badge and freshness) gives both.
 ## Reference demos
 
 The **canonical live-link reference** is
-[`packages/patterns/profile-roster-live-demo.tsx`](../../packages/patterns/profile-roster-live-demo.tsx):
+[`patterns/examples/profile-roster-live-demo/profile-roster-live-demo.tsx`](../../patterns/examples/profile-roster-live-demo/profile-roster-live-demo.tsx):
 every participant renders with a live, visitable `<cf-profile-badge>` bound to
 their real profile cell, identity is keyed with `equals()`, and it was verified
 end-to-end across multiple real identities. Prefer it as the starting point.
@@ -130,16 +130,16 @@ other users' profile spaces being reachable. Every API used below is exercised
 elsewhere in the repo:
 
 - `wish<string>({ query: "#profileName" })` and reading `.result` —
-  `packages/patterns/shared-profile-demo/main.tsx`,
-  `packages/patterns/chatbot.tsx`; `wish<FabricBytes>` over `#profilePicture`
-  — `packages/patterns/group-chat-lobby.tsx`.
+  `patterns/examples/shared-profile-demo/main.tsx`,
+  `patterns/system/chatbot/chatbot.tsx`; `wish<FabricBytes>` over
+  `#profilePicture` — `patterns/examples/group-chat-lobby/group-chat-lobby.tsx`.
 - `PerSpace` / `PerUser` roster + writable-cell aliases + a join handler that
-  writes the roster — `packages/patterns/scrabble/scrabble.tsx`,
-  `packages/patterns/scoped-group-chat/main-plain-inputs.tsx`.
+  writes the roster — `patterns/showcase/scrabble/scrabble.tsx`,
+  `patterns/examples/scoped-group-chat/main-plain-inputs.tsx`.
 - `Date.now()` for timestamps in handlers —
-  `packages/patterns/scoped-group-chat/main-plain-inputs.tsx`.
+  `patterns/examples/scoped-group-chat/main-plain-inputs.tsx`.
 - picture rendering from a snapshot with `<cf-avatar bytes name>` —
-  `packages/patterns/group-chat-room.tsx`.
+  `patterns/examples/group-chat-room/group-chat-room.tsx`.
 
 ```tsx
 import {
@@ -390,7 +390,7 @@ export default pattern<RosterDemoInput, RosterDemoOutput>(
 
 The live-link approach — store each joiner's profile **cell** and render it with
 a visitable `<cf-profile-badge>` — is the recommended idiom; see
-[`profile-roster-live-demo.tsx`](../../packages/patterns/profile-roster-live-demo.tsx)
+[`profile-roster-live-demo.tsx`](../../patterns/examples/profile-roster-live-demo/profile-roster-live-demo.tsx)
 for the complete pattern. The shape:
 
 ```tsx
@@ -434,13 +434,13 @@ both.
 Two deployable versions:
 
 - **Live link (canonical):**
-  [`packages/patterns/profile-roster-live-demo.tsx`](../../packages/patterns/profile-roster-live-demo.tsx)
+  [`patterns/examples/profile-roster-live-demo/profile-roster-live-demo.tsx`](../../patterns/examples/profile-roster-live-demo/profile-roster-live-demo.tsx)
   renders *every* participant with a live, visitable
   **`<cf-profile-badge $profile={p.profile} />`** bound to their real profile
   cell — current data, verified seal, bio/pinned tooltip, navigable to each
   contributor's profile. Verified end-to-end across multiple real identities.
 - **Snapshot (self-containment variant):**
-  [`packages/patterns/shared-profile-roster/main.tsx`](../../packages/patterns/shared-profile-roster/main.tsx)
+  [`patterns/examples/shared-profile-roster/main.tsx`](../../patterns/examples/shared-profile-roster/main.tsx)
   renders participants via **`<cf-avatar bytes={p.picture} name={p.name} />`**
   from values copied at join time, with the current viewer's own identity on a
   trusted `<cf-profile-badge>`. Verified deployed (`cf piece new … main.tsx`): 0
@@ -451,18 +451,19 @@ Two deployable versions:
 
 - [Shared Profile Space](shared-profile-space.md) — CT-1645 shared profile
   space, `wish` profile targets, owner-protected profile writes.
-- `packages/runner/src/builtins/wish.ts` — `#profile`, `#profileName`,
+- `runtime/runner/src/builtins/wish.ts` — `#profile`, `#profileName`,
   `#profilePicture` resolution and the `WishState` result shape.
-- `packages/patterns/system/profile-home.tsx` — `ProfileHomeOutput`
+- `patterns/system/profile-home/profile-home.tsx` — `ProfileHomeOutput`
   (`name`, `picture`, `elements`, `initialNameApplied`) that `#profile` resolves
   to.
-- `packages/patterns/profile-roster-live-demo.tsx` — canonical live-link roster:
-  every participant on a visitable `<cf-profile-badge>` bound to their real cell.
-- `packages/patterns/shared-profile-demo/main.tsx` — minimal `#profile` consumer.
-- `packages/ui/src/v2/components/cf-profile-badge/` — trusted, visitable identity
+- `patterns/examples/profile-roster-live-demo/profile-roster-live-demo.tsx` —
+  canonical live-link roster: every participant on a visitable
+  `<cf-profile-badge>` bound to their real cell.
+- `patterns/examples/shared-profile-demo/main.tsx` — minimal `#profile` consumer.
+- `runtime/ui/src/v2/components/cf-profile-badge/` — trusted, visitable identity
   badge (verified seal + bio / pinned-piece tooltip).
-- `packages/patterns/scrabble/scrabble.tsx`,
-  `packages/patterns/scoped-user-directory/main.tsx`,
-  `packages/patterns/scoped-group-chat/main-plain-inputs.tsx` — `PerSpace`
+- `patterns/showcase/scrabble/scrabble.tsx`,
+  `patterns/examples/scoped-user-directory/main.tsx`,
+  `patterns/examples/scoped-group-chat/main-plain-inputs.tsx` — `PerSpace`
   roster + join-handler precedents.
 - `docs/common/patterns/multi-user-patterns.md` — scope-boundary guidance.

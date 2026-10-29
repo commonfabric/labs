@@ -1,0 +1,1 @@
+{"date":"2026-10-24","from":{"k":"unit","s":"memory","n":"client self-revocation > settles a genesis ACL commit that revokes its own session with the server's verdict"},"to":{"k":"unit","s":"memory","n":"a commit the server accepted > settles with its verdict when its own ACL write revokes its session before its send settles"}}

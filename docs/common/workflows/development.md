@@ -56,7 +56,8 @@ deno task cf piece link ... editor-id/items viewer-id/items
   authority. Renaming or moving a module intentionally does not inherit that
   authority.
 - `setsrc` rejects backward-incompatible argument or result schema changes
-  before updating the piece. Existing fields must keep compatible types. New
+  before updating the piece, and the refusal lists every issue it found, one
+  line per schema path. Existing fields must keep compatible types. New
   argument fields must be optional or have defaults, because existing
   invocations do not bind them. New result fields may be required without
   defaults because the candidate pattern generates them during setup. This

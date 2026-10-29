@@ -88,7 +88,7 @@ fi
 common_dir="$(cd "$(git rev-parse --git-common-dir)" && pwd -P)"
 primary="$(dirname "${common_dir}")"
 fell_back=0
-if [ ! -f "${primary}/packages/cli/launcher.ts" ]; then
+if [ ! -f "${primary}/runtime/cli/launcher.ts" ]; then
   fell_back=1
   primary="${repo_root}"
 fi
