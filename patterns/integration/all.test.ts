@@ -9,22 +9,39 @@ import { initializePiecesController } from "./pieces-controller.ts";
 const { API_URL } = env;
 
 describe("Compile all patterns", () => {
-  const skippedPatterns = [
-    "system/link-tool/link-tool.tsx", // Utility handlers, not a standalone pattern
+  // This compilation smoke suite selects standalone patterns explicitly:
+  // category directories also contain helpers and separate pattern test harnesses.
+  const patterns = [
+    "apps/annotation-manager/annotation-manager.tsx",
+    "apps/annotation/annotation.tsx",
+    "apps/bookmarks/bookmarks.tsx",
+    "apps/cheeseboard/cheeseboard.tsx",
+    "apps/deep-research/deep-research.tsx",
+    "apps/image-analysis/image-analysis.tsx",
+    "apps/self-improving-classifier/self-improving-classifier.tsx",
+    "apps/shopping-list/shopping-list.tsx",
+    "apps/store-mapper/store-mapper.tsx",
+    "dev/cell-link/cell-link.tsx",
+    "dev/nested-map-ifelse-test/nested-map-ifelse-test.tsx",
+    "dev/render-test/render-test.tsx",
+    "dev/self-reference-test/self-reference-test.tsx",
+    "examples/aside/aside.tsx",
+    "examples/compiler/compiler.tsx",
+    "examples/form-demo/form-demo.tsx",
+    "examples/group-chat-lobby/group-chat-lobby.tsx",
+    "examples/group-chat-room/group-chat-room.tsx",
+    "examples/image/image.tsx",
+    "examples/link-preview/link-preview.tsx",
+    "examples/map-demo/map-demo.tsx",
+    "examples/mobile-app-demo/mobile-app-demo.tsx",
+    "examples/pattern-index/pattern-index.tsx",
+    "examples/profile-roster-live-demo/profile-roster-live-demo.tsx",
+    "examples/text-swapper/text-swapper.tsx",
+    "showcase/dice/dice.tsx",
+    "system/chatbot/chatbot.tsx",
+    "system/self/self.tsx",
   ];
-
-  const patterns = [...Deno.readDirSync(join(import.meta.dirname!, ".."))]
-    .filter((file) => file.name.endsWith(".tsx"))
-    .map((file) => file.name)
-    // `.test.tsx` files are pattern tests, not authored patterns: they wrap a
-    // pattern in a test harness and are compiled and executed by the separate
-    // pattern unit-test job (`cf test`). Compiling them here too repeats that
-    // work — and recompiles the real pattern they import — on the pattern
-    // integration critical path. Match the pattern-source definition in
-    // tasks/cfcheck.ts, which already excludes `.test.tsx`/`.test.ts`.
-    .filter((name) => !name.endsWith(".test.tsx") && !name.endsWith(".test.ts"))
-    .filter((name) => !skippedPatterns.includes(name))
-    .sort();
+  assert(patterns.length > 0, "The pattern compilation suite has no cases.");
   for (const name of patterns) {
     it(`Executes: ${name}`, async () => {
       // Heap monitoring for bisection experiments (CT-1148)
