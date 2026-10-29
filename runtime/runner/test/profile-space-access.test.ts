@@ -73,10 +73,12 @@ describe("profile-space-access", () => {
     try {
       const profileLink = await createProfileThroughHome(ownerRuntime, "Ada");
       const profileSpace = profileLink.space as MemorySpace;
+      // The profile space owns itself; its creator holds a delegation from
+      // the space's key rather than a grant of its own.
       expect(
         (await server.readDocument(profileSpace, aclDocId(profileSpace) as URI))
           ?.value,
-      ).toEqual({ "*": "WRITE", [owner.did()]: "OWNER" });
+      ).toEqual({ "*": "WRITE", [profileSpace]: "OWNER" });
 
       // The owner's runtime is gone before the visitor arrives, so every
       // commit the profile space takes from here on is the visitor's.
