@@ -236,10 +236,25 @@ function shouldSkipInternalProperty(
 }
 
 /**
+ * A mapped type as the checker holds it once it resolves its members:
+ * `modifiersType` is `T` in `{ [K in keyof T]: T[K] }`, the type it maps over.
+ */
+type MappedTypeWithInternals = ts.ObjectType & {
+  readonly modifiersType?: ts.Type;
+};
+
+/**
  * Formatter for object types (interfaces, type literals, etc.)
  */
 export class ObjectFormatter implements TypeFormatter {
   #schemaGenerator: SchemaGenerator;
+
+  /**
+   * The annotation read for each property a mapped type over a union makes
+   * (`#annotationOfMembers()`), kept so every read of the property reads the
+   * same node.
+   */
+  #membersAnnotations = new WeakMap<ts.Symbol, ts.TypeNode | undefined>();
 
   constructor(schemaGenerator: SchemaGenerator) {
     this.#schemaGenerator = schemaGenerator;
@@ -302,6 +317,16 @@ export class ObjectFormatter implements TypeFormatter {
       );
       const propDecl = prop.valueDeclaration ??
         (prop.declarations?.[0] as ts.Declaration | undefined);
+      // A property several members of a union or an intersection declare, as
+      // a `Pick` or an `Omit` over a union makes, is never read by one
+      // member's annotation, which says what it is in that member alone: it
+      // is read by every member's (`#annotationOfMembers()`), or else by the
+      // type the checker gives it, which is all of them.
+      const annotated = prop.valueDeclaration !== undefined ||
+        prop.declarations?.length === 1;
+      propTypeNode ??= annotated
+        ? undefined
+        : this.#annotationOfMembers(prop, type, checker);
 
       if (propDecl) {
         if (
@@ -312,11 +337,11 @@ export class ObjectFormatter implements TypeFormatter {
         if (
           ts.isPropertySignature(propDecl) || ts.isPropertyDeclaration(propDecl)
         ) {
-          if (!propTypeNode && propDecl.type) {
+          if (!propTypeNode && annotated && propDecl.type) {
             propTypeNode = propDecl.type as ts.TypeNode;
           }
         } else if (
-          !propTypeNode &&
+          !propTypeNode && annotated &&
           (ts.isPropertyAssignment(propDecl) ||
             ts.isShorthandPropertyAssignment(propDecl))
         ) {
@@ -548,6 +573,50 @@ export class ObjectFormatter implements TypeFormatter {
         context,
       )
       : schema;
+  }
+
+  /**
+   * The annotation of `prop`, a property of `type` that several members of a
+   * union declare, where `type` is a mapped type over that union, as a `Pick`
+   * or an `Omit` of it is: the union of the annotation each member writes,
+   * where each writes one. An annotation written in a type parameter is read
+   * only under the bindings of its member's own reading, which this one does
+   * not have. So where some are, the union is of the others alone, and only
+   * where each of those accepts any value, as a CFC alias over `any` does:
+   * the property then accepts any value, whatever the parameter is bound to.
+   * `undefined` otherwise, where the property is read by its type, and for a
+   * property several members of an intersection declare, whose type is all
+   * of theirs at once.
+   */
+  #annotationOfMembers(
+    prop: ts.Symbol,
+    type: ts.Type,
+    checker: ts.TypeChecker,
+  ): ts.TypeNode | undefined {
+    if (this.#membersAnnotations.has(prop)) {
+      return this.#membersAnnotations.get(prop);
+    }
+    const source = (type as ts.ObjectType).objectFlags & ts.ObjectFlags.Mapped
+      ? (type as MappedTypeWithInternals).modifiersType
+      : undefined;
+    const annotations = (prop.declarations ?? []).map((declaration) =>
+      ts.isPropertySignature(declaration) ? declaration.type : undefined
+    );
+    const written = annotations.filter((annotation) =>
+      annotation !== undefined && !holdsTypeParameter(annotation, checker)
+    ) as ts.TypeNode[];
+    const read = source?.isUnion() &&
+        annotations.every((annotation) => annotation !== undefined) &&
+        written.length > 0 &&
+        (written.length === annotations.length ||
+          written.every((annotation) =>
+            (checker.getTypeFromTypeNode(annotation).flags &
+              ts.TypeFlags.Any) !== 0
+          ))
+      ? ts.factory.createUnionTypeNode(written)
+      : undefined;
+    this.#membersAnnotations.set(prop, read);
+    return read;
   }
 
   #lookupBuiltInSchema(

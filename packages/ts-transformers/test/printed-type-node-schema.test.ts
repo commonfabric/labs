@@ -2614,6 +2614,64 @@ type Outer<T extends { x: string }> = Select<Sec<T>>;`,
             expect(await schemasOf(declarations, written)).toEqual(read);
           });
         }
+
+        describe("over a union whose members declare one property", () => {
+          // The property has a declaration from each member and none of its
+          // own, so each side reads it as every member's, not as whichever
+          // member the checker orders first.
+
+          const DECLARATIONS = `import type { PerUser } from "commonfabric";
+type PickScoped<T> = Pick<{ x: T } | { x: PerUser<string> }, "x">;
+type PickSec<T> = Pick<{ x: T } | { x: Sec<string> }, "x">;
+type OmitSecTwo<T> = Omit<{ x: T; z: 1 } | { x: Confidential<string, readonly ["c"]>; z: 1 }, "z">;`;
+
+          it("refuses `PickScoped<number>`, whose `x` is a scope wrapper beside `number`", async () => {
+            await expect(schemasOf(DECLARATIONS, "PickScoped<number>")).rejects
+              .toThrow("A scope wrapper cannot be a member of a union.");
+          });
+
+          for (
+            const [a, x] of [
+              ["PickScoped<any>", true],
+              ["PickSec<number>", {
+                anyOf: [
+                  { type: "number" },
+                  { type: "string", ifc: { confidentiality: ["a"] } },
+                ],
+              }],
+            ] as const
+          ) {
+            it(`reads \`x\` of \`${a}\` as every member's, on both sides`, async () => {
+              const expected = {
+                type: "object",
+                properties: { x },
+                required: ["x"],
+              };
+              expect(await schemasOf(DECLARATIONS, a)).toEqual({
+                input: expected,
+                output: expected,
+              });
+            });
+          }
+
+          it("keeps the label each member puts on `x` of `OmitSecTwo<Sec<string>>`, on both sides", async () => {
+            // Each side lists the members in the order it reads them in, and
+            // they are a set.
+
+            const { input, output } = await schemasOf(
+              DECLARATIONS,
+              "OmitSecTwo<Sec<string>>",
+            );
+            for (const side of [input, output]) {
+              const { anyOf } = ((side as Schema).properties as Record<
+                string,
+                { anyOf: { ifc: { confidentiality: string[] } }[] }
+              >).x!;
+              expect(anyOf.map(({ ifc }) => ifc.confidentiality[0]).sort())
+                .toEqual(["a", "c"]);
+            }
+          });
+        });
       });
     });
 

@@ -254,4 +254,105 @@ type SchemaRoot = typeof result;
         .toBeUndefined();
     });
   });
+
+  describe("a property several members of a union declare", () => {
+    // A `Pick` or an `Omit` over a union makes one property of every member's,
+    // with a declaration from each and none of its own. It is read as all of
+    // them, by type and from its node alike, whichever member the checker
+    // orders first.
+
+    const DECLARATIONS = `
+type CfcStamp<T, Meta> = { readonly meta?: Meta; readonly of?: T };
+type CfcTag<T, Meta> = { readonly __ct_cfc__?: CfcStamp<T, Meta> };
+type Confidential<T, X extends readonly unknown[]> =
+  T & CfcTag<T, { confidentiality: X }>;
+type Sec<T> = Confidential<T, readonly ["a"]>;
+type SecretAny = Confidential<any, readonly ["s"]>;
+type PickScoped<T> = Pick<{ x: T } | { x: PerUser<string> }, "x">;
+type OmitScoped<T> = Omit<{ x: T } | { x: PerUser<string> }, never>;
+type PickSec<T> = Pick<{ x: T } | { x: Sec<string> }, "x">;
+type OmitSecTwo<T> = Omit<
+  { x: T; z: 1 } | { x: Confidential<string, readonly ["c"]>; z: 1 },
+  "z"
+>;
+type PickAnySec<T> = Pick<{ x: T } | { x: SecretAny }, "x">;
+`;
+
+    /**
+     * The schema of `value`'s property `x`, by each path: read by its type,
+     * and from its node.
+     */
+    const propertyX = async (value: string) => {
+      const { type, checker, typeNode } = await getTypeFromCode(
+        `${DECLARATIONS}\ntype SchemaRoot = ${value};`,
+        "SchemaRoot",
+      );
+      return [undefined, typeNode].map((node) =>
+        asObjectSchema(
+          new SchemaGenerator().generateSchema(type, checker, node),
+        ).properties?.x
+      );
+    };
+
+    for (const value of ["PickScoped<number>", "OmitScoped<number>"]) {
+      it(`refuses \`${value}\`, whose \`x\` is a scope wrapper beside \`number\``, async () => {
+        // As `PerUser<string> | number` written out is.
+
+        await expect(propertyX(value)).rejects.toThrow(
+          "A scope wrapper cannot be a member of a union.",
+        );
+      });
+    }
+
+    for (
+      const [value, expected] of [
+        ["PickScoped<any>", true],
+        ["PickSec<number>", {
+          anyOf: [
+            { type: "number" },
+            { type: "string", ifc: { confidentiality: ["a"] } },
+          ],
+        }],
+        ['Pick<{ x: Sec<string> } | { x: number }, "x">', {
+          anyOf: [
+            { type: "number" },
+            { type: "string", ifc: { confidentiality: ["a"] } },
+          ],
+        }],
+        [
+          'Pick<{ x: SecretAny } | { x: SecretAny; y: 1 }, "x">',
+          { ifc: { confidentiality: ["s"] } },
+        ],
+        ['Pick<{ x: string } & { x: "a" | "b" }, "x">', { enum: ["a", "b"] }],
+      ] as const
+    ) {
+      it(`reads \`x\` of \`${value}\` as every member's`, async () => {
+        for (const read of await propertyX(value)) {
+          expect(read).toEqual(expected);
+        }
+      });
+    }
+
+    it("reads `x` of `PickAnySec<string>` by type as `SecretAny`, which accepts any value whatever `T` is bound to", async () => {
+      // The member written in `T` is read under bindings this reading does
+      // not have, and adds no value `SecretAny` does not accept.
+
+      const [byType] = await propertyX("PickAnySec<string>");
+      expect(byType).toEqual({ ifc: { confidentiality: ["s"] } });
+    });
+
+    it("keeps the label each member puts on `x` of `OmitSecTwo<Sec<string>>`", async () => {
+      // The members' labels differ, so the union keeps both arms.
+
+      for (const read of await propertyX("OmitSecTwo<Sec<string>>")) {
+        const arms =
+          (read as { anyOf: { ifc: { confidentiality: string[] } }[] })
+            .anyOf;
+        expect(arms.map(({ ifc }) => ifc.confidentiality[0]).sort()).toEqual([
+          "a",
+          "c",
+        ]);
+      }
+    });
+  });
 });
