@@ -502,6 +502,7 @@ const handlers: Record<
       watchPaths: requestedWatchPaths,
       renderView: requestedRenderView,
       clientClass,
+      preferredProfileSpace,
     },
   ) {
     const identity = await Identity.fromKeyPair(
@@ -523,6 +524,9 @@ const handlers: Record<
         ? { cfcWriteFloor: cfcWriteFloor as CfcWriteFloorMode }
         : {}),
       ...(clientClass === "web" ? { clientClass } : {}),
+      ...(typeof preferredProfileSpace === "string"
+        ? { preferredProfileSpace: preferredProfileSpace as MemorySpace }
+        : {}),
     });
     // Opening the storage session exchanges frames, so a shim that has shaped
     // none patches a class this realm's memory sockets do not use.
