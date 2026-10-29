@@ -2647,31 +2647,27 @@ export function analyzeFunctionCapabilities(
       return isCellLikeType(checker.getTypeAtLocation(expr), checker);
     };
 
-    // True when every element an array of `arrayType` may hold is a
-    // primitive, across each array type a union of them may be.
-    const hasPrimitiveElementTypes = (arrayType: ts.Type): boolean => {
+    // True when some element an array of `arrayType` may hold has no
+    // identity of its own, a primitive or a nullish value, across each array
+    // type a union of them may be. An element typed `any` or `unknown` says
+    // nothing either way.
+    const holdsElementsWithoutIdentity = (arrayType: ts.Type): boolean => {
       if (!checker) return false;
       const nonNullable = checker.getNonNullableType(arrayType);
       const arrays = nonNullable.isUnion() ? nonNullable.types : [nonNullable];
-      const elements: ts.Type[] = [];
-      for (const array of arrays) {
+      return arrays.some((array) => {
         const element = checker.getIndexTypeOfType(array, ts.IndexKind.Number);
         if (!element) return false;
-        for (const member of element.isUnion() ? element.types : [element]) {
-          elements.push(member);
-        }
-      }
-      return elements.some((element) =>
-        !(element.flags & ts.TypeFlags.Never)
-      ) &&
-        elements.every((element) =>
-          !!(element.flags & (
-            ts.TypeFlags.BooleanLike | ts.TypeFlags.NumberLike |
-            ts.TypeFlags.StringLike | ts.TypeFlags.BigIntLike |
-            ts.TypeFlags.ESSymbolLike | ts.TypeFlags.EnumLike |
-            ts.TypeFlags.Never
-          ))
+        return (element.isUnion() ? element.types : [element]).some(
+          (member) =>
+            !!(member.flags & (
+              ts.TypeFlags.BooleanLike | ts.TypeFlags.NumberLike |
+              ts.TypeFlags.StringLike | ts.TypeFlags.BigIntLike |
+              ts.TypeFlags.ESSymbolLike | ts.TypeFlags.EnumLike |
+              ts.TypeFlags.Null | ts.TypeFlags.Undefined | ts.TypeFlags.Void
+            )),
         );
+      });
     };
 
     // The type the declaration of `ref`'s parameter gives the value at its
@@ -2699,18 +2695,18 @@ export function analyzeFunctionCapabilities(
       return unwrapCellLikeType(type, checker);
     };
 
-    // True when the elements `arrayExpr` spreads, which resolves to `ref`, are
-    // primitives by its own type or by the type `ref`'s parameter declares:
-    // `Array.isArray` narrows to `any[]`, which says nothing either way.
-    const hasPrimitiveElements = (
+    // True when some element `arrayExpr` spreads, which resolves to `ref`, may
+    // have no identity, by its own type or by the type `ref`'s parameter
+    // declares: `Array.isArray` narrows to `any[]`, which says nothing.
+    const mayHoldElementsWithoutIdentity = (
       arrayExpr: ts.Expression,
       ref: SourceRef,
     ): boolean => {
       if (!checker) return false;
       const declared = declaredTypeAt(ref);
-      return hasPrimitiveElementTypes(
+      return holdsElementsWithoutIdentity(
         typeRegistry?.get(arrayExpr) ?? checker.getTypeAtLocation(arrayExpr),
-      ) || (declared !== undefined && hasPrimitiveElementTypes(declared));
+      ) || (declared !== undefined && holdsElementsWithoutIdentity(declared));
     };
 
     const isPrimitiveLikeExpression = (expr: ts.Expression): boolean => {
@@ -5024,10 +5020,14 @@ export function analyzeFunctionCapabilities(
             identityArrayLocals.has(identityArrayLocal);
           if (ref) {
             trackReadRef(ref);
-            // A primitive element has no identity of its own: written back by
-            // identity it would become a link to the slot it was read from,
-            // which names another value once the array's elements shift.
-            if (writtenByIdentity && !hasPrimitiveElements(spreadExpr, ref)) {
+            // A primitive or nullish element has no identity of its own:
+            // written back by identity it would become a link to the slot it
+            // was read from, which names another value once the array's
+            // elements shift, so any such element keeps them all values.
+            if (
+              writtenByIdentity &&
+              !mayHoldElementsWithoutIdentity(spreadExpr, ref)
+            ) {
               markArrayItemIdentityUseRef(ref);
             }
           } else {

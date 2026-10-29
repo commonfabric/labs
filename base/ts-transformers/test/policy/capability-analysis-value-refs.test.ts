@@ -583,6 +583,49 @@ export default handler<void, { history: Writable<number[]> }>(
       expect(state.history!.items).toEqual({ type: "number" });
     });
 
+    it("keeps the elements of a nullable primitive array a shifted copy of it writes back as values", async () => {
+      // `null` has no identity either.
+
+      const state = await stateProperties(`
+import { handler, Writable } from "commonfabric";
+export default handler<void, { history: Writable<(number | null)[]> }>(
+  (_, { history }) => {
+    const current = history.get();
+    const list = Array.isArray(current) ? current : [];
+    const updated = [...list, 1].slice(-3);
+    history.set(updated);
+  },
+);
+`);
+      expect(state.history!.items).toEqual({
+        anyOf: [{ type: "number" }, { type: "null" }],
+      });
+    });
+
+    it("keeps the elements of an array mixing primitives and objects a shifted copy of it writes back as values", async () => {
+      // One element type without identity is enough: the numbers among the
+      // objects would otherwise go back as links to the slots they left.
+
+      const state = await stateProperties(`
+import { handler, Writable } from "commonfabric";
+export default handler<void, { history: Writable<(number | { label: string })[]> }>(
+  (_, { history }) => {
+    const current = history.get();
+    const list = Array.isArray(current) ? current : [];
+    const updated = [...list, 1].slice(-3);
+    history.set(updated);
+  },
+);
+`);
+      expect(state.history!.items).toEqual({
+        anyOf: [{ type: "number" }, {
+          type: "object",
+          properties: { label: { type: "string" } },
+          required: ["label"],
+        }],
+      });
+    });
+
     it("keeps the elements of a primitive array a prepended copy of it writes back as values", async () => {
       const state = await stateProperties(`
 import { handler, Writable } from "commonfabric";

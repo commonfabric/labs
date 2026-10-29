@@ -2783,12 +2783,14 @@ computation's input schema:
   `handler-schema/identity-element-field-handler`).
 - The elements a spread puts in an array the body fills and hands to `.set()`
   are written back by identity, each as a link to the slot it was read from,
-  unless they are primitives by the spread source's own type or by the type its
-  parameter declares (`Array.isArray` narrows the former to `any[]`). A
-  primitive has no identity, so once the copy moves it
-  (`[...history.get(), next].slice(-3)`, a prepend) its link would name the
-  value now in its old slot; such elements are read as values
-  (`hasPrimitiveElements` in `policy/capability-analysis.ts`;
+  unless some element may be a primitive or a nullish value, by the spread
+  source's own type or by the type its parameter declares (`Array.isArray`
+  narrows the former to `any[]`, which says nothing). Such a value has no
+  identity, so once the copy moves it (`[...history.get(), next].slice(-3)`, a
+  prepend) its link would name the value now in its old slot; the elements of
+  such an array, `(number | null)[]` and `(number | { label: string })[]`
+  among them, are read as values (`mayHoldElementsWithoutIdentity` in
+  `policy/capability-analysis.ts`;
   `test/policy/capability-analysis-value-refs.test.ts`;
   `packages/patterns/regression/primitive-array-copy-write.test.tsx`).
 - Scheduler completeness is separate from path retention: identity-only roots
