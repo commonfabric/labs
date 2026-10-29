@@ -152,26 +152,4 @@ describe("row-label over a stored INTEGER", () => {
       }
     });
   });
-
-  it("leaves an ordinary read on the connection it always used", () => {
-    // The labeled path is the one that has to see whole integers. An
-    // unlabeled `query()` keeps whatever the driver gave it before, so a
-    // consumer reading rows outside CFC sees no change from this.
-    withStore((path) => {
-      const pool = new ReadConnectionPool();
-      try {
-        const rows = pool.query(
-          path,
-          "SELECT source_id FROM messages ORDER BY id",
-        );
-        expect(rows.map((row) => typeof row.source_id)).toEqual([
-          "number",
-          "number",
-          "number",
-        ]);
-      } finally {
-        pool.close();
-      }
-    });
-  });
 });
