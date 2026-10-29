@@ -222,7 +222,7 @@ describe("delegation", () => {
         expiresAt: NOW + 60,
         nowSeconds: NOW,
       });
-      const rows = await describeDelegationChains([chain]);
+      const rows = await describeDelegationChains([chain], NOW);
       expect(rows).toHaveLength(2);
       expect(rows[0]).toEqual({
         chain: 0,
