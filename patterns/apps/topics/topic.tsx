@@ -2985,7 +2985,7 @@ export default pattern<TopicInput, TopicOutput>(
               </cf-vstack>
             </cf-card>
 
-            {/* ── Referenced by (the board's pivot; nothing persisted) ── */}
+            {/* ── Referenced by (derived from the board's pivot; nothing authored) ── */}
             {hasReferences
               ? (
                 <cf-card>
