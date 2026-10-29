@@ -267,6 +267,10 @@ describe("in-space allocation", () => {
         sub: space,
         cmd: "/memory",
       });
+      expect(await runtime.recordedDelegations(space)).toEqual([
+        (bytes as FabricBytes).slice(),
+      ]);
+      expect(await runtime.recordedDelegations(home)).toEqual([]);
       // The creating runtime held the delegation at once: its sessions on
       // the space act under the space's own grant.
       expect(

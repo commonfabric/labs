@@ -2,12 +2,12 @@
 
 ## Status
 
-Design, implemented through its third phase: the server verifies a chain, a
-runtime presents one, and a profile space is born owning itself with its
-delegation recorded in Home. The two phases after that, chains to other keys
-and caveats with revocation, are design only; "Phases" below says which is
-which. The document is written against the session authentication and
-access-list rules in
+Design, implemented through its fourth phase for the command line: the
+server verifies a chain, a runtime presents one, a profile space is born
+owning itself with its delegation recorded in Home, and `cf delegation`
+issues a chain to another key. The phase after that, caveats with
+revocation, is design only; "Phases" below says which is which. The document
+is written against the session authentication and access-list rules in
 [`memory-v2/04-protocol.md`](memory-v2/04-protocol.md) §4.5 and the profile
 creation path in [`shared-profile-space.md`](shared-profile-space.md), and is
 the first slice of the UCAN-authorized memory commands that §4.5.2 of the
@@ -208,13 +208,13 @@ interface DelegationPayload {
 ```
 
 The codec's payload type carries every field above as UCAN defines it, `sub`
-nullable and `pol` an array included, so an issuer sets `pol` to `[]` and
-the verifier refuses anything else; the shape stays closed while the type
-stays UCAN's. The delegation a profile issues at creation has `iss` and
-`sub` both the profile DID, `aud` the core identity, `cmd` of `/memory`, an
-empty `pol`, and `exp` of `null`. It has no expiry because the key that could renew it is
-destroyed. It is the one delegation most users ever hold for a profile, and
-it is what makes "open the profile as myself" work.
+nullable and `pol` an array included, so an issuer sets `pol` to `[]` and the
+verifier refuses anything else; the shape stays closed while the type stays
+UCAN's. The delegation a profile issues at creation has `iss` and `sub` both the
+profile DID, `aud` the core identity, `cmd` of `/memory`, an empty `pol`, and
+`exp` of `null`. It has no expiry because the key that could renew it is
+destroyed. It is the one delegation most users ever hold for a profile, and it
+is what makes "open the profile as myself" work.
 
 Encoding and decoding DAG-CBOR, constructing a CID, and producing the
 varsig header are new to the repository, and the first slice does them
@@ -244,18 +244,17 @@ closed, and that slice brings a general DAG-CBOR codec with it.
 
 ### Where it is stored
 
-In the Home space, beside the profile list that is already the durable
-record of which profiles a user has: one document per profile space, under
-the cause `{ delegations: <space DID> }`, holding a list of delegations'
-bytes, the root delegation written there in the transaction that appends the
-profile link and any later delegation over the space, with another command
-or policy, added beside it. The Home
-space is readable by its owner alone, so the delegation is as private as the
-profile list itself, and it is the only record of the profile's authority
-anywhere. The runtime walks the list at startup, reads each profile's
-record, and holds the delegations keyed by space DID. Each is stored as its encoded
-bytes beside its CID, so the runtime presents it without re-encoding it, and
-the CID the server checks is the one the issuer produced.
+In the Home space, beside the profile list that is already the durable record of
+which profiles a user has: one document per profile space, under the cause
+`{ delegations: <space DID> }`, holding a list of delegations' bytes, the root
+delegation written there in the transaction that appends the profile link and
+any later delegation over the space, with another command or policy, added
+beside it. The Home space is readable by its owner alone, so the delegation is
+as private as the profile list itself, and it is the only record of the
+profile's authority anywhere. The runtime walks the list at startup, reads each
+profile's record, and holds the delegations keyed by space DID. Each is stored
+as its encoded bytes beside its CID, so the runtime presents it without
+re-encoding it, and the CID the server checks is the one the issuer produced.
 
 A delegation whose audience is a key other than the one the runtime acts as
 is no use to that runtime and is skipped. A delegation whose subject is not
@@ -272,10 +271,11 @@ does not:
 
 - **A device or agent key.** The core identity issues
   `{ iss: coreDID, aud: agentDID, sub: profileDID, cmd: "/memory", pol: [...] }`
-  and hands the agent both delegations. The agent opens the profile as its
-  own key with a chain of two. The agent's delegation can expire, can carry
-  caveats, and can be withheld from the next agent, none of which touches the
-  profile's access list.
+  and hands the agent both delegations, which `cf delegation issue` does
+  as a chain file. The agent opens the profile as its own key with a chain
+  of two. The agent's delegation can expire, can carry caveats, and can be
+  withheld from the next agent, none of which touches the profile's access
+  list.
 - **Any space, not only profiles.** Nothing in the chain rule is specific to
   profiles. An owner of any space can delegate to any key the same way, and
   the server verifies it the same way. A profile is the case where the owner
@@ -344,7 +344,7 @@ equal the named principal, exactly as it must equal `iss` on a signed open.
 
 ### Verification
 
-The server's `session.open` verifier (`packages/memory/v2/session-open-auth.ts`)
+The server's `session.open` verifier (`runtime/memory/v2/session-open-auth.ts`)
 verifies the signature as it does now, then, when `prf` is present:
 
 1. `proofs.length === prf.length`, and the CID of `proofs[i]`, computed
@@ -390,7 +390,7 @@ act ever reaches a profile space, and the emergency exit below depends on it.
 
 Capability resolution is the one point where the chain changes the server's
 behavior, and it is deliberately the same point `actingAs: "space-owner"`
-uses today (`packages/memory/v2/server.ts`, the OW31 binding), where the
+uses today (`runtime/memory/v2/server.ts`, the OW31 binding), where the
 server already resolves a capability for a principal other than the one that
 signed the open. The difference is in what authorizes the substitution: the
 binding is admitted by operator configuration (the delegating-principal
@@ -415,7 +415,7 @@ present, verify them and ensure consistency with ACL",
 
 The runtime's storage manager opens a session to a space with a
 `SessionPrincipal`, whose `authorizeSessionOpen` builds the signed invocation
-(`packages/runner/src/storage/v2-remote-session.ts`,
+(`runtime/runner/src/storage/v2-remote-session.ts`,
 `createSignedSessionOpenAuth`). The pieces are:
 
 - The remote session factory holds a delegation store
@@ -553,11 +553,35 @@ part of this design.
    delegation at startup. The server reads a self-owned space's declared
    kind before taking it for a home, and `sessionOpenProofs` is on by
    default.
-4. **Chains beyond the profile.** A `cf` command and a Home-space affordance
-   to issue a delegation from the core identity to another key; agent and
-   daemon identities use it.
-5. **Caveats and revocation.** Read-only caveats, expiry on issued
-   delegations, and per-delegation revocation.
+4. **Chains beyond the profile.** Implemented for the command line.
+   `cf delegation issue` issues a delegation over a space from the identity to
+   another key and writes the chain that key presents: the delegation alone
+   where the access list grants the identity, and behind the chain the
+   identity's own sessions present where it holds the space through one, as a
+   profile's owner does through Home's record and a key delegated to in turn
+   does through a chain file (`StorageManager.delegationChainFor`). The chain
+   travels as a file in a format of this repository's own
+   (`delegation-chain-text.ts` in the identity package): JSON naming the format
+   and listing chains, each its delegations' envelope bytes root first, so a
+   holder never reconstructs a chain. The UCAN working group's container format,
+   a CBOR bag of tokens in no order whose recipient links them itself, is the
+   interchange form other UCAN tooling reads; emitting and reading it is a later
+   feature, for when something on the other side speaks it. `cf delegation show`
+   describes a chain file, and says whether a runtime would present each chain
+   now. `--delegations` or `CF_DELEGATIONS` names the files whose chains a `cf`
+   runtime holds when it connects, and a chain in one that no session would
+   present then, expired or not yet valid, fails the command. An issued
+   delegation can carry an expiry, which the server already holds a session to.
+   A Home-space affordance for the same, and a daemon that holds a chain from
+   elsewhere than a file, are left for the hosts that need them. When one does,
+   the delegatee's inbox is the channel: the issuer delivers the chain there as
+   an offer, and the holder reads what verifies and ends at its key, skipping
+   the rest. The inbox grants the world WRITE, so until the policy work of the
+   next phase confines each sender to its own documents, a chain delivered there
+   can be removed or written over by anyone with the address; the file stays the
+   recovery.
+5. **Caveats and revocation.** Read-only caveats, and per-delegation
+   revocation.
 
 ## Open questions
 
@@ -567,6 +591,12 @@ part of this design.
   key is not the user's, and whether the owner-integrity labels on the
   profile's fields follow the same change. Neither is decided, and neither
   is needed until unlinkability from readers of the space is a requirement.
+  The inbox is the other place a profile reveals its identity: every
+  profile points at the one inbox Home holds, so two profiles that share
+  an inbox share an owner. Unlinkability gives each profile an inbox of
+  its own, reached through the profile's chain like any space it covers;
+  the host already resolves an inbox through the profile that points at
+  it, so the change is to stop reconciling them to one.
 - **A serving runtime keeps its full rights, and the server must stop
   reading "home" off self-ownership.** The serving runtime acts as the
   service identity, whose authority is deployment policy rather than
@@ -614,18 +644,19 @@ part of this design.
 
 | Concern | Where |
 | --- | --- |
-| Delegation codec: DAG-CBOR envelope, CID, varsig; issue and verify | a new module in `packages/identity`, in-house for the closed shape, with reference test vectors |
-| Verify a signed open; add chain verification and root-issuer output | `packages/memory/v2/session-open-auth.ts` |
-| Resolve the session capability for the root issuer | `packages/memory/v2/server.ts`, session.open admission beside the `actingAs` binding |
-| Persist the proofs with the open's authorization | `packages/memory/v2/engine.ts`, `authorization` table |
-| Home predicate by declared kind beside self-ownership | the acting-as binding in `packages/memory/v2/server.ts`, and the root ensure's `isHomeSpace` in `packages/runner/src/executor/space-server.ts` |
-| Create a space that owns itself; sign the delegation before the key is dropped | `StorageManager.createSelfOwnedSpace` in `packages/runner/src/storage/v2.ts`; `inSpace(..., { selfOwned: true })` through `Runtime.createSpace` |
+| Delegation codec: DAG-CBOR envelope, CID, varsig; issue and verify | a new module in `base/identity`, in-house for the closed shape, with reference test vectors |
+| Verify a signed open; add chain verification and root-issuer output | `runtime/memory/v2/session-open-auth.ts` |
+| Resolve the session capability for the root issuer | `runtime/memory/v2/server.ts`, session.open admission beside the `actingAs` binding |
+| Persist the proofs with the open's authorization | `runtime/memory/v2/engine.ts`, `authorization` table |
+| Home predicate by declared kind beside self-ownership | the acting-as binding in `runtime/memory/v2/server.ts`, and the root ensure's `isHomeSpace` in `runtime/runner/src/executor/space-server.ts` |
+| Create a space that owns itself; sign the delegation before the key is dropped | `StorageManager.createSelfOwnedSpace` in `runtime/runner/src/storage/v2.ts`; `inSpace(..., { selfOwned: true })` through `Runtime.createSpace` |
 | Record the delegation in the calling space, beside the allocation | `Runtime.resolveInSpaceNameSync`, under `delegationsCause` |
 | Hold Home's recorded delegations at startup | `Runtime.loadProfileDelegations`, called by the runtime-client worker and the `cf` CLI |
-| Present chains under emulation | the emulated session factory in `packages/runner/src/storage/v2-emulate.ts` |
-| Build the signed open with `prf` and proofs | `packages/runner/src/storage/v2-remote-session.ts`, `createSignedSessionOpenAuth` |
-| Keep the chain across reopens | `packages/memory/v2/client.ts`, the session's reopen descriptor |
-| Delegation store, keyed by space DID | `packages/runner/src/storage/v2.ts`, storage manager mount |
+| Issue a chain to another key; describe and hold chain files | `cf delegation` over `runtime/cli/lib/delegation.ts`, the chain-file codec in `base/identity/src/delegation-chain-text.ts`, and `loadPieces` holding the files `--delegations` names |
+| Present chains under emulation | the emulated session factory in `runtime/runner/src/storage/v2-emulate.ts` |
+| Build the signed open with `prf` and proofs | `runtime/runner/src/storage/v2-remote-session.ts`, `createSignedSessionOpenAuth` |
+| Keep the chain across reopens | `runtime/memory/v2/client.ts`, the session's reopen descriptor |
+| Delegation store, keyed by space DID | `runtime/runner/src/storage/v2.ts`, storage manager mount |
 | Sign genesis as the profile key; issue the delegation; destroy the key | the profile creation path (`profile-create.tsx`) and `StorageManager.createSpace` |
 | Record the delegation beside the profile link | the Home default pattern's `profiles` entries |
 | Protocol description | `memory-v2/04-protocol.md` §4.5 |

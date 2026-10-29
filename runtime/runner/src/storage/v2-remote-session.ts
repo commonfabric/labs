@@ -163,6 +163,16 @@ export interface SessionFactory {
   addDelegationChain?(chain: readonly Uint8Array[]): Promise<void>;
 
   /**
+   * The chain a session opened on `space` as `principal` presents now,
+   * root first, as copies of the delegations' bytes, or `undefined` where
+   * none is held: what `addDelegationChain` was given and still holds.
+   */
+  delegationChainFor?(
+    space: MemorySpace,
+    principal: string,
+  ): readonly Uint8Array[] | undefined;
+
+  /**
    * The flags the memory server serving `space` advertises, read from a
    * handshake alone. No session is opened on `space`, so nothing a server
    * does when a session opens there, such as starting to serve the space,
@@ -1257,6 +1267,16 @@ export class RemoteSessionFactory implements SessionFactory {
   /** @inheritDoc */
   async addDelegationChain(chain: readonly Uint8Array[]): Promise<void> {
     await this.#delegations.add(chain);
+  }
+
+  /** @inheritDoc */
+  delegationChainFor(
+    space: MemorySpace,
+    principal: string,
+  ): readonly Uint8Array[] | undefined {
+    return this.#delegations.chainFor(space, principal)?.map((delegation) =>
+      delegation.bytes.slice()
+    );
   }
 
   /** Changes compression on live sessions and the default for later ones. */
