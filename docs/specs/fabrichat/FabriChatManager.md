@@ -28,6 +28,16 @@ membership choices and the user's shared-space catalog, Home's, which Home
 hands the manager
 ([`shared-space-catalog.md`](../../features/shared-space-catalog.md)).
 
+The manager wishes for `#profile` twice. The user's wish, stored per user,
+supplies the profile `rooms`, `people` and `outgoingNotices` are derived from,
+which are the user's. A second wish, declared `PerSession`, supplies the profile
+each session finds for itself: whether the start controls are disabled, the chat
+address the rendering shows, and the profile each act is taken as are derived
+from it, each per session. A session whose wish finds no profile, or fails,
+writes that into its own instance of the second wish, never over the one
+another session of the user reads (see
+[`ChatManagerOutput`](ChatManagerOutput.md#scopes)).
+
 For each saved catalog entry, the manager resolves the space's root with
 `wish({ query: "#default", scope: [space] })`. A `fabrichat-room` entry names
 a standalone room at that root. Every other kind uses the root's explicit

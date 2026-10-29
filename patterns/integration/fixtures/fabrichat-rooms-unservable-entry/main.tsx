@@ -125,8 +125,10 @@ export default pattern<MainInput, MainOutput>((
     entries: {},
     offers: {},
   }).for("sharedSpaceCatalog");
+  const profile = firstProfileOf(profiles);
   const chats = FabriChatManagerCore({
-    myProfile: firstProfileOf(profiles),
+    myProfile: profile,
+    sessionProfile: profile,
     sharedSpaceCatalog: catalog,
     direct,
     requests,

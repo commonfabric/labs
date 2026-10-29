@@ -6,11 +6,10 @@
  * wish fails rather than answer as another profile. Once the other has run the
  * manager, the documents the runtime that found the profile reads for the
  * start controls' `disabled` and for the chat address, as stored there, still
- * say it can start a chat, and still hold the person's address.
+ * say it can start a chat, and still show the person's address.
  *
- * With server execution on, the manager's values are served, and a served
- * value is derived without a client's preferred profile, so the failing
- * runtime finds the profile there too, and writes nothing over them.
+ * The same holds with server execution on, where the failing runtime's own
+ * answers say it can't start a chat as well.
  *
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
@@ -157,11 +156,7 @@ describe("fabrichat-manager-profile-wish-multi-runtime", () => {
         });
         await failed.readRaw(["$UI"]);
         await harness.settle();
-        // A served value is derived without the session's preferred profile,
-        // so only a session that derives its own finds none.
-        expect(await failed.read([...start, "disabled"])).toBe(
-          !serverExecution,
-        );
+        expect(await failed.read([...start, "disabled"])).toBe(true);
 
         expect(await stored(found, [...start, "disabled"])).toBe(false);
         expect(await stored(found, [...address, "style", "display"])).toBe(

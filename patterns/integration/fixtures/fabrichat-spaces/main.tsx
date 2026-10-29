@@ -28,6 +28,7 @@ export default pattern<FabriChatManagerInput, FabriChatManagerOutput>(
     const profile = Writable.of<StandInProfile>({ name: "Starter" });
     return FabriChatManagerCore({
       myProfile: profile,
+      sessionProfile: profile,
       sharedSpaceCatalog,
       direct,
       requests,
