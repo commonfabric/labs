@@ -1,5 +1,6 @@
 import { debugStr, hashOf } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import { delegationCid } from "@commonfabric/identity";
 import { type MemorySpace, type Signer } from "@commonfabric/memory/interface";
 import {
   encodeMemoryBoundary,
@@ -44,6 +45,7 @@ import {
 import { getLogger } from "@commonfabric/utils/logger";
 import { utf8ByteLength } from "@commonfabric/utils/utf8";
 import { normalizeSpaceHost, SpaceHostValidationError } from "../space-host.ts";
+import { DelegationStore } from "./delegation-store.ts";
 import type { MemoryConnectionSizes } from "./diagnostics.ts";
 import {
   createMemorySocket,
@@ -150,6 +152,25 @@ export interface SessionFactory {
 
   /** Changes compression on live sessions and the default for later ones. */
   setMessageCompressionEnabled?(enabled: boolean): Promise<void>;
+
+  /**
+   * Holds the delegation chain `chain` encodes, root first and the
+   * delegation granting the opening key last, so that a session opened from
+   * here on, on the space it is over and as that key, presents it
+   * (04-protocol.md §4.5.1, "Proof chains"). Throws a `DelegationError` for
+   * a chain whose delegations do not decode, verify, or link.
+   */
+  addDelegationChain?(chain: readonly Uint8Array[]): Promise<void>;
+
+  /**
+   * The chain a session opened on `space` as `principal` presents now,
+   * root first, as copies of the delegations' bytes, or `undefined` where
+   * none is held: what `addDelegationChain` was given and still holds.
+   */
+  delegationChainFor?(
+    space: MemorySpace,
+    principal: string,
+  ): readonly Uint8Array[] | undefined;
 
   /**
    * The flags the memory server serving `space` advertises, read from a
@@ -1036,6 +1057,10 @@ export async function createSignedSessionOpenAuth(
   context: MemoryClient.SessionOpenAuthContext,
 ): Promise<MemoryClient.SessionOpenAuth> {
   const iat = Math.floor(Date.now() / 1000);
+  const { proofs } = context;
+  const prf = proofs === undefined
+    ? undefined
+    : await Promise.all(proofs.map((proof) => delegationCid(proof)));
   const invocation = {
     iss: signer.did(),
     cmd: "session.open",
@@ -1048,6 +1073,9 @@ export async function createSignedSessionOpenAuth(
     challenge: context.challenge.value,
     iat,
     exp: iat + SESSION_OPEN_TTL_SECONDS,
+    // The chain's CIDs, signed with the rest, bind the chain to this open
+    // (04-protocol.md §4.5.1, "Proof chains").
+    ...(prf === undefined ? {} : { prf }),
   };
   const signature = await signer.sign(hashOf(invocation).bytes);
   if (signature.error) {
@@ -1061,6 +1089,10 @@ export async function createSignedSessionOpenAuth(
       // form and round-trips faithfully. The server's `toByteArray` accepts
       // it.
       signature: new FabricBytes(signature.ok),
+      // The proofs travel as issued, each signed by its own issuer.
+      ...(proofs === undefined ? {} : {
+        proofs: proofs.map((proof) => new FabricBytes(proof)),
+      }),
     },
   };
 }
@@ -1217,6 +1249,9 @@ export class RemoteSessionFactory implements SessionFactory {
   readonly #defaultSigner: Signer;
   readonly #createSocket: MemorySocketFactory;
 
+  /** The chains held here, one of which a session's open presents. */
+  readonly #delegations = new DelegationStore();
+
   constructor(
     resolveAddress: (space: MemorySpace) => URL,
     defaultSigner: Signer,
@@ -1227,6 +1262,21 @@ export class RemoteSessionFactory implements SessionFactory {
     this.#defaultSigner = defaultSigner;
     this.#clientInfo = createClientInfo(clientBuild);
     this.#createSocket = createSocket;
+  }
+
+  /** @inheritDoc */
+  async addDelegationChain(chain: readonly Uint8Array[]): Promise<void> {
+    await this.#delegations.add(chain);
+  }
+
+  /** @inheritDoc */
+  delegationChainFor(
+    space: MemorySpace,
+    principal: string,
+  ): readonly Uint8Array[] | undefined {
+    return this.#delegations.chainFor(space, principal)?.map((delegation) =>
+      delegation.bytes.slice()
+    );
   }
 
   /** Changes compression on live sessions and the default for later ones. */
@@ -1334,15 +1384,19 @@ export class RemoteSessionFactory implements SessionFactory {
     client: SessionConnection;
     session: MemoryClient.SpaceSession;
   }> {
+    const principal = this.#sessionPrincipal(signer);
     return this.#sharedConnections
-      ? this.#createShared(space, signer, mountOptions, signal)
-      : this.#createDedicated(space, signer, mountOptions, signal);
+      ? this.#createShared(space, principal, mountOptions, signal)
+      : this.#createDedicated(space, principal, mountOptions, signal);
   }
 
   /**
    * Helper for `create()`, which returns both authentication signers for the
-   * key. The server's capabilities select authentication independently of
-   * whether the factory shares connections.
+   * key, and the chain the store assembles for the key at the moment of an
+   * open, which the client hands back to the signer through the open's
+   * context, so a reopen presents a delegation added since and leaves out
+   * one that has expired. The server's capabilities select authentication
+   * independently of whether the factory shares connections.
    */
   #sessionPrincipal(signer: Signer): MemoryClient.SessionPrincipal {
     return {
@@ -1356,6 +1410,10 @@ export class RemoteSessionFactory implements SessionFactory {
           descriptor,
           context,
         ),
+      proofs: (space) =>
+        this.#delegations.chainFor(space, signer.did())?.map((delegation) =>
+          delegation.bytes
+        ),
     };
   }
 
@@ -1366,7 +1424,7 @@ export class RemoteSessionFactory implements SessionFactory {
    */
   async #createShared(
     space: MemorySpace,
-    signer: Signer,
+    principal: MemoryClient.SessionPrincipal,
     mountOptions: MemoryClient.MountOptions,
     signal?: AbortSignal,
   ): Promise<{
@@ -1382,7 +1440,7 @@ export class RemoteSessionFactory implements SessionFactory {
       const session = await client.mount(
         space,
         mountOptions,
-        this.#sessionPrincipal(signer),
+        principal,
         signal,
       );
       return {
@@ -1512,7 +1570,7 @@ export class RemoteSessionFactory implements SessionFactory {
    */
   async #createDedicated(
     space: MemorySpace,
-    signer: Signer,
+    principal: MemoryClient.SessionPrincipal,
     mountOptions: MemoryClient.MountOptions,
     signal?: AbortSignal,
   ) {
@@ -1541,7 +1599,7 @@ export class RemoteSessionFactory implements SessionFactory {
         const session = await client.mount(
           space,
           mountOptions,
-          this.#sessionPrincipal(signer),
+          principal,
           signal,
         );
         if (signal?.aborted) throw abortError();

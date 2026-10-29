@@ -142,6 +142,8 @@ Profile creation uses the **anonymous** `PatternFactory.inSpace()` (CT-1650):
 const profile = ProfileHome.inSpace(undefined, {
   grants: { "*": "WRITE" },
   root: true,
+  spaceKind: "profile",
+  selfOwned: true,
 })({
   initialName: name,
 });
@@ -152,10 +154,15 @@ the calling space calls it: the home space records one allocation per name, so
 every profile created under one name would land in one space. The anonymous case
 instead records one allocation per call, keyed by the creating handler's frame
 cause (per-user home-space input links + the durable per-event id). Each
-allocation creates a space with a random DID owned by the creating user ([random
-space identities](random-space-identities.md)), so the space is unique per user
-AND per creation event, and stable across the cross-space-commit retry. The
-profile space grants the wildcard `"*"` WRITE. Other users read a profile's
+allocation creates a space with a random DID ([random space
+identities](random-space-identities.md)), so the space is unique per user AND
+per creation event, and stable across the cross-space-commit retry. The space
+owns itself and declares the `profile` kind: its access list grants its own
+DID OWNER and the wildcard `"*"` WRITE, and the creating user holds a
+delegation from the space's key, recorded in the home space and presented
+when the user's runtime opens the space, in place of a grant
+([profile delegation](profile-delegation.md)). A profile created before
+profiles owned themselves names its creator as owner instead. Other users read a profile's
 name, and a runtime showing a profile writes into the profile's space — its
 per-session state at the least — so a space granting READ alone refuses the
 visit. The space's access list therefore protects nothing in a profile. The

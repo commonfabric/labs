@@ -4662,6 +4662,17 @@ export class RuntimeProcessor {
     // can reject an entry. A default-host provider is provisional. Failures
     // here must not block worker boot.
     processor.watchSiteTable();
+    // The delegations Home records for the user's profiles, started here
+    // and never awaited: a stalled Home read must not keep the worker from
+    // acknowledging its start. A profile space opened before they are held,
+    // by the preload below among others, opens on the key's own grant, and
+    // the storage manager reopens that session once its chain arrives.
+    runtime.loadProfileDelegations().catch((error) => {
+      console.warn(
+        "[RuntimeProcessor] Could not load the profile delegations:",
+        error,
+      );
+    });
     try {
       processor.#profilePreloadCancel = preloadProfiles(runtime);
     } catch (error) {

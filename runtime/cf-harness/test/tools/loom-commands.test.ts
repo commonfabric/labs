@@ -1,5 +1,5 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
+import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 
 import { createCfHarnessCliCapabilities } from "../../src/cli.ts";
@@ -24,11 +24,7 @@ import {
   type HarnessLoomCommandsConfig,
 } from "../../src/loom-commands.ts";
 import { CfHarnessPromptLoop } from "../../src/prompt-loop.ts";
-import type {
-  ProcessRunner,
-  ProcessRunRequest,
-  ProcessRunResult,
-} from "../../src/sandbox/process-runner.ts";
+import type { ProcessRunRequest } from "../../src/sandbox/process-runner.ts";
 import type { SandboxRuntime } from "../../src/sandbox/types.ts";
 import { harnessSessionToolBacking } from "../../src/session-assembly.ts";
 import {
@@ -44,24 +40,53 @@ import {
   runCommandModelView,
   type RunCommandOutput,
   runCommandTool,
-  runReadCommandTool,
 } from "../../src/tools/loom-commands.ts";
 import { LOOM_RETRIEVAL_MAX_OUTPUT_CHARS } from "../../src/tools/loom-retrieval.ts";
 import { getBuiltinTool } from "../../src/tools/registry.ts";
 import type { HarnessToolContext } from "../../src/tools/types.ts";
+import {
+  type CommandHost,
+  type CommandHostAnswers,
+  startCommandHost,
+} from "../support/command-host.ts";
 import { directPromptSlotBindingFor } from "../support/prompt-slot-binding.ts";
 import { responsesBodyFromChatFixture } from "../support/responses-fixture.ts";
 
 const OWNER = "https://cfc.test/atom/owner";
 const HEALTH = "https://cfc.test/atom/facet/health";
 
-/** A fresh broker-routed host configuration. */
-const freshConfig = (): HarnessLoomCommandsConfig => ({
-  cliPath: "/trusted/loom",
-  transport: { kind: "broker", queuePath: "/trusted/queue" },
+/** A host configuration whose endpoint is `url`. */
+const configFor = (url: string): HarnessLoomCommandsConfig => ({
+  url,
+  actor: "agent:agent-runner",
+  runId: "job-1",
 });
 
-/** The manifest the stub host lists: two visible rows and one hidden. */
+/**
+ * The stub host every run in this file reaches, started once for the file.
+ * Each fixture sets how it answers and clears what it received, so a
+ * fixture's `calls` hold only the requests made since it was built.
+ */
+let host: CommandHost;
+
+/** How the stub host answers, as the latest fixture set it. */
+let answers: Required<CommandHostAnswers>;
+
+/** How a stub host answers `POST /command`: one text, or per call. */
+type Answer =
+  | string
+  | ((call: { id: string }) => Response | Promise<Response>);
+
+/** Helper for fixtures, which answers one posted call with `answer`. */
+const answerTo = (answer: Answer | undefined, body: unknown) =>
+  typeof answer === "function"
+    ? answer(body as { id: string })
+    : new Response(answer ?? JSON.stringify({ ok: true }));
+
+/** Helper for tests, which reads the command id a request posted. */
+const idOf = (body: unknown): unknown => (body as { id?: unknown }).id;
+
+/** The manifest the stub host lists for this caller. */
 const MANIFEST = {
   schema: "loom.commands",
   version: 3,
@@ -80,7 +105,6 @@ const MANIFEST = {
       scope: "loom",
       inputs: { type: "object" },
     },
-    { id: "share.invite", actors: ["user"], origins_refused: ["session"] },
     {
       id: "people-discovery.dossier",
       title: "Gather what is known about a person.",
@@ -104,14 +128,15 @@ const MANIFEST = {
 const DOSSIER_SIGNATURE =
   "people-discovery.dossier(entity_id: string, limit?: integer = 50) -> {messages, records}  [read, global]";
 
-/** Helper for tests, which answers `command list` and `command run` apart. */
+/**
+ * Helper for tests, which answers `GET /commands` and `POST /command` apart,
+ * and returns a tool context over the host, what the host received, and the
+ * configuration the context holds.
+ */
 const contextWith = (
   options: {
     manifest?: string;
-    answer?:
-      | string
-      | ((request: ProcessRunRequest) => Promise<ProcessRunResult>);
-    config?: HarnessLoomCommandsConfig;
+    answer?: Answer;
     configured?: boolean;
     aborted?: boolean;
     cancelDuringListing?: boolean;
@@ -119,40 +144,30 @@ const contextWith = (
     queryLabel?: unknown[];
     referents?: Record<string, unknown>[];
   } = {},
-): { context: HarnessToolContext; calls: ProcessRunRequest[] } => {
-  const calls: ProcessRunRequest[] = [];
+): {
+  context: HarnessToolContext;
+  calls: CommandHost["requests"];
+  config: HarnessLoomCommandsConfig;
+} => {
   const controller = new AbortController();
   if (options.aborted === true) controller.abort();
   let outputs = 0;
-  const hostProcessRunner: ProcessRunner = {
-    run(request: ProcessRunRequest): Promise<ProcessRunResult> {
-      calls.push(request);
-      if (request.args[1] === "list") {
-        if (options.cancelDuringListing) controller.abort();
-        return Promise.resolve({
-          stdout: options.manifest ?? JSON.stringify(MANIFEST),
-          stderr: "",
-          exitCode: 0,
-        });
-      }
-      const answer = options.answer ?? JSON.stringify({ ok: true });
-      return typeof answer === "string"
-        ? Promise.resolve({ stdout: answer, stderr: "", exitCode: 0 })
-        : answer(request);
+  host.requests.length = 0;
+  answers = {
+    list: () => {
+      if (options.cancelDuringListing) controller.abort();
+      return new Response(options.manifest ?? JSON.stringify(MANIFEST));
     },
+    run: (body) => answerTo(options.answer, body),
   };
-  const config = options.config ?? freshConfig();
+  const config = configFor(host.url);
   const context: Partial<HarnessToolContext> = {
     nextOutputId: (toolId: string) =>
       createToolOutputId("run-commands", toolId, ++outputs),
-    hostProcessRunner,
     // The engine holds one catalog source for the run, as here.
     ...(options.configured === false ? {} : {
       loomCommands: config,
-      loomCommandCatalog: createLoomCommandCatalogSource(
-        config,
-        hostProcessRunner,
-      ),
+      loomCommandCatalog: createLoomCommandCatalogSource(config),
     }),
     ...(options.ceiling !== undefined
       ? {
@@ -177,7 +192,11 @@ const contextWith = (
       : {}),
     signal: controller.signal,
   };
-  return { context: context as HarnessToolContext, calls };
+  return {
+    context: context as HarnessToolContext,
+    calls: host.requests,
+    config,
+  };
 };
 
 /** Narrows a listing to its success arm, failing the test otherwise. */
@@ -216,7 +235,10 @@ const sandbox: SandboxRuntime = {
   runShell: () => Promise.resolve({ stdout: "", stderr: "", exitCode: 0 }),
 };
 
-/** Helper for engine tests, which answers list and run like `contextWith`. */
+/**
+ * Helper for engine tests, which answers list and run like `contextWith`, and
+ * records every process the engine starts on the host, refusing it.
+ */
 const engineWith = (
   answer: string,
   options: {
@@ -225,11 +247,16 @@ const engineWith = (
     manifest?: () => string;
   } = {},
 ) => {
-  const calls: ProcessRunRequest[] = [];
+  const processes: ProcessRunRequest[] = [];
+  host.requests.length = 0;
+  answers = {
+    list: () => new Response(options.manifest?.() ?? JSON.stringify(MANIFEST)),
+    run: () => new Response(answer),
+  };
   const engine = new CfHarnessEngine({
     model: "gpt-5.4",
     sandboxRuntime: sandbox,
-    loomCommands: freshConfig(),
+    loomCommands: configFor(host.url),
     ...(options.cfcEnforcementMode !== undefined
       ? { cfcEnforcementMode: options.cfcEnforcementMode }
       : {}),
@@ -246,23 +273,28 @@ const engineWith = (
       : {}),
     processRunner: {
       run(request) {
-        calls.push(request);
-        return Promise.resolve({
-          stdout: request.args[1] === "list"
-            ? options.manifest?.() ?? JSON.stringify(MANIFEST)
-            : answer,
-          stderr: "",
-          exitCode: 0,
-        });
+        processes.push(request);
+        return Promise.reject(new Error("No host process may start."));
       },
     },
   });
-  return { engine, calls };
+  return { engine, calls: host.requests, processes };
 };
 
 describe("loom-commands tools", () => {
+  beforeAll(() => {
+    host = startCommandHost({
+      list: (request) => answers.list(request),
+      run: (body, request) => answers.run(body, request),
+    });
+  });
+
+  afterAll(async () => {
+    await host[Symbol.asyncDispose]();
+  });
+
   describe("availability", () => {
-    /** Backing with everything but the command broker switched off. */
+    /** Backing with everything but the command endpoint switched off. */
     const backing = {
       fabricSessionAvailable: false,
       patternIndexAvailable: false,
@@ -276,7 +308,6 @@ describe("loom-commands tools", () => {
       expect([...LOOM_COMMAND_TOOL_IDS]).toEqual([
         "list_commands",
         "run_command",
-        "run_read_command",
       ]);
       expect(getBuiltinTool("list_commands")?.descriptor.effectClass).toBe(
         "read",
@@ -284,27 +315,11 @@ describe("loom-commands tools", () => {
       expect(getBuiltinTool("run_command")?.descriptor.effectClass).toBe(
         "write",
       );
-      expect(getBuiltinTool("run_read_command")?.descriptor.effectClass).toBe(
-        "read",
-      );
       expect(LOOM_COMMAND_TOOLS.map((tool) => tool.descriptor.toolId))
-        .toEqual(["list_commands", "run_command", "run_read_command"]);
+        .toEqual(["list_commands", "run_command"]);
     });
 
-    it("marks the reads the host grants, and not the write", () => {
-      expect(
-        LOOM_COMMAND_TOOLS.map((tool) => [
-          tool.descriptor.toolId,
-          tool.descriptor.hostGrantedRead,
-        ]),
-      ).toEqual([
-        ["list_commands", true],
-        ["run_command", undefined],
-        ["run_read_command", true],
-      ]);
-    });
-
-    it("withholds the tools without a host command broker and offers them with one", () => {
+    it("withholds the tools without a host command endpoint and offers them with one", () => {
       const without = { ...backing, loomCommandsAvailable: false };
       for (const toolId of LOOM_COMMAND_TOOL_IDS) {
         expect(withheldToolIds(without).has(toolId)).toBe(true);
@@ -322,7 +337,10 @@ describe("loom-commands tools", () => {
       } as unknown as Parameters<typeof harnessSessionToolBacking>[0];
       expect(harnessSessionToolBacking(base).loomCommandsAvailable).toBe(false);
       expect(
-        harnessSessionToolBacking({ ...base, loomCommands: freshConfig() })
+        harnessSessionToolBacking({
+          ...base,
+          loomCommands: configFor("http://127.0.0.1:1"),
+        })
           .loomCommandsAvailable,
       ).toBe(true);
     });
@@ -344,7 +362,7 @@ describe("loom-commands tools", () => {
   });
 
   describe("listCommandsTool", () => {
-    it("returns an error without starting a process when the run has no configuration", async () => {
+    it("returns an error without sending a request when the run has no configuration", async () => {
       const { context, calls } = contextWith({ configured: false });
       expect(await listCommandsTool.invoke(context, {})).toMatchObject({
         status: "error",
@@ -353,7 +371,7 @@ describe("loom-commands tools", () => {
       expect(calls).toHaveLength(0);
     });
 
-    it("returns an error without starting a process once the turn is cancelled", async () => {
+    it("returns an error without sending a request once the turn is cancelled", async () => {
       const { context, calls } = contextWith({ aborted: true });
       expect(await listCommandsTool.invoke(context, {})).toMatchObject({
         status: "error",
@@ -363,14 +381,14 @@ describe("loom-commands tools", () => {
     });
 
     it("relays a host failure as a typed error", async () => {
-      const { context } = contextWith({ manifest: "Error: no broker" });
+      const { context } = contextWith({ manifest: "Error: no host" });
       expect(await listCommandsTool.invoke(context, {})).toMatchObject({
         status: "error",
         code: "command_failed",
       });
     });
 
-    it("returns the commands an agent may run, the hidden count, and the effect notice", async () => {
+    it("returns the commands the host listed and the effect notice", async () => {
       const { context } = contextWith();
       const output = listed(await listCommandsTool.invoke(context, {}));
       expect(output.notice).toBe(LOOM_COMMANDS_EFFECT_NOTICE);
@@ -393,28 +411,8 @@ describe("loom-commands tools", () => {
           title: "Gather what is known about a person.",
         },
       ]);
-      expect(output.hidden).toBe(1);
       expect(output.compacted).toBeUndefined();
       expect(output.omitted).toBeUndefined();
-    });
-
-    it("shows the broker's read-only grant on the entries it stamps, and on no other", async () => {
-      const { context } = contextWith({
-        manifest: JSON.stringify({
-          commands: [
-            { id: "loom.inspect", effect: "read", readOnlyGranted: true },
-            { id: "loom.read", effect: "read", readOnlyGranted: "true" },
-            { id: "loom.compose", effect: "change" },
-          ],
-        }),
-      });
-      const output = listed(await listCommandsTool.invoke(context, {}));
-      expect(output.entries.map((entry) => [entry.name, entry.readOnlyGranted]))
-        .toEqual([
-          ["loom.inspect", true],
-          ["loom.read", undefined],
-          ["loom.compose", undefined],
-        ]);
     });
 
     it("returns the full argument schema, without `x-*` keywords, only for a command named in `detail`", async () => {
@@ -438,6 +436,18 @@ describe("loom-commands tools", () => {
         },
       });
       expect(JSON.stringify(output)).not.toContain("x-");
+    });
+
+    it("shows the commands the host names as relevant first, marked, and keeps every other command", async () => {
+      const { context, config } = contextWith();
+      config.relevant = ["people-discovery.dossier", "not.listed"];
+      const output = listed(await listCommandsTool.invoke(context, {}));
+      expect(output.entries.map((entry) => [entry.name, entry.relevant]))
+        .toEqual([
+          ["people-discovery.dossier", true],
+          ["loom.compose", undefined],
+          ["loom.inspect", undefined],
+        ]);
     });
 
     it("counts unreadable rows as omitted", async () => {
@@ -476,7 +486,7 @@ describe("loom-commands tools", () => {
   });
 
   describe("runCommandTool", () => {
-    it("returns an error without starting a process when the run has no configuration", async () => {
+    it("returns an error without sending a request when the run has no configuration", async () => {
       const { context, calls } = contextWith({ configured: false });
       expect(
         await runCommandTool.invoke(context, { command: "a.b", args: {} }),
@@ -488,7 +498,7 @@ describe("loom-commands tools", () => {
       expect(calls).toHaveLength(0);
     });
 
-    it("refuses malformed input before starting a process", async () => {
+    it("refuses malformed input before sending a request", async () => {
       const inputs = [
         {},
         { args: {} },
@@ -518,7 +528,7 @@ describe("loom-commands tools", () => {
       }
     });
 
-    it("refuses args larger than the contract's bound before starting a process", async () => {
+    it("refuses args larger than the contract's bound before sending a request", async () => {
       const { context, calls } = contextWith();
       const output = await runCommandTool.invoke(context, {
         command: "loom.compose",
@@ -534,32 +544,66 @@ describe("loom-commands tools", () => {
       expect(calls).toHaveLength(0);
     });
 
-    it("does not dispatch after cancellation while the fresh catalog is loading", async () => {
-      for (const tool of [runCommandTool, runReadCommandTool]) {
-        const { context, calls } = contextWith({
-          cancelDuringListing: true,
-          manifest: JSON.stringify({
-            commands: [{
-              id: "loom.inspect",
-              effect: "read",
-              readOnlyGranted: true,
-              inputs: { type: "object" },
-            }],
-          }),
+    it("ends only the cancelled caller's wait on a catalog read another caller shares", async () => {
+      for (const cancelled of ["first", "second"] as const) {
+        const first = contextWith();
+        const second = contextWith();
+        const listing = Promise.withResolvers<Response>();
+        answers.list = () => listing.promise;
+        // Both callers wait on the one read the run holds.
+        const signals = [new AbortController(), new AbortController()];
+        Object.assign(first.context, { signal: signals[0].signal });
+        Object.assign(second.context, {
+          signal: signals[1].signal,
+          loomCommandCatalog: first.context.loomCommandCatalog,
         });
-        expect(
-          await tool.invoke(context, { command: "loom.inspect", args: {} }),
-        )
-          .toMatchObject({
-            status: "failed_to_deliver",
-            code: "cancelled",
-            landed: "no",
-          });
-        expect(calls.map((call) => call.args[1])).toEqual(["list"]);
+        const call = { command: "loom.compose", args: {} };
+        const pending = [
+          runCommandTool.invoke(first.context, call),
+          runCommandTool.invoke(second.context, call),
+        ];
+        signals[cancelled === "first" ? 0 : 1].abort();
+        listing.resolve(new Response(JSON.stringify(MANIFEST)));
+        const [one, two] = await Promise.all(pending);
+        const [gone, kept] = cancelled === "first" ? [one, two] : [two, one];
+        expect(gone).toMatchObject({
+          status: "failed_to_deliver",
+          code: "cancelled",
+          landed: "no",
+        });
+        expect(kept).toMatchObject({ status: "executed" });
+        expect(host.requests.map((request) => request.path)).toEqual([
+          "/commands",
+          "/command",
+        ]);
       }
     });
 
-    it("returns an error without starting a process once the turn is cancelled", async () => {
+    it("does not dispatch after cancellation while the fresh catalog is loading", async () => {
+      const { context, calls } = contextWith({
+        cancelDuringListing: true,
+        manifest: JSON.stringify({
+          commands: [{
+            id: "loom.inspect",
+            effect: "read",
+            inputs: { type: "object" },
+          }],
+        }),
+      });
+      expect(
+        await runCommandTool.invoke(context, {
+          command: "loom.inspect",
+          args: {},
+        }),
+      ).toMatchObject({
+        status: "failed_to_deliver",
+        code: "cancelled",
+        landed: "no",
+      });
+      expect(calls.map((call) => call.path)).toEqual(["/commands"]);
+    });
+
+    it("returns an error without sending a request once the turn is cancelled", async () => {
       const { context, calls } = contextWith({ aborted: true });
       expect(
         await runCommandTool.invoke(context, {
@@ -582,7 +626,7 @@ describe("loom-commands tools", () => {
         code: "malformed_payload",
         landed: "no",
       });
-      expect(calls.map((call) => call.args[1])).toEqual(["list"]);
+      expect(calls.map((call) => call.path)).toEqual(["/commands"]);
     });
 
     it("returns `unknown_command` with the nearest listed names for a command the listing leaves out, sending nothing", async () => {
@@ -606,7 +650,7 @@ describe("loom-commands tools", () => {
           expect(output.suggestions[0]).toBe(suggestion);
         }
         expect(output.hint).toContain("list_commands");
-        expect(calls.map((call) => call.args[1])).toEqual(["list"]);
+        expect(calls.map((call) => call.path)).toEqual(["/commands"]);
       }
     });
 
@@ -641,24 +685,19 @@ describe("loom-commands tools", () => {
         command: "loom.compose",
         args: {},
       });
-      expect(calls.map((call) => call.args[1])).toEqual([
-        "list",
-        "run",
-        "run",
-        "list",
-        "run",
+      expect(calls.map((call) => call.path)).toEqual([
+        "/commands",
+        "/command",
+        "/command",
+        "/commands",
+        "/command",
       ]);
     });
 
     describe("batches", () => {
       it("returns one result per call in order, running the listed calls and sending nothing for an unknown one", async () => {
         const { context, calls } = contextWith({
-          answer: (request) =>
-            Promise.resolve({
-              stdout: JSON.stringify({ ok: true, id: request.args[2] }),
-              stderr: "",
-              exitCode: 0,
-            }),
+          answer: ({ id }) => Response.json({ ok: true, id }),
         });
         const output = batched(
           await runCommandTool.invoke(context, {
@@ -688,66 +727,20 @@ describe("loom-commands tools", () => {
         );
         expect(sequence).toEqual([...sequence].sort((a, b) => a - b));
         expect(new Set(sequence).size).toBe(3);
-        expect(calls.map((call) => call.args.slice(1, 3))).toEqual([
-          ["list", "--json"],
-          ["run", "loom.compose"],
-          ["run", "loom.inspect"],
-        ]);
-      });
-
-      it("sends a read batch's granted reads read-only and refuses its other calls without sending them", async () => {
-        const { context, calls } = contextWith({
-          manifest: JSON.stringify({
-            commands: [
-              { id: "loom.inspect", effect: "read", readOnlyGranted: true },
-              { id: "loom.compose", effect: "change", readOnlyGranted: true },
-              { id: "loom.read", effect: "read" },
-            ],
-          }),
-          answer: (request) =>
-            Promise.resolve({
-              stdout: JSON.stringify({ ok: true, id: request.args[2] }),
-              stderr: "",
-              exitCode: 0,
-            }),
-        });
-        const output = batched(
-          await runReadCommandTool.invoke(context, {
-            calls: [
-              { command: "loom.inspect", args: {} },
-              { command: "loom.compose", args: {} },
-              { command: "loom.read", args: {} },
-            ],
-          }),
-        );
-        expect(output.results).toMatchObject([
-          { status: "executed", outcome: { ok: true, id: "loom.inspect" } },
-          { status: "failed_to_deliver", code: "not_granted", landed: "no" },
-          { status: "failed_to_deliver", code: "not_granted", landed: "no" },
-        ]);
-        expect(calls.map((call) => call.args.slice(1))).toEqual([
-          ["list", "--json"],
-          [
-            "run",
-            "loom.inspect",
-            "--args-json",
-            "-",
-            "--json",
-            "--read-only",
-          ],
-        ]);
+        expect(calls.map((call) => [call.path, call.body && idOf(call.body)]))
+          .toEqual([
+            ["/commands", undefined],
+            ["/command", "loom.compose"],
+            ["/command", "loom.inspect"],
+          ]);
       });
 
       it("returns a call whose answer was lost beside its siblings' answers", async () => {
         const { context } = contextWith({
-          answer: (request) =>
-            request.args[2] === "loom.inspect"
-              ? Promise.reject(new Error("killed"))
-              : Promise.resolve({
-                stdout: JSON.stringify({ ok: true }),
-                stderr: "",
-                exitCode: 0,
-              }),
+          answer: ({ id }) =>
+            id === "loom.inspect"
+              ? new Response("killed", { status: 502 })
+              : Response.json({ ok: true }),
         });
         const output = batched(
           await runCommandTool.invoke(context, {
@@ -775,13 +768,8 @@ describe("loom-commands tools", () => {
         const { context } = contextWith({
           answer: () => {
             started += 1;
-            const answer = Promise.withResolvers<ProcessRunResult>();
-            const settle = () =>
-              answer.resolve({
-                stdout: JSON.stringify({ ok: true }),
-                stderr: "",
-                exitCode: 0,
-              });
+            const answer = Promise.withResolvers<Response>();
+            const settle = () => answer.resolve(Response.json({ ok: true }));
             if (released) settle();
             else pending.push(settle);
             if (pending.length === 4) fourInFlight.resolve();
@@ -953,16 +941,10 @@ describe("loom-commands tools", () => {
 
       it("leaves out a result's hint and keeps the signature a `bad-args` refusal carries", async () => {
         const { context } = contextWith({
-          answer: (request) =>
-            Promise.resolve({
-              stdout: JSON.stringify({
-                ok: false,
-                code: request.args[2] === "loom.compose"
-                  ? "forbidden"
-                  : "bad-args",
-              }),
-              stderr: "",
-              exitCode: 0,
+          answer: ({ id }) =>
+            Response.json({
+              ok: false,
+              code: id === "loom.compose" ? "forbidden" : "bad-args",
             }),
         });
         const [refused, badArgs] = batched(
@@ -981,21 +963,13 @@ describe("loom-commands tools", () => {
       it("withholds a call's answer above the ceiling and leaves its label out of the batch's", async () => {
         const { context } = contextWith({
           ceiling: [OWNER],
-          answer: (request) =>
-            Promise.resolve({
-              stdout: JSON.stringify({
-                ok: true,
-                detail: request.args[2] === "loom.inspect"
-                  ? "secret detail"
-                  : "plain",
-                ifc: {
-                  confidentiality: [
-                    request.args[2] === "loom.inspect" ? HEALTH : OWNER,
-                  ],
-                },
-              }),
-              stderr: "",
-              exitCode: 0,
+          answer: ({ id }) =>
+            Response.json({
+              ok: true,
+              detail: id === "loom.inspect" ? "secret detail" : "plain",
+              ifc: {
+                confidentiality: [id === "loom.inspect" ? HEALTH : OWNER],
+              },
             }),
         });
         const output = batched(
@@ -1021,32 +995,25 @@ describe("loom-commands tools", () => {
 
       it("rejects a call whose configuration became invalid after the catalog was read, rather than reporting an answer lost", async () => {
         for (const batch of [false, true]) {
-          const config = freshConfig();
-          const { context, calls } = contextWith({ config });
+          const { context, calls, config } = contextWith();
           await listCommandsTool.invoke(context, {});
-          config.cliPath = "loom";
+          config.url = "loom";
           const call = { command: "loom.compose", args: {} };
           await expect(
             runCommandTool.invoke(context, batch ? { calls: [call] } : call),
-          ).rejects.toThrow("absolute `cliPath`");
-          expect(calls.map((request) => request.args[1])).toEqual(["list"]);
+          ).rejects.toThrow("endpoint");
+          expect(calls.map((request) => request.path)).toEqual(["/commands"]);
         }
       });
 
       it("joins the executed calls' labels as the batch's", async () => {
         const { context } = contextWith({
-          answer: (request) =>
-            Promise.resolve({
-              stdout: JSON.stringify({
-                ok: true,
-                ifc: {
-                  confidentiality: [
-                    request.args[2] === "loom.inspect" ? HEALTH : OWNER,
-                  ],
-                },
-              }),
-              stderr: "",
-              exitCode: 0,
+          answer: ({ id }) =>
+            Response.json({
+              ok: true,
+              ifc: {
+                confidentiality: [id === "loom.inspect" ? HEALTH : OWNER],
+              },
             }),
         });
         const output = batched(
@@ -1066,7 +1033,7 @@ describe("loom-commands tools", () => {
 
     it("returns an answer that may have landed when the host's answer is lost", async () => {
       const { context } = contextWith({
-        answer: () => Promise.reject(new Error("killed")),
+        answer: () => new Response("killed", { status: 502 }),
       });
       expect(
         await runCommandTool.invoke(context, {
@@ -1139,11 +1106,17 @@ describe("loom-commands tools", () => {
           version: 2,
         },
       }]);
-      expect(calls[1].args.slice(0, 3)).toEqual([
-        "command",
-        "run",
-        "loom.compose",
-      ]);
+      expect(calls[1]).toEqual({
+        method: "POST",
+        path: "/command",
+        runId: "job-1",
+        body: {
+          id: "loom.compose",
+          args: { title: "Trip" },
+          context: { loom_id: "loom-0123456789abcdef", expected_version: 1 },
+          actor: "agent:agent-runner",
+        },
+      });
     });
 
     it("withholds an answer above the ceiling and shows only the outcome's summary", async () => {
@@ -1179,7 +1152,7 @@ describe("loom-commands tools", () => {
       expect(referents).toEqual([]);
     });
 
-    it("restates the broker's and the command layer's refusals as `not_granted`, keeping the host's code", async () => {
+    it("restates the host's and the command layer's refusals as `not_granted`, keeping the host's code", async () => {
       for (const hostCode of ["forbidden", "refused"]) {
         const { context } = contextWith({
           answer: JSON.stringify({ ok: false, code: hostCode, error: "no" }),
@@ -1341,7 +1314,7 @@ describe("loom-commands tools", () => {
         { command: "loom.compose", args: {} },
       );
       expect(executed(output).entry?.status).toBe("withheld");
-      expect(bounded.calls[0].env?.LOOM_PAGE_RPC_QUEUE).toBe("/trusted/queue");
+      expect(bounded.calls[0].runId).toBe("job-1");
       const unbounded = engineWith(answer);
       const unboundedOutput = await unbounded.engine.invokeBuiltinTool(
         "run_command",
@@ -1352,205 +1325,6 @@ describe("loom-commands tools", () => {
   });
 
   describe("prompt loop", () => {
-    /** Lists commands, invokes one read, then finishes a context-bound task. */
-    const readOnce = (
-      engine: CfHarnessEngine,
-      role: PromptSlotBinding["role"] | null = "context",
-    ) => {
-      const payloads = ["list_commands", "run_read_command"].map((name) => ({
-        choices: [{
-          index: 0,
-          message: {
-            role: "assistant",
-            content: "",
-            tool_calls: [{
-              id: name,
-              type: "function",
-              function: {
-                name,
-                arguments: JSON.stringify(
-                  name === "list_commands" ? {} : {
-                    command: "loom.inspect",
-                    args: {},
-                    loomId: "loom-0123456789abcdef",
-                  },
-                ),
-              },
-            }],
-          },
-        }],
-      }));
-      let index = 0;
-      return new CfHarnessPromptLoop({
-        engine,
-        apiKey: "synthetic-test-key",
-        model: "gpt-5.4",
-        allowedToolIds: ["list_commands", "run_read_command"],
-        fetchFn: (_url, init) =>
-          Promise.resolve(
-            new Response(
-              JSON.stringify(
-                responsesBodyFromChatFixture(
-                  payloads[index++] ?? {
-                    choices: [{
-                      index: 0,
-                      message: { role: "assistant", content: "Done" },
-                    }],
-                  },
-                  init?.body,
-                ),
-              ),
-              { status: 200 },
-            ),
-          ),
-      }).runPrompt({
-        prompt: "Read the trip loom",
-        ...(role === null ? {} : {
-          promptSlotBinding: {
-            type: CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
-            source: { type: "test.prompt-slot", subject: "preparation" },
-            role,
-            kernelName: "cf-harness",
-            surface: "test",
-            subject: "preparation",
-            eventId: "event-preparation",
-          },
-        }),
-      });
-    };
-
-    for (
-      const cfcEnforcementMode of [
-        "enforce-explicit",
-        "enforce-strict",
-      ] as const
-    ) {
-      it(`runs a broker-granted context read at ${cfcEnforcementMode} and records its observation`, async () => {
-        const { engine, calls } = engineWith(
-          JSON.stringify({
-            ok: true,
-            outputs: { title: "Trip loom" },
-            ifc: { confidentiality: [OWNER] },
-          }),
-          {
-            cfcEnforcementMode,
-            manifest: () =>
-              JSON.stringify({
-                commands: [{
-                  id: "loom.inspect",
-                  effect: "read",
-                  readOnlyGranted: true,
-                }],
-              }),
-          },
-        );
-        const result = await readOnce(engine);
-        expect(calls.map((call) => call.args)).toEqual([
-          ["command", "list", "--json"],
-          ["command", "list", "--json"],
-          [
-            "command",
-            "run",
-            "loom.inspect",
-            "--args-json",
-            "-",
-            "--json",
-            "--loom",
-            "loom-0123456789abcdef",
-            "--read-only",
-          ],
-        ]);
-        expect(result.runState.policyDecisions).toContainEqual(
-          expect.objectContaining({
-            toolId: "run_read_command",
-            decision: "allowed",
-          }),
-        );
-        const message = result.transcript.find((entry) =>
-          entry.role === "tool" && entry.toolName === "run_read_command"
-        );
-        expect(message).toBeDefined();
-        if (message?.role !== "tool") throw new Error("Missing read output");
-        expect(JSON.parse(message.content)).toMatchObject({
-          status: "executed",
-        });
-        expect(JSON.parse(message.content)).not.toHaveProperty("cfc");
-        expect(engine.getRunState().cfcModelContext?.observations)
-          .toContainEqual(
-            expect.objectContaining({
-              toolId: "run_read_command",
-              label: { confidentiality: [OWNER] },
-            }),
-          );
-      });
-
-      for (
-        const row of [
-          { id: "loom.inspect", effect: "change", readOnlyGranted: true },
-          { id: "loom.inspect", readOnlyGranted: true },
-          { id: "loom.inspect", effect: "unknown", readOnlyGranted: true },
-          { id: "loom.inspect", effect: "read" },
-          { id: "loom.inspect", effect: "read", readOnlyGranted: false },
-          { id: "loom.inspect", effect: "read", readOnlyGranted: "true" },
-        ]
-      ) {
-        it(`refuses a context-bound read at ${cfcEnforcementMode} when the fresh broker row is ${JSON.stringify(row)}`, async () => {
-          let lists = 0;
-          const { engine, calls } = engineWith(JSON.stringify({ ok: true }), {
-            cfcEnforcementMode,
-            manifest: () =>
-              JSON.stringify({
-                commands: [
-                  ++lists === 1
-                    ? {
-                      id: "loom.inspect",
-                      effect: "read",
-                      readOnlyGranted: true,
-                    }
-                    : row,
-                ],
-              }),
-          });
-          const result = await readOnce(engine);
-          expect(calls.map((call) => call.args[1])).toEqual(["list", "list"]);
-          const message = result.transcript.find((entry) =>
-            entry.role === "tool" && entry.toolName === "run_read_command"
-          );
-          expect(message).toBeDefined();
-          if (message?.role !== "tool") throw new Error("Missing read output");
-          expect(JSON.parse(message.content)).toMatchObject({
-            status: "failed_to_deliver",
-            code: "not_granted",
-            landed: "no",
-          });
-        });
-      }
-    }
-
-    for (const role of ["quote", null] as const) {
-      it(`does not grant strict broker reads to ${role ?? "absent"} task authority`, async () => {
-        const { engine, calls } = engineWith(JSON.stringify({ ok: true }), {
-          cfcEnforcementMode: "enforce-strict",
-          manifest: () =>
-            JSON.stringify({
-              commands: [{
-                id: "loom.inspect",
-                effect: "read",
-                readOnlyGranted: true,
-              }],
-            }),
-        });
-        const result = await readOnce(engine, role);
-        expect(calls).toEqual([]);
-        expect(
-          result.runState.policyDecisions?.filter((row) =>
-            row.decision === "denied"
-          ).map((row) => row.toolId),
-        )
-          .toEqual(["list_commands", "run_read_command"]);
-      });
-    }
-
     /**
      * Has the model call `run_command` once under `binding` — `loom.compose`
      * unless `input` says otherwise — then finish.
@@ -1622,8 +1396,8 @@ describe("loom-commands tools", () => {
         const [binding, decision, hostCalls] of [
           [context, "denied", []],
           [directPromptSlotBindingFor("loom-commands"), "allowed", [
-            "list",
-            "run",
+            "/commands",
+            "/command",
           ]],
         ] as const
       ) {
@@ -1631,11 +1405,7 @@ describe("loom-commands tools", () => {
           cfcEnforcementMode: "enforce-explicit",
           manifest: () =>
             JSON.stringify({
-              commands: [{
-                id: "loom.compose",
-                effect: "read",
-                readOnlyGranted: true,
-              }],
+              commands: [{ id: "loom.compose", effect: "read" }],
             }),
         });
         const result = await composeOnce(engine, binding);
@@ -1643,7 +1413,7 @@ describe("loom-commands tools", () => {
           entry.toolId === "run_command"
         );
         expect(record?.decision).toBe(decision);
-        expect(calls.map((call) => call.args[1])).toEqual([...hostCalls]);
+        expect(calls.map((call) => call.path)).toEqual([...hostCalls]);
       }
     });
 
@@ -1667,9 +1437,9 @@ describe("loom-commands tools", () => {
         const [binding, decisions, hostCalls] of [
           [context, ["denied"], []],
           [directPromptSlotBindingFor("loom-commands"), ["allowed"], [
-            "list",
-            "run",
-            "run",
+            "/commands",
+            "/command",
+            "/command",
           ]],
         ] as const
       ) {
@@ -1682,7 +1452,7 @@ describe("loom-commands tools", () => {
             .filter((entry) => entry.toolId === "run_command")
             .map((entry) => entry.decision),
         ).toEqual([...decisions]);
-        expect(calls.map((call) => call.args[1])).toEqual([...hostCalls]);
+        expect(calls.map((call) => call.path)).toEqual([...hostCalls]);
       }
     });
 
@@ -1781,7 +1551,7 @@ describe("loom-commands tools", () => {
         prompt: "Compose the trip loom",
         promptSlotBinding: directPromptSlotBindingFor("loom-commands"),
       });
-      expect(calls.map((call) => call.args[1])).toEqual(["list", "run"]);
+      expect(calls.map((call) => call.path)).toEqual(["/commands", "/command"]);
       const toolMessage = result.transcript.find((message) =>
         message.role === "tool"
       );
@@ -1796,6 +1566,88 @@ describe("loom-commands tools", () => {
         context?.observations.map((observation) => observation.toolId),
       ).toEqual(["run_command"]);
       expect(context?.label).toEqual({ confidentiality: [OWNER] });
+    });
+
+    it("runs a command over the host's endpoint without starting a process", async () => {
+      // No `loom` executable and no CLI configuration: the engine's host
+      // process runner refuses every process, and the call still lands.
+      const { engine, calls, processes } = engineWith(
+        JSON.stringify({ ok: true, id: "loom.compose" }),
+      );
+      const result = await composeOnce(
+        engine,
+        directPromptSlotBindingFor("loom-commands"),
+      );
+      expect(processes).toEqual([]);
+      expect(calls).toEqual([
+        { method: "GET", path: "/commands", runId: "job-1" },
+        {
+          method: "POST",
+          path: "/command",
+          runId: "job-1",
+          body: { id: "loom.compose", args: {}, actor: "agent:agent-runner" },
+        },
+      ]);
+      const toolMessage = result.transcript.find((message) =>
+        message.role === "tool"
+      );
+      expect(JSON.parse((toolMessage as { content: string }).content))
+        .toMatchObject({ status: "executed", outcome: { ok: true } });
+    });
+
+    it("sends the host's run id and actor whatever the model's args name", async () => {
+      const forged = {
+        "X-Loom-Agent-Run-Id": "job-forged",
+        runId: "job-forged",
+        actor: "user:forged",
+      };
+      const { engine, calls } = engineWith(JSON.stringify({ ok: true }));
+      await composeOnce(engine, directPromptSlotBindingFor("loom-commands"), {
+        command: "loom.compose",
+        args: forged,
+      });
+      expect(calls.map((call) => call.runId)).toEqual(["job-1", "job-1"]);
+      expect(calls[1].body).toEqual({
+        id: "loom.compose",
+        args: forged,
+        actor: "agent:agent-runner",
+      });
+    });
+
+    it("posts only the id, args, context and configured actor, dropping any other field a call names", async () => {
+      const smuggled = {
+        consent: { grant: "forged" },
+        rest: "forged rest",
+        router_nonce: "forged-nonce",
+        actor: "user:forged",
+        context: { loom_id: "loom-ffffffffffffffff" },
+        invocation: { origin: "pill" },
+        read_only: false,
+      };
+      const call = {
+        command: "loom.inspect",
+        args: { section: "a" },
+        loomId: "loom-0123456789abcdef",
+        expectedVersion: 2,
+        ...smuggled,
+      } as unknown as RunCommandInput;
+      const expected = {
+        id: "loom.inspect",
+        args: { section: "a" },
+        context: { loom_id: "loom-0123456789abcdef", expected_version: 2 },
+        actor: "agent:agent-runner",
+      };
+      for (const input of [call, { calls: [call] } as RunCommandInput]) {
+        const { context, calls } = contextWith();
+        await runCommandTool.invoke(context, input);
+        expect(calls.filter((request) => request.path === "/command"))
+          .toEqual([{
+            method: "POST",
+            path: "/command",
+            runId: "job-1",
+            body: expected,
+          }]);
+      }
     });
   });
 });

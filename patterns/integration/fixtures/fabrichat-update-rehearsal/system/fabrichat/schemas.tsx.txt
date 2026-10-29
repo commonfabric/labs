@@ -22,7 +22,7 @@ import {
 } from "commonfabric";
 import type { FileEntry } from "../fabrifile/schemas.tsx";
 import type { FileStoreRecord } from "../fabrifile/store.tsx";
-import type { ProfileInbox } from "../system/profile-home.tsx";
+import type { ProfileInbox } from "../profile-home/profile-home.tsx";
 
 //
 // Reviewed surfaces

@@ -32,6 +32,7 @@ import {
 import {
   pinShuffleSeed,
   shuffledPaths,
+  shuffleFlag,
   shuffleSeed,
 } from "@commonfabric/test-support/shuffle";
 import {
@@ -654,20 +655,22 @@ export async function findIntegrationTestFiles(
 }
 
 /**
- * Build the `deno test` arguments for a name-filtered integration run. The
+ * Build the `deno test` command for a name-filtered integration run. The
  * matching files are passed as explicit paths under `relDir`. Deno does not
  * filter explicitly-passed paths through a package `test` config's `exclude`,
  * so they run even where that config drops the `integration/` directory.
- * The run writes its JUnit report into `junitDir`, and carries the
- * registration preload beside it.
+ * The files run in the order `seed` shuffles them into. The run writes its
+ * JUnit report into `junitDir`, and carries the registration preload beside
+ * it.
  */
-export function buildFilteredTestArgs(
+export function filteredTestCommand(
   pkg: string,
   relDir: string,
   testFiles: string[],
   junitDir: string,
+  seed: number,
 ): string[] {
-  const args = ["test", "--no-check", "-A"];
+  const args = ["deno", "test", "--no-check", "-A", shuffleFlag(seed)];
 
   if (pkg === "patterns") {
     args.push("--v8-flags=--max-old-space-size=4096", "--trace-leaks");
@@ -694,7 +697,8 @@ export function buildFilteredTestArgs(
  * `integration/` directory, leaving no modules to run. Explicit file paths skip
  * that filtering, so the files are enumerated here instead of passing a glob.
  * Returns a failing result, without running anything, when no file matches.
- * The report goes into `junitDir`, which the caller has made.
+ * The report goes into `junitDir`, which the caller has made. The files run
+ * in the order of the run's shuffle seed.
  */
 export async function runFilteredIntegration(
   pkg: string,
@@ -719,13 +723,14 @@ export async function runFilteredIntegration(
 
   // Resolved for the same reason as in runPackageIntegration: the child's
   // working directory is the package, not the orchestrator's.
-  const args = buildFilteredTestArgs(
+  const command = filteredTestCommand(
     pkg,
     relDir,
     testFiles,
     path.resolve(junitDir),
+    shuffleSeed(),
   );
-  return await run(["deno", ...args], {
+  return await run(command, {
     cwd: packageDir,
     env,
     inheritStdio: true,

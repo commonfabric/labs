@@ -53,7 +53,7 @@
     "check-docs": "deno run --allow-read --allow-write --allow-run --allow-env ./docs/check.ts",
     "check-no-waitfor": "deno run --allow-read ./tasks/check-no-waitfor.ts",
     "check-conflict-markers": "deno run --allow-read --allow-run=git ./tasks/check-conflict-markers.ts",
-    "check-test-shuffle": "deno run --allow-read --allow-run=git ./tasks/check-test-shuffle.ts",
+    "check-test-shuffle": "deno run --allow-read --allow-env --allow-run=git ./tasks/check-test-shuffle.ts",
     "check-control-characters": "deno run --allow-read --allow-run=git ./tasks/check-control-characters.ts",
     "check-local-program": "deno run --allow-read --allow-env --allow-run=git ./tasks/check-local-program.ts",
     "compile-cache-version": "deno run --allow-read --allow-write=runtime/runner/src/compilation-cache --allow-env --allow-ffi --allow-net=127.0.0.1 ./tasks/compile-cache-version.ts",

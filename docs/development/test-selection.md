@@ -1028,6 +1028,15 @@ the old name, since that is what a record of that day resolves to. Each
 run moves whatever an alias line written since the previous run gives to
 a new name, and says how many tests it moved.
 
+A path line also moves the file each test was last recorded in. A record's file
+moves as of the record's day. A file the aggregate carries moves as of the last
+day the aggregate read, since every record it folded is no newer than that. A
+change that moves a package's test files without renaming the tests therefore
+keeps those tests in the manifest, in the files they moved to, from the first
+run after its path lines land, as long as the lines are dated after the day
+the change lands. A record made on a line's date keeps its file, so a file
+named by one waits until `main` records the test again.
+
 A lane, and the coverage gate, apply the checkout's own alias lines to the
 manifest they read, as of the day the manifest was generated
 (`manifestUnderAliases` in `tasks/test-selection/manifest.ts`). A manifest

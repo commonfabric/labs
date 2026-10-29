@@ -42,6 +42,7 @@ import {
   resolvePieces,
   saveMirror,
 } from "./sync.ts";
+import { similarTopics } from "./similar.ts";
 import {
   type Clock,
   consoleTerminal,
@@ -335,7 +336,10 @@ function topicName(reference: string): string {
     : `${space === undefined ? "" : `//${space}/`}top/${number}`;
 }
 
-/** The text of a write: the argument given, else everything on stdin. */
+/**
+ * The text a command takes, such as a write's body: the argument given, else
+ * everything on stdin.
+ */
 async function textFrom(
   deps: TopicsDeps,
   given: string | undefined,
@@ -623,13 +627,7 @@ export async function searchAction(
       {
         matching: hits.length,
         topics: listed.map(({ topic, snippets }) => ({
-          number: topic.number,
-          address: `/${topic.address}`,
-          title: topic.title,
-          createdAt: topic.createdAt,
-          createdBy: topic.createdBy,
-          lastActivityAt: topic.lastActivityAt,
-          comments: topic.comments.filter((c) => !c.removed).length,
+          ...listing(topic),
           matches: snippets,
         })),
       },
@@ -649,6 +647,67 @@ export async function searchAction(
       : `${hits.length} of ${topics.length} Topics match.`,
   );
   deps.write(lines.join("\n"));
+}
+
+/** Runs the `similar` command. */
+export async function similarAction(
+  options: TopicsOptions & Pick<SearchScope, "exclude"> & {
+    limit?: number;
+    json?: boolean;
+  },
+  given: string | undefined,
+  deps: TopicsDeps = defaultDeps,
+): Promise<void> {
+  const text = await textFrom(deps, given, "text");
+  const { topics } = await readTopics(
+    deps,
+    boardFrom(deps, options),
+    { offline: options.offline },
+  );
+  const hits = similarTopics(topics, text, options);
+  const limit = options.limit ?? DEFAULT_LIMIT;
+  const listed = hits.slice(0, limit);
+  if (options.json) {
+    deps.write(JSON.stringify(
+      {
+        matching: hits.length,
+        topics: listed.map(({ topic, similarity, shared }) => ({
+          ...listing(topic),
+          similarity,
+          shared,
+        })),
+      },
+      null,
+      2,
+    ));
+    return;
+  }
+  const lines = listed.flatMap(({ topic, similarity, shared }) => [
+    formatTopicLine(topic, nowFor(deps)),
+    `    similarity ${similarity.toPrecision(2)}; shared words: ${
+      shared.join(", ")
+    }`,
+  ]);
+  lines.push(
+    hits.length > limit
+      ? `${hits.length} Topics share words with the text; these are the ` +
+        `${limit} most like it (\`--limit\` lists more).`
+      : `${hits.length} of ${topics.length} Topics share words with the text.`,
+  );
+  deps.write(lines.join("\n"));
+}
+
+/** What a listing in JSON says of `topic`, beyond why it is listed. */
+function listing(topic: Topic) {
+  return {
+    number: topic.number,
+    address: `/${topic.address}`,
+    title: topic.title,
+    createdAt: topic.createdAt,
+    createdBy: topic.createdBy,
+    lastActivityAt: topic.lastActivityAt,
+    comments: topic.comments.filter((c) => !c.removed).length,
+  };
 }
 
 /**
@@ -899,6 +958,7 @@ export async function mentionAction(
 /** The options each command takes, beyond `--identity` and `--help`. */
 const OPTIONS: Record<string, readonly string[]> = {
   search: ["limit", "offline", "in", "exclude", "json"],
+  similar: ["limit", "offline", "exclude", "json"],
   show: ["offline", "json", "last", "comments-since"],
   sync: ["rebuild"],
   watch: [],
@@ -929,6 +989,13 @@ Reading:
                             body, comments, links, authors (default all).
       --exclude <pattern>   Leave out Topics whose title matches, such as
                             '^\\[(RESOLVED|DUPLICATE|OBSOLETE)'. Repeatable.
+  similar [text]            The Topics most like the text, such as an issue
+                            filed elsewhere or the body of a Topic about to be
+                            filed, most similar first, with the words they
+                            share. A Topic is compared by its title and body,
+                            word for word; a word counts for more the fewer
+                            Topics use it. Takes --limit and --exclude as
+                            search does.
   show <topic>...           Each Topic as Markdown: body, links, and comments.
       --last <count>        Only the last this many comments of each.
       --comments-since <date>
@@ -938,8 +1005,10 @@ Reading:
       --rebuild             Read the whole board again.
   watch                     The board, live, on the whole terminal: each
                             change shown as it happens. q quits.
-  --offline                 Read the copy as it stands (search, show).
-  --json                    Print JSON for a program to read (search, show).
+  --offline                 Read the copy as it stands (search, similar,
+                            show).
+  --json                    Print JSON for a program to read (search,
+                            similar, show).
 
 Writing:
   new <title> [body]        File a Topic.
@@ -951,9 +1020,9 @@ Writing:
   mention <topic> <other>   Record that one Topic references another.
   unmention <topic> <other> Remove those references.
 
-A body omitted from the arguments is read from stdin; give one that begins with
-- there, or after --. A Topic is named by its number (42, #42, top/42,
-//<space>/top/42) or its address.
+A body or a text omitted from the arguments is read from stdin; give one that
+begins with - there, or after --. A Topic is named by its number (42, #42,
+top/42, //<space>/top/42) or its address.
 
 Writes of authored content need --agent-name <name> (or CF_AGENT_NAME). Every
 write is a new one, and prints its invocation id before it is made. When a
@@ -1015,6 +1084,16 @@ export async function main(
     }
     return operands;
   };
+  // The positive whole number an option gives, if it gives one.
+  const count = (option: "limit" | "last"): number | undefined => {
+    const given = flags[option];
+    if (given === undefined) return undefined;
+    const value = Number(given);
+    if (!(Number.isInteger(value) && value > 0)) {
+      throw new Error(`\`--${option}\` takes a positive whole number.`);
+    }
+    return value;
+  };
   if (flags.help || command === undefined) {
     deps.write(USAGE);
     return;
@@ -1049,10 +1128,6 @@ export async function main(
   }
   switch (command) {
     case "search": {
-      const limit = flags.limit === undefined ? undefined : Number(flags.limit);
-      if (limit !== undefined && !(Number.isInteger(limit) && limit > 0)) {
-        throw new Error("`--limit` takes a positive whole number.");
-      }
       const fields = flags.in?.split(",").map((named) => {
         const field = FIELDS.find((field) => field === named.trim());
         if (field === undefined) {
@@ -1065,7 +1140,7 @@ export async function main(
       return await searchAction(
         {
           ...options,
-          limit,
+          limit: count("limit"),
           fields,
           exclude: flags.exclude.map(patternOf),
           json: flags.json,
@@ -1074,12 +1149,22 @@ export async function main(
         deps,
       );
     }
+    case "similar": {
+      const [text] = take(0, 1);
+      return await similarAction(
+        {
+          ...options,
+          limit: count("limit"),
+          exclude: flags.exclude.map(patternOf),
+          json: flags.json,
+        },
+        text,
+        deps,
+      );
+    }
     case "show": {
       take(1, Infinity);
-      const last = flags.last === undefined ? undefined : Number(flags.last);
-      if (last !== undefined && !(Number.isInteger(last) && last > 0)) {
-        throw new Error("`--last` takes a positive whole number.");
-      }
+      const last = count("last");
       // A day alone is the start of that day where the command runs, as a
       // time without a zone is.
       const given = flags["comments-since"];

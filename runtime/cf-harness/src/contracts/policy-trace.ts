@@ -23,7 +23,6 @@ export type HarnessPolicyDecisionReasonCode =
   | "cfc_enforce_explicit_direct_command"
   | "cfc_enforce_explicit_requires_direct_command"
   | "cfc_enforce_strict_direct_command"
-  | "cfc_enforce_strict_host_command_read"
   | "cfc_enforce_strict_requires_direct_command"
   | "write_file_disabled"
   | "write_file_observe_direct_command"

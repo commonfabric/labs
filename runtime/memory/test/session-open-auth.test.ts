@@ -5,12 +5,19 @@ import { describe, it } from "@std/testing/bdd";
 import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
 import { hashOf } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import {
+  type Delegation,
+  delegationCid,
+  issueDelegation,
+} from "@commonfabric/identity";
 
 import { MEMORY_PROTOCOL } from "../v2.ts";
 import { type ClientInfo, createClientInfo } from "../v2/client-info.ts";
 import {
   authorizeLoopbackSessionOpen,
+  MAX_PROOF_CHAIN_LENGTH,
   verifySessionOpenAuthorization,
+  verifySessionOpenProofs,
   wireAuthorizationOf,
 } from "../v2/session-open-auth.ts";
 import { alice, bob, mallory, space } from "./principal.ts";
@@ -602,5 +609,257 @@ describe("authorizeLoopbackSessionOpen", () => {
         verifyOptions(),
       ),
     ).toBeUndefined();
+  });
+});
+
+describe("verifySessionOpenProofs", () => {
+  // The space delegates to alice, and alice delegates on to bob: the two
+  // chains every case below is built from. The space is its own owner, as a
+  // profile space is, so the root issuer is the space DID.
+  const rootDelegation = (
+    fields: Partial<Parameters<typeof issueDelegation>[1]> = {},
+  ) =>
+    issueDelegation(space, {
+      aud: alice.did(),
+      sub: space.did(),
+      cmd: "/memory",
+      pol: [],
+      ...fields,
+    });
+  const onwardDelegation = (
+    fields: Partial<Parameters<typeof issueDelegation>[1]> = {},
+  ) =>
+    issueDelegation(alice, {
+      aud: bob.did(),
+      sub: space.did(),
+      cmd: "/memory/session.open",
+      pol: [],
+      ...fields,
+    });
+
+  /** A signed open as `principal` presenting `chain`, with `prf` naming it
+   * unless `prf` is given. */
+  const signedOpen = (
+    chain: Delegation[],
+    principal = alice,
+    prf: FabricValue = chain.map((d) => d.cid),
+  ) => ({
+    space: space.did(),
+    session: {},
+    invocation: {
+      iss: principal.did(),
+      cmd: "session.open",
+      sub: space.did(),
+      args: { protocol: MEMORY_PROTOCOL, session: {} },
+      ...signedFields(),
+      prf,
+    },
+    authorization: {
+      signature: new FabricBytes(new Uint8Array(64)),
+      proofs: chain.map((d) => new FabricBytes(d.bytes)),
+    },
+  });
+
+  /** Options for `principal`; `null` is an open authenticating no one. */
+  const proofOptions = (principal: string | null = alice.did()) => ({
+    space: space.did(),
+    principal: principal ?? undefined,
+    nowSeconds: now,
+  });
+
+  it("returns `undefined` for an open presenting no chain", async () => {
+    expect(
+      await verifySessionOpenProofs(await buildOpen(), proofOptions()),
+    ).toBeUndefined();
+  });
+
+  it("returns the root issuer for a chain of one from the space to the opener", async () => {
+    const root = await rootDelegation();
+    expect(
+      await verifySessionOpenProofs(signedOpen([root]), proofOptions()),
+    ).toEqual({ rootIssuer: space.did() });
+  });
+
+  it("returns the root issuer for a chain of two ending at the opener", async () => {
+    const chain = [await rootDelegation(), await onwardDelegation()];
+    expect(
+      await verifySessionOpenProofs(
+        signedOpen(chain, bob),
+        proofOptions(bob.did()),
+      ),
+    ).toEqual({ rootIssuer: space.did() });
+  });
+
+  it("returns the root issuer for an open naming an authenticated principal and carrying proofs alone", async () => {
+    const root = await rootDelegation();
+    expect(
+      await verifySessionOpenProofs(
+        {
+          space: space.did(),
+          session: {},
+          authorization: { proofs: [new FabricBytes(root.bytes)] },
+        },
+        proofOptions(),
+      ),
+    ).toEqual({ rootIssuer: space.did() });
+  });
+
+  it("throws when the open authenticates no principal", async () => {
+    const root = await rootDelegation();
+    await expect(
+      verifySessionOpenProofs(signedOpen([root]), proofOptions(null)),
+    ).rejects.toThrow("authenticates no principal");
+  });
+
+  it("throws when `prf` names a CID other than the proof's", async () => {
+    const root = await rootDelegation();
+    const other = await rootDelegation();
+    await expect(
+      verifySessionOpenProofs(
+        signedOpen([root], alice, [other.cid]),
+        proofOptions(),
+      ),
+    ).rejects.toThrow("not the delegation `prf` names");
+  });
+
+  it("throws when a signed open carries proofs without `prf`, or `prf` without proofs", async () => {
+    const root = await rootDelegation();
+    const { invocation, ...rest } = signedOpen([root]);
+    const { prf: _, ...unbound } = invocation;
+    await expect(
+      verifySessionOpenProofs({ ...rest, invocation: unbound }, proofOptions()),
+    ).rejects.toThrow("`prf` does not name one CID per proof");
+    await expect(
+      verifySessionOpenProofs(
+        {
+          ...rest,
+          invocation,
+          authorization: { signature: new FabricBytes(new Uint8Array(64)) },
+        },
+        proofOptions(),
+      ),
+    ).rejects.toThrow("`proofs` is not a non-empty array");
+  });
+
+  it("throws for a proof that is not bytes", async () => {
+    const root = await rootDelegation();
+    const open = signedOpen([root]);
+    await expect(
+      verifySessionOpenProofs(
+        { ...open, authorization: { ...open.authorization, proofs: ["x"] } },
+        proofOptions(),
+      ),
+    ).rejects.toThrow("proof 0 is not bytes");
+  });
+
+  it("throws for a proof whose signature does not verify", async () => {
+    const root = await rootDelegation();
+    const forged = root.bytes.slice();
+    forged[10] ^= 0xff;
+    const open = signedOpen([root]);
+    await expect(
+      verifySessionOpenProofs(
+        {
+          ...open,
+          invocation: {
+            ...open.invocation,
+            prf: [await delegationCid(forged)],
+          },
+          authorization: {
+            ...open.authorization,
+            proofs: [new FabricBytes(forged)],
+          },
+        },
+        proofOptions(),
+      ),
+    ).rejects.toThrow("proof 0 signature does not verify");
+  });
+
+  it("throws for a proof over another space", async () => {
+    const root = await rootDelegation({ sub: mallory.did() });
+    await expect(
+      verifySessionOpenProofs(signedOpen([root]), proofOptions()),
+    ).rejects.toThrow("proof 0 is over another space");
+  });
+
+  it("throws for a proof that names no subject", async () => {
+    const root = await rootDelegation({ sub: null });
+    await expect(
+      verifySessionOpenProofs(signedOpen([root]), proofOptions()),
+    ).rejects.toThrow("proof 0 names no subject");
+  });
+
+  it("throws for a proof whose command does not cover opening a session", async () => {
+    const root = await rootDelegation({ cmd: "/memory/transact" });
+    await expect(
+      verifySessionOpenProofs(signedOpen([root]), proofOptions()),
+    ).rejects.toThrow("proof 0 does not cover /memory/session.open");
+  });
+
+  it("throws for a proof past its expiry second, and accepts one at it", async () => {
+    const expired = await rootDelegation({ exp: now - 1 });
+    await expect(
+      verifySessionOpenProofs(signedOpen([expired]), proofOptions()),
+    ).rejects.toThrow("proof 0 has expired");
+    const atExpiry = await rootDelegation({ exp: now });
+    expect(
+      await verifySessionOpenProofs(signedOpen([atExpiry]), proofOptions()),
+    ).toEqual({ rootIssuer: space.did(), expiresAt: now });
+  });
+
+  it("throws for a proof that is not yet valid", async () => {
+    const early = await rootDelegation({ nbf: now + 1_000 });
+    await expect(
+      verifySessionOpenProofs(signedOpen([early]), proofOptions()),
+    ).rejects.toThrow("proof 0 is not yet valid");
+  });
+
+  it("throws for a chain whose links do not meet", async () => {
+    const root = await rootDelegation();
+    const stray = await issueDelegation(mallory, {
+      aud: bob.did(),
+      sub: space.did(),
+      cmd: "/memory",
+      pol: [],
+    });
+    await expect(
+      verifySessionOpenProofs(
+        signedOpen([root, stray], bob),
+        proofOptions(bob.did()),
+      ),
+    ).rejects.toThrow("proof 1 is not issued by the previous audience");
+  });
+
+  it("throws for a chain whose last audience is not the opener", async () => {
+    const root = await rootDelegation();
+    await expect(
+      verifySessionOpenProofs(signedOpen([root], bob), proofOptions(bob.did())),
+    ).rejects.toThrow("the last audience is not the open's principal");
+  });
+
+  it("throws for a chain longer than the bound before verifying any signature", async () => {
+    const root = await rootDelegation();
+    const chain = Array.from(
+      { length: MAX_PROOF_CHAIN_LENGTH + 1 },
+      () => root,
+    );
+    await expect(
+      verifySessionOpenProofs(signedOpen(chain), proofOptions()),
+    ).rejects.toThrow(
+      `the chain is longer than ${MAX_PROOF_CHAIN_LENGTH} proofs`,
+    );
+  });
+
+  it("returns the earliest expiry among the chain's proofs", async () => {
+    const chain = [
+      await rootDelegation({ exp: now + 500 }),
+      await onwardDelegation({ exp: now + 200 }),
+    ];
+    expect(
+      await verifySessionOpenProofs(
+        signedOpen(chain, bob),
+        proofOptions(bob.did()),
+      ),
+    ).toEqual({ rootIssuer: space.did(), expiresAt: now + 200 });
   });
 });

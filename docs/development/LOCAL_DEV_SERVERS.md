@@ -419,7 +419,9 @@ follows the queue. It prints a line when it claims a run and when the run ends,
 and it runs until interrupted. The model provider is the one `cf-harness` is
 configured with under `CF_HARNESS_HOME`; `--model` names a model, and
 `--loom-retrieval-config` names the host-owned file backing the read-only Loom
-tools. A run's workspace and artifacts go under `--work-root`, which defaults to
+tools. `--commands-url` and `--commands-actor` name the host's command endpoint
+behind `list_commands` and `run_command`, and the actor a run's commands run as.
+A run's workspace and artifacts go under `--work-root`, which defaults to
 `$CF_HARNESS_HOME/agent-runs`.
 
 A run's sandbox is the one the harness selects.

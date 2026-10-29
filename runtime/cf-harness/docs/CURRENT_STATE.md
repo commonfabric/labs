@@ -651,17 +651,13 @@ The current package provides:
   observation ceiling before it enters model context. A row loom returns without
   a label is given the query's label, an assumption the implementation profile
   publishes as a deviation. See [Read-only Loom retrieval](LOOM_RETRIEVAL.md);
-- the commands a host admits, listed and run as the agent through the host's
-  scoped broker, which decides what is listed and what runs. The listing is read
-  once per run and held for it, an explicit `list_commands` reading it again,
-  and shows each command as a one-line typed signature; `run_command` takes one
-  call or a batch of up to sixteen, run four at a time, refuses a name the held
+- the commands a host offers, listed and run as the agent over the host's
+  command endpoint, whose own rules decide what runs. The listing is read once
+  per run and held for it, an explicit `list_commands` reading it again, and
+  shows each command as a one-line typed signature; `run_command` takes one call
+  or a batch of up to sixteen, run four at a time, refuses a name the held
   listing does not show with the nearest listed names, and returns a host
   `bad-args` refusal with the command's signature. `run_command` carries write
-  authority; `run_read_command` takes the same calls, requires a fresh listing's
-  read effect and explicit broker grant for each, and sends a separate read-only
-  demand for execution revalidation. Explicitly context-bound broker reads work
-  under both enforcing modes; strict mode still refuses quoted or absent
   authority. Each answer is measured against the run's observation ceiling like
   a retrieval row, a batch's answers within one output bound. See
   [Host commands](LOOM_COMMANDS.md);

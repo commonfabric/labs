@@ -7928,41 +7928,29 @@ Deno.test("parseCfHarnessCliArgs rejects --allow-tool for a Loom retrieval tool 
   );
 });
 
-Deno.test("parseCfHarnessCliArgs reads the host command broker configuration from the flag or the environment", async () => {
-  const commands = {
-    cliPath: "/trusted/loom",
-    transport: { kind: "broker" as const, queuePath: "/trusted/queue" },
-  };
-  const readTextFile = (path: string) => {
-    assertEquals(path, "/trusted/commands.json");
-    return Promise.resolve(JSON.stringify(commands));
-  };
+Deno.test("parseCfHarnessCliArgs reads the host command endpoint from its three flags", async () => {
   const flagged = await parseCfHarnessCliArgs(
     [
       "--prompt",
       "hi",
-      "--loom-commands-config",
-      "/trusted/commands.json",
+      "--commands-url",
+      "http://127.0.0.1:8080",
+      "--commands-actor",
+      "agent:agent-runner",
+      "--commands-run-id",
+      "job-1",
       "--allow-tool",
       "run_command",
-      "--allow-tool",
-      "run_read_command",
     ],
-    { cwd: "/tmp/project", env: {}, readTextFile },
+    { cwd: "/tmp/project", env: {} },
   );
   if ("help" in flagged) throw new Error("expected config result");
-  assertEquals(flagged.loomCommands, commands);
-  expect(flagged.allowedToolIds).toContain("run_read_command");
-  const fromEnvironment = await parseCfHarnessCliArgs(
-    ["--prompt", "hi"],
-    {
-      cwd: "/tmp/project",
-      env: { CF_HARNESS_LOOM_COMMANDS_CONFIG: "/trusted/commands.json" },
-      readTextFile,
-    },
-  );
-  if ("help" in fromEnvironment) throw new Error("expected config result");
-  assertEquals(fromEnvironment.loomCommands, commands);
+  assertEquals(flagged.loomCommands, {
+    url: "http://127.0.0.1:8080",
+    actor: "agent:agent-runner",
+    runId: "job-1",
+  });
+  expect(flagged.allowedToolIds).toContain("run_command");
   const absent = await parseCfHarnessCliArgs(
     ["--prompt", "hi"],
     { cwd: "/tmp/project", env: {} },
@@ -7971,8 +7959,96 @@ Deno.test("parseCfHarnessCliArgs reads the host command broker configuration fro
   assertEquals(absent.loomCommands, undefined);
 });
 
-Deno.test("parseCfHarnessCliArgs rejects --allow-tool for a command tool without the broker configuration", async () => {
-  for (const tool of ["list_commands", "run_command", "run_read_command"]) {
+Deno.test("parseCfHarnessCliArgs reads each repeated --commands-relevant, and refuses one without an endpoint", async () => {
+  const endpoint = [
+    "--commands-url",
+    "http://127.0.0.1:8080",
+    "--commands-actor",
+    "agent:agent-runner",
+    "--commands-run-id",
+    "job-1",
+  ];
+  const relevant = [
+    "--commands-relevant",
+    "search.run",
+    "--commands-relevant",
+    "person.find",
+  ];
+  const parsed = await parseCfHarnessCliArgs(
+    ["--prompt", "hi", ...endpoint, ...relevant],
+    { cwd: "/tmp/project", env: {} },
+  );
+  if ("help" in parsed) throw new Error("expected config result");
+  assertEquals(parsed.loomCommands?.relevant, ["search.run", "person.find"]);
+  await assertRejects(
+    () =>
+      parseCfHarnessCliArgs(
+        ["--prompt", "hi", ...relevant],
+        { cwd: "/tmp/project", env: {} },
+      ),
+    Error,
+    "--commands-relevant needs --commands-url.",
+  );
+});
+
+Deno.test("parseCfHarnessCliArgs rejects the command flags given apart or naming an invalid endpoint", async () => {
+  const flags = {
+    url: ["--commands-url", "http://127.0.0.1:8080"],
+    actor: ["--commands-actor", "agent:agent-runner"],
+    runId: ["--commands-run-id", "job-1"],
+  };
+  for (
+    const given of [
+      [flags.url],
+      [flags.url, flags.actor],
+      [flags.actor, flags.runId],
+    ]
+  ) {
+    await assertRejects(
+      () =>
+        parseCfHarnessCliArgs(
+          ["--prompt", "hi", ...given.flat()],
+          { cwd: "/tmp/project", env: {} },
+        ),
+      Error,
+      "--commands-url, --commands-actor and --commands-run-id go together.",
+    );
+  }
+  await assertRejects(
+    () =>
+      parseCfHarnessCliArgs(
+        [
+          "--prompt",
+          "hi",
+          "--commands-url",
+          "file:///commands",
+          ...flags.actor,
+          ...flags.runId,
+        ],
+        { cwd: "/tmp/project", env: {} },
+      ),
+    Error,
+    "endpoint",
+  );
+});
+
+Deno.test("parseCfHarnessCliArgs ignores a command configuration file named in the environment", async () => {
+  const parsed = await parseCfHarnessCliArgs(
+    ["--prompt", "hi"],
+    {
+      cwd: "/tmp/project",
+      env: { CF_HARNESS_LOOM_COMMANDS_CONFIG: "/trusted/commands.json" },
+      readTextFile: () => {
+        throw new Error("no file may be read");
+      },
+    },
+  );
+  if ("help" in parsed) throw new Error("expected config result");
+  assertEquals(parsed.loomCommands, undefined);
+});
+
+Deno.test("parseCfHarnessCliArgs rejects --allow-tool for a command tool without the host command endpoint", async () => {
+  for (const tool of ["list_commands", "run_command"]) {
     await assertRejects(
       () =>
         parseCfHarnessCliArgs(
@@ -7980,7 +8056,7 @@ Deno.test("parseCfHarnessCliArgs rejects --allow-tool for a command tool without
           { cwd: "/tmp/project", env: {} },
         ),
       Error,
-      `--allow-tool ${tool} requires a host command broker configuration`,
+      `--allow-tool ${tool} requires a host command endpoint; missing --commands-url`,
     );
   }
 });

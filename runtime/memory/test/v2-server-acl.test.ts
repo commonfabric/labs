@@ -3060,6 +3060,73 @@ describe("v2-server-acl", () => {
     // principal and cannot initialize a genesis.
 
     describe("`enforce` mode", () => {
+      it("resolves no acting user for a self-owned space declaring a kind, and the space itself for one declaring none", async () => {
+        const server = createAclServer("memory://acl-ow31-self-owned-kind", {
+          mode: "enforce",
+          delegatingDids: [SERVICE],
+        });
+        // A self-owned space: its own DID is its one owner, as a profile
+        // space's is (docs/specs/profile-delegation.md), or a home space's.
+        const createSelfOwned = async (space: string, spaceKind?: string) => {
+          const authority = await connect(server);
+          const opened = await openSession(
+            authority,
+            space,
+            space,
+            spaceKind === undefined ? {} : { spaceKind },
+          );
+          expectExists(opened.ok);
+          await authority.connection.receive(encodeMemoryBoundary({
+            type: "transact",
+            requestId: nextRequestId("self-owned-genesis"),
+            space,
+            sessionId: opened.ok.sessionId,
+            commit: {
+              localSeq: 1,
+              reads: { confirmed: [], pending: [] },
+              ...(spaceKind === undefined ? {} : { spaceKind }),
+              operations: [{
+                op: "set" as const,
+                id: `of:${space}`,
+                value: { value: { [space]: "OWNER" } },
+              }],
+            },
+          }));
+          expect(nextResponse(authority.messages).error).toBeUndefined();
+        };
+        const profile = "did:key:z6Mk-acl-ow31-profile-space";
+        const home = "did:key:z6Mk-acl-ow31-home-space";
+        try {
+          await createSelfOwned(profile, "profile");
+          await createSelfOwned(home);
+          // The binding resolves nothing for the kinded space: its DID is no
+          // user to act as, so the envelope's own capability applies, and
+          // the serving identity holds none.
+          const kinded = await openSession(
+            await connect(server),
+            profile,
+            SERVICE,
+            {
+              actingAs: "space-owner",
+            },
+          );
+          expect(kinded.error?.name).toBe("AuthorizationError");
+          // The unkinded self-owned space is a home: the binding resolves
+          // its DID, and the open is admitted.
+          const unkinded = await openSession(
+            await connect(server),
+            home,
+            SERVICE,
+            {
+              actingAs: "space-owner",
+            },
+          );
+          expectExists(unkinded.ok, unkinded.error?.message);
+        } finally {
+          await server.close();
+        }
+      });
+
       it("admits a delegating principal acting as space-owner to read an owner-only space, and refuses its writes and ACL-document writes", async () => {
         const server = createAclServer("memory://acl-ow31-binding", {
           mode: "enforce",

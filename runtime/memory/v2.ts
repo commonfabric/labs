@@ -1358,6 +1358,15 @@ export type MemoryProtocolFlags = {
   connectionAuth?: boolean;
 
   /**
+   * Server capability: a `session.open` may present a UCAN proof chain, and
+   * the session's capability then resolves from the access-list grant to the
+   * chain's root issuer (04-protocol.md §4.5.1). Advertised by a server whose
+   * access-list policy admits delegations. Absent parses to false, and a
+   * client then presents no chain, since such a server refuses one.
+   */
+  sessionOpenProofs?: boolean;
+
+  /**
    * The peer takes part in `session/admissible` (04-protocol.md §4.2.2). A
    * client advertising it may be sent the notice; a server advertising it
    * sends one to such a client, on any connection but a routed one.
@@ -1442,6 +1451,7 @@ export type WireMemoryProtocolFlags = {
   presenceV1?: boolean;
   sessionClose?: boolean;
   connectionAuth?: boolean;
+  sessionOpenProofs?: boolean;
   admissionNotice?: boolean;
   elidedVerdicts?: boolean;
   sessionReportV1?: boolean;
@@ -2738,6 +2748,9 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // What this build can do. A server advertises it only when its host
   // verifies `connection.auth` (`Server.memoryProtocolFlags()`).
   connectionAuth: true,
+  // What this build can do. A server advertises it only when its
+  // access-list policy admits delegations (`Server.memoryProtocolFlags()`).
+  sessionOpenProofs: true,
   // Build-inherent: this build's server tells a connection it refused a
   // space once a grant admits the refused principal, and its client acts on
   // the notice. A routed connection records no refusal, so it is told
@@ -2974,6 +2987,13 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
+  const sessionOpenProofs = value.sessionOpenProofs;
+  if (
+    sessionOpenProofs !== undefined && typeof sessionOpenProofs !== "boolean"
+  ) {
+    return null;
+  }
+
   const admissionNotice = value.admissionNotice;
   if (admissionNotice !== undefined && typeof admissionNotice !== "boolean") {
     return null;
@@ -3054,6 +3074,8 @@ export const parseMemoryProtocolFlags = (
     sessionClose: sessionClose === true,
     // Absent parses to false: a client then signs each `session.open`.
     connectionAuth: connectionAuth === true,
+    // Absent parses to false: a client then presents no proof chain.
+    sessionOpenProofs: sessionOpenProofs === true,
     // Absent (an older peer) parses to false: a server then sends that
     // client no `session/admissible`.
     admissionNotice: admissionNotice === true,
@@ -3115,6 +3137,7 @@ export const wireMemoryProtocolFlags = (
   presenceV1: flags.presenceV1,
   sessionClose: flags.sessionClose,
   connectionAuth: flags.connectionAuth,
+  sessionOpenProofs: flags.sessionOpenProofs,
   admissionNotice: flags.admissionNotice,
   elidedVerdicts: flags.elidedVerdicts,
   sessionReportV1: flags.sessionReportV1,

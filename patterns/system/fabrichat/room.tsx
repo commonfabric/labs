@@ -693,7 +693,7 @@ export interface AddMemberOutput {
    * Whether the viewer can add someone: an OWNER of a group room in a space of
    * its own.
    */
-  canAdd: boolean;
+  canAdd: PerSession<boolean>;
 }
 
 /**
@@ -718,14 +718,23 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
     const offer = offerAddedMember({ room, requests, latest, self, manager });
     const bindings = { room, ownSpace, kind, requests, latest, offer };
     const add = commitAddMember(bindings);
-    const canAdd = computed(() =>
+    // Whether the reader can add someone is each session's own, as the room's
+    // `canSend` is. Its binding's name is its cause.
+    const canAddForSession = computed((): PerSession<boolean> =>
       ownSpace && kind !== "direct" && spaceAccess(room) === "OWNER"
     );
     // Who may add differs by viewer, and what came of an add by session, so
     // both are hidden by a prop rather than built as a different tree (see
     // `FabriChatMessageRow`).
-    const addDisplay = computed((): ChatDisplay =>
-      canAdd && myProfile?.get() !== undefined ? "flex" : "none"
+    //
+    // TODO(danfuzz): Test `canAddForSession` itself, once the transformer
+    // keeps a captured value whose only use is as a guard, typed other than
+    // `boolean` or `number`, in a computation's inputs. As the leading operand
+    // of `&&` here it is left out, and reads as `undefined`.
+    const addDisplayForSession = computed((): PerSession<ChatDisplay> =>
+      canAddForSession === true && myProfile?.get() !== undefined
+        ? "flex"
+        : "none"
     );
     const outcomes = computed((): Record<string, AddMemberOutcome> =>
       withDeliveries(requests?.get() ?? {}, spaceOf(room), manager?.requests)
@@ -774,7 +783,7 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
           id="fabrichat-add-member"
           gap="1"
           hidden
-          style={{ display: addDisplay }}
+          style={{ display: addDisplayForSession }}
         >
           <div
             data-ui-pattern={CHAT_ADD_MEMBER_SURFACE}
@@ -828,7 +837,7 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
       ),
       add,
       outcomes,
-      canAdd,
+      canAdd: canAddForSession,
     };
   },
 );
@@ -1134,16 +1143,16 @@ export interface ChatRoomView {
   messages: ChatMessageList;
 
   /** Whether this reader can send, edit, delete, and react. */
-  canSend: boolean;
+  canSend: PerSession<boolean>;
 
   /** Who is reading the room: their profile, its principal, and their access. */
-  viewer: ChatRoomViewer;
+  viewer: PerSession<ChatRoomViewer>;
 
   /**
    * What this reader may do to each of the room's messages, oldest first.
    * Nothing at all while `canSend` doesn't hold.
    */
-  messageRights: ChatMessageRights[];
+  messageRights: PerSession<ChatMessageRights[]>;
 
   /** Sends a message. */
   sendMessage: Stream<RoomStreamEvent>;
@@ -1176,7 +1185,7 @@ export interface ChatRoomView {
    * Whether this reader can add someone: an OWNER of a group room in a space
    * of its own.
    */
-  canAdd: boolean;
+  canAdd: PerSession<boolean>;
 
   /**
    * The outcome of each of this reader's adds, by its `requestId`, with how
@@ -1544,7 +1553,15 @@ export const FabriChatRoomCore = pattern<
     principalsOf(participantEntriesForUser)
   );
   const join = addParticipant({ roster });
-  const canSend = computed(() => canActIn(messages, myProfile));
+  // What the room says about its reader, and every value derived from it, is
+  // each session's own. A session's profile can resolve later than another
+  // session's of the same person, so an answer shared by the person's
+  // sessions would let one whose profile hasn't resolved tell another, whose
+  // profile has, that it can't send. Each binding's name is its cause, the
+  // identity of the document that stores it, so renaming one moves its data.
+  const canSendForSession = computed((): PerSession<boolean> =>
+    canActIn(messages, myProfile)
+  );
   const addMember = AddMember({
     room: messages,
     myProfile,
@@ -1560,9 +1577,15 @@ export const FabriChatRoomCore = pattern<
   // absent then, so a composer would show enabled, disable itself until the
   // viewer's profile and access resolve, and enable again, dropping what was
   // typed or clicked meanwhile.
-  const cannotSend = computed((): boolean | Default<true> => !canSend);
-  const isOwner = computed(() => isOwnerOf(messages));
-  const viewer = computed((): ChatRoomViewer => {
+  const cannotSendForSession = computed(
+    (): PerSession<boolean | Default<true>> => !canSendForSession,
+  );
+  // It defaults to `false`. The rows' map takes it as an argument, and a room
+  // whose rows were stored before it was bound has no value for it there.
+  const isOwnerForSession = computed(
+    (): PerSession<boolean | Default<false>> => isOwnerOf(messages),
+  );
+  const viewerForSession = computed((): PerSession<ChatRoomViewer> => {
     const profile = viewerProfileOf(myProfile);
     const principal = profile === undefined
       ? undefined
@@ -1579,23 +1602,32 @@ export const FabriChatRoomCore = pattern<
   // whether it is live. The reader is the author of a message whose author's
   // key is the reader's profile's: both are Home's `profileKeyOf()` of the
   // profile's resolved link, which is what `equals()` compares.
-  const messageRights = computed((): ChatMessageRights[] => {
-    const profile = viewerProfileOf(myProfile);
-    const readerKey = profile === undefined ? undefined : profileKeyOf(profile);
-    return facts.entries.map((entry) => ({
-      message: entry.cell,
-      ...(canSend && readerKey !== undefined
-        ? rightsOf(
-          entry.authorKey === readerKey,
-          entry.live,
-          entry.authorKey !== undefined,
-          kind,
-          isOwner,
-          ownersMayObliterate,
-        )
-        : NO_MESSAGE_RIGHTS),
-    }));
-  });
+  const messageRightsForSession = computed(
+    (): PerSession<ChatMessageRights[]> => {
+      const profile = viewerProfileOf(myProfile);
+      const readerKey = profile === undefined
+        ? undefined
+        : profileKeyOf(profile);
+      return facts.entries.map((entry) => ({
+        message: entry.cell,
+        // TODO(danfuzz): Test `canSendForSession` itself, once the
+        // transformer keeps a captured value whose only use is as a guard,
+        // typed other than `boolean` or `number`, in a computation's inputs.
+        // As the leading operand of `&&` here it is left out, and reads as
+        // `undefined`.
+        ...(canSendForSession === true && readerKey !== undefined
+          ? rightsOf(
+            entry.authorKey === readerKey,
+            entry.live,
+            entry.authorKey !== undefined,
+            kind,
+            isOwnerForSession,
+            ownersMayObliterate,
+          )
+          : NO_MESSAGE_RIGHTS),
+      }));
+    },
+  );
   // The title a member last set outranks the one the room was created with.
   const title = computed((): string | undefined =>
     titles?.elementById(TITLE_KEY).get()?.title ?? about?.get()?.title
@@ -1629,8 +1661,8 @@ export const FabriChatRoomCore = pattern<
   // Who may retitle differs by viewer, and what came of a retitle by session,
   // so both are hidden by a prop rather than built as a different tree (see
   // `FabriChatMessageRow`).
-  const retitleDisplay = computed((): ChatDisplay =>
-    ownSpace && titles !== undefined && canSend ? "flex" : "none"
+  const retitleDisplayForSession = computed((): PerSession<ChatDisplay> =>
+    ownSpace && titles !== undefined && canSendForSession ? "flex" : "none"
   );
   const titleRefusalDisplay = computed((): ChatDisplay =>
     titleRefusal.get() === "" ? "none" : "block"
@@ -1757,7 +1789,7 @@ export const FabriChatRoomCore = pattern<
   const threadComposers = threadComposerRoots.map((root) =>
     FabriChatThreadComposer({
       root,
-      disabled: cannotSend,
+      disabled: cannotSendForSession,
       myProfile,
       messages,
       composer,
@@ -1797,8 +1829,9 @@ export const FabriChatRoomCore = pattern<
     outcomes: threadTitleRequests,
     refusal: threadTitleRefusal,
   });
-  const threadRetitleDisplay = computed((): ChatDisplay =>
-    threadInfo !== undefined && canSend ? "flex" : "none"
+  const threadRetitleDisplayForSession = computed(
+    (): PerSession<ChatDisplay> =>
+      threadInfo !== undefined && canSendForSession ? "flex" : "none",
   );
   const threadTitleRefusalDisplay = computed((): ChatDisplay =>
     threadTitleRefusal.get() === "" ? "none" : "block"
@@ -1829,9 +1862,9 @@ export const FabriChatRoomCore = pattern<
     participantPrincipals: participantPrincipalsForUser,
     addParticipant: join,
     messages: facts.list,
-    canSend,
-    viewer,
-    messageRights,
+    canSend: canSendForSession,
+    viewer: viewerForSession,
+    messageRights: messageRightsForSession,
     ...streams,
     addMember: addMember.add,
     canAdd: addMember.canAdd,
@@ -1873,7 +1906,7 @@ export const FabriChatRoomCore = pattern<
           id="fabrichat-retitle"
           gap="1"
           hidden
-          style={{ display: retitleDisplay }}
+          style={{ display: retitleDisplayForSession }}
         >
           <div
             data-ui-pattern={CHAT_RETITLE_SURFACE}
@@ -1932,8 +1965,8 @@ export const FabriChatRoomCore = pattern<
               kind={kind}
               composer={composer}
               places={places}
-              cannotWrite={cannotSend}
-              isOwner={isOwner}
+              cannotWrite={cannotSendForSession}
+              isOwner={isOwnerForSession}
               ownersMayObliterate={ownersMayObliterate}
               messages={messages}
               canJoin={canJoin}
@@ -1968,7 +2001,7 @@ export const FabriChatRoomCore = pattern<
             $draft={composer.key("draft")}
             placeholder="Message"
             buttonText="Send"
-            disabled={cannotSend}
+            disabled={cannotSendForSession}
             onClick={composeSend}
           />
         </div>
@@ -1986,7 +2019,7 @@ export const FabriChatRoomCore = pattern<
             buttonText="📎 Attach"
             variant="ghost"
             size="sm"
-            disabled={cannotSend}
+            disabled={cannotSendForSession}
             oncf-click={openAttach}
             oncf-change={attachFiles}
           />
@@ -2012,7 +2045,7 @@ export const FabriChatRoomCore = pattern<
             id="fabrichat-thread-retitle"
             gap="1"
             hidden
-            style={{ display: threadRetitleDisplay }}
+            style={{ display: threadRetitleDisplayForSession }}
           >
             <div
               data-ui-pattern={CHAT_RETITLE_SURFACE}
@@ -2043,8 +2076,8 @@ export const FabriChatRoomCore = pattern<
               kind={kind}
               composer={composer}
               places={places}
-              cannotWrite={cannotSend}
-              isOwner={isOwner}
+              cannotWrite={cannotSendForSession}
+              isOwner={isOwnerForSession}
               ownersMayObliterate={ownersMayObliterate}
               messages={messages}
               canJoin={canJoin}

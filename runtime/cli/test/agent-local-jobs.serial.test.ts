@@ -354,6 +354,35 @@ describe("cf agent runner local jobs", () => {
       ]);
     });
 
+    it("refuses a malformed command endpoint before starting either lane", async () => {
+      for (
+        const flags of [
+          ["--commands-url", "http://127.0.0.1:8090/?"],
+          [
+            "--commands-url",
+            "http://127.0.0.1:8090/#",
+            "--commands-actor",
+            "agent:agent-runner",
+          ],
+        ]
+      ) {
+        const { deps, events } = stubDeps();
+
+        await expect(
+          run(deps, [
+            "runner",
+            "-i",
+            "/keys/me.key",
+            "-a",
+            "http://localhost:8100",
+            ...LOCAL,
+            ...flags,
+          ]),
+        ).rejects.toThrow(ValidationError);
+        expect(events).toEqual([]);
+      }
+    });
+
     it("stops local jobs and throws when the Fabric lane's flags are wrong", async () => {
       const { deps, events } = stubDeps();
 

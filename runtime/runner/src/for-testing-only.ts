@@ -6,10 +6,21 @@
  */
 
 import { deepFreeze } from "@commonfabric/data-model";
+// @ts-types="@types/ws"
+import { WebSocket } from "ws";
 
 import { instancePartialCause } from "./builder/instance-name.ts";
 import { freezePartialCauses } from "./builder/pattern.ts";
 import type { JSONObject, Pattern } from "./builder/types.ts";
+
+/**
+ * The `ws` class behind every memory socket a runtime opens under Deno, for a
+ * test that shapes memory traffic by patching its prototype. A patch reaches
+ * only the realm that makes it, since each worker loads its own copy. A test
+ * resolving `ws` through another package's import map could load a separate
+ * copy, whose prototype no memory socket uses.
+ */
+export const MemoryWebSocketForTestingOnly = WebSocket;
 
 /**
  * Returns `pattern`, a pattern a test writes out as an object literal rather

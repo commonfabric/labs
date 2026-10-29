@@ -4,6 +4,7 @@ import type {
   SchemaPathSelector,
   TextChange,
 } from "@commonfabric/api";
+import type { DIDKey } from "@commonfabric/identity/did";
 import {
   type ACL,
   type AuthorizationError as IAuthorizationError,
@@ -458,6 +459,52 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
       spaceKind?: string;
     },
   ): Promise<MemorySpace>;
+
+  /**
+   * Creates a space that owns itself, and returns its DID with the
+   * delegation its key issued to `delegateTo` before being dropped
+   * (`docs/specs/profile-delegation.md`). Like `createSpace`, except that
+   * the access list is `grants` plus the space's own DID as OWNER, no other
+   * principal being made owner, and that between the genesis commit and the
+   * key's end the key signs one delegation over the space to `delegateTo`,
+   * covering every memory command and never expiring. This manager holds
+   * that delegation from then on, so a session it opens as `delegateTo`
+   * presents it; the caller records it where the space's holder will find
+   * it again.
+   *
+   * @throws If `grants` makes any principal OWNER, if the memory server
+   *   does not advertise `sessionOpenProofs`, since a space nobody could
+   *   open is not created, or if it refuses the genesis commit. No DID is
+   *   returned then, and the space that was being created is abandoned.
+   */
+  createSelfOwnedSpace?(
+    options: {
+      grants?: ACL;
+      delegateTo: DIDKey;
+      root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+      spaceKind?: string;
+    },
+  ): Promise<{ space: MemorySpace; delegation: Uint8Array }>;
+
+  /**
+   * Holds the delegation chain `chain` encodes, root first and the
+   * delegation granting the opening key last, so that a session this manager
+   * opens from here on, on the space the chain is over and as that key,
+   * presents it and acts under the root issuer's grant
+   * (`docs/specs/profile-delegation.md`). Throws a `DelegationError` for a
+   * chain whose delegations do not decode, verify, or link, and an `Error`
+   * where the manager's sessions cannot present a chain.
+   */
+  addDelegationChain?(chain: readonly Uint8Array[]): Promise<void>;
+
+  /**
+   * The chain a session this manager opens on `space` presents now, root
+   * first, as copies of the delegations' bytes, or `undefined` where it
+   * holds none it could present: the delegation granting this manager's
+   * identity last, every link within its validity window. A caller
+   * delegating the space onward puts its own delegation after this chain.
+   */
+  delegationChainFor?(space: MemorySpace): readonly Uint8Array[] | undefined;
 
   /**
    * The kind `space` declares in its genesis commit, or `undefined` when it

@@ -329,6 +329,26 @@ the checkout, prints the seed on standard output and the line naming it on
 standard error. `deno task check-test-shuffle` fails when a command that
 starts a test runner does not carry a seed, and lists the runners this
 repository owns along with the ones whose order is the test.
+
+A `deno test` that TypeScript starts is built as an array of arguments, and
+the seed goes into that array as it is written:
+`["deno", "test", "--no-check", shuffleFlag(shuffleSeed()), ...files]`, with
+both functions from `@commonfabric/test-support/shuffle`. In a runner that has
+called `pinShuffleSeed()`, `shuffleSeed()` returns the seed that call settled.
+The processes the runner starts inherit that seed through the environment.
+
+The check reads every tracked TypeScript file except test files and the
+implementation of a runner that forwards its caller's flags. In those files it
+looks at two kinds of array: one that starts `"deno", "test"` or
+`Deno.execPath(), "test"`, and the `args` array of a `new Deno.Command()`
+whose program is `deno`, when that array starts with `"test"`. Such an array
+passes when one of its elements is a string writing `--shuffle=` and a seed, or
+a call to `shuffleFlag()`. A spread element never counts, because the check
+cannot see what it holds. An array that starts with `"deno"` or `Deno.execPath()` and goes
+on with anything other than a plain string, such as `["deno", ...args]`, may
+run `deno test`, so it is held to the same rule; write a `deno test` command as
+one array.
+
 `base/test-support/src/shuffle.ts` holds the seed and the permutation.
 `tasks/test-topology.test.ts` fails on a `deno test` that a manifest, a
 workflow, or a shell script writes without `--no-check`; a lane passes the flag
@@ -517,7 +537,7 @@ TOOLSHED_PORT=58848 SHELL_PORT=5263 EXPERIMENTAL_SERVER_EXECUTION=false deno tas
 After the shell reports that it is listening, run the browser test:
 
 ```bash
-API_URL=http://127.0.0.1:8089 FRONTEND_URL=http://127.0.0.1:5263/ EXPERIMENTAL_SERVER_EXECUTION=false CF_ROW_RECONNECT_CONTROL_URL=http://127.0.0.1:58849/ CF_ROW_REPRO_ARTIFACT_DIR=/tmp/row-reconnect deno test --no-check -A patterns/integration/reactive-vote-rows-browser.test.ts
+API_URL=http://127.0.0.1:8089 FRONTEND_URL=http://127.0.0.1:5263/ EXPERIMENTAL_SERVER_EXECUTION=false CF_ROW_RECONNECT_CONTROL_URL=http://127.0.0.1:58849/ CF_ROW_REPRO_ARTIFACT_DIR=/tmp/row-reconnect deno test --shuffle=$(deno task -q test-seed) --no-check -A patterns/integration/reactive-vote-rows-browser.test.ts
 ```
 
 Each outage asserts that the relay closed live socket endpoints before the
@@ -560,7 +580,8 @@ EXPERIMENTAL_SERVER_EXECUTION=true EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true
 cd patterns
 EXPERIMENTAL_SERVER_EXECUTION=true EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true \
   API_URL=http://localhost:8000/ \
-  deno test --no-check -A ./integration/<name>.test.ts
+  deno test --shuffle=$(deno task -q test-seed) --no-check -A \
+  ./integration/<name>.test.ts
 ```
 
 Then ask the server what posture it is in, rather than trusting the command

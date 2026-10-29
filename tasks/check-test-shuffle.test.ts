@@ -11,6 +11,7 @@ import { expect } from "@std/expect";
 import { assert } from "@std/assert";
 import { join } from "@std/path";
 import {
+  builtDenoTests,
   commandsOf,
   main,
   problemWith,
@@ -198,6 +199,111 @@ describe("check-test-shuffle", () => {
     });
   });
 
+  describe("builtDenoTests()", () => {
+    /** Whether each list `source` builds carries a seed, in order. */
+    const shuffles = (source: string) =>
+      builtDenoTests(source, "tasks/runner.ts").map((list) => list.shuffles);
+
+    it("returns a list that starts `deno test` and carries no seed as unshuffled", () => {
+      expect(builtDenoTests('run(["deno", "test", "-A", file]);\n', "a.ts"))
+        .toEqual([{
+          line: 1,
+          text: '["deno", "test", "-A", file]',
+          shuffles: false,
+        }]);
+      expect(shuffles('[Deno.execPath(), "test", "--no-check", path]'))
+        .toEqual([false]);
+      expect(shuffles('["deno", "test"]')).toEqual([false]);
+    });
+
+    it("returns the `args` of a `Deno.Command` that runs `deno test`", () => {
+      expect(shuffles(
+        "new Deno.Command(Deno.execPath(), {\n" +
+          '  args: ["test", ...flags, ...files],\n});\n',
+      )).toEqual([false]);
+      expect(shuffles('new Deno.Command("deno", { args: ["test", file] })'))
+        .toEqual([false]);
+      expect(shuffles('new Deno.Command("deno", { "args": ["test", file] })'))
+        .toEqual([false]);
+      expect(shuffles(
+        'new Deno.Command("deno", { args: ["test", shuffleFlag(seed), f] })',
+      )).toEqual([true]);
+    });
+
+    it("returns a list carrying a seed as shuffled, whichever way it is written", () => {
+      expect(shuffles('["deno", "test", "-A", shuffleFlag(seed)]'))
+        .toEqual([true]);
+      expect(shuffles('["deno", "test", shuffle.shuffleFlag(seed)]'))
+        .toEqual([true]);
+      expect(shuffles('["deno", "test", "--shuffle=20260922", "-A"]'))
+        .toEqual([true]);
+      expect(shuffles('["deno", "test", `--shuffle=${seed}`]')).toEqual([true]);
+      expect(shuffles('["deno", "test", "--shuffle=" + seed]')).toEqual([true]);
+    });
+
+    it("returns a list whose shuffle flag names no seed as unshuffled", () => {
+      // `--shuffle` with no seed picks a new order on every run, which is
+      // not the commit's order, and `--shuffle=` names nothing.
+      expect(shuffles('["deno", "test", "--shuffle", "-A"]')).toEqual([false]);
+      expect(shuffles('["deno", "test", "--shuffle=", "-A"]')).toEqual([false]);
+    });
+
+    it("returns a `deno` command it cannot read as unshuffled", () => {
+      expect(shuffles('run(["deno", ...args]);')).toEqual([false]);
+      expect(shuffles('[Deno.execPath(), subcommand, "-A"]')).toEqual([false]);
+      expect(shuffles('["deno", ...args, shuffleFlag(seed)]')).toEqual([true]);
+      // A lone program name, and a subcommand it can read, are not tests.
+      expect(shuffles('const needs = ["deno"];')).toEqual([]);
+      expect(shuffles('["deno", "run", "-A", ...args]')).toEqual([]);
+    });
+
+    it("looks through a type assertion or parentheses", () => {
+      expect(shuffles(
+        'new Deno.Command(Deno.execPath(), { args: ["test", "-A"] as string[] })',
+      )).toEqual([false]);
+      expect(shuffles(
+        'new Deno.Command("deno", { args: (["test", "-A"]) satisfies string[] })',
+      )).toEqual([false]);
+      expect(shuffles('[Deno.execPath(), "test", shuffleFlag(seed) as string]'))
+        .toEqual([true]);
+    });
+
+    it("returns a list whose seed is only inside a spread as unshuffled", () => {
+      expect(shuffles('["deno", "test", ...shuffleArguments()]')).toEqual([
+        false,
+      ]);
+      expect(shuffles('["deno", "test", ...[shuffleFlag(seed)]]')).toEqual([
+        false,
+      ]);
+    });
+
+    it("returns nothing for a list that does not run `deno`", () => {
+      expect(shuffles('new Set(["test", "tests", "integration"])')).toEqual([]);
+      expect(shuffles('["deno", "task", "test"]')).toEqual([]);
+      // The arguments of `cf test`, and of the shell's `test` builtin.
+      expect(shuffles('runCf(["test", "--root", dir, file])')).toEqual([]);
+      expect(shuffles('[...cf, "test", "--root", dir]')).toEqual([]);
+      expect(shuffles('new Deno.Command("sh", { args: ["test", "-d", d] })'))
+        .toEqual([]);
+      expect(shuffles('[node.execPath(), "test", "-A"]')).toEqual([]);
+      expect(shuffles('new Deno.Command("deno", { env: ["test", "-A"] })'))
+        .toEqual([]);
+      // A comment and a string are not array literals.
+      expect(
+        shuffles('// ["deno", "test", "-A"]\nconst s = \'["deno", "test"]\';'),
+      ).toEqual([]);
+    });
+
+    it("returns the lists a TSX source builds", () => {
+      expect(
+        builtDenoTests(
+          'const v = <p>x</p>;\nrun(["deno", "test", "-A"]);\n',
+          "tasks/view.tsx",
+        ).map((list) => list.line),
+      ).toEqual([2]);
+    });
+  });
+
   describe("a runner written where it is easy to miss", () => {
     it("finds a `deno test` inside a command substitution", () => {
       const problems = commandsOf("echo $(deno test -A)")
@@ -325,6 +431,40 @@ describe("check-test-shuffle", () => {
       expect(violations.map((violation) => violation.where)).toEqual([
         "scripts/run.sh:2",
       ]);
+    });
+
+    it("fails a TypeScript source that builds a `deno test` with no seed", async () => {
+      const root = await fixtureMember({ test: `deno test ${SHUFFLE} -A` }, {
+        "tasks/run.ts": "// A runner.\n" +
+          'await run(["deno", "test", "-A", ...files]);\n',
+      });
+      const violations = await scan(root);
+      expect(violations).toEqual([{
+        where: "tasks/run.ts:2",
+        command: '["deno", "test", "-A", ...files]',
+        problem: expect.stringContaining("shuffleFlag(shuffleSeed())"),
+      }]);
+    });
+
+    it("passes a TypeScript source whose `deno test` carries a seed", async () => {
+      const root = await fixtureMember({ test: `deno test ${SHUFFLE} -A` }, {
+        "tasks/run.ts":
+          'await run(["deno", "test", shuffleFlag(shuffleSeed()), "-A"]);\n',
+      });
+      expect(await scan(root)).toEqual([]);
+    });
+
+    it("passes over the `deno test` a test file or a forwarding runner builds", async () => {
+      // A test file's list runs a fixture or is an expected value, and
+      // the forwarding runner's flags come from a command the check
+      // reads where it is written.
+      const root = await fixtureMember({ test: `deno test ${SHUFFLE} -A` }, {
+        "tasks/run.test.ts":
+          'expect(args).toEqual(["deno", "test", "-A", "x.ts"]);\n',
+        "tasks/run-test-batches.ts":
+          'const a = ["deno", "test", ...flags, ...files];\n',
+      });
+      expect(await scan(root)).toEqual([]);
     });
 
     it("passes over a tracked script the working tree no longer holds", async () => {

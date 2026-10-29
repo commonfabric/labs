@@ -30,7 +30,7 @@ import {
   pattern,
   type PerSession,
   type PerUser,
-  principalOf,
+  profileOwnerOf,
   SELF,
   spaceAccess,
   type SpaceAccessLevel,
@@ -56,7 +56,7 @@ import {
   type ParticipantRosterCell,
   rosterProfiles,
 } from "../loom/participants.tsx";
-import { profileKeyOf } from "../system/private-inbox.tsx";
+import { profileKeyOf } from "../private-inbox/private-inbox.tsx";
 import {
   type ShownIn,
   threadExcerpt,
@@ -82,6 +82,7 @@ import {
   dropAttachment,
   FABRICHAT_POLICY,
   isOwnerOf,
+  type JoinedEvent,
   type JoiningManager,
   type MessageCell,
   messageEntries,
@@ -162,8 +163,8 @@ export interface ParticipantEntry {
   profile: ProfileCell;
 
   /**
-   * The principal the profile's `represents-principal` label attests; absent
-   * when it attests none, or when the label can't be read where the entry is
+   * The principal whose own profile it is (`profileOwnerOf()`); absent when
+   * it is no one's, or when its label can't be read where the entry is
    * derived.
    */
   principal?: string;
@@ -178,7 +179,7 @@ export const participantEntriesOf = (
 ): ParticipantEntry[] =>
   participants.map((profile) => ({
     profile,
-    principal: principalOf(profile, "represents-principal"),
+    principal: profileOwnerOf(profile),
   }));
 
 /** The principals `entries` attest, each once, in the order of `entries`. */
@@ -248,17 +249,15 @@ export interface ParticipantChipOutput {
  * manager, and to a viewer whose Home has none, and a click then reaches no
  * one. It names the participant to the manager by their profile, bound as the
  * control's `name`, which crosses into the click's event as the profile's own
- * cell; the manager reads whom it names from the profile's
- * `represents-principal` label, and offers the room through the share inbox
- * the profile points at.
+ * cell; the manager reads whom it names as the principal whose own profile it
+ * is (`profileOwnerOf()`), and offers the room through the share inbox the
+ * profile points at.
  */
 export const ParticipantChip = pattern<
   ParticipantChipInput,
   ParticipantChipOutput
 >(({ participant, myProfile, startDirect }) => {
-  const counterpart = computed(() =>
-    principalOf(participant, "represents-principal") ?? ""
-  );
+  const counterpart = computed(() => profileOwnerOf(participant) ?? "");
   // Who may start a chat differs by viewer, so the control is hidden by a
   // prop rather than built as a different tree (see `FabriChatMessageRow`).
   const chatDisplay = computed((): ChatDisplay =>
@@ -306,8 +305,8 @@ export interface AddMemberEvent {
   readonly requestId?: string;
 
   /**
-   * The new member's profile, whose `represents-principal` label names them,
-   * through whose share inbox the viewer's manager offers them the room.
+   * The new member's own profile (`profileOwnerOf()` names them), through
+   * whose share inbox the viewer's manager offers them the room.
    */
   // `Cell<…>` is written out rather than reached through an alias: the
   // event's schema marks a reference position only where the wrapper is
@@ -595,12 +594,12 @@ const commitAddMember = handler<AddMemberEvent, AddMemberState>(
       refuse("A direct chat keeps its two members.", "direct-room");
       return;
     }
-    // A profile names the person its `represents-principal` label attests, so
-    // one attesting no one names no one.
+    // A profile names the person whose own profile it is (`profileOwnerOf()`),
+    // so one that is no one's names no one.
     const profile = event?.profile ?? picked;
     const attested = profile === undefined
       ? undefined
-      : principalOf(profile, "represents-principal");
+      : profileOwnerOf(profile);
     if (profile !== undefined && !isPrincipalDID(attested)) {
       refuse("That profile doesn't say whose it is.");
       return;
@@ -1052,8 +1051,9 @@ export interface ChatRoomViewer {
   profile?: ProfileCell;
 
   /**
-   * The principal the reader's profile's `represents-principal` label attests;
-   * absent when it attests none, or the label can't be read.
+   * The principal whose own profile the reader's profile is
+   * (`profileOwnerOf()`); absent when it is no one's, or its label can't be
+   * read.
    */
   principal?: string;
 
@@ -1111,8 +1111,8 @@ export interface ChatRoomView {
 
   /**
    * One entry for each of `participants`, in their order: the profile, and the
-   * principal its `represents-principal` label attests, absent where it
-   * attests none or the label can't be read where the list is derived. Like
+   * principal whose own profile it is (`profileOwnerOf()`), absent where it is
+   * no one's or its label can't be read where the list is derived. Like
    * `participants`, it is not proof of access.
    */
   participantEntries: PerUser<ParticipantEntry[]>;
@@ -1392,6 +1392,66 @@ const FabriChatAttachingFile = pattern<AttachingFileInput, { [UI]: VNode }>(
   },
 );
 
+/** One thread composer's session-owned draft and view. */
+interface ThreadComposerOutput {
+  [UI]: VNode;
+  draft: PerSession<Writable<{ value: string; revision: string }>>;
+}
+
+/** Owns one thread's session draft under its root's mapped occurrence identity. */
+const FabriChatThreadComposer = pattern<{
+  root: Cell<RepliedMessage>;
+  disabled: boolean | Default<true>;
+  myProfile: ProfileCell | undefined;
+  messages: MessagesCell;
+  composer: PerSession<ComposerCell>;
+  shownIn: ShownIn;
+  threadInfo: ThreadInfoCell;
+  joined?: Stream<JoinedEvent>;
+}, PerSession<ThreadComposerOutput>>(
+  (
+    {
+      root,
+      disabled,
+      myProfile,
+      messages,
+      composer,
+      shownIn,
+      threadInfo,
+      joined,
+    },
+  ) => {
+    const draft = new Writable.perSession<{ value: string; revision: string }>({
+      value: "",
+      revision: "",
+    });
+    const send = commitThreadSend({
+      myProfile,
+      messages,
+      composer,
+      shownIn,
+      threadInfo,
+      joined,
+      draft,
+    });
+    return {
+      draft,
+      [UI]: (
+        <cf-submit-input
+          data-ui-action={CHAT_SEND_ACTION}
+          data-thread-key={computed(() => viewKeyOf(root) ?? "")}
+          inputId="fabrichat-thread-message"
+          $draft={draft}
+          placeholder="Reply in thread"
+          buttonText="Reply"
+          disabled={disabled}
+          onClick={send}
+        />
+      ),
+    };
+  },
+);
+
 /**
  * A conversation with a composer that sends as the viewer: the whole of
  * `ChatRoomOutput`, given the viewer's profile.
@@ -1506,7 +1566,7 @@ export const FabriChatRoomCore = pattern<
     const profile = viewerProfileOf(myProfile);
     const principal = profile === undefined
       ? undefined
-      : principalOf(profile, "represents-principal");
+      : profileOwnerOf(profile);
     const role = spaceAccess(messages);
     return {
       ...(profile === undefined ? {} : { profile }),
@@ -1584,6 +1644,14 @@ export const FabriChatRoomCore = pattern<
     return key !== undefined && places[key] !== undefined ? key : "";
   });
   const hasThread = computed(() => openThreadKey !== "");
+  const threadComposerRoots = computed(
+    (): PerSession<Cell<RepliedMessage>[]> => {
+      const root = composer.get()?.thread;
+      return openThreadKey === "" || root === undefined
+        ? []
+        : [root.resolveAsCell()];
+    },
+  );
   // The session's open thread: its root, and every message in the thread the
   // root starts, in the order the room recorded them. The thread's list maps
   // it, so a session holds a thread row for each message of the thread it has
@@ -1686,10 +1754,31 @@ export const FabriChatRoomCore = pattern<
   const attachingFiles = computed((): PerSession<ComposerAttachment[]> =>
     composer.get()?.attaching ?? []
   );
+  const threadComposers = threadComposerRoots.map((root) =>
+    FabriChatThreadComposer({
+      root,
+      disabled: cannotSend,
+      myProfile,
+      messages,
+      composer,
+      shownIn: threadShownIn,
+      threadInfo,
+      joined: tellJoined,
+    })
+  );
+  const selectedThreadDraft = computed(
+    (): Writable<{ value: string; revision: string }> | undefined =>
+      threadComposers[0]?.draft,
+  );
+  // The aggregate view belongs to the session, as the child composers do.
+  const threadComposerViews = computed((): PerSession<VNode[]> =>
+    threadComposers.map((threadComposer) => threadComposer[UI])
+  );
   const sendThreadReply = commitThreadSend({
     myProfile,
     messages,
     composer,
+    draft: selectedThreadDraft,
     shownIn: threadShownIn,
     threadInfo,
     joined: tellJoined,
@@ -1876,6 +1965,7 @@ export const FabriChatRoomCore = pattern<
           <cf-submit-input
             data-ui-action={CHAT_SEND_ACTION}
             inputId="fabrichat-message"
+            $draft={composer.key("draft")}
             placeholder="Message"
             buttonText="Send"
             disabled={cannotSend}
@@ -1981,14 +2071,7 @@ export const FabriChatRoomCore = pattern<
             data-ui-pattern={CHAT_SEND_SURFACE}
             data-ui-event-integrity={CHAT_SEND_SURFACE}
           >
-            <cf-submit-input
-              data-ui-action={CHAT_SEND_ACTION}
-              inputId="fabrichat-thread-message"
-              placeholder="Reply in thread"
-              buttonText="Reply"
-              disabled={cannotSend}
-              onClick={sendThreadReply}
-            />
+            {threadComposerViews}
           </div>
         </cf-vstack>
       </cf-vstack>

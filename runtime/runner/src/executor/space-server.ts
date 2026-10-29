@@ -59,7 +59,10 @@ import {
   toDirtyKey,
 } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
-import { readGenesisRoot } from "@commonfabric/memory/v2/genesis-root";
+import {
+  readGenesisRoot,
+  readSpaceKind,
+} from "@commonfabric/memory/v2/genesis-root";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
 import type { AdmittedCommitNotice } from "@commonfabric/memory/v2/server";
 
@@ -6390,10 +6393,13 @@ export class SpaceServer implements TransactionSealDestination {
       const deadlineMs = this.#options.policy?.rootEnsureDeadlineMs ??
         DEFAULT_ROOT_ENSURE_DEADLINE_MS;
       const work = ensureSpaceRootPattern(runtime, space, {
-        // The ACL-derived home predicate (self-owned = home): the
-        // client's `space === runtime.userIdentityDID` is WRONG here —
-        // a serving runtime's userIdentityDID is the SERVICE DID.
-        isHomeSpace: owner === space,
+        // The ACL-derived home predicate: self-owned, and declaring no
+        // kind. The client's `space === runtime.userIdentityDID` is WRONG
+        // here, since a serving runtime's userIdentityDID is the SERVICE
+        // DID; and a self-owned space declaring a kind is not a home but a
+        // space that owns itself, a profile among them
+        // (docs/specs/profile-delegation.md).
+        isHomeSpace: owner === space && readSpaceKind(engine) === undefined,
         genesisRoot: readGenesisRoot(engine),
         stampCreationTx: (tx) => {
           runtime.stampServerRun(tx, {

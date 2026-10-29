@@ -1914,6 +1914,33 @@ function assignParameterBindingAlias(
   }
 }
 
+/**
+ * Whether `state` records any use of the value at `path`: a use at the path
+ * itself, at a path below it, or at a path above it, or a wildcard or
+ * passthrough of the whole root.
+ */
+function recordsUseOfPath(
+  state: MutableCapabilityState,
+  path: readonly string[],
+): boolean {
+  if (state.passthrough || state.wildcard) return true;
+  const overlaps = (encoded: string): boolean => {
+    const other = decodePath(encoded);
+    return other.length <= path.length
+      ? other.every((segment, index) => path[index] === segment)
+      : path.every((segment, index) => other[index] === segment);
+  };
+  return [
+    state.reads,
+    state.fullShapeReads,
+    state.writes,
+    state.rawIdentityPaths,
+    state.rawOpaquePaths,
+    state.escapedPaths,
+    state.wildcardPaths,
+  ].some((paths) => Array.from(paths).some(overlaps));
+}
+
 function toCapability(state: MutableCapabilityState): ReactiveCapability {
   const hasReads = state.reads.size > 0;
   const hasWrites = state.writes.size > 0;
@@ -2102,6 +2129,9 @@ export function analyzeFunctionCapabilities(
     const aliases = new Map<string, SourceRef>();
     const aliasShapes = new Map<string, AliasShape>();
     const optionalPresenceAliases = new Set<string>();
+    // Truthiness tests whose read waits for the end of the walk, since only
+    // then is it known whether another use already retains the value tested.
+    const deferredTruthinessRefs: SourceRef[] = [];
     const localArrayElementBindings = new Map<string, AliasBinding>();
     const localMapValueBindings = new Map<string, AliasBinding>();
     const parameterStateKeys: string[] = [];
@@ -3758,18 +3788,20 @@ export function analyzeFunctionCapabilities(
                 !isPrimitiveLikeExpression(usage)) &&
               isBooleanConditionUsage(usage)
             ) {
-              // Truthiness checks on a non-primitive source property only
-              // require presence, not the aliased payload shape. Recording
-              // nothing keeps such a (typically nullable, possibly
-              // transiently-undefined) reactive value out of the required input
-              // set, so an action/lift gated on it still runs when it is absent.
+              // A truthiness test on a non-primitive source property needs
+              // only the value's presence, not its payload shape, so it adds
+              // nothing to what the body's other uses of the value retain:
+              // a member read narrows the value to that member, and an
+              // identity use keeps it for identity alone. Where no other use
+              // retains the value, the walk's end charges the test as a read,
+              // so that the value is there to test.
               //
-              // Primitives are handled differently: their value *is* their
-              // presence and a required primitive is never legitimately
-              // `undefined`, so dropping it would be a real bug (lunch-poll
-              // `isAdmin`). `isPrimitiveLikeExpression` — now type-registry
-              // aware so it sees through synthetic `any` params — routes
-              // primitives to the full read above instead of into this skip.
+              // A primitive's value is its presence, so a primitive not
+              // reached through an optional-chain alias goes to the read below
+              // instead. `isPrimitiveLikeExpression` consults the type
+              // registry, which sees through the `any` the checker gives a
+              // synthetic parameter's bindings.
+              deferredTruthinessRefs.push(resolvedSource);
             } else if (
               signatureCapabilityArgumentUses.has(usage)
             ) {
@@ -4540,6 +4572,15 @@ export function analyzeFunctionCapabilities(
       }
     } else {
       visit(fn.body);
+    }
+
+    // A truthiness test on a value nothing else uses is a read of it. Left
+    // unrecorded, the shrink would drop the value from the input, and the test
+    // would see `undefined` whatever the value is.
+    for (const ref of deferredTruthinessRefs) {
+      if (!recordsUseOfPath(ensureState(ref.root), ref.path)) {
+        trackReadRef(ref);
+      }
     }
 
     if (mergeablePushMisuseSink && mergeablePushSites.length > 0) {

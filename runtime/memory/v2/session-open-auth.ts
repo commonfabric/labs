@@ -30,6 +30,12 @@ import {
   valueEqual,
 } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import {
+  decodeDelegation,
+  type Delegation,
+  delegationCovers,
+  verifyDelegation,
+} from "@commonfabric/identity";
 import { fromDID } from "../util.ts";
 import { MEMORY_PROTOCOL, type SessionOpenChallenge } from "../v2.ts";
 import { type ClientInfo, parseClientInfo } from "./client-info.ts";
@@ -280,4 +286,161 @@ export const authorizeLoopbackSessionOpen = (
       typeof authorization.principal === "string"
     ? authorization.principal
     : undefined;
+};
+
+/** The command a `session.open` exercises, as a delegation names it. */
+export const SESSION_OPEN_COMMAND = "/memory/session.open";
+
+/**
+ * The most proofs an open may present. A chain grows by one per hop of
+ * delegation, and a profile's chain is one or two long; the bound keeps the
+ * signatures an open can make the server verify small.
+ */
+export const MAX_PROOF_CHAIN_LENGTH = 8;
+
+export type VerifySessionOpenProofsOptions = {
+  /** The space the open names. */
+  space: string;
+
+  /** The principal the open was authenticated as, or `undefined` for none. */
+  principal: string | undefined;
+
+  /** Current unix time in seconds (defaults to now). Injectable for tests. */
+  nowSeconds?: number;
+};
+
+/** What a verified chain establishes for the session it opens. */
+export type VerifiedProofChain = {
+  /**
+   * The chain's root issuer: the principal whose access-list grant the
+   * session's capability resolves from.
+   */
+  rootIssuer: string;
+
+  /**
+   * The unix second the chain stops holding, the earliest `exp` among its
+   * proofs; absent when none expires. The session is held to it after
+   * admission as it is at admission.
+   */
+  expiresAt?: number;
+};
+
+const proofError = (step: string): Error =>
+  authorizationError(`memory session.open proofs refused: ${step}`);
+
+/**
+ * Verifies the proof chain a `session.open` presents, and returns what it
+ * establishes: the root issuer, whose access-list grant the session's
+ * capability resolves from, and the chain's expiry. Returns `undefined` for
+ * an open presenting no chain.
+ *
+ * A chain is `authorization.proofs`, the delegations' bytes in order from the
+ * root, at most {@link MAX_PROOF_CHAIN_LENGTH} of them. A signed open also
+ * names their CIDs in `invocation.prf`, in the same order, which binds the
+ * chain to the signature; an open naming an authenticated principal carries
+ * the proofs alone. Each proof must decode as a delegation, carry the CID
+ * named for it, name `space` as its subject, cover
+ * {@link SESSION_OPEN_COMMAND}, be within its validity window, and link to
+ * the proof before it, each audience being the next issuer; the last
+ * audience must be `principal`. Those checks run on the whole chain before
+ * any signature is verified, so a chain that fails them costs no signature
+ * verification. Any shortfall throws a permanent `AuthorizationError` naming
+ * the step, since no fresh handshake heals it.
+ */
+export const verifySessionOpenProofs = async (
+  message: SessionOpenMessage,
+  options: VerifySessionOpenProofsOptions,
+): Promise<VerifiedProofChain | undefined> => {
+  const { invocation } = message;
+  const prf = isFabricPlainObject(invocation) ? invocation.prf : undefined;
+  const proofs = isFabricPlainObject(message.authorization)
+    ? message.authorization.proofs
+    : undefined;
+  if (prf === undefined && proofs === undefined) return undefined;
+  if (options.principal === undefined) {
+    throw proofError("the open authenticates no principal");
+  }
+  if (!Array.isArray(proofs) || proofs.length === 0) {
+    throw proofError("`proofs` is not a non-empty array");
+  }
+  if (proofs.length > MAX_PROOF_CHAIN_LENGTH) {
+    throw proofError(
+      `the chain is longer than ${MAX_PROOF_CHAIN_LENGTH} proofs`,
+    );
+  }
+  let cids: string[] | undefined;
+  if (isFabricPlainObject(invocation)) {
+    if (
+      !Array.isArray(prf) || prf.length !== proofs.length ||
+      !prf.every((cid) => typeof cid === "string")
+    ) {
+      throw proofError("`prf` does not name one CID per proof");
+    }
+    cids = prf as string[];
+  } else if (prf !== undefined) {
+    throw proofError("`prf` without a signed invocation");
+  }
+  const now = options.nowSeconds ?? Math.floor(Date.now() / 1000);
+  const chain: Delegation[] = [];
+  let expiresAt: number | undefined;
+  for (const [i, proof] of proofs.entries()) {
+    if (!(proof instanceof FabricBytes)) {
+      throw proofError(`proof ${i} is not bytes`);
+    }
+    let delegation: Delegation;
+    try {
+      delegation = await decodeDelegation(proof.slice());
+    } catch (error) {
+      throw proofError(
+        `proof ${i} ${error instanceof Error ? error.message : error}`,
+      );
+    }
+    if (cids !== undefined && cids[i] !== delegation.cid) {
+      throw proofError(`proof ${i} is not the delegation \`prf\` names`);
+    }
+    const { payload } = delegation;
+    // UCAN allows a delegation over any subject; this server admits only
+    // one over the space being opened.
+    if (payload.sub === null) {
+      throw proofError(`proof ${i} names no subject`);
+    }
+    if (payload.sub !== options.space) {
+      throw proofError(`proof ${i} is over another space`);
+    }
+    if (!delegationCovers(payload.cmd, SESSION_OPEN_COMMAND)) {
+      throw proofError(`proof ${i} does not cover ${SESSION_OPEN_COMMAND}`);
+    }
+    if (payload.exp !== null) {
+      if (payload.exp < now) {
+        throw proofError(`proof ${i} has expired`);
+      }
+      expiresAt = expiresAt === undefined
+        ? payload.exp
+        : Math.min(expiresAt, payload.exp);
+    }
+    if (payload.nbf !== undefined && payload.nbf > now) {
+      throw proofError(`proof ${i} is not yet valid`);
+    }
+    const previous = chain.at(-1);
+    if (previous !== undefined && previous.payload.aud !== payload.iss) {
+      throw proofError(`proof ${i} is not issued by the previous audience`);
+    }
+    chain.push(delegation);
+  }
+  if (chain.at(-1)!.payload.aud !== options.principal) {
+    throw proofError("the last audience is not the open's principal");
+  }
+  for (const [i, delegation] of chain.entries()) {
+    try {
+      await verifyDelegation(delegation);
+    } catch (error) {
+      throw proofError(
+        `proof ${i} ${error instanceof Error ? error.message : error}`,
+      );
+    }
+  }
+  return {
+    rootIssuer: chain[0].payload.iss,
+    ...(expiresAt === undefined ? {} : { expiresAt }),
+  };
 };

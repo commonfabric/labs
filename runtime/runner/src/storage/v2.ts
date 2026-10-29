@@ -13,7 +13,12 @@ import {
   walkSchemaDocumentClosure,
 } from "@commonfabric/data-model-schema/schema-closure";
 import { isSubschema } from "@commonfabric/data-model-schema/schema-walk";
-import { Identity } from "@commonfabric/identity";
+import {
+  decodeDelegation,
+  Identity,
+  issueDelegation,
+} from "@commonfabric/identity";
+import type { DIDKey } from "@commonfabric/identity/did";
 import { aclDocId } from "@commonfabric/memory/acl";
 import type { ACL, Entity } from "@commonfabric/memory/interface";
 import {
@@ -203,6 +208,7 @@ import {
   type ViewInterestLease,
 } from "./interface.ts";
 import { endLocalReadValidationStretch } from "./local-read-policy.ts";
+import type { MemorySocketFactory } from "./memory-socket.ts";
 import {
   getBlindStructuralTarget,
   isDurableReadTx,
@@ -1145,6 +1151,13 @@ export interface Options {
    */
   spaceHostMap?: Record<string, string>;
 
+  /**
+   * Opens each memory connection. Absent, `createMemorySocket()` picks the
+   * backend for the platform the manager runs on. Tests inject their own to
+   * observe which addresses the manager dials.
+   */
+  createSocket?: MemorySocketFactory;
+
   id?: string;
   settings?: IRemoteStorageProviderSettings;
 
@@ -1903,6 +1916,25 @@ export class StorageManager implements IStorageManager {
     await this.#sessionFactory.setMessageCompressionEnabled?.(enabled);
   }
 
+  /** @inheritDoc */
+  async addDelegationChain(chain: readonly Uint8Array[]): Promise<void> {
+    if (this.#sessionFactory.addDelegationChain === undefined) {
+      throw new Error("This storage manager's sessions present no proof chain");
+    }
+    await this.#sessionFactory.addDelegationChain(chain);
+    // A session already open on the chain's space was opened without it,
+    // and acts under the key's own grant until it opens again; it is
+    // reopened now, so the chain reaches it rather than the next open.
+    const space = (await decodeDelegation(chain[0])).payload.sub;
+    if (space === null) return;
+    await this.#providers.get(space as MemorySpace)?.restoreSession();
+  }
+
+  /** @inheritDoc */
+  delegationChainFor(space: MemorySpace): readonly Uint8Array[] | undefined {
+    return this.#sessionFactory.delegationChainFor?.(space, this.as.did());
+  }
+
   protected constructor(
     options: Options,
     sessionFactory: SessionFactory,
@@ -2153,7 +2185,69 @@ export class StorageManager implements IStorageManager {
       spaceKind?: string;
     } = {},
   ): Promise<MemorySpace> {
+    const { space } = await this.#createSpaceAs(
+      await Identity.generate(),
+      () => acl,
+      genesis,
+    );
+    return space;
+  }
+
+  /** @inheritDoc */
+  async createSelfOwnedSpace(
+    options: {
+      grants?: ACL;
+      delegateTo: DIDKey;
+      root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+      spaceKind?: string;
+    },
+  ): Promise<{ space: MemorySpace; delegation: Uint8Array }> {
+    for (
+      const [principal, capability] of Object.entries(options.grants ?? {})
+    ) {
+      if (capability === "OWNER") {
+        throw new Error(
+          `A space that owns itself grants OWNER to nobody else, and the ` +
+            `grants make ${principal} one`,
+        );
+      }
+    }
     const key = await Identity.generate();
+    const { space, delegation } = await this.#createSpaceAs(
+      key,
+      (space) => ({ ...options.grants, [space]: "OWNER" }),
+      options,
+      // The key signs the delegation after its genesis commit is confirmed
+      // and before it is dropped: the one other thing it ever signs.
+      () =>
+        issueDelegation(key, {
+          aud: options.delegateTo,
+          sub: key.did(),
+          cmd: "/memory",
+          pol: [],
+        }),
+    );
+    // This manager holds the delegation from here on, so its own sessions
+    // on the new space act under the space's grant.
+    await this.#sessionFactory.addDelegationChain?.([delegation.bytes]);
+    return { space, delegation: delegation.bytes };
+  }
+
+  /**
+   * Helper for `createSpace()` and `createSelfOwnedSpace()`: creates the
+   * space `key` names, with `acl(space)` as its genesis access list and
+   * `genesis` as its declarations, and returns what `afterGenesis` signs
+   * with the key once the commit is confirmed, before the key is released.
+   */
+  async #createSpaceAs<T>(
+    key: Identity,
+    acl: (space: MemorySpace) => ACL,
+    genesis: {
+      root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+      spaceKind?: string;
+    },
+    afterGenesis?: () => Promise<T>,
+  ): Promise<{ space: MemorySpace; delegation: T }> {
     const space = key.did() as MemorySpace;
     const { spaceKind } = genesis;
     const root = typeof genesis.root === "function"
@@ -2169,12 +2263,24 @@ export class StorageManager implements IStorageManager {
       key,
       { sessionId: crypto.randomUUID(), ...declarations },
     );
+    let delegation: T | undefined;
     try {
       if (root !== undefined && client.serverFlags?.genesisRoot !== true) {
         throw new Error("Host does not support genesis root reservations");
       }
       if (spaceKind !== undefined && client.serverFlags?.spaceKind !== true) {
         throw new Error("Host does not support declared space kinds");
+      }
+      // A space whose authority is a delegation is one nobody can open on
+      // a host that admits no chain, so none is created there.
+      if (
+        afterGenesis !== undefined &&
+        client.serverFlags?.sessionOpenProofs !== true
+      ) {
+        throw new Error(
+          "Host does not admit a session.open proof chain, so a space that " +
+            "owns itself could not be opened",
+        );
       }
       const commit = session.transact({
         ...declarations,
@@ -2183,10 +2289,15 @@ export class StorageManager implements IStorageManager {
           confirmed: [{ id: aclId, path: toDocumentPath([]), seq: 0 }],
           pending: [],
         },
-        operations: [{ op: "set", id: aclId, value: { value: { ...acl } } }],
+        operations: [{
+          op: "set",
+          id: aclId,
+          value: { value: { ...acl(space) } },
+        }],
       });
       this.trackPendingCommit(commit);
       await commit;
+      if (afterGenesis !== undefined) delegation = await afterGenesis();
     } finally {
       try {
         await client.close();
@@ -2202,7 +2313,7 @@ export class StorageManager implements IStorageManager {
         );
       }
     }
-    return space;
+    return { space, delegation: delegation as T };
   }
 
   /**
@@ -4176,7 +4287,7 @@ export class StorageManager implements IStorageManager {
           dynamicHosts,
         ),
         options.as,
-        undefined,
+        options.createSocket,
         options.clientBuild,
       ),
     );
@@ -4837,6 +4948,11 @@ class Provider
 
   ensureSession(): Promise<void> {
     return this.#followReplacement((replica) => replica.ensureSession());
+  }
+
+  /** See SpaceReplica.restoreSession. */
+  restoreSession(): Promise<void> {
+    return this.#followReplacement((replica) => replica.restoreSession());
   }
 
   /** See SpaceReplica.noteAclChanged (THE SESSION REMOUNT's latch). Only
@@ -6075,6 +6191,22 @@ export class SpaceReplica
 
   async ensureSession(): Promise<void> {
     await this.#activeSessionHandle();
+  }
+
+  /**
+   * Opens this replica's session again, as a lost connection would, and
+   * resolves once the server has admitted it: what carries a proof chain
+   * held since the session opened to the server, since each open presents
+   * the chain as it stands then (04-protocol.md §4.5.1). Opens a session
+   * first where none is open yet. On a host that does not record session
+   * holdings, a restore ends a session with a holdings provider instead of
+   * resuming it, so there the session is left standing, on the grant it
+   * opened with, until it opens again.
+   */
+  async restoreSession(): Promise<void> {
+    const { client, session } = await this.#activeSessionHandle();
+    if (client.serverFlags?.sessionHoldings !== true) return;
+    await session.restore();
   }
 
   /**

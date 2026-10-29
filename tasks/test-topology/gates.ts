@@ -216,9 +216,8 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     name: "check-test-shuffle",
     kind: "gate",
     run: ["task", "check-test-shuffle"],
-    // Reads every manifest, workflow and shell script in the tree, so a
-    // command that starts a test runner is reached wherever it is
-    // written.
+    // Reads every manifest, workflow and shell script in the tree, and
+    // the `deno` commands TypeScript sources write as array literals.
     reachedBy: [],
   },
   {

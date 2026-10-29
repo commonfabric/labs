@@ -362,6 +362,41 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     await runtime.storageManager.synced();
   };
 
+  /** Seed a genesis that grants the space's own DID OWNER and declares
+   * `spaceKind`, as a profile's creation does
+   * (docs/specs/profile-delegation.md). ACLManager declares no kind, so
+   * the space identity commits the genesis over a session of its own. */
+  const seedSelfOwnedKind = async (spaceKind: string): Promise<void> => {
+    const client = await MemoryV2Client.connect({
+      transport: MemoryV2Client.loopback(server),
+    });
+    try {
+      const session = await client.mount(
+        space,
+        { spaceKind },
+        (_space, _session, context) => ({
+          invocation: {
+            aud: context.audience,
+            challenge: context.challenge.value,
+          },
+          authorization: { principal: space },
+        }),
+      );
+      await session.transact({
+        spaceKind,
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: `of:${space}`,
+          value: { value: { [space]: "OWNER" } },
+        }],
+      });
+    } finally {
+      await client.close();
+    }
+  };
+
   const newSpaceServer = (
     policyOverride?: Partial<
       NonNullable<ConstructorParameters<typeof SpaceServer>[0]["policy"]>
@@ -458,6 +493,26 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     expect(stats.rootEnsure.created).toBe(1);
     expect(stats.rootEnsure.skippedNoOwner).toBe(0);
     expect(stats.rootEnsure.failures).toBe(0);
+  });
+
+  it("activation of a self-owned space declaring a kind materializes the root from the default-app source under the space's own trust snapshot", async () => {
+    // A profile owns itself, so its owner is its own DID; declaring a kind
+    // is what keeps it from being taken for a home.
+
+    await seedSelfOwnedKind("profile");
+    const created = newSpaceServer();
+    expect(await created.activate()).toBe(true);
+
+    expect(await ensures.matching(() => true)).toBe("created");
+    const reader = clientRuntime(readerSigner);
+    const root = await resolveRootAfterEnsure(reader);
+    expect(getPatternSource(root)).toBe(DEFAULT_APP_PATTERN_SOURCE);
+    const creations = ensureTxs();
+    expect(creations.length).toBeGreaterThan(0);
+    for (const tx of creations) {
+      expect(tx.getCfcState().trustSnapshot?.actingPrincipal).toBe(space);
+    }
+    expect(stats.rootEnsure.skippedNoOwner).toBe(0);
   });
 
   it("park/re-activate converges on ONE root and leaves its source alone", async () => {

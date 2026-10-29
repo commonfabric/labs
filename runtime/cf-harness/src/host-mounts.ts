@@ -44,6 +44,32 @@ export interface CfHarnessHostMountConfig {
 
 const HOST_MOUNT_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
+/**
+ * Formats mount fields for `--host-mount`; the parser validates their values.
+ * Throws when a field cannot be represented without changing its value in
+ * the comma-separated, whitespace-trimmed grammar.
+ */
+export const formatHostMountSpec = (
+  mount: Record<keyof CfHarnessHostMountConfig, string>,
+): string => {
+  const fields = {
+    name: mount.name,
+    source: mount.hostPath,
+    target: mount.sandboxPath,
+    mode: mount.mode,
+  };
+  for (const value of Object.values(fields)) {
+    if (value.includes(",") || value.trim() !== value) {
+      throw new Error(
+        "--host-mount fields must not contain commas or surrounding whitespace",
+      );
+    }
+  }
+  return Object.entries(fields).map(([key, value]) => `${key}=${value}`).join(
+    ",",
+  );
+};
+
 const normalizeSandboxMountPath = (path: string, label: string): string => {
   const normalized = normalizeSandboxPath(path);
   if (!isAbsoluteSandboxPath(normalized) || normalized === "/") {
