@@ -17,6 +17,7 @@
 import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
+import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import {
   MultiRuntimeHarness,
@@ -30,6 +31,43 @@ const PROGRAM_PATH = join(
   "main.tsx",
 );
 const ROOT_PATH = join(import.meta.dirname!, "..");
+
+/**
+ * The path, below `path`, to the node of the stored rendering `node` whose
+ * props hold `id`; `undefined` where none does.
+ */
+const pathToId = (
+  node: FabricValue,
+  id: string,
+  path: (string | number)[],
+): (string | number)[] | undefined => {
+  if (Array.isArray(node)) {
+    for (const [index, child] of node.entries()) {
+      const found = pathToId(child, id, [...path, index]);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  }
+  if (typeof node !== "object" || node === null) return undefined;
+  const { props, children } = node as Record<string, FabricValue>;
+  if ((props as Record<string, FabricValue> | null)?.id === id) return path;
+  return children === undefined
+    ? undefined
+    : pathToId(children, id, [...path, "children"]);
+};
+
+/** The display of the room's profile-setup surface, as `session` derives it. */
+const setupDisplay = async (
+  session: MultiRuntimeSession,
+): Promise<unknown> => {
+  const path = pathToId(
+    await session.readRaw(["$UI"]),
+    "fabrichat-profile-setup",
+    ["$UI"],
+  );
+  expect(path).toBeDefined();
+  return await session.read([...path!, "props", "style", "display"]);
+};
 
 /**
  * The stored value of the document the piece result's `path` resolves to in
@@ -88,6 +126,7 @@ describe("fabrichat room profile wish across runtimes", () => {
         await harness.settle();
         expect(await found.read(["viewer", "profile", "name"])).toBe("Person");
         expect(await found.read(["canSend"])).toBe(true);
+        expect(await setupDisplay(found)).toBe("none");
 
         // The same person's runtime acting as a profile their home does not
         // list: its wish fails rather than answer as another profile. Reading
@@ -104,6 +143,7 @@ describe("fabrichat room profile wish across runtimes", () => {
         });
         await failed.read(["viewer"]);
         await harness.settle();
+        expect(await setupDisplay(failed)).toBe("block");
 
         expect(await stored(found, ["viewer"])).toMatchObject({
           profile: expect.anything(),
