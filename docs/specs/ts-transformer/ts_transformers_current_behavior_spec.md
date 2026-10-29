@@ -2385,7 +2385,7 @@ each operand of a fallback, wherever on the member spine it sits, a call on
   `x && y` or `!x`, needs only the member's presence, so it adds nothing to
   what the body's other uses of the member retain: `if (user) return
   user.name` records `["user", "name"]` alone, and an identity use of the
-  member keeps it a link. Where nothing else the body does uses the member,
+  member keeps it for identity alone. Where nothing else the body does uses the member,
   the test is a read of it, so the member stays in the input schema:
   `x && other.get()` records `["x"]` as well as `["other"]`. A test of a
   primitive member is a read of it in either case, since a primitive's value

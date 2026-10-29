@@ -3792,14 +3792,15 @@ export function analyzeFunctionCapabilities(
               // only the value's presence, not its payload shape, so it adds
               // nothing to what the body's other uses of the value retain:
               // a member read narrows the value to that member, and an
-              // identity use keeps it a link. Where no other use retains the
-              // value, the walk's end charges the test as a read, so that the
-              // value is there to test.
+              // identity use keeps it for identity alone. Where no other use
+              // retains the value, the walk's end charges the test as a read,
+              // so that the value is there to test.
               //
-              // A primitive's value is its presence, so a primitive goes to
-              // the read below instead. `isPrimitiveLikeExpression` consults
-              // the type registry, which sees through the `any` the checker
-              // gives a synthetic parameter's bindings.
+              // A primitive's value is its presence, so a primitive not
+              // reached through an optional-chain alias goes to the read below
+              // instead. `isPrimitiveLikeExpression` consults the type
+              // registry, which sees through the `any` the checker gives a
+              // synthetic parameter's bindings.
               deferredTruthinessRefs.push(resolvedSource);
             } else if (
               signatureCapabilityArgumentUses.has(usage)
