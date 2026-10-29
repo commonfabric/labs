@@ -2570,7 +2570,6 @@ describe("console/src/live-view", () => {
         toolStarted("call-2", "browser"),
         toolStarted("call-3", "browser"),
         toolStarted("call-4", "browser"),
-        toolStarted("call-5", "run_read_command"),
       ));
       view.details = new Map([["turn-1", {
         ...await runDetail(),
