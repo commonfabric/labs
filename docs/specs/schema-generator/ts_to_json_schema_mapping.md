@@ -1547,7 +1547,11 @@ Mechanics:
   Any other, whose keys the bindings alone cannot name, as one that renames
   them with an `as` clause or picks keys a bound parameter gives, leaves the
   payload unread: its restrictions land on the whole value, and its evidence
-  nowhere.
+  nowhere. So does an intersection with a part the checker defers until its
+  parameters are bound, a conditional type, as `(T extends object ? T : never)`,
+  `Extract<T, U>` and `Awaited<T>` are, or an indexed access, as `T["data"]`
+  is: read uninstantiated, that part lists none of its instantiation's
+  members, and the others would only partly list the payload's.
   - A restriction lands wherever the payload's data may be: on each member of
     the value the payload names, and on each member with no declaration. A
     mapped type that renames its keys keeps no member's declaration, nor does
