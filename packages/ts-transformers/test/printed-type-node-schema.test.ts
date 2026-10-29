@@ -2673,6 +2673,45 @@ type View<T> = Omit<${alias}<${wrapper} & { y: number }, readonly ["${atom}"]>, 
         });
       }
 
+      for (
+        const conditional of [
+          "(T extends object ? T : never)",
+          "Same<T>",
+          "Extract<T, object>",
+          "Exclude<T, undefined>",
+          "Awaited<T>",
+        ]
+      ) {
+        it(`labels the whole of an \`Omit\` over a union a member of which intersects \`${conditional}\`, at \`T = { x: string }\`, on both sides`, async () => {
+          // The conditional type lists none of its instantiation's members, so
+          // the member's payload is not read, and its restriction goes on the
+          // whole value rather than on `y` alone.
+
+          const read = await schemasOf(
+            `type Same<T> = T extends object ? T : never;
+type View<T> = Omit<
+  | Confidential<${conditional} & { y: number }, readonly ["c"]>
+  | Confidential<{ x: string; y: number }, readonly ["a"]>,
+  never
+>;`,
+            "View<{ x: string }>",
+          );
+          for (const side of [read.input, read.output]) {
+            const { confidentiality } = (side as Schema).ifc as {
+              confidentiality: string[];
+            };
+            expect([...confidentiality].sort()).toEqual(["a", "c"]);
+            for (
+              const property of Object.values(
+                (side as Schema).properties as Record<string, Schema>,
+              )
+            ) {
+              expect(property.ifc).toBeUndefined();
+            }
+          }
+        });
+      }
+
       it("labels the whole of an `Omit` over a union of `Integrity<Readonly<T> & { y: number }, …>` and a member with its keys, at `T = { x: string }`, on both sides", async () => {
         // Evidence lands only where the payload's data must be: `Readonly<T>`
         // read as `T` bound to its argument is where `x` must be, so `i`

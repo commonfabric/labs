@@ -706,7 +706,9 @@ type Payload = readonly (readonly ts.Type[])[];
  * (`listsItsKeys()`), as `Pick<T, "x">` does. `undefined` where the payload
  * is not read: none was recorded, or it holds a mapped type over a bound
  * parameter whose keys the bindings alone cannot name, as one renaming them
- * with an `as` clause has.
+ * with an `as` clause has, or an intersection with a part the checker defers
+ * (`isDeferredType()`), as `(T extends object ? T : never) & { y: number }`
+ * is, whose members the other parts' would only partly list.
  */
 const boundPayloadOf = (
   metadata: CarriedMetadata,
@@ -742,6 +744,9 @@ const payloadUnder = (
       ? read.flat()
       : undefined;
   }
+  if (type.isIntersection() && type.types.some(isDeferredType)) {
+    return undefined;
+  }
   if (
     !type.isIntersection() ||
     !type.types.some((part) => holdsBoundParameter(part, bound, checker))
@@ -765,6 +770,15 @@ const payloadUnder = (
     )
   );
 };
+
+/**
+ * Whether `type` is one the checker defers until the type parameters it is
+ * written over are bound, as a conditional type and an indexed access are,
+ * `Extract<T, U>` and `Awaited<T>` among them: read uninstantiated, it lists
+ * none of the members its instantiation has.
+ */
+const isDeferredType = (type: ts.Type): boolean =>
+  (type.flags & (ts.TypeFlags.Conditional | ts.TypeFlags.IndexedAccess)) !== 0;
 
 /**
  * Whether `type` is a type parameter `bound` binds, or a union, an

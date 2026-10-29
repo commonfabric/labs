@@ -4750,6 +4750,36 @@ describe("Schema: CFC authoring aliases", () => {
           never
         >;
         type Same<X> = X extends object ? X : never;
+        type OmitDeferredOr<T> = Omit<
+          | Confidential<(T extends object ? T : never) & { y: number }, readonly ["c"]>
+          | Sec<{ x: string; y: number }>,
+          never
+        >;
+        type OmitSameOr<T> = Omit<
+          | Confidential<Same<T> & { y: number }, readonly ["c"]>
+          | Sec<{ x: string; y: number }>,
+          never
+        >;
+        type OmitExtractOr<T> = Omit<
+          | Confidential<Extract<T, object> & { y: number }, readonly ["c"]>
+          | Sec<{ x: string; y: number }>,
+          never
+        >;
+        type OmitAwaitedOr<T> = Omit<
+          | Confidential<Awaited<T> & { y: number }, readonly ["c"]>
+          | Sec<{ x: string; y: number }>,
+          never
+        >;
+        type OmitIndexedOr<T extends { data: object }> = Omit<
+          | Confidential<T["data"] & { y: number }, readonly ["c"]>
+          | Sec<{ x: string; y: number }>,
+          never
+        >;
+        type OmitDeferredIntegrityOr<T> = Omit<
+          | Integrity<(T extends object ? T : never) & { y: number }, readonly ["i"]>
+          | Integrity<{ x: string; y: number }, readonly ["i"]>,
+          never
+        >;
         type OmitConditional<T> =
           Omit<Confidential<Same<T> & { y: number }, readonly ["c"]>, never>;
         type OmitOpen<T> = Omit<T | Sec<T>, never>;
@@ -4948,6 +4978,17 @@ describe("Schema: CFC authoring aliases", () => {
           ["OmitReadonlyOr<{ x: string }>", { confidentiality: ["a", "c"] }],
           ["OmitReadonlyIntegrityOr<{ x: string }>", { integrity: ["i"] }],
           ["OmitConditional<{ x: string }>", { confidentiality: ["c"] }],
+          // A member's payload intersecting a type the checker defers, as a
+          // conditional type, lists its own members only, so the payload is
+          // not read and its restriction goes on the whole value.
+          ["OmitDeferredOr<{ x: string }>", { confidentiality: ["a", "c"] }],
+          ["OmitSameOr<{ x: string }>", { confidentiality: ["a", "c"] }],
+          ["OmitExtractOr<{ x: string }>", { confidentiality: ["a", "c"] }],
+          ["OmitAwaitedOr<{ x: string }>", { confidentiality: ["a", "c"] }],
+          [
+            "OmitIndexedOr<{ data: { x: string } }>",
+            { confidentiality: ["a", "c"] },
+          ],
         ] as const
       ) {
         it(`labels the whole of \`${alias}\`, whose payload intersects a wrapped bound parameter with a member of its own`, async () => {
@@ -4995,6 +5036,25 @@ describe("Schema: CFC authoring aliases", () => {
           expect(diagnostics).toEqual([]);
         });
       }
+
+      it("reads `OmitDeferredIntegrityOr<{ x: string }>`, whose member's payload intersects a conditional type, with no evidence", async () => {
+        // Its payload is not read, so where the payload's data must be is
+        // unknown, and evidence goes nowhere on that member, so on no member.
+
+        const { schema, diagnostics } = await generate(
+          "OmitDeferredIntegrityOr<{ x: string }>",
+          DECLARATIONS,
+        );
+        const { ifc, properties } = schema as {
+          ifc?: unknown;
+          properties: Record<string, { ifc?: unknown }>;
+        };
+        expect(ifc).toBeUndefined();
+        for (const property of Object.values(properties)) {
+          expect(property.ifc).toBeUndefined();
+        }
+        expect(diagnostics).toEqual([]);
+      });
 
       it("reads `ReadonlyUnion<string, null>` as `Readonly<Sec<string> | Sec<null>>`, labeling the `string` member alone", async () => {
         // A CFC alias holds `null` beside its carrier, so `Sec<null>` is a
