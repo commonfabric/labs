@@ -109,7 +109,7 @@ Against every recorded baseline that declares one of these fields with no
 scope, the pattern-update proof reports `scope changed` (RUN,
 `deno task pattern-compat`):
 
-- `system/fabrichat/room.tsx`, against 113 baselines: `result.canSend`,
+- `system/fabrichat/room.tsx`, against 118 baselines: `result.canSend`,
   `result.canAdd`, `result.viewer` and `result.messageRights`, and each of
   them through `$VIEWS.room`, at whichever of those paths the baseline has;
 - `system/fabrichat/placement.tsx`, against 5 baselines:
@@ -120,11 +120,11 @@ scope, the pattern-update proof reports `scope changed` (RUN,
   `result.$VIEWS.chat.canSend`, `result.placement.$VIEWS.chat.canSend`,
   `argument.placement.room.canSend` and `result.placement.room.canSend`.
 
-In `tasks/pattern-compat-accepted-breaks.ts`, 105 of those 123 pairs are already
+In `tasks/pattern-compat-accepted-breaks.ts`, 105 of those 128 pairs are already
 accepted for earlier FabriChat breaks. The nine entries holding them name the
 paths their pairs blame beside their own, and their `reason` cites this record.
-The other 18 pairs are the baselines recorded since those breaks, which no
-entry named: 12 of the room's, 3 of the placement's and 3 of the adapter's.
+The other 23 pairs are the baselines recorded since those breaks, which no
+entry named: 17 of the room's, 3 of the placement's and 3 of the adapter's.
 They have entries of their own, which name this record.
 
 A change of scope at `messageRights` is reported at that path alone, and no
