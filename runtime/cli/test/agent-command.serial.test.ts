@@ -396,6 +396,19 @@ describe("cf agent runner", () => {
         "",
       ]),
     ).rejects.toThrow(/Missing value for option "--commands-actor"/);
+    for (
+      const url of ["http://127.0.0.1:8090/?a=1", "http://127.0.0.1:8090/#"]
+    ) {
+      await expect(
+        run(deps, [
+          ...base,
+          "--commands-url",
+          url,
+          "--commands-actor",
+          "agent:agent-runner",
+        ]),
+      ).rejects.toThrow(/no query or fragment/);
+    }
     expect(started).toEqual([]);
   });
 

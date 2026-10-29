@@ -544,6 +544,41 @@ describe("loom-commands tools", () => {
       expect(calls).toHaveLength(0);
     });
 
+    it("ends only the cancelled caller's wait on a catalog read another caller shares", async () => {
+      for (const cancelled of ["first", "second"] as const) {
+        const first = contextWith();
+        const second = contextWith();
+        const listing = Promise.withResolvers<Response>();
+        answers.list = () => listing.promise;
+        // Both callers wait on the one read the run holds.
+        const signals = [new AbortController(), new AbortController()];
+        Object.assign(first.context, { signal: signals[0].signal });
+        Object.assign(second.context, {
+          signal: signals[1].signal,
+          loomCommandCatalog: first.context.loomCommandCatalog,
+        });
+        const call = { command: "loom.compose", args: {} };
+        const pending = [
+          runCommandTool.invoke(first.context, call),
+          runCommandTool.invoke(second.context, call),
+        ];
+        signals[cancelled === "first" ? 0 : 1].abort();
+        listing.resolve(new Response(JSON.stringify(MANIFEST)));
+        const [one, two] = await Promise.all(pending);
+        const [gone, kept] = cancelled === "first" ? [one, two] : [two, one];
+        expect(gone).toMatchObject({
+          status: "failed_to_deliver",
+          code: "cancelled",
+          landed: "no",
+        });
+        expect(kept).toMatchObject({ status: "executed" });
+        expect(host.requests.map((request) => request.path)).toEqual([
+          "/commands",
+          "/command",
+        ]);
+      }
+    });
+
     it("does not dispatch after cancellation while the fresh catalog is loading", async () => {
       const { context, calls } = contextWith({
         cancelDuringListing: true,

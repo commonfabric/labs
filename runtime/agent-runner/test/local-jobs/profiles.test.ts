@@ -200,6 +200,14 @@ describe("local-jobs/profiles", () => {
         "`commands`",
       ],
       [
+        "a command endpoint with a query",
+        {
+          ...ASK,
+          commands: { ...ASK.commands, url: "http://127.0.0.1:8080/?" },
+        },
+        "`commands`",
+      ],
+      [
         "relevant commands that are not a list of ids",
         { ...ASK, commands: { ...ASK.commands, relevant: "search.run" } },
         "`commands`",

@@ -31,6 +31,7 @@
     "./subagent-return": "./src/subagent-return.ts",
     "./artifacts": "./src/artifacts.ts",
     "./cli": "./src/cli.ts",
+    "./loom-commands": "./src/loom-commands.ts",
     "./provenance": "./src/provenance.ts",
     "./result-writer": "./src/result-writer.ts",
     "./fabric-session": "./src/fabric-session.ts",

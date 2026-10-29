@@ -318,6 +318,34 @@ const COMMAND_NAME_SCHEMA = {
   maxLength: HARNESS_COMMAND_ID_MAX_LENGTH,
 } as const;
 
+/**
+ * Helper for the command tools, which waits for the run's catalog read
+ * unless the turn is cancelled first. The read is shared with every other
+ * caller in the run, so a cancelled turn stops waiting for it without
+ * ending it.
+ */
+const unlessCancelled = <T>(
+  reading: Promise<T>,
+  signal: AbortSignal | undefined,
+): Promise<T | "cancelled"> => {
+  if (signal === undefined) return reading;
+  if (signal.aborted) return Promise.resolve("cancelled");
+  return new Promise((resolve, reject) => {
+    const cancel = () => resolve("cancelled");
+    signal.addEventListener("abort", cancel, { once: true });
+    reading.then(
+      (value) => {
+        signal.removeEventListener("abort", cancel);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", cancel);
+        reject(error);
+      },
+    );
+  });
+};
+
 /** Lists the commands this run's host lets it run. */
 export const listCommandsTool: HarnessToolDefinition<
   ListCommandsInput,
@@ -360,11 +388,12 @@ export const listCommandsTool: HarnessToolDefinition<
     }
     // An explicit listing asks the host afresh, and what it reads is the
     // catalog `run_command` checks calls against from then on.
-    const listed = await source.refresh(context.signal);
+    const listed = await unlessCancelled(source.refresh(), context.signal);
+    if (listed === "cancelled") {
+      return fail("cancelled", "The turn was cancelled during the host call.");
+    }
     if (listed.status === "error") {
-      return context.signal?.aborted
-        ? fail("cancelled", "The turn was cancelled during the host call.")
-        : fail(listed.code, listed.message);
+      return fail(listed.code, listed.message);
     }
     const { catalog } = listed;
     const detail = new Set(
@@ -790,14 +819,16 @@ const readCatalog = async (
       "The turn was cancelled before the command.",
     );
   }
-  const listed = await source.current(context.signal);
-  if (listed.status === "ok") return { catalog: listed.catalog };
-  return context.signal?.aborted
-    ? notSent(
+  const listed = await unlessCancelled(source.current(), context.signal);
+  if (listed === "cancelled") {
+    return notSent(
       outputId,
       "cancelled",
       "The turn was cancelled before the command.",
-    )
+    );
+  }
+  return listed.status === "ok"
+    ? { catalog: listed.catalog }
     : notSent(outputId, listed.code, listed.message);
 };
 

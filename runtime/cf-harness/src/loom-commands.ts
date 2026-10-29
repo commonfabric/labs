@@ -113,24 +113,30 @@ export const LOOM_COMMAND_OUTPUTS_LIMIT = 32;
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   isObjectNotArray(value);
 
+/**
+ * Why `url` cannot be a command endpoint's base URL, or `undefined` when it
+ * can: it must be `http:` or `https:`, and hold no query or fragment, not
+ * even an empty one, since the routes are appended to it as written.
+ */
+export const commandEndpointUrlProblem = (url: unknown): string | undefined => {
+  if (typeof url !== "string" || !URL.canParse(url)) {
+    return "Commands require an `http:` or `https:` endpoint URL.";
+  }
+  if (!["http:", "https:"].includes(new URL(url).protocol)) {
+    return "Commands require an `http:` or `https:` endpoint URL.";
+  }
+  if (url.includes("?") || url.includes("#")) {
+    return "Commands require an endpoint URL with no query or fragment.";
+  }
+  return undefined;
+};
+
 /** Validates host configuration before it can advertise a command tool. */
 export const validateLoomCommandsConfig = (
   config: HarnessLoomCommandsConfig,
 ): void => {
-  let url: URL | undefined;
-  try {
-    url = new URL(config.url);
-  } catch {
-    url = undefined;
-  }
-  if (url === undefined || !["http:", "https:"].includes(url.protocol)) {
-    throw new Error("Commands require an `http:` or `https:` endpoint URL.");
-  }
-  if (url.search !== "" || url.hash !== "") {
-    throw new Error(
-      "Commands require an endpoint URL with no query or fragment.",
-    );
-  }
+  const problem = commandEndpointUrlProblem(config.url);
+  if (problem !== undefined) throw new Error(problem);
   if (typeof config.actor !== "string" || config.actor === "") {
     throw new Error("Commands require the actor they run as.");
   }
@@ -410,15 +416,15 @@ export type LoomCommandCatalogRead =
  * The catalog one run reads its commands from. The host is asked on first
  * use and the catalog held for the rest of the run, so a run of many
  * commands lists once; `refresh` asks again and holds what it reads. A read
- * that fails, a read `signal` cancelled included, is not held, so the next
- * use asks the host again.
+ * that fails is not held, so the next use asks the host again. A read is
+ * shared by every caller, so no one caller's cancellation ends it.
  */
 export interface LoomCommandCatalogSource {
   /** The held catalog, read from the host when none is held yet. */
-  current(signal?: AbortSignal): Promise<LoomCommandCatalogRead>;
+  current(): Promise<LoomCommandCatalogRead>;
 
   /** The host's catalog as it stands, held in place of the old one. */
-  refresh(signal?: AbortSignal): Promise<LoomCommandCatalogRead>;
+  refresh(): Promise<LoomCommandCatalogRead>;
 }
 
 /** A catalog source over the host's `GET <url>/commands`. */
@@ -426,10 +432,8 @@ export const createLoomCommandCatalogSource = (
   config: HarnessLoomCommandsConfig,
 ): LoomCommandCatalogSource => {
   let held: Promise<LoomCommandCatalogRead> | undefined;
-  const read = async (
-    signal?: AbortSignal,
-  ): Promise<LoomCommandCatalogRead> => {
-    const listed = await listLoomCommands(config, signal);
+  const read = async (): Promise<LoomCommandCatalogRead> => {
+    const listed = await listLoomCommands(config);
     return listed.status === "ok"
       ? { status: "ok", catalog: loomCommandCatalogOf(listed.commands) }
       : listed;
@@ -447,7 +451,7 @@ export const createLoomCommandCatalogSource = (
     return reading;
   };
   return {
-    current: (signal) => held ?? hold(read(signal)),
-    refresh: (signal) => hold(read(signal)),
+    current: () => held ?? hold(read()),
+    refresh: () => hold(read()),
   };
 };

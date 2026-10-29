@@ -83,7 +83,12 @@ describe("loom-commands", () => {
 
     it("throws for an endpoint with a query or a fragment", () => {
       for (
-        const url of ["http://127.0.0.1:8080/?a=1", "http://127.0.0.1:8080/#a"]
+        const url of [
+          "http://127.0.0.1:8080/?a=1",
+          "http://127.0.0.1:8080/#a",
+          "http://127.0.0.1:8080/?",
+          "http://127.0.0.1:8080/#",
+        ]
       ) {
         expect(() => validateLoomCommandsConfig(configFor(url))).toThrow(
           "no query or fragment",
@@ -337,24 +342,6 @@ describe("loom-commands", () => {
       await source.refresh();
       await source.current();
       expect(host.requests).toHaveLength(2);
-    });
-
-    it("returns `command_failed` for a read its signal cancelled, and does not hold it", async () => {
-      const answered = Promise.withResolvers<Response>();
-      await using host = startCommandHost({ list: () => answered.promise });
-      const source = createLoomCommandCatalogSource(configFor(host.url));
-      const controller = new AbortController();
-      const reading = source.current(controller.signal);
-      controller.abort();
-      expect(await reading).toMatchObject({
-        status: "error",
-        code: "command_failed",
-      });
-      answered.resolve(Response.json({ commands: [{ id: "a.b" }] }));
-      expect(await source.current()).toMatchObject({
-        status: "ok",
-        catalog: { entries: [{ name: "a.b" }] },
-      });
     });
 
     it("does not hold a read that failed, so the next use asks again", async () => {

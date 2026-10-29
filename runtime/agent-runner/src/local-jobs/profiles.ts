@@ -31,6 +31,7 @@ import {
 } from "@commonfabric/cf-harness/contracts/tool-descriptor";
 import { validateHarnessForeignSpaces } from "@commonfabric/cf-harness/foreign-spaces";
 import { parseHandleRef } from "@commonfabric/cf-harness/handle-table";
+import { commandEndpointUrlProblem } from "@commonfabric/cf-harness/loom-commands";
 import {
   checkInputCellSpec,
   parseNamedPieceAddress,
@@ -226,10 +227,6 @@ const isUrl = (value: unknown): value is string => {
   }
 };
 
-/** Helper for reading, which says whether `value` is an `http(s):` URL. */
-const isHttpUrl = (value: unknown): value is string =>
-  isUrl(value) && ["http:", "https:"].includes(new URL(value).protocol);
-
 /** Helper for reading, which checks one profile and returns it. */
 const profileOf = (name: string, value: unknown): LocalJobProfile => {
   const fail = (what: string): never => {
@@ -298,14 +295,15 @@ const profileOf = (name: string, value: unknown): LocalJobProfile => {
   }
   if (
     commands !== undefined &&
-    (!isObjectNotArray(commands) || !isHttpUrl(commands.url) ||
+    (!isObjectNotArray(commands) ||
+      commandEndpointUrlProblem(commands.url) !== undefined ||
       typeof commands.actor !== "string" || commands.actor === "" ||
       (commands.relevant !== undefined &&
         (!Array.isArray(commands.relevant) ||
           !commands.relevant.every((id) => typeof id === "string"))))
   ) {
     fail(
-      "`commands` must name an http(s) `url` and an `actor`, and any `relevant` commands as a list of ids",
+      "`commands` must name an http(s) `url` with no query or fragment and an `actor`, and any `relevant` commands as a list of ids",
     );
   }
   if (model !== undefined && typeof model !== "string") {

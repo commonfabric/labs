@@ -28,6 +28,7 @@ import {
   LOOM_RETRIEVAL_TOOL_IDS,
 } from "@commonfabric/cf-harness/contracts/tool-descriptor";
 import { HarnessControlError } from "@commonfabric/cf-harness/control-errors";
+import { commandEndpointUrlProblem } from "@commonfabric/cf-harness/loom-commands";
 import { type Cell, type Runtime, sendEvent } from "@commonfabric/runner";
 import {
   AGENT_RUN_STATES,
@@ -251,8 +252,13 @@ export async function resolveAgentRunnerConfig(
       { exitCode: 1 },
     );
   }
-  if (options.commandsUrl !== undefined) {
-    originOf("--commands-url", options.commandsUrl);
+  const endpointProblem = options.commandsUrl === undefined
+    ? undefined
+    : commandEndpointUrlProblem(options.commandsUrl);
+  if (endpointProblem !== undefined) {
+    throw new ValidationError(`"--commands-url": ${endpointProblem}`, {
+      exitCode: 1,
+    });
   }
   const identityPath = absPath(options.identity);
   const identity = await deps.loadIdentity(identityPath);
