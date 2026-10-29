@@ -307,12 +307,15 @@ division is:
   key acting for a person; a successor key after a rotation. The list says
   who may, the chain says which key may on their behalf, and attenuation
   and expiry ride on the chain without touching the shared list.
-- **Revocation of a chain has two grades.** Expiry is the everyday one:
-  every issued delegation carries one, a holder renews by being issued
-  again, and removing a key is not renewing it. For what cannot wait, a
-  per-space revocation document of refused CIDs, written under the access
-  list's whole-document rule, that the server consults beside the proofs
-  and sweeps open sessions against as it sweeps on an access-list change.
+- **Revocation of a chain has two grades.** Expiry is the everyday one for
+  a delegation issued with one: a holder renews by being issued again, and
+  removing a key is not renewing it. A delegation issued without an expiry,
+  as the profile's root delegation is and as `cf delegation issue` writes
+  unless given `--expires-in`, does not end that way. For one of those, and
+  for what cannot wait, a per-space revocation document of refused CIDs,
+  written under the access list's whole-document rule, that the server
+  consults beside the proofs and sweeps open sessions against as it sweeps
+  on an access-list change.
   Replacing the list itself remains the emergency exit that refuses every
   chain rooted at a grant at once.
 
@@ -353,8 +356,17 @@ what a traversal reaches from them is output, which no policy sees. It
 does not need to: a selector whose schema is `false` reads its root and
 follows no reference (`memory-v2/05-queries.md` §5.3.2), so a policy that
 pins each root's id and forces its schema to `false` admits a query that can
-only ask for the documents it names. A holder scoped that way lists what it
-wants as roots, one each, and nothing is evaluated after the fact.
+only ask for the documents it names. What such a query delivers is those
+documents and their schema closure: the schema and label documents each
+one's `cfc` envelope names, and the content-addressed schema documents its
+refs reach, transitively. The server delivers and tracks that closure for
+every document it delivers, whatever the selector, because a reader cannot
+check what it may read without it (§5.3.2, "Metadata / Provenance
+Resolution"). A read scoped this way therefore reaches the roots it names
+and the closure they carry, and no other document; whether the policy
+should have to cover the closure too is left open below. A holder scoped
+that way lists what it wants as roots, one each, and nothing is evaluated
+after the fact.
 
 **What the invocation carries is a separate decision.** A policy needs the
 invocation's shape, `cmd`, `args`, and the proofs it invokes under; it does
@@ -584,10 +596,12 @@ the emergency it is named for.
   delegation to it over the space. No commit to the space.
 - **Removing a key the core delegated to**: the core identity revokes its own
   delegation, and the revocation reaches the server two ways. Expiry is the
-  everyday one: every delegation `cf delegation issue` writes carries one,
-  the holder renews by being issued again, and removing a key is not
-  renewing it; the server holds a session to its chain's expiry after
-  admission. For a revocation that cannot wait, the space holds a
+  everyday one for a delegation issued with one, as
+  `cf delegation issue --expires-in` writes: the holder renews by being
+  issued again, and removing a key is not renewing it; the server holds a
+  session to its chain's expiry after admission. A delegation issued
+  without an expiry, the command's default, never ends that way. For one of
+  those, and for a revocation that cannot wait, the space holds a
   revocation document beside its access list, `of:<space>/revocations`,
   listing the CIDs of refused delegations and nothing else: no audience,
   no issuer, and no revoker. A CID is opaque to a reader who does not
@@ -772,6 +786,16 @@ part of this design.
   offers each sender delivers into a document of its own by some other
   means, is open; the policy evaluation this phase builds is what either
   would rest on.
+- **Does a scoped read's policy cover its schema closure?** A read scoped
+  to named roots also delivers their schema closure, the schema and label
+  documents the server delivers beside every document ("Policy and command
+  restriction"), and a policy over the roots never names them. This design
+  admits them on the strength of the root they serve, since a reader needs
+  them to check its labels, and a policy that had to name them would need
+  the closure known before the query, which only the server has. Whether
+  a closure document can carry anything the root's holder should not read,
+  and if so whether the server should hold the closure to the policy as
+  well, is open.
 - **The delegation is a real UCAN; the invocation is not yet.** The
   repository's content hash is SHA-256 over a tag-byte structural encoding
   of a fabric value, named as `fid1`; a UCAN's identifier is a CIDv1 over
