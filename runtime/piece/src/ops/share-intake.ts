@@ -409,7 +409,6 @@ export class ShareIntake {
 
   /** {@link #poke}s each inbox at `addresses`, once each. */
   #pokeEach(addresses: Iterable<string>): void {
-    if (this.#halted) return;
     for (const address of new Set(addresses)) this.#poke(address);
   }
 
@@ -722,31 +721,18 @@ export class ShareIntake {
   /**
    * Has the row keyed `row`, in the inbox at `address`, taken up again when
    * the state of `space` changes, following that state if nothing yet does.
-   * A space whose state cannot be followed leaves the row to its inbox's next
-   * change.
    */
   #waitOn(row: string, space: DID, address: string): void {
     const rows = this.#waiting.get(address) ?? new Map<string, DID>();
     rows.set(row, space);
     this.#waiting.set(address, rows);
     if (this.#spaces.has(space)) return;
-    try {
-      // The sinks call back at once; that pokes the row's inbox, which the
-      // scan under way takes up after it.
-      this.#spaces.set(
-        space,
-        followSpaceState(
-          this.#runtime,
-          space,
-          () => this.#pokeWaitingOn(space),
-        ),
-      );
-    } catch (error) {
-      logger.warn("follow-failed", () => [
-        `Following the state of ${space}:`,
-        error,
-      ]);
-    }
+    // The sinks call back at once; that pokes the row's inbox, which the scan
+    // under way takes up after it.
+    this.#spaces.set(
+      space,
+      followSpaceState(this.#runtime, space, () => this.#pokeWaitingOn(space)),
+    );
   }
 
   /** {@link #poke}s each inbox a row of {@link #waiting} naming `space` waits in. */
