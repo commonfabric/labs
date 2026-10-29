@@ -1061,14 +1061,18 @@ holds the measurements and the conditions for revisiting.
   named instance on a fresh one, and show the carried child's state under the
   sibling, with no refusal in either. Its reopen of a parent a naming runtime
   set up shows fresh children in place of the named ones.
-- **Status on 2026-10-23.** The carry-over and naming cases in
-  `runtime/runner/test/instance-carry-over.test.ts` and the Home upgrade case
-  in `patterns/integration/home-interface-upgrade.test.ts` run with
-  the flag on. The transformer's off arm is held to `main`'s output by the
-  golden fixtures and `pipeline-regressions.test.ts`, and both arms by
-  `transform.test.ts`. That compiled code is never shared between the two
-  modes is pinned by `runtime/runner/test/instance-naming-modes.test.ts`, and
-  the plumbing by `runtime/runner/test/experimental-options.test.ts` and
+- **Status on 2026-10-29.** The transformer's off arm is held to `main`'s
+  output by the golden fixtures and `pipeline-regressions.test.ts`, and both
+  arms by `transform.test.ts`. That compiled code is never shared between the
+  two modes is pinned by `runtime/runner/test/instance-naming-modes.test.ts`.
+  So is a cold start, in either mode, of a parent the other mode set up: the
+  two modes stamp the same setup record, so the start runs the parent. With
+  naming on, it carries the children over; with naming off, the positional
+  roots start fresh. Carry-over is pinned by
+  `runtime/runner/test/instance-carry-over.test.ts`, and by the Home upgrade
+  cases in `patterns/integration/home-interface-upgrade.test.ts`, which run
+  with the flag on. The plumbing is pinned by
+  `runtime/runner/test/experimental-options.test.ts` and
   `runtime/runner/test/deployment-meta.test.ts`.
 - **Path to removal.** Once on everywhere, delete the runtime option, its env,
   authority and shell-source entries, `namesInstances()`,

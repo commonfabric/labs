@@ -15474,15 +15474,15 @@ export class Runner {
    * runtime's build of it does, a number this runtime's builds give may name
    * another child: an instance whose cell, or whose spot by order, is at
    * such a number goes to the match by pattern identity, and none takes the
-   * child at its own positional spot. An instance that pattern, loaded, does not name is matched
-   * to its positional children by order within each pattern identity.
-   * Without that pattern, or where order places the instance at no set-up
-   * child, an instance carries over the one child, among the positional
-   * spots the parent's manifest records, that runs the instance's own child
-   * pattern identity and that no positional node of `pattern` sets up at its
-   * own spot; failing that, the child at its own positional cause, unless
-   * the parent shows the children have moved spots. A child is carried over
-   * by one instance at most.
+   * child at its own positional spot. An instance that pattern, loaded, does
+   * not name is matched to its positional children by order within each
+   * pattern identity. Without that pattern, or where order places the
+   * instance at no set-up child, an instance carries over the one child,
+   * among the positional spots the parent's manifest records, that runs the
+   * instance's own child pattern identity and that no positional node of
+   * `pattern` sets up at its own spot; failing that, the child at its own
+   * positional cause, unless the parent shows the children have moved spots.
+   * A child is carried over by one instance at most.
    */
   #planInstanceCarryOver(
     resultCell: Cell<any>,
