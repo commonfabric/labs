@@ -145,8 +145,8 @@ export async function readTree(root: string): Promise<Tree> {
 /**
  * Marks a backticked token as something other than a repo path: a glob, or a
  * stand-in for a name the reader supplies. Authors citing an illustrative path
- * use one of these forms — `packages/<pkg>/mod.ts`, `cf-{name}/cf-{name}.ts`,
- * `packages/**` — which is the inline opt-out from this check.
+ * use one of these forms — `runtime/<pkg>/mod.ts`, `cf-{name}/cf-{name}.ts`,
+ * `runtime/**` — which is the inline opt-out from this check.
  */
 const PLACEHOLDER = /[<>{}*]|\.\.\.|path\/to/;
 
@@ -396,8 +396,8 @@ function reportDrift(drift: Drift[]): void {
       "name the current path or specifier.",
       "",
       "A path cited as an illustration rather than a real location should say so",
-      "with a placeholder — `packages/<pkg>/mod.ts`, `cf-{name}/cf-{name}.ts`,",
-      "`packages/**` — which this check skips by design.",
+      "with a placeholder — `runtime/<pkg>/mod.ts`, `cf-{name}/cf-{name}.ts`,",
+      "`runtime/**` — which this check skips by design.",
       "",
       "See docs/development/skill-audit.md.",
       "",

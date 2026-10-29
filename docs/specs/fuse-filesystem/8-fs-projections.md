@@ -187,7 +187,7 @@ cache. Reads always see the current cell value.
 
 ## Example: Note Pattern
 
-The `Note` pattern in `packages/patterns/notes/note.tsx` uses `[FS]`:
+The `Note` pattern in `patterns/system/notes/note.tsx` uses `[FS]`:
 
 ```tsx
 // Shown inside a pattern body.

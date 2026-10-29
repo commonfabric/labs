@@ -510,16 +510,6 @@ export async function writeBatchSkipList(
 }
 
 /**
- * The flag every `deno test` a suite builds shuffles by. The seed is the
- * one the commit under test was committed on unless the environment names
- * another, and the runner that starts a run puts the seed it settled on
- * in the environment, so every invocation of that run takes the same one.
- */
-export function shuffleArguments(): string[] {
-  return [shuffleFlag(shuffleSeed())];
-}
-
-/**
  * The command that runs `deno test` over `files` under `flags`, recording
  * and shuffling as every suite's `deno test` does, and writing its report to
  * `junitPath`. The preload is permitted to read `skipList`, where the
@@ -545,7 +535,7 @@ export function denoTestCommand(
     Deno.execPath(),
     "test",
     ...unchecked,
-    ...shuffleArguments(),
+    shuffleFlag(shuffleSeed()),
     ...recordingArguments(unchecked, {
       spool: context.spoolDir,
       root: context.root,

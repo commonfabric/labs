@@ -65,7 +65,7 @@ const view = recommendation.pending
   or not this is declared (see below).
 - `tools` (optional) names the tools the run may use, from the list the
   deployment publishes (`AGENT_TOOL_NAMES` in
-  `packages/runner/src/builtins/agent-schemas.ts`); `describe_handle` and
+  `runtime/runner/src/builtins/agent-schemas.ts`); `describe_handle` and
   `read_value` come with every run and need not be named. A name the user's
   registered runner does not offer fails the request with `INVALID_INPUT`
   before it is staged; with no runner registered the request queues.
@@ -113,7 +113,7 @@ runner starts. A request made where the home space holds no queue ends
 `refused`.
 
 To stop a run, set `cancelRequestedAt` on its record — the `cancel` stream of
-`packages/patterns/system/agent-run.tsx` does — and the runner ends it
+`patterns/system/agent-run/agent-run.tsx` does — and the runner ends it
 `cancelled`.
 
 ## What the request carries, and what is measured

@@ -35,7 +35,7 @@ synchronous computation:
 - Cross-origin isolation is not enabled, so a browser would not expose
   `SharedArrayBuffer` or a high-resolution `performance.now()` regardless.
 
-These invariants are pinned by `packages/runner/test/security-timing.test.ts`, so
+These invariants are pinned by `runtime/runner/test/security-timing.test.ts`, so
 a Secure ECMAScript upgrade or a widened global surface that re-opens a fine
 clock fails loudly.
 
@@ -51,7 +51,7 @@ Every real-time-correlated signal a pattern can reach, and how it is closed.
 | 4 | `#now` cell-flip arrival/ordering | value coarsened + tick grid-aligned (≥1 s); deliberately left unshaped (low value; ≥1 s + grid-aligned + W1) | — |
 | 5 | Server-pushed cell changes (cross-tab/cross-machine), the `$value` write bypass, and own commit-completion latency | `$value` keystroke writes to a pattern reader are shaped through the cell-notification shaper (plan B, DONE); server pushes are NOT shaped — the adoption-era reason is deleted (server-execution v2 stage C; archived at [incremental observation adoption](../../history/specs/scheduler-v2/incremental-observation-adoption.md)), the shaping re-check is owed (runtime-mapping.md N10), and they are network-bounded (see below) | cell-notification shaper on the storage-notification hook |
 | 6 | Builtin progress cells — `fetchData` `pending`, large-language-model `partial` (~15 Hz) | LLM `partial` coarsened to ≤1 Hz always-on (DONE); `fetchData` `pending` left to W1 (terminal, not a cadence) | coarsen at source |
-| 7 | Raw `fetch()` exposed directly to patterns | CLOSED: a compartment endows no `fetch`, and the name is withheld from the authored surface, so calling one fails to compile | `SANDBOX_WITHHELD_GLOBALS` in `packages/utils/src/sandbox-contract.ts`, pinned by `runner/test/sandbox-global-contract.test.ts` (DONE) |
+| 7 | Raw `fetch()` exposed directly to patterns | CLOSED: a compartment endows no `fetch`, and the name is withheld from the authored surface, so calling one fails to compile | `SANDBOX_WITHHELD_GLOBALS` in `base/utils/src/sandbox-contract.ts`, pinned by `runner/test/sandbox-global-contract.test.ts` (DONE) |
 | 8 | `Date.now()` / `Math.random()` re-enabled by a Secure ECMAScript config drift | neutered by an implicit default | W0 (pinned by test) |
 
 Randomness note: `Math.random()` is not itself a timing channel — random
@@ -120,7 +120,7 @@ bucket (item 4 below), and the cell path's group key is the pattern instance
 Landing order, smallest and safest first. Each is its own commit/PR.
 
 - **W0 — Guardrail and Secure ECMAScript pin. DONE.**
-  `packages/runner/test/security-timing.test.ts`. Non-breaking. Encodes the
+  `runtime/runner/test/security-timing.test.ts`. Non-breaking. Encodes the
   structural barrier above. (The `dateTaming`/`mathTaming` lockdown options do
   not exist in this Secure ECMAScript version; the test is the correct
   encoding.)
@@ -146,7 +146,7 @@ Landing order, smallest and safest first. Each is its own commit/PR.
     correlate and nothing to coarsen. They also carry what an ambient `fetch`
     could not: the runtime records each request as a CFC sink request, holds it
     as a CFC sink request, which a deployment's ceiling then gates
-    (`packages/runner/src/cfc/sink-inventory.ts`), and signs it when it targets
+    (`runtime/runner/src/cfc/sink-inventory.ts`), and signs it when it targets
     a first-party route.
   - **Consequence — an imperative API client has no surface to run on.** A
     handler cannot await a reactive node, so a request sequence is declared as a
@@ -182,8 +182,8 @@ Landing order, smallest and safest first. Each is its own commit/PR.
     separate events time still advances, bounded by how fast events arrive (which
     the delivery shaper already floors). The check is dynamic (call-time) because
     shared helpers are reached from both contexts.
-    Tested in `packages/runner/test/time-capability.test.ts` (frozen across
-    reads) and `packages/patterns/integration/time-capability-intrinsics.test.ts`
+    Tested in `runtime/runner/test/time-capability.test.ts` (frozen across
+    reads) and `patterns/integration/time-capability-intrinsics.test.ts`
     (a handler reads the event's coarse time; the instant is carried forward to
     an emitted event so a chained handler reads the same value). The gate is
     breaking: about 297 call sites across about 77 pattern files — handler-context
@@ -258,7 +258,7 @@ Landing order, smallest and safest first. Each is its own commit/PR.
       pin and the do-list pattern-test exclusion have been removed, and those
       patterns join the clean set.
     - **Behavioral verification — DONE (offline patterns).**
-      `packages/patterns/integration/time-capability.test.ts` instantiates the
+      `patterns/integration/time-capability.test.ts` instantiates the
       offline-instantiable migrated patterns with the gate on, materializes their
       lifts (`start:true` + `result.sink` + `idle`), and asserts the scheduler
       reports no `TimeCapabilityError`. A negative-control fixture (calls
@@ -275,7 +275,7 @@ Landing order, smallest and safest first. Each is its own commit/PR.
       just `suggestion` but every pattern that embeds it. Option-3 has since landed
       (above), so that whole chain is now clean.
     - **Full-suite gate verification — DONE (offline).**
-      `packages/patterns/integration/time-capability-full.test.ts` discovers every
+      `patterns/integration/time-capability-full.test.ts` discovers every
       shipped pattern that reads the gated clock/entropy intrinsics
       (`Date.now()`/no-argument `new Date()`/`Math.random()`), instantiates
       each under the gate (`start:true`), materializes its lifts, fires its result
@@ -389,7 +389,7 @@ Landing order, smallest and safest first. Each is its own commit/PR.
   limits as a liveness backstop for non-idempotent lifts (not the security
   boundary).
   - **COOP/COEP headers — DONE (deliberately non-isolating).** The shell route
-    (`packages/toolshed/routes/shell/shell.index.ts`) sets
+    (`runtime/toolshed/routes/shell/shell.index.ts`) sets
     `Cross-Origin-Opener-Policy: same-origin-allow-popups` and
     `Cross-Origin-Embedder-Policy: unsafe-none`, neither of the isolating values.
     This keeps `crossOriginIsolated === false`, so `SharedArrayBuffer` and the
@@ -402,7 +402,7 @@ Landing order, smallest and safest first. Each is its own commit/PR.
   separately the runtime exported `safeDateNow()`/`nonPrivateRandom()` as the
   sanctioned gated path patterns had to migrate to. W6 collapses them at the
   intrinsic.
-  - **Implemented.** `packages/runner/src/sandbox/compartment-globals.ts`
+  - **Implemented.** `runtime/runner/src/sandbox/compartment-globals.ts`
     (`createCompatibilityGlobals`, which both module and callback compartments
     use) now injects a gated `Date` and `Math` into every pattern compartment,
     replacing the SES-tamed throw. `Date.now()` and the no-argument `new Date()`
@@ -414,7 +414,7 @@ Landing order, smallest and safest first. Each is its own commit/PR.
     all prototype methods pass straight through. The intrinsics never
     expose a fine clock, so the structural barrier is preserved: a lift and the
     bare compartment get no usable clock. Verified by
-    `packages/patterns/integration/time-capability-intrinsics.test.ts`
+    `patterns/integration/time-capability-intrinsics.test.ts`
     (lift-throws, handler-coarsens to 1 s, `new Date(arg)`-passes-through),
     `security-timing.test.ts` unchanged, and the widened
     full-suite (raw `Date.now`/`Math.random`/`new Date()` now in scope) still
@@ -427,7 +427,7 @@ Landing order, smallest and safest first. Each is its own commit/PR.
     asserts lockdown has run before it builds, so it fails loud rather than
     injecting a leaky clock if ever called too early. `instanceof Date` and the
     real methods still work. Pinned by
-    `packages/runner/test/w6-intrinsic-escape.test.ts`, which drives every
+    `runtime/runner/test/w6-intrinsic-escape.test.ts`, which drives every
     constructor/prototype escape and asserts none yields a number.
   - **Why it is better.** The native JS API becomes the safe API — authors write
     `new Date()` and get correct, safe behavior with no import and no lesson
@@ -468,13 +468,14 @@ real users, has now landed. The items are ordered by what unblocks what.
 
 1. **Land option-3 (per-request sandbox id) — DONE (upstream #4217).** With the
    gate always-on, three patterns used to read entropy in a lift/body context and
-   throw (`system/suggestion.tsx`, `system/omnibox-fab.tsx`, and
-   `notes/daily-journal.tsx`, which embeds Suggestion transitively). Upstream
+   throw (`system/suggestion/suggestion.tsx`,
+   `system/omnibox-fab/omnibox-fab.tsx`, and `system/notes/daily-journal.tsx`,
+   which embeds Suggestion transitively). Upstream
    #4217 (`da833f6d4`) made the framework provide the bash `sandboxId` from the
    tool definition's content-addressed entity id (unique per instance, derived
    from identity not entropy, framework-owned), so those patterns stop reading
    entropy and instantiate cleanly. The `KNOWN_PENDING_OPTION3` pin in
-   `packages/patterns/integration/time-capability-full.test.ts` and the do-list
+   `patterns/integration/time-capability-full.test.ts` and the do-list
    pattern-test exclusion have been removed. This was the last precondition
    blocking the branch from being upstreamed.
 

@@ -36,14 +36,14 @@
  *        deno task check-completion-slots --list   # every undecided slot
  */
 
-import { main as cliRoot } from "../packages/cli/commands/main.ts";
+import { main as cliRoot } from "../runtime/cli/commands/main.ts";
 import {
   type AnyCommand,
   type DeclaredSlots,
   declaredSlots,
-} from "../packages/cli/lib/completion/line.ts";
-import { enumeratedOptionNames } from "../packages/cli/lib/completion/static.ts";
-import { completionProviderKeys } from "../packages/cli/lib/completion/providers.ts";
+} from "../runtime/cli/lib/completion/line.ts";
+import { enumeratedOptionNames } from "../runtime/cli/lib/completion/static.ts";
+import { completionProviderKeys } from "../runtime/cli/lib/completion/providers.ts";
 
 /**
  * Positionals deliberately left without candidates, each with the reason.
@@ -169,6 +169,14 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
   ["history-limit", "an operation history row count"],
   ["max-concurrent", "how many agent runs one runner holds; a count"],
   ["lease-seconds", "a lease length in seconds"],
+  [
+    "commands-url",
+    "the host's own command endpoint, which only the host that started the runner knows",
+  ],
+  [
+    "commands-actor",
+    "an actor string the host chooses and labs passes on unread",
+  ],
   [
     "max-concurrent-local",
     "how many local jobs one runner runs at once; a count",
@@ -455,7 +463,7 @@ export function main(
     console.error("Completion slot check failed.\n");
     console.error(failures.join("\n\n"));
     console.error(
-      "\nEither give the slot candidates in packages/cli/lib/completion/, or " +
+      "\nEither give the slot candidates in runtime/cli/lib/completion/, or " +
         "record why it has none in tasks/check-completion-slots.ts — under " +
         "`<command path>:<name>` where the option means something else " +
         "elsewhere.",

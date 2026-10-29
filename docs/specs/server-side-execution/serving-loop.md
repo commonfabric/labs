@@ -7,26 +7,26 @@ MUST/NEVER language is binding on implementers.
 
 ## Anchors
 
-- Scheduler: `packages/runner/src/scheduler/` (`execution.ts`,
+- Scheduler: `runtime/runner/src/scheduler/` (`execution.ts`,
   `dependency-graph.ts`, `events.ts`, `event-identity.ts`). The scheduler
   already runs graphs to fixpoint on a client runtime; the serving loop
   hosts THAT scheduler server-side. Do not write a new scheduler.
-- Runtime construction: `packages/runner/src/runtime.ts` (`new Runtime`),
-  builtin registration `packages/runner/src/builtins/index.ts`
+- Runtime construction: `runtime/runner/src/runtime.ts` (`new Runtime`),
+  builtin registration `runtime/runner/src/builtins/index.ts`
   (`registerBuiltins(runtime)`).
 - Store: engine-v3 sqlite per space DID (the on-disk layout is
   composed by `resolveMemoryEngineStoreRootUrl` and
-  `resolveSpaceStoreUrl` in `packages/memory/v2/storage-path.ts`),
+  `resolveSpaceStoreUrl` in `runtime/memory/v2/storage-path.ts`),
   tables `commit`, `revision`, `head`, `branch`, and `execution_lease`
-  in the reduced §2 shape (`packages/memory/v2/engine.ts` schema;
-  `packages/memory/v2/execution-lease.ts` holder side). The v1
+  in the reduced §2 shape (`runtime/memory/v2/engine.ts` schema;
+  `runtime/memory/v2/execution-lease.ts` holder side). The v1
   branch's richer shape was prior art, not substrate (its `engine.ts`:
   branch PK, `lease_generation`, `host_id`, `on_behalf_of`, state
   `active|draining|revoked`, `expires_at`) and none of it carried
   over.
-- Memory server + protocol: `packages/memory/v2.ts`, mounted in toolshed
+- Memory server + protocol: `runtime/memory/v2.ts`, mounted in toolshed
   at `/api/storage/memory`
-  (`packages/toolshed/routes/storage/memory/memory.routes.ts`).
+  (`runtime/toolshed/routes/storage/memory/memory.routes.ts`).
 
 ## 1. Components
 
@@ -102,9 +102,9 @@ if that fails too, it counts as a failure park like any other. A
 space whose serving fails every time is therefore rebuilt at a widening
 interval rather than in a tight loop. Impl: `host.ts`'s park handler,
 the failure arm of `#activateInner`, and `#reactivateAfterPark`; pinned
-in `packages/runner/test/executor-serving-loop.test.ts`,
-`packages/runner/test/executor-events-down.test.ts`, and
-`packages/runner/test/executor/activation-lease.test.ts`.
+in `runtime/runner/test/executor-serving-loop.test.ts`,
+`runtime/runner/test/executor-events-down.test.ts`, and
+`runtime/runner/test/executor/activation-lease.test.ts`.
 
 What activation LOADS (RULED 2026-08-02): there is NO piece-start
 policy in v2. The space is ONE lazy reactive graph, and activation
@@ -210,7 +210,7 @@ is TENURE-scoped, and the request itself is a one-shot in-process
 signal, not a durable row — loss across a process crash in the
 staged-but-underived window is the OW46 silent-park observability
 family. Impl: `host.ts`'s `#endTenure`; pinned in
-`packages/runner/test/executor-warm-request.test.ts`. One deliberate
+`runtime/runner/test/executor-warm-request.test.ts`. One deliberate
 side effect, stated: the warm notice rides `noteExecutorCommit`, whose
 dirtiness marking means a foreign provisioning batch's staged writes
 now also PUSH to any client session subscribed to those docs in the
@@ -534,7 +534,7 @@ mid-wave belong to the NEXT wave — natural double-buffering, no timers):
   // preflight holds for an invalid input ends the run of handlers, so
   // the settle runs that input first.
   run scheduler to QUIESCENCE — scheduler.idle()
-  (Scheduler.idle() in packages/runner/src/scheduler/facade.ts)
+  (Scheduler.idle() in runtime/runner/src/scheduler/facade.ts)
   resolves; it
   awaits queued AND parked events, running actions, and demanded pull
   work — the eager/idle-scheduled actions and their cascades included.
@@ -741,7 +741,7 @@ executing:
 
 - Every run (handler, computed, eager action) executes in a transaction
   that logs each read — doc, path, version (the reactivity log,
-  `packages/runner/src/storage/reactivity-log.ts`). The scheduler
+  `runtime/runner/src/storage/reactivity-log.ts`). The scheduler
   subscribes the node to exactly its LAST run's read set.
 - **Dynamic dependencies are one-run-late, and that is sound**: a node
   cannot newly read C except as a consequence of a change in something
@@ -870,7 +870,7 @@ CREATE TABLE scheduler_basis (
                             --   M2 re-keying; scope_key vocabulary
                             --   is the shared `resolveScopeKey` in
                             --   the wire-shape module —
-                            --   packages/memory/v2.ts — per
+                            --   runtime/memory/v2.ts — per
                             --   LD3, key-vocabulary.md §3)
   entity_space     TEXT,    -- the input doc's space: foreign reads
                             --   are logged reads too (cross-space
@@ -972,7 +972,7 @@ spine. A migration driven off the six-table enumeration leaves the
 floor table behind and fails the plan's stage-C criterion for a
 reason that reads like a mystery.
 `migrateSchedulerObservationTablesToBasis` in
-`packages/memory/v2/engine.ts` drives the drop from the seven-table
+`runtime/memory/v2/engine.ts` drives the drop from the seven-table
 list above; anything that re-derives that list must too.
 
 **NO BACKFILL** (D10). `scheduler_read_index` and
@@ -1008,11 +1008,11 @@ here so no one re-derives it mid-PR:
 Dev tooling and live docs read these tables directly and break
 silently, since no product test exercises them:
 
-- `packages/state-inspector` — `hasSchedulerBasisTable` in `db.ts`
+- `runtime/state-inspector` — `hasSchedulerBasisTable` in `db.ts`
   and the basis-row count in `queries.ts` name the table directly, so
   the inspector follows any change to it by hand;
 - the `cf inspect` CLI surface that renders that output;
-- `packages/memory/v2/sqlite/guard.ts` — the `CORE_TABLE_NAMES`
+- `runtime/memory/v2/sqlite/guard.ts` — the `CORE_TABLE_NAMES`
   blocklist that a pattern statement may never reference lists
   `scheduler_basis` and none of the dropped names; a table added to
   the engine goes IN, or pattern SQL gains a reachable engine table;
@@ -1027,7 +1027,7 @@ PRs): C.2 carries this migration; C.1 deletes the certificate
 surface it ships beside (`completeSchedulerScopeSummary`
 / `completeActionScopeSummary` — README §5), and that half is NOT a
 hand edit: ~110 fixture files under
-`packages/ts-transformers/test/fixtures/` embed the emitted marker,
+`base/ts-transformers/test/fixtures/` embed the emitted marker,
 so the GOLDEN-REGENERATION procedure is a required step of the
 change, not a follow-up. Plan Phase 1 stage C sizes the full
 surface. (The OFF-arm observation-adoption path, the one certificate
@@ -1288,7 +1288,7 @@ the 2026-08-24 ruling; the owner may re-rule it).
   stays subscribed, so it runs again once the instance is produced.
 - On a client (OFF arm, and speculation in the ON arm) seal == commit /
   overlay-apply as today — one abstraction, two destinations. Anchor:
-  `packages/runner/src/storage/extended-storage-transaction.ts`.
+  `runtime/runner/src/storage/extended-storage-transaction.ts`.
 
 **Mid-wave concurrency rule**: the wave commit CASes PER DOC against
 the wave's read basis, and conflict handling is PER WRITE CLASS.
@@ -2279,5 +2279,5 @@ starves) work against a stale liveness answer. Review test for a diff
 that adds such a site without the bracket: reject it. Verification:
 run the runner suite with `SCHEDULER_LIVENESS_EQUIVALENCE=1` (the
 every-mutation equivalence hook in
-`packages/runner/src/scheduler/dependency-graph.ts` checks the
+`runtime/runner/src/scheduler/dependency-graph.ts` checks the
 incremental state against the full rebuild at each mutator exit).

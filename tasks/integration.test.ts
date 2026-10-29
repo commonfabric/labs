@@ -3,10 +3,13 @@ import { fromFileUrl } from "@std/path";
 import { FakeTime } from "@std/testing/time";
 import ports from "@commonfabric/ports" with { type: "json" };
 import { preloadArgument } from "@commonfabric/test-support/records";
-import { shuffledPaths } from "@commonfabric/test-support/shuffle";
 import {
-  buildFilteredTestArgs,
+  SHUFFLE_SEED_VARIABLE,
+  shuffledPaths,
+} from "@commonfabric/test-support/shuffle";
+import {
   chooseGeneratedPortOffset,
+  filteredTestCommand,
   findIntegrationTestFiles,
   GENERATED_PORT_OFFSET_RANGE,
   integrationRerun,
@@ -27,32 +30,32 @@ import { PATTERN_TREES } from "./pattern-files.ts";
 Deno.test("selectPatternTestFiles returns the files slash-separated and sorted", () => {
   assertEquals(
     selectPatternTestFiles([
-      "packages\\patterns\\notes\\note.test.tsx",
-      "packages/patterns/dice.test.tsx",
+      "patterns\\system\\notes\\note.test.tsx",
+      "patterns/showcase/dice/dice.test.tsx",
     ]),
     [
-      "packages/patterns/dice.test.tsx",
-      "packages/patterns/notes/note.test.tsx",
+      "patterns/showcase/dice/dice.test.tsx",
+      "patterns/system/notes/note.test.tsx",
     ],
   );
 });
 
 Deno.test("readPatternTestList reads each path and the cost written after it", () => {
   const text = [
-    patternTestListLine("packages/patterns/dice.test.tsx", 12.5),
+    patternTestListLine("patterns/showcase/dice/dice.test.tsx", 12.5),
     "",
-    patternTestListLine("packages\\patterns\\notes\\note.test.tsx"),
-    patternTestListLine("packages/patterns/chat.test.tsx", 0),
+    patternTestListLine("patterns\\system\\notes\\note.test.tsx"),
+    patternTestListLine("patterns/chat.test.tsx", 0),
   ].join("\n") + "\n";
   const { files, costs } = readPatternTestList(text);
   assertEquals(files, [
-    "packages/patterns/dice.test.tsx",
-    "packages/patterns/notes/note.test.tsx",
-    "packages/patterns/chat.test.tsx",
+    "patterns/showcase/dice/dice.test.tsx",
+    "patterns/system/notes/note.test.tsx",
+    "patterns/chat.test.tsx",
   ]);
   assertEquals([...costs], [
-    ["packages/patterns/dice.test.tsx", 12.5],
-    ["packages/patterns/chat.test.tsx", 0],
+    ["patterns/showcase/dice/dice.test.tsx", 12.5],
+    ["patterns/chat.test.tsx", 0],
   ]);
 });
 
@@ -220,18 +223,21 @@ Deno.test("findIntegrationTestFiles rethrows errors other than a missing directo
   }
 });
 
-Deno.test("buildFilteredTestArgs passes files as explicit paths under relDir", () => {
+Deno.test("filteredTestCommand passes files as explicit paths under relDir", () => {
   assertEquals(
-    buildFilteredTestArgs(
+    filteredTestCommand(
       "runner",
       "integration",
       ["a.test.ts", "b.test.ts"],
       "out/junit",
+      20260922,
     ),
     [
+      "deno",
       "test",
       "--no-check",
       "-A",
+      "--shuffle=20260922",
       "--junit-path=out/junit/runner.xml",
       preloadArgument(),
       "./integration/a.test.ts",
@@ -240,18 +246,21 @@ Deno.test("buildFilteredTestArgs passes files as explicit paths under relDir", (
   );
 });
 
-Deno.test("buildFilteredTestArgs adds patterns memory and leak flags", () => {
+Deno.test("filteredTestCommand adds patterns memory and leak flags", () => {
   assertEquals(
-    buildFilteredTestArgs(
+    filteredTestCommand(
       "patterns",
       "integration",
       ["home-profile.test.ts"],
       "out/junit",
+      20260922,
     ),
     [
+      "deno",
       "test",
       "--no-check",
       "-A",
+      "--shuffle=20260922",
       "--v8-flags=--max-old-space-size=4096",
       "--trace-leaks",
       "--junit-path=out/junit/patterns.xml",
@@ -261,18 +270,21 @@ Deno.test("buildFilteredTestArgs adds patterns memory and leak flags", () => {
   );
 });
 
-Deno.test("buildFilteredTestArgs uses the generated-patterns subdir and flags", () => {
+Deno.test("filteredTestCommand uses the generated-patterns subdir and flags", () => {
   assertEquals(
-    buildFilteredTestArgs(
+    filteredTestCommand(
       "generated-patterns",
       "integration/patterns",
       ["simple-counter.test.ts"],
       "out/junit",
+      20260922,
     ),
     [
+      "deno",
       "test",
       "--no-check",
       "-A",
+      "--shuffle=20260922",
       "--trace-leaks",
       "--parallel",
       "--junit-path=out/junit/generated-patterns.xml",
@@ -282,13 +294,21 @@ Deno.test("buildFilteredTestArgs uses the generated-patterns subdir and flags", 
   );
 });
 
-Deno.test("buildFilteredTestArgs adds a junit path when a junit dir is given", () => {
+Deno.test("filteredTestCommand adds a junit path when a junit dir is given", () => {
   assertEquals(
-    buildFilteredTestArgs("shell", "integration", ["a.test.ts"], "out/junit"),
+    filteredTestCommand(
+      "shell",
+      "integration",
+      ["a.test.ts"],
+      "out/junit",
+      20260922,
+    ),
     [
+      "deno",
       "test",
       "--no-check",
       "-A",
+      "--shuffle=20260922",
       "--junit-path=out/junit/shell.xml",
       preloadArgument(),
       "./integration/a.test.ts",
@@ -320,6 +340,25 @@ Deno.test("runFilteredIntegration fails without running when no file matches", a
   }
 });
 
+/**
+ * Runs `body` with the run's shuffle seed pinned to `seed`, the way the
+ * orchestrator pins it before any package runs, and puts the variable
+ * back afterwards.
+ */
+async function withPinnedSeed<T>(
+  seed: number,
+  body: () => Promise<T>,
+): Promise<T> {
+  const before = Deno.env.get(SHUFFLE_SEED_VARIABLE);
+  Deno.env.set(SHUFFLE_SEED_VARIABLE, String(seed));
+  try {
+    return await body();
+  } finally {
+    if (before === undefined) Deno.env.delete(SHUFFLE_SEED_VARIABLE);
+    else Deno.env.set(SHUFFLE_SEED_VARIABLE, before);
+  }
+}
+
 Deno.test("runFilteredIntegration runs deno test with the matching explicit paths", async () => {
   const pkgDir = await Deno.makeTempDir();
   try {
@@ -327,17 +366,18 @@ Deno.test("runFilteredIntegration runs deno test with the matching explicit path
     await Deno.writeTextFile(`${pkgDir}/integration/home-profile.test.ts`, "");
     await Deno.writeTextFile(`${pkgDir}/integration/counter.test.ts`, "");
     let captured: { cmd: string[]; cwd?: string } | undefined;
-    const result = await runFilteredIntegration(
-      "patterns",
-      pkgDir,
-      { LOG_LEVEL: "warn" },
-      "home-profile",
-      "/junit",
-      (cmd, options) => {
-        captured = { cmd, cwd: options?.cwd };
-        return Promise.resolve({ success: true, code: 0 });
-      },
-    );
+    const result = await withPinnedSeed(20260922, () =>
+      runFilteredIntegration(
+        "patterns",
+        pkgDir,
+        { LOG_LEVEL: "warn" },
+        "home-profile",
+        "/junit",
+        (cmd, options) => {
+          captured = { cmd, cwd: options?.cwd };
+          return Promise.resolve({ success: true, code: 0 });
+        },
+      ));
     assertEquals(result, { success: true, code: 0 });
     assertEquals(captured?.cwd, pkgDir);
     assertEquals(captured?.cmd, [
@@ -345,6 +385,7 @@ Deno.test("runFilteredIntegration runs deno test with the matching explicit path
       "test",
       "--no-check",
       "-A",
+      "--shuffle=20260922",
       "--v8-flags=--max-old-space-size=4096",
       "--trace-leaks",
       "--junit-path=/junit/patterns.xml",
@@ -365,22 +406,24 @@ Deno.test("runFilteredIntegration uses the generated-patterns subdir", async () 
       "",
     );
     let captured: string[] | undefined;
-    await runFilteredIntegration(
-      "generated-patterns",
-      pkgDir,
-      {},
-      "simple-counter",
-      "/junit",
-      (cmd) => {
-        captured = cmd;
-        return Promise.resolve({ success: true, code: 0 });
-      },
-    );
+    await withPinnedSeed(42, () =>
+      runFilteredIntegration(
+        "generated-patterns",
+        pkgDir,
+        {},
+        "simple-counter",
+        "/junit",
+        (cmd) => {
+          captured = cmd;
+          return Promise.resolve({ success: true, code: 0 });
+        },
+      ));
     assertEquals(captured, [
       "deno",
       "test",
       "--no-check",
       "-A",
+      "--shuffle=42",
       "--trace-leaks",
       "--parallel",
       "--junit-path=/junit/generated-patterns.xml",
@@ -395,11 +438,11 @@ Deno.test("runFilteredIntegration uses the generated-patterns subdir", async () 
 Deno.test("runPackageIntegration returns false when a filtered run matches nothing", async () => {
   const rootDir = await Deno.makeTempDir();
   try {
-    await Deno.mkdir(`${rootDir}/packages/runner/integration`, {
+    await Deno.mkdir(`${rootDir}/runtime/runner/integration`, {
       recursive: true,
     });
     await Deno.writeTextFile(
-      `${rootDir}/packages/runner/integration/counter.test.ts`,
+      `${rootDir}/runtime/runner/integration/counter.test.ts`,
       "",
     );
     const outcome = await runPackageIntegration(
@@ -421,7 +464,7 @@ Deno.test("runPackageIntegration returns false when a filtered run matches nothi
 // report goes, or writes nothing for no `xml`, and fails.
 async function makeReportingPackage(xml?: string): Promise<string> {
   const rootDir = await Deno.makeTempDir();
-  const packageDir = `${rootDir}/packages/runner`;
+  const packageDir = `${rootDir}/runtime/runner`;
   await Deno.mkdir(packageDir, { recursive: true });
   await Deno.writeTextFile(
     `${packageDir}/deno.json`,
@@ -469,13 +512,13 @@ Deno.test("runPackageIntegration reads each test, and how to rerun a failing one
       [{
         name: "counts",
         outcome: "pass",
-        file: "packages/runner/integration/counter.test.ts",
+        file: "runtime/runner/integration/counter.test.ts",
         message: undefined,
         rerun: undefined,
       }, {
         name: "resets",
         outcome: "fail",
-        file: "packages/runner/integration/counter.test.ts",
+        file: "runtime/runner/integration/counter.test.ts",
         message: "Uncaught Error: still 3",
         rerun: "deno task integration runner counter",
       }],
@@ -509,7 +552,7 @@ Deno.test("integrationRerun names the test file where it is known", () => {
   assertEquals(
     integrationRerun(
       "patterns",
-      "packages/patterns/integration/cf-render.test.ts",
+      "patterns/integration/cf-render.test.ts",
     ),
     "deno task integration patterns cf-render",
   );
@@ -518,13 +561,13 @@ Deno.test("integrationRerun names the test file where it is known", () => {
   assertEquals(
     integrationRerun(
       "patterns-reload",
-      "packages/patterns/integration/x.test.ts",
+      "patterns/integration/x.test.ts",
     ),
     "deno task integration patterns-reload",
   );
   assertEquals(
-    integrationRerun("pattern-tests", "packages/patterns/a b/c.test.tsx"),
-    "deno task integration pattern-tests 'packages/patterns/a b/c.test.tsx'",
+    integrationRerun("pattern-tests", "patterns/a b/c.test.tsx"),
+    "deno task integration pattern-tests 'patterns/a b/c.test.tsx'",
   );
 });
 
@@ -632,7 +675,7 @@ type Ran = Awaited<
 
 const PRECOMPILE_ROOT = "/repo";
 const PATTERN_FILES = "abcdefghijkl".split("").map((name) =>
-  `packages/patterns/${name}/main.test.tsx`
+  `patterns/${name}/main.test.tsx`
 );
 const CONNECTOR_FILE = `${PATTERN_TREES[1].directory}/main.test.tsx`;
 
@@ -679,7 +722,7 @@ Deno.test("precompilePatternTests cuts the shard into runs of neighbors that sha
   assertEquals(
     groups.map((group) => group.root),
     [
-      ...Array(4).fill(`${PRECOMPILE_ROOT}/packages/patterns`),
+      ...Array(4).fill(`${PRECOMPILE_ROOT}/patterns`),
       PRECOMPILE_ROOT,
     ],
   );

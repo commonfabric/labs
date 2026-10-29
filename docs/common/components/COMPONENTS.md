@@ -7,14 +7,14 @@ Fabric UI library. Division of labor:
 
 - **This file** — complete component index (tag, purpose, bindable props) and
   the usage narrative that is not derivable from source.
-- [`packages/patterns/catalog/catalog.tsx`](../../../packages/patterns/catalog/catalog.tsx)
+- [`patterns/dev/catalog/catalog.tsx`](../../../patterns/dev/catalog/catalog.tsx)
   and the story files under
-  [`packages/patterns/catalog/stories/`](../../../packages/patterns/catalog/stories/)
+  [`patterns/dev/catalog/stories/`](../../../patterns/dev/catalog/stories/)
   — authoritative, type-checked live usage.
 - Component source under
-  [`packages/ui/src/v2/components/`](../../../packages/ui/src/v2/components/)
+  [`runtime/ui/src/v2/components/`](../../../runtime/ui/src/v2/components/)
   — authoritative props, events, and JSDoc.
-- [`packages/ui/LLM-COMPONENT-INSTRUCTIONS.md`](../../../packages/ui/LLM-COMPONENT-INSTRUCTIONS.md)
+- [`runtime/ui/LLM-COMPONENT-INSTRUCTIONS.md`](../../../runtime/ui/LLM-COMPONENT-INSTRUCTIONS.md)
   — HTML attribute tables per component.
 
 ## Bidirectional Binding
@@ -89,7 +89,7 @@ That state follows the rendered checkbox, including values delivered through
 
 ## Component Index
 
-One row per component directory in `packages/ui/src/v2/components/`. "Bindable
+One row per component directory in `runtime/ui/src/v2/components/`. "Bindable
 props" lists cell-bound (`$`-prefixed) properties verified in source; an empty
 cell means none confirmed — check the component source before assuming.
 
@@ -329,7 +329,7 @@ array indices, which drift when lists change.
 
 Contributor-facing internals (FormFieldController, file organization, design
 decisions) live in
-[`packages/ui/docs/forms-internals.md`](../../../packages/ui/docs/forms-internals.md).
+[`runtime/ui/docs/forms-internals.md`](../../../runtime/ui/docs/forms-internals.md).
 
 ---
 
@@ -522,7 +522,7 @@ or a `JSXElement` (a renderable sub-piece), or a reactive value of one, so a
 value of the wrong shape under `[UI]`, `[CHIP_UI]` or `[TILE_UI]` is a compile
 error at the pattern.
 
-See `packages/patterns/examples/ui-variants-demo.tsx` for a full example.
+See `patterns/examples/ui-variants/ui-variants-demo.tsx` for a full example.
 
 > Note: `sidebarUI` is a shell composition **slot**, a separate concept from
 > size variants. Other exported subviews such as `settingsUI` are
@@ -1178,7 +1178,7 @@ const profileWish = wish({ query: "#profile" }); // resolves the viewer's profil
   so store each person's `#profile` cell in the shared `PerSpace` roster on join and
   bind `$profile={p.profile}`. See
   [multi-user-patterns → Presenting Identity](../patterns/multi-user-patterns.md#presenting-identity)
-  and the live demo `packages/patterns/profile-roster-live-demo.tsx`. Only fall back
+  and the live demo `patterns/examples/profile-roster-live-demo/profile-roster-live-demo.tsx`. Only fall back
   to `cf-avatar` when you deliberately hold just a snapshot.
 - ⚠️ **Bind it at a STATIC `[UI]` position.** Like every `$`-bidirectional binding
   (`$value`, `$checked`, …), `$profile` must be bound where the JSX is constructed
@@ -1187,7 +1187,7 @@ const profileWish = wish({ query: "#profile" }); // resolves the viewer's profil
   bound property $profile is not reactive"*, blanking the whole pattern. Resolve
   `wish({query:"#profile"})` once and place the badge in the static JSX; gate only
   its *siblings* reactively, or use `ifElse(cond, staticA, staticB)` as a child of a
-  static wrapper. Repro: `packages/patterns/scope-bug-computed-vnode-blank/`.
+  static wrapper. Repro: `patterns/dev/scope-bug-computed-vnode-blank/`.
 
 ---
 
@@ -1261,7 +1261,7 @@ be any cell the pattern declares `PolicyOf` its custody rules: the runtime
 reads the policy from that cell's label, where the reference, its module
 identity, digest and room subject, is bound. The box `$box` receives is the one
 document the room's projector reads; reading it is label-gated like any other
-read. `packages/patterns/cfc-exchange-rules/custody-answer-room.tsx` is a room
+read. `patterns/examples/cfc-exchange-rules/custody-answer-room.tsx` is a room
 built this way, which shows its answer through `cf-custody-answer`.
 
 The button opens a native modal dialog. Its first part comes from what the
@@ -1299,7 +1299,7 @@ nor the key of the actor's entry in the room. The box's entries carry the
 room's policy, and a read through the link carries it, so `$box` need declare
 none. Known limitation: a `$box` whose entries do declare a label makes the
 seal's commit fail (see the `TODO(custody-box-link)` repro in
-`packages/patterns/cfc-exchange-rules/custody-answer-room.tsx`). A binding that changes while a commit is in flight
+`patterns/examples/cfc-exchange-rules/custody-answer-room.tsx`). A binding that changes while a commit is in flight
 leaves the component without that event even if the seal committed, so a
 pattern that must know should read the room rather than rely on it; the
 seal still writes the box link to the `$box` bound when the actor reviewed.
@@ -1335,7 +1335,7 @@ the component quiet, and it asks nothing before the room has terms. Any other
 failure, such as a lost worker connection or a slot the seal did not write,
 shows as an alert. It fires `cf-published` once the published answer is shown,
 with `detail.instance` when this component published it.
-`packages/patterns/cfc-exchange-rules/custody-answer-room.tsx` is a room built
+`patterns/examples/cfc-exchange-rules/custody-answer-room.tsx` is a room built
 this way; the [custody seal spec](../../specs/cfc-custody-seal.md) says what it
 does not cover.
 

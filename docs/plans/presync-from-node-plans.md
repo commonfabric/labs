@@ -44,7 +44,7 @@ only if something named it or a selector reached it.
 
 Stages 1 and 3 are complete, stage 2 lacks only its measurement, and stage 5
 has its first step. This section describes the runner the open stages start
-from. Every method it names is in `packages/runner/src/runner.ts` unless a
+from. Every method it names is in `runtime/runner/src/runner.ts` unless a
 path says otherwise.
 
 `#nodePlan` derives the plan of every node, whatever its kind. Instantiation
@@ -56,7 +56,7 @@ without it: `#syncListSlotResolutions` and `#syncResumeListChildren` derive a
 list coordinator's inputs through `#buildRawNodeInputs`, the binder a raw
 node's plan uses. The bindings the first plan of a node computes against a
 stored argument are held for every later plan of it (`NodeBindingMemo`,
-`packages/runner/src/node-binding-memo.ts`); a binding against a stand-in is
+`runtime/runner/src/node-binding-memo.ts`); a binding against a stand-in is
 computed and not held. "One plan per node" below says which part of a plan
 that covers.
 
@@ -108,7 +108,7 @@ instantiates the piece with `awaitSyncBeforeInitialRun` set (`#doStart`).
 The scheduler holds the first run of every action registered that way until
 the space's `synced()` resolves or `INITIAL_RUN_SYNC_HOLD_TIMEOUT_MS`, two
 seconds, has passed (`#holdInitialRunUntilSynced`,
-`packages/runner/src/scheduler/facade.ts`). The hold is space-wide and timed:
+`runtime/runner/src/scheduler/facade.ts`). The hold is space-wide and timed:
 it takes no account of the loads the action's plan named, and the timer
 releases it whether or not they have landed. A pattern node passes the option
 on to its child's start, and a list builtin passes it to the element runs of
@@ -119,7 +119,7 @@ client dispatch whose handler did not run, on a runtime without server
 execution, is run again unless its caller sent it with `retries: false`, in
 which case it is dropped. The run that follows is parked on the loads the
 first run's reads registered when any are in flight, and otherwise waits a
-backoff step (`packages/runner/src/scheduler/events.ts`).
+backoff step (`runtime/runner/src/scheduler/events.ts`).
 
 Two gates decide whether a run or a swap over a stored piece must name the
 piece's family first, and both probe the replica for documents.
@@ -171,7 +171,7 @@ kind of module. The runner holds that part by those four and by the kind of
 module the node resolved to, with the pattern a pattern node's module holds,
 from the first plan made of a node for every later plan of it — a pre-sync's,
 a name-sync's, the instantiation's — across a load (`NodeBindingMemo`,
-`packages/runner/src/node-binding-memo.ts`), so every plan of a node shares
+`runtime/runner/src/node-binding-memo.ts`), so every plan of a node shares
 one binding and one inputs document, and a pattern node's bound child is the
 same pattern object in every plan, under which the child's own nodes are
 found again. A pattern is named by its content identity when it has one and
@@ -461,7 +461,7 @@ in the pull request.
       (`#syncStoredArgumentLinkTargets`), for both a resume and a setup
       staged over a stored piece: setup's supplied-link proof reads a
       linked document's metadata and its owner's, and neither is a node
-      read. `packages/cli`'s `piece-link-input-visibility` case over a
+      read. `runtime/cli`'s `piece-link-input-visibility` case over a
       legacy link on a fresh replica is the pin.
 - [x] Test, red first: a child pattern whose authored argument type declares
       a link no child body reads leaves it cold; a grandchild reads through
@@ -519,8 +519,8 @@ Exit: no resumed action's first run is released by a timer.
       declares, as the root wave names the root's.
 - [x] Test: a tree whose rows receive, through the root's argument, a link
       to a document nothing has written resumes with one name-sync
-      (`packages/runner/test/resume-presync-plan-count.test.ts`); the
-      `packages/runner/test/piece-named-before-start.test.ts` cases pass
+      (`runtime/runner/test/resume-presync-plan-count.test.ts`); the
+      `runtime/runner/test/piece-named-before-start.test.ts` cases pass
       unchanged.
 - [ ] A start no pre-sync planned — a caller's `run()` over a piece set up
       elsewhere — still walks the argument's redirect chains under the probe

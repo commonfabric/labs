@@ -18,10 +18,10 @@ interpretation, or the transformer stages that decide *when* to generate.
 
 Authoritative implementation sources:
 
-- `packages/schema-generator/src/**`
-- `packages/schema-generator/test/**` (fixtures under `test/fixtures/schema/`)
-- the wrapper/extension vocabulary in `packages/api/index.ts` and
-  `packages/api/cfc.ts`
+- `base/schema-generator/src/**`
+- `base/schema-generator/test/**` (fixtures under `test/fixtures/schema/`)
+- the wrapper/extension vocabulary in `base/api/index.ts` and
+  `base/api/cfc.ts`
 
 If this document conflicts with code or passing tests, code/tests win.
 
@@ -37,7 +37,7 @@ Consumers, as of this writing (verified by import grep): the only external
 consumer package is `@commonfabric/ts-transformers`, along two axes:
 
 1. **Schema generation proper** — `SchemaGeneratorTransformer`
-   (`packages/ts-transformers/src/transformers/schema-generator.ts`)
+   (`base/ts-transformers/src/transformers/schema-generator.ts`)
    constructs a `SchemaGenerator` and feeds it the pipeline's bare cross-stage
    maps `typeRegistry` / `schemaHints`
    (`ts-transformers/src/core/cross-stage-state.ts`; its header notes
@@ -412,8 +412,8 @@ by any repo test.
 | A property several members of a union declare, with a declaration from each and none of its own, as a `Pick` or an `Omit` over a union makes | every member's, never one member's by the checker's member order: the union of the members' annotations where none is written in a type parameter; where some are, which only their own member's bindings read, the union of the others where each of those accepts any value, as a CFC alias over `any` does, since the property then accepts any value whatever the parameter is bound to; else the type the checker gives it, which reads a label only a member's syntax states, as a CFC alias over `any`, as the checker does. So `Pick<{ x: T } | { x: PerUser<string> }, "x">` at `T = number` is refused as a scope wrapper inside a union (§10), and `Omit<{ x: T; z: 1 } | { x: Confidential<string, C>; z: 1 }, "z">` at `T = Sec<string>` keeps both members' labels. A property several members of an intersection declare is read by its type | `object-formatter.ts` (`#annotationOfMembers()`) | object-formatter.test.ts; printed-type-node-schema.test.ts |
 | Functions / callables / constructables | property skipped entirely (not in `properties`, not in `required`) — **except** callable properties whose call signature returns `Stream`/`Cell`/`SqliteDb` (ModuleFactory/HandlerFactory shapes): kept as `{ asCell: ["stream"/"cell"/"sqlite"] }`, they participate in `required`, and they carry the property's JSDoc description. Stream-valued properties also carry the `deprecated` annotation. Generic members, including nested type literals, union/intersection arms and array elements, use their instantiated type or bound argument to classify callability | classification: `object-formatter.ts`; member paths: `object-formatter.ts`, `schema-generator.ts` (only those three kinds; capability cells like `ReadonlyCell` returns are *not* kept) | pattern-with-types fixtures; object-formatter.test.ts |
 | `FabricPrimitive` class (`FabricBytes`, `FabricDurationDay`, `FabricDurationNsec`, `FabricEpochDay`, `FabricEpochNsec`, `FabricHash`, `FabricKeyPair`, `FabricRegExp`, `FabricUnavailable` carrying the `FabricPrimitive` brand) | `{ type: "<Name>" }` — the fabric-primitive schema vocabulary (§5.2); a leaf, not hoisted, matched by prototype at validation time | `native-type-formatter.ts` | fixture `fabric-special-object-brand`; end-to-end: ts-transformers `schema-transform/fabric-special-object-brand` |
-| `FabricInstancePlus` nominal brand (`FABRIC_INSTANCE_PLUS_BRAND` in `packages/data-model/src/api.ts`, an interned `unique symbol`), which `FabricInstance` declares at `never` | property skipped entirely (not in `properties`, not in `required`) — a symbol-keyed member, which the generator skips as it skips every symbol-keyed member; a field typed as `FabricInstance` emits `{ type: "object", properties: {} }` | `shouldSkipInternalProperty`, `object-formatter.ts` | fixture `fabric-special-object-brand` |
-| `FabricPrimitive` nominal brand (`FABRIC_PRIMITIVE_BRAND` in `packages/data-model/src/api.ts`, an interned `unique symbol`) on a type outside the fabric-primitive vocabulary | property skipped entirely (not in `properties`, not in `required`) — a symbol-keyed member, which the generator skips as it skips every symbol-keyed member; a field typed as the `FabricPrimitive` base still emits `{ type: "object", properties: {} }` | `shouldSkipInternalProperty`, `object-formatter.ts` | fixture `fabric-special-object-brand` |
+| `FabricInstancePlus` nominal brand (`FABRIC_INSTANCE_PLUS_BRAND` in `base/data-model/src/api.ts`, an interned `unique symbol`), which `FabricInstance` declares at `never` | property skipped entirely (not in `properties`, not in `required`) — a symbol-keyed member, which the generator skips as it skips every symbol-keyed member; a field typed as `FabricInstance` emits `{ type: "object", properties: {} }` | `shouldSkipInternalProperty`, `object-formatter.ts` | fixture `fabric-special-object-brand` |
+| `FabricPrimitive` nominal brand (`FABRIC_PRIMITIVE_BRAND` in `base/data-model/src/api.ts`, an interned `unique symbol`) on a type outside the fabric-primitive vocabulary | property skipped entirely (not in `properties`, not in `required`) — a symbol-keyed member, which the generator skips as it skips every symbol-keyed member; a field typed as the `FabricPrimitive` base still emits `{ type: "object", properties: {} }` | `shouldSkipInternalProperty`, `object-formatter.ts` | fixture `fabric-special-object-brand` |
 | TS `enum` declaration | hoisted under the enum name with **no `type` key** (all-literal union path, §8): numeric → `$defs: { Color: { enum: [0,1,2] } }` + `$ref`; string → `$defs: { Mode: { enum: ["on","off"] } }` | union path `union-formatter.ts`; hoisting §5 | `test/enum-schema-rows.test.ts` |
 | Single enum member type (`Mode.On`) | inline literal schema, e.g. `{ type: "string", enum: ["on"] }`; enum-member symbols are excluded from named-type hoisting so same-named members and unrelated named types cannot collide in `$defs` | `getNamedTypeKey`, `type-utils.ts`; pinned by `test/enum-member-hoisting.test.ts` | — |
 | `SqliteDatabase` (the `SqliteDb` handle's value, carrying the `SQLITE_DB_BRAND` unique symbol) | the handle descriptor `{ id, tables, rev }` with `additionalProperties: true` (§5.2), hoisted under `SqliteDatabase`; the brand's own members describe nothing, so a structural schema would shape a handle read down to `{}` | `native-type-formatter.ts` | `test/schema/cell-type.test.ts`; end-to-end: ts-transformers `handler-schema/sqlite-db-handler-state`, `schema-injection/scoped-sqlite-factory` |
@@ -454,7 +454,7 @@ schema carries CFC labels at its root, such as an optional
 stay on the property, because the runtime's policy merge refuses labels on one
 `anyOf` branch whose siblings it cannot prove type-disjoint, and a labeled
 `$ref` cannot be (`assertNoDivergentIfcBranches`,
-`packages/runner/src/cfc/schema-merge.ts`). The property remains outside
+`runtime/runner/src/cfc/schema-merge.ts`). The property remains outside
 `required`. Explicit `T | undefined` and optional tuple elements also retain
 `undefined`.
 
@@ -609,8 +609,8 @@ A field authored against a `FabricPrimitive` class ITSELF (`blob: FabricBytes`)
 emits that class's schema-vocabulary name, a leaf with no `properties`, no
 `required`, and no `$defs` hoisting. Validation is by prototype: a value
 matches the name it reports as `.schemaType`, which each class under
-`packages/data-model/src/fabric-primitives/` supplies. The dialect side is
-specified in `docs/specs/json_schema.md`.
+`base/data-model/src/fabric-primitives/` supplies. The dialect
+side is specified in `docs/specs/json_schema.md`.
 
 `NativeTypeFormatter` also claims one type that is not in the name table: the
 `SqliteDb` handle's readable value, recognized by the `SQLITE_DB_BRAND` unique
@@ -790,7 +790,7 @@ Nesting prepends: `Stream<Cell<number>>` → `{ type: "number", asCell:
 opaque). Boolean inner schemas: `true` → `{ asCell: [brand] }`; `false` →
 `{ asCell: [brand], not: true }`.
 
-Entry shapes (`packages/api/index.ts`): `AsCellEntry = CellKind |
+Entry shapes (`base/api/index.ts`): `AsCellEntry = CellKind |
 { kind: CellKind; scope?: SchemaScope }`, `CellKind` being the seven brand
 strings. The object form is produced only by scope wrapping
 (§10). `Cell<Cell<T>>` → `asCell: ["cell","cell"]` is representable per the
@@ -802,7 +802,7 @@ cell-in-cell nesting as of this writing; the pinned nested pair is
 them only in two stale comments; the api `JSONSchemaObj` has no such members.
 The single-array cleanup landed in #3732 (2026-05-29, verified in git), also
 the README's last commit. Legacy *readers* of `asStream` survive in
-`packages/runner/src/` (`schema.ts`, `traverse.ts`, `link-utils.ts`, …) for
+`runtime/runner/src/` (`schema.ts`, `traverse.ts`, `link-utils.ts`, …) for
 pre-cleanup schemas.
 
 ### 6.3 Node/type interplay
@@ -861,7 +861,7 @@ pre-cleanup schemas.
 
 `Reactive<T>` emits **no wrapper marker of any kind**. Evidence chain:
 
-1. `Reactive<T> = T` is an identity alias (`packages/api/index.ts`) — no
+1. `Reactive<T> = T` is an identity alias (`base/api/index.ts`) — no
    runtime wrapper, no structural brand, so structural detection cannot see it
    (explicit comment, `common-fabric-formatter.ts`).
 2. Node-level detection deliberately excludes the spelling:
@@ -1279,7 +1279,7 @@ Default paths of §7:
 `PerSpace` / `PerUser` / `PerSession` / `PerAny` (api: `Scoped<T, S>`, `T`
 intersected with an optional `SCOPE_BRAND`-typed member for each of its members
 other than `null` and `undefined`, which it holds as they are,
-`packages/api/index.ts`) lower to a `scope` key with values
+`base/api/index.ts`) lower to a `scope` key with values
 `"space" | "user" | "session" | "any"` (`SCOPE_WRAPPER_SCOPES`,
 `common-fabric-formatter.ts`). The type keeps the alias it is reached by,
 `PerUser<…>` or an author's own, as `Box<T>` in `type Box<T> = PerUser<…>`, so
@@ -1388,7 +1388,7 @@ optional property, which keeps the cell alone (`handle?: PerSpace<Cell<T>>` →
 written, so `handle?: PerSpace<Cell<T>> | undefined` throws as well, including
 where the type it is read at has lost that `undefined`, as `Required` takes it
 out. Tested end to end in the runtime:
-`packages/runner/test/ascell-scope-cap.test.ts`. A nested scope **without an intervening
+`runtime/runner/test/ascell-scope-cap.test.ts`. A nested scope **without an intervening
 cell boundary throws** (`Nested scope wrappers require a cell boundary between
 scopes.`; tested, scope-wrappers.test.ts), and so does a type carrying two
 scopes' brands on one value, as an inferred `PerUser<PerSession<T>>` resolves
@@ -1475,7 +1475,7 @@ lift's result at the narrowest scope its callback reads.
 ## 11. CFC Alias Lowering (`ifc` Metadata)
 
 The canonical authoring surface contains 18 names. The inventory is
-`CFC_CANONICAL_ALIAS_NAMES` (`packages/api/cfc.ts`), consumed by
+`CFC_CANONICAL_ALIAS_NAMES` (`base/api/cfc.ts`), consumed by
 `CommonFabricFormatter`. Sixteen aliases lower the wrapped value and attach an
 `ifc` payload; `AnyOf` and `PolicyOf` are label-expression markers interpreted
 inside those payloads.
@@ -1557,7 +1557,7 @@ Mechanics:
   the same reference read inside its own reading is one.
 - A label lands on the part of a value its policy was written around. Each
   carrier records that payload beside its metadata (`CfcStamp<T, M>`,
-  `packages/api/cfc.ts`), because TypeScript merges a carrier into whatever
+  `base/api/cfc.ts`), because TypeScript merges a carrier into whatever
   its value is merged into: an intersection, a spread, a mapped type. So a
   label is placed by the payload it records, never by where the carrier sits
   (`placeCarriedLabels`, `payloadReach`):
@@ -1633,7 +1633,7 @@ Mechanics:
   `printed-type-node-schema.test.ts` ("a labeled payload merged into a larger
   value").
 - A policy's type keeps its alias name beside `null` and `undefined`: the
-  carrier holds them beside its stamp (`CfcTag`, `packages/api/cfc.ts`), so
+  carrier holds them beside its stamp (`CfcTag`, `base/api/cfc.ts`), so
   `Confidential<string | null, L>` is `(string & carrier) | null` and reads
   as its reference does, `null` included. A policy around `null` alone,
   `Confidential<null, L>`, is `null`, with no name or carrier left, and a
@@ -2051,7 +2051,7 @@ Mechanics:
 In-package coverage: `test/schema/cfc-authoring.test.ts` (13 tests), including
 renamed `AnyOf` / `PolicyOf` imports, and `test/ifc-labels.test.ts` for how
 labels combine. Transformer-side policy compilation and
-diagnostics are pinned by `packages/ts-transformers/test/cfc-authoring.test.ts`.
+diagnostics are pinned by `base/ts-transformers/test/cfc-authoring.test.ts`.
 
 The collection/opaque helpers `LengthPreservedFrom`, `FilteredFrom`,
 `SubsetOf`, `PermutationOf`, and `OpaqueInput` were removed from
@@ -2061,7 +2061,7 @@ arbitrary record `M`; that low-level escape hatch does not make the removed
 helpers part of the supported authoring surface.
 
 The emitted key set aligns with the api's `JSONSchemaObj.ifc` member
-(`packages/api/index.ts`): `confidentiality`, `integrity`,
+(`base/api/index.ts`): `confidentiality`, `integrity`,
 `addIntegrity`, `requiredIntegrity`, `maxConfidentiality`, `ownerPrincipal`,
 `writeAuthorizedBy`, `writePolicyAnyOf`, `exactCopyOf`, `projection`,
 `observes`, and `uiContract`. `ownerPrincipal` and `observes` have no direct
@@ -2084,7 +2084,7 @@ producing alias in this package as of this writing.
 - Index signatures and intersection constituents have their own attachment
   points (§4 table; §9).
 - Hashtags remain in attached descriptions. Discovery extracts them at runtime
-  with `tagsFromSchema` in `packages/runtime-client/src/schema-tags.ts`,
+  with `tagsFromSchema` in `runtime/runtime-client/src/schema-tags.ts`,
   using `extractHashtags` from `@commonfabric/utils/hashtags`. Tags are
   lowercased and deduplicated in first-seen order across nested schemas.
   Fixtures: descriptions-hashtag-tags, descriptions-index-signature-tags,
@@ -2336,7 +2336,7 @@ synthetic node resolution failure → `any` → `true`
 
 ## 17. Test Workflow
 
-- `deno task test` from `packages/schema-generator/` (env knobs allow-listed
+- `deno task test` from `base/schema-generator/` (env knobs allow-listed
   in `deno.jsonc`); `deno task check` type-checks source, harnesses, and
   test suites while excluding raw fixture inputs. Those inputs depend on the
   synthetic declarations supplied by the fixture runner and are checked there.
@@ -2344,7 +2344,7 @@ synthetic node resolution failure → `any` → `true`
   `test/fixtures/schema/*.input.ts` → `*.expected.json`; the root type is the
   fixture's `SchemaRoot`. Env knobs: `FIXTURE=<baseName>` filter;
   `UPDATE_GOLDENS=1` rewrites goldens
-  (`packages/test-support/src/fixture-runner.ts`); `SKIP_INPUT_CHECK=1`
+  (`base/test-support/src/fixture-runner.ts`); `SKIP_INPUT_CHECK=1`
   disables the default batch type-check of all inputs in one program — type
   errors otherwise fail the suite before any comparison.
 - **Normalization caveat**: goldens are normalized — object keys sorted,
@@ -2374,7 +2374,7 @@ synthetic node resolution failure → `any` → `true`
 
 When a section above enumerates a set, the constant/function below is
 canonical; update prose from it, not the other way around. Paths relative to
-`packages/schema-generator/` unless noted.
+`base/schema-generator/` unless noted.
 
 | Spec content | Canonical source | Guard / note |
 | --- | --- | --- |
@@ -2386,15 +2386,15 @@ canonical; update prose from it, not the other way around. Paths relative to
 | Node-wrapper participation (§6.1, §6.4) | `NODE_WRAPPER_SPELLINGS` (`src/type-utils.ts`) | compile-time table |
 | Brand values / kind↔brand maps (§6.2) | `CellBrand` / `wrapperKindToBrand` (`src/typescript/cell-brand.ts`) | capability-wrapper-types tests |
 | Capability-kind subset (§6.3) | `CELL_CAPABILITY_KIND_MAP` (`src/formatters/common-fabric-formatter.ts`) | exhaustive over `CellWrapperKind` |
-| `asCell` entry shape (§6.2, §10) | `AsCellEntry` / `CellKind` / `SchemaScope` (`packages/api/index.ts`) | — |
+| `asCell` entry shape (§6.2, §10) | `AsCellEntry` / `CellKind` / `SchemaScope` (`base/api/index.ts`) | — |
 | Scope wrapper map (§10) | `SCOPE_WRAPPER_SCOPES` (`src/formatters/common-fabric-formatter.ts`) | scoped-wrappers fixture |
-| CFC alias set (§11) | `CFC_CANONICAL_ALIAS_NAMES` (`packages/api/cfc.ts`) | — |
+| CFC alias set (§11) | `CFC_CANONICAL_ALIAS_NAMES` (`base/api/cfc.ts`) | — |
 | CFC payload map (§11) | `buildIfcMetadataForAlias` switch (`src/formatters/common-fabric-formatter.ts`) | cfc-authoring tests |
-| `ifc` key vocabulary (§11) | `JSONSchemaObj.ifc` (`packages/api/index.ts`) | — |
+| `ifc` key vocabulary (§11) | `JSONSchemaObj.ifc` (`base/api/index.ts`) | — |
 | Hint shape (§13) | `SchemaHint` / `UiContractHint` (`src/interface.ts`) | — |
 | Generation options (§14) | `SchemaGenerationOptions` (`src/interface.ts`) | widening, writer identity, and diagnostics |
 | Throw inventory (§15) | grep `throw new Error` under `src/` | messages quoted above verified this snapshot |
-| Fixture env knobs (§17) | `test/fixtures-runner.test.ts`; `packages/test-support/src/fixture-runner.ts` | — |
+| Fixture env knobs (§17) | `test/fixtures-runner.test.ts`; `base/test-support/src/fixture-runner.ts` | — |
 
 A drift-resistant habit (mirroring the ts-transformers spec §21.1): when
 editing a set above, update this document from the canonical source and keep

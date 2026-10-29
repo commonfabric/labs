@@ -81,8 +81,8 @@ result schema so each viewer sees their own profile projection.
 - `Runtime.getHomeSpaceCell()` creates the home space cell at
   `(space = userIdentityDID, cause = userIdentityDID)`.
 - `PiecesController.ensureDefaultPattern()` links a default pattern at
-  `spaceCell.defaultPattern`. Today it chooses `system/home.tsx` for the home
-  space and `system/default-app.tsx` for other spaces.
+  `spaceCell.defaultPattern`. Today it chooses `system/home/home.tsx` for the
+  home space and `system/default-app/default-app.tsx` for other spaces.
 - The current home pattern owns durable cells such as `favorites`, `journal`,
   `learned`, `spaces`, and `defaultAppUrl` on the home default pattern.
 - The current docs say favorites are on `spaceCell.favorites`, but current code
@@ -142,6 +142,8 @@ Profile creation uses the **anonymous** `PatternFactory.inSpace()` (CT-1650):
 const profile = ProfileHome.inSpace(undefined, {
   grants: { "*": "WRITE" },
   root: true,
+  spaceKind: "profile",
+  selfOwned: true,
 })({
   initialName: name,
 });
@@ -152,10 +154,15 @@ the calling space calls it: the home space records one allocation per name, so
 every profile created under one name would land in one space. The anonymous case
 instead records one allocation per call, keyed by the creating handler's frame
 cause (per-user home-space input links + the durable per-event id). Each
-allocation creates a space with a random DID owned by the creating user ([random
-space identities](random-space-identities.md)), so the space is unique per user
-AND per creation event, and stable across the cross-space-commit retry. The
-profile space grants the wildcard `"*"` WRITE. Other users read a profile's
+allocation creates a space with a random DID ([random space
+identities](random-space-identities.md)), so the space is unique per user AND
+per creation event, and stable across the cross-space-commit retry. The space
+owns itself and declares the `profile` kind: its access list grants its own
+DID OWNER and the wildcard `"*"` WRITE, and the creating user holds a
+delegation from the space's key, recorded in the home space and presented
+when the user's runtime opens the space, in place of a grant
+([profile delegation](profile-delegation.md)). A profile created before
+profiles owned themselves names its creator as owner instead. Other users read a profile's
 name, and a runtime showing a profile writes into the profile's space — its
 per-session state at the least — so a space granting READ alone refuses the
 visit. The space's access list therefore protects nothing in a profile. The
@@ -393,10 +400,10 @@ that is useful for rendering, but external code must depend on `elements` and
 
 Default pattern creation needs a third case:
 
-1. Home space: `/api/patterns/system/home.tsx`
-2. Profile space: `/api/patterns/system/profile-home.tsx`
+1. Home space: `/api/patterns/system/home/home.tsx`
+2. Profile space: `/api/patterns/system/profile-home/profile-home.tsx`
 3. Other spaces: home `defaultPattern.defaultAppUrl` or
-   `/api/patterns/system/default-app.tsx`
+   `/api/patterns/system/default-app/default-app.tsx`
 
 A profile space is not identified by `space === userIdentityDID`. It is
 identified by the profile default-pattern link at
@@ -423,9 +430,9 @@ If `profile` is missing:
 - render an input field for the user's profile name
 - submitting it stores the requested name, which drives a profile-creation
   action/lift
-- that action starts `system/profile-home.tsx` with the anonymous `.inSpace()`
-  (see Profile Space Identity above), passes the submitted name as the initial
-  profile name, and writes the resulting profile
+- that action starts `system/profile-home/profile-home.tsx` with the anonymous
+  `.inSpace()` (see Profile Space Identity above), passes the submitted name as
+  the initial profile name, and writes the resulting profile
   default-pattern link to `homeDefaultPattern.profile`
 
 If `profile` is present:
@@ -636,7 +643,7 @@ The integration test should:
     renders the second user's name without changing the first user's profile
 
 The test should use the existing shell integration harness style from
-`packages/patterns/integration/default-app.test.ts`, including fresh noble
+`patterns/integration/default-app.test.ts`, including fresh noble
 identities and `waitForRuntimeIdle` before assertions. The CFC browser helpers
 already provide useful primitives such as `waitForText`, `fillCfInput`, and
 `waitForRuntimeIdle`; the CFC group-chat integration tests show the existing

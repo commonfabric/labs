@@ -196,9 +196,9 @@ the nginx backend set must not change the durable history selected by a DID.
 
 Labs supplies the common client boundary. A remote Memory session appends the
 space DID to its
-[`space` query parameter](../../packages/runner/src/storage/v2-remote-session.ts)
+[`space` query parameter](../../runtime/runner/src/storage/v2-remote-session.ts)
 and Toolshed server runtimes connect through
-[`MEMORY_URL`](../../packages/toolshed/runtime-options.ts). Both current and
+[`MEMORY_URL`](../../runtime/toolshed/runtime-options.ts). Both current and
 future deployment routers must preserve that contract. Under the
 [`sharedMemoryConnection`](../development/EXPERIMENTAL_OPTIONS.md#sharedmemoryconnection)
 experimental flag a session's connection carries several spaces and names

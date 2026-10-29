@@ -1,8 +1,8 @@
 # CFC Authoring Contract
 
 **Status:** Implemented direct-authoring contract
-**Scope:** `packages/api`, `packages/ts-transformers`,
-`packages/schema-generator`
+**Scope:** `base/api`, `base/ts-transformers`,
+`base/schema-generator`
 
 This document specifies the compile-time contract for CFC-aware TypeScript
 authoring. It is intentionally narrower than the runner CFC specs: the concern
@@ -441,7 +441,7 @@ Required failure modes:
 The contract is not fully implemented until these tests pass or equivalent
 coverage exists:
 
-- `packages/ts-transformers/test/cfc-authoring.test.ts`
-- `packages/schema-generator/test/schema/cfc-authoring.test.ts`
-- `packages/schema-generator/test/schema/write-policy-any-of.test.ts`
-- `packages/runner/test/cfc-write-policy-any-of.test.ts`
+- `base/ts-transformers/test/cfc-authoring.test.ts`
+- `base/schema-generator/test/schema/cfc-authoring.test.ts`
+- `base/schema-generator/test/schema/write-policy-any-of.test.ts`
+- `runtime/runner/test/cfc-write-policy-any-of.test.ts`

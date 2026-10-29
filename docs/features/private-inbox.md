@@ -10,7 +10,7 @@ what Home records when the host refuses one, how the owner replaces a refused
 one, what access its space grants, what `receive` accepts, how the host admits
 what it receives, and the limits on what it keeps private.
 
-The pattern is `packages/patterns/system/private-inbox.tsx`.
+The pattern is `patterns/system/private-inbox/private-inbox.tsx`.
 
 ## Where it lives
 
@@ -57,9 +57,9 @@ halves wait on.
 
 The host gives Home its inbox, normally once per runtime worker, when it first
 brings up the user's Home pattern: `PiecesController.ensurePrivateInbox()` in
-`packages/piece`, called from `RuntimeProcessor` in `packages/runtime-client`,
+`runtime/piece`, called from `RuntimeProcessor` in `runtime/runtime-client`,
 which does it through `ensurePrivateInboxOf()` in
-`packages/piece/src/ops/private-inbox.ts`.
+`runtime/piece/src/ops/private-inbox.ts`.
 
 A worker brings up Home when a client asks it for any of three things, and the
 first of them in a worker starts the ensure: to ensure Home is running
@@ -96,7 +96,7 @@ directly and never starts one.
 
 The ensure decides by one profile: the first,
 in the order `#profile` answers in, that points at an inbox. That order is
-`orderProfileCandidates()` in `packages/runner/src/profile-order.ts`, which the
+`orderProfileCandidates()` in `runtime/runner/src/profile-order.ts`, which the
 `wish` builtin answers `#profile` by: Home's default profile first, then by rank
 in its MRU list, then in `profiles` list order, leaving out a retired profile,
 one whose document is absent, and one that is not the person's own by the one
@@ -159,10 +159,11 @@ Home holds no inbox, as after a refusal, a profile that points at none stays
 unpointed, until a later ensure finds a usable advertisement or none. Sending
 the stream again creates nothing, re-points nothing and retains nothing more.
 Creation is tested by
-`packages/patterns/integration/private-inbox-multi-runtime.test.ts`, with server
+`patterns/integration/private-inbox-multi-runtime.test.ts`, with server
 execution on and off; keeping, adopting, adopting again, refusing and recording
-a refusal are tested there, by `packages/patterns/system/private-inbox.test.tsx`
-and, vetting rule by rule, by `packages/piece/test/ops/private-inbox.test.ts`.
+a refusal are tested there, by
+`patterns/system/private-inbox/private-inbox.test.tsx` and, vetting rule by
+rule, by `runtime/piece/test/ops/private-inbox.test.ts`.
 
 `retainedPrivateInboxes` holds a link to each inbox Home gave up, in the order
 it gave them up, and never the one it holds: adopting an inbox the list holds,
@@ -202,7 +203,7 @@ A profile is pointed in one of three ways:
   section, which Home hands its `privateInbox`, and the create surface a
   `#profile` wish opens, which the runtime hands the `privateInbox` of the
   demanding user's own Home, beside its `profiles`
-  (`packages/runner/src/builtins/wish.ts`). An embedder that hands no inbox
+  (`runtime/runner/src/builtins/wish.ts`). An embedder that hands no inbox
   leaves the profile to the next ensure.
 - **When the owner replaces a refused inbox**, as "Replacing a refused inbox"
   says: every profile in Home's list that points at the refused inbox.
@@ -232,7 +233,7 @@ handlers read the inbox the event names to adopt, the inbox Home holds, the ones
 it retains, the one its refusal record names and the one its replacement record
 names, as a typed link,
 `Cell<ShareInboxPiece>`; the host reads it through `inboxPieceLinkSchema` in
-`packages/piece/src/ops/private-inbox.ts`, the same type as a schema. A link
+`runtime/piece/src/ops/private-inbox.ts`, the same type as a schema. A link
 that names the inbox's own result document, as `setInbox` and an adoption write
 it, carries the label of what it reaches, and the inbox labels its offers
 confidential to its owner; a profile's pointer, and Home's holder once Home has
@@ -297,7 +298,7 @@ The inbox lives in a field of Home's root, as the shared-space catalog does, so
 replacing Home's root would replace it: a new root holds no inbox and retains
 none, and its first ensure gives it one by the rules above, from whatever
 profile list the new root holds. Nothing replaces an identity Home's root:
-`PiecesController.recreateDefaultPattern()` in `packages/piece` refuses one,
+`PiecesController.recreateDefaultPattern()` in `runtime/piece` refuses one,
 absent or present, and a Home's source is changed in place, which keeps both
 (`docs/common/conventions/HOME_SPACE.md`, "Custom Home Pattern").
 
@@ -365,7 +366,7 @@ the send or of Home's handling as an error status, and carries no receipt
 address unless the runtime writes receipts, which it does with commit
 preconditions or server execution on. For `ensured`, the client then reads the
 profile's `inbox.piece`, through the typed link `inboxPieceLinkSchema` in
-`packages/piece/src/ops/private-inbox.ts`, for the reason every reader of the
+`runtime/piece/src/ops/private-inbox.ts`, for the reason every reader of the
 pointer does, as "Creating or adopting it" says, and waits for the pointer to
 name an inbox.
 
@@ -388,7 +389,7 @@ has settled can still find `pending` while the served answer is already
 client subscribed to the receipt, as `requestPrivateInboxOf()` is, reads
 again when that write arrives.
 
-`requestPrivateInboxOf()` in `packages/piece/src/ops/private-inbox.ts` is the
+`requestPrivateInboxOf()` in `runtime/piece/src/ops/private-inbox.ts` is the
 host's implementation of that client. It returns `ensured` with the inbox,
 `unlisted`, `unpointable` or `not-held`; `unavailable`, sending nothing, for a
 Home without the stream; and `abandoned` once the caller's signal aborts while
@@ -418,9 +419,9 @@ the inbox's, can find the first one's changes. The runtime logs that under
 `storage.v2.multi-space-commit` as an error, and both requests still end at the
 one inbox.
 
-`packages/patterns/system/private-inbox-request.test.tsx` tests the answers,
-`packages/piece/test/ops/requestPrivateInboxOf.test.ts` the host's client, and
-`packages/patterns/integration/private-inbox-multi-runtime.test.ts`, with
+`patterns/system/private-inbox/private-inbox-request.test.tsx` tests the
+answers, `runtime/piece/test/ops/requestPrivateInboxOf.test.ts` the host's
+client, and `patterns/integration/private-inbox-multi-runtime.test.ts`, with
 server execution on and off, requests through the receipt: two at once
 answered with the one inbox both profiles point at, each linking to Home's one
 answer for its profile; a receipt still answering `ensured` for its own
@@ -436,7 +437,7 @@ Home's `privateInboxRefusal` holds, under `refusal`, the host's refusal of the
 inbox the deciding profile points at: `reason`, the host's code for why the
 inbox failed vetting, as the event named it, trimmed and cut to
 `REFUSAL_REASON_MAX_LENGTH` (64), which today is one of `InboxAdoptionRefusal`'s
-codes in `packages/piece/src/ops/private-inbox.ts`, such as
+codes in `runtime/piece/src/ops/private-inbox.ts`, such as
 `inbox-adoption-acl-mismatch`; `inbox`, a link to the inbox refused; and
 `refusedAt`, when Home first recorded this refusal, of this inbox for this
 reason, by the handler's clock, which reads to the second. Home stores the code
@@ -480,9 +481,9 @@ advertise.
 While the record holds a refusal, Home shows a notice above its tabs, whichever
 tab is open, saying that what others share may not arrive. It shows the code,
 with a sentence saying what the code means when it is one of the host's codes,
-`INBOX_ADOPTION_REFUSALS` in `packages/piece/src/ops/private-inbox.ts`, and
+`INBOX_ADOPTION_REFUSALS` in `runtime/piece/src/ops/private-inbox.ts`, and
 `refusedAt`, in UTC, with the zone named. Home's sentences are in
-`packages/patterns/system/private-inbox-refusal-text.ts`, and
+`patterns/system/private-inbox/private-inbox-refusal-text.ts`, and
 `private-inbox-refusal-text.test.ts` beside it fails while one of the host's
 codes has none. The sentence for `inbox-adoption-acl-mismatch` names the likely
 case, a loom daemon of the owner's running as another identity, for which loom
@@ -496,7 +497,7 @@ empty one as `none given`. The notice carries a "Use a new inbox" button, as
 "Replacing a refused inbox" says, and says that a loom daemon running as another
 identity than the owner's stops receiving loom shares once the owner uses it.
 The notice goes when the record is cleared.
-`packages/patterns/system/home.test.tsx` tests it, and
+`patterns/system/home/home.test.tsx` tests it, and
 `home-refusal-notice.test.tsx` beside it, with the refused inbox created by
 another user, checks that `inspectConfLabel` reports no user's label on the
 notice's sentence, where it reports one once the computed producing the notice's
@@ -597,8 +598,9 @@ Replacing, refusing a send no click marks, re-pointing only the profiles that
 pointed at the refused inbox, replacing an inbox whose space has revoked the
 owner's `READ`, and replacing Home's own inbox without touching its offers are
 tested by
-`packages/patterns/integration/private-inbox-multi-runtime.test.ts`, with server
-execution on and off, and by `packages/patterns/system/private-inbox.test.tsx`.
+`patterns/integration/private-inbox-multi-runtime.test.ts`, with server
+execution on and off, and by
+`patterns/system/private-inbox/private-inbox.test.tsx`.
 
 ## The access its space grants
 
@@ -718,7 +720,7 @@ trusting a row. A loom reader checks that `from` holds its own `WRITE` or
 The host reads the owner's offers and registers the ones it admits in Home's
 shared-space catalog, which
 [`shared-space-catalog.md`](shared-space-catalog.md) describes. The intake is
-`ShareIntake` in `packages/piece/src/ops/share-intake.ts`, which
+`ShareIntake` in `runtime/piece/src/ops/share-intake.ts`, which
 `PiecesController.startShareIntake()` starts over the identity's Home, and
 `RuntimeProcessor` starts it beside the ensure, the first time a runtime
 worker brings up Home. Home opens without waiting for it; a failure to start
@@ -893,7 +895,7 @@ to the visited space, through the user's own entry or the grant to every princip
 the space's declared kind to select its locator:
 
 - A `fabrichat-room` uses the same strict vetting as a share offer
-  (`vetSpace()` in `packages/piece/src/ops/space-vetting.ts`): its root is a
+  (`vetSpace()` in `runtime/piece/src/ops/space-vetting.ts`): its root is a
   document of that space at the address its genesis commit reserves.
 - Every other kind, including an undeclared kind, uses the root's explicit
   `chatRoom` link. The root must be a document of the visited space; its
@@ -908,7 +910,7 @@ A passing visit sends the room to Home's `chatManager.joinRoom`, when Home has
 that stream, with no `requestId`. A declaration-based join also sends the
 root as `container`; the manager verifies that its `chatRoom` names the same
 room (`joinVisitedRoomOf()` in
-`packages/piece/src/ops/join-visited-room.ts`). Visiting a container counts as
+`runtime/piece/src/ops/join-visited-room.ts`). Visiting a container counts as
 visiting its declared chat. A placement with no declaration is outside this
 locator contract. The share intake still requires a standalone room.
 

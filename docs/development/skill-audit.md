@@ -75,8 +75,8 @@ citation breaks as soon as its target moves away rather than lingering until the
 deletion is staged.
 
 To cite a path as an illustration rather than a real location, write it as a
-placeholder — `packages/<pkg>/mod.ts`, `cf-{name}/cf-{name}.figma.ts`,
-`packages/**`. The tripwire skips those by design, and that is the intended
+placeholder — `runtime/<pkg>/mod.ts`, `cf-{name}/cf-{name}.figma.ts`,
+`runtime/**`. The tripwire skips those by design, and that is the intended
 opt-out; there is no allowlist, and none of the skills has needed one.
 
 ## Triggers
@@ -112,7 +112,7 @@ stays narrow on purpose; the audit carries the judgment.
 
 One row it cannot cover by construction: the cf-review anti-dup table's
 cell↔link entry names a **bare internal symbol** (`convertCellsToLinks` in
-`packages/runner/src/cell.ts`) — an internal runner function with no package
+`runtime/runner/src/cell.ts`) — an internal runner function with no package
 export, so there's nothing for the resolvability check to resolve. That symbol's
 accuracy is the audit's job, not the tripwire's. (Noted from @mpsalisbury's
 review of #3829.)

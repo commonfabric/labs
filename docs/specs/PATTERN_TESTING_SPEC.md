@@ -112,7 +112,7 @@ is the only way to write; a bare `Reactive<boolean>` is a compile error. The
 transformer rewrites the `assert` body to record each operand as it is
 computed, so a failure can report the operands and their values instead of
 only `false`. See
-[Assertion diagnostics](../../packages/ts-transformers/README.md#assertion-diagnostics)
+[Assertion diagnostics](../../base/ts-transformers/README.md#assertion-diagnostics)
 for the rewrite, and
 [Pattern Testing](../common/workflows/pattern-testing.md#write-assertions-with-assert)
 for the authoring side.
@@ -277,7 +277,7 @@ expense-tracker.test.tsx
 
 ### Algorithm
 
-The runner itself is `packages/cli/lib/test-runner.ts`. The sketch below is a
+The runner itself is `runtime/cli/lib/test-runner.ts`. The sketch below is a
 reading aid for the shape of the loop, not a second copy of it: it leaves out
 the convergence loop an action and a render step settle through, the read
 accounting and error handling around each step, and the multi-user paths.
@@ -524,9 +524,9 @@ return {
 - [x] Example test pattern
 
 **Files created:**
-- `packages/cli/commands/test-command.ts`
-- `packages/cli/lib/test-runner.ts`
-- `packages/patterns/gideon-tests/test-reactivity-computed-derive-same/index.test.tsx`
+- `runtime/cli/commands/test-command.ts`
+- `runtime/cli/lib/test-runner.ts`
+- `patterns/dev/gideon-tests/test-reactivity-computed-derive-same/index.test.tsx`
 
 ### Phase 2: Developer Experience
 

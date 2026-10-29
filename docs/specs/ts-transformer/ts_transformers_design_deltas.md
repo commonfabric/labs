@@ -125,7 +125,7 @@ landed after the snapshot above:
     runtime helper / `__cfHelpers` export that does not yet exist. Today
     `selfcontained` appears only in design comments in `ast/call-kind.ts` and
     `builder-call-hoisting.ts`; no transformer emits it and no fixture expects
-    it. See `packages/ts-transformers/docs/derive-to-lift-design.md`.
+    it. See `base/ts-transformers/docs/derive-to-lift-design.md`.
 
 ### Addendum 4 (a plain-array `map` callback carries pattern-owned sites)
 
@@ -619,26 +619,26 @@ fields/defaults unless an explicit author opt-in narrowing model is introduced.
 
 ## Candidate Implementation Touchpoints
 
-- `packages/ts-transformers/src/ast/reactive-context.ts`
-- `packages/ts-transformers/src/ast/call-kind.ts`
+- `base/ts-transformers/src/ast/reactive-context.ts`
+- `base/ts-transformers/src/ast/call-kind.ts`
   (`classifyArrayMethodCallSite` — the former `type-inference.ts`
   `isReactiveArrayMapCall` no longer exists)
-- `packages/ts-transformers/src/transformers/jsx-expression-site-router.ts`
-- `packages/ts-transformers/src/transformers/expression-rewrite/emitters/binary-expression.ts`
-- `packages/ts-transformers/src/transformers/expression-rewrite/emitters/conditional-expression.ts`
-- `packages/ts-transformers/src/closures/strategies/array-method-strategy.ts`
+- `base/ts-transformers/src/transformers/jsx-expression-site-router.ts`
+- `base/ts-transformers/src/transformers/expression-rewrite/emitters/binary-expression.ts`
+- `base/ts-transformers/src/transformers/expression-rewrite/emitters/conditional-expression.ts`
+- `base/ts-transformers/src/closures/strategies/array-method-strategy.ts`
   (née `map-strategy.ts`; split into strategy/policy/transform/utils)
-- `packages/ts-transformers/src/ast/call-kind.ts`
-- `packages/ts-transformers/src/ast/dataflow.ts` (or successor capability graph)
-- `packages/ts-transformers/src/ast/type-inference.ts`
-- `packages/ts-transformers/src/ast/type-building.ts`
+- `base/ts-transformers/src/ast/call-kind.ts`
+- `base/ts-transformers/src/ast/dataflow.ts` (or successor capability graph)
+- `base/ts-transformers/src/ast/type-inference.ts`
+- `base/ts-transformers/src/ast/type-building.ts`
 - validation messaging in
-  `packages/ts-transformers/src/transformers/pattern-context-validation.ts`
+  `base/ts-transformers/src/transformers/pattern-context-validation.ts`
 - replacement/merge path for that validation in pattern-callback-lowering diagnostics
 - schema emission in
-  `packages/ts-transformers/src/transformers/schema-injection.ts`
+  `base/ts-transformers/src/transformers/schema-injection.ts`
 - schema generation coupling in
-  `packages/ts-transformers/src/transformers/schema-generator.ts`
+  `base/ts-transformers/src/transformers/schema-generator.ts`
 - docs currently describing “safe context,” including
   `docs/history/packages/ts-transformers/docs/SAFE_CONTEXT_TRANSFORMS_DESIGN.md`
 

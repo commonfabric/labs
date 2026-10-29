@@ -1,0 +1,934 @@
+import {
+  action,
+  Default,
+  equals,
+  handler,
+  lift,
+  NAME,
+  pattern,
+  type PerSession,
+  type ReadonlyCell,
+  Stream,
+  UI,
+  type VNode,
+  wish,
+  Writable,
+} from "commonfabric";
+
+import {
+  mentionableIndex,
+  type MentionableRow,
+} from "../../product/collection-naming/mentionable.ts";
+import {
+  createNamed,
+  type NamesMap,
+  namesTable,
+  type NamesTableRow,
+  type NamingDeclaration,
+  recordNames,
+  SEQUENCE_NAMING,
+} from "../../product/collection-naming/naming.ts";
+import Topic, {
+  rejectMutation,
+  snippet,
+  TOPIC_STATE_VERSION,
+  type TopicAuthor,
+  topicAuthorFromAgent,
+  topicAuthorFromPerson,
+  topicAuthorLabel,
+  type TopicCrossrefRow,
+  type TopicMentionable,
+  type TopicMentionSource,
+  TOPICS_SCREEN_STYLE,
+  TOPICS_THEME,
+  type TopicSummary,
+  whenLabel,
+} from "./topic.tsx";
+
+// Re-export the shared types for consumers and tests.
+export type {
+  AddCommentEvent,
+  AddCommentResult,
+  AddLinkEvent,
+  AddLinkResult,
+  AgentAuthoredEvent,
+  SetBodyEvent,
+  SetBodyResult,
+  SetTitleEvent,
+  SetTitleResult,
+  TopicAuthor,
+  TopicComment,
+  TopicCrossrefRow,
+  TopicInput,
+  TopicLink,
+  TopicLinkKind,
+  TopicMentionRef,
+  TopicMentionRefMap,
+  TopicOutput,
+  TopicPiece,
+} from "./topic.tsx";
+
+/**
+ * What the board uses of a stored topic — its demand, not the topic's complete
+ * contract.
+ *
+ * A holder names only the fields it reads and verbs it calls; see
+ * [designing verbs so they can change](../../../docs/plans/verb-evolution.md).
+ * This board calls no Topic verb, so the demand names none. Callers take a
+ * Topic's address from `index` and reach its verbs on the Topic itself.
+ *
+ * The nine fields cover the card, compact index, activity sort, reference
+ * pivot, and mention autocomplete. Seven carry defaults so a missing path does
+ * not make the whole array unreadable. Two do not, for different reasons:
+ * `createdAt` is required, because the Topic pattern defaults its input and
+ * publishes that path unconditionally, and `shortName` is optional, because a
+ * default there cannot be applied over a board deployed before the namespace.
+ */
+export interface TopicDemand extends TopicSummary {
+  /** The display name, which the board's mention index copies into each
+   * topic's row — the label every `@`-mention completion carries. The index
+   * lift states the same three-string demand for itself; this entry is the
+   * board-level record of it. */
+  [NAME]: string | Default<""> | undefined;
+  body: string | Default<"">;
+  mentions: unknown[] | Default<[]>;
+
+  /** The board's number for the topic, as the topic PUBLISHES it: out of the
+   * number the topic stores. Where a topic publishes one, the card renders it
+   * as a badge and the mention index copies it into the topic's universe row,
+   * so `#42` matches without expanding a topic; where none is published, the
+   * card shows no badge and the row carries the empty string.
+   *
+   * This is also the signal `backfillNames` reads to tell a topic that stores
+   * its number from one that does not, which is what lets that step report a
+   * run as finished.
+   *
+   * OPTIONAL rather than defaulted, which is a fact about the compatibility
+   * proof: a defaulted property moves the demand's defaults below an array
+   * constraint the proof cannot show stable under default insertion, while an
+   * optional one simply tolerates a topic that publishes none.
+   *
+   * A member's open producer contract allows any value at an undeclared
+   * property. Demanding a string there narrows that contract even when the
+   * property is optional, so `setsrc` requires an accepted compatibility
+   * break until the producer guarantees the string type. An optional
+   * `unknown` demand imposes no such restriction. A topic that stores no
+   * number — one from before the board numbered anything, until
+   * `backfillNames` has reached it — is absent here rather than blank, and
+   * every consumer treats the two the same. */
+  shortName?: string;
+}
+
+export interface TopicsInput {
+  /** The board's durable topic list. `addTopic` appends here; direct writes
+   * are legitimate but unattributed, and a whole-array write forfeits the
+   * mergeability the verb's append keeps. */
+  topics?: Writable<TopicDemand[] | Default<[]>>;
+
+  /** The board's member namespace: each name to the topic it names, held as an
+   * unread reference. `addTopic` writes one key per create and `backfillNames`
+   * one key per member it names; nothing rewrites the map whole. Reads as empty
+   * on a board from before it numbered anything, in the default form `NamesMap`
+   * explains. */
+  // deno-lint-ignore ban-types
+  names?: Writable<Default<NamesMap, {}>>;
+}
+
+export interface AddTopicEvent {
+  /** The topic's title, trimmed before it is stored. Must be non-empty. */
+  title: string;
+
+  /** The topic's initial living-document body. A topic born with a body
+   * appears with it atomically — no reader observes the title-only halfway
+   * state, and no follow-up `setBody` call is needed to finish a create
+   * (verb contract: the atomic-unit rule). */
+  body?: string;
+
+  /** The agent making this mutation. The authenticated principal remains the
+   * human whose identity key invoked the stream; this is the agent's explicit
+   * content-level signature under that shared principal.
+   *
+   * Required, for the reason given on `AgentAuthoredEvent`: acceptance widens
+   * compatibly and narrows only through a break, so tolerating an unsigned
+   * create is a tolerance that could never be withdrawn. */
+  agentName: string;
+}
+
+export interface AddTopicResult {
+  /** The topic this call created — the piece itself, not a manufactured
+   * identifier. `cf piece call` can project the child link with a `$link` marker;
+   * the returned canonical reference composes directly into the next command.
+   *
+   * Declared through the index's row schema rather than the full `TopicPiece`,
+   * and the narrowness is the contract: the declared schema bounds the default
+   * readback — a full piece would expand the body, thread, and every
+   * referenced sibling — and every name a verb's result publishes is permanent
+   * with no gate checking it, so the result publishes the survey row the
+   * caller already knows plus the write-time facts only the pattern could
+   * resolve (`createdAt`, `createdBy`). */
+  topic: TopicIndexRow;
+
+  /** The number the create allocated, as it was written to the namespace and
+   * passed into the topic. This is the one to read: the row IS the created
+   * topic, so reading its `shortName` waits for that piece to materialize. */
+  name: string;
+}
+
+/** What `backfillNames` takes: the agent running it. */
+export interface BackfillNamesEvent {
+  /** The agent running the backfill, checked as `addTopic` checks it. */
+  agentName: string;
+}
+
+/**
+ * What `backfillNames` returns: three lists of numbers in filing order, which
+ * together cover every listed topic the run could number.
+ *
+ * The split follows where each write lands, and three lists is what that
+ * takes. The namespace is the board's own document, so `assigned` is what this
+ * run wrote there. A topic's stored number is the topic's own document, which
+ * only the topic can write, so the run reports which topics it found already
+ * carrying theirs and which it asked — and cannot report the outcome of an
+ * asking it just made. Those last two are a settled fact and an unconfirmed
+ * request, and no one list says both: merge them and a run can no longer say
+ * it is finished, merge either into `assigned` and a write to the topic's
+ * document is reported as a write to the board's.
+ *
+ * `../../product/collection-naming/README.md` carries the library side: the two backfills,
+ * and the `recordName` contract a member has to provide for `recordNames` to
+ * reach it.
+ */
+export interface BackfillNamesResult {
+  /** The numbers this run wrote into the namespace; empty when every listed
+   * topic was already in it, which is what a second run writes. */
+  assigned: string[];
+
+  /** The numbers of the topics that already report them. The run sent these
+   * topics nothing. */
+  named: string[];
+
+  /** The numbers this run asked topics to store, one `recordName` call each.
+   * None is confirmed: a send's effect is invisible to the transaction that
+   * makes it, so a topic here is one whose number is not stored YET as far as
+   * this run could see.
+   *
+   * Empty means the board is finished: every topic it holds reports its
+   * number. Non-empty is not a failure but the set to run the verb over again
+   * — the numbers that landed come back under `named`, and the rest are asked
+   * for again. A number allocated for a topic that has not stored it is still
+   * that topic's permanently, and `top/<n>` already reaches it. */
+  pending: string[];
+}
+
+/** One row of the board's compact discovery index: the topic itself, declared
+ * through a title-and-scalars schema. The declared schema is the bound, so a
+ * reader surveying the board expands no topic's prose, thread, or verbs.
+ *
+ * A row IS the topic it describes, so a row's own address is the topic's
+ * address; nothing here carries a separate copy of it. */
+export interface TopicIndexRow {
+  title: string;
+  createdAt: number;
+
+  /** Who filed the topic. A record without structured authorship materializes
+   * the inert `{ kind: "person", name: "" }` default, which
+   * `topicAuthorLabel()` renders as `someone`. */
+  createdBy?: TopicAuthor | Default<{ kind: "person"; name: "" }> | undefined;
+
+  /** Coalesced to 0 for a topic that publishes none, such as one on an older
+   * pattern that has never run, so the row itself never carries the
+   * mixed-version undefined. */
+  commentCount: number | Default<0> | undefined;
+  lastActivityAt: number | Default<0> | undefined;
+
+  /** The board's number for the topic, as the topic publishes it, so absent
+   * for as long as a topic publishes none. Optional rather than defaulted,
+   * unlike the two above, for the reason `TopicDemand.shortName` states. */
+  shortName?: string;
+}
+
+/**
+ * Each source's mention list, read once per source.
+ *
+ * A source whose value has not materialized yet — a topic appended a moment
+ * ago, still mid-sync — reads back as `undefined`, and taking `.mentions` of
+ * that throws. Thrown here it kills the whole pivot, and with it the append
+ * that caused it: the board goes on serving every topic it already had and
+ * silently accepts no new one.
+ *
+ * `mentionedBy` below already declares this element as `| undefined` and
+ * already guards it with `mentions[from]?.some(...)`. So the tolerance is not
+ * being added here; the producer is being made to honor the contract its own
+ * consumer states.
+ *
+ * A read taken straight off the cell gets no help from the compiler. `get()` on
+ * `ReadonlyCell<TopicMentionSource>` is declared to return a value rather than
+ * `T | undefined` — `IReadable` in `base/api/index.ts` — so omitting the
+ * second `?.` there type-checks exactly as well as including it, and every gate
+ * stays green over a board that silently accepts no new topic. Only a read
+ * against a board with an in-flight append tells the two apart.
+ *
+ * Declaring the source structurally is what changes that. The parameter type
+ * says `get(): { mentions: M } | undefined`, so omitting the second `?.` HERE
+ * is a compile error: `deno task cfcheck` fails with "Object is possibly
+ * 'undefined'". `deno task check` passes either way — it walks the
+ * hand-maintained path list in `tasks/typecheck.ts`, which this package is not
+ * on, and patterns are checked by `cfcheck`. So the structural declaration buys
+ * two things rather than one: the read becomes testable, and the optionality
+ * moves somewhere the pattern typechecker can see it.
+ *
+ * Whether a cell's `get()` may return undefined against its declared type is a
+ * question about the cell contract rather than about this pattern, and it is
+ * not answered here.
+ */
+export function mentionListsOf<M>(
+  sources: readonly ({ get(): { mentions: M } | undefined } | undefined)[],
+): (M | undefined)[] {
+  return Array.from(sources, (source) => source?.get()?.mentions);
+}
+
+/**
+ * The topics that mention `topic`, out of `list` — the pivot's whole join,
+ * lifted out so a test can hand it a list built by hand.
+ *
+ * The result holds one element for each entry of `list` whose mentions name
+ * `topic` and which is not `topic` itself, in `list`'s order. The pivot hands
+ * it the list `distinctByIdentity` returns, which names each topic once.
+ *
+ * `mentions[i]` is what `list[i]` points at, read once by the caller because
+ * reading it through the reactive array costs a link resolution per topic per
+ * topic.
+ *
+ * The exclusion is asked of IDENTITY, never of array position, and that is the
+ * whole reason this is a named function. A list holding one topic at two
+ * indices must not route its self-mention through the twin and call the result
+ * an inbound edge — and a position comparison passes every test where each
+ * topic appears once. Handing this function a duplicated list is what tells the
+ * two apart.
+ *
+ * Mention membership is checked before source identity: a source with no
+ * matching mention contributes no edge and needs no identity comparison.
+ *
+ * `equals` resolves BOTH sides before comparing, so it answers "do these name
+ * the same document" whether each side arrived as a cell or as the raw link a
+ * read left behind. A method call on the value would depend on which it is.
+ */
+export function mentionedBy<T extends object>(
+  topic: T,
+  list: readonly T[],
+  mentions: readonly (readonly (object | undefined)[] | undefined)[],
+): T[] {
+  return list.filter((other, from) =>
+    mentions[from]?.some((mention) => equals(mention, topic)) &&
+    !equals(other, topic)
+  );
+}
+
+/**
+ * The entries of `list` naming distinct topics, each kept at its first entry
+ * and in `list`'s order, leaving out an entry with nothing behind it yet. These
+ * are the topics the pivot builds rows for and joins over as sources.
+ *
+ * Identity is `equals`, the comparison `mentionedBy` makes, so two entries that
+ * resolve to one document are one topic whether they hold the same link or one
+ * holds an alias of it. Nothing in the pattern API turns a `ReadonlyCell` entry
+ * into a resolved key carrying space, scope, and path, so each entry is
+ * compared with `equals` against the distinct entries kept before it: at most
+ * `n(n - 1) / 2` comparisons over `n` entries.
+ */
+export function distinctByIdentity<T extends object>(
+  list: readonly (T | undefined)[],
+): T[] {
+  const distinct: T[] = [];
+  for (const entry of list) {
+    if (entry && !distinct.some((kept) => equals(kept, entry))) {
+      distinct.push(entry);
+    }
+  }
+  return distinct;
+}
+
+/**
+ * The board's mention pivot: one row per distinct topic, naming the topics that
+ * mention it.
+ *
+ * The whole reference graph is derived HERE, once, and every topic reads its
+ * own row out of the result. The alternative — each topic deriving its own
+ * inbound edges — is the same join done N times over the same corpus.
+ *
+ * The declared parameter is the entire cost of that: one list of references per
+ * topic, `unknown` because they are compared by identity and never read
+ * through. So the pivot over a whole board expands no topic's title, prose,
+ * thread, verbs, or rendered UI. It reads the shape of the graph and nothing
+ * else.
+ *
+ * Matching uses `equals` so aliases and scoped references keep their canonical
+ * identity semantics. The scan runs over plain arrays and compares source
+ * identity only after finding a matching mention.
+ *
+ * The rows and the join's sources both come from `distinctByIdentity`. A topic
+ * the board lists at two entries therefore gets one row, which is what lets a
+ * topic's lookup by identity find exactly one, and counts once as a source in
+ * the row of every topic it mentions, at the place of its first entry.
+ *
+ * Each row is addressed by the topic it describes — `Writable.for(topic)` — so
+ * a row keeps its identity wherever it sits in the array and however the board
+ * is reordered. That is what lets every topic's lookup lift re-run freely on
+ * any board change and still write nothing: an unchanged row recomputes to the
+ * same links at the same address.
+ */
+const crossrefTable = lift(
+  (
+    { sources }: {
+      // An array of CELLS, which is what lets ONE declaration answer both of
+      // the pivot's questions: the cell is the topic's identity, and its value
+      // is the short list of what that topic points at. A cell always writes as
+      // a link, so the rows below are deterministic; an element read as a value
+      // writes a link only while it still carries provenance and an inline copy
+      // once it does not, which makes the same inputs produce two different
+      // documents and fails the idempotency recheck.
+      sources: ReadonlyCell<TopicMentionSource>[] | Default<[]>;
+    },
+  ): TopicCrossrefRow[] => {
+    const rows: unknown[] = [];
+    // Every pass below reads this plain array: an element read through the
+    // reactive array resolves a link every time, and the passes read each
+    // element many times. It holds each distinct topic at its first entry, and
+    // is both the list of rows and the join's sources. An entry with nothing
+    // behind it yet (mid-sync) has no identity to address a row by, and
+    // `Writable.for(undefined)` is not a cause, so `distinctByIdentity` leaves
+    // it out. It gets no row rather than a junk one — the lookup is by
+    // identity, not by position, so a shorter table costs nothing.
+    const list = distinctByIdentity(Array.from(sources));
+    // Materialize each mention array once, from `list` itself, so `mentions[i]`
+    // is what `list[i]` points at; scanning a reactive array resolves its
+    // elements again for every destination topic.
+    const mentions = mentionListsOf(list).map((refs) =>
+      refs === undefined ? undefined : Array.from(refs)
+    );
+    list.forEach((topic) => {
+      const inbound = mentionedBy(topic, list, mentions);
+      // Addressed by the topic it describes, so a row keeps its identity
+      // wherever it sits and however the board is reordered. That is what lets
+      // every topic's lookup re-run freely on any board change and still write
+      // nothing: an unchanged row recomputes to the same links at the same
+      // address.
+      rows.push(
+        Writable.for<TopicCrossrefRow>(topic).set({
+          topic,
+          mentionedBy: inbound,
+        }),
+      );
+    });
+    return rows as TopicCrossrefRow[];
+  },
+);
+
+/**
+ * The instant a row sorts by: its published `lastActivityAt`, or its
+ * `createdAt` when it has published none.
+ *
+ * A topic on the current pattern is created with `lastActivityAt` and keeps it
+ * stored. A topic on an older pattern derives it, so it exists only once that
+ * topic has run: one filed headlessly and never opened publishes none, and
+ * {@link TopicIndexRow} coalesces that absence to `0`. Ordering on that `0`
+ * puts the newest topic on the board beneath every topic that has ever run —
+ * the opposite of what a board sorted by recency is for, and invisible,
+ * because the row is present and merely last.
+ *
+ * `createdAt` is the one instant a cold row always carries: the Topic pattern
+ * defaults its input and publishes that path unconditionally, which is why the
+ * demand declares it required. Falling back to it orders a cold topic by when
+ * it was filed, which is what a reader means by recency for a topic that has
+ * had no activity since.
+ *
+ * The absence arrives as `0` rather than `undefined`, so this tests the value
+ * and does not merely coalesce with `??`. A published `lastActivityAt` is a max
+ * that includes `createdAt`, so it is never `0` for a topic that has run, and
+ * the fallback cannot mask a real one.
+ */
+export function activityOrderOf(
+  row: {
+    lastActivityAt: number | Default<0> | undefined;
+    createdAt: number;
+  },
+): number {
+  return (row.lastActivityAt ?? 0) || row.createdAt;
+}
+
+/**
+ * One rendered card, derived once for the whole board.
+ *
+ * Everything a card shows is a plain string here, and that is the point: the
+ * card list is a mapped sub-pattern, so any helper call or conditional in the
+ * card's JSX — `snippet(card.body)`, `topicAuthorLabel(card.createdBy)`,
+ * `whenLabel(...)`, `x ? <a/> : null` — becomes a computed cell of its own,
+ * minted per card, persisted per session and watched by every reader. On the
+ * Topics board that was six computed documents a card, 934 cards deep, and
+ * the commits that re-persisted them on every headless survey. Deriving the
+ * strings here, in one lift over the board, is the same bound the mention
+ * universe takes (`../../product/collection-naming/mentionable.ts`): one derivation pays
+ * the board-wide walk, once per change, in place of every card paying it on
+ * every load.
+ *
+ * `topic` is the member itself, written as a reference and never read through
+ * here: the card's Open link navigates to it, as `MentionableRow.piece` is
+ * resolved only when a completion is picked.
+ */
+export interface CardRow {
+  /** The topic, as a reference: what the card's Open link navigates to. */
+  topic: unknown;
+
+  /** The board's number for the topic, or the empty string where it publishes
+   * none — the one conditional the card keeps, since a badge with no text is
+   * still a badge. */
+  badge: string;
+  title: string;
+
+  /** The body's first 120 characters, or the empty string for a bodiless
+   * topic, which the card renders as no line at all. */
+  snippet: string;
+
+  /** The caption line: comment count, author, and when the topic was last
+   * active. */
+  caption: string;
+}
+
+/**
+ * The fields a card reads of each topic: the demand this lift declares, and
+ * so the ceiling on its walk. Every field but `createdAt` carries a default
+ * or is optional, for the reason `TopicSummary.title` gives: the stored topics
+ * a deployed board holds predate some of them.
+ */
+export interface CardSource {
+  title: string | Default<"">;
+  body: string | Default<"">;
+  createdAt: number;
+  createdBy?: TopicAuthor | Default<{ kind: "person"; name: "" }> | undefined;
+  commentCount: number | Default<0> | undefined;
+  lastActivityAt: number | Default<0> | undefined;
+  shortName?: string;
+}
+
+/**
+ * The cards' rows, most recently active first, from the topics as cells.
+ *
+ * Each topic is read ONCE, into a plain value, and sorted and rendered from
+ * that: reading through the reactive array costs a link resolution per read,
+ * and the sort reads every element many times. A topic with nothing behind it
+ * yet — appended a moment ago, still mid-sync — reads as `undefined` and gets
+ * no card rather than a junk one; it appears on the next run.
+ *
+ * The parameter is an array of CELLS, as `mentionableIndex`'s is, so each
+ * row's `topic` is the member's identity and writes as a link. Each row is
+ * addressed by the topic it describes — `Writable.for(topic)`, as the
+ * crossref table's rows are — so a card keeps its identity wherever its row
+ * sits in the order: an activity reorder moves rows, and the mapped card
+ * subtrees move with them rather than being re-addressed across the shifted
+ * range. An unchanged row recomputes to the same strings at the same address
+ * and writes nothing.
+ */
+export function cardRowsOf(
+  topics: readonly (
+    | { get(): CardSource | undefined }
+    | undefined
+  )[],
+): CardRow[] {
+  const read: { topic: unknown; value: CardSource }[] = [];
+  for (const topic of topics) {
+    const value = topic?.get();
+    if (value) read.push({ topic, value });
+  }
+  read.sort((a, b) => activityOrderOf(b.value) - activityOrderOf(a.value));
+  const rows: unknown[] = [];
+  for (const { topic, value } of read) {
+    rows.push(
+      Writable.for<CardRow>(topic).set({
+        topic,
+        badge: value.shortName ?? "",
+        title: value.title || "(untitled topic)",
+        snippet: value.body ? snippet(value.body, 120) : "",
+        caption: `${value.commentCount ?? 0} comments · by ${
+          topicAuthorLabel(value.createdBy)
+        } · ${whenLabel(value.lastActivityAt ?? 0)}`,
+      }),
+    );
+  }
+  return rows as CardRow[];
+}
+
+const cardRowsByActivity = lift(
+  (
+    { rows }: { rows: ReadonlyCell<CardSource>[] | Default<[]> },
+  ): CardRow[] => cardRowsOf(Array.from(rows)),
+);
+
+/**
+ * Topics — a tracker over #topic pieces: durable units of shared attention
+ * (CT-1878). Deliberately minimal: no statuses, labels, or assignees; topics
+ * sort by last activity. Replaces Linear / GitHub issues / loose process docs
+ * for the team; PR workflows stay in GitHub and arrive here as links.
+ *
+ * Headless use: survey the whole board with one bounded read of `index` — a
+ * row is its Topic, so select the row's own address alongside `title` and use
+ * that canonical address as the piece for the Topic's reads and verbs.
+ * File with `addTopic`, title and optional initial body in one call, then work
+ * on the Topic directly: the body is its living document, the thread its
+ * append-only deliberation. Sign every authored-content mutation with
+ * `agentName`; Fabric records the human principal behind the key, and the name
+ * says which agent acted under it. Reference-only `mention` and `unmention`
+ * calls carry no content signature.
+ */
+export interface TopicsOutput {
+  [NAME]: string;
+  [UI]: VNode;
+
+  /** The board's topics, in filing order, through the shape the board demands
+   * of them: the display scalars and the mention universe, and no verbs. A
+   * caller that means to mutate a topic addresses the topic itself, where its
+   * own schema governs. Survey through `index` instead; read this when you
+   * already know which topic you are expanding. */
+  topics: TopicDemand[];
+
+  /** The board's mention universe, under the name the topic pattern's editor
+   * autocompletes over — what `addTopic` wires into each child. One derived
+   * document of copies, each holding its topic as an unread reference and
+   * carrying what that topic publishes as its name: the number where a topic
+   * publishes one, and the empty string where it publishes none. Copying
+   * rather than listing the topics themselves is what bounds the read: a
+   * reader of the universe expands no topic, and a `#42` query finds a member
+   * — wherever a name is published to find one by — without expanding one; see
+   * `MentionableRow` in `../../product/collection-naming/mentionable.ts`. */
+  mentionable: MentionableRow[] | Default<[]>;
+
+  /** The namespace itself: each name to the topic it names. A slug pointing
+   * here is what makes a member addressable as `<collection>/<name>`.
+   * Published under the default its input carries. */
+  // deno-lint-ignore ban-types
+  names: Default<NamesMap, {}>;
+
+  /** The names table, one row per numbered member: what `nameOf` reads to find
+   * the number the board gives a topic by identity, including a topic whose own
+   * `shortName` is absent. No topic reads it — a topic reports the number it
+   * stores — so this is published for a caller doing that reverse lookup. */
+  namesTable: NamesTableRow[] | Default<[]>;
+
+  /** What the board declares about its names, for a consumer deciding whether
+   * a name may be held rather than an identity. */
+  naming: NamingDeclaration;
+
+  /** How many topics the board holds, nulls included. */
+  topicCount: number;
+
+  /** The board's mention pivot, one row per topic: the topic, and the topics
+   * that mention it. Published so a topic composed outside `addTopic` can be
+   * wired to the same table the board's own children read — the graph is
+   * derived once, here, and never per topic. */
+  crossrefs: TopicCrossrefRow[] | Default<[]>;
+
+  /** The full-board survey surface: one bounded row per topic, carrying the
+   * scalars a survey reads. A row IS its topic, so a row's own address is the
+   * topic's — `--select index[].@` reads it, and an index into this array is
+   * not a stable address. */
+  index: TopicIndexRow[] | Default<[]>;
+
+  /** Session-local draft for the footer composer (exposed for embedding and
+   * headless driving, like the chat exemplar's drafts). */
+  newTitle?: PerSession<Writable<string>>;
+
+  /** File a topic. The atomic unit takes the initial body with the title, so
+   * no reader observes a title-only halfway state and no follow-up `setBody`
+   * finishes a create. Returns the created topic as its survey row — the
+   * reference plus the write-time facts the pattern resolved. */
+  addTopic: Stream<AddTopicEvent, AddTopicResult>;
+
+  /** Number every topic the namespace does not hold, in filing order, and ask
+   * every topic that reports no number to store the one the namespace holds
+   * for it. Idempotent: a run over topics that all report their numbers writes
+   * nothing and sends nothing. What one run cannot confirm is the asking, so
+   * the result separates the topics it found numbered from the ones it asked,
+   * and running it again completes whichever asking did not land. */
+  backfillNames: Stream<BackfillNamesEvent, BackfillNamesResult>;
+
+  /** Submit the footer composer as the current viewer's canonical Profile. */
+  submitTopic: Stream<void>;
+}
+
+/** Browser composer submit. Profile wishes are resolved by the pattern and
+ * bound into this handler as plain snapshot values, which keeps the mutation
+ * independently testable without weakening the canonical Profile path. */
+export const submitProfileTopic = handler<void, {
+  topics: Writable<TopicDemand[] | Default<[]>>;
+
+  /** The mention universe, declared at the child's own demand — the three
+   * strings a universe entry carries — so the board's index rows and a plain
+   * list of pieces both satisfy it. Handed to the new topic as it arrives;
+   * nothing here writes an entry. */
+  mentionable: ReadonlyCell<TopicMentionable[] | Default<[]>>;
+
+  /** The board's pivot, handed to the new topic as it arrives; nothing here
+   * writes a row. */
+  boardCrossrefs: ReadonlyCell<TopicCrossrefRow[] | Default<[]>>;
+
+  /** The namespace, written one key per create. Read for its keys and written
+   * at one of them inside this handler, so the allocation and the append are
+   * one transaction. */
+  // deno-lint-ignore ban-types
+  names: Writable<Default<NamesMap, {}>>;
+  newTitle: Writable<string>;
+  profileName: string;
+}>((_, {
+  topics,
+  mentionable,
+  boardCrossrefs,
+  names,
+  newTitle,
+  profileName,
+}) => {
+  const trimmed = newTitle.get().trim();
+  const author = topicAuthorFromPerson(profileName);
+  if (!trimmed || !author) return;
+  // The number, the create, and the append are one transaction, as they are
+  // in `addTopic`: no reader observes the topic without its number, and a
+  // concurrent create serializes on the map's keys rather than taking the
+  // same one.
+  const filedAt = Date.now();
+  const { member: piece } = createNamed(names, (allocated) =>
+    Topic({
+      topicStateVersion: TOPIC_STATE_VERSION,
+      title: trimmed,
+      createdAt: filedAt,
+      // Kept by the topic's verbs from here on; a new topic has no comment and
+      // no activity but its creation.
+      commentCount: 0,
+      lastActivityAt: filedAt,
+      createdBy: author,
+      // The number this create allocated, stored with the topic, which is
+      // what lets the topic report it without reading the board.
+      shortName: allocated,
+      // Same wiring `addTopic` gives its children: the board's mention index
+      // is the universe the new topic's editor autocompletes over, and the
+      // board's pivot is where it reads its inbound references.
+      mentionable,
+      boardCrossrefs,
+    }));
+  topics.push(piece);
+  newTitle.set("");
+});
+
+export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
+  const newTitle = new Writable.perSession("");
+
+  // `.length` alone is what makes this cheap: the shrunk schema declares
+  // `items: unknown`, so counting the board expands no topic. Reaching past
+  // `.length` — or through a helper this analysis cannot see into — is what
+  // puts the whole board back in the read.
+  const topicCount = topics.get().length;
+  // Derived once for the whole board: the strings each card renders, so the
+  // card map mints nothing of its own beyond its two conditionals.
+  const cards = cardRowsByActivity({ rows: topics });
+  // Derived once for the whole board; every topic reads its own row out of it.
+  //
+  // The binding's name is the name of the document the rows are stored in.
+  // On the deployed board, the document named `crossrefs` holds at space scope
+  // only a link to each reader's own session instance of it, and a run whose
+  // reads stay at space scope writes behind such a link rather than over it,
+  // so a reader in any session that has not run the board finds no rows. A
+  // document under this name has no such link, and the run stores the rows in
+  // it at space scope, where every reader finds them.
+  const pivot = crossrefTable({ sources: topics });
+  // Also derived once for the whole board: the mention universe every
+  // child's editor autocompletes over, as one document of copies instead of
+  // the topics themselves.
+  const mentionable = mentionableIndex({ members: topics });
+  // Derived once for the whole board, for a caller's reverse lookup by
+  // identity; no topic reads it.
+  const table = namesTable({ names });
+  const hasNoTopics = topicCount === 0;
+
+  // Browser authorship comes from the current viewer's canonical Profile.
+  // CLI streams below remain wish-free: agents sign each mutation in the
+  // event payload, while Fabric records the human principal behind the key.
+  // One wish, not two: `#profile` resolves the profile itself, and `name` is a
+  // field on it. The `#profileName` target is the same field reached through a
+  // second resolution of the same profile.
+  const profileWish = wish<{ name: string }>({
+    query: "#profile",
+  });
+  // A wish resolves after setup, so each of these stays a derivation. Reading
+  // the fields once here would pin the composer to the empty profile the board
+  // started with: the Start button never enables, and a topic filed through it
+  // carries blank attribution.
+  const profileName = profileWish.result?.name ?? "";
+  const hasProfile = profileName.trim().length > 0;
+
+  const addTopic = action<AddTopicEvent, AddTopicResult>((
+    { title, body, agentName },
+  ) => {
+    const trimmed = (title ?? "").trim();
+    const author = topicAuthorFromAgent(agentName) ??
+      rejectMutation("addTopic", "agentName must be non-blank");
+    if (!trimmed) rejectMutation("addTopic", "title must be non-empty");
+    // The number, the create, and the append are one transaction: the topic is
+    // built holding the number the map records it under, no reader observes the
+    // topic without its number, and a concurrent create serializes on the
+    // map's keys, re-running with the next number rather than taking the same
+    // one.
+    const filedAt = Date.now();
+    const { name, member: piece } = createNamed(names, (allocated) =>
+      Topic({
+        topicStateVersion: TOPIC_STATE_VERSION,
+        title: trimmed,
+        // Body at create is part of the create's atomic unit; created-with is
+        // not an update, so bodyUpdatedBy/At stay unset (createdBy covers it).
+        // Preserved verbatim, matching setBody and the UI save path — trimming
+        // would corrupt whitespace-sensitive Markdown (indented code blocks).
+        body: body ?? "",
+        createdAt: filedAt,
+        // Kept by the topic's verbs from here on; a new topic has no comment
+        // and no activity but its creation.
+        commentCount: 0,
+        lastActivityAt: filedAt,
+        createdBy: author,
+        // The number this create allocated, stored with the topic, which is
+        // what lets the topic report it without reading the board.
+        shortName: allocated,
+        // The board's mention index, so the editor has a mention universe. A
+        // piece from before the index is rewired to it as a one-time
+        // link-bind, the backfill the input declares for itself.
+        mentionable,
+        // The board's mention pivot. A topic reads its inbound references out
+        // of the row the board already built for it rather than rebuilding the
+        // join.
+        boardCrossrefs: pivot,
+      }));
+    // Mergeable append: concurrent creates from different users all land.
+    // The session composer draft is `submitTopic`'s to clear; a headless
+    // create has no draft.
+    topics.push(piece);
+    return { topic: piece, name };
+  });
+
+  const backfill = action<BackfillNamesEvent, BackfillNamesResult>(
+    ({ agentName }) => {
+      if (!topicAuthorFromAgent(agentName)) {
+        rejectMutation("backfillNames", "agentName must be non-blank");
+      }
+      return recordNames(topics, names);
+    },
+  );
+
+  const submitTopic = submitProfileTopic({
+    topics,
+    mentionable,
+    boardCrossrefs: pivot,
+    names,
+    newTitle,
+    profileName,
+  });
+
+  return {
+    [NAME]: `Topics (${topicCount})`,
+    [UI]: (
+      <cf-theme theme={TOPICS_THEME}>
+        <cf-screen style={TOPICS_SCREEN_STYLE}>
+          <cf-vstack slot="header" gap="2" padding="4">
+            <cf-hstack justify="between" align="center">
+              <cf-vstack gap="0">
+                <cf-heading level={3}>Topics</cf-heading>
+                <cf-text variant="caption" tone="muted">
+                  {topicCount} topics · durable units of shared attention
+                </cf-text>
+              </cf-vstack>
+              <cf-hstack gap="2" align="center">
+                <cf-text variant="caption" tone="muted">Acting as</cf-text>
+                {hasProfile
+                  ? (
+                    <cf-profile-badge
+                      $profile={profileWish.result}
+                      size="sm"
+                      noNavigate
+                    />
+                  )
+                  : <div>{profileWish[UI]}</div>}
+              </cf-hstack>
+            </cf-hstack>
+          </cf-vstack>
+
+          <cf-vstack gap="2" padding="4">
+            {cards.map((card) => (
+              <cf-card>
+                <cf-hstack gap="3" align="center">
+                  {card.badge
+                    ? (
+                      <cf-badge size="sm" color="primary" data-member-name="">
+                        {card.badge}
+                      </cf-badge>
+                    )
+                    : null}
+                  <cf-vstack gap="0" style="flex: 1; min-width: 0;">
+                    <cf-text block style="font-weight: 600;">
+                      {card.title}
+                    </cf-text>
+                    {card.snippet
+                      ? (
+                        <cf-text tone="muted" block truncate>
+                          {card.snippet}
+                        </cf-text>
+                      )
+                      : null}
+                    <cf-text variant="caption" tone="muted">
+                      {card.caption}
+                    </cf-text>
+                  </cf-vstack>
+                  <cf-cell-link $cell={card.topic} label="Open" static />
+                </cf-hstack>
+              </cf-card>
+            ))}
+
+            {hasNoTopics
+              ? (
+                <cf-empty-state message="No topics yet. Start the first one below." />
+              )
+              : null}
+          </cf-vstack>
+
+          <cf-vstack slot="footer" gap="2" padding="4">
+            <cf-hstack gap="2" align="end">
+              <cf-field label="New topic" style="flex: 1;">
+                <cf-input
+                  $value={newTitle}
+                  placeholder="What deserves shared attention?"
+                />
+              </cf-field>
+              <cf-button
+                variant="primary"
+                disabled={!hasProfile}
+                onClick={submitTopic}
+              >
+                Start
+              </cf-button>
+            </cf-hstack>
+          </cf-vstack>
+        </cf-screen>
+      </cf-theme>
+    ),
+    topics,
+    mentionable,
+    names,
+    namesTable: table,
+    // The sequence policy, claiming no name for the board: what it is bound
+    // as is decided where the binding is made.
+    naming: SEQUENCE_NAMING,
+    topicCount,
+    crossrefs: pivot,
+    // The topics themselves, declared through the index's narrow row schema:
+    // a row's address is the topic's address, so a survey and a follow-up read
+    // name the same document.
+    index: topics,
+    newTitle,
+    addTopic,
+    backfillNames: backfill,
+    submitTopic,
+  };
+});

@@ -26,7 +26,7 @@ deviation and reduced-assurance mode.
 
 Each normative clause carries an identifier made of `AH`, for agent harness, an
 area, and a number, such as `AH-CFC-16`. Conformance statements and the audit in
-`packages/cf-harness/audit` cite clauses by that identifier.
+`runtime/cf-harness/audit` cite clauses by that identifier.
 
 ## Reading order
 
@@ -61,7 +61,7 @@ An implementation profile owns:
 - experimental features and documented deviations;
 - test evidence for its conformance claims.
 
-The first [implementation profile](../../../packages/cf-harness/docs/IMPLEMENTATION_PROFILE.md)
+The first [implementation profile](../../../runtime/cf-harness/docs/IMPLEMENTATION_PROFILE.md)
 is maintained with `@commonfabric/cf-harness`. Loom and Pattern Factory
 maintain separate adapter documents because their routing, mounts, brokers, and
 product rollout choices are not universal harness behavior.

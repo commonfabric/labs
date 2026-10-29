@@ -27,11 +27,15 @@ import {
 
 /** The packages the suite spans, and what each one's tests need. */
 const PACKAGES: ReadonlyArray<
-  { scope: ServerExecutionSuite; headless: boolean }
+  { scope: ServerExecutionSuite; packageDir: string; headless: boolean }
 > = [
-  { scope: "runner", headless: false },
-  { scope: "runtime-client", headless: false },
-  { scope: "shell", headless: true },
+  { scope: "runner", packageDir: "runtime/runner", headless: false },
+  {
+    scope: "runtime-client",
+    packageDir: "runtime/runtime-client",
+    headless: false,
+  },
+  { scope: "shell", packageDir: "runtime/shell", headless: true },
 ];
 
 /** Test files directly inside a package's integration directory. */
@@ -68,8 +72,7 @@ export async function loadPackageIntegrationSuites(
   const opposites: FilePart[] = [];
   const defaultLane = serverExecutionCiLane("default", defaultEnabled);
   const oppositeLane = serverExecutionCiLane("opposite", defaultEnabled);
-  for (const { scope, headless } of PACKAGES) {
-    const packageDir = `packages/${scope}`;
+  for (const { scope, packageDir, headless } of PACKAGES) {
     const files = await integrationFiles(root, packageDir);
     const junit = { kind: "integration", scope, filePrefix: packageDir };
     // The environment the package's own `integration` task sets, so the
@@ -103,20 +106,20 @@ export async function loadPackageIntegrationSuites(
     });
   }
   const harnessPostureGate =
-    "packages/cf-harness/integration/fabric-session-posture-gate.test.ts";
+    "runtime/cf-harness/integration/fabric-session-posture-gate.test.ts";
   const deployedTopology = fileSuite({
     id: "deployed-topology",
     needs: ["deno", "toolshed"],
     parts: [
       {
-        packageDir: "packages/cf-harness",
+        packageDir: "runtime/cf-harness",
         flags: ["-A"],
         junit: {
           kind: "integration",
           scope: "cf-harness",
-          filePrefix: "packages/cf-harness",
+          filePrefix: "runtime/cf-harness",
         },
-        files: (await integrationFiles(root, "packages/cf-harness")).filter(
+        files: (await integrationFiles(root, "runtime/cf-harness")).filter(
           (file) => file === harnessPostureGate,
         ),
       },

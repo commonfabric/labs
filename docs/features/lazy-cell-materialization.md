@@ -13,7 +13,7 @@ combinator the value's type does not settle is evaluated whole at the position
 where it is accessed.
 
 What that buys is pinned where it is largest.
-`packages/patterns/integration/topics-lazy-lookup-reruns.test.ts` holds the
+`patterns/integration/topics-lazy-lookup-reruns.test.ts` holds the
 Topics board's per-topic backlink lookup, which reads a pivot table declared
 with a default, to re-running only for the topics whose row a mention edit
 changed. A runtime change that materializes a defaulted or nullable subtree
@@ -28,9 +28,9 @@ decided per child. The runner marks the transaction it runs a lift's
 argument read and body on, and unmarks it afterwards.
 
 `validateAndTransform` in
-[`schema.ts`](../../packages/runner/src/schema.ts) is the single entry point.
+[`schema.ts`](../../runtime/runner/src/schema.ts) is the single entry point.
 It reads the mark and branches to
-[`schema-view.ts`](../../packages/runner/src/schema-view.ts) **after** its own
+[`schema-view.ts`](../../runtime/runner/src/schema-view.ts) **after** its own
 link resolution, `asCell` dispatch and schema combination have run, so a view
 and an eager read start from the same link and the same schema and only the
 materialization differs.
@@ -102,7 +102,7 @@ failed is registered first, including when a default replaces it.
 
 A view and an eager read agree on every value they both produce. Where they
 part is in what a view declines to look at, and each divergence below is a
-decision rather than a gap. `packages/runner/test/materialization-parity.test.ts`
+decision rather than a gap. `runtime/runner/test/materialization-parity.test.ts`
 pins each one in both modes, under "where a view deliberately diverges from an
 eager read".
 
@@ -367,7 +367,7 @@ reads skip the machinery outright on that check.
 
 A schema that constrains nothing — absent, `true`, `{}`, or a `$ref` resolving
 to one of those — selects the schema-less query-result proxy in
-[`query-result-proxy.ts`](../../packages/runner/src/query-result-proxy.ts),
+[`query-result-proxy.ts`](../../runtime/runner/src/query-result-proxy.ts),
 which `validateAndTransform` dispatches to before a view is considered. `false`
 is not among them: it constrains everything, so it reaches traversal, and the
 read is nothing.
@@ -375,7 +375,7 @@ read is nothing.
 That dispatch is not the root's alone. An eager read hands back a proxy for any
 subtree whose narrowed schema says nothing
 (`TransformObjectCreator.createObject` in
-[`schema.ts`](../../packages/runner/src/schema.ts)), and a view's children go
+[`schema.ts`](../../runtime/runner/src/schema.ts)), and a view's children go
 back through the same front door, so they reach it the same way. One
 `cell.get()` is therefore schema-checked at the top and schema-less wherever
 the schema runs out below, and nothing in the value marks where that changes.
@@ -413,7 +413,7 @@ transaction it was created with, so reading after that transaction finishes
 throws rather than quietly reading from committed state.
 
 That is what separates a view from the standing handle in
-[`query-result-proxy.ts`](../../packages/runner/src/query-result-proxy.ts),
+[`query-result-proxy.ts`](../../runtime/runner/src/query-result-proxy.ts),
 which re-resolves its transaction on every access so a holder keeps reading
 current state after the transaction it was made against has finished. Long-lived
 consumers depend on that — an LLM tool call dispatched later, a SQLite result

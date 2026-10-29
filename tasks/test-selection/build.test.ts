@@ -132,7 +132,7 @@ function stored(
 
 const KEY = testIdentityKey({ k: "unit", s: "memory", n: "space > writes" });
 /** The file a record of that identity names. */
-const UNIT = "packages/memory/test/space.test.ts";
+const UNIT = "runtime/memory/test/space.test.ts";
 const CI_NAME = "labs/test-records/submissions/ci/v1/2026/08/20/run-1-a.ndjson";
 const LOCAL_NAME =
   "labs/test-records/submissions/local/ianh/v1/2026/08/20/01K3-branch.ndjson";
@@ -255,21 +255,21 @@ describe("build", () => {
       expect(
         recordSurface(
           { k: "unit", s: "memory", n: "a" },
-          "packages/memory/test/space.test.ts",
+          "runtime/memory/test/space.test.ts",
         ).unit,
-      ).toBe("packages/memory/test/space.test.ts");
+      ).toBe("runtime/memory/test/space.test.ts");
     });
 
     it("keeps a file-backed unit when a later record has none", () => {
       const read = readReport(
         stored(CI_NAME, context(), [
-          record({ file: "packages/memory/test/space.test.ts" }),
+          record({ file: "runtime/memory/test/space.test.ts" }),
           record(),
         ]),
         NO_ALIASES,
       );
       expect([...read.surfaces.values()][0]!.unit).toEqual(
-        "packages/memory/test/space.test.ts",
+        "runtime/memory/test/space.test.ts",
       );
     });
 
@@ -775,6 +775,70 @@ describe("build", () => {
       const fold = new Fold(carried, NO_ALIASES, "2026-08-20");
       fold.add([stored(CI_NAME, context(), [record()])]);
       expect(fold.finish().aggregate.files).toEqual({ [KEY]: UNIT });
+    });
+
+    describe("a file a path line moves", () => {
+      const OLD_UNIT = "packages/memory/test/space.test.ts";
+
+      /** A path line moving the memory package, dated `date`. */
+      const moved = (date: string) =>
+        new AliasResolver([{
+          date,
+          from: { p: "packages/memory" },
+          to: { p: "runtime/memory" },
+        }]);
+
+      it("names a record's file where the line moved it", () => {
+        // The test's name does not change when its package moves, so only
+        // the file says where it went, and a suite holding the moved file
+        // claims it from the first run after the move lands.
+        const folded = foldReports(
+          emptyAggregate("2026-08-20"),
+          [stored(CI_NAME, context(), [record({ file: OLD_UNIT })])],
+          moved("2026-08-21"),
+          "2026-08-20",
+        );
+        expect(folded.aggregate.files).toEqual({ [KEY]: UNIT });
+        expect(folded.surfaces.get(KEY)).toEqual({
+          suite: "unit:memory",
+          unit: UNIT,
+          fromFile: true,
+        });
+      });
+
+      it("keeps the file of a record made on the line's date", () => {
+        const folded = foldReports(
+          emptyAggregate("2026-08-20"),
+          [stored(CI_NAME, context(), [record({ file: OLD_UNIT })])],
+          moved("2026-08-20"),
+          "2026-08-20",
+        );
+        expect(folded.aggregate.files).toEqual({ [KEY]: OLD_UNIT });
+      });
+
+      it("names a carried file where the line moved it", () => {
+        // The aggregate published before the move named every file the
+        // old way, and nothing reads it but this.
+        const carried = emptyAggregate("2026-08-19");
+        carried.states[KEY] = emptyState();
+        carried.files[KEY] = OLD_UNIT;
+        const folded = new Fold(carried, moved("2026-08-20"), "2026-08-20")
+          .finish();
+        expect(folded.aggregate.files).toEqual({ [KEY]: UNIT });
+        expect(folded.surfaces.get(KEY)?.unit).toBe(UNIT);
+      });
+
+      it("keeps a carried file the aggregate read on the line's date", () => {
+        // The record that named the file is no newer than the last day
+        // the aggregate read, so it may have been made on the line's
+        // date, and a record of that day keeps its file.
+        const carried = emptyAggregate("2026-08-20");
+        carried.states[KEY] = emptyState();
+        carried.files[KEY] = OLD_UNIT;
+        const folded = new Fold(carried, moved("2026-08-20"), "2026-08-20")
+          .finish();
+        expect(folded.aggregate.files).toEqual({ [KEY]: OLD_UNIT });
+      });
     });
 
     it("does not fold a day it took from a rollup", () => {
@@ -1753,17 +1817,17 @@ describe("build", () => {
       const { placed } = locateSurfaces(
         [claiming("workspace-unit", () => ({
           level: "unit",
-          unit: "packages/memory/test/space.test.ts",
+          unit: "runtime/memory/test/space.test.ts",
         }))],
         new Map([[KEY, {
           suite: "unit:memory",
-          unit: "packages/memory/test/space.test.ts",
+          unit: "runtime/memory/test/space.test.ts",
           fromFile: true,
         }]]),
       );
       expect(placed.get(KEY)).toEqual({
         suite: "workspace-unit",
-        unit: "packages/memory/test/space.test.ts",
+        unit: "runtime/memory/test/space.test.ts",
         fromFile: true,
       });
     });
@@ -2811,11 +2875,11 @@ describe("history held under a name an alias has since replaced", () => {
     const states = new Map([[testIdentityKey(OLD), either()]]);
     const files = {
       [testIdentityKey(OLD)]: UNIT,
-      [testIdentityKey(NEW)]: "packages/memory/test/write.test.ts",
+      [testIdentityKey(NEW)]: "runtime/memory/test/write.test.ts",
     };
     resolveHistory(states, files, RENAMED);
     expect(files[testIdentityKey(NEW)]).toBe(
-      "packages/memory/test/write.test.ts",
+      "runtime/memory/test/write.test.ts",
     );
   });
 
