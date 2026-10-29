@@ -9,8 +9,11 @@
  * alone. The catalog and the share inbox are each a cell of their own, apart
  * from the manager's records, as Home's catalog and a share inbox are. The
  * stand-in also holds a private inbox, as Home does, which its profiles point
- * at, so that another person's manager can offer them a room. Fixture for
- * `fabrichat-stamped-catalog-multi-runtime.test.ts` and
+ * at, so that another person's manager can offer them a room, and it can
+ * record a request outcome from an offer, which carries the label onto the
+ * manager's own records. Fixture for
+ * `fabrichat-stamped-catalog-multi-runtime.test.ts`,
+ * `fabrichat-stamped-records-multi-runtime.test.ts` and
  * `fabrichat-stamped-title-offers-multi-runtime.test.ts`.
  */
 
@@ -30,6 +33,7 @@ import {
   FabriChatManagerCore,
   type FabriChatManagerInput,
   type ManagerStreamEvent,
+  type RequestsCell,
 } from "../../../system/fabrichat/manager.tsx";
 import {
   type ChatManagerNotice,
@@ -161,6 +165,23 @@ const retitle = handler<
   }
 });
 
+/**
+ * Records, under each of the inbox's offers' ids, a refused request whose
+ * reason is the offer's title, so that the manager's own records carry the
+ * inbox's label, as a request a manager act decided over labeled data does.
+ */
+const recordOffers = handler<
+  Record<PropertyKey, never>,
+  { inbox: Writable<InboxOffers>; requests: RequestsCell }
+>((_, { inbox, requests }) => {
+  for (const offer of inbox.get() ?? []) {
+    requests.key(offer.id).set({
+      status: "refused",
+      reason: offer.title ?? "",
+    });
+  }
+});
+
 /** What the stand-in stores, the FabriChat manager's records among it. */
 export interface MainInput
   extends Omit<FabriChatManagerInput, "sharedSpaceCatalog"> {
@@ -190,6 +211,9 @@ export interface MainOutput {
 
   /** Retitles the catalog's entries the share inbox's offers name. */
   retitle: Stream<Record<PropertyKey, never>>;
+
+  /** Records a refused request for each of the share inbox's offers. */
+  recordOffers: Stream<Record<PropertyKey, never>>;
 
   /** Finds or creates a direct room from the person's manager. */
   openDirect: Stream<ManagerStreamEvent>;
@@ -257,6 +281,7 @@ export default pattern<MainInput, MainOutput>((
     receive: receive({ inbox }),
     ingest: ingest({ inbox, catalog }),
     retitle: retitle({ inbox, catalog }),
+    recordOffers: recordOffers({ inbox, requests }),
     openDirect: chats.openDirect,
     createGroup: chats.createGroup,
     offerRoom: chats.offerRoom,
